@@ -1,0 +1,1926 @@
+{
+  "version": 1,
+  "name": "Demo2D",
+  "settings": {
+    "ambientColor": [
+      0.55,
+      0.6,
+      0.7
+    ],
+    "ambientIntensity": 1.0,
+    "gravity2D": [
+      0,
+      -9.81
+    ],
+    "gravity": [
+      0,
+      -9.81,
+      0
+    ],
+    "exposure": 1.0,
+    "tonemapping": false
+  },
+  "entities": [
+    {
+      "guid": 500022,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "MainCamera",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            1,
+            10
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 1,
+          "Field Of View": 60,
+          "Orthographic Size": 6,
+          "Near Clip": 0.1,
+          "Far Clip": 100,
+          "Primary": true,
+          "Background": [
+            0.36,
+            0.6,
+            0.85,
+            1
+          ]
+        },
+        "Script": {
+          "Class": "CameraFollow",
+          "Fields": {
+            "Target": 500021,
+            "Offset": [
+              0,
+              1,
+              10
+            ],
+            "Smoothing": 4.0
+          }
+        }
+      }
+    },
+    {
+      "guid": 500021,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Player",
+          "Tag": "Player",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -4,
+            2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100003,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 10,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Rigidbody 2D": {
+          "Body Type": 1,
+          "Gravity Scale": 1.5,
+          "Linear Damping": 0.0,
+          "Fixed Rotation": true
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            0.8,
+            1.0
+          ],
+          "Density": 1.0,
+          "Friction": 0.0,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        },
+        "Script": {
+          "Class": "PlayerController2D",
+          "Fields": {
+            "Move Speed": 6.0,
+            "Jump Impulse": 7.0
+          }
+        }
+      }
+    },
+    {
+      "guid": 500023,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Level",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "guid": 500024,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 1",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -6,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500025,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 2",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -5,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500026,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 3",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -4,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500027,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 4",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -3,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500028,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 5",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -2,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500029,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 6",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -1,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500030,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 7",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500031,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 8",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            1,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500032,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 9",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            2,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500033,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 10",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            3,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500034,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 11",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            4,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500035,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 12",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            5,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500036,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 13",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            6,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500037,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 14",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            7,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500038,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 15",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            8,
+            -2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500039,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 16",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            2,
+            0.5,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500040,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 17",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            3,
+            0.5,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500041,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 18",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            4,
+            0.5,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500042,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 19",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            7,
+            2.5,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500043,
+      "parent": 500023,
+      "components": {
+        "Tag": {
+          "Name": "Tile 20",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            8,
+            2.5,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100004,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 0,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500044,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Box 1",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -1,
+            3,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100011,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 5,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Rigidbody 2D": {
+          "Body Type": 1,
+          "Gravity Scale": 1.0,
+          "Linear Damping": 0.0,
+          "Fixed Rotation": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.5,
+          "Bounciness": 0.1,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500045,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Box 2",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -0.6,
+            4.2,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.2617993877991494
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100011,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 5,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Rigidbody 2D": {
+          "Body Type": 1,
+          "Gravity Scale": 1.0,
+          "Linear Damping": 0.0,
+          "Fixed Rotation": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.5,
+          "Bounciness": 0.1,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500046,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Box 3",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -1.3,
+            5.4,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.5235987755982988
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100011,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 5,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Rigidbody 2D": {
+          "Body Type": 1,
+          "Gravity Scale": 1.0,
+          "Linear Damping": 0.0,
+          "Fixed Rotation": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.5,
+          "Bounciness": 0.1,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500047,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Box 4",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0.2,
+            6.5,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.7853981633974483
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100011,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 5,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Rigidbody 2D": {
+          "Body Type": 1,
+          "Gravity Scale": 1.0,
+          "Linear Damping": 0.0,
+          "Fixed Rotation": false
+        },
+        "Box Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1
+          ],
+          "Density": 1.0,
+          "Friction": 0.5,
+          "Bounciness": 0.1,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 500048,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Coin 1",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            2,
+            1.6,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            0.6,
+            0.6,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100005,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 3,
+          "Flip X": false,
+          "Flip Y": false,
+          "Sheet Columns": 4,
+          "Sheet Rows": 1,
+          "Frame": 0
+        },
+        "Sprite Animator": {
+          "Frames Per Second": 8.0,
+          "First Frame": 0,
+          "Frame Count": 4,
+          "Loop": true,
+          "Playing": true
+        },
+        "Circle Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Radius": 0.45,
+          "Density": 1.0,
+          "Friction": 0.0,
+          "Bounciness": 0.0,
+          "Is Trigger": true
+        },
+        "Script": {
+          "Class": "Bobber",
+          "Fields": {
+            "Amplitude": 0.12,
+            "Frequency": 1.0
+          }
+        }
+      }
+    },
+    {
+      "guid": 500049,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Coin 2",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            3,
+            1.6,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            0.6,
+            0.6,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100005,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 3,
+          "Flip X": false,
+          "Flip Y": false,
+          "Sheet Columns": 4,
+          "Sheet Rows": 1,
+          "Frame": 0
+        },
+        "Sprite Animator": {
+          "Frames Per Second": 8.0,
+          "First Frame": 0,
+          "Frame Count": 4,
+          "Loop": true,
+          "Playing": true
+        },
+        "Circle Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Radius": 0.45,
+          "Density": 1.0,
+          "Friction": 0.0,
+          "Bounciness": 0.0,
+          "Is Trigger": true
+        },
+        "Script": {
+          "Class": "Bobber",
+          "Fields": {
+            "Amplitude": 0.12,
+            "Frequency": 1.0
+          }
+        }
+      }
+    },
+    {
+      "guid": 500050,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Coin 3",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            4,
+            1.6,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            0.6,
+            0.6,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100005,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 3,
+          "Flip X": false,
+          "Flip Y": false,
+          "Sheet Columns": 4,
+          "Sheet Rows": 1,
+          "Frame": 0
+        },
+        "Sprite Animator": {
+          "Frames Per Second": 8.0,
+          "First Frame": 0,
+          "Frame Count": 4,
+          "Loop": true,
+          "Playing": true
+        },
+        "Circle Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Radius": 0.45,
+          "Density": 1.0,
+          "Friction": 0.0,
+          "Bounciness": 0.0,
+          "Is Trigger": true
+        },
+        "Script": {
+          "Class": "Bobber",
+          "Fields": {
+            "Amplitude": 0.12,
+            "Frequency": 1.0
+          }
+        }
+      }
+    },
+    {
+      "guid": 500051,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Coin 4",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            7.5,
+            3.6,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            0.6,
+            0.6,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 100005,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 3,
+          "Flip X": false,
+          "Flip Y": false,
+          "Sheet Columns": 4,
+          "Sheet Rows": 1,
+          "Frame": 0
+        },
+        "Sprite Animator": {
+          "Frames Per Second": 8.0,
+          "First Frame": 0,
+          "Frame Count": 4,
+          "Loop": true,
+          "Playing": true
+        },
+        "Circle Collider 2D": {
+          "Offset": [
+            0,
+            0
+          ],
+          "Radius": 0.45,
+          "Density": 1.0,
+          "Friction": 0.0,
+          "Bounciness": 0.0,
+          "Is Trigger": true
+        },
+        "Script": {
+          "Class": "Bobber",
+          "Fields": {
+            "Amplitude": 0.12,
+            "Frequency": 1.0
+          }
+        }
+      }
+    },
+    {
+      "guid": 500052,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Background",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            2,
+            2,
+            -5
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            40,
+            20,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 0,
+          "Color": [
+            0.55,
+            0.78,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": -100,
+          "Flip X": false,
+          "Flip Y": false
+        }
+      }
+    }
+  ]
+}

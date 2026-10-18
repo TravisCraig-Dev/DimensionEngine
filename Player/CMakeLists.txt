@@ -1,0 +1,5 @@
+file(GLOB_RECURSE PLAYER_SOURCES CONFIGURE_DEPENDS Source/*.cpp Source/*.h)
+add_executable(DimensionPlayer ${PLAYER_SOURCES})
+target_link_libraries(DimensionPlayer PRIVATE DimensionEngine)
+target_compile_definitions(DimensionPlayer PRIVATE DIM_DEFAULT_PROJECT="${CMAKE_SOURCE_DIR}/Projects/Sandbox")
+add_dependencies(DimensionPlayer SandboxGame)

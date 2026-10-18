@@ -1,0 +1,2318 @@
+{
+  "version": 1,
+  "name": "Demo3D",
+  "settings": {
+    "ambientColor": [
+      0.55,
+      0.6,
+      0.7
+    ],
+    "ambientIntensity": 0.35,
+    "gravity2D": [
+      0,
+      -9.81
+    ],
+    "gravity": [
+      0,
+      -9.81,
+      0
+    ],
+    "exposure": 1.0,
+    "tonemapping": true
+  },
+  "entities": [
+    {
+      "guid": 500002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "MainCamera",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            4.5,
+            11
+          ],
+          "Rotation": [
+            -0.2792526803190927,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 0,
+          "Field Of View": 60,
+          "Orthographic Size": 5,
+          "Near Clip": 0.1,
+          "Far Clip": 500,
+          "Primary": true,
+          "Background": [
+            0.42,
+            0.62,
+            0.86,
+            1
+          ],
+          "Clear Flags": 1
+        }
+      }
+    },
+    {
+      "guid": 500003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Sun",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            6,
+            0
+          ],
+          "Rotation": [
+            -0.9599310885968813,
+            -0.6108652381980153,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Directional Light": {
+          "Color": [
+            1.0,
+            0.95,
+            0.85
+          ],
+          "Intensity": 2.2
+        }
+      }
+    },
+    {
+      "guid": 500004,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ground",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            2,
+            1,
+            2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 3,
+          "Albedo": 100001,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            6,
+            6
+          ],
+          "Smoothness": 0.2,
+          "Emission": 0.0
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            -0.05,
+            0
+          ],
+          "Size": [
+            10,
+            0.1,
+            10
+          ],
+          "Friction": 0.7,
+          "Bounciness": 0.1
+        }
+      }
+    },
+    {
+      "guid": 500005,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate 1",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -3,
+            0.5,
+            -1
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.15,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 2.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 500006,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate 2",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -2,
+            0.5,
+            -1
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.15,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 2.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 500007,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate 3",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -1,
+            0.5,
+            -1
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.15,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 2.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 500008,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate 4",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -2.5,
+            1.5,
+            -1
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.15,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 2.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 500009,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate 5",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -1.5,
+            1.5,
+            -1
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.15,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 2.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 500010,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate 6",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -2,
+            2.5,
+            -1
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.15,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 2.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 500011,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spinning Torus",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            2.5,
+            1.6,
+            -1
+          ],
+          "Rotation": [
+            1.2217304763960306,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 100006,
+          "Albedo": 0,
+          "Color": [
+            0.95,
+            0.75,
+            0.25,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.9,
+          "Emission": 0.0,
+          "Material": 100022
+        },
+        "Script": {
+          "Class": "Rotator",
+          "Fields": {
+            "Degrees Per Second": [
+              0,
+              0,
+              90
+            ]
+          }
+        }
+      }
+    },
+    {
+      "guid": 500012,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Floating Sphere",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0.5,
+            1.2,
+            1.5
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.3,
+            0.55,
+            1.0,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.85,
+          "Emission": 0.0,
+          "Material": 100023
+        },
+        "Script": {
+          "Class": "Bobber",
+          "Fields": {
+            "Amplitude": 0.35,
+            "Frequency": 0.5
+          }
+        }
+      }
+    },
+    {
+      "guid": 500013,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Pulse Orb",
+          "Tag": "Pulse",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            4.5,
+            0.6,
+            1.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            0.8,
+            0.8,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            1.0,
+            0.3,
+            0.5,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.6,
+          "Emission": 0.5,
+          "Material": 100026
+        }
+      }
+    },
+    {
+      "guid": 500014,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Pillar",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -5,
+            1,
+            2
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 5,
+          "Albedo": 0,
+          "Color": [
+            0.85,
+            0.85,
+            0.8,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.3,
+          "Emission": 0.0,
+          "Material": 100024
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            2,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 500015,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Warm Light",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            3.5,
+            2.0,
+            1.5
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Point Light": {
+          "Color": [
+            1.0,
+            0.6,
+            0.3
+          ],
+          "Intensity": 6.0,
+          "Range": 7.0
+        }
+      }
+    },
+    {
+      "guid": 500016,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Cool Light",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -3.5,
+            2.0,
+            2.5
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Point Light": {
+          "Color": [
+            0.3,
+            0.6,
+            1.0
+          ],
+          "Intensity": 6.0,
+          "Range": 7.0
+        }
+      }
+    },
+    {
+      "guid": 500017,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ball Spawner",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            7,
+            -1
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Script": {
+          "Class": "Spawner",
+          "Fields": {
+            "Prefab": 100008,
+            "Interval": 0.6,
+            "Max Spawns": 25
+          }
+        }
+      }
+    },
+    {
+      "guid": 500018,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Player",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.5,
+            3
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            0.2,
+            0.85,
+            0.4,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.1,
+          "Angular Damping": 5.0,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.2,
+          "Bounciness": 0.0
+        },
+        "Script": {
+          "Class": "PlayerController3D",
+          "Fields": {
+            "Move Speed": 5.0,
+            "Jump Speed": 5.0
+          }
+        },
+        "Audio Source": {
+          "Clip": 100007,
+          "Volume": 0.5,
+          "Pitch": 1.0,
+          "Loop": false,
+          "Play On Awake": true,
+          "Spatial": false,
+          "Min Distance": 1,
+          "Max Distance": 50
+        }
+      }
+    },
+    {
+      "guid": 500019,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Orbit Hub",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -1,
+            3.5,
+            2
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Script": {
+          "Class": "Rotator",
+          "Fields": {
+            "Degrees Per Second": [
+              0,
+              60,
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "guid": 500020,
+      "parent": 500019,
+      "components": {
+        "Tag": {
+          "Name": "Moon",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            1.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            0.35,
+            0.35,
+            0.35
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.9,
+            0.9,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.3,
+          "Emission": 0.0,
+          "Material": 100025
+        }
+      }
+    },
+    {
+      "guid": 600001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Canvas",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Canvas": {
+          "Scale Mode": 1,
+          "Reference Resolution": [
+            1920,
+            1080
+          ],
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 600002,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Title",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            32,
+            24
+          ],
+          "Size": [
+            900,
+            70
+          ]
+        },
+        "UI Text": {
+          "Text": "Dimension Engine - 3D Demo",
+          "Font": 0,
+          "Font Size": 48,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 600003,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Hint",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            34,
+            92
+          ],
+          "Size": [
+            900,
+            40
+          ]
+        },
+        "UI Text": {
+          "Text": "WASD to move the green cube, Space to jump",
+          "Font": 0,
+          "Font Size": 26,
+          "Color": [
+            0.92,
+            0.95,
+            1,
+            0.9
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 600004,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Ball Counter",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            1,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            0
+          ],
+          "Pivot": [
+            1,
+            0
+          ],
+          "Position": [
+            -32,
+            24
+          ],
+          "Size": [
+            400,
+            60
+          ]
+        },
+        "UI Text": {
+          "Text": "Balls: 0",
+          "Font": 0,
+          "Font Size": 42,
+          "Color": [
+            1,
+            0.85,
+            0.4,
+            1
+          ],
+          "Alignment": 2,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        },
+        "Script": {
+          "Class": "EntityCounterText",
+          "Fields": {
+            "Name": "Ball",
+            "Label": "Balls"
+          }
+        }
+      }
+    },
+    {
+      "guid": 600005,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Spawn Button",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0.5,
+            1
+          ],
+          "Anchor Max": [
+            0.5,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            1
+          ],
+          "Position": [
+            0,
+            -40
+          ],
+          "Size": [
+            320,
+            80
+          ]
+        },
+        "UI Image": {
+          "Image": 0,
+          "Color": [
+            0.16,
+            0.45,
+            0.85,
+            0.92
+          ]
+        },
+        "UI Button": {
+          "Normal Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Hover Color": [
+            1.15,
+            1.15,
+            1.15,
+            1
+          ],
+          "Pressed Color": [
+            0.75,
+            0.75,
+            0.75,
+            1
+          ],
+          "Interactable": true
+        },
+        "Script": {
+          "Class": "SpawnOnClick",
+          "Fields": {
+            "Prefab": 100008,
+            "Spawn Position": [
+              0,
+              7,
+              -1
+            ]
+          }
+        }
+      }
+    },
+    {
+      "guid": 600006,
+      "parent": 600005,
+      "components": {
+        "Tag": {
+          "Name": "Label",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
+        "UI Text": {
+          "Text": "Spawn Ball",
+          "Font": 0,
+          "Font Size": 36,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 600007,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crates Sign",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -2,
+            3.6,
+            -1
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Text (3D)": {
+          "Text": "Physics Crates",
+          "Font": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Font Size": 0.45,
+          "Alignment": 1,
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 700001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Tentacle (Wave)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            5.5,
+            0,
+            -3
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 100030,
+          "Material": 100025,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Wave",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true
+        }
+      }
+    },
+    {
+      "guid": 700002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Tentacle (Sway)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            6.7,
+            0,
+            -2
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 100030,
+          "Material": 100022,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Sway",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true
+        }
+      }
+    },
+    {
+      "guid": 700003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Tentacle (State Machine)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            4.3,
+            0,
+            -2
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 100030,
+          "Material": 100026,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Wave",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 100040
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.TentacleBrain",
+              "Fields": {
+                "EnergyPeriod": 6.0,
+                "PokeInterval": 3.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 710001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ball (Prefab Instance)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -3.5,
+            0.5,
+            3.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Color": [
+            0.2,
+            0.9,
+            0.5,
+            1
+          ]
+        },
+        "Prefab Link": {
+          "Prefab": 100008,
+          "SourceId": 500001,
+          "Root": true,
+          "Overrides": [
+            "Mesh Renderer.Color"
+          ]
+        }
+      }
+    },
+    {
+      "guid": 720001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Campfire",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            2.6,
+            0.0,
+            5.6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Point Light": {
+          "Color": [
+            1.0,
+            0.55,
+            0.2
+          ],
+          "Intensity": 4.0,
+          "Range": 5.0
+        }
+      }
+    },
+    {
+      "guid": 720002,
+      "parent": 720001,
+      "components": {
+        "Tag": {
+          "Name": "Fire",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.05,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Duration": 5.0,
+          "Looping": true,
+          "Play On Awake": true,
+          "Start Rotation": [
+            0,
+            360
+          ],
+          "Angular Velocity": [
+            -60,
+            60
+          ],
+          "Max Particles": 1000,
+          "Simulation Space": 1,
+          "Burst Count": 0,
+          "Shape": 0,
+          "Box Size": [
+            1,
+            1,
+            1
+          ],
+          "Texture": 0,
+          "Sorting Order": 1,
+          "Drag": 0.0,
+          "Start Lifetime": [
+            0.5,
+            0.9
+          ],
+          "Start Speed": [
+            0.8,
+            1.6
+          ],
+          "Start Size": [
+            0.35,
+            0.6
+          ],
+          "Start Color A": [
+            1.0,
+            0.85,
+            0.35,
+            0.9
+          ],
+          "Start Color B": [
+            1.0,
+            0.4,
+            0.06,
+            0.85
+          ],
+          "Gravity Modifier": -0.05,
+          "Rate Over Time": 90,
+          "Shape Angle": 12,
+          "Shape Radius": 0.2,
+          "End Color": [
+            0.9,
+            0.2,
+            0.05,
+            0
+          ],
+          "End Size": 0.25,
+          "Blend": 0
+        }
+      }
+    },
+    {
+      "guid": 720003,
+      "parent": 720001,
+      "components": {
+        "Tag": {
+          "Name": "Smoke",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.6,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Duration": 5.0,
+          "Looping": true,
+          "Play On Awake": true,
+          "Start Rotation": [
+            0,
+            360
+          ],
+          "Angular Velocity": [
+            -60,
+            60
+          ],
+          "Max Particles": 1000,
+          "Simulation Space": 1,
+          "Burst Count": 0,
+          "Shape": 0,
+          "Box Size": [
+            1,
+            1,
+            1
+          ],
+          "Texture": 0,
+          "Sorting Order": -1,
+          "Drag": 0.2,
+          "Start Lifetime": [
+            2.5,
+            3.5
+          ],
+          "Start Speed": [
+            0.4,
+            0.8
+          ],
+          "Start Size": [
+            0.3,
+            0.5
+          ],
+          "Start Color A": [
+            0.35,
+            0.35,
+            0.38,
+            0.45
+          ],
+          "Start Color B": [
+            0.2,
+            0.2,
+            0.22,
+            0.35
+          ],
+          "Gravity Modifier": -0.02,
+          "Rate Over Time": 12,
+          "Shape Angle": 18,
+          "Shape Radius": 0.15,
+          "End Color": [
+            1,
+            1,
+            1,
+            0
+          ],
+          "End Size": 3.0,
+          "Blend": 0
+        }
+      }
+    },
+    {
+      "guid": 720004,
+      "parent": 720001,
+      "components": {
+        "Tag": {
+          "Name": "Sparks",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.1,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Duration": 5.0,
+          "Looping": true,
+          "Play On Awake": true,
+          "Start Rotation": [
+            0,
+            360
+          ],
+          "Angular Velocity": [
+            -60,
+            60
+          ],
+          "Max Particles": 1000,
+          "Simulation Space": 1,
+          "Burst Count": 0,
+          "Shape": 0,
+          "Box Size": [
+            1,
+            1,
+            1
+          ],
+          "Texture": 0,
+          "Sorting Order": 0,
+          "Drag": 0.0,
+          "Start Lifetime": [
+            0.6,
+            1.2
+          ],
+          "Start Speed": [
+            2.0,
+            3.5
+          ],
+          "Start Size": [
+            0.03,
+            0.06
+          ],
+          "Start Color A": [
+            1.0,
+            0.85,
+            0.4,
+            1
+          ],
+          "Start Color B": [
+            1.0,
+            0.5,
+            0.15,
+            1
+          ],
+          "Gravity Modifier": 0.4,
+          "Rate Over Time": 15,
+          "Shape Angle": 30,
+          "Shape Radius": 0.15,
+          "End Color": [
+            1,
+            0.4,
+            0.1,
+            0
+          ],
+          "End Size": 0.5,
+          "Blend": 1
+        }
+      }
+    },
+    {
+      "guid": 720005,
+      "parent": 720001,
+      "components": {
+        "Tag": {
+          "Name": "Glow",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.15,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Duration": 5.0,
+          "Looping": true,
+          "Play On Awake": true,
+          "Start Rotation": [
+            0,
+            360
+          ],
+          "Angular Velocity": [
+            -60,
+            60
+          ],
+          "Max Particles": 1000,
+          "Simulation Space": 1,
+          "Burst Count": 0,
+          "Shape": 0,
+          "Box Size": [
+            1,
+            1,
+            1
+          ],
+          "Texture": 0,
+          "Sorting Order": 2,
+          "Drag": 0.0,
+          "Start Lifetime": [
+            0.5,
+            0.9
+          ],
+          "Start Speed": [
+            0.4,
+            0.8
+          ],
+          "Start Size": [
+            0.7,
+            1.0
+          ],
+          "Start Color A": [
+            1.0,
+            0.55,
+            0.15,
+            0.35
+          ],
+          "Start Color B": [
+            1.0,
+            0.35,
+            0.05,
+            0.3
+          ],
+          "Gravity Modifier": -0.05,
+          "Rate Over Time": 25,
+          "Shape Angle": 12,
+          "Shape Radius": 0.2,
+          "End Color": [
+            0.9,
+            0.2,
+            0.05,
+            0
+          ],
+          "End Size": 0.6,
+          "Blend": 1
+        }
+      }
+    },
+    {
+      "guid": 720006,
+      "parent": 720001,
+      "components": {
+        "Tag": {
+          "Name": "Fire Pit",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.02,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1.1,
+            0.04,
+            1.1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 5,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            0.12,
+            0.1,
+            0.09,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.1,
+          "Emission": 0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 730001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "C# Spinner",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -3.0,
+            1.2,
+            5.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.8,
+            0.8,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.6,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.Spinner",
+              "Fields": {
+                "DegreesPerSecond": [
+                  20,
+                  90,
+                  0
+                ],
+                "BobHeight": 0.3,
+                "BobSpeed": 2.0
+              },
+              "Enabled": true
+            },
+            {
+              "Class": "Game.Rainbow",
+              "Fields": {
+                "CyclesPerSecond": 0.5,
+                "Saturation": 0.7
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 730002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "C# Rainbow",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -1.6,
+            0.4,
+            5.6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.8,
+            0.8,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.6,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Script": {
+          "Class": "Game.Rainbow",
+          "Fields": {
+            "CyclesPerSecond": 0.25,
+            "Saturation": 0.85
+          }
+        }
+      }
+    },
+    {
+      "guid": 730003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "C# Launcher",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            -4.4,
+            0.4,
+            5.6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.8,
+            0.8,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.6,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Script": {
+          "Class": "Game.Launcher",
+          "Fields": {
+            "Impulse": 6.0
+          }
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    }
+  ]
+}

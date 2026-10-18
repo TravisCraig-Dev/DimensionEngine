@@ -1,0 +1,17 @@
+out/
+cmake-build-*/
+.idea/
+.vs/
+.vscode/
+imgui.ini
+Projects/*/Builds/
+*.user
+Projects/*/.dimension/
+Engine/Managed/**/bin/
+Engine/Managed/**/obj/
+Projects/*/Scripts/bin/
+Projects/*/Scripts/obj/
+
+# Local tool settings
+.claude/settings.local.json
+.mcp.json

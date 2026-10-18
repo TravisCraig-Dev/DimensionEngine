@@ -1,0 +1,33 @@
+{
+  "Base Color": [
+    1.0,
+    0.78,
+    0.34,
+    1
+  ],
+  "Base Map": 0,
+  "Normal Map": 0,
+  "Normal Strength": 1.0,
+  "Metallic": 1.0,
+  "Roughness": 0.25,
+  "Metallic Roughness Map": 0,
+  "Emission Color": [
+    0,
+    0,
+    0
+  ],
+  "Emission Strength": 1.0,
+  "Emission Map": 0,
+  "Tiling": [
+    1,
+    1
+  ],
+  "Offset": [
+    0,
+    0
+  ],
+  "Blend Mode": 0,
+  "Alpha Cutoff": 0.5,
+  "Double Sided": false,
+  "Cast Shadows": true
+}

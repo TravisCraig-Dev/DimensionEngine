@@ -1,0 +1,7 @@
+{
+  "name": "Sandbox",
+  "startScene": 100009,
+  "windowWidth": 1280,
+  "windowHeight": 720,
+  "engineVersion": "0.1.0"
+}

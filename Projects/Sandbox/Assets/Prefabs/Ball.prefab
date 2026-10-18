@@ -1,0 +1,72 @@
+{
+  "prefab": true,
+  "entities": [
+    {
+      "guid": 500001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ball",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            1.0,
+            0.45,
+            0.2,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.8,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Sphere Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Radius": 0.5,
+          "Friction": 0.5,
+          "Bounciness": 0.6
+        },
+        "Script": {
+          "Class": "Lifetime",
+          "Fields": {
+            "Seconds": 8.0
+          }
+        }
+      }
+    }
+  ]
+}

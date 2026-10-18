@@ -1,0 +1,103 @@
+{
+  "parameters": [
+    {
+      "name": "Energy",
+      "type": 0,
+      "default": 0.0
+    },
+    {
+      "name": "Poke",
+      "type": 3,
+      "default": 0.0
+    }
+  ],
+  "states": [
+    {
+      "name": "Sway",
+      "clip": "Sway",
+      "speed": 1.0,
+      "loop": true,
+      "position": [
+        -180,
+        0
+      ]
+    },
+    {
+      "name": "Wave",
+      "clip": "Wave",
+      "speed": 1.2,
+      "loop": true,
+      "position": [
+        120,
+        -90
+      ]
+    },
+    {
+      "name": "Curl",
+      "clip": "Curl",
+      "speed": 1.0,
+      "loop": false,
+      "position": [
+        120,
+        90
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from": 0,
+      "to": 1,
+      "hasExitTime": false,
+      "exitTime": 1.0,
+      "duration": 0.4,
+      "conditions": [
+        {
+          "parameter": "Energy",
+          "op": 0,
+          "threshold": 0.5
+        }
+      ]
+    },
+    {
+      "from": 1,
+      "to": 0,
+      "hasExitTime": false,
+      "exitTime": 1.0,
+      "duration": 0.4,
+      "conditions": [
+        {
+          "parameter": "Energy",
+          "op": 1,
+          "threshold": 0.5
+        }
+      ]
+    },
+    {
+      "from": -1,
+      "to": 2,
+      "hasExitTime": false,
+      "exitTime": 1.0,
+      "duration": 0.2,
+      "conditions": [
+        {
+          "parameter": "Poke",
+          "op": 4,
+          "threshold": 0.0
+        }
+      ]
+    },
+    {
+      "from": 2,
+      "to": 0,
+      "hasExitTime": true,
+      "exitTime": 1.0,
+      "duration": 0.4,
+      "conditions": []
+    }
+  ],
+  "defaultState": 0,
+  "anyStatePosition": [
+    -180,
+    -160
+  ]
+}

@@ -1,0 +1,16 @@
+#pragma once
+// Convenience umbrella header for game code.
+#include "Dimension/Core/Base.h"
+#include "Dimension/Core/Log.h"
+#include "Dimension/Core/Input.h"
+#include "Dimension/Core/Application.h"
+#include "Dimension/ECS/Registry.h"
+#include "Dimension/Scene/Scene.h"
+#include "Dimension/Scene/Components.h"
+#include "Dimension/Scene/System.h"
+#include "Dimension/Scripting/ScriptableEntity.h"
+#include "Dimension/Scripting/ScriptRegistry.h"
+#include "Dimension/Physics/Physics2D.h"
+#include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Audio/AudioEngine.h"
+#include "Dimension/Asset/AssetManager.h"

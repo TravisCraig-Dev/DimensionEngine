@@ -1,0 +1,310 @@
+#include "EditorUI.h"
+#include <Dimension/Renderer/Texture.h>
+#include <imgui_internal.h>
+#include <imgui_stdlib.h>
+#include <glm/gtc/type_ptr.hpp>
+
+namespace Editor::UI
+{
+    bool BeginProperties(const char* id)
+    {
+        if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_NoSavedSettings)) return false;
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        return true;
+    }
+
+    void EndProperties() { ImGui::EndTable(); }
+
+    void PropertyLabel(const char* label, const char* tooltip)
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        if (tooltip && *tooltip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+    }
+
+    static EditResult Track(bool changed)
+    {
+        return { changed, ImGui::IsItemActivated() };
+    }
+
+    EditResult Vec3Control(const char* label, glm::vec3& v, float reset, float speed)
+    {
+        EditResult r;
+        PropertyLabel(label);
+        ImGui::PushID(label);
+        float full = ImGui::GetContentRegionAvail().x;
+        float lineH = ImGui::GetFrameHeight();
+        float itemW = (full - lineH * 3.0f - ImGui::GetStyle().ItemSpacing.x * 2.0f) / 3.0f;
+        const ImVec4 colors[3] = { { 0.75f, 0.2f, 0.2f, 1 }, { 0.25f, 0.6f, 0.25f, 1 }, { 0.2f, 0.35f, 0.8f, 1 } };
+        const char* names[3] = { "X", "Y", "Z" };
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i > 0) ImGui::SameLine(0, ImGui::GetStyle().FramePadding.x);
+            ImGui::PushStyleColor(ImGuiCol_Button, colors[i]);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(colors[i].x + 0.1f, colors[i].y + 0.1f, colors[i].z + 0.1f, 1));
+            if (ImGui::Button(names[i], ImVec2(lineH, lineH)))
+            {
+                r.Activated = true; // treat reset as an edit for undo purposes
+                v[i] = reset;
+                r.Changed = true;
+            }
+            ImGui::PopStyleColor(2);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(itemW);
+            ImGui::PushID(i);
+            r |= Track(ImGui::DragFloat("##v", &v[i], speed, 0.0f, 0.0f, "%.3f"));
+            ImGui::PopID();
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopID();
+        return r;
+    }
+
+    ImVec4 AssetColor(AssetType type)
+    {
+        switch (type)
+        {
+        case AssetType::Texture: return { 0.85f, 0.55f, 0.25f, 1 };
+        case AssetType::Mesh: return { 0.35f, 0.6f, 0.9f, 1 };
+        case AssetType::Scene: return { 0.5f, 0.8f, 0.4f, 1 };
+        case AssetType::Prefab: return { 0.35f, 0.75f, 0.95f, 1 };
+        case AssetType::Audio: return { 0.85f, 0.4f, 0.75f, 1 };
+        case AssetType::Material: return { 0.95f, 0.85f, 0.4f, 1 };
+        case AssetType::Font: return { 0.75f, 0.75f, 0.95f, 1 };
+        case AssetType::AnimatorController: return { 0.55f, 0.9f, 0.7f, 1 };
+        default: return { 0.5f, 0.5f, 0.5f, 1 };
+        }
+    }
+
+    const char* AssetLetter(AssetType type)
+    {
+        switch (type)
+        {
+        case AssetType::Texture: return "IMG";
+        case AssetType::Mesh: return "MESH";
+        case AssetType::Scene: return "SCENE";
+        case AssetType::Prefab: return "PREFAB";
+        case AssetType::Audio: return "AUDIO";
+        case AssetType::Material: return "MAT";
+        case AssetType::Font: return "FONT";
+        case AssetType::AnimatorController: return "ANIM";
+        default: return "FILE";
+        }
+    }
+
+    EditResult AssetField(const char* label, AssetHandle& handle, AssetType type)
+    {
+        EditResult r;
+        PropertyLabel(label);
+        ImGui::PushID(label);
+        std::string name = AssetManager::GetDisplayName(handle);
+        float h = ImGui::GetFrameHeight();
+
+        if (type == AssetType::Texture)
+        {
+            if (auto tex = AssetManager::GetTexture(handle))
+            {
+                ImGui::Image(ImTextureRef((ImTextureID)tex->GetImGuiId()), ImVec2(h, h));
+                ImGui::SameLine(0, 4);
+            }
+        }
+        float width = ImGui::GetContentRegionAvail().x;
+        std::string text = name + "  (" + AssetTypeToString(type) + ")";
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
+        if (ImGui::Button(text.c_str(), ImVec2(width, 0))) ImGui::OpenPopup("picker");
+        ImGui::PopStyleVar();
+        if (ImGui::IsItemHovered() && handle.IsValid()) ImGui::SetTooltip("%s", AssetManager::GetAbsolutePath(handle).string().c_str());
+
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kAssetPayload))
+            {
+                AssetHandle dropped(*(const uint64_t*)p->Data);
+                auto* meta = AssetManager::GetMetadata(dropped);
+                if (meta && meta->Type == type)
+                {
+                    r.Activated = r.Changed = true;
+                    handle = dropped;
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        if (ImGui::BeginPopup("picker"))
+        {
+            static std::string filter;
+            if (ImGui::IsWindowAppearing()) { filter.clear(); ImGui::SetKeyboardFocusHere(); }
+            ImGui::SetNextItemWidth(220);
+            ImGui::InputTextWithHint("##filter", "Search...", &filter);
+            auto option = [&](AssetHandle h, const std::string& n) {
+                if (!filter.empty())
+                {
+                    std::string a = n, b = filter;
+                    for (auto& c : a) c = (char)std::tolower(c);
+                    for (auto& c : b) c = (char)std::tolower(c);
+                    if (a.find(b) == std::string::npos) return;
+                }
+                if (ImGui::Selectable(n.c_str(), h == handle))
+                {
+                    r.Activated = r.Changed = true;
+                    handle = h;
+                }
+            };
+            option(AssetHandle::None(), type == AssetType::Font ? "Default (built-in)" : "None");
+            if (type == AssetType::Mesh)
+                for (AssetHandle b : { AssetManager::kCube, AssetManager::kSphere, AssetManager::kPlane, AssetManager::kQuad, AssetManager::kCylinder })
+                    option(b, AssetManager::GetDisplayName(b));
+            for (AssetHandle a : AssetManager::GetAssetsOfType(type))
+                option(a, AssetManager::GetMetadata(a)->Path.generic_string());
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        return r;
+    }
+
+    EditResult EntityField(const char* label, Entity& entity, Scene& scene)
+    {
+        EditResult r;
+        PropertyLabel(label);
+        ImGui::PushID(label);
+        std::string name = scene.IsValid(entity) ? scene.GetRegistry().Get<TagComponent>(entity).Name : "None (Entity)";
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
+        if (ImGui::Button(name.c_str(), ImVec2(-FLT_MIN, 0))) ImGui::OpenPopup("picker");
+        ImGui::PopStyleVar();
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kEntityPayload))
+            {
+                Entity e = scene.FindEntityByGuid(Guid(*(const uint64_t*)p->Data));
+                if (!e.IsNull())
+                {
+                    r.Activated = r.Changed = true;
+                    entity = e;
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+        if (ImGui::BeginPopup("picker"))
+        {
+            if (ImGui::Selectable("None", entity.IsNull()))
+            {
+                r.Activated = r.Changed = true;
+                entity = Entity::Null();
+            }
+            scene.GetRegistry().EachEntity([&](Entity e) {
+                ImGui::PushID((int)e.Index);
+                if (ImGui::Selectable(scene.GetRegistry().Get<TagComponent>(e).Name.c_str(), e == entity))
+                {
+                    r.Activated = r.Changed = true;
+                    entity = e;
+                }
+                ImGui::PopID();
+            });
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        return r;
+    }
+
+    EditResult Field(const FieldInfo& f, void* object, Scene* scene)
+    {
+        void* p = f.Access(object);
+        const char* label = f.Name.c_str();
+        ImGui::PushID(label);
+        EditResult r;
+        bool bounded = f.Min != f.Max;
+        switch (f.Type)
+        {
+        case FieldType::Bool:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::Checkbox("##v", (bool*)p));
+            break;
+        case FieldType::Int:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::DragInt("##v", (int*)p, f.Speed, (int)f.Min, (int)f.Max));
+            break;
+        case FieldType::Float:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::DragFloat("##v", (float*)p, f.Speed, f.Min, f.Max, "%.3f", bounded ? ImGuiSliderFlags_AlwaysClamp : 0));
+            break;
+        case FieldType::Vec2:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::DragFloat2("##v", (float*)p, f.Speed, f.Min, f.Max, "%.3f"));
+            break;
+        case FieldType::Vec3:
+            r = Vec3Control(label, *(glm::vec3*)p, f.Name == "Scale" || f.Name == "Size" ? 1.0f : 0.0f, f.Speed);
+            break;
+        case FieldType::Vec4:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::DragFloat4("##v", (float*)p, f.Speed, f.Min, f.Max, "%.3f"));
+            break;
+        case FieldType::Angles:
+        {
+            glm::vec3 degrees = glm::degrees(*(glm::vec3*)p);
+            r = Vec3Control(label, degrees, 0.0f, f.Speed);
+            if (r.Changed) *(glm::vec3*)p = glm::radians(degrees);
+            break;
+        }
+        case FieldType::Color3:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::ColorEdit3("##v", (float*)p, ImGuiColorEditFlags_Float));
+            break;
+        case FieldType::Color4:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::ColorEdit4("##v", (float*)p, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaPreviewHalf));
+            break;
+        case FieldType::String:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = Track(ImGui::InputText("##v", (std::string*)p));
+            break;
+        case FieldType::Enum:
+        {
+            PropertyLabel(label, f.Tooltip.c_str());
+            int32_t* value = (int32_t*)p;
+            const char* preview = (*value >= 0 && *value < (int)f.EnumNames.size()) ? f.EnumNames[*value].c_str() : "?";
+            if (ImGui::BeginCombo("##v", preview))
+            {
+                for (int i = 0; i < (int)f.EnumNames.size(); ++i)
+                    if (ImGui::Selectable(f.EnumNames[i].c_str(), i == *value) && i != *value)
+                    {
+                        r.Activated = r.Changed = true;
+                        *value = i;
+                    }
+                ImGui::EndCombo();
+            }
+            break;
+        }
+        case FieldType::Texture: r = AssetField(label, *(AssetHandle*)p, AssetType::Texture); break;
+        case FieldType::Mesh: r = AssetField(label, *(AssetHandle*)p, AssetType::Mesh); break;
+        case FieldType::Scene: r = AssetField(label, *(AssetHandle*)p, AssetType::Scene); break;
+        case FieldType::Prefab: r = AssetField(label, *(AssetHandle*)p, AssetType::Prefab); break;
+        case FieldType::Audio: r = AssetField(label, *(AssetHandle*)p, AssetType::Audio); break;
+        case FieldType::Material: r = AssetField(label, *(AssetHandle*)p, AssetType::Material); break;
+        case FieldType::Font: r = AssetField(label, *(AssetHandle*)p, AssetType::Font); break;
+        case FieldType::AnimatorController: r = AssetField(label, *(AssetHandle*)p, AssetType::AnimatorController); break;
+        case FieldType::EntityRef:
+            if (scene) r = EntityField(label, *(Entity*)p, *scene);
+            break;
+        }
+        ImGui::PopID();
+        return r;
+    }
+
+    void HelpMarker(const char* text)
+    {
+        ImGui::TextDisabled("(?)");
+        if (ImGui::BeginItemTooltip())
+        {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+}
