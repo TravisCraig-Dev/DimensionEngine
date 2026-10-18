@@ -16,6 +16,7 @@ namespace Dimension
         static constexpr VkFormat kIdFormat = VK_FORMAT_R32_UINT;
         static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
         static constexpr VkFormat kOutputFormat = VK_FORMAT_R8G8B8A8_UNORM;
+        static constexpr VkFormat kAOFormat = VK_FORMAT_R8_UNORM;
 
         SceneRenderTarget(uint32_t width, uint32_t height);
         ~SceneRenderTarget();
@@ -37,6 +38,10 @@ namespace Dimension
         // Tonemapped image before FXAA (same format as the output).
         const Image& GetLdr() const { return m_Ldr; }
         uint32_t GetLdrBindless() const { return m_LdrBindless; }
+        // Depth sampled by SSAO (nearest filtering), and the half-resolution AO images: [0] raw, [1] blurred.
+        uint32_t GetDepthBindless() const { return m_DepthBindless; }
+        const Image& GetAO(uint32_t i) const { return m_AO[i]; }
+        uint32_t GetAOBindless(uint32_t i) const { return m_AOBindless[i]; }
 
         // ImGui texture showing the output (SHADER_READ_ONLY layout between frames).
         uint64_t GetImGuiTexture();
@@ -64,6 +69,9 @@ namespace Dimension
         std::vector<uint32_t> m_BloomBindless;
         Image m_Ldr;
         uint32_t m_LdrBindless = 0;
+        uint32_t m_DepthBindless = 0;
+        Image m_AO[2];
+        uint32_t m_AOBindless[2] = {};
         uint64_t m_ImGuiTexture = 0;
 
         std::optional<glm::uvec2> m_PickRequest;

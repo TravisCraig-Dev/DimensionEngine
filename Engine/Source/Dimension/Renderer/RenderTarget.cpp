@@ -18,11 +18,14 @@ namespace Dimension
     {
         m_Hdr = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneHDR" });
         m_Ids = Image({ m_Width, m_Height, kIdFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "SceneIds" });
-        m_Depth = Image({ m_Width, m_Height, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1, "SceneDepth" });
+        m_Depth = Image({ m_Width, m_Height, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneDepth" });
         m_Output = Image({ m_Width, m_Height, kOutputFormat,
                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "SceneOutput" });
 
         m_Ldr = Image({ m_Width, m_Height, kOutputFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneLDR" });
+        uint32_t aw = std::max(1u, m_Width / 2), ah = std::max(1u, m_Height / 2);
+        m_AO[0] = Image({ aw, ah, kAOFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSAO" });
+        m_AO[1] = Image({ aw, ah, kAOFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSAOBlur" });
         uint32_t bw = m_Width / 2, bh = m_Height / 2;
         while (m_Bloom.size() < kMaxBloomLevels && bw >= 4 && bh >= 4)
         {
@@ -34,10 +37,12 @@ namespace Dimension
         auto& device = RenderDevice::Get();
         m_HdrBindless = device.RegisterTexture(m_Hdr.GetView(), device.GetClampSampler());
         m_LdrBindless = device.RegisterTexture(m_Ldr.GetView(), device.GetClampSampler());
+        m_DepthBindless = device.RegisterTexture(m_Depth.GetView(), device.GetNearestClampSampler());
+        for (int i = 0; i < 2; ++i) m_AOBindless[i] = device.RegisterTexture(m_AO[i].GetView(), device.GetClampSampler());
         for (auto& b : m_Bloom) m_BloomBindless.push_back(device.RegisterTexture(b.GetView(), device.GetClampSampler()));
 
         // Establish the between-frames layouts so the images can be sampled even before the first render.
-        std::vector<VkImage> images{ m_Hdr.GetHandle(), m_Output.GetHandle(), m_Ldr.GetHandle() };
+        std::vector<VkImage> images{ m_Hdr.GetHandle(), m_Output.GetHandle(), m_Ldr.GetHandle(), m_AO[0].GetHandle(), m_AO[1].GetHandle() };
         for (auto& b : m_Bloom) images.push_back(b.GetHandle());
         device.ImmediateSubmit([&](VkCommandBuffer cmd) {
             for (VkImage image : images) Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -49,6 +54,10 @@ namespace Dimension
         auto& device = RenderDevice::Get();
         device.UnregisterTexture(m_HdrBindless);
         device.UnregisterTexture(m_LdrBindless);
+        device.UnregisterTexture(m_DepthBindless);
+        for (uint32_t index : m_AOBindless) device.UnregisterTexture(index);
+        m_AO[0] = Image();
+        m_AO[1] = Image();
         for (uint32_t index : m_BloomBindless) device.UnregisterTexture(index);
         m_BloomBindless.clear();
         m_Bloom.clear();

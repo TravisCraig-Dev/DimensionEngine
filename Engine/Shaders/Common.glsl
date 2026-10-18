@@ -39,6 +39,8 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 IrradianceSH[9];
     mat4 PointShadowViewProj[MAX_POINT_SHADOWS * 6]; // per shadowed point light: +X, -X, +Y, -Y, +Z, -Z faces
     vec4 PointShadowParams[MAX_POINT_SHADOWS];       // x near, y far (range), z bias (world units), w atlas index
+    mat4 InvProj;
+    vec4 AOParams;       // x 1 = SSAO enabled (2 = debug view), y AO texture index, zw 1 / framebuffer size
     PointLight PointLights[MAX_POINT_LIGHTS];
 } uScene;
 

@@ -11,6 +11,8 @@ layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out vec2 vUV;
 
+invariant gl_Position; // the depth prepass and the main pass must produce identical depths
+
 void main()
 {
     vec3 position = aPosition;

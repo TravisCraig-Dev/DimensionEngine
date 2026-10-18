@@ -123,7 +123,11 @@ namespace Dimension
             bool Additive = false;
         };
 
-        void DrawMeshes(VkCommandBuffer cmd, Scene& scene, const glm::mat4& viewProj, bool shadowPass);
+        enum class MeshPass { Main, Shadow, Depth };
+        void DrawMeshes(VkCommandBuffer cmd, Scene& scene, const glm::mat4& viewProj, MeshPass pass);
+        // Depth prepass, half-resolution SSAO and its blur (leaves the depth attachment ready to load).
+        void RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
+                                    const SceneSettings& settings);
         // Renders the directional shadow map; returns the light view-projection.
         void RenderShadowMap(VkCommandBuffer cmd, Scene& scene, const CameraData& camera, const glm::vec3& lightDir,
                              float distance, int cascadeCount, const void* uniforms, size_t uniformSize, ShadowCascades& out);

@@ -34,6 +34,12 @@ namespace Dimension
         float BloomRadius = 1.0f;    // upsample filter spread
         bool FXAA = false;
         float Vignette = 0.0f;
+        // Screen-space ambient occlusion: darkens ambient and reflected light in creases and contact areas.
+        bool SSAO = false;
+        float SSAORadius = 0.5f;    // world units
+        float SSAOIntensity = 1.5f; // exponent applied to the occlusion
+        float SSAOBias = 0.025f;    // view-space depth bias against self-occlusion
+        bool SSAODebug = false;     // show the occlusion buffer instead of the lit scene
     };
 
     // A scene: an ECS registry plus hierarchy, identity (Guid) mapping and the

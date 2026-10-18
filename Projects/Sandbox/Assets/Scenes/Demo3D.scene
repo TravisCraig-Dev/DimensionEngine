@@ -30,7 +30,12 @@
     "skyTexture": 100045,
     "skyIntensity": 1.0,
     "skyRotation": 0.0,
-    "reflectionIntensity": 1.0
+    "reflectionIntensity": 1.0,
+    "ssao": true,
+    "ssaoRadius": 0.6,
+    "ssaoIntensity": 1.5,
+    "ssaoBias": 0.025,
+    "ssaoDebug": false
   },
   "entities": [
     {

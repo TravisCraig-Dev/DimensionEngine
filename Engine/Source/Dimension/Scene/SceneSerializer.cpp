@@ -165,6 +165,11 @@ namespace Dimension
                           { "bloomRadius", s.BloomRadius },
                           { "fxaa", s.FXAA },
                           { "vignette", s.Vignette },
+                          { "ssao", s.SSAO },
+                          { "ssaoRadius", s.SSAORadius },
+                          { "ssaoIntensity", s.SSAOIntensity },
+                          { "ssaoBias", s.SSAOBias },
+                          { "ssaoDebug", s.SSAODebug },
                           { "skyMode", s.SkyMode },
                           { "skyTexture", (uint64_t)s.SkyTexture },
                           { "skyIntensity", s.SkyIntensity },
@@ -207,6 +212,11 @@ namespace Dimension
             s.BloomRadius = js.value("bloomRadius", s.BloomRadius);
             s.FXAA = js.value("fxaa", s.FXAA);
             s.Vignette = js.value("vignette", s.Vignette);
+            s.SSAO = js.value("ssao", s.SSAO);
+            s.SSAORadius = js.value("ssaoRadius", s.SSAORadius);
+            s.SSAOIntensity = js.value("ssaoIntensity", s.SSAOIntensity);
+            s.SSAOBias = js.value("ssaoBias", s.SSAOBias);
+            s.SSAODebug = js.value("ssaoDebug", s.SSAODebug);
             s.SkyMode = js.value("skyMode", s.SkyMode);
             s.SkyTexture = Guid(js.value("skyTexture", uint64_t(0)));
             s.SkyIntensity = js.value("skyIntensity", s.SkyIntensity);

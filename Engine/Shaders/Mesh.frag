@@ -103,6 +103,19 @@ void main()
     }
     else
         env = mix(SkyColor(R), SkyColor(vec3(0.0, 1.0, 0.0)) * 0.5 + uScene.SkyHorizon.rgb * 0.5, roughness);
+    // Screen-space ambient occlusion only darkens indirect light (opaque surfaces are in the depth prepass).
+    if (uScene.AOParams.x > 0.5 && m.Flags.x != 2u)
+    {
+        float ao = textureLod(uTextures[nonuniformEXT(uint(uScene.AOParams.y))], gl_FragCoord.xy * uScene.AOParams.zw, 0.0).r;
+        if (uScene.AOParams.x > 1.5)
+        {
+            outColor = vec4(vec3(ao), 1.0);
+            outEntity = pc.EntityId;
+            return;
+        }
+        ambient *= ao;
+        env *= mix(ao, 1.0, 0.25);
+    }
     vec3 color = albedo * (1.0 - metallic) * ambient;
     color += env * EnvBRDFApprox(F0, roughness, NdotV); // the sky is the environment, at full strength
 

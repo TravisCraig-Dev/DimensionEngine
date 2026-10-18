@@ -190,6 +190,8 @@ namespace
         scene.GetSettings().BloomThreshold = 2.5f;
         scene.GetSettings().FXAA = true;
         scene.GetSettings().Vignette = 0.3f;
+        scene.GetSettings().SSAO = true;
+        scene.GetSettings().SSAORadius = 0.8f;
 
         auto json = SceneSerializer::Serialize(scene);
         auto loaded = SceneSerializer::Deserialize(json);
@@ -210,6 +212,7 @@ namespace
         CHECK(Near(loaded->GetSettings().AmbientIntensity, 0.75f));
         CHECK(loaded->GetSettings().Bloom && loaded->GetSettings().FXAA);
         CHECK(Near(loaded->GetSettings().BloomThreshold, 2.5f) && Near(loaded->GetSettings().Vignette, 0.3f));
+        CHECK(loaded->GetSettings().SSAO && Near(loaded->GetSettings().SSAORadius, 0.8f) && !loaded->GetSettings().SSAODebug);
         CHECK(SceneSerializer::Serialize(*loaded) == json); // stable
     }
 

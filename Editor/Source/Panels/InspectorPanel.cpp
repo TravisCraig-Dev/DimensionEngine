@@ -820,6 +820,16 @@ namespace Editor
             track(ImGui::SliderFloat("Radius", &s.BloomRadius, 0.5f, 3.0f));
             ImGui::Unindent();
         }
+        track(ImGui::Checkbox("Ambient Occlusion (SSAO)", &s.SSAO));
+        if (s.SSAO)
+        {
+            ImGui::Indent();
+            track(ImGui::DragFloat("Radius##ssao", &s.SSAORadius, 0.01f, 0.05f, 5.0f));
+            track(ImGui::DragFloat("Intensity##ssao", &s.SSAOIntensity, 0.01f, 0.0f, 4.0f));
+            track(ImGui::DragFloat("Bias##ssao", &s.SSAOBias, 0.001f, 0.0f, 0.5f, "%.3f"));
+            track(ImGui::Checkbox("Show Occlusion##ssao", &s.SSAODebug));
+            ImGui::Unindent();
+        }
         track(ImGui::SliderFloat("Vignette", &s.Vignette, 0.0f, 1.0f));
         track(ImGui::Checkbox("FXAA (anti-aliasing)", &s.FXAA));
         ImGui::SeparatorText("Physics");

@@ -29,6 +29,8 @@
 #include "shaders/BloomDown.frag.h"
 #include "shaders/BloomUp.frag.h"
 #include "shaders/Fxaa.frag.h"
+#include "shaders/Ssao.frag.h"
+#include "shaders/SsaoBlur.frag.h"
 
 namespace Dimension
 {
@@ -69,6 +71,8 @@ namespace Dimension
             glm::vec4 IrradianceSH[9];
             glm::mat4 PointShadowViewProj[SceneRenderer::kMaxPointShadows * 6];
             glm::vec4 PointShadowParams[SceneRenderer::kMaxPointShadows]; // near, far, bias, atlas index
+            glm::mat4 InvProj;
+            glm::vec4 AOParams; // x enabled, y AO texture index, zw 1 / framebuffer size
             PointLightGPU PointLights[kMaxPointLights];
         };
         static_assert(sizeof(SceneUniforms) <= RenderDevice::kUniformBlockSize);
@@ -113,6 +117,24 @@ namespace Dimension
             float Knee;
             glm::vec2 SrcTexel;
             float Radius;
+        };
+
+        struct SsaoPush
+        {
+            uint32_t Depth;
+            uint32_t Samples;
+            glm::vec2 DepthTexel;
+            float Radius;
+            float Power;
+            float Bias;
+            float Pad;
+        };
+
+        struct SsaoBlurPush
+        {
+            uint32_t AO;
+            uint32_t Depth;
+            glm::vec2 AOTexel;
         };
 
         struct FxaaPush
@@ -222,7 +244,7 @@ namespace Dimension
     struct Renderer::Resources
     {
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
-        Pipeline BloomDown, BloomUp, Fxaa;
+        Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur;
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
     };
@@ -265,6 +287,15 @@ namespace Dimension
         shadow.DepthBias = true;
         shadow.DebugName = "ShadowPipeline";
         r.Shadow = Pipeline(shadow);
+        // Depth prepass for SSAO: same culling as the main pass so it never hides what the main pass would draw.
+        GraphicsPipelineDesc prepass = shadow;
+        prepass.CullMode = VK_CULL_MODE_BACK_BIT;
+        prepass.DepthBias = false;
+        prepass.DebugName = "DepthPrepassPipeline";
+        r.DepthPrepass = Pipeline(prepass);
+        prepass.CullMode = VK_CULL_MODE_NONE;
+        prepass.DebugName = "DepthPrepassDoubleSidedPipeline";
+        r.DepthPrepassDoubleSided = Pipeline(prepass);
 
         GraphicsPipelineDesc sky;
         sky.VertexSpirv = kSky_vert;
@@ -344,6 +375,13 @@ namespace Dimension
         post.ColorAttachments = { { F::kOutputFormat } };
         post.DebugName = "FxaaPipeline";
         r.Fxaa = Pipeline(post);
+        post.FragmentSpirv = kSsao_frag;
+        post.ColorAttachments = { { F::kAOFormat } };
+        post.DebugName = "SsaoPipeline";
+        r.Ssao = Pipeline(post);
+        post.FragmentSpirv = kSsaoBlur_frag;
+        post.DebugName = "SsaoBlurPipeline";
+        r.SsaoBlur = Pipeline(post);
 
         std::vector<uint32_t> indices(kMaxQuadsPerDraw * 6);
         for (uint32_t q = 0; q < kMaxQuadsPerDraw; ++q)
@@ -553,6 +591,17 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_ASPECT_DEPTH_BIT);
 
+        // SSAO needs a perspective view of opaque geometry; orthographic (2D) cameras skip it.
+        bool ssao = settings.SSAO && !camera.Orthographic;
+        u.InvProj = glm::inverse(u.Proj);
+        if (ssao)
+        {
+            u.AOParams = glm::vec4(settings.SSAODebug ? 2.0f : 1.0f, (float)target.GetAOBindless(1), 1.0f / extent.width, 1.0f / extent.height);
+            device.BindBindless(cmd);
+            device.BindUniforms(cmd, &u, sizeof(u));
+            RenderAmbientOcclusion(cmd, scene, target, u.ViewProj, settings);
+        }
+
         glm::vec4 clear = ToLinear(camera.ClearColor);
         VkRenderingAttachmentInfo colors[2]{};
         colors[0] = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
@@ -570,7 +619,7 @@ namespace Dimension
         VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         depth.imageView = target.GetDepth().GetView();
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.loadOp = ssao ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; // reuse the prepass depth
         depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depth.clearValue.depthStencil = { 1.0f, 0 };
 
@@ -598,7 +647,7 @@ namespace Dimension
             vkCmdDraw(cmd, 3, 1, 0, 0);
             m_Stats.DrawCalls++;
         }
-        DrawMeshes(cmd, scene, u.ViewProj, false);
+        DrawMeshes(cmd, scene, u.ViewProj, MeshPass::Main);
 
         if (!m_GridLines.empty())
         {
@@ -792,14 +841,15 @@ namespace Dimension
                 const glm::mat4& viewProj = faceViewProj[light * 6 + face];
                 std::memcpy(faceUniforms.data(), &viewProj, sizeof(glm::mat4)); // ViewProj is the first member
                 device.BindUniforms(cmd, faceUniforms.data(), faceUniforms.size());
-                DrawMeshes(cmd, scene, viewProj, true);
+                DrawMeshes(cmd, scene, viewProj, MeshPass::Shadow);
             }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 
-    void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, Scene& scene, const glm::mat4& viewProj, bool shadowPass)
+    void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, Scene& scene, const glm::mat4& viewProj, MeshPass pass)
     {
+        bool shadowPass = pass == MeshPass::Shadow, depthPass = pass == MeshPass::Depth;
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
         Frustum frustum(viewProj);
@@ -826,7 +876,7 @@ namespace Dimension
             vkCmdDrawIndexed(cmd, d.IndexCount, 1, d.FirstIndex, 0, 0);
             m_Stats.DrawCalls++;
             if (shadowPass) m_Stats.ShadowCasters++;
-            else
+            else if (!depthPass)
             {
                 m_Stats.Meshes++;
                 m_Stats.Triangles += d.IndexCount / 3;
@@ -846,7 +896,7 @@ namespace Dimension
             if (shadowPass && !mr.CastShadows) continue;
             if (!skinned && !frustum.Intersects(t.World, mesh->GetBounds())) // animated bounds are unknown: never cull
             {
-                if (!shadowPass) m_Stats.Culled++;
+                if (pass == MeshPass::Main) m_Stats.Culled++;
                 continue;
             }
 
@@ -880,6 +930,7 @@ namespace Dimension
                 const Material& mat = *matPtr;
                 bool isTransparent = mat.BlendMode == MaterialBlendMode::Transparent;
                 if (shadowPass && (!mat.CastShadows || !mr.CastShadows || isTransparent)) continue;
+                if (depthPass && isTransparent) continue;
 
                 Draw d;
                 d.MeshPtr = mesh.get();
@@ -892,7 +943,9 @@ namespace Dimension
                 d.Push.Joints = jointsAddress;
                 d.Push.Flags = jointsAddress ? 1u : 0u;
                 if (!d.Push.Material) continue;
-                d.Pipe = shadowPass ? &res.Shadow : isTransparent ? &res.MeshTransparent : mat.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
+                d.Pipe = shadowPass  ? &res.Shadow
+                       : depthPass   ? (mat.DoubleSided ? &res.DepthPrepassDoubleSided : &res.DepthPrepass)
+                       : isTransparent ? &res.MeshTransparent : mat.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
                 if (isTransparent)
                 {
                     d.Depth = glm::distance(glm::vec3(t.World * glm::vec4(mesh->GetBounds().Center(), 1.0f)), camPos);
@@ -1020,7 +1073,7 @@ namespace Dimension
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             std::memcpy(shadowUniforms.data(), &out.ViewProj[c], sizeof(glm::mat4)); // ViewProj is the first member
             device.BindUniforms(cmd, shadowUniforms.data(), shadowUniforms.size());
-            DrawMeshes(cmd, scene, out.ViewProj[c], true);
+            DrawMeshes(cmd, scene, out.ViewProj[c], MeshPass::Shadow);
         }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -1353,6 +1406,69 @@ namespace Dimension
                             glm::vec2(1.0f / src.GetWidth(), 1.0f / src.GetHeight()), settings.BloomRadius };
             pass(target.GetBloom(i), true, res.BloomUp, push);
         }
+    }
+
+    void SceneRenderer::RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
+                                               const SceneSettings& settings)
+    {
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
+
+        // Opaque geometry into the scene depth; the main pass then loads it instead of clearing.
+        VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        depth.imageView = target.GetDepth().GetView();
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depth.clearValue.depthStencil = { 1.0f, 0 };
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        info.renderArea = { { 0, 0 }, extent };
+        info.layerCount = 1;
+        info.pDepthAttachment = &depth;
+        vkCmdBeginRendering(cmd, &info);
+        VkViewport viewport{ 0.0f, (float)extent.height, (float)extent.width, -(float)extent.height, 0.0f, 1.0f };
+        VkRect2D scissor{ { 0, 0 }, extent };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        DrawMeshes(cmd, scene, viewProj, MeshPass::Depth);
+        vkCmdEndRendering(cmd);
+
+        VkImage depthImage = target.GetDepth().GetHandle();
+        Vk::TransitionImage(cmd, depthImage, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_IMAGE_ASPECT_DEPTH_BIT);
+        auto pass = [&](const Image& dst, const Pipeline& pipeline, const void* push, uint32_t pushSize) {
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            att.imageView = dst.GetView();
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo pi{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+            pi.renderArea = { { 0, 0 }, dst.GetExtent() };
+            pi.layerCount = 1;
+            pi.colorAttachmentCount = 1;
+            pi.pColorAttachments = &att;
+            vkCmdBeginRendering(cmd, &pi);
+            VkViewport flat{ 0.0f, 0.0f, (float)dst.GetWidth(), (float)dst.GetHeight(), 0.0f, 1.0f };
+            VkRect2D rect{ { 0, 0 }, dst.GetExtent() };
+            vkCmdSetViewport(cmd, 0, 1, &flat);
+            vkCmdSetScissor(cmd, 0, 1, &rect);
+            pipeline.Bind(cmd);
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, pushSize, push);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_Stats.DrawCalls++;
+        };
+        SsaoPush ao{ target.GetDepthBindless(), 16u, glm::vec2(1.0f / extent.width, 1.0f / extent.height),
+                     std::max(settings.SSAORadius, 0.01f), std::max(settings.SSAOIntensity, 0.0f), settings.SSAOBias, 0.0f };
+        pass(target.GetAO(0), res.Ssao, &ao, sizeof(ao));
+        const Image& raw = target.GetAO(0);
+        SsaoBlurPush blur{ target.GetAOBindless(0), target.GetDepthBindless(), glm::vec2(1.0f / raw.GetWidth(), 1.0f / raw.GetHeight()) };
+        pass(target.GetAO(1), res.SsaoBlur, &blur, sizeof(blur));
+        Vk::TransitionImage(cmd, depthImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 
     void SceneRenderer::FlushLines(VkCommandBuffer cmd, std::vector<LineVertex>& lines, const Pipeline& pipeline)
