@@ -11,6 +11,7 @@
 #include <fstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <cstring>
 
 namespace Dimension
 {
@@ -25,11 +26,17 @@ namespace Dimension
             std::unordered_map<std::string, AssetHandle> PathToHandle; // generic relative path
             std::unordered_map<AssetHandle, Ref<Texture2D>> Textures;
             std::unordered_map<AssetHandle, Ref<Mesh>> Meshes;
+            std::unordered_map<AssetHandle, std::shared_ptr<const MeshData>> MeshDatas;
             std::unordered_map<AssetHandle, Ref<Material>> Materials;
             std::unordered_map<AssetHandle, Ref<Font>> Fonts;
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
+            // Model sub-assets (embedded materials/textures), keyed by the model.
+            std::unordered_map<AssetHandle, std::vector<AssetHandle>> MeshMaterials;
+            std::unordered_map<AssetHandle, std::vector<std::string>> MeshMaterialNames;
+            std::unordered_map<AssetHandle, std::vector<AssetHandle>> SubAssets;
+            std::unordered_map<AssetHandle, std::string> SubAssetNames;
             Ref<Font> DefaultFont;
-            Ref<Texture2D> White, Checker, Particle;
+            Ref<Texture2D> White, Checker, Particle, Circle;
         };
         State* s = nullptr;
 
@@ -69,6 +76,19 @@ namespace Dimension
 
         void Unload(AssetHandle h)
         {
+            if (auto it = s->SubAssets.find(h); it != s->SubAssets.end())
+            {
+                for (AssetHandle sub : it->second)
+                {
+                    s->Textures.erase(sub);
+                    s->Materials.erase(sub);
+                    s->SubAssetNames.erase(sub);
+                }
+                s->SubAssets.erase(it);
+            }
+            s->MeshMaterials.erase(h);
+            s->MeshDatas.erase(h);
+            s->MeshMaterialNames.erase(h);
             s->Textures.erase(h);
             s->Meshes.erase(h);
             s->Materials.erase(h);
@@ -90,6 +110,89 @@ namespace Dimension
         case AssetType::Font: return "Font";
         case AssetType::AnimatorController: return "Animator Controller";
         default: return "None";
+        }
+    }
+
+    namespace
+    {
+        // Stable handle for a sub-asset of a model (kind: 1 sRGB texture, 2 linear texture, 3 material).
+        AssetHandle SubAssetHandle(AssetHandle owner, uint64_t kind, uint64_t index)
+        {
+            uint64_t x = (uint64_t)owner ^ (kind << 56) ^ (index * 0x9E3779B97F4A7C15ull);
+            x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ull;
+            x ^= x >> 27; x *= 0x94D049BB133111EBull;
+            x ^= x >> 31;
+            return AssetHandle(x | (1ull << 63));
+        }
+
+        // Registers a loaded model's material slots: extracted .mat assets when the meta lists them,
+        // otherwise read-only in-memory materials (and textures) built from the file.
+        void RegisterMeshMaterials(AssetHandle mesh, const AssetMetadata& meta, const MeshData& data)
+        {
+            std::vector<AssetHandle> slots(data.Materials.size());
+            std::vector<std::string> names(data.Materials.size());
+            json extracted = meta.ImportSettings.value("materials", json::array());
+            auto& subs = s->SubAssets[mesh];
+            auto image = [&](int32_t index, bool srgb) -> AssetHandle {
+                if (index < 0 || index >= (int32_t)data.Images.size()) return AssetHandle::None();
+                AssetHandle h = SubAssetHandle(mesh, srgb ? 1 : 2, (uint64_t)index);
+                if (!s->Textures.contains(h))
+                {
+                    const ImportedImage& im = data.Images[index];
+                    TextureSettings ts;
+                    ts.SRGB = srgb;
+                    Ref<Texture2D> tex = !im.Bytes.empty() ? Texture2D::LoadFromMemory(im.Bytes.data(), im.Bytes.size(), ts, im.Name)
+                                       : !im.File.empty()  ? Texture2D::LoadFromFile(im.File, ts)
+                                                           : nullptr;
+                    s->Textures[h] = tex;
+                    s->SubAssetNames[h] = im.Name;
+                    subs.push_back(h);
+                }
+                return h;
+            };
+            for (size_t i = 0; i < data.Materials.size(); ++i)
+            {
+                const ImportedMaterial& im = data.Materials[i];
+                names[i] = im.Name;
+                if (i < extracted.size() && extracted[i].is_number_unsigned())
+                {
+                    AssetHandle h(extracted[i].get<uint64_t>());
+                    if (AssetManager::GetMetadata(h))
+                    {
+                        slots[i] = h;
+                        continue;
+                    }
+                }
+                AssetHandle h = SubAssetHandle(mesh, 3, i);
+                auto m = MakeRef<Material>(im.Values);
+                m->BaseColorMap = image(im.BaseColorImage, true);
+                m->NormalMap = image(im.NormalImage, false);
+                m->MetallicRoughnessMap = image(im.MetallicRoughnessImage, false);
+                m->EmissionMap = image(im.EmissionImage, true);
+                s->Materials[h] = m;
+                s->SubAssetNames[h] = im.Name;
+                subs.push_back(h);
+                slots[i] = h;
+            }
+            s->MeshMaterials[mesh] = std::move(slots);
+            s->MeshMaterialNames[mesh] = std::move(names);
+        }
+
+        std::string SafeFileName(std::string name)
+        {
+            for (char& c : name)
+                if (std::strchr("<>:\"/\\|?*", c) || (unsigned char)c < 32) c = '_';
+            return name.empty() ? "Unnamed" : name;
+        }
+
+        fs::path UniqueFile(const fs::path& path)
+        {
+            if (!fs::exists(path)) return path;
+            for (int i = 1;; ++i)
+            {
+                fs::path p = path.parent_path() / (path.stem().string() + " " + std::to_string(i) + path.extension().string());
+                if (!fs::exists(p)) return p;
+            }
         }
     }
 
@@ -232,6 +335,7 @@ namespace Dimension
         case 5: return "Cylinder (built-in)";
         default: break;
         }
+        if (auto it = s->SubAssetNames.find(handle); it != s->SubAssetNames.end()) return it->second + " (embedded)";
         auto* m = GetMetadata(handle);
         return m ? m->Path.stem().string() : "Missing";
     }
@@ -321,10 +425,132 @@ namespace Dimension
         case 5: mesh = Mesh::CreateCylinder(); break;
         default:
             if (auto* meta = GetMetadata(handle); meta && meta->Type == AssetType::Mesh)
-                mesh = Mesh::LoadFromFile(s->AssetsDir / meta->Path);
+            {
+                MeshData data;
+                if (MeshData::LoadFromFile(s->AssetsDir / meta->Path, data))
+                {
+                    RegisterMeshMaterials(handle, *meta, data);
+                    mesh = MakeRef<Mesh>(std::move(data));
+                }
+            }
         }
         s->Meshes[handle] = mesh;
         return mesh;
+    }
+
+    std::shared_ptr<const MeshData> AssetManager::GetMeshData(AssetHandle handle)
+    {
+        if (!handle.IsValid() || !s) return nullptr;
+        if (auto it = s->MeshDatas.find(handle); it != s->MeshDatas.end()) return it->second;
+        std::shared_ptr<MeshData> data;
+        switch ((uint64_t)handle)
+        {
+        case 1: data = std::make_shared<MeshData>(MeshData::Cube()); break;
+        case 2: data = std::make_shared<MeshData>(MeshData::Sphere()); break;
+        case 3: data = std::make_shared<MeshData>(MeshData::Plane()); break;
+        case 4: data = std::make_shared<MeshData>(MeshData::Quad()); break;
+        case 5: data = std::make_shared<MeshData>(MeshData::Cylinder()); break;
+        default:
+            if (auto* meta = GetMetadata(handle); meta && meta->Type == AssetType::Mesh)
+            {
+                data = std::make_shared<MeshData>();
+                if (!MeshData::LoadFromFile(s->AssetsDir / meta->Path, *data)) data.reset();
+            }
+        }
+        s->MeshDatas[handle] = data;
+        return data;
+    }
+
+    const std::vector<AssetHandle>& AssetManager::GetMeshMaterials(AssetHandle mesh)
+    {
+        static const std::vector<AssetHandle> kNone;
+        if (!s->Meshes.contains(mesh)) GetMesh(mesh);
+        auto it = s->MeshMaterials.find(mesh);
+        return it != s->MeshMaterials.end() ? it->second : kNone;
+    }
+
+    std::vector<std::string> AssetManager::GetMeshMaterialNames(AssetHandle mesh)
+    {
+        GetMeshMaterials(mesh);
+        auto it = s->MeshMaterialNames.find(mesh);
+        return it != s->MeshMaterialNames.end() ? it->second : std::vector<std::string>{};
+    }
+
+    bool AssetManager::AreMeshMaterialsExtracted(AssetHandle mesh)
+    {
+        auto* meta = GetMetadata(mesh);
+        return meta && meta->ImportSettings.contains("materials") && !meta->ImportSettings["materials"].empty();
+    }
+
+    bool AssetManager::IsSubAsset(AssetHandle handle) { return s->SubAssetNames.contains(handle); }
+
+    bool AssetManager::ExtractMeshMaterials(AssetHandle mesh)
+    {
+        auto* meta = GetMetadata(mesh);
+        if (!meta || meta->Type != AssetType::Mesh) return false;
+        fs::path modelPath = s->AssetsDir / meta->Path;
+        MeshData data;
+        if (!MeshData::LoadFromFile(modelPath, data) || data.Materials.empty()) return false;
+
+        fs::path dir = modelPath.parent_path() / (modelPath.stem().string() + " Materials");
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+
+        // Textures: external files inside Assets are referenced; embedded images are written out.
+        std::vector<AssetHandle> images(data.Images.size());
+        std::vector<bool> linear(data.Images.size(), false);
+        for (auto& m : data.Materials)
+            for (int32_t i : { m.NormalImage, m.MetallicRoughnessImage })
+                if (i >= 0 && i < (int32_t)linear.size()) linear[i] = true;
+        for (size_t i = 0; i < data.Images.size(); ++i)
+        {
+            const ImportedImage& im = data.Images[i];
+            fs::path file;
+            if (!im.Bytes.empty())
+            {
+                bool png = im.Bytes.size() > 4 && im.Bytes[0] == 0x89 && im.Bytes[1] == 'P';
+                file = UniqueFile(dir / (SafeFileName(im.Name) + (png ? ".png" : ".jpg")));
+                std::ofstream(file, std::ios::binary).write((const char*)im.Bytes.data(), (std::streamsize)im.Bytes.size());
+            }
+            else if (!im.File.empty() && fs::exists(im.File))
+            {
+                fs::path rel = im.File.lexically_relative(s->AssetsDir);
+                if (rel.empty() || *rel.begin() == "..") // outside the project: copy it in
+                {
+                    file = UniqueFile(dir / im.File.filename());
+                    fs::copy_file(im.File, file, ec);
+                }
+                else
+                    file = im.File;
+            }
+            if (file.empty()) continue;
+            images[i] = Import(file);
+            if (images[i].IsValid() && linear[i])
+            {
+                json settings = GetMetadata(images[i])->ImportSettings;
+                settings["srgb"] = false;
+                SetImportSettings(images[i], settings);
+            }
+        }
+
+        json guids = json::array();
+        for (auto& im : data.Materials)
+        {
+            Material m = im.Values;
+            auto img = [&](int32_t i) { return i >= 0 && i < (int32_t)images.size() ? images[i] : AssetHandle::None(); };
+            m.BaseColorMap = img(im.BaseColorImage);
+            m.NormalMap = img(im.NormalImage);
+            m.MetallicRoughnessMap = img(im.MetallicRoughnessImage);
+            m.EmissionMap = img(im.EmissionImage);
+            fs::path file = UniqueFile(dir / (SafeFileName(im.Name) + ".mat"));
+            if (!m.Save(file)) return false;
+            guids.push_back((uint64_t)Import(file));
+        }
+        json settings = GetMetadata(mesh)->ImportSettings;
+        settings["materials"] = guids;
+        SetImportSettings(mesh, settings); // unloads the model; it re-registers with the extracted materials
+        Log::Info("Extracted {} material(s) from '{}' to '{}'", guids.size(), meta->Path.filename().string(), dir.filename().string());
+        return true;
     }
 
     Ref<Material> AssetManager::GetMaterial(AssetHandle handle)
@@ -412,9 +638,31 @@ namespace Dimension
     AssetHandle AssetManager::CreateAnimatorController(const fs::path& absolutePath)
     {
         AnimatorController controller;
-        controller.States.push_back({ "Idle", "", 1.0f, true, { 0.0f, 0.0f } });
+        AnimState idle;
+        idle.Name = "Idle";
+        controller.States.push_back(idle);
         if (!controller.Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
+    }
+
+    Ref<Texture2D> AssetManager::GetCircleTexture()
+    {
+        if (!s->Circle)
+        {
+            constexpr int N = 64;
+            std::vector<uint32_t> pixels(N * N);
+            for (int y = 0; y < N; ++y)
+                for (int x = 0; x < N; ++x)
+                {
+                    float dx = x + 0.5f - N * 0.5f, dy = y + 0.5f - N * 0.5f;
+                    float a = std::clamp(N * 0.5f - 1.0f - std::sqrt(dx * dx + dy * dy), 0.0f, 1.0f);
+                    pixels[y * N + x] = 0x00FFFFFFu | (uint32_t(a * 255.0f) << 24);
+                }
+            TextureSettings ts;
+            ts.SRGB = false;
+            s->Circle = MakeRef<Texture2D>(pixels.data(), N, N, ts, "UICircle");
+        }
+        return s->Circle;
     }
 
     Ref<Font> AssetManager::GetDefaultFont()

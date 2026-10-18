@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <vector>
+#include <glm/gtc/packing.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -13,16 +15,29 @@ namespace Dimension
 {
     Texture2D::Texture2D(const void* rgba8, uint32_t width, uint32_t height, const TextureSettings& settings, const char* debugName)
     {
+        Create(rgba8, 4, settings.SRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, width, height, settings, debugName);
+    }
+
+    Texture2D::Texture2D(const float* rgba32f, uint32_t width, uint32_t height, const TextureSettings& settings, const char* debugName)
+    {
+        std::vector<uint16_t> half(size_t(width) * height * 4);
+        for (size_t i = 0; i < half.size(); ++i) half[i] = glm::packHalf1x16(std::min(rgba32f[i], 65000.0f));
+        Create(half.data(), 8, VK_FORMAT_R16G16B16A16_SFLOAT, width, height, settings, debugName);
+        m_IrradianceSH = Environment::ComputeIrradianceSH(rgba32f, width, height);
+    }
+
+    void Texture2D::Create(const void* pixels, uint32_t bytesPerPixel, VkFormat format, uint32_t width, uint32_t height,
+                           const TextureSettings& settings, const char* debugName)
+    {
         auto& device = RenderDevice::Get();
         uint32_t mips = settings.GenerateMips ? (uint32_t)std::floor(std::log2((float)std::max(width, height))) + 1 : 1;
-        VkFormat format = settings.SRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
         m_Image = Image(ImageDesc{ width, height, format,
                                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                    mips, debugName });
 
-        VkDeviceSize size = VkDeviceSize(width) * height * 4;
+        VkDeviceSize size = VkDeviceSize(width) * height * bytesPerPixel;
         Buffer staging(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, MemoryUsage::CpuToGpu);
-        std::memcpy(staging.GetMapped(), rgba8, size);
+        std::memcpy(staging.GetMapped(), pixels, size);
 
         VkImage image = m_Image.GetHandle();
         device.ImmediateSubmit([&](VkCommandBuffer cmd) {
@@ -79,6 +94,19 @@ namespace Dimension
     {
         int w, h, channels;
         std::string utf8 = path.string();
+        if (stbi_is_hdr(utf8.c_str()))
+        {
+            float* hdr = stbi_loadf(utf8.c_str(), &w, &h, &channels, 4);
+            if (!hdr)
+            {
+                Log::Error("Failed to load HDR texture '{}': {}", utf8, stbi_failure_reason());
+                return nullptr;
+            }
+            auto name = path.filename().string();
+            auto texture = MakeRef<Texture2D>(hdr, (uint32_t)w, (uint32_t)h, settings, name.c_str());
+            stbi_image_free(hdr);
+            return texture;
+        }
         stbi_uc* pixels = stbi_load(utf8.c_str(), &w, &h, &channels, 4);
         if (!pixels)
         {
@@ -86,6 +114,20 @@ namespace Dimension
             return nullptr;
         }
         auto name = path.filename().string();
+        auto texture = MakeRef<Texture2D>(pixels, (uint32_t)w, (uint32_t)h, settings, name.c_str());
+        stbi_image_free(pixels);
+        return texture;
+    }
+
+    Ref<Texture2D> Texture2D::LoadFromMemory(const void* data, size_t size, const TextureSettings& settings, const std::string& name)
+    {
+        int w, h, channels;
+        stbi_uc* pixels = stbi_load_from_memory((const stbi_uc*)data, (int)size, &w, &h, &channels, 4);
+        if (!pixels)
+        {
+            Log::Error("Failed to decode texture '{}': {}", name, stbi_failure_reason());
+            return nullptr;
+        }
         auto texture = MakeRef<Texture2D>(pixels, (uint32_t)w, (uint32_t)h, settings, name.c_str());
         stbi_image_free(pixels);
         return texture;

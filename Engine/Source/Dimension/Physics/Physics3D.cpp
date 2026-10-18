@@ -19,36 +19,68 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
+#include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Renderer/Mesh.h"
+#include "Dimension/Project/Project.h"
 
 #include <cstdarg>
 #include <mutex>
+#include <algorithm>
+#include <array>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Dimension
 {
     namespace
     {
+        // Object layer = (user layer << 1) | moving. Broad phase layers: 0 non-moving, 1 moving.
         namespace Layers
         {
             constexpr JPH::ObjectLayer NonMoving = 0;
             constexpr JPH::ObjectLayer Moving = 1;
+            JPH::ObjectLayer Make(int userLayer, bool moving) { return (JPH::ObjectLayer)((std::clamp(userLayer, 0, 31) << 1) | (moving ? 1 : 0)); }
         }
 
         class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter
         {
         public:
+            std::array<uint32_t, 32> Matrix = ProjectConfig::MakeDefaultMatrix();
             bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override
             {
-                return a == Layers::Moving || b == Layers::Moving;
+                if (!(a & 1) && !(b & 1)) return false; // static vs static
+                return (Matrix[a >> 1] >> (b >> 1)) & 1u;
             }
+        };
+
+        // Query filter: accepts bodies whose user layer is in the mask.
+        class LayerMaskFilter final : public JPH::ObjectLayerFilter
+        {
+        public:
+            explicit LayerMaskFilter(uint32_t mask) : m_Mask(mask) {}
+            bool ShouldCollide(JPH::ObjectLayer layer) const override { return (m_Mask >> (layer >> 1)) & 1u; }
+
+        private:
+            uint32_t m_Mask;
         };
 
         class BroadPhaseLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface
         {
         public:
             JPH::uint GetNumBroadPhaseLayers() const override { return 2; }
-            JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override { return JPH::BroadPhaseLayer((JPH::uint8)layer); }
+            JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override { return JPH::BroadPhaseLayer((JPH::uint8)(layer & 1)); }
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
             const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override
             {
@@ -62,7 +94,7 @@ namespace Dimension
         public:
             bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer bp) const override
             {
-                return layer == Layers::Moving || (JPH::BroadPhaseLayer::Type)bp == Layers::Moving;
+                return (layer & 1) || (JPH::BroadPhaseLayer::Type)bp == Layers::Moving;
             }
         };
 
@@ -103,7 +135,16 @@ namespace Dimension
         JPH::PhysicsSystem System;
 
         std::unordered_map<JPH::uint32, Entity> BodyToEntity; // read-only during Update
-        struct Event { Entity A, B; bool Begin; };
+        std::unordered_set<JPH::uint32> Sensors;               // read-only during Update
+        struct Joint { Entity A, B; JPH::Ref<JPH::Constraint> Constraint; };
+        std::vector<Joint> Joints;
+        // Jointed bodies that must not collide share group 0 and get their own sub-group.
+        static constexpr JPH::uint kMaxJointSubGroups = 4096;
+        JPH::Ref<JPH::GroupFilterTable> JointFilter = new JPH::GroupFilterTable(kMaxJointSubGroups);
+        std::unordered_map<JPH::uint32, JPH::uint> SubGroupOf; // body id -> sub-group
+        JPH::uint NextSubGroup = 0;
+        std::vector<Entity> Characters;
+        struct Event { Entity A, B; bool Begin, Trigger; };
         std::mutex EventMutex;
         std::vector<Event> Events;
 
@@ -116,19 +157,22 @@ namespace Dimension
         void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold&, JPH::ContactSettings&) override
         {
             std::lock_guard lock(EventMutex);
-            Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true });
+            Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true, a.IsSensor() || b.IsSensor() });
         }
 
         void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
         {
+            bool trigger = Sensors.contains(pair.GetBody1ID().GetIndexAndSequenceNumber()) ||
+                           Sensors.contains(pair.GetBody2ID().GetIndexAndSequenceNumber());
             std::lock_guard lock(EventMutex);
-            Events.push_back({ Lookup(pair.GetBody1ID()), Lookup(pair.GetBody2ID()), false });
+            Events.push_back({ Lookup(pair.GetBody1ID()), Lookup(pair.GetBody2ID()), false, trigger });
         }
     };
 
-    Physics3DWorld::Physics3DWorld(Scene& scene) : m_Scene(scene), m_Impl(MakeScope<Impl>())
+    Physics3DWorld::Physics3DWorld(Scene& scene) : m_Scene(scene), m_Impl((EnsureJoltInitialized(), MakeScope<Impl>())) // Impl allocates through Jolt
     {
         EnsureJoltInitialized();
+        m_Impl->ObjectPair.Matrix = Project::GetConfig().LayerCollisionMatrix;
         m_Impl->TempAllocator = MakeScope<JPH::TempAllocatorImpl>(16 * 1024 * 1024);
         int threads = std::max(1, (int)std::thread::hardware_concurrency() - 1);
         m_Impl->JobSystem = MakeScope<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads);
@@ -139,15 +183,22 @@ namespace Dimension
         auto& reg = scene.GetRegistry();
         std::vector<Entity> entities;
         reg.EachEntity([&](Entity e) {
-            if (reg.Has<RigidbodyComponent>(e) || reg.Has<BoxColliderComponent>(e) || reg.Has<SphereColliderComponent>(e) || reg.Has<CapsuleColliderComponent>(e))
+            if (reg.Has<RigidbodyComponent>(e) || reg.Has<BoxColliderComponent>(e) || reg.Has<SphereColliderComponent>(e) ||
+                reg.Has<CapsuleColliderComponent>(e) || reg.Has<MeshColliderComponent>(e) || reg.Has<CharacterControllerComponent>(e))
                 entities.push_back(e);
         });
         for (Entity e : entities) CreateBody(e);
+        std::vector<Entity> jointed;
+        for (auto [e, j] : reg.ViewOf<JointComponent>()) jointed.push_back(e);
+        for (Entity e : jointed) CreateJoint(e);
         m_Impl->System.OptimizeBroadPhase();
     }
 
     Physics3DWorld::~Physics3DWorld()
     {
+        for (auto& j : m_Impl->Joints) m_Impl->System.RemoveConstraint(j.Constraint);
+        m_Impl->Joints.clear();
+        for (auto [e, cc] : m_Scene.GetRegistry().ViewOf<CharacterControllerComponent>()) cc.Runtime.reset();
         auto& bi = m_Impl->System.GetBodyInterface();
         for (auto [e, rb] : m_Scene.GetRegistry().ViewOf<RigidbodyComponent>())
         {
@@ -161,15 +212,168 @@ namespace Dimension
 
     void Physics3DWorld::CreateBodiesFor(Entity root)
     {
+        CreateBodiesRecursive(root);
+        CreateJointsRecursive(root);
+    }
+
+    void Physics3DWorld::CreateBodiesRecursive(Entity e)
+    {
         auto& reg = m_Scene.GetRegistry();
-        if (reg.Has<RigidbodyComponent>(root) || reg.Has<BoxColliderComponent>(root) || reg.Has<SphereColliderComponent>(root) || reg.Has<CapsuleColliderComponent>(root))
-            CreateBody(root);
-        for (Entity c : m_Scene.GetChildren(root)) CreateBodiesFor(c);
+        if (reg.Has<RigidbodyComponent>(e) || reg.Has<BoxColliderComponent>(e) || reg.Has<SphereColliderComponent>(e) ||
+            reg.Has<CapsuleColliderComponent>(e) || reg.Has<MeshColliderComponent>(e) || reg.Has<CharacterControllerComponent>(e))
+            CreateBody(e);
+        for (Entity c : m_Scene.GetChildren(e)) CreateBodiesRecursive(c);
+    }
+
+    void Physics3DWorld::CreateJointsRecursive(Entity e)
+    {
+        if (m_Scene.GetRegistry().Has<JointComponent>(e)) CreateJoint(e);
+        for (Entity c : m_Scene.GetChildren(e)) CreateJointsRecursive(c);
+    }
+
+    size_t Physics3DWorld::GetJointCount() const { return m_Impl->Joints.size(); }
+
+    void Physics3DWorld::CreateJoint(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& j = reg.Get<JointComponent>(e);
+        auto* rbA = reg.TryGet<RigidbodyComponent>(e);
+        if (!rbA || rbA->RuntimeBody == 0xFFFFFFFF)
+        {
+            Log::Warn("Joint on '{}' needs a Rigidbody with a collider", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        JPH::BodyID idA(rbA->RuntimeBody), idB; // invalid B = attached to the world
+        Entity other = Entity::Null();
+        const TransformComponent* tb = nullptr;
+        if (m_Scene.IsValid(j.ConnectedBody) && j.ConnectedBody != e)
+        {
+            auto* rbB = reg.TryGet<RigidbodyComponent>(j.ConnectedBody);
+            if (!rbB || rbB->RuntimeBody == 0xFFFFFFFF)
+            {
+                Log::Warn("Joint on '{}': connected body has no physics body", reg.Get<TagComponent>(e).Name);
+                return;
+            }
+            idB = JPH::BodyID(rbB->RuntimeBody);
+            other = j.ConnectedBody;
+            tb = &reg.Get<TransformComponent>(other);
+        }
+        const auto& ta = reg.Get<TransformComponent>(e);
+        glm::vec3 anchor = glm::vec3(ta.World * glm::vec4(j.Anchor, 1.0f));
+        glm::vec3 axis = glm::mat3(ta.World) * j.Axis;
+        axis = glm::length(axis) > 1e-6f ? glm::normalize(axis) : glm::vec3(0, 0, 1);
+
+        JPH::Ref<JPH::TwoBodyConstraintSettings> settings;
+        switch (j.Type)
+        {
+        case JointType::Fixed:
+        {
+            auto* s = new JPH::FixedConstraintSettings();
+            s->mAutoDetectPoint = true;
+            settings = s;
+            break;
+        }
+        case JointType::Hinge:
+        {
+            auto* s = new JPH::HingeConstraintSettings();
+            s->mPoint1 = s->mPoint2 = JPH::RVec3(ToJolt(anchor));
+            s->mHingeAxis1 = s->mHingeAxis2 = ToJolt(axis);
+            glm::vec3 helper = std::abs(axis.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+            s->mNormalAxis1 = s->mNormalAxis2 = ToJolt(glm::normalize(glm::cross(axis, helper)));
+            if (j.UseLimits)
+            {
+                s->mLimitsMin = glm::radians(std::clamp(j.MinAngle, -180.0f, 0.0f));
+                s->mLimitsMax = glm::radians(std::clamp(j.MaxAngle, 0.0f, 180.0f));
+            }
+            settings = s;
+            break;
+        }
+        case JointType::Point:
+        {
+            auto* s = new JPH::PointConstraintSettings();
+            s->mPoint1 = s->mPoint2 = JPH::RVec3(ToJolt(anchor));
+            settings = s;
+            break;
+        }
+        case JointType::Distance:
+        {
+            auto* s = new JPH::DistanceConstraintSettings();
+            glm::vec3 pointB = tb ? glm::vec3(tb->World * glm::vec4(j.ConnectedAnchor, 1.0f)) : j.ConnectedAnchor;
+            s->mPoint1 = JPH::RVec3(ToJolt(anchor));
+            s->mPoint2 = JPH::RVec3(ToJolt(pointB));
+            float initial = glm::distance(anchor, pointB);
+            s->mMinDistance = j.MinDistance > 0.0f ? j.MinDistance : initial;
+            s->mMaxDistance = j.MaxDistance > 0.0f ? std::max(j.MaxDistance, s->mMinDistance) : std::max(initial, s->mMinDistance);
+            settings = s;
+            break;
+        }
+        }
+
+        auto& bi = m_Impl->System.GetBodyInterface();
+        JPH::TwoBodyConstraint* constraint = bi.CreateConstraint(settings, idA, idB);
+        if (!constraint) return;
+        m_Impl->System.AddConstraint(constraint);
+        bi.ActivateConstraint(constraint);
+        m_Impl->Joints.push_back({ e, other, constraint });
+
+        if (!j.EnableCollision && !idB.IsInvalid())
+        {
+            auto subGroup = [&](JPH::BodyID id) -> JPH::uint {
+                auto it = m_Impl->SubGroupOf.find(id.GetIndexAndSequenceNumber());
+                if (it != m_Impl->SubGroupOf.end()) return it->second;
+                if (m_Impl->NextSubGroup >= Impl::kMaxJointSubGroups) return ~0u;
+                JPH::uint sg = m_Impl->NextSubGroup++;
+                m_Impl->SubGroupOf[id.GetIndexAndSequenceNumber()] = sg;
+                JPH::BodyLockWrite lock(m_Impl->System.GetBodyLockInterface(), id);
+                if (lock.Succeeded()) lock.GetBody().SetCollisionGroup(JPH::CollisionGroup(m_Impl->JointFilter, 0, sg));
+                return sg;
+            };
+            JPH::uint a = subGroup(idA), b = subGroup(idB);
+            if (a != ~0u && b != ~0u) m_Impl->JointFilter->DisableCollision(a, b);
+            else Log::Warn("Too many jointed bodies: '{}' keeps colliding with its connected body", reg.Get<TagComponent>(e).Name);
+        }
+    }
+
+    void Physics3DWorld::CreateCharacter(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& cc = reg.Get<CharacterControllerComponent>(e);
+        if (cc.Runtime) return;
+        auto& t = reg.Get<TransformComponent>(e);
+        float radius = std::max(0.01f, cc.Radius);
+        float halfCylinder = std::max(0.01f, cc.Height * 0.5f - radius);
+        JPH::RotatedTranslatedShapeSettings shapeSettings(ToJolt(cc.Center), JPH::Quat::sIdentity(), new JPH::CapsuleShapeSettings(halfCylinder, radius));
+        auto shape = shapeSettings.Create();
+        if (shape.HasError()) return;
+
+        JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
+        settings->mShape = shape.Get();
+        settings->mMaxSlopeAngle = glm::radians(std::clamp(cc.SlopeLimit, 0.0f, 89.0f));
+        settings->mMass = cc.Mass;
+        settings->mMaxStrength = cc.PushStrength;
+        settings->mCharacterPadding = cc.SkinWidth;
+        // Contacts on the lower hemisphere can support the character.
+        settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), halfCylinder - cc.Center.y);
+        settings->mInnerBodyShape = shape.Get(); // lets raycasts, triggers and rigidbodies see the character
+        settings->mInnerBodyLayer = Layers::Make(reg.Get<TagComponent>(e).Layer, true);
+        auto* character = new JPH::CharacterVirtual(settings, JPH::RVec3(ToJolt(t.GetWorldPosition())), JPH::Quat::sIdentity(), 0, &m_Impl->System);
+        cc.Runtime = std::shared_ptr<void>(new JPH::Ref<JPH::CharacterVirtual>(character),
+                                           [](void* p) { delete static_cast<JPH::Ref<JPH::CharacterVirtual>*>(p); });
+        cc.IsGrounded = false;
+        cc.VerticalSpeed = 0.0f;
+        cc.Velocity = glm::vec3(0.0f);
+        if (!character->GetInnerBodyID().IsInvalid()) m_Impl->BodyToEntity[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = e;
+        m_Impl->Characters.push_back(e);
     }
 
     void Physics3DWorld::CreateBody(Entity e)
     {
         auto& reg = m_Scene.GetRegistry();
+        if (reg.Has<CharacterControllerComponent>(e))
+        {
+            CreateCharacter(e); // characters are not rigid bodies (their colliders are ignored)
+            return;
+        }
         if (!reg.Has<RigidbodyComponent>(e)) reg.Emplace<RigidbodyComponent>(e).Type = BodyType::Static;
         auto& rb = reg.Get<RigidbodyComponent>(e);
         if (rb.RuntimeBody != 0xFFFFFFFF) return;
@@ -179,6 +383,7 @@ namespace Dimension
         JPH::StaticCompoundShapeSettings compound;
         float friction = 0.6f, restitution = 0.0f;
         int shapeCount = 0;
+        bool sensor = false;
         if (auto* box = reg.TryGet<BoxColliderComponent>(e))
         {
             glm::vec3 half = glm::max(box->Size * 0.5f * scale, glm::vec3(0.001f));
@@ -186,6 +391,7 @@ namespace Dimension
             compound.AddShape(ToJolt(box->Offset * scale), JPH::Quat::sIdentity(), new JPH::BoxShapeSettings(ToJolt(half), convex));
             friction = box->Friction;
             restitution = box->Restitution;
+            sensor |= box->IsTrigger;
             ++shapeCount;
         }
         if (auto* sphere = reg.TryGet<SphereColliderComponent>(e))
@@ -194,6 +400,7 @@ namespace Dimension
             compound.AddShape(ToJolt(sphere->Offset * scale), JPH::Quat::sIdentity(), new JPH::SphereShapeSettings(radius));
             friction = sphere->Friction;
             restitution = sphere->Restitution;
+            sensor |= sphere->IsTrigger;
             ++shapeCount;
         }
         if (auto* cap = reg.TryGet<CapsuleColliderComponent>(e))
@@ -203,7 +410,49 @@ namespace Dimension
             compound.AddShape(ToJolt(cap->Offset * scale), JPH::Quat::sIdentity(), new JPH::CapsuleShapeSettings(halfCylinder, radius));
             friction = cap->Friction;
             restitution = cap->Restitution;
+            sensor |= cap->IsTrigger;
             ++shapeCount;
+        }
+        if (auto* mc = reg.TryGet<MeshColliderComponent>(e))
+        {
+            auto* mr = reg.TryGet<MeshRendererComponent>(e);
+            AssetHandle meshHandle = mc->Mesh.IsValid() ? mc->Mesh : mr ? mr->Mesh : AssetHandle::None();
+            auto data = AssetManager::GetMeshData(meshHandle);
+            if (!data || data->Vertices.empty() || data->Indices.size() < 3)
+                Log::Warn("Mesh Collider on '{}' has no mesh", reg.Get<TagComponent>(e).Name);
+            else
+            {
+                bool convex = mc->Convex || rb.Type == BodyType::Dynamic;
+                if (!mc->Convex && rb.Type == BodyType::Dynamic)
+                    Log::Warn("Mesh Collider on '{}': dynamic bodies use the convex hull", reg.Get<TagComponent>(e).Name);
+                if (convex)
+                {
+                    // The hull builder only needs a representative point cloud.
+                    JPH::Array<JPH::Vec3> points;
+                    size_t stride = std::max<size_t>(1, data->Vertices.size() / 2000);
+                    for (size_t i = 0; i < data->Vertices.size(); i += stride) points.push_back(ToJolt(data->Vertices[i].Position * scale));
+                    compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::ConvexHullShapeSettings(points));
+                }
+                else
+                {
+                    JPH::VertexList vertices;
+                    vertices.reserve(data->Vertices.size());
+                    for (auto& v : data->Vertices)
+                    {
+                        glm::vec3 p = v.Position * scale;
+                        vertices.push_back(JPH::Float3(p.x, p.y, p.z));
+                    }
+                    JPH::IndexedTriangleList triangles;
+                    triangles.reserve(data->Indices.size() / 3);
+                    for (size_t i = 0; i + 2 < data->Indices.size(); i += 3)
+                        triangles.push_back(JPH::IndexedTriangle(data->Indices[i], data->Indices[i + 1], data->Indices[i + 2], 0));
+                    compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::MeshShapeSettings(std::move(vertices), std::move(triangles)));
+                }
+                friction = mc->Friction;
+                restitution = mc->Restitution;
+                sensor |= mc->IsTrigger;
+                ++shapeCount;
+            }
         }
         if (shapeCount == 0) return; // rigidbody without collider: nothing to simulate
 
@@ -218,7 +467,9 @@ namespace Dimension
                                 : rb.Type == BodyType::Kinematic ? JPH::EMotionType::Kinematic
                                                                  : JPH::EMotionType::Static;
         JPH::BodyCreationSettings settings(shapeResult.Get(), JPH::RVec3(ToJolt(t.GetWorldPosition())), ToJolt(t.GetRotationQuat()),
-                                           motion, motion == JPH::EMotionType::Static ? Layers::NonMoving : Layers::Moving);
+                                           motion, Layers::Make(reg.Get<TagComponent>(e).Layer, motion != JPH::EMotionType::Static));
+        settings.mIsSensor = sensor;
+        settings.mCollideKinematicVsNonDynamic = sensor; // triggers also see kinematic bodies (e.g. Character Controllers)
         settings.mFriction = friction;
         settings.mRestitution = restitution;
         settings.mLinearDamping = rb.LinearDamping;
@@ -226,6 +477,12 @@ namespace Dimension
         settings.mGravityFactor = rb.UseGravity ? 1.0f : 0.0f;
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = rb.Mass;
+        if (motion != JPH::EMotionType::Dynamic)
+        {
+            // Mesh shapes have no mass properties; non-dynamic bodies do not need real ones.
+            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+            settings.mMassPropertiesOverride.mInertia = JPH::Mat44::sIdentity();
+        }
 
         auto& bi = m_Impl->System.GetBodyInterface();
         JPH::BodyID id = bi.CreateAndAddBody(settings, JPH::EActivation::Activate);
@@ -236,10 +493,28 @@ namespace Dimension
         }
         rb.RuntimeBody = id.GetIndexAndSequenceNumber();
         m_Impl->BodyToEntity[rb.RuntimeBody] = e;
+        if (sensor) m_Impl->Sensors.insert(rb.RuntimeBody);
     }
 
     void Physics3DWorld::OnEntityDestroyed(Entity e)
     {
+        // Constraints must go before their bodies.
+        auto& joints = m_Impl->Joints;
+        for (auto it = joints.begin(); it != joints.end();)
+            if (it->A == e || it->B == e)
+            {
+                m_Impl->System.RemoveConstraint(it->Constraint);
+                it = joints.erase(it);
+            }
+            else
+                ++it;
+        if (auto* cc = m_Scene.GetRegistry().TryGet<CharacterControllerComponent>(e); cc && cc->Runtime)
+        {
+            auto& character = *static_cast<JPH::Ref<JPH::CharacterVirtual>*>(cc->Runtime.get());
+            m_Impl->BodyToEntity.erase(character->GetInnerBodyID().GetIndexAndSequenceNumber());
+            cc->Runtime.reset();
+            std::erase(m_Impl->Characters, e);
+        }
         auto* rb = m_Scene.GetRegistry().TryGet<RigidbodyComponent>(e);
         if (!rb || rb->RuntimeBody == 0xFFFFFFFF) return;
         auto& bi = m_Impl->System.GetBodyInterface();
@@ -247,6 +522,7 @@ namespace Dimension
         bi.RemoveBody(id);
         bi.DestroyBody(id);
         m_Impl->BodyToEntity.erase(rb->RuntimeBody);
+        m_Impl->Sensors.erase(rb->RuntimeBody);
         rb->RuntimeBody = 0xFFFFFFFF;
     }
 
@@ -282,7 +558,7 @@ namespace Dimension
             std::lock_guard lock(m_Impl->EventMutex);
             events.swap(m_Impl->Events);
         }
-        for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, false);
+        for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, ev.Trigger);
     }
 
     namespace
@@ -326,7 +602,7 @@ namespace Dimension
         if (BodyFor(scene, e, bi, id)) bi->AddImpulse(id, ToJolt(i));
     }
 
-    RaycastHit Physics3DWorld::Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance)
+    RaycastHit Physics3DWorld::Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask)
     {
         RaycastHit result;
         Physics3DWorld* world = scene.GetPhysics3D();
@@ -336,7 +612,7 @@ namespace Dimension
         auto& system = world->GetImpl()->System;
         JPH::RRayCast ray(JPH::RVec3(ToJolt(origin)), ToJolt(dir));
         JPH::RayCastResult hit;
-        if (!system.GetNarrowPhaseQuery().CastRay(ray, hit)) return result;
+        if (!system.GetNarrowPhaseQuery().CastRay(ray, hit, {}, LayerMaskFilter(layerMask))) return result;
         result.Hit = world->GetImpl()->Lookup(hit.mBodyID);
         result.Distance = hit.mFraction * maxDistance;
         result.Point = origin + dir * hit.mFraction;
@@ -344,5 +620,94 @@ namespace Dimension
         if (lock.Succeeded())
             result.Normal = FromJolt(lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, JPH::RVec3(ToJolt(result.Point))));
         return result;
+    }
+
+    namespace
+    {
+        std::vector<Entity> CollideWith(Scene& scene, const JPH::Shape& shape, const JPH::RMat44& transform, uint32_t layerMask)
+        {
+            std::vector<Entity> out;
+            Physics3DWorld* world = scene.GetPhysics3D();
+            if (!world) return out;
+            auto* impl = world->GetImpl();
+            JPH::CollideShapeSettings settings;
+            JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+            impl->System.GetNarrowPhaseQuery().CollideShape(&shape, JPH::Vec3::sReplicate(1.0f), transform, settings, JPH::RVec3::sZero(),
+                                                            collector, {}, LayerMaskFilter(layerMask));
+            for (auto& hit : collector.mHits)
+            {
+                Entity e = impl->Lookup(hit.mBodyID2);
+                if (!e.IsNull() && std::find(out.begin(), out.end(), e) == out.end()) out.push_back(e);
+            }
+            return out;
+        }
+    }
+
+    std::vector<Entity> Physics3DWorld::OverlapSphere(Scene& scene, const glm::vec3& center, float radius, uint32_t layerMask)
+    {
+        JPH::Ref<JPH::SphereShape> sphere = new JPH::SphereShape(std::max(radius, 1e-4f));
+        return CollideWith(scene, *sphere, JPH::RMat44::sTranslation(JPH::RVec3(ToJolt(center))), layerMask);
+    }
+
+    std::vector<Entity> Physics3DWorld::OverlapBox(Scene& scene, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation,
+                                                   uint32_t layerMask)
+    {
+        glm::vec3 half = glm::max(halfExtents, glm::vec3(1e-3f));
+        float convex = std::min(JPH::cDefaultConvexRadius, std::min(half.x, std::min(half.y, half.z)) * 0.5f);
+        JPH::Ref<JPH::BoxShape> box = new JPH::BoxShape(ToJolt(half), convex);
+        return CollideWith(scene, *box, JPH::RMat44::sRotationTranslation(ToJolt(rotation), JPH::RVec3(ToJolt(center))), layerMask);
+    }
+
+    namespace
+    {
+        void UpdateCharacter(Scene& scene, Entity e, const glm::vec3& velocity, float dt)
+        {
+            Physics3DWorld* world = scene.GetPhysics3D();
+            auto* cc = scene.GetRegistry().TryGet<CharacterControllerComponent>(e);
+            if (!world || !cc || !cc->Runtime || dt <= 0.0f) return;
+            auto& character = *static_cast<JPH::Ref<JPH::CharacterVirtual>*>(cc->Runtime.get());
+            auto& t = scene.GetRegistry().Get<TransformComponent>(e);
+            auto* impl = world->GetImpl();
+
+            // Follow teleports done through the transform.
+            glm::vec3 start = t.GetWorldPosition();
+            if (glm::distance(start, FromJolt(JPH::Vec3(character->GetPosition()))) > 1e-3f) character->SetPosition(JPH::RVec3(ToJolt(start)));
+
+            character->SetLinearVelocity(ToJolt(velocity));
+            JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+            settings.mWalkStairsStepUp = JPH::Vec3(0.0f, cc->StepOffset, 0.0f);
+            settings.mStickToFloorStepDown = JPH::Vec3(0.0f, -cc->StepOffset, 0.0f);
+            JPH::ObjectLayer layer = Layers::Make(scene.GetRegistry().Get<TagComponent>(e).Layer, true);
+            JPH::IgnoreSingleBodyFilter ignoreSelf(character->GetInnerBodyID());
+            character->ExtendedUpdate(dt, impl->System.GetGravity(), settings, impl->System.GetDefaultBroadPhaseLayerFilter(layer),
+                                      impl->System.GetDefaultLayerFilter(layer), ignoreSelf, {}, *impl->TempAllocator);
+
+            glm::vec3 end = FromJolt(JPH::Vec3(character->GetPosition()));
+            t.Position += end - start; // entities with characters should be roots; this keeps parented ones consistent too
+            cc->Velocity = (end - start) / dt;
+            cc->IsGrounded = character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+            scene.UpdateTransforms();
+        }
+    }
+
+    void Physics3DWorld::MoveCharacter(Scene& scene, Entity e, const glm::vec3& motion)
+    {
+        float dt = scene.GetDeltaTime();
+        if (dt > 0.0f) UpdateCharacter(scene, e, motion / dt, dt);
+    }
+
+    void Physics3DWorld::SimpleMoveCharacter(Scene& scene, Entity e, const glm::vec3& speed)
+    {
+        auto* cc = scene.GetRegistry().TryGet<CharacterControllerComponent>(e);
+        Physics3DWorld* world = scene.GetPhysics3D();
+        float dt = scene.GetDeltaTime();
+        if (!cc || !world || dt <= 0.0f) return;
+        float gravity = world->GetImpl()->System.GetGravity().GetY();
+        if (cc->IsGrounded && cc->VerticalSpeed <= 0.0f) cc->VerticalSpeed = -1.0f; // keep a little contact with the ground
+        else cc->VerticalSpeed += gravity * dt;
+        UpdateCharacter(scene, e, glm::vec3(speed.x, cc->VerticalSpeed, speed.z), dt);
+        if (cc->IsGrounded && cc->VerticalSpeed < 0.0f) cc->VerticalSpeed = -1.0f;
+        else if (!cc->IsGrounded && cc->Velocity.y > -1e-3f && cc->VerticalSpeed > 0.0f && cc->Velocity.y < cc->VerticalSpeed * 0.5f)
+            cc->VerticalSpeed = 0.0f; // hit a ceiling
     }
 }

@@ -212,6 +212,194 @@ namespace Editor::UI
         return r;
     }
 
+    EditResult CurveEditor(const char* id, Curve& curve, float height)
+    {
+        EditResult r;
+        ImGui::PushID(id);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 size(ImGui::GetContentRegionAvail().x, height);
+        ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + size.x, p0.y + size.y);
+        ImGui::InvisibleButton("##canvas", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        bool canvasHovered = ImGui::IsItemHovered();
+
+        // Vertical range covers 0-1 and every key (with headroom), so values above 1 stay editable.
+        float lo = 0.0f, hi = 1.0f;
+        for (auto& k : curve.Keys) { lo = std::min(lo, k.Value); hi = std::max(hi, k.Value); }
+        hi += (hi - lo) * 0.1f;
+        auto toScreen = [&](float t, float v) { return ImVec2(p0.x + t * size.x, p1.y - (v - lo) / (hi - lo) * size.y); };
+        auto fromScreen = [&](ImVec2 s) {
+            return glm::vec2(std::clamp((s.x - p0.x) / size.x, 0.0f, 1.0f), lo + (p1.y - s.y) / size.y * (hi - lo));
+        };
+
+        dl->AddRectFilled(p0, p1, IM_COL32(28, 28, 32, 255), 3.0f);
+        for (int i = 1; i < 4; ++i)
+            dl->AddLine(ImVec2(p0.x + size.x * i / 4, p0.y), ImVec2(p0.x + size.x * i / 4, p1.y), IM_COL32(50, 50, 56, 255));
+        if (lo < 0.0f) dl->AddLine(toScreen(0, 0), toScreen(1, 0), IM_COL32(70, 70, 80, 255));
+        dl->AddLine(toScreen(0, 1), toScreen(1, 1), IM_COL32(60, 60, 70, 255));
+        const int samples = 48;
+        for (int i = 0; i < samples; ++i)
+        {
+            float a = (float)i / samples, b = (float)(i + 1) / samples;
+            dl->AddLine(toScreen(a, curve.Evaluate(a)), toScreen(b, curve.Evaluate(b)), IM_COL32(110, 200, 255, 255), 2.0f);
+        }
+
+        ImGuiStorage* storage = ImGui::GetStateStorage();
+        ImGuiID dragId = ImGui::GetID("##dragkey");
+        int dragging = storage->GetInt(dragId, -1);
+        int hoveredKey = -1;
+        ImVec2 mouse = ImGui::GetIO().MousePos;
+        for (int i = 0; i < (int)curve.Keys.size(); ++i)
+        {
+            ImVec2 kp = toScreen(curve.Keys[i].Time, curve.Keys[i].Value);
+            bool hot = std::abs(mouse.x - kp.x) < 6 && std::abs(mouse.y - kp.y) < 6 && canvasHovered;
+            if (hot) hoveredKey = i;
+            dl->AddCircleFilled(kp, hot || i == dragging ? 5.0f : 4.0f, hot || i == dragging ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 230, 255, 255));
+        }
+        if (hoveredKey >= 0)
+            ImGui::SetTooltip("t %.2f   value %.3f", curve.Keys[hoveredKey].Time, curve.Keys[hoveredKey].Value);
+
+        if (ImGui::IsItemActivated() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredKey >= 0)
+        {
+            storage->SetInt(dragId, hoveredKey);
+            r.Activated = true;
+        }
+        dragging = storage->GetInt(dragId, -1);
+        if (dragging >= 0 && dragging < (int)curve.Keys.size())
+        {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+                glm::vec2 v = fromScreen(mouse);
+                // Keys keep their order: clamp between neighbours.
+                float minT = dragging > 0 ? curve.Keys[dragging - 1].Time : 0.0f;
+                float maxT = dragging + 1 < (int)curve.Keys.size() ? curve.Keys[dragging + 1].Time : 1.0f;
+                CurveKey k{ std::clamp(v.x, minT, maxT), v.y };
+                if (k.Time != curve.Keys[dragging].Time || k.Value != curve.Keys[dragging].Value)
+                {
+                    curve.Keys[dragging] = k;
+                    r.Changed = true;
+                }
+            }
+            else
+                storage->SetInt(dragId, -1);
+        }
+        if (canvasHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hoveredKey < 0)
+        {
+            glm::vec2 v = fromScreen(mouse);
+            curve.Keys.push_back({ v.x, v.y });
+            curve.Sort();
+            r.Activated = r.Changed = true;
+        }
+        if (hoveredKey >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && curve.Keys.size() > 1)
+        {
+            curve.Keys.erase(curve.Keys.begin() + hoveredKey);
+            r.Activated = r.Changed = true;
+        }
+        ImGui::PopID();
+        return r;
+    }
+
+    EditResult GradientEditor(const char* id, Gradient& gradient)
+    {
+        EditResult r;
+        ImGui::PushID(id);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float width = ImGui::GetContentRegionAvail().x, barH = ImGui::GetFrameHeight(), markerH = 10.0f;
+        ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + width, p0.y + barH);
+        ImGui::InvisibleButton("##bar", ImVec2(width, barH + markerH), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        bool hovered = ImGui::IsItemHovered();
+
+        // Checkerboard behind, so alpha is visible.
+        const float cell = barH * 0.5f;
+        for (float x = p0.x; x < p1.x; x += cell)
+            for (int row = 0; row < 2; ++row)
+            {
+                bool dark = ((int)((x - p0.x) / cell) + row) % 2 == 0;
+                dl->AddRectFilled(ImVec2(x, p0.y + row * cell), ImVec2(std::min(x + cell, p1.x), p0.y + (row + 1) * cell),
+                                  dark ? IM_COL32(90, 90, 90, 255) : IM_COL32(150, 150, 150, 255));
+            }
+        const int steps = 32;
+        for (int i = 0; i < steps; ++i)
+        {
+            float a = (float)i / steps, b = (float)(i + 1) / steps;
+            ImU32 ca = ImGui::ColorConvertFloat4ToU32(ImVec4(gradient.Evaluate(a).r, gradient.Evaluate(a).g, gradient.Evaluate(a).b, gradient.Evaluate(a).a));
+            ImU32 cb = ImGui::ColorConvertFloat4ToU32(ImVec4(gradient.Evaluate(b).r, gradient.Evaluate(b).g, gradient.Evaluate(b).b, gradient.Evaluate(b).a));
+            dl->AddRectFilledMultiColor(ImVec2(p0.x + a * width, p0.y), ImVec2(p0.x + b * width + 0.5f, p1.y), ca, cb, cb, ca);
+        }
+        dl->AddRect(p0, p1, IM_COL32(20, 20, 20, 255));
+
+        ImGuiStorage* storage = ImGui::GetStateStorage();
+        ImGuiID dragId = ImGui::GetID("##dragkey"), editId = ImGui::GetID("##editkey");
+        ImVec2 mouse = ImGui::GetIO().MousePos;
+        int hoveredKey = -1;
+        for (int i = 0; i < (int)gradient.Keys.size(); ++i)
+        {
+            float x = p0.x + gradient.Keys[i].Time * width;
+            bool hot = hovered && std::abs(mouse.x - x) < 6 && mouse.y >= p1.y - 2;
+            if (hot) hoveredKey = i;
+            ImVec2 a(x, p1.y), b(x - 5, p1.y + markerH), c(x + 5, p1.y + markerH);
+            glm::vec4 col = gradient.Keys[i].Color;
+            dl->AddTriangleFilled(a, b, c, ImGui::ColorConvertFloat4ToU32(ImVec4(col.r, col.g, col.b, 1.0f)));
+            dl->AddTriangle(a, b, c, hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 255), hot ? 2.0f : 1.0f);
+        }
+        if (hoveredKey >= 0) ImGui::SetTooltip("t %.2f (double-click: color, right-click: remove)", gradient.Keys[hoveredKey].Time);
+
+        if (ImGui::IsItemActivated() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredKey >= 0)
+        {
+            storage->SetInt(dragId, hoveredKey);
+            r.Activated = true;
+        }
+        int dragging = storage->GetInt(dragId, -1);
+        if (dragging >= 0 && dragging < (int)gradient.Keys.size())
+        {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+                float minT = dragging > 0 ? gradient.Keys[dragging - 1].Time : 0.0f;
+                float maxT = dragging + 1 < (int)gradient.Keys.size() ? gradient.Keys[dragging + 1].Time : 1.0f;
+                float t = std::clamp((mouse.x - p0.x) / width, minT, maxT);
+                if (t != gradient.Keys[dragging].Time)
+                {
+                    gradient.Keys[dragging].Time = t;
+                    r.Changed = true;
+                }
+            }
+            else
+                storage->SetInt(dragId, -1);
+        }
+        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        {
+            if (hoveredKey >= 0)
+            {
+                storage->SetInt(editId, hoveredKey);
+                ImGui::OpenPopup("##keycolor");
+            }
+            else
+            {
+                float t = std::clamp((mouse.x - p0.x) / width, 0.0f, 1.0f);
+                gradient.Keys.push_back({ t, gradient.Evaluate(t) });
+                gradient.Sort();
+                r.Activated = r.Changed = true;
+            }
+        }
+        if (hoveredKey >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && gradient.Keys.size() > 1)
+        {
+            gradient.Keys.erase(gradient.Keys.begin() + hoveredKey);
+            r.Activated = r.Changed = true;
+        }
+        if (ImGui::BeginPopup("##keycolor"))
+        {
+            int k = storage->GetInt(editId, -1);
+            if (k >= 0 && k < (int)gradient.Keys.size())
+            {
+                if (ImGui::IsWindowAppearing()) r.Activated = true;
+                if (ImGui::ColorPicker4("##picker", &gradient.Keys[k].Color.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf))
+                    r.Changed = true;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        return r;
+    }
+
     EditResult Field(const FieldInfo& f, void* object, Scene* scene)
     {
         void* p = f.Access(object);
@@ -290,6 +478,14 @@ namespace Editor::UI
         case FieldType::AnimatorController: r = AssetField(label, *(AssetHandle*)p, AssetType::AnimatorController); break;
         case FieldType::EntityRef:
             if (scene) r = EntityField(label, *(Entity*)p, *scene);
+            break;
+        case FieldType::Curve:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = CurveEditor("##curve", *(Curve*)p);
+            break;
+        case FieldType::Gradient:
+            PropertyLabel(label, f.Tooltip.c_str());
+            r = GradientEditor("##gradient", *(Gradient*)p);
             break;
         }
         ImGui::PopID();

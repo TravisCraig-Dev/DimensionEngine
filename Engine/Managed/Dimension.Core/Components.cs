@@ -51,6 +51,39 @@ namespace Dimension
 
         public void Translate(Vector3 delta) => Position += delta;
         public void Rotate(Vector3 eulerDegrees) => EulerAngles += eulerDegrees;
+
+        /// <summary>World transform (row-major System.Numerics layout: translation in M41..M43).</summary>
+        public Matrix4x4 LocalToWorld
+        {
+            get
+            {
+                Matrix4x4 m;
+                Native.Api.GetWorldMatrix(Entity.Scene, Entity.Id, (float*)&m); // column-major glm == row-major System.Numerics
+                return m;
+            }
+        }
+
+        /// <summary>World-space forward (-Z), right (+X) and up (+Y) directions.</summary>
+        public Vector3 Forward => Axis(new Vector3(0, 0, -1));
+        public Vector3 Right => Axis(Vector3.UnitX);
+        public Vector3 Up => Axis(Vector3.UnitY);
+
+        private Vector3 Axis(Vector3 local)
+        {
+            Vector3 v = Vector3.TransformNormal(local, LocalToWorld);
+            return v.LengthSquared() > 1e-12f ? Vector3.Normalize(v) : local;
+        }
+
+        /// <summary>Rotates so forward (-Z) points at `target` (world space, root entities), keeping no roll.</summary>
+        public void LookAt(Vector3 target)
+        {
+            Vector3 dir = target - WorldPosition;
+            if (dir.LengthSquared() < 1e-12f) return;
+            dir = Vector3.Normalize(dir);
+            float pitch = System.MathF.Asin(System.Math.Clamp(dir.Y, -1.0f, 1.0f));
+            float yaw = System.MathF.Atan2(-dir.X, -dir.Z);
+            EulerAngles = new Vector3(pitch, yaw, 0.0f) * (180.0f / System.MathF.PI);
+        }
     }
 
     public unsafe class Rigidbody2D : Component
@@ -107,6 +140,36 @@ namespace Dimension
         }
     }
 
+    public unsafe class UISlider : Component
+    {
+        internal override string NativeName => "UI Slider";
+        public float Value
+        {
+            get => Native.Api.GetUIValue(Entity.Scene, Entity.Id);
+            set => Native.Api.SetUIValue(Entity.Scene, Entity.Id, value);
+        }
+    }
+
+    public unsafe class UIToggle : Component
+    {
+        internal override string NativeName => "UI Toggle";
+        public bool IsOn
+        {
+            get => Native.Api.GetUIValue(Entity.Scene, Entity.Id) != 0.0f;
+            set => Native.Api.SetUIValue(Entity.Scene, Entity.Id, value ? 1.0f : 0.0f);
+        }
+    }
+
+    public unsafe class UIInputField : Component
+    {
+        internal override string NativeName => "UI Input Field";
+        public string Text
+        {
+            get => Native.FromUtf8(Native.Api.GetUIText(Entity.Scene, Entity.Id));
+            set { var e = Entity; Native.WithUtf8(value, p => Native.Api.SetUIText(e.Scene, e.Id, (byte*)p)); }
+        }
+    }
+
     public unsafe class Animator : Component
     {
         internal override string NativeName => "Animator";
@@ -144,5 +207,31 @@ namespace Dimension
         internal override string NativeName => "Audio Source";
         public void Play() => Native.Api.AudioPlay(Entity.Scene, Entity.Id, 1);
         public void Stop() => Native.Api.AudioPlay(Entity.Scene, Entity.Id, 0);
+        public bool IsPlaying => Native.Api.AudioIsPlaying(Entity.Scene, Entity.Id) != 0;
+        /// <summary>Plays a clip (asset GUID; 0 = this source's clip) once, overlapping other sounds, through this source's mixer group.</summary>
+        public void PlayOneShot(ulong clipGuid = 0, float volumeScale = 1.0f) => Native.Api.AudioPlayOneShot(Entity.Scene, Entity.Id, clipGuid, volumeScale);
+    }
+
+    /// <summary>Capsule character moved by scripts (like Unity's CharacterController).</summary>
+    public unsafe class CharacterController : Component
+    {
+        internal override string NativeName => "Character Controller";
+        /// <summary>Moves by `motion` this frame (no gravity), sliding along and stepping over geometry.</summary>
+        public void Move(Vector3 motion) => Native.Api.CharacterMove(Entity.Scene, Entity.Id, (float*)&motion, 0);
+        /// <summary>Moves at `speed` units/s horizontally with gravity applied.</summary>
+        public void SimpleMove(Vector3 speed) => Native.Api.CharacterMove(Entity.Scene, Entity.Id, (float*)&speed, 1);
+        /// <summary>Starts a jump for SimpleMove (vertical speed in units/s).</summary>
+        public void Jump(float speed) => Native.Api.CharacterSetVerticalSpeed(Entity.Scene, Entity.Id, speed);
+        public bool IsGrounded { get { Vector3 v; float vs; return Native.Api.CharacterState(Entity.Scene, Entity.Id, (float*)&v, &vs) != 0; } }
+        public Vector3 Velocity { get { Vector3 v; float vs; Native.Api.CharacterState(Entity.Scene, Entity.Id, (float*)&v, &vs); return v; } }
+    }
+
+    /// <summary>The project's audio mixer groups (Window > Audio Mixer).</summary>
+    public static unsafe class AudioMixer
+    {
+        public static void SetVolume(string group, float decibels) => Native.WithUtf8(group, p => Native.Api.MixerSetVolume((byte*)p, decibels));
+        public static float GetVolume(string group) => Native.WithUtf8(group, p => Native.Api.MixerGetVolume((byte*)p));
+        /// <summary>Linear 0-1 to decibels (0 = -80 dB).</summary>
+        public static float LinearToDecibels(float v) => v <= 1e-4f ? -80.0f : System.MathF.Max(-80.0f, 20.0f * System.MathF.Log10(v));
     }
 }

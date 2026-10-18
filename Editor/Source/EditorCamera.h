@@ -21,6 +21,7 @@ namespace Editor
         glm::vec3 GetPosition() const;
         glm::vec3 GetForward() const;
         float GetFlySpeed() const { return m_FlySpeed; }
+        void SetFlySpeed(float speed) { m_FlySpeed = speed; }
         float GetDistance() const { return m_Distance; }
         // Adopts the orientation and position of a view matrix (orientation gizmo), keeping the orbit distance.
         void SetFromView(const glm::mat4& view);

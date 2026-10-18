@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <string>
 
 struct GLFWwindow;
 
@@ -29,6 +30,8 @@ namespace Dimension
         static glm::vec2 GetMousePosition(); // window pixels, top-left origin
         static glm::vec2 GetMouseDelta();
         static float GetScrollDelta();
+        // UTF-8 text typed this frame (respects the game-input gate).
+        static const std::string& GetTypedText();
 
         // When disabled (e.g. editor not in play mode or game view unfocused) all queries return "nothing pressed".
         static void SetGameInputEnabled(bool enabled);
@@ -38,6 +41,7 @@ namespace Dimension
         static void Init(GLFWwindow* window);
         static void NewFrame();
         static void AddScroll(float dy);
+        static void AddChar(unsigned int codepoint);
         // Raw access that ignores the game-input gate (editor tools).
         static bool RawKeyDown(Key key);
         static bool RawMouseDown(MouseButton button);

@@ -1,4 +1,5 @@
 #pragma once
+#include "Dimension/Scene/Tilemap.h"
 #include "Dimension/Core/Guid.h"
 #include "Dimension/ECS/Entity.h"
 #include "Dimension/Renderer/Font.h"
@@ -29,6 +30,7 @@ namespace Dimension
         std::string Name = "GameObject";
         std::string Tag = "Untagged";
         bool Active = true;
+        int32_t Layer = 0; // physics layer (0-31), see Project Settings > Physics Layers
     };
 
     struct TransformComponent
@@ -111,6 +113,8 @@ namespace Dimension
         int32_t Frame = 0;
     };
 
+    // Tilemap: see Tilemap.h.
+
     // Plays a frame range of the SpriteRenderer's sheet while the scene runs.
     struct SpriteAnimatorComponent
     {
@@ -141,6 +145,8 @@ namespace Dimension
         bool CastShadows = true;
         float ShadowDistance = 40.0f; // world units from the camera covered by the shadow map
         float ShadowBias = 0.0015f;
+        int32_t ShadowCascades = 4;   // 1-4 cascades split over the shadow distance
+        bool DebugCascades = false;   // tint surfaces by cascade (red, green, blue, yellow)
     };
 
     struct PointLightComponent
@@ -148,6 +154,20 @@ namespace Dimension
         glm::vec3 Color{ 1.0f };
         float Intensity = 1.0f;
         float Range = 10.0f;
+        bool CastShadows = false;  // up to 4 point lights cast shadows (cube shadow maps)
+        float ShadowBias = 0.05f;  // world units
+    };
+
+    // Cone light shining along the entity's forward (-Z) axis, like Unity's Spot Light.
+    struct SpotLightComponent
+    {
+        glm::vec3 Color{ 1.0f };
+        float Intensity = 1.0f;
+        float Range = 10.0f;
+        float SpotAngle = 45.0f;      // full outer cone angle, degrees
+        float InnerSpotAngle = 30.0f; // full angle of the fully lit core, degrees
+        bool CastShadows = false;     // shares the 4 shadow slots with point lights
+        float ShadowBias = 0.05f;     // world units
     };
 
     // Plays skeletal animation clips of the entity's skinned Mesh Renderer (like Unity's Animator/Animation).
@@ -172,17 +192,21 @@ namespace Dimension
 
         // Runtime state (not serialized).
         float Time = 0.0f;
+        int TreeState = -1;        // controller state index when playing a blend tree (time is the state machine's)
         std::string PreviousClip;  // crossfade source
-        float PreviousTime = 0.0f;
+        int PreviousTreeState = -1;
+        float PreviousTime = 0.0f; // seconds for clips, normalized time for blend trees
         float FadeElapsed = 0.0f, FadeDuration = 0.0f;
         std::vector<glm::mat4> SkinMatrices;
 
         // Switches clips, blending from the current pose over `fadeSeconds`.
         void CrossFade(const std::string& clip, float fadeSeconds = 0.25f)
         {
-            if (clip == Clip) return;
+            if (clip == Clip && TreeState < 0) return;
             PreviousClip = Clip;
-            PreviousTime = Time;
+            PreviousTreeState = TreeState;
+            PreviousTime = TreeState >= 0 ? Runtime.StateTime : Time;
+            TreeState = -1;
             Clip = clip;
             Time = 0.0f;
             FadeElapsed = 0.0f;
@@ -225,13 +249,79 @@ namespace Dimension
 
         // Computed by the UI layout pass (screen pixels), not serialized.
         glm::vec2 ComputedMin{ 0.0f }, ComputedMax{ 0.0f };
+        glm::vec2 ClipMin{ 0.0f }, ClipMax{ 0.0f }; // visible region (scroll views clip their content)
         float ComputedScale = 1.0f;
     };
+
+    enum class UIImageType : int32_t { Simple = 0, Sliced = 1 };
 
     struct UIImageComponent
     {
         AssetHandle Texture = AssetHandle::None();
         glm::vec4 Color{ 1.0f };
+        UIImageType Type = UIImageType::Simple;
+        glm::vec4 Border{ 0.0f };   // 9-slice borders in texture pixels: left, top, right, bottom
+        float BorderScale = 1.0f;   // canvas units per border pixel
+    };
+
+    // Horizontal slider: drag anywhere on the rect to set Value.
+    struct UISliderComponent
+    {
+        float MinValue = 0.0f;
+        float MaxValue = 1.0f;
+        float Value = 0.5f;
+        bool WholeNumbers = false;
+        bool Interactable = true;
+        glm::vec4 BackgroundColor{ 0.22f, 0.22f, 0.25f, 1.0f };
+        glm::vec4 FillColor{ 0.25f, 0.55f, 0.95f, 1.0f };
+        glm::vec4 HandleColor{ 1.0f };
+        bool Dragging = false; // runtime
+    };
+
+    // Checkbox with an optional label; clicking flips IsOn.
+    struct UIToggleComponent
+    {
+        bool IsOn = false;
+        std::string Label = "Toggle";
+        float FontSize = 28.0f;
+        bool Interactable = true;
+        glm::vec4 BoxColor{ 1.0f };
+        glm::vec4 CheckColor{ 0.2f, 0.5f, 0.95f, 1.0f };
+        glm::vec4 LabelColor{ 1.0f };
+        bool Pressed = false; // runtime
+    };
+
+    // Single-line text entry: click to focus, type, Enter submits.
+    struct UIInputFieldComponent
+    {
+        std::string Text;
+        std::string Placeholder = "Enter text...";
+        int32_t CharacterLimit = 0; // 0 = unlimited
+        float FontSize = 28.0f;
+        bool Interactable = true;
+        glm::vec4 BackgroundColor{ 1.0f };
+        glm::vec4 TextColor{ 0.1f, 0.1f, 0.12f, 1.0f };
+        glm::vec4 PlaceholderColor{ 0.55f, 0.55f, 0.58f, 1.0f };
+        bool Focused = false;   // runtime
+        float CaretTime = 0.0f; // runtime
+    };
+
+    enum class UILayoutDirection : int32_t { Vertical = 0, Horizontal = 1 };
+
+    // Arranges child UI Rects in a row or column (like Vertical/Horizontal Layout Group).
+    struct UILayoutGroupComponent
+    {
+        UILayoutDirection Direction = UILayoutDirection::Vertical;
+        float Spacing = 8.0f;
+        glm::vec4 Padding{ 8.0f };  // left, top, right, bottom
+        bool StretchChildren = true; // children fill the cross axis
+    };
+
+    // Clips its children to its rect and scrolls its first child (the content) vertically.
+    struct UIScrollViewComponent
+    {
+        float ScrollSpeed = 60.0f;  // canvas units per wheel notch
+        float ScrollPosition = 0.0f; // runtime
     };
 
     struct UITextComponent
@@ -267,6 +357,9 @@ namespace Dimension
         bool Spatial = false;
         float MinDistance = 1.0f;
         float MaxDistance = 50.0f;
+        std::string Output;          // mixer group name; empty = Master
+        bool Stream = false;         // decode while playing (music) instead of loading the whole clip
+        bool Mute = false;
         std::shared_ptr<void> Runtime; // ma_sound, runtime only
     };
 
@@ -359,6 +452,7 @@ namespace Dimension
         glm::vec3 Size{ 1.0f };
         float Friction = 0.6f;
         float Restitution = 0.0f;
+        bool IsTrigger = false; // sensor: reports OnTriggerEnter/Exit instead of colliding
     };
 
     struct CapsuleColliderComponent // Y-axis capsule like Unity's default
@@ -368,6 +462,7 @@ namespace Dimension
         float Height = 2.0f; // total height including the caps
         float Friction = 0.6f;
         float Restitution = 0.0f;
+        bool IsTrigger = false;
     };
 
     struct SphereColliderComponent
@@ -376,5 +471,72 @@ namespace Dimension
         float Radius = 0.5f;
         float Friction = 0.6f;
         float Restitution = 0.0f;
+        bool IsTrigger = false;
+    };
+
+    // Collider from a mesh: exact triangles (static/kinematic bodies) or its convex hull (any body).
+    struct MeshColliderComponent
+    {
+        AssetHandle Mesh = AssetHandle::None(); // None = the entity's Mesh Renderer mesh
+        bool Convex = false;                    // dynamic bodies always use the convex hull
+        float Friction = 0.6f;
+        float Restitution = 0.0f;
+        bool IsTrigger = false;
+    };
+
+    // Capsule character moved by scripts (Unity's CharacterController), on Jolt's CharacterVirtual:
+    // collides and slides, walks up steps and slopes, pushes rigidbodies. Not simulated by itself.
+    struct CharacterControllerComponent
+    {
+        float Height = 2.0f;
+        float Radius = 0.5f;
+        glm::vec3 Center{ 0.0f };   // capsule center relative to the entity
+        float SlopeLimit = 45.0f;   // degrees
+        float StepOffset = 0.3f;
+        float SkinWidth = 0.02f;
+        float Mass = 70.0f;
+        float PushStrength = 100.0f; // max force on rigidbodies
+
+        // Runtime (not serialized)
+        bool IsGrounded = false;
+        glm::vec3 Velocity{ 0.0f };   // actual velocity of the last move
+        float VerticalSpeed = 0.0f;   // SimpleMove's gravity accumulator (set it to jump)
+        std::shared_ptr<void> Runtime; // JPH::CharacterVirtual
+    };
+
+    // ---- Joints ------------------------------------------------------------------
+
+    enum class JointType : int32_t { Fixed = 0, Hinge = 1, Point = 2, Distance = 3 };
+
+    // Connects this entity's Rigidbody to another Rigidbody, or to the world when Connected Body is empty.
+    struct JointComponent
+    {
+        JointType Type = JointType::Hinge;
+        Entity ConnectedBody = Entity::Null();
+        glm::vec3 Anchor{ 0.0f };          // pivot in this entity's local space
+        glm::vec3 Axis{ 0.0f, 0.0f, 1.0f }; // hinge axis in local space
+        glm::vec3 ConnectedAnchor{ 0.0f }; // distance joint: point on the connected body (local), or world point
+        bool UseLimits = false;
+        float MinAngle = -45.0f;           // hinge limits, degrees
+        float MaxAngle = 45.0f;
+        float MinDistance = 0.0f;          // distance joint; 0 = the initial distance
+        float MaxDistance = 0.0f;
+        bool EnableCollision = false;      // let the two connected bodies collide with each other
+    };
+
+    enum class Joint2DType : int32_t { Fixed = 0, Hinge = 1, Distance = 2 };
+
+    // 2D joint between this entity's Rigidbody 2D and another (or the world).
+    struct Joint2DComponent
+    {
+        Joint2DType Type = Joint2DType::Hinge;
+        Entity ConnectedBody = Entity::Null();
+        glm::vec2 Anchor{ 0.0f };          // pivot in this entity's local space
+        glm::vec2 ConnectedAnchor{ 0.0f }; // distance joint: point on the connected body (local), or world point
+        bool UseLimits = false;
+        float LowerAngle = -45.0f;         // hinge limits, degrees
+        float UpperAngle = 45.0f;
+        float Distance = 0.0f;             // 0 = the initial distance
+        bool CollideConnected = false;
     };
 }

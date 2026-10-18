@@ -46,6 +46,24 @@ namespace Dimension.Interop
         public delegate* unmanaged<float> GetDeltaTime;
         public delegate* unmanaged<IntPtr, ulong, byte*, float, int, void> AnimatorSetParameter;
         public delegate* unmanaged<IntPtr, ulong, byte*> AnimatorGetState;
+        public delegate* unmanaged<IntPtr, ulong, float> GetUIValue;
+        public delegate* unmanaged<IntPtr, ulong, float, void> SetUIValue;
+        public delegate* unmanaged<IntPtr, float*, float, uint, ulong*, int, int> OverlapSphere;
+        public delegate* unmanaged<IntPtr, float*, float*, float, uint, ulong*, float*, float*, float*, int> Raycast3DMask;
+        public delegate* unmanaged<byte*, void> LoadSceneByName;
+        public delegate* unmanaged<int, void> LoadSceneByIndex;
+        public delegate* unmanaged<IntPtr, byte*> GetSceneName;
+        public delegate* unmanaged<int> GetSceneCount;
+        public delegate* unmanaged<IntPtr, float> GetTime;
+        public delegate* unmanaged<IntPtr, ulong> GetFrameCount;
+        public delegate* unmanaged<IntPtr, ulong, float*, void> GetWorldMatrix;
+        public delegate* unmanaged<IntPtr, ulong, int> AudioIsPlaying;
+        public delegate* unmanaged<IntPtr, ulong, ulong, float, void> AudioPlayOneShot;
+        public delegate* unmanaged<byte*, float, void> MixerSetVolume;
+        public delegate* unmanaged<byte*, float> MixerGetVolume;
+        public delegate* unmanaged<IntPtr, ulong, float*, int, void> CharacterMove;
+        public delegate* unmanaged<IntPtr, ulong, float*, float*, int> CharacterState;
+        public delegate* unmanaged<IntPtr, ulong, float, void> CharacterSetVerticalSpeed;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
@@ -59,6 +77,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, float, void> Invoke;
         public delegate* unmanaged<IntPtr, int, ulong, void> InvokeEntity;
         public delegate* unmanaged<IntPtr, void> DestroyInstance;
+        public delegate* unmanaged<IntPtr, int, byte*, void> InvokeString;
     }
 
     internal static unsafe class Native
@@ -107,6 +126,7 @@ namespace Dimension.Interop
                 api->Invoke = &ScriptHost.Invoke;
                 api->InvokeEntity = &ScriptHost.InvokeEntity;
                 api->DestroyInstance = &ScriptHost.DestroyInstance;
+                api->InvokeString = &ScriptHost.InvokeString;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

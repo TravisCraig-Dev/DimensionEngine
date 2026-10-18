@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/Core/Guid.h"
 #include "Dimension/ECS/Entity.h"
+#include "Dimension/Core/Curve.h"
 #include <glm/glm.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <functional>
@@ -20,6 +21,8 @@ namespace Dimension
         Enum,             // int32-backed enum with display names
         Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, // AssetHandle referencing an asset of that type
         EntityRef,        // Entity, serialized as the target's Guid
+        Curve,            // Dimension::Curve (normalized time -> value)
+        Gradient,         // Dimension::Gradient (normalized time -> color)
     };
 
     struct FieldInfo
@@ -31,6 +34,7 @@ namespace Dimension
         float Min = 0.0f, Max = 0.0f; // Min == Max means unbounded
         std::vector<std::string> EnumNames;
         std::string Tooltip;
+        bool Hidden = false; // serialized but not shown in the Inspector
     };
 
     template <class M> constexpr FieldType DeduceFieldType()
@@ -44,6 +48,8 @@ namespace Dimension
         else if constexpr (std::is_same_v<M, glm::vec4>) return FieldType::Vec4;
         else if constexpr (std::is_same_v<M, std::string>) return FieldType::String;
         else if constexpr (std::is_same_v<M, Entity>) return FieldType::EntityRef;
+        else if constexpr (std::is_same_v<M, Curve>) return FieldType::Curve;
+        else if constexpr (std::is_same_v<M, Gradient>) return FieldType::Gradient;
         else if constexpr (std::is_same_v<M, Guid>) return FieldType::Texture; // override with .As()
         else static_assert(sizeof(M) == 0, "Unsupported reflected field type");
     }
@@ -74,6 +80,7 @@ namespace Dimension
         FieldListBuilder& Speed(float speed) { m_Fields.back().Speed = speed; return *this; }
         FieldListBuilder& Enum(std::vector<std::string> names) { m_Fields.back().EnumNames = std::move(names); return *this; }
         FieldListBuilder& Tooltip(std::string text) { m_Fields.back().Tooltip = std::move(text); return *this; }
+        FieldListBuilder& HideInInspector() { m_Fields.back().Hidden = true; return *this; }
 
     private:
         std::vector<FieldInfo>& m_Fields;

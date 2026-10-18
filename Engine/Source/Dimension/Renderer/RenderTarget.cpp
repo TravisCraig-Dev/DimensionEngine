@@ -22,14 +22,25 @@ namespace Dimension
         m_Output = Image({ m_Width, m_Height, kOutputFormat,
                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "SceneOutput" });
 
+        m_Ldr = Image({ m_Width, m_Height, kOutputFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneLDR" });
+        uint32_t bw = m_Width / 2, bh = m_Height / 2;
+        while (m_Bloom.size() < kMaxBloomLevels && bw >= 4 && bh >= 4)
+        {
+            m_Bloom.emplace_back(ImageDesc{ bw, bh, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "Bloom" });
+            bw /= 2;
+            bh /= 2;
+        }
+
         auto& device = RenderDevice::Get();
         m_HdrBindless = device.RegisterTexture(m_Hdr.GetView(), device.GetClampSampler());
+        m_LdrBindless = device.RegisterTexture(m_Ldr.GetView(), device.GetClampSampler());
+        for (auto& b : m_Bloom) m_BloomBindless.push_back(device.RegisterTexture(b.GetView(), device.GetClampSampler()));
 
-        // Establish the between-frames layouts so the output can be sampled even before the first render.
-        VkImage hdr = m_Hdr.GetHandle(), out = m_Output.GetHandle();
+        // Establish the between-frames layouts so the images can be sampled even before the first render.
+        std::vector<VkImage> images{ m_Hdr.GetHandle(), m_Output.GetHandle(), m_Ldr.GetHandle() };
+        for (auto& b : m_Bloom) images.push_back(b.GetHandle());
         device.ImmediateSubmit([&](VkCommandBuffer cmd) {
-            Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            Vk::TransitionImage(cmd, out, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            for (VkImage image : images) Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
     }
 
@@ -37,6 +48,11 @@ namespace Dimension
     {
         auto& device = RenderDevice::Get();
         device.UnregisterTexture(m_HdrBindless);
+        device.UnregisterTexture(m_LdrBindless);
+        for (uint32_t index : m_BloomBindless) device.UnregisterTexture(index);
+        m_BloomBindless.clear();
+        m_Bloom.clear();
+        m_Ldr = Image();
         if (m_ImGuiTexture)
         {
             uint64_t id = m_ImGuiTexture;

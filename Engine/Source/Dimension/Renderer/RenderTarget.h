@@ -30,6 +30,13 @@ namespace Dimension
         const Image& GetDepth() const { return m_Depth; }
         const Image& GetOutput() const { return m_Output; }
         uint32_t GetHdrBindless() const { return m_HdrBindless; }
+        // Bloom mip chain (half resolution and smaller), HDR format.
+        uint32_t GetBloomLevels() const { return (uint32_t)m_Bloom.size(); }
+        const Image& GetBloom(uint32_t level) const { return m_Bloom[level]; }
+        uint32_t GetBloomBindless(uint32_t level) const { return m_BloomBindless[level]; }
+        // Tonemapped image before FXAA (same format as the output).
+        const Image& GetLdr() const { return m_Ldr; }
+        uint32_t GetLdrBindless() const { return m_LdrBindless; }
 
         // ImGui texture showing the output (SHADER_READ_ONLY layout between frames).
         uint64_t GetImGuiTexture();
@@ -52,6 +59,11 @@ namespace Dimension
         uint32_t m_Width, m_Height;
         Image m_Hdr, m_Ids, m_Depth, m_Output;
         uint32_t m_HdrBindless = 0;
+        static constexpr uint32_t kMaxBloomLevels = 6;
+        std::vector<Image> m_Bloom;
+        std::vector<uint32_t> m_BloomBindless;
+        Image m_Ldr;
+        uint32_t m_LdrBindless = 0;
         uint64_t m_ImGuiTexture = 0;
 
         std::optional<glm::uvec2> m_PickRequest;

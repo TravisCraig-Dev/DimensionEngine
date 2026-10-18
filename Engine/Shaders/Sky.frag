@@ -10,6 +10,12 @@ layout(location = 1) out uint outEntity; // write-masked
 void main()
 {
     vec3 dir = normalize(vDirection);
+    if (HasSkyTexture())
+    {
+        outColor = vec4(SkyRadiance(dir, 0.0), 1.0);
+        outEntity = 0u;
+        return;
+    }
     vec3 sky = SkyColor(dir);
     if (uScene.LightDirection.w > 0.5)
     {

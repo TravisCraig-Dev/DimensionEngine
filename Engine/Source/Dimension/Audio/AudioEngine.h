@@ -1,6 +1,8 @@
 #pragma once
 #include "Dimension/Core/Base.h"
 #include "Dimension/ECS/Entity.h"
+#include "Dimension/Core/Guid.h"
+#include "Dimension/Audio/AudioMixer.h"
 
 namespace Dimension
 {
@@ -32,9 +34,13 @@ namespace Dimension
 
         static void Play(Scene& scene, Entity e);
         static void Stop(Scene& scene, Entity e);
+        static bool IsPlaying(Scene& scene, Entity e);
+        // Fire-and-forget sound through the entity's Audio Source settings (output group, spatial position).
+        static void PlayOneShot(Scene& scene, Entity e, AssetHandle clip, float volumeScale = 1.0f);
 
     private:
         void CreateSource(Entity e, bool autoplay);
         Scene& m_Scene;
+        std::vector<std::shared_ptr<void>> m_OneShots; // ma_sound, released when finished
     };
 }

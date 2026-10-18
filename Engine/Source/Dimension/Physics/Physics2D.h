@@ -2,6 +2,7 @@
 #include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <vector>
 
 namespace Dimension
 {
@@ -34,14 +35,27 @@ namespace Dimension
         static glm::vec2 GetLinearVelocity(Scene& scene, Entity e);
         static void ApplyForce(Scene& scene, Entity e, const glm::vec2& force);
         static void ApplyImpulse(Scene& scene, Entity e, const glm::vec2& impulse);
-        static RaycastHit2D Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance);
+        // layerMask: bit per physics layer (default: all but "Ignore Raycast").
+        static RaycastHit2D Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
+                                    uint32_t layerMask = ~(1u << 1));
+        static std::vector<Entity> OverlapCircle(Scene& scene, const glm::vec2& center, float radius, uint32_t layerMask = ~(1u << 1));
+        static std::vector<Entity> OverlapBox(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle = 0.0f,
+                                              uint32_t layerMask = ~(1u << 1));
 
         uint32_t GetWorldId() const { return m_World; }
+        size_t GetJointCount() const { return m_JointCount; }
 
     private:
+        void CreateBodiesRecursive(Entity e);
+        void CreateJointsRecursive(Entity e);
         void CreateBody(Entity e);
+        void CreateJoint(Entity e);
+        void CreateTilemapBody(Entity e);
 
         Scene& m_Scene;
-        uint32_t m_World = 0; // b2WorldId packed
+        uint32_t m_World = 0;  // b2WorldId packed
+        uint64_t m_Ground = 0; // static body for joints attached to the world (b2BodyId packed)
+        size_t m_JointCount = 0;
+        std::vector<uint64_t> m_TilemapBodies; // b2BodyId packed
     };
 }

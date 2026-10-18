@@ -92,8 +92,18 @@ void main()
     // Ambient: flat diffuse term plus sky reflections (rougher = blurrier, approximated by blending to the horizon tone).
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 R = reflect(-V, N);
-    vec3 env = mix(SkyColor(R), SkyColor(vec3(0.0, 1.0, 0.0)) * 0.5 + uScene.SkyHorizon.rgb * 0.5, roughness);
-    vec3 color = albedo * (1.0 - metallic) * uScene.Ambient.rgb;
+    vec3 env;
+    vec3 ambient = uScene.Ambient.rgb;
+    if (HasSkyTexture())
+    {
+        // Image-based lighting: blurrier mips for rougher surfaces, SH irradiance for diffuse.
+        float lod = roughness * max(uScene.EnvParams.y - 1.0, 0.0);
+        env = SkyRadiance(R, lod) / max(uScene.SkyParams.z, 1e-4) * uScene.EnvParams.x;
+        if (uScene.EnvParams.z > 0.5) ambient = SkyIrradiance(N) * uScene.EnvParams.w;
+    }
+    else
+        env = mix(SkyColor(R), SkyColor(vec3(0.0, 1.0, 0.0)) * 0.5 + uScene.SkyHorizon.rgb * 0.5, roughness);
+    vec3 color = albedo * (1.0 - metallic) * ambient;
     color += env * EnvBRDFApprox(F0, roughness, NdotV); // the sky is the environment, at full strength
 
     if (uScene.LightDirection.w > 0.5)
@@ -107,9 +117,17 @@ void main()
         float range = uScene.PointLights[i].PositionRange.w;
         float falloff = clamp(1.0 - pow(dist / range, 4.0), 0.0, 1.0);
         float attenuation = falloff * falloff / (dist * dist + 1.0);
+        vec4 spot = uScene.PointLights[i].Direction;
+        if (spot.w > -1.5) // spot light cone
+            attenuation *= smoothstep(spot.w, uScene.PointLights[i].Cone.x, dot(-toLight / max(dist, 1e-4), spot.xyz));
+        if (attenuation <= 0.0) continue;
+        uint shadowSlot = uint(uScene.PointLights[i].Color.w + 0.5);
+        if (shadowSlot > 0u)
+            attenuation *= PointShadow(shadowSlot - 1u, uScene.PointLights[i].PositionRange.xyz, spot, vWorldPos, normalize(vNormal));
         color += DirectLight(N, V, toLight / max(dist, 1e-4), uScene.PointLights[i].Color.rgb * attenuation, albedo, metallic, roughness);
     }
     color += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
+    if (uScene.CascadeParams.z > 0.5) color *= CascadeDebugColor(vWorldPos);
 
     outColor = vec4(color, m.Flags.x == 2u ? base.a : 1.0);
     outEntity = pc.EntityId;

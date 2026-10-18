@@ -4,6 +4,7 @@
 #include "Dimension/Scene/ComponentRegistry.h"
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Scene/SceneManager.h"
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
@@ -65,6 +66,24 @@ namespace Dimension
             float (*GetDeltaTime)();
             void (*AnimatorSetParameter)(void*, uint64_t, const char*, float, int);
             const char* (*AnimatorGetState)(void*, uint64_t);
+            float (*GetUIValue)(void*, uint64_t);
+            void (*SetUIValue)(void*, uint64_t, float);
+            int (*OverlapSphere)(void*, const float*, float, uint32_t, uint64_t*, int);
+            int (*Raycast3DMask)(void*, const float*, const float*, float, uint32_t, uint64_t*, float*, float*, float*);
+            void (*LoadSceneByName)(const char*);
+            void (*LoadSceneByIndex)(int);
+            const char* (*GetSceneName)(void*);
+            int (*GetSceneCount)();
+            float (*GetTime)(void*);
+            uint64_t (*GetFrameCount)(void*);
+            void (*GetWorldMatrix)(void*, uint64_t, float*);
+            int (*AudioIsPlaying)(void*, uint64_t);
+            void (*AudioPlayOneShot)(void*, uint64_t, uint64_t, float);
+            void (*MixerSetVolume)(const char*, float);
+            float (*MixerGetVolume)(const char*);
+            void (*CharacterMove)(void*, uint64_t, const float*, int);
+            int (*CharacterState)(void*, uint64_t, float*, float*);
+            void (*CharacterSetVerticalSpeed)(void*, uint64_t, float);
         };
 
         struct ManagedApi
@@ -76,6 +95,7 @@ namespace Dimension
             void (*Invoke)(intptr_t, int, float);
             void (*InvokeEntity)(intptr_t, int, uint64_t);
             void (*DestroyInstance)(intptr_t);
+            void (*InvokeString)(intptr_t, int, const char*);
         };
 
         bool s_Available = false;
@@ -156,6 +176,10 @@ namespace Dimension
             void OnFixedUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 2, dt); }
             void OnDestroy() override { if (m_Handle) s_Managed.Invoke(m_Handle, 3, 0.0f); }
             void OnClick() override { if (m_Handle) s_Managed.Invoke(m_Handle, 4, 0.0f); }
+            void OnUIValueChanged(float v) override { if (m_Handle) s_Managed.Invoke(m_Handle, 5, v); }
+            void OnUITextChanged(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 0, t.c_str()); }
+            void OnUISubmit(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 1, t.c_str()); }
+            void OnAnimationEvent(const std::string& n) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 2, n.c_str()); }
             void OnCollisionEnter(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 0, Pack(o)); }
             void OnCollisionExit(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 1, Pack(o)); }
             void OnTriggerEnter(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 2, Pack(o)); }
@@ -265,10 +289,14 @@ namespace Dimension
                 *distance = hit.Distance;
                 return 1;
             };
-            a.SetUIText = [](void* s, uint64_t e, const char* text) { if (auto* t = Comp<UITextComponent>(s, e)) t->Text = text; };
+            a.SetUIText = [](void* s, uint64_t e, const char* text) {
+                if (auto* t = Comp<UITextComponent>(s, e)) t->Text = text;
+                else if (auto* f = Comp<UIInputFieldComponent>(s, e)) f->Text = text;
+            };
             a.GetUIText = [](void* s, uint64_t e) -> const char* {
-                auto* t = Comp<UITextComponent>(s, e);
-                s_StringReturn = t ? t->Text : std::string();
+                if (auto* t = Comp<UITextComponent>(s, e)) s_StringReturn = t->Text;
+                else if (auto* f = Comp<UIInputFieldComponent>(s, e)) s_StringReturn = f->Text;
+                else s_StringReturn.clear();
                 return s_StringReturn.c_str();
             };
             a.AnimatorCrossFade = [](void* s, uint64_t e, const char* clip, float fade) { if (auto* an = Comp<AnimatorComponent>(s, e)) an->CrossFade(clip, fade); };
@@ -302,6 +330,68 @@ namespace Dimension
                 auto* an = Comp<AnimatorComponent>(s, e);
                 s_StringReturn = an ? an->CurrentState : std::string();
                 return s_StringReturn.c_str();
+            };
+            a.OverlapSphere = [](void* s, const float* c, float radius, uint32_t mask, uint64_t* out, int max) -> int {
+                if (!s) return 0;
+                auto hits = Physics3DWorld::OverlapSphere(S(s), { c[0], c[1], c[2] }, radius, mask);
+                int n = std::min((int)hits.size(), max);
+                for (int i = 0; i < n; ++i) out[i] = Pack(hits[i]);
+                return (int)hits.size();
+            };
+            a.Raycast3DMask = [](void* s, const float* o, const float* d, float maxDist, uint32_t mask, uint64_t* hitEntity, float* point,
+                                 float* normal, float* distance) -> int {
+                if (!s) return 0;
+                RaycastHit hit = Physics3DWorld::Raycast(S(s), { o[0], o[1], o[2] }, { d[0], d[1], d[2] }, maxDist, mask);
+                if (!hit) return 0;
+                *hitEntity = Pack(hit.Hit);
+                std::memcpy(point, &hit.Point, 12);
+                std::memcpy(normal, &hit.Normal, 12);
+                *distance = hit.Distance;
+                return 1;
+            };
+            a.LoadSceneByName = [](const char* name) { SceneManager::LoadScene(std::string(name ? name : "")); };
+            a.LoadSceneByIndex = [](int index) { SceneManager::LoadScene(index); };
+            a.GetSceneName = [](void* s) -> const char* {
+                s_StringReturn = s ? S(s).GetName() : std::string();
+                return s_StringReturn.c_str();
+            };
+            a.GetSceneCount = []() -> int { return (int)SceneManager::GetBuildScenes().size(); };
+            a.GetTime = [](void* s) -> float { return s ? S(s).GetTime() : 0.0f; };
+            a.AudioIsPlaying = [](void* s, uint64_t e) -> int { return s && AudioWorld::IsPlaying(S(s), Unpack(e)) ? 1 : 0; };
+            a.AudioPlayOneShot = [](void* s, uint64_t e, uint64_t clip, float scale) {
+                if (s) AudioWorld::PlayOneShot(S(s), Unpack(e), AssetHandle(clip), scale);
+            };
+            a.MixerSetVolume = [](const char* group, float db) { AudioMixer::SetVolumeDb(group ? group : "", db); };
+            a.CharacterMove = [](void* s, uint64_t e, const float* v, int simple) {
+                if (!s) return;
+                if (simple) Physics3DWorld::SimpleMoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] });
+                else Physics3DWorld::MoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] });
+            };
+            a.CharacterState = [](void* s, uint64_t e, float* velocity, float* verticalSpeed) -> int {
+                auto* cc = Comp<CharacterControllerComponent>(s, e);
+                if (!cc) return 0;
+                std::memcpy(velocity, &cc->Velocity, 12);
+                *verticalSpeed = cc->VerticalSpeed;
+                return cc->IsGrounded ? 1 : 0;
+            };
+            a.CharacterSetVerticalSpeed = [](void* s, uint64_t e, float v) {
+                if (auto* cc = Comp<CharacterControllerComponent>(s, e)) cc->VerticalSpeed = v;
+            };
+            a.MixerGetVolume = [](const char* group) -> float { return AudioMixer::GetVolumeDb(group ? group : ""); };
+            a.GetFrameCount = [](void* s) -> uint64_t { return s ? S(s).GetFrameCount() : 0; };
+            a.GetWorldMatrix = [](void* s, uint64_t e, float* out) {
+                glm::mat4 m(1.0f);
+                if (auto* t = Comp<TransformComponent>(s, e)) m = t->World;
+                std::memcpy(out, &m, sizeof(m));
+            };
+            a.GetUIValue = [](void* s, uint64_t e) -> float {
+                if (auto* sl = Comp<UISliderComponent>(s, e)) return sl->Value;
+                if (auto* tg = Comp<UIToggleComponent>(s, e)) return tg->IsOn ? 1.0f : 0.0f;
+                return 0.0f;
+            };
+            a.SetUIValue = [](void* s, uint64_t e, float v) {
+                if (auto* sl = Comp<UISliderComponent>(s, e)) sl->Value = std::clamp(v, std::min(sl->MinValue, sl->MaxValue), std::max(sl->MinValue, sl->MaxValue));
+                if (auto* tg = Comp<UIToggleComponent>(s, e)) tg->IsOn = v != 0.0f;
             };
         }
     }

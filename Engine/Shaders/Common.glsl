@@ -6,10 +6,13 @@ layout(set = 0, binding = 0) uniform sampler2D uTextures[];
 struct PointLight
 {
     vec4 PositionRange;  // xyz position, w range
-    vec4 Color;          // rgb color * intensity
+    vec4 Color;          // rgb color * intensity, w: shadow slot + 1 (0 = no shadows)
+    vec4 Direction;      // spot lights: xyz direction, w cos(outer half angle); point lights: w = -2
+    vec4 Cone;           // x: cos(inner half angle)
 };
 
 #define MAX_POINT_LIGHTS 32
+#define MAX_POINT_SHADOWS 4
 
 layout(set = 1, binding = 0) uniform SceneData
 {
@@ -23,11 +26,19 @@ layout(set = 1, binding = 0) uniform SceneData
     ivec4 Counts;        // x: point light count
     vec4 GridParams;     // x: fade distance (0 = none)
     mat4 InvViewProj;
-    mat4 LightViewProj;  // directional shadow map projection
-    vec4 ShadowParams;   // x: enabled, y: shadow map texture index, z: depth bias, w: texel size
+    mat4 LightViewProj[4]; // directional shadow cascades (tiles of a 2x2 atlas)
+    vec4 ShadowParams;   // x: cascade count (0 = no shadows), y: atlas texture index, z: depth bias
+    vec4 CascadeSplits;  // far view depth of each cascade
+    vec4 CascadeTexel;   // world size of a shadow texel per cascade
+    vec4 CascadeParams;  // y: blend fraction between cascades, z: 1 = debug colors
     vec4 SkyTop;         // rgb zenith color (linear)
     vec4 SkyHorizon;
     vec4 SkyGround;
+    vec4 SkyParams;      // x mode (1 = texture), y texture index, z intensity, w rotation (radians)
+    vec4 EnvParams;      // x reflection intensity, y max mip, z 1 = irradiance SH valid, w ambient intensity
+    vec4 IrradianceSH[9];
+    mat4 PointShadowViewProj[MAX_POINT_SHADOWS * 6]; // per shadowed point light: +X, -X, +Y, -Y, +Z, -Z faces
+    vec4 PointShadowParams[MAX_POINT_SHADOWS];       // x near, y far (range), z bias (world units), w atlas index
     PointLight PointLights[MAX_POINT_LIGHTS];
 } uScene;
 
@@ -39,30 +50,150 @@ vec3 SkyColor(vec3 dir)
                     : mix(uScene.SkyHorizon.rgb, uScene.SkyGround.rgb, pow(clamp(-h, 0.0, 1.0), 0.3));
 }
 
+// Equirectangular mapping (matches Environment::DirectionToEquirect): u = 0.5 at -Z, v = 0 at +Y.
+vec2 DirToEquirect(vec3 d)
+{
+    float c = cos(uScene.SkyParams.w), s = sin(uScene.SkyParams.w);
+    d = vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z); // undo the sky rotation around +Y
+    return vec2(atan(d.x, -d.z) / 6.28318530718 + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265359);
+}
+
+bool HasSkyTexture() { return uScene.SkyParams.x > 0.5; }
+
+// Sky radiance in a direction (textureLod: explicit mips avoid seams at the wrap line).
+vec3 SkyRadiance(vec3 dir, float lod)
+{
+    if (!HasSkyTexture()) return SkyColor(dir);
+    return textureLod(uTextures[nonuniformEXT(uint(uScene.SkyParams.y))], DirToEquirect(normalize(dir)), lod).rgb * uScene.SkyParams.z;
+}
+
+// Diffuse irradiance from the sky's spherical harmonics (already convolved and divided by pi).
+vec3 SkyIrradiance(vec3 n)
+{
+    vec3 r = uScene.IrradianceSH[0].rgb * 0.282095
+           + uScene.IrradianceSH[1].rgb * 0.488603 * n.y
+           + uScene.IrradianceSH[2].rgb * 0.488603 * n.z
+           + uScene.IrradianceSH[3].rgb * 0.488603 * n.x
+           + uScene.IrradianceSH[4].rgb * 1.092548 * n.x * n.y
+           + uScene.IrradianceSH[5].rgb * 1.092548 * n.y * n.z
+           + uScene.IrradianceSH[6].rgb * 0.315392 * (3.0 * n.z * n.z - 1.0)
+           + uScene.IrradianceSH[7].rgb * 1.092548 * n.x * n.z
+           + uScene.IrradianceSH[8].rgb * 0.546274 * (n.x * n.x - n.y * n.y);
+    return max(r, vec3(0.0));
+}
+
 vec4 SampleTexture(uint index, vec2 uv)
 {
     return texture(uTextures[nonuniformEXT(index)], uv);
 }
 
-// Returns 1 when lit, 0 when fully in shadow (3x3 PCF on the directional shadow map).
-float DirectionalShadow(vec3 worldPos, vec3 normal)
+// Shadow factor from one cascade (3x3 PCF), or -1 when the point is outside that cascade's tile.
+float SampleCascade(int c, vec3 worldPos, vec3 normal)
 {
-    if (uScene.ShadowParams.x < 0.5) return 1.0;
-    // Normal offset reduces acne on surfaces at grazing angles.
-    vec3 offsetPos = worldPos + normal * uScene.ShadowParams.w * 1.5;
-    vec4 ls = uScene.LightViewProj * vec4(offsetPos, 1.0);
+    // Normal offset (in this cascade's texels) reduces acne on surfaces at grazing angles.
+    vec3 offsetPos = worldPos + normal * uScene.CascadeTexel[c] * 1.5;
+    vec4 ls = uScene.LightViewProj[c] * vec4(offsetPos, 1.0);
     vec3 p = ls.xyz / ls.w;
-    // The shadow map is rendered with the same flipped viewport as the scene: row 0 is NDC y = +1.
+    // Tiles are rendered with the same flipped viewport as the scene: row 0 is NDC y = +1.
     vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
-    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || p.z >= 1.0) return 1.0;
     uint map = uint(uScene.ShadowParams.y);
     vec2 texel = vec2(1.0) / vec2(textureSize(uTextures[nonuniformEXT(map)], 0));
+    float margin = texel.x * 4.0; // 2 tile texels: keeps the PCF footprint inside the tile
+    if (uv.x <= margin || uv.y <= margin || uv.x >= 1.0 - margin || uv.y >= 1.0 - margin || p.z >= 1.0) return -1.0;
+    vec2 atlasUV = (vec2(float(c & 1), float(c >> 1)) + uv) * 0.5;
     float lit = 0.0;
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
         {
-            float d = texture(uTextures[nonuniformEXT(map)], uv + vec2(x, y) * texel).r;
+            float d = texture(uTextures[nonuniformEXT(map)], atlasUV + vec2(x, y) * texel).r;
             lit += (p.z - uScene.ShadowParams.z) <= d ? 1.0 : 0.0;
+        }
+    return lit / 9.0;
+}
+
+int ShadowCascadeIndex(vec3 worldPos)
+{
+    int count = int(uScene.ShadowParams.x);
+    float depth = -(uScene.View * vec4(worldPos, 1.0)).z;
+    for (int c = 0; c < count; ++c)
+        if (depth <= uScene.CascadeSplits[c]) return c;
+    return -1;
+}
+
+// Returns 1 when lit, 0 when fully in shadow. Blends into the next cascade near each split and fades out at the shadow distance.
+float DirectionalShadow(vec3 worldPos, vec3 normal)
+{
+    int count = int(uScene.ShadowParams.x);
+    if (count == 0) return 1.0;
+    float depth = -(uScene.View * vec4(worldPos, 1.0)).z;
+    for (int c = 0; c < count; ++c)
+    {
+        if (depth > uScene.CascadeSplits[c]) continue;
+        float s = SampleCascade(c, worldPos, normal);
+        if (s < 0.0) continue; // outside this tile: fall back to the next cascade
+        float start = c == 0 ? 0.0 : uScene.CascadeSplits[c - 1];
+        float end = uScene.CascadeSplits[c];
+        float blendStart = end - (end - start) * uScene.CascadeParams.y;
+        if (depth > blendStart)
+        {
+            float f = (depth - blendStart) / max(end - blendStart, 1e-4);
+            float next = c + 1 < count ? SampleCascade(c + 1, worldPos, normal) : 1.0;
+            if (next >= 0.0) s = mix(s, next, f);
+        }
+        return s;
+    }
+    return 1.0;
+}
+
+// Debug tint per cascade (red, green, blue, yellow).
+vec3 CascadeDebugColor(vec3 worldPos)
+{
+    int c = ShadowCascadeIndex(worldPos);
+    if (c == 0) return vec3(1.0, 0.45, 0.45);
+    if (c == 1) return vec3(0.45, 1.0, 0.45);
+    if (c == 2) return vec3(0.45, 0.6, 1.0);
+    if (c == 3) return vec3(1.0, 1.0, 0.4);
+    return vec3(1.0);
+}
+
+// Point/spot light shadow from the shadow atlas (rows = shadowed lights, columns = cube faces; spot lights use
+// column 0 only). Returns 1 when lit. Compares linear distances along the face axis, so the bias is in world units.
+float PointShadow(uint slot, vec3 lightPos, vec4 spotDirection, vec3 worldPos, vec3 normal)
+{
+    vec4 params = uScene.PointShadowParams[slot];
+    vec3 toFrag = worldPos - lightPos;
+    vec3 a = abs(toFrag);
+    // Normal offset scaled by distance (texel footprint grows with distance).
+    float dist = max(a.x, max(a.y, a.z));
+    vec3 offsetPos = worldPos + normal * (0.01 + dist * 0.004);
+    toFrag = offsetPos - lightPos;
+    a = abs(toFrag);
+    int face;
+    float axisDist;
+    if (spotDirection.w > -1.5) { face = 0; axisDist = dot(toFrag, spotDirection.xyz); if (axisDist <= 0.0) return 1.0; }
+    else if (a.x >= a.y && a.x >= a.z) { face = toFrag.x > 0.0 ? 0 : 1; axisDist = a.x; }
+    else if (a.y >= a.z)          { face = toFrag.y > 0.0 ? 2 : 3; axisDist = a.y; }
+    else                          { face = toFrag.z > 0.0 ? 4 : 5; axisDist = a.z; }
+    if (axisDist >= params.y) return 1.0;
+
+    vec4 clip = uScene.PointShadowViewProj[slot * 6u + uint(face)] * vec4(offsetPos, 1.0);
+    vec2 uv = vec2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+    uint map = uint(params.w);
+    vec2 atlasSize = vec2(textureSize(uTextures[nonuniformEXT(map)], 0));
+    vec2 tiles = vec2(6.0, float(MAX_POINT_SHADOWS));
+    vec2 texel = 1.0 / atlasSize;
+    vec2 tileTexel = texel * tiles; // one texel in tile uv
+    uv = clamp(uv, tileTexel * 1.5, 1.0 - tileTexel * 1.5); // keep the PCF footprint inside the face
+    vec2 atlasUV = (vec2(float(face), float(slot)) + uv) / tiles;
+
+    float n = params.x, f = params.y;
+    float lit = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+        {
+            float d = texture(uTextures[nonuniformEXT(map)], atlasUV + vec2(x, y) * texel).r;
+            float occluder = n * f / (f - d * (f - n)); // depth [0,1] -> linear distance along the face axis
+            lit += axisDist - params.z <= occluder ? 1.0 : 0.0;
         }
     return lit / 9.0;
 }

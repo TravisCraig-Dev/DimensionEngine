@@ -1,5 +1,5 @@
 // Dimension Editor entry point.
-// Usage: DimensionEditor [projectDir] [--play] [--frames N] [--screenshot file.png]
+// Usage: DimensionEditor [projectDir] [--play] [--frames N] [--screenshot file.png] [--build outputFolder]
 #include "EditorLayer.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Project/Project.h>
@@ -27,6 +27,9 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--windowed")) spec.Window.Maximized = false;
         else if (!std::strcmp(argv[i], "--select") && i + 1 < argc) options.SelectEntity = argv[++i];
         else if (!std::strcmp(argv[i], "--focus") && i + 1 < argc) options.FocusWindow = argv[++i];
+        else if (!std::strcmp(argv[i], "--build") && i + 1 < argc) options.BuildFolder = argv[++i];
+        else if (!std::strcmp(argv[i], "--open") && i + 1 < argc) options.OpenWindow = argv[++i];
+        else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) options.ScenePath = argv[++i];
         else projectDir = argv[i];
     }
 
@@ -42,5 +45,6 @@ int main(int argc, char** argv)
         app.PopAllLayers(); // scenes may hold objects created by the game module
         GameModule::Unload();
     }
+    if (!options.BuildFolder.empty()) return options.BuildSucceeded ? 0 : 2;
     return 0;
 }

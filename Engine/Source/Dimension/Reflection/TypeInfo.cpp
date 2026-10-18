@@ -45,6 +45,18 @@ namespace Dimension
             Entity e = *(const Entity*)p;
             return resolver && !e.IsNull() ? resolver->ToGuid(e) : uint64_t(0);
         }
+        case FieldType::Curve:
+        {
+            json keys = json::array();
+            for (auto& k : ((const Curve*)p)->Keys) keys.push_back({ k.Time, k.Value });
+            return keys;
+        }
+        case FieldType::Gradient:
+        {
+            json keys = json::array();
+            for (auto& k : ((const Gradient*)p)->Keys) keys.push_back({ k.Time, k.Color.r, k.Color.g, k.Color.b, k.Color.a });
+            return keys;
+        }
         }
         return nullptr;
     }
@@ -79,6 +91,27 @@ namespace Dimension
             case FieldType::EntityRef:
                 *(Entity*)p = resolver ? resolver->FromGuid(v.get<uint64_t>()) : Entity::Null();
                 break;
+            case FieldType::Curve:
+            {
+                if (!v.is_array()) break;
+                Curve c;
+                for (auto& k : v)
+                    if (k.is_array() && k.size() >= 2) c.Keys.push_back({ k[0].get<float>(), k[1].get<float>() });
+                c.Sort();
+                if (!c.Keys.empty()) *(Curve*)p = std::move(c);
+                break;
+            }
+            case FieldType::Gradient:
+            {
+                if (!v.is_array()) break;
+                Gradient g;
+                for (auto& k : v)
+                    if (k.is_array() && k.size() >= 5)
+                        g.Keys.push_back({ k[0].get<float>(), { k[1].get<float>(), k[2].get<float>(), k[3].get<float>(), k[4].get<float>() } });
+                g.Sort();
+                if (!g.Keys.empty()) *(Gradient*)p = std::move(g);
+                break;
+            }
             }
         }
         catch (const json::exception& e)

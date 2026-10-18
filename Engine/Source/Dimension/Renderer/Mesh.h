@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/Renderer/Buffer.h"
 #include "Dimension/Animation/Animation.h"
+#include "Dimension/Renderer/Material.h"
 #include <glm/glm.hpp>
 
 namespace Dimension
@@ -26,6 +27,30 @@ namespace Dimension
         glm::vec3 Extents() const { return (Max - Min) * 0.5f; }
     };
 
+    // A range of the index buffer drawn with one material slot (-1 = the renderer's own material).
+    struct SubMesh
+    {
+        uint32_t IndexOffset = 0;
+        uint32_t IndexCount = 0;
+        int32_t MaterialSlot = -1;
+    };
+
+    // An image referenced by an imported material: an external file, or encoded PNG/JPEG bytes embedded in the model.
+    struct ImportedImage
+    {
+        std::string Name;
+        fs::path File;              // absolute path (external image)
+        std::vector<uint8_t> Bytes; // embedded image
+    };
+
+    // A material read from a model file. Texture handles in Values are unset; images are referenced by index.
+    struct ImportedMaterial
+    {
+        std::string Name;
+        Material Values;
+        int32_t BaseColorImage = -1, NormalImage = -1, MetallicRoughnessImage = -1, EmissionImage = -1;
+    };
+
     // CPU-side mesh as imported from a file (no GPU resources; usable in tools and tests).
     struct MeshData
     {
@@ -35,8 +60,18 @@ namespace Dimension
         Ref<Skeleton> SkeletonData;       // null for static meshes
         std::vector<AnimationClip> Clips;
         std::string Name;
+        std::vector<SubMesh> SubMeshes;          // at least one after loading
+        std::vector<ImportedMaterial> Materials; // material slots (glTF materials)
+        std::vector<ImportedImage> Images;
 
         static bool LoadFromFile(const fs::path& path, MeshData& out);
+        static MeshData FromArrays(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name);
+        // Built-in primitives (CPU data; Mesh::Create* uploads them).
+        static MeshData Cube();
+        static MeshData Sphere(uint32_t segments = 48, uint32_t rings = 24);
+        static MeshData Plane();
+        static MeshData Quad();
+        static MeshData Cylinder(uint32_t segments = 48);
     };
 
     // Immutable GPU mesh (single vertex/index buffer). Imported files are merged into one mesh.
@@ -59,6 +94,7 @@ namespace Dimension
         uint32_t GetVertexCount() const { return m_VertexCount; }
         const AABB& GetBounds() const { return m_Bounds; }
         const std::string& GetName() const { return m_Name; }
+        const std::vector<SubMesh>& GetSubMeshes() const { return m_SubMeshes; }
 
         bool IsSkinned() const { return m_Skeleton != nullptr; }
         const Skeleton* GetSkeleton() const { return m_Skeleton.get(); }
@@ -75,5 +111,6 @@ namespace Dimension
         std::string m_Name;
         Ref<Skeleton> m_Skeleton;
         std::vector<AnimationClip> m_Clips;
+        std::vector<SubMesh> m_SubMeshes;
     };
 }

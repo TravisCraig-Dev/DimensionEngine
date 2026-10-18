@@ -7,6 +7,7 @@ namespace Dimension
 {
     class Texture2D;
     class Mesh;
+    struct MeshData;
     struct Material;
     class Font;
     struct AnimatorController;
@@ -60,6 +61,17 @@ namespace Dimension
 
         static Ref<Texture2D> GetTexture(AssetHandle handle);
         static Ref<Mesh> GetMesh(AssetHandle handle);
+        // CPU geometry of a mesh asset or built-in primitive (colliders, tools); cached, no GPU needed.
+        static std::shared_ptr<const MeshData> GetMeshData(AssetHandle handle);
+        // Material per slot of a model (glTF materials). Until extracted these are read-only sub-assets of the
+        // model, built from the file; after ExtractMeshMaterials they are editable .mat assets. Loads the mesh.
+        static const std::vector<AssetHandle>& GetMeshMaterials(AssetHandle mesh);
+        static std::vector<std::string> GetMeshMaterialNames(AssetHandle mesh);
+        static bool AreMeshMaterialsExtracted(AssetHandle mesh);
+        // Writes the model's materials (and embedded textures) next to it as assets and uses them from now on.
+        static bool ExtractMeshMaterials(AssetHandle mesh);
+        // True for in-memory assets owned by a model (embedded materials and textures).
+        static bool IsSubAsset(AssetHandle handle);
         // Materials are editable in place; call SaveMaterial after changing one.
         static Ref<Material> GetMaterial(AssetHandle handle);
         static void SaveMaterial(AssetHandle handle);
@@ -73,5 +85,6 @@ namespace Dimension
         static Ref<Texture2D> GetWhiteTexture();
         static Ref<Texture2D> GetCheckerTexture();
         static Ref<Texture2D> GetParticleTexture(); // soft round default sprite for particles
+        static Ref<Texture2D> GetCircleTexture();   // antialiased disc (UI handles)
     };
 }

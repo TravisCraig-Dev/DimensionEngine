@@ -3,5 +3,9 @@
   "startScene": 100009,
   "windowWidth": 1280,
   "windowHeight": 720,
-  "engineVersion": "0.1.0"
+  "engineVersion": "0.1.0",
+  "buildScenes": [
+    100009,
+    100010
+  ]
 }

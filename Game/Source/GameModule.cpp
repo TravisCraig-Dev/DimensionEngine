@@ -192,6 +192,185 @@ namespace Game
         float m_Timer = 0.0f;
     };
 
+    // UI Slider -> light intensity, with a live label ("Prefix: 2.2").
+    class LightSlider : public ScriptableEntity
+    {
+    public:
+        std::string Light = "Sun";
+        std::string Label;
+        std::string Prefix = "Intensity";
+
+        void OnCreate() override
+        {
+            if (auto* s = TryGet<UISliderComponent>()) Apply(s->Value);
+        }
+        void OnUIValueChanged(float value) override { Apply(value); }
+
+    private:
+        void Apply(float value)
+        {
+            auto& reg = GetScene().GetRegistry();
+            Entity light = Find(Light);
+            if (light.IsNull()) return;
+            if (auto* d = reg.TryGet<DirectionalLightComponent>(light)) d->Intensity = value;
+            if (auto* p = reg.TryGet<PointLightComponent>(light)) p->Intensity = value;
+            Entity label = Find(Label);
+            if (auto* t = label.IsNull() ? nullptr : reg.TryGet<UITextComponent>(label))
+            {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%s: %.1f", Prefix.c_str(), value);
+                t->Text = buf;
+            }
+        }
+    };
+
+    // UI Toggle -> enables/disables a script on another entity (like ticking a component's checkbox).
+    class ScriptToggle : public ScriptableEntity
+    {
+    public:
+        std::string Target;
+        std::string Script = "Rotator";
+
+        void OnCreate() override
+        {
+            if (auto* t = TryGet<UIToggleComponent>()) Apply(t->IsOn);
+        }
+        void OnUIValueChanged(float value) override { Apply(value != 0.0f); }
+
+    private:
+        void Apply(bool on)
+        {
+            Entity target = Find(Target);
+            if (target.IsNull()) return;
+            if (auto* sc = GetScene().GetRegistry().TryGet<ScriptComponent>(target))
+                if (auto* s = sc->Find(Script)) s->Enabled = on;
+        }
+    };
+
+    // Drives an Animator float parameter back and forth (for a blend tree) and reacts to animation events
+    // named "Pulse" with a short squash-and-stretch.
+    class BlendDriver : public ScriptableEntity
+    {
+    public:
+        std::string Parameter = "Energy";
+        float Period = 8.0f;
+
+        void OnUpdate(float dt) override
+        {
+            m_Time += dt;
+            if (auto* anim = TryGet<AnimatorComponent>())
+                anim->SetFloat(Parameter, 0.5f - 0.5f * std::cos(m_Time * glm::two_pi<float>() / std::max(Period, 0.01f)));
+            m_Pulse = std::max(0.0f, m_Pulse - dt * 3.0f);
+            float s = 1.0f + 0.12f * m_Pulse;
+            Transform().Scale = { s, 1.0f / s, s };
+        }
+
+        void OnAnimationEvent(const std::string& name) override
+        {
+            if (name != "Pulse") return;
+            m_Pulse = 1.0f;
+            Log::Trace("{}: animation event '{}'", Name(), name);
+        }
+
+    private:
+        float m_Time = 0.0f, m_Pulse = 0.0f;
+    };
+
+    // UI Button that switches scenes (Scene: a name from File > Build Settings, or an Assets-relative path).
+    class LoadSceneButton : public ScriptableEntity
+    {
+    public:
+        std::string Scene;
+        void OnClick() override { SceneManager::LoadScene(Scene); }
+    };
+
+    // Loads another scene after a delay (splash screens, "game over" -> menu).
+    class LoadSceneAfterDelay : public ScriptableEntity
+    {
+    public:
+        std::string Scene;
+        float Delay = 3.0f;
+        void OnUpdate(float dt) override
+        {
+            if (m_Done || (m_Time += dt) < Delay) return;
+            m_Done = true;
+            SceneManager::LoadScene(Scene);
+        }
+
+    private:
+        float m_Time = 0.0f;
+        bool m_Done = false;
+    };
+
+    // UI Slider (0-1) -> Audio Mixer group volume, with an optional label ("Music: 80%").
+    class MixerVolumeSlider : public ScriptableEntity
+    {
+    public:
+        std::string Group = "Music";
+        std::string Label;
+        void OnCreate() override
+        {
+            if (auto* s = TryGet<UISliderComponent>()) Apply(s->Value);
+        }
+        void OnUIValueChanged(float value) override { Apply(value); }
+
+    private:
+        void Apply(float value)
+        {
+            AudioMixer::SetVolumeDb(Group, AudioMixer::LinearToDb(value));
+            Entity label = Find(Label);
+            if (auto* t = label.IsNull() ? nullptr : GetScene().GetRegistry().TryGet<UITextComponent>(label))
+                t->Text = Group + " Volume: " + std::to_string((int)std::round(value * 100.0f)) + "%";
+        }
+    };
+
+    // Character Controller movement: WASD/arrows relative to the camera's heading, Space to jump.
+    class CharacterMover : public ScriptableEntity
+    {
+    public:
+        float MoveSpeed = 5.0f;
+        float JumpSpeed = 6.0f;
+        float TurnSpeed = 12.0f; // how fast the body faces the move direction
+
+        void OnUpdate(float dt) override
+        {
+            auto* cc = TryGet<CharacterControllerComponent>();
+            if (!cc) return;
+            glm::vec2 input(0.0f);
+            if (Input::IsKeyDown(Key::W) || Input::IsKeyDown(Key::Up)) input.y += 1.0f;
+            if (Input::IsKeyDown(Key::S) || Input::IsKeyDown(Key::Down)) input.y -= 1.0f;
+            if (Input::IsKeyDown(Key::A) || Input::IsKeyDown(Key::Left)) input.x -= 1.0f;
+            if (Input::IsKeyDown(Key::D) || Input::IsKeyDown(Key::Right)) input.x += 1.0f;
+            if (glm::length(input) > 1.0f) input = glm::normalize(input);
+
+            // Camera-relative: forward is the camera's view direction flattened onto the ground.
+            glm::vec3 forward(0, 0, -1), right(1, 0, 0);
+            Entity cam = GetScene().GetPrimaryCamera();
+            if (!cam.IsNull())
+            {
+                auto& ct = GetScene().GetRegistry().Get<TransformComponent>(cam);
+                glm::vec3 f = ct.Forward();
+                f.y = 0.0f;
+                if (glm::length(f) > 1e-3f)
+                {
+                    forward = glm::normalize(f);
+                    right = glm::cross(forward, glm::vec3(0, 1, 0));
+                }
+            }
+            glm::vec3 move = (forward * input.y + right * input.x) * MoveSpeed;
+            if (Input::IsKeyPressed(Key::Space) && cc->IsGrounded) cc->VerticalSpeed = JumpSpeed;
+            Physics3DWorld::SimpleMoveCharacter(GetScene(), Self(), move);
+
+            if (glm::length(move) > 0.1f)
+            {
+                float target = std::atan2(-move.x, -move.z);
+                float& yaw = Transform().Rotation.y;
+                float delta = std::remainder(target - yaw, glm::two_pi<float>());
+                yaw += delta * (1.0f - std::exp(-TurnSpeed * dt));
+            }
+        }
+    };
+
     // Example ECS system (no script needed): pulses the emission of every mesh
     // whose entity is tagged "Pulse".
     class PulseSystem : public System
@@ -243,6 +422,27 @@ namespace Game
             .Field("Interval", &AnimationCycler::Interval).Range(0.0f, 100.0f).Speed(0.05f)
             .Field("Fade Seconds", &AnimationCycler::FadeSeconds).Range(0.0f, 10.0f).Speed(0.01f);
 
+        ScriptRegistry::Register<LightSlider>("LightSlider")
+            .Field("Light", &LightSlider::Light)
+            .Field("Label", &LightSlider::Label)
+            .Field("Prefix", &LightSlider::Prefix);
+        ScriptRegistry::Register<ScriptToggle>("ScriptToggle")
+            .Field("Target", &ScriptToggle::Target)
+            .Field("Script", &ScriptToggle::Script);
+        ScriptRegistry::Register<BlendDriver>("BlendDriver")
+            .Field("Parameter", &BlendDriver::Parameter)
+            .Field("Period", &BlendDriver::Period).Range(0.1f, 120.0f);
+        ScriptRegistry::Register<LoadSceneButton>("LoadSceneButton").Field("Scene", &LoadSceneButton::Scene);
+        ScriptRegistry::Register<LoadSceneAfterDelay>("LoadSceneAfterDelay")
+            .Field("Scene", &LoadSceneAfterDelay::Scene)
+            .Field("Delay", &LoadSceneAfterDelay::Delay).Range(0.0f, 3600.0f);
+        ScriptRegistry::Register<MixerVolumeSlider>("MixerVolumeSlider")
+            .Field("Group", &MixerVolumeSlider::Group)
+            .Field("Label", &MixerVolumeSlider::Label);
+        ScriptRegistry::Register<CharacterMover>("CharacterMover")
+            .Field("Move Speed", &CharacterMover::MoveSpeed).Range(0.0f, 100.0f)
+            .Field("Jump Speed", &CharacterMover::JumpSpeed).Range(0.0f, 100.0f)
+            .Field("Turn Speed", &CharacterMover::TurnSpeed).Range(0.0f, 100.0f);
         SystemRegistry::Register<PulseSystem>("Pulse");
         Log::Info("Sandbox game module registered");
     }

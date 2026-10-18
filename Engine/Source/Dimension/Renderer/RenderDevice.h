@@ -68,7 +68,7 @@ namespace Dimension
         void BindBindless(VkCommandBuffer cmd);
         // Copies a uniform block (<= kUniformBlockSize) into the transient ring and binds it at set 1.
         void BindUniforms(VkCommandBuffer cmd, const void* data, size_t size);
-        static constexpr VkDeviceSize kUniformBlockSize = 4096;
+        static constexpr VkDeviceSize kUniformBlockSize = 8192;
 
         uint32_t RegisterTexture(VkImageView view, VkSampler sampler);
         void UnregisterTexture(uint32_t index);

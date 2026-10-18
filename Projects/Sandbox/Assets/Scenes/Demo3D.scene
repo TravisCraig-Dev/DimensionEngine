@@ -18,7 +18,19 @@
       0
     ],
     "exposure": 1.0,
-    "tonemapping": true
+    "tonemapping": true,
+    "bloom": true,
+    "bloomIntensity": 0.6,
+    "bloomThreshold": 2.0,
+    "bloomKnee": 0.5,
+    "bloomRadius": 1.0,
+    "fxaa": true,
+    "vignette": 0.25,
+    "skyMode": 1,
+    "skyTexture": 100045,
+    "skyIntensity": 1.0,
+    "skyRotation": 0.0,
+    "reflectionIntensity": 1.0
   },
   "entities": [
     {
@@ -600,6 +612,13 @@
               90
             ]
           }
+        },
+        "Mesh Collider": {
+          "Mesh": 0,
+          "Convex": false,
+          "Friction": 0.6,
+          "Bounciness": 0.2,
+          "Is Trigger": false
         }
       }
     },
@@ -792,7 +811,9 @@
             0.3
           ],
           "Intensity": 6.0,
-          "Range": 7.0
+          "Range": 7.0,
+          "Cast Shadows": true,
+          "Shadow Bias": 0.05
         }
       }
     },
@@ -829,7 +850,9 @@
             1.0
           ],
           "Intensity": 6.0,
-          "Range": 7.0
+          "Range": 7.0,
+          "Cast Shadows": true,
+          "Shadow Bias": 0.05
         }
       }
     },
@@ -881,7 +904,7 @@
         "Transform": {
           "Position": [
             0,
-            0.5,
+            0.55,
             3
           ],
           "Rotation": [
@@ -911,33 +934,18 @@
           "Smoothness": 0.4,
           "Emission": 0.0
         },
-        "Rigidbody": {
-          "Body Type": 1,
-          "Mass": 1.0,
-          "Linear Damping": 0.1,
-          "Angular Damping": 5.0,
-          "Use Gravity": true
-        },
-        "Box Collider": {
-          "Offset": [
-            0,
-            0,
-            0
-          ],
-          "Size": [
-            1,
-            1,
-            1
-          ],
-          "Friction": 0.2,
-          "Bounciness": 0.0
-        },
         "Script": {
-          "Class": "PlayerController3D",
-          "Fields": {
-            "Move Speed": 5.0,
-            "Jump Speed": 5.0
-          }
+          "Scripts": [
+            {
+              "Class": "CharacterMover",
+              "Fields": {
+                "Move Speed": 5.0,
+                "Jump Speed": 6.0,
+                "Turn Speed": 12.0
+              },
+              "Enabled": true
+            }
+          ]
         },
         "Audio Source": {
           "Clip": 100007,
@@ -947,7 +955,22 @@
           "Play On Awake": true,
           "Spatial": false,
           "Min Distance": 1,
-          "Max Distance": 50
+          "Max Distance": 50,
+          "Output": "SFX"
+        },
+        "Character Controller": {
+          "Height": 1.1,
+          "Radius": 0.5,
+          "Center": [
+            0,
+            0,
+            0
+          ],
+          "Slope Limit": 45.0,
+          "Step Offset": 0.3,
+          "Skin Width": 0.02,
+          "Mass": 70.0,
+          "Push Strength": 200.0
         }
       }
     },
@@ -1793,14 +1816,33 @@
           "Rate Over Time": 90,
           "Shape Angle": 12,
           "Shape Radius": 0.2,
-          "End Color": [
-            0.9,
-            0.2,
-            0.05,
-            0
+          "Blend": 0,
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              0.9,
+              0.2,
+              0.05,
+              0
+            ]
           ],
-          "End Size": 0.25,
-          "Blend": 0
+          "Size Over Lifetime": [
+            [
+              0,
+              1.0
+            ],
+            [
+              1,
+              0.25
+            ]
+          ]
         }
       }
     },
@@ -1882,14 +1924,33 @@
           "Rate Over Time": 12,
           "Shape Angle": 18,
           "Shape Radius": 0.15,
-          "End Color": [
-            1,
-            1,
-            1,
-            0
+          "Blend": 0,
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              1,
+              1,
+              1,
+              0
+            ]
           ],
-          "End Size": 3.0,
-          "Blend": 0
+          "Size Over Lifetime": [
+            [
+              0,
+              1.0
+            ],
+            [
+              1,
+              3.0
+            ]
+          ]
         }
       }
     },
@@ -1971,14 +2032,33 @@
           "Rate Over Time": 15,
           "Shape Angle": 30,
           "Shape Radius": 0.15,
-          "End Color": [
-            1,
-            0.4,
-            0.1,
-            0
+          "Blend": 1,
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              1,
+              0.4,
+              0.1,
+              0
+            ]
           ],
-          "End Size": 0.5,
-          "Blend": 1
+          "Size Over Lifetime": [
+            [
+              0,
+              1.0
+            ],
+            [
+              1,
+              0.5
+            ]
+          ]
         }
       }
     },
@@ -2060,14 +2140,33 @@
           "Rate Over Time": 25,
           "Shape Angle": 12,
           "Shape Radius": 0.2,
-          "End Color": [
-            0.9,
-            0.2,
-            0.05,
-            0
+          "Blend": 1,
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              0.9,
+              0.2,
+              0.05,
+              0
+            ]
           ],
-          "End Size": 0.6,
-          "Blend": 1
+          "Size Over Lifetime": [
+            [
+              0,
+              1.0
+            ],
+            [
+              1,
+              0.6
+            ]
+          ]
         }
       }
     },
@@ -2311,6 +2410,2164 @@
           ],
           "Friction": 0.6,
           "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 800001,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Settings Panel",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            1,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            0
+          ],
+          "Pivot": [
+            1,
+            0
+          ],
+          "Position": [
+            -32,
+            110
+          ],
+          "Size": [
+            440,
+            500
+          ]
+        },
+        "UI Image": {
+          "Image": 100041,
+          "Color": [
+            0.09,
+            0.1,
+            0.13,
+            0.82
+          ],
+          "Image Type": 1,
+          "Border": [
+            16,
+            16,
+            16,
+            16
+          ],
+          "Border Scale": 1.0
+        },
+        "UI Layout Group": {
+          "Direction": 0,
+          "Spacing": 10,
+          "Padding": [
+            22,
+            18,
+            22,
+            18
+          ],
+          "Stretch Children": true
+        }
+      }
+    },
+    {
+      "guid": 800002,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Header",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            44
+          ]
+        },
+        "UI Text": {
+          "Text": "Settings",
+          "Font": 0,
+          "Font Size": 36,
+          "Color": [
+            1,
+            0.85,
+            0.4,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 800003,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Sun Label",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            34
+          ]
+        },
+        "UI Text": {
+          "Text": "Sun Intensity: 2.2",
+          "Font": 0,
+          "Font Size": 28,
+          "Color": [
+            0.92,
+            0.95,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 800004,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Sun Slider",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            30
+          ]
+        },
+        "UI Slider": {
+          "Min Value": 0.0,
+          "Max Value": 5.0,
+          "Value": 2.2,
+          "Whole Numbers": false,
+          "Interactable": true,
+          "Background Color": [
+            0.25,
+            0.27,
+            0.32,
+            1
+          ],
+          "Fill Color": [
+            1.0,
+            0.75,
+            0.3,
+            1
+          ],
+          "Handle Color": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "LightSlider",
+              "Fields": {
+                "Light": "Sun",
+                "Label": "Sun Label",
+                "Prefix": "Sun Intensity"
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 800005,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Spin Toggle",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            36
+          ]
+        },
+        "UI Toggle": {
+          "Is On": true,
+          "Label": "Spin the torus",
+          "Font Size": 28,
+          "Interactable": true,
+          "Box Color": [
+            0.92,
+            0.94,
+            1,
+            1
+          ],
+          "Check Color": [
+            0.2,
+            0.5,
+            0.95,
+            1
+          ],
+          "Label Color": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "ScriptToggle",
+              "Fields": {
+                "Target": "Spinning Torus",
+                "Script": "Rotator"
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 870002,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Music Label",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            34
+          ]
+        },
+        "UI Text": {
+          "Text": "Music Volume: 80%",
+          "Font": 0,
+          "Font Size": 28,
+          "Color": [
+            0.92,
+            0.95,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 870003,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Music Slider",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            30
+          ]
+        },
+        "UI Slider": {
+          "Min Value": 0.0,
+          "Max Value": 1.0,
+          "Value": 0.8,
+          "Whole Numbers": false,
+          "Interactable": true,
+          "Background Color": [
+            0.25,
+            0.27,
+            0.32,
+            1
+          ],
+          "Fill Color": [
+            0.45,
+            0.75,
+            1.0,
+            1
+          ],
+          "Handle Color": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "MixerVolumeSlider",
+              "Fields": {
+                "Group": "Music",
+                "Label": "Music Label"
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 800006,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Name Label",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            34
+          ]
+        },
+        "UI Text": {
+          "Text": "Your name (C# greets you):",
+          "Font": 0,
+          "Font Size": 26,
+          "Color": [
+            0.92,
+            0.95,
+            1,
+            0.9
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 800007,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Name Field",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            50
+          ]
+        },
+        "UI Input Field": {
+          "Text": "",
+          "Placeholder": "Type and press Enter...",
+          "Character Limit": 24,
+          "Font Size": 28,
+          "Interactable": true,
+          "Background Color": [
+            0.95,
+            0.96,
+            1,
+            1
+          ],
+          "Text Color": [
+            0.1,
+            0.1,
+            0.12,
+            1
+          ],
+          "Placeholder Color": [
+            0.5,
+            0.52,
+            0.58,
+            1
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.Greeter",
+              "Fields": {
+                "Target": "Greeting"
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 800008,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Greeting",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            40
+          ]
+        },
+        "UI Text": {
+          "Text": "",
+          "Font": 0,
+          "Font Size": 30,
+          "Color": [
+            0.55,
+            0.95,
+            0.6,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 810001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "glTF Showcase",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0.6,
+            0,
+            -4.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 100042,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Material": 0
+        },
+        "Mesh Collider": {
+          "Mesh": 0,
+          "Convex": false,
+          "Friction": 0.6,
+          "Bounciness": 0.2,
+          "Is Trigger": false
+        }
+      }
+    },
+    {
+      "guid": 810002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Showcase Spot",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0.6,
+            4.5,
+            -2.0
+          ],
+          "Rotation": [
+            -1.0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Spot Light": {
+          "Color": [
+            1.0,
+            0.85,
+            0.6
+          ],
+          "Intensity": 25.0,
+          "Range": 9.0,
+          "Spot Angle": 50.0,
+          "Inner Spot Angle": 30.0,
+          "Cast Shadows": true,
+          "Shadow Bias": 0.05
+        }
+      }
+    },
+    {
+      "guid": 820001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Chain Hook",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -5.5,
+            4.6,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.2,
+            0.2,
+            0.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.15,
+            0.15,
+            0.17,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.6,
+          "Emission": 0.0,
+          "Material": 0
+        }
+      }
+    },
+    {
+      "guid": 820010,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Chain Link 1",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -5.05,
+            4.6,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.36,
+            0.36,
+            0.36
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.33249999999999996,
+            0.7647499999999998,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.0,
+          "Material": 0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.2,
+          "Use Gravity": true
+        },
+        "Sphere Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        },
+        "Joint": {
+          "Type": 2,
+          "Connected Body": 0,
+          "Anchor": [
+            -1.25,
+            0,
+            0
+          ],
+          "Axis": [
+            0,
+            0,
+            1
+          ],
+          "Connected Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Use Limits": false,
+          "Min Angle": -45.0,
+          "Max Angle": 45.0,
+          "Min Distance": 0.0,
+          "Max Distance": 0.0
+        }
+      }
+    },
+    {
+      "guid": 820011,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Chain Link 2",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -4.6,
+            4.6,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.36,
+            0.36,
+            0.36
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.33249999999999996,
+            0.5053999999999996,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.0,
+          "Material": 0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.2,
+          "Use Gravity": true
+        },
+        "Sphere Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        },
+        "Joint": {
+          "Type": 2,
+          "Connected Body": 820010,
+          "Anchor": [
+            -0.625,
+            0,
+            0
+          ],
+          "Axis": [
+            0,
+            0,
+            1
+          ],
+          "Connected Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Use Limits": false,
+          "Min Angle": -45.0,
+          "Max Angle": 45.0,
+          "Min Distance": 0.0,
+          "Max Distance": 0.0
+        }
+      }
+    },
+    {
+      "guid": 820012,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Chain Link 3",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -4.15,
+            4.6,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.36,
+            0.36,
+            0.36
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.4189500000000004,
+            0.33249999999999996,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.0,
+          "Material": 0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.2,
+          "Use Gravity": true
+        },
+        "Sphere Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        },
+        "Joint": {
+          "Type": 2,
+          "Connected Body": 820011,
+          "Anchor": [
+            -0.625,
+            0,
+            0
+          ],
+          "Axis": [
+            0,
+            0,
+            1
+          ],
+          "Connected Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Use Limits": false,
+          "Min Angle": -45.0,
+          "Max Angle": 45.0,
+          "Min Distance": 0.0,
+          "Max Distance": 0.0
+        }
+      }
+    },
+    {
+      "guid": 820013,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Chain Link 4",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -3.7,
+            4.6,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.36,
+            0.36,
+            0.36
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.6783000000000002,
+            0.33249999999999996,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.0,
+          "Material": 0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.2,
+          "Use Gravity": true
+        },
+        "Sphere Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        },
+        "Joint": {
+          "Type": 2,
+          "Connected Body": 820012,
+          "Anchor": [
+            -0.625,
+            0,
+            0
+          ],
+          "Axis": [
+            0,
+            0,
+            1
+          ],
+          "Connected Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Use Limits": false,
+          "Min Angle": -45.0,
+          "Max Angle": 45.0,
+          "Min Distance": 0.0,
+          "Max Distance": 0.0
+        }
+      }
+    },
+    {
+      "guid": 820014,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Chain Link 5",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -3.25,
+            4.6,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.36,
+            0.36,
+            0.36
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.9376500000000003,
+            0.33249999999999996,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.0,
+          "Material": 0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.2,
+          "Use Gravity": true
+        },
+        "Sphere Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        },
+        "Joint": {
+          "Type": 2,
+          "Connected Body": 820013,
+          "Anchor": [
+            -0.625,
+            0,
+            0
+          ],
+          "Axis": [
+            0,
+            0,
+            1
+          ],
+          "Connected Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Use Limits": false,
+          "Min Angle": -45.0,
+          "Max Angle": 45.0,
+          "Min Distance": 0.0,
+          "Max Distance": 0.0
+        }
+      }
+    },
+    {
+      "guid": 820015,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Chain Link 6",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -2.8,
+            4.6,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.36,
+            0.36,
+            0.36
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.95,
+            0.33249999999999996,
+            0.7029999999999997,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.0,
+          "Material": 0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.2,
+          "Use Gravity": true
+        },
+        "Sphere Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.0,
+          "Is Trigger": false
+        },
+        "Joint": {
+          "Type": 2,
+          "Connected Body": 820014,
+          "Anchor": [
+            -0.625,
+            0,
+            0
+          ],
+          "Axis": [
+            0,
+            0,
+            1
+          ],
+          "Connected Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Use Limits": false,
+          "Min Angle": -45.0,
+          "Max Angle": 45.0,
+          "Min Distance": 0.0,
+          "Max Distance": 0.0
+        }
+      }
+    },
+    {
+      "guid": 830001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Tentacle (Blend Tree)",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -7.0,
+            0,
+            -2.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 100030,
+          "Material": 100026,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 100043
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "BlendDriver",
+              "Fields": {
+                "Parameter": "Energy",
+                "Period": 8.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 840001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Fireworks",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -3.5,
+            0,
+            -4.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Duration": 5.0,
+          "Looping": true,
+          "Play On Awake": true,
+          "Start Lifetime": [
+            1.1,
+            1.4
+          ],
+          "Start Speed": [
+            9.0,
+            11.0
+          ],
+          "Start Size": [
+            0.12,
+            0.12
+          ],
+          "Start Rotation": [
+            0,
+            360
+          ],
+          "Angular Velocity": [
+            0,
+            0
+          ],
+          "Start Color A": [
+            3.0,
+            2.2,
+            1.0,
+            1
+          ],
+          "Start Color B": [
+            3.0,
+            2.2,
+            1.0,
+            1
+          ],
+          "Gravity Modifier": 0.35,
+          "Drag": 0.0,
+          "Max Particles": 1000,
+          "Simulation Space": 1,
+          "Rate Over Time": 0.9,
+          "Burst Count": 0,
+          "Shape": 0,
+          "Shape Angle": 7.0,
+          "Shape Radius": 0.3,
+          "Box Size": [
+            1,
+            1,
+            1
+          ],
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          ],
+          "Size Over Lifetime": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              1
+            ]
+          ],
+          "Speed Over Lifetime": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              1
+            ]
+          ],
+          "Collision": 0,
+          "Collision Plane Height": 0.0,
+          "Bounce": 0.5,
+          "Collision Dampen": 0.1,
+          "Lifetime Loss": 0.0,
+          "Collision Radius": 0.05,
+          "Sub Emitter": 840002,
+          "Sub Emitter Trigger": 2,
+          "Sub Emit Count": 70,
+          "Trails": true,
+          "Trail Lifetime": 0.4,
+          "Trail Width": 0.6,
+          "Texture": 0,
+          "Blend": 1,
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 840002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Firework Burst",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -3.5,
+            0,
+            -4.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Duration": 5.0,
+          "Looping": true,
+          "Play On Awake": true,
+          "Start Lifetime": [
+            1.0,
+            1.6
+          ],
+          "Start Speed": [
+            3.0,
+            5.0
+          ],
+          "Start Size": [
+            0.09,
+            0.15
+          ],
+          "Start Rotation": [
+            0,
+            360
+          ],
+          "Angular Velocity": [
+            0,
+            0
+          ],
+          "Start Color A": [
+            4.0,
+            0.9,
+            0.5,
+            1
+          ],
+          "Start Color B": [
+            0.6,
+            1.4,
+            4.0,
+            1
+          ],
+          "Gravity Modifier": 0.25,
+          "Drag": 1.2,
+          "Max Particles": 3000,
+          "Simulation Space": 1,
+          "Rate Over Time": 0.0,
+          "Burst Count": 0,
+          "Shape": 1,
+          "Shape Angle": 25.0,
+          "Shape Radius": 0.05,
+          "Box Size": [
+            1,
+            1,
+            1
+          ],
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              0.6,
+              1,
+              1,
+              1,
+              0.85
+            ],
+            [
+              1,
+              1,
+              0.6,
+              0.4,
+              0
+            ]
+          ],
+          "Size Over Lifetime": [
+            [
+              0,
+              1.4
+            ],
+            [
+              0.3,
+              1.0
+            ],
+            [
+              1,
+              0.4
+            ]
+          ],
+          "Speed Over Lifetime": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              1
+            ]
+          ],
+          "Collision": 0,
+          "Collision Plane Height": 0.0,
+          "Bounce": 0.5,
+          "Collision Dampen": 0.1,
+          "Lifetime Loss": 0.0,
+          "Collision Radius": 0.05,
+          "Sub Emitter": 0,
+          "Sub Emitter Trigger": 2,
+          "Sub Emit Count": 20,
+          "Trails": true,
+          "Trail Lifetime": 0.3,
+          "Trail Width": 0.5,
+          "Texture": 0,
+          "Blend": 1,
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 840003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spark Fountain",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            5.0,
+            0.55,
+            3.6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Duration": 5.0,
+          "Looping": true,
+          "Play On Awake": true,
+          "Start Lifetime": [
+            2.0,
+            2.8
+          ],
+          "Start Speed": [
+            5.0,
+            6.5
+          ],
+          "Start Size": [
+            0.06,
+            0.1
+          ],
+          "Start Rotation": [
+            0,
+            360
+          ],
+          "Angular Velocity": [
+            0,
+            0
+          ],
+          "Start Color A": [
+            3.0,
+            1.8,
+            0.5,
+            1
+          ],
+          "Start Color B": [
+            3.5,
+            1.2,
+            0.3,
+            1
+          ],
+          "Gravity Modifier": 1.0,
+          "Drag": 0.0,
+          "Max Particles": 1000,
+          "Simulation Space": 1,
+          "Rate Over Time": 70.0,
+          "Burst Count": 0,
+          "Shape": 0,
+          "Shape Angle": 14.0,
+          "Shape Radius": 0.05,
+          "Box Size": [
+            1,
+            1,
+            1
+          ],
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              0.7,
+              1,
+              0.8,
+              0.6,
+              0.9
+            ],
+            [
+              1,
+              1,
+              0.5,
+              0.3,
+              0
+            ]
+          ],
+          "Size Over Lifetime": [
+            [
+              0,
+              1.0
+            ],
+            [
+              1,
+              0.5
+            ]
+          ],
+          "Speed Over Lifetime": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              1
+            ]
+          ],
+          "Collision": 2,
+          "Collision Plane Height": 0.0,
+          "Bounce": 0.45,
+          "Collision Dampen": 0.25,
+          "Lifetime Loss": 0.2,
+          "Collision Radius": 0.04,
+          "Sub Emitter": 0,
+          "Sub Emitter Trigger": 2,
+          "Sub Emit Count": 20,
+          "Trails": true,
+          "Trail Lifetime": 0.15,
+          "Trail Width": 0.7,
+          "Texture": 0,
+          "Blend": 1,
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 850001,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "2D Demo > Button",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            32,
+            140
+          ],
+          "Size": [
+            230,
+            56
+          ]
+        },
+        "UI Image": {
+          "Image": 100041,
+          "Color": [
+            0.12,
+            0.13,
+            0.17,
+            0.85
+          ],
+          "Image Type": 1,
+          "Border": [
+            16,
+            16,
+            16,
+            16
+          ],
+          "Border Scale": 1.0
+        },
+        "UI Button": {
+          "Normal Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Hover Color": [
+            1.4,
+            1.4,
+            1.5,
+            1
+          ],
+          "Pressed Color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "Interactable": true
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "LoadSceneButton",
+              "Fields": {
+                "Scene": "Demo2D"
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 850002,
+      "parent": 850001,
+      "components": {
+        "Tag": {
+          "Name": "Label",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
+        "UI Text": {
+          "Text": "2D Demo >",
+          "Font": 0,
+          "Font Size": 28,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 860001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "C# Coroutine Lamp",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -5.4,
+            0.45,
+            4.2
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.6,
+            0.6,
+            0.6
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.8,
+          "Emission": 2.5,
+          "Material": 0
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.CoroutineLamp",
+              "Fields": {
+                "RedSeconds": 1.0,
+                "YellowSeconds": 0.5,
+                "GreenSeconds": 1.0,
+                "TickStep": 0.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 870001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Music",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Audio Source": {
+          "Clip": 100044,
+          "Volume": 0.7,
+          "Pitch": 1.0,
+          "Loop": true,
+          "Play On Awake": true,
+          "Spatial": false,
+          "Min Distance": 1,
+          "Max Distance": 50,
+          "Output": "Music",
+          "Stream": true,
+          "Mute": false
         }
       }
     }

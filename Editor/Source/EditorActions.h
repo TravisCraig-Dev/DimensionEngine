@@ -8,6 +8,7 @@ namespace Editor
         Empty, Sprite, SpriteSquareBody, Cube, Sphere, Plane, Quad, Cylinder,
         Camera, DirectionalLight, PointLight, AudioSource, PhysicsCube, PhysicsSphere,
         Text3D, Canvas, UIImage, UIText, UIButton, ParticleSystem,
+        UIPanel, UISlider, UIToggle, UIInputField, UIScrollView, SpotLight, Tilemap,
     };
 
     // Creates a preconfigured GameObject (records undo, selects it).

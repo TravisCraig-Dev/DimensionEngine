@@ -8,6 +8,7 @@
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Scene/Components.h"
 #include "Dimension/Scene/System.h"
+#include "Dimension/Scene/SceneManager.h"
 #include "Dimension/Scripting/ScriptableEntity.h"
 #include "Dimension/Scripting/ScriptRegistry.h"
 #include "Dimension/Physics/Physics2D.h"

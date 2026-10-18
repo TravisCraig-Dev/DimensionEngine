@@ -12,6 +12,8 @@ namespace Dimension
         glm::vec2 s_MousePos{}, s_PrevMousePos{};
         float s_Scroll = 0.0f, s_ScrollAccum = 0.0f;
         bool s_GameInput = true;
+        std::string s_TypedAccum, s_Typed;
+        const std::string s_Empty;
     }
 
     void Input::Init(GLFWwindow* window) { s_Window = window; }
@@ -29,9 +31,22 @@ namespace Dimension
         s_MousePos = { (float)x, (float)y };
         s_Scroll = s_ScrollAccum;
         s_ScrollAccum = 0.0f;
+        s_Typed = std::move(s_TypedAccum);
+        s_TypedAccum.clear();
     }
 
     void Input::AddScroll(float dy) { s_ScrollAccum += dy; }
+
+    void Input::AddChar(unsigned int cp)
+    {
+        // UTF-8 encode.
+        if (cp < 0x80) s_TypedAccum += (char)cp;
+        else if (cp < 0x800) { s_TypedAccum += (char)(0xC0 | (cp >> 6)); s_TypedAccum += (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { s_TypedAccum += (char)(0xE0 | (cp >> 12)); s_TypedAccum += (char)(0x80 | ((cp >> 6) & 0x3F)); s_TypedAccum += (char)(0x80 | (cp & 0x3F)); }
+        else { s_TypedAccum += (char)(0xF0 | (cp >> 18)); s_TypedAccum += (char)(0x80 | ((cp >> 12) & 0x3F)); s_TypedAccum += (char)(0x80 | ((cp >> 6) & 0x3F)); s_TypedAccum += (char)(0x80 | (cp & 0x3F)); }
+    }
+
+    const std::string& Input::GetTypedText() { return s_GameInput ? s_Typed : s_Empty; }
     void Input::SetGameInputEnabled(bool enabled) { s_GameInput = enabled; }
     bool Input::IsGameInputEnabled() { return s_GameInput; }
 

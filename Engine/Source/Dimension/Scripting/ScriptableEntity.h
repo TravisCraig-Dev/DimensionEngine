@@ -2,6 +2,8 @@
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Physics/Physics3D.h"
+#include <algorithm>
+#include <functional>
 
 namespace Dimension
 {
@@ -27,6 +29,10 @@ namespace Dimension
         virtual void OnTriggerEnter(Entity other) {}
         virtual void OnTriggerExit(Entity other) {}
         virtual void OnClick() {} // UI Button on this entity was clicked
+        virtual void OnUIValueChanged(float value) {}              // UI Slider value, or UI Toggle (1 = on)
+        virtual void OnUITextChanged(const std::string& text) {}   // UI Input Field edited
+        virtual void OnUISubmit(const std::string& text) {}        // UI Input Field: Enter pressed
+        virtual void OnAnimationEvent(const std::string& name) {}  // Animator state event reached
 
         Entity Self() const { return m_Entity; }
         Scene& GetScene() const { return *m_Scene; }
@@ -60,9 +66,52 @@ namespace Dimension
             return Physics2DWorld::Raycast(*m_Scene, origin, dir, maxDistance);
         }
 
+        // Timers (like Unity's Invoke / InvokeRepeating). Callbacks run after OnUpdate while the script is enabled.
+        // Returns an id for CancelInvoke(id).
+        int Invoke(std::function<void()> fn, float delay) { return AddTimer(std::move(fn), delay, 0.0f); }
+        int InvokeRepeating(std::function<void()> fn, float delay, float interval) { return AddTimer(std::move(fn), delay, std::max(interval, 1e-4f)); }
+        void CancelInvoke(int id) { std::erase_if(m_Timers, [id](const Timer& t) { return t.Id == id; }); }
+        void CancelInvoke() { m_Timers.clear(); }
+        bool IsInvoking() const { return !m_Timers.empty(); }
+        // Seconds since play mode started (scaled; stops while paused).
+        float Time() const { return m_Scene->GetTime(); }
+
+        // Engine-internal: advances timers.
+        void TickTimers(float dt)
+        {
+            if (m_Timers.empty()) return;
+            // Callbacks may add or cancel timers: work on a snapshot of the ids due now.
+            std::vector<int> due;
+            for (auto& t : m_Timers)
+                if ((t.Remaining -= dt) <= 0.0f) due.push_back(t.Id);
+            for (int id : due)
+            {
+                auto it = std::find_if(m_Timers.begin(), m_Timers.end(), [id](const Timer& t) { return t.Id == id; });
+                if (it == m_Timers.end()) continue;
+                auto fn = it->Fn;
+                if (it->Interval > 0.0f) it->Remaining += it->Interval;
+                else m_Timers.erase(it);
+                fn();
+            }
+        }
+
     private:
+        struct Timer
+        {
+            int Id;
+            float Remaining, Interval;
+            std::function<void()> Fn;
+        };
+        int AddTimer(std::function<void()> fn, float delay, float interval)
+        {
+            m_Timers.push_back({ ++m_NextTimer, delay, interval, std::move(fn) });
+            return m_NextTimer;
+        }
+
         friend class Scene;
         Entity m_Entity;
         Scene* m_Scene = nullptr;
+        std::vector<Timer> m_Timers;
+        int m_NextTimer = 0;
     };
 }

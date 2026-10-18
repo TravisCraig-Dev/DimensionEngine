@@ -33,6 +33,31 @@ namespace Dimension
                 s_Config.WindowWidth = j.value("windowWidth", s_Config.WindowWidth);
                 s_Config.WindowHeight = j.value("windowHeight", s_Config.WindowHeight);
                 s_Config.GameModule = j.value("gameModule", s_Config.GameModule);
+                for (auto& h : j.value("buildScenes", nlohmann::json::array())) s_Config.BuildScenes.push_back(Guid(h.get<uint64_t>()));
+                s_Config.Fullscreen = j.value("fullscreen", false);
+                s_Config.VSync = j.value("vsync", true);
+                s_Config.BuildFolder = j.value("buildFolder", std::string());
+                if (j.contains("audioMixer") && j["audioMixer"].is_array() && !j["audioMixer"].empty())
+                {
+                    s_Config.MixerGroups.clear();
+                    for (auto& g : j["audioMixer"])
+                    {
+                        AudioMixerGroup group;
+                        group.Name = g.value("name", group.Name);
+                        group.Parent = g.value("parent", 0);
+                        group.VolumeDb = g.value("volumeDb", 0.0f);
+                        group.Mute = g.value("mute", false);
+                        group.Solo = g.value("solo", false);
+                        group.LowPassHz = g.value("lowPassHz", 0.0f);
+                        s_Config.MixerGroups.push_back(group);
+                    }
+                }
+                if (j.contains("physicsLayers") && j["physicsLayers"].is_array())
+                    for (size_t i = 0; i < j["physicsLayers"].size() && i < ProjectConfig::kMaxLayers; ++i)
+                        s_Config.PhysicsLayers[i] = j["physicsLayers"][i].get<std::string>();
+                if (j.contains("layerCollisionMatrix") && j["layerCollisionMatrix"].is_array())
+                    for (size_t i = 0; i < j["layerCollisionMatrix"].size() && i < ProjectConfig::kMaxLayers; ++i)
+                        s_Config.LayerCollisionMatrix[i] = j["layerCollisionMatrix"][i].get<uint32_t>();
             }
             catch (const std::exception& e)
             {
@@ -41,6 +66,7 @@ namespace Dimension
             }
         }
         s_Open = true;
+        AudioMixer::MarkStructureDirty(); // a new project means a new mixer graph
         AssetManager::Init(dir / "Assets");
         if (!fs::exists(file)) Save();
         Log::Info("Opened project '{}' ({})", s_Config.Name, dir.string());
@@ -50,11 +76,24 @@ namespace Dimension
     bool Project::Save()
     {
         if (!s_Open) return false;
+        nlohmann::json mixer = nlohmann::json::array();
+        for (auto& g : s_Config.MixerGroups)
+            mixer.push_back({ { "name", g.Name }, { "parent", g.Parent }, { "volumeDb", g.VolumeDb }, { "mute", g.Mute },
+                              { "solo", g.Solo }, { "lowPassHz", g.LowPassHz } });
+        nlohmann::json buildScenes = nlohmann::json::array();
+        for (AssetHandle h : s_Config.BuildScenes) buildScenes.push_back((uint64_t)h);
         nlohmann::json j{ { "name", s_Config.Name },
+                          { "buildScenes", buildScenes },
+                          { "audioMixer", mixer },
                           { "startScene", (uint64_t)s_Config.StartScene },
                           { "windowWidth", s_Config.WindowWidth },
                           { "windowHeight", s_Config.WindowHeight },
                           { "gameModule", s_Config.GameModule },
+                          { "fullscreen", s_Config.Fullscreen },
+                          { "vsync", s_Config.VSync },
+                          { "buildFolder", s_Config.BuildFolder },
+                          { "physicsLayers", s_Config.PhysicsLayers },
+                          { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "engineVersion", "0.1.0" } };
         std::ofstream out(s_Directory / kFileName);
         out << j.dump(2);

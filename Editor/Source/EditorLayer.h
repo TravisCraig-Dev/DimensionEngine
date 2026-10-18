@@ -1,4 +1,5 @@
 #pragma once
+#include <imgui.h>
 #include "EditorContext.h"
 #include "EditorCamera.h"
 #include "Panels/Panels.h"
@@ -14,12 +15,16 @@ namespace Editor
         bool StartInPlayMode = false;
         std::string SelectEntity; // select by name on startup (automation/testing)
         std::string FocusWindow;  // bring a panel to front on startup (automation/testing)
+        std::string BuildFolder;  // batch build: build the project here and exit (CI)
+        std::string ScenePath;    // open this scene instead of the project's start scene
+        std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
+        bool BuildSucceeded = false; // result of the batch build
     };
 
     class EditorLayer : public Dimension::Layer
     {
     public:
-        explicit EditorLayer(const EditorOptions& options) : m_Options(options) {}
+        explicit EditorLayer(EditorOptions& options) : m_Options(options), m_OptionsOut(&options) {}
 
         void OnAttach() override;
         void OnDetach() override;
@@ -51,10 +56,19 @@ namespace Editor
         void DrawGameView();
         void DrawStats();
         void DrawProjectSettings();
+        void DrawBuildSettings();
+        void DrawPreferences();
+        void DrawAudioMixer();
+        void DrawTilePalette();
+        // Scene-view tile painting for the selected Tilemap; returns true while it owns the mouse.
+        bool UpdateTilePainting(const ImVec2& origin, const ImVec2& size);
+        void ApplyPreferences();
+        void Autosave(float dt);
         void DrawAbout();
         void HandleShortcuts();
         void BuildDefaultLayout(unsigned int dockspaceId);
-        void BuildGame();
+        // Builds the game into `folder` (asks for one when empty); optionally runs it afterwards.
+        bool BuildGame(bool run = false, fs::path folder = {});
         void FocusSelected();
         void LoadGameModule();
         void ReloadGameModule();
@@ -65,6 +79,8 @@ namespace Editor
         void PollCSharp(float dt);
 
         EditorOptions m_Options;
+        EditorOptions* m_OptionsOut = nullptr; // batch build result is reported back to main
+        bool m_BatchBuildDone = false;
         EditorContext m_Ctx;
         EditorCamera m_Camera;
         Scope<HierarchyPanel> m_Hierarchy;
@@ -99,6 +115,11 @@ namespace Editor
         bool m_ShowHierarchy = true, m_ShowInspector = true, m_ShowContent = true, m_ShowConsole = true;
         bool m_ShowAnimator = true;
         bool m_ShowStats = true, m_ShowSceneSettings = true, m_ShowProjectSettings = false, m_ShowAbout = false;
+        bool m_ShowBuildSettings = false, m_ShowPreferences = false, m_ShowAudioMixer = true, m_ShowTilePalette = false;
+        int m_TileBrush = 0;
+        int m_TileTool = 0; // 0 paint, 1 erase
+        bool m_TileStroke = false;
+        float m_AutosaveTimer = 0.0f;
         bool m_ResetLayout = false;
         bool m_ShowImGuiDemo = false;
         std::string m_IniPath;

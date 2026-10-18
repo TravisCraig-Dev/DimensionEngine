@@ -7,6 +7,9 @@
 #include <Dimension/Renderer/Mesh.h>
 #include <Dimension/Renderer/Material.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Project/Project.h>
+#include <Dimension/Audio/AudioMixer.h>
+#include <Dimension/Renderer/Texture.h>
 #include <Dimension/Animation/AnimatorController.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -62,21 +65,52 @@ namespace Editor
             return resolver;
         }
 
-        bool ComponentHeader(const char* name, bool removable, bool& remove, bool& reset)
+        enum class ComponentAction { None, Reset, Remove, Copy, PasteValues, PasteNew };
+
+        // Component values travel through the OS clipboard as JSON, so they can be pasted into
+        // another object, scene, or editor instance (Unity's Copy Component / Paste Component Values).
+        constexpr const char* kClipboardKey = "DimensionComponent";
+
+        bool ReadComponentClipboard(std::string& name, nlohmann::json& fields)
         {
+            const char* text = ImGui::GetClipboardText();
+            if (!text || !*text || text[0] != '{') return false;
+            auto j = nlohmann::json::parse(text, nullptr, false);
+            if (j.is_discarded() || !j.is_object() || !j.contains(kClipboardKey) || !j[kClipboardKey].is_string()) return false;
+            name = j[kClipboardKey].get<std::string>();
+            fields = j.value("fields", nlohmann::json::object());
+            return true;
+        }
+
+        // Draws a component's header; returns whether it is expanded. `action` reports the menu choice.
+        bool ComponentHeader(const ComponentInfo& info, ComponentAction& action)
+        {
+            const char* name = info.Name.c_str();
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_SpanAvailWidth |
                                        ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_FramePadding;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 5));
             bool open = ImGui::TreeNodeEx(name, flags, "%s", name);
             ImGui::PopStyleVar();
+            bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right); // right-click the header, or use "..."
             float w = ImGui::GetFrameHeight();
             ImGui::SameLine(ImGui::GetContentRegionMax().x - w);
             ImGui::PushID(name);
-            if (ImGui::Button("...", ImVec2(w, w))) ImGui::OpenPopup("ComponentSettings");
+            if (ImGui::Button("...", ImVec2(w, w)) || rightClicked) ImGui::OpenPopup("ComponentSettings");
             if (ImGui::BeginPopup("ComponentSettings"))
             {
-                if (ImGui::MenuItem("Reset")) reset = true;
-                if (ImGui::MenuItem("Remove Component", nullptr, false, removable)) remove = true;
+                bool copyable = !info.Fields.empty(); // scripts use their own serialization
+                std::string clipName;
+                nlohmann::json clipFields;
+                bool hasClip = ReadComponentClipboard(clipName, clipFields);
+                if (ImGui::MenuItem("Reset")) action = ComponentAction::Reset;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Copy Component", nullptr, false, copyable)) action = ComponentAction::Copy;
+                std::string pasteValues = hasClip ? "Paste Component Values (" + clipName + ")" : "Paste Component Values";
+                if (ImGui::MenuItem(pasteValues.c_str(), nullptr, false, hasClip && clipName == info.Name)) action = ComponentAction::PasteValues;
+                std::string pasteNew = hasClip ? "Paste Component As New (" + clipName + ")" : "Paste Component As New";
+                if (ImGui::MenuItem(pasteNew.c_str(), nullptr, false, hasClip && clipName != info.Name)) action = ComponentAction::PasteNew;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Remove Component", nullptr, false, info.Removable)) action = ComponentAction::Remove;
                 ImGui::EndPopup();
             }
             ImGui::PopID();
@@ -100,7 +134,7 @@ namespace Editor
             if (count > 1)
             {
                 ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "%zu objects selected", count);
-                ImGui::TextDisabled("Showing the active object; edits apply to all selected objects with the same component.");
+                ImGui::TextDisabled("Showing components they all have (values of the active object); edits apply to all.");
                 ImGui::Separator();
             }
             DrawEntity(scene, m_Ctx.Selected);
@@ -140,6 +174,30 @@ namespace Editor
                 ImGui::EndCombo();
             }
             ImGui::SameLine();
+            ImGui::TextDisabled("Layer");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(140);
+            {
+                const auto& layers = Project::GetConfig().PhysicsLayers;
+                int current = std::clamp(tag.Layer, 0, ProjectConfig::kMaxLayers - 1);
+                std::string preview = std::to_string(current) + ": " + (layers[current].empty() ? "(unnamed)" : layers[current]);
+                if (ImGui::BeginCombo("##layer", preview.c_str()))
+                {
+                    for (int i = 0; i < ProjectConfig::kMaxLayers; ++i)
+                    {
+                        if (layers[i].empty() && i != current) continue;
+                        std::string label = std::to_string(i) + ": " + (layers[i].empty() ? "(unnamed)" : layers[i]);
+                        if (ImGui::Selectable(label.c_str(), i == current) && i != current)
+                        {
+                            r.Activated = r.Changed = true;
+                            tag.Layer = i;
+                        }
+                    }
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Edit layers in File > Project Settings");
+                    ImGui::EndCombo();
+                }
+            }
             ImGui::TextDisabled("ID %llu", (unsigned long long)(uint64_t)scene.GetGuid(e));
             ApplyEdit(m_Ctx, r, tag, before);
             if (r.Changed) scene.UpdateTransforms();
@@ -148,12 +206,35 @@ namespace Editor
         DrawPrefabHeader(scene, e);
         EntityRefResolver resolver = MakeResolver(scene);
 
+        // With several objects selected, only components they all share are shown (like Unity); the
+        // header actions and field edits then apply to every selected object.
+        std::vector<Entity> targets;
+        for (Entity s : m_Ctx.Selection)
+            if (scene.IsValid(s)) targets.push_back(s);
+        if (std::find(targets.begin(), targets.end(), e) == targets.end()) targets.push_back(e);
+
         const ComponentInfo* removeInfo = nullptr;
+        const ComponentInfo* resetInfo = nullptr;
+        std::string pasteValuesInto;
+        bool pasteNew = false;
         for (auto& info : ComponentRegistry::All())
         {
             if (info.Hidden || !info.Has(scene, e)) continue;
-            bool remove = false, reset = false;
-            bool open = ComponentHeader(info.Name.c_str(), info.Removable, remove, reset);
+            if (!std::all_of(targets.begin(), targets.end(), [&](Entity t) { return info.Has(scene, t); })) continue;
+            ComponentAction action = ComponentAction::None;
+            bool open = ComponentHeader(info, action);
+            bool remove = action == ComponentAction::Remove, reset = action == ComponentAction::Reset;
+            if (action == ComponentAction::Copy)
+            {
+                nlohmann::json fields = nlohmann::json::object();
+                void* data = info.Get(scene, e);
+                for (auto& f : info.Fields) fields[f.Name] = FieldToJson(f, data, &resolver);
+                nlohmann::json clip{ { kClipboardKey, info.Name }, { "fields", fields } };
+                ImGui::SetClipboardText(clip.dump(2).c_str());
+                Log::Info("Copied component '{}'", info.Name);
+            }
+            if (action == ComponentAction::PasteValues) pasteValuesInto = info.Name;
+            if (action == ComponentAction::PasteNew) pasteNew = true;
             if (open)
             {
                 if (info.TypeId == GetComponentTypeId<ScriptComponent>())
@@ -163,6 +244,7 @@ namespace Editor
                     void* data = info.Get(scene, e);
                     for (auto& f : info.Fields)
                     {
+                        if (f.Hidden) continue;
                         nlohmann::json before = FieldToJson(f, data, &resolver);
                         UI::EditResult r;
                         bool handled = false;
@@ -190,6 +272,28 @@ namespace Editor
                                 handled = true;
                             }
                         }
+                        if (info.TypeId == GetComponentTypeId<AudioSourceComponent>() && f.Name == "Output")
+                        {
+                            auto& src = *static_cast<AudioSourceComponent*>(data);
+                            UI::PropertyLabel("Output", f.Tooltip.c_str());
+                            if (ImGui::BeginCombo("##output", src.Output.empty() ? "Master" : src.Output.c_str()))
+                            {
+                                for (auto& g : AudioMixer::Groups())
+                                {
+                                    bool isMaster = &g == &AudioMixer::Groups().front();
+                                    bool selected = isMaster ? src.Output.empty() || src.Output == g.Name : src.Output == g.Name;
+                                    if (ImGui::Selectable(g.Name.c_str(), selected))
+                                    {
+                                        r.Activated = r.Changed = true;
+                                        src.Output = isMaster ? std::string() : g.Name;
+                                    }
+                                }
+                                ImGui::EndCombo();
+                            }
+                            if (!src.Output.empty() && AudioMixer::FindGroup(src.Output) < 0)
+                                ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "Unknown group: plays through Master");
+                            handled = true;
+                        }
                         bool overridden = Prefabs::IsOverridden(scene, e, info.Name, f.Name);
                         if (overridden) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.72f, 1.0f, 1.0f));
                         if (!handled) r = UI::Field(f, data, &scene);
@@ -211,24 +315,64 @@ namespace Editor
                         }
                     }
                     UI::EndProperties();
+                    if (info.TypeId == GetComponentTypeId<MeshRendererComponent>())
+                    {
+                        auto& mr = *static_cast<MeshRendererComponent*>(info.Get(scene, e));
+                        size_t slots = AssetManager::GetMeshMaterials(mr.Mesh).size();
+                        if (slots > 0 && !AssetManager::GetMaterial(mr.Material))
+                            ImGui::TextWrapped("Using %zu material(s) from the model. Color, Albedo, Smoothness and Emission only "
+                                               "apply to parts without one; assign a Material to override all parts.", slots);
+                    }
                 }
                 ImGui::TreePop();
             }
-            if (reset)
-            {
-                m_Ctx.RecordUndo();
-                info.Remove(scene, e);
-                info.Add(scene, e);
-                for (auto& f : info.Fields) Prefabs::RecordFieldOverride(scene, e, info.Name, f.Name);
-            }
+            if (reset) resetInfo = &info;
             if (remove) removeInfo = &info;
             ImGui::Spacing();
+        }
+        // Structural changes after the loop (they invalidate component pointers), applied to every target.
+        if (resetInfo)
+        {
+            m_Ctx.RecordUndo();
+            for (Entity t : targets)
+            {
+                resetInfo->Remove(scene, t);
+                resetInfo->Add(scene, t);
+                for (auto& f : resetInfo->Fields) Prefabs::RecordFieldOverride(scene, t, resetInfo->Name, f.Name);
+            }
         }
         if (removeInfo)
         {
             m_Ctx.RecordUndo();
-            removeInfo->Remove(scene, e);
-            Prefabs::RecordComponentRemoved(scene, e, removeInfo->Name);
+            for (Entity t : targets)
+            {
+                removeInfo->Remove(scene, t);
+                Prefabs::RecordComponentRemoved(scene, t, removeInfo->Name);
+            }
+        }
+        if (!pasteValuesInto.empty() || pasteNew)
+        {
+            std::string clipName;
+            nlohmann::json clipFields;
+            const ComponentInfo* clipInfo = ReadComponentClipboard(clipName, clipFields) ? ComponentRegistry::Find(clipName) : nullptr;
+            if (clipInfo)
+            {
+                m_Ctx.RecordUndo();
+                for (Entity t : targets)
+                {
+                    if (pasteNew && !clipInfo->Has(scene, t)) clipInfo->Add(scene, t);
+                    if (!clipInfo->Has(scene, t)) continue;
+                    void* data = clipInfo->Get(scene, t);
+                    for (auto& f : clipInfo->Fields)
+                        if (clipFields.contains(f.Name))
+                        {
+                            FieldFromJson(f, data, clipFields[f.Name], &resolver);
+                            Prefabs::RecordFieldOverride(scene, t, clipInfo->Name, f.Name);
+                        }
+                }
+                scene.UpdateTransforms();
+                Log::Info("Pasted component '{}' into {} object(s)", clipName, targets.size());
+            }
         }
 
         ImGui::Separator();
@@ -529,6 +673,35 @@ namespace Editor
                 ImGui::Text("Triangles: %u", mesh->GetIndexCount() / 3);
                 auto ext = mesh->GetBounds().Extents() * 2.0f;
                 ImGui::Text("Bounds: %.2f x %.2f x %.2f", ext.x, ext.y, ext.z);
+                ImGui::Text("Sub-meshes: %zu", mesh->GetSubMeshes().size());
+                const auto& slots = AssetManager::GetMeshMaterials(handle);
+                if (!slots.empty())
+                {
+                    ImGui::SeparatorText("Materials");
+                    auto names = AssetManager::GetMeshMaterialNames(handle);
+                    bool extracted = AssetManager::AreMeshMaterialsExtracted(handle);
+                    for (size_t i = 0; i < slots.size(); ++i)
+                    {
+                        ImGui::PushID((int)i);
+                        ImGui::BulletText("%s", i < names.size() ? names[i].c_str() : "?");
+                        ImGui::SameLine();
+                        if (extracted && !AssetManager::IsSubAsset(slots[i]))
+                        {
+                            if (ImGui::SmallButton("Select")) m_Ctx.SelectAsset(slots[i]);
+                        }
+                        else
+                            ImGui::TextDisabled("(embedded)");
+                        ImGui::PopID();
+                    }
+                    if (!extracted)
+                    {
+                        ImGui::TextWrapped("Embedded materials are read-only. Extract them to edit them as .mat assets "
+                                           "(textures embedded in the file are written out too).");
+                        if (ImGui::Button("Extract Materials")) AssetManager::ExtractMeshMaterials(handle);
+                    }
+                    else
+                        ImGui::TextDisabled("Using extracted materials. A Mesh Renderer's Material overrides all slots.");
+                }
                 if (const Skeleton* sk = mesh->GetSkeleton())
                 {
                     ImGui::SeparatorText("Skeleton");
@@ -611,12 +784,44 @@ namespace Editor
         track(ImGui::ColorEdit3("Ambient Color", &s.AmbientColor.x, ImGuiColorEditFlags_Float));
         track(ImGui::DragFloat("Ambient Intensity", &s.AmbientIntensity, 0.01f, 0.0f, 10.0f));
         ImGui::SeparatorText("Sky");
-        track(ImGui::ColorEdit3("Sky Top", &s.SkyTop.x, ImGuiColorEditFlags_Float));
-        track(ImGui::ColorEdit3("Sky Horizon", &s.SkyHorizon.x, ImGuiColorEditFlags_Float));
-        track(ImGui::ColorEdit3("Sky Ground", &s.SkyGround.x, ImGuiColorEditFlags_Float));
+        track(ImGui::Combo("Sky Mode", &s.SkyMode, "Procedural\0Texture (HDR)\0"));
+        if (s.SkyMode == 1)
+        {
+            if (UI::BeginProperties("SkyTexture"))
+            {
+                UI::EditResult tex = UI::AssetField("Sky Texture", s.SkyTexture, AssetType::Texture);
+                r |= tex;
+                UI::EndProperties();
+            }
+            track(ImGui::DragFloat("Sky Intensity", &s.SkyIntensity, 0.01f, 0.0f, 20.0f));
+            track(ImGui::DragFloat("Sky Rotation", &s.SkyRotation, 0.5f, -360.0f, 360.0f, "%.1f deg"));
+            track(ImGui::DragFloat("Reflection Intensity", &s.ReflectionIntensity, 0.01f, 0.0f, 10.0f));
+            ImGui::TextDisabled("Ambient Intensity scales the sky's diffuse light.");
+            auto tex = AssetManager::GetTexture(s.SkyTexture);
+            if (!tex) ImGui::TextDisabled("Assign an equirectangular .hdr image.");
+            else if (!tex->IsHDR()) ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "Not HDR: reflections only, ambient uses Ambient Color.");
+        }
+        else
+        {
+            track(ImGui::ColorEdit3("Sky Top", &s.SkyTop.x, ImGuiColorEditFlags_Float));
+            track(ImGui::ColorEdit3("Sky Horizon", &s.SkyHorizon.x, ImGuiColorEditFlags_Float));
+            track(ImGui::ColorEdit3("Sky Ground", &s.SkyGround.x, ImGuiColorEditFlags_Float));
+        }
         ImGui::SeparatorText("Post Processing");
         track(ImGui::DragFloat("Exposure", &s.Exposure, 0.01f, 0.0f, 20.0f));
         track(ImGui::Checkbox("ACES Tonemapping", &s.Tonemapping));
+        track(ImGui::Checkbox("Bloom", &s.Bloom));
+        if (s.Bloom)
+        {
+            ImGui::Indent();
+            track(ImGui::DragFloat("Intensity", &s.BloomIntensity, 0.01f, 0.0f, 20.0f));
+            track(ImGui::DragFloat("Threshold", &s.BloomThreshold, 0.01f, 0.0f, 50.0f));
+            track(ImGui::SliderFloat("Soft Knee", &s.BloomKnee, 0.0f, 1.0f));
+            track(ImGui::SliderFloat("Radius", &s.BloomRadius, 0.5f, 3.0f));
+            ImGui::Unindent();
+        }
+        track(ImGui::SliderFloat("Vignette", &s.Vignette, 0.0f, 1.0f));
+        track(ImGui::Checkbox("FXAA (anti-aliasing)", &s.FXAA));
         ImGui::SeparatorText("Physics");
         track(ImGui::DragFloat2("Gravity 2D", &s.Gravity2D.x, 0.05f));
         track(ImGui::DragFloat3("Gravity 3D", &s.Gravity.x, 0.05f));

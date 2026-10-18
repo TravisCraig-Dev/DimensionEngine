@@ -1,0 +1,49 @@
+{
+  "parameters": [
+    {
+      "name": "Energy",
+      "type": 0,
+      "default": 0.0
+    }
+  ],
+  "states": [
+    {
+      "name": "Blend",
+      "clip": "",
+      "speed": 1.0,
+      "loop": true,
+      "position": [
+        40,
+        0
+      ],
+      "motion": 1,
+      "blendParameter": "Energy",
+      "children": [
+        {
+          "clip": "Sway",
+          "threshold": 0.0
+        },
+        {
+          "clip": "Wave",
+          "threshold": 0.5
+        },
+        {
+          "clip": "Curl",
+          "threshold": 1.0
+        }
+      ],
+      "events": [
+        {
+          "time": 0.5,
+          "function": "Pulse"
+        }
+      ]
+    }
+  ],
+  "transitions": [],
+  "defaultState": 0,
+  "anyStatePosition": [
+    -220,
+    0
+  ]
+}

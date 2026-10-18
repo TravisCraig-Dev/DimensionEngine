@@ -203,10 +203,31 @@ namespace Dimension
                 switch (method)
                 {
                     case 0: b.OnCreate(); break;
-                    case 1: b.OnUpdate(dt); break;
+                    case 1: b.OnUpdate(dt); b.Coroutines?.Tick(dt); break;
                     case 2: b.OnFixedUpdate(dt); break;
-                    case 3: b.OnDestroy(); break;
+                    case 3: b.OnDestroy(); b.StopAllCoroutines(); break;
                     case 4: b.OnClick(); break;
+                    case 5: b.OnValueChanged(dt); break;
+                }
+            }
+            catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
+        }
+
+        // 0 TextChanged, 1 Submit
+        [UnmanagedCallersOnly]
+        internal static unsafe void InvokeString(IntPtr handle, int method, byte* text)
+        {
+            Behaviour b = null;
+            try
+            {
+                b = (Behaviour)GCHandle.FromIntPtr(handle).Target;
+                Native.CurrentScene = b.Entity.Scene;
+                string s = Native.FromUtf8(text) ?? string.Empty;
+                switch (method)
+                {
+                    case 0: b.OnTextChanged(s); break;
+                    case 1: b.OnSubmit(s); break;
+                    case 2: b.OnAnimationEvent(s); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

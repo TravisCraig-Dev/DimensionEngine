@@ -1,6 +1,9 @@
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Scene/Scene.h"
+#include "Dimension/Project/Project.h"
+#include "Dimension/Core/Log.h"
 #include <box2d/box2d.h>
+#include <algorithm>
 #include <cstring>
 
 namespace Dimension
@@ -23,6 +26,31 @@ namespace Dimension
             b2BodyId id = b2LoadBodyId(rb->RuntimeBody);
             return b2Body_IsValid(id) ? id : b2_nullBodyId;
         }
+
+        b2Filter LayerFilter(Scene& scene, Entity e)
+        {
+            int layer = std::clamp(scene.GetRegistry().Get<TagComponent>(e).Layer, 0, 31);
+            b2Filter f = b2DefaultFilter();
+            f.categoryBits = 1ull << layer;
+            f.maskBits = Project::GetConfig().LayerCollisionMatrix[layer];
+            return f;
+        }
+
+        b2QueryFilter MaskQuery(uint32_t layerMask)
+        {
+            b2QueryFilter q = b2DefaultQueryFilter();
+            q.categoryBits = 0xFFFFFFFFull; // a query collides with every shape mask
+            q.maskBits = layerMask;
+            return q;
+        }
+
+        bool CollectEntity(b2ShapeId shape, void* context)
+        {
+            auto* out = static_cast<std::vector<Entity>*>(context);
+            Entity e = UnpackEntity(b2Shape_GetUserData(shape));
+            if (std::find(out->begin(), out->end(), e) == out->end()) out->push_back(e);
+            return true;
+        }
     }
 
     Physics2DWorld::Physics2DWorld(Scene& scene) : m_Scene(scene)
@@ -39,6 +67,13 @@ namespace Dimension
                 entities.push_back(e);
         });
         for (Entity e : entities) CreateBody(e);
+        std::vector<Entity> tilemaps;
+        for (auto [e, tm] : reg.ViewOf<TilemapComponent>())
+            if (tm.Collider) tilemaps.push_back(e);
+        for (Entity e : tilemaps) CreateTilemapBody(e);
+        std::vector<Entity> jointed;
+        for (auto [e, j] : reg.ViewOf<Joint2DComponent>()) jointed.push_back(e);
+        for (Entity e : jointed) CreateJoint(e);
     }
 
     Physics2DWorld::~Physics2DWorld()
@@ -49,10 +84,138 @@ namespace Dimension
 
     void Physics2DWorld::CreateBodiesFor(Entity root)
     {
+        CreateBodiesRecursive(root);
+        CreateJointsRecursive(root);
+    }
+
+    void Physics2DWorld::CreateBodiesRecursive(Entity e)
+    {
         auto& reg = m_Scene.GetRegistry();
-        if (reg.Has<Rigidbody2DComponent>(root) || reg.Has<BoxCollider2DComponent>(root) || reg.Has<CircleCollider2DComponent>(root))
-            CreateBody(root);
-        for (Entity c : m_Scene.GetChildren(root)) CreateBodiesFor(c);
+        if (auto* tm = reg.TryGet<TilemapComponent>(e); tm && tm->Collider) CreateTilemapBody(e);
+        if (reg.Has<Rigidbody2DComponent>(e) || reg.Has<BoxCollider2DComponent>(e) || reg.Has<CircleCollider2DComponent>(e))
+            CreateBody(e);
+        for (Entity c : m_Scene.GetChildren(e)) CreateBodiesRecursive(c);
+    }
+
+    void Physics2DWorld::CreateJointsRecursive(Entity e)
+    {
+        if (m_Scene.GetRegistry().Has<Joint2DComponent>(e)) CreateJoint(e);
+        for (Entity c : m_Scene.GetChildren(e)) CreateJointsRecursive(c);
+    }
+
+    void Physics2DWorld::CreateTilemapBody(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& tm = reg.Get<TilemapComponent>(e);
+        auto& t = reg.Get<TransformComponent>(e);
+        auto boxes = tm.ColliderBoxes();
+        if (boxes.empty()) return;
+        glm::vec3 p = t.GetWorldPosition();
+        glm::vec2 scale = glm::abs(glm::vec2(t.Scale));
+        b2BodyDef bd = b2DefaultBodyDef();
+        bd.type = b2_staticBody;
+        bd.position = { p.x, p.y };
+        bd.rotation = b2MakeRot(t.Rotation.z);
+        bd.userData = PackEntity(e);
+        b2BodyId body = b2CreateBody(LoadWorld(m_World), &bd);
+        b2ShapeDef sd = b2DefaultShapeDef();
+        sd.material.friction = tm.Friction;
+        sd.filter = LayerFilter(m_Scene, e);
+        sd.enableContactEvents = true;
+        sd.userData = PackEntity(e);
+        for (auto& b : boxes)
+        {
+            glm::vec2 half = glm::vec2(b.z, b.w) * 0.5f * scale;
+            glm::vec2 center = (glm::vec2(b.x, b.y) + glm::vec2(b.z, b.w) * 0.5f) * scale;
+            b2Polygon poly = b2MakeOffsetBox(half.x, half.y, { center.x, center.y }, b2Rot_identity);
+            b2CreatePolygonShape(body, &sd, &poly);
+        }
+        m_TilemapBodies.push_back(b2StoreBodyId(body));
+    }
+
+    void Physics2DWorld::CreateJoint(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& j = reg.Get<Joint2DComponent>(e);
+        b2BodyId a = BodyOf(m_Scene, e);
+        if (B2_IS_NULL(a))
+        {
+            Log::Warn("Joint 2D on '{}' needs a Rigidbody 2D with a collider", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        b2BodyId b = b2_nullBodyId;
+        Entity other = j.ConnectedBody;
+        bool connected = m_Scene.IsValid(other) && other != e;
+        if (connected)
+        {
+            b = BodyOf(m_Scene, other);
+            if (B2_IS_NULL(b))
+            {
+                Log::Warn("Joint 2D on '{}': connected body has no physics body", reg.Get<TagComponent>(e).Name);
+                return;
+            }
+        }
+        else
+        {
+            if (!m_Ground)
+            {
+                b2BodyDef gd = b2DefaultBodyDef();
+                gd.userData = PackEntity(Entity::Null());
+                m_Ground = b2StoreBodyId(b2CreateBody(LoadWorld(m_World), &gd));
+            }
+            b = b2LoadBodyId(m_Ground);
+        }
+
+        const auto& ta = reg.Get<TransformComponent>(e);
+        glm::vec2 anchor = glm::vec2(ta.World * glm::vec4(j.Anchor, 0.0f, 1.0f));
+        b2Vec2 aw{ anchor.x, anchor.y };
+        float referenceAngle = b2Rot_GetAngle(b2Body_GetRotation(b)) - b2Rot_GetAngle(b2Body_GetRotation(a));
+        b2WorldId world = LoadWorld(m_World);
+        switch (j.Type)
+        {
+        case Joint2DType::Fixed:
+        {
+            b2WeldJointDef d = b2DefaultWeldJointDef();
+            d.bodyIdA = a;
+            d.bodyIdB = b;
+            d.localAnchorA = b2Body_GetLocalPoint(a, aw);
+            d.localAnchorB = b2Body_GetLocalPoint(b, aw);
+            d.referenceAngle = referenceAngle;
+            d.collideConnected = j.CollideConnected;
+            b2CreateWeldJoint(world, &d);
+            break;
+        }
+        case Joint2DType::Hinge:
+        {
+            b2RevoluteJointDef d = b2DefaultRevoluteJointDef();
+            d.bodyIdA = a;
+            d.bodyIdB = b;
+            d.localAnchorA = b2Body_GetLocalPoint(a, aw);
+            d.localAnchorB = b2Body_GetLocalPoint(b, aw);
+            d.referenceAngle = referenceAngle;
+            d.enableLimit = j.UseLimits;
+            d.lowerAngle = glm::radians(std::min(j.LowerAngle, j.UpperAngle));
+            d.upperAngle = glm::radians(std::max(j.LowerAngle, j.UpperAngle));
+            d.collideConnected = j.CollideConnected;
+            b2CreateRevoluteJoint(world, &d);
+            break;
+        }
+        case Joint2DType::Distance:
+        {
+            glm::vec2 pointB = connected ? glm::vec2(reg.Get<TransformComponent>(other).World * glm::vec4(j.ConnectedAnchor, 0.0f, 1.0f))
+                                         : j.ConnectedAnchor;
+            b2DistanceJointDef d = b2DefaultDistanceJointDef();
+            d.bodyIdA = a;
+            d.bodyIdB = b;
+            d.localAnchorA = b2Body_GetLocalPoint(a, aw);
+            d.localAnchorB = b2Body_GetLocalPoint(b, { pointB.x, pointB.y });
+            d.length = j.Distance > 0.0f ? j.Distance : std::max(glm::distance(anchor, pointB), 0.01f);
+            d.collideConnected = j.CollideConnected;
+            b2CreateDistanceJoint(world, &d);
+            break;
+        }
+        }
+        ++m_JointCount;
     }
 
     void Physics2DWorld::CreateBody(Entity e)
@@ -84,6 +247,7 @@ namespace Dimension
             sd.material.friction = box->Friction;
             sd.material.restitution = box->Restitution;
             sd.isSensor = box->IsTrigger;
+            sd.filter = LayerFilter(m_Scene, e);
             sd.enableSensorEvents = true;
             sd.enableContactEvents = true;
             sd.userData = PackEntity(e);
@@ -98,6 +262,7 @@ namespace Dimension
             sd.material.friction = circle->Friction;
             sd.material.restitution = circle->Restitution;
             sd.isSensor = circle->IsTrigger;
+            sd.filter = LayerFilter(m_Scene, e);
             sd.enableSensorEvents = true;
             sd.enableContactEvents = true;
             sd.userData = PackEntity(e);
@@ -191,7 +356,7 @@ namespace Dimension
         if (B2_IS_NON_NULL(id)) b2Body_ApplyLinearImpulseToCenter(id, { i.x, i.y }, true);
     }
 
-    RaycastHit2D Physics2DWorld::Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance)
+    RaycastHit2D Physics2DWorld::Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance, uint32_t layerMask)
     {
         RaycastHit2D result;
         Physics2DWorld* world = scene.GetPhysics2D();
@@ -199,12 +364,41 @@ namespace Dimension
         if (!world || len <= 0.0f) return result;
         glm::vec2 translation = direction / len * maxDistance;
         b2RayResult hit = b2World_CastRayClosest(LoadWorld(world->m_World), { origin.x, origin.y }, { translation.x, translation.y },
-                                                 b2DefaultQueryFilter());
+                                                 MaskQuery(layerMask));
         if (!hit.hit) return result;
         result.Hit = UnpackEntity(b2Shape_GetUserData(hit.shapeId));
         result.Point = { hit.point.x, hit.point.y };
         result.Normal = { hit.normal.x, hit.normal.y };
         result.Distance = hit.fraction * maxDistance;
         return result;
+    }
+
+    std::vector<Entity> Physics2DWorld::OverlapCircle(Scene& scene, const glm::vec2& center, float radius, uint32_t layerMask)
+    {
+        std::vector<Entity> out;
+        Physics2DWorld* world = scene.GetPhysics2D();
+        if (!world) return out;
+        b2Vec2 c{ center.x, center.y };
+        b2ShapeProxy proxy = b2MakeProxy(&c, 1, std::max(radius, 1e-4f));
+        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &out);
+        return out;
+    }
+
+    std::vector<Entity> Physics2DWorld::OverlapBox(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle, uint32_t layerMask)
+    {
+        std::vector<Entity> out;
+        Physics2DWorld* world = scene.GetPhysics2D();
+        if (!world) return out;
+        float c = std::cos(angle), s = std::sin(angle);
+        b2Vec2 points[4];
+        const glm::vec2 corners[4] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
+        for (int i = 0; i < 4; ++i)
+        {
+            glm::vec2 p = corners[i] * halfExtents;
+            points[i] = { center.x + p.x * c - p.y * s, center.y + p.x * s + p.y * c };
+        }
+        b2ShapeProxy proxy = b2MakeProxy(points, 4, 0.0f);
+        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &out);
+        return out;
     }
 }

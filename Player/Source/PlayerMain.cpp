@@ -10,6 +10,7 @@
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <cstring>
+#include <fstream>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -49,8 +50,22 @@ namespace
             auto size = Application::Get().GetWindow().GetFramebufferSize();
             m_Target->Resize(size.x, size.y);
             if (Input::IsKeyPressed(Key::Escape)) Application::Get().Close();
-            m_Scene->SetUIInput(Input::GetMousePosition(), Input::RawMouseDown(MouseButton::Left), { (float)size.x, (float)size.y });
+            if (Input::IsKeyPressed(Key::Enter) && (Input::RawKeyDown(Key::LeftAlt) || Input::RawKeyDown(Key::RightAlt)))
+            {
+                auto& window = Application::Get().GetWindow();
+                window.SetFullscreen(!window.IsFullscreen());
+            }
+            m_Scene->SetUIInput(Input::GetMousePosition(), Input::RawMouseDown(MouseButton::Left), { (float)size.x, (float)size.y }, true,
+                                Input::GetScrollDelta());
             m_Scene->OnUpdateRuntime(dt);
+            // Scene switches requested by scripts take effect between frames.
+            if (SceneManager::HasPendingLoad())
+                if (auto next = SceneManager::LoadPending())
+                {
+                    m_Scene->OnRuntimeStop();
+                    m_Scene = next;
+                    m_Scene->OnRuntimeStart();
+                }
         }
 
         void OnRender(VkCommandBuffer cmd) override
@@ -107,25 +122,36 @@ int main(int argc, char** argv)
         projectDir = fs::exists(bundled / Project::kFileName) ? bundled : fs::path(DIM_DEFAULT_PROJECT);
     }
 
-    // Window size comes from the project file; read it before creating the app.
+#ifdef DIM_GAME_BUILD
+    // No console in shipped builds: keep a log file next to the executable (like Unity's Player.log).
+    auto logFile = std::make_shared<std::ofstream>(ExecutableDirectory() / "Player.log", std::ios::trunc);
+    Log::AddSink([logFile](const LogEntry& e) {
+        static const char* levels[] = { "trace", "info", "warn", "error" };
+        *logFile << "[" << e.Time << "] [" << levels[(int)e.Level] << "] " << e.Message << std::endl;
+    });
+#endif
+    // The project is opened first so its window settings apply.
+    if (!Project::Open(projectDir)) return 1;
+    auto& config = Project::GetConfig();
     ApplicationSpec spec;
-    spec.Name = "Dimension Player";
+    spec.Name = config.Name;
     spec.EnableImGui = false;
     spec.MaxFrames = maxFrames;
     spec.ScreenshotPath = screenshot;
-    spec.Window.Width = 1280;
-    spec.Window.Height = 720;
+    spec.VSync = config.VSync;
+    spec.Window.Title = config.Name;
+    spec.Window.Width = std::max(320u, config.WindowWidth);
+    spec.Window.Height = std::max(200u, config.WindowHeight);
+    spec.Window.Fullscreen = config.Fullscreen && maxFrames == 0; // automated runs stay windowed
     {
         Application app(spec);
-        if (!Project::Open(projectDir)) return 1;
-        auto& config = Project::GetConfig();
-        app.GetWindow().SetTitle(config.Name);
         GameModule::Load(ExecutableDirectory() / (config.GameModule + ".dll"));
         if (CSharpRuntime::Init(ExecutableDirectory() / "managed"))
             CSharpRuntime::LoadScripts(CSharpProject::AssemblyPath(Project::GetDirectory()));
 
-        fs::path scene = sceneOverride.empty() ? AssetManager::GetAbsolutePath(config.StartScene) : sceneOverride;
-        if (scene.empty()) Log::Error("Project has no start scene. Set one in the editor (File > Project Settings).");
+        auto buildScenes = SceneManager::GetBuildScenes();
+        fs::path scene = !sceneOverride.empty() ? sceneOverride : buildScenes.empty() ? fs::path() : AssetManager::GetAbsolutePath(buildScenes[0]);
+        if (scene.empty()) Log::Error("Project has no scenes to run. Add some in the editor (File > Build Settings).");
         app.PushLayer(MakeScope<PlayerLayer>(scene));
         app.Run();
         app.PopAllLayers();

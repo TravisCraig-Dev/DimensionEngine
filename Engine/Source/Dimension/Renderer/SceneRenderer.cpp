@@ -26,6 +26,9 @@
 #include "Dimension/Particles/ParticleSystem.h"
 #include "shaders/Composite.vert.h"
 #include "shaders/Composite.frag.h"
+#include "shaders/BloomDown.frag.h"
+#include "shaders/BloomUp.frag.h"
+#include "shaders/Fxaa.frag.h"
 
 namespace Dimension
 {
@@ -37,7 +40,9 @@ namespace Dimension
         struct PointLightGPU
         {
             glm::vec4 PositionRange;
-            glm::vec4 Color;
+            glm::vec4 Color;     // w: shadow slot + 1
+            glm::vec4 Direction; // spot: xyz direction, w cos(outer half angle); point: w = -2
+            glm::vec4 Cone;      // x: cos(inner half angle)
         };
 
         // std140 mirror of SceneData in Common.glsl.
@@ -53,9 +58,17 @@ namespace Dimension
             glm::ivec4 Counts;
             glm::vec4 GridParams;
             glm::mat4 InvViewProj;
-            glm::mat4 LightViewProj;
-            glm::vec4 ShadowParams;
+            glm::mat4 LightViewProj[ShadowCascades::kMax];
+            glm::vec4 ShadowParams;  // x: cascade count, y: atlas index, z: bias
+            glm::vec4 CascadeSplits;
+            glm::vec4 CascadeTexel;
+            glm::vec4 CascadeParams; // y: blend fraction, z: debug colors
             glm::vec4 SkyTop, SkyHorizon, SkyGround;
+            glm::vec4 SkyParams;  // x mode (1 = texture), y texture index, z intensity, w rotation (radians)
+            glm::vec4 EnvParams;  // x reflection intensity, y max mip, z 1 = irradiance SH valid, w ambient intensity
+            glm::vec4 IrradianceSH[9];
+            glm::mat4 PointShadowViewProj[SceneRenderer::kMaxPointShadows * 6];
+            glm::vec4 PointShadowParams[SceneRenderer::kMaxPointShadows]; // near, far, bias, atlas index
             PointLightGPU PointLights[kMaxPointLights];
         };
         static_assert(sizeof(SceneUniforms) <= RenderDevice::kUniformBlockSize);
@@ -87,6 +100,26 @@ namespace Dimension
             uint32_t HdrTexture;
             float Exposure;
             uint32_t Tonemap;
+            uint32_t BloomTexture; // index + 1, 0 = none
+            float BloomIntensity;
+            float Vignette;
+        };
+
+        struct BloomPush
+        {
+            uint32_t Src;
+            uint32_t Prefilter;
+            float Threshold;
+            float Knee;
+            glm::vec2 SrcTexel;
+            float Radius;
+        };
+
+        struct FxaaPush
+        {
+            uint32_t Src;
+            uint32_t Pad;
+            glm::vec2 Texel;
         };
 
         // Frustum planes (Gribb/Hartmann) for a GL-style clip space with depth in [0, 1].
@@ -189,6 +222,7 @@ namespace Dimension
     struct Renderer::Resources
     {
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
+        Pipeline BloomDown, BloomUp, Fxaa;
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
     };
@@ -297,6 +331,20 @@ namespace Dimension
         composite.DebugName = "CompositePipeline";
         r.Composite = Pipeline(composite);
 
+        GraphicsPipelineDesc post = composite;
+        post.FragmentSpirv = kBloomDown_frag;
+        post.ColorAttachments = { { F::kHdrFormat } };
+        post.DebugName = "BloomDownPipeline";
+        r.BloomDown = Pipeline(post);
+        post.FragmentSpirv = kBloomUp_frag;
+        post.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive } };
+        post.DebugName = "BloomUpPipeline";
+        r.BloomUp = Pipeline(post);
+        post.FragmentSpirv = kFxaa_frag;
+        post.ColorAttachments = { { F::kOutputFormat } };
+        post.DebugName = "FxaaPipeline";
+        r.Fxaa = Pipeline(post);
+
         std::vector<uint32_t> indices(kMaxQuadsPerDraw * 6);
         for (uint32_t q = 0; q < kMaxQuadsPerDraw; ++q)
         {
@@ -403,8 +451,21 @@ namespace Dimension
         u.SkyTop = glm::vec4(ToLinear(settings.SkyTop), 1.0f);
         u.SkyHorizon = glm::vec4(ToLinear(settings.SkyHorizon), 1.0f);
         u.SkyGround = glm::vec4(ToLinear(settings.SkyGround), 1.0f);
-        bool castShadows = false;
+        if (settings.SkyMode == 1)
+            if (auto sky = AssetManager::GetTexture(settings.SkyTexture))
+            {
+                u.SkyParams = glm::vec4(1.0f, (float)sky->GetBindlessIndex(), settings.SkyIntensity, glm::radians(settings.SkyRotation));
+                u.EnvParams = glm::vec4(settings.ReflectionIntensity * settings.SkyIntensity, (float)(sky->GetMipLevels() - 1), 0.0f,
+                                        settings.AmbientIntensity * settings.SkyIntensity);
+                if (const auto& sh = sky->GetIrradianceSH())
+                {
+                    u.EnvParams.z = 1.0f;
+                    for (int i = 0; i < 9; ++i) u.IrradianceSH[i] = glm::vec4((*sh)[i], 0.0f);
+                }
+            }
+        bool castShadows = false, debugCascades = false;
         float shadowDistance = 40.0f, shadowBias = 0.0015f;
+        int cascadeCount = 4;
         for (auto [e, light, t] : reg.ViewOf<DirectionalLightComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
@@ -413,17 +474,51 @@ namespace Dimension
             castShadows = light.CastShadows;
             shadowDistance = light.ShadowDistance;
             shadowBias = light.ShadowBias;
+            cascadeCount = std::clamp(light.ShadowCascades, 1, ShadowCascades::kMax);
+            debugCascades = light.DebugCascades;
             break;
         }
+        uint32_t pointShadows = 0;
+        uint32_t shadowFaces[kMaxPointShadows] = {};
+        const float shadowNear = 0.05f;
         for (auto [e, light, t] : reg.ViewOf<PointLightComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || u.Counts.x >= (int)kMaxPointLights) continue;
-            u.PointLights[u.Counts.x++] = { glm::vec4(t.GetWorldPosition(), light.Range),
-                                            glm::vec4(ToLinear(light.Color) * light.Intensity, 1.0f) };
+            glm::vec3 pos = t.GetWorldPosition();
+            float slot = 0.0f; // shadow slot + 1
+            if (light.CastShadows && pointShadows < kMaxPointShadows && light.Range > 0.1f)
+            {
+                for (int f = 0; f < 6; ++f)
+                    u.PointShadowViewProj[pointShadows * 6 + f] = PointShadowFaceViewProj(pos, f, shadowNear, light.Range);
+                u.PointShadowParams[pointShadows] = glm::vec4(shadowNear, light.Range, light.ShadowBias, 0.0f);
+                shadowFaces[pointShadows] = 6;
+                slot = (float)(++pointShadows);
+            }
+            u.PointLights[u.Counts.x++] = { glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
+                                            glm::vec4(0.0f, 0.0f, 0.0f, -2.0f), glm::vec4(0.0f) };
+        }
+        for (auto [e, light, t] : reg.ViewOf<SpotLightComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || u.Counts.x >= (int)kMaxPointLights) continue;
+            glm::vec3 pos = t.GetWorldPosition(), dir = t.Forward();
+            float outer = glm::radians(std::clamp(light.SpotAngle, 1.0f, 179.0f)) * 0.5f;
+            float inner = glm::radians(std::clamp(light.InnerSpotAngle, 0.0f, light.SpotAngle)) * 0.5f;
+            float cosOuter = std::cos(outer), cosInner = std::max(std::cos(inner), cosOuter + 1e-4f);
+            float slot = 0.0f;
+            if (light.CastShadows && pointShadows < kMaxPointShadows && light.Range > 0.1f)
+            {
+                u.PointShadowViewProj[pointShadows * 6] = SpotShadowViewProj(pos, dir, light.SpotAngle, shadowNear, light.Range);
+                u.PointShadowParams[pointShadows] = glm::vec4(shadowNear, light.Range, light.ShadowBias, 0.0f);
+                shadowFaces[pointShadows] = 1;
+                slot = (float)(++pointShadows);
+            }
+            u.PointLights[u.Counts.x++] = { glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
+                                            glm::vec4(dir, cosOuter), glm::vec4(cosInner, 0.0f, 0.0f, 0.0f) };
         }
 
         // Prepare CPU-side draw lists
         CollectSprites(scene, camera);
+        CollectTilemaps(scene, camera);
         CollectText(scene, camera);
         CollectParticles(scene, camera);
         if (options.EditorOverlays)
@@ -433,11 +528,23 @@ namespace Dimension
             if (options.Grid) BuildGrid(camera, options.Grid2D, m_GridLines);
         }
 
+        if (pointShadows > 0)
+        {
+            RenderPointShadows(cmd, scene, u.PointShadowViewProj, shadowFaces, pointShadows, &u, sizeof(u));
+            for (uint32_t i = 0; i < pointShadows; ++i) u.PointShadowParams[i].w = (float)m_PointShadowBindless;
+        }
         if (castShadows)
         {
-            float texel = 0.0f;
-            u.LightViewProj = RenderShadowMap(cmd, scene, camera, glm::vec3(u.LightDirection), shadowDistance, &u, sizeof(u), texel);
-            u.ShadowParams = glm::vec4(1.0f, (float)m_ShadowBindless, shadowBias, texel);
+            ShadowCascades cascades;
+            RenderShadowMap(cmd, scene, camera, glm::vec3(u.LightDirection), shadowDistance, cascadeCount, &u, sizeof(u), cascades);
+            for (int i = 0; i < cascades.Count; ++i)
+            {
+                u.LightViewProj[i] = cascades.ViewProj[i];
+                u.CascadeSplits[i] = cascades.Splits[i];
+                u.CascadeTexel[i] = cascades.Texel[i];
+            }
+            u.ShadowParams = glm::vec4((float)cascades.Count, (float)m_ShadowBindless, shadowBias, 0.0f);
+            u.CascadeParams = glm::vec4(0.0f, 0.15f, debugCascades ? 1.0f : 0.0f, 0.0f);
         }
 
         VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
@@ -507,28 +614,55 @@ namespace Dimension
         vkCmdEndRendering(cmd);
         target.RecordPickCopy(cmd);
 
-        // Composite: HDR -> tonemapped, sRGB-encoded RGBA8 output.
+        // Post processing: bloom (HDR) -> composite (exposure, tonemap, vignette) -> optional FXAA -> overlays and UI.
         Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        Vk::TransitionImage(cmd, target.GetOutput().GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        VkRenderingAttachmentInfo out{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-        out.imageView = target.GetOutput().GetView();
-        out.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        out.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        out.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        VkRenderingInfo compositeInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-        compositeInfo.renderArea = { { 0, 0 }, extent };
-        compositeInfo.layerCount = 1;
-        compositeInfo.colorAttachmentCount = 1;
-        compositeInfo.pColorAttachments = &out;
-        vkCmdBeginRendering(cmd, &compositeInfo);
-        VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
-        vkCmdSetViewport(cmd, 0, 1, &flat);
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-        res.Composite.Bind(cmd);
         device.BindBindless(cmd);
-        CompositePush push{ target.GetHdrBindless(), settings.Exposure, settings.Tonemapping ? 1u : 0u };
-        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
-        vkCmdDraw(cmd, 3, 1, 0, 0);
+        bool bloom = settings.Bloom && settings.BloomIntensity > 0.0f && target.GetBloomLevels() > 0;
+        if (bloom) RenderBloom(cmd, target, settings);
+
+        VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
+        CompositePush push{ target.GetHdrBindless(), settings.Exposure, settings.Tonemapping ? 1u : 0u,
+                            bloom ? target.GetBloomBindless(0) + 1 : 0u,
+                            settings.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), settings.Vignette };
+        auto beginPass = [&](const Image& image) {
+            Vk::TransitionImage(cmd, image.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            att.imageView = image.GetView();
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+            info.renderArea = { { 0, 0 }, extent };
+            info.layerCount = 1;
+            info.colorAttachmentCount = 1;
+            info.pColorAttachments = &att;
+            vkCmdBeginRendering(cmd, &info);
+            vkCmdSetViewport(cmd, 0, 1, &flat);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+        };
+        auto composite = [&] {
+            res.Composite.Bind(cmd);
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        };
+        if (settings.FXAA)
+        {
+            beginPass(target.GetLdr());
+            composite();
+            vkCmdEndRendering(cmd);
+            Vk::TransitionImage(cmd, target.GetLdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_Stats.DrawCalls++;
+            beginPass(target.GetOutput());
+            res.Fxaa.Bind(cmd);
+            FxaaPush fxaa{ target.GetLdrBindless(), 0u, glm::vec2(1.0f / extent.width, 1.0f / extent.height) };
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(fxaa), &fxaa);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        }
+        else
+        {
+            beginPass(target.GetOutput());
+            composite();
+        }
         if (!m_Lines.empty())
         {
             // Overlays go on top of the tonemapped image so their colors stay exact.
@@ -594,6 +728,74 @@ namespace Dimension
     SceneRenderer::~SceneRenderer()
     {
         if (m_ShadowMap) RenderDevice::Get().UnregisterTexture(m_ShadowBindless);
+        if (m_PointShadowMap) RenderDevice::Get().UnregisterTexture(m_PointShadowBindless);
+    }
+
+    glm::mat4 PointShadowFaceViewProj(const glm::vec3& position, int face, float nearPlane, float farPlane)
+    {
+        static const glm::vec3 dirs[6] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+        static const glm::vec3 ups[6] = { { 0, 1, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 0, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 } };
+        glm::mat4 view = glm::lookAt(position, position + dirs[face], ups[face]);
+        glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f, nearPlane, farPlane);
+        return proj * view;
+    }
+
+    glm::mat4 SpotShadowViewProj(const glm::vec3& position, const glm::vec3& direction, float spotAngleDegrees, float nearPlane, float farPlane)
+    {
+        glm::vec3 dir = glm::normalize(direction);
+        glm::vec3 up = std::abs(dir.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+        float fov = glm::radians(std::clamp(spotAngleDegrees + 4.0f, 2.0f, 170.0f)); // small margin for PCF at the rim
+        return glm::perspective(fov, 1.0f, nearPlane, farPlane) * glm::lookAt(position, position + dir, up);
+    }
+
+    void SceneRenderer::RenderPointShadows(VkCommandBuffer cmd, Scene& scene, const glm::mat4* faceViewProj, const uint32_t* faceCounts,
+                                           uint32_t lightCount, const void* uniforms, size_t uniformSize)
+    {
+        auto& device = RenderDevice::Get();
+        const uint32_t width = kPointShadowTile * 6, height = kPointShadowTile * kMaxPointShadows;
+        if (!m_PointShadowMap)
+        {
+            m_PointShadowMap = MakeScope<Image>(ImageDesc{ width, height, VK_FORMAT_D32_SFLOAT,
+                                                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "PointShadowAtlas" });
+            m_PointShadowBindless = device.RegisterTexture(m_PointShadowMap->GetView(), device.GetNearestClampSampler());
+            VkImage img = m_PointShadowMap->GetHandle();
+            device.ImmediateSubmit([&](VkCommandBuffer c) {
+                Vk::TransitionImage(c, img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+            });
+        }
+
+        VkImage img = m_PointShadowMap->GetHandle();
+        Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+        VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        depth.imageView = m_PointShadowMap->GetView();
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depth.clearValue.depthStencil = { 1.0f, 0 };
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        info.renderArea = { { 0, 0 }, { width, height } };
+        info.layerCount = 1;
+        info.pDepthAttachment = &depth;
+        vkCmdBeginRendering(cmd, &info);
+        vkCmdSetLineWidth(cmd, 1.0f);
+        device.BindBindless(cmd);
+        std::vector<uint8_t> faceUniforms((const uint8_t*)uniforms, (const uint8_t*)uniforms + uniformSize);
+        for (uint32_t light = 0; light < lightCount; ++light)
+            for (uint32_t face = 0; face < faceCounts[light]; ++face)
+            {
+                float x = (float)(face * kPointShadowTile), y = (float)(light * kPointShadowTile);
+                // Same flipped viewport as the scene: tile row 0 is NDC y = +1.
+                VkViewport viewport{ x, y + kPointShadowTile, (float)kPointShadowTile, -(float)kPointShadowTile, 0.0f, 1.0f };
+                VkRect2D scissor{ { (int32_t)x, (int32_t)y }, { kPointShadowTile, kPointShadowTile } };
+                vkCmdSetViewport(cmd, 0, 1, &viewport);
+                vkCmdSetScissor(cmd, 0, 1, &scissor);
+                const glm::mat4& viewProj = faceViewProj[light * 6 + face];
+                std::memcpy(faceUniforms.data(), &viewProj, sizeof(glm::mat4)); // ViewProj is the first member
+                device.BindUniforms(cmd, faceUniforms.data(), faceUniforms.size());
+                DrawMeshes(cmd, scene, viewProj, true);
+            }
+        vkCmdEndRendering(cmd);
+        Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 
     void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, Scene& scene, const glm::mat4& viewProj, bool shadowPass)
@@ -606,6 +808,7 @@ namespace Dimension
         struct Draw
         {
             Mesh* MeshPtr;
+            uint32_t FirstIndex = 0, IndexCount = 0;
             MeshPush Push;
             const Pipeline* Pipe;
             float Depth;
@@ -620,13 +823,13 @@ namespace Dimension
             }
             vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(MeshPush), &d.Push);
             d.MeshPtr->Bind(cmd);
-            vkCmdDrawIndexed(cmd, d.MeshPtr->GetIndexCount(), 1, 0, 0, 0);
+            vkCmdDrawIndexed(cmd, d.IndexCount, 1, d.FirstIndex, 0, 0);
             m_Stats.DrawCalls++;
             if (shadowPass) m_Stats.ShadowCasters++;
             else
             {
                 m_Stats.Meshes++;
-                m_Stats.Triangles += d.MeshPtr->GetIndexCount() / 3;
+                m_Stats.Triangles += d.IndexCount / 3;
             }
         };
 
@@ -640,23 +843,15 @@ namespace Dimension
             // Skinned meshes use the Animator's matrices; without an Animator they render in bind pose.
             const AnimatorComponent* animator = mesh->IsSkinned() ? reg.TryGet<AnimatorComponent>(e) : nullptr;
             bool skinned = animator && animator->SkinMatrices.size() == mesh->GetSkeleton()->Joints.size() && mesh->GetSkinAddress();
-            const Material& mat = ResolveMaterial(mr, scratch);
-            bool isTransparent = mat.BlendMode == MaterialBlendMode::Transparent;
-            if (shadowPass && (!mat.CastShadows || !mr.CastShadows || isTransparent)) continue;
+            if (shadowPass && !mr.CastShadows) continue;
             if (!skinned && !frustum.Intersects(t.World, mesh->GetBounds())) // animated bounds are unknown: never cull
             {
                 if (!shadowPass) m_Stats.Culled++;
                 continue;
             }
 
-            Draw d;
-            d.MeshPtr = mesh.get();
-            d.Push.Model = t.World;
-            d.Push.Material = UploadMaterial(mat);
-            d.Push.EntityId = e.Index + 1;
-            d.Push.Skin = 0;
-            d.Push.Joints = 0;
-            d.Push.Flags = 0;
+            // Joint matrices are shared by all sub-meshes of the entity.
+            VkDeviceAddress jointsAddress = 0;
             if (skinned)
             {
                 size_t bytes = animator->SkinMatrices.size() * sizeof(glm::mat4);
@@ -664,34 +859,80 @@ namespace Dimension
                 if (joints)
                 {
                     std::memcpy(joints.Data, animator->SkinMatrices.data(), bytes);
-                    d.Push.Skin = mesh->GetSkinAddress();
-                    d.Push.Joints = joints.Address;
-                    d.Push.Flags = 1;
+                    jointsAddress = joints.Address;
                 }
             }
-            if (!d.Push.Material) continue;
-            d.Pipe = shadowPass ? &res.Shadow : isTransparent ? &res.MeshTransparent : mat.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
-            if (isTransparent)
+
+            // Material per sub-mesh: the renderer's Material overrides all; otherwise the model's material for the
+            // slot; otherwise the renderer's simple color/texture fields.
+            Ref<Material> overrideMat = AssetManager::GetMaterial(mr.Material);
+            const auto& slots = AssetManager::GetMeshMaterials(mr.Mesh);
+            for (const SubMesh& sub : mesh->GetSubMeshes())
             {
-                d.Depth = glm::distance(glm::vec3(t.World * glm::vec4(mesh->GetBounds().Center(), 1.0f)), camPos);
-                transparent.push_back(d);
+                const Material* matPtr = overrideMat.get();
+                Ref<Material> slotMat;
+                if (!matPtr && sub.MaterialSlot >= 0 && sub.MaterialSlot < (int32_t)slots.size())
+                {
+                    slotMat = AssetManager::GetMaterial(slots[sub.MaterialSlot]);
+                    matPtr = slotMat.get();
+                }
+                if (!matPtr) matPtr = &ResolveMaterial(mr, scratch);
+                const Material& mat = *matPtr;
+                bool isTransparent = mat.BlendMode == MaterialBlendMode::Transparent;
+                if (shadowPass && (!mat.CastShadows || !mr.CastShadows || isTransparent)) continue;
+
+                Draw d;
+                d.MeshPtr = mesh.get();
+                d.FirstIndex = sub.IndexOffset;
+                d.IndexCount = sub.IndexCount;
+                d.Push.Model = t.World;
+                d.Push.Material = UploadMaterial(mat);
+                d.Push.EntityId = e.Index + 1;
+                d.Push.Skin = jointsAddress ? mesh->GetSkinAddress() : 0;
+                d.Push.Joints = jointsAddress;
+                d.Push.Flags = jointsAddress ? 1u : 0u;
+                if (!d.Push.Material) continue;
+                d.Pipe = shadowPass ? &res.Shadow : isTransparent ? &res.MeshTransparent : mat.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
+                if (isTransparent)
+                {
+                    d.Depth = glm::distance(glm::vec3(t.World * glm::vec4(mesh->GetBounds().Center(), 1.0f)), camPos);
+                    transparent.push_back(d);
+                }
+                else
+                    submit(d);
             }
-            else
-                submit(d);
         }
         // Transparent meshes after opaque ones, far to near.
         std::sort(transparent.begin(), transparent.end(), [](const Draw& a, const Draw& b) { return a.Depth > b.Depth; });
         for (auto& d : transparent) submit(d);
     }
 
-    glm::mat4 SceneRenderer::RenderShadowMap(VkCommandBuffer cmd, Scene& scene, const CameraData& camera, const glm::vec3& lightDir,
-                                             float distance, const void* uniforms, size_t uniformSize, float& texelWorldSize)
+    std::array<float, ShadowCascades::kMax> ComputeCascadeSplits(float nearDepth, float farDepth, int count, float lambda)
+    {
+        std::array<float, ShadowCascades::kMax> splits{};
+        count = std::clamp(count, 1, ShadowCascades::kMax);
+        nearDepth = std::max(nearDepth, 1e-3f);
+        farDepth = std::max(farDepth, nearDepth + 1e-3f);
+        for (int i = 0; i < count; ++i)
+        {
+            float f = (float)(i + 1) / count;
+            float logSplit = nearDepth * std::pow(farDepth / nearDepth, f);
+            float uniformSplit = nearDepth + (farDepth - nearDepth) * f;
+            splits[i] = glm::mix(uniformSplit, logSplit, lambda);
+        }
+        splits[count - 1] = farDepth;
+        for (int i = count; i < ShadowCascades::kMax; ++i) splits[i] = farDepth;
+        return splits;
+    }
+
+    void SceneRenderer::RenderShadowMap(VkCommandBuffer cmd, Scene& scene, const CameraData& camera, const glm::vec3& lightDir,
+                                        float distance, int cascadeCount, const void* uniforms, size_t uniformSize, ShadowCascades& out)
     {
         auto& device = RenderDevice::Get();
         if (!m_ShadowMap)
         {
             m_ShadowMap = MakeScope<Image>(ImageDesc{ kShadowMapSize, kShadowMapSize, VK_FORMAT_D32_SFLOAT,
-                                                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "ShadowMap" });
+                                                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "ShadowAtlas" });
             m_ShadowBindless = device.RegisterTexture(m_ShadowMap->GetView(), device.GetNearestClampSampler());
             VkImage img = m_ShadowMap->GetHandle();
             device.ImmediateSubmit([&](VkCommandBuffer c) {
@@ -699,46 +940,61 @@ namespace Dimension
             });
         }
 
-        // Bounding sphere of the camera frustum, clipped to the shadow distance.
+        // Camera frustum corner rays (near plane -> far plane) and their view depths.
         glm::mat4 invCam = glm::inverse(camera.Projection * camera.View);
-        glm::vec3 corners[8];
-        glm::vec3 center(0.0f);
+        glm::vec3 nearP[4], farP[4];
         for (int i = 0; i < 4; ++i)
         {
             glm::vec2 ndc((i & 1) ? 1.0f : -1.0f, (i & 2) ? 1.0f : -1.0f);
             glm::vec4 n = invCam * glm::vec4(ndc, 0.0f, 1.0f), f = invCam * glm::vec4(ndc, 1.0f, 1.0f);
-            glm::vec3 nearP = glm::vec3(n) / n.w, farP = glm::vec3(f) / f.w;
-            glm::vec3 ray = farP - nearP;
-            float len = glm::length(ray);
-            if (len > distance) farP = nearP + ray * (distance / len);
-            corners[i * 2] = nearP;
-            corners[i * 2 + 1] = farP;
+            nearP[i] = glm::vec3(n) / n.w;
+            farP[i] = glm::vec3(f) / f.w;
         }
-        for (auto& c : corners) center += c / 8.0f;
-        float radius = 0.0f;
-        for (auto& c : corners) radius = std::max(radius, glm::distance(c, center));
-        radius = std::ceil(radius * 16.0f) / 16.0f; // quantized size reduces shimmering
+        auto viewDepth = [&](const glm::vec3& p) { return -(camera.View * glm::vec4(p, 1.0f)).z; };
+        float nearDepth = viewDepth(nearP[0]), farDepth = viewDepth(farP[0]);
+        float shadowFar = std::min(distance, farDepth);
+        auto splits = ComputeCascadeSplits(std::max(nearDepth, 0.01f), shadowFar, cascadeCount, 0.75f);
+        auto pointAt = [&](int ray, float depth) {
+            float t = (depth - nearDepth) / std::max(farDepth - nearDepth, 1e-5f);
+            return nearP[ray] + (farP[ray] - nearP[ray]) * t;
+        };
 
         glm::vec3 dir = glm::normalize(lightDir);
         glm::vec3 up = std::abs(dir.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
-        // Snap the center to whole shadow texels in light space so shadows do not crawl as the camera moves.
         glm::mat4 lightRot = glm::lookAt(glm::vec3(0.0f), dir, up);
-        float unitsPerTexel = radius * 2.0f / kShadowMapSize;
-        glm::vec3 ls = glm::vec3(lightRot * glm::vec4(center, 1.0f));
-        ls.x = std::floor(ls.x / unitsPerTexel) * unitsPerTexel;
-        ls.y = std::floor(ls.y / unitsPerTexel) * unitsPerTexel;
-        center = glm::vec3(glm::inverse(lightRot) * glm::vec4(ls, 1.0f));
-
         const float backoff = 100.0f; // include casters outside the camera frustum, between it and the light
-        glm::mat4 view = glm::lookAt(center - dir * (radius + backoff), center, up);
-        glm::mat4 proj = glm::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f + backoff);
-        glm::mat4 lightViewProj = proj * view;
-        texelWorldSize = unitsPerTexel;
 
-        // Depth-only pass that reuses the mesh vertex shader with the light as the camera.
-        std::vector<uint8_t> shadowUniforms((const uint8_t*)uniforms, (const uint8_t*)uniforms + uniformSize);
-        std::memcpy(shadowUniforms.data(), &lightViewProj, sizeof(glm::mat4)); // ViewProj is the first member
+        out.Count = std::clamp(cascadeCount, 1, ShadowCascades::kMax);
+        for (int c = 0; c < out.Count; ++c)
+        {
+            // Bounding sphere of this slice of the frustum.
+            float d0 = c == 0 ? nearDepth : splits[c - 1], d1 = splits[c];
+            glm::vec3 corners[8], center(0.0f);
+            for (int i = 0; i < 4; ++i)
+            {
+                corners[i * 2] = pointAt(i, d0);
+                corners[i * 2 + 1] = pointAt(i, d1);
+            }
+            for (auto& p : corners) center += p / 8.0f;
+            float radius = 0.0f;
+            for (auto& p : corners) radius = std::max(radius, glm::distance(p, center));
+            radius = std::ceil(radius * 16.0f) / 16.0f; // quantized size reduces shimmering
 
+            // Snap the center to whole shadow texels in light space so shadows do not crawl as the camera moves.
+            float unitsPerTexel = radius * 2.0f / kShadowTileSize;
+            glm::vec3 ls = glm::vec3(lightRot * glm::vec4(center, 1.0f));
+            ls.x = std::floor(ls.x / unitsPerTexel) * unitsPerTexel;
+            ls.y = std::floor(ls.y / unitsPerTexel) * unitsPerTexel;
+            center = glm::vec3(glm::inverse(lightRot) * glm::vec4(ls, 1.0f));
+
+            glm::mat4 view = glm::lookAt(center - dir * (radius + backoff), center, up);
+            glm::mat4 proj = glm::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f + backoff);
+            out.ViewProj[c] = proj * view;
+            out.Splits[c] = d1;
+            out.Texel[c] = unitsPerTexel;
+        }
+
+        // Depth-only passes into the atlas tiles, reusing the mesh vertex shader with the light as the camera.
         VkImage img = m_ShadowMap->GetHandle();
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
         VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
@@ -752,17 +1008,22 @@ namespace Dimension
         info.layerCount = 1;
         info.pDepthAttachment = &depth;
         vkCmdBeginRendering(cmd, &info);
-        VkViewport viewport{ 0.0f, (float)kShadowMapSize, (float)kShadowMapSize, -(float)kShadowMapSize, 0.0f, 1.0f };
-        VkRect2D scissor{ { 0, 0 }, { kShadowMapSize, kShadowMapSize } };
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
         vkCmdSetLineWidth(cmd, 1.0f);
         device.BindBindless(cmd);
-        device.BindUniforms(cmd, shadowUniforms.data(), shadowUniforms.size());
-        DrawMeshes(cmd, scene, lightViewProj, true);
+        std::vector<uint8_t> shadowUniforms((const uint8_t*)uniforms, (const uint8_t*)uniforms + uniformSize);
+        for (int c = 0; c < out.Count; ++c)
+        {
+            float x = (float)((c & 1) * kShadowTileSize), y = (float)((c >> 1) * kShadowTileSize);
+            VkViewport viewport{ x, y + kShadowTileSize, (float)kShadowTileSize, -(float)kShadowTileSize, 0.0f, 1.0f };
+            VkRect2D scissor{ { (int32_t)x, (int32_t)y }, { kShadowTileSize, kShadowTileSize } };
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            std::memcpy(shadowUniforms.data(), &out.ViewProj[c], sizeof(glm::mat4)); // ViewProj is the first member
+            device.BindUniforms(cmd, shadowUniforms.data(), shadowUniforms.size());
+            DrawMeshes(cmd, scene, out.ViewProj[c], true);
+        }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
-        return lightViewProj;
     }
 
     void SceneRenderer::CollectSprites(Scene& scene, const CameraData& camera)
@@ -797,6 +1058,42 @@ namespace Dimension
             d.Order = sr.SortingOrder;
             d.Depth = (camera.View * t.World[3]).z; // more negative = farther
             m_Sprites.push_back(d);
+        }
+    }
+
+    void SceneRenderer::CollectTilemaps(Scene& scene, const CameraData& camera)
+    {
+        uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
+        for (auto [e, tm, t] : scene.GetRegistry().ViewOf<TilemapComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy) continue;
+            const auto& cells = tm.Cells();
+            if (cells.empty()) continue;
+            Ref<Texture2D> tex = AssetManager::GetTexture(tm.Tileset);
+            int cols = std::max(1, tm.Columns), rows = std::max(1, tm.Rows);
+            glm::vec2 cell(1.0f / cols, 1.0f / rows);
+            // Half-texel inset keeps neighbouring tiles from bleeding in with filtering.
+            glm::vec2 inset = tex ? glm::vec2(0.5f / tex->GetWidth(), 0.5f / tex->GetHeight()) : glm::vec2(0.0f);
+            glm::vec4 color = ToLinear(tm.Color);
+            float cs = tm.CellSize, depth = (camera.View * t.World[3]).z;
+            glm::mat4 cellScale = glm::scale(glm::mat4(1.0f), glm::vec3(cs, cs, 1.0f));
+            for (auto& [key, tile] : cells)
+            {
+                int32_t x = TilemapComponent::KeyX(key), y = TilemapComponent::KeyY(key);
+                int frame = std::clamp(tile, 0, cols * rows - 1);
+                glm::vec2 uvMin = glm::vec2((float)(frame % cols), (float)(frame / cols)) * cell + inset;
+                glm::vec2 uvMax = uvMin + cell - 2.0f * inset;
+                SpriteDraw d;
+                d.Transform = t.World * glm::translate(glm::mat4(1.0f), glm::vec3((x + 0.5f) * cs, (y + 0.5f) * cs, 0.0f)) * cellScale;
+                d.Color = color;
+                d.UVMin = { uvMin.x, uvMax.y }; // bottom-left corner; image rows run top-down
+                d.UVMax = { uvMax.x, uvMin.y };
+                d.Texture = tex ? tex->GetBindlessIndex() : white;
+                d.Entity = e.Index + 1;
+                d.Order = tm.SortingOrder;
+                d.Depth = depth;
+                m_Sprites.push_back(d);
+            }
         }
     }
 
@@ -844,16 +1141,52 @@ namespace Dimension
             uint32_t texture = (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex();
             bool local = ps.SimulationSpace == ParticleSpace::Local;
             float worldScale = local ? glm::length(glm::vec3(t.World[0])) : 1.0f;
+            uint32_t trailTexture = AssetManager::GetParticleTexture()->GetBindlessIndex();
             for (const auto& p : ps.Particles)
             {
                 float life = std::clamp(p.Age / p.Lifetime, 0.0f, 1.0f);
                 glm::vec3 pos = local ? glm::vec3(t.World * glm::vec4(p.Position, 1.0f)) : p.Position;
-                float size = p.Size * glm::mix(1.0f, ps.EndSize, life) * worldScale;
+                float size = p.Size * ps.SizeOverLifetime.Evaluate(life) * worldScale;
+                glm::vec4 color = p.Color * ps.ColorOverLifetime.Evaluate(life);
+                if (ps.Trails && p.TrailCount > 0)
+                {
+                    // Ribbon of camera-facing segments from the particle back through its history, tapering and fading.
+                    glm::vec3 prev = pos;
+                    int n = p.TrailCount;
+                    for (int k = 0; k < n; ++k)
+                    {
+                        glm::vec3 q = local ? glm::vec3(t.World * glm::vec4(p.Trail[k], 1.0f)) : p.Trail[k];
+                        glm::vec3 axis = q - prev;
+                        if (glm::dot(axis, axis) > 1e-8f)
+                        {
+                            glm::vec3 mid = (q + prev) * 0.5f;
+                            glm::vec3 side = glm::cross(axis, camera.Position - mid);
+                            float fade = 1.0f - (float)k / n;
+                            float width = size * ps.TrailWidth * fade;
+                            if (glm::dot(side, side) > 1e-10f && width > 0.0f)
+                            {
+                                side = glm::normalize(side) * width;
+                                SpriteDraw seg;
+                                seg.Transform = glm::mat4(glm::vec4(axis, 0), glm::vec4(side, 0), glm::vec4(forward, 0), glm::vec4(mid, 1));
+                                seg.Color = ToLinear(color * glm::vec4(1.0f, 1.0f, 1.0f, fade));
+                                seg.UVMin = { 0.5f, 1.0f }; // soft falloff across the width, constant along the length
+                                seg.UVMax = { 0.5f, 0.0f };
+                                seg.Texture = trailTexture;
+                                seg.Entity = e.Index + 1;
+                                seg.Order = ps.SortingOrder;
+                                seg.Depth = (camera.View * glm::vec4(mid, 1.0f)).z;
+                                seg.Additive = ps.Blend == ParticleBlend::Additive;
+                                m_Sprites.push_back(seg);
+                            }
+                        }
+                        prev = q;
+                    }
+                }
                 float c = std::cos(p.Rotation), s = std::sin(p.Rotation);
                 glm::vec3 r = (right * c + up * s) * size, u = (up * c - right * s) * size;
                 SpriteDraw d;
                 d.Transform = glm::mat4(glm::vec4(r, 0), glm::vec4(u, 0), glm::vec4(forward, 0), glm::vec4(pos, 1));
-                d.Color = ToLinear(p.Color * glm::mix(glm::vec4(1.0f), ps.EndColor, life));
+                d.Color = ToLinear(color);
                 d.UVMin = { 0, 1 };
                 d.UVMax = { 1, 0 };
                 d.Texture = texture;
@@ -892,6 +1225,7 @@ namespace Dimension
         for (auto [e, c] : reg.ViewOf<CameraComponent>()) addIcon(e, IconCamera, { 0.9f, 0.9f, 0.9f, 1 });
         for (auto [e, l] : reg.ViewOf<DirectionalLightComponent>()) addIcon(e, IconSun, { 1.0f, 0.85f, 0.3f, 1 });
         for (auto [e, l] : reg.ViewOf<PointLightComponent>()) addIcon(e, IconBulb, glm::vec4(ToLinear(l.Color), 1));
+        for (auto [e, l] : reg.ViewOf<SpotLightComponent>()) addIcon(e, IconBulb, glm::vec4(ToLinear(l.Color), 1));
         for (auto [e, a] : reg.ViewOf<AudioSourceComponent>()) addIcon(e, IconSpeaker, { 0.6f, 0.8f, 1.0f, 1 });
     }
 
@@ -969,6 +1303,55 @@ namespace Dimension
             uint32_t n = (uint32_t)std::min<size_t>(kMaxQuadsPerDraw, count - first);
             vkCmdDrawIndexed(cmd, n * 6, 1, 0, (int32_t)(first * 4), 0);
             m_Stats.DrawCalls++;
+        }
+    }
+
+    void SceneRenderer::RenderBloom(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings)
+    {
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        auto pass = [&](const Image& dst, bool load, const Pipeline& pipeline, const BloomPush& push) {
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            att.imageView = dst.GetView();
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+            info.renderArea = { { 0, 0 }, dst.GetExtent() };
+            info.layerCount = 1;
+            info.colorAttachmentCount = 1;
+            info.pColorAttachments = &att;
+            vkCmdBeginRendering(cmd, &info);
+            VkViewport viewport{ 0.0f, 0.0f, (float)dst.GetWidth(), (float)dst.GetHeight(), 0.0f, 1.0f };
+            VkRect2D scissor{ { 0, 0 }, dst.GetExtent() };
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            pipeline.Bind(cmd);
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_Stats.DrawCalls++;
+        };
+
+        uint32_t levels = target.GetBloomLevels();
+        // Downsample: HDR -> level 0 (thresholded) -> level 1 -> ...
+        for (uint32_t i = 0; i < levels; ++i)
+        {
+            const Image& src = i == 0 ? target.GetHdr() : target.GetBloom(i - 1);
+            BloomPush push{ i == 0 ? target.GetHdrBindless() : target.GetBloomBindless(i - 1), i == 0 ? 1u : 0u,
+                            settings.BloomThreshold, settings.BloomKnee,
+                            glm::vec2(1.0f / src.GetWidth(), 1.0f / src.GetHeight()), settings.BloomRadius };
+            pass(target.GetBloom(i), false, res.BloomDown, push);
+        }
+        // Upsample: add each smaller level onto the next larger one.
+        for (int i = (int)levels - 2; i >= 0; --i)
+        {
+            const Image& src = target.GetBloom(i + 1);
+            BloomPush push{ target.GetBloomBindless(i + 1), 0u, 0.0f, 0.0f,
+                            glm::vec2(1.0f / src.GetWidth(), 1.0f / src.GetHeight()), settings.BloomRadius };
+            pass(target.GetBloom(i), true, res.BloomUp, push);
         }
     }
 
@@ -1062,6 +1445,84 @@ namespace Dimension
         }
         if (auto* pl = reg.TryGet<PointLightComponent>(sel))
             DrawWireSphere(glm::translate(glm::mat4(1.0f), t.GetWorldPosition()), glm::vec3(0), pl->Range, yellow);
+        if (auto* joint = reg.TryGet<JointComponent>(sel))
+        {
+            const glm::vec4 cyan{ 0.3f, 0.9f, 1.0f, 1.0f };
+            glm::vec3 anchor = glm::vec3(t.World * glm::vec4(joint->Anchor, 1.0f));
+            DrawWireSphere(glm::translate(glm::mat4(1.0f), anchor), glm::vec3(0), 0.08f, cyan);
+            glm::vec3 other = anchor;
+            if (scene.IsValid(joint->ConnectedBody))
+            {
+                const auto& ot = reg.Get<TransformComponent>(joint->ConnectedBody);
+                other = joint->Type == JointType::Distance ? glm::vec3(ot.World * glm::vec4(joint->ConnectedAnchor, 1.0f)) : ot.GetWorldPosition();
+            }
+            else if (joint->Type == JointType::Distance)
+                other = joint->ConnectedAnchor;
+            DrawLine(t.GetWorldPosition(), anchor, cyan);
+            DrawLine(anchor, other, cyan);
+            if (joint->Type == JointType::Hinge)
+            {
+                glm::vec3 axis = glm::mat3(t.World) * joint->Axis;
+                if (glm::length(axis) > 1e-6f) axis = glm::normalize(axis) * 0.6f;
+                DrawLine(anchor - axis, anchor + axis, { 1.0f, 0.6f, 0.2f, 1.0f });
+            }
+        }
+        if (auto* joint = reg.TryGet<Joint2DComponent>(sel))
+        {
+            const glm::vec4 cyan{ 0.3f, 0.9f, 1.0f, 1.0f };
+            glm::vec3 anchor = glm::vec3(t.World * glm::vec4(joint->Anchor, 0.0f, 1.0f));
+            DrawWireCircle(glm::translate(glm::mat4(1.0f), anchor), glm::vec3(0), 0.08f, cyan, 2);
+            glm::vec3 other = anchor;
+            if (scene.IsValid(joint->ConnectedBody))
+            {
+                const auto& ot = reg.Get<TransformComponent>(joint->ConnectedBody);
+                other = joint->Type == Joint2DType::Distance ? glm::vec3(ot.World * glm::vec4(joint->ConnectedAnchor, 0.0f, 1.0f)) : ot.GetWorldPosition();
+            }
+            else if (joint->Type == Joint2DType::Distance)
+                other = glm::vec3(joint->ConnectedAnchor, 0.0f);
+            DrawLine(t.GetWorldPosition(), anchor, cyan);
+            DrawLine(anchor, other, cyan);
+        }
+        if (auto* cc = reg.TryGet<CharacterControllerComponent>(sel))
+        {
+            const glm::vec4 green{ 0.4f, 1.0f, 0.4f, 1.0f };
+            glm::vec3 center = t.GetWorldPosition() + cc->Center;
+            float r = cc->Radius, half = std::max(0.0f, cc->Height * 0.5f - r);
+            glm::mat4 top = glm::translate(glm::mat4(1.0f), center + glm::vec3(0, half, 0));
+            glm::mat4 bottom = glm::translate(glm::mat4(1.0f), center - glm::vec3(0, half, 0));
+            DrawWireCircle(top, glm::vec3(0), r, green, 1);
+            DrawWireCircle(bottom, glm::vec3(0), r, green, 1);
+            DrawWireCircle(top, glm::vec3(0), r, green, 0);
+            DrawWireCircle(top, glm::vec3(0), r, green, 2);
+            DrawWireCircle(bottom, glm::vec3(0), r, green, 0);
+            DrawWireCircle(bottom, glm::vec3(0), r, green, 2);
+            for (glm::vec3 d : { glm::vec3(r, 0, 0), glm::vec3(-r, 0, 0), glm::vec3(0, 0, r), glm::vec3(0, 0, -r) })
+                DrawLine(center + glm::vec3(0, half, 0) + d, center - glm::vec3(0, half, 0) + d, green);
+        }
+        if (auto* mc = reg.TryGet<MeshColliderComponent>(sel))
+        {
+            auto* mr = reg.TryGet<MeshRendererComponent>(sel);
+            AssetHandle h = mc->Mesh.IsValid() ? mc->Mesh : mr ? mr->Mesh : AssetHandle::None();
+            if (auto mesh = AssetManager::GetMesh(h))
+                DrawWireBox(t.World, mesh->GetBounds().Center(), mesh->GetBounds().Extents(), { 0.4f, 1.0f, 0.4f, 1.0f });
+        }
+        if (auto* sl = reg.TryGet<SpotLightComponent>(sel))
+        {
+            // Cone: apex at the light, rim circle at Range along the forward axis.
+            glm::vec3 p = t.GetWorldPosition(), f = t.Forward(), r = glm::normalize(t.Right()), up = glm::normalize(t.Up());
+            float half = glm::radians(std::clamp(sl->SpotAngle, 1.0f, 179.0f)) * 0.5f;
+            float dist = sl->Range * std::cos(half), radius = sl->Range * std::sin(half);
+            glm::vec3 c = p + f * dist;
+            glm::vec3 prev{};
+            for (int i = 0; i <= 32; ++i)
+            {
+                float a = glm::two_pi<float>() * i / 32;
+                glm::vec3 q = c + (r * std::cos(a) + up * std::sin(a)) * radius;
+                if (i > 0) DrawLine(prev, q, yellow);
+                if (i % 8 == 0 && i < 32) DrawLine(p, q, yellow);
+                prev = q;
+            }
+        }
         if (auto* box = reg.TryGet<BoxCollider2DComponent>(sel))
             DrawWireBox(t.World, glm::vec3(box->Offset, 0), glm::vec3(box->Size * 0.5f, 0), green);
         if (auto* circle = reg.TryGet<CircleCollider2DComponent>(sel))

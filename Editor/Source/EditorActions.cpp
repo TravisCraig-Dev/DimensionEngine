@@ -13,10 +13,13 @@ namespace Editor
         auto& reg = scene.GetRegistry();
         static const char* names[] = { "GameObject", "Sprite", "Square", "Cube", "Sphere", "Plane", "Quad", "Cylinder",
                                        "Camera", "Directional Light", "Point Light", "Audio Source", "Physics Cube", "Physics Sphere",
-                                       "Text", "Canvas", "Image", "Text", "Button", "Particle System" };
+                                       "Text", "Canvas", "Image", "Text", "Button", "Particle System",
+                                       "Panel", "Slider", "Toggle", "Input Field", "Scroll View", "Spot Light", "Tilemap" };
 
         // UI elements must live under a Canvas: use the selection if it is UI, else an existing canvas, else make one.
-        bool isUI = kind == ObjectKind::UIImage || kind == ObjectKind::UIText || kind == ObjectKind::UIButton;
+        bool isUI = kind == ObjectKind::UIImage || kind == ObjectKind::UIText || kind == ObjectKind::UIButton ||
+                    kind == ObjectKind::UIPanel || kind == ObjectKind::UISlider || kind == ObjectKind::UIToggle ||
+                    kind == ObjectKind::UIInputField || kind == ObjectKind::UIScrollView;
         if (isUI)
         {
             auto& r = scene.GetRegistry();
@@ -69,6 +72,12 @@ namespace Editor
             reg.Emplace<PointLightComponent>(e);
             if (!position) t.Position = { 0.0f, 2.0f, 0.0f };
             break;
+        case ObjectKind::Tilemap: reg.Emplace<TilemapComponent>(e); break;
+        case ObjectKind::SpotLight:
+            reg.Emplace<SpotLightComponent>(e);
+            t.Rotation = glm::radians(glm::vec3(-90.0f, 0.0f, 0.0f)); // pointing down
+            if (!position) t.Position = { 0.0f, 4.0f, 0.0f };
+            break;
         case ObjectKind::AudioSource: reg.Emplace<AudioSourceComponent>(e); break;
         case ObjectKind::PhysicsCube:
             mesh(AssetManager::kCube);
@@ -99,6 +108,39 @@ namespace Editor
             reg.Emplace<UITextComponent>(label).Text = "Button";
             break;
         }
+        case ObjectKind::UIPanel:
+        {
+            uiRect({ 400.0f, 300.0f });
+            auto& img = reg.Emplace<UIImageComponent>(e);
+            img.Color = { 0.1f, 0.1f, 0.12f, 0.85f };
+            reg.Emplace<UILayoutGroupComponent>(e);
+            break;
+        }
+        case ObjectKind::UISlider: uiRect({ 320.0f, 32.0f }); reg.Emplace<UISliderComponent>(e); break;
+        case ObjectKind::UIToggle: uiRect({ 240.0f, 36.0f }); reg.Emplace<UIToggleComponent>(e); break;
+        case ObjectKind::UIInputField: uiRect({ 320.0f, 50.0f }); reg.Emplace<UIInputFieldComponent>(e); break;
+        case ObjectKind::UIScrollView:
+        {
+            uiRect({ 400.0f, 300.0f });
+            reg.Emplace<UIImageComponent>(e).Color = { 0.12f, 0.12f, 0.14f, 0.9f };
+            reg.Emplace<UIScrollViewComponent>(e);
+            Entity content = scene.CreateEntity("Content", e);
+            auto& cr = reg.Emplace<UIRectComponent>(content);
+            cr.AnchorMin = { 0.0f, 0.0f };
+            cr.AnchorMax = { 1.0f, 1.0f };
+            cr.Size = { 0.0f, 0.0f };
+            reg.Emplace<UILayoutGroupComponent>(content);
+            for (int i = 0; i < 8; ++i)
+            {
+                Entity item = scene.CreateEntity("Item " + std::to_string(i + 1), content);
+                reg.Emplace<UIRectComponent>(item).Size = { 0.0f, 50.0f };
+                auto& txt = reg.Emplace<UITextComponent>(item);
+                txt.Text = "Item " + std::to_string(i + 1);
+                txt.Color = { 1, 1, 1, 1 };
+                txt.FontSize = 28.0f;
+            }
+            break;
+        }
         case ObjectKind::PhysicsSphere:
             mesh(AssetManager::kSphere);
             reg.Emplace<RigidbodyComponent>(e);
@@ -117,6 +159,7 @@ namespace Editor
         {
             if (ImGui::MenuItem("Sprite")) CreateObject(ctx, ObjectKind::Sprite, parent);
             if (ImGui::MenuItem("Sprite (Physics Square)")) CreateObject(ctx, ObjectKind::SpriteSquareBody, parent);
+            if (ImGui::MenuItem("Tilemap")) CreateObject(ctx, ObjectKind::Tilemap, parent);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("3D Object"))
@@ -135,6 +178,7 @@ namespace Editor
         {
             if (ImGui::MenuItem("Directional Light")) CreateObject(ctx, ObjectKind::DirectionalLight, parent);
             if (ImGui::MenuItem("Point Light")) CreateObject(ctx, ObjectKind::PointLight, parent);
+            if (ImGui::MenuItem("Spot Light")) CreateObject(ctx, ObjectKind::SpotLight, parent);
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Text (3D)")) CreateObject(ctx, ObjectKind::Text3D, parent);
@@ -149,6 +193,12 @@ namespace Editor
             if (ImGui::MenuItem("Image")) CreateObject(ctx, ObjectKind::UIImage, parent);
             if (ImGui::MenuItem("Text")) CreateObject(ctx, ObjectKind::UIText, parent);
             if (ImGui::MenuItem("Button")) CreateObject(ctx, ObjectKind::UIButton, parent);
+            if (ImGui::MenuItem("Slider")) CreateObject(ctx, ObjectKind::UISlider, parent);
+            if (ImGui::MenuItem("Toggle")) CreateObject(ctx, ObjectKind::UIToggle, parent);
+            if (ImGui::MenuItem("Input Field")) CreateObject(ctx, ObjectKind::UIInputField, parent);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Panel")) CreateObject(ctx, ObjectKind::UIPanel, parent);
+            if (ImGui::MenuItem("Scroll View")) CreateObject(ctx, ObjectKind::UIScrollView, parent);
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Audio Source")) CreateObject(ctx, ObjectKind::AudioSource, parent);

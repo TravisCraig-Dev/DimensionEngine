@@ -4,6 +4,10 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include "Dimension/Renderer/RenderDevice.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -188,6 +192,92 @@ namespace Dimension
             }
         }
 
+        float LinearToSrgb(float c)
+        {
+            c = std::clamp(c, 0.0f, 1.0f);
+            return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+        }
+
+        // Images and materials (glTF factors are linear; Material colors are sRGB like the editor's color pickers).
+        void ReadMaterials(const cgltf_data* data, const cgltf_options& options, const fs::path& path, MeshData& out)
+        {
+            for (cgltf_size i = 0; i < data->images_count; ++i)
+            {
+                const cgltf_image& image = data->images[i];
+                ImportedImage im;
+                im.Name = image.name && *image.name ? image.name : "Image" + std::to_string(i);
+                if (image.buffer_view && image.buffer_view->buffer->data)
+                {
+                    auto* bytes = (const uint8_t*)image.buffer_view->buffer->data + image.buffer_view->offset;
+                    im.Bytes.assign(bytes, bytes + image.buffer_view->size);
+                }
+                else if (image.uri && std::strncmp(image.uri, "data:", 5) == 0)
+                {
+                    const char* comma = std::strchr(image.uri, ',');
+                    if (comma && std::strstr(image.uri, ";base64,"))
+                    {
+                        size_t len = std::strlen(comma + 1);
+                        size_t size = len / 4 * 3;
+                        if (len >= 1 && comma[len] == '=') --size;
+                        if (len >= 2 && comma[len - 1] == '=') --size;
+                        void* decoded = nullptr;
+                        if (cgltf_load_buffer_base64(&options, size, comma + 1, &decoded) == cgltf_result_success)
+                        {
+                            im.Bytes.assign((const uint8_t*)decoded, (const uint8_t*)decoded + size);
+                            std::free(decoded);
+                        }
+                    }
+                }
+                else if (image.uri)
+                {
+                    std::string uri = image.uri;
+                    cgltf_decode_uri(uri.data());
+                    uri.resize(std::strlen(uri.c_str()));
+                    im.File = (path.parent_path() / fs::u8path(uri)).lexically_normal();
+                    if (!image.name || !*image.name) im.Name = im.File.stem().string();
+                }
+                out.Images.push_back(std::move(im));
+            }
+
+            auto imageOf = [&](const cgltf_texture_view& view) -> int32_t {
+                if (!view.texture || !view.texture->image) return -1;
+                return (int32_t)(view.texture->image - data->images);
+            };
+            for (cgltf_size i = 0; i < data->materials_count; ++i)
+            {
+                const cgltf_material& src = data->materials[i];
+                ImportedMaterial m;
+                m.Name = src.name && *src.name ? src.name : "Material" + std::to_string(i);
+                Material& v = m.Values;
+                const auto& pbr = src.pbr_metallic_roughness;
+                v.BaseColor = { LinearToSrgb(pbr.base_color_factor[0]), LinearToSrgb(pbr.base_color_factor[1]),
+                                LinearToSrgb(pbr.base_color_factor[2]), pbr.base_color_factor[3] };
+                v.Metallic = pbr.metallic_factor;
+                v.Roughness = pbr.roughness_factor;
+                m.BaseColorImage = imageOf(pbr.base_color_texture);
+                m.MetallicRoughnessImage = imageOf(pbr.metallic_roughness_texture);
+                if (pbr.base_color_texture.has_transform)
+                {
+                    v.Tiling = { pbr.base_color_texture.transform.scale[0], pbr.base_color_texture.transform.scale[1] };
+                    v.Offset = { pbr.base_color_texture.transform.offset[0], pbr.base_color_texture.transform.offset[1] };
+                }
+                m.NormalImage = imageOf(src.normal_texture);
+                if (m.NormalImage >= 0) v.NormalStrength = src.normal_texture.scale;
+                v.EmissionColor = { LinearToSrgb(src.emissive_factor[0]), LinearToSrgb(src.emissive_factor[1]), LinearToSrgb(src.emissive_factor[2]) };
+                v.EmissionStrength = src.has_emissive_strength ? src.emissive_strength.emissive_strength : 1.0f;
+                m.EmissionImage = imageOf(src.emissive_texture);
+                if (src.alpha_mode == cgltf_alpha_mode_mask)
+                {
+                    v.BlendMode = MaterialBlendMode::Cutout;
+                    v.AlphaCutoff = src.alpha_cutoff;
+                }
+                else if (src.alpha_mode == cgltf_alpha_mode_blend)
+                    v.BlendMode = MaterialBlendMode::Transparent;
+                v.DoubleSided = src.double_sided;
+                out.Materials.push_back(std::move(m));
+            }
+        }
+
         bool LoadGltf(const fs::path& path, MeshData& out)
         {
             cgltf_options options{};
@@ -228,10 +318,21 @@ namespace Dimension
                 {
                     const cgltf_primitive& prim = node->mesh->primitives[p];
                     if (prim.type != cgltf_primitive_type_triangles) continue;
+                    SubMesh sub;
+                    sub.IndexOffset = (uint32_t)out.Indices.size();
+                    sub.MaterialSlot = prim.material ? (int32_t)(prim.material - data->materials) : -1;
                     ReadPrimitive(prim, transform, out, needNormals, skin ? &identity : nullptr);
+                    sub.IndexCount = (uint32_t)out.Indices.size() - sub.IndexOffset;
+                    // Consecutive primitives with the same material share one draw.
+                    if (!out.SubMeshes.empty() && out.SubMeshes.back().MaterialSlot == sub.MaterialSlot &&
+                        out.SubMeshes.back().IndexOffset + out.SubMeshes.back().IndexCount == sub.IndexOffset)
+                        out.SubMeshes.back().IndexCount += sub.IndexCount;
+                    else if (sub.IndexCount > 0)
+                        out.SubMeshes.push_back(sub);
                 }
             }
             if (skin) ReadAnimations(data, jointOf, out);
+            ReadMaterials(data, options, path, out);
             cgltf_free(data);
 
             if (skipped) Log::Warn("glTF '{}': {} unskinned mesh node(s) ignored in a skinned file", path.filename().string(), skipped);
@@ -309,21 +410,26 @@ namespace Dimension
         out.Name = path.filename().string();
         auto ext = path.extension().string();
         for (auto& c : ext) c = (char)std::tolower(c);
-        if (ext == ".gltf" || ext == ".glb") return LoadGltf(path, out);
-        if (ext == ".obj") return LoadObj(path, out);
-        Log::Error("Unsupported mesh format '{}'", ext);
-        return false;
+        bool ok = false;
+        if (ext == ".gltf" || ext == ".glb") ok = LoadGltf(path, out);
+        else if (ext == ".obj") ok = LoadObj(path, out);
+        else Log::Error("Unsupported mesh format '{}'", ext);
+        if (ok && out.SubMeshes.empty()) out.SubMeshes.push_back({ 0, (uint32_t)out.Indices.size(), -1 });
+        return ok;
     }
 
     Mesh::Mesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name)
         : m_Name(name)
     {
         Upload(vertices, indices);
+        m_SubMeshes.push_back({ 0, m_IndexCount, -1 });
     }
 
-    Mesh::Mesh(MeshData&& data) : m_Name(std::move(data.Name)), m_Skeleton(std::move(data.SkeletonData)), m_Clips(std::move(data.Clips))
+    Mesh::Mesh(MeshData&& data)
+        : m_Name(std::move(data.Name)), m_Skeleton(std::move(data.SkeletonData)), m_Clips(std::move(data.Clips)), m_SubMeshes(std::move(data.SubMeshes))
     {
         Upload(data.Vertices, data.Indices);
+        if (m_SubMeshes.empty()) m_SubMeshes.push_back({ 0, m_IndexCount, -1 });
         if (m_Skeleton && data.Skin.size() == data.Vertices.size())
         {
             m_SkinBuffer = Buffer::CreateWithData(data.Skin.data(), data.Skin.size() * sizeof(SkinVertex),
@@ -359,6 +465,16 @@ namespace Dimension
         vkCmdBindIndexBuffer(cmd, m_IndexBuffer.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
     }
 
+    MeshData MeshData::FromArrays(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name)
+    {
+        MeshData d;
+        d.Name = name;
+        d.Vertices = std::move(vertices);
+        d.Indices = std::move(indices);
+        d.SubMeshes.push_back({ 0, (uint32_t)d.Indices.size(), -1 });
+        return d;
+    }
+
     Ref<Mesh> Mesh::LoadFromFile(const fs::path& path)
     {
         MeshData data;
@@ -366,7 +482,7 @@ namespace Dimension
         return MakeRef<Mesh>(std::move(data));
     }
 
-    Ref<Mesh> Mesh::CreateCube()
+    MeshData MeshData::Cube()
     {
         struct Face { glm::vec3 n, u, v; };
         const Face faces[] = {
@@ -387,10 +503,10 @@ namespace Dimension
             idx.insert(idx.end(), { base, base + 1, base + 2, base, base + 2, base + 3 });
         }
         FixWinding(v, idx);
-        return MakeRef<Mesh>(std::move(v), std::move(idx), "Cube");
+        return FromArrays(std::move(v), std::move(idx), "Cube");
     }
 
-    Ref<Mesh> Mesh::CreateSphere(uint32_t segments, uint32_t rings)
+    MeshData MeshData::Sphere(uint32_t segments, uint32_t rings)
     {
         std::vector<Vertex> v;
         std::vector<uint32_t> idx;
@@ -412,10 +528,10 @@ namespace Dimension
                 if (r != rings - 1) idx.insert(idx.end(), { a + 1, b, b + 1 });
             }
         FixWinding(v, idx);
-        return MakeRef<Mesh>(std::move(v), std::move(idx), "Sphere");
+        return FromArrays(std::move(v), std::move(idx), "Sphere");
     }
 
-    Ref<Mesh> Mesh::CreatePlane()
+    MeshData MeshData::Plane()
     {
         constexpr int kDiv = 10;
         std::vector<Vertex> v;
@@ -430,10 +546,10 @@ namespace Dimension
                 idx.insert(idx.end(), { a, b, a + 1, a + 1, b, b + 1 });
             }
         FixWinding(v, idx);
-        return MakeRef<Mesh>(std::move(v), std::move(idx), "Plane");
+        return FromArrays(std::move(v), std::move(idx), "Plane");
     }
 
-    Ref<Mesh> Mesh::CreateQuad()
+    MeshData MeshData::Quad()
     {
         std::vector<Vertex> v = {
             { { -0.5f, -0.5f, 0 }, { 0, 0, 1 }, { 0, 1 } }, { { 0.5f, -0.5f, 0 }, { 0, 0, 1 }, { 1, 1 } },
@@ -441,10 +557,10 @@ namespace Dimension
         };
         std::vector<uint32_t> idx = { 0, 1, 2, 0, 2, 3 };
         FixWinding(v, idx);
-        return MakeRef<Mesh>(std::move(v), std::move(idx), "Quad");
+        return FromArrays(std::move(v), std::move(idx), "Quad");
     }
 
-    Ref<Mesh> Mesh::CreateCylinder(uint32_t segments)
+    MeshData MeshData::Cylinder(uint32_t segments)
     {
         std::vector<Vertex> v;
         std::vector<uint32_t> idx;
@@ -475,6 +591,16 @@ namespace Dimension
             for (uint32_t s = 0; s < segments; ++s) idx.insert(idx.end(), { center, center + 1 + s, center + 2 + s });
         }
         FixWinding(v, idx);
-        return MakeRef<Mesh>(std::move(v), std::move(idx), "Cylinder");
+        return FromArrays(std::move(v), std::move(idx), "Cylinder");
     }
+
+    Ref<Mesh> Mesh::CreateCube() { return MakeRef<Mesh>(MeshData::Cube()); }
+
+    Ref<Mesh> Mesh::CreateSphere(uint32_t segments, uint32_t rings) { return MakeRef<Mesh>(MeshData::Sphere(segments, rings)); }
+
+    Ref<Mesh> Mesh::CreatePlane() { return MakeRef<Mesh>(MeshData::Plane()); }
+
+    Ref<Mesh> Mesh::CreateQuad() { return MakeRef<Mesh>(MeshData::Quad()); }
+
+    Ref<Mesh> Mesh::CreateCylinder(uint32_t segments) { return MakeRef<Mesh>(MeshData::Cylinder(segments)); }
 }

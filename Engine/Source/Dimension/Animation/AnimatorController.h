@@ -23,12 +23,32 @@ namespace Dimension
         float Threshold = 0.0f;
     };
 
+    enum class AnimMotionType : int32_t { Clip = 0, BlendTree1D = 1 };
+
+    // One motion of a 1D blend tree, placed at `Threshold` on the blend parameter.
+    struct BlendTreeChild
+    {
+        std::string Clip;
+        float Threshold = 0.0f;
+    };
+
+    // Calls OnAnimationEvent(Function) on the entity's scripts when playback passes `Time` (normalized, 0-1).
+    struct AnimEvent
+    {
+        float Time = 0.5f;
+        std::string Function = "OnStep";
+    };
+
     struct AnimState
     {
         std::string Name = "State";
-        std::string Clip;
+        AnimMotionType Motion = AnimMotionType::Clip;
+        std::string Clip;                    // Motion == Clip
+        std::string BlendParameter;          // Motion == BlendTree1D: float parameter
+        std::vector<BlendTreeChild> Children; // Motion == BlendTree1D, any order
         float Speed = 1.0f;
         bool Loop = true;
+        std::vector<AnimEvent> Events;
         glm::vec2 EditorPosition{ 0.0f }; // graph layout
     };
 
@@ -67,6 +87,7 @@ namespace Dimension
         float StateTime = 0.0f; // seconds in the current state (scaled by speed, not wrapped)
         std::unordered_map<std::string, float> Parameters;
         std::unordered_set<std::string> Triggers;
+        std::vector<std::string> FiredEvents; // animation events passed during the last Update (cleared by Update)
     };
 
     namespace AnimatorStateMachine
@@ -82,5 +103,12 @@ namespace Dimension
 
         float GetParameter(const AnimatorController& controller, const AnimatorRuntime& runtime, const std::string& name);
         float NormalizedTime(const AnimatorController& controller, const AnimatorRuntime& runtime, const ClipDurationFn& clipDuration);
+        // Seconds per loop of a state: its clip, or the weighted duration of a blend tree's children.
+        float StateDuration(const AnimatorController& controller, const AnimatorRuntime& runtime, const AnimState& state,
+                            const ClipDurationFn& clipDuration);
+        // Weight per child of a 1D blend tree (sums to 1; at most two non-zero) for the parameter value.
+        void BlendWeights(const AnimState& state, float value, std::vector<float>& weights);
+        // Appends the functions of events whose time lies in (from, to] (normalized; loops repeat every 1.0).
+        void CollectEvents(const AnimState& state, float from, float to, std::vector<std::string>& out);
     }
 }

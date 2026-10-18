@@ -1,6 +1,7 @@
 #include "EditorLayer.h"
 #include "EditorActions.h"
 #include "EditorUI.h"
+#include "EditorPreferences.h"
 #include <Dimension/Core/Input.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scene/SceneSerializer.h>
@@ -9,6 +10,7 @@
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Scene/SceneManager.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
@@ -107,12 +109,22 @@ namespace Editor
         ImGui::GetIO().IniFilename = m_IniPath.c_str();
         m_ResetLayout = !fs::exists(m_IniPath);
 
+        EditorPreferences::Get().Load();
+        ApplyPreferences();
+        m_Camera.SetFlySpeed(EditorPreferences::Get().CameraFlySpeed);
+        m_ShowGrid = EditorPreferences::Get().ShowGrid;
+        if (m_Options.OpenWindow == "Build Settings") m_ShowBuildSettings = true;
+        else if (m_Options.OpenWindow == "Preferences") m_ShowPreferences = true;
+        else if (m_Options.OpenWindow == "Project Settings") m_ShowProjectSettings = true;
+        else if (m_Options.OpenWindow == "Audio Mixer") m_ShowAudioMixer = true;
+        else if (m_Options.OpenWindow == "Tile Palette") m_ShowTilePalette = true;
+
         LoadGameModule();
         InitCSharp();
         m_SceneTarget = MakeScope<SceneRenderTarget>(m_SceneViewSize.x, m_SceneViewSize.y);
         m_GameTarget = MakeScope<SceneRenderTarget>(m_GameViewSize.x, m_GameViewSize.y);
 
-        fs::path start = AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
+        fs::path start = !m_Options.ScenePath.empty() ? fs::path(m_Options.ScenePath) : AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
         if (!start.empty() && fs::exists(start)) OpenScene(start);
         else NewScene();
 
@@ -244,7 +256,9 @@ namespace Editor
     void EditorLayer::Play()
     {
         if (m_Ctx.IsPlaying()) return;
+        if (EditorPreferences::Get().SaveSceneBeforePlay && m_Ctx.Dirty && !m_Ctx.ScenePath.empty()) SaveScene();
         if (m_Console->ClearOnPlay) m_Console->Clear();
+        SceneManager::CancelPendingLoad();
         m_Ctx.RuntimeScene = m_Ctx.EditorScene->Clone();
         m_Ctx.RuntimeScene->OnRuntimeStart();
         m_Ctx.State = PlayState::Play;
@@ -255,6 +269,7 @@ namespace Editor
     void EditorLayer::Stop()
     {
         if (!m_Ctx.IsPlaying()) return;
+        SceneManager::CancelPendingLoad();
         m_Ctx.RuntimeScene->OnRuntimeStop();
         m_Ctx.RuntimeScene.reset();
         m_Ctx.State = PlayState::Edit;
@@ -285,6 +300,7 @@ namespace Editor
 
         PollGameModule(dt);
         PollCSharp(dt);
+        Autosave(dt);
         m_SceneTarget->Resize(m_SceneViewSize.x, m_SceneViewSize.y);
         m_GameTarget->Resize(m_GameViewSize.x, m_GameViewSize.y);
 
@@ -306,8 +322,22 @@ namespace Editor
         if (m_SceneViewHovered || m_Camera.IsControlling()) m_Camera.Update(dt, m_SceneViewHovered);
 
         Input::SetGameInputEnabled(m_Ctx.IsPlaying() && m_GameViewFocused);
-        if (m_Ctx.IsPlaying()) m_Ctx.RuntimeScene->OnUpdateRuntime(dt);
-        else m_Ctx.EditorScene->OnUpdateEditor(dt);
+        if (m_Ctx.IsPlaying())
+        {
+            m_Ctx.RuntimeScene->OnUpdateRuntime(dt);
+            // SceneManager::LoadScene from scripts: swap the play-mode scene; Stop returns to the edited scene.
+            if (SceneManager::HasPendingLoad())
+                if (auto next = SceneManager::LoadPending())
+                {
+                    m_Ctx.RuntimeScene->OnRuntimeStop();
+                    m_Ctx.Select(Entity::Null());
+                    m_Ctx.RuntimeScene = next;
+                    m_Ctx.RuntimeScene->OnRuntimeStart();
+                    UpdateWindowTitle();
+                }
+        }
+        else
+            m_Ctx.EditorScene->OnUpdateEditor(dt);
 
         if (auto pick = m_SceneTarget->PollPick())
         {
@@ -426,9 +456,21 @@ namespace Editor
         DrawGameView();
         DrawSceneView();
         if (m_ShowProjectSettings) DrawProjectSettings();
+        if (m_ShowBuildSettings) DrawBuildSettings();
+        if (m_ShowPreferences) DrawPreferences();
+        if (m_ShowAudioMixer) DrawAudioMixer();
+        if (m_ShowTilePalette) DrawTilePalette();
         if (m_ShowAbout) DrawAbout();
         if (m_ShowImGuiDemo) ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
         HandleShortcuts();
+        if (!m_Options.BuildFolder.empty() && !m_BatchBuildDone)
+        {
+            m_BatchBuildDone = true;
+            bool ok = BuildGame(false, m_Options.BuildFolder);
+            if (m_OptionsOut) m_OptionsOut->BuildSucceeded = ok;
+            Log::Info("Batch build {}", ok ? "succeeded" : "FAILED");
+            Application::Get().Close();
+        }
         if (!m_Options.FocusWindow.empty() && m_FocusRequestFrames > 0 && --m_FocusRequestFrames == 0)
             ImGui::SetWindowFocus(m_Options.FocusWindow.c_str());
         style = saved;
@@ -454,6 +496,7 @@ namespace Editor
         ImGui::DockBuilderDockWindow("Project", bottom);
         ImGui::DockBuilderDockWindow("Console", bottom);
         ImGui::DockBuilderDockWindow("Animator", bottom);
+        ImGui::DockBuilderDockWindow("Audio Mixer", bottom);
         ImGui::DockBuilderFinish(id);
     }
 
@@ -505,7 +548,8 @@ namespace Editor
                 }
             }
             if (ImGui::MenuItem("Project Settings...")) m_ShowProjectSettings = true;
-            if (ImGui::MenuItem("Build Game...", nullptr, false, !m_Ctx.IsPlaying())) BuildGame();
+            if (ImGui::MenuItem("Build Settings...", "Ctrl+Shift+B")) m_ShowBuildSettings = true;
+            if (ImGui::MenuItem("Build And Run", "Ctrl+B", false, !m_Ctx.IsPlaying())) BuildGame(true, Project::GetConfig().BuildFolder);
             ImGui::Separator();
             if (ImGui::MenuItem("Exit")) Application::Get().GetWindow().SetShouldClose(OnCloseRequested());
             ImGui::EndMenu();
@@ -518,6 +562,8 @@ namespace Editor
             if (ImGui::MenuItem("Copy", "Ctrl+C", false, m_Ctx.HasValidSelection())) CopySelected(m_Ctx);
             if (ImGui::MenuItem("Paste", "Ctrl+V", false, !m_Ctx.IsPlaying())) PasteClipboard(m_Ctx);
             if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_Ctx.HasValidSelection())) DuplicateSelected(m_Ctx);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Preferences...")) m_ShowPreferences = true;
             if (ImGui::MenuItem("Delete", "Del", false, m_Ctx.HasValidSelection())) DeleteSelected(m_Ctx);
             if (ImGui::MenuItem("Frame Selected", "F", false, m_Ctx.HasValidSelection())) FocusSelected();
             ImGui::Separator();
@@ -554,6 +600,8 @@ namespace Editor
             ImGui::MenuItem("Console", nullptr, &m_ShowConsole);
             ImGui::MenuItem("Scene Settings", nullptr, &m_ShowSceneSettings);
             ImGui::MenuItem("Animator", nullptr, &m_ShowAnimator);
+            ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
+            ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);
             ImGui::Separator();
             if (ImGui::MenuItem("Reset Layout")) m_ResetLayout = true;
@@ -691,9 +739,11 @@ namespace Editor
             ImGui::EndDragDropTarget();
         }
 
+        bool tilePainting = UpdateTilePainting(origin, avail);
+
         // Transform gizmo
         bool gizmoHovered = false;
-        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling())
+        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting)
         {
             auto& reg = scene.GetRegistry();
             auto& t = reg.Get<TransformComponent>(m_Ctx.Selected);
@@ -764,7 +814,7 @@ namespace Editor
 
         // Click to select (GPU picking)
         bool alt = ImGui::GetIO().KeyAlt;
-        if (m_SceneViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !gizmoHovered && !alt)
+        if (m_SceneViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !gizmoHovered && !alt && !tilePainting)
         {
             ImVec2 mouse = ImGui::GetMousePos();
             m_SceneTarget->RequestPick((uint32_t)(mouse.x - origin.x), (uint32_t)(mouse.y - origin.y));
@@ -807,7 +857,8 @@ namespace Editor
             ImVec2 mouse = ImGui::GetMousePos();
             m_Ctx.RuntimeScene->SetUIInput({ mouse.x - origin.x, mouse.y - origin.y },
                                            imageHovered && ImGui::IsMouseDown(ImGuiMouseButton_Left),
-                                           { avail.x, avail.y }, imageHovered || ImGui::IsMouseDown(ImGuiMouseButton_Left));
+                                           { avail.x, avail.y }, imageHovered || ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                                           imageHovered ? ImGui::GetIO().MouseWheel : 0.0f);
         }
         if (m_Ctx.ActiveScene().GetPrimaryCamera().IsNull())
         {
@@ -866,6 +917,58 @@ namespace Editor
             changed |= ImGui::InputScalar("##h", ImGuiDataType_U32, &config.WindowHeight);
             UI::EndProperties();
         }
+        if (ImGui::CollapsingHeader("Physics Layers"))
+        {
+            ImGui::TextDisabled("Layers 0-1 are built in. Name a layer to use it.");
+            for (int i = 0; i < ProjectConfig::kMaxLayers; ++i)
+            {
+                ImGui::PushID(i);
+                ImGui::Text("%2d", i);
+                ImGui::SameLine(40);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (i < 2)
+                    ImGui::TextDisabled("%s", config.PhysicsLayers[i].c_str());
+                else
+                    changed |= ImGui::InputText("##layer", &config.PhysicsLayers[i]);
+                ImGui::PopID();
+            }
+        }
+        if (ImGui::CollapsingHeader("Layer Collision Matrix"))
+        {
+            // Unity-style triangle: row i, column j (j <= i) for named layers.
+            std::vector<int> named;
+            for (int i = 0; i < ProjectConfig::kMaxLayers; ++i)
+                if (!config.PhysicsLayers[i].empty()) named.push_back(i);
+            if (ImGui::BeginTable("##matrix", (int)named.size() + 1, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Borders))
+            {
+                ImGui::TableSetupColumn("");
+                for (int j : named) ImGui::TableSetupColumn(std::to_string(j).c_str());
+                ImGui::TableHeadersRow();
+                for (int i : named)
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d: %s", i, config.PhysicsLayers[i].c_str());
+                    for (int j : named)
+                    {
+                        ImGui::TableNextColumn();
+                        if (j > i) continue;
+                        bool on = config.LayersCollide(i, j);
+                        ImGui::PushID(i * 64 + j);
+                        if (ImGui::Checkbox("##c", &on))
+                        {
+                            config.SetLayersCollide(i, j, on);
+                            changed = true;
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s <-> %s", config.PhysicsLayers[i].c_str(), config.PhysicsLayers[j].c_str());
+                        ImGui::PopID();
+                    }
+                }
+                ImGui::EndTable();
+            }
+            ImGui::TextDisabled("Changes apply the next time play mode starts.");
+        }
         ImGui::TextDisabled("Project folder: %s", Project::GetDirectory().string().c_str());
         if (changed) Project::Save();
         ImGui::End();
@@ -893,6 +996,11 @@ namespace Editor
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) shift ? SaveSceneAs() : SaveScene();
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false) && ConfirmDiscardChanges()) NewScene();
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_R, false)) BuildGameModule();
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false))
+        {
+            if (shift) m_ShowBuildSettings = true;
+            else if (!m_Ctx.IsPlaying()) BuildGame(true, Project::GetConfig().BuildFolder);
+        }
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
         {
             auto p = FileDialogs::OpenFile({ { L"Scene", L"*.scene" } }, AssetManager::GetAssetsDirectory());
@@ -918,43 +1026,472 @@ namespace Editor
         }
     }
 
-    void EditorLayer::BuildGame()
+    void EditorLayer::ApplyPreferences()
     {
-        if (!SaveScene()) return;
-        auto& config = Project::GetConfig();
-        if (!config.StartScene.IsValid())
+        auto& prefs = EditorPreferences::Get();
+        ImGui::GetStyle().FontScaleMain = std::clamp(prefs.UIScale, 0.5f, 3.0f);
+        m_Camera.FieldOfView = std::clamp(prefs.CameraFieldOfView, 10.0f, 150.0f);
+        if (m_Console) m_Console->ClearOnPlay = prefs.ClearConsoleOnPlay;
+    }
+
+    void EditorLayer::DrawPreferences()
+    {
+        ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Appearing);
+        if (!ImGui::Begin("Preferences", &m_ShowPreferences, ImGuiWindowFlags_NoDocking))
         {
-            Log::Error("Set a start scene in Project Settings before building");
+            ImGui::End();
             return;
         }
-        auto dest = FileDialogs::PickFolder(Project::GetDirectory());
-        if (!dest) return;
+        auto& prefs = EditorPreferences::Get();
+        bool changed = false;
+        ImGui::SeparatorText("Interface");
+        if (UI::BeginProperties("PrefsUI"))
+        {
+            UI::PropertyLabel("UI Scale");
+            changed |= ImGui::SliderFloat("##scale", &prefs.UIScale, 0.75f, 2.0f, "%.2f");
+            UI::PropertyLabel("Clear Console On Play");
+            changed |= ImGui::Checkbox("##clear", &prefs.ClearConsoleOnPlay);
+            UI::EndProperties();
+        }
+        ImGui::SeparatorText("Scene View");
+        if (UI::BeginProperties("PrefsScene"))
+        {
+            UI::PropertyLabel("Camera Fly Speed", "Starting speed; the mouse wheel changes it while flying");
+            if (ImGui::DragFloat("##fly", &prefs.CameraFlySpeed, 0.1f, 0.1f, 500.0f))
+            {
+                m_Camera.SetFlySpeed(prefs.CameraFlySpeed);
+                changed = true;
+            }
+            UI::PropertyLabel("Field Of View");
+            changed |= ImGui::SliderFloat("##fov", &prefs.CameraFieldOfView, 20.0f, 120.0f, "%.0f deg");
+            UI::PropertyLabel("Show Grid");
+            if (ImGui::Checkbox("##grid", &prefs.ShowGrid))
+            {
+                m_ShowGrid = prefs.ShowGrid;
+                changed = true;
+            }
+            UI::EndProperties();
+        }
+        ImGui::SeparatorText("Saving");
+        if (UI::BeginProperties("PrefsSave"))
+        {
+            UI::PropertyLabel("Autosave (minutes)", "Backs up the open scene to .dimension/Autosave; 0 turns it off");
+            changed |= ImGui::DragFloat("##autosave", &prefs.AutosaveMinutes, 0.1f, 0.0f, 120.0f, "%.1f");
+            UI::PropertyLabel("Save Scene Before Play");
+            changed |= ImGui::Checkbox("##saveplay", &prefs.SaveSceneBeforePlay);
+            UI::EndProperties();
+        }
+        ImGui::TextDisabled("Stored in %s", EditorPreferences::FilePath().string().c_str());
+        if (changed)
+        {
+            ApplyPreferences();
+            prefs.Save();
+        }
+        ImGui::End();
+    }
+
+    void EditorLayer::DrawAudioMixer()
+    {
+        // First appearance in an existing layout: dock next to the Console instead of floating.
+        if (ImGuiWindow* console = ImGui::FindWindowByName("Console"); console && console->DockId)
+            ImGui::SetNextWindowDockID(console->DockId, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(720, 300), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Audio Mixer", &m_ShowAudioMixer))
+        {
+            ImGui::End();
+            return;
+        }
+        auto& groups = AudioMixer::Groups();
+        bool live = false, structure = false, save = false;
+        int remove = -1;
+        const float stripW = 150.0f;
+        ImGui::TextDisabled("Audio Sources pick a group in their Output field. Volume, mute, solo and low-pass apply live;"
+                            " new groups and parents apply when play starts.");
+        if (ImGui::BeginChild("##strips", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
+        {
+            for (int i = 0; i < (int)groups.size(); ++i)
+            {
+                auto& g = groups[i];
+                if (i > 0) ImGui::SameLine();
+                ImGui::PushID(i);
+                ImGui::BeginGroup();
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, i == 0 ? ImVec4(0.17f, 0.2f, 0.26f, 1) : ImVec4(0.15f, 0.15f, 0.17f, 1));
+                ImGui::BeginChild("##strip", ImVec2(stripW, 0), ImGuiChildFlags_Borders);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (i == 0) ImGui::TextUnformatted(g.Name.c_str());
+                else
+                {
+                    ImGui::InputText("##name", &g.Name);
+                    save |= ImGui::IsItemDeactivatedAfterEdit();
+                }
+                // Left: full-height fader. Right: readout and controls (fits short docks).
+                float faderH = std::max(40.0f, ImGui::GetContentRegionAvail().y);
+                if (ImGui::VSliderFloat("##db", ImVec2(28, faderH), &g.VolumeDb, AudioMixer::kSilentDb, 10.0f, "", ImGuiSliderFlags_None)) live = true;
+                save |= ImGui::IsItemDeactivatedAfterEdit();
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { g.VolumeDb = 0.0f; live = save = true; }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volume (double-click: 0 dB)");
+                ImGui::SameLine();
+                ImGui::BeginGroup();
+                float controlsW = ImGui::GetContentRegionAvail().x;
+                ImGui::Text(g.VolumeDb <= AudioMixer::kSilentDb ? "-inf dB" : "%.1f dB", g.VolumeDb);
+                auto toggle = [&](const char* label, bool& value, ImVec4 on, const char* tip) {
+                    if (value) ImGui::PushStyleColor(ImGuiCol_Button, on);
+                    if (ImGui::Button(label, ImVec2((controlsW - ImGui::GetStyle().ItemSpacing.x) * 0.5f, 0))) { value = !value; live = save = true; }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                    if (value) ImGui::PopStyleColor();
+                };
+                toggle("M", g.Mute, ImVec4(0.75f, 0.3f, 0.25f, 1), "Mute");
+                ImGui::SameLine();
+                toggle("S", g.Solo, ImVec4(0.75f, 0.65f, 0.2f, 1), "Solo");
+                ImGui::SetNextItemWidth(controlsW);
+                if (ImGui::DragFloat("##lpf", &g.LowPassHz, 25.0f, 0.0f, 20000.0f, g.LowPassHz <= 0.0f ? "LPF off" : "LPF %.0f")) live = true;
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Low-pass cutoff in Hz (0 = off)");
+                save |= ImGui::IsItemDeactivatedAfterEdit();
+                if (i > 0)
+                {
+                    ImGui::SetNextItemWidth(controlsW);
+                    const char* parentName = g.Parent >= 0 && g.Parent < (int)groups.size() ? groups[g.Parent].Name.c_str() : "Master";
+                    if (ImGui::BeginCombo("##parent", parentName))
+                    {
+                        for (int p = 0; p < (int)groups.size(); ++p)
+                            if (p != i && ImGui::Selectable(groups[p].Name.c_str(), p == g.Parent))
+                            {
+                                g.Parent = p;
+                                structure = save = true;
+                            }
+                        ImGui::EndCombo();
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Output (parent group)");
+                    if (ImGui::Button("Remove", ImVec2(controlsW, 0))) remove = i;
+                }
+                ImGui::EndGroup();
+                ImGui::EndChild();
+                ImGui::PopStyleColor();
+                ImGui::EndGroup();
+                ImGui::PopID();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+ Group", ImVec2(80, 0)))
+            {
+                AudioMixerGroup g;
+                g.Name = "Group " + std::to_string(groups.size());
+                groups.push_back(g);
+                structure = save = true;
+            }
+        }
+        ImGui::EndChild();
+        if (remove > 0)
+        {
+            int parent = groups[remove].Parent;
+            groups.erase(groups.begin() + remove);
+            for (auto& g : groups)
+            {
+                if (g.Parent == remove) g.Parent = parent > remove ? parent - 1 : parent;
+                else if (g.Parent > remove) --g.Parent;
+            }
+            structure = save = true;
+        }
+        if (live) AudioMixer::Apply();
+        if (structure) AudioMixer::MarkStructureDirty();
+        if (save) Project::Save();
+        ImGui::End();
+    }
+
+    void EditorLayer::DrawTilePalette()
+    {
+        ImGui::SetNextWindowSize(ImVec2(300, 360), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Tile Palette", &m_ShowTilePalette))
+        {
+            ImGui::End();
+            return;
+        }
+        Scene& scene = m_Ctx.ActiveScene();
+        auto* tm = m_Ctx.HasValidSelection() ? scene.GetRegistry().TryGet<TilemapComponent>(m_Ctx.Selected) : nullptr;
+        if (!tm)
+        {
+            ImGui::TextWrapped("Select an entity with a Tilemap (GameObject > 2D Object > Tilemap) to paint it.");
+            ImGui::End();
+            return;
+        }
+        ImGui::RadioButton("Paint", &m_TileTool, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("Erase", &m_TileTool, 1);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(Shift: erase)");
+        ImGui::TextDisabled("%zu tiles. Left-drag in the Scene view.", tm->Count());
+
+        auto tex = AssetManager::GetTexture(tm->Tileset);
+        int cols = std::max(1, tm->Columns), rows = std::max(1, tm->Rows), count = cols * rows;
+        m_TileBrush = std::clamp(m_TileBrush, 0, count - 1);
+        if (!tex) ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "Assign a Tileset texture to the Tilemap.");
+        else
+        {
+            float cell = 48.0f, spacing = ImGui::GetStyle().ItemSpacing.x;
+            int perRow = std::max(1, (int)((ImGui::GetContentRegionAvail().x + spacing) / (cell + spacing + 8)));
+            for (int i = 0; i < count; ++i)
+            {
+                ImGui::PushID(i);
+                ImVec2 uv0((float)(i % cols) / cols, (float)(i / cols) / rows), uv1(uv0.x + 1.0f / cols, uv0.y + 1.0f / rows);
+                bool selected = i == m_TileBrush;
+                if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.55f, 0.95f, 1));
+                if (ImGui::ImageButton("##tile", ImTextureRef((ImTextureID)tex->GetImGuiId()), ImVec2(cell, cell), uv0, uv1)) { m_TileBrush = i; m_TileTool = 0; }
+                if (selected) ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tile %d", i);
+                if ((i + 1) % perRow != 0 && i + 1 < count) ImGui::SameLine();
+                ImGui::PopID();
+            }
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("Clear All Tiles") && FileDialogs::Confirm("Clear Tilemap", "Remove every tile from this tilemap?"))
+        {
+            m_Ctx.RecordUndo();
+            tm->Clear();
+            m_Ctx.MarkDirty();
+        }
+        ImGui::End();
+    }
+
+    bool EditorLayer::UpdateTilePainting(const ImVec2& origin, const ImVec2& size)
+    {
+        if (!m_ShowTilePalette || !m_Ctx.HasValidSelection() || m_Camera.IsControlling())
+        {
+            m_TileStroke = false;
+            return false;
+        }
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        auto* tm = reg.TryGet<TilemapComponent>(m_Ctx.Selected);
+        if (!tm || !m_SceneViewHovered)
+        {
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_TileStroke = false;
+            return m_TileStroke;
+        }
+        auto& t = reg.Get<TransformComponent>(m_Ctx.Selected);
+
+        // Mouse ray -> the tilemap's local XY plane.
+        glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
+        glm::mat4 inv = glm::inverse(viewProj);
+        ImVec2 mouse = ImGui::GetMousePos();
+        glm::vec2 ndc((mouse.x - origin.x) / size.x * 2.0f - 1.0f, 1.0f - (mouse.y - origin.y) / size.y * 2.0f);
+        glm::vec4 a = inv * glm::vec4(ndc, 0.0f, 1.0f), b = inv * glm::vec4(ndc, 1.0f, 1.0f);
+        glm::mat4 invWorld = glm::inverse(t.World);
+        glm::vec3 la = glm::vec3(invWorld * (a / a.w)), lb = glm::vec3(invWorld * (b / b.w));
+        if (std::abs(la.z - lb.z) < 1e-6f) return false;
+        float s = la.z / (la.z - lb.z);
+        glm::vec3 hit = la + (lb - la) * s;
+        glm::ivec2 cell = tm->LocalToCell(glm::vec2(hit));
+
+        // Hover outline.
+        float cs = tm->CellSize;
+        auto toScreen = [&](float x, float y) {
+            glm::vec4 c = viewProj * (t.World * glm::vec4(x, y, 0.0f, 1.0f));
+            glm::vec2 n = glm::vec2(c) / c.w;
+            return ImVec2(origin.x + (n.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - n.y * 0.5f) * size.y);
+        };
+        bool erase = m_TileTool == 1 || ImGui::GetIO().KeyShift;
+        ImU32 col = erase ? IM_COL32(255, 90, 80, 255) : IM_COL32(90, 200, 255, 255);
+        ImGui::GetWindowDrawList()->AddQuad(toScreen(cell.x * cs, cell.y * cs), toScreen((cell.x + 1) * cs, cell.y * cs),
+                                            toScreen((cell.x + 1) * cs, (cell.y + 1) * cs), toScreen(cell.x * cs, (cell.y + 1) * cs), col, 2.0f);
+
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
+        {
+            m_Ctx.RecordUndo(); // one undo step per stroke
+            m_TileStroke = true;
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_TileStroke = false;
+        if (m_TileStroke)
+        {
+            int tile = erase ? -1 : m_TileBrush;
+            if (tm->GetTile(cell.x, cell.y) != tile)
+            {
+                tm->SetTile(cell.x, cell.y, tile);
+                m_Ctx.MarkDirty();
+            }
+        }
+        return true; // the palette owns left clicks over a selected tilemap
+    }
+
+    void EditorLayer::Autosave(float dt)
+    {
+        float minutes = EditorPreferences::Get().AutosaveMinutes;
+        if (minutes <= 0.0f || m_Ctx.IsPlaying() || !m_Ctx.Dirty) return;
+        m_AutosaveTimer += dt;
+        if (m_AutosaveTimer < minutes * 60.0f) return;
+        m_AutosaveTimer = 0.0f;
+        // A backup copy: the real scene file is only written by Save.
+        fs::path dir = Project::GetDirectory() / ".dimension" / "Autosave";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        std::string name = m_Ctx.ScenePath.empty() ? m_Ctx.EditorScene->GetName() : m_Ctx.ScenePath.stem().string();
+        fs::path file = dir / (name + ".scene");
+        if (SceneSerializer::SaveToFile(*m_Ctx.EditorScene, file)) Log::Trace("Autosaved a backup of '{}' to {}", name, file.string());
+    }
+
+    void EditorLayer::DrawBuildSettings()
+    {
+        ImGui::SetNextWindowSize(ImVec2(520, 520), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Build Settings", &m_ShowBuildSettings, ImGuiWindowFlags_NoDocking))
+        {
+            ImGui::End();
+            return;
+        }
+        auto& config = Project::GetConfig();
+        bool changed = false;
+
+        ImGui::SeparatorText("Scenes In Build");
+        auto& scenes = config.BuildScenes;
+        int moveUp = -1, remove = -1;
+        if (ImGui::BeginChild("##scenes", ImVec2(0, 170), ImGuiChildFlags_Borders))
+        {
+            if (scenes.empty())
+                ImGui::TextDisabled(config.StartScene.IsValid() ? "Empty: the Start Scene is built alone." : "Drag scenes here from the Project panel.");
+            for (int i = 0; i < (int)scenes.size(); ++i)
+            {
+                ImGui::PushID(i);
+                bool missing = !AssetManager::GetMetadata(scenes[i]);
+                ImGui::Text("%d", i);
+                ImGui::SameLine(32);
+                if (missing) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "(missing scene)");
+                else ImGui::TextUnformatted(AssetManager::GetDisplayName(scenes[i]).c_str());
+                ImGui::SameLine(ImGui::GetContentRegionAvail().x - 70);
+                ImGui::BeginDisabled(i == 0);
+                if (ImGui::ArrowButton("##up", ImGuiDir_Up)) moveUp = i;
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Remove")) remove = i;
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(UI::kAssetPayload))
+            {
+                AssetHandle h(*(const uint64_t*)payload->Data);
+                auto* meta = AssetManager::GetMetadata(h);
+                if (meta && meta->Type == AssetType::Scene && std::find(scenes.begin(), scenes.end(), h) == scenes.end())
+                {
+                    scenes.push_back(h);
+                    changed = true;
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+        if (moveUp > 0) { std::swap(scenes[moveUp], scenes[moveUp - 1]); changed = true; }
+        if (remove >= 0) { scenes.erase(scenes.begin() + remove); changed = true; }
+        if (ImGui::Button("Add Open Scene"))
+        {
+            AssetHandle current = m_Ctx.ScenePath.empty() ? AssetHandle::None() : AssetManager::GetHandle(m_Ctx.ScenePath);
+            if (!current.IsValid()) Log::Warn("Save the scene inside the Assets folder before adding it to the build");
+            else if (std::find(scenes.begin(), scenes.end(), current) == scenes.end())
+            {
+                scenes.push_back(current);
+                changed = true;
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Scene 0 starts the game. Scripts load others with SceneManager::LoadScene.");
+
+        ImGui::SeparatorText("Player");
+        if (UI::BeginProperties("BuildPlayer"))
+        {
+            UI::PropertyLabel("Product Name");
+            changed |= ImGui::InputText("##name", &config.Name);
+            UI::PropertyLabel("Window Size");
+            int size[2] = { (int)config.WindowWidth, (int)config.WindowHeight };
+            if (ImGui::InputInt2("##size", size))
+            {
+                config.WindowWidth = (uint32_t)std::clamp(size[0], 320, 7680);
+                config.WindowHeight = (uint32_t)std::clamp(size[1], 200, 4320);
+                changed = true;
+            }
+            UI::PropertyLabel("Fullscreen", "Borderless fullscreen; Alt+Enter toggles in the game");
+            changed |= ImGui::Checkbox("##fs", &config.Fullscreen);
+            UI::PropertyLabel("VSync");
+            changed |= ImGui::Checkbox("##vsync", &config.VSync);
+            UI::EndProperties();
+        }
+
+        ImGui::SeparatorText("Output");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 80);
+        changed |= ImGui::InputTextWithHint("##folder", "Output folder", &config.BuildFolder);
+        ImGui::SameLine();
+        if (ImGui::Button("Browse..."))
+            if (auto folder = FileDialogs::PickFolder(config.BuildFolder.empty() ? Project::GetDirectory() : fs::path(config.BuildFolder)))
+            {
+                config.BuildFolder = folder->string();
+                changed = true;
+            }
+        if (changed) Project::Save();
+
+        ImGui::Spacing();
+        ImGui::BeginDisabled(m_Ctx.IsPlaying());
+        if (ImGui::Button("Build", ImVec2(120, 0))) BuildGame(false, config.BuildFolder);
+        ImGui::SameLine();
+        if (ImGui::Button("Build And Run", ImVec2(120, 0))) BuildGame(true, config.BuildFolder);
+        ImGui::EndDisabled();
+        ImGui::End();
+    }
+
+    bool EditorLayer::BuildGame(bool run, fs::path folder)
+    {
+        bool batch = !m_Options.BuildFolder.empty();
+        if (!batch && !SaveScene()) return false;
+        auto& config = Project::GetConfig();
+        auto scenes = SceneManager::GetBuildScenes();
+        if (scenes.empty())
+        {
+            Log::Error("Add scenes in File > Build Settings (or set a start scene) before building");
+            m_ShowBuildSettings = true;
+            return false;
+        }
+        for (AssetHandle h : scenes)
+            if (!AssetManager::GetMetadata(h))
+            {
+                Log::Error("Build Settings lists a missing scene; remove it first");
+                m_ShowBuildSettings = true;
+                return false;
+            }
+        if (folder.empty())
+        {
+            auto picked = FileDialogs::PickFolder(Project::GetDirectory());
+            if (!picked) return false;
+            folder = *picked;
+        }
+        if (!batch && config.BuildFolder != folder.string())
+        {
+            config.BuildFolder = folder.string();
+            Project::Save();
+        }
 
         std::error_code ec;
-        fs::path player = ExecutableDirectory() / "DimensionPlayer.exe";
+        // The shipping runtime has no console window; fall back to the dev player if it is missing.
+        fs::path player = ExecutableDirectory() / "DimensionGame.exe";
+        if (!fs::exists(player)) player = ExecutableDirectory() / "DimensionPlayer.exe";
         if (!fs::exists(player))
         {
-            Log::Error("Player runtime not found at '{}'", player.string());
-            return;
+            Log::Error("Player runtime not found next to the editor");
+            return false;
         }
         std::string exeName = config.Name.empty() ? "Game" : config.Name;
-        fs::create_directories(*dest, ec);
-        fs::copy_file(player, *dest / (exeName + ".exe"), fs::copy_options::overwrite_existing, ec);
+        fs::create_directories(folder, ec);
+        fs::path exe = folder / (exeName + ".exe");
+        fs::copy_file(player, exe, fs::copy_options::overwrite_existing, ec);
         if (ec)
         {
-            Log::Error("Copying player failed: {}", ec.message());
-            return;
+            Log::Error("Copying the player failed: {} (is the game still running?)", ec.message());
+            return false;
         }
         for (const char* dll : { "DimensionEngine.dll" })
-            fs::copy_file(ExecutableDirectory() / dll, *dest / dll, fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(ExecutableDirectory() / dll, folder / dll, fs::copy_options::overwrite_existing, ec);
         fs::path module = ExecutableDirectory() / (config.GameModule + ".dll");
-        if (fs::exists(module)) fs::copy_file(module, *dest / module.filename(), fs::copy_options::overwrite_existing, ec);
+        if (fs::exists(module)) fs::copy_file(module, folder / module.filename(), fs::copy_options::overwrite_existing, ec);
         if (fs::exists(ExecutableDirectory() / "nethost.dll"))
         {
-            fs::copy_file(ExecutableDirectory() / "nethost.dll", *dest / "nethost.dll", fs::copy_options::overwrite_existing, ec);
-            fs::copy(ExecutableDirectory() / "managed", *dest / "managed", fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(ExecutableDirectory() / "nethost.dll", folder / "nethost.dll", fs::copy_options::overwrite_existing, ec);
+            fs::copy(ExecutableDirectory() / "managed", folder / "managed", fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
         }
-        fs::path projectOut = *dest / "Project";
+        fs::path projectOut = folder / "Project";
         fs::remove_all(projectOut, ec);
         fs::create_directories(projectOut, ec);
         fs::copy_file(Project::GetDirectory() / Project::kFileName, projectOut / Project::kFileName, ec);
@@ -969,10 +1506,12 @@ namespace Editor
         if (ec)
         {
             Log::Error("Copying assets failed: {}", ec.message());
-            return;
+            return false;
         }
-        Log::Info("Built '{}' to {}", exeName, dest->string());
-        FileDialogs::OpenWithDefaultApp(*dest);
+        Log::Info("Built '{}' ({} scene(s)) to {}", exeName, scenes.size(), folder.string());
+        if (run) FileDialogs::OpenWithDefaultApp(exe);
+        else if (!batch) FileDialogs::OpenWithDefaultApp(folder);
+        return true;
     }
 
     // ---- Game module (hot reload) ------------------------------------------------------------

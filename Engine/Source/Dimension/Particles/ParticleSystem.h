@@ -1,6 +1,9 @@
 #pragma once
 #include "Dimension/Core/Guid.h"
+#include "Dimension/Core/Curve.h"
+#include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -11,9 +14,13 @@ namespace Dimension
     enum class ParticleShape : int32_t { Cone = 0, Sphere = 1, Box = 2, Point = 3 };
     enum class ParticleSpace : int32_t { Local = 0, World = 1 };
     enum class ParticleBlend : int32_t { Alpha = 0, Additive = 1 };
+    enum class ParticleCollision : int32_t { None = 0, Plane = 1, World = 2 };
+    enum class ParticleSubEmitTrigger : int32_t { Birth = 0, Collision = 1, Death = 2 };
 
     struct Particle
     {
+        static constexpr int kTrailPoints = 12;
+
         glm::vec3 Position;
         glm::vec3 Velocity;
         glm::vec4 Color;
@@ -22,6 +29,10 @@ namespace Dimension
         float Size;
         float Rotation;        // radians
         float AngularVelocity; // radians per second
+        // Trail history, newest first (same space as Position).
+        std::array<glm::vec3, kTrailPoints> Trail;
+        uint8_t TrailCount = 0;
+        float TrailTimer = 0.0f;
     };
 
     // CPU particle emitter (a compact take on Unity's ParticleSystem modules).
@@ -46,7 +57,7 @@ namespace Dimension
 
         // Emission
         float RateOverTime = 20.0f;
-        int32_t BurstCount = 0;                     // emitted once when the system starts
+        int32_t BurstCount = 0;                     // emitted when the system starts (and each loop)
 
         // Shape
         ParticleShape Shape = ParticleShape::Cone;
@@ -54,9 +65,28 @@ namespace Dimension
         float ShapeRadius = 0.25f;
         glm::vec3 BoxSize{ 1.0f };
 
-        // Over lifetime
-        glm::vec4 EndColor{ 1.0f, 1.0f, 1.0f, 0.0f }; // multiplied with the start color at death
-        float EndSize = 1.0f;                         // size multiplier at death
+        // Over lifetime (normalized age 0-1)
+        Gradient ColorOverLifetime = Gradient::Linear(glm::vec4(1.0f), glm::vec4(1.0f, 1.0f, 1.0f, 0.0f)); // multiplies the start color
+        Curve SizeOverLifetime = Curve::Constant(1.0f);  // multiplies the start size
+        Curve SpeedOverLifetime = Curve::Constant(1.0f); // multiplies the velocity when moving
+
+        // Collision
+        ParticleCollision Collision = ParticleCollision::None;
+        float CollisionPlaneHeight = 0.0f; // world Y of the plane (Plane mode)
+        float Bounce = 0.5f;               // fraction of the normal velocity kept
+        float CollisionDampen = 0.1f;      // fraction of the tangential velocity lost
+        float LifetimeLoss = 0.0f;         // fraction of the lifetime lost per collision
+        float CollisionRadius = 0.05f;
+
+        // Sub emitter: another Particle System that emits a burst at this system's particles.
+        Entity SubEmitter = Entity::Null();
+        ParticleSubEmitTrigger SubEmitterTrigger = ParticleSubEmitTrigger::Death;
+        int32_t SubEmitCount = 20;
+
+        // Trails
+        bool Trails = false;
+        float TrailLifetime = 0.25f; // seconds of history
+        float TrailWidth = 0.5f;     // multiplier of the particle size
 
         // Renderer
         AssetHandle Texture = AssetHandle::None();    // None = built-in soft particle
@@ -64,7 +94,9 @@ namespace Dimension
         int32_t SortingOrder = 0;
 
         // Runtime state (not serialized)
+        struct Burst { glm::vec3 WorldPosition; int32_t Count; };
         std::vector<Particle> Particles;
+        std::vector<Burst> PendingBursts; // sub-emitter requests
         float Time = 0.0f;
         float EmitAccumulator = 0.0f;
         uint32_t RandomState = 0x9E3779B9u;
@@ -76,7 +108,8 @@ namespace Dimension
         void Stop() { Playing = false; }  // existing particles finish their lives
         void Clear() { Particles.clear(); }
         void Emit(int count) { PendingEmit += count; }
-        bool IsAlive() const { return Playing || !Particles.empty(); }
+        void EmitAt(const glm::vec3& worldPosition, int count) { PendingBursts.push_back({ worldPosition, count }); }
+        bool IsAlive() const { return Playing || !Particles.empty() || !PendingBursts.empty(); }
     };
 
     namespace ParticleSystems

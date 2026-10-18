@@ -139,19 +139,92 @@ namespace Editor
                     auto& st = c.States[m_SelectedState];
                     ImGui::SeparatorText("State");
                     changed |= ImGui::InputText("Name", &st.Name);
-                    if (mesh && !mesh->GetClips().empty())
-                    {
-                        if (ImGui::BeginCombo("Clip", st.Clip.empty() ? "(none)" : st.Clip.c_str()))
+                    // Clip picker: the preview mesh's clips when available, else free text.
+                    auto clipCombo = [&](const char* label, std::string& value) {
+                        if (mesh && !mesh->GetClips().empty())
                         {
-                            for (auto& clip : mesh->GetClips())
-                                if (ImGui::Selectable(clip.Name.c_str(), clip.Name == st.Clip)) { st.Clip = clip.Name; changed = true; }
+                            if (ImGui::BeginCombo(label, value.empty() ? "(none)" : value.c_str()))
+                            {
+                                for (auto& clip : mesh->GetClips())
+                                    if (ImGui::Selectable(clip.Name.c_str(), clip.Name == value)) { value = clip.Name; changed = true; }
+                                ImGui::EndCombo();
+                            }
+                        }
+                        else
+                            changed |= ImGui::InputText(label, &value);
+                    };
+                    int motion = (int)st.Motion;
+                    if (ImGui::Combo("Motion", &motion, "Clip\0Blend Tree 1D\0"))
+                    {
+                        st.Motion = (AnimMotionType)motion;
+                        changed = true;
+                    }
+                    if (st.Motion == AnimMotionType::Clip)
+                        clipCombo("Clip", st.Clip);
+                    else
+                    {
+                        if (ImGui::BeginCombo("Parameter", st.BlendParameter.empty() ? "(none)" : st.BlendParameter.c_str()))
+                        {
+                            for (auto& p : c.Parameters)
+                                if (p.Type == AnimParameterType::Float && ImGui::Selectable(p.Name.c_str(), p.Name == st.BlendParameter))
+                                {
+                                    st.BlendParameter = p.Name;
+                                    changed = true;
+                                }
                             ImGui::EndCombo();
                         }
+                        std::vector<float> weights;
+                        if (live && m_Ctx.IsPlaying()) AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(c, live->Runtime, st.BlendParameter), weights);
+                        int removeChild = -1;
+                        for (int k = 0; k < (int)st.Children.size(); ++k)
+                        {
+                            ImGui::PushID(k + 5000);
+                            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+                            clipCombo("##clip", st.Children[k].Clip);
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - (weights.empty() ? 28 : 72));
+                            changed |= ImGui::DragFloat("##threshold", &st.Children[k].Threshold, 0.01f);
+                            if (k < (int)weights.size())
+                            {
+                                ImGui::SameLine();
+                                ImGui::TextDisabled("%3.0f%%", weights[k] * 100.0f);
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("x")) removeChild = k;
+                            ImGui::PopID();
+                        }
+                        if (removeChild >= 0) { st.Children.erase(st.Children.begin() + removeChild); changed = true; }
+                        if (ImGui::Button("+ Motion"))
+                        {
+                            BlendTreeChild child;
+                            child.Threshold = st.Children.empty() ? 0.0f : st.Children.back().Threshold + 1.0f;
+                            st.Children.push_back(child);
+                            changed = true;
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("clip / threshold");
                     }
-                    else
-                        changed |= ImGui::InputText("Clip", &st.Clip);
                     changed |= ImGui::DragFloat("Speed", &st.Speed, 0.01f, -10.0f, 10.0f);
                     changed |= ImGui::Checkbox("Loop", &st.Loop);
+
+                    ImGui::SeparatorText("Events");
+                    int removeEvent = -1;
+                    for (int k = 0; k < (int)st.Events.size(); ++k)
+                    {
+                        ImGui::PushID(k + 6000);
+                        ImGui::SetNextItemWidth(70);
+                        changed |= ImGui::SliderFloat("##time", &st.Events[k].Time, 0.0f, 1.0f, "%.2f");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 28);
+                        changed |= ImGui::InputText("##fn", &st.Events[k].Function);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("x")) removeEvent = k;
+                        ImGui::PopID();
+                    }
+                    if (removeEvent >= 0) { st.Events.erase(st.Events.begin() + removeEvent); changed = true; }
+                    if (ImGui::Button("+ Event")) { st.Events.push_back({}); changed = true; }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("normalized time / OnAnimationEvent name");
                     ImGui::BeginDisabled(c.DefaultState == m_SelectedState);
                     if (ImGui::Button("Set as Default State")) { c.DefaultState = m_SelectedState; changed = true; }
                     ImGui::EndDisabled();
@@ -314,7 +387,15 @@ namespace Editor
                 dl->AddRect(min, max, selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 255), 6.0f, 0, selected ? 2.0f : 1.0f);
                 const char* name = i < 0 ? "Any State" : c.States[i].Name.c_str();
                 ImVec2 ts = ImGui::CalcTextSize(name);
-                dl->AddText(ImVec2(min.x + (nodeW - ts.x) * 0.5f, min.y + (nodeH - ts.y) * 0.5f - (isCurrent ? 4 : 0)), IM_COL32(240, 240, 240, 255), name);
+                bool isTree = i >= 0 && c.States[i].Motion == AnimMotionType::BlendTree1D;
+                dl->AddText(ImVec2(min.x + (nodeW - ts.x) * 0.5f, min.y + (nodeH - ts.y) * 0.5f - (isCurrent || isTree ? 5 : 0)), IM_COL32(240, 240, 240, 255), name);
+                if (isTree && !isCurrent) // the progress bar takes this space on the current state
+                {
+                    const char* sub = "Blend Tree";
+                    ImVec2 ss = ImGui::CalcTextSize(sub);
+                    dl->AddText(nullptr, ImGui::GetFontSize() * 0.8f, ImVec2(min.x + (nodeW - ss.x * 0.8f) * 0.5f, min.y + nodeH * 0.5f + 2),
+                                IM_COL32(190, 200, 215, 255), sub);
+                }
                 if (isCurrent && mesh)
                 {
                     auto duration = [&](const std::string& n) {

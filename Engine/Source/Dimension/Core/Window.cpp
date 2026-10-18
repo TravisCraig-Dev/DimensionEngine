@@ -17,9 +17,11 @@ namespace Dimension
         m_Window = glfwCreateWindow((int)spec.Width, (int)spec.Height, spec.Title.c_str(), nullptr, nullptr);
         DIM_ASSERT(m_Window, "Failed to create window");
         glfwSetWindowUserPointer(m_Window, this);
+        if (spec.Fullscreen) SetFullscreen(true);
 
         // Installed before ImGui so its GLFW backend chains to these callbacks.
         glfwSetScrollCallback(m_Window, [](GLFWwindow*, double, double dy) { Input::AddScroll((float)dy); });
+        glfwSetCharCallback(m_Window, [](GLFWwindow*, unsigned int cp) { Input::AddChar(cp); });
         glfwSetDropCallback(m_Window, [](GLFWwindow* w, int count, const char** paths) {
             auto* self = (Window*)glfwGetWindowUserPointer(w);
             if (!self->OnFilesDropped) return;
@@ -55,6 +57,24 @@ namespace Dimension
     }
 
     bool Window::IsFocused() const { return glfwGetWindowAttrib(m_Window, GLFW_FOCUSED) == GLFW_TRUE; }
+
+    void Window::SetFullscreen(bool fullscreen)
+    {
+        if (fullscreen == m_Fullscreen) return;
+        if (fullscreen)
+        {
+            glfwGetWindowPos(m_Window, &m_WindowedRect[0], &m_WindowedRect[1]);
+            glfwGetWindowSize(m_Window, &m_WindowedRect[2], &m_WindowedRect[3]);
+            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+            const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+            if (!mode) return;
+            // Matching the desktop mode gives a borderless fullscreen window (no display mode switch).
+            glfwSetWindowMonitor(m_Window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+        }
+        else
+            glfwSetWindowMonitor(m_Window, nullptr, m_WindowedRect[0], m_WindowedRect[1], m_WindowedRect[2], m_WindowedRect[3], 0);
+        m_Fullscreen = fullscreen;
+    }
 
     bool Window::IsMinimized() const
     {

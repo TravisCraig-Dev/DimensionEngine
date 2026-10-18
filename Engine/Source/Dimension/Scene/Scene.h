@@ -21,6 +21,19 @@ namespace Dimension
         glm::vec3 SkyGround{ 0.33f, 0.31f, 0.29f };
         float Exposure = 1.0f;
         bool Tonemapping = false; // ACES filmic; off keeps 2D colors exactly as authored
+        // Sky: 0 = procedural gradient, 1 = equirectangular texture (ideally .hdr) that also lights the scene.
+        int32_t SkyMode = 0;
+        AssetHandle SkyTexture = AssetHandle::None();
+        float SkyIntensity = 1.0f;
+        float SkyRotation = 0.0f;       // degrees around +Y
+        float ReflectionIntensity = 1.0f; // sky reflections (texture mode); diffuse sky light uses AmbientIntensity
+        bool Bloom = false;
+        float BloomIntensity = 1.0f;
+        float BloomThreshold = 1.0f; // HDR brightness where bloom starts
+        float BloomKnee = 0.5f;      // soft transition below the threshold (fraction of it)
+        float BloomRadius = 1.0f;    // upsample filter spread
+        bool FXAA = false;
+        float Vignette = 0.0f;
     };
 
     // A scene: an ECS registry plus hierarchy, identity (Guid) mapping and the
@@ -78,14 +91,24 @@ namespace Dimension
         SceneSettings& GetSettings() { return m_Settings; }
         Physics2DWorld* GetPhysics2D() { return m_Physics2D.get(); }
         Physics3DWorld* GetPhysics3D() { return m_Physics3D.get(); }
+        AudioWorld* GetAudio() { return m_Audio.get(); }
 
         const std::string& GetName() const { return m_Name; }
         void SetName(std::string name) { m_Name = std::move(name); }
 
         // UI input for the current frame (pointer in render-target pixels). Applied in OnUpdateRuntime.
-        void SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid = true);
+        void SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid = true, float scroll = 0.0f);
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
+        // Play-mode clock: seconds and frames since OnRuntimeStart (paused frames do not count).
+        float GetTime() const { return m_Time; }
+        float GetDeltaTime() const { return m_DeltaTime; } // this frame's (clamped) update step
+        uint64_t GetFrameCount() const { return m_FrameCount; }
+        // Extra UI keyboard input for this frame (tests / injected input); combined with the Input module.
+        void InjectUIKeyboard(const std::string& text, bool backspace = false, bool enter = false);
         void DispatchUIClick(Entity e);
+        void DispatchAnimationEvent(Entity e, const std::string& name);
+        void DispatchUIValueChanged(Entity e, float value);
+        void DispatchUIText(Entity e, const std::string& text, bool submit);
 
         // Script/physics glue (called by physics worlds).
         void DispatchCollision(Entity a, Entity b, bool begin, bool trigger);
@@ -116,6 +139,11 @@ namespace Dimension
         std::vector<Entity> m_PendingDestroy;
         glm::vec2 m_UIPointer{ 0.0f }, m_UIScreen{ 0.0f };
         bool m_UIDown = false, m_UIWasDown = false, m_UIInputValid = false;
+        float m_UIScroll = 0.0f;
+        float m_Time = 0.0f, m_DeltaTime = 0.0f;
+        uint64_t m_FrameCount = 0;
+        std::string m_UIInjectedText;
+        bool m_UIInjectedBackspace = false, m_UIInjectedEnter = false;
         Entity m_UIHovered = Entity::Null();
         std::vector<Scope<System>> m_Systems;
         Scope<Physics2DWorld> m_Physics2D;

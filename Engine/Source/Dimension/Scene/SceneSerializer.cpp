@@ -157,7 +157,19 @@ namespace Dimension
                           { "skyTop", { s.SkyTop.r, s.SkyTop.g, s.SkyTop.b } },
                           { "skyHorizon", { s.SkyHorizon.r, s.SkyHorizon.g, s.SkyHorizon.b } },
                           { "skyGround", { s.SkyGround.r, s.SkyGround.g, s.SkyGround.b } },
-                          { "tonemapping", s.Tonemapping } };
+                          { "tonemapping", s.Tonemapping },
+                          { "bloom", s.Bloom },
+                          { "bloomIntensity", s.BloomIntensity },
+                          { "bloomThreshold", s.BloomThreshold },
+                          { "bloomKnee", s.BloomKnee },
+                          { "bloomRadius", s.BloomRadius },
+                          { "fxaa", s.FXAA },
+                          { "vignette", s.Vignette },
+                          { "skyMode", s.SkyMode },
+                          { "skyTexture", (uint64_t)s.SkyTexture },
+                          { "skyIntensity", s.SkyIntensity },
+                          { "skyRotation", s.SkyRotation },
+                          { "reflectionIntensity", s.ReflectionIntensity } };
 
         EntityRefResolver resolver;
         resolver.ToGuid = [&](Entity e) { return scene.IsValid(e) ? (uint64_t)scene.GetGuid(e) : uint64_t(0); };
@@ -188,6 +200,18 @@ namespace Dimension
             if (js.contains("skyHorizon")) vec(js["skyHorizon"], &s.SkyHorizon.x, 3);
             if (js.contains("skyGround")) vec(js["skyGround"], &s.SkyGround.x, 3);
             s.Tonemapping = js.value("tonemapping", s.Tonemapping);
+            s.Bloom = js.value("bloom", s.Bloom);
+            s.BloomIntensity = js.value("bloomIntensity", s.BloomIntensity);
+            s.BloomThreshold = js.value("bloomThreshold", s.BloomThreshold);
+            s.BloomKnee = js.value("bloomKnee", s.BloomKnee);
+            s.BloomRadius = js.value("bloomRadius", s.BloomRadius);
+            s.FXAA = js.value("fxaa", s.FXAA);
+            s.Vignette = js.value("vignette", s.Vignette);
+            s.SkyMode = js.value("skyMode", s.SkyMode);
+            s.SkyTexture = Guid(js.value("skyTexture", uint64_t(0)));
+            s.SkyIntensity = js.value("skyIntensity", s.SkyIntensity);
+            s.SkyRotation = js.value("skyRotation", s.SkyRotation);
+            s.ReflectionIntensity = js.value("reflectionIntensity", s.ReflectionIntensity);
         }
         if (data.contains("entities")) DeserializeEntities(*scene, data["entities"], Entity::Null(), false);
         scene->UpdateTransforms();

@@ -11,6 +11,7 @@ namespace Dimension
         std::string Title = "Dimension";
         uint32_t Width = 1600, Height = 900;
         bool Maximized = false;
+        bool Fullscreen = false; // borderless fullscreen on the primary monitor
     };
 
     class Window
@@ -29,6 +30,8 @@ namespace Dimension
         glm::uvec2 GetFramebufferSize() const;
         bool IsMinimized() const;
         bool IsFocused() const;
+        void SetFullscreen(bool fullscreen);
+        bool IsFullscreen() const { return m_Fullscreen; }
         GLFWwindow* GetNative() const { return m_Window; }
 
         std::function<void(std::vector<fs::path>)> OnFilesDropped;
@@ -36,5 +39,7 @@ namespace Dimension
 
     private:
         GLFWwindow* m_Window = nullptr;
+        bool m_Fullscreen = false;
+        int m_WindowedRect[4] = { 100, 100, 1280, 720 }; // restored when leaving fullscreen
     };
 }

@@ -13,6 +13,7 @@
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Core/Log.h"
+#include "Dimension/Core/Input.h"
 #include <glm/gtx/matrix_decompose.hpp>
 #include <algorithm>
 #include <fstream>
@@ -309,6 +310,8 @@ namespace Dimension
     {
         m_Running = true;
         m_FixedAccumulator = 0.0f;
+        m_Time = 0.0f;
+        m_FrameCount = 0;
         UpdateTransforms();
 
         m_Physics2D = MakeScope<Physics2DWorld>(*this);
@@ -357,17 +360,30 @@ namespace Dimension
             dt = kFixedTimestep;
         }
         dt = std::min(dt, 0.1f); // avoid spiral of death after hitches
+        m_Time += dt;
+        m_DeltaTime = dt;
+        ++m_FrameCount;
 
         if (m_UIInputValid)
         {
-            UI::PointerState pointer{ m_UIPointer, m_UIDown, m_UIDown && !m_UIWasDown, !m_UIDown && m_UIWasDown };
-            m_UIHovered = UI::Update(*this, pointer, m_UIScreen);
+            UI::PointerState pointer{ m_UIPointer, m_UIDown, m_UIDown && !m_UIWasDown, !m_UIDown && m_UIWasDown, m_UIScroll };
+            pointer.Text = Input::GetTypedText() + m_UIInjectedText;
+            pointer.Backspace = Input::IsKeyPressed(Key::Backspace) || m_UIInjectedBackspace;
+            pointer.Enter = Input::IsKeyPressed(Key::Enter) || m_UIInjectedEnter;
+            m_UIInjectedText.clear();
+            m_UIInjectedBackspace = m_UIInjectedEnter = false;
+            m_UIHovered = UI::Update(*this, pointer, m_UIScreen, dt);
+            m_UIScroll = 0.0f;
             m_UIWasDown = m_UIDown;
         }
 
         m_Registry.ViewOf<ScriptComponent>().Each([&](Entity e, ScriptComponent& sc) {
             if (!m_Registry.Get<TransformComponent>(e).ActiveInHierarchy) return;
-            for (auto& inst : sc.LiveInstances(true)) inst->OnUpdate(dt);
+            for (auto& inst : sc.LiveInstances(true))
+            {
+                inst->OnUpdate(dt);
+                inst->TickTimers(dt);
+            }
         });
         for (auto& sys : m_Systems) sys->OnUpdate(*this, dt);
         UpdateSpriteAnimators(dt);
@@ -420,6 +436,7 @@ namespace Dimension
     void Scene::UpdateAnimators(float dt)
     {
         Pose current, previous;
+        std::vector<std::pair<Entity, std::vector<std::string>>> firedEvents;
         for (auto [e, anim, mr] : m_Registry.ViewOf<AnimatorComponent, MeshRendererComponent>())
         {
             Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
@@ -430,30 +447,71 @@ namespace Dimension
                 continue;
             }
             const auto& clips = mesh->GetClips();
-            if (auto controller = AssetManager::GetAnimatorController(anim.Controller))
+            auto duration = [&](const std::string& name) {
+                const AnimationClip* c = Animation::FindClip(clips, name);
+                return c ? c->Duration : 0.0f;
+            };
+            Ref<AnimatorController> controller = AssetManager::GetAnimatorController(anim.Controller);
+            if (controller)
             {
-                auto duration = [&](const std::string& name) {
-                    const AnimationClip* c = Animation::FindClip(clips, name);
-                    return c ? c->Duration : 0.0f;
-                };
                 AnimatorStateMachine::Update(*controller, anim.Runtime, dt * anim.Speed, duration, [&](const AnimState& state, float fade) {
-                    if (fade > 0.0f && !anim.Clip.empty()) anim.CrossFade(state.Clip, fade);
-                    else
+                    int index = (int)(&state - controller->States.data());
+                    bool tree = state.Motion == AnimMotionType::BlendTree1D;
+                    bool hasCurrent = !anim.Clip.empty() || anim.TreeState >= 0;
+                    if (fade > 0.0f && hasCurrent)
                     {
-                        anim.Clip = state.Clip;
-                        anim.Time = 0.0f;
-                        anim.FadeDuration = 0.0f;
+                        anim.PreviousClip = anim.Clip;
+                        anim.PreviousTreeState = anim.TreeState;
+                        anim.PreviousTime = anim.Time;
+                        anim.FadeElapsed = 0.0f;
+                        anim.FadeDuration = fade;
                     }
+                    else
+                        anim.FadeDuration = 0.0f;
+                    anim.TreeState = tree ? index : -1;
+                    anim.Clip = tree ? std::string() : state.Clip;
+                    anim.Time = 0.0f;
                     anim.Loop = state.Loop;
                     anim.StateSpeed = state.Speed;
                     anim.CurrentState = state.Name;
                     anim.Playing = true;
                 });
+                if (!anim.Runtime.FiredEvents.empty()) firedEvents.emplace_back(e, anim.Runtime.FiredEvents);
             }
             else
+            {
                 anim.StateSpeed = 1.0f;
-            const AnimationClip* clip = Animation::FindClip(clips, anim.Clip);
-            if (!clip && !clips.empty() && anim.Clip.empty()) clip = &clips.front(); // default to the first clip
+                anim.TreeState = anim.PreviousTreeState = -1;
+            }
+            auto treeOf = [&](int index) -> const AnimState* {
+                return controller && index >= 0 && index < (int)controller->States.size() ? &controller->States[index] : nullptr;
+            };
+            // Samples a 1D blend tree at a normalized time: the two weighted children, in sync.
+            auto sampleTree = [&](const AnimState& st, float normalized, Pose& out) {
+                std::vector<float> w;
+                AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(*controller, anim.Runtime, st.BlendParameter), w);
+                float frac = st.Loop ? normalized - std::floor(normalized) : std::clamp(normalized, 0.0f, 1.0f);
+                auto sampleChild = [&](int i, Pose& p) {
+                    const AnimationClip* c = Animation::FindClip(clips, st.Children[i].Clip);
+                    if (c) Animation::Sample(*skeleton, *c, frac * c->Duration, p);
+                    else p.SetBindPose(*skeleton);
+                };
+                int a = -1, b = -1;
+                for (int i = 0; i < (int)w.size(); ++i)
+                    if (w[i] > 0.0f) (a < 0 ? a : b) = i;
+                if (a < 0) { out.SetBindPose(*skeleton); return; }
+                sampleChild(a, out);
+                if (b >= 0)
+                {
+                    Pose pb, blended;
+                    sampleChild(b, pb);
+                    Animation::Blend(out, pb, w[b], blended);
+                    out = std::move(blended);
+                }
+            };
+            const AnimState* tree = treeOf(anim.TreeState);
+            const AnimationClip* clip = tree ? nullptr : Animation::FindClip(clips, anim.Clip);
+            if (!tree && !clip && !clips.empty() && anim.Clip.empty()) clip = &clips.front(); // default to the first clip
 
             auto advance = [&](float& time, const AnimationClip* c) {
                 if (!c || !anim.Playing) return;
@@ -462,17 +520,29 @@ namespace Dimension
                 if (anim.Loop) time = std::fmod(std::fmod(time, c->Duration) + c->Duration, c->Duration);
                 else time = std::clamp(time, 0.0f, c->Duration);
             };
-            advance(anim.Time, clip);
-            if (clip) Animation::Sample(*skeleton, *clip, anim.Time, current);
-            else current.SetBindPose(*skeleton);
+            if (tree) sampleTree(*tree, anim.Runtime.StateTime, current);
+            else
+            {
+                advance(anim.Time, clip);
+                if (clip) Animation::Sample(*skeleton, *clip, anim.Time, current);
+                else current.SetBindPose(*skeleton);
+            }
 
             if (anim.FadeDuration > 0.0f && anim.FadeElapsed < anim.FadeDuration)
             {
-                const AnimationClip* prev = Animation::FindClip(clips, anim.PreviousClip);
-                advance(anim.PreviousTime, prev);
                 anim.FadeElapsed += dt;
-                if (prev)
+                if (const AnimState* prevTree = treeOf(anim.PreviousTreeState))
                 {
+                    float d = AnimatorStateMachine::StateDuration(*controller, anim.Runtime, *prevTree, duration);
+                    if (anim.Playing && d > 0.0f) anim.PreviousTime += dt * anim.Speed * prevTree->Speed / d;
+                    sampleTree(*prevTree, anim.PreviousTime, previous);
+                    Pose blended;
+                    Animation::Blend(previous, current, std::clamp(anim.FadeElapsed / anim.FadeDuration, 0.0f, 1.0f), blended);
+                    current = std::move(blended);
+                }
+                else if (const AnimationClip* prev = Animation::FindClip(clips, anim.PreviousClip))
+                {
+                    advance(anim.PreviousTime, prev);
                     Animation::Sample(*skeleton, *prev, anim.PreviousTime, previous);
                     Pose blended;
                     Animation::Blend(previous, current, std::clamp(anim.FadeElapsed / anim.FadeDuration, 0.0f, 1.0f), blended);
@@ -481,10 +551,21 @@ namespace Dimension
             }
             Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
         }
+        // After iteration: scripts may change the registry.
+        for (auto& [e, names] : firedEvents)
+            for (auto& name : names) DispatchAnimationEvent(e, name);
     }
 
-    void Scene::SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid)
+    void Scene::DispatchAnimationEvent(Entity e, const std::string& name)
     {
+        if (!IsValid(e)) return;
+        if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
+            for (auto& inst : sc->LiveInstances(true)) inst->OnAnimationEvent(name);
+    }
+
+    void Scene::SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid, float scroll)
+    {
+        m_UIScroll = scroll;
         m_UIPointer = pointer;
         m_UIDown = down;
         m_UIScreen = screenSize;
@@ -492,10 +573,33 @@ namespace Dimension
         if (!valid) m_UIHovered = Entity::Null();
     }
 
+    void Scene::InjectUIKeyboard(const std::string& text, bool backspace, bool enter)
+    {
+        m_UIInjectedText += text;
+        m_UIInjectedBackspace |= backspace;
+        m_UIInjectedEnter |= enter;
+    }
+
     void Scene::DispatchUIClick(Entity e)
     {
         if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
             for (auto& inst : sc->LiveInstances(true)) inst->OnClick();
+    }
+
+    void Scene::DispatchUIValueChanged(Entity e, float value)
+    {
+        if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
+            for (auto& inst : sc->LiveInstances(true)) inst->OnUIValueChanged(value);
+    }
+
+    void Scene::DispatchUIText(Entity e, const std::string& text, bool submit)
+    {
+        if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
+            for (auto& inst : sc->LiveInstances(true))
+            {
+                if (submit) inst->OnUISubmit(text);
+                else inst->OnUITextChanged(text);
+            }
     }
 
     void Scene::DispatchCollision(Entity a, Entity b, bool begin, bool trigger)

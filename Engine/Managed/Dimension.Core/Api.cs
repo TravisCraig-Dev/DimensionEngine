@@ -23,6 +23,62 @@ namespace Dimension
         public virtual void OnTriggerExit(Entity other) { }
         /// <summary>Called when a UI Button on this entity is clicked.</summary>
         public virtual void OnClick() { }
+        /// <summary>Called when a UI Slider (its value) or UI Toggle (1 = on, 0 = off) on this entity changes.</summary>
+        public virtual void OnValueChanged(float value) { }
+        /// <summary>Called when the text of a UI Input Field on this entity is edited.</summary>
+        public virtual void OnTextChanged(string text) { }
+        /// <summary>Called when Enter is pressed in a UI Input Field on this entity.</summary>
+        public virtual void OnSubmit(string text) { }
+        /// <summary>Called when an Animator state event on this entity is reached (the event's function name).</summary>
+        public virtual void OnAnimationEvent(string name) { }
+
+        // ---- Coroutines and delayed calls (like MonoBehaviour) ---------------------------------
+        internal CoroutineRunner Coroutines;
+
+        /// <summary>Runs `routine` until its first yield now, then resumes it every frame after OnUpdate.
+        /// Yield null (next frame), WaitForSeconds, WaitUntil, WaitWhile, another IEnumerator (run nested) or a Coroutine (wait for it).</summary>
+        public Coroutine StartCoroutine(System.Collections.IEnumerator routine) => (Coroutines ??= new CoroutineRunner()).Start(routine, null);
+        public void StopCoroutine(Coroutine coroutine) => Coroutines?.Stop(coroutine);
+        public void StopAllCoroutines() => Coroutines?.StopAll();
+
+        /// <summary>Calls the parameterless method `methodName` on this script after `delay` seconds.</summary>
+        public void Invoke(string methodName, float delay) => StartInvoke(methodName, delay, -1.0f);
+        /// <summary>Calls `methodName` after `delay` seconds, then every `rate` seconds.</summary>
+        public void InvokeRepeating(string methodName, float delay, float rate) => StartInvoke(methodName, delay, MathF.Max(rate, 1e-4f));
+        public void CancelInvoke() => Coroutines?.StopTagged(null);
+        public void CancelInvoke(string methodName) => Coroutines?.StopTagged(methodName);
+        public bool IsInvoking(string methodName) => Coroutines != null && Coroutines.HasTagged(methodName);
+
+        /// <summary>Destroys `entity` after `delay` seconds.</summary>
+        public void Destroy(Entity entity, float delay) => StartCoroutine(DestroyLater(entity, delay));
+
+        private void StartInvoke(string methodName, float delay, float rate)
+        {
+            var method = GetType().GetMethod(methodName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public |
+                                                         System.Reflection.BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+            if (method == null)
+            {
+                Debug.LogError($"{GetType().Name}.Invoke: no parameterless method '{methodName}'");
+                return;
+            }
+            (Coroutines ??= new CoroutineRunner()).Start(InvokeRoutine(method, delay, rate), methodName);
+        }
+
+        private System.Collections.IEnumerator InvokeRoutine(System.Reflection.MethodInfo method, float delay, float rate)
+        {
+            if (delay > 0.0f) yield return new WaitForSeconds(delay);
+            do
+            {
+                method.Invoke(this, null);
+                if (rate > 0.0f) yield return new WaitForSeconds(rate);
+            } while (rate > 0.0f);
+        }
+
+        private static System.Collections.IEnumerator DestroyLater(Entity entity, float delay)
+        {
+            yield return new WaitForSeconds(delay);
+            if (entity.IsValid) entity.Destroy();
+        }
 
         public T GetComponent<T>() where T : Component, new() => Entity.GetComponent<T>();
         public bool HasComponent<T>() where T : Component, new() => Entity.HasComponent<T>();
@@ -132,6 +188,10 @@ namespace Dimension
     {
         /// <summary>Seconds since the previous frame.</summary>
         public static float DeltaTime => Native.Api.GetDeltaTime();
+        /// <summary>Seconds since play mode started (stops while paused).</summary>
+        public static float time => Native.Api.GetTime(Native.CurrentScene);
+        /// <summary>Frames simulated since play mode started.</summary>
+        public static ulong FrameCount => Native.Api.GetFrameCount(Native.CurrentScene);
     }
 
     /// <summary>Key codes (same values as GLFW / the engine's Key enum).</summary>
@@ -167,14 +227,39 @@ namespace Dimension
 
     public static unsafe class Physics
     {
-        public static bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f)
+        /// <summary>Layer mask with every layer except "Ignore Raycast" (the default for queries).</summary>
+        public const uint DefaultLayers = ~(1u << 1);
+
+        public static bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
         {
             ulong id;
             Vector3 point, normal;
             float distance;
-            int ok = Native.Api.Raycast3D(Native.CurrentScene, (float*)&origin, (float*)&direction, maxDistance, &id, (float*)&point, (float*)&normal, &distance);
+            int ok = Native.Api.Raycast3DMask(Native.CurrentScene, (float*)&origin, (float*)&direction, maxDistance, layerMask, &id,
+                                              (float*)&point, (float*)&normal, &distance);
             hit = new RaycastHit { Entity = ok != 0 ? new Entity(Native.CurrentScene, id) : Entity.Null, Point = point, Normal = normal, Distance = distance };
             return ok != 0;
         }
+
+        /// <summary>Entities whose 3D colliders overlap the sphere.</summary>
+        public static Entity[] OverlapSphere(Vector3 center, float radius, uint layerMask = DefaultLayers)
+        {
+            const int max = 256;
+            ulong* ids = stackalloc ulong[max];
+            int count = Math.Min(Native.Api.OverlapSphere(Native.CurrentScene, (float*)&center, radius, layerMask, ids, max), max);
+            var result = new Entity[count];
+            for (int i = 0; i < count; ++i) result[i] = new Entity(Native.CurrentScene, ids[i]);
+            return result;
+        }
+    }
+
+    /// <summary>Runtime scene switching (scenes come from File > Build Settings). Loads happen at the end of the frame.</summary>
+    public static unsafe class SceneManager
+    {
+        public static void LoadScene(string name) => Native.WithUtf8(name, p => Native.Api.LoadSceneByName((byte*)p));
+        public static void LoadScene(int buildIndex) => Native.Api.LoadSceneByIndex(buildIndex);
+        /// <summary>Name of the scene the calling script runs in.</summary>
+        public static string ActiveSceneName => Native.FromUtf8(Native.Api.GetSceneName(Native.CurrentScene));
+        public static int SceneCountInBuild => Native.Api.GetSceneCount();
     }
 }
