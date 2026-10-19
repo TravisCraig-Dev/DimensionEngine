@@ -1059,6 +1059,42 @@
           "Smoothness": 0.3,
           "Emission": 0.0,
           "Material": 100025
+        },
+        "Trail Renderer": {
+          "Time": 0.9,
+          "Min Vertex Distance": 0.05,
+          "Width": 0.3,
+          "Width Curve": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ],
+          "Color": [
+            [
+              0.0,
+              0.3,
+              0.75,
+              1.0,
+              0.9
+            ],
+            [
+              1.0,
+              0.55,
+              0.3,
+              1.0,
+              0.0
+            ]
+          ],
+          "Emitting": true,
+          "Texture": 0,
+          "Texture Mode": 0,
+          "Blend": 0,
+          "Sorting Order": 0
         }
       }
     },
@@ -1550,7 +1586,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Tentacle (Sway)",
+          "Name": "Tentacle (Layers)",
           "Tag": "Untagged",
           "Active": true
         },
@@ -1593,7 +1629,8 @@
           "Clip": "Sway",
           "Speed": 1.0,
           "Loop": true,
-          "Playing": true
+          "Playing": true,
+          "Controller": 100049
         }
       }
     },
@@ -1847,7 +1884,11 @@
               1,
               0.25
             ]
-          ]
+          ],
+          "Noise": true,
+          "Noise Strength": 0.35,
+          "Noise Frequency": 2.0,
+          "Noise Scroll Speed": 1.5
         }
       }
     },
@@ -1898,7 +1939,7 @@
             1,
             1
           ],
-          "Texture": 0,
+          "Texture": 100048,
           "Sorting Order": -1,
           "Drag": 0.2,
           "Start Lifetime": [
@@ -1910,40 +1951,47 @@
             0.8
           ],
           "Start Size": [
-            0.3,
-            0.5
+            0.8,
+            1.2
           ],
           "Start Color A": [
-            0.35,
-            0.35,
-            0.38,
-            0.45
+            0.22,
+            0.22,
+            0.24,
+            0.9
           ],
           "Start Color B": [
-            0.2,
-            0.2,
-            0.22,
-            0.35
+            0.32,
+            0.31,
+            0.3,
+            0.8
           ],
           "Gravity Modifier": -0.02,
-          "Rate Over Time": 12,
+          "Rate Over Time": 14,
           "Shape Angle": 18,
           "Shape Radius": 0.15,
           "Blend": 0,
           "Color Over Lifetime": [
             [
-              0,
+              0.0,
               1,
               1,
               1,
-              1
+              0.0
             ],
             [
+              0.15,
               1,
               1,
               1,
+              1.0
+            ],
+            [
+              1.0,
               1,
-              0
+              1,
+              1,
+              0.0
             ]
           ],
           "Size Over Lifetime": [
@@ -1955,7 +2003,17 @@
               1,
               3.0
             ]
-          ]
+          ],
+          "Texture Sheet": true,
+          "Sheet Columns": 4,
+          "Sheet Rows": 4,
+          "Sheet Frames": 0,
+          "Sheet Cycles": 1.0,
+          "Sheet Random Start": false,
+          "Noise": true,
+          "Noise Strength": 0.6,
+          "Noise Frequency": 0.8,
+          "Noise Scroll Speed": 0.4
         }
       }
     },
@@ -2483,13 +2541,80 @@
           ],
           "Border Scale": 1.0
         },
+        "UI Scroll View": {
+          "Scroll Speed": 60.0,
+          "Scrollbar": true,
+          "Scrollbar Width": 8.0,
+          "Scrollbar Track Color": [
+            1,
+            1,
+            1,
+            0.08
+          ],
+          "Scrollbar Handle Color": [
+            1,
+            1,
+            1,
+            0.6
+          ]
+        }
+      }
+    },
+    {
+      "guid": 900001,
+      "parent": 800001,
+      "components": {
+        "Tag": {
+          "Name": "Content",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
         "UI Layout Group": {
           "Direction": 0,
           "Spacing": 10,
           "Padding": [
             22,
             18,
-            22,
+            30,
             18
           ],
           "Stretch Children": true
@@ -2498,7 +2623,7 @@
     },
     {
       "guid": 800002,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Header",
@@ -2562,7 +2687,7 @@
     },
     {
       "guid": 800003,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Sun Label",
@@ -2626,7 +2751,7 @@
     },
     {
       "guid": 800004,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Sun Slider",
@@ -2714,7 +2839,7 @@
     },
     {
       "guid": 800005,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Spin Toggle",
@@ -2800,7 +2925,7 @@
     },
     {
       "guid": 870002,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Music Label",
@@ -2865,7 +2990,7 @@
     },
     {
       "guid": 870003,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Music Slider",
@@ -2952,8 +3077,170 @@
       }
     },
     {
+      "guid": 900002,
+      "parent": 900001,
+      "components": {
+        "Tag": {
+          "Name": "Color Label",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            34
+          ]
+        },
+        "UI Text": {
+          "Text": "Cube color:",
+          "Font": 0,
+          "Font Size": 28,
+          "Color": [
+            0.92,
+            0.95,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 900003,
+      "parent": 900001,
+      "components": {
+        "Tag": {
+          "Name": "Color Dropdown",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            46
+          ]
+        },
+        "UI Dropdown": {
+          "Options": [
+            "Green",
+            "Red",
+            "Blue",
+            "Gold",
+            "White"
+          ],
+          "Value": 0,
+          "Font Size": 26,
+          "Max Visible Items": 4,
+          "Interactable": true,
+          "Background Color": [
+            0.93,
+            0.95,
+            1,
+            1
+          ],
+          "Text Color": [
+            0.1,
+            0.1,
+            0.12,
+            1
+          ],
+          "List Color": [
+            0.97,
+            0.97,
+            0.98,
+            1
+          ],
+          "Highlight Color": [
+            0.25,
+            0.55,
+            0.95,
+            1
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.ColorDropdown",
+              "Fields": {
+                "Target": "Player"
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "guid": 800006,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Name Label",
@@ -3017,7 +3304,7 @@
     },
     {
       "guid": 800007,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Name Field",
@@ -3103,7 +3390,7 @@
     },
     {
       "guid": 800008,
-      "parent": 800001,
+      "parent": 900001,
       "components": {
         "Tag": {
           "Name": "Greeting",
@@ -4573,6 +4860,643 @@
           "Output": "Music",
           "Stream": true,
           "Mute": false
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "KeepAcrossScenes",
+              "Fields": {},
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 890001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Rainbow Arch",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -6.0,
+            0.0,
+            -1.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Line Renderer": {
+          "Positions": [
+            [
+              -3.0,
+              0.0,
+              0.0
+            ],
+            [
+              -2.733,
+              0.499,
+              0.0
+            ],
+            [
+              -2.467,
+              0.976,
+              0.0
+            ],
+            [
+              -2.2,
+              1.411,
+              0.0
+            ],
+            [
+              -1.933,
+              1.784,
+              0.0
+            ],
+            [
+              -1.667,
+              2.078,
+              0.0
+            ],
+            [
+              -1.4,
+              2.283,
+              0.0
+            ],
+            [
+              -1.133,
+              2.387,
+              0.0
+            ],
+            [
+              -0.867,
+              2.387,
+              0.0
+            ],
+            [
+              -0.6,
+              2.283,
+              0.0
+            ],
+            [
+              -0.333,
+              2.078,
+              0.0
+            ],
+            [
+              -0.067,
+              1.784,
+              0.0
+            ],
+            [
+              0.2,
+              1.411,
+              0.0
+            ],
+            [
+              0.467,
+              0.976,
+              0.0
+            ],
+            [
+              0.733,
+              0.499,
+              0.0
+            ],
+            [
+              1.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "Use World Space": false,
+          "Loop": false,
+          "Width": 0.16,
+          "Width Curve": [
+            [
+              0.0,
+              0.6
+            ],
+            [
+              0.5,
+              1.0
+            ],
+            [
+              1.0,
+              0.6
+            ]
+          ],
+          "Color": [
+            [
+              0.0,
+              1.0,
+              0.25,
+              0.25,
+              1.0
+            ],
+            [
+              0.33,
+              1.0,
+              0.85,
+              0.2,
+              1.0
+            ],
+            [
+              0.66,
+              0.2,
+              0.9,
+              0.4,
+              1.0
+            ],
+            [
+              1.0,
+              0.25,
+              0.5,
+              1.0,
+              1.0
+            ]
+          ],
+          "Alignment": 0,
+          "Texture": 0,
+          "Texture Mode": 0,
+          "Blend": 0,
+          "Sorting Order": 0
+        },
+        "Script": {
+          "Class": "Game.LineWave",
+          "Fields": {
+            "Points": 32,
+            "Length": 4.0,
+            "Height": 2.4,
+            "Ripple": 0.15,
+            "Speed": 2.0
+          }
+        }
+      }
+    },
+    {
+      "guid": 890002,
+      "parent": 720001,
+      "components": {
+        "Tag": {
+          "Name": "Fire Ring",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            0.03,
+            0.0
+          ],
+          "Rotation": [
+            -1.5707963,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Line Renderer": {
+          "Positions": [
+            [
+              1.25,
+              0.0,
+              0.0
+            ],
+            [
+              1.226,
+              0.244,
+              0.0
+            ],
+            [
+              1.155,
+              0.478,
+              0.0
+            ],
+            [
+              1.039,
+              0.694,
+              0.0
+            ],
+            [
+              0.884,
+              0.884,
+              0.0
+            ],
+            [
+              0.694,
+              1.039,
+              0.0
+            ],
+            [
+              0.478,
+              1.155,
+              0.0
+            ],
+            [
+              0.244,
+              1.226,
+              0.0
+            ],
+            [
+              0.0,
+              1.25,
+              0.0
+            ],
+            [
+              -0.244,
+              1.226,
+              0.0
+            ],
+            [
+              -0.478,
+              1.155,
+              0.0
+            ],
+            [
+              -0.694,
+              1.039,
+              0.0
+            ],
+            [
+              -0.884,
+              0.884,
+              0.0
+            ],
+            [
+              -1.039,
+              0.694,
+              0.0
+            ],
+            [
+              -1.155,
+              0.478,
+              0.0
+            ],
+            [
+              -1.226,
+              0.244,
+              0.0
+            ],
+            [
+              -1.25,
+              0.0,
+              0.0
+            ],
+            [
+              -1.226,
+              -0.244,
+              0.0
+            ],
+            [
+              -1.155,
+              -0.478,
+              0.0
+            ],
+            [
+              -1.039,
+              -0.694,
+              0.0
+            ],
+            [
+              -0.884,
+              -0.884,
+              0.0
+            ],
+            [
+              -0.694,
+              -1.039,
+              0.0
+            ],
+            [
+              -0.478,
+              -1.155,
+              0.0
+            ],
+            [
+              -0.244,
+              -1.226,
+              0.0
+            ],
+            [
+              -0.0,
+              -1.25,
+              0.0
+            ],
+            [
+              0.244,
+              -1.226,
+              0.0
+            ],
+            [
+              0.478,
+              -1.155,
+              0.0
+            ],
+            [
+              0.694,
+              -1.039,
+              0.0
+            ],
+            [
+              0.884,
+              -0.884,
+              0.0
+            ],
+            [
+              1.039,
+              -0.694,
+              0.0
+            ],
+            [
+              1.155,
+              -0.478,
+              0.0
+            ],
+            [
+              1.226,
+              -0.244,
+              0.0
+            ]
+          ],
+          "Use World Space": false,
+          "Loop": true,
+          "Width": 0.1,
+          "Width Curve": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0
+            ]
+          ],
+          "Color": [
+            [
+              0.0,
+              1.0,
+              0.6,
+              0.2,
+              1.0
+            ],
+            [
+              0.5,
+              1.0,
+              0.3,
+              0.1,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              0.6,
+              0.2,
+              1.0
+            ]
+          ],
+          "Alignment": 1,
+          "Texture": 0,
+          "Texture Mode": 0,
+          "Blend": 0,
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 910001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Moving Platform",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.6,
+            0.15,
+            0.6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            0.3,
+            1.6
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            0.35,
+            0.4,
+            0.5,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 2,
+          "Mass": 1.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": false
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "PlatformMover",
+              "Fields": {
+                "Offset": [
+                  3.6,
+                  0.0,
+                  0.0
+                ],
+                "Speed": 1.5,
+                "Pause": 0.6
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 910002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Turnstile",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            3.6,
+            0.5,
+            2.6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.4,
+            0.6,
+            0.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            0.85,
+            0.3,
+            0.25,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 5.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        },
+        "Joint": {
+          "Type": 1,
+          "Connected Body": 0,
+          "Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Axis": [
+            0,
+            1,
+            0
+          ],
+          "Connected Anchor": [
+            0,
+            0,
+            0
+          ],
+          "Use Limits": false,
+          "Min Angle": -45,
+          "Max Angle": 45,
+          "Min Distance": 0,
+          "Max Distance": 0,
+          "Enable Collision": false,
+          "Use Motor": true,
+          "Motor Speed": 60.0,
+          "Motor Max Torque": 400.0,
+          "Break Force": 0.0,
+          "Break Torque": 0.0
+        }
+      }
+    },
+    {
+      "guid": 920001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Reflection Probe",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            1.5,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Reflection Probe": {
+          "Size": [
+            20,
+            8,
+            20
+          ],
+          "Resolution": 1,
+          "Intensity": 1.0,
+          "Box Projection": true,
+          "Realtime": false
         }
       }
     }

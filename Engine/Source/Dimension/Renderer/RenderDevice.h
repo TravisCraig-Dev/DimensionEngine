@@ -52,6 +52,7 @@ namespace Dimension
         RenderDevice& operator=(const RenderDevice&) = delete;
 
         static RenderDevice& Get();
+        static bool Exists(); // false in headless tools and tests
 
         // Frame loop. BeginFrame returns false if the frame must be skipped (e.g. swapchain resized).
         bool BeginFrame();

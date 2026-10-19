@@ -5,6 +5,49 @@
 
 namespace Dimension
 {
+    namespace Animation
+    {
+        void BuildMask(const Skeleton& skeleton, const std::vector<std::string>& joints, std::vector<float>& weights)
+        {
+            size_t n = skeleton.Joints.size();
+            weights.assign(n, joints.empty() ? 1.0f : 0.0f);
+            if (joints.empty()) return;
+            for (const auto& name : joints)
+                if (int j = skeleton.FindJoint(name); j >= 0) weights[j] = 1.0f;
+            // Parents come first in Order: children inherit their parent's membership.
+            for (int j : skeleton.Order)
+                if (int parent = skeleton.Joints[j].Parent; parent >= 0 && weights[parent] > 0.0f) weights[j] = 1.0f;
+        }
+
+        void LayerOverride(Pose& base, const Pose& layer, const std::vector<float>& mask, float weight)
+        {
+            size_t n = std::min({ base.Rotations.size(), layer.Rotations.size(), mask.size() });
+            for (size_t j = 0; j < n; ++j)
+            {
+                float w = weight * mask[j];
+                if (w <= 0.0f) continue;
+                base.Translations[j] = glm::mix(base.Translations[j], layer.Translations[j], w);
+                base.Rotations[j] = glm::slerp(base.Rotations[j], layer.Rotations[j], w);
+                base.Scales[j] = glm::mix(base.Scales[j], layer.Scales[j], w);
+            }
+        }
+
+        void LayerAdditive(Pose& base, const Pose& layer, const Pose& reference, const std::vector<float>& mask, float weight)
+        {
+            size_t n = std::min({ base.Rotations.size(), layer.Rotations.size(), reference.Rotations.size(), mask.size() });
+            for (size_t j = 0; j < n; ++j)
+            {
+                float w = weight * mask[j];
+                if (w <= 0.0f) continue;
+                base.Translations[j] += (layer.Translations[j] - reference.Translations[j]) * w;
+                glm::quat delta = glm::inverse(reference.Rotations[j]) * layer.Rotations[j];
+                base.Rotations[j] = glm::normalize(base.Rotations[j] * glm::slerp(glm::quat(1, 0, 0, 0), delta, w));
+                glm::vec3 ratio = layer.Scales[j] / glm::max(glm::abs(reference.Scales[j]), glm::vec3(1e-6f)) * glm::sign(reference.Scales[j]);
+                base.Scales[j] *= glm::mix(glm::vec3(1.0f), ratio, w);
+            }
+        }
+    }
+
     void Skeleton::ComputeOrder()
     {
         Order.clear();

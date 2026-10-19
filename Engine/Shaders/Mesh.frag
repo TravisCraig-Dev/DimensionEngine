@@ -6,6 +6,7 @@
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vUV;
+layout(location = 3) flat in uint vEntity;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out uint outEntity;
@@ -103,6 +104,23 @@ void main()
     }
     else
         env = mix(SkyColor(R), SkyColor(vec3(0.0, 1.0, 0.0)) * 0.5 + uScene.SkyHorizon.rgb * 0.5, roughness);
+    if (pc.Probe != 0u && pc.Probe <= uint(uScene.Counts.y))
+    {
+        // Reflection probe: the surroundings captured at the probe, optionally box-projected so reflections line up
+        // with the walls of the influence box instead of being "at infinity".
+        ReflectionProbe probe = uScene.Probes[pc.Probe - 1u];
+        vec3 dir = R;
+        if (probe.Params.x > 0.5)
+        {
+            vec3 safe = mix(R, vec3(1e-4), lessThan(abs(R), vec3(1e-4)));
+            vec3 t1 = (probe.BoxMax.xyz - vWorldPos) / safe, t2 = (probe.BoxMin.xyz - vWorldPos) / safe;
+            vec3 far = max(t1, t2);
+            float t = min(min(far.x, far.y), far.z);
+            if (t > 0.0) dir = vWorldPos + R * t - probe.CenterIntensity.xyz;
+        }
+        float lod = roughness * max(probe.BoxMax.w - 1.0, 0.0);
+        env = textureLod(uTextures[nonuniformEXT(uint(probe.BoxMin.w))], DirToEquirectRaw(normalize(dir)), lod).rgb * probe.CenterIntensity.w;
+    }
     // Screen-space ambient occlusion only darkens indirect light (opaque surfaces are in the depth prepass).
     if (uScene.AOParams.x > 0.5 && m.Flags.x != 2u)
     {
@@ -110,7 +128,7 @@ void main()
         if (uScene.AOParams.x > 1.5)
         {
             outColor = vec4(vec3(ao), 1.0);
-            outEntity = pc.EntityId;
+            outEntity = vEntity;
             return;
         }
         ambient *= ao;
@@ -143,5 +161,5 @@ void main()
     if (uScene.CascadeParams.z > 0.5) color *= CascadeDebugColor(vWorldPos);
 
     outColor = vec4(color, m.Flags.x == 2u ? base.a : 1.0);
-    outEntity = pc.EntityId;
+    outEntity = vEntity;
 }

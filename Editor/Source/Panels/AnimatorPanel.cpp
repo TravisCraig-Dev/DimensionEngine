@@ -59,7 +59,8 @@ namespace Editor
             ImGui::End();
             return;
         }
-        AnimatorController& c = *controller;
+        AnimatorController& root = *controller;
+        root.LinkLayers();
         bool changed = false;
         AnimatorComponent* live = entity.IsNull() ? nullptr : scene.GetRegistry().TryGet<AnimatorComponent>(entity);
         Ref<Mesh> mesh;
@@ -80,9 +81,9 @@ namespace Editor
             ImGui::BeginChild("Sidebar");
             ImGui::SeparatorText("Parameters");
             int removeParam = -1;
-            for (int i = 0; i < (int)c.Parameters.size(); ++i)
+            for (int i = 0; i < (int)root.Parameters.size(); ++i)
             {
-                auto& p = c.Parameters[i];
+                auto& p = root.Parameters[i];
                 ImGui::PushID(i);
                 ImGui::SetNextItemWidth(110);
                 changed |= ImGui::InputText("##name", &p.Name);
@@ -99,7 +100,7 @@ namespace Editor
                     }
                     else
                     {
-                        float v = AnimatorStateMachine::GetParameter(c, live->Runtime, p.Name);
+                        float v = AnimatorStateMachine::GetParameter(root, live->Runtime, p.Name);
                         if (p.Type == AnimParameterType::Bool)
                         {
                             bool b = v != 0.0f;
@@ -119,14 +120,124 @@ namespace Editor
                 if (ImGui::SmallButton("x")) removeParam = i;
                 ImGui::PopID();
             }
-            if (removeParam >= 0) { c.Parameters.erase(c.Parameters.begin() + removeParam); changed = true; }
+            if (removeParam >= 0) { root.Parameters.erase(root.Parameters.begin() + removeParam); changed = true; }
             for (int t = 0; t < 4; ++t)
             {
                 if (t) ImGui::SameLine();
                 if (ImGui::SmallButton((std::string("+ ") + kTypeNames[t]).c_str()))
                 {
-                    c.Parameters.push_back({ std::string("New") + kTypeNames[t], (AnimParameterType)t, 0.0f });
+                    root.Parameters.push_back({ std::string("New") + kTypeNames[t], (AnimParameterType)t, 0.0f });
                     changed = true;
+                }
+            }
+
+            // ---------------- Layers ----------------
+            ImGui::SeparatorText("Layers");
+            m_Layer = std::clamp(m_Layer, 0, (int)root.Layers.size());
+            if (ImGui::Selectable("Base Layer", m_Layer == 0)) { m_Layer = 0; m_SelectedState = -1; }
+            int removeLayer = -1;
+            for (int li = 0; li < (int)root.Layers.size(); ++li)
+            {
+                ImGui::PushID(1000 + li);
+                const auto& layer = root.Layers[li];
+                std::string label = layer.Name + (layer.Blending == AnimLayerBlending::Additive ? "  (additive)" : "");
+                if (ImGui::Selectable(label.c_str(), m_Layer == li + 1)) { m_Layer = li + 1; m_SelectedState = -1; }
+                ImGui::PopID();
+            }
+            if (ImGui::SmallButton("+ Layer"))
+            {
+                AnimLayer layer;
+                layer.Name = "Layer " + std::to_string(root.Layers.size() + 1);
+                root.Layers.push_back(std::move(layer));
+                root.LinkLayers();
+                m_Layer = (int)root.Layers.size();
+                m_SelectedState = -1;
+                changed = true;
+            }
+            if (m_Layer > 0)
+            {
+                AnimLayer& layer = root.Layers[m_Layer - 1];
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Remove Layer")) removeLayer = m_Layer - 1;
+                ImGui::SetNextItemWidth(180);
+                changed |= ImGui::InputText("Name##layer", &layer.Name);
+                ImGui::SetNextItemWidth(180);
+                changed |= ImGui::SliderFloat("Weight##layer", &layer.Weight, 0.0f, 1.0f);
+                int blending = (int)layer.Blending;
+                ImGui::SetNextItemWidth(180);
+                if (ImGui::Combo("Blending##layer", &blending, "Override\0Additive\0")) { layer.Blending = (AnimLayerBlending)blending; changed = true; }
+                if (live && m_Ctx.IsPlaying() && (int)live->Layers.size() >= m_Layer)
+                {
+                    float w = live->Layers[m_Layer - 1].Weight >= 0.0f ? live->Layers[m_Layer - 1].Weight : layer.Weight;
+                    ImGui::SetNextItemWidth(180);
+                    if (ImGui::SliderFloat("Live Weight##layer", &w, 0.0f, 1.0f)) live->SetLayerWeight(m_Layer, w);
+                }
+                // Mask: joints (with their descendants) this layer affects; empty = whole body.
+                ImGui::TextDisabled("Mask: %s", layer.Mask.empty() ? "whole skeleton" : "these joints and their children");
+                int removeJoint = -1;
+                for (int mj = 0; mj < (int)layer.Mask.size(); ++mj)
+                {
+                    ImGui::PushID(2000 + mj);
+                    ImGui::BulletText("%s", layer.Mask[mj].c_str());
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("x")) removeJoint = mj;
+                    ImGui::PopID();
+                }
+                if (removeJoint >= 0) { layer.Mask.erase(layer.Mask.begin() + removeJoint); changed = true; }
+                const Skeleton* skeleton = mesh ? mesh->GetSkeleton() : nullptr;
+                if (skeleton)
+                {
+                    ImGui::SetNextItemWidth(180);
+                    if (ImGui::BeginCombo("##addjoint", "+ Add joint"))
+                    {
+                        for (int j : skeleton->Order)
+                        {
+                            int depth = 0;
+                            for (int q = skeleton->Joints[j].Parent; q >= 0; q = skeleton->Joints[q].Parent) ++depth;
+                            std::string item = std::string(depth * 2, ' ') + skeleton->Joints[j].Name;
+                            if (ImGui::Selectable(item.c_str()))
+                            {
+                                layer.Mask.push_back(skeleton->Joints[j].Name);
+                                changed = true;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+                else
+                    ImGui::TextDisabled("Select an entity using this controller to pick mask joints.");
+            }
+            if (removeLayer >= 0)
+            {
+                root.Layers.erase(root.Layers.begin() + removeLayer);
+                root.LinkLayers();
+                m_Layer = 0;
+                m_SelectedState = -1;
+                changed = true;
+            }
+
+            // The rest of the window edits the selected layer's state machine.
+            AnimatorController& c = m_Layer == 0 ? root : root.Layers[m_Layer - 1].Machine;
+            AnimatorRuntime emptyRuntime;
+            const AnimatorRuntime* liveRuntime = &emptyRuntime;
+            float liveFadeDuration = 0.0f, liveFadeElapsed = 0.0f;
+            std::string liveState;
+            if (live)
+            {
+                if (m_Layer == 0)
+                {
+                    liveRuntime = &live->Runtime;
+                    liveFadeDuration = live->FadeDuration;
+                    liveFadeElapsed = live->FadeElapsed;
+                    liveState = live->CurrentState;
+                }
+                else if ((int)live->Layers.size() >= m_Layer)
+                {
+                    const auto& lp = live->Layers[m_Layer - 1];
+                    liveRuntime = &lp.Runtime;
+                    liveFadeDuration = lp.FadeDuration;
+                    liveFadeElapsed = lp.FadeElapsed;
+                    liveState = lp.CurrentState;
                 }
             }
 
@@ -165,7 +276,7 @@ namespace Editor
                     {
                         if (ImGui::BeginCombo("Parameter", st.BlendParameter.empty() ? "(none)" : st.BlendParameter.c_str()))
                         {
-                            for (auto& p : c.Parameters)
+                            for (auto& p : root.Parameters)
                                 if (p.Type == AnimParameterType::Float && ImGui::Selectable(p.Name.c_str(), p.Name == st.BlendParameter))
                                 {
                                     st.BlendParameter = p.Name;
@@ -174,7 +285,7 @@ namespace Editor
                             ImGui::EndCombo();
                         }
                         std::vector<float> weights;
-                        if (live && m_Ctx.IsPlaying()) AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(c, live->Runtime, st.BlendParameter), weights);
+                        if (live && m_Ctx.IsPlaying()) AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(c, (*liveRuntime), st.BlendParameter), weights);
                         int removeChild = -1;
                         for (int k = 0; k < (int)st.Children.size(); ++k)
                         {
@@ -260,7 +371,7 @@ namespace Editor
                             ImGui::SetNextItemWidth(100);
                             if (ImGui::BeginCombo("##param", cond.Parameter.empty() ? "(param)" : cond.Parameter.c_str()))
                             {
-                                for (auto& p : c.Parameters)
+                                for (auto& p : root.Parameters)
                                     if (ImGui::Selectable(p.Name.c_str(), p.Name == cond.Parameter))
                                     {
                                         cond.Parameter = p.Name;
@@ -363,13 +474,13 @@ namespace Editor
 
             dl->PushClipRect(canvasMin, canvasMax, true);
             int activeTransition = -1;
-            if (live && m_Ctx.IsPlaying() && live->FadeDuration > 0.0f && live->FadeElapsed < live->FadeDuration) activeTransition = live->Runtime.State;
+            if (live && m_Ctx.IsPlaying() && liveFadeDuration > 0.0f && liveFadeElapsed < liveFadeDuration) activeTransition = (*liveRuntime).State;
             for (auto& t : c.Transitions)
             {
                 if (t.To < 0 || t.To >= (int)c.States.size() || (t.From >= (int)c.States.size())) continue;
                 bool reverse = false;
                 for (auto& o : c.Transitions) reverse |= o.From == t.To && o.To == t.From;
-                bool hot = activeTransition == t.To && live && c.FindState(live->CurrentState) == t.To;
+                bool hot = activeTransition == t.To && live && c.FindState(liveState) == t.To;
                 Arrow(dl, nodeCenter(t.From), nodeCenter(t.To), hot ? IM_COL32(110, 190, 255, 255) : IM_COL32(200, 200, 205, 220), reverse ? 6.0f : 0.0f);
             }
 
@@ -379,7 +490,7 @@ namespace Editor
                 glm::vec2& pos = i < 0 ? c.AnyStatePosition : c.States[i].EditorPosition;
                 ImVec2 min(origin.x + pos.x * z, origin.y + pos.y * z), max(min.x + kNodeW * z, min.y + kNodeH * z);
                 float nodeW = kNodeW * z, nodeH = kNodeH * z;
-                bool isCurrent = live && i >= 0 && live->Runtime.State == i && c.FindState(live->CurrentState) == i;
+                bool isCurrent = live && i >= 0 && (*liveRuntime).State == i && c.FindState(liveState) == i;
                 bool selected = (i < 0 && m_SelectedState == -2) || (i >= 0 && m_SelectedState == i);
                 ImU32 fill = i < 0 ? IM_COL32(40, 120, 115, 255) : i == c.DefaultState ? IM_COL32(170, 100, 35, 255) : IM_COL32(70, 72, 78, 255);
                 if (isCurrent) fill = IM_COL32(45, 105, 175, 255);
@@ -402,7 +513,7 @@ namespace Editor
                         const AnimationClip* clip = Animation::FindClip(mesh->GetClips(), n);
                         return clip ? clip->Duration : 0.0f;
                     };
-                    float t = AnimatorStateMachine::NormalizedTime(c, live->Runtime, duration);
+                    float t = AnimatorStateMachine::NormalizedTime(c, (*liveRuntime), duration);
                     float frac = c.States[i].Loop ? t - std::floor(t) : std::min(t, 1.0f);
                     dl->AddRectFilled(ImVec2(min.x + 8, max.y - 9), ImVec2(min.x + 8 + (nodeW - 16) * frac, max.y - 5), IM_COL32(160, 210, 255, 255), 2.0f);
                 }

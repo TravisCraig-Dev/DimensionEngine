@@ -14,12 +14,12 @@ namespace Editor
         static const char* names[] = { "GameObject", "Sprite", "Square", "Cube", "Sphere", "Plane", "Quad", "Cylinder",
                                        "Camera", "Directional Light", "Point Light", "Audio Source", "Physics Cube", "Physics Sphere",
                                        "Text", "Canvas", "Image", "Text", "Button", "Particle System",
-                                       "Panel", "Slider", "Toggle", "Input Field", "Scroll View", "Spot Light", "Tilemap" };
+                                       "Panel", "Slider", "Toggle", "Input Field", "Scroll View", "Spot Light", "Tilemap", "Line", "Trail", "Dropdown", "Reflection Probe" };
 
         // UI elements must live under a Canvas: use the selection if it is UI, else an existing canvas, else make one.
         bool isUI = kind == ObjectKind::UIImage || kind == ObjectKind::UIText || kind == ObjectKind::UIButton ||
                     kind == ObjectKind::UIPanel || kind == ObjectKind::UISlider || kind == ObjectKind::UIToggle ||
-                    kind == ObjectKind::UIInputField || kind == ObjectKind::UIScrollView;
+                    kind == ObjectKind::UIInputField || kind == ObjectKind::UIScrollView || kind == ObjectKind::UIDropdown;
         if (isUI)
         {
             auto& r = scene.GetRegistry();
@@ -73,6 +73,16 @@ namespace Editor
             if (!position) t.Position = { 0.0f, 2.0f, 0.0f };
             break;
         case ObjectKind::Tilemap: reg.Emplace<TilemapComponent>(e); break;
+        case ObjectKind::LineRenderer: reg.Emplace<LineRendererComponent>(e); break;
+        case ObjectKind::ReflectionProbe:
+            reg.Emplace<ReflectionProbeComponent>(e);
+            if (!position) t.Position = { 0.0f, 1.5f, 0.0f };
+            break;
+        case ObjectKind::TrailRenderer: reg.Emplace<TrailRendererComponent>(e); break;
+        case ObjectKind::UIDropdown:
+            uiRect({ 320.0f, 50.0f });
+            reg.Emplace<UIDropdownComponent>(e);
+            break;
         case ObjectKind::SpotLight:
             reg.Emplace<SpotLightComponent>(e);
             t.Rotation = glm::radians(glm::vec3(-90.0f, 0.0f, 0.0f)); // pointing down
@@ -179,12 +189,16 @@ namespace Editor
             if (ImGui::MenuItem("Directional Light")) CreateObject(ctx, ObjectKind::DirectionalLight, parent);
             if (ImGui::MenuItem("Point Light")) CreateObject(ctx, ObjectKind::PointLight, parent);
             if (ImGui::MenuItem("Spot Light")) CreateObject(ctx, ObjectKind::SpotLight, parent);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reflection Probe")) CreateObject(ctx, ObjectKind::ReflectionProbe, parent);
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Text (3D)")) CreateObject(ctx, ObjectKind::Text3D, parent);
         if (ImGui::BeginMenu("Effects"))
         {
             if (ImGui::MenuItem("Particle System")) CreateObject(ctx, ObjectKind::ParticleSystem, parent);
+            if (ImGui::MenuItem("Line")) CreateObject(ctx, ObjectKind::LineRenderer, parent);
+            if (ImGui::MenuItem("Trail")) CreateObject(ctx, ObjectKind::TrailRenderer, parent);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("UI"))
@@ -196,6 +210,7 @@ namespace Editor
             if (ImGui::MenuItem("Slider")) CreateObject(ctx, ObjectKind::UISlider, parent);
             if (ImGui::MenuItem("Toggle")) CreateObject(ctx, ObjectKind::UIToggle, parent);
             if (ImGui::MenuItem("Input Field")) CreateObject(ctx, ObjectKind::UIInputField, parent);
+            if (ImGui::MenuItem("Dropdown")) CreateObject(ctx, ObjectKind::UIDropdown, parent);
             ImGui::Separator();
             if (ImGui::MenuItem("Panel")) CreateObject(ctx, ObjectKind::UIPanel, parent);
             if (ImGui::MenuItem("Scroll View")) CreateObject(ctx, ObjectKind::UIScrollView, parent);

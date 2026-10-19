@@ -7,7 +7,12 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <chrono>
 #include <cstring>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "shaders/Mesh.vert.h"
 #include "shaders/Mesh.frag.h"
@@ -31,6 +36,9 @@
 #include "shaders/Fxaa.frag.h"
 #include "shaders/Ssao.frag.h"
 #include "shaders/SsaoBlur.frag.h"
+#include "shaders/DofPrefilter.frag.h"
+#include "shaders/DofBlur.frag.h"
+#include "shaders/ProbeEquirect.frag.h"
 
 namespace Dimension
 {
@@ -73,6 +81,10 @@ namespace Dimension
             glm::vec4 PointShadowParams[SceneRenderer::kMaxPointShadows]; // near, far, bias, atlas index
             glm::mat4 InvProj;
             glm::vec4 AOParams; // x enabled, y AO texture index, zw 1 / framebuffer size
+            struct ProbeGPU
+            {
+                glm::vec4 CenterIntensity, BoxMin, BoxMax, Params; // see ReflectionProbe in Common.glsl
+            } Probes[SceneRenderer::kMaxReflectionProbes];
             PointLightGPU PointLights[kMaxPointLights];
         };
         static_assert(sizeof(SceneUniforms) <= RenderDevice::kUniformBlockSize);
@@ -83,9 +95,23 @@ namespace Dimension
             VkDeviceAddress Material;
             VkDeviceAddress Skin;
             VkDeviceAddress Joints;
+            VkDeviceAddress Instances;
             uint32_t EntityId;
-            uint32_t Flags; // bit 0: skinned
+            uint32_t Flags; // bit 0: skinned, bit 1: instanced
+            uint32_t Probe; // reflection probe slot + 1
         };
+
+        // std430 mirror of MeshInstance in MeshCommon.glsl.
+        struct InstanceGPU
+        {
+            glm::mat4 Model;
+            glm::uvec4 Data; // x: entity id
+        };
+
+
+        bool s_InstancingEnabled = true;
+        uint64_t s_ProbeBakeGeneration = 0;
+        constexpr uint32_t kMaxInstancesPerDraw = 16384;
 
         // std430 mirror of MaterialRef in MeshCommon.glsl.
         struct MaterialGPU
@@ -107,6 +133,21 @@ namespace Dimension
             uint32_t BloomTexture; // index + 1, 0 = none
             float BloomIntensity;
             float Vignette;
+            uint32_t DofTexture; // index + 1, 0 = none
+        };
+
+        struct DofPrefilterPush
+        {
+            uint32_t Hdr, Depth;
+            float ProjZ, ProjW, Focus, Range;
+            glm::vec2 FullTexel;
+        };
+
+        struct DofBlurPush
+        {
+            uint32_t Src, Samples;
+            glm::vec2 Texel;
+            float Radius;
         };
 
         struct BloomPush
@@ -158,6 +199,13 @@ namespace Dimension
                 Planes[4] = t[2];
                 Planes[5] = t[3] - t[2];
                 for (auto& p : Planes) p /= glm::length(glm::vec3(p));
+            }
+            // World-space box given by its center and half extents.
+            bool IntersectsWorld(const glm::vec3& c, const glm::vec3& we) const
+            {
+                for (auto& p : Planes)
+                    if (glm::dot(glm::vec3(p), c) + p.w + glm::dot(glm::abs(glm::vec3(p)), we) < 0.0f) return false;
+                return true;
             }
             // Conservative test of a local-space AABB under a world transform.
             bool Intersects(const glm::mat4& world, const AABB& box) const
@@ -244,7 +292,7 @@ namespace Dimension
     struct Renderer::Resources
     {
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
-        Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur;
+        Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect;
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
     };
@@ -375,6 +423,17 @@ namespace Dimension
         post.ColorAttachments = { { F::kOutputFormat } };
         post.DebugName = "FxaaPipeline";
         r.Fxaa = Pipeline(post);
+        post.FragmentSpirv = kProbeEquirect_frag;
+        post.ColorAttachments = { { F::kHdrFormat } };
+        post.DebugName = "ProbeEquirectPipeline";
+        r.ProbeEquirect = Pipeline(post);
+        post.FragmentSpirv = kDofPrefilter_frag;
+        post.ColorAttachments = { { F::kHdrFormat } };
+        post.DebugName = "DofPrefilterPipeline";
+        r.DofPrefilter = Pipeline(post);
+        post.FragmentSpirv = kDofBlur_frag;
+        post.DebugName = "DofBlurPipeline";
+        r.DofBlur = Pipeline(post);
         post.FragmentSpirv = kSsao_frag;
         post.ColorAttachments = { { F::kAOFormat } };
         post.DebugName = "SsaoPipeline";
@@ -472,6 +531,10 @@ namespace Dimension
     void SceneRenderer::Render(VkCommandBuffer cmd, Scene& scene, const CameraData& camera, SceneRenderTarget& target,
                                const SceneRenderOptions& options)
     {
+        // Reflection probes capture the scene with nested Render calls, so they run before this view collects anything.
+        if (!options.ProbeCapture) UpdateReflectionProbes(cmd, scene);
+        m_Capturing = options.ProbeCapture;
+        auto cpuStart = std::chrono::steady_clock::now();
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
         m_Stats = {};
@@ -516,6 +579,13 @@ namespace Dimension
             debugCascades = light.DebugCascades;
             break;
         }
+        if (options.DefaultLight && u.LightDirection.w == 0.0f)
+        {
+            // Neutral studio light for scenes without a sun (Prefab Mode).
+            u.LightDirection = glm::vec4(glm::normalize(glm::vec3(-0.45f, -0.8f, -0.4f)), 1.0f);
+            u.LightColor = glm::vec4(glm::vec3(2.2f), 1.0f);
+            castShadows = true;
+        }
         uint32_t pointShadows = 0;
         uint32_t shadowFaces[kMaxPointShadows] = {};
         const float shadowNear = 0.05f;
@@ -559,6 +629,8 @@ namespace Dimension
         CollectTilemaps(scene, camera);
         CollectText(scene, camera);
         CollectParticles(scene, camera);
+        CollectLines(scene, camera);
+        BuildRenderList(scene); // shared by the shadow, depth and main passes below
         if (options.EditorOverlays)
         {
             CollectEditorIcons(scene, camera);
@@ -592,7 +664,15 @@ namespace Dimension
                             VK_IMAGE_ASPECT_DEPTH_BIT);
 
         // SSAO needs a perspective view of opaque geometry; orthographic (2D) cameras skip it.
-        bool ssao = settings.SSAO && !camera.Orthographic;
+        bool ssao = settings.SSAO && !camera.Orthographic && !options.ProbeCapture;
+        if (!m_Capturing)
+            for (size_t i = 0; i < m_FrameProbes.size(); ++i)
+            {
+                const FrameProbe& p = m_FrameProbes[i];
+                u.Probes[i] = { glm::vec4(p.Center, p.Intensity), glm::vec4(p.Min, (float)p.Texture), glm::vec4(p.Max, (float)p.Mips),
+                                glm::vec4(p.BoxProjection ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f) };
+                u.Counts.y = (int)i + 1;
+            }
         u.InvProj = glm::inverse(u.Proj);
         if (ssao)
         {
@@ -620,7 +700,9 @@ namespace Dimension
         depth.imageView = target.GetDepth().GetView();
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depth.loadOp = ssao ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; // reuse the prepass depth
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        // Depth of field focuses for the game camera: the editor's Scene view (overlays on) stays sharp.
+        bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
+        depth.storeOp = dof ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth of field reads it
         depth.clearValue.depthStencil = { 1.0f, 0 };
 
         VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
@@ -647,7 +729,7 @@ namespace Dimension
             vkCmdDraw(cmd, 3, 1, 0, 0);
             m_Stats.DrawCalls++;
         }
-        DrawMeshes(cmd, scene, u.ViewProj, MeshPass::Main);
+        DrawMeshes(cmd, u.ViewProj, MeshPass::Main);
 
         if (!m_GridLines.empty())
         {
@@ -662,17 +744,35 @@ namespace Dimension
 
         vkCmdEndRendering(cmd);
         target.RecordPickCopy(cmd);
+        if (options.ProbeCapture)
+        {
+            // The caller copies the HDR image into a probe face.
+            Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            m_Sprites.clear();
+            m_Lines.clear();
+            m_GridLines.clear();
+            m_RenderItems.clear();
+            m_Capturing = false;
+            return;
+        }
 
         // Post processing: bloom (HDR) -> composite (exposure, tonemap, vignette) -> optional FXAA -> overlays and UI.
         Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         device.BindBindless(cmd);
         bool bloom = settings.Bloom && settings.BloomIntensity > 0.0f && target.GetBloomLevels() > 0;
         if (bloom) RenderBloom(cmd, target, settings);
+        if (dof)
+        {
+            Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_IMAGE_ASPECT_DEPTH_BIT);
+            RenderDepthOfField(cmd, target, camera, settings);
+        }
 
         VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
         CompositePush push{ target.GetHdrBindless(), settings.Exposure, settings.Tonemapping ? 1u : 0u,
                             bloom ? target.GetBloomBindless(0) + 1 : 0u,
-                            settings.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), settings.Vignette };
+                            settings.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), settings.Vignette,
+                            dof ? target.GetDofBindless(1) + 1 : 0u };
         auto beginPass = [&](const Image& image) {
             Vk::TransitionImage(cmd, image.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
@@ -731,6 +831,8 @@ namespace Dimension
         m_Sprites.clear();
         m_Lines.clear();
         m_GridLines.clear();
+        m_RenderItems.clear(); // drop mesh references until the next frame
+        m_Stats.CpuMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
     }
 
     namespace
@@ -756,12 +858,29 @@ namespace Dimension
             return tex ? tex->GetBindlessIndex() : fallback;
         }
 
-        VkDeviceAddress UploadMaterial(const Material& m)
+        // Material content as a hash-map key (no allocations; MaterialGPU has no padding).
+        struct MaterialKey
         {
-            TransientAllocation a = RenderDevice::Get().AllocateTransient(sizeof(MaterialGPU), 16);
-            if (!a) return 0;
+            MaterialGPU Data;
+            bool operator==(const MaterialKey& o) const { return std::memcmp(&Data, &o.Data, sizeof(Data)) == 0; }
+        };
+        struct MaterialKeyHash
+        {
+            size_t operator()(const MaterialKey& k) const
+            {
+                const auto* words = reinterpret_cast<const uint32_t*>(&k.Data);
+                uint64_t h = 1469598103934665603ull; // FNV-1a over 32-bit words
+                for (size_t i = 0; i < sizeof(MaterialGPU) / 4; ++i) h = (h ^ words[i]) * 1099511628211ull;
+                return (size_t)h;
+            }
+        };
+        static_assert(sizeof(MaterialGPU) % 4 == 0);
+
+        MaterialGPU BuildMaterialGPU(const Material& m)
+        {
             uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
-            auto* g = (MaterialGPU*)a.Data;
+            MaterialGPU gpu{};
+            auto* g = &gpu;
             g->BaseColor = ToLinear(m.BaseColor);
             g->Emission = glm::vec4(ToLinear(m.EmissionColor) * m.EmissionStrength, 0.0f);
             g->Params = glm::vec4(m.Metallic, m.Roughness, m.AlphaCutoff, m.NormalStrength);
@@ -770,9 +889,21 @@ namespace Dimension
             g->Maps = glm::uvec4(TextureIndex(m.BaseColorMap, white), normal, TextureIndex(m.MetallicRoughnessMap, white),
                                  TextureIndex(m.EmissionMap, white));
             g->Flags = glm::uvec4((uint32_t)m.BlendMode, m.NormalMap.IsValid() && normal != white ? 1u : 0u, 0u, 0u);
-            return a.Address;
+            return gpu;
         }
     }
+
+    void SceneRenderer::SetInstancingEnabled(bool enabled) { s_InstancingEnabled = enabled; }
+    void SceneRenderer::RequestProbeBake() { ++s_ProbeBakeGeneration; }
+
+    SceneRenderer::ProbeResources::~ProbeResources()
+    {
+        auto& device = RenderDevice::Get();
+        for (uint32_t index : FaceBindless)
+            if (index) device.UnregisterTexture(index);
+        if (Bindless) device.UnregisterTexture(Bindless);
+    }
+    bool SceneRenderer::IsInstancingEnabled() { return s_InstancingEnabled; }
 
     SceneRenderer::~SceneRenderer()
     {
@@ -841,80 +972,115 @@ namespace Dimension
                 const glm::mat4& viewProj = faceViewProj[light * 6 + face];
                 std::memcpy(faceUniforms.data(), &viewProj, sizeof(glm::mat4)); // ViewProj is the first member
                 device.BindUniforms(cmd, faceUniforms.data(), faceUniforms.size());
-                DrawMeshes(cmd, scene, viewProj, MeshPass::Shadow);
+                DrawMeshes(cmd, viewProj, MeshPass::Shadow);
             }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 
-    void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, Scene& scene, const glm::mat4& viewProj, MeshPass pass)
+    void SceneRenderer::BuildRenderList(Scene& scene)
     {
-        bool shadowPass = pass == MeshPass::Shadow, depthPass = pass == MeshPass::Depth;
         auto& device = RenderDevice::Get();
-        auto& res = Renderer::Get();
-        Frustum frustum(viewProj);
+        auto& reg = scene.GetRegistry();
+        m_RenderItems.clear();
+        m_RenderParts.clear();
         Material scratch;
 
-        struct Draw
+        // Materials are uploaded once per distinct content, so objects sharing a material (or the same simple
+        // Mesh Renderer settings) share an address, which is what lets them batch.
+        auto listStart = std::chrono::steady_clock::now();
+        m_BatchInstanceable.clear();
+        struct BatchKey
         {
             Mesh* MeshPtr;
-            uint32_t FirstIndex = 0, IndexCount = 0;
-            MeshPush Push;
-            const Pipeline* Pipe;
-            float Depth;
+            uint32_t FirstIndex, IndexCount;
+            VkDeviceAddress Material;
+            bool DoubleSided;
+            uint32_t Probe;
+            bool operator==(const BatchKey&) const = default;
         };
-        std::vector<Draw> transparent;
-        const Pipeline* bound = nullptr;
-        auto submit = [&](const Draw& d) {
-            if (d.Pipe != bound)
+        struct BatchKeyHash
+        {
+            size_t operator()(const BatchKey& k) const
             {
-                d.Pipe->Bind(cmd);
-                bound = d.Pipe;
+                size_t h = std::hash<const void*>()(k.MeshPtr);
+                for (uint64_t v : { (uint64_t)k.FirstIndex, (uint64_t)k.IndexCount, (uint64_t)k.Material, (uint64_t)k.DoubleSided, (uint64_t)k.Probe })
+                    h = (h ^ std::hash<uint64_t>()(v)) * 1099511628211ull;
+                return h;
             }
-            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(MeshPush), &d.Push);
-            d.MeshPtr->Bind(cmd);
-            vkCmdDrawIndexed(cmd, d.IndexCount, 1, d.FirstIndex, 0, 0);
-            m_Stats.DrawCalls++;
-            if (shadowPass) m_Stats.ShadowCasters++;
-            else if (!depthPass)
-            {
-                m_Stats.Meshes++;
-                m_Stats.Triangles += d.IndexCount / 3;
-            }
+        };
+        std::unordered_map<BatchKey, uint32_t, BatchKeyHash> batches;
+        auto batchOf = [&](const BatchKey& key, bool instanceable) -> uint32_t {
+            if (instanceable)
+                if (auto it = batches.find(key); it != batches.end()) return it->second;
+            uint32_t id = (uint32_t)m_BatchInstanceable.size();
+            m_BatchInstanceable.push_back(instanceable ? 1 : 0);
+            if (instanceable) batches.emplace(key, id);
+            return id;
         };
 
-        glm::vec3 camPos = glm::vec3(glm::inverse(viewProj) * glm::vec4(0, 0, 0, 1)); // only used for sorting
-        auto& reg = scene.GetRegistry();
+        std::unordered_map<MaterialKey, VkDeviceAddress, MaterialKeyHash> materialCache;
+        auto uploadMaterial = [&](const Material& m) -> VkDeviceAddress {
+            MaterialKey key{ BuildMaterialGPU(m) };
+            if (auto it = materialCache.find(key); it != materialCache.end()) return it->second;
+            TransientAllocation a = device.AllocateTransient(sizeof(MaterialGPU), 16);
+            if (!a) return 0;
+            std::memcpy(a.Data, &key.Data, sizeof(MaterialGPU));
+            materialCache.emplace(key, a.Address);
+            return a.Address;
+        };
+
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
             Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
             if (!mesh) continue;
-            // Skinned meshes use the Animator's matrices; without an Animator they render in bind pose.
-            const AnimatorComponent* animator = mesh->IsSkinned() ? reg.TryGet<AnimatorComponent>(e) : nullptr;
-            bool skinned = animator && animator->SkinMatrices.size() == mesh->GetSkeleton()->Joints.size() && mesh->GetSkinAddress();
-            if (shadowPass && !mr.CastShadows) continue;
-            if (!skinned && !frustum.Intersects(t.World, mesh->GetBounds())) // animated bounds are unknown: never cull
+            RenderItem item;
+            item.World = t.World;
+            const AABB& bounds = mesh->GetBounds();
+            glm::mat3 m(t.World);
+            glm::vec3 ext = bounds.Extents();
+            item.Center = glm::vec3(t.World * glm::vec4(bounds.Center(), 1.0f));
+            item.Extents = glm::abs(m[0]) * ext.x + glm::abs(m[1]) * ext.y + glm::abs(m[2]) * ext.z;
+            item.EntityId = e.Index + 1;
+            item.CastShadows = mr.CastShadows;
+            // The smallest reflection probe box containing the mesh's center (none while capturing a probe).
+            if (!m_Capturing)
             {
-                if (pass == MeshPass::Main) m_Stats.Culled++;
-                continue;
+                float best = 0.0f;
+                for (size_t pi = 0; pi < m_FrameProbes.size(); ++pi)
+                {
+                    const FrameProbe& p = m_FrameProbes[pi];
+                    if (glm::any(glm::lessThan(item.Center, p.Min)) || glm::any(glm::greaterThan(item.Center, p.Max))) continue;
+                    glm::vec3 size = p.Max - p.Min;
+                    float volume = size.x * size.y * size.z;
+                    if (item.Probe == 0 || volume < best)
+                    {
+                        item.Probe = (uint32_t)pi + 1;
+                        best = volume;
+                    }
+                }
             }
 
-            // Joint matrices are shared by all sub-meshes of the entity.
-            VkDeviceAddress jointsAddress = 0;
+            // Skinned meshes use the Animator's matrices (uploaded once, shared by every pass); without an
+            // Animator they render in bind pose.
+            const AnimatorComponent* animator = mesh->IsSkinned() ? reg.TryGet<AnimatorComponent>(e) : nullptr;
+            bool skinned = animator && animator->SkinMatrices.size() == mesh->GetSkeleton()->Joints.size() && mesh->GetSkinAddress();
+            item.AlwaysVisible = skinned;
             if (skinned)
             {
                 size_t bytes = animator->SkinMatrices.size() * sizeof(glm::mat4);
-                TransientAllocation joints = device.AllocateTransient(bytes, 16);
-                if (joints)
+                if (TransientAllocation joints = device.AllocateTransient(bytes, 16))
                 {
                     std::memcpy(joints.Data, animator->SkinMatrices.data(), bytes);
-                    jointsAddress = joints.Address;
+                    item.Joints = joints.Address;
+                    item.Skin = mesh->GetSkinAddress();
                 }
             }
 
             // Material per sub-mesh: the renderer's Material overrides all; otherwise the model's material for the
             // slot; otherwise the renderer's simple color/texture fields.
+            item.FirstPart = (uint32_t)m_RenderParts.size();
             Ref<Material> overrideMat = AssetManager::GetMaterial(mr.Material);
             const auto& slots = AssetManager::GetMeshMaterials(mr.Mesh);
             for (const SubMesh& sub : mesh->GetSubMeshes())
@@ -928,36 +1094,155 @@ namespace Dimension
                 }
                 if (!matPtr) matPtr = &ResolveMaterial(mr, scratch);
                 const Material& mat = *matPtr;
-                bool isTransparent = mat.BlendMode == MaterialBlendMode::Transparent;
-                if (shadowPass && (!mat.CastShadows || !mr.CastShadows || isTransparent)) continue;
-                if (depthPass && isTransparent) continue;
+                VkDeviceAddress address = uploadMaterial(mat);
+                if (!address) continue;
+                bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
+                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, mat.DoubleSided, item.Probe }, !skinned && !transparent);
+                m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, transparent, mat.DoubleSided, mat.CastShadows,
+                                          (uint32_t)m_RenderItems.size(), batch });
+            }
+            item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
+            item.MeshRef = std::move(mesh);
+            m_RenderItems.push_back(std::move(item));
+        }
+        m_Stats.RenderListItems = (uint32_t)m_RenderItems.size();
+        m_Stats.ListMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - listStart).count();
+    }
 
-                Draw d;
-                d.MeshPtr = mesh.get();
-                d.FirstIndex = sub.IndexOffset;
-                d.IndexCount = sub.IndexCount;
-                d.Push.Model = t.World;
-                d.Push.Material = UploadMaterial(mat);
-                d.Push.EntityId = e.Index + 1;
-                d.Push.Skin = jointsAddress ? mesh->GetSkinAddress() : 0;
-                d.Push.Joints = jointsAddress;
-                d.Push.Flags = jointsAddress ? 1u : 0u;
-                if (!d.Push.Material) continue;
-                d.Pipe = shadowPass  ? &res.Shadow
-                       : depthPass   ? (mat.DoubleSided ? &res.DepthPrepassDoubleSided : &res.DepthPrepass)
-                       : isTransparent ? &res.MeshTransparent : mat.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
-                if (isTransparent)
+    void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass)
+    {
+        bool shadowPass = pass == MeshPass::Shadow, depthPass = pass == MeshPass::Depth;
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        Frustum frustum(viewProj);
+
+        struct Draw
+        {
+            Mesh* MeshPtr;
+            uint32_t FirstIndex = 0, IndexCount = 0;
+            MeshPush Push;
+            const Pipeline* Pipe;
+            float Depth;
+        };
+        std::vector<Draw> transparent;
+        const Pipeline* bound = nullptr;
+        Mesh* boundMesh = nullptr;
+        auto submit = [&](const Draw& d, uint32_t instances) {
+            if (d.Pipe != bound)
+            {
+                d.Pipe->Bind(cmd);
+                bound = d.Pipe;
+            }
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(MeshPush), &d.Push);
+            if (d.MeshPtr != boundMesh)
+            {
+                d.MeshPtr->Bind(cmd);
+                boundMesh = d.MeshPtr;
+            }
+            vkCmdDrawIndexed(cmd, d.IndexCount, instances, d.FirstIndex, 0, 0);
+            m_Stats.DrawCalls++;
+            if (shadowPass) m_Stats.ShadowCasters += instances;
+            else if (!depthPass)
+            {
+                m_Stats.Meshes += instances;
+                m_Stats.Triangles += d.IndexCount / 3 * instances;
+                if (instances > 1) m_Stats.InstancedMeshes += instances;
+            }
+        };
+
+        glm::vec3 camPos = glm::vec3(glm::inverse(viewProj) * glm::vec4(0, 0, 0, 1)); // only used for sorting
+        auto makeDraw = [&](const RenderPart& part) {
+            const RenderItem& item = m_RenderItems[part.Item];
+            Draw d;
+            d.MeshPtr = item.MeshRef.get();
+            d.FirstIndex = part.FirstIndex;
+            d.IndexCount = part.IndexCount;
+            d.Push.Model = item.World;
+            d.Push.Material = part.Material;
+            d.Push.EntityId = item.EntityId;
+            d.Push.Skin = item.Joints ? item.Skin : 0;
+            d.Push.Joints = item.Joints;
+            d.Push.Instances = 0;
+            d.Push.Flags = item.Joints ? 1u : 0u;
+            d.Push.Probe = item.Probe;
+            d.Pipe = shadowPass  ? &res.Shadow
+                   : depthPass   ? (part.DoubleSided ? &res.DepthPrepassDoubleSided : &res.DepthPrepass)
+                   : part.Transparent ? &res.MeshTransparent : part.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
+            return d;
+        };
+
+        // Visible opaque parts, bucketed by batch with a counting sort (no comparisons, no per-draw structs).
+        size_t batchCount = m_BatchInstanceable.size();
+        m_VisibleParts.clear();
+        m_BatchStart.assign(batchCount + 1, 0);
+        for (const RenderItem& item : m_RenderItems)
+        {
+            if (shadowPass && !item.CastShadows) continue;
+            if (!item.AlwaysVisible && !frustum.IntersectsWorld(item.Center, item.Extents))
+            {
+                if (pass == MeshPass::Main) m_Stats.Culled++;
+                continue;
+            }
+            for (uint32_t p = item.FirstPart; p < item.FirstPart + item.PartCount; ++p)
+            {
+                const RenderPart& part = m_RenderParts[p];
+                if (shadowPass && (!part.CastShadows || part.Transparent)) continue;
+                if (part.Transparent)
                 {
-                    d.Depth = glm::distance(glm::vec3(t.World * glm::vec4(mesh->GetBounds().Center(), 1.0f)), camPos);
+                    if (depthPass) continue;
+                    Draw d = makeDraw(part);
+                    d.Depth = glm::distance(item.Center, camPos);
                     transparent.push_back(d);
+                    continue;
                 }
-                else
-                    submit(d);
+                m_VisibleParts.push_back(p);
+                m_BatchStart[part.Batch + 1]++;
             }
         }
+        for (size_t b = 0; b < batchCount; ++b) m_BatchStart[b + 1] += m_BatchStart[b];
+        m_BatchFill.assign(m_BatchStart.begin(), m_BatchStart.end() - 1);
+        m_SortedParts.resize(m_VisibleParts.size());
+        for (uint32_t p : m_VisibleParts) m_SortedParts[m_BatchFill[m_RenderParts[p].Batch]++] = p;
+
+        // One transient block holds the instance data of every instanced draw in this pass.
+        size_t instancedTotal = 0;
+        if (s_InstancingEnabled)
+            for (size_t b = 0; b < batchCount; ++b)
+                if (uint32_t n = m_BatchStart[b + 1] - m_BatchStart[b]; n > 1 && m_BatchInstanceable[b]) instancedTotal += n;
+        TransientAllocation instanceBlock = instancedTotal ? device.AllocateTransient(instancedTotal * sizeof(InstanceGPU), 16) : TransientAllocation{};
+        auto* instanceData = instanceBlock ? (InstanceGPU*)instanceBlock.Data : nullptr;
+        size_t instanceCursor = 0;
+
+        for (size_t b = 0; b < batchCount; ++b)
+        {
+            uint32_t first = m_BatchStart[b], count = m_BatchStart[b + 1] - first;
+            if (count == 0) continue;
+            if (count > 1 && m_BatchInstanceable[b] && instanceData)
+            {
+                for (uint32_t done = 0; done < count;)
+                {
+                    uint32_t n = std::min(count - done, kMaxInstancesPerDraw);
+                    InstanceGPU* items = instanceData + instanceCursor;
+                    for (uint32_t k = 0; k < n; ++k)
+                    {
+                        const RenderItem& item = m_RenderItems[m_RenderParts[m_SortedParts[first + done + k]].Item];
+                        items[k] = { item.World, glm::uvec4(item.EntityId, 0, 0, 0) };
+                    }
+                    Draw batch = makeDraw(m_RenderParts[m_SortedParts[first + done]]);
+                    batch.Push.Instances = instanceBlock.Address + instanceCursor * sizeof(InstanceGPU);
+                    batch.Push.Flags |= 2u;
+                    submit(batch, n);
+                    instanceCursor += n;
+                    done += n;
+                }
+            }
+            else
+                for (uint32_t k = 0; k < count; ++k) submit(makeDraw(m_RenderParts[m_SortedParts[first + k]]), 1);
+        }
+
         // Transparent meshes after opaque ones, far to near.
         std::sort(transparent.begin(), transparent.end(), [](const Draw& a, const Draw& b) { return a.Depth > b.Depth; });
-        for (auto& d : transparent) submit(d);
+        for (auto& d : transparent) submit(d, 1);
     }
 
     std::array<float, ShadowCascades::kMax> ComputeCascadeSplits(float nearDepth, float farDepth, int count, float lambda)
@@ -1073,7 +1358,7 @@ namespace Dimension
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             std::memcpy(shadowUniforms.data(), &out.ViewProj[c], sizeof(glm::mat4)); // ViewProj is the first member
             device.BindUniforms(cmd, shadowUniforms.data(), shadowUniforms.size());
-            DrawMeshes(cmd, scene, out.ViewProj[c], MeshPass::Shadow);
+            DrawMeshes(cmd, out.ViewProj[c], MeshPass::Shadow);
         }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -1240,8 +1525,7 @@ namespace Dimension
                 SpriteDraw d;
                 d.Transform = glm::mat4(glm::vec4(r, 0), glm::vec4(u, 0), glm::vec4(forward, 0), glm::vec4(pos, 1));
                 d.Color = ToLinear(color);
-                d.UVMin = { 0, 1 };
-                d.UVMax = { 1, 0 };
+                ps.SheetUV(ps.SheetFrame(p), d.UVMin, d.UVMax);
                 d.Texture = texture;
                 d.Entity = e.Index + 1;
                 d.Order = ps.SortingOrder;
@@ -1249,6 +1533,78 @@ namespace Dimension
                 d.Additive = ps.Blend == ParticleBlend::Additive;
                 m_Sprites.push_back(d);
             }
+        }
+    }
+
+    void SceneRenderer::CollectLines(Scene& scene, const CameraData& camera)
+    {
+        auto& reg = scene.GetRegistry();
+        RibbonParams params;
+        params.Orthographic = camera.Orthographic;
+        params.CameraPosition = camera.Position;
+        params.CameraForward = -glm::vec3(glm::inverse(camera.View)[2]);
+        uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
+        auto textureIndex = [&](AssetHandle handle) {
+            auto tex = handle.IsValid() ? AssetManager::GetTexture(handle) : nullptr;
+            return tex ? tex->GetBindlessIndex() : white;
+        };
+        std::vector<RibbonPoint> points;
+        auto emit = [&](const std::vector<RibbonQuad>& quads, uint32_t texture, Entity e, int32_t order, bool additive) {
+            for (const RibbonQuad& q : quads)
+            {
+                SpriteDraw d;
+                d.HasCorners = true;
+                for (int i = 0; i < 4; ++i)
+                {
+                    d.P[i] = q.P[i];
+                    d.C[i] = q.C[i];
+                    d.UV[i] = q.UV[i];
+                }
+                d.Texture = texture;
+                d.Entity = e.Index + 1;
+                d.Order = order;
+                d.Depth = (camera.View * glm::vec4((q.P[0] + q.P[2]) * 0.5f, 1.0f)).z;
+                d.Additive = additive;
+                m_Sprites.push_back(d);
+            }
+        };
+
+        for (auto [e, line, t] : reg.ViewOf<LineRendererComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || line.Positions.size() < 2) continue;
+            size_t n = line.Positions.size();
+            float scale = line.UseWorldSpace ? 1.0f : glm::length(glm::vec3(t.World[0]));
+            points.clear();
+            for (size_t i = 0; i < n; ++i)
+            {
+                float f = (float)i / (float)(n - 1);
+                glm::vec3 p = line.UseWorldSpace ? line.Positions[i] : glm::vec3(t.World * glm::vec4(line.Positions[i], 1.0f));
+                points.push_back({ p, line.Width * scale * line.WidthCurve.Evaluate(f), ToLinear(line.ColorGradient.Evaluate(f)) });
+            }
+            params.FaceCamera = line.Alignment == LineAlignment::View;
+            params.Normal = glm::normalize(glm::vec3(t.World[2]));
+            params.Loop = line.Loop;
+            params.TextureMode = line.TextureMode;
+            emit(BuildRibbon(points, params), textureIndex(line.Texture), e, line.SortingOrder, line.Blend == LineBlend::Additive);
+        }
+
+        float now = scene.GetTime();
+        for (auto [e, trail, t] : reg.ViewOf<TrailRendererComponent, TransformComponent>())
+        {
+            if (trail.Points.empty()) continue;
+            float lifetime = std::max(trail.Time, 1e-3f);
+            auto add = [&](const glm::vec3& p, float age) {
+                float f = std::clamp(age / lifetime, 0.0f, 1.0f);
+                points.push_back({ p, trail.Width * trail.WidthCurve.Evaluate(f), ToLinear(trail.ColorGradient.Evaluate(f)) });
+            };
+            // Head first, so normalized position 0 is the newest point.
+            points.clear();
+            if (trail.Emitting && t.ActiveInHierarchy) add(t.GetWorldPosition(), 0.0f);
+            for (auto it = trail.Points.rbegin(); it != trail.Points.rend(); ++it) add(it->Position, now - it->Time);
+            params.FaceCamera = true;
+            params.Loop = false;
+            params.TextureMode = trail.TextureMode;
+            emit(BuildRibbon(points, params), textureIndex(trail.Texture), e, trail.SortingOrder, trail.Blend == LineBlend::Additive);
         }
     }
 
@@ -1298,6 +1654,11 @@ namespace Dimension
         const glm::vec4 corners[4] = { { -0.5f, -0.5f, 0, 1 }, { 0.5f, -0.5f, 0, 1 }, { 0.5f, 0.5f, 0, 1 }, { -0.5f, 0.5f, 0, 1 } };
         for (auto& s : m_Sprites)
         {
+            if (s.HasCorners)
+            {
+                for (int i = 0; i < 4; ++i) *v++ = { s.P[i], s.C[i], s.UV[i], s.Texture, s.Entity };
+                continue;
+            }
             glm::vec2 uvs[4] = { { s.UVMin.x, s.UVMin.y }, { s.UVMax.x, s.UVMin.y }, { s.UVMax.x, s.UVMax.y }, { s.UVMin.x, s.UVMax.y } };
             for (int i = 0; i < 4; ++i)
                 *v++ = { glm::vec3(s.Transform * corners[i]), s.Color, uvs[i], s.Texture, s.Entity };
@@ -1431,7 +1792,7 @@ namespace Dimension
         VkRect2D scissor{ { 0, 0 }, extent };
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
-        DrawMeshes(cmd, scene, viewProj, MeshPass::Depth);
+        DrawMeshes(cmd, viewProj, MeshPass::Depth);
         vkCmdEndRendering(cmd);
 
         VkImage depthImage = target.GetDepth().GetHandle();
@@ -1469,6 +1830,176 @@ namespace Dimension
         pass(target.GetAO(1), res.SsaoBlur, &blur, sizeof(blur));
         Vk::TransitionImage(cmd, depthImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_ASPECT_DEPTH_BIT);
+    }
+
+    void SceneRenderer::UpdateReflectionProbes(VkCommandBuffer cmd, Scene& scene)
+    {
+        m_FrameProbes.clear();
+        std::unordered_set<uint64_t> seen;
+        for (auto [e, probe, t] : scene.GetRegistry().ViewOf<ReflectionProbeComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || m_FrameProbes.size() >= kMaxReflectionProbes) continue;
+            uint64_t id = ((uint64_t)e.Generation << 32) | e.Index;
+            seen.insert(id);
+            auto& gpu = m_Probes[id];
+            if (!gpu) gpu = std::make_unique<ProbeResources>();
+            uint32_t resolution = 64u << std::clamp(probe.Resolution, 0, 3);
+            glm::vec3 position = t.GetWorldPosition();
+            // Re-capture when the probe or its scene changes (play mode works on a copy of the scene).
+            struct { glm::vec3 P; uint32_t R; const void* S; } keyData{ position, resolution, &scene };
+            uint64_t key = 1469598103934665603ull;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&keyData);
+            for (size_t i = 0; i < sizeof(keyData); ++i) key = (key ^ bytes[i]) * 1099511628211ull;
+            if (!gpu->Baked || gpu->Key != key || probe.Realtime || gpu->Generation != s_ProbeBakeGeneration)
+            {
+                BakeProbe(cmd, scene, *gpu, position, resolution);
+                gpu->Key = key;
+                gpu->Generation = s_ProbeBakeGeneration;
+                gpu->Baked = true;
+            }
+            glm::vec3 half = glm::abs(probe.Size) * 0.5f;
+            m_FrameProbes.push_back({ position, position - half, position + half, probe.Intensity, gpu->Bindless,
+                                      gpu->Equirect.GetMipLevels(), probe.BoxProjection });
+        }
+        std::erase_if(m_Probes, [&](const auto& entry) { return !seen.contains(entry.first); });
+    }
+
+    void SceneRenderer::BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t res)
+    {
+        auto& device = RenderDevice::Get();
+        auto& renderer = Renderer::Get();
+        using F = SceneRenderTarget;
+        uint32_t width = res * 4, height = res * 2;
+        uint32_t mips = (uint32_t)std::floor(std::log2((float)width)) + 1;
+        if (gpu.Resolution != res)
+        {
+            for (int f = 0; f < 6; ++f)
+            {
+                if (gpu.FaceBindless[f]) device.UnregisterTexture(gpu.FaceBindless[f]);
+                gpu.Faces[f] = Image({ res, res, F::kHdrFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, 1, "ProbeFace" });
+                gpu.FaceBindless[f] = device.RegisterTexture(gpu.Faces[f].GetView(), device.GetClampSampler());
+            }
+            if (gpu.Bindless) device.UnregisterTexture(gpu.Bindless);
+            gpu.Base = Image({ width, height, F::kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "ProbeBase" });
+            gpu.Equirect = Image({ width, height, F::kHdrFormat,
+                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, mips, "ProbeEquirect" });
+            gpu.Bindless = device.RegisterTexture(gpu.Equirect.GetView(), device.GetLinearSampler());
+            gpu.Resolution = res;
+        }
+        if (!m_ProbeTarget) m_ProbeTarget = MakeScope<SceneRenderTarget>(res, res);
+        m_ProbeTarget->Resize(res, res);
+
+        // Six 90 degree views (same frames as ProbeEquirect.frag).
+        static const glm::vec3 forward[6] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+        static const glm::vec3 up[6] = { { 0, 1, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 0, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 } };
+        RenderStats outer = m_Stats;
+        SceneRenderOptions capture;
+        capture.ProbeCapture = true;
+        for (int f = 0; f < 6; ++f)
+        {
+            CameraData cam;
+            cam.View = glm::lookAt(position, position + forward[f], up[f]);
+            cam.Projection = glm::perspective(glm::radians(90.0f), 1.0f, 0.05f, 500.0f);
+            cam.Position = position;
+            cam.Skybox = true;
+            Render(cmd, scene, cam, *m_ProbeTarget, capture);
+            VkImage face = gpu.Faces[f].GetHandle();
+            Vk::TransitionImage(cmd, face, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageCopy copy{};
+            copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.extent = { res, res, 1 };
+            vkCmdCopyImage(cmd, m_ProbeTarget->GetHdr().GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, face, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            Vk::TransitionImage(cmd, face, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            Vk::TransitionImage(cmd, m_ProbeTarget->GetHdr().GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+        m_Stats = outer;
+
+        // Faces -> equirectangular image (mip 0), then a blurred mip chain for rough surfaces.
+        VkImage base = gpu.Base.GetHandle(), equirect = gpu.Equirect.GetHandle();
+        Vk::TransitionImage(cmd, base, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        att.imageView = gpu.Base.GetView();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        info.renderArea = { { 0, 0 }, { width, height } };
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cmd, &info);
+        VkViewport viewport{ 0.0f, 0.0f, (float)width, (float)height, 0.0f, 1.0f };
+        VkRect2D scissor{ { 0, 0 }, { width, height } };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        device.BindBindless(cmd);
+        renderer.ProbeEquirect.Bind(cmd);
+        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(gpu.FaceBindless), gpu.FaceBindless);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+        Vk::TransitionImage(cmd, base, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        Vk::TransitionImage(cmd, equirect, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageCopy copy{};
+        copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.extent = { width, height, 1 };
+        vkCmdCopyImage(cmd, base, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, equirect, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        int32_t w = (int32_t)width, h = (int32_t)height;
+        for (uint32_t mip = 1; mip < mips; ++mip)
+        {
+            Vk::TransitionImage(cmd, equirect, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+            int32_t nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+            VkImageBlit blit{};
+            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, 1 };
+            blit.srcOffsets[1] = { w, h, 1 };
+            blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1 };
+            blit.dstOffsets[1] = { nw, nh, 1 };
+            vkCmdBlitImage(cmd, equirect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, equirect, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            Vk::TransitionImage(cmd, equirect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+            w = nw;
+            h = nh;
+        }
+        Vk::TransitionImage(cmd, equirect, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mips - 1, 1);
+    }
+
+    void SceneRenderer::RenderDepthOfField(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera, const SceneSettings& settings)
+    {
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        auto pass = [&](const Image& dst, const Pipeline& pipeline, const void* push, uint32_t size) {
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            att.imageView = dst.GetView();
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+            info.renderArea = { { 0, 0 }, dst.GetExtent() };
+            info.layerCount = 1;
+            info.colorAttachmentCount = 1;
+            info.pColorAttachments = &att;
+            vkCmdBeginRendering(cmd, &info);
+            VkViewport viewport{ 0.0f, 0.0f, (float)dst.GetWidth(), (float)dst.GetHeight(), 0.0f, 1.0f };
+            VkRect2D scissor{ { 0, 0 }, dst.GetExtent() };
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            pipeline.Bind(cmd);
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, size, push);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_Stats.DrawCalls++;
+        };
+        DofPrefilterPush pre{ target.GetHdrBindless(), target.GetDepthBindless(), camera.Projection[2][2], camera.Projection[3][2],
+                              std::max(settings.FocusDistance, 0.01f), std::max(settings.FocusRange, 0.01f),
+                              glm::vec2(1.0f / target.GetWidth(), 1.0f / target.GetHeight()) };
+        pass(target.GetDof(0), res.DofPrefilter, &pre, sizeof(pre));
+        const Image& half = target.GetDof(0);
+        DofBlurPush blur{ target.GetDofBindless(0), 32u, glm::vec2(1.0f / half.GetWidth(), 1.0f / half.GetHeight()),
+                          std::clamp(settings.BokehSize, 0.0f, 0.1f) * (float)half.GetHeight() };
+        pass(target.GetDof(1), res.DofBlur, &blur, sizeof(blur));
     }
 
     void SceneRenderer::FlushLines(VkCommandBuffer cmd, std::vector<LineVertex>& lines, const Pipeline& pipeline)
@@ -1558,6 +2089,21 @@ namespace Dimension
                 glm::vec3 o = (r * std::cos(a) + u * std::sin(a)) * 0.4f;
                 DrawLine(p + o, p + o + f * 2.0f, yellow);
             }
+        }
+        if (auto* line = reg.TryGet<LineRendererComponent>(sel))
+        {
+            // Point handles: a small sphere at each position, the first one larger.
+            for (size_t i = 0; i < line->Positions.size(); ++i)
+            {
+                glm::vec3 p = line->UseWorldSpace ? line->Positions[i] : glm::vec3(t.World * glm::vec4(line->Positions[i], 1.0f));
+                DrawWireSphere(glm::translate(glm::mat4(1.0f), p), glm::vec3(0), i == 0 ? 0.08f : 0.05f, orange);
+            }
+        }
+        if (auto* probe = reg.TryGet<ReflectionProbeComponent>(sel))
+        {
+            glm::mat4 at = glm::translate(glm::mat4(1.0f), t.GetWorldPosition());
+            DrawWireBox(at, glm::vec3(0.0f), glm::abs(probe->Size) * 0.5f, { 0.4f, 0.85f, 1.0f, 0.9f });
+            DrawWireSphere(at, glm::vec3(0.0f), 0.25f, { 0.4f, 0.85f, 1.0f, 0.9f });
         }
         if (auto* pl = reg.TryGet<PointLightComponent>(sel))
             DrawWireSphere(glm::translate(glm::mat4(1.0f), t.GetWorldPosition()), glm::vec3(0), pl->Range, yellow);

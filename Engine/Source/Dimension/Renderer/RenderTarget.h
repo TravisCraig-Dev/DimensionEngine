@@ -42,6 +42,9 @@ namespace Dimension
         uint32_t GetDepthBindless() const { return m_DepthBindless; }
         const Image& GetAO(uint32_t i) const { return m_AO[i]; }
         uint32_t GetAOBindless(uint32_t i) const { return m_AOBindless[i]; }
+        // Depth of field, half resolution HDR: [0] color + CoC, [1] blurred.
+        const Image& GetDof(uint32_t i) const { return m_Dof[i]; }
+        uint32_t GetDofBindless(uint32_t i) const { return m_DofBindless[i]; }
 
         // ImGui texture showing the output (SHADER_READ_ONLY layout between frames).
         uint64_t GetImGuiTexture();
@@ -72,6 +75,8 @@ namespace Dimension
         uint32_t m_DepthBindless = 0;
         Image m_AO[2];
         uint32_t m_AOBindless[2] = {};
+        Image m_Dof[2];
+        uint32_t m_DofBindless[2] = {};
         uint64_t m_ImGuiTexture = 0;
 
         std::optional<glm::uvec2> m_PickRequest;

@@ -170,6 +170,10 @@ namespace Dimension
                           { "ssaoIntensity", s.SSAOIntensity },
                           { "ssaoBias", s.SSAOBias },
                           { "ssaoDebug", s.SSAODebug },
+                          { "dof", s.DepthOfField },
+                          { "focusDistance", s.FocusDistance },
+                          { "focusRange", s.FocusRange },
+                          { "bokehSize", s.BokehSize },
                           { "skyMode", s.SkyMode },
                           { "skyTexture", (uint64_t)s.SkyTexture },
                           { "skyIntensity", s.SkyIntensity },
@@ -186,43 +190,61 @@ namespace Dimension
         return j;
     }
 
+    void SceneSerializer::ReadSettings(const json& js, SceneSettings& s)
+    {
+        auto vec = [](const json& a, float* out, int n) {
+            if (a.is_array()) for (int i = 0; i < n && i < (int)a.size(); ++i) out[i] = a[i].get<float>();
+        };
+        if (js.contains("ambientColor")) vec(js["ambientColor"], &s.AmbientColor.x, 3);
+        s.AmbientIntensity = js.value("ambientIntensity", s.AmbientIntensity);
+        if (js.contains("gravity2D")) vec(js["gravity2D"], &s.Gravity2D.x, 2);
+        if (js.contains("gravity")) vec(js["gravity"], &s.Gravity.x, 3);
+        s.Exposure = js.value("exposure", s.Exposure);
+        if (js.contains("skyTop")) vec(js["skyTop"], &s.SkyTop.x, 3);
+        if (js.contains("skyHorizon")) vec(js["skyHorizon"], &s.SkyHorizon.x, 3);
+        if (js.contains("skyGround")) vec(js["skyGround"], &s.SkyGround.x, 3);
+        s.Tonemapping = js.value("tonemapping", s.Tonemapping);
+        s.Bloom = js.value("bloom", s.Bloom);
+        s.BloomIntensity = js.value("bloomIntensity", s.BloomIntensity);
+        s.BloomThreshold = js.value("bloomThreshold", s.BloomThreshold);
+        s.BloomKnee = js.value("bloomKnee", s.BloomKnee);
+        s.BloomRadius = js.value("bloomRadius", s.BloomRadius);
+        s.FXAA = js.value("fxaa", s.FXAA);
+        s.Vignette = js.value("vignette", s.Vignette);
+        s.SSAO = js.value("ssao", s.SSAO);
+        s.SSAORadius = js.value("ssaoRadius", s.SSAORadius);
+        s.SSAOIntensity = js.value("ssaoIntensity", s.SSAOIntensity);
+        s.SSAOBias = js.value("ssaoBias", s.SSAOBias);
+        s.SSAODebug = js.value("ssaoDebug", s.SSAODebug);
+        s.DepthOfField = js.value("dof", s.DepthOfField);
+        s.FocusDistance = js.value("focusDistance", s.FocusDistance);
+        s.FocusRange = js.value("focusRange", s.FocusRange);
+        s.BokehSize = js.value("bokehSize", s.BokehSize);
+        s.SkyMode = js.value("skyMode", s.SkyMode);
+        s.SkyTexture = Guid(js.value("skyTexture", uint64_t(0)));
+        s.SkyIntensity = js.value("skyIntensity", s.SkyIntensity);
+        s.SkyRotation = js.value("skyRotation", s.SkyRotation);
+        s.ReflectionIntensity = js.value("reflectionIntensity", s.ReflectionIntensity);
+    }
+
+    std::vector<Entity> SceneSerializer::DeserializeInto(Scene& scene, const json& data)
+    {
+        if (!data.contains("entities") || !data["entities"].is_array()) return {};
+        const json& records = data["entities"];
+        bool clash = false;
+        for (auto& rec : records)
+            if (uint64_t g = rec.value("guid", uint64_t(0)); g && !scene.FindEntityByGuid(Guid(g)).IsNull()) clash = true;
+        auto created = DeserializeEntities(scene, records, Entity::Null(), clash);
+        std::vector<Entity> roots;
+        for (Entity e : created)
+            if (scene.GetParent(e).IsNull()) roots.push_back(e);
+        return roots;
+    }
+
     Ref<Scene> SceneSerializer::Deserialize(const json& data)
     {
         auto scene = MakeRef<Scene>(data.value("name", std::string("Untitled")));
-        if (data.contains("settings"))
-        {
-            auto& js = data["settings"];
-            auto& s = scene->GetSettings();
-            auto vec = [](const json& a, float* out, int n) {
-                if (a.is_array()) for (int i = 0; i < n && i < (int)a.size(); ++i) out[i] = a[i].get<float>();
-            };
-            if (js.contains("ambientColor")) vec(js["ambientColor"], &s.AmbientColor.x, 3);
-            s.AmbientIntensity = js.value("ambientIntensity", s.AmbientIntensity);
-            if (js.contains("gravity2D")) vec(js["gravity2D"], &s.Gravity2D.x, 2);
-            if (js.contains("gravity")) vec(js["gravity"], &s.Gravity.x, 3);
-            s.Exposure = js.value("exposure", s.Exposure);
-            if (js.contains("skyTop")) vec(js["skyTop"], &s.SkyTop.x, 3);
-            if (js.contains("skyHorizon")) vec(js["skyHorizon"], &s.SkyHorizon.x, 3);
-            if (js.contains("skyGround")) vec(js["skyGround"], &s.SkyGround.x, 3);
-            s.Tonemapping = js.value("tonemapping", s.Tonemapping);
-            s.Bloom = js.value("bloom", s.Bloom);
-            s.BloomIntensity = js.value("bloomIntensity", s.BloomIntensity);
-            s.BloomThreshold = js.value("bloomThreshold", s.BloomThreshold);
-            s.BloomKnee = js.value("bloomKnee", s.BloomKnee);
-            s.BloomRadius = js.value("bloomRadius", s.BloomRadius);
-            s.FXAA = js.value("fxaa", s.FXAA);
-            s.Vignette = js.value("vignette", s.Vignette);
-            s.SSAO = js.value("ssao", s.SSAO);
-            s.SSAORadius = js.value("ssaoRadius", s.SSAORadius);
-            s.SSAOIntensity = js.value("ssaoIntensity", s.SSAOIntensity);
-            s.SSAOBias = js.value("ssaoBias", s.SSAOBias);
-            s.SSAODebug = js.value("ssaoDebug", s.SSAODebug);
-            s.SkyMode = js.value("skyMode", s.SkyMode);
-            s.SkyTexture = Guid(js.value("skyTexture", uint64_t(0)));
-            s.SkyIntensity = js.value("skyIntensity", s.SkyIntensity);
-            s.SkyRotation = js.value("skyRotation", s.SkyRotation);
-            s.ReflectionIntensity = js.value("reflectionIntensity", s.ReflectionIntensity);
-        }
+        if (data.contains("settings")) ReadSettings(data["settings"], scene->GetSettings());
         if (data.contains("entities")) DeserializeEntities(*scene, data["entities"], Entity::Null(), false);
         scene->UpdateTransforms();
         return scene;

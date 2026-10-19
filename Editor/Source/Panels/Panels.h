@@ -96,6 +96,7 @@ namespace Editor
         AssetHandle m_Handle = AssetHandle::None();
         AssetHandle m_FramedHandle = AssetHandle::None();
         int m_SelectedState = -1; // -2 = Any State
+        int m_Layer = 0;          // 0 = base layer, i = controller Layers[i - 1]
         glm::vec2 m_Pan{ 0.0f };
         float m_Zoom = 1.0f;
         glm::vec2 m_ContextPos{ 0.0f };

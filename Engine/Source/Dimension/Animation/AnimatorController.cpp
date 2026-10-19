@@ -18,9 +18,19 @@ namespace Dimension
 
     const AnimParameter* AnimatorController::FindParameter(const std::string& name) const
     {
+        if (ParameterOwner && ParameterOwner != this) return ParameterOwner->FindParameter(name);
         for (auto& p : Parameters)
             if (p.Name == name) return &p;
         return nullptr;
+    }
+
+    void AnimatorController::LinkLayers() const
+    {
+        for (auto& layer : Layers)
+        {
+            layer.Machine.ParameterOwner = this;
+            layer.Machine.LinkLayers();
+        }
     }
 
     void AnimatorController::RemoveState(int index)
@@ -37,16 +47,11 @@ namespace Dimension
         else if (DefaultState > index) --DefaultState;
     }
 
-    Ref<AnimatorController> AnimatorController::Load(const fs::path& path)
+    namespace
     {
-        auto c = MakeRef<AnimatorController>();
-        std::ifstream in(path);
-        if (!in) return c; // empty controller
-        try
+        // States, transitions and default state of one state machine (the base layer or an extra layer).
+        void ReadMachine(const json& j, AnimatorController& c)
         {
-            json j = json::parse(in);
-            for (auto& p : j.value("parameters", json::array()))
-                c->Parameters.push_back({ p.value("name", std::string()), (AnimParameterType)p.value("type", 0), p.value("default", 0.0f) });
             for (auto& s : j.value("states", json::array()))
             {
                 AnimState st;
@@ -61,7 +66,7 @@ namespace Dimension
                 for (auto& ev : s.value("events", json::array()))
                     st.Events.push_back({ ev.value("time", 0.0f), ev.value("function", std::string()) });
                 if (s.contains("position")) st.EditorPosition = { s["position"][0].get<float>(), s["position"][1].get<float>() };
-                c->States.push_back(st);
+                c.States.push_back(st);
             }
             for (auto& t : j.value("transitions", json::array()))
             {
@@ -73,10 +78,69 @@ namespace Dimension
                 tr.Duration = t.value("duration", 0.25f);
                 for (auto& cond : t.value("conditions", json::array()))
                     tr.Conditions.push_back({ cond.value("parameter", std::string()), (AnimConditionOp)cond.value("op", 4), cond.value("threshold", 0.0f) });
-                c->Transitions.push_back(tr);
+                c.Transitions.push_back(tr);
             }
-            c->DefaultState = j.value("defaultState", 0);
-            if (j.contains("anyStatePosition")) c->AnyStatePosition = { j["anyStatePosition"][0].get<float>(), j["anyStatePosition"][1].get<float>() };
+            c.DefaultState = j.value("defaultState", 0);
+            if (j.contains("anyStatePosition")) c.AnyStatePosition = { j["anyStatePosition"][0].get<float>(), j["anyStatePosition"][1].get<float>() };
+        }
+
+        void WriteMachine(const AnimatorController& c, json& j)
+        {
+            j["states"] = json::array();
+            for (auto& s : c.States)
+            {
+                json st{ { "name", s.Name }, { "clip", s.Clip }, { "speed", s.Speed }, { "loop", s.Loop },
+                         { "position", { s.EditorPosition.x, s.EditorPosition.y } } };
+                if (s.Motion != AnimMotionType::Clip)
+                {
+                    st["motion"] = (int)s.Motion;
+                    st["blendParameter"] = s.BlendParameter;
+                    st["children"] = json::array();
+                    for (auto& ch : s.Children) st["children"].push_back({ { "clip", ch.Clip }, { "threshold", ch.Threshold } });
+                }
+                if (!s.Events.empty())
+                {
+                    st["events"] = json::array();
+                    for (auto& ev : s.Events) st["events"].push_back({ { "time", ev.Time }, { "function", ev.Function } });
+                }
+                j["states"].push_back(std::move(st));
+            }
+            j["transitions"] = json::array();
+            for (auto& t : c.Transitions)
+            {
+                json conds = json::array();
+                for (auto& cond : t.Conditions) conds.push_back({ { "parameter", cond.Parameter }, { "op", (int)cond.Op }, { "threshold", cond.Threshold } });
+                j["transitions"].push_back({ { "from", t.From }, { "to", t.To }, { "hasExitTime", t.HasExitTime }, { "exitTime", t.ExitTime },
+                                             { "duration", t.Duration }, { "conditions", conds } });
+            }
+            j["defaultState"] = c.DefaultState;
+            j["anyStatePosition"] = { c.AnyStatePosition.x, c.AnyStatePosition.y };
+        }
+    }
+
+    Ref<AnimatorController> AnimatorController::Load(const fs::path& path)
+    {
+        auto c = MakeRef<AnimatorController>();
+        std::ifstream in(path);
+        if (!in) return c; // empty controller
+        try
+        {
+            json j = json::parse(in);
+            for (auto& p : j.value("parameters", json::array()))
+                c->Parameters.push_back({ p.value("name", std::string()), (AnimParameterType)p.value("type", 0), p.value("default", 0.0f) });
+            ReadMachine(j, *c);
+            for (auto& l : j.value("layers", json::array()))
+            {
+                AnimLayer layer;
+                layer.Name = l.value("name", layer.Name);
+                layer.Weight = l.value("weight", 1.0f);
+                layer.Blending = (AnimLayerBlending)l.value("blending", 0);
+                for (auto& m : l.value("mask", json::array()))
+                    if (m.is_string()) layer.Mask.push_back(m.get<std::string>());
+                ReadMachine(l, layer.Machine);
+                c->Layers.push_back(std::move(layer));
+            }
+            c->LinkLayers();
         }
         catch (const std::exception& e)
         {
@@ -90,35 +154,17 @@ namespace Dimension
         json j;
         j["parameters"] = json::array();
         for (auto& p : Parameters) j["parameters"].push_back({ { "name", p.Name }, { "type", (int)p.Type }, { "default", p.Default } });
-        j["states"] = json::array();
-        for (auto& s : States)
+        WriteMachine(*this, j);
+        if (!Layers.empty())
         {
-            json st{ { "name", s.Name }, { "clip", s.Clip }, { "speed", s.Speed }, { "loop", s.Loop },
-                     { "position", { s.EditorPosition.x, s.EditorPosition.y } } };
-            if (s.Motion != AnimMotionType::Clip)
+            j["layers"] = json::array();
+            for (auto& layer : Layers)
             {
-                st["motion"] = (int)s.Motion;
-                st["blendParameter"] = s.BlendParameter;
-                st["children"] = json::array();
-                for (auto& ch : s.Children) st["children"].push_back({ { "clip", ch.Clip }, { "threshold", ch.Threshold } });
+                json l{ { "name", layer.Name }, { "weight", layer.Weight }, { "blending", (int)layer.Blending }, { "mask", layer.Mask } };
+                WriteMachine(layer.Machine, l);
+                j["layers"].push_back(std::move(l));
             }
-            if (!s.Events.empty())
-            {
-                st["events"] = json::array();
-                for (auto& ev : s.Events) st["events"].push_back({ { "time", ev.Time }, { "function", ev.Function } });
-            }
-            j["states"].push_back(std::move(st));
         }
-        j["transitions"] = json::array();
-        for (auto& t : Transitions)
-        {
-            json conds = json::array();
-            for (auto& c : t.Conditions) conds.push_back({ { "parameter", c.Parameter }, { "op", (int)c.Op }, { "threshold", c.Threshold } });
-            j["transitions"].push_back({ { "from", t.From }, { "to", t.To }, { "hasExitTime", t.HasExitTime }, { "exitTime", t.ExitTime },
-                                         { "duration", t.Duration }, { "conditions", conds } });
-        }
-        j["defaultState"] = DefaultState;
-        j["anyStatePosition"] = { AnyStatePosition.x, AnyStatePosition.y };
         std::ofstream out(path);
         out << j.dump(2);
         return (bool)out;

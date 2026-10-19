@@ -125,12 +125,48 @@ namespace Dimension
             .Field("Sub Emitter", &PS::SubEmitter).Tooltip("Another Particle System that bursts at this system's particles")
             .Field("Sub Emitter Trigger", &PS::SubEmitterTrigger).Enum({ "Birth", "Collision", "Death" })
             .Field("Sub Emit Count", &PS::SubEmitCount).Range(0, 10000)
+            .Field("Texture Sheet", &PS::TextureSheet).Tooltip("Play the texture as a flipbook (a grid of frames) over each particle's life")
+            .Field("Sheet Columns", &PS::SheetColumns).Range(1, 64)
+            .Field("Sheet Rows", &PS::SheetRows).Range(1, 64)
+            .Field("Sheet Frames", &PS::SheetFrames).Range(0, 4096).Tooltip("0 = every cell")
+            .Field("Sheet Cycles", &PS::SheetCycles).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Times the animation plays over a lifetime")
+            .Field("Sheet Random Start", &PS::SheetRandomStart)
+            .Field("Noise", &PS::Noise).Tooltip("Swirling curl-noise drift")
+            .Field("Noise Strength", &PS::NoiseStrength).Range(0.0f, 1000.0f).Speed(0.02f).Tooltip("Units per second")
+            .Field("Noise Frequency", &PS::NoiseFrequency).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Noise features per unit")
+            .Field("Noise Scroll Speed", &PS::NoiseScrollSpeed).Range(0.0f, 100.0f).Speed(0.01f)
             .Field("Trails", &PS::Trails)
             .Field("Trail Lifetime", &PS::TrailLifetime).Range(0.01f, 10.0f).Speed(0.01f)
             .Field("Trail Width", &PS::TrailWidth).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Multiplier of the particle size")
             .Field("Texture", &PS::Texture).As(FieldType::Texture)
             .Field("Blend", &PS::Blend).Enum({ "Alpha", "Additive" })
             .Field("Sorting Order", &PS::SortingOrder);
+
+        Register<LineRendererComponent>("Line Renderer", "Effects")
+            .Field("Positions", &LineRendererComponent::Positions)
+            .Field("Use World Space", &LineRendererComponent::UseWorldSpace).Tooltip("Off: positions are relative to this object")
+            .Field("Loop", &LineRendererComponent::Loop).Tooltip("Connect the last point back to the first")
+            .Field("Width", &LineRendererComponent::Width).Range(0.0f, 1000.0f).Speed(0.005f)
+            .Field("Width Curve", &LineRendererComponent::WidthCurve).Tooltip("Width multiplier from the start (0) to the end (1)")
+            .Field("Color", &LineRendererComponent::ColorGradient).Tooltip("Color from the start (0) to the end (1)")
+            .Field("Alignment", &LineRendererComponent::Alignment).Enum({ "View", "Transform Z" })
+                .Tooltip("View: faces the camera. Transform Z: lies flat, facing this object's Z axis")
+            .Field("Texture", &LineRendererComponent::Texture).As(FieldType::Texture)
+            .Field("Texture Mode", &LineRendererComponent::TextureMode).Enum({ "Stretch", "Tile" }).Tooltip("Tile repeats the texture every world unit")
+            .Field("Blend", &LineRendererComponent::Blend).Enum({ "Alpha", "Additive" })
+            .Field("Sorting Order", &LineRendererComponent::SortingOrder);
+
+        Register<TrailRendererComponent>("Trail Renderer", "Effects")
+            .Field("Time", &TrailRendererComponent::Time).Range(0.01f, 60.0f).Speed(0.01f).Tooltip("Seconds each trail point lives")
+            .Field("Min Vertex Distance", &TrailRendererComponent::MinVertexDistance).Range(0.001f, 100.0f).Speed(0.005f)
+            .Field("Width", &TrailRendererComponent::Width).Range(0.0f, 1000.0f).Speed(0.005f)
+            .Field("Width Curve", &TrailRendererComponent::WidthCurve).Tooltip("Width multiplier from the head (0) to the tail (1)")
+            .Field("Color", &TrailRendererComponent::ColorGradient).Tooltip("Color from the head (0) to the tail (1)")
+            .Field("Emitting", &TrailRendererComponent::Emitting)
+            .Field("Texture", &TrailRendererComponent::Texture).As(FieldType::Texture)
+            .Field("Texture Mode", &TrailRendererComponent::TextureMode).Enum({ "Stretch", "Tile" })
+            .Field("Blend", &TrailRendererComponent::Blend).Enum({ "Alpha", "Additive" })
+            .Field("Sorting Order", &TrailRendererComponent::SortingOrder);
 
         Register<TextRendererComponent>("Text (3D)", "Rendering")
             .Field("Text", &TextRendererComponent::Text)
@@ -164,6 +200,13 @@ namespace Dimension
             .Field("Alignment", &UITextComponent::Align).Enum({ "Left", "Center", "Right" })
             .Field("Vertical Alignment", &UITextComponent::VerticalAlign).Enum({ "Top", "Middle", "Bottom" })
             .Field("Wrap", &UITextComponent::Wrap);
+        Register<ReflectionProbeComponent>("Reflection Probe", "Rendering")
+            .Field("Size", &ReflectionProbeComponent::Size).Speed(0.05f).Tooltip("Influence box: meshes whose center is inside use this probe")
+            .Field("Resolution", &ReflectionProbeComponent::Resolution).Enum({ "64", "128", "256", "512" })
+            .Field("Intensity", &ReflectionProbeComponent::Intensity).Range(0.0f, 10.0f).Speed(0.01f)
+            .Field("Box Projection", &ReflectionProbeComponent::BoxProjection).Tooltip("Reflections line up with the box's walls")
+            .Field("Realtime", &ReflectionProbeComponent::Realtime).Tooltip("Re-capture every frame (costly: six extra renders)");
+
         Register<TilemapComponent>("Tilemap", "Rendering")
             .Field("Tileset", &TilemapComponent::Tileset).As(FieldType::Texture).Tooltip("Sprite sheet; paint with Window > Tile Palette")
             .Field("Columns", &TilemapComponent::Columns).Range(1, 256)
@@ -205,8 +248,23 @@ namespace Dimension
             .Field("Spacing", &UILayoutGroupComponent::Spacing).Speed(0.5f)
             .Field("Padding", &UILayoutGroupComponent::Padding).Speed(0.5f).Tooltip("left, top, right, bottom")
             .Field("Stretch Children", &UILayoutGroupComponent::StretchChildren);
+        Register<UIDropdownComponent>("UI Dropdown", "UI")
+            .Field("Options", &UIDropdownComponent::Options)
+            .Field("Value", &UIDropdownComponent::Value).Range(0, 10000).Tooltip("Index of the selected option")
+            .Field("Font Size", &UIDropdownComponent::FontSize).Range(1.0f, 500.0f).Speed(0.5f)
+            .Field("Max Visible Items", &UIDropdownComponent::MaxVisibleItems).Range(1, 100).Tooltip("The open list scrolls beyond this")
+            .Field("Interactable", &UIDropdownComponent::Interactable)
+            .Field("Background Color", &UIDropdownComponent::BackgroundColor).As(FieldType::Color4)
+            .Field("Text Color", &UIDropdownComponent::TextColor).As(FieldType::Color4)
+            .Field("List Color", &UIDropdownComponent::ListColor).As(FieldType::Color4)
+            .Field("Highlight Color", &UIDropdownComponent::HighlightColor).As(FieldType::Color4);
+
         Register<UIScrollViewComponent>("UI Scroll View", "UI")
-            .Field("Scroll Speed", &UIScrollViewComponent::ScrollSpeed).Range(1.0f, 10000.0f).Speed(1.0f);
+            .Field("Scroll Speed", &UIScrollViewComponent::ScrollSpeed).Range(1.0f, 10000.0f).Speed(1.0f)
+            .Field("Scrollbar", &UIScrollViewComponent::Scrollbar).Tooltip("Shown while the content is taller than the view")
+            .Field("Scrollbar Width", &UIScrollViewComponent::ScrollbarWidth).Range(1.0f, 200.0f).Speed(0.25f)
+            .Field("Scrollbar Track Color", &UIScrollViewComponent::ScrollbarTrackColor).As(FieldType::Color4)
+            .Field("Scrollbar Handle Color", &UIScrollViewComponent::ScrollbarHandleColor).As(FieldType::Color4);
         Register<UIButtonComponent>("UI Button", "UI")
             .Field("Normal Color", &UIButtonComponent::NormalColor).As(FieldType::Color4)
             .Field("Hover Color", &UIButtonComponent::HoverColor).As(FieldType::Color4)
@@ -310,7 +368,12 @@ namespace Dimension
             .Field("Max Angle", &JointComponent::MaxAngle).Range(0.0f, 180.0f).Speed(0.5f)
             .Field("Min Distance", &JointComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.01f)
             .Field("Max Distance", &JointComponent::MaxDistance).Range(0.0f, 10000.0f).Speed(0.01f)
-            .Field("Enable Collision", &JointComponent::EnableCollision);
+            .Field("Enable Collision", &JointComponent::EnableCollision)
+            .Field("Use Motor", &JointComponent::UseMotor).Tooltip("Hinge: drive toward Motor Speed")
+            .Field("Motor Speed", &JointComponent::MotorSpeed).Speed(1.0f).Tooltip("Degrees per second")
+            .Field("Motor Max Torque", &JointComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(10.0f)
+            .Field("Break Force", &JointComponent::BreakForce).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Newtons; 0 = unbreakable")
+            .Field("Break Torque", &JointComponent::BreakTorque).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Newton-meters; 0 = unbreakable");
         Register<MeshColliderComponent>("Mesh Collider", "Physics")
             .Field("Mesh", &MeshColliderComponent::Mesh).As(FieldType::Mesh).Tooltip("None = the Mesh Renderer's mesh")
             .Field("Convex", &MeshColliderComponent::Convex).Tooltip("Use the convex hull (always on for dynamic bodies)")
@@ -325,7 +388,9 @@ namespace Dimension
             .Field("Step Offset", &CharacterControllerComponent::StepOffset).Range(0.0f, 10.0f).Speed(0.01f)
             .Field("Skin Width", &CharacterControllerComponent::SkinWidth).Range(0.001f, 1.0f).Speed(0.001f)
             .Field("Mass", &CharacterControllerComponent::Mass).Range(0.1f, 10000.0f).Speed(0.5f)
-            .Field("Push Strength", &CharacterControllerComponent::PushStrength).Range(0.0f, 100000.0f).Speed(1.0f);
+            .Field("Push Strength", &CharacterControllerComponent::PushStrength).Range(0.0f, 100000.0f).Speed(1.0f)
+            .Field("Ride Moving Platforms", &CharacterControllerComponent::RideMovingPlatforms)
+                .Tooltip("Standing on a moving (e.g. kinematic) body carries the character with it");
         Register<Joint2DComponent>("Joint 2D", "Physics 2D")
             .Field("Type", &Joint2DComponent::Type).Enum({ "Fixed", "Hinge", "Distance" })
             .Field("Connected Body", &Joint2DComponent::ConnectedBody).Tooltip("Empty = attached to the world")
@@ -335,7 +400,12 @@ namespace Dimension
             .Field("Lower Angle", &Joint2DComponent::LowerAngle).Range(-180.0f, 180.0f).Speed(0.5f)
             .Field("Upper Angle", &Joint2DComponent::UpperAngle).Range(-180.0f, 180.0f).Speed(0.5f)
             .Field("Distance", &Joint2DComponent::Distance).Range(0.0f, 10000.0f).Speed(0.01f)
-            .Field("Collide Connected", &Joint2DComponent::CollideConnected);
+            .Field("Collide Connected", &Joint2DComponent::CollideConnected)
+            .Field("Use Motor", &Joint2DComponent::UseMotor).Tooltip("Hinge: drive toward Motor Speed")
+            .Field("Motor Speed", &Joint2DComponent::MotorSpeed).Speed(1.0f).Tooltip("Degrees per second")
+            .Field("Motor Max Torque", &Joint2DComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(1.0f)
+            .Field("Break Force", &Joint2DComponent::BreakForce).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Newtons; 0 = unbreakable")
+            .Field("Break Torque", &Joint2DComponent::BreakTorque).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Newton-meters; 0 = unbreakable");
         BuiltinCount() = Infos().size();
     }
 }

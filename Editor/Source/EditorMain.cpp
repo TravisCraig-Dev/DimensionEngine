@@ -30,6 +30,9 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--build") && i + 1 < argc) options.BuildFolder = argv[++i];
         else if (!std::strcmp(argv[i], "--open") && i + 1 < argc) options.OpenWindow = argv[++i];
         else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) options.ScenePath = argv[++i];
+        else if (!std::strcmp(argv[i], "--prefab") && i + 1 < argc) options.PrefabPath = argv[++i];
+        else if (!std::strcmp(argv[i], "--open-scene") && i + 1 < argc) options.OpenSceneLater = argv[++i];
+        else if (!std::strcmp(argv[i], "--menu-open-scene")) options.MenuOpenScene = true;
         else projectDir = argv[i];
     }
 

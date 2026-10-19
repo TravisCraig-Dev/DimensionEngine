@@ -3,7 +3,9 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Renderer/Texture.h"
+#include "Dimension/Renderer/RenderDevice.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <tuple>
 
@@ -123,6 +125,7 @@ namespace Dimension::UI
                 glm::vec2 viewMin = rect->ComputedMin, viewMax = rect->ComputedMax;
                 glm::vec2 innerClipMin = glm::max(clipMin, viewMin), innerClipMax = glm::min(clipMax, viewMax);
                 bool first = true;
+                view->MaxScroll = 0.0f;
                 for (Entity c : ctx.TheScene.GetChildren(e))
                 {
                     if (!first || !HasRect(reg, c))
@@ -140,6 +143,7 @@ namespace Dimension::UI
                     if (auto* cg = reg.TryGet<UILayoutGroupComponent>(c); cg && cg->Direction == UILayoutDirection::Vertical)
                         size.y = std::max(size.y, LayoutGroupExtent(ctx, c, *cg));
                     float maxScroll = std::max(0.0f, (cmin.y + size.y - viewMax.y) / s);
+                    view->MaxScroll = maxScroll;
                     view->ScrollPosition = std::clamp(view->ScrollPosition, 0.0f, maxScroll);
                     cmin.y -= view->ScrollPosition * s;
                     glm::vec2 cmax = cmin + size;
@@ -162,7 +166,55 @@ namespace Dimension::UI
         bool BlocksPointer(Registry& reg, Entity e)
         {
             return reg.Has<UIImageComponent>(e) || reg.Has<UIButtonComponent>(e) || reg.Has<UISliderComponent>(e) ||
-                   reg.Has<UIToggleComponent>(e) || reg.Has<UIInputFieldComponent>(e);
+                   reg.Has<UIToggleComponent>(e) || reg.Has<UIInputFieldComponent>(e) || reg.Has<UIDropdownComponent>(e);
+        }
+
+        bool InBox(const glm::vec2& p, const glm::vec2& mn, const glm::vec2& mx)
+        {
+            return p.x >= mn.x && p.y >= mn.y && p.x <= mx.x && p.y <= mx.y;
+        }
+
+        // Vertical scrollbar along a scroll view's right edge (screen pixels); false while the content fits.
+        struct ScrollbarGeometry
+        {
+            glm::vec2 TrackMin, TrackMax, HandleMin, HandleMax;
+        };
+
+        bool GetScrollbar(const UIRectComponent& r, const UIScrollViewComponent& view, ScrollbarGeometry& g)
+        {
+            if (!view.Scrollbar || view.MaxScroll <= 0.0f) return false;
+            float s = r.ComputedScale, inset = 4.0f * s, w = std::max(2.0f, view.ScrollbarWidth * s);
+            g.TrackMin = { r.ComputedMax.x - inset - w, r.ComputedMin.y + inset };
+            g.TrackMax = { r.ComputedMax.x - inset, r.ComputedMax.y - inset };
+            float trackH = g.TrackMax.y - g.TrackMin.y;
+            if (trackH <= 0.0f) return false;
+            float viewH = (r.ComputedMax.y - r.ComputedMin.y) / s; // canvas units, like MaxScroll
+            float handleH = std::clamp(trackH * viewH / (viewH + view.MaxScroll), std::min(24.0f * s, trackH), trackH);
+            float t = std::clamp(view.ScrollPosition / view.MaxScroll, 0.0f, 1.0f);
+            g.HandleMin = { g.TrackMin.x, g.TrackMin.y + (trackH - handleH) * t };
+            g.HandleMax = { g.TrackMax.x, g.HandleMin.y + handleH };
+            return true;
+        }
+
+        // The open list of a dropdown: below the box, or above it when it does not fit on screen.
+        struct DropdownList
+        {
+            glm::vec2 Min, Max;
+            float ItemHeight;
+            int Visible;
+        };
+
+        DropdownList GetDropdownList(const UIRectComponent& r, const UIDropdownComponent& d, const glm::vec2& screen)
+        {
+            DropdownList l;
+            l.ItemHeight = std::max(1.0f, r.ComputedMax.y - r.ComputedMin.y);
+            int n = (int)d.Options.size();
+            l.Visible = std::min(n, std::max(1, d.MaxVisibleItems));
+            float h = l.Visible * l.ItemHeight;
+            bool below = r.ComputedMax.y + h <= screen.y || r.ComputedMin.y - h < 0.0f;
+            l.Min = { r.ComputedMin.x, below ? r.ComputedMax.y : r.ComputedMin.y - h };
+            l.Max = { r.ComputedMax.x, l.Min.y + h };
+            return l;
         }
 
         void PopCodepoint(std::string& s)
@@ -226,8 +278,91 @@ namespace Dimension::UI
             return w * pixelSize / Font::kBakeSize;
         }
 
+        // Small solid triangle built from stacked rows (UI quads are axis-aligned).
+        void EmitArrow(std::vector<DrawCommand>& out, glm::vec2 center, float width, bool up, const glm::vec4& color, uint32_t white,
+                       const UIRectComponent& clip)
+        {
+            constexpr int kRows = 8;
+            float height = width * 0.55f, rowH = height / kRows;
+            for (int i = 0; i < kRows; ++i)
+            {
+                float f = (float)i / kRows; // 0 = wide end
+                float w = width * (1.0f - f);
+                float y = up ? center.y + height * 0.5f - (i + 1) * rowH : center.y - height * 0.5f + i * rowH;
+                Emit(out, { center.x - w * 0.5f, y }, { center.x + w * 0.5f, y + rowH + 0.5f }, { 0, 0 }, { 1, 1 }, color, white, clip);
+            }
+        }
+
+        // ---- Text editing helpers (byte offsets on UTF-8 boundaries) ----
+        size_t NextCodepoint(const std::string& s, size_t i)
+        {
+            if (i >= s.size()) return s.size();
+            ++i;
+            while (i < s.size() && ((uint8_t)s[i] & 0xC0) == 0x80) ++i;
+            return i;
+        }
+
+        size_t PrevCodepoint(const std::string& s, size_t i)
+        {
+            if (i == 0) return 0;
+            i = std::min(i, s.size()) - 1;
+            while (i > 0 && ((uint8_t)s[i] & 0xC0) == 0x80) --i;
+            return i;
+        }
+
+        bool IsWordChar(char c) { return std::isalnum((unsigned char)c) || c == '_' || (unsigned char)c >= 0x80; }
+
+        size_t WordLeft(const std::string& s, size_t i)
+        {
+            while (i > 0 && !IsWordChar(s[i - 1])) --i;
+            while (i > 0 && IsWordChar(s[i - 1])) --i;
+            return i;
+        }
+
+        size_t WordRight(const std::string& s, size_t i)
+        {
+            while (i < s.size() && !IsWordChar(s[i])) ++i;
+            while (i < s.size() && IsWordChar(s[i])) ++i;
+            return i;
+        }
+
+        // Caret position (byte offset) nearest to x, measured from the start of the text.
+        size_t CaretFromX(const std::string& s, float x, float pixelSize)
+        {
+            size_t best = 0;
+            float bestDist = std::abs(x);
+            for (size_t i = NextCodepoint(s, 0); i <= s.size(); i = NextCodepoint(s, i))
+            {
+                float d = std::abs(MeasureText(s.substr(0, i), pixelSize) - x);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    best = i;
+                }
+                if (i == s.size()) break;
+            }
+            return best;
+        }
+
+        TextMeasure& MeasureFunction()
+        {
+            static TextMeasure measure;
+            return measure;
+        }
+
         constexpr glm::vec4 kDisabledTint{ 0.6f, 0.6f, 0.6f, 0.8f };
         constexpr glm::vec4 kPressedTint{ 0.85f, 0.85f, 0.85f, 1.0f };
+    }
+
+    void SetTextMeasure(TextMeasure measure) { MeasureFunction() = std::move(measure); }
+
+    float MeasureText(const std::string& text, float pixelSize)
+    {
+        if (auto& custom = MeasureFunction()) return custom(text, pixelSize);
+        // Without a GPU (headless tools, tests) the font cannot be loaded: approximate the width.
+        if (!RenderDevice::Exists()) return 0.5f * pixelSize * (float)CodepointCount(text);
+        auto font = AssetManager::GetDefaultFont();
+        return font ? TextWidth(*font, text, pixelSize) : 0.0f;
     }
 
     size_t CodepointCount(const std::string& s)
@@ -264,34 +399,125 @@ namespace Dimension::UI
         auto& reg = scene.GetRegistry();
         auto order = ComputeLayout(scene, screen);
 
-        // Topmost element under the pointer (last drawn wins); widgets and images block, text does not.
-        Entity hovered = Entity::Null();
-        for (auto it = order.rbegin(); it != order.rend(); ++it)
-            if (BlocksPointer(reg, *it) && Contains(reg.Get<UIRectComponent>(*it), pointer.Position))
-            {
-                hovered = *it;
-                break;
-            }
-
-        // The wheel scrolls the innermost scroll view under the pointer (clamped by the next layout).
-        if (pointer.Scroll != 0.0f)
-            for (auto it = order.rbegin(); it != order.rend(); ++it)
-                if (auto* view = reg.TryGet<UIScrollViewComponent>(*it); view && Contains(reg.Get<UIRectComponent>(*it), pointer.Position))
-                {
-                    view->ScrollPosition = std::max(0.0f, view->ScrollPosition - pointer.Scroll * view->ScrollSpeed);
-                    break;
-                }
-
         // Events are collected and dispatched after iteration: scripts may change the scene.
         std::vector<Entity> clicked;
         std::vector<std::pair<Entity, float>> values;
         std::vector<std::tuple<Entity, std::string, bool>> texts;
 
+        // An open dropdown list is modal and a scrollbar drag owns the pointer: the other widgets see `input`
+        // with the click and wheel removed.
+        PointerState input = pointer;
+        Entity captured = Entity::Null();
+        for (auto [e, dd] : reg.ViewOf<UIDropdownComponent>())
+        {
+            if (!dd.Open) continue;
+            auto* r = reg.TryGet<UIRectComponent>(e);
+            if (!captured.IsNull() || !r || !reg.Get<TransformComponent>(e).ActiveInHierarchy || !dd.Interactable || dd.Options.empty())
+            {
+                dd.Open = false; // at most one list is open
+                continue;
+            }
+            captured = e;
+            int n = (int)dd.Options.size();
+            DropdownList list = GetDropdownList(*r, dd, screen);
+            float maxScroll = (float)(n - list.Visible);
+            bool inList = InBox(pointer.Position, list.Min, list.Max);
+            if (inList && pointer.Scroll != 0.0f) dd.ListScroll -= pointer.Scroll;
+            dd.ListScroll = std::clamp(dd.ListScroll, 0.0f, maxScroll);
+            dd.HoveredItem = inList ? std::clamp((int)std::floor((pointer.Position.y - list.Min.y) / list.ItemHeight + dd.ListScroll), 0, n - 1) : -1;
+            if (pointer.Pressed)
+            {
+                // Picking an item selects it; a click anywhere else (including the box) just closes the list.
+                if (dd.HoveredItem >= 0 && dd.HoveredItem != dd.Value)
+                {
+                    dd.Value = dd.HoveredItem;
+                    values.emplace_back(e, (float)dd.Value);
+                }
+                dd.Open = false;
+                dd.Pressed = false;
+            }
+            input.Pressed = input.Released = false;
+            input.Scroll = 0.0f;
+        }
+
+        if (input.Pressed)
+            for (auto it = order.rbegin(); it != order.rend(); ++it)
+            {
+                auto* view = reg.TryGet<UIScrollViewComponent>(*it);
+                ScrollbarGeometry g;
+                auto& r = reg.Get<UIRectComponent>(*it);
+                if (!view || !GetScrollbar(r, *view, g) || !Contains(r, pointer.Position)) continue;
+                glm::vec2 grow(3.0f * r.ComputedScale, 0.0f); // a slightly wider hit area
+                if (!InBox(pointer.Position, g.TrackMin - grow, g.TrackMax + grow)) continue;
+                // Grab the handle where it was clicked; clicking the track centres the handle on the pointer.
+                view->DraggingScrollbar = true;
+                view->DragOffset = InBox(pointer.Position, g.HandleMin - grow, g.HandleMax + grow) ? pointer.Position.y - g.HandleMin.y
+                                                                                                    : (g.HandleMax.y - g.HandleMin.y) * 0.5f;
+                input.Pressed = false;
+                break;
+            }
+        for (auto [e, view] : reg.ViewOf<UIScrollViewComponent>())
+        {
+            if (!pointer.Down) view.DraggingScrollbar = false;
+            if (!view.DraggingScrollbar) continue;
+            auto* r = reg.TryGet<UIRectComponent>(e);
+            ScrollbarGeometry g;
+            if (!r || !GetScrollbar(*r, view, g))
+            {
+                view.DraggingScrollbar = false;
+                continue;
+            }
+            float range = (g.TrackMax.y - g.TrackMin.y) - (g.HandleMax.y - g.HandleMin.y);
+            float t = range > 0.0f ? std::clamp((pointer.Position.y - view.DragOffset - g.TrackMin.y) / range, 0.0f, 1.0f) : 0.0f;
+            view.ScrollPosition = t * view.MaxScroll;
+            if (captured.IsNull()) captured = e;
+            input.Pressed = input.Released = false;
+        }
+
+        // Topmost element under the pointer (last drawn wins); widgets and images block, text does not.
+        Entity hovered = captured;
+        if (hovered.IsNull())
+            for (auto it = order.rbegin(); it != order.rend(); ++it)
+                if (BlocksPointer(reg, *it) && Contains(reg.Get<UIRectComponent>(*it), pointer.Position))
+                {
+                    hovered = *it;
+                    break;
+                }
+
+        // The wheel scrolls the innermost scroll view under the pointer (clamped by the next layout).
+        if (input.Scroll != 0.0f)
+            for (auto it = order.rbegin(); it != order.rend(); ++it)
+                if (auto* view = reg.TryGet<UIScrollViewComponent>(*it); view && Contains(reg.Get<UIRectComponent>(*it), pointer.Position))
+                {
+                    view->ScrollPosition = std::max(0.0f, view->ScrollPosition - input.Scroll * view->ScrollSpeed);
+                    break;
+                }
+
+        for (auto [e, dd] : reg.ViewOf<UIDropdownComponent>())
+        {
+            int n = (int)dd.Options.size();
+            dd.Value = std::clamp(dd.Value, 0, std::max(0, n - 1));
+            if (dd.Open) continue;
+            bool over = e == hovered && dd.Interactable;
+            if (input.Pressed && over) dd.Pressed = true;
+            if (input.Released)
+            {
+                if (dd.Pressed && over && n > 0)
+                {
+                    dd.Open = true;
+                    dd.HoveredItem = -1;
+                    int visible = std::min(n, std::max(1, dd.MaxVisibleItems));
+                    dd.ListScroll = (float)std::clamp(dd.Value - visible + 1, 0, n - visible); // keep the selection in view
+                }
+                dd.Pressed = false;
+            }
+        }
+
         for (auto [e, button] : reg.ViewOf<UIButtonComponent>())
         {
             button.Hovered = e == hovered && button.Interactable;
-            if (pointer.Pressed && button.Hovered) button.Pressed = true;
-            if (pointer.Released)
+            if (input.Pressed && button.Hovered) button.Pressed = true;
+            if (input.Released)
             {
                 if (button.Pressed && button.Hovered) clicked.push_back(e);
                 button.Pressed = false;
@@ -300,7 +526,7 @@ namespace Dimension::UI
 
         for (auto [e, slider] : reg.ViewOf<UISliderComponent>())
         {
-            if (pointer.Pressed && e == hovered && slider.Interactable) slider.Dragging = true;
+            if (input.Pressed && e == hovered && slider.Interactable) slider.Dragging = true;
             if (!pointer.Down) slider.Dragging = false;
             if (!slider.Dragging) continue;
             auto& r = reg.Get<UIRectComponent>(e);
@@ -319,8 +545,8 @@ namespace Dimension::UI
         for (auto [e, toggle] : reg.ViewOf<UIToggleComponent>())
         {
             bool over = e == hovered && toggle.Interactable;
-            if (pointer.Pressed && over) toggle.Pressed = true;
-            if (pointer.Released)
+            if (input.Pressed && over) toggle.Pressed = true;
+            if (input.Released)
             {
                 if (toggle.Pressed && over)
                 {
@@ -331,36 +557,163 @@ namespace Dimension::UI
             }
         }
 
+        // Input fields: caret, selection (keyboard and mouse drag), clipboard, Tab to the next field.
+        std::vector<Entity> fieldOrder;
+        for (Entity e : order)
+            if (auto* f = reg.TryGet<UIInputFieldComponent>(e); f && f->Interactable) fieldOrder.push_back(e);
+        Entity tabFrom = Entity::Null();
+        bool tabBackwards = false;
         for (auto [e, field] : reg.ViewOf<UIInputFieldComponent>())
         {
-            if (pointer.Pressed)
+            auto* rect = reg.TryGet<UIRectComponent>(e);
+            if (!rect) continue;
+            std::string& text = field.Text;
+            float scale = rect->ComputedScale, pad = 10.0f * scale, px = field.FontSize * scale;
+            float textLeft = rect->ComputedMin.x + pad;
+            auto caretAt = [&](float x) { return (int32_t)CaretFromX(text, x - textLeft + field.ScrollX, px); };
+            field.Caret = std::clamp(field.Caret, 0, (int32_t)text.size());
+            if (field.SelectionAnchor > (int32_t)text.size()) field.SelectionAnchor = -1;
+
+            if (input.Pressed)
             {
-                bool focus = e == hovered && field.Interactable;
-                if (focus && !field.Focused) field.CaretTime = 0.0f;
-                field.Focused = focus;
+                if (e == hovered && field.Interactable)
+                {
+                    if (!field.Focused) field.CaretTime = 0.0f;
+                    field.Focused = true;
+                    field.Caret = caretAt(pointer.Position.x);
+                    field.SelectionAnchor = field.Caret;
+                    field.Selecting = true;
+                }
+                else
+                    field.Focused = false;
             }
-            if (!field.Focused) continue;
+            if (field.Selecting)
+            {
+                if (pointer.Down) field.Caret = caretAt(pointer.Position.x);
+                else field.Selecting = false;
+            }
+            if (!field.Focused)
+            {
+                field.SelectionAnchor = -1;
+                field.Selecting = false;
+                field.ScrollX = 0.0f;
+                continue;
+            }
+
             field.CaretTime += dt;
-            std::string before = field.Text;
-            for (size_t i = 0; i < pointer.Text.size();)
+            std::string before = text;
+            int32_t caretBefore = field.Caret, anchorBefore = field.SelectionAnchor;
+            auto hasSelection = [&] { return field.SelectionAnchor >= 0 && field.SelectionAnchor != field.Caret; };
+            auto selectionLo = [&] { return (size_t)std::min(field.Caret, field.SelectionAnchor); };
+            auto selectionHi = [&] { return (size_t)std::max(field.Caret, field.SelectionAnchor); };
+            auto eraseSelection = [&] {
+                if (!hasSelection()) return false;
+                size_t lo = selectionLo(), hi = selectionHi();
+                text.erase(lo, hi - lo);
+                field.Caret = (int32_t)lo;
+                field.SelectionAnchor = -1;
+                return true;
+            };
+            auto insert = [&](const std::string& typed) {
+                eraseSelection();
+                std::string add;
+                size_t count = CodepointCount(text);
+                for (size_t i = 0; i < typed.size();)
+                {
+                    unsigned char c = (unsigned char)typed[i];
+                    size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
+                    bool printable = c >= 32 && c != 127; // also drops pasted newlines and tabs
+                    if (printable && (field.CharacterLimit <= 0 || count < (size_t)field.CharacterLimit))
+                    {
+                        add.append(typed, i, len);
+                        ++count;
+                    }
+                    i += len;
+                }
+                text.insert((size_t)field.Caret, add);
+                field.Caret += (int32_t)add.size();
+                field.SelectionAnchor = -1;
+            };
+            auto moveCaret = [&](size_t to) {
+                if (pointer.Shift)
+                {
+                    if (field.SelectionAnchor < 0) field.SelectionAnchor = field.Caret;
+                }
+                else
+                    field.SelectionAnchor = -1;
+                field.Caret = (int32_t)to;
+            };
+
+            if (pointer.SelectAll)
             {
-                unsigned char c = (unsigned char)pointer.Text[i];
-                size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
-                bool printable = c >= 32 && c != 127;
-                if (printable && (field.CharacterLimit <= 0 || CodepointCount(field.Text) < (size_t)field.CharacterLimit))
-                    field.Text.append(pointer.Text, i, len);
-                i += len;
+                field.SelectionAnchor = 0;
+                field.Caret = (int32_t)text.size();
             }
-            if (pointer.Backspace) PopCodepoint(field.Text);
-            if (field.Text != before)
+            if ((pointer.Copy || pointer.Cut) && hasSelection() && pointer.SetClipboard)
+                pointer.SetClipboard(text.substr(selectionLo(), selectionHi() - selectionLo()));
+            if (pointer.Cut) eraseSelection();
+            if (pointer.Paste) insert(pointer.PasteText);
+            if (!pointer.Text.empty()) insert(pointer.Text);
+            if (pointer.Backspace && !eraseSelection())
             {
-                field.CaretTime = 0.0f;
-                texts.emplace_back(e, field.Text, false);
+                size_t from = pointer.Ctrl ? WordLeft(text, field.Caret) : PrevCodepoint(text, field.Caret);
+                text.erase(from, field.Caret - from);
+                field.Caret = (int32_t)from;
             }
+            if (pointer.Delete && !eraseSelection())
+            {
+                size_t to = pointer.Ctrl ? WordRight(text, field.Caret) : NextCodepoint(text, field.Caret);
+                text.erase(field.Caret, to - field.Caret);
+            }
+            if (pointer.Left)
+            {
+                if (!pointer.Shift && hasSelection()) { field.Caret = (int32_t)selectionLo(); field.SelectionAnchor = -1; }
+                else moveCaret(pointer.Ctrl ? WordLeft(text, field.Caret) : PrevCodepoint(text, field.Caret));
+            }
+            if (pointer.Right)
+            {
+                if (!pointer.Shift && hasSelection()) { field.Caret = (int32_t)selectionHi(); field.SelectionAnchor = -1; }
+                else moveCaret(pointer.Ctrl ? WordRight(text, field.Caret) : NextCodepoint(text, field.Caret));
+            }
+            if (pointer.Home) moveCaret(0);
+            if (pointer.End) moveCaret(text.size());
+            if (pointer.Tab)
+            {
+                tabFrom = e;
+                tabBackwards = pointer.Shift;
+            }
+
+            if (text != before || field.Caret != caretBefore || field.SelectionAnchor != anchorBefore) field.CaretTime = 0.0f;
+            if (text != before) texts.emplace_back(e, text, false);
             if (pointer.Enter)
             {
                 field.Focused = false;
-                texts.emplace_back(e, field.Text, true);
+                field.SelectionAnchor = -1;
+                texts.emplace_back(e, text, true);
+            }
+
+            // Keep the caret inside the visible part of the field.
+            float avail = std::max(1.0f, rect->ComputedMax.x - rect->ComputedMin.x - 2.0f * pad);
+            float caretX = MeasureText(text.substr(0, field.Caret), px), total = MeasureText(text, px);
+            if (caretX - field.ScrollX > avail) field.ScrollX = caretX - avail;
+            if (caretX - field.ScrollX < 0.0f) field.ScrollX = caretX;
+            field.ScrollX = std::clamp(field.ScrollX, 0.0f, std::max(0.0f, total - avail));
+        }
+        if (!tabFrom.IsNull() && fieldOrder.size() > 1)
+        {
+            auto it = std::find(fieldOrder.begin(), fieldOrder.end(), tabFrom);
+            if (it != fieldOrder.end())
+            {
+                size_t n = fieldOrder.size(), i = (size_t)std::distance(fieldOrder.begin(), it);
+                Entity next = fieldOrder[tabBackwards ? (i + n - 1) % n : (i + 1) % n];
+                auto& from = reg.Get<UIInputFieldComponent>(tabFrom);
+                from.Focused = false;
+                from.SelectionAnchor = -1;
+                auto& to = reg.Get<UIInputFieldComponent>(next);
+                to.Focused = true;
+                to.CaretTime = 0.0f;
+                to.SelectionAnchor = 0; // like Unity, tabbing in selects the text
+                to.Caret = (int32_t)to.Text.size();
             }
         }
 
@@ -447,23 +800,43 @@ namespace Dimension::UI
                     UIRectComponent inner = rect; // text is clipped to the padded field
                     inner.ClipMin = glm::max(rect.ClipMin, mn + glm::vec2(pad * 0.5f, 0.0f));
                     inner.ClipMax = glm::min(rect.ClipMax, mx - glm::vec2(pad * 0.5f, 0.0f));
-                    float avail = size.x - 2.0f * pad;
-                    bool empty = field->Text.empty();
-                    float width = empty ? 0.0f : TextWidth(*font, field->Text, px);
-                    float shift = std::max(0.0f, width - avail); // keep the caret end visible
-                    glm::vec2 origin{ mn.x + pad - shift, mn.y };
-                    if (empty && !field->Placeholder.empty() && !field->Focused)
+                    const std::string& text = field->Text;
+                    glm::vec2 origin{ mn.x + pad - field->ScrollX, mn.y };
+                    size_t caret = std::min((size_t)std::max(field->Caret, 0), text.size());
+                    float lineH = px * 1.1f, lineY = mn.y + (size.y - lineH) * 0.5f;
+                    if (field->Focused && field->SelectionAnchor >= 0 && field->SelectionAnchor != (int32_t)caret)
+                    {
+                        size_t lo = std::min(caret, (size_t)field->SelectionAnchor), hi = std::max(caret, std::min((size_t)field->SelectionAnchor, text.size()));
+                        float x0 = origin.x + MeasureText(text.substr(0, lo), px), x1 = origin.x + MeasureText(text.substr(0, hi), px);
+                        Emit(out, { x0, lineY }, { x1, lineY + lineH }, { 0, 0 }, { 1, 1 }, { 0.25f, 0.55f, 0.95f, 0.35f }, white, inner);
+                    }
+                    if (text.empty() && !field->Placeholder.empty() && !field->Focused)
                         EmitText(out, *font, field->Placeholder, px, origin, size.y, field->PlaceholderColor, inner);
-                    else if (!empty)
-                        EmitText(out, *font, field->Text, px, origin, size.y, field->TextColor, inner);
+                    else if (!text.empty())
+                        EmitText(out, *font, text, px, origin, size.y, field->TextColor, inner);
                     if (field->Focused && std::fmod(field->CaretTime, 1.0f) < 0.55f)
                     {
-                        float cx = origin.x + width + 1.0f * s;
-                        float h = px * 1.1f;
-                        float cy = mn.y + (size.y - h) * 0.5f;
-                        Emit(out, { cx, cy }, { cx + std::max(1.0f, 2.0f * s), cy + h }, { 0, 0 }, { 1, 1 }, field->TextColor, white, inner);
+                        float cx = origin.x + MeasureText(text.substr(0, caret), px);
+                        Emit(out, { cx, lineY }, { cx + std::max(1.0f, 2.0f * s), lineY + lineH }, { 0, 0 }, { 1, 1 }, field->TextColor, white, inner);
                     }
                 }
+            }
+
+            if (auto* dd = reg.TryGet<UIDropdownComponent>(e))
+            {
+                glm::vec4 dim = dd->Interactable ? glm::vec4(1.0f) : kDisabledTint;
+                if (!reg.Has<UIImageComponent>(e))
+                {
+                    glm::vec4 bg = dd->BackgroundColor * dim;
+                    if (dd->Pressed || dd->Open) bg *= kPressedTint;
+                    Emit(out, mn, mx, { 0, 0 }, { 1, 1 }, bg, white, rect);
+                }
+                float pad = 10.0f * s, arrow = std::min(size.y * 0.4f, 18.0f * s);
+                UIRectComponent inner = rect; // the label stops before the arrow
+                inner.ClipMax.x = std::min(rect.ClipMax.x, mx.x - pad * 1.5f - arrow);
+                if (auto font = AssetManager::GetDefaultFont(); font && dd->Value >= 0 && dd->Value < (int)dd->Options.size())
+                    EmitText(out, *font, dd->Options[dd->Value], dd->FontSize * s, { mn.x + pad, mn.y }, size.y, dd->TextColor * dim, inner);
+                EmitArrow(out, { mx.x - pad - arrow * 0.5f, mn.y + size.y * 0.5f }, arrow, dd->Open, dd->TextColor * dim, white, rect);
             }
 
             if (auto* text = reg.TryGet<UITextComponent>(e); text && !text->Text.empty())
@@ -479,6 +852,63 @@ namespace Dimension::UI
                 glm::vec2 origin = mn + glm::vec2(0.0f, y);
                 uint32_t atlas = font->GetAtlas()->GetBindlessIndex();
                 for (auto& q : quads) Emit(out, origin + q.Min, origin + q.Max, q.UVMin, q.UVMax, text->Color, atlas, rect);
+            }
+        }
+
+        // Scrollbars sit on top of their view's content.
+        for (Entity e : order)
+        {
+            auto* view = reg.TryGet<UIScrollViewComponent>(e);
+            ScrollbarGeometry g;
+            if (!view || !GetScrollbar(reg.Get<UIRectComponent>(e), *view, g)) continue;
+            const auto& rect = reg.Get<UIRectComponent>(e);
+            Emit(out, g.TrackMin, g.TrackMax, { 0, 0 }, { 1, 1 }, view->ScrollbarTrackColor, white, rect);
+            glm::vec4 handle = view->ScrollbarHandleColor;
+            if (view->DraggingScrollbar) handle.a = std::min(1.0f, handle.a * 1.5f);
+            Emit(out, g.HandleMin, g.HandleMax, { 0, 0 }, { 1, 1 }, handle, white, rect);
+        }
+
+        // Open dropdown lists last, over everything and unclipped by their parents.
+        UIRectComponent screenClip;
+        screenClip.ClipMin = glm::vec2(0.0f);
+        screenClip.ClipMax = screen;
+        auto font = AssetManager::GetDefaultFont();
+        for (Entity e : order)
+        {
+            auto* dd = reg.TryGet<UIDropdownComponent>(e);
+            if (!dd || !dd->Open || dd->Options.empty()) continue;
+            const auto& rect = reg.Get<UIRectComponent>(e);
+            float s = rect.ComputedScale, pad = 10.0f * s;
+            DropdownList list = GetDropdownList(rect, *dd, screen);
+            Emit(out, list.Min + glm::vec2(4.0f * s), list.Max + glm::vec2(4.0f * s), { 0, 0 }, { 1, 1 }, { 0, 0, 0, 0.3f }, white, screenClip);
+            Emit(out, list.Min, list.Max, { 0, 0 }, { 1, 1 }, dd->ListColor, white, screenClip);
+            UIRectComponent listClip = screenClip;
+            listClip.ClipMin = glm::max(list.Min, glm::vec2(0.0f));
+            listClip.ClipMax = glm::min(list.Max, screen);
+            int n = (int)dd->Options.size();
+            int first = (int)std::floor(dd->ListScroll);
+            for (int i = first; i < std::min(n, first + list.Visible + 1); ++i)
+            {
+                float y = list.Min.y + (i - dd->ListScroll) * list.ItemHeight;
+                glm::vec2 a{ list.Min.x, y }, b{ list.Max.x, y + list.ItemHeight };
+                bool hot = i == dd->HoveredItem;
+                if (hot) Emit(out, a, b, { 0, 0 }, { 1, 1 }, dd->HighlightColor, white, listClip);
+                else if (i == dd->Value) Emit(out, a, b, { 0, 0 }, { 1, 1 }, dd->HighlightColor * glm::vec4(1, 1, 1, 0.2f), white, listClip);
+                if (i == dd->Value) // selection marker
+                {
+                    float m = list.ItemHeight * 0.18f;
+                    Emit(out, { b.x - pad - m * 2.0f, y + list.ItemHeight * 0.5f - m }, { b.x - pad, y + list.ItemHeight * 0.5f + m }, { 0, 0 }, { 1, 1 },
+                         hot ? glm::vec4(1.0f) : dd->HighlightColor, white, listClip);
+                }
+                if (font)
+                    EmitText(out, *font, dd->Options[i], dd->FontSize * s, { a.x + pad, y }, list.ItemHeight, hot ? glm::vec4(1.0f) : dd->TextColor,
+                             listClip);
+            }
+            if (n > list.Visible) // position indicator
+            {
+                float trackH = list.Max.y - list.Min.y, h = trackH * list.Visible / n;
+                float y = list.Min.y + (trackH - h) * (dd->ListScroll / (float)(n - list.Visible));
+                Emit(out, { list.Max.x - 6.0f * s, y }, { list.Max.x - 2.0f * s, y + h }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 0.35f }, white, listClip);
             }
         }
     }

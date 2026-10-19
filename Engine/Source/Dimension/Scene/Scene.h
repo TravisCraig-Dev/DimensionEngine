@@ -40,6 +40,11 @@ namespace Dimension
         float SSAOIntensity = 1.5f; // exponent applied to the occlusion
         float SSAOBias = 0.025f;    // view-space depth bias against self-occlusion
         bool SSAODebug = false;     // show the occlusion buffer instead of the lit scene
+        // Depth of field: objects nearer or farther than the focus distance blur (perspective cameras).
+        bool DepthOfField = false;
+        float FocusDistance = 10.0f; // world units from the camera
+        float FocusRange = 6.0f;     // distance from the focus at which blur reaches its maximum
+        float BokehSize = 0.012f;    // maximum blur radius as a fraction of the image height
     };
 
     // A scene: an ECS registry plus hierarchy, identity (Guid) mapping and the
@@ -102,6 +107,25 @@ namespace Dimension
         const std::string& GetName() const { return m_Name; }
         void SetName(std::string name) { m_Name = std::move(name); }
 
+        // ---- Several scenes at runtime (driven by SceneManager) ----
+        // The running scene holds the objects of every loaded scene. Each loaded scene remembers the root objects it
+        // contributed so it can be unloaded; persistent objects (DontDestroyOnLoad) survive single-mode loads.
+        struct LoadedScene
+        {
+            std::string Name;
+            std::vector<Entity> Roots;
+        };
+        static constexpr const char* kPersistentSceneName = "DontDestroyOnLoad";
+        const std::vector<LoadedScene>& GetLoadedScenes() const { return m_LoadedScenes; }
+        // Marks the object's root (with all its children) to survive scene loads.
+        void DontDestroyOnLoad(Entity e);
+        bool IsPersistent(Entity e) const;
+        // Adds a serialized scene's objects (and starts them when running). Single mode first destroys every
+        // non-persistent object and takes over the new scene's name and settings; additive keeps both.
+        void LoadSceneData(const nlohmann::json& data, bool additive);
+        // Destroys the root objects a loaded scene contributed. False if no loaded scene has that name.
+        bool UnloadScene(const std::string& name);
+
         // UI input for the current frame (pointer in render-target pixels). Applied in OnUpdateRuntime.
         void SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid = true, float scroll = 0.0f);
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
@@ -113,6 +137,7 @@ namespace Dimension
         void InjectUIKeyboard(const std::string& text, bool backspace = false, bool enter = false);
         void DispatchUIClick(Entity e);
         void DispatchAnimationEvent(Entity e, const std::string& name);
+        void DispatchJointBreak(Entity e, float force);
         void DispatchUIValueChanged(Entity e, float value);
         void DispatchUIText(Entity e, const std::string& text, bool submit);
 
@@ -152,6 +177,8 @@ namespace Dimension
         bool m_UIInjectedBackspace = false, m_UIInjectedEnter = false;
         Entity m_UIHovered = Entity::Null();
         std::vector<Scope<System>> m_Systems;
+        std::vector<LoadedScene> m_LoadedScenes;
+        std::vector<Entity> m_Persistent;
         Scope<Physics2DWorld> m_Physics2D;
         Scope<Physics3DWorld> m_Physics3D;
         Scope<AudioWorld> m_Audio;

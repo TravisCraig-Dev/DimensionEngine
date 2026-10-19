@@ -23,6 +23,8 @@ namespace Dimension
         EntityRef,        // Entity, serialized as the target's Guid
         Curve,            // Dimension::Curve (normalized time -> value)
         Gradient,         // Dimension::Gradient (normalized time -> color)
+        Vec3List,         // std::vector<glm::vec3>
+        StringList,       // std::vector<std::string>
     };
 
     struct FieldInfo
@@ -50,6 +52,8 @@ namespace Dimension
         else if constexpr (std::is_same_v<M, Entity>) return FieldType::EntityRef;
         else if constexpr (std::is_same_v<M, Curve>) return FieldType::Curve;
         else if constexpr (std::is_same_v<M, Gradient>) return FieldType::Gradient;
+        else if constexpr (std::is_same_v<M, std::vector<glm::vec3>>) return FieldType::Vec3List;
+        else if constexpr (std::is_same_v<M, std::vector<std::string>>) return FieldType::StringList;
         else if constexpr (std::is_same_v<M, Guid>) return FieldType::Texture; // override with .As()
         else static_assert(sizeof(M) == 0, "Unsupported reflected field type");
     }
@@ -78,7 +82,13 @@ namespace Dimension
         FieldListBuilder& As(FieldType type) { m_Fields.back().Type = type; return *this; }
         FieldListBuilder& Range(float min, float max) { m_Fields.back().Min = min; m_Fields.back().Max = max; return *this; }
         FieldListBuilder& Speed(float speed) { m_Fields.back().Speed = speed; return *this; }
-        FieldListBuilder& Enum(std::vector<std::string> names) { m_Fields.back().EnumNames = std::move(names); return *this; }
+        FieldListBuilder& Enum(std::vector<std::string> names)
+        {
+            auto& f = m_Fields.back();
+            f.EnumNames = std::move(names);
+            if (f.Type == FieldType::Int) f.Type = FieldType::Enum; // plain int32 fields with names become a dropdown too
+            return *this;
+        }
         FieldListBuilder& Tooltip(std::string text) { m_Fields.back().Tooltip = std::move(text); return *this; }
         FieldListBuilder& HideInInspector() { m_Fields.back().Hidden = true; return *this; }
 

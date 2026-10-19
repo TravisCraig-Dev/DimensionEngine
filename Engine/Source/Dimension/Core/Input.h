@@ -19,12 +19,18 @@ namespace Dimension
 
     enum class MouseButton : int { Left = 0, Right = 1, Middle = 2 };
 
+    // Modifier bits (match GLFW).
+    enum KeyModifier : int { ModShift = 1, ModControl = 2, ModAlt = 4, ModSuper = 8 };
+
     // Polled input, sampled once per frame. Used by gameplay scripts and the editor camera.
     class Input
     {
     public:
         static bool IsKeyDown(Key key);
         static bool IsKeyPressed(Key key); // went down this frame
+        static bool IsKeyTyped(Key key);   // went down or auto-repeated this frame (text editing)
+        // Modifiers held now or during any key press this frame (catches taps shorter than a frame).
+        static int GetModifiers();
         static bool IsMouseDown(MouseButton button);
         static bool IsMousePressed(MouseButton button);
         static glm::vec2 GetMousePosition(); // window pixels, top-left origin
@@ -32,16 +38,22 @@ namespace Dimension
         static float GetScrollDelta();
         // UTF-8 text typed this frame (respects the game-input gate).
         static const std::string& GetTypedText();
+        static std::string GetClipboardText();
+        static void SetClipboardText(const std::string& text);
 
         // When disabled (e.g. editor not in play mode or game view unfocused) all queries return "nothing pressed".
         static void SetGameInputEnabled(bool enabled);
         static bool IsGameInputEnabled();
+        // While a UI text field has focus, gameplay sees no keyboard (keys, typed text, modifiers); the UI reads it first.
+        static void SetKeyboardCapturedByUI(bool captured);
+        static bool IsKeyboardCapturedByUI();
 
         // Engine-internal
         static void Init(GLFWwindow* window);
         static void NewFrame();
         static void AddScroll(float dy);
         static void AddChar(unsigned int codepoint);
+        static void AddKeyEvent(int key, int action, int mods);
         // Raw access that ignores the game-input gate (editor tools).
         static bool RawKeyDown(Key key);
         static bool RawMouseDown(MouseButton button);

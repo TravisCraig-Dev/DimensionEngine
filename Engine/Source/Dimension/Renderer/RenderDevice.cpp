@@ -42,6 +42,8 @@ namespace Dimension
         }
     }
 
+    bool RenderDevice::Exists() { return s_Instance != nullptr; }
+
     RenderDevice& RenderDevice::Get()
     {
         DIM_ASSERT(s_Instance, "RenderDevice not created");

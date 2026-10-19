@@ -84,6 +84,20 @@ namespace Dimension
             void (*CharacterMove)(void*, uint64_t, const float*, int);
             int (*CharacterState)(void*, uint64_t, float*, float*);
             void (*CharacterSetVerticalSpeed)(void*, uint64_t, float);
+            void (*LineSetPositions)(void*, uint64_t, const float*, int);
+            int (*LineGetPositions)(void*, uint64_t, float*, int);
+            void (*TrailClear)(void*, uint64_t);
+            void (*TrailSetEmitting)(void*, uint64_t, int);
+            int (*TrailIsEmitting)(void*, uint64_t);
+            const char* (*DropdownGetOptions)(void*, uint64_t);
+            void (*DropdownSetOptions)(void*, uint64_t, const char*);
+            void (*LoadSceneWithMode)(const char*, int, int);
+            void (*UnloadScene)(const char*);
+            void (*DontDestroyOnLoad)(void*, uint64_t);
+            int (*GetLoadedSceneCount)(void*);
+            const char* (*GetLoadedSceneName)(void*, int);
+            void (*SetJointMotor)(void*, uint64_t, int, float);
+            int (*GetJointState)(void*, uint64_t, float*);
         };
 
         struct ManagedApi
@@ -177,6 +191,7 @@ namespace Dimension
             void OnDestroy() override { if (m_Handle) s_Managed.Invoke(m_Handle, 3, 0.0f); }
             void OnClick() override { if (m_Handle) s_Managed.Invoke(m_Handle, 4, 0.0f); }
             void OnUIValueChanged(float v) override { if (m_Handle) s_Managed.Invoke(m_Handle, 5, v); }
+            void OnJointBreak(float force) override { if (m_Handle) s_Managed.Invoke(m_Handle, 6, force); }
             void OnUITextChanged(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 0, t.c_str()); }
             void OnUISubmit(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 1, t.c_str()); }
             void OnAnimationEvent(const std::string& n) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 2, n.c_str()); }
@@ -296,6 +311,8 @@ namespace Dimension
             a.GetUIText = [](void* s, uint64_t e) -> const char* {
                 if (auto* t = Comp<UITextComponent>(s, e)) s_StringReturn = t->Text;
                 else if (auto* f = Comp<UIInputFieldComponent>(s, e)) s_StringReturn = f->Text;
+                else if (auto* d = Comp<UIDropdownComponent>(s, e); d && d->Value >= 0 && d->Value < (int)d->Options.size())
+                    s_StringReturn = d->Options[d->Value];
                 else s_StringReturn.clear();
                 return s_StringReturn.c_str();
             };
@@ -378,6 +395,25 @@ namespace Dimension
                 if (auto* cc = Comp<CharacterControllerComponent>(s, e)) cc->VerticalSpeed = v;
             };
             a.MixerGetVolume = [](const char* group) -> float { return AudioMixer::GetVolumeDb(group ? group : ""); };
+            a.LineSetPositions = [](void* s, uint64_t e, const float* xyz, int count) {
+                auto* line = Comp<LineRendererComponent>(s, e);
+                if (!line) return;
+                line->Positions.resize(std::max(count, 0));
+                if (count > 0) std::memcpy(line->Positions.data(), xyz, sizeof(glm::vec3) * count);
+            };
+            a.LineGetPositions = [](void* s, uint64_t e, float* out, int max) -> int {
+                auto* line = Comp<LineRendererComponent>(s, e);
+                if (!line) return 0;
+                int n = std::min((int)line->Positions.size(), std::max(max, 0));
+                if (n > 0) std::memcpy(out, line->Positions.data(), sizeof(glm::vec3) * n);
+                return (int)line->Positions.size();
+            };
+            a.TrailClear = [](void* s, uint64_t e) { if (auto* t = Comp<TrailRendererComponent>(s, e)) t->Clear(); };
+            a.TrailSetEmitting = [](void* s, uint64_t e, int on) { if (auto* t = Comp<TrailRendererComponent>(s, e)) t->Emitting = on != 0; };
+            a.TrailIsEmitting = [](void* s, uint64_t e) -> int {
+                auto* t = Comp<TrailRendererComponent>(s, e);
+                return t && t->Emitting ? 1 : 0;
+            };
             a.GetFrameCount = [](void* s) -> uint64_t { return s ? S(s).GetFrameCount() : 0; };
             a.GetWorldMatrix = [](void* s, uint64_t e, float* out) {
                 glm::mat4 m(1.0f);
@@ -387,11 +423,63 @@ namespace Dimension
             a.GetUIValue = [](void* s, uint64_t e) -> float {
                 if (auto* sl = Comp<UISliderComponent>(s, e)) return sl->Value;
                 if (auto* tg = Comp<UIToggleComponent>(s, e)) return tg->IsOn ? 1.0f : 0.0f;
+                if (auto* dd = Comp<UIDropdownComponent>(s, e)) return (float)dd->Value;
                 return 0.0f;
             };
             a.SetUIValue = [](void* s, uint64_t e, float v) {
                 if (auto* sl = Comp<UISliderComponent>(s, e)) sl->Value = std::clamp(v, std::min(sl->MinValue, sl->MaxValue), std::max(sl->MinValue, sl->MaxValue));
                 if (auto* tg = Comp<UIToggleComponent>(s, e)) tg->IsOn = v != 0.0f;
+                if (auto* dd = Comp<UIDropdownComponent>(s, e)) dd->Value = std::clamp((int)std::lround(v), 0, std::max(0, (int)dd->Options.size() - 1));
+            };
+            a.SetJointMotor = [](void* s, uint64_t e, int use, float speed) {
+                if (auto* j = Comp<JointComponent>(s, e)) { j->UseMotor = use != 0; j->MotorSpeed = speed; }
+                if (auto* j = Comp<Joint2DComponent>(s, e)) { j->UseMotor = use != 0; j->MotorSpeed = speed; }
+            };
+            // out: use motor, motor speed, force, torque. Returns 1 if broken, 0 if intact, -1 without a joint.
+            a.GetJointState = [](void* s, uint64_t e, float* out) -> int {
+                auto fill = [&](auto* j) {
+                    out[0] = j->UseMotor ? 1.0f : 0.0f;
+                    out[1] = j->MotorSpeed;
+                    out[2] = j->CurrentForce;
+                    out[3] = j->CurrentTorque;
+                    return j->Broken ? 1 : 0;
+                };
+                if (auto* j = Comp<JointComponent>(s, e)) return fill(j);
+                if (auto* j = Comp<Joint2DComponent>(s, e)) return fill(j);
+                return -1;
+            };
+            a.LoadSceneWithMode = [](const char* name, int index, int additive) {
+                LoadSceneMode mode = additive ? LoadSceneMode::Additive : LoadSceneMode::Single;
+                if (name && *name) SceneManager::LoadScene(std::string(name), mode);
+                else SceneManager::LoadScene(index, mode);
+            };
+            a.UnloadScene = [](const char* name) { SceneManager::UnloadScene(name ? name : ""); };
+            a.DontDestroyOnLoad = [](void* s, uint64_t e) { if (s) S(s).DontDestroyOnLoad(Unpack(e)); };
+            a.GetLoadedSceneCount = [](void* s) -> int { return s ? (int)S(s).GetLoadedScenes().size() : 0; };
+            a.GetLoadedSceneName = [](void* s, int i) -> const char* {
+                s_StringReturn.clear();
+                if (s && i >= 0 && i < (int)S(s).GetLoadedScenes().size()) s_StringReturn = S(s).GetLoadedScenes()[i].Name;
+                return s_StringReturn.c_str();
+            };
+            a.DropdownGetOptions = [](void* s, uint64_t e) -> const char* {
+                s_StringReturn.clear();
+                if (auto* dd = Comp<UIDropdownComponent>(s, e))
+                    for (size_t i = 0; i < dd->Options.size(); ++i) s_StringReturn += (i ? "\n" : "") + dd->Options[i];
+                return s_StringReturn.c_str();
+            };
+            a.DropdownSetOptions = [](void* s, uint64_t e, const char* joined) {
+                auto* dd = Comp<UIDropdownComponent>(s, e);
+                if (!dd) return;
+                dd->Options.clear();
+                std::string all = joined ? joined : "";
+                for (size_t start = 0; start <= all.size();)
+                {
+                    size_t end = all.find('\n', start);
+                    if (end == std::string::npos) end = all.size();
+                    if (end > start || end < all.size()) dd->Options.push_back(all.substr(start, end - start));
+                    start = end + 1;
+                }
+                dd->Value = std::clamp(dd->Value, 0, std::max(0, (int)dd->Options.size() - 1));
             };
         }
     }

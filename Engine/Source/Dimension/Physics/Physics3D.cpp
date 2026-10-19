@@ -136,7 +136,7 @@ namespace Dimension
 
         std::unordered_map<JPH::uint32, Entity> BodyToEntity; // read-only during Update
         std::unordered_set<JPH::uint32> Sensors;               // read-only during Update
-        struct Joint { Entity A, B; JPH::Ref<JPH::Constraint> Constraint; };
+        struct Joint { Entity A, B; JPH::Ref<JPH::Constraint> Constraint; JointType Type; };
         std::vector<Joint> Joints;
         // Jointed bodies that must not collide share group 0 and get their own sub-group.
         static constexpr JPH::uint kMaxJointSubGroups = 4096;
@@ -285,6 +285,8 @@ namespace Dimension
                 s->mLimitsMin = glm::radians(std::clamp(j.MinAngle, -180.0f, 0.0f));
                 s->mLimitsMax = glm::radians(std::clamp(j.MaxAngle, 0.0f, 180.0f));
             }
+            // Always valid motor settings, so the motor can be switched on while playing.
+            s->mMotorSettings = JPH::MotorSettings(2.0f, 1.0f, 0.0f, std::max(j.MotorMaxTorque, 0.0f));
             settings = s;
             break;
         }
@@ -314,7 +316,9 @@ namespace Dimension
         if (!constraint) return;
         m_Impl->System.AddConstraint(constraint);
         bi.ActivateConstraint(constraint);
-        m_Impl->Joints.push_back({ e, other, constraint });
+        m_Impl->Joints.push_back({ e, other, constraint, j.Type });
+        j.Broken = false;
+        j.CurrentForce = j.CurrentTorque = 0.0f;
 
         if (!j.EnableCollision && !idB.IsInvalid())
         {
@@ -540,7 +544,71 @@ namespace Dimension
             else bi.SetPositionAndRotation(id, pos, ToJolt(t.GetRotationQuat()), JPH::EActivation::DontActivate);
         }
 
+        // Hinge motors follow their components (scripts may change Use Motor / Motor Speed while playing).
+        for (auto& joint : m_Impl->Joints)
+        {
+            auto* jc = reg.TryGet<JointComponent>(joint.A);
+            if (!jc || joint.Type != JointType::Hinge) continue;
+            auto* hinge = static_cast<JPH::HingeConstraint*>(joint.Constraint.GetPtr());
+            hinge->GetMotorSettings().SetTorqueLimit(std::max(jc->MotorMaxTorque, 0.0f));
+            hinge->SetMotorState(jc->UseMotor ? JPH::EMotorState::Velocity : JPH::EMotorState::Off);
+            // Jolt drives the connected body relative to this one; positive speed should turn *this* entity
+            // counter-clockwise around its axis (right-hand rule), hence the sign.
+            hinge->SetTargetAngularVelocity(-glm::radians(jc->MotorSpeed));
+            if (jc->UseMotor)
+            {
+                bi.ActivateBody(JPH::BodyID(reg.Get<RigidbodyComponent>(joint.A).RuntimeBody));
+                if (auto* rbB = m_Scene.IsValid(joint.B) ? reg.TryGet<RigidbodyComponent>(joint.B) : nullptr) bi.ActivateBody(JPH::BodyID(rbB->RuntimeBody));
+            }
+        }
+
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
+
+        // Joint reactions (impulses / dt); joints over their break force or torque are removed.
+        std::vector<std::pair<Entity, float>> broken;
+        for (auto it = m_Impl->Joints.begin(); it != m_Impl->Joints.end();)
+        {
+            auto* jc = reg.TryGet<JointComponent>(it->A);
+            JPH::Constraint* c = it->Constraint.GetPtr();
+            float force = 0.0f, torque = 0.0f;
+            switch (it->Type)
+            {
+            case JointType::Fixed:
+            {
+                auto* f = static_cast<JPH::FixedConstraint*>(c);
+                force = f->GetTotalLambdaPosition().Length();
+                torque = f->GetTotalLambdaRotation().Length();
+                break;
+            }
+            case JointType::Hinge:
+            {
+                auto* h = static_cast<JPH::HingeConstraint*>(c);
+                JPH::Vector<2> r = h->GetTotalLambdaRotation();
+                force = h->GetTotalLambdaPosition().Length();
+                torque = std::sqrt(r[0] * r[0] + r[1] * r[1] + h->GetTotalLambdaRotationLimits() * h->GetTotalLambdaRotationLimits());
+                break;
+            }
+            case JointType::Point: force = static_cast<JPH::PointConstraint*>(c)->GetTotalLambdaPosition().Length(); break;
+            case JointType::Distance: force = std::abs(static_cast<JPH::DistanceConstraint*>(c)->GetTotalLambdaPosition()); break;
+            }
+            force /= dt;
+            torque /= dt;
+            if (jc)
+            {
+                jc->CurrentForce = force;
+                jc->CurrentTorque = torque;
+                bool breaks = (jc->BreakForce > 0.0f && force > jc->BreakForce) || (jc->BreakTorque > 0.0f && torque > jc->BreakTorque);
+                if (breaks)
+                {
+                    jc->Broken = true;
+                    m_Impl->System.RemoveConstraint(c);
+                    broken.emplace_back(it->A, force);
+                    it = m_Impl->Joints.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
 
         for (auto [e, rb, t] : reg.ViewOf<RigidbodyComponent, TransformComponent>())
         {
@@ -559,6 +627,7 @@ namespace Dimension
             events.swap(m_Impl->Events);
         }
         for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, ev.Trigger);
+        for (auto& [e, force] : broken) m_Scene.DispatchJointBreak(e, force);
     }
 
     namespace
@@ -673,7 +742,18 @@ namespace Dimension
             glm::vec3 start = t.GetWorldPosition();
             if (glm::distance(start, FromJolt(JPH::Vec3(character->GetPosition()))) > 1e-3f) character->SetPosition(JPH::RVec3(ToJolt(start)));
 
-            character->SetLinearVelocity(ToJolt(velocity));
+            // Moving platforms: while grounded, the ground's velocity at the contact point is added.
+            glm::vec3 total = velocity;
+            if (cc->RideMovingPlatforms && character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround)
+            {
+                character->UpdateGroundVelocity();
+                glm::vec3 ground = FromJolt(character->GetGroundVelocity());
+                total += ground;
+                cc->GroundVelocity = ground;
+            }
+            else
+                cc->GroundVelocity = glm::vec3(0.0f);
+            character->SetLinearVelocity(ToJolt(total));
             JPH::CharacterVirtual::ExtendedUpdateSettings settings;
             settings.mWalkStairsStepUp = JPH::Vec3(0.0f, cc->StepOffset, 0.0f);
             settings.mStickToFloorStepDown = JPH::Vec3(0.0f, -cc->StepOffset, 0.0f);

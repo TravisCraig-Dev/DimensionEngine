@@ -27,6 +27,14 @@ namespace Dimension
         // Removes the link: the entities become ordinary scene objects.
         void Unpack(Scene& scene, Entity instanceRoot);
 
+        // Prefab Mode: the prefab alone in its own scene. Its entities stay linked so saving keeps their ids
+        // (and therefore every instance's overrides) stable.
+        Ref<Scene> OpenForEditing(AssetHandle prefab);
+        // The edited prefab's root in such a scene (null if it was deleted).
+        Entity FindEditedRoot(Scene& scene, AssetHandle prefab);
+        // Writes the root's subtree back into the asset. Objects outside the root are not part of the prefab.
+        bool SaveEdited(Scene& scene, AssetHandle prefab);
+
         void Sync(Scene& scene, Entity instanceRoot);
         void SyncAll(Scene& scene);
 

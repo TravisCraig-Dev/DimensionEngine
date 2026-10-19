@@ -5,6 +5,7 @@
 
 // Depth-only pass. Cutout materials alpha-test so holes let light through.
 layout(location = 2) in vec2 vUV;
+layout(location = 3) flat in uint vEntity; // unused; matches Mesh.vert's outputs
 
 void main()
 {

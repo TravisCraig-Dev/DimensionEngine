@@ -25,5 +25,10 @@ namespace Dimension
                                             std::vector<std::pair<uint64_t, Entity>>* mapping = nullptr);
 
         static bool SavePrefab(Scene& scene, Entity root, const fs::path& path);
+
+        // Adds every entity of a serialized scene to `scene` (keeping Guids unless one is already taken, in which case
+        // all get new ones). Returns the created root entities.
+        static std::vector<Entity> DeserializeInto(Scene& scene, const nlohmann::json& data);
+        static void ReadSettings(const nlohmann::json& settings, SceneSettings& out);
     };
 }

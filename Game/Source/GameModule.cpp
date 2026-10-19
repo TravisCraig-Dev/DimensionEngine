@@ -302,6 +302,55 @@ namespace Game
         bool m_Done = false;
     };
 
+    // Moves the entity back and forth between its start position and start + Offset (moving platforms, elevators).
+    // Give it a kinematic Rigidbody so Character Controllers standing on it ride along.
+    class PlatformMover : public ScriptableEntity
+    {
+    public:
+        glm::vec3 Offset{ 4.0f, 0.0f, 0.0f };
+        float Speed = 1.5f;     // units per second
+        float Pause = 0.5f;     // seconds at each end
+
+        void OnCreate() override { m_Start = Get<TransformComponent>().Position; }
+        void OnUpdate(float dt) override
+        {
+            float length = glm::length(Offset);
+            if (length < 1e-4f || Speed <= 0.0f) return;
+            float travel = length / Speed;
+            m_Time = std::fmod(m_Time + dt, 2.0f * (travel + Pause));
+            float t = m_Time < travel ? m_Time / travel : m_Time < travel + Pause ? 1.0f
+                    : m_Time < 2.0f * travel + Pause ? 1.0f - (m_Time - travel - Pause) / travel : 0.0f;
+            t = t * t * (3.0f - 2.0f * t); // ease in and out
+            Get<TransformComponent>().Position = m_Start + Offset * t;
+        }
+
+    private:
+        glm::vec3 m_Start{ 0.0f };
+        float m_Time = 0.0f;
+    };
+
+    // Keeps this object alive across scene loads (DontDestroyOnLoad), as a singleton: when a scene that also contains
+    // it is loaded again, the newcomer removes itself so music keeps playing without restarting or doubling.
+    class KeepAcrossScenes : public ScriptableEntity
+    {
+    public:
+        void OnCreate() override
+        {
+            Scene& scene = GetScene();
+            const std::string& name = Get<TagComponent>().Name;
+            for (const auto& loaded : scene.GetLoadedScenes())
+                if (loaded.Name == Scene::kPersistentSceneName)
+                    for (Entity e : loaded.Roots)
+                        if (e != Self() && scene.IsValid(e) && scene.GetRegistry().Get<TagComponent>(e).Name == name)
+                        {
+                            Log::Info("'{}' already survives from an earlier scene; removing the duplicate", name);
+                            Destroy(Self());
+                            return;
+                        }
+            scene.DontDestroyOnLoad(Self());
+        }
+    };
+
     // UI Slider (0-1) -> Audio Mixer group volume, with an optional label ("Music: 80%").
     class MixerVolumeSlider : public ScriptableEntity
     {
@@ -436,6 +485,11 @@ namespace Game
         ScriptRegistry::Register<LoadSceneAfterDelay>("LoadSceneAfterDelay")
             .Field("Scene", &LoadSceneAfterDelay::Scene)
             .Field("Delay", &LoadSceneAfterDelay::Delay).Range(0.0f, 3600.0f);
+        ScriptRegistry::Register<KeepAcrossScenes>("KeepAcrossScenes");
+        ScriptRegistry::Register<PlatformMover>("PlatformMover")
+            .Field("Offset", &PlatformMover::Offset)
+            .Field("Speed", &PlatformMover::Speed).Range(0.0f, 100.0f).Speed(0.05f)
+            .Field("Pause", &PlatformMover::Pause).Range(0.0f, 60.0f).Speed(0.05f);
         ScriptRegistry::Register<MixerVolumeSlider>("MixerVolumeSlider")
             .Field("Group", &MixerVolumeSlider::Group)
             .Field("Label", &MixerVolumeSlider::Label);

@@ -4,6 +4,7 @@
 #include <Dimension/Scene/Scene.h>
 #include <glm/glm.hpp>
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 
 namespace Editor::UI
 {
@@ -31,6 +32,12 @@ namespace Editor::UI
     void PropertyLabel(const char* label, const char* tooltip = nullptr);
 
     EditResult Field(const FieldInfo& field, void* object, Scene* scene);
+    // Multi-object editing: marks the next Field() as differing across the selection (bit i = vector component i,
+    // bit 0 for scalars). Differing values show as "--"; the mask is cleared after that Field().
+    void SetMixedValue(uint32_t mask);
+    // Mask of differing components between two serialized field values (vector types compare per component).
+    uint32_t MixedMask(FieldType type, const nlohmann::json& a, const nlohmann::json& b);
+    bool IsVectorField(FieldType type);
     EditResult Vec3Control(const char* label, glm::vec3& value, float resetValue = 0.0f, float speed = 0.05f);
     EditResult AssetField(const char* label, AssetHandle& handle, AssetType type);
     EditResult EntityField(const char* label, Entity& entity, Scene& scene);

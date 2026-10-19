@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using Dimension.Interop;
 
@@ -170,6 +171,55 @@ namespace Dimension
         }
     }
 
+    /// <summary>A Joint (3D) or Joint 2D on the entity: hinge motor control and break state.</summary>
+    public unsafe class Joint : Component
+    {
+        internal override string NativeName => "Joint";
+        private float State(int i) { float* s = stackalloc float[4]; Native.Api.GetJointState(Entity.Scene, Entity.Id, s); return s[i]; }
+        public bool UseMotor
+        {
+            get => State(0) != 0.0f;
+            set => Native.Api.SetJointMotor(Entity.Scene, Entity.Id, value ? 1 : 0, MotorSpeed);
+        }
+        /// <summary>Degrees per second; positive turns this entity counter-clockwise around the hinge axis.</summary>
+        public float MotorSpeed
+        {
+            get => State(1);
+            set => Native.Api.SetJointMotor(Entity.Scene, Entity.Id, UseMotor ? 1 : 0, value);
+        }
+        public bool IsBroken { get { float* s = stackalloc float[4]; return Native.Api.GetJointState(Entity.Scene, Entity.Id, s) == 1; } }
+        /// <summary>Reaction force (N) and torque (N*m) during the last physics step.</summary>
+        public float Force => State(2);
+        public float Torque => State(3);
+    }
+
+    public unsafe class Joint2D : Joint
+    {
+        internal override string NativeName => "Joint 2D";
+    }
+
+    public unsafe class UIDropdown : Component
+    {
+        internal override string NativeName => "UI Dropdown";
+        /// <summary>Index of the selected option.</summary>
+        public int Value
+        {
+            get => (int)Native.Api.GetUIValue(Entity.Scene, Entity.Id);
+            set => Native.Api.SetUIValue(Entity.Scene, Entity.Id, value);
+        }
+        /// <summary>Label of the selected option.</summary>
+        public string SelectedText => Native.FromUtf8(Native.Api.GetUIText(Entity.Scene, Entity.Id));
+        public string[] Options
+        {
+            get
+            {
+                string joined = Native.FromUtf8(Native.Api.DropdownGetOptions(Entity.Scene, Entity.Id));
+                return string.IsNullOrEmpty(joined) ? Array.Empty<string>() : joined.Split('\n');
+            }
+            set { var e = Entity; Native.WithUtf8(string.Join("\n", value ?? Array.Empty<string>()), p => Native.Api.DropdownSetOptions(e.Scene, e.Id, (byte*)p)); }
+        }
+    }
+
     public unsafe class Animator : Component
     {
         internal override string NativeName => "Animator";
@@ -200,6 +250,47 @@ namespace Dimension
         public void Emit(int count) => Native.Api.ParticlesEmit(Entity.Scene, Entity.Id, count);
         public void Play() => Native.Api.ParticlesPlay(Entity.Scene, Entity.Id, 1);
         public void Stop() => Native.Api.ParticlesPlay(Entity.Scene, Entity.Id, 0);
+    }
+
+    public unsafe class LineRenderer : Component
+    {
+        internal override string NativeName => "Line Renderer";
+
+        public int PositionCount => Native.Api.LineGetPositions(Entity.Scene, Entity.Id, null, 0);
+
+        public void SetPositions(Vector3[] positions)
+        {
+            positions ??= Array.Empty<Vector3>();
+            fixed (Vector3* p = positions) Native.Api.LineSetPositions(Entity.Scene, Entity.Id, (float*)p, positions.Length);
+        }
+
+        public Vector3[] GetPositions()
+        {
+            var result = new Vector3[PositionCount];
+            fixed (Vector3* p = result) Native.Api.LineGetPositions(Entity.Scene, Entity.Id, (float*)p, result.Length);
+            return result;
+        }
+
+        public void SetPosition(int index, Vector3 position)
+        {
+            var positions = GetPositions();
+            if (index < 0 || index >= positions.Length) throw new ArgumentOutOfRangeException(nameof(index));
+            positions[index] = position;
+            SetPositions(positions);
+        }
+
+        public Vector3 GetPosition(int index) => GetPositions()[index];
+    }
+
+    public unsafe class TrailRenderer : Component
+    {
+        internal override string NativeName => "Trail Renderer";
+        public void Clear() => Native.Api.TrailClear(Entity.Scene, Entity.Id);
+        public bool Emitting
+        {
+            get => Native.Api.TrailIsEmitting(Entity.Scene, Entity.Id) != 0;
+            set => Native.Api.TrailSetEmitting(Entity.Scene, Entity.Id, value ? 1 : 0);
+        }
     }
 
     public unsafe class AudioSource : Component

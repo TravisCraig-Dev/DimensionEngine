@@ -57,6 +57,13 @@ namespace Dimension
             for (auto& k : ((const Gradient*)p)->Keys) keys.push_back({ k.Time, k.Color.r, k.Color.g, k.Color.b, k.Color.a });
             return keys;
         }
+        case FieldType::Vec3List:
+        {
+            json list = json::array();
+            for (auto& v : *(const std::vector<glm::vec3>*)p) list.push_back({ v.x, v.y, v.z });
+            return list;
+        }
+        case FieldType::StringList: return *(const std::vector<std::string>*)p;
         }
         return nullptr;
     }
@@ -110,6 +117,24 @@ namespace Dimension
                         g.Keys.push_back({ k[0].get<float>(), { k[1].get<float>(), k[2].get<float>(), k[3].get<float>(), k[4].get<float>() } });
                 g.Sort();
                 if (!g.Keys.empty()) *(Gradient*)p = std::move(g);
+                break;
+            }
+            case FieldType::Vec3List:
+            {
+                if (!v.is_array()) break;
+                auto& list = *(std::vector<glm::vec3>*)p;
+                list.clear();
+                for (auto& k : v)
+                    if (k.is_array() && k.size() >= 3) list.push_back({ k[0].get<float>(), k[1].get<float>(), k[2].get<float>() });
+                break;
+            }
+            case FieldType::StringList:
+            {
+                if (!v.is_array()) break;
+                auto& list = *(std::vector<std::string>*)p;
+                list.clear();
+                for (auto& k : v)
+                    if (k.is_string()) list.push_back(k.get<std::string>());
                 break;
             }
             }

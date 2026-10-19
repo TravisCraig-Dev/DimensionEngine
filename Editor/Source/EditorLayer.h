@@ -17,6 +17,9 @@ namespace Editor
         std::string FocusWindow;  // bring a panel to front on startup (automation/testing)
         std::string BuildFolder;  // batch build: build the project here and exit (CI)
         std::string ScenePath;    // open this scene instead of the project's start scene
+        std::string PrefabPath;   // open this prefab in Prefab Mode on startup (path relative to Assets or absolute)
+        std::string OpenSceneLater; // request this scene like the UI does, after a few frames (automation/testing)
+        bool MenuOpenScene = false; // run File > Open Scene... after a few frames (automation/testing)
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
         bool BuildSucceeded = false; // result of the batch build
     };
@@ -41,6 +44,15 @@ namespace Editor
         bool SaveScene();
         bool SaveSceneAs();
         bool ConfirmDiscardChanges(); // false = user cancelled
+        void OpenSceneWithDialog();   // File > Open Scene...
+
+        // Prefab Mode
+        void OpenPrefabMode(AssetHandle prefab);
+        bool LeavePrefabMode(); // saves or asks first; false = user cancelled
+        bool SavePrefabStage();
+        void DrawPrefabModeBar();
+        EditorCamera m_SceneCamera; // the scene's view while a prefab is open
+        bool m_LeavePrefabRequested = false;
         void UpdateWindowTitle();
 
         // Play mode
@@ -96,6 +108,8 @@ namespace Editor
         bool m_SceneViewVisible = false, m_GameViewVisible = false;
         bool m_SceneViewHovered = false, m_SceneViewFocused = false, m_GameViewFocused = false;
         int m_FocusGameView = 0;
+        int m_FocusSceneView = 0;
+        int m_AutomationFrames = 0, m_MenuAutomationFrames = 0;
         int m_FocusRequestFrames = 3; // frames left to request focus (docking may not be ready on the first one)
         int m_GizmoOperation = 7; // ImGuizmo::TRANSLATE
         bool m_GizmoLocal = false;

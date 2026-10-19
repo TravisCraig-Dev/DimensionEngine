@@ -170,6 +170,59 @@ namespace Dimension::Prefabs
         return Entity::Null();
     }
 
+    Ref<Scene> OpenForEditing(AssetHandle prefab)
+    {
+        if (!LoadPrefabJson(prefab)) return nullptr;
+        auto scene = MakeRef<Scene>(AssetManager::GetAbsolutePath(prefab).stem().string());
+        Entity root = Instantiate(*scene, prefab);
+        if (root.IsNull()) return nullptr;
+        scene->UpdateTransforms();
+        return scene;
+    }
+
+    Entity FindEditedRoot(Scene& scene, AssetHandle prefab)
+    {
+        for (auto [e, link] : scene.GetRegistry().ViewOf<PrefabLinkComponent>())
+            if (link.IsRoot && link.Prefab == prefab && scene.GetParent(e).IsNull()) return e;
+        return Entity::Null();
+    }
+
+    bool SaveEdited(Scene& scene, AssetHandle prefab)
+    {
+        Entity root = FindEditedRoot(scene, prefab);
+        fs::path path = AssetManager::GetAbsolutePath(prefab);
+        if (root.IsNull() || path.empty())
+        {
+            Log::Error("Cannot save prefab: its root object or asset is missing");
+            return false;
+        }
+        size_t outside = 0;
+        for (Entity e : scene.GetRootEntities())
+            if (e != root) ++outside;
+        if (outside) Log::Warn("{} object(s) outside the prefab root are not saved; parent them under '{}'", outside,
+                               scene.GetRegistry().Get<TagComponent>(root).Name);
+        if (!WriteJson(path, BuildPrefabJson(scene, root, prefab))) return false;
+        // New objects become linked so later saves keep their ids.
+        std::vector<Entity> subtree;
+        CollectSubtree(scene, root, subtree);
+        auto& reg = scene.GetRegistry();
+        for (Entity e : subtree)
+        {
+            if (auto* link = LinkOf(scene, e, prefab))
+            {
+                link->Overrides.clear();
+                continue;
+            }
+            uint64_t guid = scene.GetGuid(e);
+            auto& added = reg.EmplaceOrReplace<PrefabLinkComponent>(e);
+            added.Prefab = prefab;
+            added.SourceId = guid;
+            added.IsRoot = false;
+            added.Overrides.clear();
+        }
+        return true;
+    }
+
     void Sync(Scene& scene, Entity root)
     {
         auto& reg = scene.GetRegistry();

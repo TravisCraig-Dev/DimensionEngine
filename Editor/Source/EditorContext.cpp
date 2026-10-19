@@ -23,6 +23,37 @@ namespace Editor
         Dirty = true;
     }
 
+    void EditorContext::EnterPrefabMode(AssetHandle prefab, Ref<Scene> stageScene)
+    {
+        Snapshot selection = { {}, HasValidSelection() ? (uint64_t)EditorScene->GetGuid(Selected) : 0, {} };
+        for (Entity e : Selection)
+            if (EditorScene->IsValid(e)) selection.SelectionGuids.push_back(EditorScene->GetGuid(e));
+        m_Stage = PrefabStage{ prefab, EditorScene, EditorScene->GetName(), ScenePath, Dirty,
+                               std::move(m_UndoStack), std::move(m_RedoStack), selection.SelectionGuids, selection.SelectedGuid };
+        EditorScene = std::move(stageScene);
+        ScenePath.clear();
+        Dirty = false;
+        ClearHistory();
+        Select(Entity::Null());
+    }
+
+    void EditorContext::ExitPrefabMode()
+    {
+        if (!m_Stage) return;
+        PrefabStage stage = std::move(*m_Stage);
+        m_Stage.reset();
+        EditorScene = stage.Scene;
+        ScenePath = stage.ScenePath;
+        Dirty = stage.Dirty;
+        m_UndoStack = std::move(stage.UndoStack);
+        m_RedoStack = std::move(stage.RedoStack);
+        Select(Entity::Null());
+        for (uint64_t g : stage.SelectionGuids)
+            if (Entity e = EditorScene->FindEntityByGuid(Guid(g)); !e.IsNull()) AddToSelection(e);
+        if (stage.SelectedGuid)
+            if (Entity e = EditorScene->FindEntityByGuid(Guid(stage.SelectedGuid)); !e.IsNull()) Selected = e;
+    }
+
     void EditorContext::RecordUndo()
     {
         if (IsPlaying()) return;

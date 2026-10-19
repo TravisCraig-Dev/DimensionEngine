@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <shobjidl.h>
 #include <shellapi.h>
+#include <atomic>
+#include <thread>
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 
@@ -11,11 +13,36 @@ namespace Dimension
 {
     namespace
     {
-        // Runs an IFileDialog; returns the chosen path.
-        std::optional<fs::path> RunDialog(REFCLSID clsid, const FileDialogs::Filter& filter, const wchar_t* defaultExt,
-                                          const fs::path& initialDir, bool folders)
+        // Shell objects (file dialogs, ShellExecute handlers) need a single-threaded COM apartment, but the main thread
+        // may already be multi-threaded (the .NET runtime initializes it that way once C# scripts run). There the dialog
+        // deadlocks, so shell calls run on their own STA thread. The calling thread keeps dispatching its window
+        // messages meanwhile: the dialog is owned by the editor window and the editor must not stop responding.
+        template <class Fn> void RunOnStaThread(Fn&& fn, bool pumpMessages)
         {
-            HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+            std::atomic<bool> done = false;
+            std::thread worker([&] {
+                HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+                fn();
+                if (SUCCEEDED(init)) CoUninitialize();
+                done = true;
+            });
+            while (pumpMessages && !done)
+            {
+                MsgWaitForMultipleObjects(0, nullptr, FALSE, 20, QS_ALLINPUT);
+                MSG msg;
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+                {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            worker.join();
+        }
+
+        // Runs an IFileDialog (on an STA thread); returns the chosen path.
+        std::optional<fs::path> ShowDialog(REFCLSID clsid, const FileDialogs::Filter& filter, const wchar_t* defaultExt,
+                                           const fs::path& initialDir, bool folders, HWND owner)
+        {
             std::optional<fs::path> result;
             IFileDialog* dialog = nullptr;
             if (SUCCEEDED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
@@ -36,7 +63,7 @@ namespace Dimension
                         folder->Release();
                     }
                 }
-                if (SUCCEEDED(dialog->Show(GetActiveWindow())))
+                if (SUCCEEDED(dialog->Show(owner)))
                 {
                     IShellItem* item = nullptr;
                     if (SUCCEEDED(dialog->GetResult(&item)))
@@ -52,7 +79,15 @@ namespace Dimension
                 }
                 dialog->Release();
             }
-            if (SUCCEEDED(init)) CoUninitialize();
+            return result;
+        }
+
+        std::optional<fs::path> RunDialog(REFCLSID clsid, const FileDialogs::Filter& filter, const wchar_t* defaultExt,
+                                          const fs::path& initialDir, bool folders)
+        {
+            std::optional<fs::path> result;
+            HWND owner = GetActiveWindow(); // per-thread: query it here, on the caller's thread
+            RunOnStaThread([&] { result = ShowDialog(clsid, filter, defaultExt, initialDir, folders, owner); }, true);
             return result;
         }
 
@@ -83,12 +118,12 @@ namespace Dimension
     void FileDialogs::RevealInExplorer(const fs::path& path)
     {
         std::wstring args = L"/select,\"" + path.wstring() + L"\"";
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+        RunOnStaThread([&] { ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL); }, false);
     }
 
     void FileDialogs::OpenWithDefaultApp(const fs::path& path)
     {
-        ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        RunOnStaThread([&] { ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL); }, false);
     }
 
     bool FileDialogs::Confirm(const std::string& title, const std::string& message)

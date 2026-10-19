@@ -192,6 +192,8 @@ namespace
         scene.GetSettings().Vignette = 0.3f;
         scene.GetSettings().SSAO = true;
         scene.GetSettings().SSAORadius = 0.8f;
+        scene.GetSettings().DepthOfField = true;
+        scene.GetSettings().FocusDistance = 12.5f;
 
         auto json = SceneSerializer::Serialize(scene);
         auto loaded = SceneSerializer::Deserialize(json);
@@ -213,6 +215,7 @@ namespace
         CHECK(loaded->GetSettings().Bloom && loaded->GetSettings().FXAA);
         CHECK(Near(loaded->GetSettings().BloomThreshold, 2.5f) && Near(loaded->GetSettings().Vignette, 0.3f));
         CHECK(loaded->GetSettings().SSAO && Near(loaded->GetSettings().SSAORadius, 0.8f) && !loaded->GetSettings().SSAODebug);
+        CHECK(loaded->GetSettings().DepthOfField && Near(loaded->GetSettings().FocusDistance, 12.5f) && Near(loaded->GetSettings().FocusRange, 6.0f));
         CHECK(SceneSerializer::Serialize(*loaded) == json); // stable
     }
 
@@ -933,6 +936,501 @@ namespace
         }
     }
 
+    // Counts its own updates: proves a persistent object keeps its script instance across scene loads.
+    class PersistProbe : public ScriptableEntity
+    {
+    public:
+        static inline int Created = 0, Destroyed = 0;
+        int Updates = 0;
+        void OnCreate() override { ++Created; }
+        void OnDestroy() override { ++Destroyed; }
+        void OnUpdate(float) override { ++Updates; }
+    };
+
+    void TestMultiScene()
+    {
+        fs::path assets = fs::temp_directory_path() / "dimension_multiscene_test" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        {
+            Scene level("Level");
+            level.GetSettings().AmbientIntensity = 0.9f;
+            Entity root = level.CreateEntity("Level Root");
+            Entity crate = level.CreateEntity("Crate", root);
+            auto& reg = level.GetRegistry();
+            reg.Get<TransformComponent>(crate).Position = { 0, 5, 0 };
+            reg.Emplace<RigidbodyComponent>(crate);
+            reg.Emplace<BoxColliderComponent>(crate);
+            reg.Emplace<ScriptComponent>(crate).Add("PersistProbe");
+            level.CreateEntity("Level Lamp");
+            CHECK(SceneSerializer::SaveToFile(level, assets / "Level.scene"));
+            Scene overlay("Overlay");
+            overlay.CreateEntity("Overlay Root");
+            CHECK(SceneSerializer::SaveToFile(overlay, assets / "Overlay.scene"));
+        }
+        AssetManager::Init(assets);
+
+        Scene hub("Hub");
+        auto& reg = hub.GetRegistry();
+        Entity manager = hub.CreateEntity("Manager");
+        Entity managerChild = hub.CreateEntity("Manager Child", manager);
+        reg.Emplace<ScriptComponent>(manager).Add("PersistProbe");
+        hub.CreateEntity("Hub Prop");
+        hub.UpdateTransforms();
+        PersistProbe::Created = PersistProbe::Destroyed = 0;
+        hub.OnRuntimeStart();
+        auto probe = [&](Entity e) { return std::static_pointer_cast<PersistProbe>(reg.Get<ScriptComponent>(e).Scripts[0].Instance); };
+        for (int i = 0; i < 10; ++i) hub.OnUpdateRuntime(1.0f / 60.0f);
+        auto managerScript = probe(manager);
+        CHECK(managerScript && managerScript->Updates == 10);
+        CHECK(hub.GetLoadedScenes().size() == 1 && hub.GetLoadedScenes()[0].Name == "Hub");
+
+        // A child marks its root; the root moves to the DontDestroyOnLoad entry.
+        hub.DontDestroyOnLoad(managerChild);
+        CHECK(hub.IsPersistent(manager) && hub.IsPersistent(managerChild) && !hub.IsPersistent(hub.FindEntityByName("Hub Prop")));
+        CHECK(hub.GetLoadedScenes().size() == 2 && hub.GetLoadedScenes()[1].Name == Scene::kPersistentSceneName);
+
+        // Single load: the prop goes, the manager (same script instance, same state) stays; name and settings change.
+        SceneManager::LoadScene("Level");
+        CHECK(SceneManager::ApplyPending(hub) && !SceneManager::HasPendingLoad());
+        CHECK(hub.GetName() == "Level" && Near(hub.GetSettings().AmbientIntensity, 0.9f));
+        CHECK(hub.FindEntityByName("Hub Prop").IsNull() && hub.IsValid(manager) && hub.IsValid(managerChild));
+        CHECK(probe(manager) == managerScript && PersistProbe::Destroyed == 0 && PersistProbe::Created == 2);
+        Entity crate = hub.FindEntityByName("Crate");
+        CHECK(!crate.IsNull() && hub.GetLoadedScenes()[0].Name == "Level" && hub.GetLoadedScenes()[0].Roots.size() == 2);
+        // Loaded objects run: the crate has a physics body and falls; the manager keeps counting.
+        for (int i = 0; i < 30; ++i) hub.OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(reg.Get<TransformComponent>(crate).Position.y < 4.9f);
+        CHECK(managerScript->Updates == 40 && probe(crate)->Updates == 30);
+
+        // Additive load twice: the second copy gets fresh ids (no Guid clash), both are tracked.
+        SceneManager::LoadScene("Overlay", LoadSceneMode::Additive);
+        SceneManager::LoadScene("Overlay", LoadSceneMode::Additive);
+        CHECK(SceneManager::ApplyPending(hub));
+        size_t overlays = 0;
+        for (Entity r : hub.GetRootEntities())
+            if (reg.Get<TagComponent>(r).Name == "Overlay Root") ++overlays;
+        CHECK(overlays == 2 && hub.GetName() == "Level" && hub.GetLoadedScenes().size() == 4);
+
+        // Unload removes one scene's objects only.
+        SceneManager::UnloadScene("Level");
+        CHECK(SceneManager::ApplyPending(hub));
+        CHECK(hub.FindEntityByName("Crate").IsNull() && hub.FindEntityByName("Level Lamp").IsNull() && PersistProbe::Destroyed == 1);
+        CHECK(!hub.FindEntityByName("Overlay Root").IsNull() && hub.IsValid(manager));
+        SceneManager::UnloadScene("Nope");
+        CHECK(!SceneManager::ApplyPending(hub));
+
+        // A queued single load supersedes earlier requests.
+        SceneManager::LoadScene("Overlay", LoadSceneMode::Additive);
+        SceneManager::LoadScene("Level");
+        CHECK(SceneManager::ApplyPending(hub));
+        CHECK(hub.FindEntityByName("Overlay Root").IsNull() && !hub.FindEntityByName("Crate").IsNull() && hub.IsValid(manager));
+        hub.OnRuntimeStop();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
+    class BreakCounter : public ScriptableEntity
+    {
+    public:
+        static inline int Breaks = 0;
+        static inline float LastForce = 0.0f;
+        void OnJointBreak(float force) override
+        {
+            ++Breaks;
+            LastForce = force;
+        }
+    };
+
+    void TestJointMotorsAndPlatforms()
+    {
+        auto angleBetween = [](const glm::quat& a, const glm::quat& b) { return glm::degrees(2.0f * std::acos(std::min(1.0f, std::abs(glm::dot(a, b))))); };
+
+        // ---- 3D: motorized hinge, breakable joints
+        {
+            Scene scene("Joints3D");
+            auto& reg = scene.GetRegistry();
+            Entity wheel = scene.CreateEntity("Wheel");
+            reg.Emplace<RigidbodyComponent>(wheel);
+            reg.Emplace<BoxColliderComponent>(wheel);
+            auto& hinge = reg.Emplace<JointComponent>(wheel);
+            hinge.Type = JointType::Hinge;
+            hinge.Axis = { 0, 1, 0 };
+            hinge.UseMotor = true;
+            hinge.MotorSpeed = 90.0f;
+
+            auto hanging = [&](const char* name, float x, float breakForce) {
+                Entity e = scene.CreateEntity(name);
+                reg.Get<TransformComponent>(e).Position = { x, 5, 0 };
+                reg.Emplace<RigidbodyComponent>(e).Mass = 1.0f;
+                reg.Emplace<BoxColliderComponent>(e);
+                auto& j = reg.Emplace<JointComponent>(e);
+                j.Type = JointType::Point;
+                j.Anchor = { 0, 0.5f, 0 };
+                j.BreakForce = breakForce;
+                reg.Emplace<ScriptComponent>(e).Add("BreakCounter");
+                return e;
+            };
+            Entity weak = hanging("Weak", 5, 5.0f);   // weight 9.81 N > 5 N
+            Entity strong = hanging("Strong", -5, 50.0f);
+            scene.UpdateTransforms();
+            BreakCounter::Breaks = 0;
+            scene.OnRuntimeStart();
+            for (int i = 0; i < 30; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            glm::quat q0 = reg.Get<TransformComponent>(wheel).GetRotationQuat();
+            for (int i = 0; i < 30; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            glm::quat q1 = reg.Get<TransformComponent>(wheel).GetRotationQuat();
+            // Positive speed turns the entity counter-clockwise around its axis (right-hand rule), seen from +Y.
+            glm::vec3 x0 = q0 * glm::vec3(1, 0, 0), x1 = q1 * glm::vec3(1, 0, 0);
+            float signedYaw = glm::degrees(std::atan2(glm::cross(x0, x1).y, glm::dot(x0, x1)));
+            CHECK(Near(signedYaw, 45.0f, 4.0f)); // 90 deg/s for 0.5 s
+            CHECK(Near(reg.Get<TransformComponent>(wheel).Position.y, 0.0f, 0.05f)); // held by the hinge
+
+            auto& wj = reg.Get<JointComponent>(weak);
+            auto& sj = reg.Get<JointComponent>(strong);
+            CHECK(wj.Broken && !sj.Broken && BreakCounter::Breaks == 1 && BreakCounter::LastForce > 5.0f);
+            CHECK(Near(sj.CurrentForce, 9.81f, 1.5f));
+            CHECK(reg.Get<TransformComponent>(weak).Position.y < 3.0f && Near(reg.Get<TransformComponent>(strong).Position.y, 5.0f, 0.1f));
+
+            // Motors can be switched while playing.
+            reg.Get<JointComponent>(wheel).MotorSpeed = 0.0f;
+            for (int i = 0; i < 30; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            glm::quat q2 = reg.Get<TransformComponent>(wheel).GetRotationQuat();
+            for (int i = 0; i < 30; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(angleBetween(q2, reg.Get<TransformComponent>(wheel).GetRotationQuat()) < 2.0f);
+            scene.OnRuntimeStop();
+        }
+
+        // ---- 2D: motorized hinge, breakable joint
+        {
+            Scene scene("Joints2D");
+            auto& reg = scene.GetRegistry();
+            Entity wheel = scene.CreateEntity("Wheel");
+            reg.Emplace<Rigidbody2DComponent>(wheel).GravityScale = 0.0f;
+            reg.Emplace<BoxCollider2DComponent>(wheel);
+            auto& hinge = reg.Emplace<Joint2DComponent>(wheel);
+            hinge.UseMotor = true;
+            hinge.MotorSpeed = 180.0f;
+            Entity weak = scene.CreateEntity("Weak");
+            reg.Get<TransformComponent>(weak).Position = { 5, 5, 0 };
+            reg.Emplace<Rigidbody2DComponent>(weak);
+            reg.Emplace<BoxCollider2DComponent>(weak); // 1 x 1, density 1: about 1 kg
+            auto& wj = reg.Emplace<Joint2DComponent>(weak);
+            wj.Anchor = { 0, 0.5f };
+            wj.BreakForce = 5.0f;
+            reg.Emplace<ScriptComponent>(weak).Add("BreakCounter");
+            scene.UpdateTransforms();
+            BreakCounter::Breaks = 0;
+            scene.OnRuntimeStart();
+            for (int i = 0; i < 30; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            float a0 = reg.Get<TransformComponent>(wheel).Rotation.z;
+            for (int i = 0; i < 15; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            float delta = glm::degrees(reg.Get<TransformComponent>(wheel).Rotation.z - a0);
+            delta = std::fmod(delta + 540.0f, 360.0f) - 180.0f; // wrap to [-180, 180)
+            CHECK(Near(delta, 45.0f, 4.0f)); // 180 deg/s for 0.25 s
+            CHECK(reg.Get<Joint2DComponent>(weak).Broken && BreakCounter::Breaks == 1);
+            CHECK(reg.Get<TransformComponent>(weak).Position.y < 3.5f);
+            scene.OnRuntimeStop();
+        }
+
+        // ---- Characters ride moving (kinematic) platforms
+        for (bool ride : { true, false })
+        {
+            Scene scene("Platform");
+            auto& reg = scene.GetRegistry();
+            Entity platform = scene.CreateEntity("Platform");
+            reg.Emplace<RigidbodyComponent>(platform).Type = BodyType::Kinematic;
+            reg.Emplace<BoxColliderComponent>(platform).Size = { 6, 0.5f, 6 };
+            Entity hero = scene.CreateEntity("Hero");
+            reg.Get<TransformComponent>(hero).Position = { 0, 1.3f, 0 };
+            reg.Emplace<CharacterControllerComponent>(hero).RideMovingPlatforms = ride;
+            reg.Emplace<ScriptComponent>(hero).Add("CharacterProbe");
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            for (int i = 0; i < 30; ++i) scene.OnUpdateRuntime(1.0f / 60.0f); // settle on the platform
+            float x0 = reg.Get<TransformComponent>(hero).Position.x;
+            for (int i = 0; i < 60; ++i)
+            {
+                reg.Get<TransformComponent>(platform).Position.x += 2.0f / 60.0f; // 2 m/s
+                scene.OnUpdateRuntime(1.0f / 60.0f);
+            }
+            float moved = reg.Get<TransformComponent>(hero).Position.x - x0;
+            if (ride) CHECK(Near(moved, 2.0f, 0.3f) && reg.Get<CharacterControllerComponent>(hero).IsGrounded);
+            else CHECK(std::abs(moved) < 0.3f);
+            scene.OnRuntimeStop();
+        }
+    }
+
+    void TestParticleSheetsAndNoise()
+    {
+        // Flipbook: 4 x 2 sheet, 6 frames used, one cycle over the lifetime.
+        ParticleSystemComponent ps;
+        ps.TextureSheet = true;
+        ps.SheetColumns = 4;
+        ps.SheetRows = 2;
+        ps.SheetFrames = 6;
+        Particle p{};
+        p.Lifetime = 2.0f;
+        p.Age = 0.0f;
+        CHECK(ps.SheetFrame(p) == 0);
+        p.Age = 1.0f;
+        CHECK(ps.SheetFrame(p) == 3);
+        p.Age = 1.99f;
+        CHECK(ps.SheetFrame(p) == 5);
+        ps.SheetCycles = 2.0f; // twice per life
+        p.Age = 1.0f;
+        CHECK(ps.SheetFrame(p) == 0);
+        p.SheetOffset = 0.5f;  // random start shifts the phase
+        CHECK(ps.SheetFrame(p) == 3);
+        glm::vec2 mn, mx;
+        ps.SheetUV(5, mn, mx); // column 1, row 1 (bottom row)
+        CHECK(Near(mn.x, 0.25f) && Near(mx.x, 0.5f) && Near(mn.y, 1.0f) && Near(mx.y, 0.5f));
+        ps.TextureSheet = false;
+        ps.SheetUV(ps.SheetFrame(p), mn, mx);
+        CHECK(Near(mn.x, 0.0f) && Near(mx.x, 1.0f) && Near(mn.y, 1.0f) && Near(mx.y, 0.0f));
+
+        // Noise: bounded, smooth, and its curl is (numerically) divergence-free.
+        float lo = 1e9f, hi = -1e9f, maxStep = 0.0f;
+        for (int i = 0; i < 2000; ++i)
+        {
+            glm::vec3 q(i * 0.173f, std::sin(i * 0.37f) * 9.0f, i * -0.061f);
+            float v = ParticleSystems::GradientNoise(q);
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+            maxStep = std::max(maxStep, std::abs(ParticleSystems::GradientNoise(q + glm::vec3(0.01f, 0, 0)) - v));
+        }
+        CHECK(lo > -1.5f && hi < 1.5f && hi - lo > 0.8f && maxStep < 0.05f);
+        float divergence = 0.0f, magnitude = 0.0f;
+        for (int i = 0; i < 50; ++i)
+        {
+            glm::vec3 q(i * 0.71f, i * 0.33f, -i * 0.57f);
+            const float e = 0.01f;
+            float div = (ParticleSystems::CurlNoise(q + glm::vec3(e, 0, 0)).x - ParticleSystems::CurlNoise(q - glm::vec3(e, 0, 0)).x +
+                         ParticleSystems::CurlNoise(q + glm::vec3(0, e, 0)).y - ParticleSystems::CurlNoise(q - glm::vec3(0, e, 0)).y +
+                         ParticleSystems::CurlNoise(q + glm::vec3(0, 0, e)).z - ParticleSystems::CurlNoise(q - glm::vec3(0, 0, e)).z) / (2 * e);
+            divergence += std::abs(div);
+            magnitude += glm::length(ParticleSystems::CurlNoise(q));
+        }
+        CHECK(magnitude / 50 > 0.3f && divergence / 50 < 0.05f); // measured: about 0.84 and 0.013
+
+        // Simulation: motionless particles only move when Noise is on.
+        for (bool noise : { false, true })
+        {
+            Scene scene("Noise");
+            auto& reg = scene.GetRegistry();
+            Entity e = scene.CreateEntity("Emitter");
+            auto& sys = reg.Emplace<ParticleSystemComponent>(e);
+            sys.RateOverTime = 0.0f;
+            sys.BurstCount = 50;
+            sys.StartSpeed = { 0.0f, 0.0f };
+            sys.StartLifetime = { 10.0f, 10.0f };
+            sys.Shape = ParticleShape::Box;
+            sys.BoxSize = glm::vec3(4.0f);
+            sys.Noise = noise;
+            sys.NoiseStrength = 2.0f;
+            scene.UpdateTransforms();
+            ParticleSystems::Update(scene, 1.0f / 60.0f);
+            std::vector<glm::vec3> start;
+            for (auto& q : sys.Particles) start.push_back(q.Position);
+            for (int i = 0; i < 60; ++i) ParticleSystems::Update(scene, 1.0f / 60.0f);
+            float moved = 0.0f;
+            for (size_t i = 0; i < start.size(); ++i) moved += glm::distance(start[i], sys.Particles[i].Position);
+            moved /= std::max<size_t>(1, start.size());
+            if (noise) CHECK(moved > 0.2f && moved < 2.5f); // about strength * |curl| * 1 s
+            else CHECK(moved < 1e-5f);
+        }
+    }
+
+    void TestUITextEditing()
+    {
+        UI::SetTextMeasure([](const std::string& t, float) { return 10.0f * (float)UI::CodepointCount(t); }); // 10 px per character
+        Scene scene("TextEditing");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto field = [&](const char* name, float y) {
+            Entity e = scene.CreateEntity(name, canvas);
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = { 0, 0 };
+            r.Pivot = { 0, 0 };
+            r.Position = { 0, y };
+            r.Size = { 300, 40 }; // text starts at x = 10 (padding); 28 characters fit
+            reg.Emplace<UIInputFieldComponent>(e).FontSize = 20.0f;
+            return e;
+        };
+        Entity a = field("A", 0), b = field("B", 50);
+        scene.UpdateTransforms();
+        glm::vec2 screen(1000, 1000);
+        std::string clipboard;
+        glm::vec2 mouse(0.0f);
+        bool down = false, wasDown = false;
+        auto frame = [&](auto&& setup) {
+            UI::PointerState p;
+            p.Position = mouse;
+            p.Down = down;
+            p.Pressed = down && !wasDown;
+            p.Released = !down && wasDown;
+            p.SetClipboard = [&](const std::string& t) { clipboard = t; };
+            setup(p);
+            UI::Update(scene, p, screen, 0.016f);
+            wasDown = down;
+        };
+        auto none = [](UI::PointerState&) {};
+        auto& fa = reg.Get<UIInputFieldComponent>(a);
+        auto& fb = reg.Get<UIInputFieldComponent>(b);
+
+        // Click to focus, type, move the caret and insert in the middle.
+        mouse = { 45, 20 };
+        down = true;
+        frame(none);
+        down = false;
+        frame(none);
+        CHECK(fa.Focused && !fb.Focused && fa.Caret == 0);
+        frame([](auto& p) { p.Text = "hello world"; });
+        frame([](auto& p) { p.Left = true; });
+        frame([](auto& p) { p.Left = true; });
+        frame([](auto& p) { p.Text = "X"; });
+        CHECK(fa.Text == "hello worXld" && fa.Caret == 10);
+
+        // Home, Shift+End selects everything; typing replaces the selection.
+        frame([](auto& p) { p.Home = true; });
+        frame([](auto& p) { p.End = true; p.Shift = true; });
+        CHECK(fa.SelectionAnchor == 0 && fa.Caret == 12);
+        frame([](auto& p) { p.Text = "abc def"; });
+        CHECK(fa.Text == "abc def" && fa.SelectionAnchor == -1);
+        frame([](auto& p) { p.Backspace = true; p.Ctrl = true; }); // word-wise
+        CHECK(fa.Text == "abc " && fa.Caret == 4);
+
+        // Clipboard: copy all, paste (newlines dropped) over the selection, cut part of it.
+        frame([](auto& p) { p.SelectAll = true; p.Copy = true; });
+        CHECK(clipboard == "abc ");
+        frame([](auto& p) { p.Paste = true; p.PasteText = "x\ny"; });
+        CHECK(fa.Text == "xy" && fa.Caret == 2);
+        // Mouse: click after 'x' (x = 10 + 10), drag to after 'y', cut.
+        mouse = { 21, 20 };
+        down = true;
+        frame(none);
+        CHECK(fa.Caret == 1 && fa.SelectionAnchor == 1);
+        mouse = { 31, 20 };
+        frame(none);
+        down = false;
+        frame([](auto& p) { p.Cut = true; });
+        CHECK(clipboard == "y" && fa.Text == "x" && fa.Caret == 1);
+        frame([](auto& p) { p.Home = true; });
+        frame([](auto& p) { p.Delete = true; });
+        CHECK(fa.Text.empty());
+
+        // Long text scrolls to keep the caret visible; Home scrolls back.
+        frame([](auto& p) { p.Text = std::string(40, 'm'); });
+        CHECK(Near(fa.ScrollX, 120.0f)); // 400 px of text, 280 px visible
+        frame([](auto& p) { p.Home = true; });
+        CHECK(Near(fa.ScrollX, 0.0f));
+
+        // Tab moves to the next field and selects its text; the character limit applies to pastes.
+        fb.Text = "keep";
+        fb.CharacterLimit = 6;
+        frame([](auto& p) { p.Tab = true; });
+        CHECK(!fa.Focused && fb.Focused && fb.SelectionAnchor == 0 && fb.Caret == 4);
+        frame([](auto& p) { p.End = true; });
+        frame([](auto& p) { p.Paste = true; p.PasteText = "abcdef"; });
+        CHECK(fb.Text == "keepab");
+        frame([](auto& p) { p.Tab = true; p.Shift = true; }); // back to A (wraps)
+        CHECK(fa.Focused && !fb.Focused);
+        UI::SetTextMeasure(nullptr);
+    }
+
+    void TestAnimatorLayers()
+    {
+        // Real skeleton and clips (CPU only): Tentacle = Bone0 -> Bone1 -> ... -> Bone5, clips Wave/Sway/Curl.
+        MeshData data;
+        CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Tentacle.gltf", data));
+        const Skeleton& sk = *data.SkeletonData;
+        int b2 = sk.FindJoint("Bone2"), b3 = sk.FindJoint("Bone3"), b5 = sk.FindJoint("Bone5");
+        CHECK(b2 >= 0 && b3 >= 0 && b5 >= 0);
+
+        // Mask: Bone3 and everything below it.
+        std::vector<float> mask;
+        Animation::BuildMask(sk, { "Bone3" }, mask);
+        CHECK(mask[b3] == 1.0f && mask[b5] == 1.0f && mask[b2] == 0.0f && mask[sk.FindJoint("Bone0")] == 0.0f);
+        Animation::BuildMask(sk, {}, mask);
+        CHECK(std::all_of(mask.begin(), mask.end(), [](float w) { return w == 1.0f; }));
+
+        // Override: masked joints follow the layer (fully at weight 1, halfway at 0.5); the rest keep the base.
+        const AnimationClip* sway = Animation::FindClip(data.Clips, "Sway");
+        const AnimationClip* wave = Animation::FindClip(data.Clips, "Wave");
+        CHECK(sway && wave);
+        Pose base, layer, result;
+        Animation::Sample(sk, *sway, 0.3f * sway->Duration, base);
+        Animation::Sample(sk, *wave, 0.3f * wave->Duration, layer);
+        Animation::BuildMask(sk, { "Bone3" }, mask);
+        result = base;
+        Animation::LayerOverride(result, layer, mask, 1.0f);
+        auto angle = [](const glm::quat& a, const glm::quat& b) { return glm::degrees(2.0f * std::acos(std::min(1.0f, std::abs(glm::dot(a, b))))); };
+        CHECK(angle(result.Rotations[b5], layer.Rotations[b5]) < 0.01f && angle(result.Rotations[b2], base.Rotations[b2]) < 0.01f);
+        CHECK(angle(base.Rotations[b5], layer.Rotations[b5]) > 1.0f); // the clips really differ there
+        result = base;
+        Animation::LayerOverride(result, layer, mask, 0.5f);
+        CHECK(Near(angle(result.Rotations[b5], base.Rotations[b5]), angle(base.Rotations[b5], layer.Rotations[b5]) * 0.5f, 0.1f));
+
+        // Additive: the layer's change from its reference frame is added on top of the base.
+        Pose bindPose, turned, reference;
+        bindPose.SetBindPose(sk);
+        reference = bindPose;
+        turned = bindPose;
+        glm::quat bend = glm::angleAxis(glm::radians(40.0f), glm::vec3(0, 0, 1));
+        turned.Rotations[b3] = turned.Rotations[b3] * bend;
+        result = base;
+        Animation::LayerAdditive(result, turned, reference, mask, 0.5f);
+        CHECK(Near(angle(result.Rotations[b3], base.Rotations[b3]), 20.0f, 0.1f)); // half of the 40 degree bend
+        CHECK(angle(result.Rotations[b2], base.Rotations[b2]) < 0.01f);          // outside the mask
+
+        // Layer machines read the controller's parameters; layers survive save/load.
+        AnimatorController c;
+        c.Parameters = { { "Waving", AnimParameterType::Bool, 0.0f } };
+        AnimState idle;
+        idle.Name = "Idle";
+        idle.Clip = "Sway";
+        c.States = { idle };
+        AnimLayer arm;
+        arm.Name = "Arm";
+        arm.Weight = 0.75f;
+        arm.Blending = AnimLayerBlending::Additive;
+        arm.Mask = { "Bone3" };
+        AnimState rest, waving;
+        rest.Name = "Rest";
+        rest.Clip = "Sway";
+        waving.Name = "Waving";
+        waving.Clip = "Wave";
+        arm.Machine.States = { rest, waving };
+        arm.Machine.Transitions = { AnimTransition{ 0, 1, false, 1.0f, 0.2f, { { "Waving", AnimConditionOp::IsTrue, 0.0f } } } };
+        c.Layers.push_back(arm);
+        c.LinkLayers();
+        CHECK(c.Layers[0].Machine.FindParameter("Waving") != nullptr);
+        AnimatorRuntime rt;
+        auto duration = [](const std::string&) { return 1.0f; };
+        std::string entered;
+        auto enter = [&](const AnimState& st, float) { entered = st.Name; };
+        AnimatorStateMachine::Update(c.Layers[0].Machine, rt, 0.1f, duration, enter);
+        CHECK(entered == "Rest");
+        rt.Parameters["Waving"] = 1.0f;
+        AnimatorStateMachine::Update(c.Layers[0].Machine, rt, 0.1f, duration, enter);
+        CHECK(entered == "Waving");
+
+        fs::path path = fs::temp_directory_path() / "dimension_layers.controller";
+        CHECK(c.Save(path));
+        auto loaded = AnimatorController::Load(path);
+        CHECK(loaded->Layers.size() == 1 && loaded->Layers[0].Name == "Arm" && Near(loaded->Layers[0].Weight, 0.75f));
+        CHECK(loaded->Layers[0].Blending == AnimLayerBlending::Additive && loaded->Layers[0].Mask == std::vector<std::string>({ "Bone3" }));
+        CHECK(loaded->Layers[0].Machine.States.size() == 2 && loaded->Layers[0].Machine.Transitions.size() == 1);
+        CHECK(loaded->Layers[0].Machine.FindParameter("Waving") != nullptr); // linked on load
+        fs::remove(path);
+
+        // Script-side weight override.
+        AnimatorComponent anim;
+        anim.SetLayerWeight(1, 0.25f);
+        CHECK(anim.Layers.size() == 1 && Near(anim.Layers[0].Weight, 0.25f));
+    }
+
     void TestSceneManager()
     {
         fs::path assets = fs::temp_directory_path() / "dimension_scenes_test" / "Assets";
@@ -1269,6 +1767,187 @@ namespace
         runtime->OnRuntimeStop();
     }
 
+    void TestLineRenderers()
+    {
+        // Straight line along +X seen from +Z: a ribbon in the XY plane, two quads sharing their middle edge.
+        RibbonParams params;
+        params.CameraPosition = { 0, 0, 10 };
+        std::vector<RibbonPoint> pts{ { { 0, 0, 0 }, 1.0f, glm::vec4(1) }, { { 1, 0, 0 }, 1.0f, glm::vec4(1) },
+                                      { { 1, 0, 0 }, 1.0f, glm::vec4(1) }, // duplicate: skipped
+                                      { { 3, 0, 0 }, 0.5f, glm::vec4(0, 0, 0, 1) } };
+        auto quads = BuildRibbon(pts, params);
+        CHECK(quads.size() == 2);
+        CHECK(Near(std::abs(quads[0].P[0].y), 0.5f) && Near(quads[0].P[0].z, 0.0f) && Near(quads[0].P[0].y, -quads[0].P[1].y));
+        CHECK(quads[0].P[2] == quads[1].P[1] && quads[0].P[3] == quads[1].P[0]); // joined, no gaps
+        CHECK(Near(std::abs(quads[1].P[2].y), 0.25f));
+        CHECK(Near(quads[0].UV[0].x, 0.0f) && Near(quads[0].UV[2].x, 1.0f / 3.0f) && Near(quads[1].UV[2].x, 1.0f));
+        CHECK(quads[1].C[2] == glm::vec4(0, 0, 0, 1));
+        params.TextureMode = LineTextureMode::Tile;
+        CHECK(Near(BuildRibbon(pts, params)[1].UV[2].x, 3.0f)); // one repeat per world unit
+
+        // Right-angle corner: the miter keeps the full width on both segments.
+        std::vector<RibbonPoint> corner{ { { 0, 0, 0 }, 1.0f, glm::vec4(1) }, { { 1, 0, 0 }, 1.0f, glm::vec4(1) }, { { 1, 1, 0 }, 1.0f, glm::vec4(1) } };
+        params.TextureMode = LineTextureMode::Stretch;
+        auto c = BuildRibbon(corner, params);
+        CHECK(c.size() == 2 && Near(glm::distance(c[0].P[2], c[0].P[3]), std::sqrt(2.0f), 1e-3f));
+
+        // Loop: a square closes with a fourth segment; Transform Z alignment ignores the camera.
+        std::vector<RibbonPoint> square{ { { 0, 0, 0 }, 0.2f, glm::vec4(1) }, { { 1, 0, 0 }, 0.2f, glm::vec4(1) },
+                                         { { 1, 1, 0 }, 0.2f, glm::vec4(1) }, { { 0, 1, 0 }, 0.2f, glm::vec4(1) } };
+        params.Loop = true;
+        params.FaceCamera = false;
+        params.Normal = { 0, 0, 1 };
+        params.CameraPosition = { 50, 0, 0 };
+        auto loop = BuildRibbon(square, params);
+        CHECK(loop.size() == 4 && loop[3].P[2] == loop[0].P[1]);
+        bool flat = true;
+        for (auto& q : loop) for (auto& v : q.P) flat &= Near(v.z, 0.0f);
+        CHECK(flat);
+
+        // Line positions round trip through the serializer; trails record points while playing and age them out.
+        Scene scene("Lines");
+        auto& reg = scene.GetRegistry();
+        Entity lineEntity = scene.CreateEntity("Line");
+        reg.Emplace<LineRendererComponent>(lineEntity).Positions = { { 0, 0, 0 }, { 1, 2, 3 }, { -4, 5, 6 } };
+        Entity mover = scene.CreateEntity("Mover");
+        auto& trail = reg.Emplace<TrailRendererComponent>(mover);
+        trail.Time = 0.5f;
+        trail.MinVertexDistance = 0.05f;
+        auto loaded = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        auto& lr = loaded->GetRegistry().Get<LineRendererComponent>(loaded->FindEntityByName("Line"));
+        CHECK(lr.Positions.size() == 3 && lr.Positions[2] == glm::vec3(-4, 5, 6));
+
+        auto runtime = loaded->Clone();
+        runtime->OnRuntimeStart();
+        Entity rm = runtime->FindEntityByName("Mover");
+        auto& rt = runtime->GetRegistry().Get<TrailRendererComponent>(rm);
+        CHECK(Near(rt.Time, 0.5f) && rt.Points.empty());
+        for (int i = 0; i < 60; ++i)
+        {
+            runtime->GetRegistry().Get<TransformComponent>(rm).Position.x = i * 0.1f;
+            runtime->OnUpdateRuntime(1.0f / 60.0f);
+        }
+        // 0.5 s at 60 Hz keeps ~30 points, all within the last 0.5 s and ordered oldest first.
+        CHECK(rt.Points.size() >= 28 && rt.Points.size() <= 32);
+        CHECK(runtime->GetTime() - rt.Points.front().Time <= 0.5f + 1e-4f && rt.Points.front().Position.x < rt.Points.back().Position.x);
+        rt.Emitting = false;
+        for (int i = 0; i < 40; ++i) runtime->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(rt.Points.empty());
+        runtime->OnRuntimeStop();
+    }
+
+    void TestUIDropdownAndScrollbar()
+    {
+        Scene scene("Dropdown");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto rect = [&](Entity e, glm::vec2 pos, glm::vec2 size) {
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = { 0, 0 };
+            r.Pivot = { 0, 0 };
+            r.Position = pos;
+            r.Size = size;
+        };
+
+        // Dropdown 200 x 40 at the top-left: 8 options, 4 visible -> the list spans y 40..200.
+        Entity dropdown = scene.CreateEntity("Dropdown", canvas);
+        rect(dropdown, { 0, 0 }, { 200, 40 });
+        {
+            auto& dd = reg.Emplace<UIDropdownComponent>(dropdown);
+            dd.Options.clear();
+            for (int i = 0; i < 8; ++i) dd.Options.push_back("Item " + std::to_string(i));
+            dd.MaxVisibleItems = 4;
+            reg.Emplace<ScriptComponent>(dropdown).Add("WidgetListener");
+        }
+        // A button underneath the list must not react while the list is open.
+        Entity button = scene.CreateEntity("Button", canvas);
+        rect(button, { 0, 120 }, { 200, 40 });
+        reg.Emplace<UIImageComponent>(button);
+        reg.Emplace<UIButtonComponent>(button);
+
+        // Scroll view 200 x 100 at x 400 with 300 of content: max scroll 200, scrollbar track x 586..596, y 4..96.
+        Entity view = scene.CreateEntity("View", canvas);
+        rect(view, { 400, 0 }, { 200, 100 });
+        reg.Emplace<UIScrollViewComponent>(view);
+        Entity content = scene.CreateEntity("Content", view);
+        {
+            auto& r = reg.Emplace<UIRectComponent>(content);
+            r.AnchorMin = { 0, 0 }; r.AnchorMax = { 1, 0 }; r.Size = { 0, 0 };
+            auto& g = reg.Emplace<UILayoutGroupComponent>(content);
+            g.Padding = glm::vec4(0.0f);
+            g.Spacing = 0.0f;
+        }
+        for (int i = 0; i < 6; ++i)
+        {
+            Entity item = scene.CreateEntity("Item", content);
+            reg.Emplace<UIRectComponent>(item).Size = { 0, 50 };
+            reg.Emplace<UIImageComponent>(item);
+        }
+        scene.UpdateTransforms();
+
+        // Options survive serialization.
+        auto loaded = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        auto& ldd = loaded->GetRegistry().Get<UIDropdownComponent>(loaded->FindEntityByName("Dropdown"));
+        CHECK(ldd.Options.size() == 8 && ldd.Options[7] == "Item 7" && ldd.MaxVisibleItems == 4);
+
+        glm::vec2 screen(1000, 1000);
+        auto runtime = scene.Clone();
+        auto& rr = runtime->GetRegistry();
+        runtime->OnRuntimeStart();
+        auto step = [&](glm::vec2 p, bool down, float scroll = 0.0f) {
+            runtime->SetUIInput(p, down, screen, true, scroll);
+            runtime->OnUpdateRuntime(0.016f);
+        };
+        auto& dd = rr.Get<UIDropdownComponent>(dropdown);
+
+        // Click the box: opens on release.
+        WidgetListener::ValueEvents = 0;
+        step({ 100, 20 }, false);
+        step({ 100, 20 }, true);
+        CHECK(!dd.Open);
+        step({ 100, 20 }, false);
+        CHECK(dd.Open && Near(dd.ListScroll, 0.0f));
+
+        // Hover the third row, scroll the list two items, then pick the fifth option over the button.
+        step({ 100, 130 }, false);
+        CHECK(dd.HoveredItem == 2);
+        step({ 100, 130 }, false, -2.0f);
+        CHECK(Near(dd.ListScroll, 2.0f) && dd.HoveredItem == 4);
+        step({ 100, 130 }, true);
+        CHECK(!dd.Open && dd.Value == 4 && Near(WidgetListener::LastValue, 4.0f) && WidgetListener::ValueEvents == 1);
+        CHECK(!rr.Get<UIButtonComponent>(button).Pressed);
+        step({ 100, 130 }, false);
+
+        // Reopen, then click outside: closes without changing the value; the wheel does not reach the scroll view.
+        step({ 100, 20 }, true);
+        step({ 100, 20 }, false);
+        CHECK(dd.Open && Near(dd.ListScroll, 1.0f)); // the selection (4) is the last visible row
+        step({ 500, 50 }, false, -3.0f);
+        UI::ComputeLayout(*runtime, screen);
+        CHECK(Near(rr.Get<UIScrollViewComponent>(view).ScrollPosition, 0.0f));
+        step({ 900, 900 }, true);
+        step({ 900, 900 }, false);
+        CHECK(!dd.Open && dd.Value == 4 && WidgetListener::ValueEvents == 1);
+
+        // Scrollbar: the handle covers 92 * 100/300 px at the top. Drag it half way down the free track.
+        auto& sv = rr.Get<UIScrollViewComponent>(view);
+        UI::ComputeLayout(*runtime, screen);
+        CHECK(Near(sv.MaxScroll, 200.0f));
+        float handle = 92.0f * 100.0f / 300.0f, freeTrack = 92.0f - handle;
+        step({ 591, 10 }, true);
+        CHECK(sv.DraggingScrollbar && Near(sv.DragOffset, 6.0f, 0.01f));
+        step({ 591, 10 + freeTrack * 0.5f }, true);
+        CHECK(Near(sv.ScrollPosition, 100.0f, 0.1f));
+        step({ 591, 10 + freeTrack * 0.5f }, false);
+        CHECK(!sv.DraggingScrollbar);
+        // Clicking the track below the handle centres the handle on the pointer (clamped at the end).
+        step({ 591, 95 }, true);
+        CHECK(Near(sv.ScrollPosition, 200.0f, 0.1f));
+        step({ 591, 95 }, false);
+        runtime->OnRuntimeStop();
+    }
+
     void TestAnimationSampling()
     {
         // Two-joint chain: root at origin, child 1 unit up. Clip rotates the root 90 degrees about Z over 1s.
@@ -1481,6 +2160,53 @@ namespace
         Entity la = loaded->FindEntityByGuid(scene.GetGuid(a));
         CHECK(!la.IsNull() && loaded->GetRegistry().Has<PrefabLinkComponent>(la));
         CHECK(loaded->GetRegistry().Get<PrefabLinkComponent>(la).SourceId == reg.Get<PrefabLinkComponent>(a).SourceId);
+
+        // Prefab Mode: edit the asset on its own, then instances pick the changes up and keep their overrides.
+        reg.Get<MeshRendererComponent>(a).Color = { 0, 1, 0, 1 };
+        Prefabs::RecordFieldOverride(scene, a, "Mesh Renderer", "Color");
+        auto stage = Prefabs::OpenForEditing(prefab);
+        CHECK(stage != nullptr);
+        auto& sreg = stage->GetRegistry();
+        Entity sroot = Prefabs::FindEditedRoot(*stage, prefab);
+        CHECK(!sroot.IsNull() && stage->GetChildren(sroot).size() == 2 && stage->GetRootEntities().size() == 1);
+        sreg.Get<MeshRendererComponent>(sroot).Color = { 0, 0, 1, 1 };
+        sreg.Get<MeshRendererComponent>(sroot).Smoothness = 0.2f;
+        Entity antenna = Entity::Null(), sEye = Entity::Null();
+        for (Entity ch : stage->GetChildren(sroot))
+            (sreg.Get<TagComponent>(ch).Name == "Antenna" ? antenna : sEye) = ch;
+        sreg.Get<TagComponent>(sEye).Name = "Lens";
+        stage->DestroyEntity(antenna);
+        Entity fin = stage->CreateEntity("Fin", sroot);
+        sreg.Emplace<SpotLightComponent>(fin);
+        stage->CreateEntity("Stray"); // outside the root: not part of the prefab
+        CHECK(Prefabs::SaveEdited(*stage, prefab));
+        uint64_t finId = (uint64_t)stage->GetGuid(fin);
+        CHECK(sreg.Has<PrefabLinkComponent>(fin) && sreg.Get<PrefabLinkComponent>(fin).SourceId == finId);
+
+        // Reopening shows exactly the saved prefab, and the new child kept its id.
+        auto stage2 = Prefabs::OpenForEditing(prefab);
+        Entity root2 = Prefabs::FindEditedRoot(*stage2, prefab);
+        std::vector<std::string> names;
+        uint64_t finSource = 0;
+        for (Entity ch : stage2->GetChildren(root2))
+        {
+            names.push_back(stage2->GetRegistry().Get<TagComponent>(ch).Name);
+            if (names.back() == "Fin") finSource = stage2->GetRegistry().Get<PrefabLinkComponent>(ch).SourceId;
+        }
+        std::sort(names.begin(), names.end());
+        CHECK(names == std::vector<std::string>({ "Fin", "Lens" }) && stage2->GetRootEntities().size() == 1 && finSource == finId);
+
+        Prefabs::SyncAll(scene);
+        CHECK(Near(reg.Get<MeshRendererComponent>(a).Color.g, 1.0f));    // instance override kept
+        CHECK(Near(reg.Get<MeshRendererComponent>(a).Smoothness, 0.2f)); // edit propagated
+        CHECK(Near(reg.Get<MeshRendererComponent>(b).Color.b, 1.0f));    // no override: takes the new color
+        std::vector<std::string> childrenA;
+        for (Entity ch : scene.GetChildren(a)) childrenA.push_back(reg.Get<TagComponent>(ch).Name);
+        std::sort(childrenA.begin(), childrenA.end());
+        CHECK(childrenA == std::vector<std::string>({ "Fin", "Lens" }));
+        Entity finA = Entity::Null();
+        for (Entity ch : scene.GetChildren(a)) if (reg.Get<TagComponent>(ch).Name == "Fin") finA = ch;
+        CHECK(!finA.IsNull() && reg.Has<SpotLightComponent>(finA));
 
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path());
@@ -1727,6 +2453,8 @@ int main(int argc, char** argv)
     ScriptRegistry::Register<TimerProbe>("TimerProbe");
     ScriptRegistry::Register<TriggerCounter>("TriggerCounter");
     ScriptRegistry::Register<WidgetListener>("WidgetListener");
+    ScriptRegistry::Register<PersistProbe>("PersistProbe");
+    ScriptRegistry::Register<BreakCounter>("BreakCounter");
     ScriptRegistry::Register<CounterA>("CounterA");
     ScriptRegistry::Register<CounterB>("CounterB");
     ScriptRegistry::Register<TestScript>("TestScript").Field("Speed", &TestScript::Speed).Field("Target", &TestScript::Target);
@@ -1746,6 +2474,9 @@ int main(int argc, char** argv)
     Run("Material round trip", TestMaterialRoundTrip);
     Run("UI layout and clicks", TestUI);
     Run("UI widgets", TestUIWidgets);
+    Run("UI dropdown and scrollbar", TestUIDropdownAndScrollbar);
+    Run("UI text editing", TestUITextEditing);
+    Run("Animator layers and masks", TestAnimatorLayers);
     Run("Shadow cascade splits", TestCascadeSplits);
     Run("Point shadow faces", TestPointShadowFaces);
     Run("Animation sampling", TestAnimationSampling);
@@ -1753,10 +2484,14 @@ int main(int argc, char** argv)
     Run("glTF materials", TestGltfMaterials);
     Run("Prefab instances", TestPrefabs);
     Run("Scene manager", TestSceneManager);
+    Run("Multi-scene runtime", TestMultiScene);
+    Run("Joint motors, breaking and moving platforms", TestJointMotorsAndPlatforms);
+    Run("Particle texture sheets and noise", TestParticleSheetsAndNoise);
     Run("Script timers", TestScriptTimers);
     Run("Audio mixer", TestAudioMixer);
     Run("Environment lighting", TestEnvironmentLighting);
     Run("Tilemaps", TestTilemaps);
+    Run("Line and trail renderers", TestLineRenderers);
     Run("Particle simulation", TestParticles);
     Run("Particle modules", TestParticleModules);
     Run("C# scripting", TestCSharpScripts);

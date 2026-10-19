@@ -33,6 +33,7 @@ namespace Dimension
         virtual void OnUITextChanged(const std::string& text) {}   // UI Input Field edited
         virtual void OnUISubmit(const std::string& text) {}        // UI Input Field: Enter pressed
         virtual void OnAnimationEvent(const std::string& name) {}  // Animator state event reached
+        virtual void OnJointBreak(float force) {}                  // a Joint / Joint 2D on this entity broke (reaction force, N)
 
         Entity Self() const { return m_Entity; }
         Scene& GetScene() const { return *m_Scene; }

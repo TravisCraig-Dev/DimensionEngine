@@ -214,6 +214,7 @@ namespace Editor
                     {
                         if (isDir) enterDir = path;
                         else if (type == AssetType::Scene) m_Ctx.RequestOpenScene = path;
+                        else if (type == AssetType::Prefab && handle.IsValid()) m_Ctx.RequestOpenPrefab = handle;
                         else FileDialogs::OpenWithDefaultApp(path);
                     }
 

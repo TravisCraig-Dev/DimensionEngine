@@ -317,8 +317,11 @@ namespace Dimension
         m_Physics2D = MakeScope<Physics2DWorld>(*this);
         m_Physics3D = MakeScope<Physics3DWorld>(*this);
         m_Audio = MakeScope<AudioWorld>(*this);
+        m_LoadedScenes = { LoadedScene{ m_Name, m_Roots } };
+        m_Persistent.clear();
 
         ParticleSystems::Restart(*this);
+        TrailRenderers::ClearAll(*this);
         for (auto [e, anim] : m_Registry.ViewOf<AnimatorComponent>())
             if (anim.Controller.IsValid())
             {
@@ -332,9 +335,77 @@ namespace Dimension
         m_Audio->Start();
     }
 
+    // ---- Several scenes at runtime -----------------------------------------------------
+
+    void Scene::DontDestroyOnLoad(Entity e)
+    {
+        if (!IsValid(e)) return;
+        while (!GetParent(e).IsNull()) e = GetParent(e);
+        if (IsPersistent(e)) return;
+        m_Persistent.push_back(e);
+        for (auto& loaded : m_LoadedScenes) std::erase(loaded.Roots, e);
+        auto it = std::find_if(m_LoadedScenes.begin(), m_LoadedScenes.end(), [](auto& l) { return l.Name == kPersistentSceneName; });
+        if (it == m_LoadedScenes.end()) it = m_LoadedScenes.insert(m_LoadedScenes.end(), LoadedScene{ kPersistentSceneName, {} });
+        it->Roots.push_back(e);
+    }
+
+    bool Scene::IsPersistent(Entity e) const
+    {
+        if (!IsValid(e)) return false;
+        while (!GetParent(e).IsNull()) e = GetParent(e);
+        return std::find(m_Persistent.begin(), m_Persistent.end(), e) != m_Persistent.end();
+    }
+
+    void Scene::LoadSceneData(const nlohmann::json& data, bool additive)
+    {
+        std::string name = data.value("name", std::string("Untitled"));
+        FlushDeferredDestroys();
+        std::erase_if(m_Persistent, [this](Entity e) { return !IsValid(e); });
+        if (!additive)
+        {
+            std::vector<Entity> roots = m_Roots; // copy: destroying edits the list
+            for (Entity r : roots)
+                if (!IsPersistent(r)) DestroyEntity(r);
+            std::erase_if(m_LoadedScenes, [](auto& l) { return l.Name != kPersistentSceneName; });
+            m_Name = name;
+            if (data.contains("settings")) SceneSerializer::ReadSettings(data["settings"], m_Settings);
+            m_UIHovered = Entity::Null();
+        }
+        std::vector<Entity> roots = SceneSerializer::DeserializeInto(*this, data);
+        UpdateTransforms();
+        if (m_Running)
+        {
+            for (Entity r : roots)
+            {
+                if (m_Physics2D) m_Physics2D->CreateBodiesFor(r);
+                if (m_Physics3D) m_Physics3D->CreateBodiesFor(r);
+                if (m_Audio) m_Audio->CreateSourcesFor(r);
+            }
+            InstantiateScripts();
+        }
+        // The active (single-mode) scene comes first, after any persistent objects' entry.
+        LoadedScene entry{ name, roots };
+        if (additive) m_LoadedScenes.push_back(std::move(entry));
+        else m_LoadedScenes.insert(m_LoadedScenes.begin(), std::move(entry));
+    }
+
+    bool Scene::UnloadScene(const std::string& name)
+    {
+        auto it = std::find_if(m_LoadedScenes.begin(), m_LoadedScenes.end(), [&](auto& l) { return l.Name == name; });
+        if (it == m_LoadedScenes.end()) return false;
+        std::vector<Entity> roots = std::move(it->Roots);
+        m_LoadedScenes.erase(it);
+        for (Entity r : roots)
+            if (IsValid(r)) DestroyEntity(r);
+        std::erase_if(m_Persistent, [this](Entity e) { return !IsValid(e); });
+        m_UIHovered = Entity::Null();
+        return true;
+    }
+
     void Scene::OnRuntimeStop()
     {
         if (!m_Running) return;
+        Input::SetKeyboardCapturedByUI(false);
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
             for (auto& inst : sc.LiveInstances(false)) inst->OnDestroy();
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
@@ -364,15 +435,35 @@ namespace Dimension
         m_DeltaTime = dt;
         ++m_FrameCount;
 
+        Input::SetKeyboardCapturedByUI(false); // the UI reads the keyboard first
         if (m_UIInputValid)
         {
             UI::PointerState pointer{ m_UIPointer, m_UIDown, m_UIDown && !m_UIWasDown, !m_UIDown && m_UIWasDown, m_UIScroll };
             pointer.Text = Input::GetTypedText() + m_UIInjectedText;
-            pointer.Backspace = Input::IsKeyPressed(Key::Backspace) || m_UIInjectedBackspace;
+            pointer.Backspace = Input::IsKeyTyped(Key::Backspace) || m_UIInjectedBackspace;
             pointer.Enter = Input::IsKeyPressed(Key::Enter) || m_UIInjectedEnter;
+            pointer.Delete = Input::IsKeyTyped(Key::Delete);
+            pointer.Left = Input::IsKeyTyped(Key::Left);
+            pointer.Right = Input::IsKeyTyped(Key::Right);
+            pointer.Home = Input::IsKeyTyped(Key::Home);
+            pointer.End = Input::IsKeyTyped(Key::End);
+            pointer.Tab = Input::IsKeyTyped(Key::Tab);
+            int mods = Input::GetModifiers();
+            pointer.Shift = (mods & ModShift) != 0;
+            pointer.Ctrl = (mods & ModControl) != 0;
+            pointer.SelectAll = pointer.Ctrl && Input::IsKeyTyped(Key::A);
+            pointer.Copy = pointer.Ctrl && Input::IsKeyTyped(Key::C);
+            pointer.Cut = pointer.Ctrl && Input::IsKeyTyped(Key::X);
+            pointer.Paste = pointer.Ctrl && Input::IsKeyTyped(Key::V);
+            if (pointer.Paste) pointer.PasteText = Input::GetClipboardText();
+            pointer.SetClipboard = [](const std::string& text) { Input::SetClipboardText(text); };
             m_UIInjectedText.clear();
             m_UIInjectedBackspace = m_UIInjectedEnter = false;
             m_UIHovered = UI::Update(*this, pointer, m_UIScreen, dt);
+            // A focused text field keeps the keys from gameplay (WASD while typing a name must not move the player).
+            bool typing = false;
+            for (auto [e, field] : m_Registry.ViewOf<UIInputFieldComponent>()) typing |= field.Focused;
+            Input::SetKeyboardCapturedByUI(typing);
             m_UIScroll = 0.0f;
             m_UIWasDown = m_UIDown;
         }
@@ -405,6 +496,7 @@ namespace Dimension
         UpdateTransforms();
         UpdateAnimators(dt);
         ParticleSystems::Update(*this, dt);
+        TrailRenderers::Update(*this, m_Time);
         m_Audio->Update();
         FlushDeferredDestroys();
     }
@@ -452,49 +544,17 @@ namespace Dimension
                 return c ? c->Duration : 0.0f;
             };
             Ref<AnimatorController> controller = AssetManager::GetAnimatorController(anim.Controller);
-            if (controller)
-            {
-                AnimatorStateMachine::Update(*controller, anim.Runtime, dt * anim.Speed, duration, [&](const AnimState& state, float fade) {
-                    int index = (int)(&state - controller->States.data());
-                    bool tree = state.Motion == AnimMotionType::BlendTree1D;
-                    bool hasCurrent = !anim.Clip.empty() || anim.TreeState >= 0;
-                    if (fade > 0.0f && hasCurrent)
-                    {
-                        anim.PreviousClip = anim.Clip;
-                        anim.PreviousTreeState = anim.TreeState;
-                        anim.PreviousTime = anim.Time;
-                        anim.FadeElapsed = 0.0f;
-                        anim.FadeDuration = fade;
-                    }
-                    else
-                        anim.FadeDuration = 0.0f;
-                    anim.TreeState = tree ? index : -1;
-                    anim.Clip = tree ? std::string() : state.Clip;
-                    anim.Time = 0.0f;
-                    anim.Loop = state.Loop;
-                    anim.StateSpeed = state.Speed;
-                    anim.CurrentState = state.Name;
-                    anim.Playing = true;
-                });
-                if (!anim.Runtime.FiredEvents.empty()) firedEvents.emplace_back(e, anim.Runtime.FiredEvents);
-            }
-            else
-            {
-                anim.StateSpeed = 1.0f;
-                anim.TreeState = anim.PreviousTreeState = -1;
-            }
-            auto treeOf = [&](int index) -> const AnimState* {
-                return controller && index >= 0 && index < (int)controller->States.size() ? &controller->States[index] : nullptr;
-            };
+            if (controller) controller->LinkLayers();
+
             // Samples a 1D blend tree at a normalized time: the two weighted children, in sync.
-            auto sampleTree = [&](const AnimState& st, float normalized, Pose& out) {
+            auto sampleTree = [&](const AnimatorController& machine, const AnimatorRuntime& runtime, const AnimState& st, float normalized, Pose& out) {
                 std::vector<float> w;
-                AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(*controller, anim.Runtime, st.BlendParameter), w);
+                AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(machine, runtime, st.BlendParameter), w);
                 float frac = st.Loop ? normalized - std::floor(normalized) : std::clamp(normalized, 0.0f, 1.0f);
-                auto sampleChild = [&](int i, Pose& p) {
+                auto sampleChild = [&](int i, Pose& pose) {
                     const AnimationClip* c = Animation::FindClip(clips, st.Children[i].Clip);
-                    if (c) Animation::Sample(*skeleton, *c, frac * c->Duration, p);
-                    else p.SetBindPose(*skeleton);
+                    if (c) Animation::Sample(*skeleton, *c, frac * c->Duration, pose);
+                    else pose.SetBindPose(*skeleton);
                 };
                 int a = -1, b = -1;
                 for (int i = 0; i < (int)w.size(); ++i)
@@ -509,44 +569,117 @@ namespace Dimension
                     out = std::move(blended);
                 }
             };
-            const AnimState* tree = treeOf(anim.TreeState);
-            const AnimationClip* clip = tree ? nullptr : Animation::FindClip(clips, anim.Clip);
-            if (!tree && !clip && !clips.empty() && anim.Clip.empty()) clip = &clips.front(); // default to the first clip
 
-            auto advance = [&](float& time, const AnimationClip* c) {
-                if (!c || !anim.Playing) return;
-                time += dt * anim.Speed * anim.StateSpeed;
-                if (c->Duration <= 0.0f) { time = 0.0f; return; }
-                if (anim.Loop) time = std::fmod(std::fmod(time, c->Duration) + c->Duration, c->Duration);
-                else time = std::clamp(time, 0.0f, c->Duration);
-            };
-            if (tree) sampleTree(*tree, anim.Runtime.StateTime, current);
-            else
-            {
-                advance(anim.Time, clip);
-                if (clip) Animation::Sample(*skeleton, *clip, anim.Time, current);
-                else current.SetBindPose(*skeleton);
-            }
-
-            if (anim.FadeDuration > 0.0f && anim.FadeElapsed < anim.FadeDuration)
-            {
-                anim.FadeElapsed += dt;
-                if (const AnimState* prevTree = treeOf(anim.PreviousTreeState))
+            // Runs one state machine (the base layer: `pb` is the AnimatorComponent itself; an extra layer: its playback)
+            // and produces its pose, including the crossfade from the previous state.
+            auto evaluate = [&](auto& pb, const AnimatorController* machine, bool baseLayer, Pose& out) {
+                if (machine)
                 {
-                    float d = AnimatorStateMachine::StateDuration(*controller, anim.Runtime, *prevTree, duration);
-                    if (anim.Playing && d > 0.0f) anim.PreviousTime += dt * anim.Speed * prevTree->Speed / d;
-                    sampleTree(*prevTree, anim.PreviousTime, previous);
-                    Pose blended;
-                    Animation::Blend(previous, current, std::clamp(anim.FadeElapsed / anim.FadeDuration, 0.0f, 1.0f), blended);
-                    current = std::move(blended);
+                    AnimatorStateMachine::Update(*machine, pb.Runtime, dt * anim.Speed, duration, [&](const AnimState& state, float fade) {
+                        int index = (int)(&state - machine->States.data());
+                        bool isTree = state.Motion == AnimMotionType::BlendTree1D;
+                        bool hasCurrent = !pb.Clip.empty() || pb.TreeState >= 0;
+                        if (fade > 0.0f && hasCurrent)
+                        {
+                            pb.PreviousClip = pb.Clip;
+                            pb.PreviousTreeState = pb.TreeState;
+                            pb.PreviousTime = pb.Time;
+                            pb.FadeElapsed = 0.0f;
+                            pb.FadeDuration = fade;
+                        }
+                        else
+                            pb.FadeDuration = 0.0f;
+                        pb.TreeState = isTree ? index : -1;
+                        pb.Clip = isTree ? std::string() : state.Clip;
+                        pb.Time = 0.0f;
+                        pb.Loop = state.Loop;
+                        pb.StateSpeed = state.Speed;
+                        pb.CurrentState = state.Name;
+                        pb.Playing = true;
+                    });
+                    if (!pb.Runtime.FiredEvents.empty()) firedEvents.emplace_back(e, pb.Runtime.FiredEvents);
                 }
-                else if (const AnimationClip* prev = Animation::FindClip(clips, anim.PreviousClip))
+                else
                 {
-                    advance(anim.PreviousTime, prev);
-                    Animation::Sample(*skeleton, *prev, anim.PreviousTime, previous);
-                    Pose blended;
-                    Animation::Blend(previous, current, std::clamp(anim.FadeElapsed / anim.FadeDuration, 0.0f, 1.0f), blended);
-                    current = std::move(blended);
+                    pb.StateSpeed = 1.0f;
+                    pb.TreeState = pb.PreviousTreeState = -1;
+                }
+                auto treeOf = [&](int index) -> const AnimState* {
+                    return machine && index >= 0 && index < (int)machine->States.size() ? &machine->States[index] : nullptr;
+                };
+                const AnimState* tree = treeOf(pb.TreeState);
+                const AnimationClip* clip = tree ? nullptr : Animation::FindClip(clips, pb.Clip);
+                if (baseLayer && !tree && !clip && !clips.empty() && pb.Clip.empty()) clip = &clips.front(); // default to the first clip
+
+                auto advance = [&](float& time, const AnimationClip* c) {
+                    if (!c || !pb.Playing) return;
+                    time += dt * anim.Speed * pb.StateSpeed;
+                    if (c->Duration <= 0.0f) { time = 0.0f; return; }
+                    if (pb.Loop) time = std::fmod(std::fmod(time, c->Duration) + c->Duration, c->Duration);
+                    else time = std::clamp(time, 0.0f, c->Duration);
+                };
+                if (tree) sampleTree(*machine, pb.Runtime, *tree, pb.Runtime.StateTime, out);
+                else
+                {
+                    advance(pb.Time, clip);
+                    if (clip) Animation::Sample(*skeleton, *clip, pb.Time, out);
+                    else out.SetBindPose(*skeleton);
+                }
+
+                if (pb.FadeDuration > 0.0f && pb.FadeElapsed < pb.FadeDuration)
+                {
+                    pb.FadeElapsed += dt;
+                    if (const AnimState* prevTree = treeOf(pb.PreviousTreeState))
+                    {
+                        float d = AnimatorStateMachine::StateDuration(*machine, pb.Runtime, *prevTree, duration);
+                        if (pb.Playing && d > 0.0f) pb.PreviousTime += dt * anim.Speed * prevTree->Speed / d;
+                        sampleTree(*machine, pb.Runtime, *prevTree, pb.PreviousTime, previous);
+                        Pose blended;
+                        Animation::Blend(previous, out, std::clamp(pb.FadeElapsed / pb.FadeDuration, 0.0f, 1.0f), blended);
+                        out = std::move(blended);
+                    }
+                    else if (const AnimationClip* prev = Animation::FindClip(clips, pb.PreviousClip))
+                    {
+                        advance(pb.PreviousTime, prev);
+                        Animation::Sample(*skeleton, *prev, pb.PreviousTime, previous);
+                        Pose blended;
+                        Animation::Blend(previous, out, std::clamp(pb.FadeElapsed / pb.FadeDuration, 0.0f, 1.0f), blended);
+                        out = std::move(blended);
+                    }
+                }
+            };
+            evaluate(anim, controller.get(), true, current);
+
+            // Extra layers, in order, on top of the base pose.
+            if (controller && !controller->Layers.empty())
+            {
+                if (anim.Layers.size() < controller->Layers.size()) anim.Layers.resize(controller->Layers.size());
+                Pose layerPose, reference;
+                std::vector<float> mask;
+                for (size_t li = 0; li < controller->Layers.size(); ++li)
+                {
+                    const AnimLayer& layer = controller->Layers[li];
+                    auto& pb = anim.Layers[li];
+                    // Parameters are shared; a trigger consumed by this layer is consumed for the whole Animator.
+                    pb.Runtime.Parameters = anim.Runtime.Parameters;
+                    pb.Runtime.Triggers = anim.Runtime.Triggers;
+                    evaluate(pb, &layer.Machine, false, layerPose);
+                    for (auto it = anim.Runtime.Triggers.begin(); it != anim.Runtime.Triggers.end();)
+                        it = pb.Runtime.Triggers.contains(*it) ? std::next(it) : anim.Runtime.Triggers.erase(it);
+                    float weight = std::clamp(pb.Weight >= 0.0f ? pb.Weight : layer.Weight, 0.0f, 1.0f);
+                    if (weight <= 0.0f || layer.Machine.States.empty()) continue;
+                    Animation::BuildMask(*skeleton, layer.Mask, mask);
+                    if (layer.Blending == AnimLayerBlending::Override)
+                        Animation::LayerOverride(current, layerPose, mask, weight);
+                    else
+                    {
+                        // Reference: the first frame of the layer's current motion.
+                        const AnimState* st = pb.TreeState >= 0 && pb.TreeState < (int)layer.Machine.States.size() ? &layer.Machine.States[pb.TreeState] : nullptr;
+                        if (st) sampleTree(layer.Machine, pb.Runtime, *st, 0.0f, reference);
+                        else if (const AnimationClip* c = Animation::FindClip(clips, pb.Clip)) Animation::Sample(*skeleton, *c, 0.0f, reference);
+                        else reference = layerPose;
+                        Animation::LayerAdditive(current, layerPose, reference, mask, weight);
+                    }
                 }
             }
             Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
@@ -554,6 +687,13 @@ namespace Dimension
         // After iteration: scripts may change the registry.
         for (auto& [e, names] : firedEvents)
             for (auto& name : names) DispatchAnimationEvent(e, name);
+    }
+
+    void Scene::DispatchJointBreak(Entity e, float force)
+    {
+        if (!IsValid(e)) return;
+        if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
+            for (auto& inst : sc->LiveInstances(true)) inst->OnJointBreak(force);
     }
 
     void Scene::DispatchAnimationEvent(Entity e, const std::string& name)

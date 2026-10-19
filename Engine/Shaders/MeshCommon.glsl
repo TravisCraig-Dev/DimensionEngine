@@ -19,12 +19,22 @@ struct SkinVertex
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer SkinRef { SkinVertex Vertices[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer JointsRef { mat4 Matrices[]; };
 
+// GPU instancing: one entry per instance, indexed by gl_InstanceIndex.
+struct MeshInstance
+{
+    mat4 Model;
+    uvec4 Data; // x: entity id
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstancesRef { MeshInstance Items[]; };
+
 layout(push_constant) uniform Push
 {
     mat4 Model;
     MaterialRef Material;
     SkinRef Skin;       // valid when Flags & 1
     JointsRef Joints;   // skinning matrices (mesh space)
+    InstancesRef Instances; // valid when Flags & 2 (Model and EntityId then come from here)
     uint EntityId;
-    uint Flags;         // bit 0: skinned
+    uint Flags;         // bit 0: skinned, bit 1: instanced
+    uint Probe;         // reflection probe slot + 1 (0 = sky)
 } pc;

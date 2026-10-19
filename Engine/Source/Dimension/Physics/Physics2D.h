@@ -43,7 +43,7 @@ namespace Dimension
                                               uint32_t layerMask = ~(1u << 1));
 
         uint32_t GetWorldId() const { return m_World; }
-        size_t GetJointCount() const { return m_JointCount; }
+        size_t GetJointCount() const { return m_Joints.size(); }
 
     private:
         void CreateBodiesRecursive(Entity e);
@@ -55,7 +55,13 @@ namespace Dimension
         Scene& m_Scene;
         uint32_t m_World = 0;  // b2WorldId packed
         uint64_t m_Ground = 0; // static body for joints attached to the world (b2BodyId packed)
-        size_t m_JointCount = 0;
+        struct JointRecord
+        {
+            Entity Owner;
+            uint64_t Id; // b2JointId packed
+            bool Hinge;
+        };
+        std::vector<JointRecord> m_Joints;
         std::vector<uint64_t> m_TilemapBodies; // b2BodyId packed
     };
 }

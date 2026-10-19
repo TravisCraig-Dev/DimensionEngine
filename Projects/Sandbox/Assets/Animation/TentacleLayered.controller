@@ -1,0 +1,49 @@
+{
+  "parameters": [],
+  "states": [
+    {
+      "name": "Sway",
+      "clip": "Sway",
+      "speed": 1.0,
+      "loop": true,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "transitions": [],
+  "defaultState": 0,
+  "anyStatePosition": [
+    -220,
+    0
+  ],
+  "layers": [
+    {
+      "name": "Tip Wave",
+      "weight": 1.0,
+      "blending": 0,
+      "mask": [
+        "Bone3"
+      ],
+      "states": [
+        {
+          "name": "Wave",
+          "clip": "Wave",
+          "speed": 1.4,
+          "loop": true,
+          "position": [
+            0,
+            0
+          ]
+        }
+      ],
+      "transitions": [],
+      "defaultState": 0,
+      "anyStatePosition": [
+        -220,
+        0
+      ]
+    }
+  ]
+}

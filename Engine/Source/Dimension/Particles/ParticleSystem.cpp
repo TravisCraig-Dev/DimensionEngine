@@ -78,6 +78,7 @@ namespace Dimension
             p.Size = Range(rng, ps.StartSize);
             p.Rotation = glm::radians(Range(rng, ps.StartRotation));
             p.AngularVelocity = glm::radians(Range(rng, ps.AngularVelocity));
+            p.SheetOffset = ps.SheetRandomStart ? Random01(rng) : 0.0f;
             ps.Particles.push_back(p);
             if (ps.SubEmitterTrigger == ParticleSubEmitTrigger::Birth && !ps.SubEmitter.IsNull())
                 subEmits.push_back({ ps.SubEmitter, worldPos, ps.SubEmitCount });
@@ -94,6 +95,15 @@ namespace Dimension
             glm::vec3 previous = p.Position;
             p.Position += p.Velocity * speedScale * dt;
             p.Rotation += p.AngularVelocity * dt;
+            if (ps.Noise && ps.NoiseStrength != 0.0f)
+            {
+                // Sampled in world space so local and world simulation swirl the same way; moves the particle
+                // without accumulating into its velocity (like Unity's Noise module).
+                glm::vec3 wp = local ? glm::vec3(world * glm::vec4(p.Position, 1.0f)) : p.Position;
+                glm::vec3 drift = ParticleSystems::CurlNoise(wp * ps.NoiseFrequency + glm::vec3(0.0f, 0.0f, ps.NoiseTime * ps.NoiseScrollSpeed)) *
+                                  ps.NoiseStrength;
+                p.Position += (local ? glm::vec3(invWorld * glm::vec4(drift, 0.0f)) : drift) * dt;
+            }
             if (ps.Collision == ParticleCollision::None) return;
 
             glm::vec3 from = local ? glm::vec3(world * glm::vec4(previous, 1.0f)) : previous;
@@ -185,6 +195,7 @@ namespace Dimension
             ps.PendingBursts.clear();
 
             glm::mat4 invWorld = glm::inverse(world);
+            ps.NoiseTime += dt;
             glm::vec3 gravity(0.0f, -9.81f * ps.GravityModifier, 0.0f);
             if (ps.SimulationSpace == ParticleSpace::Local) gravity = glm::vec3(invWorld * glm::vec4(gravity, 0.0f));
             float damping = std::max(0.0f, 1.0f - ps.Drag * dt);
@@ -217,8 +228,89 @@ namespace Dimension
         }
     }
 
+    int32_t ParticleSystemComponent::SheetFrame(const Particle& p) const
+    {
+        if (!TextureSheet) return 0;
+        int32_t cells = std::max(1, SheetColumns) * std::max(1, SheetRows);
+        int32_t frames = SheetFrames > 0 ? std::min(SheetFrames, cells) : cells;
+        float life = std::clamp(p.Age / std::max(p.Lifetime, 1e-4f), 0.0f, 0.9999f);
+        float t = life * std::max(SheetCycles, 0.0f) + p.SheetOffset;
+        t -= std::floor(t);
+        return std::min((int32_t)(t * frames), frames - 1);
+    }
+
+    void ParticleSystemComponent::SheetUV(int32_t frame, glm::vec2& uvMin, glm::vec2& uvMax) const
+    {
+        if (!TextureSheet)
+        {
+            uvMin = { 0.0f, 1.0f };
+            uvMax = { 1.0f, 0.0f };
+            return;
+        }
+        int32_t cols = std::max(1, SheetColumns), rows = std::max(1, SheetRows);
+        float col = (float)(frame % cols), row = (float)(frame / cols);
+        uvMin = { col / cols, (row + 1.0f) / rows };
+        uvMax = { (col + 1.0f) / cols, row / rows };
+    }
+
     namespace ParticleSystems
     {
+        namespace
+        {
+            uint32_t HashCell(int32_t x, int32_t y, int32_t z)
+            {
+                uint32_t h = (uint32_t)x * 0x8da6b343u ^ (uint32_t)y * 0xd8163841u ^ (uint32_t)z * 0xcb1ab31fu;
+                h ^= h >> 15;
+                h *= 0x2c1b3c6du;
+                h ^= h >> 12;
+                h *= 0x297a2d39u;
+                return h ^ (h >> 15);
+            }
+
+            float GradDot(uint32_t hash, const glm::vec3& d)
+            {
+                // One of the 12 cube-edge gradients (Perlin's improved noise).
+                switch (hash % 12u)
+                {
+                case 0: return d.x + d.y;
+                case 1: return -d.x + d.y;
+                case 2: return d.x - d.y;
+                case 3: return -d.x - d.y;
+                case 4: return d.x + d.z;
+                case 5: return -d.x + d.z;
+                case 6: return d.x - d.z;
+                case 7: return -d.x - d.z;
+                case 8: return d.y + d.z;
+                case 9: return -d.y + d.z;
+                case 10: return d.y - d.z;
+                default: return -d.y - d.z;
+                }
+            }
+        }
+
+        float GradientNoise(const glm::vec3& p)
+        {
+            glm::vec3 cell = glm::floor(p), f = p - cell;
+            glm::vec3 u = f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f); // quintic fade
+            int32_t x = (int32_t)cell.x, y = (int32_t)cell.y, z = (int32_t)cell.z;
+            auto corner = [&](int32_t i, int32_t j, int32_t k) { return GradDot(HashCell(x + i, y + j, z + k), f - glm::vec3(i, j, k)); };
+            float x00 = glm::mix(corner(0, 0, 0), corner(1, 0, 0), u.x), x10 = glm::mix(corner(0, 1, 0), corner(1, 1, 0), u.x);
+            float x01 = glm::mix(corner(0, 0, 1), corner(1, 0, 1), u.x), x11 = glm::mix(corner(0, 1, 1), corner(1, 1, 1), u.x);
+            return glm::mix(glm::mix(x00, x10, u.y), glm::mix(x01, x11, u.y), u.z);
+        }
+
+        glm::vec3 CurlNoise(const glm::vec3& p)
+        {
+            // Curl of a noise vector potential (three decorrelated noise fields), by central differences.
+            const float e = 0.05f;
+            const glm::vec3 offB(31.416f, -47.853f, 12.793f), offC(-73.219f, 19.371f, 58.111f);
+            auto psi = [&](const glm::vec3& q) { return glm::vec3(GradientNoise(q), GradientNoise(q + offB), GradientNoise(q + offC)); };
+            glm::vec3 dx = (psi(p + glm::vec3(e, 0, 0)) - psi(p - glm::vec3(e, 0, 0))) / (2.0f * e);
+            glm::vec3 dy = (psi(p + glm::vec3(0, e, 0)) - psi(p - glm::vec3(0, e, 0))) / (2.0f * e);
+            glm::vec3 dz = (psi(p + glm::vec3(0, 0, e)) - psi(p - glm::vec3(0, 0, e))) / (2.0f * e);
+            return glm::vec3(dy.z - dz.y, dz.x - dx.z, dx.y - dy.x) * 0.5f;
+        }
+
         void Update(Scene& scene, float dt)
         {
             auto& reg = scene.GetRegistry();

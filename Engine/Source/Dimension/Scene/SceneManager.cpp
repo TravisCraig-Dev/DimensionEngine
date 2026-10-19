@@ -6,7 +6,7 @@
 #include "Dimension/Project/Project.h"
 #include "Dimension/Core/Log.h"
 #include <mutex>
-#include <optional>
+#include <vector>
 
 namespace Dimension
 {
@@ -16,33 +16,72 @@ namespace Dimension
         {
             std::string Name;
             int Index = -1;
+            bool Unload = false;
+            LoadSceneMode Mode = LoadSceneMode::Single;
         };
         std::mutex s_Mutex;
-        std::optional<Request> s_Pending;
+        std::vector<Request> s_Queue;
+
+        void Enqueue(Request r)
+        {
+            std::lock_guard lock(s_Mutex);
+            if (!r.Unload && r.Mode == LoadSceneMode::Single) s_Queue.clear(); // everything before it would be destroyed anyway
+            s_Queue.push_back(std::move(r));
+        }
+
+        std::vector<Request> TakeAll()
+        {
+            std::lock_guard lock(s_Mutex);
+            std::vector<Request> all;
+            all.swap(s_Queue);
+            return all;
+        }
+
+        AssetHandle ResolveRequest(const Request& r)
+        {
+            AssetHandle handle = AssetHandle::None();
+            if (r.Index >= 0)
+            {
+                auto scenes = SceneManager::GetBuildScenes();
+                if (r.Index < (int)scenes.size()) handle = scenes[r.Index];
+                else Log::Error("LoadScene: build index {} is out of range ({} scenes in the build)", r.Index, scenes.size());
+            }
+            else
+            {
+                handle = SceneManager::Resolve(r.Name);
+                if (!handle.IsValid()) Log::Error("LoadScene: no scene named '{}' (add it in File > Build Settings)", r.Name);
+            }
+            return handle;
+        }
+
+        // The scene file with its prefab instances brought up to date.
+        Ref<Scene> LoadSceneAsset(AssetHandle handle)
+        {
+            auto scene = SceneSerializer::LoadFromFile(AssetManager::GetAbsolutePath(handle));
+            if (!scene)
+            {
+                Log::Error("LoadScene: failed to load '{}'", AssetManager::GetDisplayName(handle));
+                return nullptr;
+            }
+            Prefabs::SyncAll(*scene);
+            return scene;
+        }
     }
 
-    void SceneManager::LoadScene(const std::string& name)
-    {
-        std::lock_guard lock(s_Mutex);
-        s_Pending = Request{ name, -1 };
-    }
-
-    void SceneManager::LoadScene(int buildIndex)
-    {
-        std::lock_guard lock(s_Mutex);
-        s_Pending = Request{ std::string(), buildIndex };
-    }
+    void SceneManager::LoadScene(const std::string& name, LoadSceneMode mode) { Enqueue({ name, -1, false, mode }); }
+    void SceneManager::LoadScene(int buildIndex, LoadSceneMode mode) { Enqueue({ std::string(), buildIndex, false, mode }); }
+    void SceneManager::UnloadScene(const std::string& name) { Enqueue({ name, -1, true, LoadSceneMode::Additive }); }
 
     bool SceneManager::HasPendingLoad()
     {
         std::lock_guard lock(s_Mutex);
-        return s_Pending.has_value();
+        return !s_Queue.empty();
     }
 
     void SceneManager::CancelPendingLoad()
     {
         std::lock_guard lock(s_Mutex);
-        s_Pending.reset();
+        s_Queue.clear();
     }
 
     std::vector<AssetHandle> SceneManager::GetBuildScenes()
@@ -76,37 +115,50 @@ namespace Dimension
         return AssetHandle::None();
     }
 
+    bool SceneManager::ApplyPending(Scene& running)
+    {
+        bool changed = false;
+        for (const Request& r : TakeAll())
+        {
+            if (r.Unload)
+            {
+                if (running.UnloadScene(r.Name))
+                {
+                    Log::Info("Unloaded scene '{}'", r.Name);
+                    changed = true;
+                }
+                else
+                    Log::Warn("UnloadScene: '{}' is not loaded", r.Name);
+                continue;
+            }
+            AssetHandle handle = ResolveRequest(r);
+            if (!handle.IsValid()) continue;
+            auto loaded = LoadSceneAsset(handle);
+            if (!loaded) continue;
+            bool additive = r.Mode == LoadSceneMode::Additive;
+            running.LoadSceneData(SceneSerializer::Serialize(*loaded), additive);
+            size_t kept = 0;
+            for (auto& l : running.GetLoadedScenes())
+                if (l.Name == Scene::kPersistentSceneName) kept = l.Roots.size();
+            Log::Info("Loaded scene '{}' ({}{})", loaded->GetName(), additive ? "additive" : "single",
+                      !additive && kept ? ", " + std::to_string(kept) + " persistent object(s) kept" : std::string());
+            changed = true;
+        }
+        return changed;
+    }
+
     Ref<Scene> SceneManager::LoadPending()
     {
-        std::optional<Request> request;
+        std::vector<Request> all = TakeAll();
+        for (const Request& r : all)
         {
-            std::lock_guard lock(s_Mutex);
-            request.swap(s_Pending);
+            if (r.Unload) continue;
+            AssetHandle handle = ResolveRequest(r);
+            if (!handle.IsValid()) return nullptr;
+            auto scene = LoadSceneAsset(handle);
+            if (scene) Log::Info("Loaded scene '{}'", scene->GetName());
+            return scene;
         }
-        if (!request) return nullptr;
-
-        AssetHandle handle = AssetHandle::None();
-        if (request->Index >= 0)
-        {
-            auto scenes = GetBuildScenes();
-            if (request->Index < (int)scenes.size()) handle = scenes[request->Index];
-            else Log::Error("LoadScene: build index {} is out of range ({} scenes in the build)", request->Index, scenes.size());
-        }
-        else
-        {
-            handle = Resolve(request->Name);
-            if (!handle.IsValid()) Log::Error("LoadScene: no scene named '{}' (add it in File > Build Settings)", request->Name);
-        }
-        if (!handle.IsValid()) return nullptr;
-
-        auto scene = SceneSerializer::LoadFromFile(AssetManager::GetAbsolutePath(handle));
-        if (!scene)
-        {
-            Log::Error("LoadScene: failed to load '{}'", AssetManager::GetDisplayName(handle));
-            return nullptr;
-        }
-        Prefabs::SyncAll(*scene);
-        Log::Info("Loaded scene '{}'", scene->GetName());
-        return scene;
+        return nullptr;
     }
 }

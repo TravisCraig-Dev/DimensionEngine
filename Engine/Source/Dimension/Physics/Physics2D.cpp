@@ -171,6 +171,7 @@ namespace Dimension
         b2Vec2 aw{ anchor.x, anchor.y };
         float referenceAngle = b2Rot_GetAngle(b2Body_GetRotation(b)) - b2Rot_GetAngle(b2Body_GetRotation(a));
         b2WorldId world = LoadWorld(m_World);
+        b2JointId created = b2_nullJointId;
         switch (j.Type)
         {
         case Joint2DType::Fixed:
@@ -182,7 +183,7 @@ namespace Dimension
             d.localAnchorB = b2Body_GetLocalPoint(b, aw);
             d.referenceAngle = referenceAngle;
             d.collideConnected = j.CollideConnected;
-            b2CreateWeldJoint(world, &d);
+            created = b2CreateWeldJoint(world, &d);
             break;
         }
         case Joint2DType::Hinge:
@@ -197,7 +198,10 @@ namespace Dimension
             d.lowerAngle = glm::radians(std::min(j.LowerAngle, j.UpperAngle));
             d.upperAngle = glm::radians(std::max(j.LowerAngle, j.UpperAngle));
             d.collideConnected = j.CollideConnected;
-            b2CreateRevoluteJoint(world, &d);
+            d.enableMotor = j.UseMotor;
+            d.motorSpeed = -glm::radians(j.MotorSpeed); // Box2D drives B relative to A; positive turns this entity counter-clockwise
+            d.maxMotorTorque = std::max(j.MotorMaxTorque, 0.0f);
+            created = b2CreateRevoluteJoint(world, &d);
             break;
         }
         case Joint2DType::Distance:
@@ -211,11 +215,14 @@ namespace Dimension
             d.localAnchorB = b2Body_GetLocalPoint(b, { pointB.x, pointB.y });
             d.length = j.Distance > 0.0f ? j.Distance : std::max(glm::distance(anchor, pointB), 0.01f);
             d.collideConnected = j.CollideConnected;
-            b2CreateDistanceJoint(world, &d);
+            created = b2CreateDistanceJoint(world, &d);
             break;
         }
         }
-        ++m_JointCount;
+        if (B2_IS_NULL(created)) return;
+        m_Joints.push_back({ e, b2StoreJointId(created), j.Type == Joint2DType::Hinge });
+        j.Broken = false;
+        j.CurrentForce = j.CurrentTorque = 0.0f;
     }
 
     void Physics2DWorld::CreateBody(Entity e)
@@ -292,7 +299,47 @@ namespace Dimension
             b2Body_SetTransform(id, { p.x, p.y }, b2MakeRot(t.Rotation.z));
         }
 
+        // Hinge motors follow their components (scripts may change them while playing).
+        std::erase_if(m_Joints, [](const JointRecord& r) { return !b2Joint_IsValid(b2LoadJointId(r.Id)); }); // removed with a body
+        for (auto& r : m_Joints)
+        {
+            auto* jc = reg.TryGet<Joint2DComponent>(r.Owner);
+            if (!r.Hinge || !jc) continue;
+            b2JointId id = b2LoadJointId(r.Id);
+            b2RevoluteJoint_EnableMotor(id, jc->UseMotor);
+            b2RevoluteJoint_SetMotorSpeed(id, -glm::radians(jc->MotorSpeed));
+            b2RevoluteJoint_SetMaxMotorTorque(id, std::max(jc->MotorMaxTorque, 0.0f));
+            if (jc->UseMotor) b2Joint_WakeBodies(id);
+        }
+
         b2World_Step(world, dt, 4);
+
+        // Joint reactions; joints over their break force or torque (excluding the motor's own torque) are destroyed.
+        std::vector<std::pair<Entity, float>> broken;
+        for (auto it = m_Joints.begin(); it != m_Joints.end();)
+        {
+            b2JointId id = b2LoadJointId(it->Id);
+            auto* jc = reg.TryGet<Joint2DComponent>(it->Owner);
+            if (!jc || !b2Joint_IsValid(id))
+            {
+                ++it;
+                continue;
+            }
+            b2Vec2 f = b2Joint_GetConstraintForce(id);
+            float torque = b2Joint_GetConstraintTorque(id);
+            if (it->Hinge) torque -= b2RevoluteJoint_GetMotorTorque(id);
+            jc->CurrentForce = std::sqrt(f.x * f.x + f.y * f.y);
+            jc->CurrentTorque = std::abs(torque);
+            if ((jc->BreakForce > 0.0f && jc->CurrentForce > jc->BreakForce) || (jc->BreakTorque > 0.0f && jc->CurrentTorque > jc->BreakTorque))
+            {
+                jc->Broken = true;
+                broken.emplace_back(it->Owner, jc->CurrentForce);
+                b2DestroyJoint(id);
+                it = m_Joints.erase(it);
+                continue;
+            }
+            ++it;
+        }
 
         for (auto [e, rb, t] : reg.ViewOf<Rigidbody2DComponent, TransformComponent>())
         {
@@ -328,6 +375,7 @@ namespace Dimension
             events.push_back({ UnpackEntity(b2Shape_GetUserData(ev.sensorShapeId)), UnpackEntity(b2Shape_GetUserData(ev.visitorShapeId)), false, true });
         }
         for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, ev.Trigger);
+        for (auto& [e, force] : broken) m_Scene.DispatchJointBreak(e, force);
     }
 
     void Physics2DWorld::SetLinearVelocity(Scene& scene, Entity e, const glm::vec2& v)

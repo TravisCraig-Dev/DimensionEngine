@@ -32,6 +32,37 @@ namespace Editor::UI
         return { changed, ImGui::IsItemActivated() };
     }
 
+    static uint32_t s_Mixed = 0; // see SetMixedValue
+    constexpr const char* kMixedText = "--";
+
+    void SetMixedValue(uint32_t mask) { s_Mixed = mask; }
+
+    bool IsVectorField(FieldType type)
+    {
+        switch (type)
+        {
+        case FieldType::Vec2:
+        case FieldType::Vec3:
+        case FieldType::Vec4:
+        case FieldType::Color3:
+        case FieldType::Color4:
+        case FieldType::Angles: return true;
+        default: return false;
+        }
+    }
+
+    uint32_t MixedMask(FieldType type, const nlohmann::json& a, const nlohmann::json& b)
+    {
+        if (IsVectorField(type) && a.is_array() && b.is_array() && a.size() == b.size())
+        {
+            uint32_t mask = 0;
+            for (size_t i = 0; i < a.size() && i < 32; ++i)
+                if (a[i] != b[i]) mask |= 1u << i;
+            return mask;
+        }
+        return a == b ? 0u : 1u;
+    }
+
     EditResult Vec3Control(const char* label, glm::vec3& v, float reset, float speed)
     {
         EditResult r;
@@ -58,7 +89,7 @@ namespace Editor::UI
             ImGui::SameLine();
             ImGui::SetNextItemWidth(itemW);
             ImGui::PushID(i);
-            r |= Track(ImGui::DragFloat("##v", &v[i], speed, 0.0f, 0.0f, "%.3f"));
+            r |= Track(ImGui::DragFloat("##v", &v[i], speed, 0.0f, 0.0f, (s_Mixed >> i) & 1u ? kMixedText : "%.3f"));
             ImGui::PopID();
         }
         ImGui::PopStyleVar();
@@ -103,7 +134,7 @@ namespace Editor::UI
         EditResult r;
         PropertyLabel(label);
         ImGui::PushID(label);
-        std::string name = AssetManager::GetDisplayName(handle);
+        std::string name = s_Mixed ? std::string(kMixedText) : AssetManager::GetDisplayName(handle);
         float h = ImGui::GetFrameHeight();
 
         if (type == AssetType::Texture)
@@ -173,7 +204,7 @@ namespace Editor::UI
         EditResult r;
         PropertyLabel(label);
         ImGui::PushID(label);
-        std::string name = scene.IsValid(entity) ? scene.GetRegistry().Get<TagComponent>(entity).Name : "None (Entity)";
+        std::string name = s_Mixed ? std::string(kMixedText) : scene.IsValid(entity) ? scene.GetRegistry().Get<TagComponent>(entity).Name : "None (Entity)";
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
         if (ImGui::Button(name.c_str(), ImVec2(-FLT_MIN, 0))) ImGui::OpenPopup("picker");
         ImGui::PopStyleVar();
@@ -407,30 +438,34 @@ namespace Editor::UI
         ImGui::PushID(label);
         EditResult r;
         bool bounded = f.Min != f.Max;
+        bool mixed = s_Mixed != 0;
+        const char* floatFormat = mixed ? kMixedText : "%.3f";
         switch (f.Type)
         {
         case FieldType::Bool:
             PropertyLabel(label, f.Tooltip.c_str());
+            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, mixed); // draws a dash in the box
             r = Track(ImGui::Checkbox("##v", (bool*)p));
+            ImGui::PopItemFlag();
             break;
         case FieldType::Int:
             PropertyLabel(label, f.Tooltip.c_str());
-            r = Track(ImGui::DragInt("##v", (int*)p, f.Speed, (int)f.Min, (int)f.Max));
+            r = Track(ImGui::DragInt("##v", (int*)p, f.Speed, (int)f.Min, (int)f.Max, mixed ? kMixedText : "%d"));
             break;
         case FieldType::Float:
             PropertyLabel(label, f.Tooltip.c_str());
-            r = Track(ImGui::DragFloat("##v", (float*)p, f.Speed, f.Min, f.Max, "%.3f", bounded ? ImGuiSliderFlags_AlwaysClamp : 0));
+            r = Track(ImGui::DragFloat("##v", (float*)p, f.Speed, f.Min, f.Max, floatFormat, bounded ? ImGuiSliderFlags_AlwaysClamp : 0));
             break;
         case FieldType::Vec2:
             PropertyLabel(label, f.Tooltip.c_str());
-            r = Track(ImGui::DragFloat2("##v", (float*)p, f.Speed, f.Min, f.Max, "%.3f"));
+            r = Track(ImGui::DragFloat2("##v", (float*)p, f.Speed, f.Min, f.Max, floatFormat));
             break;
         case FieldType::Vec3:
             r = Vec3Control(label, *(glm::vec3*)p, f.Name == "Scale" || f.Name == "Size" ? 1.0f : 0.0f, f.Speed);
             break;
         case FieldType::Vec4:
             PropertyLabel(label, f.Tooltip.c_str());
-            r = Track(ImGui::DragFloat4("##v", (float*)p, f.Speed, f.Min, f.Max, "%.3f"));
+            r = Track(ImGui::DragFloat4("##v", (float*)p, f.Speed, f.Min, f.Max, floatFormat));
             break;
         case FieldType::Angles:
         {
@@ -440,22 +475,39 @@ namespace Editor::UI
             break;
         }
         case FieldType::Color3:
-            PropertyLabel(label, f.Tooltip.c_str());
-            r = Track(ImGui::ColorEdit3("##v", (float*)p, ImGuiColorEditFlags_Float));
-            break;
         case FieldType::Color4:
+        {
             PropertyLabel(label, f.Tooltip.c_str());
-            r = Track(ImGui::ColorEdit4("##v", (float*)p, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaPreviewHalf));
+            bool alpha = f.Type == FieldType::Color4;
+            ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaPreviewHalf;
+            if (mixed) flags |= ImGuiColorEditFlags_NoInputs; // swatch of the active object, then "--"
+            r = Track(alpha ? ImGui::ColorEdit4("##v", (float*)p, flags) : ImGui::ColorEdit3("##v", (float*)p, flags));
+            if (mixed)
+            {
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", kMixedText);
+            }
             break;
+        }
         case FieldType::String:
             PropertyLabel(label, f.Tooltip.c_str());
-            r = Track(ImGui::InputText("##v", (std::string*)p));
+            if (mixed)
+            {
+                // Empty box with a "--" hint; typing replaces the value on every selected object.
+                static std::string typed;
+                typed.clear();
+                r = Track(ImGui::InputTextWithHint("##v", kMixedText, &typed));
+                if (r.Changed) *(std::string*)p = typed;
+            }
+            else
+                r = Track(ImGui::InputText("##v", (std::string*)p));
             break;
         case FieldType::Enum:
         {
             PropertyLabel(label, f.Tooltip.c_str());
             int32_t* value = (int32_t*)p;
-            const char* preview = (*value >= 0 && *value < (int)f.EnumNames.size()) ? f.EnumNames[*value].c_str() : "?";
+            const char* preview = mixed ? kMixedText : (*value >= 0 && *value < (int)f.EnumNames.size()) ? f.EnumNames[*value].c_str() : "?";
             if (ImGui::BeginCombo("##v", preview))
             {
                 for (int i = 0; i < (int)f.EnumNames.size(); ++i)
@@ -487,7 +539,80 @@ namespace Editor::UI
             PropertyLabel(label, f.Tooltip.c_str());
             r = GradientEditor("##gradient", *(Gradient*)p);
             break;
+        case FieldType::StringList:
+        {
+            auto& list = *(std::vector<std::string>*)p;
+            PropertyLabel(label, f.Tooltip.c_str());
+            if (ImGui::Button("+ Add"))
+            {
+                list.push_back("Option " + std::to_string(list.size() + 1));
+                r.Activated = r.Changed = true;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d items", (int)list.size());
+            int remove = -1;
+            for (int i = 0; i < (int)list.size(); ++i)
+            {
+                ImGui::PushID(i);
+                char name[16];
+                std::snprintf(name, sizeof(name), "  %d", i);
+                PropertyLabel(name, "");
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+                r |= Track(ImGui::InputText("##s", &list[i]));
+                ImGui::SameLine();
+                if (ImGui::Button("x", ImVec2(ImGui::GetFrameHeight(), 0.0f))) remove = i;
+                ImGui::PopID();
+            }
+            if (remove >= 0)
+            {
+                list.erase(list.begin() + remove);
+                r.Activated = r.Changed = true;
+            }
+            break;
         }
+        case FieldType::Vec3List:
+        {
+            auto& list = *(std::vector<glm::vec3>*)p;
+            PropertyLabel(label, f.Tooltip.c_str());
+            int size = (int)list.size();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+            if (ImGui::InputInt("##count", &size, 1, 1))
+            {
+                size = std::clamp(size, 0, 4096);
+                // New points continue the line in the direction of its last segment.
+                while ((int)list.size() < size)
+                {
+                    glm::vec3 last = list.empty() ? glm::vec3(0.0f) : list.back();
+                    glm::vec3 step = list.size() >= 2 ? last - list[list.size() - 2] : glm::vec3(0.0f, 1.0f, 0.0f);
+                    list.push_back(list.empty() ? last : last + step);
+                }
+                list.resize(size);
+                r.Activated = r.Changed = true;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("points");
+            int remove = -1;
+            for (int i = 0; i < (int)list.size(); ++i)
+            {
+                ImGui::PushID(i);
+                char name[16];
+                std::snprintf(name, sizeof(name), "  %d", i);
+                PropertyLabel(name, "");
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+                r |= Track(ImGui::DragFloat3("##p", &list[i].x, f.Speed, 0.0f, 0.0f, "%.2f"));
+                ImGui::SameLine();
+                if (ImGui::Button("x", ImVec2(ImGui::GetFrameHeight(), 0.0f))) remove = i;
+                ImGui::PopID();
+            }
+            if (remove >= 0)
+            {
+                list.erase(list.begin() + remove);
+                r.Activated = r.Changed = true;
+            }
+            break;
+        }
+        }
+        s_Mixed = 0;
         ImGui::PopID();
         return r;
     }

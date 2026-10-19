@@ -64,6 +64,20 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, float*, int, void> CharacterMove;
         public delegate* unmanaged<IntPtr, ulong, float*, float*, int> CharacterState;
         public delegate* unmanaged<IntPtr, ulong, float, void> CharacterSetVerticalSpeed;
+        public delegate* unmanaged<IntPtr, ulong, float*, int, void> LineSetPositions;
+        public delegate* unmanaged<IntPtr, ulong, float*, int, int> LineGetPositions;
+        public delegate* unmanaged<IntPtr, ulong, void> TrailClear;
+        public delegate* unmanaged<IntPtr, ulong, int, void> TrailSetEmitting;
+        public delegate* unmanaged<IntPtr, ulong, int> TrailIsEmitting;
+        public delegate* unmanaged<IntPtr, ulong, byte*> DropdownGetOptions;
+        public delegate* unmanaged<IntPtr, ulong, byte*, void> DropdownSetOptions;
+        public delegate* unmanaged<byte*, int, int, void> LoadSceneWithMode;
+        public delegate* unmanaged<byte*, void> UnloadScene;
+        public delegate* unmanaged<IntPtr, ulong, void> DontDestroyOnLoad;
+        public delegate* unmanaged<IntPtr, int> GetLoadedSceneCount;
+        public delegate* unmanaged<IntPtr, int, byte*> GetLoadedSceneName;
+        public delegate* unmanaged<IntPtr, ulong, int, float, void> SetJointMotor;
+        public delegate* unmanaged<IntPtr, ulong, float*, int> GetJointState;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

@@ -32,6 +32,8 @@ namespace Dimension
         bool Grid = true;
         bool Grid2D = false;         // XY grid instead of XZ
         bool RenderUI = false;       // draw screen-space canvases (Game view / Player)
+        bool DefaultLight = false;   // studio sun when the scene has no directional light (Prefab Mode)
+        bool ProbeCapture = false;   // internal: HDR scene only, no post or probes (reflection probe faces)
         Entity Selected = Entity::Null();          // primary selection (camera frustum, light gizmos)
         std::vector<Entity> Selection;             // all selected entities (outlines)
     };
@@ -63,6 +65,10 @@ namespace Dimension
         uint32_t Sprites = 0;
         uint32_t Culled = 0;
         uint32_t ShadowCasters = 0;
+        uint32_t InstancedMeshes = 0; // meshes drawn as part of an instanced draw (main pass)
+        uint32_t RenderListItems = 0; // mesh renderers resolved this frame (once, shared by all passes)
+        float CpuMs = 0.0f;           // CPU time spent recording this view
+        float ListMs = 0.0f;          // part of CpuMs: building the render list
     };
 
     // Shared GPU resources for all scene renderers (pipelines, index buffers, icons).
@@ -97,6 +103,14 @@ namespace Dimension
 
         const RenderStats& GetStats() const { return m_Stats; }
 
+        // GPU instancing: identical opaque meshes (same mesh, sub-mesh, material and pipeline) are drawn with one
+        // instanced call. On by default; turning it off is useful for comparisons.
+        static void SetInstancingEnabled(bool enabled);
+        static bool IsInstancingEnabled();
+        // Re-captures every reflection probe on the next frame (all renderers).
+        static void RequestProbeBake();
+        static constexpr uint32_t kMaxReflectionProbes = 8;
+
     private:
         struct LineVertex
         {
@@ -121,11 +135,73 @@ namespace Dimension
             int32_t Order;
             float Depth;
             bool Additive = false;
+            // Explicit world-space corners (ribbons); Transform/UVMin/UVMax are ignored when set.
+            bool HasCorners = false;
+            glm::vec3 P[4];
+            glm::vec4 C[4];
+            glm::vec2 UV[4];
         };
 
+        // Mesh renderers resolved once per frame (mesh, world bounds, uploaded materials, skinning) and then only
+        // culled and batched by each pass (main, depth prepass, every shadow map).
+        struct RenderPart
+        {
+            uint32_t FirstIndex, IndexCount;
+            VkDeviceAddress Material;
+            bool Transparent, DoubleSided, CastShadows; // CastShadows: the material's flag
+            uint32_t Item;  // owning RenderItem
+            uint32_t Batch; // parts with the same batch share mesh, range, material and culling: one instanced draw
+        };
+        struct RenderItem
+        {
+            Ref<Mesh> MeshRef;
+            glm::mat4 World;
+            glm::vec3 Center, Extents; // world-space bounds
+            uint32_t EntityId;
+            uint32_t Probe = 0;        // reflection probe slot + 1
+            VkDeviceAddress Skin = 0, Joints = 0;
+            bool AlwaysVisible;        // skinned: animated bounds are unknown
+            bool CastShadows;          // the renderer's flag
+            uint32_t FirstPart, PartCount;
+        };
+        std::vector<RenderItem> m_RenderItems;
+        std::vector<RenderPart> m_RenderParts;
+        std::vector<uint8_t> m_BatchInstanceable;       // per batch: false for skinned parts (one draw each)
+        std::vector<uint32_t> m_BatchStart, m_BatchFill; // per-pass scratch for the counting sort
+        std::vector<uint32_t> m_VisibleParts, m_SortedParts;
+        void BuildRenderList(Scene& scene);
+
+        // Reflection probes: GPU images per probe entity, captured on demand and listed for this frame's uniforms.
+        struct ProbeResources
+        {
+            uint32_t Resolution = 0;
+            Image Faces[6];
+            uint32_t FaceBindless[6] = {};
+            Image Base;     // equirectangular conversion target (mip 0)
+            Image Equirect; // with mips, sampled by meshes
+            uint32_t Bindless = 0;
+            uint64_t Key = 0, Generation = ~0ull;
+            bool Baked = false;
+            ~ProbeResources();
+        };
+        struct FrameProbe
+        {
+            glm::vec3 Center, Min, Max;
+            float Intensity;
+            uint32_t Texture, Mips;
+            bool BoxProjection;
+        };
+        std::unordered_map<uint64_t, std::unique_ptr<ProbeResources>> m_Probes;
+        std::vector<FrameProbe> m_FrameProbes;
+        Scope<SceneRenderTarget> m_ProbeTarget;
+        bool m_Capturing = false;
+        void UpdateReflectionProbes(VkCommandBuffer cmd, Scene& scene);
+        void BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t resolution);
+
         enum class MeshPass { Main, Shadow, Depth };
-        void DrawMeshes(VkCommandBuffer cmd, Scene& scene, const glm::mat4& viewProj, MeshPass pass);
+        void DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass);
         // Depth prepass, half-resolution SSAO and its blur (leaves the depth attachment ready to load).
+        void RenderDepthOfField(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera, const SceneSettings& settings);
         void RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
                                     const SceneSettings& settings);
         // Renders the directional shadow map; returns the light view-projection.
@@ -136,6 +212,7 @@ namespace Dimension
         void CollectText(Scene& scene, const CameraData& camera);
         void CollectTilemaps(Scene& scene, const CameraData& camera);
         void CollectParticles(Scene& scene, const CameraData& camera);
+        void CollectLines(Scene& scene, const CameraData& camera);
         void DrawSprites(VkCommandBuffer cmd);
         void BuildGrid(const CameraData& camera, bool grid2D, std::vector<LineVertex>& out);
         void BuildEditorOverlays(Scene& scene, const SceneRenderOptions& options);

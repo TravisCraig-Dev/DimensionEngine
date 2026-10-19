@@ -208,6 +208,7 @@ namespace Dimension
                     case 3: b.OnDestroy(); b.StopAllCoroutines(); break;
                     case 4: b.OnClick(); break;
                     case 5: b.OnValueChanged(dt); break;
+                    case 6: b.OnJointBreak(dt); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

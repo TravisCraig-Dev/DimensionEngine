@@ -10,6 +10,7 @@ layout(location = 2) in vec2 aUV;
 layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out vec2 vUV;
+layout(location = 3) flat out uint vEntity;
 
 invariant gl_Position; // the depth prepass and the main pass must produce identical depths
 
@@ -26,9 +27,16 @@ void main()
         position = vec3(skin * vec4(aPosition, 1.0));
         normal = mat3(skin) * aNormal;
     }
-    vec4 world = pc.Model * vec4(position, 1.0);
+    mat4 model = pc.Model;
+    vEntity = pc.EntityId;
+    if ((pc.Flags & 2u) != 0u)
+    {
+        model = pc.Instances.Items[gl_InstanceIndex].Model;
+        vEntity = pc.Instances.Items[gl_InstanceIndex].Data.x;
+    }
+    vec4 world = model * vec4(position, 1.0);
     vWorldPos = world.xyz;
-    vNormal = normalize(transpose(inverse(mat3(pc.Model))) * normal);
+    vNormal = normalize(transpose(inverse(mat3(model))) * normal);
     vUV = aUV;
     gl_Position = uScene.ViewProj * world;
 }

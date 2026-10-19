@@ -13,6 +13,15 @@ struct PointLight
 
 #define MAX_POINT_LIGHTS 32
 #define MAX_POINT_SHADOWS 4
+#define MAX_REFLECTION_PROBES 8
+
+struct ReflectionProbe
+{
+    vec4 CenterIntensity; // xyz capture position, w intensity
+    vec4 BoxMin;          // xyz influence box min, w texture index
+    vec4 BoxMax;          // xyz influence box max, w mip count
+    vec4 Params;          // x 1 = box projection
+};
 
 layout(set = 1, binding = 0) uniform SceneData
 {
@@ -41,6 +50,7 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 PointShadowParams[MAX_POINT_SHADOWS];       // x near, y far (range), z bias (world units), w atlas index
     mat4 InvProj;
     vec4 AOParams;       // x 1 = SSAO enabled (2 = debug view), y AO texture index, zw 1 / framebuffer size
+    ReflectionProbe Probes[MAX_REFLECTION_PROBES]; // Counts.y in use
     PointLight PointLights[MAX_POINT_LIGHTS];
 } uScene;
 
@@ -57,6 +67,12 @@ vec2 DirToEquirect(vec3 d)
 {
     float c = cos(uScene.SkyParams.w), s = sin(uScene.SkyParams.w);
     d = vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z); // undo the sky rotation around +Y
+    return vec2(atan(d.x, -d.z) / 6.28318530718 + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265359);
+}
+
+// Same mapping without the sky rotation (reflection probes).
+vec2 DirToEquirectRaw(vec3 d)
+{
     return vec2(atan(d.x, -d.z) / 6.28318530718 + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265359);
 }
 

@@ -6,12 +6,14 @@
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Renderer/Mesh.h>
 #include <Dimension/Renderer/Material.h>
+#include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Animation/AnimatorController.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <map>
 
@@ -134,7 +136,9 @@ namespace Editor
             if (count > 1)
             {
                 ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "%zu objects selected", count);
-                ImGui::TextDisabled("Showing components they all have (values of the active object); edits apply to all.");
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("Showing components they all have. Values that differ show as --; edits apply to all.");
+                ImGui::PopStyleColor();
                 ImGui::Separator();
             }
             DrawEntity(scene, m_Ctx.Selected);
@@ -153,17 +157,43 @@ namespace Editor
         {
             auto& tag = reg.Get<TagComponent>(e);
             TagComponent before = tag;
+            // Multi-selection: the header edits every selected object; values that differ show as "--".
+            std::vector<Entity> others;
+            for (Entity s : m_Ctx.Selection)
+                if (s != e && scene.IsValid(s)) others.push_back(s);
+            bool mixActive = false, mixName = false, mixTag = false, mixLayer = false;
+            for (Entity o : others)
+            {
+                const auto& ot = reg.Get<TagComponent>(o);
+                mixActive |= ot.Active != tag.Active;
+                mixName |= ot.Name != tag.Name;
+                mixTag |= ot.Tag != tag.Tag;
+                mixLayer |= ot.Layer != tag.Layer;
+            }
             UI::EditResult r;
+            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, mixActive);
             r.Changed = ImGui::Checkbox("##active", &tag.Active);
+            ImGui::PopItemFlag();
             r.Activated = ImGui::IsItemActivated();
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-FLT_MIN);
-            r.Changed |= ImGui::InputText("##name", &tag.Name);
+            if (mixName)
+            {
+                static std::string typed;
+                typed.clear();
+                if (ImGui::InputTextWithHint("##name", "--", &typed))
+                {
+                    tag.Name = typed;
+                    r.Changed = true;
+                }
+            }
+            else
+                r.Changed |= ImGui::InputText("##name", &tag.Name);
             r.Activated |= ImGui::IsItemActivated();
             ImGui::TextDisabled("Tag");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(160);
-            if (ImGui::BeginCombo("##tag", tag.Tag.c_str()))
+            if (ImGui::BeginCombo("##tag", mixTag ? "--" : tag.Tag.c_str()))
             {
                 for (const char* t : { "Untagged", "Player", "Enemy", "MainCamera", "Respawn", "Finish", "Pulse" })
                     if (ImGui::Selectable(t, tag.Tag == t))
@@ -180,7 +210,7 @@ namespace Editor
             {
                 const auto& layers = Project::GetConfig().PhysicsLayers;
                 int current = std::clamp(tag.Layer, 0, ProjectConfig::kMaxLayers - 1);
-                std::string preview = std::to_string(current) + ": " + (layers[current].empty() ? "(unnamed)" : layers[current]);
+                std::string preview = mixLayer ? std::string("--") : std::to_string(current) + ": " + (layers[current].empty() ? "(unnamed)" : layers[current]);
                 if (ImGui::BeginCombo("##layer", preview.c_str()))
                 {
                     for (int i = 0; i < ProjectConfig::kMaxLayers; ++i)
@@ -200,7 +230,18 @@ namespace Editor
             }
             ImGui::TextDisabled("ID %llu", (unsigned long long)(uint64_t)scene.GetGuid(e));
             ApplyEdit(m_Ctx, r, tag, before);
-            if (r.Changed) scene.UpdateTransforms();
+            if (r.Changed)
+            {
+                for (Entity o : others) // only the property that was edited
+                {
+                    auto& ot = reg.Get<TagComponent>(o);
+                    if (tag.Active != before.Active) ot.Active = tag.Active;
+                    if (tag.Name != before.Name) ot.Name = tag.Name;
+                    if (tag.Tag != before.Tag) ot.Tag = tag.Tag;
+                    if (tag.Layer != before.Layer) ot.Layer = tag.Layer;
+                }
+                scene.UpdateTransforms();
+            }
         }
         ImGui::Separator();
         DrawPrefabHeader(scene, e);
@@ -296,7 +337,15 @@ namespace Editor
                         }
                         bool overridden = Prefabs::IsOverridden(scene, e, info.Name, f.Name);
                         if (overridden) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.72f, 1.0f, 1.0f));
-                        if (!handled) r = UI::Field(f, data, &scene);
+                        if (!handled)
+                        {
+                            uint32_t mixed = 0;
+                            for (Entity t : targets)
+                                if (t != e)
+                                    if (void* td = info.Get(scene, t)) mixed |= UI::MixedMask(f.Type, before, FieldToJson(f, td, &resolver));
+                            UI::SetMixedValue(mixed);
+                            r = UI::Field(f, data, &scene);
+                        }
                         if (overridden) ImGui::PopStyleColor();
                         if (r.Changed)
                             for (Entity target : m_Ctx.Selection)
@@ -305,16 +354,35 @@ namespace Editor
                         ApplyFieldEdit(m_Ctx, r, f, data, before, resolver);
                         if (r.Changed)
                         {
-                            // Multi-edit: copy the new value to the same field on every other selected object.
+                            // Multi-edit: copy the new value to the same field on every other selected object. Vectors
+                            // copy only the components that changed (dragging X keeps each object's own Y and Z).
                             nlohmann::json value = FieldToJson(f, data, &resolver);
+                            bool perComponent = UI::IsVectorField(f.Type) && before.is_array() && value.is_array() && before.size() == value.size();
                             for (Entity other : m_Ctx.Selection)
                                 if (other != e && scene.IsValid(other))
-                                    if (void* od = info.Get(scene, other)) FieldFromJson(f, od, value, &resolver);
+                                    if (void* od = info.Get(scene, other))
+                                    {
+                                        nlohmann::json merged = value;
+                                        if (perComponent)
+                                        {
+                                            merged = FieldToJson(f, od, &resolver);
+                                            for (size_t i = 0; i < value.size() && i < merged.size(); ++i)
+                                                if (before[i] != value[i]) merged[i] = value[i];
+                                        }
+                                        FieldFromJson(f, od, merged, &resolver);
+                                    }
                             data = info.Get(scene, e);
                             scene.UpdateTransforms();
                         }
                     }
                     UI::EndProperties();
+                    if (info.TypeId == GetComponentTypeId<ReflectionProbeComponent>())
+                    {
+                        if (ImGui::Button("Bake Reflection Probes")) SceneRenderer::RequestProbeBake();
+                        ImGui::SameLine();
+                        UI::HelpMarker("Probes capture when first shown, when moved or resized, and when play starts. "
+                                       "Bake again after changing what is around them (or enable Realtime).");
+                    }
                     if (info.TypeId == GetComponentTypeId<MeshRendererComponent>())
                     {
                         auto& mr = *static_cast<MeshRendererComponent*>(info.Get(scene, e));
@@ -382,6 +450,7 @@ namespace Editor
 
     void InspectorPanel::DrawPrefabHeader(Scene& scene, Entity e)
     {
+        if (m_Ctx.InPrefabMode()) return; // the stage *is* the prefab: no instance header
         Entity root = Prefabs::FindInstanceRoot(scene, e);
         if (root.IsNull()) return;
         auto& link = scene.GetRegistry().Get<PrefabLinkComponent>(root);
@@ -411,6 +480,8 @@ namespace Editor
         }
         ImGui::BeginDisabled(missing);
         if (ImGui::SmallButton("Select")) m_Ctx.SelectAsset(prefab);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Open")) m_Ctx.RequestOpenPrefab = prefab;
         ImGui::SameLine();
         ImGui::BeginDisabled(m_Ctx.IsPlaying());
         if (ImGui::SmallButton("Revert"))
@@ -764,7 +835,9 @@ namespace Editor
         }
         else if (meta->Type == AssetType::Prefab)
         {
-            ImGui::TextWrapped("Drag this prefab into the Scene view or Hierarchy to instantiate it, or reference it from a script field.");
+            if (ImGui::Button("Open Prefab")) m_Ctx.RequestOpenPrefab = handle;
+            ImGui::TextWrapped("Opens the prefab on its own (Prefab Mode); double-clicking it in the Project panel does the same. "
+                               "Drag it into the Scene view or Hierarchy to instantiate it, or reference it from a script field.");
         }
     }
 
@@ -828,6 +901,15 @@ namespace Editor
             track(ImGui::DragFloat("Intensity##ssao", &s.SSAOIntensity, 0.01f, 0.0f, 4.0f));
             track(ImGui::DragFloat("Bias##ssao", &s.SSAOBias, 0.001f, 0.0f, 0.5f, "%.3f"));
             track(ImGui::Checkbox("Show Occlusion##ssao", &s.SSAODebug));
+            ImGui::Unindent();
+        }
+        track(ImGui::Checkbox("Depth of Field", &s.DepthOfField));
+        if (s.DepthOfField)
+        {
+            ImGui::Indent();
+            track(ImGui::DragFloat("Focus Distance", &s.FocusDistance, 0.05f, 0.05f, 10000.0f));
+            track(ImGui::DragFloat("Focus Range", &s.FocusRange, 0.05f, 0.05f, 10000.0f));
+            track(ImGui::SliderFloat("Bokeh Size", &s.BokehSize, 0.0f, 0.04f, "%.3f"));
             ImGui::Unindent();
         }
         track(ImGui::SliderFloat("Vignette", &s.Vignette, 0.0f, 1.0f));

@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,19 @@ namespace Dimension
             float Scroll = 0.0f;         // wheel notches this frame (positive = up)
             std::string Text;            // UTF-8 characters typed this frame
             bool Backspace = false, Enter = false;
+            // Text editing (presses including key repeat), modifiers and clipboard.
+            bool Delete = false, Left = false, Right = false, Home = false, End = false, Tab = false;
+            bool Shift = false, Ctrl = false;
+            bool SelectAll = false, Copy = false, Cut = false, Paste = false;
+            std::string PasteText;                              // clipboard contents when Paste is set
+            std::function<void(const std::string&)> SetClipboard; // receives copied/cut text
         };
+
+        // Width in pixels of a single line of text at a pixel size. Defaults to the built-in font; tests can swap in
+        // a fixed-width measure (fonts need the GPU).
+        using TextMeasure = std::function<float(const std::string& text, float pixelSize)>;
+        void SetTextMeasure(TextMeasure measure);
+        float MeasureText(const std::string& text, float pixelSize);
 
         // A textured, tinted screen-space quad (pixels, top-left origin), already clipped. Colors are display-space (sRGB).
         struct DrawCommand

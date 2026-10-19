@@ -1,11 +1,13 @@
 #pragma once
 #include "Dimension/Scene/Tilemap.h"
+#include "Dimension/Scene/LineRenderer.h"
 #include "Dimension/Core/Guid.h"
 #include "Dimension/ECS/Entity.h"
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Particles/ParticleSystem.h"
 #include "Dimension/Animation/AnimatorController.h"
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -171,6 +173,24 @@ namespace Dimension
     };
 
     // Plays skeletal animation clips of the entity's skinned Mesh Renderer (like Unity's Animator/Animation).
+    // Playback of one extra Animator layer (runtime only); mirrors the base layer's fields on AnimatorComponent.
+    struct AnimatorLayerPlayback
+    {
+        AnimatorRuntime Runtime;
+        std::string Clip;
+        float Time = 0.0f;
+        bool Loop = true;
+        bool Playing = true;
+        float StateSpeed = 1.0f;
+        std::string CurrentState;
+        int TreeState = -1;
+        std::string PreviousClip;
+        int PreviousTreeState = -1;
+        float PreviousTime = 0.0f;
+        float FadeElapsed = 0.0f, FadeDuration = 0.0f;
+        float Weight = -1.0f; // < 0: use the layer's weight from the controller
+    };
+
     struct AnimatorComponent
     {
         AssetHandle Controller = AssetHandle::None(); // optional state machine; when set it drives Clip/Loop
@@ -188,6 +208,14 @@ namespace Dimension
         void SetInteger(const std::string& name, int v) { Runtime.Parameters[name] = (float)v; }
         void SetBool(const std::string& name, bool v) { Runtime.Parameters[name] = v ? 1.0f : 0.0f; }
         void SetTrigger(const std::string& name) { Runtime.Triggers.insert(name); }
+        // Extra layers are 1-based (layer 0 is the base). Weight changes take effect immediately.
+        void SetLayerWeight(int layer, float weight)
+        {
+            if (layer < 1) return;
+            if ((int)Layers.size() < layer) Layers.resize(layer);
+            Layers[layer - 1].Weight = std::clamp(weight, 0.0f, 1.0f);
+        }
+        std::vector<AnimatorLayerPlayback> Layers; // runtime, one per extra controller layer
         void ResetTrigger(const std::string& name) { Runtime.Triggers.erase(name); }
 
         // Runtime state (not serialized).
@@ -304,6 +332,11 @@ namespace Dimension
         glm::vec4 PlaceholderColor{ 0.55f, 0.55f, 0.58f, 1.0f };
         bool Focused = false;   // runtime
         float CaretTime = 0.0f; // runtime
+        // Runtime editing state: byte offsets into Text (always on UTF-8 boundaries).
+        int32_t Caret = 0;
+        int32_t SelectionAnchor = -1; // -1 = no selection
+        bool Selecting = false;       // mouse drag in progress
+        float ScrollX = 0.0f;         // pixels the text is scrolled left to keep the caret visible
     };
 
     enum class UILayoutDirection : int32_t { Vertical = 0, Horizontal = 1 };
@@ -318,10 +351,40 @@ namespace Dimension
     };
 
     // Clips its children to its rect and scrolls its first child (the content) vertically.
+    // A scrollbar on the right edge appears while the content is taller than the view.
     struct UIScrollViewComponent
     {
         float ScrollSpeed = 60.0f;  // canvas units per wheel notch
-        float ScrollPosition = 0.0f; // runtime
+        bool Scrollbar = true;
+        float ScrollbarWidth = 10.0f; // canvas units
+        glm::vec4 ScrollbarTrackColor{ 1.0f, 1.0f, 1.0f, 0.12f };
+        glm::vec4 ScrollbarHandleColor{ 1.0f, 1.0f, 1.0f, 0.55f };
+
+        // Runtime (not serialized)
+        float ScrollPosition = 0.0f; // canvas units scrolled down
+        float MaxScroll = 0.0f;      // set by the layout pass
+        bool DraggingScrollbar = false;
+        float DragOffset = 0.0f;     // pointer offset inside the handle (pixels)
+    };
+
+    // Closed: shows the selected option. Clicking opens a list over all other UI; picking an item sets Value.
+    struct UIDropdownComponent
+    {
+        std::vector<std::string> Options{ "Option A", "Option B", "Option C" };
+        int32_t Value = 0; // selected option index
+        float FontSize = 28.0f;
+        int32_t MaxVisibleItems = 6; // the list scrolls beyond this
+        bool Interactable = true;
+        glm::vec4 BackgroundColor{ 1.0f };
+        glm::vec4 TextColor{ 0.1f, 0.1f, 0.12f, 1.0f };
+        glm::vec4 ListColor{ 0.97f, 0.97f, 0.98f, 1.0f };
+        glm::vec4 HighlightColor{ 0.25f, 0.55f, 0.95f, 1.0f };
+
+        // Runtime (not serialized)
+        bool Open = false;
+        bool Pressed = false;
+        int32_t HoveredItem = -1;
+        float ListScroll = 0.0f; // first visible item
     };
 
     struct UITextComponent
@@ -343,6 +406,17 @@ namespace Dimension
         glm::vec4 PressedColor{ 0.75f, 0.75f, 0.75f, 1.0f };
         bool Interactable = true;
         bool Hovered = false, Pressed = false; // runtime state
+    };
+
+    // Captures the surroundings at its position; meshes inside its box reflect that instead of the sky (Unity's
+    // Reflection Probe). Baked when first rendered, when moved or resized, on request, or every frame (Realtime).
+    struct ReflectionProbeComponent
+    {
+        glm::vec3 Size{ 10.0f, 5.0f, 10.0f }; // influence box, centered on the probe
+        int32_t Resolution = 1;               // 0: 64, 1: 128, 2: 256, 3: 512 pixels per cube face
+        float Intensity = 1.0f;
+        bool BoxProjection = true;            // parallax-correct reflections against the box (rooms, courtyards)
+        bool Realtime = false;                // re-capture every frame (six extra scene renders)
     };
 
     // ---- Audio -------------------------------------------------------------------
@@ -496,11 +570,13 @@ namespace Dimension
         float SkinWidth = 0.02f;
         float Mass = 70.0f;
         float PushStrength = 100.0f; // max force on rigidbodies
+        bool RideMovingPlatforms = true; // standing on a moving body carries the character along
 
         // Runtime (not serialized)
         bool IsGrounded = false;
         glm::vec3 Velocity{ 0.0f };   // actual velocity of the last move
         float VerticalSpeed = 0.0f;   // SimpleMove's gravity accumulator (set it to jump)
+        glm::vec3 GroundVelocity{ 0.0f }; // velocity of the moving platform under the character (last move)
         std::shared_ptr<void> Runtime; // JPH::CharacterVirtual
     };
 
@@ -522,6 +598,15 @@ namespace Dimension
         float MinDistance = 0.0f;          // distance joint; 0 = the initial distance
         float MaxDistance = 0.0f;
         bool EnableCollision = false;      // let the two connected bodies collide with each other
+        bool UseMotor = false;             // hinge: drive toward Motor Speed
+        float MotorSpeed = 90.0f;          // degrees per second (can be changed while playing)
+        float MotorMaxTorque = 1000.0f;    // N*m
+        float BreakForce = 0.0f;           // N; the joint breaks above this (0 = unbreakable)
+        float BreakTorque = 0.0f;          // N*m; 0 = unbreakable
+
+        // Runtime (not serialized)
+        bool Broken = false;
+        float CurrentForce = 0.0f, CurrentTorque = 0.0f; // reaction during the last physics step
     };
 
     enum class Joint2DType : int32_t { Fixed = 0, Hinge = 1, Distance = 2 };
@@ -538,5 +623,14 @@ namespace Dimension
         float UpperAngle = 45.0f;
         float Distance = 0.0f;             // 0 = the initial distance
         bool CollideConnected = false;
+        bool UseMotor = false;             // hinge: drive toward Motor Speed
+        float MotorSpeed = 90.0f;          // degrees per second (can be changed while playing)
+        float MotorMaxTorque = 100.0f;     // N*m
+        float BreakForce = 0.0f;           // N; 0 = unbreakable
+        float BreakTorque = 0.0f;          // N*m; 0 = unbreakable
+
+        // Runtime (not serialized)
+        bool Broken = false;
+        float CurrentForce = 0.0f, CurrentTorque = 0.0f;
     };
 }

@@ -129,6 +129,12 @@ namespace Editor
         else NewScene();
 
         Log::Info("Editor ready. Scene view: RMB+WASD fly, Alt+LMB orbit, MMB pan, wheel zoom, F frame, W/E/R gizmos.");
+        if (!m_Options.PrefabPath.empty())
+        {
+            fs::path p = m_Options.PrefabPath;
+            if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
+            if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenPrefabMode(h);
+        }
         if (!m_Options.SelectEntity.empty())
         {
             // Comma-separated names select several entities; the last one is primary.
@@ -213,6 +219,7 @@ namespace Editor
             Log::Warn("Exit play mode before saving the scene");
             return false;
         }
+        if (m_Ctx.InPrefabMode()) return SavePrefabStage();
         if (m_Ctx.ScenePath.empty()) return SaveSceneAs();
         if (!SceneSerializer::SaveToFile(*m_Ctx.EditorScene, m_Ctx.ScenePath)) return false;
         AssetHandle h = AssetManager::Import(m_Ctx.ScenePath);
@@ -227,8 +234,15 @@ namespace Editor
         return true;
     }
 
+    void EditorLayer::OpenSceneWithDialog()
+    {
+        auto p = FileDialogs::OpenFile({ { L"Scene", L"*.scene" } }, AssetManager::GetAssetsDirectory());
+        if (p && ConfirmDiscardChanges()) OpenScene(*p);
+    }
+
     bool EditorLayer::SaveSceneAs()
     {
+        if (m_Ctx.InPrefabMode()) return SavePrefabStage();
         auto path = FileDialogs::SaveFile({ { L"Scene", L"*.scene" } }, L"scene", AssetManager::GetAssetsDirectory());
         if (!path) return false;
         m_Ctx.ScenePath = *path;
@@ -238,6 +252,7 @@ namespace Editor
 
     bool EditorLayer::ConfirmDiscardChanges()
     {
+        if (m_Ctx.InPrefabMode() && !LeavePrefabMode()) return false;
         if (!m_Ctx.Dirty) return true;
         int choice = FileDialogs::YesNoCancel("Unsaved Changes", "The scene '" + m_Ctx.EditorScene->GetName() + "' has unsaved changes. Save them?");
         if (choice == 0) return SaveScene();
@@ -246,7 +261,9 @@ namespace Editor
 
     void EditorLayer::UpdateWindowTitle()
     {
-        std::string title = "Dimension Editor - " + Project::GetConfig().Name + " - " + m_Ctx.EditorScene->GetName() + (m_Ctx.Dirty ? "*" : "");
+        std::string title = "Dimension Editor - " + Project::GetConfig().Name + " - ";
+        if (m_Ctx.InPrefabMode()) title += m_Ctx.PrefabModeSceneName() + " > Prefab: ";
+        title += m_Ctx.EditorScene->GetName() + (m_Ctx.Dirty ? "*" : "");
         if (m_Ctx.IsPlaying()) title += "  [PLAYING]";
         Application::Get().GetWindow().SetTitle(title);
     }
@@ -256,6 +273,7 @@ namespace Editor
     void EditorLayer::Play()
     {
         if (m_Ctx.IsPlaying()) return;
+        if (m_Ctx.InPrefabMode() && !LeavePrefabMode()) return; // play always runs the scene
         if (EditorPreferences::Get().SaveSceneBeforePlay && m_Ctx.Dirty && !m_Ctx.ScenePath.empty()) SaveScene();
         if (m_Console->ClearOnPlay) m_Console->Clear();
         SceneManager::CancelPendingLoad();
@@ -291,12 +309,32 @@ namespace Editor
 
     void EditorLayer::OnUpdate(float dt)
     {
+        if (!m_Options.OpenSceneLater.empty() && ++m_AutomationFrames == 30)
+        {
+            fs::path p = m_Options.OpenSceneLater;
+            m_Ctx.RequestOpenScene = p.is_relative() ? AssetManager::GetAssetsDirectory() / p : p;
+        }
         if (m_Ctx.RequestOpenScene)
         {
             fs::path p = *m_Ctx.RequestOpenScene;
             m_Ctx.RequestOpenScene.reset();
             if (ConfirmDiscardChanges()) OpenScene(p);
         }
+        if (m_Ctx.RequestOpenPrefab)
+        {
+            AssetHandle h = *m_Ctx.RequestOpenPrefab;
+            m_Ctx.RequestOpenPrefab.reset();
+            OpenPrefabMode(h);
+        }
+        if (m_LeavePrefabRequested)
+        {
+            m_LeavePrefabRequested = false;
+            LeavePrefabMode();
+        }
+        // Prefab Mode auto save: write the asset once an edit is finished (no widget or gizmo held).
+        if (m_Ctx.InPrefabMode() && m_Ctx.PrefabAutoSave && m_Ctx.Dirty && !ImGui::IsAnyItemActive() && !ImGuizmo::IsUsing() &&
+            !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            SavePrefabStage();
 
         PollGameModule(dt);
         PollCSharp(dt);
@@ -309,7 +347,7 @@ namespace Editor
         if (focused && !m_WasWindowFocused)
         {
             AssetManager::Refresh();
-            if (!m_Ctx.IsPlaying())
+            if (!m_Ctx.IsPlaying() && !m_Ctx.InPrefabMode())
             {
                 // Prefab files may have changed outside the editor.
                 auto before = SceneSerializer::Serialize(*m_Ctx.EditorScene);
@@ -325,16 +363,13 @@ namespace Editor
         if (m_Ctx.IsPlaying())
         {
             m_Ctx.RuntimeScene->OnUpdateRuntime(dt);
-            // SceneManager::LoadScene from scripts: swap the play-mode scene; Stop returns to the edited scene.
-            if (SceneManager::HasPendingLoad())
-                if (auto next = SceneManager::LoadPending())
-                {
-                    m_Ctx.RuntimeScene->OnRuntimeStop();
-                    m_Ctx.Select(Entity::Null());
-                    m_Ctx.RuntimeScene = next;
-                    m_Ctx.RuntimeScene->OnRuntimeStart();
-                    UpdateWindowTitle();
-                }
+            // SceneManager loads from scripts go into the play-mode scene; Stop returns to the edited scene.
+            if (SceneManager::HasPendingLoad() && SceneManager::ApplyPending(*m_Ctx.RuntimeScene))
+            {
+                if (!m_Ctx.RuntimeScene->IsValid(m_Ctx.Selected)) m_Ctx.Select(Entity::Null());
+                std::erase_if(m_Ctx.Selection, [&](Entity e) { return !m_Ctx.RuntimeScene->IsValid(e); });
+                UpdateWindowTitle();
+            }
         }
         else
             m_Ctx.EditorScene->OnUpdateEditor(dt);
@@ -364,6 +399,92 @@ namespace Editor
             wasDirty = m_Ctx.Dirty;
             UpdateWindowTitle();
         }
+    }
+
+    // ---- Prefab Mode ----------------------------------------------------------------------------
+
+    void EditorLayer::OpenPrefabMode(AssetHandle prefab)
+    {
+        if (m_Ctx.IsPlaying()) Stop();
+        if (m_Ctx.InPrefabMode())
+        {
+            if (prefab == m_Ctx.PrefabModeAsset()) return;
+            if (!LeavePrefabMode()) return;
+        }
+        auto stage = Prefabs::OpenForEditing(prefab);
+        if (!stage)
+        {
+            Log::Error("Could not open the prefab for editing");
+            return;
+        }
+        m_SceneCamera = m_Camera;
+        m_Ctx.EnterPrefabMode(prefab, stage);
+        Entity root = Prefabs::FindEditedRoot(*stage, prefab);
+        m_Ctx.Select(root);
+        FocusSelected();
+        m_FocusSceneView = 3; // prefabs are edited in the Scene view
+        UpdateWindowTitle();
+        Log::Info("Editing prefab '{}' (Prefab Mode)", AssetManager::GetDisplayName(prefab));
+    }
+
+    bool EditorLayer::SavePrefabStage()
+    {
+        if (!m_Ctx.InPrefabMode()) return false;
+        if (!Prefabs::SaveEdited(*m_Ctx.EditorScene, m_Ctx.PrefabModeAsset()))
+        {
+            m_Ctx.PrefabAutoSave = false; // do not retry every frame
+            return false;
+        }
+        m_Ctx.Dirty = false;
+        UpdateWindowTitle();
+        return true;
+    }
+
+    bool EditorLayer::LeavePrefabMode()
+    {
+        if (!m_Ctx.InPrefabMode()) return true;
+        if (m_Ctx.Dirty)
+        {
+            int choice = m_Ctx.PrefabAutoSave ? 0
+                       : FileDialogs::YesNoCancel("Unsaved Prefab", "The prefab '" + m_Ctx.EditorScene->GetName() + "' has unsaved changes. Save them?");
+            if (choice == 2) return false;
+            if (choice == 0 && !SavePrefabStage()) return false;
+        }
+        m_Ctx.ExitPrefabMode();
+        // Instances in the scene pick up the edited prefab (their overrides are kept).
+        auto before = SceneSerializer::Serialize(*m_Ctx.EditorScene);
+        Prefabs::SyncAll(*m_Ctx.EditorScene);
+        if (SceneSerializer::Serialize(*m_Ctx.EditorScene) != before) m_Ctx.Dirty = true;
+        m_Camera = m_SceneCamera;
+        UpdateWindowTitle();
+        return true;
+    }
+
+    void EditorLayer::DrawPrefabModeBar()
+    {
+        // Breadcrumb like Unity's: back to the scene, the prefab's name, Save and Auto Save.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.16f, 0.24f, 0.36f, 1.0f));
+        ImGui::BeginChild("##PrefabModeBar", ImVec2(0, ImGui::GetFrameHeight() + 8.0f), ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_NoScrollbar);
+        if (ImGui::Button("< Scene")) m_LeavePrefabRequested = true; // handled next update, outside the panels
+        {
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s  >", m_Ctx.PrefabModeSceneName().c_str());
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "%s%s", m_Ctx.EditorScene->GetName().c_str(), m_Ctx.Dirty ? "*" : "");
+            float right = ImGui::CalcTextSize("Auto Save").x + ImGui::GetFrameHeight() + ImGui::CalcTextSize("Save").x + 40.0f;
+            ImGui::SameLine(ImGui::GetWindowWidth() - right);
+            ImGui::BeginDisabled(!m_Ctx.Dirty);
+            if (ImGui::Button("Save")) SavePrefabStage();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::Checkbox("Auto Save", &m_Ctx.PrefabAutoSave);
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
     }
 
     void EditorLayer::FocusSelected()
@@ -410,6 +531,7 @@ namespace Editor
             options.Grid2D = m_Camera.Is2D();
             options.Selected = m_Ctx.Selected;
             options.Selection = m_Ctx.Selection;
+            options.DefaultLight = m_Ctx.InPrefabMode();
             m_SceneRenderer.Render(cmd, scene, cam, *m_SceneTarget, options);
         }
         if (m_GameViewVisible)
@@ -514,15 +636,12 @@ namespace Editor
 
     void EditorLayer::DrawMenuBar()
     {
+        if (m_Options.MenuOpenScene && ++m_MenuAutomationFrames == 30) OpenSceneWithDialog(); // automation: same path as the menu
         if (!ImGui::BeginMainMenuBar()) return;
         if (ImGui::BeginMenu("File"))
         {
             if (ImGui::MenuItem("New Scene", "Ctrl+N") && ConfirmDiscardChanges()) NewScene();
-            if (ImGui::MenuItem("Open Scene...", "Ctrl+O"))
-            {
-                auto p = FileDialogs::OpenFile({ { L"Scene", L"*.scene" } }, AssetManager::GetAssetsDirectory());
-                if (p && ConfirmDiscardChanges()) OpenScene(*p);
-            }
+            if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) OpenSceneWithDialog();
             if (ImGui::MenuItem("Save", "Ctrl+S", false, !m_Ctx.IsPlaying())) SaveScene();
             if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, !m_Ctx.IsPlaying())) SaveSceneAs();
             ImGui::Separator();
@@ -660,6 +779,7 @@ namespace Editor
 
             // Right side: compile status + scene name
             std::string label = m_Ctx.EditorScene->GetName() + (m_Ctx.Dirty ? "*" : "");
+            if (m_Ctx.InPrefabMode()) label = "Prefab Mode: " + label;
             if (m_BuildState && m_BuildState->load() == 1) label = "Compiling scripts...   " + label;
             else if (m_CSharpBuild && m_CSharpBuild->load() == 1) label = "Compiling C#...   " + label;
             else if (m_CSharpReloadPending) label = "C# changed: reload after Stop   " + label;
@@ -675,6 +795,11 @@ namespace Editor
     void EditorLayer::DrawSceneView()
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        if (m_FocusSceneView > 0)
+        {
+            ImGui::SetNextWindowFocus();
+            --m_FocusSceneView;
+        }
         bool visible = ImGui::Begin("Scene");
         ImGui::PopStyleVar();
         m_SceneViewVisible = visible;
@@ -685,6 +810,7 @@ namespace Editor
             return;
         }
         m_SceneViewFocused = ImGui::IsWindowFocused();
+        if (m_Ctx.InPrefabMode()) DrawPrefabModeBar();
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
         m_SceneViewSize = { (uint32_t)std::max(1.0f, avail.x), (uint32_t)std::max(1.0f, avail.y) };
@@ -728,6 +854,11 @@ namespace Editor
                         break;
                     }
                     case AssetType::Prefab:
+                        if (h == m_Ctx.PrefabModeAsset())
+                        {
+                            Log::Warn("A prefab cannot contain an instance of itself");
+                            break;
+                        }
                         m_Ctx.RecordUndo();
                         m_Ctx.Select(scene.InstantiatePrefab(h, pos));
                         break;
@@ -889,7 +1020,11 @@ namespace Editor
         ImGui::Separator();
         ImGui::Text("Scene view: %u draw calls, %u triangles", st.DrawCalls, st.Triangles);
         ImGui::Text("Meshes: %u   Sprites: %u   Culled: %u", st.Meshes, st.Sprites, st.Culled);
-        ImGui::Text("Shadow casters: %u", st.ShadowCasters);
+        ImGui::Text("Shadow casters: %u   Instanced meshes: %u", st.ShadowCasters, st.InstancedMeshes);
+        bool instancing = SceneRenderer::IsInstancingEnabled();
+        if (ImGui::Checkbox("GPU Instancing", &instancing)) SceneRenderer::SetInstancingEnabled(instancing);
+        ImGui::SameLine();
+        UI::HelpMarker("Identical opaque meshes (same mesh and material) are drawn with one instanced call per pass.");
         ImGui::Text("Entities: %zu", m_Ctx.ActiveScene().GetEntityCount());
         bool vsync = device.GetVSync();
         if (ImGui::Checkbox("VSync", &vsync)) device.SetVSync(vsync);
@@ -1001,11 +1136,7 @@ namespace Editor
             if (shift) m_ShowBuildSettings = true;
             else if (!m_Ctx.IsPlaying()) BuildGame(true, Project::GetConfig().BuildFolder);
         }
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
-        {
-            auto p = FileDialogs::OpenFile({ { L"Scene", L"*.scene" } }, AssetManager::GetAssetsDirectory());
-            if (p && ConfirmDiscardChanges()) OpenScene(*p);
-        }
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) OpenSceneWithDialog();
         if (m_GameViewFocused && m_Ctx.IsPlaying()) return; // the game owns the keyboard
 
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) m_Ctx.Undo();
@@ -1314,7 +1445,7 @@ namespace Editor
     void EditorLayer::Autosave(float dt)
     {
         float minutes = EditorPreferences::Get().AutosaveMinutes;
-        if (minutes <= 0.0f || m_Ctx.IsPlaying() || !m_Ctx.Dirty) return;
+        if (minutes <= 0.0f || m_Ctx.IsPlaying() || !m_Ctx.Dirty || m_Ctx.InPrefabMode()) return;
         m_AutosaveTimer += dt;
         if (m_AutosaveTimer < minutes * 60.0f) return;
         m_AutosaveTimer = 0.0f;

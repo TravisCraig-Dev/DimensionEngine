@@ -11,6 +11,7 @@ layout(push_constant) uniform Push
     uint BloomTexture;   // bindless index + 1, 0 = no bloom
     float BloomIntensity;
     float Vignette;      // 0..1 darkening at the corners
+    uint DofTexture;     // bindless index + 1 of the blurred half-resolution image (alpha = blend), 0 = off
 } pc;
 
 layout(location = 0) in vec2 vUV;
@@ -31,6 +32,11 @@ vec3 LinearToSRGB(vec3 c)
 void main()
 {
     vec3 hdr = texture(uTextures[nonuniformEXT(pc.HdrTexture)], vUV).rgb;
+    if (pc.DofTexture != 0u)
+    {
+        vec4 blurred = texture(uTextures[nonuniformEXT(pc.DofTexture - 1u)], vUV);
+        hdr = mix(hdr, blurred.rgb, smoothstep(0.05, 0.35, blurred.a));
+    }
     if (pc.BloomTexture != 0u)
         hdr += texture(uTextures[nonuniformEXT(pc.BloomTexture - 1u)], vUV).rgb * pc.BloomIntensity;
     hdr *= pc.Exposure;

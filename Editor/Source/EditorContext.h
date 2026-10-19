@@ -105,7 +105,17 @@ namespace Editor
         fs::path ScenePath; // empty until saved
         bool Dirty = false;
 
+        // Prefab Mode: EditorScene is the prefab alone; the scene being edited (with its path, dirty flag,
+        // undo history and selection) waits in the stage and comes back on exit.
+        bool InPrefabMode() const { return m_Stage.has_value(); }
+        AssetHandle PrefabModeAsset() const { return m_Stage ? m_Stage->Prefab : AssetHandle::None(); }
+        const std::string& PrefabModeSceneName() const { return m_Stage->SceneName; }
+        void EnterPrefabMode(AssetHandle prefab, Ref<Scene> stageScene);
+        void ExitPrefabMode();
+        bool PrefabAutoSave = true;
+
         // Deferred requests handled by the EditorLayer at a safe point in the frame.
+        std::optional<AssetHandle> RequestOpenPrefab;
         std::optional<fs::path> RequestOpenScene;
         std::optional<glm::vec3> RequestFocus; // frame point in scene view
         bool RequestFocusSelected = false;
@@ -122,5 +132,18 @@ namespace Editor
 
         std::deque<Snapshot> m_UndoStack, m_RedoStack;
         static constexpr size_t kMaxHistory = 100;
+
+        struct PrefabStage
+        {
+            AssetHandle Prefab;
+            Ref<Dimension::Scene> Scene;
+            std::string SceneName;
+            fs::path ScenePath;
+            bool Dirty;
+            std::deque<Snapshot> UndoStack, RedoStack;
+            std::vector<uint64_t> SelectionGuids;
+            uint64_t SelectedGuid;
+        };
+        std::optional<PrefabStage> m_Stage;
     };
 }

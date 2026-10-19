@@ -23,8 +23,10 @@ namespace Dimension
         public virtual void OnTriggerExit(Entity other) { }
         /// <summary>Called when a UI Button on this entity is clicked.</summary>
         public virtual void OnClick() { }
-        /// <summary>Called when a UI Slider (its value) or UI Toggle (1 = on, 0 = off) on this entity changes.</summary>
+        /// <summary>Called when a UI Slider (its value), UI Toggle (1 = on, 0 = off) or UI Dropdown (option index) on this entity changes.</summary>
         public virtual void OnValueChanged(float value) { }
+        /// <summary>Called when a Joint or Joint 2D on this entity breaks (its Break Force/Torque was exceeded).</summary>
+        public virtual void OnJointBreak(float force) { }
         /// <summary>Called when the text of a UI Input Field on this entity is edited.</summary>
         public virtual void OnTextChanged(string text) { }
         /// <summary>Called when Enter is pressed in a UI Input Field on this entity.</summary>
@@ -254,10 +256,32 @@ namespace Dimension
     }
 
     /// <summary>Runtime scene switching (scenes come from File > Build Settings). Loads happen at the end of the frame.</summary>
+    public enum LoadSceneMode { Single = 0, Additive = 1 }
+
     public static unsafe class SceneManager
     {
         public static void LoadScene(string name) => Native.WithUtf8(name, p => Native.Api.LoadSceneByName((byte*)p));
         public static void LoadScene(int buildIndex) => Native.Api.LoadSceneByIndex(buildIndex);
+        /// <summary>Single destroys everything not marked DontDestroyOnLoad; Additive adds the scene's objects.</summary>
+        public static void LoadScene(string name, LoadSceneMode mode) =>
+            Native.WithUtf8(name, p => Native.Api.LoadSceneWithMode((byte*)p, -1, (int)mode));
+        public static void LoadScene(int buildIndex, LoadSceneMode mode) => Native.Api.LoadSceneWithMode(null, buildIndex, (int)mode);
+        /// <summary>Removes the objects of a scene loaded additively (or the first scene).</summary>
+        public static void UnloadScene(string name) => Native.WithUtf8(name, p => Native.Api.UnloadScene((byte*)p));
+        /// <summary>Keeps the entity's root object (and its children) alive across single-mode loads.</summary>
+        public static void DontDestroyOnLoad(Entity entity) => Native.Api.DontDestroyOnLoad(entity.Scene, entity.Id);
+        /// <summary>Names of the loaded scenes (the active one first; "DontDestroyOnLoad" holds persistent objects).</summary>
+        public static string[] LoadedSceneNames
+        {
+            get
+            {
+                IntPtr scene = Native.CurrentScene;
+                int n = Native.Api.GetLoadedSceneCount(scene);
+                var names = new string[n];
+                for (int i = 0; i < n; i++) names[i] = Native.FromUtf8(Native.Api.GetLoadedSceneName(scene, i));
+                return names;
+            }
+        }
         /// <summary>Name of the scene the calling script runs in.</summary>
         public static string ActiveSceneName => Native.FromUtf8(Native.Api.GetSceneName(Native.CurrentScene));
         public static int SceneCountInBuild => Native.Api.GetSceneCount();

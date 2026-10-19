@@ -63,5 +63,13 @@ namespace Dimension
         // Skinning matrices: jointWorld * inverseBind, in mesh space.
         void ComputeSkinMatrices(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& out);
         const AnimationClip* FindClip(const std::vector<AnimationClip>& clips, const std::string& name);
+
+        // Animator layers. A mask gives each joint a weight: 1 for the listed joints and all their descendants,
+        // 0 elsewhere (an empty list covers the whole skeleton).
+        void BuildMask(const Skeleton& skeleton, const std::vector<std::string>& joints, std::vector<float>& weights);
+        // Override: base moves toward the layer pose by weight * mask.
+        void LayerOverride(Pose& base, const Pose& layer, const std::vector<float>& mask, float weight);
+        // Additive: adds the layer's difference from `reference` (its motion's first frame) to base.
+        void LayerAdditive(Pose& base, const Pose& layer, const Pose& reference, const std::vector<float>& mask, float weight);
     }
 }

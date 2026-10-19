@@ -62,7 +62,12 @@ namespace Dimension
         std::vector<AnimCondition> Conditions;
     };
 
-    // State machine asset (".controller"), like Unity's Animator Controller.
+    enum class AnimLayerBlending : int32_t { Override = 0, Additive = 1 };
+
+    struct AnimLayer;
+
+    // State machine asset (".controller"), like Unity's Animator Controller. The fields below form the base layer;
+    // Layers are extra state machines evaluated on top of it (each with a weight, blending mode and joint mask).
     struct AnimatorController
     {
         std::vector<AnimParameter> Parameters;
@@ -70,14 +75,30 @@ namespace Dimension
         std::vector<AnimTransition> Transitions;
         int DefaultState = 0;
         glm::vec2 AnyStatePosition{ -220.0f, 0.0f };
+        std::vector<AnimLayer> Layers;
+
+        // Set on a layer's machine: parameters are looked up in the controller that owns the layer.
+        mutable const AnimatorController* ParameterOwner = nullptr;
 
         int FindState(const std::string& name) const;
         const AnimParameter* FindParameter(const std::string& name) const;
+        // Points every layer's machine at this controller's parameters (call after copying or editing layers).
+        void LinkLayers() const;
         // Fixes indices after a state is removed.
         void RemoveState(int index);
 
         static Ref<AnimatorController> Load(const fs::path& path);
         bool Save(const fs::path& path) const;
+    };
+
+    // An extra layer: its own states and transitions, sharing the controller's parameters.
+    struct AnimLayer
+    {
+        std::string Name = "Layer";
+        float Weight = 1.0f;
+        AnimLayerBlending Blending = AnimLayerBlending::Override;
+        std::vector<std::string> Mask; // joints affected, with their descendants; empty = the whole skeleton
+        AnimatorController Machine;    // States, Transitions and DefaultState (its Parameters are unused)
     };
 
     // Per-entity state machine state (runtime only).
