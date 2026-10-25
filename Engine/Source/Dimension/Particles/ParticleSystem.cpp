@@ -89,11 +89,31 @@ namespace Dimension
                        const glm::vec3& gravity, float damping, float dt, std::vector<SubEmitRequest>& subEmits)
         {
             bool local = ps.SimulationSpace == ParticleSpace::Local;
+            // A module's vector given in `space`, expressed in the simulation space.
+            auto toSim = [&](const glm::vec3& v, ParticleSpace space) {
+                if (space == ps.SimulationSpace) return v;
+                return space == ParticleSpace::Local ? glm::vec3(world * glm::vec4(v, 0.0f)) : glm::vec3(invWorld * glm::vec4(v, 0.0f));
+            };
             p.Age += dt;
-            p.Velocity = (p.Velocity + gravity * dt) * damping;
-            float speedScale = ps.SpeedOverLifetime.Evaluate(std::clamp(p.Age / p.Lifetime, 0.0f, 1.0f));
+            float life = std::clamp(p.Age / p.Lifetime, 0.0f, 1.0f);
+            glm::vec3 accel = gravity;
+            if (ps.ForceOverLifetime) accel += toSim(ps.Force * ps.ForceCurve.Evaluate(life), ps.ForceSpace);
+            p.Velocity = (p.Velocity + accel * dt) * damping;
+            float speedScale = ps.SpeedOverLifetime.Evaluate(life);
             glm::vec3 previous = p.Position;
             p.Position += p.Velocity * speedScale * dt;
+            if (ps.VelocityOverLifetime)
+            {
+                p.Position += toSim(ps.LifetimeVelocity * ps.VelocityCurve.Evaluate(life), ps.VelocitySpace) * dt;
+                if (ps.OrbitalSpeed != 0.0f)
+                {
+                    // Orbit the emitter's origin around its local Y axis.
+                    glm::vec3 lp = local ? p.Position : glm::vec3(invWorld * glm::vec4(p.Position, 1.0f));
+                    float a = glm::radians(ps.OrbitalSpeed) * dt, c = std::cos(a), s = std::sin(a);
+                    lp = glm::vec3(c * lp.x + s * lp.z, lp.y, -s * lp.x + c * lp.z);
+                    p.Position = local ? lp : glm::vec3(world * glm::vec4(lp, 1.0f));
+                }
+            }
             p.Rotation += p.AngularVelocity * dt;
             if (ps.Noise && ps.NoiseStrength != 0.0f)
             {

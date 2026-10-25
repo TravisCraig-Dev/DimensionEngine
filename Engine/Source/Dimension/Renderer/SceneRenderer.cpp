@@ -81,6 +81,8 @@ namespace Dimension
             glm::vec4 PointShadowParams[SceneRenderer::kMaxPointShadows]; // near, far, bias, atlas index
             glm::mat4 InvProj;
             glm::vec4 AOParams; // x enabled, y AO texture index, zw 1 / framebuffer size
+            glm::vec4 CascadeDepth;     // world depth range of each cascade
+            glm::vec4 SoftShadowParams; // x PCSS on, y tan(light angular radius), z max filter radius in texels
             struct ProbeGPU
             {
                 glm::vec4 CenterIntensity, BoxMin, BoxMax, Params; // see ReflectionProbe in Common.glsl
@@ -521,6 +523,23 @@ namespace Dimension
         }
     }
 
+    void SceneRenderer::DrawSliderGizmo(const glm::vec3& anchor, glm::vec3 axis, bool limits, float min, float max)
+    {
+        if (glm::length(axis) < 1e-6f) return;
+        axis = glm::normalize(axis);
+        const glm::vec4 orange{ 1.0f, 0.6f, 0.2f, 1.0f }, dim{ 1.0f, 0.6f, 0.2f, 0.35f };
+        if (!limits)
+        {
+            DrawLine(anchor - axis * 1.5f, anchor + axis * 1.5f, dim);
+            return;
+        }
+        glm::vec3 a = anchor + axis * std::min(min, 0.0f), b = anchor + axis * std::max(max, 0.0f);
+        DrawLine(a, b, orange);
+        glm::vec3 side = glm::normalize(glm::cross(axis, std::abs(axis.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0))) * 0.12f;
+        DrawLine(a - side, a + side, orange);
+        DrawLine(b - side, b + side, orange);
+    }
+
     void SceneRenderer::DrawWireSphere(const glm::mat4& m, const glm::vec3& c, float r, const glm::vec4& color)
     {
         for (int axis = 0; axis < 3; ++axis) DrawWireCircle(m, c, r, color, axis);
@@ -564,8 +583,8 @@ namespace Dimension
                     for (int i = 0; i < 9; ++i) u.IrradianceSH[i] = glm::vec4((*sh)[i], 0.0f);
                 }
             }
-        bool castShadows = false, debugCascades = false;
-        float shadowDistance = 40.0f, shadowBias = 0.0015f;
+        bool castShadows = false, debugCascades = false, softShadows = false;
+        float shadowDistance = 40.0f, shadowBias = 0.0015f, lightAngle = 1.0f;
         int cascadeCount = 4;
         for (auto [e, light, t] : reg.ViewOf<DirectionalLightComponent, TransformComponent>())
         {
@@ -577,6 +596,8 @@ namespace Dimension
             shadowBias = light.ShadowBias;
             cascadeCount = std::clamp(light.ShadowCascades, 1, ShadowCascades::kMax);
             debugCascades = light.DebugCascades;
+            softShadows = light.SoftShadows;
+            lightAngle = light.LightAngle;
             break;
         }
         if (options.DefaultLight && u.LightDirection.w == 0.0f)
@@ -620,8 +641,19 @@ namespace Dimension
                 shadowFaces[pointShadows] = 1;
                 slot = (float)(++pointShadows);
             }
+            // Cookie: bindless index + 1, and the light's roll around its axis relative to the basis the shader builds.
+            float cookie = 0.0f, roll = 0.0f;
+            if (light.Cookie)
+                if (auto tex = AssetManager::GetTexture(light.Cookie))
+                {
+                    cookie = (float)tex->GetBindlessIndex() + 1.0f;
+                    glm::vec3 right0, up0;
+                    SpotCookieBasis(dir, right0, up0);
+                    glm::vec3 right = t.Right();
+                    roll = std::atan2(glm::dot(right, up0), glm::dot(right, right0));
+                }
             u.PointLights[u.Counts.x++] = { glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
-                                            glm::vec4(dir, cosOuter), glm::vec4(cosInner, 0.0f, 0.0f, 0.0f) };
+                                            glm::vec4(dir, cosOuter), glm::vec4(cosInner, cookie, roll, 0.0f) };
         }
 
         // Prepare CPU-side draw lists
@@ -652,9 +684,12 @@ namespace Dimension
                 u.LightViewProj[i] = cascades.ViewProj[i];
                 u.CascadeSplits[i] = cascades.Splits[i];
                 u.CascadeTexel[i] = cascades.Texel[i];
+                u.CascadeDepth[i] = cascades.DepthRange[i];
             }
             u.ShadowParams = glm::vec4((float)cascades.Count, (float)m_ShadowBindless, shadowBias, 0.0f);
             u.CascadeParams = glm::vec4(0.0f, 0.15f, debugCascades ? 1.0f : 0.0f, 0.0f);
+            if (softShadows)
+                u.SoftShadowParams = glm::vec4(1.0f, std::tan(glm::radians(std::clamp(lightAngle, 0.01f, 20.0f)) * 0.5f), 24.0f, 0.0f);
         }
 
         VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
@@ -920,6 +955,25 @@ namespace Dimension
         return proj * view;
     }
 
+    void SpotCookieBasis(const glm::vec3& direction, glm::vec3& right, glm::vec3& up)
+    {
+        glm::vec3 d = glm::normalize(direction);
+        glm::vec3 ref = std::abs(d.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+        right = glm::normalize(glm::cross(d, ref));
+        up = glm::cross(right, d);
+    }
+
+    glm::vec2 SpotCookieUV(const glm::vec3& direction, float cosOuter, float roll, const glm::vec3& toPoint)
+    {
+        glm::vec3 right, up, d = glm::normalize(direction), p = glm::normalize(toPoint);
+        SpotCookieBasis(d, right, up);
+        float tanOuter = std::sqrt(std::max(1.0f - cosOuter * cosOuter, 1e-6f)) / std::max(cosOuter, 1e-4f);
+        glm::vec2 q = glm::vec2(glm::dot(p, right), glm::dot(p, up)) / (std::max(glm::dot(p, d), 1e-4f) * tanOuter);
+        float c = std::cos(roll), s = std::sin(roll);
+        q = glm::vec2(c * q.x + s * q.y, -s * q.x + c * q.y); // into the light's own (rolled) axes
+        return glm::vec2(q.x * 0.5f + 0.5f, 0.5f - q.y * 0.5f);
+    }
+
     glm::mat4 SpotShadowViewProj(const glm::vec3& position, const glm::vec3& direction, float spotAngleDegrees, float nearPlane, float farPlane)
     {
         glm::vec3 dir = glm::normalize(direction);
@@ -1078,15 +1132,25 @@ namespace Dimension
                 }
             }
 
-            // Material per sub-mesh: the renderer's Material overrides all; otherwise the model's material for the
-            // slot; otherwise the renderer's simple color/texture fields.
+            // Material per sub-mesh: the renderer's per-slot override (Materials[slot], where sub-meshes without a
+            // model slot use their own index); else the renderer's Material for all parts; else the model's material
+            // for the slot; else the renderer's simple color/texture fields.
             item.FirstPart = (uint32_t)m_RenderParts.size();
             Ref<Material> overrideMat = AssetManager::GetMaterial(mr.Material);
             const auto& slots = AssetManager::GetMeshMaterials(mr.Mesh);
-            for (const SubMesh& sub : mesh->GetSubMeshes())
+            const auto& subMeshes = mesh->GetSubMeshes();
+            for (size_t si = 0; si < subMeshes.size(); ++si)
             {
-                const Material* matPtr = overrideMat.get();
+                const SubMesh& sub = subMeshes[si];
+                const Material* matPtr = nullptr;
                 Ref<Material> slotMat;
+                size_t slotIndex = sub.MaterialSlot >= 0 ? (size_t)sub.MaterialSlot : si;
+                if (slotIndex < mr.Materials.size() && mr.Materials[slotIndex])
+                {
+                    slotMat = AssetManager::GetMaterial(mr.Materials[slotIndex]);
+                    matPtr = slotMat.get();
+                }
+                if (!matPtr) matPtr = overrideMat.get();
                 if (!matPtr && sub.MaterialSlot >= 0 && sub.MaterialSlot < (int32_t)slots.size())
                 {
                     slotMat = AssetManager::GetMaterial(slots[sub.MaterialSlot]);
@@ -1330,6 +1394,7 @@ namespace Dimension
             out.ViewProj[c] = proj * view;
             out.Splits[c] = d1;
             out.Texel[c] = unitsPerTexel;
+            out.DepthRange[c] = radius * 2.0f + backoff;
         }
 
         // Depth-only passes into the atlas tiles, reusing the mesh vertex shader with the light as the camera.
@@ -1585,6 +1650,8 @@ namespace Dimension
             params.Normal = glm::normalize(glm::vec3(t.World[2]));
             params.Loop = line.Loop;
             params.TextureMode = line.TextureMode;
+            params.CornerVertices = line.CornerVertices;
+            params.CapVertices = line.EndCapVertices;
             emit(BuildRibbon(points, params), textureIndex(line.Texture), e, line.SortingOrder, line.Blend == LineBlend::Additive);
         }
 
@@ -1604,6 +1671,8 @@ namespace Dimension
             params.FaceCamera = true;
             params.Loop = false;
             params.TextureMode = trail.TextureMode;
+            params.CornerVertices = trail.CornerVertices;
+            params.CapVertices = trail.EndCapVertices;
             emit(BuildRibbon(points, params), textureIndex(trail.Texture), e, trail.SortingOrder, trail.Blend == LineBlend::Additive);
         }
     }
@@ -2128,6 +2197,8 @@ namespace Dimension
                 if (glm::length(axis) > 1e-6f) axis = glm::normalize(axis) * 0.6f;
                 DrawLine(anchor - axis, anchor + axis, { 1.0f, 0.6f, 0.2f, 1.0f });
             }
+            if (joint->Type == JointType::Slider)
+                DrawSliderGizmo(anchor, glm::mat3(t.World) * joint->Axis, joint->UseLimits, joint->SliderMin, joint->SliderMax);
         }
         if (auto* joint = reg.TryGet<Joint2DComponent>(sel))
         {
@@ -2144,6 +2215,9 @@ namespace Dimension
                 other = glm::vec3(joint->ConnectedAnchor, 0.0f);
             DrawLine(t.GetWorldPosition(), anchor, cyan);
             DrawLine(anchor, other, cyan);
+            if (joint->Type == Joint2DType::Slider)
+                DrawSliderGizmo(anchor, glm::vec3(t.World * glm::vec4(joint->Axis, 0.0f, 0.0f)), joint->UseLimits, joint->LowerTranslation,
+                                joint->UpperTranslation);
         }
         if (auto* cc = reg.TryGet<CharacterControllerComponent>(sel))
         {

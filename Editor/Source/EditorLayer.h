@@ -5,6 +5,7 @@
 #include "Panels/Panels.h"
 #include <Dimension/Core/Application.h>
 #include <Dimension/Renderer/SceneRenderer.h>
+#include <Dimension/Audio/AudioMixer.h>
 #include <atomic>
 #include <memory>
 
@@ -71,6 +72,10 @@ namespace Editor
         void DrawBuildSettings();
         void DrawPreferences();
         void DrawAudioMixer();
+        void DrawLevelMeter(int group, float height);
+        std::vector<AudioMixerGroup> m_MixerBeforePlay; // play mode changes to the mixer (scripts, snapshots) revert on Stop
+        struct MeterDisplay { float Rms = 0.0f, Peak = 0.0f, Hold = 0.0f, HoldTime = 0.0f; };
+        std::vector<MeterDisplay> m_MixerMeters; // per group, smoothed for display
         void DrawTilePalette();
         // Scene-view tile painting for the selected Tilemap; returns true while it owns the mouse.
         bool UpdateTilePainting(const ImVec2& origin, const ImVec2& size);

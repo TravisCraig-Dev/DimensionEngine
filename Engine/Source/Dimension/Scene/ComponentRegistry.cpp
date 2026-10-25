@@ -26,6 +26,49 @@ namespace Dimension
         return nullptr;
     }
 
+    std::vector<const ComponentInfo*> ComponentRegistry::GetDisplayOrder(Scene& scene, Entity entity)
+    {
+        std::vector<const ComponentInfo*> list;
+        if (!scene.IsValid(entity)) return list;
+        const auto* tag = scene.GetRegistry().TryGet<TagComponent>(entity);
+        std::vector<std::pair<size_t, const ComponentInfo*>> keyed;
+        size_t index = 0;
+        for (auto& info : Infos())
+        {
+            ++index;
+            if (info.Hidden || !info.Has(scene, entity)) continue;
+            size_t key = 1'000'000 + index; // unlisted: after listed ones, in registration order
+            if (!info.Removable) key = index;
+            else if (tag)
+                if (auto it = std::find(tag->ComponentOrder.begin(), tag->ComponentOrder.end(), info.Name); it != tag->ComponentOrder.end())
+                    key = 1000 + (size_t)(it - tag->ComponentOrder.begin());
+            keyed.emplace_back(key, &info);
+        }
+        std::stable_sort(keyed.begin(), keyed.end(), [](auto& a, auto& b) { return a.first < b.first; });
+        for (auto& [k, info] : keyed) list.push_back(info);
+        return list;
+    }
+
+    bool ComponentRegistry::MoveComponent(Scene& scene, Entity entity, const std::string& name, int delta)
+    {
+        auto* tag = scene.IsValid(entity) ? scene.GetRegistry().TryGet<TagComponent>(entity) : nullptr;
+        if (!tag || delta == 0) return false;
+        auto list = GetDisplayOrder(scene, entity);
+        auto it = std::find_if(list.begin(), list.end(), [&](const ComponentInfo* i) { return i->Name == name; });
+        if (it == list.end() || !(*it)->Removable) return false;
+        int from = (int)(it - list.begin());
+        int to = std::clamp(from + delta, 0, (int)list.size() - 1);
+        while (to < from && !list[to]->Removable) ++to; // never above Transform
+        if (to == from) return false;
+        const ComponentInfo* moving = list[from];
+        list.erase(list.begin() + from);
+        list.insert(list.begin() + to, moving);
+        tag->ComponentOrder.clear();
+        for (auto* i : list)
+            if (i->Removable) tag->ComponentOrder.push_back(i->Name);
+        return true;
+    }
+
     void ComponentRegistry::RegisterBuiltins()
     {
         if (!Infos().empty()) return;
@@ -35,7 +78,8 @@ namespace Dimension
             .Field("Name", &TagComponent::Name)
             .Field("Tag", &TagComponent::Tag)
             .Field("Active", &TagComponent::Active)
-            .Field("Layer", &TagComponent::Layer).Range(0, 31);
+            .Field("Layer", &TagComponent::Layer).Range(0, 31)
+            .Field("Component Order", &TagComponent::ComponentOrder).HideInInspector();
         Register<TransformComponent>("Transform", "Core", false, false)
             .Field("Position", &TransformComponent::Position)
             .Field("Rotation", &TransformComponent::Rotation).As(FieldType::Angles).Speed(0.5f)
@@ -76,6 +120,8 @@ namespace Dimension
             .Field("Mesh", &MeshRendererComponent::Mesh).As(FieldType::Mesh)
             .Field("Material", &MeshRendererComponent::Material).As(FieldType::Material)
                 .Tooltip("PBR material asset. When empty, the simple fields below are used.")
+            .Field("Materials", &MeshRendererComponent::Materials)
+                .Tooltip("Per-slot overrides: slot N replaces the model's material N (or sub-mesh N). Empty slots use Material or the model's own.")
             .Field("Albedo", &MeshRendererComponent::Texture).As(FieldType::Texture)
             .Field("Color", &MeshRendererComponent::Color).As(FieldType::Color4)
             .Field("Tiling", &MeshRendererComponent::Tiling)
@@ -116,6 +162,15 @@ namespace Dimension
             .Field("Color Over Lifetime", &PS::ColorOverLifetime).Tooltip("Multiplied with the start color (normalized age 0-1)")
             .Field("Size Over Lifetime", &PS::SizeOverLifetime).Tooltip("Multiplies the start size")
             .Field("Speed Over Lifetime", &PS::SpeedOverLifetime).Tooltip("Multiplies the velocity")
+            .Field("Velocity Over Lifetime", &PS::VelocityOverLifetime).Tooltip("Adds a velocity (not accumulated) and an orbit")
+            .Field("Lifetime Velocity", &PS::LifetimeVelocity).Speed(0.05f).Tooltip("Units per second, scaled by Velocity Curve")
+            .Field("Velocity Space", &PS::VelocitySpace).Enum({ "Local", "World" })
+            .Field("Velocity Curve", &PS::VelocityCurve).Tooltip("Multiplies Lifetime Velocity over each particle's life")
+            .Field("Orbital Speed", &PS::OrbitalSpeed).Speed(1.0f).Tooltip("Degrees per second around the emitter's Y axis")
+            .Field("Force Over Lifetime", &PS::ForceOverLifetime).Tooltip("Accelerates particles (wind, thrust)")
+            .Field("Force", &PS::Force).Speed(0.05f).Tooltip("Units per second squared, scaled by Force Curve")
+            .Field("Force Space", &PS::ForceSpace).Enum({ "Local", "World" })
+            .Field("Force Curve", &PS::ForceCurve).Tooltip("Multiplies Force over each particle's life")
             .Field("Collision", &PS::Collision).Enum({ "None", "Plane", "World" }).Tooltip("World collides with 3D physics colliders (play mode)")
             .Field("Collision Plane Height", &PS::CollisionPlaneHeight).Speed(0.01f)
             .Field("Bounce", &PS::Bounce).Range(0.0f, 2.0f).Speed(0.01f)
@@ -153,6 +208,8 @@ namespace Dimension
                 .Tooltip("View: faces the camera. Transform Z: lies flat, facing this object's Z axis")
             .Field("Texture", &LineRendererComponent::Texture).As(FieldType::Texture)
             .Field("Texture Mode", &LineRendererComponent::TextureMode).Enum({ "Stretch", "Tile" }).Tooltip("Tile repeats the texture every world unit")
+            .Field("Corner Vertices", &LineRendererComponent::CornerVertices).Range(0, 32).Tooltip("Rounded joins (0 = mitered corners)")
+            .Field("End Cap Vertices", &LineRendererComponent::EndCapVertices).Range(0, 32).Tooltip("Rounded ends (0 = square)")
             .Field("Blend", &LineRendererComponent::Blend).Enum({ "Alpha", "Additive" })
             .Field("Sorting Order", &LineRendererComponent::SortingOrder);
 
@@ -165,6 +222,8 @@ namespace Dimension
             .Field("Emitting", &TrailRendererComponent::Emitting)
             .Field("Texture", &TrailRendererComponent::Texture).As(FieldType::Texture)
             .Field("Texture Mode", &TrailRendererComponent::TextureMode).Enum({ "Stretch", "Tile" })
+            .Field("Corner Vertices", &TrailRendererComponent::CornerVertices).Range(0, 32).Tooltip("Rounded joins (0 = mitered corners)")
+            .Field("End Cap Vertices", &TrailRendererComponent::EndCapVertices).Range(0, 32).Tooltip("Rounded ends (0 = square)")
             .Field("Blend", &TrailRendererComponent::Blend).Enum({ "Alpha", "Additive" })
             .Field("Sorting Order", &TrailRendererComponent::SortingOrder);
 
@@ -244,10 +303,12 @@ namespace Dimension
             .Field("Text Color", &UIInputFieldComponent::TextColor).As(FieldType::Color4)
             .Field("Placeholder Color", &UIInputFieldComponent::PlaceholderColor).As(FieldType::Color4);
         Register<UILayoutGroupComponent>("UI Layout Group", "UI")
-            .Field("Direction", &UILayoutGroupComponent::Direction).Enum({ "Vertical", "Horizontal" })
+            .Field("Direction", &UILayoutGroupComponent::Direction).Enum({ "Vertical", "Horizontal", "Grid" })
             .Field("Spacing", &UILayoutGroupComponent::Spacing).Speed(0.5f)
             .Field("Padding", &UILayoutGroupComponent::Padding).Speed(0.5f).Tooltip("left, top, right, bottom")
-            .Field("Stretch Children", &UILayoutGroupComponent::StretchChildren);
+            .Field("Stretch Children", &UILayoutGroupComponent::StretchChildren).Tooltip("Rows and columns: children fill the cross axis")
+            .Field("Cell Size", &UILayoutGroupComponent::CellSize).Speed(0.5f).Tooltip("Grid: size of every cell")
+            .Field("Columns", &UILayoutGroupComponent::Columns).Range(0, 1000).Tooltip("Grid: fixed column count (0 = as many as fit)");
         Register<UIDropdownComponent>("UI Dropdown", "UI")
             .Field("Options", &UIDropdownComponent::Options)
             .Field("Value", &UIDropdownComponent::Value).Range(0, 10000).Tooltip("Index of the selected option")
@@ -260,8 +321,10 @@ namespace Dimension
             .Field("Highlight Color", &UIDropdownComponent::HighlightColor).As(FieldType::Color4);
 
         Register<UIScrollViewComponent>("UI Scroll View", "UI")
+            .Field("Vertical", &UIScrollViewComponent::Vertical)
+            .Field("Horizontal", &UIScrollViewComponent::Horizontal).Tooltip("Shift + wheel scrolls sideways (the wheel alone when Vertical is off)")
             .Field("Scroll Speed", &UIScrollViewComponent::ScrollSpeed).Range(1.0f, 10000.0f).Speed(1.0f)
-            .Field("Scrollbar", &UIScrollViewComponent::Scrollbar).Tooltip("Shown while the content is taller than the view")
+            .Field("Scrollbar", &UIScrollViewComponent::Scrollbar).Tooltip("Shown while the content is larger than the view")
             .Field("Scrollbar Width", &UIScrollViewComponent::ScrollbarWidth).Range(1.0f, 200.0f).Speed(0.25f)
             .Field("Scrollbar Track Color", &UIScrollViewComponent::ScrollbarTrackColor).As(FieldType::Color4)
             .Field("Scrollbar Handle Color", &UIScrollViewComponent::ScrollbarHandleColor).As(FieldType::Color4);
@@ -278,7 +341,9 @@ namespace Dimension
             .Field("Shadow Distance", &DirectionalLightComponent::ShadowDistance).Range(1.0f, 1000.0f).Speed(0.5f)
             .Field("Shadow Bias", &DirectionalLightComponent::ShadowBias).Range(0.0f, 0.05f).Speed(0.0001f)
             .Field("Shadow Cascades", &DirectionalLightComponent::ShadowCascades).Range(1, 4)
-            .Field("Debug Cascades", &DirectionalLightComponent::DebugCascades);
+            .Field("Debug Cascades", &DirectionalLightComponent::DebugCascades)
+            .Field("Soft Shadows", &DirectionalLightComponent::SoftShadows)
+            .Field("Light Angle", &DirectionalLightComponent::LightAngle).Range(0.01f, 20.0f).Speed(0.05f);
 
         Register<PointLightComponent>("Point Light", "Rendering")
             .Field("Color", &PointLightComponent::Color).As(FieldType::Color3)
@@ -294,7 +359,9 @@ namespace Dimension
             .Field("Spot Angle", &SpotLightComponent::SpotAngle).Range(1.0f, 179.0f).Speed(0.5f)
             .Field("Inner Spot Angle", &SpotLightComponent::InnerSpotAngle).Range(0.0f, 179.0f).Speed(0.5f)
             .Field("Cast Shadows", &SpotLightComponent::CastShadows)
-            .Field("Shadow Bias", &SpotLightComponent::ShadowBias).Range(0.0f, 1.0f).Speed(0.001f);
+            .Field("Shadow Bias", &SpotLightComponent::ShadowBias).Range(0.0f, 1.0f).Speed(0.001f)
+            .Field("Cookie", &SpotLightComponent::Cookie).As(FieldType::Texture)
+                .Tooltip("Texture projected through the cone, like a gobo: its color multiplies the light. Rolls with the light.");
 
         Register<AudioSourceComponent>("Audio Source", "Audio")
             .Field("Clip", &AudioSourceComponent::Clip).As(FieldType::Audio)
@@ -358,20 +425,22 @@ namespace Dimension
             .Field("Bounciness", &SphereColliderComponent::Restitution).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Is Trigger", &SphereColliderComponent::IsTrigger);
         Register<JointComponent>("Joint", "Physics")
-            .Field("Type", &JointComponent::Type).Enum({ "Fixed", "Hinge", "Point", "Distance" })
+            .Field("Type", &JointComponent::Type).Enum({ "Fixed", "Hinge", "Point", "Distance", "Slider" })
             .Field("Connected Body", &JointComponent::ConnectedBody).Tooltip("Empty = attached to the world")
             .Field("Anchor", &JointComponent::Anchor).Speed(0.01f)
-            .Field("Axis", &JointComponent::Axis).Speed(0.01f).Tooltip("Hinge axis (local space)")
+            .Field("Axis", &JointComponent::Axis).Speed(0.01f).Tooltip("Hinge or slider axis (local space)")
             .Field("Connected Anchor", &JointComponent::ConnectedAnchor).Speed(0.01f).Tooltip("Distance joint: local point on the connected body, or a world point")
             .Field("Use Limits", &JointComponent::UseLimits)
             .Field("Min Angle", &JointComponent::MinAngle).Range(-180.0f, 0.0f).Speed(0.5f)
             .Field("Max Angle", &JointComponent::MaxAngle).Range(0.0f, 180.0f).Speed(0.5f)
             .Field("Min Distance", &JointComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.01f)
             .Field("Max Distance", &JointComponent::MaxDistance).Range(0.0f, 10000.0f).Speed(0.01f)
+            .Field("Slider Min", &JointComponent::SliderMin).Range(-10000.0f, 0.0f).Speed(0.01f).Tooltip("Slider: lowest travel along Axis (units)")
+            .Field("Slider Max", &JointComponent::SliderMax).Range(0.0f, 10000.0f).Speed(0.01f).Tooltip("Slider: highest travel along Axis (units)")
             .Field("Enable Collision", &JointComponent::EnableCollision)
-            .Field("Use Motor", &JointComponent::UseMotor).Tooltip("Hinge: drive toward Motor Speed")
-            .Field("Motor Speed", &JointComponent::MotorSpeed).Speed(1.0f).Tooltip("Degrees per second")
-            .Field("Motor Max Torque", &JointComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(10.0f)
+            .Field("Use Motor", &JointComponent::UseMotor).Tooltip("Hinge or slider: drive toward Motor Speed")
+            .Field("Motor Speed", &JointComponent::MotorSpeed).Speed(1.0f).Tooltip("Hinge: degrees per second. Slider: units per second along Axis")
+            .Field("Motor Max Torque", &JointComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Hinge: N*m. Slider: maximum force (N)")
             .Field("Break Force", &JointComponent::BreakForce).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Newtons; 0 = unbreakable")
             .Field("Break Torque", &JointComponent::BreakTorque).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Newton-meters; 0 = unbreakable");
         Register<MeshColliderComponent>("Mesh Collider", "Physics")
@@ -392,7 +461,7 @@ namespace Dimension
             .Field("Ride Moving Platforms", &CharacterControllerComponent::RideMovingPlatforms)
                 .Tooltip("Standing on a moving (e.g. kinematic) body carries the character with it");
         Register<Joint2DComponent>("Joint 2D", "Physics 2D")
-            .Field("Type", &Joint2DComponent::Type).Enum({ "Fixed", "Hinge", "Distance" })
+            .Field("Type", &Joint2DComponent::Type).Enum({ "Fixed", "Hinge", "Distance", "Slider" })
             .Field("Connected Body", &Joint2DComponent::ConnectedBody).Tooltip("Empty = attached to the world")
             .Field("Anchor", &Joint2DComponent::Anchor).Speed(0.01f)
             .Field("Connected Anchor", &Joint2DComponent::ConnectedAnchor).Speed(0.01f)
@@ -400,10 +469,13 @@ namespace Dimension
             .Field("Lower Angle", &Joint2DComponent::LowerAngle).Range(-180.0f, 180.0f).Speed(0.5f)
             .Field("Upper Angle", &Joint2DComponent::UpperAngle).Range(-180.0f, 180.0f).Speed(0.5f)
             .Field("Distance", &Joint2DComponent::Distance).Range(0.0f, 10000.0f).Speed(0.01f)
+            .Field("Axis", &Joint2DComponent::Axis).Speed(0.01f).Tooltip("Slider axis (local space)")
+            .Field("Lower Translation", &Joint2DComponent::LowerTranslation).Range(-10000.0f, 0.0f).Speed(0.01f).Tooltip("Slider: lowest travel along Axis (units)")
+            .Field("Upper Translation", &Joint2DComponent::UpperTranslation).Range(0.0f, 10000.0f).Speed(0.01f).Tooltip("Slider: highest travel along Axis (units)")
             .Field("Collide Connected", &Joint2DComponent::CollideConnected)
-            .Field("Use Motor", &Joint2DComponent::UseMotor).Tooltip("Hinge: drive toward Motor Speed")
-            .Field("Motor Speed", &Joint2DComponent::MotorSpeed).Speed(1.0f).Tooltip("Degrees per second")
-            .Field("Motor Max Torque", &Joint2DComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(1.0f)
+            .Field("Use Motor", &Joint2DComponent::UseMotor).Tooltip("Hinge or slider: drive toward Motor Speed")
+            .Field("Motor Speed", &Joint2DComponent::MotorSpeed).Speed(1.0f).Tooltip("Hinge: degrees per second. Slider: units per second along Axis")
+            .Field("Motor Max Torque", &Joint2DComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Hinge: N*m. Slider: maximum force (N)")
             .Field("Break Force", &Joint2DComponent::BreakForce).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Newtons; 0 = unbreakable")
             .Field("Break Torque", &Joint2DComponent::BreakTorque).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Newton-meters; 0 = unbreakable");
         BuiltinCount() = Infos().size();

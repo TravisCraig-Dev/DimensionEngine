@@ -46,6 +46,7 @@ namespace Dimension
         glm::mat4 ViewProj[kMax]{};
         float Splits[kMax]{}; // far view depth of each cascade
         float Texel[kMax]{};  // world size of one shadow texel
+        float DepthRange[kMax]{}; // world depth spanned by the cascade's [0,1] depth
     };
 
     // Cascade far distances between nearDepth and farDepth (view depth), blending logarithmic and
@@ -54,6 +55,11 @@ namespace Dimension
 
     // View-projection of cube face `face` (+X, -X, +Y, -Y, +Z, -Z) for a point light shadow (90 degree FOV).
     glm::mat4 PointShadowFaceViewProj(const glm::vec3& position, int face, float nearPlane, float farPlane);
+    // Spot light cookies: the basis the shader projects with (right/up perpendicular to the direction), and the cookie
+    // texture coordinate of a point (toPoint = point - light position; `roll` turns the cookie around the axis).
+    // Mirrors SpotCookieUV in Common.glsl. Points on the outer cone's rim land on the texture's inscribed circle.
+    void SpotCookieBasis(const glm::vec3& direction, glm::vec3& right, glm::vec3& up);
+    glm::vec2 SpotCookieUV(const glm::vec3& direction, float cosOuter, float roll, const glm::vec3& toPoint);
     // View-projection for a spot light shadow covering its outer cone.
     glm::mat4 SpotShadowViewProj(const glm::vec3& position, const glm::vec3& direction, float spotAngleDegrees, float nearPlane, float farPlane);
 
@@ -99,6 +105,8 @@ namespace Dimension
         void DrawLine(const glm::vec3& a, const glm::vec3& b, const glm::vec4& color);
         void DrawWireBox(const glm::mat4& transform, const glm::vec3& center, const glm::vec3& halfExtents, const glm::vec4& color);
         void DrawWireCircle(const glm::mat4& transform, const glm::vec3& center, float radius, const glm::vec4& color, int axis = 2);
+        // Slider joint: its axis through the anchor, the travel range between the limits with end ticks.
+        void DrawSliderGizmo(const glm::vec3& anchor, glm::vec3 axis, bool limits, float min, float max);
         void DrawWireSphere(const glm::mat4& transform, const glm::vec3& center, float radius, const glm::vec4& color);
 
         const RenderStats& GetStats() const { return m_Stats; }

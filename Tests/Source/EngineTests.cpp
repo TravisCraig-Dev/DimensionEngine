@@ -12,6 +12,7 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
+#include <Dimension/Platform/AppIcon.h>
 #include <windows.h>
 
 namespace
@@ -42,6 +43,7 @@ namespace
     } while (0)
 
     bool Near(float a, float b, float eps = 1e-3f) { return std::abs(a - b) <= eps; }
+    bool Near(const glm::vec2& a, const glm::vec2& b, float eps = 1e-3f) { return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec2(eps))); }
     bool Near(const glm::vec3& a, const glm::vec3& b, float eps = 1e-3f) { return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec3(eps))); }
 
     struct Position { float X = 0, Y = 0; };
@@ -2431,6 +2433,515 @@ namespace
         CHECK(osc.Scripts.size() == 1 && osc.Scripts[0].ClassName == "TestScript" && osc.Scripts[0].Fields["Speed"] == 4.0);
     }
 
+    void TestMaterialSlotsAndSoftShadows()
+    {
+        // Per-slot material overrides round trip through the scene serializer, keeping empty slots in place.
+        Scene scene("Slots");
+        Entity e = scene.CreateEntity("Model");
+        auto& mr = scene.GetRegistry().Emplace<MeshRendererComponent>(e);
+        mr.Materials = { Guid(uint64_t(9001)), Guid::None(), Guid(uint64_t(9003)) };
+        auto& sun = scene.GetRegistry().Emplace<DirectionalLightComponent>(e);
+        sun.SoftShadows = true;
+        sun.LightAngle = 2.5f;
+        auto loaded = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        Entity le = loaded->FindEntityByName("Model");
+        auto& lmr = loaded->GetRegistry().Get<MeshRendererComponent>(le);
+        CHECK(lmr.Materials.size() == 3 && (uint64_t)lmr.Materials[0] == 9001 && !lmr.Materials[1] && (uint64_t)lmr.Materials[2] == 9003);
+        auto& lsun = loaded->GetRegistry().Get<DirectionalLightComponent>(le);
+        CHECK(lsun.SoftShadows && Near(lsun.LightAngle, 2.5f));
+        // Older scenes without the field load with no overrides.
+        nlohmann::json j = SceneSerializer::Serialize(scene);
+        for (auto& ent : j["entities"]) ent["components"]["Mesh Renderer"].erase("Materials");
+        auto old = SceneSerializer::Deserialize(j);
+        CHECK(old->GetRegistry().Get<MeshRendererComponent>(old->FindEntityByName("Model")).Materials.empty());
+    }
+
+    void TestUIGridAndHorizontalScroll()
+    {
+        Scene scene("Grid");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto rect = [&](Entity e, glm::vec2 pos, glm::vec2 size) -> UIRectComponent& {
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = { 0, 0 };
+            r.Pivot = { 0, 0 };
+            r.Position = pos;
+            r.Size = size;
+            return r;
+        };
+        auto content = [&](Entity parent, UILayoutDirection dir, glm::vec2 anchorMax) {
+            Entity c = scene.CreateEntity("Content", parent);
+            auto& r = reg.Emplace<UIRectComponent>(c);
+            r.AnchorMin = { 0, 0 }; r.AnchorMax = anchorMax; r.Size = { 0, 0 }; r.Pivot = { 0, 0 };
+            auto& g = reg.Emplace<UILayoutGroupComponent>(c);
+            g.Direction = dir;
+            g.Padding = glm::vec4(0.0f);
+            return c;
+        };
+
+        // A 200 x 100 vertical scroll view whose content is a flexible grid of 50 px cells, 10 px apart: 3 columns,
+        // 7 cells -> 3 rows, 170 px tall, so it scrolls 70.
+        Entity gridView = scene.CreateEntity("GridView", canvas);
+        rect(gridView, { 0, 0 }, { 200, 100 });
+        reg.Emplace<UIScrollViewComponent>(gridView);
+        Entity grid = content(gridView, UILayoutDirection::Grid, { 1, 0 });
+        {
+            auto& g = reg.Get<UILayoutGroupComponent>(grid);
+            g.CellSize = { 50, 50 };
+            g.Spacing = 10.0f;
+        }
+        std::vector<Entity> cells;
+        for (int i = 0; i < 7; ++i)
+        {
+            cells.push_back(scene.CreateEntity("Cell", grid));
+            rect(cells.back(), { 0, 0 }, { 10, 10 }); // ignored: cells take the grid's cell size
+        }
+
+        // A 200 x 100 horizontal-only view with a row of five 80 px items: 400 wide, so it scrolls 200 sideways.
+        Entity rowView = scene.CreateEntity("RowView", canvas);
+        rect(rowView, { 0, 300 }, { 200, 100 });
+        {
+            auto& v = reg.Emplace<UIScrollViewComponent>(rowView);
+            v.Vertical = false;
+            v.Horizontal = true;
+        }
+        Entity row = content(rowView, UILayoutDirection::Horizontal, { 0, 1 });
+        reg.Get<UILayoutGroupComponent>(row).Spacing = 0.0f;
+        for (int i = 0; i < 5; ++i)
+        {
+            Entity item = scene.CreateEntity("Item", row);
+            rect(item, { 0, 0 }, { 80, 0 });
+            reg.Emplace<UIImageComponent>(item);
+        }
+        scene.UpdateTransforms();
+
+        glm::vec2 screen(1000, 1000);
+        UI::ComputeLayout(scene, screen);
+        auto& gv = reg.Get<UIScrollViewComponent>(gridView);
+        CHECK(Near(gv.MaxScroll, 70.0f) && Near(gv.MaxScrollX, 0.0f));
+        auto& c4 = reg.Get<UIRectComponent>(cells[4]); // second row, second column
+        CHECK(Near(c4.ComputedMin, glm::vec2(60, 60)) && Near(c4.ComputedMax, glm::vec2(110, 110)));
+        // A fixed column count overrides the fit: two columns -> cell 4 starts the third row; 4 rows = 230 px.
+        reg.Get<UILayoutGroupComponent>(grid).Columns = 2;
+        UI::ComputeLayout(scene, screen);
+        CHECK(Near(c4.ComputedMin, glm::vec2(0, 120)) && Near(gv.MaxScroll, 130.0f));
+
+        auto& rv = reg.Get<UIScrollViewComponent>(rowView);
+        CHECK(Near(rv.MaxScrollX, 200.0f) && Near(rv.MaxScroll, 0.0f));
+        // The wheel scrolls a horizontal-only view sideways.
+        UI::PointerState p;
+        p.Position = { 100, 320 };
+        p.Scroll = -1.0f;
+        UI::Update(scene, p, screen);
+        UI::ComputeLayout(scene, screen);
+        CHECK(Near(rv.ScrollPositionX, 60.0f) && Near(reg.Get<UIRectComponent>(row).ComputedMin.x, -60.0f));
+        // In a view that scrolls both ways, Shift + wheel goes sideways and the plain wheel goes down.
+        rv.Vertical = true;
+        p.Shift = true;
+        UI::Update(scene, p, screen);
+        CHECK(Near(rv.ScrollPositionX, 120.0f) && Near(rv.ScrollPosition, 0.0f));
+        rv.Vertical = false;
+        rv.ScrollPositionX = 0.0f;
+        UI::ComputeLayout(scene, screen);
+
+        // Horizontal scrollbar along the bottom: track x 4..196, handle 192 * 200/400 = 96 px. Drag it half way.
+        p = UI::PointerState();
+        p.Position = { 10, 391 };
+        p.Down = p.Pressed = true;
+        UI::Update(scene, p, screen);
+        CHECK(rv.DraggingScrollbar && rv.DraggingHorizontal && Near(rv.DragOffset, 6.0f, 0.01f));
+        p.Pressed = false;
+        p.Position.x = 10 + 48.0f;
+        UI::Update(scene, p, screen);
+        CHECK(Near(rv.ScrollPositionX, 100.0f, 0.1f));
+        p.Down = false;
+        p.Released = true;
+        UI::Update(scene, p, screen);
+        CHECK(!rv.DraggingScrollbar);
+
+        // New fields survive serialization.
+        auto loaded = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        auto& lg = loaded->GetRegistry().Get<UILayoutGroupComponent>(loaded->GetChildren(loaded->FindEntityByName("GridView"))[0]);
+        CHECK(lg.Direction == UILayoutDirection::Grid && lg.Columns == 2 && Near(lg.CellSize, glm::vec2(50, 50)));
+        auto& lv = loaded->GetRegistry().Get<UIScrollViewComponent>(loaded->FindEntityByName("RowView"));
+        CHECK(lv.Horizontal && !lv.Vertical);
+    }
+
+    void TestSmoothCurvesAndParticleForces()
+    {
+        // Smooth curves pass through every key, stay within neighbouring keys (monotone), and are flat at a peak.
+        Curve c;
+        c.Keys = { { 0.0f, 0.0f }, { 0.5f, 1.0f }, { 1.0f, 0.0f } };
+        Curve linear = c;
+        c.Smooth = true;
+        CHECK(Near(c.Evaluate(0.0f), 0.0f) && Near(c.Evaluate(0.5f), 1.0f) && Near(c.Evaluate(1.0f), 0.0f));
+        CHECK(c.Evaluate(0.25f) > linear.Evaluate(0.25f)); // eases into the peak
+        bool bounded = true;
+        for (int i = 0; i <= 100; ++i) bounded &= c.Evaluate(i / 100.0f) <= 1.0f + 1e-5f && c.Evaluate(i / 100.0f) >= -1e-5f;
+        CHECK(bounded);
+        CHECK(Near(c.Evaluate(0.49f), c.Evaluate(0.51f), 1e-3f)); // zero slope at the peak
+        Curve ramp;
+        ramp.Keys = { { 0.0f, 0.0f }, { 0.2f, 0.9f }, { 1.0f, 1.0f } };
+        ramp.Smooth = true;
+        bool monotone = true;
+        for (int i = 0; i < 100; ++i) monotone &= ramp.Evaluate((i + 1) / 100.0f) >= ramp.Evaluate(i / 100.0f) - 1e-6f;
+        CHECK(monotone);
+
+        // The smooth flag round trips; plain curves keep the old array format.
+        ParticleSystemComponent ps;
+        ps.SizeOverLifetime = c;
+        const ComponentInfo* info = ComponentRegistry::Find<ParticleSystemComponent>();
+        nlohmann::json j;
+        for (auto& f : info->Fields) j[f.Name] = FieldToJson(f, &ps, nullptr);
+        CHECK(j["Size Over Lifetime"].is_object() && j["Speed Over Lifetime"].is_array());
+        ParticleSystemComponent back;
+        for (auto& f : info->Fields) FieldFromJson(f, &back, j[f.Name], nullptr);
+        CHECK(back.SizeOverLifetime == c && !back.SpeedOverLifetime.Smooth);
+
+        // Force over lifetime accelerates; velocity over lifetime moves without accumulating; orbits keep the radius.
+        Scene scene("Forces");
+        auto& reg = scene.GetRegistry();
+        Entity systems[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            systems[i] = scene.CreateEntity("System");
+            auto& p = reg.Emplace<ParticleSystemComponent>(systems[i]);
+            p.RateOverTime = 0.0f;
+            p.StartSpeed = { 0.0f, 0.0f };
+            p.StartLifetime = { 10.0f, 10.0f };
+            p.Shape = ParticleShape::Point;
+        }
+        // References only after every component exists (the pool may move them while growing).
+        auto& force = reg.Get<ParticleSystemComponent>(systems[0]);
+        auto& vel = reg.Get<ParticleSystemComponent>(systems[1]);
+        auto& orbit = reg.Get<ParticleSystemComponent>(systems[2]);
+        force.ForceOverLifetime = true;
+        force.Force = { 2.0f, 0.0f, 0.0f };
+        vel.VelocityOverLifetime = true;
+        vel.LifetimeVelocity = { 0.0f, 0.0f, 3.0f };
+        orbit.VelocityOverLifetime = true;
+        orbit.OrbitalSpeed = 90.0f;
+        scene.UpdateTransforms();
+        ParticleSystems::Restart(scene);
+        for (auto* p : { &force, &vel, &orbit }) p->Emit(1);
+        ParticleSystems::Update(scene, 0.0f);
+        CHECK(force.Particles.size() == 1 && vel.Particles.size() == 1 && orbit.Particles.size() == 1);
+        if (force.Particles.size() != 1 || vel.Particles.size() != 1 || orbit.Particles.size() != 1) return;
+        orbit.Particles[0].Position = { 1.0f, 0.0f, 0.0f };
+        for (int i = 0; i < 60; ++i) ParticleSystems::Update(scene, 1.0f / 60.0f);
+        // x = a t^2 / 2 = 1 after one second (semi-implicit Euler: within a few percent), velocity 2.
+        CHECK(Near(force.Particles[0].Velocity.x, 2.0f, 1e-3f) && Near(force.Particles[0].Position.x, 1.0f, 0.05f));
+        CHECK(Near(vel.Particles[0].Position.z, 3.0f, 1e-3f) && Near(glm::length(vel.Particles[0].Velocity), 0.0f));
+        const Particle& op = orbit.Particles.back();
+        // 90 degrees per second for one second: (1, 0, 0) -> (0, 0, -1) (counter-clockwise seen from above).
+        CHECK(Near(glm::length(glm::vec2(op.Position.x, op.Position.z)), 1.0f, 1e-3f) && Near(op.Position.z, -1.0f, 1e-3f));
+    }
+
+    void TestAudioMeter()
+    {
+        // A full-scale sine has peak 1 and RMS 1/sqrt(2); RMS settles over ~0.3 s (one-pole), the peak resets on read.
+        AudioMeter meter;
+        const uint32_t rate = 48000, block = 480;
+        std::vector<float> samples(block * 2);
+        uint32_t t = 0;
+        for (int b = 0; b < 200; ++b) // 2 seconds
+        {
+            for (uint32_t i = 0; i < block; ++i, ++t)
+                samples[i * 2] = samples[i * 2 + 1] = std::sin(2.0f * 3.14159265f * 440.0f * t / rate);
+            meter.Process(samples.data(), block, 2, rate);
+        }
+        AudioLevel level = meter.Read();
+        CHECK(Near(level.Peak, 1.0f, 0.01f) && Near(level.Rms, 0.7071f, 0.01f));
+        CHECK(meter.Read().Peak == 0.0f); // reset by the previous read
+        // Silence decays the RMS: after 0.3 s it falls to about 1/e of the mean square.
+        std::fill(samples.begin(), samples.end(), 0.0f);
+        for (int b = 0; b < 30; ++b) meter.Process(samples.data(), block, 2, rate);
+        CHECK(Near(meter.Read().Rms, 0.7071f * std::sqrt(std::exp(-1.0f)), 0.01f));
+        // Without an audio device the mixer reports silence.
+        CHECK(AudioMixer::GetLevel(0).Peak >= 0.0f && AudioMixer::GetLevel(99).Rms == 0.0f);
+    }
+
+    // Icon images in an executable's GLFW_ICON group: (size, first bytes of each image).
+    std::vector<std::pair<int, std::vector<uint8_t>>> ReadExeIcons(const fs::path& exe)
+    {
+        std::vector<std::pair<int, std::vector<uint8_t>>> icons;
+        HMODULE module = LoadLibraryExW(exe.wstring().c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+        if (!module) return icons;
+        if (HRSRC group = FindResourceW(module, L"GLFW_ICON", MAKEINTRESOURCEW(14)))
+        {
+            auto* g = (const uint8_t*)LockResource(LoadResource(module, group));
+            uint16_t count = *(const uint16_t*)(g + 4);
+            for (uint16_t i = 0; i < count; ++i)
+            {
+                const uint8_t* e = g + 6 + 14 * i;
+                uint16_t id = *(const uint16_t*)(e + 12);
+                if (HRSRC icon = FindResourceW(module, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(3)))
+                {
+                    auto* data = (const uint8_t*)LockResource(LoadResource(module, icon));
+                    DWORD size = SizeofResource(module, icon);
+                    icons.push_back({ e[0] == 0 ? 256 : e[0], std::vector<uint8_t>(data, data + std::min<DWORD>(size, 64)) });
+                }
+            }
+        }
+        FreeLibrary(module);
+        return icons;
+    }
+
+    void TestAppIcon()
+    {
+        // Resizing fits non-square images with transparent margins and keeps edge colors (premultiplied filtering).
+        AppIcon::Image src;
+        src.Width = 64;
+        src.Height = 32;
+        src.Rgba.resize(64 * 32 * 4);
+        for (size_t i = 0; i < src.Rgba.size(); i += 4) { src.Rgba[i] = 255; src.Rgba[i + 1] = 0; src.Rgba[i + 2] = 0; src.Rgba[i + 3] = 255; }
+        auto small = AppIcon::Resize(src, 16);
+        auto px = [&](int x, int y) { return &small.Rgba[(y * 16 + x) * 4]; };
+        CHECK(small.Width == 16 && px(8, 0)[3] == 0 && px(8, 15)[3] == 0);    // letterbox rows are transparent
+        CHECK(px(8, 8)[0] == 255 && px(8, 8)[3] == 255 && px(8, 8)[1] == 0); // opaque red inside
+        CHECK(px(8, 4)[0] == 255);                                            // partial edge row keeps its red
+        auto ico = AppIcon::BuildIco(src);
+        CHECK(ico.size() > 6 && ico[2] == 1 && ico[4] == (uint8_t)std::size(AppIcon::kSizes));
+
+        // The engine's executables carry the default icon; Build writes the project icon into the game's copy.
+        wchar_t self[MAX_PATH];
+        GetModuleFileNameW(nullptr, self, MAX_PATH);
+        fs::path exeDir = fs::path(self).parent_path();
+        auto engineIcons = ReadExeIcons(exeDir / "DimensionGame.exe");
+        CHECK(engineIcons.size() == std::size(AppIcon::kSizes));
+        fs::path copy = fs::temp_directory_path() / "dimension_icon_test.exe";
+        std::error_code ec;
+        fs::copy_file(exeDir / "DimensionGame.exe", copy, fs::copy_options::overwrite_existing, ec);
+        CHECK(!ec && AppIcon::WriteToExecutable(copy, src));
+        auto written = ReadExeIcons(copy);
+        CHECK(written.size() == std::size(AppIcon::kSizes));
+        static const uint8_t png[] = { 0x89, 'P', 'N', 'G' };
+        bool allPng = !written.empty();
+        for (auto& [size, bytes] : written) allPng &= bytes.size() >= 4 && std::equal(png, png + 4, bytes.begin());
+        CHECK(allPng && written.back().first == 256 && written.front().first == 16);
+        CHECK(written.size() == engineIcons.size() && written[0].second != engineIcons[0].second);
+        fs::remove(copy, ec);
+    }
+
+    void TestMixerSnapshots()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_snapshot_project";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        AudioMixer::SetVolumeDb("Music", -6.0f);
+        AudioMixer::CaptureSnapshot("Normal");
+        AudioMixer::SetVolumeDb("Music", -30.0f);
+        AudioMixer::Groups()[0].LowPassHz = 500.0f;
+        AudioMixer::CaptureSnapshot("Paused");
+        CHECK(AudioMixer::Snapshots().size() == 2 && AudioMixer::FindSnapshot("Paused") == 1);
+
+        // Blend back to Normal over one second: halfway in dB, and the cutoff halfway in octaves (500 Hz -> open).
+        CHECK(AudioMixer::TransitionToSnapshot("Normal", 1.0f) && AudioMixer::IsTransitioning());
+        AudioMixer::Update(0.5f);
+        CHECK(Near(AudioMixer::GetVolumeDb("Music"), -18.0f, 0.01f));
+        CHECK(Near(AudioMixer::Groups()[0].LowPassHz, std::sqrt(500.0f * 22000.0f), 1.0f));
+        AudioMixer::Update(0.6f);
+        CHECK(!AudioMixer::IsTransitioning() && Near(AudioMixer::GetVolumeDb("Music"), -6.0f) && AudioMixer::Groups()[0].LowPassHz == 0.0f);
+        CHECK(AudioMixer::TransitionToSnapshot("Paused", 0.0f) && Near(AudioMixer::GetVolumeDb("Music"), -30.0f) && !AudioMixer::IsTransitioning());
+        CHECK(!AudioMixer::TransitionToSnapshot("Missing", 1.0f));
+
+        // Snapshots save with the project.
+        CHECK(Project::Save());
+        CHECK(Project::Open(dir));
+        auto& snaps = AudioMixer::Snapshots();
+        CHECK(snaps.size() == 2 && snaps[1].Name == "Paused" && snaps[1].Values.size() == 3);
+        CHECK(snaps[1].Values[0].Group == "Master" && Near(snaps[1].Values[0].LowPassHz, 500.0f) && Near(snaps[1].Values[1].VolumeDb, -30.0f));
+        fs::remove_all(dir, ec);
+    }
+
+    void TestSpotCookies()
+    {
+        // A light pointing down (-Y) with a 90 degree cone: the axis hits the cookie's center, the rim its edge circle.
+        glm::vec3 dir(0, -1, 0);
+        float cosOuter = std::cos(glm::radians(45.0f));
+        CHECK(Near(SpotCookieUV(dir, cosOuter, 0.0f, { 0, -3, 0 }), glm::vec2(0.5f)));
+        glm::vec3 right, up;
+        SpotCookieBasis(dir, right, up);
+        CHECK(Near(glm::dot(right, dir), 0.0f) && Near(glm::dot(up, dir), 0.0f) && Near(glm::dot(right, up), 0.0f));
+        // 45 degrees off the axis toward the basis' right and up vectors: the right and top edges of the texture.
+        CHECK(Near(SpotCookieUV(dir, cosOuter, 0.0f, dir + right), glm::vec2(1.0f, 0.5f)));
+        CHECK(Near(SpotCookieUV(dir, cosOuter, 0.0f, dir + up), glm::vec2(0.5f, 0.0f)));
+        // Rolling the light a quarter turn carries the cookie with it: the point at the basis' right now samples the
+        // bottom edge.
+        CHECK(Near(SpotCookieUV(dir, cosOuter, glm::half_pi<float>(), dir + right), glm::vec2(0.5f, 1.0f)));
+        // Halfway out from the axis in angle tangent: a quarter of the way in from the center.
+        CHECK(Near(SpotCookieUV(dir, cosOuter, 0.0f, dir + right * 0.5f), glm::vec2(0.75f, 0.5f)));
+    }
+
+    void TestSliderJoints()
+    {
+        // ---- 3D: a body on a vertical slider falls to its lower limit; a motor pushes another along +Axis.
+        {
+            Scene scene("Sliders3D");
+            auto& reg = scene.GetRegistry();
+            Entity drop = scene.CreateEntity("Drop");
+            reg.Get<TransformComponent>(drop).Position = { 0, 5, 0 };
+            reg.Get<TransformComponent>(drop).Rotation = { 0, 0, glm::radians(90.0f) }; // local X axis points up
+            reg.Emplace<RigidbodyComponent>(drop).Mass = 1.0f;
+            reg.Emplace<BoxColliderComponent>(drop);
+            Entity motor = scene.CreateEntity("Motor");
+            reg.Get<TransformComponent>(motor).Position = { 10, 5, 0 };
+            reg.Emplace<RigidbodyComponent>(motor).Mass = 1.0f;
+            reg.Emplace<BoxColliderComponent>(motor);
+            {
+                auto& j = reg.Emplace<JointComponent>(drop);
+                j.Type = JointType::Slider;
+                j.Axis = { 1, 0, 0 };
+                j.UseLimits = true;
+                j.SliderMin = -2.0f;
+                j.SliderMax = 1.0f;
+            }
+            {
+                auto& j = reg.Emplace<JointComponent>(motor);
+                j.Type = JointType::Slider;
+                j.Axis = { 0, 0, 1 }; // horizontal, so gravity does not act along it
+                j.UseMotor = true;
+                j.MotorSpeed = 2.0f;
+                j.MotorMaxTorque = 1000.0f;
+                j.BreakForce = 100.0f; // holds the 9.81 N weight; the motor's own force does not count
+            }
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            for (int i = 0; i < 120; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            auto& dp = reg.Get<TransformComponent>(drop).Position;
+            CHECK(Near(dp.y, 3.0f, 0.05f) && Near(dp.x, 0.0f, 0.02f) && Near(dp.z, 0.0f, 0.02f)); // stopped at -2
+            auto& mp = reg.Get<TransformComponent>(motor).Position;
+            CHECK(Near(mp.z, 4.0f, 0.2f) && Near(mp.y, 5.0f, 0.05f)); // 2 units/s for 2 s, held up by the slider
+            auto& mj = reg.Get<JointComponent>(motor);
+            CHECK(!mj.Broken && Near(mj.CurrentForce, 9.81f, 1.5f));
+            // Reversing the motor while playing.
+            mj.MotorSpeed = -4.0f;
+            for (int i = 0; i < 30; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(Near(reg.Get<TransformComponent>(motor).Position.z, 2.0f, 0.25f));
+            scene.OnRuntimeStop();
+        }
+
+        // ---- 2D: the same with a prismatic joint.
+        {
+            Scene scene("Sliders2D");
+            auto& reg = scene.GetRegistry();
+            Entity drop = scene.CreateEntity("Drop");
+            reg.Get<TransformComponent>(drop).Position = { 0, 5, 0 };
+            reg.Emplace<Rigidbody2DComponent>(drop);
+            reg.Emplace<BoxCollider2DComponent>(drop);
+            Entity motor = scene.CreateEntity("Motor");
+            reg.Get<TransformComponent>(motor).Position = { 10, 5, 0 };
+            reg.Emplace<Rigidbody2DComponent>(motor);
+            reg.Emplace<BoxCollider2DComponent>(motor);
+            {
+                auto& j = reg.Emplace<Joint2DComponent>(drop);
+                j.Type = Joint2DType::Slider;
+                j.Axis = { 0, 1 };
+                j.UseLimits = true;
+                j.LowerTranslation = -2.0f;
+                j.UpperTranslation = 1.0f;
+            }
+            {
+                auto& j = reg.Emplace<Joint2DComponent>(motor);
+                j.Type = Joint2DType::Slider;
+                j.Axis = { 1, 0 };
+                j.UseMotor = true;
+                j.MotorSpeed = 2.0f;
+                j.MotorMaxTorque = 1000.0f;
+                j.BreakForce = 100.0f;
+            }
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            for (int i = 0; i < 120; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            auto& dp = reg.Get<TransformComponent>(drop).Position;
+            CHECK(Near(dp.y, 3.0f, 0.05f) && Near(dp.x, 0.0f, 0.02f));
+            auto& mp = reg.Get<TransformComponent>(motor).Position;
+            CHECK(Near(mp.x, 14.0f, 0.2f) && Near(mp.y, 5.0f, 0.05f));
+            auto& mj = reg.Get<Joint2DComponent>(motor);
+            CHECK(!mj.Broken && Near(mj.CurrentForce, 9.81f, 1.5f));
+            std::printf("  3D/2D slider forces ok (2D holding force %.2f N)\n", mj.CurrentForce);
+            scene.OnRuntimeStop();
+        }
+    }
+
+    void TestLineCapsAndJoins()
+    {
+        RibbonParams params;
+        params.FaceCamera = false;
+        params.Normal = { 0, 0, 1 };
+        // A straight line with round caps: one segment plus two half discs of 4 triangles each, every fan vertex
+        // half a width from its end, and the caps reaching past the ends.
+        std::vector<RibbonPoint> straight{ { { 0, 0, 0 }, 0.4f, glm::vec4(1) }, { { 2, 0, 0 }, 0.4f, glm::vec4(1) } };
+        params.CapVertices = 3;
+        auto capped = BuildRibbon(straight, params);
+        CHECK(capped.size() == 1 + 2 * 4);
+        bool onCircle = true;
+        float minX = 1e9f, maxX = -1e9f;
+        for (size_t i = 1; i < capped.size(); ++i)
+            for (int c = 1; c < 4; ++c)
+            {
+                onCircle &= Near(glm::distance(capped[i].P[c], capped[i].P[0]), 0.2f, 1e-4f);
+                minX = std::min(minX, capped[i].P[c].x);
+                maxX = std::max(maxX, capped[i].P[c].x);
+            }
+        CHECK(onCircle && Near(minX, -0.2f, 1e-4f) && Near(maxX, 2.2f, 1e-4f));
+
+        // A right-angle corner with rounded joins: two square-ended segments and a 2-triangle fan on each side.
+        std::vector<RibbonPoint> corner{ { { 0, 0, 0 }, 0.4f, glm::vec4(1) }, { { 1, 0, 0 }, 0.4f, glm::vec4(1) }, { { 1, 1, 0 }, 0.4f, glm::vec4(1) } };
+        params.CapVertices = 0;
+        params.CornerVertices = 1;
+        auto joined = BuildRibbon(corner, params);
+        CHECK(joined.size() == 2 + 2 * 2);
+        // Square segment ends (no miter): the first segment ends exactly at x = 1, half a width either side.
+        CHECK(Near(joined[0].P[2].x, 1.0f) && Near(joined[0].P[3].x, 1.0f) && Near(std::abs(joined[0].P[2].y), 0.2f));
+        // The outer fan (below-right of the left turn) has its middle vertex on the diagonal, 0.2 from the corner.
+        bool diagonal = false;
+        for (size_t i = 2; i < joined.size(); ++i)
+            for (int c = 1; c < 4; ++c)
+            {
+                glm::vec3 d = joined[i].P[c] - glm::vec3(1, 0, 0);
+                diagonal |= Near(glm::length(d), 0.2f, 1e-4f) && Near(d.x, 0.1414f, 1e-3f) && Near(d.y, -0.1414f, 1e-3f);
+            }
+        CHECK(diagonal);
+        // Mitered joins are unchanged when both counts are 0.
+        params.CornerVertices = 0;
+        CHECK(BuildRibbon(corner, params).size() == 2);
+    }
+
+    void TestComponentOrder()
+    {
+        Scene scene("Order");
+        Entity e = scene.CreateEntity("Thing");
+        auto& reg = scene.GetRegistry();
+        reg.Emplace<MeshRendererComponent>(e);
+        reg.Emplace<PointLightComponent>(e);
+        reg.Emplace<AudioSourceComponent>(e);
+        auto names = [&](Scene& s, Entity x) {
+            std::vector<std::string> n;
+            for (auto* i : ComponentRegistry::GetDisplayOrder(s, x)) n.push_back(i->Name);
+            return n;
+        };
+        auto before = names(scene, e);
+        CHECK(before.size() == 4 && before[0] == "Transform");
+        // Move the last component to the top: it stops below Transform, which never moves.
+        std::string last = before.back();
+        CHECK(ComponentRegistry::MoveComponent(scene, e, last, -1));
+        CHECK(ComponentRegistry::MoveComponent(scene, e, last, -1));
+        CHECK(!ComponentRegistry::MoveComponent(scene, e, last, -1));
+        CHECK(!ComponentRegistry::MoveComponent(scene, e, "Transform", 1));
+        auto after = names(scene, e);
+        CHECK(after[0] == "Transform" && after[1] == last && after[2] == before[1] && after[3] == before[2]);
+        // The order saves with the scene; a component added later goes to the end.
+        auto loaded = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        Entity le = loaded->FindEntityByName("Thing");
+        CHECK(names(*loaded, le) == after);
+        loaded->GetRegistry().Emplace<CameraComponent>(le);
+        auto withCamera = names(*loaded, le);
+        CHECK(withCamera.size() == 5 && withCamera.back() == "Camera");
+    }
+
     const char* g_Filter = nullptr; // run only tests whose name contains this (first command-line argument)
 
     void Run(const char* name, void (*fn)())
@@ -2498,6 +3009,16 @@ int main(int argc, char** argv)
     Run("Multiple scripts per entity", TestMultipleScripts);
     Run("Animator state machine", TestAnimatorStateMachine);
     Run("Blend trees and animation events", TestBlendTreesAndEvents);
+    Run("Material slots and soft shadows", TestMaterialSlotsAndSoftShadows);
+    Run("Component order", TestComponentOrder);
+    Run("Line caps and joins", TestLineCapsAndJoins);
+    Run("Slider joints", TestSliderJoints);
+    Run("Spot light cookies", TestSpotCookies);
+    Run("Audio mixer snapshots", TestMixerSnapshots);
+    Run("Application icon", TestAppIcon);
+    Run("Audio level meter", TestAudioMeter);
+    Run("Smooth curves and particle forces", TestSmoothCurvesAndParticleForces);
+    Run("UI grid and horizontal scroll", TestUIGridAndHorizontalScroll);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

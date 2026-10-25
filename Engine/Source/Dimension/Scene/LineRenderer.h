@@ -27,6 +27,8 @@ namespace Dimension
         LineTextureMode TextureMode = LineTextureMode::Stretch;
         LineBlend Blend = LineBlend::Alpha;
         int32_t SortingOrder = 0;
+        int32_t CornerVertices = 0; // > 0: rounded joins with this many extra vertices per corner (0 = mitered)
+        int32_t EndCapVertices = 0; // > 0: rounded ends with this many extra vertices (0 = square)
     };
 
     // Ribbon left behind a moving object (Unity's TrailRenderer). Points are recorded in world space while playing.
@@ -42,6 +44,8 @@ namespace Dimension
         LineTextureMode TextureMode = LineTextureMode::Stretch;
         LineBlend Blend = LineBlend::Alpha;
         int32_t SortingOrder = 0;
+        int32_t CornerVertices = 0;
+        int32_t EndCapVertices = 0;
 
         // Runtime state (not serialized): oldest first.
         struct Point { glm::vec3 Position; float Time; };
@@ -58,7 +62,8 @@ namespace Dimension
     };
 
     // Four corners of one ribbon segment, in the sprite batcher's corner order
-    // (start-left, start-right, end-right, end-left). Adjacent segments share their edge.
+    // (start-left, start-right, end-right, end-left). Adjacent mitered segments share their edge. Rounded joins and caps
+    // are triangle fans, emitted as quads whose last two corners coincide.
     struct RibbonQuad
     {
         glm::vec3 P[4];
@@ -75,6 +80,8 @@ namespace Dimension
         glm::vec3 Normal{ 0.0f, 0.0f, 1.0f };
         bool Loop = false;
         LineTextureMode TextureMode = LineTextureMode::Stretch;
+        int CornerVertices = 0; // > 0: round joins (fans of CornerVertices + 1 triangles) instead of miters
+        int CapVertices = 0;    // > 0: round caps (half discs of CapVertices + 1 triangles) on open ribbons
     };
 
     // Expands a polyline into joined quads. Points closer than 1e-5 to the previous one are skipped.

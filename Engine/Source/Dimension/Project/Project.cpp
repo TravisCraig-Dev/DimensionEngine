@@ -37,6 +37,7 @@ namespace Dimension
                 s_Config.Fullscreen = j.value("fullscreen", false);
                 s_Config.VSync = j.value("vsync", true);
                 s_Config.BuildFolder = j.value("buildFolder", std::string());
+                s_Config.Icon = Guid(j.value("icon", uint64_t(0)));
                 if (j.contains("audioMixer") && j["audioMixer"].is_array() && !j["audioMixer"].empty())
                 {
                     s_Config.MixerGroups.clear();
@@ -51,6 +52,14 @@ namespace Dimension
                         group.LowPassHz = g.value("lowPassHz", 0.0f);
                         s_Config.MixerGroups.push_back(group);
                     }
+                }
+                for (auto& sj : j.value("audioSnapshots", nlohmann::json::array()))
+                {
+                    AudioMixerSnapshot snap;
+                    snap.Name = sj.value("name", snap.Name);
+                    for (auto& v : sj.value("values", nlohmann::json::array()))
+                        snap.Values.push_back({ v.value("group", std::string()), v.value("volumeDb", 0.0f), v.value("lowPassHz", 0.0f) });
+                    s_Config.MixerSnapshots.push_back(std::move(snap));
                 }
                 if (j.contains("physicsLayers") && j["physicsLayers"].is_array())
                     for (size_t i = 0; i < j["physicsLayers"].size() && i < ProjectConfig::kMaxLayers; ++i)
@@ -82,9 +91,17 @@ namespace Dimension
                               { "solo", g.Solo }, { "lowPassHz", g.LowPassHz } });
         nlohmann::json buildScenes = nlohmann::json::array();
         for (AssetHandle h : s_Config.BuildScenes) buildScenes.push_back((uint64_t)h);
+        nlohmann::json snapshots = nlohmann::json::array();
+        for (auto& snap : s_Config.MixerSnapshots)
+        {
+            nlohmann::json values = nlohmann::json::array();
+            for (auto& v : snap.Values) values.push_back({ { "group", v.Group }, { "volumeDb", v.VolumeDb }, { "lowPassHz", v.LowPassHz } });
+            snapshots.push_back({ { "name", snap.Name }, { "values", values } });
+        }
         nlohmann::json j{ { "name", s_Config.Name },
                           { "buildScenes", buildScenes },
                           { "audioMixer", mixer },
+                          { "audioSnapshots", snapshots },
                           { "startScene", (uint64_t)s_Config.StartScene },
                           { "windowWidth", s_Config.WindowWidth },
                           { "windowHeight", s_Config.WindowHeight },
@@ -92,6 +109,7 @@ namespace Dimension
                           { "fullscreen", s_Config.Fullscreen },
                           { "vsync", s_Config.VSync },
                           { "buildFolder", s_Config.BuildFolder },
+                          { "icon", (uint64_t)s_Config.Icon },
                           { "physicsLayers", s_Config.PhysicsLayers },
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "engineVersion", "0.1.0" } };

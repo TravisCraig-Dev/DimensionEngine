@@ -11,11 +11,13 @@ namespace Dimension
         bool operator==(const CurveKey&) const = default;
     };
 
-    // Piecewise-linear curve over normalized time (a compact take on Unity's AnimationCurve).
+    // Curve over normalized time (a compact take on Unity's AnimationCurve): piecewise linear, or Smooth, a monotone
+    // cubic through the keys (tangents chosen automatically, flat at peaks, so it never overshoots a key).
     // Values before the first key / after the last key are held.
     struct Curve
     {
         std::vector<CurveKey> Keys;
+        bool Smooth = false;
 
         static Curve Constant(float v) { return { { { 0.0f, v }, { 1.0f, v } } }; }
         static Curve Linear(float from, float to) { return { { { 0.0f, from }, { 1.0f, to } } }; }

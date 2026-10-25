@@ -8,7 +8,7 @@ struct PointLight
     vec4 PositionRange;  // xyz position, w range
     vec4 Color;          // rgb color * intensity, w: shadow slot + 1 (0 = no shadows)
     vec4 Direction;      // spot lights: xyz direction, w cos(outer half angle); point lights: w = -2
-    vec4 Cone;           // x: cos(inner half angle)
+    vec4 Cone;           // x: cos(inner half angle), y: cookie texture index + 1 (0 = none), z: cookie roll (radians)
 };
 
 #define MAX_POINT_LIGHTS 32
@@ -50,6 +50,8 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 PointShadowParams[MAX_POINT_SHADOWS];       // x near, y far (range), z bias (world units), w atlas index
     mat4 InvProj;
     vec4 AOParams;       // x 1 = SSAO enabled (2 = debug view), y AO texture index, zw 1 / framebuffer size
+    vec4 CascadeDepth;   // world depth covered by each cascade's [0,1] depth range
+    vec4 SoftShadowParams; // x 1 = PCSS soft shadows, y tan(light angular radius), z max filter radius (tile texels)
     ReflectionProbe Probes[MAX_REFLECTION_PROBES]; // Counts.y in use
     PointLight PointLights[MAX_POINT_LIGHTS];
 } uScene;
@@ -105,7 +107,20 @@ vec4 SampleTexture(uint index, vec2 uv)
     return texture(uTextures[nonuniformEXT(index)], uv);
 }
 
-// Shadow factor from one cascade (3x3 PCF), or -1 when the point is outside that cascade's tile.
+// Interleaved gradient noise (Jimenez 2014) over shadow-map coordinates: rotates the soft shadow sample disc.
+// Seeded in light space (not screen space) so it stays put as the camera moves; usable from any stage.
+float ShadowNoise(vec2 coord) { return fract(52.9829189 * fract(dot(floor(coord), vec2(0.06711056, 0.00583715)))); }
+
+// Vogel disk: sample i of n, evenly spread over the unit disc and rotated by `phi`.
+vec2 VogelDisk(int i, int n, float phi)
+{
+    float r = sqrt((float(i) + 0.5) / float(n));
+    float theta = float(i) * 2.39996323 + phi;
+    return vec2(cos(theta), sin(theta)) * r;
+}
+
+// Shadow factor from one cascade (3x3 PCF, or PCSS when soft shadows are on), or -1 when the point is outside
+// that cascade's tile.
 float SampleCascade(int c, vec3 worldPos, vec3 normal)
 {
     // Normal offset (in this cascade's texels) reduces acne on surfaces at grazing angles.
@@ -118,13 +133,51 @@ float SampleCascade(int c, vec3 worldPos, vec3 normal)
     vec2 texel = vec2(1.0) / vec2(textureSize(uTextures[nonuniformEXT(map)], 0));
     float margin = texel.x * 4.0; // 2 tile texels: keeps the PCF footprint inside the tile
     if (uv.x <= margin || uv.y <= margin || uv.x >= 1.0 - margin || uv.y >= 1.0 - margin || p.z >= 1.0) return -1.0;
-    vec2 atlasUV = (vec2(float(c & 1), float(c >> 1)) + uv) * 0.5;
+    vec2 tileOrigin = vec2(float(c & 1), float(c >> 1));
+    vec2 atlasUV = (tileOrigin + uv) * 0.5;
+    float receiver = p.z - uScene.ShadowParams.z;
+
+    if (uScene.SoftShadowParams.x > 0.5)
+    {
+        // Percentage-closer soft shadows: the penumbra widens with the distance from the blocker to the receiver,
+        // like a sun of finite size. Distances are in world units (depth range * [0,1] depth, texel size).
+        vec2 tileTexel = texel * 2.0;
+        vec2 lo = (tileOrigin + tileTexel) * 0.5, hi = (tileOrigin + 1.0 - tileTexel) * 0.5; // stay inside the tile
+        float range = uScene.CascadeDepth[c];
+        float tanAngle = uScene.SoftShadowParams.y;
+        float maxRadius = uScene.SoftShadowParams.z;
+        float phi = ShadowNoise(atlasUV / texel * 4.0) * 6.28318530718;
+
+        // 1. Blocker search over the area that could shade this point.
+        float searchTexels = clamp(tanAngle * min(p.z * range, 20.0) / uScene.CascadeTexel[c], 1.5, maxRadius);
+        float blockerSum = 0.0, blockers = 0.0;
+        for (int i = 0; i < 16; ++i)
+        {
+            vec2 suv = clamp(atlasUV + VogelDisk(i, 16, phi) * searchTexels * texel, lo, hi);
+            float d = texture(uTextures[nonuniformEXT(map)], suv).r;
+            if (d < receiver) { blockerSum += d; blockers += 1.0; }
+        }
+        if (blockers == 0.0) return 1.0;
+        float blocker = blockerSum / blockers;
+
+        // 2. Penumbra width from the average blocker depth, then a PCF filter of that size.
+        float penumbraWorld = (receiver - blocker) * range * tanAngle;
+        float filterTexels = clamp(penumbraWorld / uScene.CascadeTexel[c], 1.0, maxRadius);
+        float lit = 0.0;
+        for (int i = 0; i < 24; ++i)
+        {
+            vec2 suv = clamp(atlasUV + VogelDisk(i, 24, phi) * filterTexels * texel, lo, hi);
+            lit += receiver <= texture(uTextures[nonuniformEXT(map)], suv).r ? 1.0 : 0.0;
+        }
+        return lit / 24.0;
+    }
+
     float lit = 0.0;
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
         {
             float d = texture(uTextures[nonuniformEXT(map)], atlasUV + vec2(x, y) * texel).r;
-            lit += (p.z - uScene.ShadowParams.z) <= d ? 1.0 : 0.0;
+            lit += receiver <= d ? 1.0 : 0.0;
         }
     return lit / 9.0;
 }
@@ -172,6 +225,19 @@ vec3 CascadeDebugColor(vec3 worldPos)
     if (c == 2) return vec3(0.45, 0.6, 1.0);
     if (c == 3) return vec3(1.0, 1.0, 0.4);
     return vec3(1.0);
+}
+
+// Spot light cookie coordinates (mirrors SpotCookieUV in SceneRenderer.cpp).
+vec2 SpotCookieUV(vec3 dir, float cosOuter, float roll, vec3 toPoint)
+{
+    vec3 d = normalize(dir), p = normalize(toPoint);
+    vec3 ref = abs(d.y) > 0.99 ? vec3(0, 0, 1) : vec3(0, 1, 0);
+    vec3 right = normalize(cross(d, ref)), up = cross(right, d);
+    float tanOuter = sqrt(max(1.0 - cosOuter * cosOuter, 1e-6)) / max(cosOuter, 1e-4);
+    vec2 q = vec2(dot(p, right), dot(p, up)) / (max(dot(p, d), 1e-4) * tanOuter);
+    float c = cos(roll), s = sin(roll);
+    q = vec2(c * q.x + s * q.y, -s * q.x + c * q.y);
+    return vec2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
 }
 
 // Point/spot light shadow from the shadow atlas (rows = shadowed lights, columns = cube faces; spot lights use

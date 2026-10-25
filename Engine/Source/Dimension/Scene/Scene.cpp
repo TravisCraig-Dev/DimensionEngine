@@ -497,6 +497,7 @@ namespace Dimension
         UpdateAnimators(dt);
         ParticleSystems::Update(*this, dt);
         TrailRenderers::Update(*this, m_Time);
+        AudioMixer::Update(dt);
         m_Audio->Update();
         FlushDeferredDestroys();
     }

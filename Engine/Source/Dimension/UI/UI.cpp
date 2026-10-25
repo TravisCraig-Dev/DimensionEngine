@@ -28,6 +28,14 @@ namespace Dimension::UI
             return reg.Has<UIRectComponent>(e) && reg.Get<TransformComponent>(e).ActiveInHierarchy;
         }
 
+        // Columns of a grid layout whose inner width is `innerWidth` canvas units.
+        int GridColumns(const UILayoutGroupComponent& group, float innerWidth)
+        {
+            if (group.Columns > 0) return group.Columns;
+            float step = std::max(group.CellSize.x + group.Spacing, 1.0f);
+            return std::max(1, (int)std::floor((innerWidth + group.Spacing) / step + 1e-4f));
+        }
+
         // Children of a layout group are stacked along the main axis using their Size.
         void LayoutGroupChildren(LayoutContext& ctx, Entity e, const UILayoutGroupComponent& group, glm::vec2 min, glm::vec2 max,
                                  glm::vec2 clipMin, glm::vec2 clipMax)
@@ -37,6 +45,9 @@ namespace Dimension::UI
             glm::vec2 innerMin = min + glm::vec2(group.Padding.x, group.Padding.y) * s;
             glm::vec2 innerMax = max - glm::vec2(group.Padding.z, group.Padding.w) * s;
             bool vertical = group.Direction == UILayoutDirection::Vertical;
+            bool grid = group.Direction == UILayoutDirection::Grid;
+            int columns = grid ? GridColumns(group, (innerMax.x - innerMin.x) / s) : 0;
+            int index = 0;
             float cursor = vertical ? innerMin.y : innerMin.x;
             for (Entity c : ctx.TheScene.GetChildren(e))
             {
@@ -47,7 +58,14 @@ namespace Dimension::UI
                 }
                 auto& r = reg.Get<UIRectComponent>(c);
                 glm::vec2 cmin, cmax;
-                if (vertical)
+                if (grid)
+                {
+                    int col = index % columns, row = index / columns;
+                    ++index;
+                    cmin = innerMin + glm::vec2(col * (group.CellSize.x + group.Spacing), row * (group.CellSize.y + group.Spacing)) * s;
+                    cmax = cmin + group.CellSize * s;
+                }
+                else if (vertical)
                 {
                     float h = r.Size.y * s;
                     float w = group.StretchChildren ? innerMax.x - innerMin.x : r.Size.x * s;
@@ -67,10 +85,20 @@ namespace Dimension::UI
             }
         }
 
-        // Main-axis extent a layout group needs for its children (screen pixels).
-        float LayoutGroupExtent(LayoutContext& ctx, Entity e, const UILayoutGroupComponent& group)
+        // Main-axis extent a layout group needs for its children (screen pixels): height for columns and grids
+        // (`width` is the group's width in pixels, which sets a flexible grid's column count), width for rows.
+        float LayoutGroupExtent(LayoutContext& ctx, Entity e, const UILayoutGroupComponent& group, float width)
         {
             auto& reg = ctx.TheScene.GetRegistry();
+            if (group.Direction == UILayoutDirection::Grid)
+            {
+                int n = 0;
+                for (Entity c : ctx.TheScene.GetChildren(e)) n += HasRect(reg, c) ? 1 : 0;
+                int columns = GridColumns(group, width / ctx.Scale - group.Padding.x - group.Padding.z);
+                int rows = (n + columns - 1) / columns;
+                float h = group.Padding.y + group.Padding.w + rows * group.CellSize.y + std::max(0, rows - 1) * group.Spacing;
+                return h * ctx.Scale;
+            }
             bool vertical = group.Direction == UILayoutDirection::Vertical;
             float total = vertical ? group.Padding.y + group.Padding.w : group.Padding.x + group.Padding.z;
             int n = 0;
@@ -125,7 +153,7 @@ namespace Dimension::UI
                 glm::vec2 viewMin = rect->ComputedMin, viewMax = rect->ComputedMax;
                 glm::vec2 innerClipMin = glm::max(clipMin, viewMin), innerClipMax = glm::min(clipMax, viewMax);
                 bool first = true;
-                view->MaxScroll = 0.0f;
+                view->MaxScroll = view->MaxScrollX = 0.0f;
                 for (Entity c : ctx.TheScene.GetChildren(e))
                 {
                     if (!first || !HasRect(reg, c))
@@ -139,13 +167,20 @@ namespace Dimension::UI
                     glm::vec2 anchorMin = viewMin + cr.AnchorMin * parentSize, anchorMax = viewMin + cr.AnchorMax * parentSize;
                     glm::vec2 size = (anchorMax - anchorMin) + cr.Size * s;
                     glm::vec2 cmin = glm::mix(anchorMin, anchorMax, cr.Pivot) + cr.Position * s - cr.Pivot * size;
-                    // Content grows downward from its top edge.
-                    if (auto* cg = reg.TryGet<UILayoutGroupComponent>(c); cg && cg->Direction == UILayoutDirection::Vertical)
-                        size.y = std::max(size.y, LayoutGroupExtent(ctx, c, *cg));
-                    float maxScroll = std::max(0.0f, (cmin.y + size.y - viewMax.y) / s);
+                    // Content grows downward from its top edge (columns, grids) or rightward from its left edge (rows).
+                    if (auto* cg = reg.TryGet<UILayoutGroupComponent>(c))
+                    {
+                        if (cg->Direction == UILayoutDirection::Horizontal) size.x = std::max(size.x, LayoutGroupExtent(ctx, c, *cg, size.x));
+                        else size.y = std::max(size.y, LayoutGroupExtent(ctx, c, *cg, size.x));
+                    }
+                    float maxScroll = view->Vertical ? std::max(0.0f, (cmin.y + size.y - viewMax.y) / s) : 0.0f;
+                    float maxScrollX = view->Horizontal ? std::max(0.0f, (cmin.x + size.x - viewMax.x) / s) : 0.0f;
                     view->MaxScroll = maxScroll;
+                    view->MaxScrollX = maxScrollX;
                     view->ScrollPosition = std::clamp(view->ScrollPosition, 0.0f, maxScroll);
+                    view->ScrollPositionX = std::clamp(view->ScrollPositionX, 0.0f, maxScrollX);
                     cmin.y -= view->ScrollPosition * s;
+                    cmin.x -= view->ScrollPositionX * s;
                     glm::vec2 cmax = cmin + size;
                     LayoutNode(ctx, c, viewMin, viewMax, innerClipMin, innerClipMax, &cmin, &cmax);
                 }
@@ -174,25 +209,40 @@ namespace Dimension::UI
             return p.x >= mn.x && p.y >= mn.y && p.x <= mx.x && p.y <= mx.y;
         }
 
-        // Vertical scrollbar along a scroll view's right edge (screen pixels); false while the content fits.
+        // Scrollbar along a scroll view's right edge (vertical) or bottom edge (horizontal), in screen pixels; false
+        // while the content fits on that axis. When both show, each stops short of the corner they share.
         struct ScrollbarGeometry
         {
             glm::vec2 TrackMin, TrackMax, HandleMin, HandleMax;
         };
 
-        bool GetScrollbar(const UIRectComponent& r, const UIScrollViewComponent& view, ScrollbarGeometry& g)
+        bool GetScrollbar(const UIRectComponent& r, const UIScrollViewComponent& view, ScrollbarGeometry& g, bool horizontal = false)
         {
-            if (!view.Scrollbar || view.MaxScroll <= 0.0f) return false;
+            float maxScroll = horizontal ? view.MaxScrollX : view.MaxScroll;
+            if (!view.Scrollbar || maxScroll <= 0.0f) return false;
             float s = r.ComputedScale, inset = 4.0f * s, w = std::max(2.0f, view.ScrollbarWidth * s);
-            g.TrackMin = { r.ComputedMax.x - inset - w, r.ComputedMin.y + inset };
-            g.TrackMax = { r.ComputedMax.x - inset, r.ComputedMax.y - inset };
-            float trackH = g.TrackMax.y - g.TrackMin.y;
-            if (trackH <= 0.0f) return false;
-            float viewH = (r.ComputedMax.y - r.ComputedMin.y) / s; // canvas units, like MaxScroll
-            float handleH = std::clamp(trackH * viewH / (viewH + view.MaxScroll), std::min(24.0f * s, trackH), trackH);
-            float t = std::clamp(view.ScrollPosition / view.MaxScroll, 0.0f, 1.0f);
-            g.HandleMin = { g.TrackMin.x, g.TrackMin.y + (trackH - handleH) * t };
-            g.HandleMax = { g.TrackMax.x, g.HandleMin.y + handleH };
+            int axis = horizontal ? 0 : 1;
+            bool other = horizontal ? view.MaxScroll > 0.0f : view.MaxScrollX > 0.0f; // the other bar takes the corner
+            float cornerGap = other ? w + inset : 0.0f;
+            if (horizontal)
+            {
+                g.TrackMin = { r.ComputedMin.x + inset, r.ComputedMax.y - inset - w };
+                g.TrackMax = { r.ComputedMax.x - inset - cornerGap, r.ComputedMax.y - inset };
+            }
+            else
+            {
+                g.TrackMin = { r.ComputedMax.x - inset - w, r.ComputedMin.y + inset };
+                g.TrackMax = { r.ComputedMax.x - inset, r.ComputedMax.y - inset - cornerGap };
+            }
+            float track = g.TrackMax[axis] - g.TrackMin[axis];
+            if (track <= 0.0f) return false;
+            float viewLen = (r.ComputedMax[axis] - r.ComputedMin[axis]) / s; // canvas units, like MaxScroll
+            float handle = std::clamp(track * viewLen / (viewLen + maxScroll), std::min(24.0f * s, track), track);
+            float t = std::clamp((horizontal ? view.ScrollPositionX : view.ScrollPosition) / maxScroll, 0.0f, 1.0f);
+            g.HandleMin = g.TrackMin;
+            g.HandleMax = g.TrackMax;
+            g.HandleMin[axis] = g.TrackMin[axis] + (track - handle) * t;
+            g.HandleMax[axis] = g.HandleMin[axis] + handle;
             return true;
         }
 
@@ -441,20 +491,28 @@ namespace Dimension::UI
         }
 
         if (input.Pressed)
-            for (auto it = order.rbegin(); it != order.rend(); ++it)
+            for (auto it = order.rbegin(); it != order.rend() && input.Pressed; ++it)
             {
                 auto* view = reg.TryGet<UIScrollViewComponent>(*it);
-                ScrollbarGeometry g;
                 auto& r = reg.Get<UIRectComponent>(*it);
-                if (!view || !GetScrollbar(r, *view, g) || !Contains(r, pointer.Position)) continue;
-                glm::vec2 grow(3.0f * r.ComputedScale, 0.0f); // a slightly wider hit area
-                if (!InBox(pointer.Position, g.TrackMin - grow, g.TrackMax + grow)) continue;
-                // Grab the handle where it was clicked; clicking the track centres the handle on the pointer.
-                view->DraggingScrollbar = true;
-                view->DragOffset = InBox(pointer.Position, g.HandleMin - grow, g.HandleMax + grow) ? pointer.Position.y - g.HandleMin.y
-                                                                                                    : (g.HandleMax.y - g.HandleMin.y) * 0.5f;
-                input.Pressed = false;
-                break;
+                if (!view || !Contains(r, pointer.Position)) continue;
+                for (bool horizontal : { false, true })
+                {
+                    ScrollbarGeometry g;
+                    if (!GetScrollbar(r, *view, g, horizontal)) continue;
+                    int axis = horizontal ? 0 : 1;
+                    glm::vec2 grow(0.0f);
+                    grow[1 - axis] = 3.0f * r.ComputedScale; // a slightly wider hit area
+                    if (!InBox(pointer.Position, g.TrackMin - grow, g.TrackMax + grow)) continue;
+                    // Grab the handle where it was clicked; clicking the track centres the handle on the pointer.
+                    view->DraggingScrollbar = true;
+                    view->DraggingHorizontal = horizontal;
+                    view->DragOffset = InBox(pointer.Position, g.HandleMin - grow, g.HandleMax + grow)
+                                           ? pointer.Position[axis] - g.HandleMin[axis]
+                                           : (g.HandleMax[axis] - g.HandleMin[axis]) * 0.5f;
+                    input.Pressed = false;
+                    break;
+                }
             }
         for (auto [e, view] : reg.ViewOf<UIScrollViewComponent>())
         {
@@ -462,14 +520,17 @@ namespace Dimension::UI
             if (!view.DraggingScrollbar) continue;
             auto* r = reg.TryGet<UIRectComponent>(e);
             ScrollbarGeometry g;
-            if (!r || !GetScrollbar(*r, view, g))
+            bool horizontal = view.DraggingHorizontal;
+            if (!r || !GetScrollbar(*r, view, g, horizontal))
             {
                 view.DraggingScrollbar = false;
                 continue;
             }
-            float range = (g.TrackMax.y - g.TrackMin.y) - (g.HandleMax.y - g.HandleMin.y);
-            float t = range > 0.0f ? std::clamp((pointer.Position.y - view.DragOffset - g.TrackMin.y) / range, 0.0f, 1.0f) : 0.0f;
-            view.ScrollPosition = t * view.MaxScroll;
+            int axis = horizontal ? 0 : 1;
+            float range = (g.TrackMax[axis] - g.TrackMin[axis]) - (g.HandleMax[axis] - g.HandleMin[axis]);
+            float t = range > 0.0f ? std::clamp((pointer.Position[axis] - view.DragOffset - g.TrackMin[axis]) / range, 0.0f, 1.0f) : 0.0f;
+            if (horizontal) view.ScrollPositionX = t * view.MaxScrollX;
+            else view.ScrollPosition = t * view.MaxScroll;
             if (captured.IsNull()) captured = e;
             input.Pressed = input.Released = false;
         }
@@ -484,12 +545,15 @@ namespace Dimension::UI
                     break;
                 }
 
-        // The wheel scrolls the innermost scroll view under the pointer (clamped by the next layout).
+        // The wheel scrolls the innermost scroll view under the pointer (clamped by the next layout): vertically, or
+        // sideways with Shift held or when the view only scrolls horizontally.
         if (input.Scroll != 0.0f)
             for (auto it = order.rbegin(); it != order.rend(); ++it)
                 if (auto* view = reg.TryGet<UIScrollViewComponent>(*it); view && Contains(reg.Get<UIRectComponent>(*it), pointer.Position))
                 {
-                    view->ScrollPosition = std::max(0.0f, view->ScrollPosition - input.Scroll * view->ScrollSpeed);
+                    bool sideways = view->Horizontal && (pointer.Shift || !view->Vertical);
+                    if (sideways) view->ScrollPositionX = std::max(0.0f, view->ScrollPositionX - input.Scroll * view->ScrollSpeed);
+                    else if (view->Vertical) view->ScrollPosition = std::max(0.0f, view->ScrollPosition - input.Scroll * view->ScrollSpeed);
                     break;
                 }
 
@@ -859,13 +923,17 @@ namespace Dimension::UI
         for (Entity e : order)
         {
             auto* view = reg.TryGet<UIScrollViewComponent>(e);
-            ScrollbarGeometry g;
-            if (!view || !GetScrollbar(reg.Get<UIRectComponent>(e), *view, g)) continue;
+            if (!view) continue;
             const auto& rect = reg.Get<UIRectComponent>(e);
-            Emit(out, g.TrackMin, g.TrackMax, { 0, 0 }, { 1, 1 }, view->ScrollbarTrackColor, white, rect);
-            glm::vec4 handle = view->ScrollbarHandleColor;
-            if (view->DraggingScrollbar) handle.a = std::min(1.0f, handle.a * 1.5f);
-            Emit(out, g.HandleMin, g.HandleMax, { 0, 0 }, { 1, 1 }, handle, white, rect);
+            for (bool horizontal : { false, true })
+            {
+                ScrollbarGeometry g;
+                if (!GetScrollbar(rect, *view, g, horizontal)) continue;
+                Emit(out, g.TrackMin, g.TrackMax, { 0, 0 }, { 1, 1 }, view->ScrollbarTrackColor, white, rect);
+                glm::vec4 handle = view->ScrollbarHandleColor;
+                if (view->DraggingScrollbar && view->DraggingHorizontal == horizontal) handle.a = std::min(1.0f, handle.a * 1.5f);
+                Emit(out, g.HandleMin, g.HandleMax, { 0, 0 }, { 1, 1 }, handle, white, rect);
+            }
         }
 
         // Open dropdown lists last, over everything and unclipped by their parents.

@@ -6,6 +6,11 @@
 
 namespace Dimension
 {
+    enum class Joint2DType : int32_t; // Components.h
+}
+
+namespace Dimension
+{
     class Scene;
 
     struct RaycastHit2D
@@ -59,7 +64,7 @@ namespace Dimension
         {
             Entity Owner;
             uint64_t Id; // b2JointId packed
-            bool Hinge;
+            Joint2DType Type;
         };
         std::vector<JointRecord> m_Joints;
         std::vector<uint64_t> m_TilemapBodies; // b2BodyId packed

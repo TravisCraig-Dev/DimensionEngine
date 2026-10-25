@@ -532,9 +532,14 @@ namespace Editor::UI
             if (scene) r = EntityField(label, *(Entity*)p, *scene);
             break;
         case FieldType::Curve:
+        {
             PropertyLabel(label, f.Tooltip.c_str());
-            r = CurveEditor("##curve", *(Curve*)p);
+            Curve& curve = *(Curve*)p;
+            r = CurveEditor("##curve", curve);
+            r |= Track(ImGui::Checkbox("Smooth##curve", &curve.Smooth));
+            ImGui::SetItemTooltip("Monotone cubic through the keys instead of straight segments");
             break;
+        }
         case FieldType::Gradient:
             PropertyLabel(label, f.Tooltip.c_str());
             r = GradientEditor("##gradient", *(Gradient*)p);
@@ -567,6 +572,29 @@ namespace Editor::UI
             {
                 list.erase(list.begin() + remove);
                 r.Activated = r.Changed = true;
+            }
+            break;
+        }
+        case FieldType::MaterialList:
+        {
+            auto& list = *(std::vector<AssetHandle>*)p;
+            PropertyLabel(label, f.Tooltip.c_str());
+            int size = (int)list.size();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+            if (ImGui::InputInt("##count", &size, 1, 1))
+            {
+                list.resize(std::clamp(size, 0, 256), AssetHandle::None());
+                r.Activated = r.Changed = true;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("slots");
+            for (int i = 0; i < (int)list.size(); ++i)
+            {
+                ImGui::PushID(i);
+                char name[24];
+                std::snprintf(name, sizeof(name), "  Slot %d", i);
+                r |= AssetField(name, list[i], AssetType::Material);
+                ImGui::PopID();
             }
             break;
         }

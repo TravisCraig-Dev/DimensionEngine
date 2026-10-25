@@ -4,6 +4,7 @@
   "windowWidth": 1280,
   "windowHeight": 720,
   "engineVersion": "0.1.0",
+  "icon": 100050,
   "buildScenes": [
     100009,
     100010

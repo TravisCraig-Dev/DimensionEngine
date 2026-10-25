@@ -59,6 +59,13 @@ namespace Dimension
 
     bool Window::IsFocused() const { return glfwGetWindowAttrib(m_Window, GLFW_FOCUSED) == GLFW_TRUE; }
 
+    void Window::SetIcon(const std::vector<IconImage>& images)
+    {
+        std::vector<GLFWimage> glfwImages;
+        for (auto& i : images) glfwImages.push_back({ i.Width, i.Height, const_cast<unsigned char*>(i.Rgba) });
+        glfwSetWindowIcon(m_Window, (int)glfwImages.size(), glfwImages.empty() ? nullptr : glfwImages.data());
+    }
+
     void Window::SetFullscreen(bool fullscreen)
     {
         if (fullscreen == m_Fullscreen) return;

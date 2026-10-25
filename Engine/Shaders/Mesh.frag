@@ -149,13 +149,22 @@ void main()
         float falloff = clamp(1.0 - pow(dist / range, 4.0), 0.0, 1.0);
         float attenuation = falloff * falloff / (dist * dist + 1.0);
         vec4 spot = uScene.PointLights[i].Direction;
+        vec3 lightColor = uScene.PointLights[i].Color.rgb;
         if (spot.w > -1.5) // spot light cone
+        {
             attenuation *= smoothstep(spot.w, uScene.PointLights[i].Cone.x, dot(-toLight / max(dist, 1e-4), spot.xyz));
+            uint cookie = uint(uScene.PointLights[i].Cone.y + 0.5);
+            if (cookie > 0u && attenuation > 0.0)
+            {
+                vec2 cuv = SpotCookieUV(spot.xyz, spot.w, uScene.PointLights[i].Cone.z, -toLight);
+                lightColor *= textureLod(uTextures[nonuniformEXT(cookie - 1u)], cuv, 0.0).rgb;
+            }
+        }
         if (attenuation <= 0.0) continue;
         uint shadowSlot = uint(uScene.PointLights[i].Color.w + 0.5);
         if (shadowSlot > 0u)
             attenuation *= PointShadow(shadowSlot - 1u, uScene.PointLights[i].PositionRange.xyz, spot, vWorldPos, normalize(vNormal));
-        color += DirectLight(N, V, toLight / max(dist, 1e-4), uScene.PointLights[i].Color.rgb * attenuation, albedo, metallic, roughness);
+        color += DirectLight(N, V, toLight / max(dist, 1e-4), lightColor * attenuation, albedo, metallic, roughness);
     }
     color += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
     if (uScene.CascadeParams.z > 0.5) color *= CascadeDebugColor(vWorldPos);

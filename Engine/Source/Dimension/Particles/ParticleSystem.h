@@ -71,6 +71,20 @@ namespace Dimension
         Curve SizeOverLifetime = Curve::Constant(1.0f);  // multiplies the start size
         Curve SpeedOverLifetime = Curve::Constant(1.0f); // multiplies the velocity when moving
 
+        // Velocity over Lifetime: a velocity added to each particle's motion (not accumulated), scaled by a curve,
+        // plus an orbit around the emitter's up (Y) axis.
+        bool VelocityOverLifetime = false;
+        glm::vec3 LifetimeVelocity{ 0.0f };          // units per second
+        ParticleSpace VelocitySpace = ParticleSpace::Local;
+        Curve VelocityCurve = Curve::Constant(1.0f); // multiplies Lifetime Velocity
+        float OrbitalSpeed = 0.0f;                   // degrees per second around the emitter's Y axis
+
+        // Force over Lifetime: an acceleration that builds up velocity (wind, thrust), scaled by a curve.
+        bool ForceOverLifetime = false;
+        glm::vec3 Force{ 0.0f };                     // units per second squared
+        ParticleSpace ForceSpace = ParticleSpace::World;
+        Curve ForceCurve = Curve::Constant(1.0f);
+
         // Collision
         ParticleCollision Collision = ParticleCollision::None;
         float CollisionPlaneHeight = 0.0f; // world Y of the plane (Plane mode)

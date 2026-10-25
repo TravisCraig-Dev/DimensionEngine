@@ -98,6 +98,7 @@ namespace Dimension
             const char* (*GetLoadedSceneName)(void*, int);
             void (*SetJointMotor)(void*, uint64_t, int, float);
             int (*GetJointState)(void*, uint64_t, float*);
+            int (*MixerTransition)(const char*, float);
         };
 
         struct ManagedApi
@@ -447,6 +448,9 @@ namespace Dimension
                 if (auto* j = Comp<JointComponent>(s, e)) return fill(j);
                 if (auto* j = Comp<Joint2DComponent>(s, e)) return fill(j);
                 return -1;
+            };
+            a.MixerTransition = [](const char* name, float seconds) -> int {
+                return AudioMixer::TransitionToSnapshot(name ? name : "", seconds) ? 1 : 0;
             };
             a.LoadSceneWithMode = [](const char* name, int index, int additive) {
                 LoadSceneMode mode = additive ? LoadSceneMode::Additive : LoadSceneMode::Single;

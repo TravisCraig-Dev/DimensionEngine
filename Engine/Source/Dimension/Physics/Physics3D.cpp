@@ -25,6 +25,7 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
@@ -309,6 +310,23 @@ namespace Dimension
             settings = s;
             break;
         }
+        case JointType::Slider:
+        {
+            // Jolt measures the connected body's position relative to this one, so this entity's travel is negated.
+            auto* s = new JPH::SliderConstraintSettings();
+            s->mPoint1 = s->mPoint2 = JPH::RVec3(ToJolt(anchor));
+            s->mSliderAxis1 = s->mSliderAxis2 = ToJolt(axis);
+            glm::vec3 helper = std::abs(axis.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+            s->mNormalAxis1 = s->mNormalAxis2 = ToJolt(glm::normalize(glm::cross(axis, helper)));
+            if (j.UseLimits)
+            {
+                s->mLimitsMin = -std::max(j.SliderMax, 0.0f);
+                s->mLimitsMax = -std::min(j.SliderMin, 0.0f);
+            }
+            s->mMotorSettings = JPH::MotorSettings(2.0f, 1.0f, std::max(j.MotorMaxTorque, 0.0f), 0.0f);
+            settings = s;
+            break;
+        }
         }
 
         auto& bi = m_Impl->System.GetBodyInterface();
@@ -548,13 +566,23 @@ namespace Dimension
         for (auto& joint : m_Impl->Joints)
         {
             auto* jc = reg.TryGet<JointComponent>(joint.A);
-            if (!jc || joint.Type != JointType::Hinge) continue;
-            auto* hinge = static_cast<JPH::HingeConstraint*>(joint.Constraint.GetPtr());
-            hinge->GetMotorSettings().SetTorqueLimit(std::max(jc->MotorMaxTorque, 0.0f));
-            hinge->SetMotorState(jc->UseMotor ? JPH::EMotorState::Velocity : JPH::EMotorState::Off);
+            if (!jc || (joint.Type != JointType::Hinge && joint.Type != JointType::Slider)) continue;
             // Jolt drives the connected body relative to this one; positive speed should turn *this* entity
-            // counter-clockwise around its axis (right-hand rule), hence the sign.
-            hinge->SetTargetAngularVelocity(-glm::radians(jc->MotorSpeed));
+            // counter-clockwise around its axis (right-hand rule), or move it along +Axis, hence the signs.
+            if (joint.Type == JointType::Hinge)
+            {
+                auto* hinge = static_cast<JPH::HingeConstraint*>(joint.Constraint.GetPtr());
+                hinge->GetMotorSettings().SetTorqueLimit(std::max(jc->MotorMaxTorque, 0.0f));
+                hinge->SetMotorState(jc->UseMotor ? JPH::EMotorState::Velocity : JPH::EMotorState::Off);
+                hinge->SetTargetAngularVelocity(-glm::radians(jc->MotorSpeed));
+            }
+            else
+            {
+                auto* slider = static_cast<JPH::SliderConstraint*>(joint.Constraint.GetPtr());
+                slider->GetMotorSettings().SetForceLimit(std::max(jc->MotorMaxTorque, 0.0f));
+                slider->SetMotorState(jc->UseMotor ? JPH::EMotorState::Velocity : JPH::EMotorState::Off);
+                slider->SetTargetVelocity(-jc->MotorSpeed);
+            }
             if (jc->UseMotor)
             {
                 bi.ActivateBody(JPH::BodyID(reg.Get<RigidbodyComponent>(joint.A).RuntimeBody));
@@ -590,6 +618,16 @@ namespace Dimension
             }
             case JointType::Point: force = static_cast<JPH::PointConstraint*>(c)->GetTotalLambdaPosition().Length(); break;
             case JointType::Distance: force = std::abs(static_cast<JPH::DistanceConstraint*>(c)->GetTotalLambdaPosition()); break;
+            case JointType::Slider:
+            {
+                // Perpendicular and limit forces; the slider's own motor force does not count.
+                auto* s = static_cast<JPH::SliderConstraint*>(c);
+                JPH::Vector<2> p = s->GetTotalLambdaPosition();
+                float limit = s->GetTotalLambdaPositionLimits();
+                force = std::sqrt(p[0] * p[0] + p[1] * p[1] + limit * limit);
+                torque = s->GetTotalLambdaRotation().Length();
+                break;
+            }
             }
             force /= dt;
             torque /= dt;

@@ -5,6 +5,7 @@
 #include "Dimension/Project/Project.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_NO_ENCODING
@@ -18,11 +19,33 @@ namespace Dimension
 
         ma_sound* SoundOf(AudioSourceComponent& src) { return static_cast<ma_sound*>(src.Runtime.get()); }
 
-        // Mixer graph: per group a sound group (sounds attach here) feeding a low-pass filter that feeds the parent.
+        // Pass-through node that meters the signal (the group's level meter).
+        struct MeterNode
+        {
+            ma_node_base Base; // must be first
+            AudioMeter Meter;
+            ma_uint32 Channels = 2, SampleRate = 48000;
+        };
+
+        void MeterProcess(ma_node* node, const float** framesIn, ma_uint32* frameCountIn, float** framesOut, ma_uint32* frameCountOut)
+        {
+            auto* m = reinterpret_cast<MeterNode*>(node);
+            // A passthrough node: miniaudio has already read the input into the output buffer (framesIn == framesOut).
+            ma_uint32 frames = std::min(*frameCountIn, *frameCountOut);
+            if (framesIn[0] != framesOut[0]) std::memmove(framesOut[0], framesIn[0], (size_t)frames * m->Channels * sizeof(float));
+            *frameCountIn = *frameCountOut = frames;
+            m->Meter.Process(framesOut[0], frames, m->Channels, m->SampleRate);
+        }
+
+        ma_node_vtable s_MeterVtable = { MeterProcess, nullptr, 1, 1, MA_NODE_FLAG_PASSTHROUGH };
+
+        // Mixer graph: per group a sound group (sounds attach here) feeding a low-pass filter, then a meter, that
+        // feeds the parent.
         struct GroupNodes
         {
             ma_sound_group Group;
             ma_lpf_node LowPass;
+            MeterNode Meter;
             bool Valid = false;
         };
         std::vector<std::unique_ptr<GroupNodes>> s_Groups;
@@ -43,6 +66,7 @@ namespace Dimension
                 auto& g = s_Groups[*it];
                 if (!g || !g->Valid) continue;
                 ma_sound_group_uninit(&g->Group);
+                ma_node_uninit(&g->Meter.Base, nullptr);
                 ma_lpf_node_uninit(&g->LowPass, nullptr);
                 g->Valid = false;
             }
@@ -129,6 +153,85 @@ namespace Dimension
 
     void AudioMixer::MarkStructureDirty() { s_StructureDirty = true; }
 
+    namespace
+    {
+        // A running snapshot transition: start and target values per group index.
+        struct MixerTransition
+        {
+            struct Track { int Group; float FromDb, ToDb, FromHz, ToHz; };
+            std::vector<Track> Tracks;
+            float Duration = 0.0f, Elapsed = 0.0f;
+            bool Active = false;
+        };
+        MixerTransition s_Transition;
+
+        constexpr float kLowPassOpenHz = 22000.0f; // "off" while blending: above hearing, so the blend is smooth
+        float CutoffForBlend(float hz) { return hz <= 0.0f ? kLowPassOpenHz : std::clamp(hz, 10.0f, kLowPassOpenHz); }
+    }
+
+    std::vector<AudioMixerSnapshot>& AudioMixer::Snapshots() { return Project::GetConfig().MixerSnapshots; }
+
+    int AudioMixer::FindSnapshot(const std::string& name)
+    {
+        auto& snaps = Snapshots();
+        for (size_t i = 0; i < snaps.size(); ++i)
+            if (snaps[i].Name == name) return (int)i;
+        return -1;
+    }
+
+    void AudioMixer::CaptureSnapshot(const std::string& name)
+    {
+        AudioMixerSnapshot snap;
+        snap.Name = name;
+        for (auto& g : Groups()) snap.Values.push_back({ g.Name, g.VolumeDb, g.LowPassHz });
+        int i = FindSnapshot(name);
+        if (i >= 0) Snapshots()[i] = std::move(snap);
+        else Snapshots().push_back(std::move(snap));
+    }
+
+    bool AudioMixer::TransitionToSnapshot(const std::string& name, float seconds)
+    {
+        int s = FindSnapshot(name);
+        if (s < 0)
+        {
+            Log::Warn("Audio Mixer has no snapshot '{}'", name);
+            return false;
+        }
+        auto& groups = Groups();
+        s_Transition = {};
+        for (auto& v : Snapshots()[s].Values)
+        {
+            int g = FindGroup(v.Group);
+            if (g < 0) continue;
+            s_Transition.Tracks.push_back({ g, groups[g].VolumeDb, v.VolumeDb, CutoffForBlend(groups[g].LowPassHz), CutoffForBlend(v.LowPassHz) });
+        }
+        s_Transition.Duration = std::max(seconds, 0.0f);
+        s_Transition.Active = true;
+        Update(0.0f); // applies at once when the duration is 0
+        return true;
+    }
+
+    bool AudioMixer::IsTransitioning() { return s_Transition.Active; }
+    void AudioMixer::CancelTransition() { s_Transition.Active = false; }
+
+    void AudioMixer::Update(float dt)
+    {
+        if (!s_Transition.Active) return;
+        s_Transition.Elapsed += dt;
+        float t = s_Transition.Duration > 0.0f ? std::clamp(s_Transition.Elapsed / s_Transition.Duration, 0.0f, 1.0f) : 1.0f;
+        auto& groups = Groups();
+        for (auto& tr : s_Transition.Tracks)
+        {
+            if (tr.Group >= (int)groups.size()) continue;
+            auto& g = groups[tr.Group];
+            g.VolumeDb = tr.FromDb + (tr.ToDb - tr.FromDb) * t;
+            float hz = std::exp2(std::log2(tr.FromHz) + (std::log2(tr.ToHz) - std::log2(tr.FromHz)) * t);
+            g.LowPassHz = hz >= kLowPassOpenHz * 0.999f ? 0.0f : hz;
+        }
+        if (t >= 1.0f) s_Transition.Active = false;
+        Apply();
+    }
+
     void AudioMixer::Rebuild()
     {
         DestroyGraph();
@@ -156,10 +259,23 @@ namespace Dimension
                 ma_sound_group_uninit(&nodes->Group);
                 continue;
             }
+            ma_node_config meterCfg = ma_node_config_init();
+            meterCfg.vtable = &s_MeterVtable;
+            meterCfg.pInputChannels = &channels;
+            meterCfg.pOutputChannels = &channels;
+            nodes->Meter.Channels = channels;
+            nodes->Meter.SampleRate = rate;
+            if (ma_node_init(graph, &meterCfg, nullptr, &nodes->Meter.Base) != MA_SUCCESS)
+            {
+                ma_lpf_node_uninit(&nodes->LowPass, nullptr);
+                ma_sound_group_uninit(&nodes->Group);
+                continue;
+            }
             int parent = ParentOf(groups, i);
             ma_node* destination = parent >= 0 && s_Groups[parent] ? (ma_node*)&s_Groups[parent]->Group : ma_engine_get_endpoint(s_Engine);
             ma_node_attach_output_bus(&nodes->Group, 0, &nodes->LowPass, 0);
-            ma_node_attach_output_bus(&nodes->LowPass, 0, destination, 0);
+            ma_node_attach_output_bus(&nodes->LowPass, 0, &nodes->Meter.Base, 0);
+            ma_node_attach_output_bus(&nodes->Meter.Base, 0, destination, 0);
             nodes->Valid = true;
             s_Groups[i] = std::move(nodes);
         }
@@ -180,6 +296,41 @@ namespace Dimension
             ma_lpf_config cfg = ma_lpf_config_init(ma_format_f32, channels, rate, CutoffOf(groups[i], rate), 2);
             ma_lpf_node_reinit(&cfg, &g->LowPass);
         }
+    }
+
+    void AudioMeter::Process(const float* samples, uint32_t frames, uint32_t channels, uint32_t sampleRate)
+    {
+        size_t n = (size_t)frames * channels;
+        if (n == 0) return;
+        float peak = 0.0f;
+        double sum = 0.0;
+        for (size_t i = 0; i < n; ++i)
+        {
+            float v = samples[i];
+            peak = std::max(peak, std::abs(v));
+            sum += (double)v * v;
+        }
+        float prev = m_Peak.load(std::memory_order_relaxed);
+        while (peak > prev && !m_Peak.compare_exchange_weak(prev, peak, std::memory_order_relaxed)) {}
+        // One-pole smoothing of the mean square, frame-rate independent.
+        float a = 1.0f - std::exp(-(float)frames / (kRmsSeconds * (float)std::max(sampleRate, 1u)));
+        float ms = m_MeanSquare.load(std::memory_order_relaxed);
+        m_MeanSquare.store(ms + ((float)(sum / (double)n) - ms) * a, std::memory_order_relaxed);
+    }
+
+    AudioLevel AudioMeter::Read()
+    {
+        AudioLevel level;
+        level.Peak = m_Peak.exchange(0.0f, std::memory_order_relaxed);
+        level.Rms = std::sqrt(std::max(0.0f, m_MeanSquare.load(std::memory_order_relaxed)));
+        return level;
+    }
+
+    AudioLevel AudioMixer::GetLevel(int group)
+    {
+        if (!s_Engine || s_StructureDirty || group < 0 || group >= (int)s_Groups.size() || !s_Groups[group] || !s_Groups[group]->Valid)
+            return {};
+        return s_Groups[group]->Meter.Meter.Read();
     }
 
     void* AudioMixer::GetGroupNode(int group)

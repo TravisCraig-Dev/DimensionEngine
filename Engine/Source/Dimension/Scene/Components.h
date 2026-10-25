@@ -33,6 +33,7 @@ namespace Dimension
         std::string Tag = "Untagged";
         bool Active = true;
         int32_t Layer = 0; // physics layer (0-31), see Project Settings > Physics Layers
+        std::vector<std::string> ComponentOrder; // Inspector display order (component names); empty = registry order
     };
 
     struct TransformComponent
@@ -132,6 +133,7 @@ namespace Dimension
     {
         AssetHandle Mesh = AssetHandle::None();
         AssetHandle Material = AssetHandle::None(); // when set, overrides the simple fields below
+        std::vector<AssetHandle> Materials;         // per material slot (sub-mesh) overrides; empty entries fall through
         glm::vec4 Color{ 1.0f };
         AssetHandle Texture = AssetHandle::None();
         glm::vec2 Tiling{ 1.0f };
@@ -149,6 +151,8 @@ namespace Dimension
         float ShadowBias = 0.0015f;
         int32_t ShadowCascades = 4;   // 1-4 cascades split over the shadow distance
         bool DebugCascades = false;   // tint surfaces by cascade (red, green, blue, yellow)
+        bool SoftShadows = false;     // PCSS: penumbrae widen with the distance from the occluder
+        float LightAngle = 1.0f;      // apparent diameter of the light in degrees (the sun is about 0.5)
     };
 
     struct PointLightComponent
@@ -170,6 +174,7 @@ namespace Dimension
         float InnerSpotAngle = 30.0f; // full angle of the fully lit core, degrees
         bool CastShadows = false;     // shares the 4 shadow slots with point lights
         float ShadowBias = 0.05f;     // world units
+        AssetHandle Cookie = AssetHandle::None(); // texture projected through the cone (tints the light; turns with the light)
     };
 
     // Plays skeletal animation clips of the entity's skinned Mesh Renderer (like Unity's Animator/Animation).
@@ -339,21 +344,26 @@ namespace Dimension
         float ScrollX = 0.0f;         // pixels the text is scrolled left to keep the caret visible
     };
 
-    enum class UILayoutDirection : int32_t { Vertical = 0, Horizontal = 1 };
+    enum class UILayoutDirection : int32_t { Vertical = 0, Horizontal = 1, Grid = 2 };
 
-    // Arranges child UI Rects in a row or column (like Vertical/Horizontal Layout Group).
+    // Arranges child UI Rects in a row or column (like Vertical/Horizontal Layout Group), or in a grid of equal cells
+    // filled left to right, then top to bottom (like Grid Layout Group).
     struct UILayoutGroupComponent
     {
         UILayoutDirection Direction = UILayoutDirection::Vertical;
         float Spacing = 8.0f;
         glm::vec4 Padding{ 8.0f };  // left, top, right, bottom
-        bool StretchChildren = true; // children fill the cross axis
+        bool StretchChildren = true; // children fill the cross axis (rows and columns only)
+        glm::vec2 CellSize{ 100.0f, 100.0f }; // Grid: size of every cell
+        int32_t Columns = 0;                  // Grid: fixed column count; 0 = as many as fit the width
     };
 
-    // Clips its children to its rect and scrolls its first child (the content) vertically.
-    // A scrollbar on the right edge appears while the content is taller than the view.
+    // Clips its children to its rect and scrolls its first child (the content) vertically and/or horizontally.
+    // Scrollbars on the right and bottom edges appear while the content is larger than the view.
     struct UIScrollViewComponent
     {
+        bool Vertical = true;
+        bool Horizontal = false;    // the wheel scrolls sideways with Shift held, or always when Vertical is off
         float ScrollSpeed = 60.0f;  // canvas units per wheel notch
         bool Scrollbar = true;
         float ScrollbarWidth = 10.0f; // canvas units
@@ -361,10 +371,13 @@ namespace Dimension
         glm::vec4 ScrollbarHandleColor{ 1.0f, 1.0f, 1.0f, 0.55f };
 
         // Runtime (not serialized)
-        float ScrollPosition = 0.0f; // canvas units scrolled down
-        float MaxScroll = 0.0f;      // set by the layout pass
+        float ScrollPosition = 0.0f;  // canvas units scrolled down
+        float MaxScroll = 0.0f;       // set by the layout pass
+        float ScrollPositionX = 0.0f; // canvas units scrolled right
+        float MaxScrollX = 0.0f;
         bool DraggingScrollbar = false;
-        float DragOffset = 0.0f;     // pointer offset inside the handle (pixels)
+        bool DraggingHorizontal = false; // which scrollbar is being dragged
+        float DragOffset = 0.0f;      // pointer offset inside the handle (pixels)
     };
 
     // Closed: shows the selected option. Clicking opens a list over all other UI; picking an item sets Value.
@@ -582,7 +595,7 @@ namespace Dimension
 
     // ---- Joints ------------------------------------------------------------------
 
-    enum class JointType : int32_t { Fixed = 0, Hinge = 1, Point = 2, Distance = 3 };
+    enum class JointType : int32_t { Fixed = 0, Hinge = 1, Point = 2, Distance = 3, Slider = 4 };
 
     // Connects this entity's Rigidbody to another Rigidbody, or to the world when Connected Body is empty.
     struct JointComponent
@@ -590,17 +603,19 @@ namespace Dimension
         JointType Type = JointType::Hinge;
         Entity ConnectedBody = Entity::Null();
         glm::vec3 Anchor{ 0.0f };          // pivot in this entity's local space
-        glm::vec3 Axis{ 0.0f, 0.0f, 1.0f }; // hinge axis in local space
+        glm::vec3 Axis{ 0.0f, 0.0f, 1.0f }; // hinge or slider axis in local space
         glm::vec3 ConnectedAnchor{ 0.0f }; // distance joint: point on the connected body (local), or world point
         bool UseLimits = false;
         float MinAngle = -45.0f;           // hinge limits, degrees
         float MaxAngle = 45.0f;
         float MinDistance = 0.0f;          // distance joint; 0 = the initial distance
         float MaxDistance = 0.0f;
+        float SliderMin = -1.0f;           // slider limits: travel along Axis from the start position (units)
+        float SliderMax = 1.0f;
         bool EnableCollision = false;      // let the two connected bodies collide with each other
-        bool UseMotor = false;             // hinge: drive toward Motor Speed
-        float MotorSpeed = 90.0f;          // degrees per second (can be changed while playing)
-        float MotorMaxTorque = 1000.0f;    // N*m
+        bool UseMotor = false;             // hinge or slider: drive toward Motor Speed
+        float MotorSpeed = 90.0f;          // hinge: degrees per second; slider: units per second (changeable while playing)
+        float MotorMaxTorque = 1000.0f;    // hinge: N*m; slider: maximum force, N
         float BreakForce = 0.0f;           // N; the joint breaks above this (0 = unbreakable)
         float BreakTorque = 0.0f;          // N*m; 0 = unbreakable
 
@@ -609,7 +624,7 @@ namespace Dimension
         float CurrentForce = 0.0f, CurrentTorque = 0.0f; // reaction during the last physics step
     };
 
-    enum class Joint2DType : int32_t { Fixed = 0, Hinge = 1, Distance = 2 };
+    enum class Joint2DType : int32_t { Fixed = 0, Hinge = 1, Distance = 2, Slider = 3 };
 
     // 2D joint between this entity's Rigidbody 2D and another (or the world).
     struct Joint2DComponent
@@ -622,10 +637,13 @@ namespace Dimension
         float LowerAngle = -45.0f;         // hinge limits, degrees
         float UpperAngle = 45.0f;
         float Distance = 0.0f;             // 0 = the initial distance
+        glm::vec2 Axis{ 1.0f, 0.0f };      // slider axis in local space
+        float LowerTranslation = -1.0f;    // slider limits: travel along Axis from the start position (units)
+        float UpperTranslation = 1.0f;
         bool CollideConnected = false;
-        bool UseMotor = false;             // hinge: drive toward Motor Speed
-        float MotorSpeed = 90.0f;          // degrees per second (can be changed while playing)
-        float MotorMaxTorque = 100.0f;     // N*m
+        bool UseMotor = false;             // hinge or slider: drive toward Motor Speed
+        float MotorSpeed = 90.0f;          // hinge: degrees per second; slider: units per second (changeable while playing)
+        float MotorMaxTorque = 100.0f;     // hinge: N*m; slider: maximum force, N
         float BreakForce = 0.0f;           // N; 0 = unbreakable
         float BreakTorque = 0.0f;          // N*m; 0 = unbreakable
 

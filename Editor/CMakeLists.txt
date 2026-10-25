@@ -1,5 +1,5 @@
 file(GLOB_RECURSE EDITOR_SOURCES CONFIGURE_DEPENDS Source/*.cpp Source/*.h)
-add_executable(DimensionEditor ${EDITOR_SOURCES})
+add_executable(DimensionEditor ${EDITOR_SOURCES} ${CMAKE_SOURCE_DIR}/Engine/Resources/Dimension.rc)
 target_include_directories(DimensionEditor PRIVATE Source)
 target_link_libraries(DimensionEditor PRIVATE DimensionEngine)
 target_compile_definitions(DimensionEditor PRIVATE

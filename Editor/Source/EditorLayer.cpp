@@ -1,4 +1,5 @@
 #include "EditorLayer.h"
+#include "Dimension/Platform/AppIcon.h"
 #include "EditorActions.h"
 #include "EditorUI.h"
 #include "EditorPreferences.h"
@@ -278,6 +279,7 @@ namespace Editor
         if (m_Console->ClearOnPlay) m_Console->Clear();
         SceneManager::CancelPendingLoad();
         m_Ctx.RuntimeScene = m_Ctx.EditorScene->Clone();
+        m_MixerBeforePlay = AudioMixer::Groups();
         m_Ctx.RuntimeScene->OnRuntimeStart();
         m_Ctx.State = PlayState::Play;
         m_FocusGameView = 3;
@@ -291,6 +293,16 @@ namespace Editor
         m_Ctx.RuntimeScene->OnRuntimeStop();
         m_Ctx.RuntimeScene.reset();
         m_Ctx.State = PlayState::Edit;
+        // Volumes and filters changed while playing (scripts, snapshot transitions) go back to their edit-time values.
+        AudioMixer::CancelTransition();
+        for (auto& g : AudioMixer::Groups())
+            for (auto& before : m_MixerBeforePlay)
+                if (before.Name == g.Name)
+                {
+                    g.VolumeDb = before.VolumeDb;
+                    g.LowPassHz = before.LowPassHz;
+                }
+        AudioMixer::Apply();
         if (!m_Ctx.EditorScene->IsValid(m_Ctx.Selected)) m_Ctx.Select(Entity::Null());
         Input::SetGameInputEnabled(true);
         ImGui::SetWindowFocus("Scene");
@@ -1221,6 +1233,44 @@ namespace Editor
         ImGui::End();
     }
 
+    // Post-fader level meter beside a mixer fader, on the fader's dB scale: the RMS bar (green, yellow above -12 dB,
+    // red above -3 dB), the decaying peak as a thin line, and a peak hold that drops after a second.
+    void EditorLayer::DrawLevelMeter(int group, float height)
+    {
+        if ((int)m_MixerMeters.size() <= group) m_MixerMeters.resize(group + 1);
+        MeterDisplay& m = m_MixerMeters[group];
+        AudioLevel level = AudioMixer::GetLevel(group);
+        float dt = ImGui::GetIO().DeltaTime;
+        float rmsDb = AudioMixer::LinearToDb(level.Rms), peakDb = AudioMixer::LinearToDb(level.Peak);
+        m.Rms = rmsDb;
+        m.Peak = std::max(peakDb, m.Peak - 30.0f * dt); // falls 30 dB per second
+        if (peakDb >= m.Hold) { m.Hold = peakDb; m.HoldTime = 1.0f; }
+        else if ((m.HoldTime -= dt) <= 0.0f) m.Hold = std::max(m.Hold - 40.0f * dt, AudioMixer::kSilentDb);
+
+        const float lo = AudioMixer::kSilentDb, hi = 10.0f, w = 8.0f;
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(w, height));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Level: RMS %.1f dB, peak %.1f dB", std::max(m.Rms, lo), std::max(m.Hold, lo));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        auto y = [&](float db) { return p0.y + height * (1.0f - (std::clamp(db, lo, hi) - lo) / (hi - lo)); };
+        ImVec2 p1(p0.x + w, p0.y + height);
+        dl->AddRectFilled(p0, p1, IM_COL32(20, 20, 24, 255), 2.0f);
+        float top = y(m.Rms);
+        // Colored zones of the bar, bottom to top.
+        struct Zone { float From, To; ImU32 Color; } zones[] = { { lo, -12.0f, IM_COL32(70, 200, 90, 255) },
+                                                              { -12.0f, -3.0f, IM_COL32(225, 200, 60, 255) },
+                                                              { -3.0f, hi, IM_COL32(230, 70, 60, 255) } };
+        for (auto& z : zones)
+        {
+            float zTop = std::max(y(z.To), top), zBottom = y(z.From);
+            if (zTop < zBottom) dl->AddRectFilled(ImVec2(p0.x + 1, zTop), ImVec2(p1.x - 1, zBottom), z.Color);
+        }
+        if (m.Peak > lo) dl->AddLine(ImVec2(p0.x + 1, y(m.Peak)), ImVec2(p1.x - 1, y(m.Peak)), IM_COL32(255, 255, 255, 170));
+        if (m.Hold > lo) dl->AddLine(ImVec2(p0.x, y(m.Hold)), ImVec2(p1.x, y(m.Hold)), m.Hold > 0.0f ? IM_COL32(255, 80, 70, 255) : IM_COL32(240, 240, 240, 255), 2.0f);
+        dl->AddLine(ImVec2(p0.x, y(0.0f)), ImVec2(p1.x, y(0.0f)), IM_COL32(255, 255, 255, 60)); // 0 dB mark
+    }
+
     void EditorLayer::DrawAudioMixer()
     {
         // First appearance in an existing layout: dock next to the Console instead of floating.
@@ -1238,6 +1288,54 @@ namespace Editor
         const float stripW = 150.0f;
         ImGui::TextDisabled("Audio Sources pick a group in their Output field. Volume, mute, solo and low-pass apply live;"
                             " new groups and parents apply when play starts.");
+        // Snapshots: click to recall, right-click to overwrite, rename or delete. Scripts blend to them over time.
+        {
+            auto& snaps = AudioMixer::Snapshots();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Snapshots");
+            ImGui::SameLine();
+            UI::HelpMarker("A snapshot stores every group's volume and low-pass cutoff. Scripts blend to one with "
+                           "AudioMixer::TransitionToSnapshot(\"Paused\", 0.5f) (C#: AudioMixer.TransitionToSnapshot).");
+            int removeSnap = -1;
+            for (int s = 0; s < (int)snaps.size(); ++s)
+            {
+                ImGui::SameLine();
+                ImGui::PushID(1000 + s);
+                if (ImGui::Button(snaps[s].Name.c_str()))
+                {
+                    AudioMixer::TransitionToSnapshot(snaps[s].Name, 0.0f);
+                    save = !m_Ctx.IsPlaying();
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Recall (right-click for more)");
+                if (ImGui::BeginPopupContextItem("##snap"))
+                {
+                    ImGui::SetNextItemWidth(160);
+                    if (ImGui::InputText("##rename", &snaps[s].Name)) save = true;
+                    if (ImGui::MenuItem("Overwrite With Current Mix"))
+                    {
+                        AudioMixer::CaptureSnapshot(snaps[s].Name);
+                        save = true;
+                    }
+                    if (ImGui::MenuItem("Delete")) removeSnap = s;
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+ Snapshot"))
+            {
+                std::string name = "Snapshot";
+                for (int n = 2; AudioMixer::FindSnapshot(name) >= 0; ++n) name = "Snapshot " + std::to_string(n);
+                AudioMixer::CaptureSnapshot(name);
+                save = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Capture the current mix as a new snapshot");
+            if (removeSnap >= 0)
+            {
+                snaps.erase(snaps.begin() + removeSnap);
+                save = true;
+            }
+        }
         if (ImGui::BeginChild("##strips", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
         {
             for (int i = 0; i < (int)groups.size(); ++i)
@@ -1261,6 +1359,8 @@ namespace Editor
                 save |= ImGui::IsItemDeactivatedAfterEdit();
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { g.VolumeDb = 0.0f; live = save = true; }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volume (double-click: 0 dB)");
+                ImGui::SameLine(0.0f, 3.0f);
+                DrawLevelMeter(i, faderH);
                 ImGui::SameLine();
                 ImGui::BeginGroup();
                 float controlsW = ImGui::GetContentRegionAvail().x;
@@ -1540,6 +1640,9 @@ namespace Editor
             changed |= ImGui::Checkbox("##fs", &config.Fullscreen);
             UI::PropertyLabel("VSync");
             changed |= ImGui::Checkbox("##vsync", &config.VSync);
+            changed |= UI::AssetField("Icon", config.Icon, AssetType::Texture).Changed;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Image for the game's executable, window and taskbar (square PNG, 256 px or more). Empty: the engine icon.");
             UI::EndProperties();
         }
 
@@ -1612,6 +1715,11 @@ namespace Editor
         {
             Log::Error("Copying the player failed: {} (is the game still running?)", ec.message());
             return false;
+        }
+        if (config.Icon)
+        {
+            auto image = AppIcon::Load(AssetManager::GetAbsolutePath(config.Icon));
+            if (!image || !AppIcon::WriteToExecutable(exe, *image)) Log::Warn("The game keeps the engine icon");
         }
         for (const char* dll : { "DimensionEngine.dll" })
             fs::copy_file(ExecutableDirectory() / dll, folder / dll, fs::copy_options::overwrite_existing, ec);

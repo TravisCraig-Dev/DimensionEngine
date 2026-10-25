@@ -20,8 +20,10 @@ namespace Dimension
         bool Fullscreen = false;              // borderless fullscreen on the primary monitor (Alt+Enter toggles)
         bool VSync = true;
         std::string BuildFolder;              // last output folder used by Build
+        AssetHandle Icon = AssetHandle::None(); // texture used as the game's executable and window icon (None = engine icon)
 
         std::vector<AudioMixerGroup> MixerGroups = AudioMixer::DefaultGroups();
+        std::vector<AudioMixerSnapshot> MixerSnapshots;
 
         // Physics layers (like Unity's Layers + Layer Collision Matrix). Empty names are unused layers.
         static constexpr int kMaxLayers = 32;

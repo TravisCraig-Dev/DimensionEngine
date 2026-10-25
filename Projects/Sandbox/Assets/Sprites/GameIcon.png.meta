@@ -1,0 +1,9 @@
+{
+  "guid": 100050,
+  "type": "Texture",
+  "settings": {
+    "filter": 1,
+    "srgb": true,
+    "mips": false
+  }
+}

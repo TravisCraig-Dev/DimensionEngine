@@ -47,8 +47,11 @@ namespace Dimension
         }
         case FieldType::Curve:
         {
+            // A plain key array; smooth curves wrap it as { "smooth": true, "keys": [...] }.
+            const Curve& curve = *(const Curve*)p;
             json keys = json::array();
-            for (auto& k : ((const Curve*)p)->Keys) keys.push_back({ k.Time, k.Value });
+            for (auto& k : curve.Keys) keys.push_back({ k.Time, k.Value });
+            if (curve.Smooth) return json{ { "smooth", true }, { "keys", keys } };
             return keys;
         }
         case FieldType::Gradient:
@@ -64,6 +67,12 @@ namespace Dimension
             return list;
         }
         case FieldType::StringList: return *(const std::vector<std::string>*)p;
+        case FieldType::MaterialList:
+        {
+            json list = json::array();
+            for (const Guid& g : *(const std::vector<Guid>*)p) list.push_back((uint64_t)g);
+            return list;
+        }
         }
         return nullptr;
     }
@@ -100,12 +109,15 @@ namespace Dimension
                 break;
             case FieldType::Curve:
             {
-                if (!v.is_array()) break;
+                const json& keys = v.is_object() ? v.value("keys", json::array()) : v;
+                if (!keys.is_array()) break;
                 Curve c;
-                for (auto& k : v)
+                c.Smooth = v.is_object() && v.value("smooth", false);
+                for (auto& k : keys)
                     if (k.is_array() && k.size() >= 2) c.Keys.push_back({ k[0].get<float>(), k[1].get<float>() });
                 c.Sort();
                 if (!c.Keys.empty()) *(Curve*)p = std::move(c);
+                else ((Curve*)p)->Smooth = c.Smooth;
                 break;
             }
             case FieldType::Gradient:
@@ -135,6 +147,14 @@ namespace Dimension
                 list.clear();
                 for (auto& k : v)
                     if (k.is_string()) list.push_back(k.get<std::string>());
+                break;
+            }
+            case FieldType::MaterialList:
+            {
+                if (!v.is_array()) break;
+                auto& list = *(std::vector<Guid>*)p;
+                list.clear();
+                for (auto& k : v) list.push_back(k.is_number() ? Guid(k.get<uint64_t>()) : Guid::None());
                 break;
             }
             }

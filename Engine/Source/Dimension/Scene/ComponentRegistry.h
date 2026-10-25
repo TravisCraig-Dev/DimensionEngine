@@ -50,6 +50,13 @@ namespace Dimension
             return nullptr;
         }
 
+        // Visible components of an entity in Inspector order: non-removable ones (Transform) first, then the order
+        // saved on the entity's Tag, then any others (newly added) in registration order.
+        static std::vector<const ComponentInfo*> GetDisplayOrder(Scene& scene, Entity entity);
+        // Moves a component up (delta < 0) or down in the display order. Non-removable components stay put.
+        // Returns false when it cannot move.
+        static bool MoveComponent(Scene& scene, Entity entity, const std::string& name, int delta);
+
         // Registers all engine components. Called once by the Application.
         static void RegisterBuiltins();
         // Removes components registered after the built-ins (by a game module that is being unloaded).

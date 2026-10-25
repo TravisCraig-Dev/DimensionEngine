@@ -67,7 +67,7 @@ namespace Editor
             return resolver;
         }
 
-        enum class ComponentAction { None, Reset, Remove, Copy, PasteValues, PasteNew };
+        enum class ComponentAction { None, Reset, Remove, Copy, PasteValues, PasteNew, MoveUp, MoveDown };
 
         // Component values travel through the OS clipboard as JSON, so they can be pasted into
         // another object, scene, or editor instance (Unity's Copy Component / Paste Component Values).
@@ -85,7 +85,7 @@ namespace Editor
         }
 
         // Draws a component's header; returns whether it is expanded. `action` reports the menu choice.
-        bool ComponentHeader(const ComponentInfo& info, ComponentAction& action)
+        bool ComponentHeader(const ComponentInfo& info, ComponentAction& action, bool canMoveUp, bool canMoveDown)
         {
             const char* name = info.Name.c_str();
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_SpanAvailWidth |
@@ -113,6 +113,9 @@ namespace Editor
                 if (ImGui::MenuItem(pasteNew.c_str(), nullptr, false, hasClip && clipName != info.Name)) action = ComponentAction::PasteNew;
                 ImGui::Separator();
                 if (ImGui::MenuItem("Remove Component", nullptr, false, info.Removable)) action = ComponentAction::Remove;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Move Up", nullptr, false, canMoveUp)) action = ComponentAction::MoveUp;
+                if (ImGui::MenuItem("Move Down", nullptr, false, canMoveDown)) action = ComponentAction::MoveDown;
                 ImGui::EndPopup();
             }
             ImGui::PopID();
@@ -258,12 +261,22 @@ namespace Editor
         const ComponentInfo* resetInfo = nullptr;
         std::string pasteValuesInto;
         bool pasteNew = false;
-        for (auto& info : ComponentRegistry::All())
+        const ComponentInfo* moveInfo = nullptr;
+        int moveDelta = 0;
+        auto ordered = ComponentRegistry::GetDisplayOrder(scene, e);
+        for (size_t oi = 0; oi < ordered.size(); ++oi)
         {
-            if (info.Hidden || !info.Has(scene, e)) continue;
+            const ComponentInfo& info = *ordered[oi];
             if (!std::all_of(targets.begin(), targets.end(), [&](Entity t) { return info.Has(scene, t); })) continue;
             ComponentAction action = ComponentAction::None;
-            bool open = ComponentHeader(info, action);
+            bool canUp = info.Removable && oi > 0 && ordered[oi - 1]->Removable;
+            bool canDown = info.Removable && oi + 1 < ordered.size();
+            bool open = ComponentHeader(info, action, canUp, canDown);
+            if (action == ComponentAction::MoveUp || action == ComponentAction::MoveDown)
+            {
+                moveInfo = &info;
+                moveDelta = action == ComponentAction::MoveUp ? -1 : 1;
+            }
             bool remove = action == ComponentAction::Remove, reset = action == ComponentAction::Reset;
             if (action == ComponentAction::Copy)
             {
@@ -390,6 +403,27 @@ namespace Editor
                         if (slots > 0 && !AssetManager::GetMaterial(mr.Material))
                             ImGui::TextWrapped("Using %zu material(s) from the model. Color, Albedo, Smoothness and Emission only "
                                                "apply to parts without one; assign a Material to override all parts.", slots);
+                        // Slot count of the mesh: the model's material slots, or one per sub-mesh.
+                        size_t meshSlots = slots;
+                        if (Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh)) meshSlots = std::max(meshSlots, mesh->GetSubMeshes().size());
+                        if (meshSlots > 1 && mr.Materials.size() != meshSlots)
+                        {
+                            if (ImGui::Button("Match Mesh Slots"))
+                            {
+                                m_Ctx.RecordUndo();
+                                for (Entity t : targets)
+                                    if (auto* other = scene.GetRegistry().TryGet<MeshRendererComponent>(t))
+                                        other->Materials.resize(meshSlots, AssetHandle::None());
+                                m_Ctx.MarkDirty();
+                            }
+                            if (ImGui::IsItemHovered())
+                            {
+                                std::string tip = "Sizes Materials to the mesh's material slots so each part can take its own override.";
+                                auto names = AssetManager::GetMeshMaterialNames(mr.Mesh);
+                                for (size_t n = 0; n < names.size(); ++n) tip += "\nSlot " + std::to_string(n) + ": " + names[n];
+                                ImGui::SetTooltip("%s", tip.c_str());
+                            }
+                        }
                     }
                 }
                 ImGui::TreePop();
@@ -399,6 +433,14 @@ namespace Editor
             ImGui::Spacing();
         }
         // Structural changes after the loop (they invalidate component pointers), applied to every target.
+        if (moveInfo)
+        {
+            m_Ctx.RecordUndo();
+            for (Entity t : targets)
+                if (ComponentRegistry::MoveComponent(scene, t, moveInfo->Name, moveDelta))
+                    Prefabs::RecordFieldOverride(scene, t, "Tag", "Component Order");
+            m_Ctx.MarkDirty();
+        }
         if (resetInfo)
         {
             m_Ctx.RecordUndo();

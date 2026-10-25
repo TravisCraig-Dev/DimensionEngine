@@ -31,6 +31,10 @@ namespace Dimension
         bool IsMinimized() const;
         bool IsFocused() const;
         void SetFullscreen(bool fullscreen);
+        // Window/taskbar icon from RGBA images of different sizes (the system picks the closest). Empty = the
+        // executable's own icon.
+        struct IconImage { int Width, Height; const uint8_t* Rgba; };
+        void SetIcon(const std::vector<IconImage>& images);
         bool IsFullscreen() const { return m_Fullscreen; }
         GLFWwindow* GetNative() const { return m_Window; }
 

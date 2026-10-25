@@ -11,6 +11,7 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/CSharpProject.h>
+#include <Dimension/Platform/AppIcon.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -203,6 +204,15 @@ int main(int argc, char** argv)
     spec.Window.Fullscreen = config.Fullscreen && maxFrames == 0; // automated runs stay windowed
     {
         Application app(spec);
+        // The project's icon on the window (a built game also has it in its executable).
+        if (config.Icon)
+            if (auto image = AppIcon::Load(AssetManager::GetAbsolutePath(config.Icon)))
+            {
+                std::vector<AppIcon::Image> sizes{ AppIcon::Resize(*image, 16), AppIcon::Resize(*image, 32), AppIcon::Resize(*image, 48) };
+                std::vector<Window::IconImage> icons;
+                for (auto& s : sizes) icons.push_back({ s.Width, s.Height, s.Rgba.data() });
+                app.GetWindow().SetIcon(icons);
+            }
         GameModule::Load(ExecutableDirectory() / (config.GameModule + ".dll"));
         if (CSharpRuntime::Init(ExecutableDirectory() / "managed"))
             CSharpRuntime::LoadScripts(CSharpProject::AssemblyPath(Project::GetDirectory()));

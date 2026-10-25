@@ -25,6 +25,7 @@ namespace Dimension
         Gradient,         // Dimension::Gradient (normalized time -> color)
         Vec3List,         // std::vector<glm::vec3>
         StringList,       // std::vector<std::string>
+        MaterialList,     // std::vector<AssetHandle> of materials (per-slot overrides)
     };
 
     struct FieldInfo
@@ -54,6 +55,7 @@ namespace Dimension
         else if constexpr (std::is_same_v<M, Gradient>) return FieldType::Gradient;
         else if constexpr (std::is_same_v<M, std::vector<glm::vec3>>) return FieldType::Vec3List;
         else if constexpr (std::is_same_v<M, std::vector<std::string>>) return FieldType::StringList;
+        else if constexpr (std::is_same_v<M, std::vector<Guid>>) return FieldType::MaterialList;
         else if constexpr (std::is_same_v<M, Guid>) return FieldType::Texture; // override with .As()
         else static_assert(sizeof(M) == 0, "Unsupported reflected field type");
     }

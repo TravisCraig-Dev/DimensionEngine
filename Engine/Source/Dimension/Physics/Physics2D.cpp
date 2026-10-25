@@ -218,9 +218,31 @@ namespace Dimension
             created = b2CreateDistanceJoint(world, &d);
             break;
         }
+        case Joint2DType::Slider:
+        {
+            // Box2D measures the connected body's translation relative to this one, so this entity's travel is negated.
+            glm::vec2 axis = glm::vec2(ta.World * glm::vec4(j.Axis, 0.0f, 0.0f));
+            axis = glm::length(axis) > 1e-6f ? glm::normalize(axis) : glm::vec2(1.0f, 0.0f);
+            b2PrismaticJointDef d = b2DefaultPrismaticJointDef();
+            d.bodyIdA = a;
+            d.bodyIdB = b;
+            d.localAnchorA = b2Body_GetLocalPoint(a, aw);
+            d.localAnchorB = b2Body_GetLocalPoint(b, aw);
+            d.localAxisA = b2Body_GetLocalVector(a, { axis.x, axis.y });
+            d.referenceAngle = referenceAngle;
+            d.enableLimit = j.UseLimits;
+            d.lowerTranslation = -std::max(j.UpperTranslation, 0.0f);
+            d.upperTranslation = -std::min(j.LowerTranslation, 0.0f);
+            d.enableMotor = j.UseMotor;
+            d.motorSpeed = -j.MotorSpeed;
+            d.maxMotorForce = std::max(j.MotorMaxTorque, 0.0f);
+            d.collideConnected = j.CollideConnected;
+            created = b2CreatePrismaticJoint(world, &d);
+            break;
+        }
         }
         if (B2_IS_NULL(created)) return;
-        m_Joints.push_back({ e, b2StoreJointId(created), j.Type == Joint2DType::Hinge });
+        m_Joints.push_back({ e, b2StoreJointId(created), j.Type });
         j.Broken = false;
         j.CurrentForce = j.CurrentTorque = 0.0f;
     }
@@ -304,11 +326,21 @@ namespace Dimension
         for (auto& r : m_Joints)
         {
             auto* jc = reg.TryGet<Joint2DComponent>(r.Owner);
-            if (!r.Hinge || !jc) continue;
+            if (!jc) continue;
             b2JointId id = b2LoadJointId(r.Id);
-            b2RevoluteJoint_EnableMotor(id, jc->UseMotor);
-            b2RevoluteJoint_SetMotorSpeed(id, -glm::radians(jc->MotorSpeed));
-            b2RevoluteJoint_SetMaxMotorTorque(id, std::max(jc->MotorMaxTorque, 0.0f));
+            if (r.Type == Joint2DType::Hinge)
+            {
+                b2RevoluteJoint_EnableMotor(id, jc->UseMotor);
+                b2RevoluteJoint_SetMotorSpeed(id, -glm::radians(jc->MotorSpeed));
+                b2RevoluteJoint_SetMaxMotorTorque(id, std::max(jc->MotorMaxTorque, 0.0f));
+            }
+            else if (r.Type == Joint2DType::Slider)
+            {
+                b2PrismaticJoint_EnableMotor(id, jc->UseMotor);
+                b2PrismaticJoint_SetMotorSpeed(id, -jc->MotorSpeed);
+                b2PrismaticJoint_SetMaxMotorForce(id, std::max(jc->MotorMaxTorque, 0.0f));
+            }
+            else continue;
             if (jc->UseMotor) b2Joint_WakeBodies(id);
         }
 
@@ -327,7 +359,15 @@ namespace Dimension
             }
             b2Vec2 f = b2Joint_GetConstraintForce(id);
             float torque = b2Joint_GetConstraintTorque(id);
-            if (it->Hinge) torque -= b2RevoluteJoint_GetMotorTorque(id);
+            if (it->Type == Joint2DType::Hinge) torque -= b2RevoluteJoint_GetMotorTorque(id);
+            if (it->Type == Joint2DType::Slider)
+            {
+                // Remove the motor's own push along the axis.
+                b2Vec2 axis = b2Body_GetWorldVector(b2Joint_GetBodyA(id), b2Joint_GetLocalAxisA(id));
+                float motor = b2PrismaticJoint_GetMotorForce(id);
+                f.x -= axis.x * motor;
+                f.y -= axis.y * motor;
+            }
             jc->CurrentForce = std::sqrt(f.x * f.x + f.y * f.y);
             jc->CurrentTorque = std::abs(torque);
             if ((jc->BreakForce > 0.0f && jc->CurrentForce > jc->BreakForce) || (jc->BreakTorque > 0.0f && jc->CurrentTorque > jc->BreakTorque))
