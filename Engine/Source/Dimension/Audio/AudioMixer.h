@@ -26,6 +26,12 @@ namespace Dimension
         float ReverbRoomSize = 0.6f; // 0-1
         float ReverbDamping = 0.5f;  // high-frequency absorption, 0-1
         float ReverbWet = 0.35f;     // 0-1
+
+        // Send: a copy of this group's output (after its volume and effects) also goes to another group, at Send
+        // Level. Typically several groups send to one "return" group holding a shared reverb. Applies live; a send
+        // that would loop back into this group is ignored.
+        int SendTarget = -1;         // group index, -1 = no send
+        float SendLevelDb = 0.0f;
     };
 
     // A saved state of the mixer (like Unity's AudioMixerSnapshot): each group's volume and low-pass cutoff, by group
@@ -75,6 +81,9 @@ namespace Dimension
         static std::vector<AudioMixerGroup>& Groups(); // the open project's groups
 
         static int FindGroup(const std::string& name);  // -1 if missing
+        // The send target each group really uses: -1 for none, out of range, itself, or a send that would create a
+        // loop through parents and earlier groups' sends.
+        static std::vector<int> ValidSends(const std::vector<AudioMixerGroup>& groups);
         // Volume of a group including mute/solo (not its parents; the graph multiplies those in).
         static float EffectiveGain(int group);
         static void SetVolumeDb(const std::string& group, float db);

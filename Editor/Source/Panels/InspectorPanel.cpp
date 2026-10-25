@@ -369,9 +369,11 @@ namespace Editor
                         if (r.Changed)
                         {
                             // Multi-edit: copy the new value to the same field on every other selected object. Vectors
-                            // copy only the components that changed (dragging X keeps each object's own Y and Z).
+                            // copy only the components that changed (dragging X keeps each object's own Y and Z), and
+                            // lists only the elements that changed, onto objects whose list has the same length.
                             nlohmann::json value = FieldToJson(f, data, &resolver);
-                            bool perComponent = UI::IsVectorField(f.Type) && before.is_array() && value.is_array() && before.size() == value.size();
+                            bool perComponent = (UI::IsVectorField(f.Type) || UI::IsListField(f.Type)) && before.is_array() && value.is_array() &&
+                                                before.size() == value.size();
                             for (Entity other : m_Ctx.Selection)
                                 if (other != e && scene.IsValid(other))
                                     if (void* od = info.Get(scene, other))
@@ -379,9 +381,13 @@ namespace Editor
                                         nlohmann::json merged = value;
                                         if (perComponent)
                                         {
-                                            merged = FieldToJson(f, od, &resolver);
-                                            for (size_t i = 0; i < value.size() && i < merged.size(); ++i)
-                                                if (before[i] != value[i]) merged[i] = value[i];
+                                            nlohmann::json own = FieldToJson(f, od, &resolver);
+                                            if (own.is_array() && own.size() == value.size())
+                                            {
+                                                merged = own;
+                                                for (size_t i = 0; i < value.size(); ++i)
+                                                    if (before[i] != value[i]) merged[i] = value[i];
+                                            }
                                         }
                                         FieldFromJson(f, od, merged, &resolver);
                                     }

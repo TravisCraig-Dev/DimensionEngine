@@ -2,8 +2,10 @@
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Scripting/Coroutine.h"
 #include <algorithm>
 #include <functional>
+#include <memory>
 
 namespace Dimension
 {
@@ -77,6 +79,50 @@ namespace Dimension
         // Seconds since play mode started (scaled; stops while paused).
         float Time() const { return m_Scene->GetTime(); }
 
+        // Coroutines (see Coroutine.h): runs the routine until its first wait, then advances it after OnUpdate every
+        // frame while the script is enabled. Returns an id for StopCoroutine (a routine that finished at once is not
+        // kept). Coroutines end with the script.
+        int StartCoroutine(Coroutine routine)
+        {
+            int id = ++m_NextCoroutine;
+            routine.Start();
+            // Waits begin now, so the routine's first tick is next frame's (one started by another routine during the
+            // tick is already past this frame's).
+            if (!routine.IsDone()) m_Coroutines.push_back(std::make_unique<RunningCoroutine>(RunningCoroutine{ id, std::move(routine), false, !m_TickingCoroutines }));
+            return id;
+        }
+        void StopCoroutine(int id)
+        {
+            for (auto& c : m_Coroutines)
+                if (c->Id == id) c->Stopped = true;
+            if (!m_TickingCoroutines) std::erase_if(m_Coroutines, [](const auto& c) { return c->Stopped; });
+        }
+        void StopAllCoroutines()
+        {
+            for (auto& c : m_Coroutines) c->Stopped = true;
+            if (!m_TickingCoroutines) m_Coroutines.clear();
+        }
+        bool IsCoroutineRunning(int id) const
+        {
+            return std::any_of(m_Coroutines.begin(), m_Coroutines.end(), [id](const auto& c) { return c->Id == id && !c->Stopped; });
+        }
+
+        // Engine-internal: advances coroutines (after timers). Routines may start or stop others, or themselves.
+        void TickCoroutines(float dt)
+        {
+            if (m_Coroutines.empty()) return;
+            m_TickingCoroutines = true;
+            for (size_t i = 0, n = m_Coroutines.size(); i < n; ++i) // routines started meanwhile wait for the next frame
+            {
+                RunningCoroutine* c = m_Coroutines[i].get(); // stable while the vector grows
+                if (c->Stopped) continue;
+                if (c->Fresh) { c->Fresh = false; continue; }
+                if (!c->Routine.Tick(dt)) c->Stopped = true;
+            }
+            m_TickingCoroutines = false;
+            std::erase_if(m_Coroutines, [](const auto& c) { return c->Stopped; });
+        }
+
         // Engine-internal: advances timers.
         void TickTimers(float dt)
         {
@@ -103,6 +149,13 @@ namespace Dimension
             float Remaining, Interval;
             std::function<void()> Fn;
         };
+        struct RunningCoroutine
+        {
+            int Id;
+            Coroutine Routine;
+            bool Stopped = false;
+            bool Fresh = true; // started this frame: skips this frame's tick
+        };
         int AddTimer(std::function<void()> fn, float delay, float interval)
         {
             m_Timers.push_back({ ++m_NextTimer, delay, interval, std::move(fn) });
@@ -114,5 +167,8 @@ namespace Dimension
         Scene* m_Scene = nullptr;
         std::vector<Timer> m_Timers;
         int m_NextTimer = 0;
+        std::vector<std::unique_ptr<RunningCoroutine>> m_Coroutines;
+        int m_NextCoroutine = 0;
+        bool m_TickingCoroutines = false;
     };
 }

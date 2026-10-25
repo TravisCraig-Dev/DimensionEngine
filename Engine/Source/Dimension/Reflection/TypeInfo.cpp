@@ -47,10 +47,13 @@ namespace Dimension
         }
         case FieldType::Curve:
         {
-            // A plain key array; smooth curves wrap it as { "smooth": true, "keys": [...] }.
+            // A plain key array; smooth curves wrap it as { "smooth": true, "keys": [...] }. Keys with hand-set
+            // tangents add them: [time, value, in, out, mode].
             const Curve& curve = *(const Curve*)p;
             json keys = json::array();
-            for (auto& k : curve.Keys) keys.push_back({ k.Time, k.Value });
+            for (auto& k : curve.Keys)
+                if (k.Mode == CurveTangentMode::Auto) keys.push_back({ k.Time, k.Value });
+                else keys.push_back({ k.Time, k.Value, k.InTangent, k.OutTangent, (int)k.Mode });
             if (curve.Smooth) return json{ { "smooth", true }, { "keys", keys } };
             return keys;
         }
@@ -114,7 +117,17 @@ namespace Dimension
                 Curve c;
                 c.Smooth = v.is_object() && v.value("smooth", false);
                 for (auto& k : keys)
-                    if (k.is_array() && k.size() >= 2) c.Keys.push_back({ k[0].get<float>(), k[1].get<float>() });
+                    if (k.is_array() && k.size() >= 2)
+                    {
+                        CurveKey key{ k[0].get<float>(), k[1].get<float>() };
+                        if (k.size() >= 5)
+                        {
+                            key.InTangent = k[2].get<float>();
+                            key.OutTangent = k[3].get<float>();
+                            key.Mode = (CurveTangentMode)std::clamp(k[4].get<int>(), 0, 2);
+                        }
+                        c.Keys.push_back(key);
+                    }
                 c.Sort();
                 if (!c.Keys.empty()) *(Curve*)p = std::move(c);
                 else ((Curve*)p)->Smooth = c.Smooth;

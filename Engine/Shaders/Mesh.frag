@@ -79,18 +79,21 @@ void main()
     if (!gl_FrontFacing) N = -N;
     if (m.Flags.y != 0u)
     {
-        vec3 t = SampleTexture(m.Maps.y, uv).xyz * 2.0 - 1.0;
-        t.y = -t.y; // glTF/OpenGL normal maps: +Y points up the image, our V runs downwards
+        vec3 t = SampleTexture(m.Maps.y, uv).xyz * 2.0 - 1.0; // glTF/OpenGL normal maps: +Y points up the image
         t.xy *= m.Params.w;
         if (abs(vTangent.w) > 0.5 && dot(vTangent.xyz, vTangent.xyz) > 1e-8)
         {
-            // Authored vertex tangents (Gram-Schmidt against the interpolated normal).
+            // Vertex tangents (authored or generated; Gram-Schmidt against the interpolated normal). As in glTF,
+            // B = cross(N, T) * w points up the image.
             vec3 T = normalize(vTangent.xyz - N * dot(N, vTangent.xyz));
             vec3 B = cross(N, T) * (vTangent.w < 0.0 ? -1.0 : 1.0);
             N = normalize(mat3(T, B, N) * t);
         }
         else
+        {
+            t.y = -t.y; // the derived frame's B follows V, which runs down the image
             N = normalize(CotangentFrame(N, vWorldPos, uv) * t);
+        }
     }
     vec4 mr = SampleTexture(m.Maps.z, uv);
     float roughness = clamp(m.Params.y * mr.g, 0.02, 1.0);
@@ -106,9 +109,11 @@ void main()
     vec3 ambient = uScene.Ambient.rgb;
     if (HasSkyTexture())
     {
-        // Image-based lighting: blurrier mips for rougher surfaces, SH irradiance for diffuse.
-        float lod = roughness * max(uScene.EnvParams.y - 1.0, 0.0);
-        env = SkyRadiance(R, lod) / max(uScene.SkyParams.z, 1e-4) * uScene.EnvParams.x;
+        // Image-based lighting: the GGX-prefiltered sky (one roughness per mip), SH irradiance for diffuse.
+        if (uScene.SkyFilter.x > 0.5)
+            env = SampleEquirect(uint(uScene.SkyFilter.x), DirToEquirect(R), roughness * uScene.SkyFilter.y) * uScene.EnvParams.x;
+        else
+            env = SkyRadiance(R, roughness * max(uScene.EnvParams.y - 1.0, 0.0)) / max(uScene.SkyParams.z, 1e-4) * uScene.EnvParams.x;
         if (uScene.EnvParams.z > 0.5) ambient = SkyIrradiance(N) * uScene.EnvParams.w;
     }
     else
@@ -167,6 +172,8 @@ void main()
                 lightColor *= textureLod(uTextures[nonuniformEXT(cookie - 1u)], cuv, 0.0).rgb;
             }
         }
+        else if (spot.x > 0.5 && attenuation > 0.0) // point light cookie
+            lightColor *= SampleEquirect(uint(spot.x + 0.5) - 1u, PointCookieUV(uScene.PointLights[i].Cone, -toLight), 0.0);
         if (attenuation <= 0.0) continue;
         uint shadowSlot = uint(uScene.PointLights[i].Color.w + 0.5);
         if (shadowSlot > 0u)

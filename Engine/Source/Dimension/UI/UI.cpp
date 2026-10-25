@@ -320,21 +320,9 @@ namespace Dimension::UI
             return block.x;
         }
 
-        // Multi-line text: byte offsets where each line starts.
-        std::vector<size_t> LineStarts(const std::string& s)
-        {
-            std::vector<size_t> starts{ 0 };
-            for (size_t i = 0; i < s.size(); ++i)
-                if (s[i] == '\n') starts.push_back(i + 1);
-            return starts;
-        }
         size_t LineOf(const std::vector<size_t>& starts, size_t offset)
         {
             return (size_t)(std::upper_bound(starts.begin(), starts.end(), offset) - starts.begin()) - 1;
-        }
-        size_t LineEnd(const std::string& s, const std::vector<size_t>& starts, size_t line)
-        {
-            return line + 1 < starts.size() ? starts[line + 1] - 1 : s.size();
         }
 
         float TextWidth(const Font& font, const std::string& text, float pixelSize)
@@ -367,6 +355,45 @@ namespace Dimension::UI
             ++i;
             while (i < s.size() && ((uint8_t)s[i] & 0xC0) == 0x80) ++i;
             return i;
+        }
+
+        // Visual lines of multi-line text, [Starts[i], Ends[i]) each. Lines break at '\n' and, with a wrap width
+        // (pixels), before the word that would overflow; a word longer than the width breaks between characters.
+        // A wrapped line keeps its trailing space, so then Ends[i] == Starts[i + 1].
+        struct TextLines
+        {
+            std::vector<size_t> Starts, Ends;
+            bool Wrapped(size_t line) const { return line + 1 < Starts.size() && Ends[line] == Starts[line + 1]; }
+        };
+        TextLines LayoutLines(const std::string& s, float wrapWidth, float px)
+        {
+            TextLines lines;
+            for (size_t para = 0;;)
+            {
+                size_t nl = s.find('\n', para), paraEnd = nl == std::string::npos ? s.size() : nl, start = para;
+                while (wrapWidth > 0.0f && start < paraEnd && MeasureText(s.substr(start, paraEnd - start), px) > wrapWidth)
+                {
+                    // Longest prefix that fits (spaces may hang past the edge), preferring to end after a space.
+                    size_t fit = start, afterSpace = std::string::npos;
+                    for (size_t i = start; i < paraEnd; i = NextCodepoint(s, i))
+                    {
+                        size_t next = NextCodepoint(s, i);
+                        if (s[i] != ' ' && MeasureText(s.substr(start, next - start), px) > wrapWidth) break;
+                        fit = next;
+                        if (s[i] == ' ') afterSpace = next;
+                    }
+                    size_t brk = afterSpace != std::string::npos ? afterSpace : std::max(fit, NextCodepoint(s, start));
+                    if (brk >= paraEnd) break;
+                    lines.Starts.push_back(start);
+                    lines.Ends.push_back(brk);
+                    start = brk;
+                }
+                lines.Starts.push_back(start);
+                lines.Ends.push_back(paraEnd);
+                if (nl == std::string::npos) break;
+                para = nl + 1;
+            }
+            return lines;
         }
 
         size_t PrevCodepoint(const std::string& s, size_t i)
@@ -469,10 +496,11 @@ namespace Dimension::UI
                       Entity hovered, std::vector<Entity>& clicked, std::vector<std::pair<Entity, float>>& values)
         {
             Entity selected = scene.GetUISelected();
-            std::vector<Entity> candidates;
+            std::vector<Entity> candidates; // reachable by arrows (UI Navigation mode None opts out)
             for (Entity e : order)
-                if (IsSelectable(reg, e)) candidates.push_back(e);
-            if (!selected.IsNull() && std::find(candidates.begin(), candidates.end(), selected) == candidates.end()) selected = Entity::Null();
+                if (IsSelectable(reg, e))
+                    if (auto* nav = reg.TryGet<UINavigationComponent>(e); !nav || nav->Mode != UINavigationMode::None) candidates.push_back(e);
+            if (!selected.IsNull() && !IsSelectable(reg, selected)) selected = Entity::Null();
             if (pointer.Pressed)
             {
                 selected = !hovered.IsNull() && IsSelectable(reg, hovered) ? hovered : Entity::Null();
@@ -537,7 +565,15 @@ namespace Dimension::UI
             }
             else if (dir != glm::vec2(0.0f) && !candidates.empty())
             {
-                if (selected.IsNull())
+                const auto* nav = selected.IsNull() ? nullptr : reg.TryGet<UINavigationComponent>(selected);
+                Entity link = Entity::Null();
+                if (nav)
+                    link = dir.y < 0.0f ? nav->SelectOnUp : dir.y > 0.0f ? nav->SelectOnDown : dir.x < 0.0f ? nav->SelectOnLeft : nav->SelectOnRight;
+                bool linkValid = !link.IsNull() && reg.Valid(link) && std::find(candidates.begin(), candidates.end(), link) != candidates.end();
+                if (nav && nav->Mode == UINavigationMode::None) {} // stays put
+                else if (linkValid) selected = link;
+                else if (nav && nav->Mode == UINavigationMode::Explicit) {} // no link this way: stays put
+                else if (selected.IsNull())
                 {
                     // Nothing selected yet: start at the top-left widget.
                     selected = *std::min_element(candidates.begin(), candidates.end(), [&](Entity a, Entity b) {
@@ -804,14 +840,18 @@ namespace Dimension::UI
             float scale = rect->ComputedScale, pad = 10.0f * scale, px = field.FontSize * scale;
             float textLeft = rect->ComputedMin.x + pad;
             float lineH = px * 1.1f, textTop = rect->ComputedMin.y + pad * 0.5f;
+            // Multi-line fields with Word Wrap break lines at the padded width (and never scroll sideways).
+            float wrapWidth = field.MultiLine && field.WordWrap ? std::max(1.0f, rect->ComputedMax.x - rect->ComputedMin.x - 2.0f * pad) : 0.0f;
             // Caret offset under a point: the line under it (multi-line), then the column.
             auto caretAt = [&](glm::vec2 p) {
                 if (!field.MultiLine) return (int32_t)CaretFromX(text, p.x - textLeft + field.ScrollX, px);
-                auto starts = LineStarts(text);
+                TextLines lines = LayoutLines(text, wrapWidth, px);
                 float row = std::floor((p.y - textTop + field.ScrollY) / lineH);
-                size_t line = (size_t)std::clamp(row, 0.0f, (float)starts.size() - 1.0f);
-                size_t a = starts[line], b = LineEnd(text, starts, line);
-                return (int32_t)(a + CaretFromX(text.substr(a, b - a), p.x - textLeft + field.ScrollX, px));
+                size_t line = (size_t)std::clamp(row, 0.0f, (float)lines.Starts.size() - 1.0f);
+                size_t a = lines.Starts[line], b = lines.Ends[line];
+                size_t caret = a + CaretFromX(text.substr(a, b - a), p.x - textLeft + field.ScrollX, px);
+                if (lines.Wrapped(line) && caret == b && b > a) caret = PrevCodepoint(text, b); // stay on this line
+                return (int32_t)caret;
             };
             field.Caret = std::clamp(field.Caret, 0, (int32_t)text.size());
             if (field.SelectionAnchor > (int32_t)text.size()) field.SelectionAnchor = -1;
@@ -920,22 +960,26 @@ namespace Dimension::UI
             if (field.MultiLine && (pointer.LineUp || pointer.LineDown))
             {
                 // Same x on the line above/below; past the first/last line, to the start/end.
-                auto starts = LineStarts(text);
-                size_t line = LineOf(starts, (size_t)field.Caret);
-                float x = MeasureText(text.substr(starts[line], field.Caret - starts[line]), px);
+                TextLines lines = LayoutLines(text, wrapWidth, px);
+                size_t line = LineOf(lines.Starts, (size_t)field.Caret);
+                float x = MeasureText(text.substr(lines.Starts[line], field.Caret - lines.Starts[line]), px);
                 if (pointer.LineUp && line == 0) moveCaret(0);
-                else if (pointer.LineDown && line + 1 >= starts.size()) moveCaret(text.size());
+                else if (pointer.LineDown && line + 1 >= lines.Starts.size()) moveCaret(text.size());
                 else
                 {
-                    size_t to = pointer.LineUp ? line - 1 : line + 1, a = starts[to], b = LineEnd(text, starts, to);
-                    moveCaret(a + CaretFromX(text.substr(a, b - a), x, px));
+                    size_t to = pointer.LineUp ? line - 1 : line + 1, a = lines.Starts[to], b = lines.Ends[to];
+                    size_t caret = a + CaretFromX(text.substr(a, b - a), x, px);
+                    if (lines.Wrapped(to) && caret == b && b > a) caret = PrevCodepoint(text, b);
+                    moveCaret(caret);
                 }
             }
             if (field.MultiLine && !pointer.Ctrl && (pointer.Home || pointer.End))
             {
-                auto starts = LineStarts(text);
-                size_t line = LineOf(starts, (size_t)field.Caret);
-                moveCaret(pointer.Home ? starts[line] : LineEnd(text, starts, line));
+                TextLines lines = LayoutLines(text, wrapWidth, px);
+                size_t line = LineOf(lines.Starts, (size_t)field.Caret);
+                size_t end = lines.Ends[line];
+                if (lines.Wrapped(line) && end > lines.Starts[line]) end = PrevCodepoint(text, end); // before the break
+                moveCaret(pointer.Home ? lines.Starts[line] : end);
             }
             else
             {
@@ -964,17 +1008,20 @@ namespace Dimension::UI
             float caretX, total;
             if (field.MultiLine)
             {
-                auto starts = LineStarts(text);
-                size_t line = LineOf(starts, (size_t)field.Caret);
-                caretX = MeasureText(text.substr(starts[line], field.Caret - starts[line]), px);
+                TextLines lines = LayoutLines(text, wrapWidth, px);
+                size_t line = LineOf(lines.Starts, (size_t)field.Caret);
+                caretX = MeasureText(text.substr(lines.Starts[line], field.Caret - lines.Starts[line]), px);
                 total = 0.0f;
-                for (size_t l = 0; l < starts.size(); ++l)
-                    total = std::max(total, MeasureText(text.substr(starts[l], LineEnd(text, starts, l) - starts[l]), px));
+                if (wrapWidth <= 0.0f)
+                    for (size_t l = 0; l < lines.Starts.size(); ++l)
+                        total = std::max(total, MeasureText(text.substr(lines.Starts[l], lines.Ends[l] - lines.Starts[l]), px));
+                else
+                    caretX = std::min(caretX, avail); // a hanging space never scrolls a wrapped field sideways
                 float availY = std::max(lineH, rect->ComputedMax.y - rect->ComputedMin.y - pad);
                 float top = line * lineH;
                 if (top + lineH - field.ScrollY > availY) field.ScrollY = top + lineH - availY;
                 if (top - field.ScrollY < 0.0f) field.ScrollY = top;
-                field.ScrollY = std::clamp(field.ScrollY, 0.0f, std::max(0.0f, starts.size() * lineH - availY));
+                field.ScrollY = std::clamp(field.ScrollY, 0.0f, std::max(0.0f, lines.Starts.size() * lineH - availY));
             }
             else
             {
@@ -1101,12 +1148,13 @@ namespace Dimension::UI
                         float top = mn.y + pad * 0.5f - field->ScrollY;
                         bool placeholder = text.empty() && !field->Focused;
                         const std::string& shown = placeholder ? field->Placeholder : text;
-                        auto starts = LineStarts(shown);
+                        float wrapWidth = field->WordWrap ? std::max(1.0f, size.x - 2.0f * pad) : 0.0f;
+                        TextLines lines = LayoutLines(shown, wrapWidth, px);
                         bool selecting = field->Focused && field->SelectionAnchor >= 0 && field->SelectionAnchor != (int32_t)caret;
                         size_t lo = selecting ? std::min(caret, (size_t)field->SelectionAnchor) : 0, hi = selecting ? std::max(caret, std::min((size_t)field->SelectionAnchor, text.size())) : 0;
-                        for (size_t l = 0; l < starts.size(); ++l)
+                        for (size_t l = 0; l < lines.Starts.size(); ++l)
                         {
-                            size_t a = starts[l], b = LineEnd(shown, starts, l);
+                            size_t a = lines.Starts[l], b = lines.Ends[l];
                             float y = top + l * lineH;
                             if (y > mx.y || y + lineH < mn.y) continue;
                             if (selecting && hi > a && lo <= b)
@@ -1121,9 +1169,10 @@ namespace Dimension::UI
                         }
                         if (field->Focused && std::fmod(field->CaretTime, 1.0f) < 0.55f)
                         {
-                            auto cs = LineStarts(text);
-                            size_t line = LineOf(cs, caret);
-                            float cx = origin.x + MeasureText(text.substr(cs[line], caret - cs[line]), px), cy = top + line * lineH;
+                            TextLines cl = LayoutLines(text, wrapWidth, px);
+                            size_t line = LineOf(cl.Starts, caret);
+                            float cx = origin.x + MeasureText(text.substr(cl.Starts[line], caret - cl.Starts[line]), px), cy = top + line * lineH;
+                            if (wrapWidth > 0.0f) cx = std::min(cx, origin.x + wrapWidth);
                             Emit(out, { cx, cy }, { cx + std::max(1.0f, 2.0f * s), cy + lineH }, { 0, 0 }, { 1, 1 }, field->TextColor, white, inner);
                         }
                     }

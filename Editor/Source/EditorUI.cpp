@@ -52,6 +52,11 @@ namespace Editor::UI
         }
     }
 
+    bool IsListField(FieldType type)
+    {
+        return type == FieldType::StringList || type == FieldType::MaterialList || type == FieldType::Vec3List;
+    }
+
     uint32_t MixedMask(FieldType type, const nlohmann::json& a, const nlohmann::json& b)
     {
         if (IsVectorField(type) && a.is_array() && b.is_array() && a.size() == b.size())
@@ -59,6 +64,14 @@ namespace Editor::UI
             uint32_t mask = 0;
             for (size_t i = 0; i < a.size() && i < 32; ++i)
                 if (a[i] != b[i]) mask |= 1u << i;
+            return mask;
+        }
+        if (IsListField(type) && a.is_array() && b.is_array())
+        {
+            if (a.size() != b.size()) return kMixedAll;
+            uint32_t mask = 0;
+            for (size_t i = 0; i < a.size(); ++i)
+                if (a[i] != b[i]) mask |= 1u << std::min<size_t>(i, 31);
             return mask;
         }
         return a == b ? 0u : 1u;
@@ -276,10 +289,65 @@ namespace Editor::UI
         }
 
         ImGuiStorage* storage = ImGui::GetStateStorage();
-        ImGuiID dragId = ImGui::GetID("##dragkey");
+        ImGuiID dragId = ImGui::GetID("##dragkey"), selectedId = ImGui::GetID("##selkey"), handleId = ImGui::GetID("##draghandle");
+        ImGuiID menuId = ImGui::GetID("##menukey");
         int dragging = storage->GetInt(dragId, -1);
         int hoveredKey = -1;
         ImVec2 mouse = ImGui::GetIO().MousePos;
+
+        // Tangent handles of the selected key (smooth curves, hand-set tangents): drag them to change the slopes.
+        // Handles are drawn a fixed screen length from the key along each slope; side -1 = in, +1 = out.
+        int selected = storage->GetInt(selectedId, -1);
+        int hoveredHandle = 0;
+        auto handlePos = [&](int key, int side) {
+            float slope = side < 0 ? curve.InSlope(key) : curve.OutSlope(key);
+            ImVec2 kp = toScreen(curve.Keys[key].Time, curve.Keys[key].Value);
+            glm::vec2 d(size.x, -slope * size.y / (hi - lo)); // screen direction of a unit of time along the slope
+            d = glm::normalize(d) * 36.0f * (float)side;
+            return ImVec2(kp.x + d.x, kp.y + d.y);
+        };
+        bool showHandles = curve.Smooth && selected >= 0 && selected < (int)curve.Keys.size() && curve.Keys[selected].Mode != CurveTangentMode::Auto;
+        if (showHandles)
+        {
+            ImVec2 kp = toScreen(curve.Keys[selected].Time, curve.Keys[selected].Value);
+            for (int side : { -1, 1 })
+            {
+                if ((side < 0 && selected == 0) || (side > 0 && selected + 1 == (int)curve.Keys.size())) continue;
+                ImVec2 h = handlePos(selected, side);
+                bool hot = canvasHovered && std::abs(mouse.x - h.x) < 5 && std::abs(mouse.y - h.y) < 5;
+                if (hot) hoveredHandle = side;
+                dl->AddLine(kp, h, IM_COL32(170, 170, 180, 255), 1.0f);
+                dl->AddCircleFilled(h, hot ? 4.5f : 3.5f, hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 200, 90, 255));
+            }
+        }
+        int handleDrag = storage->GetInt(handleId, 0);
+        if (hoveredHandle != 0 && ImGui::IsItemActivated() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            storage->SetInt(handleId, handleDrag = hoveredHandle);
+            r.Activated = true;
+        }
+        if (handleDrag != 0)
+        {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && showHandles)
+            {
+                CurveKey& k = curve.Keys[selected];
+                glm::vec2 v = fromScreen(mouse), kv(k.Time, k.Value);
+                float dt = (v.x - kv.x) * (float)handleDrag;
+                float slope = dt > 1e-4f ? (v.y - kv.y) / (v.x - kv.x) : (v.y > kv.y ? 1.0f : -1.0f) * (float)handleDrag * 1e4f;
+                slope = std::clamp(slope, -1e4f, 1e4f);
+                float in = k.InTangent, out = k.OutTangent;
+                if (k.Mode == CurveTangentMode::Free) in = out = slope;
+                else (handleDrag < 0 ? in : out) = slope;
+                if (in != k.InTangent || out != k.OutTangent)
+                {
+                    k.InTangent = in;
+                    k.OutTangent = out;
+                    r.Changed = true;
+                }
+            }
+            else
+                storage->SetInt(handleId, handleDrag = 0);
+        }
         for (int i = 0; i < (int)curve.Keys.size(); ++i)
         {
             ImVec2 kp = toScreen(curve.Keys[i].Time, curve.Keys[i].Value);
@@ -288,11 +356,15 @@ namespace Editor::UI
             dl->AddCircleFilled(kp, hot || i == dragging ? 5.0f : 4.0f, hot || i == dragging ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 230, 255, 255));
         }
         if (hoveredKey >= 0)
-            ImGui::SetTooltip("t %.2f   value %.3f", curve.Keys[hoveredKey].Time, curve.Keys[hoveredKey].Value);
+            ImGui::SetTooltip("t %.2f   value %.3f (right-click: tangents, delete)", curve.Keys[hoveredKey].Time, curve.Keys[hoveredKey].Value);
+        else if (hoveredHandle != 0)
+            ImGui::SetTooltip("%s slope %.3f", hoveredHandle < 0 ? "In" : "Out",
+                              hoveredHandle < 0 ? curve.InSlope(selected) : curve.OutSlope(selected));
 
-        if (ImGui::IsItemActivated() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredKey >= 0)
+        if (ImGui::IsItemActivated() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredKey >= 0 && handleDrag == 0)
         {
             storage->SetInt(dragId, hoveredKey);
+            storage->SetInt(selectedId, hoveredKey);
             r.Activated = true;
         }
         dragging = storage->GetInt(dragId, -1);
@@ -304,7 +376,9 @@ namespace Editor::UI
                 // Keys keep their order: clamp between neighbours.
                 float minT = dragging > 0 ? curve.Keys[dragging - 1].Time : 0.0f;
                 float maxT = dragging + 1 < (int)curve.Keys.size() ? curve.Keys[dragging + 1].Time : 1.0f;
-                CurveKey k{ std::clamp(v.x, minT, maxT), v.y };
+                CurveKey k = curve.Keys[dragging];
+                k.Time = std::clamp(v.x, minT, maxT);
+                k.Value = v.y;
                 if (k.Time != curve.Keys[dragging].Time || k.Value != curve.Keys[dragging].Value)
                 {
                     curve.Keys[dragging] = k;
@@ -314,17 +388,52 @@ namespace Editor::UI
             else
                 storage->SetInt(dragId, -1);
         }
-        if (canvasHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hoveredKey < 0)
+        if (canvasHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hoveredKey < 0 && hoveredHandle == 0)
         {
             glm::vec2 v = fromScreen(mouse);
             curve.Keys.push_back({ v.x, v.y });
             curve.Sort();
             r.Activated = r.Changed = true;
         }
-        if (hoveredKey >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && curve.Keys.size() > 1)
+        // Right-click a key: tangent modes (switching to hand-set tangents starts from the automatic ones, so the
+        // curve does not jump; it also makes the curve smooth) and Delete Key.
+        if (hoveredKey >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
-            curve.Keys.erase(curve.Keys.begin() + hoveredKey);
-            r.Activated = r.Changed = true;
+            storage->SetInt(menuId, hoveredKey);
+            ImGui::OpenPopup("##keymenu");
+        }
+        if (ImGui::BeginPopup("##keymenu"))
+        {
+            int k = storage->GetInt(menuId, -1);
+            if (k >= 0 && k < (int)curve.Keys.size())
+            {
+                CurveKey& key = curve.Keys[k];
+                auto setMode = [&](CurveTangentMode mode, bool flat) {
+                    float in = flat ? 0.0f : curve.InSlope(k), out = flat ? 0.0f : curve.OutSlope(k);
+                    if (mode == CurveTangentMode::Free && !flat) in = out = 0.5f * (in + out);
+                    key.Mode = mode;
+                    key.InTangent = mode == CurveTangentMode::Auto ? 0.0f : in;
+                    key.OutTangent = mode == CurveTangentMode::Auto ? 0.0f : out;
+                    if (mode != CurveTangentMode::Auto) curve.Smooth = true;
+                    storage->SetInt(selectedId, k);
+                    r.Activated = r.Changed = true;
+                };
+                if (ImGui::MenuItem("Auto", nullptr, key.Mode == CurveTangentMode::Auto)) setMode(CurveTangentMode::Auto, false);
+                ImGui::SetItemTooltip("Monotone tangents: smooth, never overshooting a key");
+                if (ImGui::MenuItem("Free", nullptr, key.Mode == CurveTangentMode::Free)) setMode(CurveTangentMode::Free, false);
+                ImGui::SetItemTooltip("One slope through the key, set by dragging its handles");
+                if (ImGui::MenuItem("Broken", nullptr, key.Mode == CurveTangentMode::Broken)) setMode(CurveTangentMode::Broken, false);
+                ImGui::SetItemTooltip("Separate incoming and outgoing slopes");
+                if (ImGui::MenuItem("Flat")) setMode(CurveTangentMode::Free, true);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete Key", nullptr, false, curve.Keys.size() > 1))
+                {
+                    curve.Keys.erase(curve.Keys.begin() + k);
+                    storage->SetInt(selectedId, -1);
+                    r.Activated = r.Changed = true;
+                }
+            }
+            ImGui::EndPopup();
         }
         ImGui::PopID();
         return r;
@@ -456,10 +565,13 @@ namespace Editor::UI
         bool bounded = f.Min != f.Max;
         bool mixed = s_Mixed != 0;
         const char* floatFormat = mixed ? kMixedText : "%.3f";
-        // Whole-value fields (curves, gradients, lists) that differ across the selection: say so above the editor,
-        // which shows the active object's value; any edit gives every selected object that value.
+        // Whole-value fields (curves, gradients, lists of different lengths) that differ across the selection: say so
+        // above the editor, which shows the active object's value; any edit gives every selected object that value.
+        // Lists of equal length instead mark each differing element with "--".
+        uint32_t listMixed = IsListField(f.Type) && s_Mixed != kMixedAll ? s_Mixed : 0u;
+        auto elementMixed = [&](int i) { return (listMixed >> std::min(i, 31)) & 1u; };
         auto mixedNote = [&] {
-            if (!mixed) return;
+            if (!mixed || listMixed) return;
             ImGui::TextDisabled("%s  differs between objects", kMixedText);
             ImGui::SetItemTooltip("Showing the active object's value. Editing it applies the result to every selected object.");
         };
@@ -561,7 +673,7 @@ namespace Editor::UI
             Curve& curve = *(Curve*)p;
             r = CurveEditor("##curve", curve);
             r |= Track(ImGui::Checkbox("Smooth##curve", &curve.Smooth));
-            ImGui::SetItemTooltip("Monotone cubic through the keys instead of straight segments");
+            ImGui::SetItemTooltip("A cubic through the keys instead of straight segments (right-click a key to set its tangents by hand)");
             break;
         }
         case FieldType::Gradient:
@@ -589,7 +701,17 @@ namespace Editor::UI
                 std::snprintf(name, sizeof(name), "  %d", i);
                 PropertyLabel(name, "");
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
-                r |= Track(ImGui::InputText("##s", &list[i]));
+                if (elementMixed(i))
+                {
+                    // Empty box with a "--" hint: typing sets this element on every selected object.
+                    static std::string typed;
+                    typed.clear();
+                    EditResult er = Track(ImGui::InputTextWithHint("##s", kMixedText, &typed));
+                    if (er.Changed) list[i] = typed;
+                    r |= er;
+                }
+                else
+                    r |= Track(ImGui::InputText("##s", &list[i]));
                 ImGui::SameLine();
                 if (ImGui::Button("x", ImVec2(ImGui::GetFrameHeight(), 0.0f))) remove = i;
                 ImGui::PopID();
@@ -620,7 +742,10 @@ namespace Editor::UI
                 ImGui::PushID(i);
                 char name[24];
                 std::snprintf(name, sizeof(name), "  Slot %d", i);
+                uint32_t saved = s_Mixed;
+                s_Mixed = elementMixed(i); // AssetField shows "--" while set
                 r |= AssetField(name, list[i], AssetType::Material);
+                s_Mixed = saved;
                 ImGui::PopID();
             }
             break;
@@ -655,7 +780,7 @@ namespace Editor::UI
                 std::snprintf(name, sizeof(name), "  %d", i);
                 PropertyLabel(name, "");
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
-                r |= Track(ImGui::DragFloat3("##p", &list[i].x, f.Speed, 0.0f, 0.0f, "%.2f"));
+                r |= Track(ImGui::DragFloat3("##p", &list[i].x, f.Speed, 0.0f, 0.0f, elementMixed(i) ? kMixedText : "%.2f"));
                 ImGui::SameLine();
                 if (ImGui::Button("x", ImVec2(ImGui::GetFrameHeight(), 0.0f))) remove = i;
                 ImGui::PopID();

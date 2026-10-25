@@ -7,8 +7,9 @@ struct PointLight
 {
     vec4 PositionRange;  // xyz position, w range
     vec4 Color;          // rgb color * intensity, w: shadow slot + 1 (0 = no shadows)
-    vec4 Direction;      // spot lights: xyz direction, w cos(outer half angle); point lights: w = -2
-    vec4 Cone;           // x: cos(inner half angle), y: cookie texture index + 1 (0 = none), z: cookie roll (radians)
+    vec4 Direction;      // spot lights: xyz direction, w cos(outer half angle); point lights: x cookie index + 1, w = -2
+    vec4 Cone;           // spot: x cos(inner half angle), y cookie texture index + 1 (0 = none), z cookie roll (radians)
+                         // point: world-to-light rotation (quaternion xyzw) for the cookie
 };
 
 #define MAX_POINT_LIGHTS 32
@@ -52,6 +53,7 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 AOParams;       // x 1 = SSAO enabled (2 = debug view), y AO texture index, zw 1 / framebuffer size
     vec4 CascadeDepth;   // world depth covered by each cascade's [0,1] depth range
     vec4 SoftShadowParams; // x 1 = PCSS soft shadows, y tan(light angular radius), z max filter radius (tile texels)
+    vec4 SkyFilter;      // x GGX-prefiltered sky texture index (0 = none), y its mip count - 1
     ReflectionProbe Probes[MAX_REFLECTION_PROBES]; // Counts.y in use
     PointLight PointLights[MAX_POINT_LIGHTS];
 } uScene;
@@ -80,11 +82,20 @@ vec2 DirToEquirectRaw(vec3 d)
 
 bool HasSkyTexture() { return uScene.SkyParams.x > 0.5; }
 
+// Samples an equirectangular image. The bindless samplers repeat, which is right across the wrap line (u) but would
+// blend the two poles together (v), so v stays half a texel inside the mip being read.
+vec3 SampleEquirect(uint index, vec2 uv, float lod)
+{
+    float rows = float(textureSize(uTextures[nonuniformEXT(index)], int(ceil(lod))).y);
+    uv.y = clamp(uv.y, 0.5 / rows, 1.0 - 0.5 / rows);
+    return textureLod(uTextures[nonuniformEXT(index)], uv, lod).rgb;
+}
+
 // Sky radiance in a direction (textureLod: explicit mips avoid seams at the wrap line).
 vec3 SkyRadiance(vec3 dir, float lod)
 {
     if (!HasSkyTexture()) return SkyColor(dir);
-    return textureLod(uTextures[nonuniformEXT(uint(uScene.SkyParams.y))], DirToEquirect(normalize(dir)), lod).rgb * uScene.SkyParams.z;
+    return SampleEquirect(uint(uScene.SkyParams.y), DirToEquirect(normalize(dir)), lod) * uScene.SkyParams.z;
 }
 
 // Diffuse irradiance from the sky's spherical harmonics (already convolved and divided by pi).
@@ -250,7 +261,7 @@ vec3 SampleProbe(ReflectionProbe probe, vec3 pos, vec3 R, float roughness)
         if (t > 0.0) dir = pos + R * t - probe.CenterIntensity.xyz;
     }
     float lod = roughness * max(probe.BoxMax.w - 1.0, 0.0);
-    return textureLod(uTextures[nonuniformEXT(uint(probe.BoxMin.w))], DirToEquirectRaw(normalize(dir)), lod).rgb * probe.CenterIntensity.w;
+    return SampleEquirect(uint(probe.BoxMin.w), DirToEquirectRaw(normalize(dir)), lod) * probe.CenterIntensity.w;
 }
 
 // Spot light cookie coordinates (mirrors SpotCookieUV in SceneRenderer.cpp).
@@ -264,6 +275,14 @@ vec2 SpotCookieUV(vec3 dir, float cosOuter, float roll, vec3 toPoint)
     float c = cos(roll), s = sin(roll);
     q = vec2(c * q.x + s * q.y, -s * q.x + c * q.y);
     return vec2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+}
+
+// Point light cookie coordinates: an equirectangular image in the light's local space (mirrors PointCookieUV in
+// SceneRenderer.cpp).
+vec2 PointCookieUV(vec4 worldToLight, vec3 toPoint)
+{
+    vec3 p = toPoint + 2.0 * cross(worldToLight.xyz, cross(worldToLight.xyz, toPoint) + worldToLight.w * toPoint);
+    return DirToEquirectRaw(normalize(p));
 }
 
 // Point/spot light shadow from the shadow atlas (rows = shadowed lights, columns = cube faces; spot lights use

@@ -67,6 +67,10 @@ namespace Dimension
 
         static bool LoadFromFile(const fs::path& path, MeshData& out);
         static MeshData FromArrays(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name);
+        // Fills in tangents for vertices that have none, from the UV layout (as MikkTSpace does: per-corner tangents
+        // weighted by corner angle, orthogonalized against the normal). Where triangles with mirrored UVs share a
+        // vertex, it is split so each side keeps its own handedness. Triangles without UV area add nothing.
+        void GenerateTangents();
         // Built-in primitives (CPU data; Mesh::Create* uploads them).
         static MeshData Cube();
         static MeshData Sphere(uint32_t segments = 48, uint32_t rings = 24);

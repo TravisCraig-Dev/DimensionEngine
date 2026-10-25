@@ -49,6 +49,10 @@ namespace Dimension
         static bool IsGamepadButtonDown(GamepadButton button, int pad = 0);
         static bool IsGamepadButtonPressed(GamepadButton button, int pad = 0); // went down this frame
         static float GetGamepadAxis(GamepadAxis axis, int pad = 0);
+        // Rumble (XInput controllers): low-frequency (left, heavy) and high-frequency (right, light) motor speeds 0..1.
+        // A positive duration stops it after that many seconds; 0 keeps it until changed. Silent while game input is off.
+        static void SetGamepadVibration(float lowFrequency, float highFrequency, float duration = 0.0f, int pad = 0);
+        static void StopAllVibration();
         // UTF-8 text typed this frame (respects the game-input gate).
         static const std::string& GetTypedText();
         static std::string GetClipboardText();

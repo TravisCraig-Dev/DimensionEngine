@@ -425,7 +425,80 @@ namespace Dimension
         else if (ext == ".obj") ok = LoadObj(path, out);
         else Log::Error("Unsupported mesh format '{}'", ext);
         if (ok && out.SubMeshes.empty()) out.SubMeshes.push_back({ 0, (uint32_t)out.Indices.size(), -1 });
+        if (ok) out.GenerateTangents();
         return ok;
+    }
+
+    void MeshData::GenerateTangents()
+    {
+        size_t original = Vertices.size();
+        bool missing = false;
+        for (const Vertex& v : Vertices) missing |= v.Tangent.w == 0.0f;
+        if (!missing || Indices.size() < 3) return;
+
+        // Accumulated tangent per vertex, kept apart by the handedness of the triangles adding to it.
+        std::vector<glm::vec3> accum[2] = { std::vector<glm::vec3>(original, glm::vec3(0.0f)), std::vector<glm::vec3>(original, glm::vec3(0.0f)) };
+        std::vector<int8_t> faceSign(Indices.size() / 3, 0);
+        for (size_t f = 0; f + 2 < Indices.size(); f += 3)
+        {
+            uint32_t i[3] = { Indices[f], Indices[f + 1], Indices[f + 2] };
+            if (Vertices[i[0]].Tangent.w != 0.0f && Vertices[i[1]].Tangent.w != 0.0f && Vertices[i[2]].Tangent.w != 0.0f) continue;
+            const Vertex &a = Vertices[i[0]], &b = Vertices[i[1]], &c = Vertices[i[2]];
+            glm::vec3 e1 = b.Position - a.Position, e2 = c.Position - a.Position;
+            glm::vec2 d1 = b.UV - a.UV, d2 = c.UV - a.UV;
+            float det = d1.x * d2.y - d2.x * d1.y;
+            if (std::abs(det) < 1e-12f) continue;
+            glm::vec3 t = (e1 * d2.y - e2 * d1.y) / det;
+            glm::vec3 bt = (e2 * d1.x - e1 * d2.x) / det;
+            glm::vec3 n = glm::cross(e1, e2);
+            if (glm::dot(t, t) < 1e-20f || glm::dot(n, n) < 1e-20f) continue;
+            // glTF convention: cross(N, T) * w points up the image, i.e. against increasing V (which runs downwards).
+            // Side 0 (w = +1) is the usual layout, side 1 (w = -1) has mirrored UVs.
+            int side = glm::dot(glm::cross(n, t), bt) < 0.0f ? 0 : 1;
+            faceSign[f / 3] = side ? -1 : 1;
+            t = glm::normalize(t);
+            for (int k = 0; k < 3; ++k)
+            {
+                const glm::vec3& p = Vertices[i[k]].Position;
+                glm::vec3 u = Vertices[i[(k + 1) % 3]].Position - p, w = Vertices[i[(k + 2) % 3]].Position - p;
+                float lu = glm::length(u), lw = glm::length(w);
+                if (lu < 1e-12f || lw < 1e-12f) continue;
+                float angle = std::acos(std::clamp(glm::dot(u, w) / (lu * lw), -1.0f, 1.0f));
+                accum[side][i[k]] += t * angle;
+            }
+        }
+
+        // Vertices used by both handedness sides are split: the mirrored triangles get a copy.
+        std::vector<uint32_t> mirrorCopy(original, UINT32_MAX);
+        for (size_t f = 0; f + 2 < Indices.size(); f += 3)
+        {
+            if (faceSign[f / 3] != -1) continue;
+            for (int k = 0; k < 3; ++k)
+            {
+                uint32_t& index = Indices[f + k];
+                if (index >= original || Vertices[index].Tangent.w != 0.0f || glm::dot(accum[0][index], accum[0][index]) == 0.0f) continue;
+                if (mirrorCopy[index] == UINT32_MAX)
+                {
+                    mirrorCopy[index] = (uint32_t)Vertices.size();
+                    Vertices.push_back(Vertices[index]);
+                    if (!Skin.empty()) Skin.push_back(Skin[index]);
+                }
+                index = mirrorCopy[index];
+            }
+        }
+
+        auto finish = [&](Vertex& v, const glm::vec3& sum, float handedness) {
+            glm::vec3 t = sum - v.Normal * glm::dot(v.Normal, sum);
+            if (glm::dot(t, t) > 1e-16f) v.Tangent = glm::vec4(glm::normalize(t), handedness);
+        };
+        for (size_t v = 0; v < original; ++v)
+        {
+            if (Vertices[v].Tangent.w != 0.0f) continue;
+            bool right = glm::dot(accum[0][v], accum[0][v]) > 0.0f;
+            if (right) finish(Vertices[v], accum[0][v], 1.0f);
+            else finish(Vertices[v], accum[1][v], -1.0f);
+            if (mirrorCopy[v] != UINT32_MAX) finish(Vertices[mirrorCopy[v]], accum[1][v], -1.0f);
+        }
     }
 
     Mesh::Mesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name)
@@ -482,6 +555,7 @@ namespace Dimension
         d.Vertices = std::move(vertices);
         d.Indices = std::move(indices);
         d.SubMeshes.push_back({ 0, (uint32_t)d.Indices.size(), -1 });
+        d.GenerateTangents();
         return d;
     }
 

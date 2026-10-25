@@ -292,22 +292,20 @@ namespace Game
         std::shared_ptr<SceneLoadOperation> m_Loading;
     };
 
-    // Loads another scene after a delay (splash screens, "game over" -> menu).
+    // Loads another scene after a delay (splash screens, "game over" -> menu). Written as a coroutine.
     class LoadSceneAfterDelay : public ScriptableEntity
     {
     public:
         std::string Scene;
         float Delay = 3.0f;
-        void OnUpdate(float dt) override
-        {
-            if (m_Done || (m_Time += dt) < Delay) return;
-            m_Done = true;
-            SceneManager::LoadScene(Scene);
-        }
+        void OnCreate() override { StartCoroutine(LoadLater()); }
 
     private:
-        float m_Time = 0.0f;
-        bool m_Done = false;
+        Coroutine LoadLater()
+        {
+            co_await WaitForSeconds(Delay);
+            SceneManager::LoadScene(Scene);
+        }
     };
 
     // Moves the entity back and forth between its start position and start + Offset (moving platforms, elevators).

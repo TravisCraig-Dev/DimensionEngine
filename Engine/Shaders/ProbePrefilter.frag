@@ -12,6 +12,7 @@ layout(push_constant) uniform Push
     uint Source;     // bindless index of the source (box-filtered mip chain)
     float Roughness; // perceptual roughness of this mip
     float MaxLod;    // source mip count - 1
+    float MinLod;    // lowest source mip to read (a source larger than this mip)
 } pc;
 
 layout(location = 0) in vec2 vUV;
@@ -67,9 +68,12 @@ void main()
         float sinPolar = sqrt(max(1.0 - L.y * L.y, 1e-4)); // equirect texels shrink toward the poles
         float texelSolidAngle = (2.0 * PI / size.x) * (PI / size.y) * sinPolar;
         float sampleSolidAngle = 1.0 / (float(SAMPLES) * pdf + 1e-4);
-        float lod = clamp(0.5 * log2(sampleSolidAngle / texelSolidAngle) + 1.0, 0.0, pc.MaxLod);
+        float lod = clamp(max(0.5 * log2(sampleSolidAngle / texelSolidAngle) + 1.0, pc.MinLod), 0.0, pc.MaxLod);
 
-        sum += textureLod(uTextures[nonuniformEXT(pc.Source)], UVFromDir(L), lod).rgb * NdotL;
+        vec2 uv = UVFromDir(L);
+        float rows = float(textureSize(uTextures[nonuniformEXT(pc.Source)], int(ceil(lod))).y);
+        uv.y = clamp(uv.y, 0.5 / rows, 1.0 - 0.5 / rows); // the sampler repeats: keep the poles apart
+        sum += textureLod(uTextures[nonuniformEXT(pc.Source)], uv, lod).rgb * NdotL;
         weight += NdotL;
     }
     outColor = vec4(sum / max(weight, 1e-4), 1.0);

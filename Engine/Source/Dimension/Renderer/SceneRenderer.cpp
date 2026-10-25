@@ -5,6 +5,8 @@
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include "Dimension/Renderer/Environment.h"
 #include <algorithm>
 #include <cstdint>
 #include <chrono>
@@ -84,6 +86,7 @@ namespace Dimension
             glm::vec4 AOParams; // x enabled, y AO texture index, zw 1 / framebuffer size
             glm::vec4 CascadeDepth;     // world depth range of each cascade
             glm::vec4 SoftShadowParams; // x PCSS on, y tan(light angular radius), z max filter radius in texels
+            glm::vec4 SkyFilter;        // x GGX-prefiltered sky texture index (0 = none), y its mip count - 1
             struct ProbeGPU
             {
                 glm::vec4 CenterIntensity, BoxMin, BoxMax, Params; // see ReflectionProbe in Common.glsl
@@ -582,6 +585,8 @@ namespace Dimension
                 u.SkyParams = glm::vec4(1.0f, (float)sky->GetBindlessIndex(), settings.SkyIntensity, glm::radians(settings.SkyRotation));
                 u.EnvParams = glm::vec4(settings.ReflectionIntensity * settings.SkyIntensity, (float)(sky->GetMipLevels() - 1), 0.0f,
                                         settings.AmbientIntensity * settings.SkyIntensity);
+                if (const FilteredSky* filtered = FilterSky(cmd, sky))
+                    u.SkyFilter = glm::vec4((float)filtered->Bindless, (float)(filtered->Filtered.GetMipLevels() - 1), 0.0f, 0.0f);
                 if (const auto& sh = sky->GetIrradianceSH())
                 {
                     u.EnvParams.z = 1.0f;
@@ -628,8 +633,17 @@ namespace Dimension
                 shadowFaces[pointShadows] = 6;
                 slot = (float)(++pointShadows);
             }
+            // Cookie: bindless index + 1 in Direction.x, and the world-to-light rotation as a quaternion in Cone.
+            float cookie = 0.0f;
+            glm::quat toLight(1.0f, 0.0f, 0.0f, 0.0f);
+            if (light.Cookie)
+                if (auto tex = AssetManager::GetTexture(light.Cookie))
+                {
+                    cookie = (float)tex->GetBindlessIndex() + 1.0f;
+                    toLight = glm::quat_cast(glm::transpose(glm::mat3(t.Right(), t.Up(), -t.Forward())));
+                }
             u.PointLights[u.Counts.x++] = { glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
-                                            glm::vec4(0.0f, 0.0f, 0.0f, -2.0f), glm::vec4(0.0f) };
+                                            glm::vec4(cookie, 0.0f, 0.0f, -2.0f), glm::vec4(toLight.x, toLight.y, toLight.z, toLight.w) };
         }
         for (auto [e, light, t] : reg.ViewOf<SpotLightComponent, TransformComponent>())
         {
@@ -946,6 +960,81 @@ namespace Dimension
     }
     bool SceneRenderer::IsInstancingEnabled() { return s_InstancingEnabled; }
 
+    SceneRenderer::FilteredSky::~FilteredSky()
+    {
+        if (Bindless) RenderDevice::Get().UnregisterTexture(Bindless);
+    }
+
+    namespace
+    {
+        // Prefiltered environments stop at 16 x 8: smaller mips cannot hold even the widest GGX lobe's shape, and
+        // fewer mips leave more resolution per roughness step.
+        uint32_t FilteredMipCount(uint32_t width)
+        {
+            uint32_t full = (uint32_t)std::floor(std::log2((float)std::max(width, 1u))) + 1;
+            return full > 4 ? full - 4 : 1;
+        }
+
+        // Renders mips [firstMip, mips) of an equirectangular image as the GGX-prefiltered environment of `source`
+        // (a bindless equirect with a mip chain): mip m is blurred for roughness m / (mips - 1). Mip 0 reads the source
+        // at least at minLod0 so a larger source does not alias. Leaves those mips in SHADER_READ_ONLY_OPTIMAL.
+        void PrefilterEquirectMips(VkCommandBuffer cmd, Image& dst, uint32_t firstMip, uint32_t source, uint32_t sourceMips, float minLod0)
+        {
+            auto& device = RenderDevice::Get();
+            uint32_t mips = dst.GetMipLevels(), width = dst.GetWidth(), height = dst.GetHeight();
+            if (firstMip >= mips) return;
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                                firstMip, mips - firstMip);
+            struct PrefilterPush { uint32_t Source; float Roughness; float MaxLod; float MinLod; } push{ source, 0.0f, (float)(sourceMips - 1), 0.0f };
+            device.BindBindless(cmd);
+            Renderer::Get().ProbePrefilter.Bind(cmd);
+            for (uint32_t mip = firstMip; mip < mips; ++mip)
+            {
+                uint32_t mw = std::max(1u, width >> mip), mh = std::max(1u, height >> mip);
+                VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+                att.imageView = dst.GetMipView(mip);
+                att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+                info.renderArea = { { 0, 0 }, { mw, mh } };
+                info.layerCount = 1;
+                info.colorAttachmentCount = 1;
+                info.pColorAttachments = &att;
+                vkCmdBeginRendering(cmd, &info);
+                VkViewport viewport{ 0.0f, 0.0f, (float)mw, (float)mh, 0.0f, 1.0f };
+                VkRect2D scissor{ { 0, 0 }, { mw, mh } };
+                vkCmdSetViewport(cmd, 0, 1, &viewport);
+                vkCmdSetScissor(cmd, 0, 1, &scissor);
+                push.Roughness = mips > 1 ? (float)mip / (float)(mips - 1) : 0.0f;
+                push.MinLod = mip == 0 ? minLod0 : 0.0f;
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                vkCmdDraw(cmd, 3, 1, 0, 0);
+                vkCmdEndRendering(cmd);
+            }
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_IMAGE_ASPECT_COLOR_BIT, firstMip, mips - firstMip);
+        }
+    }
+
+    const SceneRenderer::FilteredSky* SceneRenderer::FilterSky(VkCommandBuffer cmd, const Ref<Texture2D>& sky)
+    {
+        if (!sky || !sky->IsHDR()) return nullptr;
+        if (m_FilteredSky.Source.lock() == sky && m_FilteredSky.Bindless) return &m_FilteredSky;
+        auto& device = RenderDevice::Get();
+        if (m_FilteredSky.Bindless) device.UnregisterTexture(m_FilteredSky.Bindless);
+        // Reflections never need more than 1024 x 512; rough mips are tiny anyway.
+        uint32_t width = std::max(std::min(sky->GetWidth(), 1024u), 8u);
+        uint32_t height = std::max(1u, width / 2);
+        m_FilteredSky.Filtered = Image({ width, height, SceneRenderTarget::kHdrFormat,
+                                         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, FilteredMipCount(width), "SkyFiltered" });
+        m_FilteredSky.Bindless = device.RegisterTexture(m_FilteredSky.Filtered.GetView(), device.GetLinearSampler());
+        m_FilteredSky.Source = sky;
+        float minLod0 = std::max(0.0f, std::log2((float)sky->GetWidth() / (float)width));
+        PrefilterEquirectMips(cmd, m_FilteredSky.Filtered, 0, sky->GetBindlessIndex(), sky->GetMipLevels(), minLod0);
+        return &m_FilteredSky;
+    }
+
     SceneRenderer::~SceneRenderer()
     {
         if (m_ShadowMap) RenderDevice::Get().UnregisterTexture(m_ShadowBindless);
@@ -978,6 +1067,11 @@ namespace Dimension
         float c = std::cos(roll), s = std::sin(roll);
         q = glm::vec2(c * q.x + s * q.y, -s * q.x + c * q.y); // into the light's own (rolled) axes
         return glm::vec2(q.x * 0.5f + 0.5f, 0.5f - q.y * 0.5f);
+    }
+
+    glm::vec2 PointCookieUV(const glm::mat3& lightRotation, const glm::vec3& toPoint)
+    {
+        return Environment::DirectionToEquirect(glm::transpose(lightRotation) * toPoint);
     }
 
     glm::mat4 SpotShadowViewProj(const glm::vec3& position, const glm::vec3& direction, float spotAngleDegrees, float nearPlane, float farPlane)
@@ -1949,7 +2043,8 @@ namespace Dimension
             gpu.Equirect = Image({ width, height, F::kHdrFormat,
                                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, mips, "ProbeEquirect" });
             gpu.Filtered = Image({ width, height, F::kHdrFormat,
-                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, mips, "ProbeFiltered" });
+                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                   FilteredMipCount(width), "ProbeFiltered" });
             gpu.SourceBindless = device.RegisterTexture(gpu.Equirect.GetView(), device.GetLinearSampler());
             gpu.Bindless = device.RegisterTexture(gpu.Filtered.GetView(), device.GetLinearSampler());
             gpu.Resolution = res;
@@ -2037,35 +2132,7 @@ namespace Dimension
         Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1);
         vkCmdCopyImage(cmd, base, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, filtered, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
         Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1);
-        if (mips > 1)
-            Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mips - 1);
-        struct PrefilterPush { uint32_t Source; float Roughness; float MaxLod; } push{ gpu.SourceBindless, 0.0f, (float)(mips - 1) };
-        renderer.ProbePrefilter.Bind(cmd);
-        for (uint32_t mip = 1; mip < mips; ++mip)
-        {
-            uint32_t mw = std::max(1u, width >> mip), mh = std::max(1u, height >> mip);
-            VkRenderingAttachmentInfo mipAtt{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-            mipAtt.imageView = gpu.Filtered.GetMipView(mip);
-            mipAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            mipAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            mipAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            VkRenderingInfo mipInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-            mipInfo.renderArea = { { 0, 0 }, { mw, mh } };
-            mipInfo.layerCount = 1;
-            mipInfo.colorAttachmentCount = 1;
-            mipInfo.pColorAttachments = &mipAtt;
-            vkCmdBeginRendering(cmd, &mipInfo);
-            VkViewport mipViewport{ 0.0f, 0.0f, (float)mw, (float)mh, 0.0f, 1.0f };
-            VkRect2D mipScissor{ { 0, 0 }, { mw, mh } };
-            vkCmdSetViewport(cmd, 0, 1, &mipViewport);
-            vkCmdSetScissor(cmd, 0, 1, &mipScissor);
-            push.Roughness = (float)mip / (float)(mips - 1);
-            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
-            vkCmdDraw(cmd, 3, 1, 0, 0);
-            vkCmdEndRendering(cmd);
-        }
-        if (mips > 1)
-            Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mips - 1);
+        PrefilterEquirectMips(cmd, gpu.Filtered, 1, gpu.SourceBindless, mips, 0.0f);
     }
 
     void SceneRenderer::RenderDepthOfField(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera, const SceneSettings& settings)

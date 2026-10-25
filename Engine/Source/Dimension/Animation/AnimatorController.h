@@ -23,13 +23,15 @@ namespace Dimension
         float Threshold = 0.0f;
     };
 
-    enum class AnimMotionType : int32_t { Clip = 0, BlendTree1D = 1 };
+    enum class AnimMotionType : int32_t { Clip = 0, BlendTree1D = 1, BlendTree2D = 2 };
 
-    // One motion of a 1D blend tree, placed at `Threshold` on the blend parameter.
+    // One motion of a blend tree: placed at `Threshold` on the blend parameter (1D), or at (Threshold, ThresholdY) on
+    // the two parameters (2D).
     struct BlendTreeChild
     {
         std::string Clip;
         float Threshold = 0.0f;
+        float ThresholdY = 0.0f;
     };
 
     // Calls OnAnimationEvent(Function) on the entity's scripts when playback passes `Time` (normalized, 0-1).
@@ -44,8 +46,9 @@ namespace Dimension
         std::string Name = "State";
         AnimMotionType Motion = AnimMotionType::Clip;
         std::string Clip;                    // Motion == Clip
-        std::string BlendParameter;          // Motion == BlendTree1D: float parameter
-        std::vector<BlendTreeChild> Children; // Motion == BlendTree1D, any order
+        std::string BlendParameter;          // blend trees: float parameter (2D: the X axis)
+        std::string BlendParameterY;         // Motion == BlendTree2D: float parameter of the Y axis
+        std::vector<BlendTreeChild> Children; // blend trees, any order
         float Speed = 1.0f;
         bool Loop = true;
         std::vector<AnimEvent> Events;
@@ -129,6 +132,11 @@ namespace Dimension
                             const ClipDurationFn& clipDuration);
         // Weight per child of a 1D blend tree (sums to 1; at most two non-zero) for the parameter value.
         void BlendWeights(const AnimState& state, float value, std::vector<float>& weights);
+        // Weight per child of a 2D blend tree (freeform cartesian, gradient band interpolation): sums to 1, exactly 1 at
+        // a child's position, and the children nearest the point share the rest. Works for any child layout.
+        void BlendWeights2D(const AnimState& state, const glm::vec2& value, std::vector<float>& weights);
+        // Weights of a blend tree state from the runtime's parameter values (1D or 2D).
+        void TreeWeights(const AnimatorController& controller, const AnimatorRuntime& runtime, const AnimState& state, std::vector<float>& weights);
         // Appends the functions of events whose time lies in (from, to] (normalized; loops repeat every 1.0).
         void CollectEvents(const AnimState& state, float from, float to, std::vector<std::string>& out);
     }

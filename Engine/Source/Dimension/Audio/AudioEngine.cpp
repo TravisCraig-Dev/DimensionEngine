@@ -46,8 +46,29 @@ namespace Dimension
 
         ma_node_vtable s_MeterVtable = { MeterProcess, nullptr, 1, 1, MA_NODE_FLAG_PASSTHROUGH };
 
+        // Gain stage of a send (between the group's splitter and the target group).
+        struct SendNode
+        {
+            ma_node_base Base; // must be first
+            std::atomic<float> Gain{ 1.0f };
+            ma_uint32 Channels = 2;
+        };
+
+        void SendProcess(ma_node* node, const float** framesIn, ma_uint32* frameCountIn, float** framesOut, ma_uint32* frameCountOut)
+        {
+            auto* s = reinterpret_cast<SendNode*>(node);
+            ma_uint32 frames = std::min(*frameCountIn, *frameCountOut);
+            *frameCountIn = *frameCountOut = frames;
+            float gain = s->Gain.load(std::memory_order_relaxed);
+            size_t n = (size_t)frames * s->Channels;
+            for (size_t i = 0; i < n; ++i) framesOut[0][i] = framesIn[0][i] * gain;
+        }
+
+        ma_node_vtable s_SendVtable = { SendProcess, nullptr, 1, 1, 0 };
+
         // Mixer graph: per group a sound group (sounds attach here) feeding a low-pass filter, the optional echo and
-        // reverb effects, then a meter, which feeds the parent. Effects that are off are bypassed (unlinked).
+        // reverb effects, then a meter and a splitter: output 0 feeds the parent, output 1 the send target (if any).
+        // Effects that are off are bypassed (unlinked).
         struct GroupNodes
         {
             ma_sound_group Group;
@@ -55,8 +76,11 @@ namespace Dimension
             ma_delay_node Echo;
             ma_reverb_node Reverb;
             MeterNode Meter;
+            ma_splitter_node Splitter;
+            SendNode Send;
             bool HasEcho = false, HasReverb = false; // initialized
             bool EchoLinked = false, ReverbLinked = false;
+            int LinkedSend = -1;
             bool Valid = false;
         };
         std::vector<std::unique_ptr<GroupNodes>> s_Groups;
@@ -77,6 +101,8 @@ namespace Dimension
                 auto& g = s_Groups[*it];
                 if (!g || !g->Valid) continue;
                 ma_sound_group_uninit(&g->Group);
+                ma_node_uninit(&g->Send.Base, nullptr);
+                ma_splitter_node_uninit(&g->Splitter, nullptr);
                 ma_node_uninit(&g->Meter.Base, nullptr);
                 if (g->HasReverb) ma_reverb_node_uninit(&g->Reverb, nullptr);
                 if (g->HasEcho) ma_delay_node_uninit(&g->Echo, nullptr);
@@ -106,6 +132,16 @@ namespace Dimension
             n.ReverbLinked = reverb;
         }
 
+        // Points the group's send (splitter output 1 -> send gain) at its target group (live).
+        void LinkSend(GroupNodes& n, int target)
+        {
+            if (target >= 0 && (target >= (int)s_Groups.size() || !s_Groups[target] || !s_Groups[target]->Valid)) target = -1;
+            if (target == n.LinkedSend) return;
+            if (n.LinkedSend >= 0) ma_node_detach_output_bus(&n.Send.Base, 0);
+            if (target >= 0) ma_node_attach_output_bus(&n.Send.Base, 0, &s_Groups[target]->Group, 0);
+            n.LinkedSend = target;
+        }
+
         // Valid parent of group i (Master for invalid or cyclic links).
         int ParentOf(const std::vector<AudioMixerGroup>& groups, int i)
         {
@@ -119,6 +155,34 @@ namespace Dimension
             }
             return p;
         }
+    }
+
+    std::vector<int> AudioMixer::ValidSends(const std::vector<AudioMixerGroup>& groups)
+    {
+        int n = (int)groups.size();
+        std::vector<int> sends(n, -1);
+        // Does `from` lead to `to` along parents and the sends accepted so far?
+        auto reaches = [&](int from, int to) {
+            std::vector<uint8_t> seen(n, 0);
+            std::vector<int> stack{ from };
+            while (!stack.empty())
+            {
+                int g = stack.back();
+                stack.pop_back();
+                if (g == to) return true;
+                if (g < 0 || g >= n || seen[g]) continue;
+                seen[g] = 1;
+                stack.push_back(ParentOf(groups, g));
+                if (sends[g] >= 0) stack.push_back(sends[g]);
+            }
+            return false;
+        };
+        for (int i = 0; i < n; ++i)
+        {
+            int t = groups[i].SendTarget;
+            if (t >= 0 && t < n && t != i && !reaches(t, i)) sends[i] = t;
+        }
+        return sends;
     }
 
     std::vector<AudioMixerGroup> AudioMixer::DefaultGroups()
@@ -337,10 +401,33 @@ namespace Dimension
                 ma_reverb_node_config reverbCfg = ma_reverb_node_config_init(channels, rate);
                 nodes->HasReverb = ma_reverb_node_init(graph, &reverbCfg, nullptr, &nodes->Reverb) == MA_SUCCESS;
             }
+            ma_splitter_node_config splitCfg = ma_splitter_node_config_init(channels);
+            ma_node_config sendCfg = ma_node_config_init();
+            sendCfg.vtable = &s_SendVtable;
+            sendCfg.pInputChannels = &channels;
+            sendCfg.pOutputChannels = &channels;
+            nodes->Send.Channels = channels;
+            bool splitOk = ma_splitter_node_init(graph, &splitCfg, nullptr, &nodes->Splitter) == MA_SUCCESS;
+            if (splitOk && ma_node_init(graph, &sendCfg, nullptr, &nodes->Send.Base) != MA_SUCCESS)
+            {
+                ma_splitter_node_uninit(&nodes->Splitter, nullptr);
+                splitOk = false;
+            }
+            if (!splitOk)
+            {
+                if (nodes->HasReverb) ma_reverb_node_uninit(&nodes->Reverb, nullptr);
+                if (nodes->HasEcho) ma_delay_node_uninit(&nodes->Echo, nullptr);
+                ma_node_uninit(&nodes->Meter.Base, nullptr);
+                ma_lpf_node_uninit(&nodes->LowPass, nullptr);
+                ma_sound_group_uninit(&nodes->Group);
+                continue;
+            }
             int parent = ParentOf(groups, i);
             ma_node* destination = parent >= 0 && s_Groups[parent] ? (ma_node*)&s_Groups[parent]->Group : ma_engine_get_endpoint(s_Engine);
             ma_node_attach_output_bus(&nodes->Group, 0, &nodes->LowPass, 0);
-            ma_node_attach_output_bus(&nodes->Meter.Base, 0, destination, 0);
+            ma_node_attach_output_bus(&nodes->Meter.Base, 0, &nodes->Splitter, 0);
+            ma_node_attach_output_bus(&nodes->Splitter, 0, destination, 0);
+            ma_node_attach_output_bus(&nodes->Splitter, 1, &nodes->Send.Base, 0);
             LinkEffects(*nodes, groups[i]);
             nodes->Valid = true;
             s_Groups[i] = std::move(nodes);
@@ -354,12 +441,15 @@ namespace Dimension
         if (!s_Engine) return;
         auto& groups = Groups();
         ma_uint32 channels = ma_engine_get_channels(s_Engine), rate = ma_engine_get_sample_rate(s_Engine);
+        std::vector<int> sends = ValidSends(groups);
         for (size_t i = 0; i < s_Groups.size() && i < groups.size(); ++i)
         {
             auto& g = s_Groups[i];
             if (!g || !g->Valid) continue;
             ma_sound_group_set_volume(&g->Group, EffectiveGain((int)i));
             const AudioMixerGroup& mg = groups[i];
+            LinkSend(*g, sends[i]);
+            g->Send.Gain.store(DbToLinear(mg.SendLevelDb), std::memory_order_relaxed);
             if (g->HasEcho)
             {
                 ma_delay_node_set_wet(&g->Echo, std::clamp(mg.EchoWet, 0.0f, 1.0f));

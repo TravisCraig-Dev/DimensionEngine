@@ -60,6 +60,10 @@ namespace Dimension
     // Mirrors SpotCookieUV in Common.glsl. Points on the outer cone's rim land on the texture's inscribed circle.
     void SpotCookieBasis(const glm::vec3& direction, glm::vec3& right, glm::vec3& up);
     glm::vec2 SpotCookieUV(const glm::vec3& direction, float cosOuter, float roll, const glm::vec3& toPoint);
+    // Point light cookies are equirectangular images around the light, in its local space (u = 0.5 at its forward,
+    // -Z; v = 0 at its up), so they turn with it. Mirrors PointCookieUV in Common.glsl (which gets the rotation as
+    // a quaternion).
+    glm::vec2 PointCookieUV(const glm::mat3& lightRotation, const glm::vec3& toPoint);
     // View-projection for a spot light shadow covering its outer cone.
     glm::mat4 SpotShadowViewProj(const glm::vec3& position, const glm::vec3& direction, float spotAngleDegrees, float nearPlane, float farPlane);
 
@@ -208,6 +212,18 @@ namespace Dimension
         bool m_Capturing = false;
         void UpdateReflectionProbes(VkCommandBuffer cmd, Scene& scene);
         void BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t resolution);
+
+        // GGX-prefiltered copy of the HDR sky texture for reflections (mip m = roughness m / (mips - 1)), rebuilt
+        // when the sky texture changes.
+        struct FilteredSky
+        {
+            std::weak_ptr<Texture2D> Source;
+            Image Filtered;
+            uint32_t Bindless = 0;
+            ~FilteredSky();
+        };
+        FilteredSky m_FilteredSky;
+        const FilteredSky* FilterSky(VkCommandBuffer cmd, const Ref<Texture2D>& sky);
 
         enum class MeshPass { Main, Shadow, Depth };
         void DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass);

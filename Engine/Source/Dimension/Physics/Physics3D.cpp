@@ -137,7 +137,13 @@ namespace Dimension
 
         std::unordered_map<JPH::uint32, Entity> BodyToEntity; // read-only during Update
         std::unordered_set<JPH::uint32> Sensors;               // read-only during Update
-        struct Joint { Entity A, B; JPH::Ref<JPH::Constraint> Constraint; JointType Type; };
+        struct Joint
+        {
+            Entity A, B;
+            JPH::Ref<JPH::Constraint> Constraint;
+            JointType Type;
+            float MinDistance = 0.0f, MaxDistance = 0.0f; // distance joints: current limits (a winch moves them)
+        };
         std::vector<Joint> Joints;
         // Jointed bodies that must not collide share group 0 and get their own sub-group.
         static constexpr JPH::uint kMaxJointSubGroups = 4096;
@@ -338,6 +344,13 @@ namespace Dimension
         m_Impl->System.AddConstraint(constraint);
         bi.ActivateConstraint(constraint);
         m_Impl->Joints.push_back({ e, other, constraint, j.Type });
+        if (j.Type == JointType::Distance)
+        {
+            auto* d = static_cast<JPH::DistanceConstraint*>(constraint);
+            m_Impl->Joints.back().MinDistance = d->GetMinDistance();
+            m_Impl->Joints.back().MaxDistance = d->GetMaxDistance();
+            j.CurrentLength = d->GetMaxDistance();
+        }
         j.Broken = false;
         j.CurrentForce = j.CurrentTorque = 0.0f;
 
@@ -569,6 +582,24 @@ namespace Dimension
         for (auto& joint : m_Impl->Joints)
         {
             auto* jc = reg.TryGet<JointComponent>(joint.A);
+            if (jc && joint.Type == JointType::Distance && jc->UseMotor && jc->MotorSpeed != 0.0f)
+            {
+                // Winch: the joint's length changes by Motor Speed per second (both limits, so a rope keeps its
+                // slack). Reeling in stalls while the joint already pulls harder than Motor Max Torque (as a force).
+                auto* d = static_cast<JPH::DistanceConstraint*>(joint.Constraint.GetPtr());
+                float pull = dt > 0.0f ? std::abs(d->GetTotalLambdaPosition()) / dt : 0.0f;
+                if (jc->MotorSpeed > 0.0f || pull <= std::max(jc->MotorMaxTorque, 0.0f))
+                {
+                    float delta = jc->MotorSpeed * dt;
+                    joint.MinDistance = std::max(joint.MinDistance + delta, 0.01f);
+                    joint.MaxDistance = std::max(joint.MaxDistance + delta, joint.MinDistance);
+                    d->SetDistance(joint.MinDistance, joint.MaxDistance);
+                    bi.ActivateBody(JPH::BodyID(reg.Get<RigidbodyComponent>(joint.A).RuntimeBody));
+                    if (auto* rbB = m_Scene.IsValid(joint.B) ? reg.TryGet<RigidbodyComponent>(joint.B) : nullptr) bi.ActivateBody(JPH::BodyID(rbB->RuntimeBody));
+                }
+                jc->CurrentLength = joint.MaxDistance;
+                continue;
+            }
             if (!jc || (joint.Type != JointType::Hinge && joint.Type != JointType::Slider)) continue;
             // Jolt drives the connected body relative to this one; positive speed should turn *this* entity
             // counter-clockwise around its axis (right-hand rule), or move it along +Axis, hence the signs.

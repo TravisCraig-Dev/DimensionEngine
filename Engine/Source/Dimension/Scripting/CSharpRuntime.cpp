@@ -105,6 +105,7 @@ namespace Dimension
             int (*LoadSceneAsync)(const char*, int, int); // operation id (0 = scene not found)
             int (*AsyncState)(int, float*);              // progress out; returns 1 when done, 0 while loading, -1 unknown id
             void (*AsyncAllowActivation)(int, int);
+            void (*GamepadVibrate)(float, float, float, int); // low, high, seconds (0 = until changed), pad
         };
 
         // Background scene loads started from C#, by id.
@@ -466,6 +467,7 @@ namespace Dimension
             a.GamepadAxis = [](int axis, int pad) -> float {
                 return axis >= 0 && axis <= (int)GamepadAxis::RightTrigger ? Input::GetGamepadAxis((GamepadAxis)axis, pad) : 0.0f;
             };
+            a.GamepadVibrate = [](float low, float high, float seconds, int pad) { Input::SetGamepadVibration(low, high, seconds, pad); };
             a.MixerTransition = [](const char* name, float seconds) -> int {
                 return AudioMixer::TransitionToSnapshot(name ? name : "", seconds) ? 1 : 0;
             };

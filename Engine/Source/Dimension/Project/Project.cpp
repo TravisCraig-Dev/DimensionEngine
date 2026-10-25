@@ -59,6 +59,8 @@ namespace Dimension
                         group.ReverbRoomSize = g.value("reverbRoomSize", group.ReverbRoomSize);
                         group.ReverbDamping = g.value("reverbDamping", group.ReverbDamping);
                         group.ReverbWet = g.value("reverbWet", group.ReverbWet);
+                        group.SendTarget = g.value("sendTo", -1);
+                        group.SendLevelDb = g.value("sendDb", 0.0f);
                         s_Config.MixerGroups.push_back(group);
                     }
                 }
@@ -99,7 +101,8 @@ namespace Dimension
             mixer.push_back({ { "name", g.Name }, { "parent", g.Parent }, { "volumeDb", g.VolumeDb }, { "mute", g.Mute },
                               { "solo", g.Solo }, { "lowPassHz", g.LowPassHz }, { "echo", g.Echo }, { "echoDelayMs", g.EchoDelayMs },
                               { "echoDecay", g.EchoDecay }, { "echoWet", g.EchoWet }, { "reverb", g.Reverb },
-                              { "reverbRoomSize", g.ReverbRoomSize }, { "reverbDamping", g.ReverbDamping }, { "reverbWet", g.ReverbWet } });
+                              { "reverbRoomSize", g.ReverbRoomSize }, { "reverbDamping", g.ReverbDamping }, { "reverbWet", g.ReverbWet },
+                              { "sendTo", g.SendTarget }, { "sendDb", g.SendLevelDb } });
         nlohmann::json buildScenes = nlohmann::json::array();
         for (AssetHandle h : s_Config.BuildScenes) buildScenes.push_back((uint64_t)h);
         nlohmann::json snapshots = nlohmann::json::array();

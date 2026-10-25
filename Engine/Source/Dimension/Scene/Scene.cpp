@@ -489,6 +489,7 @@ namespace Dimension
             {
                 inst->OnUpdate(dt);
                 inst->TickTimers(dt);
+                inst->TickCoroutines(dt);
             }
         });
         for (auto& sys : m_Systems) sys->OnUpdate(*this, dt);
@@ -562,28 +563,32 @@ namespace Dimension
             Ref<AnimatorController> controller = AssetManager::GetAnimatorController(anim.Controller);
             if (controller) controller->LinkLayers();
 
-            // Samples a 1D blend tree at a normalized time: the two weighted children, in sync.
+            // Samples a blend tree at a normalized time: every weighted child, in sync (1D trees have at most two,
+            // 2D trees any number). Children are folded in one at a time, each at its share of the weight so far.
             auto sampleTree = [&](const AnimatorController& machine, const AnimatorRuntime& runtime, const AnimState& st, float normalized, Pose& out) {
                 std::vector<float> w;
-                AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(machine, runtime, st.BlendParameter), w);
+                AnimatorStateMachine::TreeWeights(machine, runtime, st, w);
                 float frac = st.Loop ? normalized - std::floor(normalized) : std::clamp(normalized, 0.0f, 1.0f);
                 auto sampleChild = [&](int i, Pose& pose) {
                     const AnimationClip* c = Animation::FindClip(clips, st.Children[i].Clip);
                     if (c) Animation::Sample(*skeleton, *c, frac * c->Duration, pose);
                     else pose.SetBindPose(*skeleton);
                 };
-                int a = -1, b = -1;
+                float total = 0.0f;
                 for (int i = 0; i < (int)w.size(); ++i)
-                    if (w[i] > 0.0f) (a < 0 ? a : b) = i;
-                if (a < 0) { out.SetBindPose(*skeleton); return; }
-                sampleChild(a, out);
-                if (b >= 0)
                 {
-                    Pose pb, blended;
-                    sampleChild(b, pb);
-                    Animation::Blend(out, pb, w[b], blended);
-                    out = std::move(blended);
+                    if (w[i] <= 1e-4f) continue;
+                    if (total == 0.0f) sampleChild(i, out);
+                    else
+                    {
+                        Pose child, blended;
+                        sampleChild(i, child);
+                        Animation::Blend(out, child, w[i] / (total + w[i]), blended);
+                        out = std::move(blended);
+                    }
+                    total += w[i];
                 }
+                if (total == 0.0f) out.SetBindPose(*skeleton);
             };
 
             // Runs one state machine (the base layer: `pb` is the AnimatorComponent itself; an extra layer: its playback)
@@ -593,7 +598,7 @@ namespace Dimension
                 {
                     AnimatorStateMachine::Update(*machine, pb.Runtime, dt * anim.Speed, duration, [&](const AnimState& state, float fade) {
                         int index = (int)(&state - machine->States.data());
-                        bool isTree = state.Motion == AnimMotionType::BlendTree1D;
+                        bool isTree = state.Motion != AnimMotionType::Clip;
                         bool hasCurrent = !pb.Clip.empty() || pb.TreeState >= 0;
                         if (fade > 0.0f && hasCurrent)
                         {

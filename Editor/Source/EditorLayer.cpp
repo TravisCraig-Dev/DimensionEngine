@@ -307,6 +307,7 @@ namespace Editor
                 }
         AudioMixer::Apply();
         if (!m_Ctx.EditorScene->IsValid(m_Ctx.Selected)) m_Ctx.Select(Entity::Null());
+        Input::StopAllVibration();
         Input::SetGameInputEnabled(true);
         ImGui::SetWindowFocus("Scene");
         UpdateWindowTitle();
@@ -563,7 +564,9 @@ namespace Editor
 
     // Line Renderer points: with a line selected, its points show as handles in the Scene view. Clicking one picks
     // it and a move gizmo edits that point (undoable); clicking elsewhere returns to the object's own gizmo.
-    // Returns true while the mouse is over a handle or the point gizmo (so the click does not re-select).
+    // Shift-click on a segment inserts a point there; Delete removes the picked point (a line keeps at least two).
+    // Returns true while the mouse is over a handle, a segment being inserted on, or the point gizmo (so the click
+    // does not re-select).
     bool EditorLayer::UpdateLinePointEditing(ImVec2 origin, ImVec2 size)
     {
         Scene& scene = m_Ctx.ActiveScene();
@@ -609,7 +612,42 @@ namespace Editor
             dl->AddCircleFilled(s, picked ? 6.0f : 4.5f, picked ? accent : IM_COL32(255, 170, 60, 255));
             dl->AddCircle(s, picked ? 6.0f : 4.5f, IM_COL32(20, 20, 20, 255), 0, 1.5f);
         }
-        if (hovered >= 0) ImGui::SetTooltip("Point %d (click to move it)", hovered);
+        if (hovered >= 0) ImGui::SetTooltip("Point %d (click to move it%s)", hovered, line->Positions.size() > 2 ? ", Delete removes it" : "");
+
+        // Shift: a "+" marker follows the mouse along the nearest segment; clicking inserts a point there.
+        int insertAfter = -1;
+        glm::vec3 insertWorld(0.0f);
+        if (hovered < 0 && m_SceneViewHovered && ImGui::GetIO().KeyShift && !ImGuizmo::IsUsing() && line->Positions.size() >= 2)
+        {
+            size_t segments = line->Positions.size() - (line->Loop ? 0 : 1);
+            float nearest = 10.0f;
+            for (size_t i = 0; i < segments; ++i)
+            {
+                size_t next = (i + 1) % line->Positions.size();
+                bool va, vb;
+                glm::vec3 wa = worldOf(i), wb = worldOf(next);
+                ImVec2 a = screenOf(wa, va), b = screenOf(wb, vb);
+                if (!va || !vb) continue;
+                glm::vec2 ab(b.x - a.x, b.y - a.y), am(mouse.x - a.x, mouse.y - a.y);
+                float s = std::clamp(glm::dot(am, ab) / std::max(glm::dot(ab, ab), 1e-6f), 0.0f, 1.0f);
+                float d = glm::length(am - ab * s);
+                if (d < nearest)
+                {
+                    nearest = d;
+                    insertAfter = (int)i;
+                    insertWorld = glm::mix(wa, wb, s);
+                }
+            }
+            if (insertAfter >= 0)
+            {
+                bool visible;
+                ImVec2 s = screenOf(insertWorld, visible);
+                dl->AddCircleFilled(s, 5.5f, IM_COL32(90, 200, 120, 255));
+                dl->AddLine(ImVec2(s.x - 3.0f, s.y), ImVec2(s.x + 3.0f, s.y), IM_COL32(255, 255, 255, 255), 1.5f);
+                dl->AddLine(ImVec2(s.x, s.y - 3.0f), ImVec2(s.x, s.y + 3.0f), IM_COL32(255, 255, 255, 255), 1.5f);
+                ImGui::SetTooltip("Click to insert a point");
+            }
+        }
 
         bool overGizmo = false;
         if (m_LinePoint >= 0)
@@ -637,6 +675,16 @@ namespace Editor
 
         if (m_SceneViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !overGizmo && !ImGui::GetIO().KeyAlt)
         {
+            if (insertAfter >= 0)
+            {
+                m_Ctx.RecordUndo();
+                glm::vec3 p = line->UseWorldSpace ? insertWorld : glm::vec3(glm::inverse(t.World) * glm::vec4(insertWorld, 1.0f));
+                line->Positions.insert(line->Positions.begin() + insertAfter + 1, p);
+                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, "Line Renderer", "Positions");
+                m_Ctx.MarkDirty();
+                m_LinePoint = insertAfter + 1;
+                return true;
+            }
             if (hovered >= 0)
             {
                 m_LinePoint = hovered;
@@ -645,7 +693,23 @@ namespace Editor
             m_LinePoint = -1; // back to the object's gizmo (the click selects as usual)
         }
         if (m_LinePoint >= 0 && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_LinePoint = -1;
-        return overGizmo || hovered >= 0;
+        return overGizmo || hovered >= 0 || insertAfter >= 0;
+    }
+
+    bool EditorLayer::DeleteLinePoint()
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        auto* line = m_LinePoint >= 0 && m_Ctx.HasValidSelection() ? scene.GetRegistry().TryGet<LineRendererComponent>(m_Ctx.Selected) : nullptr;
+        if (!line || m_LinePoint >= (int)line->Positions.size()) return false;
+        if (line->Positions.size() > 2)
+        {
+            m_Ctx.RecordUndo();
+            line->Positions.erase(line->Positions.begin() + m_LinePoint);
+            Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, "Line Renderer", "Positions");
+            m_Ctx.MarkDirty();
+        }
+        m_LinePoint = std::min(m_LinePoint, (int)line->Positions.size() - 1);
+        return true; // handled even when kept at two points: Delete never removes the object while a point is picked
     }
 
     // ---- UI ----------------------------------------------------------------------------------------
@@ -1247,7 +1311,7 @@ namespace Editor
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false)) DuplicateSelected(m_Ctx);
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) CopySelected(m_Ctx);
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) PasteClipboard(m_Ctx);
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) DeleteSelected(m_Ctx);
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
 
         bool viewActive = m_SceneViewHovered || m_SceneViewFocused;
         if (viewActive && !ctrl && !m_Camera.IsControlling())
@@ -1485,12 +1549,15 @@ namespace Editor
                 save |= ImGui::IsItemDeactivatedAfterEdit();
                 // Insert effects in a popup (strips are narrow).
                 {
-                    std::string fx = std::string("FX") + (g.Echo ? " E" : "") + (g.Reverb ? " R" : "") + "##fx";
-                    bool any = g.Echo || g.Reverb;
+                    bool sending = g.SendTarget >= 0 && g.SendTarget < (int)groups.size() && g.SendTarget != i;
+                    std::string fx = std::string("FX") + (g.Echo ? " E" : "") + (g.Reverb ? " R" : "") + (sending ? " >" : "") + "##fx";
+                    bool any = g.Echo || g.Reverb || sending;
                     if (any) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.45f, 0.7f, 1));
                     if (ImGui::Button(fx.c_str(), ImVec2(controlsW, 0))) ImGui::OpenPopup("##effects");
                     if (any) ImGui::PopStyleColor();
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Echo and reverb on this group");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(sending ? "Echo, reverb and send (to %s)" : "Echo, reverb and send on this group",
+                                          sending ? groups[g.SendTarget].Name.c_str() : "");
                     if (ImGui::BeginPopup("##effects"))
                     {
                         auto edited = [&](bool changed) { live |= changed; save |= ImGui::IsItemDeactivatedAfterEdit(); };
@@ -1511,6 +1578,34 @@ namespace Editor
                         edited(ImGui::SliderFloat("Damping", &g.ReverbDamping, 0.0f, 1.0f));
                         ImGui::SetNextItemWidth(180);
                         edited(ImGui::SliderFloat("Wet##reverb", &g.ReverbWet, 0.0f, 1.0f));
+                        ImGui::SeparatorText("Send");
+                        ImGui::SetNextItemWidth(180);
+                        const char* sendName = sending ? groups[g.SendTarget].Name.c_str() : "None";
+                        if (ImGui::BeginCombo("To##send", sendName))
+                        {
+                            if (ImGui::Selectable("None", !sending)) { g.SendTarget = -1; live = save = true; }
+                            for (int t = 0; t < (int)groups.size(); ++t)
+                            {
+                                if (t == i) continue;
+                                // Targets that would feed back into this group are disabled.
+                                auto trial = groups;
+                                trial[i].SendTarget = t;
+                                bool loops = AudioMixer::ValidSends(trial)[i] != t;
+                                if (ImGui::Selectable(groups[t].Name.c_str(), g.SendTarget == t, loops ? ImGuiSelectableFlags_Disabled : 0))
+                                {
+                                    g.SendTarget = t;
+                                    live = save = true;
+                                }
+                                if (loops) ImGui::SetItemTooltip("Would feed back into this group");
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SetItemTooltip("A copy of this group's output (after its volume and effects) also goes to that group, e.g. a "
+                                              "return group with a reverb shared by several groups");
+                        ImGui::SetNextItemWidth(180);
+                        ImGui::BeginDisabled(!sending);
+                        edited(ImGui::SliderFloat("Level (dB)##send", &g.SendLevelDb, AudioMixer::kSilentDb, 10.0f, "%.1f"));
+                        ImGui::EndDisabled();
                         ImGui::EndPopup();
                     }
                 }
@@ -1555,6 +1650,8 @@ namespace Editor
             {
                 if (g.Parent == remove) g.Parent = parent > remove ? parent - 1 : parent;
                 else if (g.Parent > remove) --g.Parent;
+                if (g.SendTarget == remove) g.SendTarget = -1;
+                else if (g.SendTarget > remove) --g.SendTarget;
             }
             structure = save = true;
         }

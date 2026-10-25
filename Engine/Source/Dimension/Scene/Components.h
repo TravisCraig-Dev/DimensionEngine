@@ -163,6 +163,7 @@ namespace Dimension
         float Range = 10.0f;
         bool CastShadows = false;  // up to 4 point lights cast shadows (cube shadow maps)
         float ShadowBias = 0.05f;  // world units
+        AssetHandle Cookie = AssetHandle::None(); // equirectangular texture around the light (tints it; turns with it)
     };
 
     // Cone light shining along the entity's forward (-Z) axis, like Unity's Spot Light.
@@ -338,6 +339,7 @@ namespace Dimension
         std::string Placeholder = "Enter text...";
         int32_t CharacterLimit = 0; // 0 = unlimited
         bool MultiLine = false;     // Enter starts a new line (Ctrl+Enter submits); Up/Down move between lines
+        bool WordWrap = true;       // multi-line: long lines wrap at the field's width instead of scrolling sideways
         float FontSize = 28.0f;
         bool Interactable = true;
         glm::vec4 BackgroundColor{ 1.0f };
@@ -418,6 +420,20 @@ namespace Dimension
         TextAlign Align = TextAlign::Center;
         TextVAlign VerticalAlign = TextVAlign::Middle;
         bool Wrap = true;
+    };
+
+    enum class UINavigationMode : int32_t { Automatic = 0, Explicit = 1, None = 2 };
+
+    // Keyboard/gamepad navigation settings of a widget (Unity's Selectable navigation). Automatic moves to the nearest
+    // widget in the pressed direction unless a link is set for that direction; Explicit only follows the links (an
+    // empty link goes nowhere); None takes the widget out of arrow navigation (the mouse still works).
+    struct UINavigationComponent
+    {
+        UINavigationMode Mode = UINavigationMode::Automatic;
+        Entity SelectOnUp = Entity::Null();
+        Entity SelectOnDown = Entity::Null();
+        Entity SelectOnLeft = Entity::Null();
+        Entity SelectOnRight = Entity::Null();
     };
 
     // Tints the entity's UI Image by state and calls OnClick() on its scripts when clicked.
@@ -625,15 +641,16 @@ namespace Dimension
         float SpringFrequency = 0.0f;      // distance joint: > 0 makes it a spring (oscillations per second); 0 = rigid
         float SpringDamping = 0.5f;        // damping ratio (0 = bouncy forever, 1 = no overshoot)
         bool EnableCollision = false;      // let the two connected bodies collide with each other
-        bool UseMotor = false;             // hinge or slider: drive toward Motor Speed
-        float MotorSpeed = 90.0f;          // hinge: degrees per second; slider: units per second (changeable while playing)
-        float MotorMaxTorque = 1000.0f;    // hinge: N*m; slider: maximum force, N
+        bool UseMotor = false;             // hinge or slider: drive toward Motor Speed; distance: winch
+        float MotorSpeed = 90.0f;          // hinge: degrees per second; slider / distance: units per second (changeable while playing)
+        float MotorMaxTorque = 1000.0f;    // hinge: N*m; slider: maximum force, N; distance: force above which reeling in stalls
         float BreakForce = 0.0f;           // N; the joint breaks above this (0 = unbreakable)
         float BreakTorque = 0.0f;          // N*m; 0 = unbreakable
 
         // Runtime (not serialized)
         bool Broken = false;
         float CurrentForce = 0.0f, CurrentTorque = 0.0f; // reaction during the last physics step
+        float CurrentLength = 0.0f;        // distance joint: its (maximum) length now, as a winch changes it
     };
 
     enum class Joint2DType : int32_t { Fixed = 0, Hinge = 1, Distance = 2, Slider = 3 };

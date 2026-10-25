@@ -50,10 +50,14 @@ namespace Dimension
         if (!Smooth) return a.Value + (b.Value - a.Value) * f;
         // Cubic Hermite between the two keys.
         float dt = b.Time - a.Time;
-        float m0 = MonotoneTangent(Keys, i) * dt, m1 = MonotoneTangent(Keys, i + 1) * dt;
+        float m0 = OutSlope(i) * dt, m1 = InSlope(i + 1) * dt;
         float f2 = f * f, f3 = f2 * f;
         return (2 * f3 - 3 * f2 + 1) * a.Value + (f3 - 2 * f2 + f) * m0 + (-2 * f3 + 3 * f2) * b.Value + (f3 - f2) * m1;
     }
+
+    float Curve::AutoTangent(size_t i) const { return Keys.size() >= 2 && i < Keys.size() ? MonotoneTangent(Keys, i) : 0.0f; }
+    float Curve::InSlope(size_t i) const { return Keys[i].Mode == CurveTangentMode::Auto ? AutoTangent(i) : Keys[i].InTangent; }
+    float Curve::OutSlope(size_t i) const { return Keys[i].Mode == CurveTangentMode::Auto ? AutoTangent(i) : Keys[i].OutTangent; }
 
     void Curve::Sort()
     {

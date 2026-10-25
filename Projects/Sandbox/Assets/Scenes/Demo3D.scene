@@ -1747,6 +1747,44 @@
       }
     },
     {
+      "guid": 740001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Lantern",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+          -4.8,
+          1.1,
+          7.2
+        ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Point Light": {
+          "Color": [
+            1.0,
+            0.75,
+            0.45
+          ],
+          "Intensity": 7.0,
+          "Range": 5.5,
+          "Cookie": 100052
+        }
+      }
+    },
+    {
       "guid": 720001,
       "parent": 0,
       "components": {

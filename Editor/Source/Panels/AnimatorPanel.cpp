@@ -16,6 +16,69 @@ namespace Editor
 
         ImVec2 ToV(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 
+        // A 2D blend tree's space: its children as dots (sized by weight) and the blend point. While playing the point
+        // follows the live parameters; otherwise it can be dragged to preview the weights.
+        void Draw2DBlendSpace(const AnimState& st, std::vector<float>& weights, const AnimatorController* c, const AnimatorRuntime* runtime)
+        {
+            ImGuiStorage* storage = ImGui::GetStateStorage();
+            ImGuiID px = ImGui::GetID("##previewx"), py = ImGui::GetID("##previewy");
+            glm::vec2 point(storage->GetFloat(px, 0.0f), storage->GetFloat(py, 0.0f));
+            bool livePoint = c && runtime;
+            if (livePoint)
+                point = { AnimatorStateMachine::GetParameter(*c, *runtime, st.BlendParameter), AnimatorStateMachine::GetParameter(*c, *runtime, st.BlendParameterY) };
+
+            glm::vec2 lo(-1.0f), hi(1.0f);
+            for (auto& ch : st.Children)
+            {
+                lo = glm::min(lo, glm::vec2(ch.Threshold, ch.ThresholdY));
+                hi = glm::max(hi, glm::vec2(ch.Threshold, ch.ThresholdY));
+            }
+            glm::vec2 margin = (hi - lo) * 0.12f;
+            lo -= margin;
+            hi += margin;
+            float width = ImGui::GetContentRegionAvail().x, height = std::min(170.0f, width * 0.6f);
+            ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + width, p0.y + height);
+            ImGui::InvisibleButton("##blendspace", ImVec2(width, height));
+            auto toScreen = [&](glm::vec2 v) {
+                return ImVec2(p0.x + (v.x - lo.x) / (hi.x - lo.x) * width, p1.y - (v.y - lo.y) / (hi.y - lo.y) * height);
+            };
+            if (!livePoint && ImGui::IsItemActive())
+            {
+                ImVec2 m = ImGui::GetIO().MousePos;
+                point = { lo.x + (m.x - p0.x) / width * (hi.x - lo.x), lo.y + (p1.y - m.y) / height * (hi.y - lo.y) };
+                point = glm::clamp(point, lo, hi);
+                storage->SetFloat(px, point.x);
+                storage->SetFloat(py, point.y);
+            }
+            if (!livePoint) AnimatorStateMachine::BlendWeights2D(st, point, weights);
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(p0, p1, IM_COL32(28, 28, 32, 255), 3.0f);
+            ImVec2 o = toScreen({ 0.0f, 0.0f });
+            dl->AddLine(ImVec2(p0.x, o.y), ImVec2(p1.x, o.y), IM_COL32(60, 60, 70, 255));
+            dl->AddLine(ImVec2(o.x, p0.y), ImVec2(o.x, p1.y), IM_COL32(60, 60, 70, 255));
+            int hovered = -1;
+            ImVec2 mouse = ImGui::GetIO().MousePos;
+            for (int k = 0; k < (int)st.Children.size(); ++k)
+            {
+                ImVec2 s = toScreen({ st.Children[k].Threshold, st.Children[k].ThresholdY });
+                float w = k < (int)weights.size() ? weights[k] : 0.0f;
+                dl->AddCircleFilled(s, 4.0f + 8.0f * w, w > 0.0f ? IM_COL32(110, 200, 255, 255) : IM_COL32(120, 125, 135, 255));
+                char label[8];
+                std::snprintf(label, sizeof(label), "%d", k + 1);
+                dl->AddText(ImVec2(s.x + 7.0f + 8.0f * w, s.y - 8.0f), IM_COL32(220, 220, 225, 255), label);
+                if (ImGui::IsItemHovered() && std::hypot(mouse.x - s.x, mouse.y - s.y) < 8.0f) hovered = k;
+            }
+            ImVec2 b = toScreen(point);
+            dl->AddLine(ImVec2(b.x - 6, b.y), ImVec2(b.x + 6, b.y), IM_COL32(255, 90, 80, 255), 2.0f);
+            dl->AddLine(ImVec2(b.x, b.y - 6), ImVec2(b.x, b.y + 6), IM_COL32(255, 90, 80, 255), 2.0f);
+            if (hovered >= 0)
+                ImGui::SetTooltip("%d: %s (%.2f, %.2f)", hovered + 1, st.Children[hovered].Clip.empty() ? "(no clip)" : st.Children[hovered].Clip.c_str(),
+                                  st.Children[hovered].Threshold, st.Children[hovered].ThresholdY);
+            else if (ImGui::IsItemHovered() && !livePoint)
+                ImGui::SetTooltip("Drag to preview the blend at (%.2f, %.2f)", point.x, point.y);
+        }
+
         void Arrow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float offset)
         {
             ImVec2 d(b.x - a.x, b.y - a.y);
@@ -265,36 +328,43 @@ namespace Editor
                             changed |= ImGui::InputText(label, &value);
                     };
                     int motion = (int)st.Motion;
-                    if (ImGui::Combo("Motion", &motion, "Clip\0Blend Tree 1D\0"))
+                    if (ImGui::Combo("Motion", &motion, "Clip\0Blend Tree 1D\0Blend Tree 2D\0"))
                     {
                         st.Motion = (AnimMotionType)motion;
                         changed = true;
                     }
+                    bool tree2D = st.Motion == AnimMotionType::BlendTree2D;
                     if (st.Motion == AnimMotionType::Clip)
                         clipCombo("Clip", st.Clip);
                     else
                     {
-                        if (ImGui::BeginCombo("Parameter", st.BlendParameter.empty() ? "(none)" : st.BlendParameter.c_str()))
-                        {
-                            for (auto& p : root.Parameters)
-                                if (p.Type == AnimParameterType::Float && ImGui::Selectable(p.Name.c_str(), p.Name == st.BlendParameter))
-                                {
-                                    st.BlendParameter = p.Name;
-                                    changed = true;
-                                }
-                            ImGui::EndCombo();
-                        }
+                        auto parameterCombo = [&](const char* label, std::string& value) {
+                            if (ImGui::BeginCombo(label, value.empty() ? "(none)" : value.c_str()))
+                            {
+                                for (auto& p : root.Parameters)
+                                    if (p.Type == AnimParameterType::Float && ImGui::Selectable(p.Name.c_str(), p.Name == value))
+                                    {
+                                        value = p.Name;
+                                        changed = true;
+                                    }
+                                ImGui::EndCombo();
+                            }
+                        };
+                        parameterCombo(tree2D ? "Parameter X" : "Parameter", st.BlendParameter);
+                        if (tree2D) parameterCombo("Parameter Y", st.BlendParameterY);
                         std::vector<float> weights;
-                        if (live && m_Ctx.IsPlaying()) AnimatorStateMachine::BlendWeights(st, AnimatorStateMachine::GetParameter(c, (*liveRuntime), st.BlendParameter), weights);
+                        if (live && m_Ctx.IsPlaying()) AnimatorStateMachine::TreeWeights(c, *liveRuntime, st, weights);
+                        if (tree2D) Draw2DBlendSpace(st, weights, live && m_Ctx.IsPlaying() ? &c : nullptr, live ? liveRuntime : nullptr);
                         int removeChild = -1;
                         for (int k = 0; k < (int)st.Children.size(); ++k)
                         {
                             ImGui::PushID(k + 5000);
-                            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+                            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * (tree2D ? 0.38f : 0.45f));
                             clipCombo("##clip", st.Children[k].Clip);
                             ImGui::SameLine();
                             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - (weights.empty() ? 28 : 72));
-                            changed |= ImGui::DragFloat("##threshold", &st.Children[k].Threshold, 0.01f);
+                            if (tree2D) changed |= ImGui::DragFloat2("##position", &st.Children[k].Threshold, 0.01f);
+                            else changed |= ImGui::DragFloat("##threshold", &st.Children[k].Threshold, 0.01f);
                             if (k < (int)weights.size())
                             {
                                 ImGui::SameLine();
@@ -308,12 +378,21 @@ namespace Editor
                         if (ImGui::Button("+ Motion"))
                         {
                             BlendTreeChild child;
-                            child.Threshold = st.Children.empty() ? 0.0f : st.Children.back().Threshold + 1.0f;
+                            if (tree2D)
+                            {
+                                // Fill the four directions around the center first.
+                                static const glm::vec2 spots[] = { { 0, 0 }, { 0, 1 }, { 1, 0 }, { 0, -1 }, { -1, 0 } };
+                                glm::vec2 spot = st.Children.size() < 5 ? spots[st.Children.size()] : glm::vec2(1.0f, 1.0f);
+                                child.Threshold = spot.x;
+                                child.ThresholdY = spot.y;
+                            }
+                            else
+                                child.Threshold = st.Children.empty() ? 0.0f : st.Children.back().Threshold + 1.0f;
                             st.Children.push_back(child);
                             changed = true;
                         }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("clip / threshold");
+                        ImGui::TextDisabled(tree2D ? "clip / position (X, Y)" : "clip / threshold");
                     }
                     changed |= ImGui::DragFloat("Speed", &st.Speed, 0.01f, -10.0f, 10.0f);
                     changed |= ImGui::Checkbox("Loop", &st.Loop);
@@ -498,7 +577,7 @@ namespace Editor
                 dl->AddRect(min, max, selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 255), 6.0f, 0, selected ? 2.0f : 1.0f);
                 const char* name = i < 0 ? "Any State" : c.States[i].Name.c_str();
                 ImVec2 ts = ImGui::CalcTextSize(name);
-                bool isTree = i >= 0 && c.States[i].Motion == AnimMotionType::BlendTree1D;
+                bool isTree = i >= 0 && c.States[i].Motion != AnimMotionType::Clip;
                 dl->AddText(ImVec2(min.x + (nodeW - ts.x) * 0.5f, min.y + (nodeH - ts.y) * 0.5f - (isCurrent || isTree ? 5 : 0)), IM_COL32(240, 240, 240, 255), name);
                 if (isTree && !isCurrent) // the progress bar takes this space on the current state
                 {

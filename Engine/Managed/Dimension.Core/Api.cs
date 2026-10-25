@@ -224,6 +224,10 @@ namespace Dimension
         public static bool GetGamepadButtonDown(GamepadButton button, int pad = 0) => Native.Api.GamepadButton((int)button, pad, 1) != 0;
         /// <summary>Sticks -1..1 (+Y is down) with a dead zone; triggers 0..1.</summary>
         public static float GetGamepadAxis(GamepadAxis axis, int pad = 0) => Native.Api.GamepadAxis((int)axis, pad);
+        /// <summary>Rumble: low-frequency (heavy) and high-frequency (light) motor speeds 0..1. A positive duration
+        /// stops it after that many seconds; 0 keeps it until changed. Stops when play stops.</summary>
+        public static void SetGamepadVibration(float lowFrequency, float highFrequency, float duration = 0.0f, int pad = 0) =>
+            Native.Api.GamepadVibrate(lowFrequency, highFrequency, duration, pad);
         /// <summary>The left stick, or WASD/arrows when no stick is pushed (+Y up).</summary>
         public static Vector2 GetMoveInput(int pad = 0)
         {

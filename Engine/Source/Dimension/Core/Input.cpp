@@ -1,7 +1,13 @@
 #include "Dimension/Core/Input.h"
 #include <GLFW/glfw3.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#ifdef _WIN32
+#include <windows.h>
+#include <Xinput.h>
+#endif
 
 namespace Dimension
 {
@@ -28,6 +34,110 @@ namespace Dimension
             std::array<float, 6> Axes{};
         };
         std::array<PadState, kMaxPads> s_Pads;
+
+        struct RumbleState
+        {
+            float Low = 0.0f, High = 0.0f;
+            double EndTime = 0.0;            // glfwGetTime() at which it stops (0 = until changed)
+            float SentLow = -1.0f, SentHigh = -1.0f;
+        };
+        std::array<RumbleState, kMaxPads> s_Rumble;
+
+#ifdef _WIN32
+        // XInput is loaded at runtime (as GLFW does), so nothing extra is linked.
+        struct XInputApi
+        {
+            DWORD (WINAPI* GetState)(DWORD, XINPUT_STATE*) = nullptr;
+            DWORD (WINAPI* SetState)(DWORD, XINPUT_VIBRATION*) = nullptr;
+        };
+        const XInputApi& XInput()
+        {
+            static XInputApi api = [] {
+                XInputApi a;
+                HMODULE m = LoadLibraryA("xinput1_4.dll");
+                if (!m) m = LoadLibraryA("xinput9_1_0.dll");
+                if (m)
+                {
+                    a.GetState = reinterpret_cast<decltype(a.GetState)>(reinterpret_cast<void*>(GetProcAddress(m, "XInputGetState")));
+                    a.SetState = reinterpret_cast<decltype(a.SetState)>(reinterpret_cast<void*>(GetProcAddress(m, "XInputSetState")));
+                }
+                return a;
+            }();
+            return api;
+        }
+
+        // GLFW tags XInput joysticks with a GUID starting "xinput" and lists them in user-index order, so pad p's
+        // XInput slot is the n-th connected slot, n being p's rank among the XInput joysticks.
+        int XInputSlot(int pad)
+        {
+            const XInputApi& x = XInput();
+            if (!x.GetState) return -1;
+            int rank = 0;
+            for (int j = 0; j <= pad; ++j)
+            {
+                const char* guid = glfwGetJoystickGUID(GLFW_JOYSTICK_1 + j);
+                bool isX = guid && std::strncmp(guid, "78696e707574", 12) == 0;
+                if (j == pad && !isX) return -1;
+                if (j < pad && isX) ++rank;
+            }
+            for (DWORD slot = 0; slot < XUSER_MAX_COUNT; ++slot)
+            {
+                XINPUT_STATE state{};
+                if (x.GetState(slot, &state) == ERROR_SUCCESS && rank-- == 0) return (int)slot;
+            }
+            return -1;
+        }
+
+        void SendRumble(int pad, float low, float high)
+        {
+            int slot = XInputSlot(pad);
+            if (slot < 0 || !XInput().SetState) return;
+            XINPUT_VIBRATION v{ (WORD)std::lround(low * 65535.0f), (WORD)std::lround(high * 65535.0f) };
+            XInput().SetState((DWORD)slot, &v);
+        }
+#else
+        void SendRumble(int, float, float) {}
+#endif
+
+        void UpdateRumble()
+        {
+            double now = glfwGetTime();
+            for (int p = 0; p < kMaxPads; ++p)
+            {
+                RumbleState& r = s_Rumble[p];
+                if (r.EndTime > 0.0 && now >= r.EndTime) r = { 0.0f, 0.0f, 0.0, r.SentLow, r.SentHigh };
+                if (!s_Pads[p].Connected)
+                {
+                    r.SentLow = r.SentHigh = -1.0f; // resend when it reconnects
+                    continue;
+                }
+                float low = s_GameInput ? r.Low : 0.0f, high = s_GameInput ? r.High : 0.0f;
+                if (low == r.SentLow && high == r.SentHigh) continue;
+                SendRumble(p, low, high);
+                r.SentLow = low;
+                r.SentHigh = high;
+            }
+        }
+    }
+
+    void Input::SetGamepadVibration(float low, float high, float duration, int pad)
+    {
+        if (pad < 0 || pad >= kMaxPads) return;
+        RumbleState& r = s_Rumble[pad];
+        r.Low = std::clamp(low, 0.0f, 1.0f);
+        r.High = std::clamp(high, 0.0f, 1.0f);
+        r.EndTime = duration > 0.0f && (r.Low > 0.0f || r.High > 0.0f) ? glfwGetTime() + duration : 0.0;
+        if (s_Window) UpdateRumble(); // start now rather than next frame
+    }
+
+    void Input::StopAllVibration()
+    {
+        for (int p = 0; p < kMaxPads; ++p)
+        {
+            s_Rumble[p].Low = s_Rumble[p].High = 0.0f;
+            s_Rumble[p].EndTime = 0.0;
+        }
+        if (s_Window) UpdateRumble();
     }
 
     void Input::Init(GLFWwindow* window)
@@ -77,6 +187,7 @@ namespace Dimension
                 pad.Axes[a] = v;
             }
         }
+        UpdateRumble();
     }
 
     bool Input::IsGamepadConnected(int pad) { return pad >= 0 && pad < kMaxPads && s_Pads[pad].Connected; }
@@ -140,7 +251,12 @@ namespace Dimension
     const std::string& Input::GetTypedText() { return KeyboardOpen() ? s_Typed : s_Empty; }
     void Input::SetKeyboardCapturedByUI(bool captured) { s_UICapture = captured; }
     bool Input::IsKeyboardCapturedByUI() { return s_UICapture; }
-    void Input::SetGameInputEnabled(bool enabled) { s_GameInput = enabled; }
+    void Input::SetGameInputEnabled(bool enabled)
+    {
+        if (s_GameInput == enabled) return;
+        s_GameInput = enabled;
+        if (s_Window) UpdateRumble(); // pause or resume rumble with the game
+    }
     bool Input::IsGameInputEnabled() { return s_GameInput; }
 
     bool Input::RawKeyDown(Key key) { return s_Keys[(int)key]; }

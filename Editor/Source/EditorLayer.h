@@ -124,6 +124,7 @@ namespace Editor
         int m_LinePoint = -1;
         Dimension::Entity m_LinePointOwner;
         bool UpdateLinePointEditing(ImVec2 origin, ImVec2 size);
+        bool DeleteLinePoint(); // removes the picked point; false when no point is picked
         bool m_ShowGrid = true;
         bool m_WasWindowFocused = true;
         bool m_PickAdditive = false; // Ctrl+click toggles instead of replacing the selection

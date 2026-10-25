@@ -770,6 +770,60 @@ namespace
         config.LayerCollisionMatrix = savedMatrix;
     }
 
+    void TestBlendTrees2D()
+    {
+        // Idle in the middle, Forward/Right/Back/Left around it (a typical locomotion space).
+        AnimatorController c;
+        c.Parameters = { { "X", AnimParameterType::Float, 0.5f }, { "Y", AnimParameterType::Float, 0.0f } };
+        AnimState tree;
+        tree.Name = "Move";
+        tree.Motion = AnimMotionType::BlendTree2D;
+        tree.BlendParameter = "X";
+        tree.BlendParameterY = "Y";
+        tree.Children = { { "Idle", 0, 0 }, { "Forward", 0, 1 }, { "Right", 1, 0 }, { "Back", 0, -1 }, { "Left", -1, 0 } };
+        c.States = { tree };
+        std::vector<float> w;
+        auto sum = [&] { float s = 0; for (float v : w) s += v; return s; };
+        AnimatorStateMachine::BlendWeights2D(tree, { 0, 0 }, w);
+        CHECK(Near(w[0], 1.0f) && Near(sum(), 1.0f)); // exactly on a child
+        AnimatorStateMachine::BlendWeights2D(tree, { 1, 0 }, w);
+        CHECK(Near(w[2], 1.0f) && Near(sum(), 1.0f));
+        AnimatorStateMachine::BlendWeights2D(tree, { 0.5f, 0 }, w);
+        CHECK(Near(w[0], 0.5f) && Near(w[2], 0.5f) && Near(w[1] + w[3] + w[4], 0.0f)); // halfway to Right
+        AnimatorStateMachine::BlendWeights2D(tree, { 0.5f, 0.5f }, w);
+        CHECK(Near(w[0], 1.0f / 3.0f) && Near(w[1], 1.0f / 3.0f) && Near(w[2], 1.0f / 3.0f) && Near(w[3] + w[4], 0.0f)); // diagonal
+        AnimatorStateMachine::BlendWeights2D(tree, { 5, 0 }, w);
+        CHECK(Near(w[2], 1.0f)); // past the edge: the outermost child
+        bool valid = true;
+        for (float x = -1.5f; x <= 1.5f; x += 0.25f)
+            for (float y = -1.5f; y <= 1.5f; y += 0.25f)
+            {
+                AnimatorStateMachine::BlendWeights2D(tree, { x, y }, w);
+                valid &= Near(sum(), 1.0f) && *std::min_element(w.begin(), w.end()) >= 0.0f;
+            }
+        CHECK(valid);
+
+        // The runtime reads both parameters; durations mix by weight (Idle 2 s, Right 1 s at X = 0.5).
+        auto duration = [](const std::string& clip) { return clip == "Idle" ? 2.0f : 1.0f; };
+        AnimatorRuntime rt;
+        AnimatorStateMachine::TreeWeights(c, rt, tree, w);
+        CHECK(Near(w[0], 0.5f) && Near(w[2], 0.5f));
+        CHECK(Near(AnimatorStateMachine::StateDuration(c, rt, tree, duration), 1.5f));
+        AnimatorStateMachine::Update(c, rt, 0.0f, duration, [](const AnimState&, float) {});
+        AnimatorStateMachine::Update(c, rt, 0.75f, duration, [](const AnimState&, float) {});
+        CHECK(Near(AnimatorStateMachine::NormalizedTime(c, rt, duration), 0.5f)); // normalized time, like 1D trees
+
+        // Save/load keeps the Y parameter and positions; 1D trees keep their old format.
+        fs::path file = fs::temp_directory_path() / "dimension_blend2d.controller";
+        CHECK(c.Save(file));
+        auto back = AnimatorController::Load(file);
+        CHECK(back && back->States.size() == 1 && back->States[0].Motion == AnimMotionType::BlendTree2D && back->States[0].BlendParameterY == "Y");
+        CHECK(back && back->States[0].Children.size() == 5 && Near(back->States[0].Children[3].ThresholdY, -1.0f) &&
+              back->States[0].Children[3].Clip == "Back");
+        std::error_code ec;
+        fs::remove(file, ec);
+    }
+
     void TestBlendTreesAndEvents()
     {
         AnimatorController c;
@@ -1505,6 +1559,89 @@ namespace
         }
     };
 
+    class CoroutineProbe : public ScriptableEntity
+    {
+    public:
+        static inline CoroutineProbe* Instance = nullptr;
+        std::vector<std::string> Steps;
+        bool Flag = false;
+        int Ticks = 0, MainId = 0, ForeverId = 0;
+
+        Coroutine Inner()
+        {
+            Steps.push_back("inner start");
+            co_await WaitForSeconds(0.25f);
+            Steps.push_back("inner end");
+        }
+        Coroutine Main()
+        {
+            Steps.push_back("start");
+            co_await NextFrame();
+            Steps.push_back("next frame");
+            co_await WaitForSeconds(0.5f);
+            Steps.push_back("after 0.5");
+            co_await Inner();
+            Steps.push_back("after inner");
+            co_await WaitUntil([this] { return Flag; });
+            Steps.push_back("flag");
+        }
+        Coroutine Forever()
+        {
+            for (;;)
+            {
+                ++Ticks;
+                co_await NextFrame();
+            }
+        }
+        Coroutine Immediate() { Steps.push_back("immediate"); co_return; }
+        void OnCreate() override
+        {
+            Instance = this;
+            MainId = StartCoroutine(Main());
+            ForeverId = StartCoroutine(Forever());
+            int done = StartCoroutine(Immediate());
+            if (IsCoroutineRunning(done)) Steps.push_back("immediate kept");
+        }
+    };
+
+    void TestCoroutines()
+    {
+        Scene scene("Coroutines");
+        Entity e = scene.CreateEntity("Probe");
+        scene.GetRegistry().Emplace<ScriptComponent>(e).Add("CoroutineProbe");
+        CoroutineProbe::Instance = nullptr;
+        auto runtime = scene.Clone();
+        runtime->OnRuntimeStart();
+        const float dt = 0.0625f; // exact in binary (and under the 0.1 s step cap): waits end on predictable frames
+        auto frames = [&](int n) { for (int i = 0; i < n; ++i) runtime->OnUpdateRuntime(dt); };
+        frames(1);
+        auto* p = CoroutineProbe::Instance;
+        CHECK(p != nullptr);
+        if (!p) return;
+        using V = std::vector<std::string>;
+        CHECK((p->Steps == V{ "start", "immediate" })); // runs at once until the first wait; a finished one is not kept
+        frames(1);
+        CHECK(p->Steps.size() == 3 && p->Steps[2] == "next frame");
+        frames(7);
+        CHECK(p->Steps.size() == 3); // 7/8 of the 0.5 s wait
+        frames(1);
+        CHECK(p->Steps.size() == 5 && p->Steps[3] == "after 0.5" && p->Steps[4] == "inner start"); // nested starts at once
+        frames(4);
+        CHECK(p->Steps.size() == 7 && p->Steps[5] == "inner end" && p->Steps[6] == "after inner"); // caller resumes with it
+        frames(2);
+        CHECK(p->Steps.size() == 7 && p->IsCoroutineRunning(p->MainId));
+        p->Flag = true;
+        frames(1);
+        CHECK(p->Steps.size() == 8 && p->Steps[7] == "flag" && !p->IsCoroutineRunning(p->MainId));
+        // A looping coroutine runs once per frame (from the frame after it started) until stopped.
+        int ticks = p->Ticks;
+        CHECK(ticks == 17); // the synchronous start plus frames 2..17
+        p->StopCoroutine(p->ForeverId);
+        frames(3);
+        CHECK(p->Ticks == ticks && !p->IsCoroutineRunning(p->ForeverId));
+        runtime->OnRuntimeStop(); // destroys the script, and with it any suspended coroutine frames
+    }
+
     void TestScriptTimers()
     {
         Scene scene("Timers");
@@ -1594,6 +1731,90 @@ namespace
             std::printf("  (no audio device: graph checks skipped)\n");
         AudioEngine::Shutdown();
         groups = saved;
+    }
+
+    void TestAudioSends()
+    {
+        auto& groups = Project::GetConfig().MixerGroups;
+        auto saved = groups;
+        // Master, Music, SFX, Ambience (child of Music), Return (shared reverb).
+        groups = AudioMixer::DefaultGroups();
+        AudioMixerGroup ambience, ret;
+        ambience.Name = "Ambience";
+        ambience.Parent = 1;
+        ret.Name = "Return"; // no reverb here: its tail would blur the level checks
+        groups.push_back(ambience);
+        groups.push_back(ret);
+
+        // Sends to the return group are kept; sends that would loop back (to itself, to a descendant, or through
+        // another group's send) are dropped.
+        groups[1].SendTarget = 4; // Music -> Return
+        groups[2].SendTarget = 4; // SFX -> Return
+        groups[3].SendTarget = 3; // itself
+        auto sends = AudioMixer::ValidSends(groups);
+        CHECK(sends[1] == 4 && sends[2] == 4 && sends[3] == -1 && sends[0] == -1 && sends[4] == -1);
+        groups[1].SendTarget = 3; // Music -> its own child Ambience (Ambience feeds Music): a loop
+        CHECK(AudioMixer::ValidSends(groups)[1] == -1);
+        groups[1].SendTarget = 2; // Music -> SFX, then SFX -> Music: the second one closes a loop
+        groups[2].SendTarget = 1;
+        sends = AudioMixer::ValidSends(groups);
+        CHECK(sends[1] == 2 && sends[2] == -1);
+        groups[1].SendTarget = groups[2].SendTarget = groups[3].SendTarget = -1;
+
+        // Project files keep sends.
+        fs::path dir = fs::temp_directory_path() / "dimension_sends";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        auto mix = groups;
+        CHECK(Project::Open(dir));
+        AudioMixer::Groups() = mix;
+        AudioMixer::Groups()[3].SendTarget = 4;
+        AudioMixer::Groups()[3].SendLevelDb = -6.0f;
+        CHECK(Project::Save() && Project::Open(dir));
+        const auto& back = AudioMixer::Groups();
+        CHECK(back.size() == 5 && back[3].SendTarget == 4 && Near(back[3].SendLevelDb, -6.0f) && back[1].SendTarget == -1);
+        fs::remove_all(dir, ec);
+
+        // With an audio device: music in Ambience reaches the Return group only through the send.
+        auto& live = Project::GetConfig().MixerGroups;
+        AudioEngine::Init();
+        if (AudioEngine::IsAvailable())
+        {
+            AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+            Scene scene("Sends");
+            Entity e = scene.CreateEntity("Speaker");
+            auto& src = scene.GetRegistry().Emplace<AudioSourceComponent>(e);
+            src.Clip = AssetManager::GetHandle("Audio/Music.ogg");
+            src.Output = "Ambience";
+            src.Stream = true;
+            src.Loop = true;
+            auto runtime = scene.Clone();
+            runtime->OnRuntimeStart();
+            auto level = [](int group) {
+                AudioMixer::GetLevel(group);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                return AudioMixer::GetLevel(group).Peak;
+            };
+            live[3].SendLevelDb = 0.0f;
+            AudioMixer::Apply();
+            float sent = level(4);
+            live[3].SendLevelDb = AudioMixer::kSilentDb;
+            AudioMixer::Apply();
+            level(4); // audio already in flight
+            float silent = level(4);
+            live[3].SendTarget = -1;
+            live[3].SendLevelDb = 0.0f;
+            AudioMixer::Apply();
+            float unlinked = level(4), ambienceLevel = level(3);
+            CHECK(sent > 0.01f && silent < sent * 0.25f && unlinked < sent * 0.25f && ambienceLevel > 0.01f);
+            std::printf("  return peak: sent %.3f, send at -80 dB %.4f, unlinked %.4f\n", sent, silent, unlinked);
+            runtime->OnRuntimeStop();
+            AssetManager::Shutdown();
+        }
+        else
+            std::printf("  (no audio device: graph checks skipped)\n");
+        AudioEngine::Shutdown();
+        live = saved;
     }
 
     class CharacterProbe : public ScriptableEntity
@@ -2618,6 +2839,29 @@ namespace
         for (auto& f : info->Fields) FieldFromJson(f, &back, j[f.Name], nullptr);
         CHECK(back.SizeOverLifetime == c && !back.SpeedOverLifetime.Smooth);
 
+        // Hand-set tangents: a Free key's slope is used on both sides; Broken keys can kink; Auto keys are unchanged.
+        Curve tangents = c;
+        tangents.Keys[1].Mode = CurveTangentMode::Free;
+        tangents.Keys[1].InTangent = tangents.Keys[1].OutTangent = 2.0f; // rising through the middle key
+        float h = 1e-3f;
+        CHECK(Near((tangents.Evaluate(0.5f + h) - tangents.Evaluate(0.5f - h)) / (2 * h), 2.0f, 0.02f));
+        CHECK(Near(tangents.Evaluate(0.5f), 1.0f) && tangents.Evaluate(0.6f) > 1.0f); // overshoots, as asked
+        Curve kinked = c;
+        kinked.Keys[1].Mode = CurveTangentMode::Broken;
+        kinked.Keys[1].InTangent = 4.0f;
+        kinked.Keys[1].OutTangent = -4.0f;
+        CHECK(Near((kinked.Evaluate(0.5f) - kinked.Evaluate(0.5f - h)) / h, 4.0f, 0.05f));
+        CHECK(Near((kinked.Evaluate(0.5f + h) - kinked.Evaluate(0.5f)) / h, -4.0f, 0.05f));
+        CHECK(kinked.OutSlope(0) == c.OutSlope(0));
+        // They round trip; auto keys keep the two-number format.
+        ps.SizeOverLifetime = kinked;
+        nlohmann::json kj = FieldToJson(*std::find_if(info->Fields.begin(), info->Fields.end(), [](const FieldInfo& f) { return f.Name == "Size Over Lifetime"; }), &ps, nullptr);
+        CHECK(kj["keys"][0].size() == 2 && kj["keys"][1].size() == 5);
+        ParticleSystemComponent kb;
+        for (auto& f : info->Fields)
+            if (f.Name == "Size Over Lifetime") FieldFromJson(f, &kb, kj, nullptr);
+        CHECK(kb.SizeOverLifetime == kinked);
+
         // Force over lifetime accelerates; velocity over lifetime moves without accumulating; orbits keep the radius.
         Scene scene("Forces");
         auto& reg = scene.GetRegistry();
@@ -2792,6 +3036,17 @@ namespace
         CHECK(Near(SpotCookieUV(dir, cosOuter, glm::half_pi<float>(), dir + right), glm::vec2(0.5f, 1.0f)));
         // Halfway out from the axis in angle tangent: a quarter of the way in from the center.
         CHECK(Near(SpotCookieUV(dir, cosOuter, 0.0f, dir + right * 0.5f), glm::vec2(0.75f, 0.5f)));
+
+        // Point light cookies wrap an equirectangular image around the light: its forward (-Z) is the image center,
+        // its up the top row, and the image turns with the light.
+        glm::mat3 identity(1.0f);
+        CHECK(Near(PointCookieUV(identity, { 0, 0, -2 }), glm::vec2(0.5f, 0.5f)));
+        CHECK(Near(PointCookieUV(identity, { 0, 5, 0 }).y, 0.0f));
+        CHECK(Near(PointCookieUV(identity, { 1, 0, 0 }), glm::vec2(0.75f, 0.5f)));
+        glm::mat3 yawed = glm::mat3(glm::rotate(glm::mat4(1.0f), glm::half_pi<float>(), glm::vec3(0, 1, 0))); // forward -> -X
+        CHECK(Near(PointCookieUV(yawed, { -3, 0, 0 }), glm::vec2(0.5f, 0.5f)));
+        glm::mat3 pitched = glm::mat3(glm::rotate(glm::mat4(1.0f), glm::half_pi<float>(), glm::vec3(1, 0, 0))); // up -> +Z
+        CHECK(Near(PointCookieUV(pitched, { 0, 0, 1 }).y, 0.0f));
     }
 
     void TestSliderJoints()
@@ -3011,6 +3266,41 @@ namespace
         std::printf("  3D spring rest %.3f (expected %.3f); 2D spring %.3f, winched %.3f\n", spring, 3.0f - stretch, spring2, winch);
     }
 
+    void TestDistanceWinch3D()
+    {
+        // A 1 kg bob on a rigid 2 m distance joint below a world point; the winch reels it in at 0.5 m/s, or out.
+        auto run = [](float speed, float maxForce, int steps, float* length) {
+            Scene scene("Winch3D");
+            auto& reg = scene.GetRegistry();
+            Entity bob = scene.CreateEntity("Bob");
+            reg.Get<TransformComponent>(bob).Position = { 0, 3, 0 };
+            reg.Emplace<RigidbodyComponent>(bob).Mass = 1.0f;
+            reg.Emplace<SphereColliderComponent>(bob).Radius = 0.2f;
+            auto& j = reg.Emplace<JointComponent>(bob);
+            j.Type = JointType::Distance;
+            j.ConnectedAnchor = { 0, 5, 0 };
+            j.UseMotor = true;
+            j.MotorSpeed = speed;
+            j.MotorMaxTorque = maxForce;
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            for (int i = 0; i < steps; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            float y = reg.Get<TransformComponent>(bob).Position.y;
+            *length = reg.Get<JointComponent>(bob).CurrentLength;
+            scene.OnRuntimeStop();
+            return y;
+        };
+        float inLength = 0, outLength = 0, stallLength = 0;
+        float reeledIn = run(-0.5f, 1000.0f, 120, &inLength);   // 2 s: 1 m shorter
+        float reeledOut = run(0.5f, 1000.0f, 120, &outLength);  // 1 m longer
+        float stalled = run(-0.5f, 5.0f, 120, &stallLength);    // 5 N cannot lift 9.81 N
+        CHECK(Near(inLength, 1.0f, 0.02f) && Near(reeledIn, 4.0f, 0.05f));
+        CHECK(Near(outLength, 3.0f, 0.02f) && Near(reeledOut, 2.0f, 0.05f));
+        CHECK(stallLength > 1.9f && Near(stalled, 3.0f, 0.05f));
+        std::printf("  reeled in to y %.3f (length %.3f), out to y %.3f (length %.3f); stalled at %.3f\n", reeledIn, inLength, reeledOut, outLength,
+                    stalled);
+    }
+
     void TestGltfTangents()
     {
         // A one-triangle glTF with TANGENT data, placed under a node rotated 90 degrees about Z.
@@ -3040,9 +3330,54 @@ namespace
             const glm::vec4& t = mesh.Vertices[0].Tangent;
             CHECK(Near(glm::vec3(t), glm::vec3(0, 1, 0)) && t.w == -1.0f); // +X rotated to +Y, handedness kept
         }
-        // Built-in primitives have no tangents (the shader derives a frame from screen-space derivatives).
-        CHECK(MeshData::Cube().Vertices[0].Tangent == glm::vec4(0.0f));
         fs::remove_all(dir, ec);
+    }
+
+    void TestGeneratedTangents()
+    {
+        // Built-in primitives get tangents along +U, glTF handedness (cross(N, T) * w points up the image, -V).
+        MeshData cube = MeshData::Cube();
+        bool allSet = true, orthogonal = true, upImage = true;
+        for (size_t f = 0; f + 2 < cube.Indices.size(); f += 3)
+        {
+            const Vertex &a = cube.Vertices[cube.Indices[f]], &b = cube.Vertices[cube.Indices[f + 1]], &c = cube.Vertices[cube.Indices[f + 2]];
+            glm::vec3 e1 = b.Position - a.Position, e2 = c.Position - a.Position;
+            glm::vec2 d1 = b.UV - a.UV, d2 = c.UV - a.UV;
+            float det = d1.x * d2.y - d2.x * d1.y;
+            glm::vec3 dPdu = (e1 * d2.y - e2 * d1.y) / det, dPdv = (e2 * d1.x - e1 * d2.x) / det;
+            for (const Vertex* v : { &a, &b, &c })
+            {
+                allSet &= std::abs(v->Tangent.w) == 1.0f;
+                orthogonal &= std::abs(glm::dot(glm::vec3(v->Tangent), v->Normal)) < 1e-4f;
+                upImage &= glm::dot(glm::vec3(v->Tangent), glm::normalize(dPdu)) > 0.999f;
+                upImage &= glm::dot(glm::cross(v->Normal, glm::vec3(v->Tangent)) * v->Tangent.w, dPdv) < 0.0f;
+            }
+        }
+        CHECK(allSet && orthogonal && upImage);
+        CHECK(cube.Vertices.size() == 24); // no mirrored UVs: nothing split
+
+        // Two triangles sharing an edge, the second with mirrored UVs: the shared vertices are split.
+        std::vector<Vertex> v = {
+            { { 0, 0, 0 }, { 0, 0, 1 }, { 0, 1 } }, { { 1, 0, 0 }, { 0, 0, 1 }, { 1, 1 } },
+            { { 0, 1, 0 }, { 0, 0, 1 }, { 0, 0 } }, { { -1, 0, 0 }, { 0, 0, 1 }, { 1, 1 } },
+        };
+        MeshData mirrored = MeshData::FromArrays(v, { 0, 1, 2, 0, 2, 3 }, "Mirrored");
+        CHECK(mirrored.Vertices.size() == 6);
+        bool split = true;
+        for (int k = 0; k < 3; ++k)
+        {
+            const Vertex& right = mirrored.Vertices[mirrored.Indices[k]];
+            const Vertex& left = mirrored.Vertices[mirrored.Indices[3 + k]];
+            split &= right.Tangent.w == 1.0f && Near(glm::vec3(right.Tangent), glm::vec3(1, 0, 0));
+            split &= left.Tangent.w == -1.0f && Near(glm::vec3(left.Tangent), glm::vec3(-1, 0, 0));
+        }
+        CHECK(split);
+
+        // Authored tangents are kept; a triangle without UV area gets none.
+        std::vector<Vertex> flat = { { { 0, 0, 0 }, { 0, 0, 1 }, { 0, 0 } }, { { 1, 0, 0 }, { 0, 0, 1 }, { 0, 0 } }, { { 0, 1, 0 }, { 0, 0, 1 }, { 0, 0 } } };
+        flat[0].Tangent = glm::vec4(0, 1, 0, -1);
+        MeshData noUV = MeshData::FromArrays(flat, { 0, 1, 2 }, "NoUV");
+        CHECK(noUV.Vertices[0].Tangent == glm::vec4(0, 1, 0, -1) && noUV.Vertices[1].Tangent == glm::vec4(0.0f));
     }
 
     void TestRootMotion()
@@ -3186,6 +3521,41 @@ namespace
         press([](UI::PointerState& p) { p.Cancel = true; });
         CHECK(!rr.Get<UIInputFieldComponent>(field).Focused);
         runtime->OnRuntimeStop();
+
+        // Explicit links (UI Navigation): the button's Down goes to the field, Right nowhere; the slider opts out of
+        // arrow navigation, and an Automatic widget's link overrides the nearest-widget rule.
+        {
+            auto& nav = reg.Emplace<UINavigationComponent>(button);
+            nav.Mode = UINavigationMode::Explicit;
+            nav.SelectOnDown = field;
+            reg.Emplace<UINavigationComponent>(slider).Mode = UINavigationMode::None;
+            reg.Emplace<UINavigationComponent>(dropdown).SelectOnUp = toggle;
+        }
+        auto linked = scene.Clone();
+        linked->OnRuntimeStart();
+        runtime = std::move(linked);
+        runtime->SetUISelected(button);
+        runtime->SetUINavigating(true);
+        press([](UI::PointerState& p) { p.NavRight = true; });
+        CHECK(sel() == button); // Explicit without a Right link: stays
+        press([](UI::PointerState& p) { p.NavDown = true; });
+        CHECK(sel() == field);
+        press([](UI::PointerState& p) { p.NavLeft = true; });
+        CHECK(sel() == dropdown);
+        press([](UI::PointerState& p) { p.NavUp = true; });
+        CHECK(sel() == toggle); // the link, not the slider straight above (which also opted out)
+        runtime->SetUISelected(field);
+        press([](UI::PointerState& p) { p.NavUp = true; });
+        CHECK(sel() == toggle);
+        press([](UI::PointerState& p) { p.NavLeft = true; });
+        CHECK(sel() == button);
+        // Links survive a scene round trip (entity references by GUID).
+        auto back = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        CHECK(back != nullptr);
+        Entity backButton = back->FindEntityByName("Button"), backField = back->FindEntityByName("Field");
+        auto* backNav = back->GetRegistry().TryGet<UINavigationComponent>(backButton);
+        CHECK(backNav && backNav->Mode == UINavigationMode::Explicit && backNav->SelectOnDown == backField && backNav->SelectOnUp.IsNull());
+        runtime->OnRuntimeStop();
     }
 
     void TestBuildDependencies()
@@ -3244,6 +3614,63 @@ namespace
         CHECK(!running.FindEntityByName("Player").IsNull() && running.IsValid(keep));
         AssetPrefetch::Clear();
         AssetManager::Shutdown();
+    }
+
+    void TestInputWordWrap()
+    {
+        UI::SetTextMeasure([](const std::string& t, float) { return 10.0f * (float)UI::CodepointCount(t); }); // 10 px per character
+        Scene scene("Wrap");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        Entity e = scene.CreateEntity("Notes", canvas);
+        {
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = { 0, 0 };
+            r.Pivot = { 0, 0 };
+            r.Size = { 110, 200 }; // 10 px padding each side: 9 characters per line
+            auto& f = reg.Emplace<UIInputFieldComponent>(e);
+            f.FontSize = 20.0f;
+            f.MultiLine = true;
+        }
+        scene.UpdateTransforms();
+        glm::vec2 screen(1000, 1000);
+        auto& field = reg.Get<UIInputFieldComponent>(e);
+        auto frame = [&](auto&& setup) {
+            UI::PointerState p;
+            p.Position = { 900, 900 };
+            setup(p);
+            UI::Update(scene, p, screen, 0.016f);
+        };
+        frame([](UI::PointerState& p) { p.Position = { 20, 10 }; p.Down = p.Pressed = true; });
+        frame([](UI::PointerState& p) { p.Position = { 20, 10 }; p.Released = true; });
+        // "hello world again" wraps into "hello " / "world " / "again" (whole words move down).
+        frame([](UI::PointerState& p) { p.Text = "hello world again"; });
+        CHECK(field.Caret == 17 && field.ScrollX == 0.0f);
+        frame([](UI::PointerState& p) { p.LineUp = true; });
+        CHECK(field.Caret == 11); // same x (5 characters in) on the line above
+        frame([](UI::PointerState& p) { p.End = true; });
+        CHECK(field.Caret == 11); // End stops before the wrapping space
+        frame([](UI::PointerState& p) { p.Home = true; });
+        CHECK(field.Caret == 6);
+        frame([](UI::PointerState& p) { p.LineUp = true; });
+        CHECK(field.Caret == 0);
+        // Clicking the second visual line (22 px rows from y 5) at its far right lands at that line's end.
+        frame([](UI::PointerState& p) { p.Position = { 105, 5 + 22 + 11 }; p.Down = p.Pressed = true; });
+        frame([](UI::PointerState& p) { p.Released = true; });
+        CHECK(field.Caret == 11);
+        // A word longer than the line breaks between characters; with Word Wrap off nothing wraps.
+        frame([](UI::PointerState& p) { p.SelectAll = true; });
+        frame([](UI::PointerState& p) { p.Text = "abcdefghijklmnop"; });
+        frame([](UI::PointerState& p) { p.Home = true; });
+        CHECK(field.Caret == 9);
+        field.WordWrap = false;
+        frame([](UI::PointerState& p) { p.End = true; });
+        frame([](UI::PointerState& p) { p.Home = true; });
+        CHECK(field.Caret == 0);
+        frame([](UI::PointerState& p) { p.End = true; });
+        CHECK(field.Caret == 16 && field.ScrollX > 0.0f);
+        UI::SetTextMeasure(nullptr);
     }
 
     void TestMultiLineInput()
@@ -3358,6 +3785,7 @@ int main(int argc, char** argv)
     if (argc > 1) g_Filter = argv[1];
     ComponentRegistry::RegisterBuiltins();
     ScriptRegistry::Register<ClickCounter>("ClickCounter");
+    ScriptRegistry::Register<CoroutineProbe>("CoroutineProbe");
     ScriptRegistry::Register<CharacterProbe>("CharacterProbe");
     ScriptRegistry::Register<TimerProbe>("TimerProbe");
     ScriptRegistry::Register<TriggerCounter>("TriggerCounter");
@@ -3397,6 +3825,7 @@ int main(int argc, char** argv)
     Run("Joint motors, breaking and moving platforms", TestJointMotorsAndPlatforms);
     Run("Particle texture sheets and noise", TestParticleSheetsAndNoise);
     Run("Script timers", TestScriptTimers);
+    Run("Coroutines (C++)", TestCoroutines);
     Run("Audio mixer", TestAudioMixer);
     Run("Environment lighting", TestEnvironmentLighting);
     Run("Tilemaps", TestTilemaps);
@@ -3407,20 +3836,25 @@ int main(int argc, char** argv)
     Run("Multiple scripts per entity", TestMultipleScripts);
     Run("Animator state machine", TestAnimatorStateMachine);
     Run("Blend trees and animation events", TestBlendTreesAndEvents);
+    Run("2D blend trees", TestBlendTrees2D);
     Run("Material slots and soft shadows", TestMaterialSlotsAndSoftShadows);
     Run("Component order", TestComponentOrder);
     Run("Multi-line input fields", TestMultiLineInput);
+    Run("Input field word wrap", TestInputWordWrap);
     Run("Async scene loading", TestAsyncSceneLoading);
     Run("Build dependencies", TestBuildDependencies);
     Run("UI navigation", TestUINavigation);
     Run("Root motion", TestRootMotion);
     Run("glTF tangents", TestGltfTangents);
+    Run("Generated tangents", TestGeneratedTangents);
     Run("Distance joint springs", TestDistanceSprings);
+    Run("3D distance joint winch", TestDistanceWinch3D);
     Run("Audio formats and effects", TestAudioFormatsAndEffects);
     Run("Line caps and joins", TestLineCapsAndJoins);
     Run("Slider joints", TestSliderJoints);
     Run("Spot light cookies", TestSpotCookies);
     Run("Audio mixer snapshots", TestMixerSnapshots);
+    Run("Audio sends", TestAudioSends);
     Run("Application icon", TestAppIcon);
     Run("Audio level meter", TestAudioMeter);
     Run("Smooth curves and particle forces", TestSmoothCurvesAndParticleForces);

@@ -61,8 +61,9 @@ namespace Dimension
                 st.Loop = s.value("loop", true);
                 st.Motion = (AnimMotionType)s.value("motion", 0);
                 st.BlendParameter = s.value("blendParameter", std::string());
+                st.BlendParameterY = s.value("blendParameterY", std::string());
                 for (auto& ch : s.value("children", json::array()))
-                    st.Children.push_back({ ch.value("clip", std::string()), ch.value("threshold", 0.0f) });
+                    st.Children.push_back({ ch.value("clip", std::string()), ch.value("threshold", 0.0f), ch.value("y", 0.0f) });
                 for (auto& ev : s.value("events", json::array()))
                     st.Events.push_back({ ev.value("time", 0.0f), ev.value("function", std::string()) });
                 if (s.contains("position")) st.EditorPosition = { s["position"][0].get<float>(), s["position"][1].get<float>() };
@@ -95,8 +96,14 @@ namespace Dimension
                 {
                     st["motion"] = (int)s.Motion;
                     st["blendParameter"] = s.BlendParameter;
+                    if (s.Motion == AnimMotionType::BlendTree2D) st["blendParameterY"] = s.BlendParameterY;
                     st["children"] = json::array();
-                    for (auto& ch : s.Children) st["children"].push_back({ { "clip", ch.Clip }, { "threshold", ch.Threshold } });
+                    for (auto& ch : s.Children)
+                    {
+                        json child{ { "clip", ch.Clip }, { "threshold", ch.Threshold } };
+                        if (s.Motion == AnimMotionType::BlendTree2D) child["y"] = ch.ThresholdY;
+                        st["children"].push_back(child);
+                    }
                 }
                 if (!s.Events.empty())
                 {
@@ -199,12 +206,57 @@ namespace Dimension
             weights[hi] = t;
         }
 
+        void BlendWeights2D(const AnimState& state, const glm::vec2& p, std::vector<float>& weights)
+        {
+            const auto& ch = state.Children;
+            weights.assign(ch.size(), 0.0f);
+            if (ch.empty()) return;
+            // Gradient bands: each child's influence falls from 1 at its position to 0 at every other child's position,
+            // measured along the line between them; the weight is the smallest of those, then all are normalized.
+            float sum = 0.0f;
+            for (size_t i = 0; i < ch.size(); ++i)
+            {
+                glm::vec2 pi(ch[i].Threshold, ch[i].ThresholdY);
+                float h = 1.0f;
+                for (size_t j = 0; j < ch.size() && h > 0.0f; ++j)
+                {
+                    if (j == i) continue;
+                    glm::vec2 d = glm::vec2(ch[j].Threshold, ch[j].ThresholdY) - pi;
+                    float len2 = glm::dot(d, d);
+                    if (len2 < 1e-10f) continue; // children at the same spot share
+                    h = std::min(h, std::clamp(1.0f - glm::dot(p - pi, d) / len2, 0.0f, 1.0f));
+                }
+                weights[i] = h;
+                sum += h;
+            }
+            if (sum <= 1e-6f)
+            {
+                // Cannot happen for a finite point, but stay safe: the nearest child.
+                size_t best = 0;
+                for (size_t i = 1; i < ch.size(); ++i)
+                    if (glm::distance(p, { ch[i].Threshold, ch[i].ThresholdY }) < glm::distance(p, { ch[best].Threshold, ch[best].ThresholdY })) best = i;
+                weights.assign(ch.size(), 0.0f);
+                weights[best] = 1.0f;
+                return;
+            }
+            for (float& w : weights) w /= sum;
+        }
+
+        void TreeWeights(const AnimatorController& controller, const AnimatorRuntime& runtime, const AnimState& state, std::vector<float>& weights)
+        {
+            if (state.Motion == AnimMotionType::BlendTree2D)
+                BlendWeights2D(state, { GetParameter(controller, runtime, state.BlendParameter), GetParameter(controller, runtime, state.BlendParameterY) },
+                               weights);
+            else
+                BlendWeights(state, GetParameter(controller, runtime, state.BlendParameter), weights);
+        }
+
         float StateDuration(const AnimatorController& controller, const AnimatorRuntime& runtime, const AnimState& state,
                             const ClipDurationFn& clipDuration)
         {
             if (state.Motion == AnimMotionType::Clip) return clipDuration(state.Clip);
             std::vector<float> w;
-            BlendWeights(state, GetParameter(controller, runtime, state.BlendParameter), w);
+            TreeWeights(controller, runtime, state, w);
             float d = 0.0f;
             for (size_t i = 0; i < w.size(); ++i)
                 if (w[i] > 0.0f) d += w[i] * clipDuration(state.Children[i].Clip);
@@ -215,7 +267,7 @@ namespace Dimension
         {
             if (runtime.State < 0 || runtime.State >= (int)controller.States.size()) return 0.0f;
             const AnimState& state = controller.States[runtime.State];
-            if (state.Motion == AnimMotionType::BlendTree1D) return runtime.StateTime; // trees track normalized time directly
+            if (state.Motion != AnimMotionType::Clip) return runtime.StateTime; // trees track normalized time directly
             float duration = clipDuration(state.Clip);
             return duration > 0.0f ? runtime.StateTime / duration : 0.0f;
         }
@@ -253,7 +305,7 @@ namespace Dimension
             {
                 const AnimState& state = controller.States[runtime.State];
                 float before = NormalizedTime(controller, runtime, clipDuration);
-                if (state.Motion == AnimMotionType::BlendTree1D)
+                if (state.Motion != AnimMotionType::Clip)
                 {
                     // Blend trees advance in normalized time so children stay in sync.
                     float d = StateDuration(controller, runtime, state, clipDuration);

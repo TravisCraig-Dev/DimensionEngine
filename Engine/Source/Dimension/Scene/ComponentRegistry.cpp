@@ -303,6 +303,7 @@ namespace Dimension
             .Field("Placeholder", &UIInputFieldComponent::Placeholder)
             .Field("Character Limit", &UIInputFieldComponent::CharacterLimit).Range(0, 100000)
             .Field("Multi Line", &UIInputFieldComponent::MultiLine).Tooltip("Enter starts a new line; Ctrl+Enter submits")
+            .Field("Word Wrap", &UIInputFieldComponent::WordWrap).Tooltip("Multi-line: long lines wrap at the field's width instead of scrolling sideways")
             .Field("Font Size", &UIInputFieldComponent::FontSize).Range(1.0f, 500.0f).Speed(0.5f)
             .Field("Interactable", &UIInputFieldComponent::Interactable)
             .Field("Background Color", &UIInputFieldComponent::BackgroundColor).As(FieldType::Color4)
@@ -340,6 +341,15 @@ namespace Dimension
             .Field("Pressed Color", &UIButtonComponent::PressedColor).As(FieldType::Color4)
             .Field("Interactable", &UIButtonComponent::Interactable);
 
+        Register<UINavigationComponent>("UI Navigation", "UI")
+            .Field("Mode", &UINavigationComponent::Mode).Enum({ "Automatic", "Explicit", "None" })
+                .Tooltip("Automatic: the nearest widget in the pressed direction, unless a link below is set. Explicit: only the links. "
+                         "None: arrows and the D-pad never select this widget or leave it")
+            .Field("Select On Up", &UINavigationComponent::SelectOnUp)
+            .Field("Select On Down", &UINavigationComponent::SelectOnDown)
+            .Field("Select On Left", &UINavigationComponent::SelectOnLeft)
+            .Field("Select On Right", &UINavigationComponent::SelectOnRight);
+
         Register<DirectionalLightComponent>("Directional Light", "Rendering")
             .Field("Color", &DirectionalLightComponent::Color).As(FieldType::Color3)
             .Field("Intensity", &DirectionalLightComponent::Intensity).Range(0.0f, 100.0f).Speed(0.01f)
@@ -356,7 +366,10 @@ namespace Dimension
             .Field("Intensity", &PointLightComponent::Intensity).Range(0.0f, 1000.0f).Speed(0.05f)
             .Field("Range", &PointLightComponent::Range).Range(0.01f, 1000.0f).Speed(0.1f)
             .Field("Cast Shadows", &PointLightComponent::CastShadows)
-            .Field("Shadow Bias", &PointLightComponent::ShadowBias).Range(0.0f, 1.0f).Speed(0.001f);
+            .Field("Shadow Bias", &PointLightComponent::ShadowBias).Range(0.0f, 1.0f).Speed(0.001f)
+            .Field("Cookie", &PointLightComponent::Cookie).As(FieldType::Texture)
+                .Tooltip("Equirectangular (2:1) texture wrapped around the light, like a pierced lantern: its color multiplies the light. "
+                         "The center of the image faces the light's forward axis; it turns with the light.");
 
         Register<SpotLightComponent>("Spot Light", "Rendering")
             .Field("Color", &SpotLightComponent::Color).As(FieldType::Color3)
@@ -446,9 +459,11 @@ namespace Dimension
             .Field("Spring Frequency", &JointComponent::SpringFrequency).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Distance: > 0 makes the joint a spring toward its distance (Hz); 0 = rigid")
             .Field("Spring Damping", &JointComponent::SpringDamping).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Distance spring damping ratio (1 = no overshoot)")
             .Field("Enable Collision", &JointComponent::EnableCollision)
-            .Field("Use Motor", &JointComponent::UseMotor).Tooltip("Hinge or slider: drive toward Motor Speed")
-            .Field("Motor Speed", &JointComponent::MotorSpeed).Speed(1.0f).Tooltip("Hinge: degrees per second. Slider: units per second along Axis")
-            .Field("Motor Max Torque", &JointComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Hinge: N*m. Slider: maximum force (N)")
+            .Field("Use Motor", &JointComponent::UseMotor).Tooltip("Hinge or slider: drive toward Motor Speed. Distance: a winch that changes the joint's length")
+            .Field("Motor Speed", &JointComponent::MotorSpeed).Speed(1.0f)
+                .Tooltip("Hinge: degrees per second. Slider: units per second along Axis. Distance: units per second of lengthening (negative reels in)")
+            .Field("Motor Max Torque", &JointComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(10.0f)
+                .Tooltip("Hinge: N*m. Slider: maximum force (N). Distance: reeling in stalls while the joint pulls harder than this (N)")
             .Field("Break Force", &JointComponent::BreakForce).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Newtons; 0 = unbreakable")
             .Field("Break Torque", &JointComponent::BreakTorque).Range(0.0f, 1e9f).Speed(10.0f).Tooltip("Newton-meters; 0 = unbreakable");
         Register<MeshColliderComponent>("Mesh Collider", "Physics")
