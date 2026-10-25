@@ -63,12 +63,13 @@ namespace Dimension
         void ReadPrimitive(const cgltf_primitive& prim, const glm::mat4& transform, MeshData& out, bool& needNormals,
                            const std::vector<int>* jointRemap)
         {
-            const cgltf_accessor *pos = nullptr, *nrm = nullptr, *uv = nullptr, *joints = nullptr, *weights = nullptr;
+            const cgltf_accessor *pos = nullptr, *nrm = nullptr, *uv = nullptr, *joints = nullptr, *weights = nullptr, *tan = nullptr;
             for (cgltf_size a = 0; a < prim.attributes_count; ++a)
             {
                 auto& attr = prim.attributes[a];
                 if (attr.type == cgltf_attribute_type_position) pos = attr.data;
                 else if (attr.type == cgltf_attribute_type_normal) nrm = attr.data;
+                else if (attr.type == cgltf_attribute_type_tangent) tan = attr.data;
                 else if (attr.type == cgltf_attribute_type_texcoord && attr.index == 0) uv = attr.data;
                 else if (attr.type == cgltf_attribute_type_joints && attr.index == 0) joints = attr.data;
                 else if (attr.type == cgltf_attribute_type_weights && attr.index == 0) weights = attr.data;
@@ -88,6 +89,15 @@ namespace Dimension
                     v.Normal = glm::normalize(normalMatrix * v.Normal);
                 }
                 if (uv) cgltf_accessor_read_float(uv, i, glm::value_ptr(v.UV), 2);
+                if (tan && nrm)
+                {
+                    // Authored tangents (glTF TANGENT): match the artist's normal-map baker exactly.
+                    glm::vec4 t;
+                    cgltf_accessor_read_float(tan, i, glm::value_ptr(t), 4);
+                    glm::vec3 tw = glm::mat3(transform) * glm::vec3(t);
+                    float handedness = (t.w < 0.0f ? -1.0f : 1.0f) * (glm::determinant(glm::mat3(transform)) < 0.0f ? -1.0f : 1.0f);
+                    if (glm::dot(tw, tw) > 1e-12f) v.Tangent = glm::vec4(glm::normalize(tw), handedness);
+                }
                 out.Vertices.push_back(v);
 
                 if (jointRemap)

@@ -21,6 +21,11 @@ namespace Dimension
         static void RemoveTexture(uint64_t id);
         static bool IsActive();
 
-        static void ApplyEditorStyle();
+        // Editor themes: 0 Dark (Unity's Professional skin), 1 Light (Personal skin), 2 Midnight (blue-black).
+        // The accent (0xRRGGBB) colors selection, active items and focus highlights.
+        enum Theme : int { ThemeDark = 0, ThemeLight = 1, ThemeMidnight = 2 };
+        static constexpr uint32_t kDefaultAccent = 0x3A79BB;
+        static void ApplyEditorStyle(int theme = ThemeDark, uint32_t accent = kDefaultAccent);
+        static bool IsLightTheme();
     };
 }

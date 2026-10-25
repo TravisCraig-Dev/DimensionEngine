@@ -38,6 +38,7 @@ namespace Dimension
                 s_Config.VSync = j.value("vsync", true);
                 s_Config.BuildFolder = j.value("buildFolder", std::string());
                 s_Config.Icon = Guid(j.value("icon", uint64_t(0)));
+                s_Config.StripUnusedAssets = j.value("stripUnusedAssets", true);
                 if (j.contains("audioMixer") && j["audioMixer"].is_array() && !j["audioMixer"].empty())
                 {
                     s_Config.MixerGroups.clear();
@@ -50,6 +51,14 @@ namespace Dimension
                         group.Mute = g.value("mute", false);
                         group.Solo = g.value("solo", false);
                         group.LowPassHz = g.value("lowPassHz", 0.0f);
+                        group.Echo = g.value("echo", false);
+                        group.EchoDelayMs = g.value("echoDelayMs", group.EchoDelayMs);
+                        group.EchoDecay = g.value("echoDecay", group.EchoDecay);
+                        group.EchoWet = g.value("echoWet", group.EchoWet);
+                        group.Reverb = g.value("reverb", false);
+                        group.ReverbRoomSize = g.value("reverbRoomSize", group.ReverbRoomSize);
+                        group.ReverbDamping = g.value("reverbDamping", group.ReverbDamping);
+                        group.ReverbWet = g.value("reverbWet", group.ReverbWet);
                         s_Config.MixerGroups.push_back(group);
                     }
                 }
@@ -88,7 +97,9 @@ namespace Dimension
         nlohmann::json mixer = nlohmann::json::array();
         for (auto& g : s_Config.MixerGroups)
             mixer.push_back({ { "name", g.Name }, { "parent", g.Parent }, { "volumeDb", g.VolumeDb }, { "mute", g.Mute },
-                              { "solo", g.Solo }, { "lowPassHz", g.LowPassHz } });
+                              { "solo", g.Solo }, { "lowPassHz", g.LowPassHz }, { "echo", g.Echo }, { "echoDelayMs", g.EchoDelayMs },
+                              { "echoDecay", g.EchoDecay }, { "echoWet", g.EchoWet }, { "reverb", g.Reverb },
+                              { "reverbRoomSize", g.ReverbRoomSize }, { "reverbDamping", g.ReverbDamping }, { "reverbWet", g.ReverbWet } });
         nlohmann::json buildScenes = nlohmann::json::array();
         for (AssetHandle h : s_Config.BuildScenes) buildScenes.push_back((uint64_t)h);
         nlohmann::json snapshots = nlohmann::json::array();
@@ -110,6 +121,7 @@ namespace Dimension
                           { "vsync", s_Config.VSync },
                           { "buildFolder", s_Config.BuildFolder },
                           { "icon", (uint64_t)s_Config.Icon },
+                          { "stripUnusedAssets", s_Config.StripUnusedAssets },
                           { "physicsLayers", s_Config.PhysicsLayers },
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "engineVersion", "0.1.0" } };

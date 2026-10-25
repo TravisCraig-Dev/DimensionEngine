@@ -186,7 +186,9 @@ namespace Dimension
             Image Faces[6];
             uint32_t FaceBindless[6] = {};
             Image Base;     // equirectangular conversion target (mip 0)
-            Image Equirect; // with mips, sampled by meshes
+            Image Equirect; // box-filtered mip chain: the prefilter's source
+            Image Filtered; // GGX-prefiltered per mip (mip m = roughness m / (mips - 1)), sampled by meshes
+            uint32_t SourceBindless = 0;
             uint32_t Bindless = 0;
             uint64_t Key = 0, Generation = ~0ull;
             bool Baked = false;
@@ -198,6 +200,7 @@ namespace Dimension
             float Intensity;
             uint32_t Texture, Mips;
             bool BoxProjection;
+            float BlendDistance;
         };
         std::unordered_map<uint64_t, std::unique_ptr<ProbeResources>> m_Probes;
         std::vector<FrameProbe> m_FrameProbes;

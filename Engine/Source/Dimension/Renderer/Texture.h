@@ -29,6 +29,7 @@ namespace Dimension
         // Decodes an encoded image (PNG, JPEG, ...) held in memory.
         static Ref<Texture2D> LoadFromMemory(const void* data, size_t size, const TextureSettings& settings, const std::string& name);
         static Ref<Texture2D> CreateSolid(uint32_t rgba, const char* debugName);
+        static Ref<Texture2D> FromDecoded(const struct DecodedImage& image, const TextureSettings& settings, const std::string& name);
 
         uint32_t GetBindlessIndex() const { return m_BindlessIndex; }
         bool IsHDR() const { return m_IrradianceSH.has_value(); }

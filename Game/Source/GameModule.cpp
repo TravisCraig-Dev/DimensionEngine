@@ -281,7 +281,15 @@ namespace Game
     {
     public:
         std::string Scene;
-        void OnClick() override { SceneManager::LoadScene(Scene); }
+        bool Async = false; // load in the background (the button keeps the current scene running meanwhile)
+        void OnClick() override
+        {
+            if (!Async) SceneManager::LoadScene(Scene);
+            else if (!m_Loading || m_Loading->IsDone) m_Loading = SceneManager::LoadSceneAsync(Scene);
+        }
+
+    private:
+        std::shared_ptr<SceneLoadOperation> m_Loading;
     };
 
     // Loads another scene after a delay (splash screens, "game over" -> menu).
@@ -390,6 +398,9 @@ namespace Game
             if (Input::IsKeyDown(Key::S) || Input::IsKeyDown(Key::Down)) input.y -= 1.0f;
             if (Input::IsKeyDown(Key::A) || Input::IsKeyDown(Key::Left)) input.x -= 1.0f;
             if (Input::IsKeyDown(Key::D) || Input::IsKeyDown(Key::Right)) input.x += 1.0f;
+            // A gamepad's left stick works too (+Y is down on the stick).
+            glm::vec2 stick(Input::GetGamepadAxis(GamepadAxis::LeftX), -Input::GetGamepadAxis(GamepadAxis::LeftY));
+            if (glm::dot(stick, stick) > 0.0f) input = stick;
             if (glm::length(input) > 1.0f) input = glm::normalize(input);
 
             // Camera-relative: forward is the camera's view direction flattened onto the ground.
@@ -407,7 +418,7 @@ namespace Game
                 }
             }
             glm::vec3 move = (forward * input.y + right * input.x) * MoveSpeed;
-            if (Input::IsKeyPressed(Key::Space) && cc->IsGrounded) cc->VerticalSpeed = JumpSpeed;
+            if ((Input::IsKeyPressed(Key::Space) || Input::IsGamepadButtonPressed(GamepadButton::A)) && cc->IsGrounded) cc->VerticalSpeed = JumpSpeed;
             Physics3DWorld::SimpleMoveCharacter(GetScene(), Self(), move);
 
             if (glm::length(move) > 0.1f)
@@ -481,7 +492,7 @@ namespace Game
         ScriptRegistry::Register<BlendDriver>("BlendDriver")
             .Field("Parameter", &BlendDriver::Parameter)
             .Field("Period", &BlendDriver::Period).Range(0.1f, 120.0f);
-        ScriptRegistry::Register<LoadSceneButton>("LoadSceneButton").Field("Scene", &LoadSceneButton::Scene);
+        ScriptRegistry::Register<LoadSceneButton>("LoadSceneButton").Field("Scene", &LoadSceneButton::Scene).Field("Async", &LoadSceneButton::Async);
         ScriptRegistry::Register<LoadSceneAfterDelay>("LoadSceneAfterDelay")
             .Field("Scene", &LoadSceneAfterDelay::Scene)
             .Field("Delay", &LoadSceneAfterDelay::Delay).Range(0.0f, 3600.0f);

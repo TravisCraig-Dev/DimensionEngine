@@ -15,6 +15,17 @@ namespace Dimension
         bool Mute = false;
         bool Solo = false;
         float LowPassHz = 0.0f;  // 0 = filter off
+
+        // Insert effects, after the low-pass filter. On/off and amounts apply live; a new echo delay applies when the
+        // mixer is rebuilt (play start).
+        bool Echo = false;
+        float EchoDelayMs = 300.0f;
+        float EchoDecay = 0.4f;  // feedback per repeat (0-0.95)
+        float EchoWet = 0.5f;    // level of the repeats
+        bool Reverb = false;
+        float ReverbRoomSize = 0.6f; // 0-1
+        float ReverbDamping = 0.5f;  // high-frequency absorption, 0-1
+        float ReverbWet = 0.35f;     // 0-1
     };
 
     // A saved state of the mixer (like Unity's AudioMixerSnapshot): each group's volume and low-pass cutoff, by group

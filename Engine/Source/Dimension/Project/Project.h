@@ -21,6 +21,7 @@ namespace Dimension
         bool VSync = true;
         std::string BuildFolder;              // last output folder used by Build
         AssetHandle Icon = AssetHandle::None(); // texture used as the game's executable and window icon (None = engine icon)
+        bool StripUnusedAssets = true;        // Build copies only assets the build scenes reach (plus Assets/Resources)
 
         std::vector<AudioMixerGroup> MixerGroups = AudioMixer::DefaultGroups();
         std::vector<AudioMixerSnapshot> MixerSnapshots;

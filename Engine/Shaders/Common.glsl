@@ -20,7 +20,7 @@ struct ReflectionProbe
     vec4 CenterIntensity; // xyz capture position, w intensity
     vec4 BoxMin;          // xyz influence box min, w texture index
     vec4 BoxMax;          // xyz influence box max, w mip count
-    vec4 Params;          // x 1 = box projection
+    vec4 Params;          // x 1 = box projection, y blend distance
 };
 
 layout(set = 1, binding = 0) uniform SceneData
@@ -225,6 +225,32 @@ vec3 CascadeDebugColor(vec3 worldPos)
     if (c == 2) return vec3(0.45, 0.6, 1.0);
     if (c == 3) return vec3(1.0, 1.0, 0.4);
     return vec3(1.0);
+}
+
+// Reflection probes. Weight of a probe at a point: 0 outside its box, rising to 1 at Blend Distance inside its walls.
+float ProbeWeight(ReflectionProbe p, vec3 pos)
+{
+    vec3 inside = min(pos - p.BoxMin.xyz, p.BoxMax.xyz - pos);
+    float d = min(min(inside.x, inside.y), inside.z);
+    if (d < 0.0) return 0.0;
+    return p.Params.y > 0.0 ? clamp(d / p.Params.y, 0.0, 1.0) : 1.0;
+}
+
+// The surroundings captured at the probe, optionally box-projected so reflections line up with the walls of the
+// influence box instead of being "at infinity". Rougher surfaces read blurrier (GGX-prefiltered) mips.
+vec3 SampleProbe(ReflectionProbe probe, vec3 pos, vec3 R, float roughness)
+{
+    vec3 dir = R;
+    if (probe.Params.x > 0.5)
+    {
+        vec3 safe = mix(R, vec3(1e-4), lessThan(abs(R), vec3(1e-4)));
+        vec3 t1 = (probe.BoxMax.xyz - pos) / safe, t2 = (probe.BoxMin.xyz - pos) / safe;
+        vec3 far = max(t1, t2);
+        float t = min(min(far.x, far.y), far.z);
+        if (t > 0.0) dir = pos + R * t - probe.CenterIntensity.xyz;
+    }
+    float lod = roughness * max(probe.BoxMax.w - 1.0, 0.0);
+    return textureLod(uTextures[nonuniformEXT(uint(probe.BoxMin.w))], DirToEquirectRaw(normalize(dir)), lod).rgb * probe.CenterIntensity.w;
 }
 
 // Spot light cookie coordinates (mirrors SpotCookieUV in SceneRenderer.cpp).

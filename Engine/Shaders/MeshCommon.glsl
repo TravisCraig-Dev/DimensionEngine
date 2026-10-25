@@ -36,5 +36,5 @@ layout(push_constant) uniform Push
     InstancesRef Instances; // valid when Flags & 2 (Model and EntityId then come from here)
     uint EntityId;
     uint Flags;         // bit 0: skinned, bit 1: instanced
-    uint Probe;         // reflection probe slot + 1 (0 = sky)
+    uint Probe;         // unused: reflection probes blend per pixel
 } pc;

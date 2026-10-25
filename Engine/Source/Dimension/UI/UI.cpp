@@ -320,6 +320,23 @@ namespace Dimension::UI
             return block.x;
         }
 
+        // Multi-line text: byte offsets where each line starts.
+        std::vector<size_t> LineStarts(const std::string& s)
+        {
+            std::vector<size_t> starts{ 0 };
+            for (size_t i = 0; i < s.size(); ++i)
+                if (s[i] == '\n') starts.push_back(i + 1);
+            return starts;
+        }
+        size_t LineOf(const std::vector<size_t>& starts, size_t offset)
+        {
+            return (size_t)(std::upper_bound(starts.begin(), starts.end(), offset) - starts.begin()) - 1;
+        }
+        size_t LineEnd(const std::string& s, const std::vector<size_t>& starts, size_t line)
+        {
+            return line + 1 < starts.size() ? starts[line + 1] - 1 : s.size();
+        }
+
         float TextWidth(const Font& font, const std::string& text, float pixelSize)
         {
             float w = 0.0f;
@@ -423,6 +440,156 @@ namespace Dimension::UI
         return n;
     }
 
+    namespace
+    {
+        bool IsSelectable(Registry& reg, Entity e)
+        {
+            if (!reg.Has<UIRectComponent>(e) || !reg.Get<TransformComponent>(e).ActiveInHierarchy) return false;
+            const auto& r = reg.Get<UIRectComponent>(e);
+            glm::vec2 mn = glm::max(r.ComputedMin, r.ClipMin), mx = glm::min(r.ComputedMax, r.ClipMax);
+            if (mn.x >= mx.x || mn.y >= mx.y) return false; // scrolled or clipped out of view
+            if (auto* b = reg.TryGet<UIButtonComponent>(e)) return b->Interactable;
+            if (auto* t = reg.TryGet<UIToggleComponent>(e)) return t->Interactable;
+            if (auto* s = reg.TryGet<UISliderComponent>(e)) return s->Interactable;
+            if (auto* d = reg.TryGet<UIDropdownComponent>(e)) return d->Interactable;
+            if (auto* f = reg.TryGet<UIInputFieldComponent>(e)) return f->Interactable;
+            return false;
+        }
+
+        glm::vec2 CenterOf(Registry& reg, Entity e)
+        {
+            const auto& r = reg.Get<UIRectComponent>(e);
+            return (r.ComputedMin + r.ComputedMax) * 0.5f;
+        }
+
+        // Keyboard / gamepad navigation (like Unity's EventSystem): the selection moves to the nearest widget in the
+        // pressed direction, Submit presses it, sliders step with Left/Right, and an open dropdown list is navigated
+        // with Up/Down. A mouse click selects the clicked widget (or clears the selection).
+        void Navigate(Scene& scene, Registry& reg, const std::vector<Entity>& order, const PointerState& pointer, const glm::vec2& screen,
+                      Entity hovered, std::vector<Entity>& clicked, std::vector<std::pair<Entity, float>>& values)
+        {
+            Entity selected = scene.GetUISelected();
+            std::vector<Entity> candidates;
+            for (Entity e : order)
+                if (IsSelectable(reg, e)) candidates.push_back(e);
+            if (!selected.IsNull() && std::find(candidates.begin(), candidates.end(), selected) == candidates.end()) selected = Entity::Null();
+            if (pointer.Pressed)
+            {
+                selected = !hovered.IsNull() && IsSelectable(reg, hovered) ? hovered : Entity::Null();
+                scene.SetUINavigating(false);
+            }
+            if (pointer.NavUp || pointer.NavDown || pointer.NavLeft || pointer.NavRight) scene.SetUINavigating(true);
+            bool navigating = scene.IsUINavigating();
+
+            bool typing = false;
+            for (auto [e, f] : reg.ViewOf<UIInputFieldComponent>()) typing |= f.Focused;
+            auto* field = selected.IsNull() ? nullptr : reg.TryGet<UIInputFieldComponent>(selected);
+            if (typing)
+            {
+                // A focused text field keeps the arrows and Enter; Cancel (Escape, B) leaves it.
+                if (pointer.Cancel && field && field->Focused) field->Focused = false;
+                scene.SetUISelected(selected);
+                return;
+            }
+
+            // An open dropdown list.
+            if (auto* dd = selected.IsNull() || !navigating ? nullptr : reg.TryGet<UIDropdownComponent>(selected); dd && dd->Open)
+            {
+                int n = (int)dd->Options.size();
+                if (pointer.NavUp || pointer.NavDown)
+                {
+                    int item = dd->HoveredItem >= 0 ? dd->HoveredItem : dd->Value;
+                    dd->HoveredItem = std::clamp(item + (pointer.NavDown ? 1 : -1), 0, std::max(0, n - 1));
+                    int visible = std::min(n, std::max(1, dd->MaxVisibleItems));
+                    dd->ListScroll = std::clamp(dd->ListScroll, (float)(dd->HoveredItem - visible + 1), (float)dd->HoveredItem);
+                }
+                if (pointer.Submit && dd->HoveredItem >= 0 && dd->HoveredItem < n)
+                {
+                    if (dd->HoveredItem != dd->Value)
+                    {
+                        dd->Value = dd->HoveredItem;
+                        values.emplace_back(selected, (float)dd->Value);
+                    }
+                    dd->Open = false;
+                }
+                if (pointer.Cancel) dd->Open = false;
+                scene.SetUISelected(selected);
+                return;
+            }
+
+            glm::vec2 dir(0.0f);
+            if (pointer.NavLeft) dir = { -1, 0 };
+            else if (pointer.NavRight) dir = { 1, 0 };
+            else if (pointer.NavUp) dir = { 0, -1 };
+            else if (pointer.NavDown) dir = { 0, 1 };
+            auto* slider = selected.IsNull() ? nullptr : reg.TryGet<UISliderComponent>(selected);
+            if (slider && dir.x != 0.0f)
+            {
+                float step = slider->WholeNumbers ? 1.0f : (slider->MaxValue - slider->MinValue) * 0.1f;
+                float lo = std::min(slider->MinValue, slider->MaxValue), hi = std::max(slider->MinValue, slider->MaxValue);
+                float v = std::clamp(slider->Value + step * dir.x, lo, hi);
+                if (slider->WholeNumbers) v = std::round(v);
+                if (v != slider->Value)
+                {
+                    slider->Value = v;
+                    values.emplace_back(selected, v);
+                }
+            }
+            else if (dir != glm::vec2(0.0f) && !candidates.empty())
+            {
+                if (selected.IsNull())
+                {
+                    // Nothing selected yet: start at the top-left widget.
+                    selected = *std::min_element(candidates.begin(), candidates.end(), [&](Entity a, Entity b) {
+                        glm::vec2 ca = CenterOf(reg, a), cb = CenterOf(reg, b);
+                        return ca.y + ca.x * 0.25f < cb.y + cb.x * 0.25f;
+                    });
+                }
+                else
+                {
+                    glm::vec2 from = CenterOf(reg, selected);
+                    Entity best = Entity::Null();
+                    float bestScore = 1e30f;
+                    for (Entity c : candidates)
+                    {
+                        if (c == selected) continue;
+                        glm::vec2 d = CenterOf(reg, c) - from;
+                        float along = glm::dot(d, dir);
+                        if (along <= 1.0f) continue;
+                        float across = std::abs(d.x * dir.y - d.y * dir.x);
+                        float score = along + across * 2.0f; // prefer widgets straight ahead
+                        if (score < bestScore) { bestScore = score; best = c; }
+                    }
+                    if (!best.IsNull()) selected = best;
+                }
+            }
+
+            if (pointer.Submit && navigating && !selected.IsNull())
+            {
+                if (reg.Has<UIButtonComponent>(selected)) clicked.push_back(selected);
+                else if (auto* toggle = reg.TryGet<UIToggleComponent>(selected))
+                {
+                    toggle->IsOn = !toggle->IsOn;
+                    values.emplace_back(selected, toggle->IsOn ? 1.0f : 0.0f);
+                }
+                else if (auto* dd = reg.TryGet<UIDropdownComponent>(selected); dd && !dd->Options.empty())
+                {
+                    dd->Open = true;
+                    dd->HoveredItem = dd->Value;
+                }
+                else if (field)
+                {
+                    field->Focused = true;
+                    field->CaretTime = 0.0f;
+                    field->Caret = (int32_t)field->Text.size();
+                    field->SelectionAnchor = -1;
+                }
+            }
+            (void)screen;
+            scene.SetUISelected(selected);
+        }
+    }
+
     std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screen)
     {
         auto& reg = scene.GetRegistry();
@@ -474,7 +641,9 @@ namespace Dimension::UI
             bool inList = InBox(pointer.Position, list.Min, list.Max);
             if (inList && pointer.Scroll != 0.0f) dd.ListScroll -= pointer.Scroll;
             dd.ListScroll = std::clamp(dd.ListScroll, 0.0f, maxScroll);
-            dd.HoveredItem = inList ? std::clamp((int)std::floor((pointer.Position.y - list.Min.y) / list.ItemHeight + dd.ListScroll), 0, n - 1) : -1;
+            // The mouse highlights the item under it; while navigating with keys/gamepad the highlight is theirs.
+            if (inList) dd.HoveredItem = std::clamp((int)std::floor((pointer.Position.y - list.Min.y) / list.ItemHeight + dd.ListScroll), 0, n - 1);
+            else if (!scene.IsUINavigating()) dd.HoveredItem = -1;
             if (pointer.Pressed)
             {
                 // Picking an item selects it; a click anywhere else (including the box) just closes the list.
@@ -634,7 +803,16 @@ namespace Dimension::UI
             std::string& text = field.Text;
             float scale = rect->ComputedScale, pad = 10.0f * scale, px = field.FontSize * scale;
             float textLeft = rect->ComputedMin.x + pad;
-            auto caretAt = [&](float x) { return (int32_t)CaretFromX(text, x - textLeft + field.ScrollX, px); };
+            float lineH = px * 1.1f, textTop = rect->ComputedMin.y + pad * 0.5f;
+            // Caret offset under a point: the line under it (multi-line), then the column.
+            auto caretAt = [&](glm::vec2 p) {
+                if (!field.MultiLine) return (int32_t)CaretFromX(text, p.x - textLeft + field.ScrollX, px);
+                auto starts = LineStarts(text);
+                float row = std::floor((p.y - textTop + field.ScrollY) / lineH);
+                size_t line = (size_t)std::clamp(row, 0.0f, (float)starts.size() - 1.0f);
+                size_t a = starts[line], b = LineEnd(text, starts, line);
+                return (int32_t)(a + CaretFromX(text.substr(a, b - a), p.x - textLeft + field.ScrollX, px));
+            };
             field.Caret = std::clamp(field.Caret, 0, (int32_t)text.size());
             if (field.SelectionAnchor > (int32_t)text.size()) field.SelectionAnchor = -1;
 
@@ -644,7 +822,7 @@ namespace Dimension::UI
                 {
                     if (!field.Focused) field.CaretTime = 0.0f;
                     field.Focused = true;
-                    field.Caret = caretAt(pointer.Position.x);
+                    field.Caret = caretAt(pointer.Position);
                     field.SelectionAnchor = field.Caret;
                     field.Selecting = true;
                 }
@@ -653,14 +831,14 @@ namespace Dimension::UI
             }
             if (field.Selecting)
             {
-                if (pointer.Down) field.Caret = caretAt(pointer.Position.x);
+                if (pointer.Down) field.Caret = caretAt(pointer.Position);
                 else field.Selecting = false;
             }
             if (!field.Focused)
             {
                 field.SelectionAnchor = -1;
                 field.Selecting = false;
-                field.ScrollX = 0.0f;
+                field.ScrollX = field.ScrollY = 0.0f;
                 continue;
             }
 
@@ -686,7 +864,7 @@ namespace Dimension::UI
                 {
                     unsigned char c = (unsigned char)typed[i];
                     size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : 4;
-                    bool printable = c >= 32 && c != 127; // also drops pasted newlines and tabs
+                    bool printable = (c >= 32 && c != 127) || (c == '\n' && field.MultiLine); // drops tabs (and newlines in one line)
                     if (printable && (field.CharacterLimit <= 0 || count < (size_t)field.CharacterLimit))
                     {
                         add.append(typed, i, len);
@@ -739,17 +917,42 @@ namespace Dimension::UI
                 if (!pointer.Shift && hasSelection()) { field.Caret = (int32_t)selectionHi(); field.SelectionAnchor = -1; }
                 else moveCaret(pointer.Ctrl ? WordRight(text, field.Caret) : NextCodepoint(text, field.Caret));
             }
-            if (pointer.Home) moveCaret(0);
-            if (pointer.End) moveCaret(text.size());
+            if (field.MultiLine && (pointer.LineUp || pointer.LineDown))
+            {
+                // Same x on the line above/below; past the first/last line, to the start/end.
+                auto starts = LineStarts(text);
+                size_t line = LineOf(starts, (size_t)field.Caret);
+                float x = MeasureText(text.substr(starts[line], field.Caret - starts[line]), px);
+                if (pointer.LineUp && line == 0) moveCaret(0);
+                else if (pointer.LineDown && line + 1 >= starts.size()) moveCaret(text.size());
+                else
+                {
+                    size_t to = pointer.LineUp ? line - 1 : line + 1, a = starts[to], b = LineEnd(text, starts, to);
+                    moveCaret(a + CaretFromX(text.substr(a, b - a), x, px));
+                }
+            }
+            if (field.MultiLine && !pointer.Ctrl && (pointer.Home || pointer.End))
+            {
+                auto starts = LineStarts(text);
+                size_t line = LineOf(starts, (size_t)field.Caret);
+                moveCaret(pointer.Home ? starts[line] : LineEnd(text, starts, line));
+            }
+            else
+            {
+                if (pointer.Home) moveCaret(0);
+                if (pointer.End) moveCaret(text.size());
+            }
             if (pointer.Tab)
             {
                 tabFrom = e;
                 tabBackwards = pointer.Shift;
             }
 
+            bool newline = pointer.Enter && field.MultiLine && !pointer.Ctrl;
+            if (newline) insert("\n");
             if (text != before || field.Caret != caretBefore || field.SelectionAnchor != anchorBefore) field.CaretTime = 0.0f;
             if (text != before) texts.emplace_back(e, text, false);
-            if (pointer.Enter)
+            if (pointer.Enter && !newline)
             {
                 field.Focused = false;
                 field.SelectionAnchor = -1;
@@ -758,7 +961,26 @@ namespace Dimension::UI
 
             // Keep the caret inside the visible part of the field.
             float avail = std::max(1.0f, rect->ComputedMax.x - rect->ComputedMin.x - 2.0f * pad);
-            float caretX = MeasureText(text.substr(0, field.Caret), px), total = MeasureText(text, px);
+            float caretX, total;
+            if (field.MultiLine)
+            {
+                auto starts = LineStarts(text);
+                size_t line = LineOf(starts, (size_t)field.Caret);
+                caretX = MeasureText(text.substr(starts[line], field.Caret - starts[line]), px);
+                total = 0.0f;
+                for (size_t l = 0; l < starts.size(); ++l)
+                    total = std::max(total, MeasureText(text.substr(starts[l], LineEnd(text, starts, l) - starts[l]), px));
+                float availY = std::max(lineH, rect->ComputedMax.y - rect->ComputedMin.y - pad);
+                float top = line * lineH;
+                if (top + lineH - field.ScrollY > availY) field.ScrollY = top + lineH - availY;
+                if (top - field.ScrollY < 0.0f) field.ScrollY = top;
+                field.ScrollY = std::clamp(field.ScrollY, 0.0f, std::max(0.0f, starts.size() * lineH - availY));
+            }
+            else
+            {
+                caretX = MeasureText(text.substr(0, field.Caret), px);
+                total = MeasureText(text, px);
+            }
             if (caretX - field.ScrollX > avail) field.ScrollX = caretX - avail;
             if (caretX - field.ScrollX < 0.0f) field.ScrollX = caretX;
             field.ScrollX = std::clamp(field.ScrollX, 0.0f, std::max(0.0f, total - avail));
@@ -781,6 +1003,8 @@ namespace Dimension::UI
             }
         }
 
+        Navigate(scene, reg, order, pointer, screen, hovered, clicked, values);
+
         for (Entity e : clicked) scene.DispatchUIClick(e);
         for (auto& [e, v] : values) scene.DispatchUIValueChanged(e, v);
         for (auto& [e, text, submit] : texts) scene.DispatchUIText(e, text, submit);
@@ -792,6 +1016,7 @@ namespace Dimension::UI
         auto& reg = scene.GetRegistry();
         auto order = ComputeLayout(scene, screen);
         uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
+        Entity navSelected = scene.IsUINavigating() ? scene.GetUISelected() : Entity::Null();
 
         for (Entity e : order)
         {
@@ -806,7 +1031,7 @@ namespace Dimension::UI
                 {
                     glm::vec4 tint = !b->Interactable ? kDisabledTint
                                    : b->Pressed       ? b->PressedColor
-                                   : b->Hovered       ? b->HoverColor
+                                   : b->Hovered || e == navSelected ? b->HoverColor
                                                       : b->NormalColor;
                     color *= tint;
                 }
@@ -868,7 +1093,41 @@ namespace Dimension::UI
                     glm::vec2 origin{ mn.x + pad - field->ScrollX, mn.y };
                     size_t caret = std::min((size_t)std::max(field->Caret, 0), text.size());
                     float lineH = px * 1.1f, lineY = mn.y + (size.y - lineH) * 0.5f;
-                    if (field->Focused && field->SelectionAnchor >= 0 && field->SelectionAnchor != (int32_t)caret)
+                    if (field->MultiLine)
+                    {
+                        // Lines from the top (scrolled), clipped to the padded field; selection per line.
+                        inner.ClipMin.y = std::max(rect.ClipMin.y, mn.y + pad * 0.25f);
+                        inner.ClipMax.y = std::min(rect.ClipMax.y, mx.y - pad * 0.25f);
+                        float top = mn.y + pad * 0.5f - field->ScrollY;
+                        bool placeholder = text.empty() && !field->Focused;
+                        const std::string& shown = placeholder ? field->Placeholder : text;
+                        auto starts = LineStarts(shown);
+                        bool selecting = field->Focused && field->SelectionAnchor >= 0 && field->SelectionAnchor != (int32_t)caret;
+                        size_t lo = selecting ? std::min(caret, (size_t)field->SelectionAnchor) : 0, hi = selecting ? std::max(caret, std::min((size_t)field->SelectionAnchor, text.size())) : 0;
+                        for (size_t l = 0; l < starts.size(); ++l)
+                        {
+                            size_t a = starts[l], b = LineEnd(shown, starts, l);
+                            float y = top + l * lineH;
+                            if (y > mx.y || y + lineH < mn.y) continue;
+                            if (selecting && hi > a && lo <= b)
+                            {
+                                float x0 = origin.x + MeasureText(shown.substr(a, std::max(lo, a) - a), px);
+                                float x1 = origin.x + MeasureText(shown.substr(a, std::min(hi, b) - a), px) + (hi > b ? px * 0.3f : 0.0f);
+                                Emit(out, { x0, y }, { x1, y + lineH }, { 0, 0 }, { 1, 1 }, { 0.25f, 0.55f, 0.95f, 0.35f }, white, inner);
+                            }
+                            if (b > a)
+                                EmitText(out, *font, shown.substr(a, b - a), px, { origin.x, y }, lineH,
+                                         placeholder ? field->PlaceholderColor : field->TextColor, inner);
+                        }
+                        if (field->Focused && std::fmod(field->CaretTime, 1.0f) < 0.55f)
+                        {
+                            auto cs = LineStarts(text);
+                            size_t line = LineOf(cs, caret);
+                            float cx = origin.x + MeasureText(text.substr(cs[line], caret - cs[line]), px), cy = top + line * lineH;
+                            Emit(out, { cx, cy }, { cx + std::max(1.0f, 2.0f * s), cy + lineH }, { 0, 0 }, { 1, 1 }, field->TextColor, white, inner);
+                        }
+                    }
+                    else if (field->Focused && field->SelectionAnchor >= 0 && field->SelectionAnchor != (int32_t)caret)
                     {
                         size_t lo = std::min(caret, (size_t)field->SelectionAnchor), hi = std::max(caret, std::min((size_t)field->SelectionAnchor, text.size()));
                         float x0 = origin.x + MeasureText(text.substr(0, lo), px), x1 = origin.x + MeasureText(text.substr(0, hi), px);
@@ -917,6 +1176,22 @@ namespace Dimension::UI
                 uint32_t atlas = font->GetAtlas()->GetBindlessIndex();
                 for (auto& q : quads) Emit(out, origin + q.Min, origin + q.Max, q.UVMin, q.UVMax, text->Color, atlas, rect);
             }
+        }
+
+        // Navigation highlight: an outline around the selected widget.
+        if (!navSelected.IsNull() && reg.Has<UIRectComponent>(navSelected) && reg.Get<TransformComponent>(navSelected).ActiveInHierarchy)
+        {
+            const auto& rect = reg.Get<UIRectComponent>(navSelected);
+            float w = std::max(2.0f, 3.0f * rect.ComputedScale), gap = 2.0f * rect.ComputedScale;
+            glm::vec2 a = rect.ComputedMin - glm::vec2(gap + w), b = rect.ComputedMax + glm::vec2(gap + w);
+            const glm::vec4 color{ 1.0f, 0.8f, 0.25f, 1.0f };
+            UIRectComponent clip = rect;
+            clip.ClipMin = glm::max(rect.ClipMin - glm::vec2(gap + w), glm::vec2(0.0f));
+            clip.ClipMax = glm::min(rect.ClipMax + glm::vec2(gap + w), screen);
+            Emit(out, a, { b.x, a.y + w }, { 0, 0 }, { 1, 1 }, color, white, clip);
+            Emit(out, { a.x, b.y - w }, b, { 0, 0 }, { 1, 1 }, color, white, clip);
+            Emit(out, { a.x, a.y + w }, { a.x + w, b.y - w }, { 0, 0 }, { 1, 1 }, color, white, clip);
+            Emit(out, { b.x - w, a.y + w }, { b.x, b.y - w }, { 0, 0 }, { 1, 1 }, color, white, clip);
         }
 
         // Scrollbars sit on top of their view's content.

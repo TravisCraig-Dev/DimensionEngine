@@ -29,6 +29,12 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--focus") && i + 1 < argc) options.FocusWindow = argv[++i];
         else if (!std::strcmp(argv[i], "--build") && i + 1 < argc) options.BuildFolder = argv[++i];
         else if (!std::strcmp(argv[i], "--open") && i + 1 < argc) options.OpenWindow = argv[++i];
+        else if (!std::strcmp(argv[i], "--line-point") && i + 1 < argc) options.LinePoint = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--theme") && i + 1 < argc)
+        {
+            std::string t = argv[++i];
+            options.Theme = t == "light" ? 1 : t == "midnight" ? 2 : 0;
+        }
         else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) options.ScenePath = argv[++i];
         else if (!std::strcmp(argv[i], "--prefab") && i + 1 < argc) options.PrefabPath = argv[++i];
         else if (!std::strcmp(argv[i], "--open-scene") && i + 1 < argc) options.OpenSceneLater = argv[++i];

@@ -40,6 +40,10 @@ namespace Editor::UI
     bool IsVectorField(FieldType type);
     EditResult Vec3Control(const char* label, glm::vec3& value, float resetValue = 0.0f, float speed = 0.05f);
     EditResult AssetField(const char* label, AssetHandle& handle, AssetType type);
+    // Theme-aware colors: a background tinted toward the accent (amount 0-1), and accent-colored text that stays
+    // readable on light and dark themes (prefab overrides, highlights).
+    ImVec4 AccentBackground(float amount = 0.3f);
+    ImVec4 AccentText();
     EditResult EntityField(const char* label, Entity& entity, Scene& scene);
     // Inline editors: drag keys, double-click to add, right-click a key to remove.
     EditResult CurveEditor(const char* id, Curve& curve, float height = 64.0f);

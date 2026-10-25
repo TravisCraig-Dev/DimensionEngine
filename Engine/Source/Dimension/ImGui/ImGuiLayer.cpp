@@ -85,8 +85,12 @@ namespace Dimension
 
     bool ImGuiLayer::IsActive() { return s_Active; }
 
-    void ImGuiLayer::ApplyEditorStyle()
+    static int s_Theme = ImGuiLayer::ThemeDark;
+    bool ImGuiLayer::IsLightTheme() { return s_Theme == ThemeLight; }
+
+    void ImGuiLayer::ApplyEditorStyle(int theme, uint32_t accentRgb)
     {
+        s_Theme = theme;
         ImGuiStyle& style = ImGui::GetStyle();
         style.WindowRounding = 2.0f;
         style.FrameRounding = 3.0f;
@@ -101,9 +105,60 @@ namespace Dimension
         style.TabBorderSize = 0.0f;
         style.IndentSpacing = 14.0f;
 
-        // Dark grey palette close to Unity's Professional skin.
         ImVec4* c = style.Colors;
         auto rgb = [](int r, int g, int b, float a = 1.0f) { return ImVec4(r / 255.0f, g / 255.0f, b / 255.0f, a); };
+        ImVec4 accent = rgb((accentRgb >> 16) & 0xFF, (accentRgb >> 8) & 0xFF, accentRgb & 0xFF);
+        auto withAlpha = [](ImVec4 v, float a) { v.w = a; return v; };
+        if (theme == ThemeLight || theme == ThemeMidnight)
+        {
+            // Both are built from a few base tones: background, panel, field, raised (buttons), and text.
+            bool light = theme == ThemeLight;
+            auto tone = [&](int grey, int blueShift = 0) { return rgb(grey, grey + blueShift / 2, grey + blueShift); };
+            int shift = light ? 0 : 14;
+            ImVec4 bg = light ? tone(194) : tone(30, shift), panel = light ? tone(200) : tone(34, shift);
+            ImVec4 field = light ? tone(232) : tone(22, shift), raised = light ? tone(222) : tone(48, shift);
+            ImVec4 raisedHover = light ? tone(236) : tone(62, shift), dark = light ? tone(150) : tone(16, shift);
+            ImVec4 text = light ? tone(16) : tone(214, 10);
+            c[ImGuiCol_Text] = text;
+            c[ImGuiCol_TextDisabled] = light ? tone(100) : tone(120, shift);
+            c[ImGuiCol_WindowBg] = bg;
+            c[ImGuiCol_ChildBg] = bg;
+            c[ImGuiCol_PopupBg] = panel;
+            c[ImGuiCol_Border] = dark;
+            c[ImGuiCol_FrameBg] = field;
+            c[ImGuiCol_FrameBgHovered] = light ? tone(242) : tone(30, shift);
+            c[ImGuiCol_FrameBgActive] = light ? tone(250) : tone(18, shift);
+            c[ImGuiCol_TitleBg] = light ? tone(180) : tone(24, shift);
+            c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBg];
+            c[ImGuiCol_MenuBarBg] = light ? tone(184) : tone(24, shift);
+            c[ImGuiCol_ScrollbarBg] = light ? tone(186) : tone(26, shift);
+            c[ImGuiCol_ScrollbarGrab] = light ? tone(150) : tone(70, shift);
+            c[ImGuiCol_CheckMark] = light ? tone(30) : tone(210, 10);
+            c[ImGuiCol_SliderGrab] = light ? tone(130) : tone(110, shift);
+            c[ImGuiCol_SliderGrabActive] = accent;
+            c[ImGuiCol_Button] = raised;
+            c[ImGuiCol_ButtonHovered] = raisedHover;
+            c[ImGuiCol_ButtonActive] = accent;
+            c[ImGuiCol_Header] = light ? tone(176) : tone(44, shift);
+            c[ImGuiCol_HeaderHovered] = light ? tone(186) : tone(56, shift);
+            c[ImGuiCol_HeaderActive] = accent;
+            c[ImGuiCol_Separator] = dark;
+            c[ImGuiCol_Tab] = light ? tone(176) : tone(26, shift);
+            c[ImGuiCol_TabHovered] = raisedHover;
+            c[ImGuiCol_TabSelected] = bg;
+            c[ImGuiCol_TabSelectedOverline] = accent;
+            c[ImGuiCol_TabDimmed] = c[ImGuiCol_Tab];
+            c[ImGuiCol_TabDimmedSelected] = bg;
+            c[ImGuiCol_DockingPreview] = withAlpha(accent, 0.7f);
+            c[ImGuiCol_DockingEmptyBg] = dark;
+            c[ImGuiCol_TextSelectedBg] = withAlpha(accent, 0.45f);
+            c[ImGuiCol_NavCursor] = accent;
+            c[ImGuiCol_ResizeGrip] = rgb(0, 0, 0, 0);
+            c[ImGuiCol_PlotHistogram] = accent;
+            return;
+        }
+
+        // Dark grey palette close to Unity's Professional skin.
         c[ImGuiCol_Text] = rgb(210, 210, 210);
         c[ImGuiCol_TextDisabled] = rgb(128, 128, 128);
         c[ImGuiCol_WindowBg] = rgb(56, 56, 56);
@@ -123,21 +178,21 @@ namespace Dimension
         c[ImGuiCol_SliderGrabActive] = rgb(160, 160, 160);
         c[ImGuiCol_Button] = rgb(70, 70, 70);
         c[ImGuiCol_ButtonHovered] = rgb(85, 85, 85);
-        c[ImGuiCol_ButtonActive] = rgb(44, 93, 135);
+        c[ImGuiCol_ButtonActive] = accent;
         c[ImGuiCol_Header] = rgb(66, 66, 66);
         c[ImGuiCol_HeaderHovered] = rgb(80, 80, 80);
-        c[ImGuiCol_HeaderActive] = rgb(44, 93, 135);
+        c[ImGuiCol_HeaderActive] = accent;
         c[ImGuiCol_Separator] = rgb(35, 35, 35);
         c[ImGuiCol_Tab] = rgb(45, 45, 45);
         c[ImGuiCol_TabHovered] = rgb(70, 70, 70);
         c[ImGuiCol_TabSelected] = rgb(60, 60, 60);
-        c[ImGuiCol_TabSelectedOverline] = rgb(58, 121, 187);
+        c[ImGuiCol_TabSelectedOverline] = accent;
         c[ImGuiCol_TabDimmed] = rgb(45, 45, 45);
         c[ImGuiCol_TabDimmedSelected] = rgb(56, 56, 56);
-        c[ImGuiCol_DockingPreview] = rgb(58, 121, 187, 0.7f);
+        c[ImGuiCol_DockingPreview] = withAlpha(accent, 0.7f);
         c[ImGuiCol_DockingEmptyBg] = rgb(30, 30, 30);
-        c[ImGuiCol_TextSelectedBg] = rgb(58, 121, 187, 0.5f);
-        c[ImGuiCol_NavCursor] = rgb(58, 121, 187);
+        c[ImGuiCol_TextSelectedBg] = withAlpha(accent, 0.5f);
+        c[ImGuiCol_NavCursor] = accent;
         c[ImGuiCol_ResizeGrip] = rgb(0, 0, 0, 0);
     }
 }

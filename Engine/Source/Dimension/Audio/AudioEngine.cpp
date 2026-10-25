@@ -7,9 +7,16 @@
 #include <cmath>
 #include <cstring>
 
+// Ogg Vorbis decoding through stb_vorbis (bundled with miniaudio): header first so miniaudio enables its Vorbis
+// decoder, implementation after.
+#define STB_VORBIS_HEADER_ONLY
+#include <extras/stb_vorbis.c>
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_NO_ENCODING
 #include <miniaudio.h>
+#include <extras/nodes/ma_reverb_node/ma_reverb_node.c>
+#undef STB_VORBIS_HEADER_ONLY
+#include <extras/stb_vorbis.c>
 
 namespace Dimension
 {
@@ -39,13 +46,17 @@ namespace Dimension
 
         ma_node_vtable s_MeterVtable = { MeterProcess, nullptr, 1, 1, MA_NODE_FLAG_PASSTHROUGH };
 
-        // Mixer graph: per group a sound group (sounds attach here) feeding a low-pass filter, then a meter, that
-        // feeds the parent.
+        // Mixer graph: per group a sound group (sounds attach here) feeding a low-pass filter, the optional echo and
+        // reverb effects, then a meter, which feeds the parent. Effects that are off are bypassed (unlinked).
         struct GroupNodes
         {
             ma_sound_group Group;
             ma_lpf_node LowPass;
+            ma_delay_node Echo;
+            ma_reverb_node Reverb;
             MeterNode Meter;
+            bool HasEcho = false, HasReverb = false; // initialized
+            bool EchoLinked = false, ReverbLinked = false;
             bool Valid = false;
         };
         std::vector<std::unique_ptr<GroupNodes>> s_Groups;
@@ -67,11 +78,32 @@ namespace Dimension
                 if (!g || !g->Valid) continue;
                 ma_sound_group_uninit(&g->Group);
                 ma_node_uninit(&g->Meter.Base, nullptr);
+                if (g->HasReverb) ma_reverb_node_uninit(&g->Reverb, nullptr);
+                if (g->HasEcho) ma_delay_node_uninit(&g->Echo, nullptr);
                 ma_lpf_node_uninit(&g->LowPass, nullptr);
                 g->Valid = false;
             }
             s_Groups.clear();
             s_BuildOrder.clear();
+        }
+
+        // Chains filter -> [echo] -> [reverb] -> meter for the effects that are on. miniaudio allows re-linking while
+        // the device runs, so effects switch on and off live.
+        void LinkEffects(GroupNodes& n, const AudioMixerGroup& g)
+        {
+            bool echo = n.HasEcho && g.Echo, reverb = n.HasReverb && g.Reverb;
+            if (n.Valid && echo == n.EchoLinked && reverb == n.ReverbLinked) return;
+            ma_node* chain[4];
+            int count = 0;
+            chain[count++] = &n.LowPass;
+            if (echo) chain[count++] = &n.Echo;
+            if (reverb) chain[count++] = &n.Reverb;
+            chain[count++] = &n.Meter.Base;
+            if (!echo && n.HasEcho) ma_node_detach_output_bus(&n.Echo, 0);
+            if (!reverb && n.HasReverb) ma_node_detach_output_bus(&n.Reverb, 0);
+            for (int k = 0; k + 1 < count; ++k) ma_node_attach_output_bus(chain[k], 0, chain[k + 1], 0);
+            n.EchoLinked = echo;
+            n.ReverbLinked = reverb;
         }
 
         // Valid parent of group i (Master for invalid or cyclic links).
@@ -152,6 +184,31 @@ namespace Dimension
     }
 
     void AudioMixer::MarkStructureDirty() { s_StructureDirty = true; }
+
+    std::optional<AudioClipInfo> AudioEngine::GetClipInfo(const fs::path& file)
+    {
+        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+        ma_decoder decoder;
+        if (ma_decoder_init_file_w(file.wstring().c_str(), &cfg, &decoder) != MA_SUCCESS) return std::nullopt;
+        AudioClipInfo info;
+        ma_format format;
+        ma_decoder_get_data_format(&decoder, &format, &info.Channels, &info.SampleRate, nullptr, 0);
+        ma_uint64 frames = 0;
+        if (ma_decoder_get_length_in_pcm_frames(&decoder, &frames) == MA_SUCCESS) info.Frames = frames;
+        if (info.Frames == 0 && info.Channels > 0)
+        {
+            // Some decoders (Vorbis through miniaudio) do not report a length: count the frames instead.
+            std::vector<float> chunk(4096 * (size_t)info.Channels);
+            ma_uint64 read = 0;
+            while (ma_decoder_read_pcm_frames(&decoder, chunk.data(), 4096, &read) == MA_SUCCESS && read > 0) info.Frames += read;
+        }
+        info.Seconds = info.SampleRate ? (float)((double)info.Frames / info.SampleRate) : 0.0f;
+        ma_decoder_uninit(&decoder);
+        std::string ext = file.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        info.Format = ext == ".ogg" ? "Ogg Vorbis" : ext == ".mp3" ? "MP3" : ext == ".flac" ? "FLAC" : "WAV";
+        return info;
+    }
 
     namespace
     {
@@ -271,11 +328,20 @@ namespace Dimension
                 ma_sound_group_uninit(&nodes->Group);
                 continue;
             }
+            // Effects: the echo's buffer length is its delay, so a new delay time needs a rebuild.
+            ma_uint32 delayFrames = std::max<ma_uint32>(1, (ma_uint32)(std::clamp(groups[i].EchoDelayMs, 10.0f, 5000.0f) * 0.001f * rate));
+            ma_delay_node_config echoCfg = ma_delay_node_config_init(channels, rate, delayFrames, std::clamp(groups[i].EchoDecay, 0.0f, 0.95f));
+            nodes->HasEcho = ma_delay_node_init(graph, &echoCfg, nullptr, &nodes->Echo) == MA_SUCCESS;
+            if (channels <= 2)
+            {
+                ma_reverb_node_config reverbCfg = ma_reverb_node_config_init(channels, rate);
+                nodes->HasReverb = ma_reverb_node_init(graph, &reverbCfg, nullptr, &nodes->Reverb) == MA_SUCCESS;
+            }
             int parent = ParentOf(groups, i);
             ma_node* destination = parent >= 0 && s_Groups[parent] ? (ma_node*)&s_Groups[parent]->Group : ma_engine_get_endpoint(s_Engine);
             ma_node_attach_output_bus(&nodes->Group, 0, &nodes->LowPass, 0);
-            ma_node_attach_output_bus(&nodes->LowPass, 0, &nodes->Meter.Base, 0);
             ma_node_attach_output_bus(&nodes->Meter.Base, 0, destination, 0);
+            LinkEffects(*nodes, groups[i]);
             nodes->Valid = true;
             s_Groups[i] = std::move(nodes);
         }
@@ -293,6 +359,21 @@ namespace Dimension
             auto& g = s_Groups[i];
             if (!g || !g->Valid) continue;
             ma_sound_group_set_volume(&g->Group, EffectiveGain((int)i));
+            const AudioMixerGroup& mg = groups[i];
+            if (g->HasEcho)
+            {
+                ma_delay_node_set_wet(&g->Echo, std::clamp(mg.EchoWet, 0.0f, 1.0f));
+                ma_delay_node_set_dry(&g->Echo, 1.0f);
+                ma_delay_node_set_decay(&g->Echo, std::clamp(mg.EchoDecay, 0.0f, 0.95f)); // a new delay time applies at the next rebuild (play start)
+            }
+            if (g->HasReverb)
+            {
+                verblib_set_room_size(&g->Reverb.reverb, std::clamp(mg.ReverbRoomSize, 0.0f, 1.0f));
+                verblib_set_damping(&g->Reverb.reverb, std::clamp(mg.ReverbDamping, 0.0f, 1.0f));
+                verblib_set_wet(&g->Reverb.reverb, std::clamp(mg.ReverbWet, 0.0f, 1.0f) * 3.0f); // verblib's wet scale is 0-3
+                verblib_set_dry(&g->Reverb.reverb, 1.0f);
+            }
+            LinkEffects(*g, mg);
             ma_lpf_config cfg = ma_lpf_config_init(ma_format_f32, channels, rate, CutoffOf(groups[i], rate), 2);
             ma_lpf_node_reinit(&cfg, &g->LowPass);
         }

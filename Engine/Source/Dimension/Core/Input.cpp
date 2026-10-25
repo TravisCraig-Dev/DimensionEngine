@@ -1,6 +1,7 @@
 #include "Dimension/Core/Input.h"
 #include <GLFW/glfw3.h>
 #include <array>
+#include <cmath>
 
 namespace Dimension
 {
@@ -18,6 +19,15 @@ namespace Dimension
         std::array<uint8_t, GLFW_KEY_LAST + 1> s_KeyTypedAccum{}, s_KeyTyped{}; // presses + repeats this frame
         int s_ModsAccum = 0, s_Mods = 0; // modifiers seen with key presses this frame
         const std::string s_Empty;
+
+        constexpr int kMaxPads = 4;
+        struct PadState
+        {
+            bool Connected = false;
+            std::array<bool, 15> Buttons{}, PrevButtons{};
+            std::array<float, 6> Axes{};
+        };
+        std::array<PadState, kMaxPads> s_Pads;
     }
 
     void Input::Init(GLFWwindow* window)
@@ -45,7 +55,45 @@ namespace Dimension
         s_KeyTypedAccum.fill(0);
         s_Mods = s_ModsAccum;
         s_ModsAccum = 0;
+
+        for (int p = 0; p < kMaxPads; ++p)
+        {
+            PadState& pad = s_Pads[p];
+            pad.PrevButtons = pad.Buttons;
+            GLFWgamepadstate state;
+            pad.Connected = glfwJoystickIsGamepad(GLFW_JOYSTICK_1 + p) && glfwGetGamepadState(GLFW_JOYSTICK_1 + p, &state);
+            if (!pad.Connected)
+            {
+                pad.Buttons.fill(false);
+                pad.Axes.fill(0.0f);
+                continue;
+            }
+            for (int b = 0; b < 15; ++b) pad.Buttons[b] = state.buttons[b] == GLFW_PRESS;
+            for (int a = 0; a < 6; ++a)
+            {
+                float v = state.axes[a];
+                if (a >= 4) v = v * 0.5f + 0.5f;          // triggers: -1..1 -> 0..1
+                else if (std::abs(v) < 0.15f) v = 0.0f;   // stick dead zone
+                pad.Axes[a] = v;
+            }
+        }
     }
+
+    bool Input::IsGamepadConnected(int pad) { return pad >= 0 && pad < kMaxPads && s_Pads[pad].Connected; }
+    std::string Input::GetGamepadName(int pad)
+    {
+        const char* name = IsGamepadConnected(pad) ? glfwGetGamepadName(GLFW_JOYSTICK_1 + pad) : nullptr;
+        return name ? name : "";
+    }
+    bool Input::IsGamepadButtonDown(GamepadButton b, int pad)
+    {
+        return s_GameInput && IsGamepadConnected(pad) && s_Pads[pad].Buttons[(int)b];
+    }
+    bool Input::IsGamepadButtonPressed(GamepadButton b, int pad)
+    {
+        return s_GameInput && IsGamepadConnected(pad) && s_Pads[pad].Buttons[(int)b] && !s_Pads[pad].PrevButtons[(int)b];
+    }
+    float Input::GetGamepadAxis(GamepadAxis a, int pad) { return s_GameInput && IsGamepadConnected(pad) ? s_Pads[pad].Axes[(int)a] : 0.0f; }
 
     void Input::AddScroll(float dy) { s_ScrollAccum += dy; }
 

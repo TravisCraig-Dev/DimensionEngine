@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/Renderer/Vulkan.h"
+#include <vector>
 
 namespace Dimension
 {
@@ -31,6 +32,8 @@ namespace Dimension
         uint32_t GetWidth() const { return m_Width; }
         uint32_t GetHeight() const { return m_Height; }
         uint32_t GetMipLevels() const { return m_MipLevels; }
+        // A view of a single mip level (render target for that level); created on first use.
+        VkImageView GetMipView(uint32_t mip);
         bool IsValid() const { return m_Image != VK_NULL_HANDLE; }
 
         static bool IsDepthFormat(VkFormat format);
@@ -40,6 +43,7 @@ namespace Dimension
 
         VkImage m_Image = VK_NULL_HANDLE;
         VkImageView m_View = VK_NULL_HANDLE;
+        std::vector<VkImageView> m_MipViews;
         VmaAllocation m_Allocation = nullptr;
         VkFormat m_Format = VK_FORMAT_UNDEFINED;
         uint32_t m_Width = 0, m_Height = 0, m_MipLevels = 1;

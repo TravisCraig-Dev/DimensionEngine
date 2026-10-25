@@ -11,6 +11,7 @@ namespace Dimension
         glm::vec3 Position;
         glm::vec3 Normal;
         glm::vec2 UV;
+        glm::vec4 Tangent{ 0.0f }; // xyz tangent, w handedness (+-1); all zero = none (shaders derive a frame)
     };
 
     // Per-vertex skinning data (std430-compatible; read by the vertex shader through a device address).

@@ -40,6 +40,7 @@ namespace Dimension
         float SSAOIntensity = 1.5f; // exponent applied to the occlusion
         float SSAOBias = 0.025f;    // view-space depth bias against self-occlusion
         bool SSAODebug = false;     // show the occlusion buffer instead of the lit scene
+        bool UIKeyboardNavigation = true; // arrows/Enter/Space move and press the UI selection (off when gameplay uses them)
         // Depth of field: objects nearer or farther than the focus distance blur (perspective cameras).
         bool DepthOfField = false;
         float FocusDistance = 10.0f; // world units from the camera
@@ -129,6 +130,13 @@ namespace Dimension
         // UI input for the current frame (pointer in render-target pixels). Applied in OnUpdateRuntime.
         void SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid = true, float scroll = 0.0f);
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
+        // The UI widget selected for keyboard/gamepad navigation (Null = none).
+        Entity GetUISelected() const { return m_UISelected; }
+        void SetUISelected(Entity e) { m_UISelected = e; }
+        // True after navigation input (arrows, D-pad) until the next mouse click: only then does Submit press the
+        // selection and the highlight show, so Space for jumping does not click the last button the mouse used.
+        bool IsUINavigating() const { return m_UINavigating; }
+        void SetUINavigating(bool navigating) { m_UINavigating = navigating; }
         // Play-mode clock: seconds and frames since OnRuntimeStart (paused frames do not count).
         float GetTime() const { return m_Time; }
         float GetDeltaTime() const { return m_DeltaTime; } // this frame's (clamped) update step
@@ -175,6 +183,9 @@ namespace Dimension
         uint64_t m_FrameCount = 0;
         std::string m_UIInjectedText;
         bool m_UIInjectedBackspace = false, m_UIInjectedEnter = false;
+        Entity m_UISelected = Entity::Null();
+        bool m_UINavigating = false;
+        int m_UIStickDir = 0; // left stick direction last frame (navigation repeats only on a new push)
         Entity m_UIHovered = Entity::Null();
         std::vector<Scope<System>> m_Systems;
         std::vector<LoadedScene> m_LoadedScenes;

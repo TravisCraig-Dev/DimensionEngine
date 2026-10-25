@@ -8,6 +8,7 @@
 #include <vector>
 #include <glm/gtc/packing.hpp>
 
+#include "Dimension/Asset/AssetPrefetch.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -131,6 +132,12 @@ namespace Dimension
         auto texture = MakeRef<Texture2D>(pixels, (uint32_t)w, (uint32_t)h, settings, name.c_str());
         stbi_image_free(pixels);
         return texture;
+    }
+
+    Ref<Texture2D> Texture2D::FromDecoded(const DecodedImage& image, const TextureSettings& settings, const std::string& name)
+    {
+        if (image.IsHdr()) return MakeRef<Texture2D>(image.Rgba32f.data(), image.Width, image.Height, settings, name.c_str());
+        return MakeRef<Texture2D>(image.Rgba8.data(), image.Width, image.Height, settings, name.c_str());
     }
 
     Ref<Texture2D> Texture2D::CreateSolid(uint32_t rgba, const char* debugName)

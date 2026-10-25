@@ -5,6 +5,7 @@
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Scene/SceneManager.h"
+#include <unordered_map>
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
@@ -99,7 +100,16 @@ namespace Dimension
             void (*SetJointMotor)(void*, uint64_t, int, float);
             int (*GetJointState)(void*, uint64_t, float*);
             int (*MixerTransition)(const char*, float);
+            int (*GamepadButton)(int, int, int); // button, pad, 0 = held / 1 = pressed this frame
+            float (*GamepadAxis)(int, int);
+            int (*LoadSceneAsync)(const char*, int, int); // operation id (0 = scene not found)
+            int (*AsyncState)(int, float*);              // progress out; returns 1 when done, 0 while loading, -1 unknown id
+            void (*AsyncAllowActivation)(int, int);
         };
+
+        // Background scene loads started from C#, by id.
+        std::unordered_map<int, std::shared_ptr<SceneLoadOperation>> s_AsyncOps;
+        int s_NextAsyncId = 1;
 
         struct ManagedApi
         {
@@ -449,8 +459,33 @@ namespace Dimension
                 if (auto* j = Comp<Joint2DComponent>(s, e)) return fill(j);
                 return -1;
             };
+            a.GamepadButton = [](int button, int pad, int pressed) -> int {
+                if (button < 0 || button > (int)GamepadButton::DpadLeft) return 0;
+                return (pressed ? Input::IsGamepadButtonPressed((GamepadButton)button, pad) : Input::IsGamepadButtonDown((GamepadButton)button, pad)) ? 1 : 0;
+            };
+            a.GamepadAxis = [](int axis, int pad) -> float {
+                return axis >= 0 && axis <= (int)GamepadAxis::RightTrigger ? Input::GetGamepadAxis((GamepadAxis)axis, pad) : 0.0f;
+            };
             a.MixerTransition = [](const char* name, float seconds) -> int {
                 return AudioMixer::TransitionToSnapshot(name ? name : "", seconds) ? 1 : 0;
+            };
+            a.LoadSceneAsync = [](const char* name, int index, int additive) -> int {
+                LoadSceneMode mode = additive ? LoadSceneMode::Additive : LoadSceneMode::Single;
+                auto op = name && *name ? SceneManager::LoadSceneAsync(std::string(name), mode) : SceneManager::LoadSceneAsync(index, mode);
+                if (!op) return 0;
+                std::erase_if(s_AsyncOps, [](const auto& kv) { return kv.second->IsDone.load(); }); // finished ones were read
+                int id = s_NextAsyncId++;
+                s_AsyncOps[id] = op;
+                return id;
+            };
+            a.AsyncState = [](int id, float* progress) -> int {
+                auto it = s_AsyncOps.find(id);
+                if (it == s_AsyncOps.end()) { *progress = 1.0f; return -1; }
+                *progress = it->second->Progress;
+                return it->second->IsDone ? 1 : 0;
+            };
+            a.AsyncAllowActivation = [](int id, int allow) {
+                if (auto it = s_AsyncOps.find(id); it != s_AsyncOps.end()) it->second->AllowSceneActivation = allow != 0;
             };
             a.LoadSceneWithMode = [](const char* name, int index, int additive) {
                 LoadSceneMode mode = additive ? LoadSceneMode::Additive : LoadSceneMode::Single;

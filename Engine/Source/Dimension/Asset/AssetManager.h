@@ -52,6 +52,8 @@ namespace Dimension
         static fs::path GetAbsolutePath(AssetHandle handle);
         static std::string GetDisplayName(AssetHandle handle);
         static std::vector<AssetHandle> GetAssetsOfType(AssetType type);
+        // True once the asset's runtime object (texture, mesh) has been created.
+        static bool IsLoaded(AssetHandle handle);
         static bool IsBuiltin(AssetHandle handle) { return (uint64_t)handle > 0 && (uint64_t)handle < 1024; }
 
         static void SetImportSettings(AssetHandle handle, const nlohmann::json& settings);

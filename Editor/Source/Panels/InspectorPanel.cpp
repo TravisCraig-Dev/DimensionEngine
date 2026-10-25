@@ -8,6 +8,7 @@
 #include <Dimension/Renderer/Material.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Audio/AudioEngine.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Renderer/Texture.h>
@@ -138,7 +139,7 @@ namespace Editor
                 if (scene.IsValid(s)) ++count;
             if (count > 1)
             {
-                ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "%zu objects selected", count);
+                ImGui::TextColored(UI::AccentText(), "%zu objects selected", count);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                 ImGui::TextWrapped("Showing components they all have. Values that differ show as --; edits apply to all.");
                 ImGui::PopStyleColor();
@@ -349,7 +350,7 @@ namespace Editor
                             handled = true;
                         }
                         bool overridden = Prefabs::IsOverridden(scene, e, info.Name, f.Name);
-                        if (overridden) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.72f, 1.0f, 1.0f));
+                        if (overridden) ImGui::PushStyleColor(ImGuiCol_Text, UI::AccentText());
                         if (!handled)
                         {
                             uint32_t mixed = 0;
@@ -499,9 +500,9 @@ namespace Editor
         AssetHandle prefab = link.Prefab;
         bool missing = AssetManager::GetMetadata(prefab) == nullptr;
 
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.18f, 0.26f, 0.38f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, UI::AccentBackground(0.3f));
         ImGui::BeginChild("PrefabHeader", ImVec2(0, ImGui::GetFrameHeightWithSpacing() * 2.0f + 6.0f), ImGuiChildFlags_None);
-        ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "Prefab");
+        ImGui::TextColored(UI::AccentText(), "Prefab");
         ImGui::SameLine();
         if (missing) ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "(missing asset)");
         else ImGui::TextUnformatted(AssetManager::GetDisplayName(prefab).c_str());
@@ -630,7 +631,7 @@ namespace Editor
                             auto& fields = reg.Get<ScriptComponent>(e).Scripts[i].Fields;
                             nlohmann::json before = fields;
                             bool overridden = Prefabs::IsOverridden(scene, e, "Script", "Scripts");
-                            if (overridden) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.72f, 1.0f, 1.0f));
+                            if (overridden) ImGui::PushStyleColor(ImGuiCol_Text, UI::AccentText());
                             auto r = UI::Field(f, obj, &scene);
                             if (overridden) ImGui::PopStyleColor();
                             nlohmann::json after = fields;
@@ -755,6 +756,17 @@ namespace Editor
         ImGui::TextDisabled("GUID %llu", (unsigned long long)(uint64_t)handle);
         ImGui::Separator();
 
+        if (meta->Type == AssetType::Audio)
+        {
+            if (auto info = AudioEngine::GetClipInfo(AssetManager::GetAbsolutePath(handle)))
+            {
+                ImGui::Text("%s, %s, %u Hz", info->Format.c_str(), info->Channels == 1 ? "mono" : info->Channels == 2 ? "stereo" : "multichannel",
+                            info->SampleRate);
+                ImGui::Text("Length %d:%05.2f", (int)(info->Seconds / 60.0f), std::fmod(info->Seconds, 60.0f));
+            }
+            else
+                ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "This file could not be decoded.");
+        }
         if (meta->Type == AssetType::Texture)
         {
             nlohmann::json settings = meta->ImportSettings;
@@ -956,6 +968,10 @@ namespace Editor
         }
         track(ImGui::SliderFloat("Vignette", &s.Vignette, 0.0f, 1.0f));
         track(ImGui::Checkbox("FXAA (anti-aliasing)", &s.FXAA));
+        ImGui::SeparatorText("UI");
+        track(ImGui::Checkbox("Keyboard Navigation", &s.UIKeyboardNavigation));
+        ImGui::SetItemTooltip("Arrows move the UI selection and Enter/Space press it. Turn off when gameplay uses those keys; "
+                              "the gamepad (D-pad, left stick, A/B) always navigates.");
         ImGui::SeparatorText("Physics");
         track(ImGui::DragFloat2("Gravity 2D", &s.Gravity2D.x, 0.05f));
         track(ImGui::DragFloat3("Gravity 3D", &s.Gravity.x, 0.05f));

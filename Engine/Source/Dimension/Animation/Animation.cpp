@@ -79,6 +79,33 @@ namespace Dimension
         }
     }
 
+    glm::vec3 Animation::ExtractRootMotion(const Skeleton& skeleton, int root, Pose& pose, RootMotionState& state, const glm::vec3& start,
+                                           const glm::vec3& end, float time, bool loop, const std::string& motionKey)
+    {
+        if (root < 0 || root >= (int)pose.Translations.size()) return glm::vec3(0.0f);
+        glm::vec3 now = pose.Translations[root];
+        glm::vec3 delta(0.0f);
+        if (state.Primed && state.LastMotion == motionKey)
+        {
+            delta = now - state.LastRoot;
+            if (loop && time < state.LastTime - 1e-5f) delta += end - start; // wrapped: carry on from the cycle's end
+        }
+        state.Primed = true;
+        state.LastRoot = now;
+        state.LastTime = time;
+        state.LastMotion = motionKey;
+
+        // Into model space (through the non-joint ancestors), keep the horizontal part as motion.
+        glm::mat3 toModel = glm::mat3(skeleton.RootTransform);
+        glm::vec3 modelDelta = toModel * delta;
+        modelDelta.y = 0.0f;
+        // Pin the pose: remove the root's horizontal offset from the start frame.
+        glm::vec3 offset = toModel * (now - start);
+        offset.y = 0.0f;
+        pose.Translations[root] = now - glm::inverse(toModel) * offset;
+        return modelDelta;
+    }
+
     namespace Animation
     {
         void Sample(const Skeleton& skeleton, const AnimationClip& clip, float time, Pose& out)

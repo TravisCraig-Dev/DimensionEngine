@@ -39,6 +39,7 @@
 #include "shaders/DofPrefilter.frag.h"
 #include "shaders/DofBlur.frag.h"
 #include "shaders/ProbeEquirect.frag.h"
+#include "shaders/ProbePrefilter.frag.h"
 
 namespace Dimension
 {
@@ -100,7 +101,7 @@ namespace Dimension
             VkDeviceAddress Instances;
             uint32_t EntityId;
             uint32_t Flags; // bit 0: skinned, bit 1: instanced
-            uint32_t Probe; // reflection probe slot + 1
+            uint32_t Probe; // unused (probes blend per pixel); kept for the push constant layout
         };
 
         // std430 mirror of MeshInstance in MeshCommon.glsl.
@@ -294,7 +295,7 @@ namespace Dimension
     struct Renderer::Resources
     {
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
-        Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect;
+        Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
     };
@@ -313,7 +314,8 @@ namespace Dimension
         mesh.VertexStride = sizeof(Vertex);
         mesh.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Position) },
                             { 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Normal) },
-                            { 2, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, UV) } };
+                            { 2, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, UV) },
+                            { 3, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, Tangent) } };
         mesh.CullMode = VK_CULL_MODE_BACK_BIT;
         mesh.DepthTest = mesh.DepthWrite = true;
         mesh.ColorAttachments = { { F::kHdrFormat }, { F::kIdFormat } };
@@ -429,6 +431,9 @@ namespace Dimension
         post.ColorAttachments = { { F::kHdrFormat } };
         post.DebugName = "ProbeEquirectPipeline";
         r.ProbeEquirect = Pipeline(post);
+        post.FragmentSpirv = kProbePrefilter_frag;
+        post.DebugName = "ProbePrefilterPipeline";
+        r.ProbePrefilter = Pipeline(post);
         post.FragmentSpirv = kDofPrefilter_frag;
         post.ColorAttachments = { { F::kHdrFormat } };
         post.DebugName = "DofPrefilterPipeline";
@@ -705,7 +710,7 @@ namespace Dimension
             {
                 const FrameProbe& p = m_FrameProbes[i];
                 u.Probes[i] = { glm::vec4(p.Center, p.Intensity), glm::vec4(p.Min, (float)p.Texture), glm::vec4(p.Max, (float)p.Mips),
-                                glm::vec4(p.BoxProjection ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f) };
+                                glm::vec4(p.BoxProjection ? 1.0f : 0.0f, p.BlendDistance, 0.0f, 0.0f) };
                 u.Counts.y = (int)i + 1;
             }
         u.InvProj = glm::inverse(u.Proj);
@@ -937,6 +942,7 @@ namespace Dimension
         for (uint32_t index : FaceBindless)
             if (index) device.UnregisterTexture(index);
         if (Bindless) device.UnregisterTexture(Bindless);
+        if (SourceBindless) device.UnregisterTexture(SourceBindless);
     }
     bool SceneRenderer::IsInstancingEnabled() { return s_InstancingEnabled; }
 
@@ -1098,23 +1104,7 @@ namespace Dimension
             item.Extents = glm::abs(m[0]) * ext.x + glm::abs(m[1]) * ext.y + glm::abs(m[2]) * ext.z;
             item.EntityId = e.Index + 1;
             item.CastShadows = mr.CastShadows;
-            // The smallest reflection probe box containing the mesh's center (none while capturing a probe).
-            if (!m_Capturing)
-            {
-                float best = 0.0f;
-                for (size_t pi = 0; pi < m_FrameProbes.size(); ++pi)
-                {
-                    const FrameProbe& p = m_FrameProbes[pi];
-                    if (glm::any(glm::lessThan(item.Center, p.Min)) || glm::any(glm::greaterThan(item.Center, p.Max))) continue;
-                    glm::vec3 size = p.Max - p.Min;
-                    float volume = size.x * size.y * size.z;
-                    if (item.Probe == 0 || volume < best)
-                    {
-                        item.Probe = (uint32_t)pi + 1;
-                        best = volume;
-                    }
-                }
-            }
+            // Reflection probes are chosen and blended per pixel in the shader (item.Probe stays 0).
 
             // Skinned meshes use the Animator's matrices (uploaded once, shared by every pass); without an
             // Animator they render in bind pose.
@@ -1928,9 +1918,14 @@ namespace Dimension
             }
             glm::vec3 half = glm::abs(probe.Size) * 0.5f;
             m_FrameProbes.push_back({ position, position - half, position + half, probe.Intensity, gpu->Bindless,
-                                      gpu->Equirect.GetMipLevels(), probe.BoxProjection });
+                                      gpu->Filtered.GetMipLevels(), probe.BoxProjection, std::max(probe.BlendDistance, 0.0f) });
         }
         std::erase_if(m_Probes, [&](const auto& entry) { return !seen.contains(entry.first); });
+        // Smallest boxes first: they take priority where probes overlap (the shader hands leftover weight onward).
+        std::stable_sort(m_FrameProbes.begin(), m_FrameProbes.end(), [](const FrameProbe& a, const FrameProbe& b) {
+            glm::vec3 sa = a.Max - a.Min, sb = b.Max - b.Min;
+            return sa.x * sa.y * sa.z < sb.x * sb.y * sb.z;
+        });
     }
 
     void SceneRenderer::BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t res)
@@ -1949,10 +1944,14 @@ namespace Dimension
                 gpu.FaceBindless[f] = device.RegisterTexture(gpu.Faces[f].GetView(), device.GetClampSampler());
             }
             if (gpu.Bindless) device.UnregisterTexture(gpu.Bindless);
+            if (gpu.SourceBindless) device.UnregisterTexture(gpu.SourceBindless);
             gpu.Base = Image({ width, height, F::kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "ProbeBase" });
             gpu.Equirect = Image({ width, height, F::kHdrFormat,
                                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, mips, "ProbeEquirect" });
-            gpu.Bindless = device.RegisterTexture(gpu.Equirect.GetView(), device.GetLinearSampler());
+            gpu.Filtered = Image({ width, height, F::kHdrFormat,
+                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, mips, "ProbeFiltered" });
+            gpu.SourceBindless = device.RegisterTexture(gpu.Equirect.GetView(), device.GetLinearSampler());
+            gpu.Bindless = device.RegisterTexture(gpu.Filtered.GetView(), device.GetLinearSampler());
             gpu.Resolution = res;
         }
         if (!m_ProbeTarget) m_ProbeTarget = MakeScope<SceneRenderTarget>(res, res);
@@ -2031,6 +2030,42 @@ namespace Dimension
             h = nh;
         }
         Vk::TransitionImage(cmd, equirect, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mips - 1, 1);
+
+        // GGX prefilter: mip 0 is the sharp capture (copied); mip m holds the environment blurred for roughness
+        // m / (mips - 1), the lod meshes sample for that roughness.
+        VkImage filtered = gpu.Filtered.GetHandle();
+        Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1);
+        vkCmdCopyImage(cmd, base, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, filtered, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1);
+        if (mips > 1)
+            Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mips - 1);
+        struct PrefilterPush { uint32_t Source; float Roughness; float MaxLod; } push{ gpu.SourceBindless, 0.0f, (float)(mips - 1) };
+        renderer.ProbePrefilter.Bind(cmd);
+        for (uint32_t mip = 1; mip < mips; ++mip)
+        {
+            uint32_t mw = std::max(1u, width >> mip), mh = std::max(1u, height >> mip);
+            VkRenderingAttachmentInfo mipAtt{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            mipAtt.imageView = gpu.Filtered.GetMipView(mip);
+            mipAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            mipAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            mipAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo mipInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+            mipInfo.renderArea = { { 0, 0 }, { mw, mh } };
+            mipInfo.layerCount = 1;
+            mipInfo.colorAttachmentCount = 1;
+            mipInfo.pColorAttachments = &mipAtt;
+            vkCmdBeginRendering(cmd, &mipInfo);
+            VkViewport mipViewport{ 0.0f, 0.0f, (float)mw, (float)mh, 0.0f, 1.0f };
+            VkRect2D mipScissor{ { 0, 0 }, { mw, mh } };
+            vkCmdSetViewport(cmd, 0, 1, &mipViewport);
+            vkCmdSetScissor(cmd, 0, 1, &mipScissor);
+            push.Roughness = (float)mip / (float)(mips - 1);
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+        }
+        if (mips > 1)
+            Vk::TransitionImage(cmd, filtered, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 1, mips - 1);
     }
 
     void SceneRenderer::RenderDepthOfField(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera, const SceneSettings& settings)

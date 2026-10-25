@@ -18,7 +18,7 @@ namespace Dimension
                              VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
                              uint32_t baseMip = 0, uint32_t mipCount = VK_REMAINING_MIP_LEVELS);
 
-        VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t mipLevels = 1);
+        VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t mipLevels = 1, uint32_t baseMip = 0);
         void SetDebugName(VkObjectType type, uint64_t handle, const char* name);
     }
 }

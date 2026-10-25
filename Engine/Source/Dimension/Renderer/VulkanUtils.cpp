@@ -52,13 +52,13 @@ namespace Dimension
             vkCmdPipelineBarrier2(cmd, &dep);
         }
 
-        VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t mipLevels)
+        VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t mipLevels, uint32_t baseMip)
         {
             VkImageViewCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
             info.image = image;
             info.viewType = VK_IMAGE_VIEW_TYPE_2D;
             info.format = format;
-            info.subresourceRange = { aspect, 0, mipLevels, 0, 1 };
+            info.subresourceRange = { aspect, baseMip, mipLevels, 0, 1 };
             VkImageView view;
             VK_CHECK(vkCreateImageView(RenderDevice::Get().GetDevice(), &info, nullptr, &view));
             return view;

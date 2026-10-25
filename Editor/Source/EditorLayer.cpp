@@ -1,5 +1,7 @@
 #include "EditorLayer.h"
 #include "Dimension/Platform/AppIcon.h"
+#include "Dimension/ImGui/ImGuiLayer.h"
+#include "Dimension/Asset/AssetDependencies.h"
 #include "EditorActions.h"
 #include "EditorUI.h"
 #include "EditorPreferences.h"
@@ -111,6 +113,7 @@ namespace Editor
         m_ResetLayout = !fs::exists(m_IniPath);
 
         EditorPreferences::Get().Load();
+        if (m_Options.Theme >= 0) EditorPreferences::Get().Theme = m_Options.Theme; // not saved unless Preferences change
         ApplyPreferences();
         m_Camera.SetFlySpeed(EditorPreferences::Get().CameraFlySpeed);
         m_ShowGrid = EditorPreferences::Get().ShowGrid;
@@ -476,7 +479,7 @@ namespace Editor
     {
         // Breadcrumb like Unity's: back to the scene, the prefab's name, Save and Auto Save.
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.16f, 0.24f, 0.36f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, UI::AccentBackground(0.35f));
         ImGui::BeginChild("##PrefabModeBar", ImVec2(0, ImGui::GetFrameHeight() + 8.0f), ImGuiChildFlags_AlwaysUseWindowPadding,
                           ImGuiWindowFlags_NoScrollbar);
         if (ImGui::Button("< Scene")) m_LeavePrefabRequested = true; // handled next update, outside the panels
@@ -485,7 +488,7 @@ namespace Editor
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("%s  >", m_Ctx.PrefabModeSceneName().c_str());
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "%s%s", m_Ctx.EditorScene->GetName().c_str(), m_Ctx.Dirty ? "*" : "");
+            ImGui::TextColored(UI::AccentText(), "%s%s", m_Ctx.EditorScene->GetName().c_str(), m_Ctx.Dirty ? "*" : "");
             float right = ImGui::CalcTextSize("Auto Save").x + ImGui::GetFrameHeight() + ImGui::CalcTextSize("Save").x + 40.0f;
             ImGui::SameLine(ImGui::GetWindowWidth() - right);
             ImGui::BeginDisabled(!m_Ctx.Dirty);
@@ -556,6 +559,93 @@ namespace Editor
             gameOptions.RenderUI = true;
             m_GameRenderer.Render(cmd, scene, cam, *m_GameTarget, gameOptions);
         }
+    }
+
+    // Line Renderer points: with a line selected, its points show as handles in the Scene view. Clicking one picks
+    // it and a move gizmo edits that point (undoable); clicking elsewhere returns to the object's own gizmo.
+    // Returns true while the mouse is over a handle or the point gizmo (so the click does not re-select).
+    bool EditorLayer::UpdateLinePointEditing(ImVec2 origin, ImVec2 size)
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        auto* line = m_Ctx.HasValidSelection() ? scene.GetRegistry().TryGet<LineRendererComponent>(m_Ctx.Selected) : nullptr;
+        if (!line || m_Ctx.Selection.size() > 1 || m_Camera.IsControlling())
+        {
+            if (!line) m_LinePoint = -1;
+            return false;
+        }
+        if (m_LinePointOwner != m_Ctx.Selected) m_LinePoint = -1;
+        if (m_Options.LinePoint >= 0)
+        {
+            m_LinePoint = m_Options.LinePoint;
+            m_Options.LinePoint = -1;
+        }
+        m_LinePointOwner = m_Ctx.Selected;
+        if (m_LinePoint >= (int)line->Positions.size()) m_LinePoint = -1;
+
+        const auto& t = scene.GetRegistry().Get<TransformComponent>(m_Ctx.Selected);
+        glm::mat4 view = m_Camera.GetView(), proj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y));
+        auto worldOf = [&](size_t i) { return line->UseWorldSpace ? line->Positions[i] : glm::vec3(t.World * glm::vec4(line->Positions[i], 1.0f)); };
+        auto screenOf = [&](const glm::vec3& p, bool& visible) {
+            glm::vec4 clip = proj * view * glm::vec4(p, 1.0f);
+            visible = clip.w > 1e-4f;
+            glm::vec2 ndc = glm::vec2(clip) / std::max(clip.w, 1e-4f);
+            return ImVec2(origin.x + (ndc.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - ndc.y * 0.5f) * size.y);
+        };
+
+        // Handles (drawn over the scene) and click-to-pick.
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 mouse = ImGui::GetMousePos();
+        int hovered = -1;
+        float best = 9.0f;
+        ImU32 accent = ImGui::GetColorU32(ImGuiCol_HeaderActive);
+        for (size_t i = 0; i < line->Positions.size(); ++i)
+        {
+            bool visible;
+            ImVec2 s = screenOf(worldOf(i), visible);
+            if (!visible) continue;
+            float d = std::hypot(mouse.x - s.x, mouse.y - s.y);
+            if (d < best && m_SceneViewHovered) { best = d; hovered = (int)i; }
+            bool picked = (int)i == m_LinePoint;
+            dl->AddCircleFilled(s, picked ? 6.0f : 4.5f, picked ? accent : IM_COL32(255, 170, 60, 255));
+            dl->AddCircle(s, picked ? 6.0f : 4.5f, IM_COL32(20, 20, 20, 255), 0, 1.5f);
+        }
+        if (hovered >= 0) ImGui::SetTooltip("Point %d (click to move it)", hovered);
+
+        bool overGizmo = false;
+        if (m_LinePoint >= 0)
+        {
+            ImGuizmo::SetOrthographic(m_Camera.Is2D());
+            ImGuizmo::SetDrawlist();
+            ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);
+            ImGuizmo::PushID(0x51E);
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), worldOf((size_t)m_LinePoint));
+            overGizmo = ImGuizmo::IsOver();
+            if (overGizmo && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) m_Ctx.RecordUndo();
+            bool snap = ImGui::GetIO().KeyCtrl;
+            float snaps[3] = { 0.25f, 0.25f, 0.25f };
+            if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ImGuizmo::TRANSLATE, ImGuizmo::WORLD, glm::value_ptr(m), nullptr,
+                                     snap ? snaps : nullptr))
+            {
+                glm::vec3 world(m[3]);
+                line->Positions[(size_t)m_LinePoint] = line->UseWorldSpace ? world : glm::vec3(glm::inverse(t.World) * glm::vec4(world, 1.0f));
+                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, "Line Renderer", "Positions");
+                m_Ctx.MarkDirty();
+            }
+            overGizmo |= ImGuizmo::IsUsing();
+            ImGuizmo::PopID();
+        }
+
+        if (m_SceneViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !overGizmo && !ImGui::GetIO().KeyAlt)
+        {
+            if (hovered >= 0)
+            {
+                m_LinePoint = hovered;
+                return true; // consumed: keep the selection
+            }
+            m_LinePoint = -1; // back to the object's gizmo (the click selects as usual)
+        }
+        if (m_LinePoint >= 0 && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_LinePoint = -1;
+        return overGizmo || hovered >= 0;
     }
 
     // ---- UI ----------------------------------------------------------------------------------------
@@ -883,10 +973,11 @@ namespace Editor
         }
 
         bool tilePainting = UpdateTilePainting(origin, avail);
+        bool lineEditing = UpdateLinePointEditing(origin, avail);
 
         // Transform gizmo
-        bool gizmoHovered = false;
-        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting)
+        bool gizmoHovered = lineEditing;
+        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0)
         {
             auto& reg = scene.GetRegistry();
             auto& t = reg.Get<TransformComponent>(m_Ctx.Selected);
@@ -1172,6 +1263,7 @@ namespace Editor
     void EditorLayer::ApplyPreferences()
     {
         auto& prefs = EditorPreferences::Get();
+        ImGuiLayer::ApplyEditorStyle(std::clamp(prefs.Theme, 0, 2), prefs.Accent);
         ImGui::GetStyle().FontScaleMain = std::clamp(prefs.UIScale, 0.5f, 3.0f);
         m_Camera.FieldOfView = std::clamp(prefs.CameraFieldOfView, 10.0f, 150.0f);
         if (m_Console) m_Console->ClearOnPlay = prefs.ClearConsoleOnPlay;
@@ -1190,6 +1282,19 @@ namespace Editor
         ImGui::SeparatorText("Interface");
         if (UI::BeginProperties("PrefsUI"))
         {
+            UI::PropertyLabel("Theme");
+            const char* themes[] = { "Dark", "Light", "Midnight" };
+            changed |= ImGui::Combo("##theme", &prefs.Theme, themes, 3);
+            UI::PropertyLabel("Accent Color", "Selection, active items and focus highlights");
+            float accent[3] = { ((prefs.Accent >> 16) & 0xFF) / 255.0f, ((prefs.Accent >> 8) & 0xFF) / 255.0f, (prefs.Accent & 0xFF) / 255.0f };
+            if (ImGui::ColorEdit3("##accent", accent, ImGuiColorEditFlags_NoInputs))
+            {
+                auto byte = [](float v) { return (uint32_t)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+                prefs.Accent = (byte(accent[0]) << 16) | (byte(accent[1]) << 8) | byte(accent[2]);
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset")) { prefs.Accent = ImGuiLayer::kDefaultAccent; changed = true; }
             UI::PropertyLabel("UI Scale");
             changed |= ImGui::SliderFloat("##scale", &prefs.UIScale, 0.75f, 2.0f, "%.2f");
             UI::PropertyLabel("Clear Console On Play");
@@ -1344,7 +1449,7 @@ namespace Editor
                 if (i > 0) ImGui::SameLine();
                 ImGui::PushID(i);
                 ImGui::BeginGroup();
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, i == 0 ? ImVec4(0.17f, 0.2f, 0.26f, 1) : ImVec4(0.15f, 0.15f, 0.17f, 1));
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, i == 0 ? UI::AccentBackground(0.18f) : ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg));
                 ImGui::BeginChild("##strip", ImVec2(stripW, 0), ImGuiChildFlags_Borders);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 if (i == 0) ImGui::TextUnformatted(g.Name.c_str());
@@ -1378,6 +1483,37 @@ namespace Editor
                 if (ImGui::DragFloat("##lpf", &g.LowPassHz, 25.0f, 0.0f, 20000.0f, g.LowPassHz <= 0.0f ? "LPF off" : "LPF %.0f")) live = true;
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Low-pass cutoff in Hz (0 = off)");
                 save |= ImGui::IsItemDeactivatedAfterEdit();
+                // Insert effects in a popup (strips are narrow).
+                {
+                    std::string fx = std::string("FX") + (g.Echo ? " E" : "") + (g.Reverb ? " R" : "") + "##fx";
+                    bool any = g.Echo || g.Reverb;
+                    if (any) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.45f, 0.7f, 1));
+                    if (ImGui::Button(fx.c_str(), ImVec2(controlsW, 0))) ImGui::OpenPopup("##effects");
+                    if (any) ImGui::PopStyleColor();
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Echo and reverb on this group");
+                    if (ImGui::BeginPopup("##effects"))
+                    {
+                        auto edited = [&](bool changed) { live |= changed; save |= ImGui::IsItemDeactivatedAfterEdit(); };
+                        ImGui::SeparatorText("Echo");
+                        if (ImGui::Checkbox("Enabled##echo", &g.Echo)) live = save = true;
+                        ImGui::SetNextItemWidth(180);
+                        edited(ImGui::DragFloat("Delay (ms)", &g.EchoDelayMs, 2.0f, 10.0f, 5000.0f, "%.0f"));
+                        ImGui::SetItemTooltip("A new delay time applies when play starts");
+                        ImGui::SetNextItemWidth(180);
+                        edited(ImGui::SliderFloat("Decay##echo", &g.EchoDecay, 0.0f, 0.95f));
+                        ImGui::SetNextItemWidth(180);
+                        edited(ImGui::SliderFloat("Wet##echo", &g.EchoWet, 0.0f, 1.0f));
+                        ImGui::SeparatorText("Reverb");
+                        if (ImGui::Checkbox("Enabled##reverb", &g.Reverb)) live = save = true;
+                        ImGui::SetNextItemWidth(180);
+                        edited(ImGui::SliderFloat("Room Size", &g.ReverbRoomSize, 0.0f, 1.0f));
+                        ImGui::SetNextItemWidth(180);
+                        edited(ImGui::SliderFloat("Damping", &g.ReverbDamping, 0.0f, 1.0f));
+                        ImGui::SetNextItemWidth(180);
+                        edited(ImGui::SliderFloat("Wet##reverb", &g.ReverbWet, 0.0f, 1.0f));
+                        ImGui::EndPopup();
+                    }
+                }
                 if (i > 0)
                 {
                     ImGui::SetNextItemWidth(controlsW);
@@ -1647,6 +1783,10 @@ namespace Editor
         }
 
         ImGui::SeparatorText("Output");
+        changed |= ImGui::Checkbox("Strip Unused Assets", &config.StripUnusedAssets);
+        ImGui::SameLine();
+        UI::HelpMarker("Copies only the assets the build's scenes use (following prefabs, materials, controllers and models), "
+                       "plus everything in Assets/Resources for scripts that load files by path.");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 80);
         changed |= ImGui::InputTextWithHint("##folder", "Output folder", &config.BuildFolder);
         ImGui::SameLine();
@@ -1734,7 +1874,36 @@ namespace Editor
         fs::remove_all(projectOut, ec);
         fs::create_directories(projectOut, ec);
         fs::copy_file(Project::GetDirectory() / Project::kFileName, projectOut / Project::kFileName, ec);
-        fs::copy(Project::GetAssetsDirectory(), projectOut / "Assets", fs::copy_options::recursive, ec);
+        if (config.StripUnusedAssets)
+        {
+            std::vector<AssetHandle> roots = scenes;
+            if (config.Icon) roots.push_back(config.Icon);
+            AssetDependencySet deps = AssetDependencies::Collect(roots);
+            fs::path src = Project::GetAssetsDirectory(), dst = projectOut / "Assets";
+            uintmax_t shipped = 0, total = 0;
+            auto copyOne = [&](const fs::path& rel) {
+                std::error_code fe;
+                fs::create_directories((dst / rel).parent_path(), fe);
+                fs::copy_file(src / rel, dst / rel, fs::copy_options::overwrite_existing, fe);
+                if (fe) { ec = fe; return; }
+                shipped += fs::file_size(src / rel, fe);
+            };
+            for (AssetHandle h : deps.Assets)
+                if (const AssetMetadata* m = AssetManager::GetMetadata(h))
+                {
+                    copyOne(m->Path);
+                    fs::path meta = m->Path;
+                    meta += ".meta";
+                    if (fs::exists(src / meta)) copyOne(meta);
+                }
+            for (const fs::path& f : deps.ExtraFiles)
+                if (fs::exists(src / f)) copyOne(f);
+            for (auto& entry : fs::recursive_directory_iterator(src, fs::directory_options::skip_permission_denied, ec))
+                if (entry.is_regular_file()) total += entry.file_size();
+            Log::Info("Stripped unused assets: shipping {} asset(s), {:.1f} of {:.1f} MB", deps.Assets.size(), shipped / 1048576.0, total / 1048576.0);
+        }
+        else
+            fs::copy(Project::GetAssetsDirectory(), projectOut / "Assets", fs::copy_options::recursive, ec);
         fs::path scripts = CSharpProject::AssemblyPath(Project::GetDirectory());
         if (fs::exists(scripts))
         {

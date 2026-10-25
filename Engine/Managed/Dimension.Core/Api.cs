@@ -217,7 +217,30 @@ namespace Dimension
         {
             get { Vector2 v; Native.Api.GetMousePosition((float*)&v); return v; }
         }
+
+        /// <summary>Gamepad button held (standard Xbox-style layout; pad 0-3).</summary>
+        public static bool GetGamepadButton(GamepadButton button, int pad = 0) => Native.Api.GamepadButton((int)button, pad, 0) != 0;
+        /// <summary>Gamepad button went down this frame.</summary>
+        public static bool GetGamepadButtonDown(GamepadButton button, int pad = 0) => Native.Api.GamepadButton((int)button, pad, 1) != 0;
+        /// <summary>Sticks -1..1 (+Y is down) with a dead zone; triggers 0..1.</summary>
+        public static float GetGamepadAxis(GamepadAxis axis, int pad = 0) => Native.Api.GamepadAxis((int)axis, pad);
+        /// <summary>The left stick, or WASD/arrows when no stick is pushed (+Y up).</summary>
+        public static Vector2 GetMoveInput(int pad = 0)
+        {
+            var stick = new Vector2(GetGamepadAxis(GamepadAxis.LeftX, pad), -GetGamepadAxis(GamepadAxis.LeftY, pad));
+            if (stick.LengthSquared() > 0.0f) return stick;
+            float x = (GetKey(KeyCode.D) || GetKey(KeyCode.RightArrow) ? 1 : 0) - (GetKey(KeyCode.A) || GetKey(KeyCode.LeftArrow) ? 1 : 0);
+            float y = (GetKey(KeyCode.W) || GetKey(KeyCode.UpArrow) ? 1 : 0) - (GetKey(KeyCode.S) || GetKey(KeyCode.DownArrow) ? 1 : 0);
+            return new Vector2(x, y);
+        }
     }
+
+    public enum GamepadButton
+    {
+        A = 0, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DpadUp, DpadRight, DpadDown, DpadLeft
+    }
+
+    public enum GamepadAxis { LeftX = 0, LeftY, RightX, RightY, LeftTrigger, RightTrigger }
 
     public struct RaycastHit
     {
@@ -258,6 +281,18 @@ namespace Dimension
     /// <summary>Runtime scene switching (scenes come from File > Build Settings). Loads happen at the end of the frame.</summary>
     public enum LoadSceneMode { Single = 0, Additive = 1 }
 
+    /// <summary>A background scene load (SceneManager.LoadSceneAsync).</summary>
+    public sealed unsafe class AsyncOperation
+    {
+        private readonly int m_Id;
+        internal AsyncOperation(int id) { m_Id = id; }
+        /// <summary>0 to 0.9 while loading in the background; 1 once the scene is active.</summary>
+        public float Progress { get { float p; Native.Api.AsyncState(m_Id, &p); return p; } }
+        public bool IsDone { get { float p; return Native.Api.AsyncState(m_Id, &p) != 0; } }
+        /// <summary>False holds the loaded scene at 0.9 until set back to true.</summary>
+        public bool AllowSceneActivation { set => Native.Api.AsyncAllowActivation(m_Id, value ? 1 : 0); }
+    }
+
     public static unsafe class SceneManager
     {
         public static void LoadScene(string name) => Native.WithUtf8(name, p => Native.Api.LoadSceneByName((byte*)p));
@@ -266,6 +301,19 @@ namespace Dimension
         public static void LoadScene(string name, LoadSceneMode mode) =>
             Native.WithUtf8(name, p => Native.Api.LoadSceneWithMode((byte*)p, -1, (int)mode));
         public static void LoadScene(int buildIndex, LoadSceneMode mode) => Native.Api.LoadSceneWithMode(null, buildIndex, (int)mode);
+        /// <summary>Loads in the background (a worker thread reads the scene and decodes its textures and models) and
+        /// activates at the end of a frame once ready. Null if there is no such scene. Yield it in a coroutine with
+        /// `yield return new WaitUntil(() => op.IsDone)`.</summary>
+        public static AsyncOperation LoadSceneAsync(string name, LoadSceneMode mode = LoadSceneMode.Single)
+        {
+            int id = Native.WithUtf8(name, p => Native.Api.LoadSceneAsync((byte*)p, -1, (int)mode));
+            return id != 0 ? new AsyncOperation(id) : null;
+        }
+        public static AsyncOperation LoadSceneAsync(int buildIndex, LoadSceneMode mode = LoadSceneMode.Single)
+        {
+            int id = Native.Api.LoadSceneAsync(null, buildIndex, (int)mode);
+            return id != 0 ? new AsyncOperation(id) : null;
+        }
         /// <summary>Removes the objects of a scene loaded additively (or the first scene).</summary>
         public static void UnloadScene(string name) => Native.WithUtf8(name, p => Native.Api.UnloadScene((byte*)p));
         /// <summary>Keeps the entity's root object (and its children) alive across single-mode loads.</summary>

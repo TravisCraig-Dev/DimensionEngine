@@ -54,8 +54,23 @@ namespace Dimension
         void SetBindPose(const Skeleton& skeleton);
     };
 
+    // Per-Animator state for root motion between frames.
+    struct RootMotionState
+    {
+        bool Primed = false;
+        glm::vec3 LastRoot{ 0.0f }; // root joint translation last frame (pose space)
+        float LastTime = 0.0f;      // base motion time last frame (detects loop wrap-around)
+        std::string LastMotion;     // base clip / blend-tree key last frame (a switch restarts tracking)
+    };
+
     namespace Animation
     {
+        // Root motion: takes the horizontal (model XZ) movement of the root joint out of the pose, pinning it at the
+        // motion's start, and returns that movement since last frame in model space (y = 0; vertical motion stays
+        // in the pose). `start`/`end` are the root's translations at the motion's first and last frames, so a loop
+        // wrap adds a whole cycle. `motionKey` identifies the playing motion; when it changes, tracking restarts.
+        glm::vec3 ExtractRootMotion(const Skeleton& skeleton, int rootJoint, Pose& pose, RootMotionState& state, const glm::vec3& start,
+                                    const glm::vec3& end, float time, bool loop, const std::string& motionKey);
         // Samples `clip` at `time` (seconds) on top of the bind pose.
         void Sample(const Skeleton& skeleton, const AnimationClip& clip, float time, Pose& out);
         // out = a * (1 - t) + b * t (rotations slerped).

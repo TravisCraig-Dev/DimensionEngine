@@ -2,6 +2,7 @@
 #include "Dimension/Core/Log.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Renderer/Texture.h"
+#include "Dimension/Asset/AssetPrefetch.h"
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Animation/AnimatorController.h"
@@ -396,6 +397,11 @@ namespace Dimension
         Refresh();
     }
 
+    bool AssetManager::IsLoaded(AssetHandle handle)
+    {
+        return s && (s->Textures.contains(handle) || s->Meshes.contains(handle));
+    }
+
     Ref<Texture2D> AssetManager::GetTexture(AssetHandle handle)
     {
         if (!handle.IsValid()) return nullptr;
@@ -406,7 +412,10 @@ namespace Dimension
         ts.Filter = (TextureFilter)meta->ImportSettings.value("filter", 0);
         ts.SRGB = meta->ImportSettings.value("srgb", true);
         ts.GenerateMips = meta->ImportSettings.value("mips", true);
-        auto tex = Texture2D::LoadFromFile(s->AssetsDir / meta->Path, ts);
+        fs::path file = s->AssetsDir / meta->Path;
+        Ref<Texture2D> tex;
+        if (auto image = AssetPrefetch::TakeImage(file)) tex = Texture2D::FromDecoded(*image, ts, meta->Path.filename().string());
+        else tex = Texture2D::LoadFromFile(file, ts);
         s->Textures[handle] = tex; // cache failures too (nullptr) until next reimport
         return tex;
     }
@@ -427,7 +436,15 @@ namespace Dimension
             if (auto* meta = GetMetadata(handle); meta && meta->Type == AssetType::Mesh)
             {
                 MeshData data;
-                if (MeshData::LoadFromFile(s->AssetsDir / meta->Path, data))
+                bool ok;
+                if (auto prefetched = AssetPrefetch::FindMesh(s->AssetsDir / meta->Path))
+                {
+                    data = *prefetched; // decoded by a background scene load
+                    ok = true;
+                }
+                else
+                    ok = MeshData::LoadFromFile(s->AssetsDir / meta->Path, data);
+                if (ok)
                 {
                     RegisterMeshMaterials(handle, *meta, data);
                     mesh = MakeRef<Mesh>(std::move(data));
@@ -453,8 +470,12 @@ namespace Dimension
         default:
             if (auto* meta = GetMetadata(handle); meta && meta->Type == AssetType::Mesh)
             {
-                data = std::make_shared<MeshData>();
-                if (!MeshData::LoadFromFile(s->AssetsDir / meta->Path, *data)) data.reset();
+                data = AssetPrefetch::FindMesh(s->AssetsDir / meta->Path);
+                if (!data)
+                {
+                    data = std::make_shared<MeshData>();
+                    if (!MeshData::LoadFromFile(s->AssetsDir / meta->Path, *data)) data.reset();
+                }
             }
         }
         s->MeshDatas[handle] = data;

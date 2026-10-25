@@ -6,6 +6,7 @@
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Particles/ParticleSystem.h"
 #include "Dimension/Animation/AnimatorController.h"
+#include "Dimension/Animation/Animation.h"
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
@@ -203,6 +204,12 @@ namespace Dimension
         float Speed = 1.0f;
         bool Loop = true;
         bool Playing = true;
+        bool ApplyRootMotion = false;  // the root joint's horizontal movement moves the object (or its Character Controller)
+        std::string RootMotionJoint;   // empty = the skeleton's first root joint
+
+        // Root motion (runtime): movement applied this frame, world space.
+        glm::vec3 RootMotionDelta{ 0.0f };
+        RootMotionState RootMotion;
 
         // State machine (runtime only).
         AnimatorRuntime Runtime;
@@ -330,6 +337,7 @@ namespace Dimension
         std::string Text;
         std::string Placeholder = "Enter text...";
         int32_t CharacterLimit = 0; // 0 = unlimited
+        bool MultiLine = false;     // Enter starts a new line (Ctrl+Enter submits); Up/Down move between lines
         float FontSize = 28.0f;
         bool Interactable = true;
         glm::vec4 BackgroundColor{ 1.0f };
@@ -342,6 +350,7 @@ namespace Dimension
         int32_t SelectionAnchor = -1; // -1 = no selection
         bool Selecting = false;       // mouse drag in progress
         float ScrollX = 0.0f;         // pixels the text is scrolled left to keep the caret visible
+        float ScrollY = 0.0f;         // multi-line: pixels scrolled up
     };
 
     enum class UILayoutDirection : int32_t { Vertical = 0, Horizontal = 1, Grid = 2 };
@@ -429,6 +438,7 @@ namespace Dimension
         int32_t Resolution = 1;               // 0: 64, 1: 128, 2: 256, 3: 512 pixels per cube face
         float Intensity = 1.0f;
         bool BoxProjection = true;            // parallax-correct reflections against the box (rooms, courtyards)
+        float BlendDistance = 1.0f;           // fades out over this distance inside the box walls (blends with neighbors)
         bool Realtime = false;                // re-capture every frame (six extra scene renders)
     };
 
@@ -612,6 +622,8 @@ namespace Dimension
         float MaxDistance = 0.0f;
         float SliderMin = -1.0f;           // slider limits: travel along Axis from the start position (units)
         float SliderMax = 1.0f;
+        float SpringFrequency = 0.0f;      // distance joint: > 0 makes it a spring (oscillations per second); 0 = rigid
+        float SpringDamping = 0.5f;        // damping ratio (0 = bouncy forever, 1 = no overshoot)
         bool EnableCollision = false;      // let the two connected bodies collide with each other
         bool UseMotor = false;             // hinge or slider: drive toward Motor Speed
         float MotorSpeed = 90.0f;          // hinge: degrees per second; slider: units per second (changeable while playing)
@@ -640,6 +652,8 @@ namespace Dimension
         glm::vec2 Axis{ 1.0f, 0.0f };      // slider axis in local space
         float LowerTranslation = -1.0f;    // slider limits: travel along Axis from the start position (units)
         float UpperTranslation = 1.0f;
+        float SpringFrequency = 0.0f;      // distance joint: > 0 makes it a spring (oscillations per second); 0 = rigid
+        float SpringDamping = 0.5f;        // damping ratio (0 = bouncy forever, 1 = no overshoot)
         bool CollideConnected = false;
         bool UseMotor = false;             // hinge or slider: drive toward Motor Speed
         float MotorSpeed = 90.0f;          // hinge: degrees per second; slider: units per second (changeable while playing)

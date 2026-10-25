@@ -22,6 +22,8 @@ namespace Editor
         std::string OpenSceneLater; // request this scene like the UI does, after a few frames (automation/testing)
         bool MenuOpenScene = false; // run File > Open Scene... after a few frames (automation/testing)
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
+        int Theme = -1;
+        int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer           // --theme dark|light|midnight: this session only (preferences stay unchanged)
         bool BuildSucceeded = false; // result of the batch build
     };
 
@@ -118,6 +120,10 @@ namespace Editor
         int m_FocusRequestFrames = 3; // frames left to request focus (docking may not be ready on the first one)
         int m_GizmoOperation = 7; // ImGuizmo::TRANSLATE
         bool m_GizmoLocal = false;
+        // Line Renderer point editing in the Scene view: the picked point of the selected line (-1 = none).
+        int m_LinePoint = -1;
+        Dimension::Entity m_LinePointOwner;
+        bool UpdateLinePointEditing(ImVec2 origin, ImVec2 size);
         bool m_ShowGrid = true;
         bool m_WasWindowFocused = true;
         bool m_PickAdditive = false; // Ctrl+click toggles instead of replacing the selection

@@ -35,7 +35,8 @@
     "ssaoRadius": 0.6,
     "ssaoIntensity": 1.5,
     "ssaoBias": 0.025,
-    "ssaoDebug": false
+    "ssaoDebug": false,
+    "uiKeyboardNavigation": false
   },
   "entities": [
     {
@@ -4690,7 +4691,8 @@
             {
               "Class": "LoadSceneButton",
               "Fields": {
-                "Scene": "Demo2D"
+                "Scene": "Demo2D",
+                "Async": true
               },
               "Enabled": true
             }

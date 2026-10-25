@@ -36,6 +36,15 @@ namespace Dimension
 
     Image::~Image() { Release(); }
 
+    VkImageView Image::GetMipView(uint32_t mip)
+    {
+        if (mip >= m_MipLevels) return VK_NULL_HANDLE;
+        if (m_MipViews.size() < m_MipLevels) m_MipViews.resize(m_MipLevels, VK_NULL_HANDLE);
+        if (!m_MipViews[mip])
+            m_MipViews[mip] = Vk::CreateImageView(m_Image, m_Format, IsDepthFormat(m_Format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, 1, mip);
+        return m_MipViews[mip];
+    }
+
     Image::Image(Image&& o) noexcept { *this = std::move(o); }
 
     Image& Image::operator=(Image&& o) noexcept
@@ -45,6 +54,7 @@ namespace Dimension
             Release();
             std::swap(m_Image, o.m_Image);
             std::swap(m_View, o.m_View);
+            std::swap(m_MipViews, o.m_MipViews);
             std::swap(m_Allocation, o.m_Allocation);
             std::swap(m_Format, o.m_Format);
             std::swap(m_Width, o.m_Width);
@@ -60,8 +70,12 @@ namespace Dimension
         VkImage image = m_Image;
         VkImageView view = m_View;
         VmaAllocation allocation = m_Allocation;
-        RenderDevice::Get().DeferRelease([image, view, allocation] {
+        std::vector<VkImageView> mipViews = std::move(m_MipViews);
+        m_MipViews.clear();
+        RenderDevice::Get().DeferRelease([image, view, allocation, mipViews] {
             auto& d = RenderDevice::Get();
+            for (VkImageView v : mipViews)
+                if (v) vkDestroyImageView(d.GetDevice(), v, nullptr);
             vkDestroyImageView(d.GetDevice(), view, nullptr);
             vmaDestroyImage(d.GetAllocator(), image, allocation);
         });

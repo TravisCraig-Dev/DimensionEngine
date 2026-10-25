@@ -214,6 +214,12 @@ namespace Dimension
             d.localAnchorA = b2Body_GetLocalPoint(a, aw);
             d.localAnchorB = b2Body_GetLocalPoint(b, { pointB.x, pointB.y });
             d.length = j.Distance > 0.0f ? j.Distance : std::max(glm::distance(anchor, pointB), 0.01f);
+            d.enableSpring = j.SpringFrequency > 0.0f;
+            d.hertz = j.SpringFrequency;
+            d.dampingRatio = std::max(j.SpringDamping, 0.0f);
+            d.enableMotor = j.UseMotor && d.enableSpring; // a rigid rod has nothing to drive
+            d.motorSpeed = j.MotorSpeed;
+            d.maxMotorForce = std::max(j.MotorMaxTorque, 0.0f);
             d.collideConnected = j.CollideConnected;
             created = b2CreateDistanceJoint(world, &d);
             break;
@@ -339,6 +345,12 @@ namespace Dimension
                 b2PrismaticJoint_EnableMotor(id, jc->UseMotor);
                 b2PrismaticJoint_SetMotorSpeed(id, -jc->MotorSpeed);
                 b2PrismaticJoint_SetMaxMotorForce(id, std::max(jc->MotorMaxTorque, 0.0f));
+            }
+            else if (r.Type == Joint2DType::Distance && jc->SpringFrequency > 0.0f)
+            {
+                b2DistanceJoint_EnableMotor(id, jc->UseMotor);
+                b2DistanceJoint_SetMotorSpeed(id, jc->MotorSpeed);
+                b2DistanceJoint_SetMaxMotorForce(id, std::max(jc->MotorMaxTorque, 0.0f));
             }
             else continue;
             if (jc->UseMotor) b2Joint_WakeBodies(id);

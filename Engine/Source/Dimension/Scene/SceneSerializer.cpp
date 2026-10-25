@@ -170,6 +170,7 @@ namespace Dimension
                           { "ssaoIntensity", s.SSAOIntensity },
                           { "ssaoBias", s.SSAOBias },
                           { "ssaoDebug", s.SSAODebug },
+                          { "uiKeyboardNavigation", s.UIKeyboardNavigation },
                           { "dof", s.DepthOfField },
                           { "focusDistance", s.FocusDistance },
                           { "focusRange", s.FocusRange },
@@ -216,6 +217,7 @@ namespace Dimension
         s.SSAOIntensity = js.value("ssaoIntensity", s.SSAOIntensity);
         s.SSAOBias = js.value("ssaoBias", s.SSAOBias);
         s.SSAODebug = js.value("ssaoDebug", s.SSAODebug);
+        s.UIKeyboardNavigation = js.value("uiKeyboardNavigation", s.UIKeyboardNavigation);
         s.DepthOfField = js.value("dof", s.DepthOfField);
         s.FocusDistance = js.value("focusDistance", s.FocusDistance);
         s.FocusRange = js.value("focusRange", s.FocusRange);

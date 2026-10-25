@@ -13,6 +13,10 @@
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Platform/AppIcon.h>
+#include <Dimension/Asset/AssetDependencies.h>
+#include <Dimension/Asset/AssetPrefetch.h>
+#include <Dimension/Scene/SceneManager.h>
+#include <set>
 #include <windows.h>
 
 namespace
@@ -28,6 +32,9 @@ namespace
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <chrono>
+#include <fstream>
+#include <thread>
 
 using namespace Dimension;
 
@@ -1555,15 +1562,27 @@ namespace
             Scene scene("Audio");
             Entity e = scene.CreateEntity("Speaker");
             auto& src = scene.GetRegistry().Emplace<AudioSourceComponent>(e);
-            src.Clip = AssetManager::GetHandle("Audio/Music.wav");
+            src.Clip = AssetManager::GetHandle("Audio/Music.ogg"); // streamed Ogg Vorbis
             src.Output = "Ambience";
             src.Stream = true;
             src.Loop = true;
             CHECK(src.Clip.IsValid());
+            groups[3].Echo = groups[3].Reverb = true; // Ambience: both effects in its chain
             auto runtime = scene.Clone();
             runtime->OnRuntimeStart();
             for (int g = 0; g < 4; ++g) CHECK(AudioMixer::GetGroupNode(g) != nullptr);
             CHECK(AudioWorld::IsPlaying(*runtime, e));
+            // Effects relink live; the music keeps reaching Master through each chain.
+            for (int pass = 0; pass < 3; ++pass)
+            {
+                groups[3].Reverb = pass != 1;
+                groups[3].Echo = pass != 2;
+                AudioMixer::Apply();
+                AudioMixer::GetLevel(0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                CHECK(AudioMixer::GetLevel(0).Peak > 0.01f);
+            }
+            groups[3].Echo = groups[3].Reverb = false;
             AudioWorld::PlayOneShot(*runtime, e, AssetManager::GetHandle("Audio/Chime.wav"), 0.5f);
             runtime->OnUpdateRuntime(1.0f / 60.0f);
             AudioWorld::Stop(*runtime, e);
@@ -2910,6 +2929,385 @@ namespace
         CHECK(BuildRibbon(corner, params).size() == 2);
     }
 
+    void TestAudioFormatsAndEffects()
+    {
+        // The sample music is Ogg Vorbis (stb_vorbis); the chime is WAV.
+        fs::path audio = fs::path(DIM_SOURCE_DIR) / "Projects" / "Sandbox" / "Assets" / "Audio";
+        auto music = AudioEngine::GetClipInfo(audio / "Music.ogg");
+        CHECK(music && music->Format == "Ogg Vorbis" && music->SampleRate == 22050 && music->Channels == 1);
+        CHECK(music && Near(music->Seconds, 423360.0f / 22050.0f, 0.05f));
+        auto chime = AudioEngine::GetClipInfo(audio / "Chime.wav");
+        CHECK(chime && chime->Format == "WAV" && chime->Seconds > 0.1f);
+        CHECK(!AudioEngine::GetClipInfo(audio / "Missing.ogg"));
+
+        // Group effects round trip through the project file.
+        fs::path dir = fs::temp_directory_path() / "dimension_fx_project";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        auto& sfx = AudioMixer::Groups()[2];
+        sfx.Echo = true;
+        sfx.EchoDelayMs = 250.0f;
+        sfx.Reverb = true;
+        sfx.ReverbRoomSize = 0.9f;
+        AudioMixer::Apply(); // no device: a no-op
+        CHECK(Project::Save() && Project::Open(dir));
+        auto& back = AudioMixer::Groups()[2];
+        CHECK(back.Echo && Near(back.EchoDelayMs, 250.0f) && back.Reverb && Near(back.ReverbRoomSize, 0.9f) && !AudioMixer::Groups()[1].Echo);
+        fs::remove_all(dir, ec);
+    }
+
+    void TestDistanceSprings()
+    {
+        // A 1 kg body hanging from a 2 m spring joint settles where k * stretch = m * g, with k = m (2 pi f)^2.
+        // f = 1 Hz: k = 39.5 N/m -> about 0.25 m of stretch. A rigid joint does not stretch at all.
+        auto settle3D = [](float frequency) {
+            Scene scene("Spring3D");
+            auto& reg = scene.GetRegistry();
+            Entity bob = scene.CreateEntity("Bob");
+            reg.Get<TransformComponent>(bob).Position = { 0, 3, 0 };
+            reg.Emplace<RigidbodyComponent>(bob).Mass = 1.0f;
+            reg.Emplace<SphereColliderComponent>(bob).Radius = 0.2f;
+            auto& j = reg.Emplace<JointComponent>(bob);
+            j.Type = JointType::Distance;
+            j.ConnectedAnchor = { 0, 5, 0 };
+            j.SpringFrequency = frequency;
+            j.SpringDamping = 1.0f;
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            for (int i = 0; i < 300; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            float y = reg.Get<TransformComponent>(bob).Position.y;
+            scene.OnRuntimeStop();
+            return y;
+        };
+        float rigid = settle3D(0.0f), spring = settle3D(1.0f);
+        float stretch = 9.81f / (4.0f * glm::pi<float>() * glm::pi<float>());
+        CHECK(Near(rigid, 3.0f, 0.02f) && Near(spring, 3.0f - stretch, 0.03f));
+
+        auto settle2D = [](float frequency, bool motor) {
+            Scene scene("Spring2D");
+            auto& reg = scene.GetRegistry();
+            Entity bob = scene.CreateEntity("Bob");
+            reg.Get<TransformComponent>(bob).Position = { 0, 3, 0 };
+            reg.Emplace<Rigidbody2DComponent>(bob);
+            reg.Emplace<CircleCollider2DComponent>(bob);
+            auto& j = reg.Emplace<Joint2DComponent>(bob);
+            j.Type = Joint2DType::Distance;
+            j.ConnectedAnchor = { 0, 5 };
+            j.SpringFrequency = frequency;
+            j.SpringDamping = 1.0f;
+            j.UseMotor = motor;
+            j.MotorSpeed = -0.5f; // winch: shortens the rope at 0.5 units/s
+            j.MotorMaxTorque = 1000.0f;
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            for (int i = 0; i < 120; ++i) scene.OnUpdateRuntime(1.0f / 60.0f);
+            float y = reg.Get<TransformComponent>(bob).Position.y;
+            scene.OnRuntimeStop();
+            return y;
+        };
+        float rigid2 = settle2D(0.0f, false), spring2 = settle2D(1.0f, false), winch = settle2D(1.0f, true);
+        CHECK(Near(rigid2, 3.0f, 0.02f) && spring2 < 2.9f && winch > spring2 + 0.3f);
+        std::printf("  3D spring rest %.3f (expected %.3f); 2D spring %.3f, winched %.3f\n", spring, 3.0f - stretch, spring2, winch);
+    }
+
+    void TestGltfTangents()
+    {
+        // A one-triangle glTF with TANGENT data, placed under a node rotated 90 degrees about Z.
+        fs::path dir = fs::temp_directory_path() / "dimension_tangents";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const float data[] = { 0, 0, 0, 1, 0, 0, 0, 1, 0,             // positions
+                               0, 0, 1, 0, 0, 1, 0, 0, 1,             // normals
+                               1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1 }; // tangents (+X, left-handed)
+        std::ofstream(dir / "tri.bin", std::ios::binary).write((const char*)data, sizeof(data));
+        std::ofstream(dir / "tri.gltf") << R"({
+            "asset": { "version": "2.0" },
+            "buffers": [ { "uri": "tri.bin", "byteLength": 120 } ],
+            "bufferViews": [ { "buffer": 0, "byteOffset": 0, "byteLength": 36 }, { "buffer": 0, "byteOffset": 36, "byteLength": 36 },
+                             { "buffer": 0, "byteOffset": 72, "byteLength": 48 } ],
+            "accessors": [ { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0] },
+                           { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+                           { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC4" } ],
+            "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0, "NORMAL": 1, "TANGENT": 2 } } ] } ],
+            "nodes": [ { "mesh": 0, "rotation": [0, 0, 0.7071068, 0.7071068] } ],
+            "scenes": [ { "nodes": [0] } ], "scene": 0 })";
+        MeshData mesh;
+        CHECK(MeshData::LoadFromFile(dir / "tri.gltf", mesh));
+        CHECK(mesh.Vertices.size() == 3);
+        if (mesh.Vertices.size() == 3)
+        {
+            const glm::vec4& t = mesh.Vertices[0].Tangent;
+            CHECK(Near(glm::vec3(t), glm::vec3(0, 1, 0)) && t.w == -1.0f); // +X rotated to +Y, handedness kept
+        }
+        // Built-in primitives have no tangents (the shader derives a frame from screen-space derivatives).
+        CHECK(MeshData::Cube().Vertices[0].Tangent == glm::vec4(0.0f));
+        fs::remove_all(dir, ec);
+    }
+
+    void TestRootMotion()
+    {
+        // A root that walks +2 along Z per 1 s loop (bob in Y). Root motion keeps the root in place horizontally,
+        // keeps the bob, and hands out the travel frame by frame, including across the loop seam.
+        Skeleton sk;
+        Joint root;
+        root.Name = "Hips";
+        sk.Joints = { root };
+        sk.ComputeOrder();
+        AnimationClip walk;
+        walk.Name = "Walk";
+        walk.Duration = 1.0f;
+        AnimationChannel ch;
+        ch.Joint = 0;
+        ch.Path = AnimationPath::Translation;
+        ch.Times = { 0.0f, 0.5f, 1.0f };
+        ch.Values = { { 0, 0, 0, 0 }, { 0, 0.1f, 1, 0 }, { 0, 0, 2, 0 } };
+        walk.Channels.push_back(ch);
+
+        RootMotionState state;
+        glm::vec3 travelled(0.0f);
+        float time = 0.0f, dt = 1.0f / 60.0f;
+        bool pinned = true, bobbed = false;
+        for (int frame = 0; frame <= 150; ++frame) // 2.5 loops
+        {
+            Pose pose;
+            Animation::Sample(sk, walk, time, pose);
+            travelled += Animation::ExtractRootMotion(sk, 0, pose, state, { 0, 0, 0 }, { 0, 0, 2 }, time, true, "Walk");
+            pinned &= Near(pose.Translations[0].z, 0.0f, 1e-4f) && Near(pose.Translations[0].x, 0.0f, 1e-4f);
+            bobbed |= pose.Translations[0].y > 0.05f;
+            time = std::fmod(time + dt, walk.Duration);
+        }
+        CHECK(pinned && bobbed);
+        CHECK(Near(travelled.z, 150.0f * dt * 2.0f, 0.02f) && Near(travelled.y, 0.0f) && Near(travelled.x, 0.0f));
+        // Switching motion restarts tracking: no jump on the first frame of the new clip.
+        Pose pose;
+        Animation::Sample(sk, walk, 0.9f, pose);
+        CHECK(glm::length(Animation::ExtractRootMotion(sk, 0, pose, state, { 0, 0, 0 }, { 0, 0, 2 }, 0.9f, true, "Run")) == 0.0f);
+    }
+
+    void TestUINavigation()
+    {
+        // Layout (pixels):   [Button 0,0]      [Toggle 300,0]
+        //                    [Slider 0,100]
+        //                    [Dropdown 0,200]  [Field 300,200]
+        Scene scene("Nav");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto widget = [&](const char* name, glm::vec2 pos) {
+            Entity e = scene.CreateEntity(name, canvas);
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = { 0, 0 };
+            r.Pivot = { 0, 0 };
+            r.Position = pos;
+            r.Size = { 200, 40 };
+            return e;
+        };
+        Entity button = widget("Button", { 0, 0 });
+        reg.Emplace<UIImageComponent>(button);
+        reg.Emplace<UIButtonComponent>(button);
+        reg.Emplace<ScriptComponent>(button).Add("ClickCounter");
+        Entity toggle = widget("Toggle", { 300, 0 });
+        reg.Emplace<UIToggleComponent>(toggle);
+        Entity slider = widget("Slider", { 0, 100 });
+        {
+            auto& s = reg.Emplace<UISliderComponent>(slider);
+            s.MinValue = 0;
+            s.MaxValue = 10;
+            s.Value = 5;
+            s.WholeNumbers = true;
+        }
+        Entity dropdown = widget("Dropdown", { 0, 200 });
+        reg.Emplace<UIDropdownComponent>(dropdown); // options A, B, C; value 0
+        Entity field = widget("Field", { 300, 200 });
+        reg.Emplace<UIInputFieldComponent>(field);
+        scene.UpdateTransforms();
+
+        auto runtime = scene.Clone();
+        runtime->OnRuntimeStart();
+        auto& rr = runtime->GetRegistry();
+        glm::vec2 screen(1000, 1000);
+        auto press = [&](auto setter) {
+            UI::PointerState p;
+            p.Position = { 900, 900 }; // away from every widget
+            setter(p);
+            UI::Update(*runtime, p, screen);
+        };
+        auto sel = [&] { return runtime->GetUISelected(); };
+
+        press([](UI::PointerState& p) { p.NavDown = true; });
+        CHECK(sel() == button); // nothing selected: navigation starts at the top-left widget
+        press([](UI::PointerState& p) { p.NavRight = true; });
+        CHECK(sel() == toggle);
+        press([](UI::PointerState& p) { p.NavDown = true; });
+        CHECK(sel() == field); // straight down from the toggle
+        press([](UI::PointerState& p) { p.NavLeft = true; });
+        CHECK(sel() == dropdown);
+        press([](UI::PointerState& p) { p.NavUp = true; });
+        CHECK(sel() == slider);
+        // Left/Right step a selected slider instead of moving.
+        press([](UI::PointerState& p) { p.NavRight = true; });
+        press([](UI::PointerState& p) { p.NavRight = true; });
+        CHECK(sel() == slider && Near(rr.Get<UISliderComponent>(slider).Value, 7.0f));
+        press([](UI::PointerState& p) { p.NavUp = true; });
+        int clicksBefore = ClickCounter::Clicks;
+        press([](UI::PointerState& p) { p.Submit = true; });
+        CHECK(sel() == button && ClickCounter::Clicks == clicksBefore + 1);
+        // Toggle flips on Submit.
+        press([](UI::PointerState& p) { p.NavRight = true; });
+        press([](UI::PointerState& p) { p.Submit = true; });
+        CHECK(rr.Get<UIToggleComponent>(toggle).IsOn);
+        // Dropdown: Submit opens, Down moves through the list, Submit picks, and the list closes.
+        press([](UI::PointerState& p) { p.NavDown = true; });
+        press([](UI::PointerState& p) { p.NavLeft = true; });
+        CHECK(sel() == dropdown);
+        press([](UI::PointerState& p) { p.Submit = true; });
+        CHECK(rr.Get<UIDropdownComponent>(dropdown).Open);
+        press([](UI::PointerState& p) { p.NavDown = true; });
+        press([](UI::PointerState& p) { p.NavDown = true; });
+        press([](UI::PointerState& p) { p.Submit = true; });
+        CHECK(!rr.Get<UIDropdownComponent>(dropdown).Open && rr.Get<UIDropdownComponent>(dropdown).Value == 2);
+        // A mouse click leaves navigation: Submit (Space) no longer presses the clicked button.
+        UI::PointerState click;
+        click.Position = { 50, 20 };
+        click.Down = click.Pressed = true;
+        UI::Update(*runtime, click, screen);
+        click.Down = click.Pressed = false;
+        click.Released = true;
+        UI::Update(*runtime, click, screen);
+        int afterMouse = ClickCounter::Clicks;
+        press([](UI::PointerState& p) { p.Submit = true; });
+        CHECK(sel() == button && !runtime->IsUINavigating() && ClickCounter::Clicks == afterMouse);
+        // Submit focuses a text field; Cancel leaves it.
+        runtime->SetUISelected(field);
+        runtime->SetUINavigating(true);
+        press([](UI::PointerState& p) { p.Submit = true; });
+        CHECK(rr.Get<UIInputFieldComponent>(field).Focused);
+        press([](UI::PointerState& p) { p.Cancel = true; });
+        CHECK(!rr.Get<UIInputFieldComponent>(field).Focused);
+        runtime->OnRuntimeStop();
+    }
+
+    void TestBuildDependencies()
+    {
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        auto names = [](const AssetDependencySet& set) {
+            std::set<std::string> out;
+            for (AssetHandle h : set.Assets)
+                if (auto* m = AssetManager::GetMetadata(h)) out.insert(m->Path.generic_string());
+            return out;
+        };
+        auto d2 = names(AssetDependencies::Collect({ AssetManager::GetHandle("Scenes/Demo2D.scene") }));
+        CHECK(d2.contains("Scenes/Demo2D.scene") && d2.contains("Sprites/Tiles.png") && d2.contains("Sprites/Player.png"));
+        CHECK(!d2.contains("Models/Showcase.glb") && !d2.contains("Audio/Music.ogg") && !d2.contains("Textures/ClearSky.hdr"));
+        auto deps3 = AssetDependencies::Collect({ AssetManager::GetHandle("Scenes/Demo3D.scene") });
+        auto d3 = names(deps3);
+        // Through components (models, music), scene settings (sky), materials (textures), prefabs and controllers.
+        for (const char* p : { "Models/Showcase.glb", "Models/Tentacle.gltf", "Audio/Music.ogg", "Textures/ClearSky.hdr", "Materials/Brick.mat",
+                               "Textures/Brick_Normal.png", "Prefabs/Ball.prefab", "Animation/TentacleLayered.controller" })
+        {
+            if (!d3.contains(p)) std::printf("  missing from Demo3D's dependencies: %s\n", p);
+            CHECK(d3.contains(p));
+        }
+        CHECK(!d3.contains("Scenes/Instancing.scene") && !d3.contains("Sprites/GameIcon.png"));
+        // The text glTF's buffer file ships alongside it.
+        bool hasBuffer = false;
+        for (auto& f : deps3.ExtraFiles) hasBuffer |= f.parent_path() == fs::path("Models") && f.extension() == ".bin";
+        std::error_code ec;
+        bool needsBuffer = false;
+        for (auto& e : fs::directory_iterator(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models", ec)) needsBuffer |= e.path().extension() == ".bin";
+        CHECK(hasBuffer == needsBuffer);
+        std::printf("  Demo3D ships %zu assets (+%zu files), Demo2D %zu\n", deps3.Assets.size(), deps3.ExtraFiles.size(), d2.size());
+        AssetManager::Shutdown();
+    }
+
+    void TestAsyncSceneLoading()
+    {
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        AssetPrefetch::Clear();
+        Scene running("Running");
+        Entity keep = running.CreateEntity("Keeper");
+        running.DontDestroyOnLoad(keep);
+        auto op = SceneManager::LoadSceneAsync("Scenes/Demo2D");
+        CHECK(op != nullptr && !SceneManager::LoadSceneAsync("Scenes/Missing"));
+        if (!op) return;
+        op->AllowSceneActivation = false;
+        SceneManager::WaitForAsyncLoads();
+        // Ready but held: progress parks at 0.9, nothing to apply, and the sprites are already decoded.
+        CHECK(Near(op->Progress.load(), 0.9f) && op->IsReady() && !op->IsDone && !SceneManager::HasPendingLoad());
+        CHECK(AssetPrefetch::Size() > 0 && AssetPrefetch::Contains(AssetManager::GetAbsolutePath(AssetManager::GetHandle("Sprites/Tiles.png"))));
+        op->AllowSceneActivation = true;
+        CHECK(SceneManager::HasPendingLoad());
+        CHECK(SceneManager::ApplyPending(running));
+        CHECK(op->IsDone && !op->Failed && Near(op->Progress.load(), 1.0f));
+        // Single load: the scene's objects arrive, persistent objects stay.
+        CHECK(!running.FindEntityByName("Player").IsNull() && running.IsValid(keep));
+        AssetPrefetch::Clear();
+        AssetManager::Shutdown();
+    }
+
+    void TestMultiLineInput()
+    {
+        UI::SetTextMeasure([](const std::string& t, float) { return 10.0f * (float)UI::CodepointCount(t); }); // 10 px per character
+        Scene scene("MultiLine");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        Entity e = scene.CreateEntity("Notes", canvas);
+        {
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = { 0, 0 };
+            r.Pivot = { 0, 0 };
+            r.Size = { 300, 60 }; // text at x 10, lines 22 px tall from y 5: two lines visible
+            auto& f = reg.Emplace<UIInputFieldComponent>(e);
+            f.FontSize = 20.0f;
+            f.MultiLine = true;
+        }
+        scene.UpdateTransforms();
+        glm::vec2 screen(1000, 1000);
+        auto& field = reg.Get<UIInputFieldComponent>(e);
+        auto frame = [&](auto&& setup) {
+            UI::PointerState p;
+            p.Position = { 900, 900 };
+            setup(p);
+            UI::Update(scene, p, screen, 0.016f);
+        };
+        // Click to focus, then type two lines: Enter inserts a newline instead of submitting.
+        frame([](UI::PointerState& p) { p.Position = { 20, 10 }; p.Down = p.Pressed = true; });
+        frame([](UI::PointerState& p) { p.Position = { 20, 10 }; p.Released = true; });
+        CHECK(field.Focused);
+        frame([](UI::PointerState& p) { p.Text = "ab"; });
+        frame([](UI::PointerState& p) { p.Enter = true; });
+        frame([](UI::PointerState& p) { p.Text = "cde"; });
+        CHECK(field.Focused && field.Text == "ab\ncde" && field.Caret == 6);
+        // Up keeps the x position (clamped to the shorter line); Down returns to the same column.
+        frame([](UI::PointerState& p) { p.LineUp = true; });
+        CHECK(field.Caret == 2);
+        frame([](UI::PointerState& p) { p.LineDown = true; });
+        CHECK(field.Caret == 5);
+        // Home/End stay on the line; Shift+Up selects back to the same column above.
+        frame([](UI::PointerState& p) { p.Home = true; });
+        CHECK(field.Caret == 3);
+        frame([](UI::PointerState& p) { p.End = true; });
+        CHECK(field.Caret == 6);
+        frame([](UI::PointerState& p) { p.LineUp = true; p.Shift = true; });
+        CHECK(field.SelectionAnchor == 6 && field.Caret == 2);
+        // Pasting keeps newlines; a third line scrolls the field to keep the caret visible.
+        frame([](UI::PointerState& p) { p.End = true; p.Ctrl = true; });
+        frame([](UI::PointerState& p) { p.Paste = true; p.PasteText = "\nfg"; });
+        CHECK(field.Text == "ab\ncde\nfg" && field.ScrollY > 0.0f);
+        // Clicking the first visible line puts the caret there (line 1 after scrolling one line).
+        float scrolled = field.ScrollY;
+        frame([&](UI::PointerState& p) { p.Position = { 10 + 15, 5 + 11 }; p.Down = p.Pressed = true; });
+        frame([](UI::PointerState& p) { p.Released = true; });
+        size_t expectedLine = (size_t)std::floor((11 + scrolled) / 22.0f);
+        CHECK(expectedLine == 1 && (field.Caret == 4 || field.Caret == 5)); // between 'c' and 'd' (rounding to the nearest edge)
+        // Ctrl+Enter submits.
+        frame([](UI::PointerState& p) { p.Enter = true; p.Ctrl = true; });
+        CHECK(!field.Focused && field.Text == "ab\ncde\nfg");
+        UI::SetTextMeasure(nullptr);
+    }
+
     void TestComponentOrder()
     {
         Scene scene("Order");
@@ -3011,6 +3409,14 @@ int main(int argc, char** argv)
     Run("Blend trees and animation events", TestBlendTreesAndEvents);
     Run("Material slots and soft shadows", TestMaterialSlotsAndSoftShadows);
     Run("Component order", TestComponentOrder);
+    Run("Multi-line input fields", TestMultiLineInput);
+    Run("Async scene loading", TestAsyncSceneLoading);
+    Run("Build dependencies", TestBuildDependencies);
+    Run("UI navigation", TestUINavigation);
+    Run("Root motion", TestRootMotion);
+    Run("glTF tangents", TestGltfTangents);
+    Run("Distance joint springs", TestDistanceSprings);
+    Run("Audio formats and effects", TestAudioFormatsAndEffects);
     Run("Line caps and joins", TestLineCapsAndJoins);
     Run("Slider joints", TestSliderJoints);
     Run("Spot light cookies", TestSpotCookies);

@@ -35,6 +35,8 @@ namespace Editor
             ClearConsoleOnPlay = j.value("clearConsoleOnPlay", ClearConsoleOnPlay);
             AutosaveMinutes = j.value("autosaveMinutes", AutosaveMinutes);
             SaveSceneBeforePlay = j.value("saveSceneBeforePlay", SaveSceneBeforePlay);
+            Theme = j.value("theme", Theme);
+            Accent = j.value("accent", Accent);
         }
         catch (const std::exception& e)
         {
@@ -52,7 +54,9 @@ namespace Editor
                           { "showGrid", ShowGrid },
                           { "clearConsoleOnPlay", ClearConsoleOnPlay },
                           { "autosaveMinutes", AutosaveMinutes },
-                          { "saveSceneBeforePlay", SaveSceneBeforePlay } };
+                          { "saveSceneBeforePlay", SaveSceneBeforePlay },
+                          { "theme", Theme },
+                          { "accent", Accent } };
         std::ofstream(FilePath()) << j.dump(2);
     }
 }

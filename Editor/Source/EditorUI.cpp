@@ -1,5 +1,6 @@
 #include "EditorUI.h"
 #include <Dimension/Renderer/Texture.h>
+#include <Dimension/ImGui/ImGuiLayer.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -431,6 +432,21 @@ namespace Editor::UI
         return r;
     }
 
+    ImVec4 AccentBackground(float amount)
+    {
+        ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), accent = ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
+        return ImVec4(bg.x + (accent.x - bg.x) * amount, bg.y + (accent.y - bg.y) * amount, bg.z + (accent.z - bg.z) * amount, 1.0f);
+    }
+
+    ImVec4 AccentText()
+    {
+        ImVec4 a = ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
+        // Dark themes: lift the accent toward white; light theme: darken it.
+        float k = ImGuiLayer::IsLightTheme() ? 0.6f : 0.45f;
+        return ImGuiLayer::IsLightTheme() ? ImVec4(a.x * k, a.y * k, a.z * k, 1.0f)
+                                          : ImVec4(a.x + (1 - a.x) * k, a.y + (1 - a.y) * k, a.z + (1 - a.z) * k, 1.0f);
+    }
+
     EditResult Field(const FieldInfo& f, void* object, Scene* scene)
     {
         void* p = f.Access(object);
@@ -440,6 +456,13 @@ namespace Editor::UI
         bool bounded = f.Min != f.Max;
         bool mixed = s_Mixed != 0;
         const char* floatFormat = mixed ? kMixedText : "%.3f";
+        // Whole-value fields (curves, gradients, lists) that differ across the selection: say so above the editor,
+        // which shows the active object's value; any edit gives every selected object that value.
+        auto mixedNote = [&] {
+            if (!mixed) return;
+            ImGui::TextDisabled("%s  differs between objects", kMixedText);
+            ImGui::SetItemTooltip("Showing the active object's value. Editing it applies the result to every selected object.");
+        };
         switch (f.Type)
         {
         case FieldType::Bool:
@@ -534,6 +557,7 @@ namespace Editor::UI
         case FieldType::Curve:
         {
             PropertyLabel(label, f.Tooltip.c_str());
+            mixedNote();
             Curve& curve = *(Curve*)p;
             r = CurveEditor("##curve", curve);
             r |= Track(ImGui::Checkbox("Smooth##curve", &curve.Smooth));
@@ -542,12 +566,14 @@ namespace Editor::UI
         }
         case FieldType::Gradient:
             PropertyLabel(label, f.Tooltip.c_str());
+            mixedNote();
             r = GradientEditor("##gradient", *(Gradient*)p);
             break;
         case FieldType::StringList:
         {
             auto& list = *(std::vector<std::string>*)p;
             PropertyLabel(label, f.Tooltip.c_str());
+            mixedNote();
             if (ImGui::Button("+ Add"))
             {
                 list.push_back("Option " + std::to_string(list.size() + 1));
@@ -579,6 +605,7 @@ namespace Editor::UI
         {
             auto& list = *(std::vector<AssetHandle>*)p;
             PropertyLabel(label, f.Tooltip.c_str());
+            mixedNote();
             int size = (int)list.size();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
             if (ImGui::InputInt("##count", &size, 1, 1))
@@ -602,6 +629,7 @@ namespace Editor::UI
         {
             auto& list = *(std::vector<glm::vec3>*)p;
             PropertyLabel(label, f.Tooltip.c_str());
+            mixedNote();
             int size = (int)list.size();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
             if (ImGui::InputInt("##count", &size, 1, 1))

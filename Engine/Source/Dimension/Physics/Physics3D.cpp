@@ -307,6 +307,9 @@ namespace Dimension
             float initial = glm::distance(anchor, pointB);
             s->mMinDistance = j.MinDistance > 0.0f ? j.MinDistance : initial;
             s->mMaxDistance = j.MaxDistance > 0.0f ? std::max(j.MaxDistance, s->mMinDistance) : std::max(initial, s->mMinDistance);
+            // A spring: the limits pull back softly instead of rigidly.
+            if (j.SpringFrequency > 0.0f)
+                s->mLimitsSpringSettings = JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, j.SpringFrequency, std::max(j.SpringDamping, 0.0f));
             settings = s;
             break;
         }

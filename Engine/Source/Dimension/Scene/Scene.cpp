@@ -445,9 +445,24 @@ namespace Dimension
             pointer.Delete = Input::IsKeyTyped(Key::Delete);
             pointer.Left = Input::IsKeyTyped(Key::Left);
             pointer.Right = Input::IsKeyTyped(Key::Right);
+            pointer.LineUp = Input::IsKeyTyped(Key::Up);
+            pointer.LineDown = Input::IsKeyTyped(Key::Down);
             pointer.Home = Input::IsKeyTyped(Key::Home);
             pointer.End = Input::IsKeyTyped(Key::End);
             pointer.Tab = Input::IsKeyTyped(Key::Tab);
+            // Navigation: arrows (with key repeat), D-pad, and the left stick crossing half way (one step per push).
+            glm::vec2 stick(Input::GetGamepadAxis(GamepadAxis::LeftX), Input::GetGamepadAxis(GamepadAxis::LeftY));
+            int stickDir = std::abs(stick.x) > 0.5f || std::abs(stick.y) > 0.5f
+                               ? (std::abs(stick.x) > std::abs(stick.y) ? (stick.x > 0 ? 2 : 1) : (stick.y > 0 ? 4 : 3)) : 0;
+            bool stickPush = stickDir != 0 && stickDir != m_UIStickDir;
+            m_UIStickDir = stickDir;
+            bool keys = m_Settings.UIKeyboardNavigation;
+            pointer.NavLeft = (keys && Input::IsKeyTyped(Key::Left)) || Input::IsGamepadButtonPressed(GamepadButton::DpadLeft) || (stickPush && stickDir == 1);
+            pointer.NavRight = (keys && Input::IsKeyTyped(Key::Right)) || Input::IsGamepadButtonPressed(GamepadButton::DpadRight) || (stickPush && stickDir == 2);
+            pointer.NavUp = (keys && Input::IsKeyTyped(Key::Up)) || Input::IsGamepadButtonPressed(GamepadButton::DpadUp) || (stickPush && stickDir == 3);
+            pointer.NavDown = (keys && Input::IsKeyTyped(Key::Down)) || Input::IsGamepadButtonPressed(GamepadButton::DpadDown) || (stickPush && stickDir == 4);
+            pointer.Submit = (keys && (Input::IsKeyPressed(Key::Enter) || Input::IsKeyPressed(Key::Space))) || Input::IsGamepadButtonPressed(GamepadButton::A);
+            pointer.Cancel = Input::IsKeyPressed(Key::Escape) || Input::IsGamepadButtonPressed(GamepadButton::B);
             int mods = Input::GetModifiers();
             pointer.Shift = (mods & ModShift) != 0;
             pointer.Ctrl = (mods & ModControl) != 0;
@@ -650,6 +665,43 @@ namespace Dimension
                 }
             };
             evaluate(anim, controller.get(), true, current);
+
+            // Root motion from the base layer (play mode only).
+            anim.RootMotionDelta = glm::vec3(0.0f);
+            if (anim.ApplyRootMotion && dt > 0.0f && !current.Translations.empty())
+            {
+                int root = anim.RootMotionJoint.empty() ? (skeleton->Order.empty() ? 0 : skeleton->Order.front()) : skeleton->FindJoint(anim.RootMotionJoint);
+                if (root >= 0 && root < (int)skeleton->Joints.size())
+                {
+                    glm::vec3 start = skeleton->Joints[root].Translation, end = start;
+                    const AnimationClip* baseClip = anim.TreeState < 0 ? Animation::FindClip(clips, anim.Clip) : nullptr;
+                    if (!baseClip && anim.TreeState < 0 && anim.Clip.empty() && !clips.empty()) baseClip = &clips.front();
+                    float time = anim.TreeState >= 0 ? anim.Runtime.StateTime : anim.Time;
+                    if (baseClip)
+                    {
+                        Pose p;
+                        Animation::Sample(*skeleton, *baseClip, 0.0f, p);
+                        start = p.Translations[root];
+                        Animation::Sample(*skeleton, *baseClip, baseClip->Duration, p);
+                        end = p.Translations[root];
+                    }
+                    std::string key = anim.TreeState >= 0 ? "#" + std::to_string(anim.TreeState) : anim.Clip;
+                    glm::vec3 modelDelta = Animation::ExtractRootMotion(*skeleton, root, current, anim.RootMotion, start, end, time, anim.Loop, key);
+                    auto& t = m_Registry.Get<TransformComponent>(e);
+                    glm::vec3 worldDelta = glm::mat3(t.World) * modelDelta;
+                    anim.RootMotionDelta = worldDelta;
+                    if (glm::dot(worldDelta, worldDelta) > 0.0f)
+                    {
+                        if (m_Registry.Has<CharacterControllerComponent>(e) && m_Physics3D) Physics3DWorld::MoveCharacter(*this, e, worldDelta);
+                        else
+                        {
+                            Entity parent = GetParent(e);
+                            glm::mat3 toParent = parent.IsNull() ? glm::mat3(1.0f) : glm::inverse(glm::mat3(m_Registry.Get<TransformComponent>(parent).World));
+                            t.Position += toParent * worldDelta;
+                        }
+                    }
+                }
+            }
 
             // Extra layers, in order, on top of the base pose.
             if (controller && !controller->Layers.empty())

@@ -125,7 +125,9 @@ namespace Editor
         if (prefabLink)
         {
             // Prefab instances are blue like in Unity (dimmer when inactive).
-            ImGui::PushStyleColor(ImGuiCol_Text, active ? ImVec4(0.45f, 0.7f, 1.0f, 1.0f) : ImVec4(0.3f, 0.45f, 0.65f, 1.0f));
+            ImVec4 prefabText = UI::AccentText();
+            if (!active) prefabText.w = 0.55f;
+            ImGui::PushStyleColor(ImGuiCol_Text, prefabText);
             ++pushedColors;
         }
         else if (!active)

@@ -21,8 +21,11 @@ namespace Dimension
             std::string Text;            // UTF-8 characters typed this frame
             bool Backspace = false, Enter = false;
             // Text editing (presses including key repeat), modifiers and clipboard.
-            bool Delete = false, Left = false, Right = false, Home = false, End = false, Tab = false;
+            bool Delete = false, Left = false, Right = false, LineUp = false, LineDown = false, Home = false, End = false, Tab = false;
             bool Shift = false, Ctrl = false;
+            // Navigation between widgets (arrow keys, D-pad, left stick): moves the selection; Submit (Enter, Space,
+            // gamepad A) presses the selected widget; Cancel (Escape, gamepad B) closes lists and leaves text fields.
+            bool NavUp = false, NavDown = false, NavLeft = false, NavRight = false, Submit = false, Cancel = false;
             bool SelectAll = false, Copy = false, Cut = false, Paste = false;
             std::string PasteText;                              // clipboard contents when Paste is set
             std::function<void(const std::string&)> SetClipboard; // receives copied/cut text

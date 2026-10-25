@@ -13,6 +13,8 @@ namespace Editor
         bool ClearConsoleOnPlay = true;
         float AutosaveMinutes = 5.0f;  // 0 = off; backups go to <project>/.dimension/Autosave
         bool SaveSceneBeforePlay = false;
+        int Theme = 0;                 // Dimension::ImGuiLayer::Theme: Dark, Light, Midnight
+        uint32_t Accent = 0x3A79BB;    // 0xRRGGBB
 
         static EditorPreferences& Get();
         static Dimension::fs::path FilePath();

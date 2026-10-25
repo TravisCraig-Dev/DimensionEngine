@@ -7,6 +7,7 @@ layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vUV;
 layout(location = 3) flat in uint vEntity;
+layout(location = 4) in vec4 vTangent;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out uint outEntity;
@@ -81,7 +82,15 @@ void main()
         vec3 t = SampleTexture(m.Maps.y, uv).xyz * 2.0 - 1.0;
         t.y = -t.y; // glTF/OpenGL normal maps: +Y points up the image, our V runs downwards
         t.xy *= m.Params.w;
-        N = normalize(CotangentFrame(N, vWorldPos, uv) * t);
+        if (abs(vTangent.w) > 0.5 && dot(vTangent.xyz, vTangent.xyz) > 1e-8)
+        {
+            // Authored vertex tangents (Gram-Schmidt against the interpolated normal).
+            vec3 T = normalize(vTangent.xyz - N * dot(N, vTangent.xyz));
+            vec3 B = cross(N, T) * (vTangent.w < 0.0 ? -1.0 : 1.0);
+            N = normalize(mat3(T, B, N) * t);
+        }
+        else
+            N = normalize(CotangentFrame(N, vWorldPos, uv) * t);
     }
     vec4 mr = SampleTexture(m.Maps.z, uv);
     float roughness = clamp(m.Params.y * mr.g, 0.02, 1.0);
@@ -104,22 +113,20 @@ void main()
     }
     else
         env = mix(SkyColor(R), SkyColor(vec3(0.0, 1.0, 0.0)) * 0.5 + uScene.SkyHorizon.rgb * 0.5, roughness);
-    if (pc.Probe != 0u && pc.Probe <= uint(uScene.Counts.y))
+    // Reflection probes, blended per pixel: smallest boxes first, each fading out over its Blend Distance toward its
+    // walls; whatever weight is left over goes to the next probe and finally to the sky.
     {
-        // Reflection probe: the surroundings captured at the probe, optionally box-projected so reflections line up
-        // with the walls of the influence box instead of being "at infinity".
-        ReflectionProbe probe = uScene.Probes[pc.Probe - 1u];
-        vec3 dir = R;
-        if (probe.Params.x > 0.5)
+        vec3 probeSum = vec3(0.0);
+        float remaining = 1.0;
+        for (int i = 0; i < uScene.Counts.y && remaining > 1e-3; ++i)
         {
-            vec3 safe = mix(R, vec3(1e-4), lessThan(abs(R), vec3(1e-4)));
-            vec3 t1 = (probe.BoxMax.xyz - vWorldPos) / safe, t2 = (probe.BoxMin.xyz - vWorldPos) / safe;
-            vec3 far = max(t1, t2);
-            float t = min(min(far.x, far.y), far.z);
-            if (t > 0.0) dir = vWorldPos + R * t - probe.CenterIntensity.xyz;
+            ReflectionProbe probe = uScene.Probes[i];
+            float w = ProbeWeight(probe, vWorldPos) * remaining;
+            if (w <= 0.0) continue;
+            probeSum += SampleProbe(probe, vWorldPos, R, roughness) * w;
+            remaining -= w;
         }
-        float lod = roughness * max(probe.BoxMax.w - 1.0, 0.0);
-        env = textureLod(uTextures[nonuniformEXT(uint(probe.BoxMin.w))], DirToEquirectRaw(normalize(dir)), lod).rgb * probe.CenterIntensity.w;
+        env = probeSum + env * remaining;
     }
     // Screen-space ambient occlusion only darkens indirect light (opaque surfaces are in the depth prepass).
     if (uScene.AOParams.x > 0.5 && m.Flags.x != 2u)

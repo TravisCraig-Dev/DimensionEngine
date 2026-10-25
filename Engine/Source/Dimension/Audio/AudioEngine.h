@@ -3,10 +3,20 @@
 #include "Dimension/ECS/Entity.h"
 #include "Dimension/Core/Guid.h"
 #include "Dimension/Audio/AudioMixer.h"
+#include <optional>
 
 namespace Dimension
 {
     class Scene;
+
+    // Format of an audio file (WAV, MP3, FLAC or Ogg Vorbis), read without an audio device.
+    struct AudioClipInfo
+    {
+        uint32_t Channels = 0, SampleRate = 0;
+        uint64_t Frames = 0;
+        float Seconds = 0.0f;
+        std::string Format; // "WAV", "MP3", "FLAC", "Ogg Vorbis"
+    };
 
     // Process-wide audio device (miniaudio). Safe to use when no device exists:
     // everything becomes a no-op.
@@ -18,6 +28,7 @@ namespace Dimension
         static bool IsAvailable();
         static void* GetNative(); // ma_engine*
         static void SetMasterVolume(float volume);
+        static std::optional<AudioClipInfo> GetClipInfo(const fs::path& file);
     };
 
     // Per-scene audio playback for AudioSource components while playing.

@@ -135,7 +135,10 @@ namespace Dimension
             .Field("Clip", &AnimatorComponent::Clip)
             .Field("Speed", &AnimatorComponent::Speed).Range(-10.0f, 10.0f).Speed(0.01f)
             .Field("Loop", &AnimatorComponent::Loop)
-            .Field("Playing", &AnimatorComponent::Playing);
+            .Field("Playing", &AnimatorComponent::Playing)
+            .Field("Apply Root Motion", &AnimatorComponent::ApplyRootMotion)
+                .Tooltip("Moves the object by the animation's root movement (walk cycles that travel). With a Character Controller it moves the character.")
+            .Field("Root Motion Joint", &AnimatorComponent::RootMotionJoint).Tooltip("Empty = the first root joint (e.g. Hips)");
 
         using PS = ParticleSystemComponent;
         Register<PS>("Particle System", "Effects")
@@ -260,10 +263,12 @@ namespace Dimension
             .Field("Vertical Alignment", &UITextComponent::VerticalAlign).Enum({ "Top", "Middle", "Bottom" })
             .Field("Wrap", &UITextComponent::Wrap);
         Register<ReflectionProbeComponent>("Reflection Probe", "Rendering")
-            .Field("Size", &ReflectionProbeComponent::Size).Speed(0.05f).Tooltip("Influence box: meshes whose center is inside use this probe")
+            .Field("Size", &ReflectionProbeComponent::Size).Speed(0.05f).Tooltip("Influence box: surfaces inside reflect this probe")
             .Field("Resolution", &ReflectionProbeComponent::Resolution).Enum({ "64", "128", "256", "512" })
             .Field("Intensity", &ReflectionProbeComponent::Intensity).Range(0.0f, 10.0f).Speed(0.01f)
             .Field("Box Projection", &ReflectionProbeComponent::BoxProjection).Tooltip("Reflections line up with the box's walls")
+            .Field("Blend Distance", &ReflectionProbeComponent::BlendDistance).Range(0.0f, 100.0f).Speed(0.05f)
+                .Tooltip("The probe fades out over this distance inside its box, blending into overlapping probes or the sky")
             .Field("Realtime", &ReflectionProbeComponent::Realtime).Tooltip("Re-capture every frame (costly: six extra renders)");
 
         Register<TilemapComponent>("Tilemap", "Rendering")
@@ -297,6 +302,7 @@ namespace Dimension
             .Field("Text", &UIInputFieldComponent::Text)
             .Field("Placeholder", &UIInputFieldComponent::Placeholder)
             .Field("Character Limit", &UIInputFieldComponent::CharacterLimit).Range(0, 100000)
+            .Field("Multi Line", &UIInputFieldComponent::MultiLine).Tooltip("Enter starts a new line; Ctrl+Enter submits")
             .Field("Font Size", &UIInputFieldComponent::FontSize).Range(1.0f, 500.0f).Speed(0.5f)
             .Field("Interactable", &UIInputFieldComponent::Interactable)
             .Field("Background Color", &UIInputFieldComponent::BackgroundColor).As(FieldType::Color4)
@@ -437,6 +443,8 @@ namespace Dimension
             .Field("Max Distance", &JointComponent::MaxDistance).Range(0.0f, 10000.0f).Speed(0.01f)
             .Field("Slider Min", &JointComponent::SliderMin).Range(-10000.0f, 0.0f).Speed(0.01f).Tooltip("Slider: lowest travel along Axis (units)")
             .Field("Slider Max", &JointComponent::SliderMax).Range(0.0f, 10000.0f).Speed(0.01f).Tooltip("Slider: highest travel along Axis (units)")
+            .Field("Spring Frequency", &JointComponent::SpringFrequency).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Distance: > 0 makes the joint a spring toward its distance (Hz); 0 = rigid")
+            .Field("Spring Damping", &JointComponent::SpringDamping).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Distance spring damping ratio (1 = no overshoot)")
             .Field("Enable Collision", &JointComponent::EnableCollision)
             .Field("Use Motor", &JointComponent::UseMotor).Tooltip("Hinge or slider: drive toward Motor Speed")
             .Field("Motor Speed", &JointComponent::MotorSpeed).Speed(1.0f).Tooltip("Hinge: degrees per second. Slider: units per second along Axis")
@@ -472,9 +480,11 @@ namespace Dimension
             .Field("Axis", &Joint2DComponent::Axis).Speed(0.01f).Tooltip("Slider axis (local space)")
             .Field("Lower Translation", &Joint2DComponent::LowerTranslation).Range(-10000.0f, 0.0f).Speed(0.01f).Tooltip("Slider: lowest travel along Axis (units)")
             .Field("Upper Translation", &Joint2DComponent::UpperTranslation).Range(0.0f, 10000.0f).Speed(0.01f).Tooltip("Slider: highest travel along Axis (units)")
+            .Field("Spring Frequency", &Joint2DComponent::SpringFrequency).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Distance: > 0 makes the joint a spring toward its distance (Hz); 0 = rigid")
+            .Field("Spring Damping", &Joint2DComponent::SpringDamping).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Distance spring damping ratio (1 = no overshoot)")
             .Field("Collide Connected", &Joint2DComponent::CollideConnected)
-            .Field("Use Motor", &Joint2DComponent::UseMotor).Tooltip("Hinge or slider: drive toward Motor Speed")
-            .Field("Motor Speed", &Joint2DComponent::MotorSpeed).Speed(1.0f).Tooltip("Hinge: degrees per second. Slider: units per second along Axis")
+            .Field("Use Motor", &Joint2DComponent::UseMotor).Tooltip("Hinge, slider or distance spring: drive toward Motor Speed")
+            .Field("Motor Speed", &Joint2DComponent::MotorSpeed).Speed(1.0f).Tooltip("Hinge: degrees per second. Slider: units per second along Axis. Distance spring: units per second of lengthening")
             .Field("Motor Max Torque", &Joint2DComponent::MotorMaxTorque).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Hinge: N*m. Slider: maximum force (N)")
             .Field("Break Force", &Joint2DComponent::BreakForce).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Newtons; 0 = unbreakable")
             .Field("Break Torque", &Joint2DComponent::BreakTorque).Range(0.0f, 1e9f).Speed(1.0f).Tooltip("Newton-meters; 0 = unbreakable");

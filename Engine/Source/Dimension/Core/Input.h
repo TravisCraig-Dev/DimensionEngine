@@ -19,6 +19,13 @@ namespace Dimension
 
     enum class MouseButton : int { Left = 0, Right = 1, Middle = 2 };
 
+    // Gamepad buttons and axes in the standard (Xbox-style) layout; values match GLFW's gamepad mapping.
+    enum class GamepadButton : int
+    {
+        A = 0, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DpadUp, DpadRight, DpadDown, DpadLeft
+    };
+    enum class GamepadAxis : int { LeftX = 0, LeftY, RightX, RightY, LeftTrigger, RightTrigger }; // sticks -1..1 (+Y down), triggers 0..1
+
     // Modifier bits (match GLFW).
     enum KeyModifier : int { ModShift = 1, ModControl = 2, ModAlt = 4, ModSuper = 8 };
 
@@ -36,6 +43,12 @@ namespace Dimension
         static glm::vec2 GetMousePosition(); // window pixels, top-left origin
         static glm::vec2 GetMouseDelta();
         static float GetScrollDelta();
+        // Gamepads (up to 4, any controller SDL's mapping database knows). Sticks have a 0.15 dead zone.
+        static bool IsGamepadConnected(int pad = 0);
+        static std::string GetGamepadName(int pad = 0);
+        static bool IsGamepadButtonDown(GamepadButton button, int pad = 0);
+        static bool IsGamepadButtonPressed(GamepadButton button, int pad = 0); // went down this frame
+        static float GetGamepadAxis(GamepadAxis axis, int pad = 0);
         // UTF-8 text typed this frame (respects the game-input gate).
         static const std::string& GetTypedText();
         static std::string GetClipboardText();
