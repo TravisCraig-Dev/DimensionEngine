@@ -10,12 +10,17 @@ namespace Game
         public int Limit = 0; // 0 = keep counting
 
         private UIButton m_Button;
-        private int m_Clicks;
+        [SerializeField, HideInInspector] private int m_Clicks; // kept when the scripts reload while playing
 
-        public override void OnCreate()
+        public override void OnCreate() => Listen();
+
+        // After a recompile while playing: m_Clicks is kept, but event listeners start over.
+        public override void OnReloaded() => Listen();
+
+        private void Listen()
         {
             m_Button = Find(Button).GetComponent<UIButton>();
-            if (m_Button != null) m_Button.Clicked += OnButtonClicked;
+            if (m_Button != null && (Limit <= 0 || m_Clicks < Limit)) m_Button.Clicked += OnButtonClicked;
             Show();
         }
 

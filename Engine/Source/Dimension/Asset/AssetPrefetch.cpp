@@ -1,4 +1,5 @@
 #include "Dimension/Asset/AssetPrefetch.h"
+#include "Dimension/Asset/ImportCache.h"
 #include "Dimension/Renderer/Mesh.h"
 #include <stb_image.h>
 #include <chrono>
@@ -10,6 +11,7 @@ namespace Dimension
     std::optional<DecodedImage> DecodedImage::Decode(const fs::path& file)
     {
         DecodedImage out;
+        if (ImportCache::LoadImage(file, out)) return out;
         int w = 0, h = 0, channels = 0;
         std::string utf8 = file.string();
         if (stbi_is_hdr(utf8.c_str()))
@@ -28,6 +30,7 @@ namespace Dimension
         }
         out.Width = (uint32_t)w;
         out.Height = (uint32_t)h;
+        ImportCache::StoreImage(file, out);
         return out;
     }
 

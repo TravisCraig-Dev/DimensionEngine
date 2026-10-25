@@ -37,6 +37,7 @@ namespace Dimension
         float Min = 0.0f, Max = 0.0f; // Min == Max means unbounded
         std::vector<std::string> EnumNames;
         std::string Tooltip;
+        std::string Header;  // heading drawn above the field in the Inspector
         bool Hidden = false; // serialized but not shown in the Inspector
     };
 
@@ -93,6 +94,7 @@ namespace Dimension
         }
         FieldListBuilder& Tooltip(std::string text) { m_Fields.back().Tooltip = std::move(text); return *this; }
         FieldListBuilder& HideInInspector() { m_Fields.back().Hidden = true; return *this; }
+        FieldListBuilder& Header(std::string text) { m_Fields.back().Header = std::move(text); return *this; }
 
     private:
         std::vector<FieldInfo>& m_Fields;

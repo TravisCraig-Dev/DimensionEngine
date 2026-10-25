@@ -36,17 +36,10 @@ namespace Dimension
             return nullptr;
         }
 
-        constexpr int kWidth = 2048, kHeight = 1024;
-        std::vector<uint8_t> coverage(size_t(kWidth) * kHeight);
-        std::vector<stbtt_packedchar> packed(kCharCount);
-        stbtt_pack_context pack;
-        if (!stbtt_PackBegin(&pack, coverage.data(), kWidth, kHeight, 0, 2, nullptr))
-            return nullptr;
-        stbtt_PackSetOversampling(&pack, 1, 1);
-        int ok = stbtt_PackFontRange(&pack, data, 0, kBakeSize, (int)kFirstChar, (int)kCharCount, packed.data());
-        stbtt_PackEnd(&pack);
-        if (!ok) Log::Warn("Font '{}': some glyphs did not fit in the atlas", name);
-
+        // Signed distance field glyphs: the alpha channel holds the distance to the outline (0.5 on it, kSpread pixels
+        // of falloff each way at the bake size), so text stays sharp at any size and can be shaded in the shader.
+        constexpr int kWidth = 2048, kHeight = 1024, kSpread = 6;
+        std::vector<uint8_t> distance(size_t(kWidth) * kHeight, 0);
         auto font = MakeRef<Font>();
         float scale = stbtt_ScaleForPixelHeight(&info, kBakeSize);
         int ascent, descent, lineGap;
@@ -55,26 +48,43 @@ namespace Dimension
         font->m_Descent = descent * scale;
         font->m_LineGap = lineGap * scale;
 
+        int penX = 1, penY = 1, rowHeight = 0;
+        bool full = false;
         for (uint32_t i = 0; i < kCharCount; ++i)
         {
-            const stbtt_packedchar& p = packed[i];
+            int cp = (int)(kFirstChar + i);
             Glyph& g = font->m_Glyphs[i];
-            g.UVMin = { p.x0 / (float)kWidth, p.y0 / (float)kHeight };
-            g.UVMax = { p.x1 / (float)kWidth, p.y1 / (float)kHeight };
-            g.Min = { p.xoff, p.yoff };
-            g.Max = { p.xoff2, p.yoff2 };
-            g.Advance = p.xadvance;
+            int advance, bearing;
+            stbtt_GetCodepointHMetrics(&info, cp, &advance, &bearing);
+            g.Advance = advance * scale;
+            int w = 0, h = 0, xoff = 0, yoff = 0;
+            unsigned char* sdf = stbtt_GetCodepointSDF(&info, scale, cp, kSpread, 128, 128.0f / kSpread, &w, &h, &xoff, &yoff);
+            if (!sdf) continue; // blank glyph (space)
+            // Shelf packing, one pixel apart.
+            if (penX + w + 1 > kWidth) { penX = 1; penY += rowHeight + 1; rowHeight = 0; }
+            if (penY + h + 1 > kHeight) { full = true; stbtt_FreeSDF(sdf, nullptr); continue; }
+            for (int y = 0; y < h; ++y) std::memcpy(&distance[size_t(penY + y) * kWidth + penX], sdf + size_t(y) * w, (size_t)w);
+            stbtt_FreeSDF(sdf, nullptr);
+            g.UVMin = { penX / (float)kWidth, penY / (float)kHeight };
+            g.UVMax = { (penX + w) / (float)kWidth, (penY + h) / (float)kHeight };
+            g.Min = { (float)xoff, (float)yoff };
+            g.Max = { (float)(xoff + w), (float)(yoff + h) };
+            penX += w + 1;
+            rowHeight = std::max(rowHeight, h);
         }
+        if (full) Log::Warn("Font '{}': some glyphs did not fit in the atlas", name);
 
-        // White RGB with coverage in alpha, so the sprite/UI shaders can tint it.
-        std::vector<uint32_t> rgba(coverage.size());
-        for (size_t i = 0; i < coverage.size(); ++i) rgba[i] = 0x00FFFFFFu | (uint32_t(coverage[i]) << 24);
+        // White RGB with the distance in alpha, so the sprite/UI shaders can tint it.
+        std::vector<uint32_t> rgba(distance.size());
+        for (size_t i = 0; i < distance.size(); ++i) rgba[i] = 0x00FFFFFFu | (uint32_t(distance[i]) << 24);
         TextureSettings settings;
         settings.SRGB = false;
         settings.GenerateMips = true;
         font->m_Atlas = MakeRef<Texture2D>(rgba.data(), kWidth, kHeight, settings, name.c_str());
         return font;
     }
+
+    uint32_t Font::GetAtlasIndex() const { return m_Atlas ? (m_Atlas->GetBindlessIndex() | kDistanceFieldBit) : 0u; }
 
     Ref<Font> Font::LoadFromFile(const fs::path& path)
     {

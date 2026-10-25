@@ -16,7 +16,7 @@ target_compile_definitions(DimensionEngine
     PRIVATE "IMGUI_API=__declspec(dllexport)"
     INTERFACE "IMGUI_API=__declspec(dllimport)")
 if(MSVC)
-    target_compile_options(DimensionEngine PRIVATE /W4 /wd4100 /wd4201 /wd4324)
+    target_compile_options(DimensionEngine PRIVATE /W4 /wd4100 /wd4201 /wd4324 /bigobj) # /bigobj: the component registry has many template instances
 endif()
 dim_compile_shaders(DimensionEngine ${DIM_SHADERS})
 

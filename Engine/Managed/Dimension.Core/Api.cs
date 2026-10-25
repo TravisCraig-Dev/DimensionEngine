@@ -33,6 +33,9 @@ namespace Dimension
         public virtual void OnSubmit(string text) { }
         /// <summary>Called when an Animator state event on this entity is reached (the event's function name).</summary>
         public virtual void OnAnimationEvent(string name) { }
+        /// <summary>Called instead of OnCreate when the scripts were recompiled and reloaded while playing. Serialized
+        /// fields (public and [SerializeField]) keep their values; other state, coroutines and event listeners start over.</summary>
+        public virtual void OnReloaded() { }
 
         // ---- Coroutines and delayed calls (like MonoBehaviour) ---------------------------------
         internal CoroutineRunner Coroutines;

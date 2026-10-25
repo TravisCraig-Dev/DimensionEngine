@@ -681,8 +681,13 @@ namespace Dimension
 
     bool AudioWorld::IsOccluded(Scene& scene, const glm::vec3& listener, Entity listenerEntity, Entity source)
     {
+        return Occlusion(scene, listener, listenerEntity, source) > 0.0f;
+    }
+
+    float AudioWorld::Occlusion(Scene& scene, const glm::vec3& listener, Entity listenerEntity, Entity source)
+    {
         auto& reg = scene.GetRegistry();
-        if (!scene.GetPhysics3D() || !reg.Has<TransformComponent>(source)) return false;
+        if (!scene.GetPhysics3D() || !reg.Has<TransformComponent>(source)) return 0.0f;
         auto related = [&](Entity hit, Entity to) { // same entity, or one is an ancestor of the other
             if (to.IsNull()) return false;
             for (Entity p = hit; !p.IsNull(); p = scene.GetParent(p))
@@ -693,11 +698,17 @@ namespace Dimension
         };
         glm::vec3 d = reg.Get<TransformComponent>(source).GetWorldPosition() - listener;
         float len = glm::length(d);
-        if (len < 1e-3f) return false;
-        // Colliders along the line block it, except triggers and the source's and the listener's own.
+        if (len < 1e-3f) return 0.0f;
+        // Colliders along the line block it, except triggers and the source's and the listener's own. Each adds its
+        // Audio Occluder amount (1 without one).
+        float total = 0.0f;
         for (const RaycastHit& hit : Physics3DWorld::RaycastAll(scene, listener, d, len))
-            if (!IsTriggerCollider(reg, hit.Hit) && !related(hit.Hit, source) && !related(hit.Hit, listenerEntity)) return true;
-        return false;
+            if (!IsTriggerCollider(reg, hit.Hit) && !related(hit.Hit, source) && !related(hit.Hit, listenerEntity))
+            {
+                auto* occluder = reg.TryGet<AudioOccluderComponent>(hit.Hit);
+                total += occluder ? std::max(occluder->Occlusion, 0.0f) : 1.0f;
+            }
+        return std::min(total, 1.0f);
     }
 
     void AudioWorld::Update(float dt)
@@ -712,7 +723,7 @@ namespace Dimension
             for (auto [e, src, t] : reg.ViewOf<AudioSourceComponent, TransformComponent>())
             {
                 if (!src.Occlusion || !src.Spatial || !t.ActiveInHierarchy) { src.OcclusionAmount = 0.0f; continue; }
-                float target = IsOccluded(m_Scene, listener, cam, e) ? 1.0f : 0.0f;
+                float target = Occlusion(m_Scene, listener, cam, e);
                 src.OcclusionAmount += std::clamp(target - src.OcclusionAmount, -step, step);
             }
         }

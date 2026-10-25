@@ -260,6 +260,13 @@ namespace Editor
                     if (ImGui::BeginPopupContextItem("ItemContext"))
                     {
                         if (ImGui::MenuItem("Rename")) { m_Renaming = path; m_RenameBuffer = path.filename().string(); m_RenameFocus = true; }
+                        if (path.extension() == ".prefab" && ImGui::MenuItem("Create Prefab Variant"))
+                        {
+                            // A prefab that starts identical to this one and keeps only what it changes.
+                            AssetHandle base = AssetManager::GetHandle(path);
+                            AssetHandle variant = Prefabs::CreateVariant(base, UniquePath(path.parent_path() / (path.stem().string() + " Variant.prefab")));
+                            if (variant.IsValid()) m_Ctx.SelectedAsset = variant;
+                        }
                         if (ImGui::MenuItem("Show in Explorer")) FileDialogs::RevealInExplorer(path);
                         if (ImGui::MenuItem("Delete")) toDelete = path;
                         ImGui::EndPopup();

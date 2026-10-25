@@ -99,6 +99,12 @@ namespace Dimension
         public void AddImpulse(Vector2 impulse) => Native.Api.ApplyImpulse2D(Entity.Scene, Entity.Id, (float*)&impulse);
     }
 
+    /// <summary>3D colliders, for HasComponent/AddComponent and [RequireComponent] (their settings are edited in the Inspector).</summary>
+    public class BoxCollider : Component { internal override string NativeName => "Box Collider"; }
+    public class SphereCollider : Component { internal override string NativeName => "Sphere Collider"; }
+    public class CapsuleCollider : Component { internal override string NativeName => "Capsule Collider"; }
+    public class MeshCollider : Component { internal override string NativeName => "Mesh Collider"; }
+
     public unsafe class Rigidbody : Component
     {
         internal override string NativeName => "Rigidbody";

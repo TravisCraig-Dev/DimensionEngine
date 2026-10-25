@@ -84,6 +84,11 @@ namespace Dimension
         // plane); other lengths use cyclic coordinate descent. `weight` blends from the input pose. Returns false when
         // there is nothing to solve.
         bool SolveIK(const Skeleton& skeleton, Pose& pose, int tip, int chainLength, const glm::vec3& target, const glm::vec3* hint, float weight);
+        // Look-at: turns `joint` so its `aimAxis` (in the joint's own space, e.g. +Z for a head) points at `target`
+        // (model space), shared over `chainLength` joints (the joint and its ancestors, e.g. neck and spine; each takes an
+        // even part of the turn). The turn is limited to `maxAngle` degrees. Returns false when there is nothing to do.
+        bool SolveLookAt(const Skeleton& skeleton, Pose& pose, int joint, const glm::vec3& aimAxis, int chainLength, const glm::vec3& target,
+                         float maxAngle, float weight);
         const AnimationClip* FindClip(const std::vector<AnimationClip>& clips, const std::string& name);
 
         // Animator layers. A mask gives each joint a weight: 1 for the listed joints and all their descendants,

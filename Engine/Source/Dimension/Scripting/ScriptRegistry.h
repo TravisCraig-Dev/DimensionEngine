@@ -14,6 +14,8 @@ namespace Dimension
         std::function<void*(ScriptableEntity*)> ToObject; // base -> most-derived pointer for field access
         std::vector<FieldInfo> Fields;
         std::string Module = "native"; // "native" (C++ game module) or "csharp"
+        std::string Menu;                  // Add Component menu path ("Category/Name"); empty = the Scripts section
+        std::vector<std::string> Requires; // components (registry names) added with the script in the editor
     };
 
     // Registry of native script classes, filled by game code at startup.

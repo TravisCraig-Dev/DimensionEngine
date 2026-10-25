@@ -53,6 +53,10 @@ namespace Dimension
 
         const Glyph& GetGlyph(uint32_t codepoint) const;
         const Ref<Texture2D>& GetAtlas() const { return m_Atlas; }
+        // Bindless index of the atlas with kDistanceFieldBit set: the UI and sprite shaders read its alpha as a signed
+        // distance (0.5 on the outline) instead of coverage.
+        static constexpr uint32_t kDistanceFieldBit = 0x80000000u;
+        uint32_t GetAtlasIndex() const;
         float GetAscent() const { return m_Ascent; }   // pixels at bake size
         float GetDescent() const { return m_Descent; } // negative
         float GetLineHeight() const { return m_Ascent - m_Descent + m_LineGap; }

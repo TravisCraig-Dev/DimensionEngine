@@ -67,6 +67,25 @@ namespace Dimension
     // View-projection for a spot light shadow covering its outer cone.
     glm::mat4 SpotShadowViewProj(const glm::vec3& position, const glm::vec3& direction, float spotAngleDegrees, float nearPlane, float farPlane);
 
+    // Clustered lighting: the view is split into a grid of tiles (in normalized device coordinates) times depth slices
+    // (logarithmic, linear for orthographic views); every cluster lists the point and spot lights whose range sphere
+    // reaches it, so a pixel only shades the lights near it.
+    struct LightClusters
+    {
+        static constexpr int kTilesX = 16, kTilesY = 9, kSlices = 24, kCount = kTilesX * kTilesY * kSlices;
+        static constexpr uint32_t kMaxLights = 1024, kMaxPerCluster = 256;
+        std::vector<glm::uvec2> Cells; // per cluster: offset into Indices, light count
+        std::vector<uint32_t> Indices;
+        float Near = 0.1f, Far = 100.0f;
+        bool Orthographic = false;
+
+        static int CellIndex(int x, int y, int slice) { return (slice * kTilesY + y) * kTilesX + x; }
+        int SliceOf(float viewDepth) const;
+        // Lights as (world position, range) spheres; near/far come from the projection. Without culling every cluster
+        // lists every light (for comparisons).
+        void Build(const std::vector<glm::vec4>& spheres, const glm::mat4& view, const glm::mat4& projection, bool cull = true);
+    };
+
     struct RenderStats
     {
         uint32_t DrawCalls = 0;
@@ -77,6 +96,8 @@ namespace Dimension
         uint32_t ShadowCasters = 0;
         uint32_t InstancedMeshes = 0; // meshes drawn as part of an instanced draw (main pass)
         uint32_t RenderListItems = 0; // mesh renderers resolved this frame (once, shared by all passes)
+        uint32_t Lights = 0;          // point and spot lights in view's clusters
+        uint32_t ClusterLightRefs = 0; // light entries over all clusters
         float CpuMs = 0.0f;           // CPU time spent recording this view
         float ListMs = 0.0f;          // part of CpuMs: building the render list
     };
@@ -118,6 +139,7 @@ namespace Dimension
         // GPU instancing: identical opaque meshes (same mesh, sub-mesh, material and pipeline) are drawn with one
         // instanced call. On by default; turning it off is useful for comparisons.
         static void SetInstancingEnabled(bool enabled);
+        static void SetLightClusteringEnabled(bool enabled); // false: every light in every cluster (comparisons)
         static bool IsInstancingEnabled();
         // Re-captures every reflection probe on the next frame (all renderers).
         static void RequestProbeBake();
@@ -172,6 +194,8 @@ namespace Dimension
             uint32_t EntityId;
             uint32_t Probe = 0;        // reflection probe slot + 1
             VkDeviceAddress Skin = 0, Joints = 0;
+            VkBuffer Vertices = VK_NULL_HANDLE; // this frame's vertices instead of the mesh's (simulated cloth)
+            VkDeviceSize VertexOffset = 0;
             bool AlwaysVisible;        // skinned: animated bounds are unknown
             bool CastShadows;          // the renderer's flag
             uint32_t FirstPart, PartCount;
@@ -180,6 +204,7 @@ namespace Dimension
         std::vector<RenderPart> m_RenderParts;
         std::vector<uint8_t> m_BatchInstanceable;       // per batch: false for skinned parts (one draw each)
         std::vector<uint32_t> m_BatchStart, m_BatchFill; // per-pass scratch for the counting sort
+        LightClusters m_Clusters; // this view's light clusters (rebuilt every Render)
         std::vector<uint32_t> m_VisibleParts, m_SortedParts;
         void BuildRenderList(Scene& scene);
 

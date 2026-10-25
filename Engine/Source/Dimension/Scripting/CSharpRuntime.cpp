@@ -123,6 +123,7 @@ namespace Dimension
             void (*DestroyInstance)(intptr_t);
             void (*InvokeString)(intptr_t, int, const char*);
             void (*RaiseEvent)(void*, uint64_t, int, float, uint64_t, const char*);
+            const char* (*GetFields)(intptr_t); // JSON array of the field values (entities as packed ids)
         };
 
         bool s_Available = false;
@@ -179,7 +180,35 @@ namespace Dimension
 
             void* Storage() { return m_Storage; }
 
-            void OnCreate() override
+            void OnCreate() override { CreateManaged(0); }
+            void OnScriptsReloaded() override { CreateManaged(7); }
+
+            // Live values of the managed object's fields into the native slots (for saving across a reload).
+            void OnBeforeSerialize() override
+            {
+                if (!m_Handle || !s_Managed.GetFields) return;
+                const char* text = s_Managed.GetFields(m_Handle);
+                if (!text) return;
+                try
+                {
+                    auto values = nlohmann::json::parse(text);
+                    for (size_t i = 0; i < m_Class->Slots.size() && i < values.size(); ++i)
+                    {
+                        if (m_Class->Slots[i] == Slot::Entity)
+                            *static_cast<Entity*>(Slot_(i)) = values[i].is_number_unsigned() ? Unpack(values[i].get<uint64_t>()) : Entity::Null();
+                        else
+                            FieldFromJson(m_Class->Fields[i], m_Storage, values[i], nullptr);
+                    }
+                }
+                catch (const std::exception& e)
+                {
+                    Log::Error("Reading C# fields of {} failed: {}", m_Class->Name, e.what());
+                }
+            }
+
+            // Creates the managed object, pushes the native field values to it and calls `method` (0 OnCreate,
+            // 7 OnReloaded).
+            void CreateManaged(int method)
             {
                 m_Handle = s_Managed.CreateInstance(m_Class->Name.c_str(), &GetScene(), Pack(Self()));
                 if (!m_Handle) return;
@@ -197,7 +226,7 @@ namespace Dimension
                     default: s_Managed.SetField(m_Handle, (int)i, Slot_(i)); break;
                     }
                 }
-                s_Managed.Invoke(m_Handle, 0, 0.0f);
+                s_Managed.Invoke(m_Handle, method, 0.0f);
             }
             void OnUpdate(float dt) override { s_DeltaTime = dt; if (m_Handle) s_Managed.Invoke(m_Handle, 1, dt); }
             void OnFixedUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 2, dt); }
@@ -239,6 +268,16 @@ namespace Dimension
                               : slot == Slot::String ? FieldType::String : slot == Slot::Vec2 ? FieldType::Vec2 : slot == Slot::Vec3 ? FieldType::Vec3
                               : slot == Slot::Vec4 ? FieldType::Vec4 : slot == Slot::Color4 ? FieldType::Color4 : FieldType::EntityRef;
                     info.Speed = slot == Slot::Int ? 1.0f : 0.05f;
+                    // Inspector attributes: [Range], [Tooltip], [Header], [HideInInspector].
+                    if (f.contains("min") && f.contains("max"))
+                    {
+                        info.Min = f["min"].get<float>();
+                        info.Max = f["max"].get<float>();
+                        if (slot == Slot::Float && info.Max > info.Min) info.Speed = (info.Max - info.Min) / 200.0f;
+                    }
+                    info.Tooltip = f.value("tooltip", std::string());
+                    info.Header = f.value("header", std::string());
+                    info.Hidden = f.value("hidden", false);
                     size_t offset = cls.Slots.size() * kSlotSize;
                     info.Access = [offset](void* storage) -> void* { return static_cast<uint8_t*>(storage) + offset; };
                     cls.Slots.push_back(slot);
@@ -251,6 +290,9 @@ namespace Dimension
                 info.Create = [ptr] { return std::make_shared<ManagedScript>(ptr); };
                 info.ToObject = [](ScriptableEntity* base) -> void* { return static_cast<ManagedScript*>(base)->Storage(); };
                 info.Fields = cls.Fields;
+                info.Menu = j.value("menu", std::string());
+                for (auto& r : j.value("requires", nlohmann::json::array()))
+                    if (r.is_string()) info.Requires.push_back(r.get<std::string>());
             }
             catch (const std::exception& e)
             {

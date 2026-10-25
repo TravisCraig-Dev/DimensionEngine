@@ -18,6 +18,7 @@
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
 #include <Dimension/UI/UI.h>
+#include <Dimension/Asset/ImportCache.h>
 #include <thread>
 #include <cstdio>
 #include <imgui.h>
@@ -125,6 +126,8 @@ namespace Editor
         else if (m_Options.OpenWindow == "Tile Palette") m_ShowTilePalette = true;
 
         LoadGameModule();
+        // Imports of files that changed or are gone (their new import gets a new entry).
+        if (size_t stale = ImportCache::ClearUnused(Project::GetAssetsDirectory())) Log::Info("Removed {} stale import cache entries", stale);
         InitCSharp();
         m_SceneTarget = MakeScope<SceneRenderTarget>(m_SceneViewSize.x, m_SceneViewSize.y);
         m_GameTarget = MakeScope<SceneRenderTarget>(m_GameViewSize.x, m_GameViewSize.y);
@@ -949,7 +952,6 @@ namespace Editor
             if (m_Ctx.InPrefabMode()) label = "Prefab Mode: " + label;
             if (m_BuildState && m_BuildState->load() == 1) label = "Compiling scripts...   " + label;
             else if (m_CSharpBuild && m_CSharpBuild->load() == 1) label = "Compiling C#...   " + label;
-            else if (m_CSharpReloadPending) label = "C# changed: reload after Stop   " + label;
             else if (m_ReloadPending) label = "Scripts changed: reload after Stop   " + label;
             float tw = ImGui::CalcTextSize(label.c_str()).x;
             ImGui::SameLine(ImGui::GetWindowWidth() - tw - 16);
@@ -1344,6 +1346,9 @@ namespace Editor
         ImGui::Text("Scene view: %u draw calls, %u triangles", st.DrawCalls, st.Triangles);
         ImGui::Text("Meshes: %u   Sprites: %u   Culled: %u", st.Meshes, st.Sprites, st.Culled);
         ImGui::Text("Shadow casters: %u   Instanced meshes: %u", st.ShadowCasters, st.InstancedMeshes);
+        ImGui::Text("Point/spot lights: %u   in clusters: %u", st.Lights, st.ClusterLightRefs);
+        ImGui::SameLine();
+        UI::HelpMarker("Lights are sorted into 16 x 9 x 24 view clusters; each pixel shades only its cluster's lights (up to 1024 lights).");
         bool instancing = SceneRenderer::IsInstancingEnabled();
         if (ImGui::Checkbox("GPU Instancing", &instancing)) SceneRenderer::SetInstancingEnabled(instancing);
         ImGui::SameLine();
@@ -2157,9 +2162,17 @@ namespace Editor
         }
         else
             fs::copy(Project::GetAssetsDirectory(), projectOut / "Assets", fs::copy_options::recursive, ec);
-        // Convex decompositions already computed (Mesh Colliders), so the game does not redo them.
-        if (fs::path hulls = Project::GetDirectory() / ".dimension" / "Cache" / "Convex"; fs::exists(hulls))
-            fs::copy(hulls, projectOut / ".dimension" / "Cache" / "Convex", fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+        // Work already done in the editor: convex decompositions (Mesh Colliders) and imported textures and models
+        // (keyed by their path in Assets, so the game reads them instead of decoding the source files again).
+        for (const char* cache : { "Convex", "Import" })
+            if (fs::path from = Project::GetDirectory() / ".dimension" / "Cache" / cache; fs::exists(from))
+            {
+                std::error_code ce;
+                fs::path to = projectOut / ".dimension" / "Cache" / cache;
+                fs::create_directories(to, ce);
+                fs::copy(from, to, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ce);
+                if (ce) Log::Warn("Could not copy the {} cache: {} (the game rebuilds it)", cache, ce.message());
+            }
         fs::path scripts = CSharpProject::AssemblyPath(Project::GetDirectory());
         if (fs::exists(scripts))
         {
@@ -2349,11 +2362,16 @@ namespace Editor
                 m_CSharpReloadPending = true; // new assembly is on disk
             }
         }
-        if (m_CSharpReloadPending && !m_Ctx.IsPlaying())
+        if (m_CSharpReloadPending)
         {
             m_CSharpReloadPending = false;
-            // Edit-time scenes never hold C# instances, so the assembly can be swapped directly.
-            CSharpRuntime::LoadScripts(CSharpProject::AssemblyPath(project));
+            fs::path dll = CSharpProject::AssemblyPath(project);
+            // Edit-time scenes never hold C# instances, so the assembly can be swapped directly. While playing, the
+            // live scripts keep their serialized fields across the swap (and get OnReloaded instead of OnCreate).
+            if (m_Ctx.IsPlaying() && m_Ctx.RuntimeScene)
+                m_Ctx.RuntimeScene->ReloadScriptModule("csharp", [&] { return CSharpRuntime::LoadScripts(dll); });
+            else
+                CSharpRuntime::LoadScripts(dll);
         }
 
         // Rebuild automatically when sources change (debounced).

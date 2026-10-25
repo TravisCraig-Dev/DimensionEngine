@@ -2,6 +2,7 @@
 // Usage: DimensionPlayer [projectDir] [--scene path] [--frames N] [--screenshot file]
 //        [--move x,y,frame] [--click x,y,frame]   simulated pointer for automated checks (framebuffer pixels)
 //        [--no-instancing] [--no-vsync]           draw every mesh separately / uncapped frame rate (for comparisons)
+//        [--no-clusters]                          shade every light at every pixel (for comparisons)
 // A built game ships as DimensionPlayer.exe next to a "Project" folder.
 #include <Dimension/Dimension.h>
 #include <Dimension/Project/Project.h>
@@ -165,6 +166,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
         else if (!std::strcmp(argv[i], "--no-instancing")) SceneRenderer::SetInstancingEnabled(false);
+        else if (!std::strcmp(argv[i], "--no-clusters")) SceneRenderer::SetLightClusteringEnabled(false);
         else if (!std::strcmp(argv[i], "--no-vsync")) noVSync = true;
         else if ((!std::strcmp(argv[i], "--click") || !std::strcmp(argv[i], "--move")) && i + 1 < argc)
         {

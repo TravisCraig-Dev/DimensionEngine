@@ -201,6 +201,38 @@ namespace Dimension
             }
         }
 
+        bool SolveLookAt(const Skeleton& skeleton, Pose& pose, int joint, const glm::vec3& aimAxis, int chainLength, const glm::vec3& target,
+                         float maxAngle, float weight)
+        {
+            if (weight <= 0.0f || joint < 0 || joint >= (int)skeleton.Joints.size() || pose.Rotations.size() != skeleton.Joints.size()) return false;
+            if (glm::dot(aimAxis, aimAxis) < 1e-10f) return false;
+            std::vector<int> chain; // the joint and its ancestors, nearest first
+            for (int j = joint; j >= 0 && (int)chain.size() < std::max(chainLength, 1); j = skeleton.Joints[j].Parent) chain.push_back(j);
+            std::vector<glm::quat> original(pose.Rotations);
+            std::vector<glm::mat4> g;
+            // Each joint from the top of the chain down takes its share of the turn still needed, re-measured after the
+            // joints above it moved (which also moves the tip). The aim stays within `maxAngle` of the animated aim.
+            JointGlobals(skeleton, pose, g);
+            auto aimOf = [&] { return SafeNormalize(glm::mat3(g[joint]) * aimAxis, { 0, 0, 1 }); };
+            const glm::vec3 animated = aimOf();
+            const float limit = glm::radians(std::clamp(maxAngle, 0.0f, 180.0f));
+            for (int k = (int)chain.size() - 1; k >= 0; --k)
+            {
+                JointGlobals(skeleton, pose, g);
+                glm::vec3 from = aimOf(), to = SafeNormalize(target - glm::vec3(g[joint][3]), from);
+                if (float angle = SafeAcos(glm::dot(animated, to)); angle > limit)
+                {
+                    glm::vec3 axis = glm::cross(animated, to);
+                    if (glm::dot(axis, axis) < 1e-12f) return false;
+                    to = glm::angleAxis(limit, glm::normalize(axis)) * animated;
+                }
+                RotateGlobal(skeleton, pose, g, chain[k], glm::slerp(glm::quat(1, 0, 0, 0), glm::rotation(from, to), 1.0f / (float)(k + 1)));
+            }
+            if (weight < 1.0f)
+                for (int j : chain) pose.Rotations[j] = glm::slerp(original[j], pose.Rotations[j], weight);
+            return true;
+        }
+
         bool SolveIK(const Skeleton& skeleton, Pose& pose, int tip, int chainLength, const glm::vec3& target, const glm::vec3* hint, float weight)
         {
             if (weight <= 0.0f || tip < 0 || tip >= (int)skeleton.Joints.size() || pose.Rotations.size() != skeleton.Joints.size()) return false;

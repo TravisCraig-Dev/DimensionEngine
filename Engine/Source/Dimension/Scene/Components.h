@@ -262,12 +262,19 @@ namespace Dimension
     // object: after the Animator samples its pose, the Tip joint of the Animator's skeleton is pulled to this object's
     // position by turning the Chain Length joints above it. Move the target (in the editor or from scripts) to aim a
     // hand, plant a foot or point a tentacle.
+    // Reach pulls the Tip joint to the target; Look At turns the Tip joint (shared over its chain) to aim at it.
+    enum class IKMode : int32_t { Reach = 0, LookAt = 1 };
+
     struct IKTargetComponent
     {
         Entity Animator = Entity::Null(); // object with the Animator; null = the nearest ancestor that has one
-        std::string Tip;                  // joint that reaches the target
-        int ChainLength = 2;              // joints above the tip that turn (2 = analytic two-bone, others iterate)
+        IKMode Mode = IKMode::Reach;
+        std::string Tip;                  // joint that reaches (or aims at) the target
+        int ChainLength = 2;              // Reach: joints above the tip that turn (2 = analytic two-bone, others iterate);
+                                          // Look At: joints sharing the turn, the tip included (1 = the tip alone)
         Entity Hint = Entity::Null();     // optional pole: a two-bone chain bends toward it (an elbow or knee target)
+        glm::vec3 AimAxis{ 0.0f, 0.0f, 1.0f }; // Look At: the tip joint's own axis that points at the target
+        float MaxAngle = 90.0f;           // Look At: largest turn from the animated pose (degrees)
         float Weight = 1.0f;
         int Layer = -1;                   // applied after this Animator layer (0 = base); -1 = after all layers
     };
@@ -500,6 +507,13 @@ namespace Dimension
         std::shared_ptr<void> Runtime; // ma_sound (and its occlusion filter), runtime only
     };
 
+    // How much a collider blocks sound for occluding Audio Sources (thin glass 0.3, a curtain 0.15, a wall 1).
+    // Several along the line add up; colliders without this component count 1.
+    struct AudioOccluderComponent
+    {
+        float Occlusion = 0.5f;
+    };
+
     // ---- Scripting -----------------------------------------------------------
 
     // One script attached to an entity.
@@ -583,13 +597,42 @@ namespace Dimension
         uint32_t RuntimeBody = 0xFFFFFFFF; // JPH::BodyID, runtime only
     };
 
+    enum class ClothPin : int32_t { TopEdge = 0, TopCorners = 1, None = 2 };
+
+    // A sheet of cloth (flags, curtains, banners) simulated as a Jolt soft body while playing. Needs a Mesh Renderer for
+    // its material (the mesh itself is the cloth's grid: Size in the object's XY plane, top edge at +Y). Pinned vertices
+    // follow the object, so moving it drags the cloth; the rest hang, collide with 3D colliders and blow in the Wind.
+    struct ClothComponent
+    {
+        glm::vec2 Size{ 2.0f, 2.0f };
+        int32_t Resolution = 24;      // quads per side
+        ClothPin Pin = ClothPin::TopEdge;
+        float Mass = 1.0f;            // total, kg
+        float StretchCompliance = 0.0001f; // edge springs: 0 = no stretch, larger = stretchier
+        float BendCompliance = 0.05f;      // bending: larger = floppier
+        float Damping = 0.2f;
+        float Friction = 0.5f;
+        int32_t Iterations = 8;       // solver iterations per step (more = stiffer)
+        float Thickness = 0.02f;      // collision radius of the vertices
+        glm::vec3 Wind{ 0.0f };       // world-space acceleration on the free vertices (m/s^2)
+
+        // Runtime: the simulated grid in the object's space (empty = the flat rest shape).
+        std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
+    };
+
     enum class VehicleDrive : int32_t { RearWheel = 0, FrontWheel = 1, AllWheel = 2 };
+    // Car: four wheels. Motorcycle: two on the center line that lean into turns. Tank: tracks (Track Wheels per side)
+    // steered by driving the sides at different speeds, turning on the spot when standing.
+    enum class VehicleType : int32_t { Car = 0, Motorcycle = 1, Tank = 2 };
 
     // A four-wheeled car on Jolt's wheeled vehicle (engine, automatic gearbox, differentials, raycast-free cylinder
     // wheel contacts), like Unity's WheelColliders on a car body. Needs a dynamic Rigidbody and a collider for the body
     // on the same object; the car faces -Z (forward). Scripts drive it through Throttle, Steering, Brake and Hand Brake.
     struct VehicleComponent
     {
+        VehicleType Type = VehicleType::Car;
+        int32_t TrackWheels = 5;     // tanks: road wheels per track
+        glm::vec3 CenterOfMassOffset{ 0.0f, -0.3f, 0.0f }; // from the collider's center (lower = harder to tip over)
         float WheelBase = 2.6f;      // distance between the front and rear axles
         float TrackWidth = 1.6f;     // distance between the left and right wheels
         float WheelHeight = -0.1f;   // height of the suspension mounts (body space)

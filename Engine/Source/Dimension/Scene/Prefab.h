@@ -17,6 +17,14 @@ namespace Dimension
         // Saves `root` (with children) as a prefab file and links the entities to it.
         AssetHandle CreateFromEntity(Scene& scene, Entity root, const fs::path& path);
 
+        // Prefab variants (like Unity's): a prefab that stores only its differences from a base prefab (changed fields,
+        // added or removed components and objects). It reads as the base plus those changes, so edits to the base reach
+        // the variant and its instances wherever the variant does not override them; saving a variant (Prefab Mode,
+        // Apply) writes just the differences. Variants of variants work too.
+        AssetHandle CreateVariant(AssetHandle base, const fs::path& path);
+        AssetHandle GetVariantBase(AssetHandle prefab); // None for a plain prefab
+        bool IsVariantOf(AssetHandle prefab, AssetHandle base); // directly or through other variants
+
         Entity FindInstanceRoot(Scene& scene, Entity e);
         bool IsInstanceOwned(bool isRoot, const std::string& component, const std::string& field);
 

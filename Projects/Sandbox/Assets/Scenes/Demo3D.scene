@@ -1417,7 +1417,7 @@
         "Script": {
           "Class": "SpawnOnClick",
           "Fields": {
-            "Prefab": 100008,
+            "Prefab": 100055,
             "Spawn Position": [
               0,
               7,
@@ -5764,6 +5764,119 @@
               },
               "Enabled": true
             }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 750005,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Flag Pole",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -6.2,
+            1.75,
+            4.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.08,
+            1.75,
+            0.08
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 5,
+          "Albedo": 0,
+          "Color": [
+            0.8,
+            0.8,
+            0.82,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 750006,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Flag (Cloth)",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -6.95,
+            3.0,
+            4.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            -1.5707963267948966
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Material": 100025,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Cloth": {
+          "Size": [
+            0.9,
+            1.5
+          ],
+          "Resolution": 20,
+          "Pin": 0,
+          "Mass": 0.4,
+          "Stretch Compliance": 0.0001,
+          "Bend Compliance": 0.2,
+          "Damping": 0.3,
+          "Friction": 0.5,
+          "Iterations": 8,
+          "Thickness": 0.02,
+          "Wind": [
+            -7.0,
+            0.5,
+            1.5
           ]
         }
       }

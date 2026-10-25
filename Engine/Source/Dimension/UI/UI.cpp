@@ -334,7 +334,7 @@ namespace Dimension::UI
             glm::vec2 block;
             auto quads = font.Layout(text, pixelSize, 0.0f, TextAlign::Left, 0.0f, block);
             glm::vec2 o = origin + glm::vec2(0.0f, (boxHeight - block.y) * 0.5f);
-            uint32_t atlas = font.GetAtlas()->GetBindlessIndex();
+            uint32_t atlas = font.GetAtlasIndex();
             for (auto& q : quads) Emit(out, o + q.Min, o + q.Max, q.UVMin, q.UVMax, color, atlas, clip);
             return block.x;
         }
@@ -1301,7 +1301,7 @@ namespace Dimension::UI
                         : text->VerticalAlign == TextVAlign::Middle   ? (size.y - block.y) * 0.5f
                                                                       : size.y - block.y;
                 glm::vec2 origin = mn + glm::vec2(0.0f, y);
-                EmitTextQuads(out, quads, origin, text->Color, font->GetAtlas()->GetBindlessIndex(), white, rect);
+                EmitTextQuads(out, quads, origin, text->Color, font->GetAtlasIndex(), white, rect);
             }
         }
 

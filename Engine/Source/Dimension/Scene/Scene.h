@@ -159,6 +159,11 @@ namespace Dimension
         using EventHook = void (*)(Scene& scene, Entity e, EventKind kind, float value, Entity other, const char* text);
         static void SetEventHook(EventHook hook);
 
+        // Reloads a script module while playing (C# hot reload): saves the live fields of that module's scripts,
+        // destroys them (without OnDestroy), runs `reload`, then recreates them with the saved values and calls
+        // OnScriptsReloaded instead of OnCreate. Scripts whose class is gone stay inactive. Returns reload's result.
+        bool ReloadScriptModule(const std::string& module, const std::function<bool()>& reload);
+
         static constexpr float kFixedTimestep = 1.0f / 60.0f;
 
     private:
@@ -170,6 +175,7 @@ namespace Dimension
         void UpdateTransformRecursive(Entity e, const glm::mat4& parentWorld, bool parentActive);
         void DetachFromParent(Entity e);
         void InstantiateScripts();
+        std::shared_ptr<ScriptableEntity> CreateScriptInstance(Entity e, ScriptInstance& script, const struct ScriptInfo& info, const struct EntityRefResolver& resolver);
         void FlushDeferredDestroys();
         std::vector<Entity>& SiblingList(Entity e);
 

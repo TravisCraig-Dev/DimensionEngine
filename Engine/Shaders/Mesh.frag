@@ -3,6 +3,11 @@
 #include "Common.glsl"
 #include "MeshCommon.glsl"
 
+// Clustered point and spot lights (see LightClusters).
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightListRef { PointLight Lights[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer ClusterCellsRef { uvec2 Cells[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer ClusterIndexRef { uint Indices[]; };
+
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vUV;
@@ -153,31 +158,47 @@ void main()
         color += DirectLight(N, V, normalize(-uScene.LightDirection.xyz), uScene.LightColor.rgb, albedo, metallic, roughness) *
                  DirectionalShadow(vWorldPos, normalize(vNormal));
 
-    for (int i = 0; i < uScene.Counts.x; ++i)
+    // The point and spot lights of this pixel's cluster.
+    uvec2 cell = uvec2(0u);
+    if (uScene.Counts.x > 0)
     {
-        vec3 toLight = uScene.PointLights[i].PositionRange.xyz - vWorldPos;
+        vec4 clip = uScene.ViewProj * vec4(vWorldPos, 1.0);
+        vec2 ndc = clip.xy / clip.w;
+        ivec2 tile = clamp(ivec2((ndc * 0.5 + 0.5) * vec2(CLUSTER_TILES_X, CLUSTER_TILES_Y)), ivec2(0), ivec2(CLUSTER_TILES_X - 1, CLUSTER_TILES_Y - 1));
+        float depth = -(uScene.View * vec4(vWorldPos, 1.0)).z;
+        float n = uScene.ClusterParams.x, f = uScene.ClusterParams.y;
+        float s = uScene.ClusterParams.z > 0.5 ? (depth - n) / (f - n) : log(max(depth, n) / n) / uScene.ClusterParams.w;
+        int slice = clamp(int(s * float(CLUSTER_SLICES)), 0, CLUSTER_SLICES - 1);
+        cell = ClusterCellsRef(uScene.LightBuffers.zw).Cells[(slice * CLUSTER_TILES_Y + tile.y) * CLUSTER_TILES_X + tile.x];
+    }
+    LightListRef lights = LightListRef(uScene.LightBuffers.xy);
+    ClusterIndexRef lightIndices = ClusterIndexRef(uScene.LightIndexBuffer.xy);
+    for (uint k = 0u; k < cell.y; ++k)
+    {
+        PointLight light = lights.Lights[lightIndices.Indices[cell.x + k]];
+        vec3 toLight = light.PositionRange.xyz - vWorldPos;
         float dist = length(toLight);
-        float range = uScene.PointLights[i].PositionRange.w;
+        float range = light.PositionRange.w;
         float falloff = clamp(1.0 - pow(dist / range, 4.0), 0.0, 1.0);
         float attenuation = falloff * falloff / (dist * dist + 1.0);
-        vec4 spot = uScene.PointLights[i].Direction;
-        vec3 lightColor = uScene.PointLights[i].Color.rgb;
+        vec4 spot = light.Direction;
+        vec3 lightColor = light.Color.rgb;
         if (spot.w > -1.5) // spot light cone
         {
-            attenuation *= smoothstep(spot.w, uScene.PointLights[i].Cone.x, dot(-toLight / max(dist, 1e-4), spot.xyz));
-            uint cookie = uint(uScene.PointLights[i].Cone.y + 0.5);
+            attenuation *= smoothstep(spot.w, light.Cone.x, dot(-toLight / max(dist, 1e-4), spot.xyz));
+            uint cookie = uint(light.Cone.y + 0.5);
             if (cookie > 0u && attenuation > 0.0)
             {
-                vec2 cuv = SpotCookieUV(spot.xyz, spot.w, uScene.PointLights[i].Cone.z, -toLight);
+                vec2 cuv = SpotCookieUV(spot.xyz, spot.w, light.Cone.z, -toLight);
                 lightColor *= textureLod(uTextures[nonuniformEXT(cookie - 1u)], cuv, 0.0).rgb;
             }
         }
         else if (spot.x > 0.5 && attenuation > 0.0) // point light cookie
-            lightColor *= SampleEquirect(uint(spot.x + 0.5) - 1u, PointCookieUV(uScene.PointLights[i].Cone, -toLight), 0.0);
+            lightColor *= SampleEquirect(uint(spot.x + 0.5) - 1u, PointCookieUV(light.Cone, -toLight), 0.0);
         if (attenuation <= 0.0) continue;
-        uint shadowSlot = uint(uScene.PointLights[i].Color.w + 0.5);
+        uint shadowSlot = uint(light.Color.w + 0.5);
         if (shadowSlot > 0u)
-            attenuation *= PointShadow(shadowSlot - 1u, uScene.PointLights[i].PositionRange.xyz, spot, vWorldPos, normalize(vNormal));
+            attenuation *= PointShadow(shadowSlot - 1u, light.PositionRange.xyz, spot, vWorldPos, normalize(vNormal));
         color += DirectLight(N, V, toLight / max(dist, 1e-4), lightColor * attenuation, albedo, metallic, roughness);
     }
     color += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;

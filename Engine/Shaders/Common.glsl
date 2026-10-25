@@ -12,7 +12,9 @@ struct PointLight
                          // point: world-to-light rotation (quaternion xyzw) for the cookie
 };
 
-#define MAX_POINT_LIGHTS 32
+#define CLUSTER_TILES_X 16 // must match LightClusters in SceneRenderer.h
+#define CLUSTER_TILES_Y 9
+#define CLUSTER_SLICES 24
 #define MAX_POINT_SHADOWS 4
 #define MAX_REFLECTION_PROBES 8
 
@@ -54,8 +56,10 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 CascadeDepth;   // world depth covered by each cascade's [0,1] depth range
     vec4 SoftShadowParams; // x 1 = PCSS soft shadows, y tan(light angular radius), z max filter radius (tile texels)
     vec4 SkyFilter;      // x GGX-prefiltered sky texture index (0 = none), y its mip count - 1
+    uvec4 LightBuffers;  // xy: PointLight array, zw: cluster cells (uvec2 offset, count) (buffer addresses)
+    uvec4 LightIndexBuffer; // xy: cluster light indices (buffer address)
+    vec4 ClusterParams;  // x near, y far, z 1 = orthographic, w log(far / near)
     ReflectionProbe Probes[MAX_REFLECTION_PROBES]; // Counts.y in use
-    PointLight PointLights[MAX_POINT_LIGHTS];
 } uScene;
 
 // Procedural sky gradient, also used as a cheap environment for reflections.

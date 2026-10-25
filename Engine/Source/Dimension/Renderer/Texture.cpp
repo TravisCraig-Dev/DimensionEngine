@@ -93,31 +93,14 @@ namespace Dimension
 
     Ref<Texture2D> Texture2D::LoadFromFile(const fs::path& path, const TextureSettings& settings)
     {
-        int w, h, channels;
-        std::string utf8 = path.string();
-        if (stbi_is_hdr(utf8.c_str()))
+        // Decoding goes through the import cache.
+        auto image = DecodedImage::Decode(path);
+        if (!image)
         {
-            float* hdr = stbi_loadf(utf8.c_str(), &w, &h, &channels, 4);
-            if (!hdr)
-            {
-                Log::Error("Failed to load HDR texture '{}': {}", utf8, stbi_failure_reason());
-                return nullptr;
-            }
-            auto name = path.filename().string();
-            auto texture = MakeRef<Texture2D>(hdr, (uint32_t)w, (uint32_t)h, settings, name.c_str());
-            stbi_image_free(hdr);
-            return texture;
-        }
-        stbi_uc* pixels = stbi_load(utf8.c_str(), &w, &h, &channels, 4);
-        if (!pixels)
-        {
-            Log::Error("Failed to load texture '{}': {}", utf8, stbi_failure_reason());
+            Log::Error("Failed to load texture '{}': {}", path.string(), stbi_failure_reason());
             return nullptr;
         }
-        auto name = path.filename().string();
-        auto texture = MakeRef<Texture2D>(pixels, (uint32_t)w, (uint32_t)h, settings, name.c_str());
-        stbi_image_free(pixels);
-        return texture;
+        return FromDecoded(*image, settings, path.filename().string());
     }
 
     Ref<Texture2D> Texture2D::LoadFromMemory(const void* data, size_t size, const TextureSettings& settings, const std::string& name)

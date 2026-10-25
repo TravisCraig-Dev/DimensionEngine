@@ -17,6 +17,8 @@
 #include <Dimension/Asset/AssetPrefetch.h>
 #include <Dimension/Scene/SceneManager.h>
 #include <Dimension/Physics/ConvexDecomposition.h>
+#include <Dimension/Asset/ImportCache.h>
+#include <Dimension/Physics/Cloth.h>
 #include <set>
 #include <windows.h>
 
@@ -286,6 +288,136 @@ namespace
         runtime->OnRuntimeStop();
     }
 
+    void TestImportCache()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_import_cache";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "Assets", ec);
+        fs::path src = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets";
+        for (const char* f : { "Models/Tentacle.gltf", "Models/Torus.obj", "Textures/ClearSky.hdr", "Textures/Brick.png" })
+        {
+            fs::create_directories((dir / "Assets" / f).parent_path(), ec);
+            fs::copy_file(src / f, dir / "Assets" / f, ec);
+        }
+        CHECK(Project::Open(dir));
+        CHECK(ImportCache::Directory() == dir / ".dimension" / "Cache" / "Import");
+        auto time = [](auto f) { auto t0 = std::chrono::steady_clock::now(); f(); return std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count(); };
+
+        // Meshes: the second load reads the cached import (same data, tangents and all) and is faster.
+        for (const char* f : { "Models/Tentacle.gltf", "Models/Torus.obj" })
+        {
+            MeshData first, second;
+            float cold = time([&] { CHECK(MeshData::LoadFromFile(dir / "Assets" / f, first)); });
+            // The first read of a new cache file can wait on a virus scanner; time the next one.
+            CHECK(MeshData::LoadFromFile(dir / "Assets" / f, second));
+            float warm = time([&] { CHECK(MeshData::LoadFromFile(dir / "Assets" / f, second)); });
+            bool same = first.Vertices.size() == second.Vertices.size() && first.Indices == second.Indices && first.Name == second.Name &&
+                        std::memcmp(first.Vertices.data(), second.Vertices.data(), first.Vertices.size() * sizeof(Vertex)) == 0 &&
+                        first.Clips.size() == second.Clips.size() && first.Materials.size() == second.Materials.size() &&
+                        (first.SkeletonData != nullptr) == (second.SkeletonData != nullptr);
+            if (same && first.SkeletonData)
+                same = first.SkeletonData->Joints.size() == second.SkeletonData->Joints.size() && second.SkeletonData->Order == first.SkeletonData->Order &&
+                       first.Clips[0].Channels.size() == second.Clips[0].Channels.size() && first.Clips[0].Channels[0].Values == second.Clips[0].Channels[0].Values;
+            CHECK(same);
+            std::printf("  %s: import %.1f ms, cached %.1f ms%c", f, cold, warm, 10);
+            CHECK(warm < cold);
+        }
+        // Images, HDR included.
+        auto hdr = DecodedImage::Decode(dir / "Assets/Textures/ClearSky.hdr");
+        auto hdr2 = DecodedImage::Decode(dir / "Assets/Textures/ClearSky.hdr");
+        CHECK(hdr && hdr2 && hdr->IsHdr() && hdr2->Width == hdr->Width && hdr2->Rgba32f == hdr->Rgba32f);
+        auto png = DecodedImage::Decode(dir / "Assets/Textures/Brick.png");
+        CHECK(png && !png->IsHdr() && DecodedImage::Decode(dir / "Assets/Textures/Brick.png")->Rgba8 == png->Rgba8);
+        size_t entries = 0;
+        for (auto& e : fs::directory_iterator(ImportCache::Directory(), ec)) entries += e.is_regular_file();
+        CHECK(entries == 4);
+
+        // An edited file gets a fresh import; ClearUnused drops the stale entry (and nothing live).
+        fs::last_write_time(dir / "Assets/Models/Torus.obj", fs::last_write_time(dir / "Assets/Models/Torus.obj") + std::chrono::seconds(5));
+        MeshData again;
+        CHECK(MeshData::LoadFromFile(dir / "Assets/Models/Torus.obj", again) && !again.Vertices.empty());
+        CHECK(ImportCache::ClearUnused(dir / "Assets") == 1);
+        entries = 0;
+        for (auto& e : fs::directory_iterator(ImportCache::Directory(), ec)) entries += e.is_regular_file();
+        CHECK(entries == 4);
+        // A damaged entry is ignored (and re-imported over).
+        for (auto& e : fs::directory_iterator(ImportCache::Directory(), ec))
+            if (e.path().extension() == ".mesh") fs::resize_file(e.path(), 10, ec);
+        MeshData repaired;
+        CHECK(MeshData::LoadFromFile(dir / "Assets/Models/Tentacle.gltf", repaired) && repaired.SkeletonData != nullptr);
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
+    void TestLightClusters()
+    {
+        // Camera at the origin looking down -Z, 60 degree vertical field of view, 16:9, near 0.1, far 100.
+        glm::mat4 view(1.0f), proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        LightClusters c;
+        std::vector<glm::vec4> lights = {
+            { 0, 0, -10, 1 },     // ahead, small: only central tiles around depth 10
+            { 0, 0, 10, 2 },      // behind the camera: nowhere
+            { 0, 0, -500, 5 },    // past the far plane: nowhere
+            { 0, 0, 0, 3 },       // around the camera: every tile of the near slices
+            { 30, 0, -10, 1 },    // off to the right, outside the view: nowhere (or edge tiles only)
+        };
+        c.Build(lights, view, proj);
+        CHECK(Near(c.Near, 0.1f, 1e-3f) && Near(c.Far, 100.0f, 0.1f) && !c.Orthographic);
+        auto cellsWith = [&](uint32_t light) {
+            std::vector<glm::ivec3> out;
+            for (int s = 0; s < LightClusters::kSlices; ++s)
+                for (int y = 0; y < LightClusters::kTilesY; ++y)
+                    for (int x = 0; x < LightClusters::kTilesX; ++x)
+                    {
+                        glm::uvec2 cell = c.Cells[LightClusters::CellIndex(x, y, s)];
+                        for (uint32_t k = 0; k < cell.y; ++k)
+                            if (c.Indices[cell.x + k] == light) out.push_back({ x, y, s });
+                    }
+            return out;
+        };
+        auto ahead = cellsWith(0);
+        bool central = !ahead.empty();
+        for (auto& cell : ahead)
+            central &= cell.x >= 6 && cell.x <= 9 && cell.y >= 3 && cell.y <= 5 && cell.z >= c.SliceOf(8.9f) && cell.z <= c.SliceOf(11.1f);
+        CHECK(central && ahead.size() < 60);
+        CHECK(cellsWith(1).empty() && cellsWith(2).empty() && cellsWith(4).empty());
+        auto around = cellsWith(3);
+        CHECK(around.size() == (size_t)LightClusters::kTilesX * LightClusters::kTilesY * (c.SliceOf(3.0f) + 1));
+        // Without culling every cluster lists every light (the comparison mode).
+        c.Build(lights, view, proj, false);
+        CHECK(c.Indices.size() == lights.size() * LightClusters::kCount);
+        // Orthographic views slice depth linearly.
+        c.Build(lights, view, glm::ortho(-10.0f, 10.0f, -5.0f, 5.0f, 0.5f, 50.0f));
+        CHECK(c.Orthographic && Near(c.Near, 0.5f, 1e-3f) && Near(c.Far, 50.0f, 1e-2f) && c.SliceOf(27.25f) == 12 && !cellsWith(0).empty());
+    }
+
+    void TestInactiveColliders()
+    {
+        // An inactive object's collider is out of the world (rays pass, bodies fall through) until it is activated.
+        Scene scene("Inactive");
+        auto& reg = scene.GetRegistry();
+        Entity box3 = scene.CreateEntity("Box3D");
+        reg.Emplace<BoxColliderComponent>(box3);
+        Entity box2 = scene.CreateEntity("Box2D");
+        reg.Get<TransformComponent>(box2).Position = { 10, 0, 0 };
+        reg.Emplace<BoxCollider2DComponent>(box2);
+        for (Entity e : { box3, box2 }) reg.Get<TagComponent>(e).Active = false;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto hit3 = [&] { return (bool)Physics3DWorld::Raycast(*rt, { 0, 5, 0 }, { 0, -1, 0 }, 10.0f); };
+        auto hit2 = [&] { return !Physics2DWorld::Raycast(*rt, { 10, 5 }, { 0, -1 }, 10.0f).Hit.IsNull(); };
+        CHECK(!hit3() && !hit2());
+        for (Entity e : { box3, box2 }) rt->GetRegistry().Get<TagComponent>(e).Active = true;
+        rt->OnUpdateRuntime(1.0f / 30.0f);
+        CHECK(hit3() && hit2());
+        for (Entity e : { box3, box2 }) rt->GetRegistry().Get<TagComponent>(e).Active = false;
+        rt->OnUpdateRuntime(1.0f / 30.0f);
+        CHECK(!hit3() && !hit2());
+        rt->OnRuntimeStop();
+    }
+
     void TestPhysics2D()
     {
         Scene scene("Physics2D");
@@ -411,6 +543,74 @@ namespace
         AssetManager::Shutdown();
     }
 
+    void TestCloth()
+    {
+        auto run = [](Ref<Scene>& rt, float seconds) { for (int i = 0; i < (int)(seconds * 60.0f); ++i) rt->OnUpdateRuntime(1.0f / 60.0f); };
+        // A curtain pinned along its top edge, rotated to hang in the XZ plane at first (lying flat): it swings down.
+        {
+            Scene scene("Curtain");
+            auto& reg = scene.GetRegistry();
+            Entity e = scene.CreateEntity("Curtain");
+            reg.Get<TransformComponent>(e).Position = { 0, 3, 0 };
+            reg.Get<TransformComponent>(e).Rotation = { -glm::half_pi<float>(), 0, 0 }; // top edge (+Y) points to -Z: flat
+            auto& c = reg.Emplace<ClothComponent>(e);
+            c.Resolution = 12;
+            reg.Emplace<MeshRendererComponent>(e);
+            ClothComponent probe = c;
+            CHECK(Cloth::PinnedVertices(probe).size() == 13 && Cloth::BuildGrid(probe).Vertices.size() == 169);
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            run(rt, 3.0f);
+            auto& sim = rt->GetRegistry().Get<ClothComponent>(e);
+            CHECK(sim.SimulatedPositions.size() == 169 && sim.SimulatedNormals.size() == 169);
+            if (sim.SimulatedPositions.size() == 169)
+            {
+                auto world = [&](size_t i) { return glm::vec3(rt->GetRegistry().Get<TransformComponent>(e).World * glm::vec4(sim.SimulatedPositions[i], 1.0f)); };
+                // Pinned top edge (row 12) stays at its place, about 1 m in front of the origin at y = 3.
+                glm::vec3 pinned = world(12 * 13 + 6);
+                CHECK(Near(pinned, { 0.0f, 3.0f, -1.0f }, 0.02f));
+                // The free bottom edge (row 0) has swung down from level, still about the sheet's length (2 m) away.
+                glm::vec3 bottom = world(6);
+                CHECK(bottom.y < 2.3f && Near(glm::distance(bottom, pinned), 2.0f, 0.15f));
+                // Moving the object drags the pinned edge with it.
+                rt->GetRegistry().Get<TransformComponent>(e).Position.x = 1.0f;
+                run(rt, 0.5f);
+                CHECK(Near(world(12 * 13 + 6).x, 1.0f, 0.02f));
+            }
+            rt->OnRuntimeStop();
+        }
+        // An unpinned sheet dropped on a sphere drapes over it: its middle rests on top, its edges hang lower.
+        {
+            Scene scene("Drape");
+            auto& reg = scene.GetRegistry();
+            Entity ball = scene.CreateEntity("Ball");
+            reg.Get<TransformComponent>(ball).Position = { 0, 1, 0 };
+            reg.Emplace<SphereColliderComponent>(ball).Radius = 0.5f;
+            Entity e = scene.CreateEntity("Sheet");
+            reg.Get<TransformComponent>(e).Position = { 0, 2, 0 };
+            reg.Get<TransformComponent>(e).Rotation = { -glm::half_pi<float>(), 0, 0 }; // horizontal
+            auto& c = reg.Emplace<ClothComponent>(e);
+            c.Resolution = 16;
+            c.Pin = ClothPin::None;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            run(rt, 2.5f);
+            auto& sim = rt->GetRegistry().Get<ClothComponent>(e);
+            auto& t = rt->GetRegistry().Get<TransformComponent>(e);
+            CHECK(sim.SimulatedPositions.size() == 17 * 17);
+            if (sim.SimulatedPositions.size() == 17 * 17)
+            {
+                glm::vec3 middle = glm::vec3(t.World * glm::vec4(sim.SimulatedPositions[8 * 17 + 8], 1.0f));
+                glm::vec3 corner = glm::vec3(t.World * glm::vec4(sim.SimulatedPositions[0], 1.0f));
+                CHECK(middle.y > 1.45f && middle.y < 1.65f); // on the ball's top (1.5) plus the cloth's thickness
+                CHECK(corner.y < middle.y - 0.4f);           // the corners hang down around it
+            }
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestVehicles()
     {
         Scene scene("Vehicle");
@@ -469,6 +669,102 @@ namespace
         runtime->OnRuntimeStop();
     }
 
+    void TestMotorcycleAndTank()
+    {
+        auto world = [](Scene& scene) {
+            auto& reg = scene.GetRegistry();
+            Entity ground = scene.CreateEntity("Ground");
+            reg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            reg.Get<TransformComponent>(ground).Scale = { 400, 1, 400 };
+            reg.Emplace<BoxColliderComponent>(ground).Friction = 1.0f;
+        };
+        auto run = [](Ref<Scene>& rt, float seconds) { for (int i = 0; i < (int)(seconds * 60.0f); ++i) rt->OnUpdateRuntime(1.0f / 60.0f); };
+
+        // Motorcycle: balances itself on two wheels, rides off, and leans into a turn.
+        {
+            Scene scene("Bike");
+            world(scene);
+            auto& reg = scene.GetRegistry();
+            Entity bike = scene.CreateEntity("Bike");
+            reg.Get<TransformComponent>(bike).Position = { 0, 0.9f, 0 };
+            reg.Emplace<RigidbodyComponent>(bike).Mass = 240.0f;
+            reg.Emplace<BoxColliderComponent>(bike).Size = { 0.3f, 0.5f, 1.6f };
+            auto& v = reg.Emplace<VehicleComponent>(bike);
+            v.Type = VehicleType::Motorcycle;
+            v.WheelBase = 1.5f;
+            v.WheelRadius = 0.31f;
+            v.WheelWidth = 0.15f;
+            v.EngineTorque = 150.0f;
+            v.MaxRPM = 10000.0f;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rv = rt->GetRegistry().Get<VehicleComponent>(bike);
+            auto& t = rt->GetRegistry().Get<TransformComponent>(bike);
+            auto up = [&] { return t.GetRotationQuat() * glm::vec3(0, 1, 0); };
+            run(rt, 1.0f);
+            CHECK(rv.WheelGrounded[0] && rv.WheelGrounded[2] && !rv.WheelGrounded[1]); // front and rear (left slots)
+            rv.Throttle = 1.0f;
+            run(rt, 4.0f);
+            CHECK(rv.SpeedKmh > 20.0f && t.Position.z < -10.0f && up().y > 0.9f); // upright at speed
+            // Slowed down, full right steering turns it (a high speed only allows the lean Jolt permits), upright.
+            rv.Throttle = 0.0f;
+            rv.Brake = 1.0f;
+            run(rt, 3.0f);
+            rv.Brake = 0.0f;
+            rv.Throttle = 0.3f;
+            run(rt, 1.0f);
+            auto heading = [&] { glm::vec3 f = t.GetRotationQuat() * glm::vec3(0, 0, -1); return glm::normalize(glm::vec2(f.x, f.z)); };
+            glm::vec2 h0 = heading();
+            rv.Steering = 1.0f;
+            run(rt, 1.0f);
+            glm::vec2 h1 = heading();
+            CHECK(glm::dot(h0, h1) < 0.85f && h0.x * h1.y - h0.y * h1.x > 0.0f && up().y > 0.7f); // turned right (toward +X), still up
+            rt->OnRuntimeStop();
+        }
+
+        // Tank: drives forward on its tracks, and turns on the spot when only steering.
+        {
+            Scene scene("Tank");
+            world(scene);
+            auto& reg = scene.GetRegistry();
+            Entity tank = scene.CreateEntity("Tank");
+            reg.Get<TransformComponent>(tank).Position = { 0, 1.0f, 0 };
+            reg.Emplace<RigidbodyComponent>(tank).Mass = 4000.0f;
+            reg.Emplace<BoxColliderComponent>(tank).Size = { 2.4f, 0.8f, 4.0f };
+            auto& v = reg.Emplace<VehicleComponent>(tank);
+            v.Type = VehicleType::Tank;
+            v.TrackWidth = 2.6f;
+            v.WheelBase = 3.2f;
+            v.WheelRadius = 0.3f;
+            v.EngineTorque = 2000.0f;
+            v.BrakeTorque = 15000.0f;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rv = rt->GetRegistry().Get<VehicleComponent>(tank);
+            auto& t = rt->GetRegistry().Get<TransformComponent>(tank);
+            run(rt, 1.5f);
+            CHECK(rv.WheelGrounded[0] && rv.WheelGrounded[1] && rv.WheelGrounded[2] && rv.WheelGrounded[3]);
+            rv.Throttle = 1.0f;
+            run(rt, 3.0f);
+            CHECK(rv.SpeedKmh > 5.0f && t.Position.z < -2.0f);
+            rv.Throttle = 0.0f;
+            rv.Brake = 1.0f;
+            run(rt, 3.0f);
+            rv.Brake = 0.0f;
+            glm::vec3 stopped = t.Position;
+            float yaw0 = glm::eulerAngles(t.GetRotationQuat()).y;
+            glm::vec3 f0 = t.GetRotationQuat() * glm::vec3(0, 0, -1);
+            rv.Steering = 1.0f;
+            run(rt, 0.75f);
+            glm::vec3 f1 = t.GetRotationQuat() * glm::vec3(0, 0, -1);
+            (void)yaw0;
+            CHECK(glm::dot(glm::vec2(f0.x, f0.z), glm::vec2(f1.x, f1.z)) < 0.9f);        // turned more than 25 degrees in 0.75 s
+            CHECK(glm::cross(f0, f1).y < 0.0f);                                          // to the right (clockwise from above)
+            CHECK(glm::length(glm::vec2(t.Position.x - stopped.x, t.Position.z - stopped.z)) < 1.5f); // on the spot
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestAudioOcclusion()
     {
         Scene scene("Occlusion");
@@ -517,6 +813,33 @@ namespace
         for (auto [e, src] : rr.ViewOf<AudioSourceComponent>())
             if (!src.Occlusion) CHECK(src.OcclusionAmount == 0.0f);
         runtime->OnRuntimeStop();
+
+        // Audio Occluders: two thin panes of 0.3 add up to 0.6; enough of them saturate at 1.
+        {
+            Scene panes("Panes");
+            auto& pr = panes.GetRegistry();
+            Entity ear = panes.CreateEntity("Ear");
+            Entity sound = panes.CreateEntity("Sound");
+            pr.Get<TransformComponent>(sound).Position = { 0, 0, -10 };
+            for (int i = 0; i < 5; ++i)
+            {
+                Entity pane = panes.CreateEntity("Pane");
+                pr.Get<TransformComponent>(pane).Position = { 0, 0, -2.0f - (float)i * 1.5f };
+                pr.Get<TransformComponent>(pane).Scale = { 3, 3, 0.05f };
+                pr.Emplace<BoxColliderComponent>(pane);
+                pr.Emplace<AudioOccluderComponent>(pane).Occlusion = 0.3f;
+                if (i >= 2) pr.Get<TagComponent>(pane).Active = false; // first only two (inactive objects have no collider)
+            }
+            panes.UpdateTransforms();
+            auto rt = panes.Clone();
+            rt->OnRuntimeStart();
+            CHECK(Near(AudioWorld::Occlusion(*rt, { 0, 0, 0 }, ear, sound), 0.6f));
+            // Activated while playing: the panes' colliders join on the next physics step.
+            for (auto [e, tag] : rt->GetRegistry().ViewOf<TagComponent>()) tag.Active = true;
+            rt->OnUpdateRuntime(1.0f / 30.0f);
+            CHECK(Near(AudioWorld::Occlusion(*rt, { 0, 0, 0 }, ear, sound), 1.0f));
+            rt->OnRuntimeStop();
+        }
     }
 
     void TestReflectionJson()
@@ -1093,6 +1416,22 @@ namespace
         CHECK(Animation::SolveIK(tentacle, tp, tip, 5, aim, nullptr, 1.0f));
         Animation::JointGlobals(tentacle, tp, g);
         CHECK(glm::distance(glm::vec3(g[tip][3]), aim) < 0.01f * reach);
+
+        // Look-at: the tip's +Y axis aims at a point off to the side, shared over the chain, within the angle limit.
+        auto aimDir = [&](const Pose& p, int j, glm::vec3 axis) {
+            std::vector<glm::mat4> gl;
+            Animation::JointGlobals(sk, p, gl);
+            return glm::normalize(glm::mat3(gl[j]) * axis);
+        };
+        pose.SetBindPose(sk);
+        glm::vec3 lookTarget(5.0f, 2.0f, 0.0f); // level with the tip, straight out along +X
+        CHECK(Animation::SolveLookAt(sk, pose, 2, { 0, 1, 0 }, 3, lookTarget, 180.0f, 1.0f));
+        glm::vec3 tipPos = globalPos(pose, 2);
+        CHECK(glm::dot(aimDir(pose, 2, { 0, 1, 0 }), glm::normalize(lookTarget - tipPos)) > 0.999f);
+        CHECK(std::abs(pose.Rotations[0].w) < std::cos(glm::radians(5.0f))); // the root took part of the turn (over 10 degrees)
+        pose.SetBindPose(sk);
+        Animation::SolveLookAt(sk, pose, 2, { 0, 1, 0 }, 1, { 0.0f, 2.0f, -5.0f }, 30.0f, 1.0f); // 90 degrees away, limited to 30
+        CHECK(Near(glm::degrees(std::acos(std::clamp(aimDir(pose, 2, { 0, 1, 0 }).y, -1.0f, 1.0f))), 30.0f, 0.1f) && pose.Rotations[1] == glm::quat(1, 0, 0, 0));
     }
 
     void TestLayerSync()
@@ -2705,6 +3044,99 @@ namespace
         if (const char* extra = std::getenv("DIM_TEST_EXTRA_GLTF")) CheckSkinnedFile(extra, 1, 1);
     }
 
+    void TestPrefabVariants()
+    {
+        fs::path assets = fs::temp_directory_path() / "dimension_variant_test" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+
+        // Base: a Turret with a Barrel child.
+        Scene scene("Variants");
+        auto& reg = scene.GetRegistry();
+        Entity turret = scene.CreateEntity("Turret");
+        reg.Emplace<MeshRendererComponent>(turret).Color = { 1, 0, 0, 1 };
+        reg.Emplace<PointLightComponent>(turret).Range = 2.0f;
+        Entity barrel = scene.CreateEntity("Barrel", turret);
+        reg.Get<TransformComponent>(barrel).Scale = { 0.2f, 0.2f, 2.0f };
+        reg.Emplace<MeshRendererComponent>(barrel).Color = { 0.5f, 0.5f, 0.5f, 1 };
+        AssetHandle base = Prefabs::CreateFromEntity(scene, turret, assets / "Turret.prefab");
+        CHECK(base.IsValid());
+
+        // A new variant reads exactly like its base.
+        AssetHandle variant = Prefabs::CreateVariant(base, assets / "Turret Variant.prefab");
+        CHECK(variant.IsValid() && Prefabs::GetVariantBase(variant) == base && Prefabs::GetVariantBase(base) == AssetHandle::None());
+        Entity v0 = scene.InstantiatePrefab(variant, { 3, 0, 0 });
+        CHECK(!v0.IsNull() && scene.GetChildren(v0).size() == 1 && reg.Get<MeshRendererComponent>(v0).Color == glm::vec4(1, 0, 0, 1));
+
+        // Edit the variant in Prefab Mode: recolor the barrel, drop the light, add a scope. Only that is saved.
+        {
+            auto stage = Prefabs::OpenForEditing(variant);
+            CHECK(stage != nullptr);
+            Entity root = Prefabs::FindEditedRoot(*stage, variant);
+            auto& sr = stage->GetRegistry();
+            Entity b = stage->GetChildren(root)[0];
+            sr.Get<MeshRendererComponent>(b).Color = { 0, 0, 1, 1 };
+            sr.Remove<PointLightComponent>(root);
+            Entity scope = stage->CreateEntity("Scope", root);
+            sr.Emplace<MeshRendererComponent>(scope);
+            CHECK(Prefabs::SaveEdited(*stage, variant));
+        }
+        nlohmann::json file = nlohmann::json::parse(std::ifstream(assets / "Turret Variant.prefab"));
+        CHECK(!file.contains("entities") && file["base"].get<uint64_t>() == (uint64_t)base);
+        CHECK(file["added"].size() == 1 && file["removedEntities"].empty() && file["overrides"].size() == 2);
+        bool onlyColor = false;
+        for (auto& o : file["overrides"])
+            if (o.contains("components") && o["components"].contains("Mesh Renderer"))
+                onlyColor = o["components"].size() == 1 && o["components"]["Mesh Renderer"].size() == 1 && o["components"]["Mesh Renderer"].contains("Color");
+        CHECK(onlyColor);
+
+        // A change to the base reaches the variant where it does not override (barrel length), not where it does.
+        {
+            auto stage = Prefabs::OpenForEditing(base);
+            Entity root = Prefabs::FindEditedRoot(*stage, base);
+            Entity b = stage->GetChildren(root)[0];
+            stage->GetRegistry().Get<TransformComponent>(b).Scale = { 0.2f, 0.2f, 3.0f };
+            stage->GetRegistry().Get<MeshRendererComponent>(b).Color = { 1, 1, 0, 1 };
+            CHECK(Prefabs::SaveEdited(*stage, base));
+        }
+        Prefabs::SyncAll(scene);
+        auto childNamed = [&](Entity root, const char* name) {
+            for (Entity c : scene.GetChildren(root))
+                if (reg.Get<TagComponent>(c).Name == name) return c;
+            return Entity::Null();
+        };
+        Entity vb = childNamed(v0, "Barrel");
+        CHECK(!vb.IsNull() && Near(reg.Get<TransformComponent>(vb).Scale.z, 3.0f));            // from the base
+        CHECK(reg.Get<MeshRendererComponent>(vb).Color == glm::vec4(0, 0, 1, 1));             // the variant's own
+        CHECK(!childNamed(v0, "Scope").IsNull() && !reg.Has<PointLightComponent>(v0));        // added / removed in the variant
+        CHECK(reg.Get<MeshRendererComponent>(childNamed(turret, "Barrel")).Color == glm::vec4(1, 1, 0, 1)); // base instance
+
+        // A variant of the variant inherits both, and Apply from an instance writes into the variant it came from.
+        AssetHandle second = Prefabs::CreateVariant(variant, assets / "Turret Variant 2.prefab");
+        CHECK(Prefabs::IsVariantOf(second, base) && Prefabs::IsVariantOf(second, variant) && !Prefabs::IsVariantOf(base, second));
+        Entity v2 = scene.InstantiatePrefab(second, { -3, 0, 0 });
+        CHECK(reg.Get<MeshRendererComponent>(childNamed(v2, "Barrel")).Color == glm::vec4(0, 0, 1, 1) && !childNamed(v2, "Scope").IsNull());
+        reg.Get<MeshRendererComponent>(v2).Smoothness = 0.95f;
+        Prefabs::RecordFieldOverride(scene, v2, "Mesh Renderer", "Smoothness");
+        CHECK(Prefabs::Apply(scene, v2));
+        nlohmann::json second2 = nlohmann::json::parse(std::ifstream(assets / "Turret Variant 2.prefab"));
+        CHECK(second2["base"].get<uint64_t>() == (uint64_t)variant && second2["overrides"].size() >= 1);
+        Prefabs::SyncAll(scene);
+        CHECK(reg.Get<MeshRendererComponent>(v0).Smoothness != 0.95f && Near(reg.Get<MeshRendererComponent>(v2).Smoothness, 0.95f)); // the first variant is untouched
+        // Saving and loading the scene keeps the variant instances.
+        auto back = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        CHECK(back != nullptr);
+        if (back)
+        {
+            Prefabs::SyncAll(*back);
+            Entity bv = back->FindEntityByName("Turret");
+            CHECK(!bv.IsNull());
+        }
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     void TestPrefabs()
     {
         fs::path assets = fs::temp_directory_path() / "dimension_prefab_test" / "Assets";
@@ -2884,6 +3316,20 @@ namespace
         bool hasField = false;
         for (auto& f : spinner->Fields) hasField |= f.Name == "DegreesPerSecond" && f.Type == FieldType::Vec3;
         CHECK(hasField);
+        // Inspector and menu attributes: [Range], [Tooltip], [Header], [AddComponentMenu], [RequireComponent], [SerializeField].
+        auto fieldOf = [](const ScriptInfo* s, const char* name) -> const FieldInfo* {
+            for (auto& f : s->Fields)
+                if (f.Name == name) return &f;
+            return nullptr;
+        };
+        const FieldInfo* bob = fieldOf(spinner, "BobHeight");
+        CHECK(bob && bob->Min == 0.0f && bob->Max == 2.0f && bob->Header == "Bobbing");
+        const FieldInfo* turn = fieldOf(spinner, "DegreesPerSecond");
+        CHECK(turn && turn->Tooltip == "Turn rate around each axis" && turn->Header == "Rotation");
+        CHECK(spinner->Menu == "Effects/Spinner" && spinner->Requires.empty());
+        const ScriptInfo* launcher = ScriptRegistry::Find("Game.Launcher");
+        CHECK(launcher && launcher->Requires == std::vector<std::string>({ "Rigidbody", "Sphere Collider" }));
+        CHECK(launcher && fieldOf(launcher, "m_Launches") && fieldOf(launcher, "Impulse") && !fieldOf(launcher, "Key")); // private [SerializeField] in, unsupported type out
 
         Scene scene("CSharp");
         auto& reg = scene.GetRegistry();
@@ -2984,6 +3430,13 @@ namespace
                 click();
                 CHECK(text() == "Clicks: 1");
                 click();
+                if (round == 1)
+                {
+                    // Recompiled while playing: the count survives the reload and the script listens again.
+                    CHECK(rt->ReloadScriptModule("csharp", [&] { return CSharpRuntime::LoadScripts(scripts); }));
+                    rt->OnUpdateRuntime(1.0f / 60.0f);
+                    CHECK(text() == "Clicks: 2");
+                }
                 click();
                 click(); // past the limit: unsubscribed
                 CHECK(text() == "Clicks: 3");
@@ -4276,6 +4729,9 @@ int main(int argc, char** argv)
     Run("Script runtime", TestScriptsRuntime);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
+    Run("Inactive colliders", TestInactiveColliders);
+    Run("Clustered lights", TestLightClusters);
+    Run("Import cache", TestImportCache);
     Run("Physics layers, triggers, joints", TestPhysicsLayersTriggersJoints);
     Run("Mesh colliders and characters", TestMeshCollidersAndCharacters);
     Run("Reflection JSON", TestReflectionJson);
@@ -4291,6 +4747,7 @@ int main(int argc, char** argv)
     Run("Skinned glTF import", TestSkinnedImport);
     Run("glTF materials", TestGltfMaterials);
     Run("Prefab instances", TestPrefabs);
+    Run("Prefab variants", TestPrefabVariants);
     Run("Scene manager", TestSceneManager);
     Run("Multi-scene runtime", TestMultiScene);
     Run("Joint motors, breaking and moving platforms", TestJointMotorsAndPlatforms);
@@ -4312,6 +4769,8 @@ int main(int argc, char** argv)
     Run("Rich text tags", TestRichText);
     Run("Audio occlusion", TestAudioOcclusion);
     Run("Vehicles", TestVehicles);
+    Run("Cloth", TestCloth);
+    Run("Motorcycles and tanks", TestMotorcycleAndTank);
     Run("Convex decomposition", TestConvexDecomposition);
     Run("Inverse kinematics", TestInverseKinematics);
     Run("Synced animator layers", TestLayerSync);

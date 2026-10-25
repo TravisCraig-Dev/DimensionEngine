@@ -61,6 +61,19 @@ namespace Dimension
             }
         }
 
+        private static IEnumerable<FieldInfo> SerializedFields(Type type)
+        {
+            var chain = new List<Type>();
+            for (Type t = type; t != null && t != typeof(Behaviour); t = t.BaseType) chain.Insert(0, t);
+            foreach (Type t in chain)
+                foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (!s_Supported.Contains(f.FieldType) || f.IsInitOnly || f.IsNotSerialized) continue;
+                    if (!f.IsPublic && f.GetCustomAttribute<SerializeFieldAttribute>() == null) continue;
+                    yield return f;
+                }
+        }
+
         [UnmanagedCallersOnly]
         internal static int LoadScripts(byte* pathUtf8)
         {
@@ -87,16 +100,27 @@ namespace Dimension
                     {
                         w.WriteStartObject();
                         w.WriteString("name", type.FullName);
+                        if (type.GetCustomAttribute<AddComponentMenuAttribute>() is { } menu) w.WriteString("menu", menu.Path);
+                        w.WriteStartArray("requires");
+                        foreach (var require in type.GetCustomAttributes<RequireComponentAttribute>(true))
+                            foreach (Type t in require.Types)
+                                if (t != null && t.IsSubclassOf(typeof(Component)) && !t.IsAbstract && Activator.CreateInstance(t) is Component c)
+                                    w.WriteStringValue(c.NativeName);
+                        w.WriteEndArray();
                         w.WriteStartArray("fields");
-                        foreach (FieldInfo f in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
+                        // Public fields (unless [NonSerialized]) and private ones marked [SerializeField], base class first.
+                        foreach (FieldInfo f in SerializedFields(type))
                         {
-                            if (!s_Supported.Contains(f.FieldType) || f.IsInitOnly) continue;
                             cls.Fields.Add(f);
                             w.WriteStartObject();
                             w.WriteString("name", f.Name);
                             w.WriteString("type", TypeName(f.FieldType));
                             w.WritePropertyName("default");
                             WriteDefault(w, defaults != null ? f.GetValue(defaults) : null);
+                            if (f.GetCustomAttribute<RangeAttribute>() is { } range) { w.WriteNumber("min", range.Min); w.WriteNumber("max", range.Max); }
+                            if (f.GetCustomAttribute<TooltipAttribute>() is { } tip) w.WriteString("tooltip", tip.Text);
+                            if (f.GetCustomAttribute<HeaderAttribute>() is { } header) w.WriteString("header", header.Text);
+                            if (f.GetCustomAttribute<HideInInspectorAttribute>() != null) w.WriteBoolean("hidden", true);
                             w.WriteEndObject();
                         }
                         w.WriteEndArray();
@@ -210,6 +234,7 @@ namespace Dimension
                     case 4: b.OnClick(); break;
                     case 5: b.OnValueChanged(dt); break;
                     case 6: b.OnJointBreak(dt); break;
+                    case 7: b.OnReloaded(); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
@@ -254,6 +279,42 @@ namespace Dimension
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
+        }
+
+        private static IntPtr s_FieldsBuffer; // the last GetFields result (native reads it before the next call)
+
+        // Current values of a script's serialized fields, in registration order (entities as packed ids).
+        [UnmanagedCallersOnly]
+        internal static byte* GetFields(IntPtr handle)
+        {
+            try
+            {
+                var b = (Behaviour)GCHandle.FromIntPtr(handle).Target;
+                var cls = s_Classes[b.GetType().FullName];
+                using var stream = new MemoryStream();
+                using (var w = new Utf8JsonWriter(stream))
+                {
+                    w.WriteStartArray();
+                    foreach (FieldInfo f in cls.Fields)
+                    {
+                        object v = f.GetValue(b);
+                        if (v is Entity e) w.WriteNumberValue(e.Id);
+                        else WriteDefault(w, v);
+                    }
+                    w.WriteEndArray();
+                }
+                byte[] json = stream.ToArray();
+                if (s_FieldsBuffer != IntPtr.Zero) Marshal.FreeHGlobal(s_FieldsBuffer);
+                s_FieldsBuffer = Marshal.AllocHGlobal(json.Length + 1);
+                Marshal.Copy(json, 0, s_FieldsBuffer, json.Length);
+                ((byte*)s_FieldsBuffer)[json.Length] = 0;
+                return (byte*)s_FieldsBuffer;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Reading C# fields failed: {e.Message}");
+                return null;
+            }
         }
 
         [UnmanagedCallersOnly]

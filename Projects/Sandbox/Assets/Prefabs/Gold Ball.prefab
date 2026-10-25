@@ -1,0 +1,25 @@
+{
+  "prefab": true,
+  "base": 100008,
+  "overrides": [
+    {
+      "guid": 500001,
+      "components": {
+        "Mesh Renderer": {
+          "Material": 100022,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "Sphere Collider": {
+          "Bounciness": 0.9
+        }
+      }
+    }
+  ],
+  "added": [],
+  "removedEntities": []
+}

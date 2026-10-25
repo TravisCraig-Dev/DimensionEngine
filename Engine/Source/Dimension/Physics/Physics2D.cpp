@@ -318,6 +318,22 @@ namespace Dimension
         auto& reg = m_Scene.GetRegistry();
         b2WorldId world = LoadWorld(m_World);
 
+        // Bodies of inactive objects are disabled, and enabled again (where the object now is) when it is activated.
+        for (auto [e, rb, t] : reg.ViewOf<Rigidbody2DComponent, TransformComponent>())
+        {
+            if (!rb.RuntimeBody) continue;
+            b2BodyId id = b2LoadBodyId(rb.RuntimeBody);
+            if (b2Body_IsEnabled(id) == t.ActiveInHierarchy) continue;
+            if (t.ActiveInHierarchy)
+            {
+                glm::vec3 p = t.GetWorldPosition();
+                b2Body_SetTransform(id, { p.x, p.y }, b2MakeRot(t.Rotation.z));
+                b2Body_Enable(id);
+            }
+            else
+                b2Body_Disable(id);
+        }
+
         // Kinematic/static bodies follow their transforms (moved by scripts).
         for (auto [e, rb, t] : reg.ViewOf<Rigidbody2DComponent, TransformComponent>())
         {

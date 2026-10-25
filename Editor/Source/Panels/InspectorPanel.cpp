@@ -22,6 +22,25 @@ namespace Editor
 {
     namespace
     {
+        // [RequireComponent]: components a script needs, added (if missing) when the script is added in the editor.
+        void AddRequiredComponents(Scene& scene, Entity e, const std::string& scriptName)
+        {
+            const ScriptInfo* script = ScriptRegistry::Find(scriptName);
+            if (!script) return;
+            for (const std::string& name : script->Requires)
+                if (const ComponentInfo* info = ComponentRegistry::Find(name); info && !info->Has(scene, e))
+                {
+                    info->Add(scene, e);
+                    Prefabs::RecordComponentAdded(scene, e, info->Name);
+                }
+        }
+
+        // A script's label in menus: its [AddComponentMenu] name, else the class name, with its language.
+        std::string ScriptLabel(const ScriptInfo& s)
+        {
+            std::string name = s.Menu.empty() ? s.Name : s.Menu.substr(s.Menu.find_last_of('/') == std::string::npos ? 0 : s.Menu.find_last_of('/') + 1);
+            return name + (s.Module == "csharp" ? "   (C#)" : "   (C++)");
+        }
         // Undo/dirty bookkeeping for a property edit. Widgets such as checkboxes change
         // their value on the same frame they activate, so the pre-edit value is restored
         // briefly while the undo snapshot is captured.
@@ -615,6 +634,7 @@ namespace Editor
                                 auto& target = reg.Get<ScriptComponent>(e).Scripts[i];
                                 target.ClassName = s.Name;
                                 target.Fields = nlohmann::json::object();
+                                AddRequiredComponents(scene, e, s.Name);
                             }
                         ImGui::EndCombo();
                     }
@@ -664,10 +684,11 @@ namespace Editor
         if (ImGui::BeginPopup("AddScript"))
         {
             for (auto& s : ScriptRegistry::All())
-                if (ImGui::Selectable((s.Name + (s.Module == "csharp" ? "   (C#)" : "   (C++)")).c_str()))
+                if (ImGui::Selectable(ScriptLabel(s).c_str()))
                 {
                     structural();
                     reg.Get<ScriptComponent>(e).Add(s.Name);
+                    AddRequiredComponents(scene, e, s.Name);
                 }
             if (ScriptRegistry::All().empty()) ImGui::TextDisabled("No scripts registered");
             ImGui::EndPopup();
@@ -703,47 +724,65 @@ namespace Editor
             std::string filter = m_ComponentFilter;
             for (auto& c : filter) c = (char)std::tolower(c);
 
-            std::map<std::string, std::vector<const ComponentInfo*>> byCategory;
+            // Components by category; scripts in the Scripts section, or with [AddComponentMenu("Category/Name")]
+            // in that category among the components.
+            struct Item
+            {
+                const ComponentInfo* Component = nullptr;
+                const ScriptInfo* Script = nullptr;
+            };
+            std::map<std::string, std::vector<Item>> byCategory;
+            std::vector<const ScriptInfo*> plainScripts;
+            auto matches = [&](std::string name) {
+                for (auto& c : name) c = (char)std::tolower(c);
+                return filter.empty() || name.find(filter) != std::string::npos;
+            };
             for (auto& info : ComponentRegistry::All())
             {
-                if (info.Hidden || !info.Removable || info.Has(scene, e)) continue;
-                std::string name = info.Name;
-                for (auto& c : name) c = (char)std::tolower(c);
-                if (!filter.empty() && name.find(filter) == std::string::npos) continue;
-                byCategory[info.Category].push_back(&info);
+                if (info.Hidden || !info.Removable || info.Has(scene, e) || !matches(info.Name)) continue;
+                byCategory[info.Category].push_back({ &info, nullptr });
             }
-            bool anyScript = false;
             for (auto& script : ScriptRegistry::All())
             {
-                std::string name = script.Name;
-                for (auto& c : name) c = (char)std::tolower(c);
-                if (!filter.empty() && name.find(filter) == std::string::npos) continue;
-                if (!anyScript) ImGui::SeparatorText("Scripts");
-                anyScript = true;
-                if (ImGui::Selectable((script.Name + (script.Module == "csharp" ? "   (C#)" : "   (C++)")).c_str()))
-                {
-                    m_Ctx.RecordUndo();
-                    if (!scene.GetRegistry().Has<ScriptComponent>(e))
-                    {
-                        scene.GetRegistry().Emplace<ScriptComponent>(e);
-                        Prefabs::RecordComponentAdded(scene, e, "Script");
-                    }
-                    scene.GetRegistry().Get<ScriptComponent>(e).Add(script.Name);
-                    Prefabs::RecordFieldOverride(scene, e, "Script", "Scripts");
-                    ImGui::CloseCurrentPopup();
-                }
+                if (!matches(script.Name) && !matches(script.Menu)) continue;
+                size_t slash = script.Menu.find_last_of('/');
+                if (slash == std::string::npos || slash == 0) plainScripts.push_back(&script);
+                else byCategory[script.Menu.substr(0, slash)].push_back({ nullptr, &script });
             }
-            for (auto& [category, infos] : byCategory)
+            auto addScript = [&](const ScriptInfo& script) {
+                m_Ctx.RecordUndo();
+                if (!scene.GetRegistry().Has<ScriptComponent>(e))
+                {
+                    scene.GetRegistry().Emplace<ScriptComponent>(e);
+                    Prefabs::RecordComponentAdded(scene, e, "Script");
+                }
+                scene.GetRegistry().Get<ScriptComponent>(e).Add(script.Name);
+                Prefabs::RecordFieldOverride(scene, e, "Script", "Scripts");
+                AddRequiredComponents(scene, e, script.Name);
+                ImGui::CloseCurrentPopup();
+            };
+            if (!plainScripts.empty()) ImGui::SeparatorText("Scripts");
+            for (const ScriptInfo* script : plainScripts)
+                if (ImGui::Selectable(ScriptLabel(*script).c_str())) addScript(*script);
+            for (auto& [category, items] : byCategory)
             {
                 ImGui::SeparatorText(category.c_str());
-                for (auto* info : infos)
-                    if (ImGui::Selectable(info->Name.c_str()))
+                for (auto& item : items)
+                {
+                    ImGui::PushID(item.Script ? (const void*)item.Script : (const void*)item.Component);
+                    if (item.Script)
+                    {
+                        if (ImGui::Selectable(ScriptLabel(*item.Script).c_str())) addScript(*item.Script);
+                    }
+                    else if (ImGui::Selectable(item.Component->Name.c_str()))
                     {
                         m_Ctx.RecordUndo();
-                        info->Add(scene, e);
-                        Prefabs::RecordComponentAdded(scene, e, info->Name);
+                        item.Component->Add(scene, e);
+                        Prefabs::RecordComponentAdded(scene, e, item.Component->Name);
                         ImGui::CloseCurrentPopup();
                     }
+                    ImGui::PopID();
+                }
             }
             ImGui::EndPopup();
         }
@@ -896,6 +935,14 @@ namespace Editor
         else if (meta->Type == AssetType::Prefab)
         {
             if (ImGui::Button("Open Prefab")) m_Ctx.RequestOpenPrefab = handle;
+            if (AssetHandle base = Prefabs::GetVariantBase(handle); base.IsValid())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("Variant of");
+                ImGui::SameLine();
+                if (ImGui::SmallButton(AssetManager::GetDisplayName(base).c_str())) m_Ctx.SelectedAsset = base;
+                ImGui::TextWrapped("A variant keeps only what it changes; everything else follows its base prefab.");
+            }
             ImGui::TextWrapped("Opens the prefab on its own (Prefab Mode); double-clicking it in the Project panel does the same. "
                                "Drag it into the Scene view or Hierarchy to instantiate it, or reference it from a script field.");
         }

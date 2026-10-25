@@ -3,15 +3,20 @@ using Dimension;
 
 namespace Game
 {
-    /// <summary>Rotates the entity and bobs it up and down. Public fields show in the Inspector.</summary>
+    /// <summary>Rotates the entity and bobs it up and down. Public fields show in the Inspector; attributes shape them.</summary>
+    [AddComponentMenu("Effects/Spinner")]
     public class Spinner : Behaviour
     {
+        [Header("Rotation")]
+        [Tooltip("Turn rate around each axis")]
         public Vector3 DegreesPerSecond = new(0, 90, 0);
-        public float BobHeight = 0.25f;
-        public float BobSpeed = 2.0f;
+        [Header("Bobbing")]
+        [Range(0.0f, 2.0f)] public float BobHeight = 0.25f;
+        [Range(0.0f, 10.0f), Tooltip("Bobs per second (radians)")] public float BobSpeed = 2.0f;
 
-        private float m_Time;
-        private float m_BaseY;
+        // Private state that survives a script reload while playing.
+        [SerializeField, HideInInspector] private float m_Time;
+        [SerializeField, HideInInspector] private float m_BaseY;
 
         public override void OnCreate()
         {

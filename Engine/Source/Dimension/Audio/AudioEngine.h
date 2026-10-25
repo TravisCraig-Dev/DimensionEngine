@@ -45,6 +45,9 @@ namespace Dimension
         // Whether 3D colliders block the line from `listener` to the source entity (ignoring triggers, the source's
         // own hierarchy and the listener's).
         static bool IsOccluded(Scene& scene, const glm::vec3& listener, Entity listenerEntity, Entity source);
+        // How much the line is blocked, 0..1: the sum of the blocking colliders' Audio Occluder amounts (1 each without
+        // the component).
+        static float Occlusion(Scene& scene, const glm::vec3& listener, Entity listenerEntity, Entity source);
         void CreateSourcesFor(Entity root);
         void OnEntityDestroyed(Entity e);
 

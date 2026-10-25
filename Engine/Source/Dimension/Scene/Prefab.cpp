@@ -15,21 +15,129 @@ namespace Dimension::Prefabs
 
     namespace
     {
-        std::optional<json> LoadPrefabJson(AssetHandle prefab)
+        std::optional<json> ReadRaw(AssetHandle prefab)
         {
             fs::path path = AssetManager::GetAbsolutePath(prefab);
             std::ifstream in(path);
             if (!in) return std::nullopt;
             try
             {
-                json j = json::parse(in);
-                if (j.contains("entities") && j["entities"].is_array() && !j["entities"].empty()) return j;
+                return json::parse(in);
             }
             catch (const std::exception& e)
             {
                 Log::Error("Invalid prefab '{}': {}", path.string(), e.what());
             }
             return std::nullopt;
+        }
+
+        // Variant file: { "prefab": true, "base": guid, "overrides": [ { "guid", "parent"?, "components": { Component:
+        // { field: value } }, "removed": [Component] } ], "added": [ entity records ], "removedEntities": [guid] }.
+        // Entities keep the base's ids, so instances and their overrides line up across the chain.
+        json ApplyVariant(json base, const json& variant)
+        {
+            json& entities = base["entities"];
+            std::unordered_set<uint64_t> removed;
+            for (auto& id : variant.value("removedEntities", json::array()))
+                if (id.is_number_unsigned()) removed.insert(id.get<uint64_t>());
+            if (!removed.empty())
+            {
+                json kept = json::array();
+                for (auto& rec : entities)
+                    if (!removed.contains(rec.value("guid", uint64_t(0)))) kept.push_back(rec);
+                entities = std::move(kept);
+            }
+            std::unordered_map<uint64_t, size_t> index;
+            for (size_t i = 0; i < entities.size(); ++i) index[entities[i].value("guid", uint64_t(0))] = i;
+            for (auto& o : variant.value("overrides", json::array()))
+            {
+                auto it = index.find(o.value("guid", uint64_t(0)));
+                if (it == index.end()) continue; // the base no longer has it
+                json& rec = entities[it->second];
+                if (o.contains("parent")) rec["parent"] = o["parent"];
+                json& comps = rec["components"];
+                for (auto& name : o.value("removed", json::array()))
+                    if (name.is_string()) comps.erase(name.get<std::string>());
+                for (auto& [name, fields] : o.value("components", json::object()).items())
+                {
+                    if (!comps.contains(name) || !comps[name].is_object()) comps[name] = json::object();
+                    for (auto& [field, value] : fields.items()) comps[name][field] = value;
+                }
+            }
+            for (auto& rec : variant.value("added", json::array())) entities.push_back(rec);
+            return base;
+        }
+
+        // The prefab's full content: a plain prefab as stored, a variant resolved through its chain of bases.
+        std::optional<json> LoadPrefabJson(AssetHandle prefab, int depth = 0)
+        {
+            auto j = ReadRaw(prefab);
+            if (!j) return std::nullopt;
+            if (j->contains("base"))
+            {
+                AssetHandle base((*j)["base"].get<uint64_t>());
+                if (depth > 16 || base == prefab)
+                {
+                    Log::Error("Prefab variant '{}' has a cycle in its bases", AssetManager::GetAbsolutePath(prefab).filename().string());
+                    return std::nullopt;
+                }
+                auto resolved = LoadPrefabJson(base, depth + 1);
+                if (!resolved)
+                {
+                    Log::Error("Base prefab of variant '{}' is missing", AssetManager::GetAbsolutePath(prefab).filename().string());
+                    return std::nullopt;
+                }
+                return ApplyVariant(std::move(*resolved), *j);
+            }
+            if (j->contains("entities") && (*j)["entities"].is_array() && !(*j)["entities"].empty()) return j;
+            return std::nullopt;
+        }
+
+        // What makes `full` (resolved content) differ from `base`, in variant form.
+        json DiffVariant(AssetHandle baseHandle, const json& base, const json& full)
+        {
+            json v{ { "prefab", true }, { "base", (uint64_t)baseHandle }, { "overrides", json::array() }, { "added", json::array() },
+                    { "removedEntities", json::array() } };
+            std::unordered_map<uint64_t, const json*> baseById;
+            for (auto& rec : base["entities"]) baseById[rec.value("guid", uint64_t(0))] = &rec;
+            std::unordered_set<uint64_t> present;
+            for (auto& rec : full["entities"])
+            {
+                uint64_t id = rec.value("guid", uint64_t(0));
+                present.insert(id);
+                auto it = baseById.find(id);
+                if (it == baseById.end())
+                {
+                    v["added"].push_back(rec);
+                    continue;
+                }
+                const json& b = *it->second;
+                json o{ { "guid", id } };
+                if (rec.value("parent", uint64_t(0)) != b.value("parent", uint64_t(0))) o["parent"] = rec.value("parent", uint64_t(0));
+                json changed = json::object(), removedComps = json::array();
+                const json& bc = b["components"];
+                for (auto& [name, data] : rec["components"].items())
+                {
+                    if (!bc.contains(name)) { changed[name] = data; continue; }
+                    if (!data.is_object() || !bc[name].is_object())
+                    {
+                        if (data != bc[name]) changed[name] = data;
+                        continue;
+                    }
+                    json fields = json::object();
+                    for (auto& [field, value] : data.items())
+                        if (!bc[name].contains(field) || bc[name][field] != value) fields[field] = value;
+                    if (!fields.empty()) changed[name] = fields;
+                }
+                for (auto& [name, data] : bc.items())
+                    if (!rec["components"].contains(name)) removedComps.push_back(name);
+                if (!changed.empty()) o["components"] = changed;
+                if (!removedComps.empty()) o["removed"] = removedComps;
+                if (o.size() > 1) v["overrides"].push_back(o);
+            }
+            for (auto& [id, rec] : baseById)
+                if (!present.contains(id)) v["removedEntities"].push_back(id);
+            return v;
         }
 
         void CollectSubtree(Scene& scene, Entity e, std::vector<Entity>& out)
@@ -93,6 +201,46 @@ namespace Dimension::Prefabs
             out << j.dump(2);
             return (bool)out;
         }
+
+        // Writes a prefab's new full content: a variant keeps only its differences from its base.
+        bool WritePrefab(AssetHandle prefab, const fs::path& path, const json& full)
+        {
+            auto raw = ReadRaw(prefab);
+            if (raw && raw->contains("base"))
+            {
+                AssetHandle base((*raw)["base"].get<uint64_t>());
+                if (auto baseJson = LoadPrefabJson(base)) return WriteJson(path, DiffVariant(base, *baseJson, full));
+                Log::Error("Cannot save variant '{}': its base prefab is missing", path.filename().string());
+                return false;
+            }
+            return WriteJson(path, full);
+        }
+    }
+
+    AssetHandle CreateVariant(AssetHandle base, const fs::path& path)
+    {
+        if (!LoadPrefabJson(base)) return AssetHandle::None();
+        json v{ { "prefab", true }, { "base", (uint64_t)base }, { "overrides", json::array() }, { "added", json::array() }, { "removedEntities", json::array() } };
+        if (!WriteJson(path, v)) return AssetHandle::None();
+        AssetHandle handle = AssetManager::Import(path);
+        if (handle.IsValid()) Log::Info("Created prefab variant '{}'", path.filename().string());
+        return handle;
+    }
+
+    AssetHandle GetVariantBase(AssetHandle prefab)
+    {
+        auto raw = ReadRaw(prefab);
+        return raw && raw->contains("base") && (*raw)["base"].is_number_unsigned() ? AssetHandle((*raw)["base"].get<uint64_t>()) : AssetHandle::None();
+    }
+
+    bool IsVariantOf(AssetHandle prefab, AssetHandle base)
+    {
+        for (int depth = 0; depth < 16 && prefab.IsValid(); ++depth)
+        {
+            prefab = GetVariantBase(prefab);
+            if (prefab == base) return true;
+        }
+        return false;
     }
 
     void RemapScriptEntityRefs(json& fields, const std::string& scriptClass, const std::function<uint64_t(uint64_t)>& remap)
@@ -201,7 +349,7 @@ namespace Dimension::Prefabs
             if (e != root) ++outside;
         if (outside) Log::Warn("{} object(s) outside the prefab root are not saved; parent them under '{}'", outside,
                                scene.GetRegistry().Get<TagComponent>(root).Name);
-        if (!WriteJson(path, BuildPrefabJson(scene, root, prefab))) return false;
+        if (!WritePrefab(prefab, path, BuildPrefabJson(scene, root, prefab))) return false;
         // New objects become linked so later saves keep their ids.
         std::vector<Entity> subtree;
         CollectSubtree(scene, root, subtree);
@@ -350,7 +498,7 @@ namespace Dimension::Prefabs
             Log::Error("Cannot apply: the prefab asset is missing");
             return false;
         }
-        if (!WriteJson(path, BuildPrefabJson(scene, root, prefab))) return false;
+        if (!WritePrefab(prefab, path, BuildPrefabJson(scene, root, prefab))) return false;
 
         // Everything in the instance now matches the asset: adopt new objects and clear overrides.
         std::vector<Entity> subtree;

@@ -282,6 +282,58 @@ namespace Dimension
 
     // ---- Runtime -----------------------------------------------------------------------
 
+    bool Scene::ReloadScriptModule(const std::string& module, const std::function<bool()>& reload)
+    {
+        EntityRefResolver resolver;
+        resolver.ToGuid = [this](Entity x) { return IsValid(x) ? (uint64_t)GetGuid(x) : uint64_t(0); };
+        resolver.FromGuid = [this](uint64_t g) { return FindEntityByGuid(Guid(g)); };
+        struct Saved { Entity E; size_t Index; };
+        std::vector<Saved> saved;
+        for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
+            for (size_t i = 0; i < sc.Scripts.size(); ++i)
+            {
+                auto& script = sc.Scripts[i];
+                const ScriptInfo* info = script.Instance ? ScriptRegistry::Find(script.ClassName) : nullptr;
+                if (!info || info->Module != module) continue;
+                script.Instance->OnBeforeSerialize();
+                void* obj = info->ToObject(script.Instance.get());
+                for (auto& f : info->Fields) script.Fields[f.Name] = FieldToJson(f, obj, &resolver);
+                saved.push_back({ e, i });
+            }
+        for (auto& s : saved) m_Registry.Get<ScriptComponent>(s.E).Scripts[s.Index].Instance.reset();
+        bool ok = reload();
+
+        std::vector<std::shared_ptr<ScriptableEntity>> created;
+        for (auto& s : saved)
+        {
+            auto* sc = IsValid(s.E) ? m_Registry.TryGet<ScriptComponent>(s.E) : nullptr;
+            if (!sc || s.Index >= sc->Scripts.size()) continue;
+            auto& script = sc->Scripts[s.Index];
+            const ScriptInfo* info = ScriptRegistry::Find(script.ClassName);
+            if (!info)
+            {
+                Log::Warn("Script class '{}' is gone after the reload; it stays inactive until play restarts", script.ClassName);
+                continue;
+            }
+            created.push_back(CreateScriptInstance(s.E, script, *info, resolver));
+        }
+        for (auto& inst : created) inst->OnScriptsReloaded();
+        Log::Info("Reloaded {} live script(s) while playing", created.size());
+        return ok;
+    }
+
+    std::shared_ptr<ScriptableEntity> Scene::CreateScriptInstance(Entity e, ScriptInstance& script, const ScriptInfo& info, const EntityRefResolver& resolver)
+    {
+        auto instance = info.Create();
+        instance->m_Entity = e;
+        instance->m_Scene = this;
+        void* obj = info.ToObject(instance.get());
+        for (auto& f : info.Fields)
+            if (script.Fields.contains(f.Name)) FieldFromJson(f, obj, script.Fields[f.Name], &resolver);
+        script.Instance = instance;
+        return instance;
+    }
+
     void Scene::InstantiateScripts()
     {
         EntityRefResolver resolver;
@@ -299,14 +351,7 @@ namespace Dimension
                     Log::Error("Script class '{}' is not registered", script.ClassName);
                     continue;
                 }
-                auto instance = info->Create();
-                instance->m_Entity = e;
-                instance->m_Scene = this;
-                void* obj = info->ToObject(instance.get());
-                for (auto& f : info->Fields)
-                    if (script.Fields.contains(f.Name)) FieldFromJson(f, obj, script.Fields[f.Name], &resolver);
-                script.Instance = instance;
-                created.push_back(instance);
+                created.push_back(CreateScriptInstance(e, script, *info, resolver));
             }
         }
         // OnCreate may create entities/scripts, so call after the iteration (in attachment order, like Awake).
@@ -608,9 +653,13 @@ namespace Dimension
                     if (g.Animator != e) continue;
                     int at = g.Target->Layer < 0 || g.Target->Layer > layerCount ? -1 : g.Target->Layer;
                     if (at != layer) continue;
-                    glm::vec3 hint = glm::vec3(toModel * glm::vec4(g.HintPosition, 1.0f));
-                    Animation::SolveIK(*skeleton, current, skeleton->FindJoint(g.Target->Tip), g.Target->ChainLength, glm::vec3(toModel * glm::vec4(g.Position, 1.0f)),
-                                       g.HasHint ? &hint : nullptr, std::clamp(g.Target->Weight, 0.0f, 1.0f) * layerWeight);
+                    glm::vec3 hint = glm::vec3(toModel * glm::vec4(g.HintPosition, 1.0f)), target = glm::vec3(toModel * glm::vec4(g.Position, 1.0f));
+                    float weight = std::clamp(g.Target->Weight, 0.0f, 1.0f) * layerWeight;
+                    int tip = skeleton->FindJoint(g.Target->Tip);
+                    if (g.Target->Mode == IKMode::LookAt)
+                        Animation::SolveLookAt(*skeleton, current, tip, g.Target->AimAxis, g.Target->ChainLength, target, g.Target->MaxAngle, weight);
+                    else
+                        Animation::SolveIK(*skeleton, current, tip, g.Target->ChainLength, target, g.HasHint ? &hint : nullptr, weight);
                 }
             };
 

@@ -560,6 +560,15 @@ namespace Editor::UI
     {
         void* p = f.Access(object);
         const char* label = f.Name.c_str();
+        if (!f.Header.empty())
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Dummy(ImVec2(0.0f, 2.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, AccentText());
+            ImGui::TextUnformatted(f.Header.c_str());
+            ImGui::PopStyleColor();
+        }
         ImGui::PushID(label);
         EditResult r;
         bool bounded = f.Min != f.Max;

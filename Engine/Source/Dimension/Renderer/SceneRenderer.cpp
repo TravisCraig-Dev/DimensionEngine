@@ -3,6 +3,7 @@
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Physics/ConvexDecomposition.h"
+#include "Dimension/Physics/Cloth.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -48,7 +49,7 @@ namespace Dimension
 {
     namespace
     {
-        constexpr uint32_t kMaxPointLights = 32;
+        constexpr uint32_t kMaxPointLights = LightClusters::kMaxLights;
         constexpr uint32_t kMaxQuadsPerDraw = 65536;
 
         struct PointLightGPU
@@ -88,12 +89,16 @@ namespace Dimension
             glm::vec4 CascadeDepth;     // world depth range of each cascade
             glm::vec4 SoftShadowParams; // x PCSS on, y tan(light angular radius), z max filter radius in texels
             glm::vec4 SkyFilter;        // x GGX-prefiltered sky texture index (0 = none), y its mip count - 1
+            glm::uvec4 LightBuffers;     // xy: PointLightGPU array, zw: cluster cells (buffer addresses)
+            glm::uvec4 LightIndexBuffer; // xy: cluster light indices
+            glm::vec4 ClusterParams;     // x near, y far, z 1 = orthographic, w log(far / near)
             struct ProbeGPU
             {
                 glm::vec4 CenterIntensity, BoxMin, BoxMax, Params; // see ReflectionProbe in Common.glsl
             } Probes[SceneRenderer::kMaxReflectionProbes];
-            PointLightGPU PointLights[kMaxPointLights];
         };
+
+        glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
         static_assert(sizeof(SceneUniforms) <= RenderDevice::kUniformBlockSize);
 
         struct MeshPush
@@ -117,6 +122,7 @@ namespace Dimension
 
 
         bool s_InstancingEnabled = true;
+        bool s_ClusterCulling = true;
         uint64_t s_ProbeBakeGeneration = 0;
         constexpr uint32_t kMaxInstancesPerDraw = 16384;
 
@@ -618,12 +624,13 @@ namespace Dimension
             u.LightColor = glm::vec4(glm::vec3(2.2f), 1.0f);
             castShadows = true;
         }
+        std::vector<PointLightGPU> lights;
         uint32_t pointShadows = 0;
         uint32_t shadowFaces[kMaxPointShadows] = {};
         const float shadowNear = 0.05f;
         for (auto [e, light, t] : reg.ViewOf<PointLightComponent, TransformComponent>())
         {
-            if (!t.ActiveInHierarchy || u.Counts.x >= (int)kMaxPointLights) continue;
+            if (!t.ActiveInHierarchy || lights.size() >= kMaxPointLights) continue;
             glm::vec3 pos = t.GetWorldPosition();
             float slot = 0.0f; // shadow slot + 1
             if (light.CastShadows && pointShadows < kMaxPointShadows && light.Range > 0.1f)
@@ -643,12 +650,12 @@ namespace Dimension
                     cookie = (float)tex->GetBindlessIndex() + 1.0f;
                     toLight = glm::quat_cast(glm::transpose(glm::mat3(t.Right(), t.Up(), -t.Forward())));
                 }
-            u.PointLights[u.Counts.x++] = { glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
-                                            glm::vec4(cookie, 0.0f, 0.0f, -2.0f), glm::vec4(toLight.x, toLight.y, toLight.z, toLight.w) };
+            lights.push_back({ glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
+                               glm::vec4(cookie, 0.0f, 0.0f, -2.0f), glm::vec4(toLight.x, toLight.y, toLight.z, toLight.w) });
         }
         for (auto [e, light, t] : reg.ViewOf<SpotLightComponent, TransformComponent>())
         {
-            if (!t.ActiveInHierarchy || u.Counts.x >= (int)kMaxPointLights) continue;
+            if (!t.ActiveInHierarchy || lights.size() >= kMaxPointLights) continue;
             glm::vec3 pos = t.GetWorldPosition(), dir = t.Forward();
             float outer = glm::radians(std::clamp(light.SpotAngle, 1.0f, 179.0f)) * 0.5f;
             float inner = glm::radians(std::clamp(light.InnerSpotAngle, 0.0f, light.SpotAngle)) * 0.5f;
@@ -672,8 +679,33 @@ namespace Dimension
                     glm::vec3 right = t.Right();
                     roll = std::atan2(glm::dot(right, up0), glm::dot(right, right0));
                 }
-            u.PointLights[u.Counts.x++] = { glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
-                                            glm::vec4(dir, cosOuter), glm::vec4(cosInner, cookie, roll, 0.0f) };
+            lights.push_back({ glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
+                               glm::vec4(dir, cosOuter), glm::vec4(cosInner, cookie, roll, 0.0f) });
+        }
+
+        // Clustered lights: the light array, each cluster's (offset, count) and the light index list, in the
+        // transient ring for this view.
+        if (!lights.empty())
+        {
+            std::vector<glm::vec4> spheres(lights.size());
+            for (size_t i = 0; i < lights.size(); ++i) spheres[i] = lights[i].PositionRange;
+            m_Clusters.Build(spheres, camera.View, camera.Projection, s_ClusterCulling);
+            TransientAllocation lightBlock = device.AllocateTransient(lights.size() * sizeof(PointLightGPU), 16);
+            TransientAllocation cellBlock = device.AllocateTransient(m_Clusters.Cells.size() * sizeof(glm::uvec2), 16);
+            TransientAllocation indexBlock = device.AllocateTransient(std::max<size_t>(m_Clusters.Indices.size(), 1) * sizeof(uint32_t), 16);
+            if (lightBlock && cellBlock && indexBlock)
+            {
+                std::memcpy(lightBlock.Data, lights.data(), lights.size() * sizeof(PointLightGPU));
+                std::memcpy(cellBlock.Data, m_Clusters.Cells.data(), m_Clusters.Cells.size() * sizeof(glm::uvec2));
+                if (!m_Clusters.Indices.empty()) std::memcpy(indexBlock.Data, m_Clusters.Indices.data(), m_Clusters.Indices.size() * sizeof(uint32_t));
+                glm::uvec2 a = SplitAddress(lightBlock.Address), b = SplitAddress(cellBlock.Address), c = SplitAddress(indexBlock.Address);
+                u.LightBuffers = glm::uvec4(a, b);
+                u.LightIndexBuffer = glm::uvec4(c, 0u, 0u);
+                u.ClusterParams = glm::vec4(m_Clusters.Near, m_Clusters.Far, m_Clusters.Orthographic ? 1.0f : 0.0f, std::log(m_Clusters.Far / m_Clusters.Near));
+                u.Counts.x = (int)lights.size();
+                m_Stats.Lights = (uint32_t)lights.size();
+                m_Stats.ClusterLightRefs = (uint32_t)m_Clusters.Indices.size();
+            }
         }
 
         // Prepare CPU-side draw lists
@@ -949,6 +981,7 @@ namespace Dimension
     }
 
     void SceneRenderer::SetInstancingEnabled(bool enabled) { s_InstancingEnabled = enabled; }
+    void SceneRenderer::SetLightClusteringEnabled(bool enabled) { s_ClusterCulling = enabled; }
     void SceneRenderer::RequestProbeBake() { ++s_ProbeBakeGeneration; }
 
     SceneRenderer::ProbeResources::~ProbeResources()
@@ -1188,11 +1221,32 @@ namespace Dimension
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
-            Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
+            // Cloth draws its own grid, with this frame's simulated vertices when playing.
+            const ClothComponent* cloth = reg.TryGet<ClothComponent>(e);
+            Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : AssetManager::GetMesh(mr.Mesh);
             if (!mesh) continue;
             RenderItem item;
             item.World = t.World;
-            const AABB& bounds = mesh->GetBounds();
+            AABB bounds = mesh->GetBounds();
+            if (cloth && cloth->SimulatedPositions.size() == mesh->GetVertexCount() && !cloth->SimulatedPositions.empty())
+            {
+                const auto& grid = Cloth::GridVertices(*cloth);
+                if (TransientAllocation block = device.AllocateTransient(grid.size() * sizeof(Vertex), 16))
+                {
+                    auto* out = (Vertex*)block.Data;
+                    bounds.Min = bounds.Max = cloth->SimulatedPositions[0];
+                    for (size_t i = 0; i < grid.size(); ++i)
+                    {
+                        out[i] = grid[i];
+                        out[i].Position = cloth->SimulatedPositions[i];
+                        out[i].Normal = cloth->SimulatedNormals[i];
+                        bounds.Min = glm::min(bounds.Min, out[i].Position);
+                        bounds.Max = glm::max(bounds.Max, out[i].Position);
+                    }
+                    item.Vertices = block.Buffer;
+                    item.VertexOffset = block.Offset;
+                }
+            }
             glm::mat3 m(t.World);
             glm::vec3 ext = bounds.Extents();
             item.Center = glm::vec3(t.World * glm::vec4(bounds.Center(), 1.0f));
@@ -1246,10 +1300,11 @@ namespace Dimension
                 VkDeviceAddress address = uploadMaterial(mat);
                 if (!address) continue;
                 bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
+                bool doubleSided = mat.DoubleSided || cloth; // cloth is seen from both sides
                 // Every part can batch: skinned instances carry their own skinning matrices, and transparent parts
-                // merge with same-batch neighbours in the back-to-front order.
-                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, mat.DoubleSided, item.Probe }, true);
-                m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, transparent, mat.DoubleSided, mat.CastShadows,
+                // merge with same-batch neighbours in the back-to-front order. Parts with their own vertices cannot.
+                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, doubleSided, item.Probe }, !item.Vertices);
+                m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, transparent, doubleSided, mat.CastShadows,
                                           (uint32_t)m_RenderItems.size(), batch });
             }
             item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
@@ -1275,6 +1330,8 @@ namespace Dimension
             const Pipeline* Pipe;
             float Depth;
             uint32_t Part = 0; // transparent draws: the part, for merging same-batch neighbours
+            VkBuffer Vertices = VK_NULL_HANDLE; // vertices other than the mesh's (cloth)
+            VkDeviceSize VertexOffset = 0;
         };
         std::vector<Draw> transparent;
         const Pipeline* bound = nullptr;
@@ -1290,6 +1347,11 @@ namespace Dimension
             {
                 d.MeshPtr->Bind(cmd);
                 boundMesh = d.MeshPtr;
+            }
+            if (d.Vertices)
+            {
+                vkCmdBindVertexBuffers(cmd, 0, 1, &d.Vertices, &d.VertexOffset);
+                boundMesh = nullptr; // the next draw binds its mesh's vertices again
             }
             vkCmdDrawIndexed(cmd, d.IndexCount, instances, d.FirstIndex, 0, 0);
             m_Stats.DrawCalls++;
@@ -1320,6 +1382,8 @@ namespace Dimension
             d.Push.Instances = 0;
             d.Push.Flags = item.Joints ? 1u : 0u;
             d.Push.Probe = item.Probe;
+            d.Vertices = item.Vertices;
+            d.VertexOffset = item.VertexOffset;
             d.Pipe = shadowPass  ? &res.Shadow
                    : depthPass   ? (part.DoubleSided ? &res.DepthPrepassDoubleSided : &res.DepthPrepass)
                    : part.Transparent ? &res.MeshTransparent : part.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
@@ -1415,6 +1479,87 @@ namespace Dimension
             d.Push.Flags |= 2u;
             submit(d, (uint32_t)run);
             i += run;
+        }
+    }
+
+    int LightClusters::SliceOf(float d) const
+    {
+        float s = Orthographic ? (d - Near) / (Far - Near) : std::log(std::max(d, Near) / Near) / std::log(Far / Near);
+        return std::clamp((int)(s * kSlices), 0, kSlices - 1);
+    }
+
+    void LightClusters::Build(const std::vector<glm::vec4>& spheres, const glm::mat4& view, const glm::mat4& proj, bool cull)
+    {
+        // Near and far planes from the projection (right-handed, depth 0..1).
+        Orthographic = proj[3][3] == 1.0f;
+        float n = proj[3][2] / proj[2][2];
+        float f = Orthographic ? n - 1.0f / proj[2][2] : proj[3][2] / (proj[2][2] + 1.0f);
+        Near = std::max(n, Orthographic ? -1e6f : 0.01f);
+        Far = std::clamp(f, Near + 0.01f, Near + 10000.0f);
+        if (!std::isfinite(Near) || !std::isfinite(Far)) { Near = 0.1f; Far = 1000.0f; }
+
+        // Each light's range of clusters: depth slices from its sphere, tiles from the screen bounds of its box.
+        struct Range { int X0, X1, Y0, Y1, S0, S1; };
+        std::vector<Range> ranges(spheres.size(), Range{ 0, -1, 0, -1, 0, -1 });
+        for (size_t i = 0; i < spheres.size(); ++i)
+        {
+            glm::vec3 c = glm::vec3(view * glm::vec4(glm::vec3(spheres[i]), 1.0f));
+            float r = std::max(spheres[i].w, 0.0f);
+            float dMin = -c.z - r, dMax = -c.z + r;
+            Range& rg = ranges[i];
+            if (!cull)
+            {
+                rg = { 0, kTilesX - 1, 0, kTilesY - 1, 0, kSlices - 1 };
+                continue;
+            }
+            if (dMax < Near || dMin > Far) continue;
+            rg.S0 = SliceOf(std::max(dMin, Near));
+            rg.S1 = SliceOf(std::min(dMax, Far));
+            glm::vec2 lo(-1.0f), hi(1.0f);
+            if (Orthographic || dMin > Near)
+            {
+                lo = glm::vec2(1e9f);
+                hi = glm::vec2(-1e9f);
+                for (int k = 0; k < 8; ++k)
+                {
+                    glm::vec3 corner = c + glm::vec3(k & 1 ? r : -r, k & 2 ? r : -r, k & 4 ? r : -r);
+                    glm::vec4 clip = proj * glm::vec4(corner, 1.0f);
+                    glm::vec2 ndc = glm::vec2(clip) / std::max(clip.w, 1e-6f);
+                    lo = glm::min(lo, ndc);
+                    hi = glm::max(hi, ndc);
+                }
+            }
+            auto tile = [](float ndc, int count) { return (int)std::floor((ndc * 0.5f + 0.5f) * (float)count); };
+            rg.X0 = std::max(tile(lo.x, kTilesX), 0);
+            rg.X1 = std::min(tile(hi.x, kTilesX), kTilesX - 1);
+            rg.Y0 = std::max(tile(lo.y, kTilesY), 0);
+            rg.Y1 = std::min(tile(hi.y, kTilesY), kTilesY - 1);
+        }
+        // Count, then fill (lights keep their order inside each cluster).
+        Cells.assign(kCount, glm::uvec2(0u));
+        for (const Range& rg : ranges)
+            for (int s = rg.S0; s <= rg.S1; ++s)
+                for (int y = rg.Y0; y <= rg.Y1; ++y)
+                    for (int x = rg.X0; x <= rg.X1; ++x)
+                        if (Cells[CellIndex(x, y, s)].y < kMaxPerCluster) ++Cells[CellIndex(x, y, s)].y;
+        uint32_t offset = 0;
+        for (auto& cell : Cells)
+        {
+            cell.x = offset;
+            offset += cell.y;
+            cell.y = 0;
+        }
+        Indices.assign(offset, 0u);
+        for (size_t i = 0; i < ranges.size(); ++i)
+        {
+            const Range& rg = ranges[i];
+            for (int s = rg.S0; s <= rg.S1; ++s)
+                for (int y = rg.Y0; y <= rg.Y1; ++y)
+                    for (int x = rg.X0; x <= rg.X1; ++x)
+                    {
+                        glm::uvec2& cell = Cells[CellIndex(x, y, s)];
+                        if (cell.y < kMaxPerCluster) Indices[cell.x + cell.y++] = (uint32_t)i;
+                    }
         }
     }
 
@@ -1621,7 +1766,7 @@ namespace Dimension
             // Layout at bake size: <size=N> (same units as Font Size) is N / s pixels.
             auto quads = font->Layout(text.Text, Font::kBakeSize, 0.0f, text.Align, 0.0f, block, text.RichText, 1.0f / s);
             glm::vec4 color = ToLinear(text.Color);
-            uint32_t atlas = font->GetAtlas()->GetBindlessIndex(), white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
+            uint32_t atlas = font->GetAtlasIndex(), white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
             float depth = (camera.View * t.World[3]).z;
             for (auto& q : quads)
             {
@@ -2331,8 +2476,18 @@ namespace Dimension
                                                                                                                          glm::normalize(glm::vec3(t.World[1])),
                                                                                                                          glm::normalize(glm::vec3(t.World[2])))));
             float hx = vehicle->TrackWidth * 0.5f, hz = vehicle->WheelBase * 0.5f, drop = 0.05f + vehicle->SuspensionTravel;
-            for (glm::vec3 mount : { glm::vec3(-hx, vehicle->WheelHeight, -hz), glm::vec3(hx, vehicle->WheelHeight, -hz), glm::vec3(-hx, vehicle->WheelHeight, hz),
-                                     glm::vec3(hx, vehicle->WheelHeight, hz) })
+            std::vector<glm::vec3> mounts;
+            if (vehicle->Type == VehicleType::Motorcycle)
+                mounts = { { 0.0f, vehicle->WheelHeight, -hz }, { 0.0f, vehicle->WheelHeight, hz } };
+            else if (vehicle->Type == VehicleType::Tank)
+            {
+                int perSide = std::clamp(vehicle->TrackWheels, 2, 16);
+                for (float x : { -hx, hx })
+                    for (int k = 0; k < perSide; ++k) mounts.push_back({ x, vehicle->WheelHeight, -hz + vehicle->WheelBase * (float)k / (float)(perSide - 1) });
+            }
+            else
+                mounts = { { -hx, vehicle->WheelHeight, -hz }, { hx, vehicle->WheelHeight, -hz }, { -hx, vehicle->WheelHeight, hz }, { hx, vehicle->WheelHeight, hz } };
+            for (glm::vec3 mount : mounts)
             {
                 glm::vec3 center = mount - glm::vec3(0.0f, drop, 0.0f);
                 for (float side : { -0.5f, 0.5f })

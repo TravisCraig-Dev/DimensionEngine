@@ -1,5 +1,6 @@
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Core/Log.h"
+#include "Dimension/Asset/ImportCache.h"
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
@@ -417,6 +418,7 @@ namespace Dimension
     bool MeshData::LoadFromFile(const fs::path& path, MeshData& out)
     {
         out = MeshData();
+        if (ImportCache::LoadMesh(path, out)) return true;
         out.Name = path.filename().string();
         auto ext = path.extension().string();
         for (auto& c : ext) c = (char)std::tolower(c);
@@ -425,7 +427,11 @@ namespace Dimension
         else if (ext == ".obj") ok = LoadObj(path, out);
         else Log::Error("Unsupported mesh format '{}'", ext);
         if (ok && out.SubMeshes.empty()) out.SubMeshes.push_back({ 0, (uint32_t)out.Indices.size(), -1 });
-        if (ok) out.GenerateTangents();
+        if (ok)
+        {
+            out.GenerateTangents();
+            ImportCache::StoreMesh(path, out);
+        }
         return ok;
     }
 
