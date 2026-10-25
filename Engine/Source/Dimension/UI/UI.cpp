@@ -277,14 +277,33 @@ namespace Dimension::UI
 
         // Appends a clipped quad (UVs are cut proportionally).
         void Emit(std::vector<DrawCommand>& out, glm::vec2 mn, glm::vec2 mx, glm::vec2 uvMin, glm::vec2 uvMax, const glm::vec4& color,
-                  uint32_t tex, const UIRectComponent& clip)
+                  uint32_t tex, const UIRectComponent& clip, float slant = 0.0f)
         {
             glm::vec2 cmn = glm::max(mn, clip.ClipMin), cmx = glm::min(mx, clip.ClipMax);
             if (cmx.x <= cmn.x || cmx.y <= cmn.y) return;
             glm::vec2 size = mx - mn;
             if (size.x <= 0.0f || size.y <= 0.0f) return;
             glm::vec2 t0 = (cmn - mn) / size, t1 = (cmx - mn) / size;
-            out.push_back({ cmn, cmx, glm::mix(uvMin, uvMax, t0), glm::mix(uvMin, uvMax, t1), color, tex });
+            DrawCommand cmd{ cmn, cmx, glm::mix(uvMin, uvMax, t0), glm::mix(uvMin, uvMax, t1), color, tex, slant };
+            if (slant != 0.0f) // a bottom clipped off moves the new bottom edge along the slant
+            {
+                float shift = slant * (mx.y - cmx.y);
+                cmd.Min.x += shift;
+                cmd.Max.x += shift;
+            }
+            out.push_back(cmd);
+        }
+
+        // Rich text quads: glyphs in the atlas, underlines and strikethroughs in white, tag colors replacing the
+        // text's color (keeping its alpha).
+        void EmitTextQuads(std::vector<DrawCommand>& out, const std::vector<TextQuad>& quads, glm::vec2 origin, const glm::vec4& color, uint32_t atlas,
+                           uint32_t white, const UIRectComponent& clip)
+        {
+            for (auto& q : quads)
+            {
+                glm::vec4 c = q.HasColor ? glm::vec4(glm::vec3(q.Color), q.Color.a * color.a) : color;
+                Emit(out, origin + q.Min, origin + q.Max, q.UVMin, q.UVMax, c, q.Solid ? white : atlas, clip, q.Skew);
+            }
         }
 
         void EmitSliced(std::vector<DrawCommand>& out, const UIRectComponent& rect, const UIImageComponent& image, const glm::vec4& color,
@@ -489,6 +508,57 @@ namespace Dimension::UI
             return (r.ComputedMin + r.ComputedMax) * 0.5f;
         }
 
+        // Widgets the arrows can reach, in draw order (UI Navigation mode None opts out).
+        std::vector<Entity> NavigationCandidates(Registry& reg, const std::vector<Entity>& order)
+        {
+            std::vector<Entity> candidates;
+            for (Entity e : order)
+                if (IsSelectable(reg, e))
+                    if (auto* nav = reg.TryGet<UINavigationComponent>(e); !nav || nav->Mode != UINavigationMode::None) candidates.push_back(e);
+            return candidates;
+        }
+
+        // Where a move in `dir` goes from `selected` (null: the top-left widget): its explicit link, or in Automatic
+        // mode the nearest widget that way. Returns null when it stays put. `isExplicit` reports a link was used.
+        Entity NavigationTarget(Registry& reg, const std::vector<Entity>& candidates, Entity selected, glm::vec2 dir, bool* isExplicit = nullptr)
+        {
+            if (isExplicit) *isExplicit = false;
+            if (candidates.empty()) return Entity::Null();
+            const auto* nav = selected.IsNull() ? nullptr : reg.TryGet<UINavigationComponent>(selected);
+            Entity link = Entity::Null();
+            if (nav) link = dir.y < 0.0f ? nav->SelectOnUp : dir.y > 0.0f ? nav->SelectOnDown : dir.x < 0.0f ? nav->SelectOnLeft : nav->SelectOnRight;
+            bool linkValid = !link.IsNull() && reg.Valid(link) && std::find(candidates.begin(), candidates.end(), link) != candidates.end();
+            if (nav && nav->Mode == UINavigationMode::None) return Entity::Null();
+            if (linkValid)
+            {
+                if (isExplicit) *isExplicit = true;
+                return link;
+            }
+            if (nav && nav->Mode == UINavigationMode::Explicit) return Entity::Null(); // no link this way
+            if (selected.IsNull())
+            {
+                // Nothing selected yet: start at the top-left widget.
+                return *std::min_element(candidates.begin(), candidates.end(), [&](Entity a, Entity b) {
+                    glm::vec2 ca = CenterOf(reg, a), cb = CenterOf(reg, b);
+                    return ca.y + ca.x * 0.25f < cb.y + cb.x * 0.25f;
+                });
+            }
+            glm::vec2 from = CenterOf(reg, selected);
+            Entity best = Entity::Null();
+            float bestScore = 1e30f;
+            for (Entity c : candidates)
+            {
+                if (c == selected) continue;
+                glm::vec2 d = CenterOf(reg, c) - from;
+                float along = glm::dot(d, dir);
+                if (along <= 1.0f) continue;
+                float across = std::abs(d.x * dir.y - d.y * dir.x);
+                float score = along + across * 2.0f; // prefer widgets straight ahead
+                if (score < bestScore) { bestScore = score; best = c; }
+            }
+            return best;
+        }
+
         // Keyboard / gamepad navigation (like Unity's EventSystem): the selection moves to the nearest widget in the
         // pressed direction, Submit presses it, sliders step with Left/Right, and an open dropdown list is navigated
         // with Up/Down. A mouse click selects the clicked widget (or clears the selection).
@@ -496,10 +566,7 @@ namespace Dimension::UI
                       Entity hovered, std::vector<Entity>& clicked, std::vector<std::pair<Entity, float>>& values)
         {
             Entity selected = scene.GetUISelected();
-            std::vector<Entity> candidates; // reachable by arrows (UI Navigation mode None opts out)
-            for (Entity e : order)
-                if (IsSelectable(reg, e))
-                    if (auto* nav = reg.TryGet<UINavigationComponent>(e); !nav || nav->Mode != UINavigationMode::None) candidates.push_back(e);
+            std::vector<Entity> candidates = NavigationCandidates(reg, order);
             if (!selected.IsNull() && !IsSelectable(reg, selected)) selected = Entity::Null();
             if (pointer.Pressed)
             {
@@ -565,39 +632,7 @@ namespace Dimension::UI
             }
             else if (dir != glm::vec2(0.0f) && !candidates.empty())
             {
-                const auto* nav = selected.IsNull() ? nullptr : reg.TryGet<UINavigationComponent>(selected);
-                Entity link = Entity::Null();
-                if (nav)
-                    link = dir.y < 0.0f ? nav->SelectOnUp : dir.y > 0.0f ? nav->SelectOnDown : dir.x < 0.0f ? nav->SelectOnLeft : nav->SelectOnRight;
-                bool linkValid = !link.IsNull() && reg.Valid(link) && std::find(candidates.begin(), candidates.end(), link) != candidates.end();
-                if (nav && nav->Mode == UINavigationMode::None) {} // stays put
-                else if (linkValid) selected = link;
-                else if (nav && nav->Mode == UINavigationMode::Explicit) {} // no link this way: stays put
-                else if (selected.IsNull())
-                {
-                    // Nothing selected yet: start at the top-left widget.
-                    selected = *std::min_element(candidates.begin(), candidates.end(), [&](Entity a, Entity b) {
-                        glm::vec2 ca = CenterOf(reg, a), cb = CenterOf(reg, b);
-                        return ca.y + ca.x * 0.25f < cb.y + cb.x * 0.25f;
-                    });
-                }
-                else
-                {
-                    glm::vec2 from = CenterOf(reg, selected);
-                    Entity best = Entity::Null();
-                    float bestScore = 1e30f;
-                    for (Entity c : candidates)
-                    {
-                        if (c == selected) continue;
-                        glm::vec2 d = CenterOf(reg, c) - from;
-                        float along = glm::dot(d, dir);
-                        if (along <= 1.0f) continue;
-                        float across = std::abs(d.x * dir.y - d.y * dir.x);
-                        float score = along + across * 2.0f; // prefer widgets straight ahead
-                        if (score < bestScore) { bestScore = score; best = c; }
-                    }
-                    if (!best.IsNull()) selected = best;
-                }
+                if (Entity next = NavigationTarget(reg, candidates, selected, dir); !next.IsNull()) selected = next;
             }
 
             if (pointer.Submit && navigating && !selected.IsNull())
@@ -624,6 +659,50 @@ namespace Dimension::UI
             (void)screen;
             scene.SetUISelected(selected);
         }
+    }
+
+    void DragRect(const UIRectComponent& rect, glm::ivec2 sides, glm::vec2 deltaPixels, glm::vec2& position, glm::vec2& size)
+    {
+        // min = ref + P*s - pivot*(span + S*s), max = min + span + S*s: moving one edge by d pixels changes S by +-d/s and
+        // P by the pivot's share of it, so the other edge stays.
+        glm::vec2 d = deltaPixels / std::max(rect.ComputedScale, 1e-4f);
+        if (sides == glm::ivec2(0))
+        {
+            position += d;
+            return;
+        }
+        for (int axis = 0; axis < 2; ++axis)
+        {
+            if (sides[axis] > 0)
+            {
+                size[axis] += d[axis];
+                position[axis] += rect.Pivot[axis] * d[axis];
+            }
+            else if (sides[axis] < 0)
+            {
+                size[axis] -= d[axis];
+                position[axis] += (1.0f - rect.Pivot[axis]) * d[axis];
+            }
+        }
+    }
+
+    std::vector<NavigationLink> NavigationLinks(Scene& scene, const std::vector<Entity>& order)
+    {
+        auto& reg = scene.GetRegistry();
+        std::vector<Entity> candidates = NavigationCandidates(reg, order);
+        static const glm::vec2 dirs[4] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
+        std::vector<NavigationLink> links;
+        for (Entity from : candidates)
+            for (int d = 0; d < 4; ++d)
+            {
+                bool isExplicit = false;
+                Entity to = NavigationTarget(reg, candidates, from, dirs[d], &isExplicit);
+                if (to.IsNull() || to == from) continue;
+                const auto& a = reg.Get<UIRectComponent>(from);
+                const auto& b = reg.Get<UIRectComponent>(to);
+                links.push_back({ from, to, (NavigationDirection)d, isExplicit, a.ComputedMin, a.ComputedMax, b.ComputedMin, b.ComputedMax });
+            }
+        return links;
     }
 
     std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screen)
@@ -1217,13 +1296,12 @@ namespace Dimension::UI
                 if (!font) continue;
                 float pixelSize = text->FontSize * s;
                 glm::vec2 block;
-                auto quads = font->Layout(text->Text, pixelSize, text->Wrap ? size.x : 0.0f, text->Align, size.x, block);
+                auto quads = font->Layout(text->Text, pixelSize, text->Wrap ? size.x : 0.0f, text->Align, size.x, block, text->RichText, s);
                 float y = text->VerticalAlign == TextVAlign::Top      ? 0.0f
                         : text->VerticalAlign == TextVAlign::Middle   ? (size.y - block.y) * 0.5f
                                                                       : size.y - block.y;
                 glm::vec2 origin = mn + glm::vec2(0.0f, y);
-                uint32_t atlas = font->GetAtlas()->GetBindlessIndex();
-                for (auto& q : quads) Emit(out, origin + q.Min, origin + q.Max, q.UVMin, q.UVMax, text->Color, atlas, rect);
+                EmitTextQuads(out, quads, origin, text->Color, font->GetAtlas()->GetBindlessIndex(), white, rect);
             }
         }
 

@@ -99,6 +99,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, ulong, void> InvokeEntity;
         public delegate* unmanaged<IntPtr, void> DestroyInstance;
         public delegate* unmanaged<IntPtr, int, byte*, void> InvokeString;
+        public delegate* unmanaged<IntPtr, ulong, int, float, ulong, byte*, void> RaiseEvent;
     }
 
     internal static unsafe class Native
@@ -148,6 +149,7 @@ namespace Dimension.Interop
                 api->InvokeEntity = &ScriptHost.InvokeEntity;
                 api->DestroyInstance = &ScriptHost.DestroyInstance;
                 api->InvokeString = &ScriptHost.InvokeString;
+                api->RaiseEvent = &ScriptHost.RaiseEvent;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

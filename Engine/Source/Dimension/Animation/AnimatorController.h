@@ -23,7 +23,10 @@ namespace Dimension
         float Threshold = 0.0f;
     };
 
-    enum class AnimMotionType : int32_t { Clip = 0, BlendTree1D = 1, BlendTree2D = 2 };
+    // BlendTree2D is Unity's "2D Freeform Cartesian"; BlendTree2DDirectional is "2D Simple Directional" (one motion
+    // per direction, plus optionally one at the center).
+    enum class AnimMotionType : int32_t { Clip = 0, BlendTree1D = 1, BlendTree2D = 2, BlendTree2DDirectional = 3 };
+    inline bool IsBlendTree2D(AnimMotionType m) { return m == AnimMotionType::BlendTree2D || m == AnimMotionType::BlendTree2DDirectional; }
 
     // One motion of a blend tree: placed at `Threshold` on the blend parameter (1D), or at (Threshold, ThresholdY) on
     // the two parameters (2D).
@@ -87,6 +90,11 @@ namespace Dimension
         const AnimParameter* FindParameter(const std::string& name) const;
         // Points every layer's machine at this controller's parameters (call after copying or editing layers).
         void LinkLayers() const;
+        // Gives every synced layer the states (names, layout, speed, loop) and transitions of its source layer, keeping
+        // the layer's own motion per state. Call after loading or editing the source layer.
+        void SyncLayerStates();
+        // The machine a layer index refers to (0 = this base layer, n = Layers[n - 1]); null when out of range.
+        const AnimatorController* LayerMachine(int layer) const;
         // Fixes indices after a state is removed.
         void RemoveState(int index);
 
@@ -102,7 +110,15 @@ namespace Dimension
         AnimLayerBlending Blending = AnimLayerBlending::Override;
         std::vector<std::string> Mask; // joints affected, with their descendants; empty = the whole skeleton
         AnimatorController Machine;    // States, Transitions and DefaultState (its Parameters are unused)
+        // Synced layer (like Unity's Sync): -1 = off; otherwise an earlier layer (0 = base, n = n-th extra layer) whose
+        // state machine drives this one. The layer then plays its own motion for each of that layer's states (a state
+        // without one plays the source's), at the source's normalized time and through the same crossfades; its own
+        // transitions are unused.
+        int SyncedLayer = -1;
     };
+
+    // A state's own motion in a synced layer: a clip, or a blend tree with children. Otherwise the source's plays.
+    inline bool HasOwnMotion(const AnimState& s) { return s.Motion == AnimMotionType::Clip ? !s.Clip.empty() : !s.Children.empty(); }
 
     // Per-entity state machine state (runtime only).
     struct AnimatorRuntime
@@ -135,6 +151,12 @@ namespace Dimension
         // Weight per child of a 2D blend tree (freeform cartesian, gradient band interpolation): sums to 1, exactly 1 at
         // a child's position, and the children nearest the point share the rest. Works for any child layout.
         void BlendWeights2D(const AnimState& state, const glm::vec2& value, std::vector<float>& weights);
+        // Weight per child of a 2D simple directional tree: the point's direction picks the two children whose
+        // directions enclose it, blended by their angle and distance, and a child at the center (if any) takes the rest
+        // toward the middle. Without a center child only the direction matters. Sums to 1.
+        void BlendWeightsDirectional(const AnimState& state, const glm::vec2& value, std::vector<float>& weights);
+        // Either 2D weighting, by the state's motion type.
+        void BlendWeightsAt(const AnimState& state, const glm::vec2& value, std::vector<float>& weights);
         // Weights of a blend tree state from the runtime's parameter values (1D or 2D).
         void TreeWeights(const AnimatorController& controller, const AnimatorRuntime& runtime, const AnimState& state, std::vector<float>& weights);
         // Appends the functions of events whose time lies in (from, to] (normalized; loops repeat every 1.0).

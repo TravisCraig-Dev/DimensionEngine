@@ -23,10 +23,12 @@ void main()
     vec3 tangent = aTangent.xyz;
     if ((pc.Flags & 1u) != 0u)
     {
-        // Linear blend skinning with up to 4 joints per vertex.
+        // Linear blend skinning with up to 4 joints per vertex. Instances of a skinned mesh share its weights but
+        // each has its own pose.
+        JointsRef joints = (pc.Flags & 2u) != 0u ? JointsRef(pc.Instances.Items[gl_InstanceIndex].Data.yz) : pc.Joints;
         SkinVertex s = pc.Skin.Vertices[gl_VertexIndex];
-        mat4 skin = pc.Joints.Matrices[s.Joints.x] * s.Weights.x + pc.Joints.Matrices[s.Joints.y] * s.Weights.y +
-                    pc.Joints.Matrices[s.Joints.z] * s.Weights.z + pc.Joints.Matrices[s.Joints.w] * s.Weights.w;
+        mat4 skin = joints.Matrices[s.Joints.x] * s.Weights.x + joints.Matrices[s.Joints.y] * s.Weights.y +
+                    joints.Matrices[s.Joints.z] * s.Weights.z + joints.Matrices[s.Joints.w] * s.Weights.w;
         position = vec3(skin * vec4(aPosition, 1.0));
         normal = mat3(skin) * aNormal;
         tangent = mat3(skin) * aTangent.xyz;

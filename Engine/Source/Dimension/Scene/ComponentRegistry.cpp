@@ -140,6 +140,16 @@ namespace Dimension
                 .Tooltip("Moves the object by the animation's root movement (walk cycles that travel). With a Character Controller it moves the character.")
             .Field("Root Motion Joint", &AnimatorComponent::RootMotionJoint).Tooltip("Empty = the first root joint (e.g. Hips)");
 
+        Register<IKTargetComponent>("IK Target", "Animation")
+            .Field("Animator", &IKTargetComponent::Animator).Tooltip("Object with the Animator. None = the nearest parent with one.")
+            .Field("Tip", &IKTargetComponent::Tip).Tooltip("Joint pulled to this object's position (a hand, a foot)")
+            .Field("Chain Length", &IKTargetComponent::ChainLength).Range(1, 32)
+                .Tooltip("Joints above the tip that turn. 2 solves exactly (upper and lower limb); other lengths iterate.")
+            .Field("Hint", &IKTargetComponent::Hint).Tooltip("Optional object a two-joint chain bends toward (elbow or knee direction)")
+            .Field("Weight", &IKTargetComponent::Weight).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Layer", &IKTargetComponent::Layer).Range(-1, 32)
+                .Tooltip("Applied after this Animator layer (0 = base layer); its weight scales with that layer's. -1 = after all layers.");
+
         using PS = ParticleSystemComponent;
         Register<PS>("Particle System", "Effects")
             .Field("Duration", &PS::Duration).Range(0.05f, 1000.0f).Speed(0.05f)
@@ -236,7 +246,8 @@ namespace Dimension
             .Field("Color", &TextRendererComponent::Color).As(FieldType::Color4)
             .Field("Font Size", &TextRendererComponent::FontSize).Range(0.001f, 1000.0f).Speed(0.01f)
             .Field("Alignment", &TextRendererComponent::Align).Enum({ "Left", "Center", "Right" })
-            .Field("Sorting Order", &TextRendererComponent::SortingOrder);
+            .Field("Sorting Order", &TextRendererComponent::SortingOrder)
+            .Field("Rich Text", &TextRendererComponent::RichText).Tooltip("Style with tags: <b>, <i>, <u>, <s>, <color=#ff8000>, <size=0.8>, <br>");
 
         Register<CanvasComponent>("Canvas", "UI")
             .Field("Scale Mode", &CanvasComponent::ScaleMode).Enum({ "Constant Pixel Size", "Scale With Screen Size" })
@@ -261,7 +272,9 @@ namespace Dimension
             .Field("Color", &UITextComponent::Color).As(FieldType::Color4)
             .Field("Alignment", &UITextComponent::Align).Enum({ "Left", "Center", "Right" })
             .Field("Vertical Alignment", &UITextComponent::VerticalAlign).Enum({ "Top", "Middle", "Bottom" })
-            .Field("Wrap", &UITextComponent::Wrap);
+            .Field("Wrap", &UITextComponent::Wrap)
+            .Field("Rich Text", &UITextComponent::RichText)
+                .Tooltip("Style with tags: <b>bold</b>, <i>italic</i>, <u>underline</u>, <s>strike</s>, <color=#ff8000>color</color> (or a name), <size=40>size</size> or <size=150%>, and <br> for a line break");
         Register<ReflectionProbeComponent>("Reflection Probe", "Rendering")
             .Field("Size", &ReflectionProbeComponent::Size).Speed(0.05f).Tooltip("Influence box: surfaces inside reflect this probe")
             .Field("Resolution", &ReflectionProbeComponent::Resolution).Enum({ "64", "128", "256", "512" })
@@ -382,6 +395,30 @@ namespace Dimension
             .Field("Cookie", &SpotLightComponent::Cookie).As(FieldType::Texture)
                 .Tooltip("Texture projected through the cone, like a gobo: its color multiplies the light. Rolls with the light.");
 
+        Register<VehicleComponent>("Vehicle", "Physics")
+            .Field("Wheel Base", &VehicleComponent::WheelBase).Range(0.2f, 20.0f).Speed(0.01f).Tooltip("Front to rear axle (m). The car faces -Z.")
+            .Field("Track Width", &VehicleComponent::TrackWidth).Range(0.2f, 10.0f).Speed(0.01f).Tooltip("Left to right wheel (m)")
+            .Field("Wheel Height", &VehicleComponent::WheelHeight).Speed(0.01f).Tooltip("Height of the suspension mounts in the body's space")
+            .Field("Wheel Radius", &VehicleComponent::WheelRadius).Range(0.05f, 5.0f).Speed(0.01f)
+            .Field("Wheel Width", &VehicleComponent::WheelWidth).Range(0.02f, 2.0f).Speed(0.01f)
+            .Field("Suspension Travel", &VehicleComponent::SuspensionTravel).Range(0.01f, 2.0f).Speed(0.01f)
+            .Field("Suspension Frequency", &VehicleComponent::SuspensionFrequency).Range(0.1f, 20.0f).Speed(0.01f).Tooltip("Spring stiffness (Hz)")
+            .Field("Suspension Damping", &VehicleComponent::SuspensionDamping).Range(0.0f, 2.0f).Speed(0.01f)
+            .Field("Max Steer Angle", &VehicleComponent::MaxSteerAngle).Range(0.0f, 80.0f).Speed(0.1f)
+            .Field("Drive", &VehicleComponent::Drive).Enum({ "Rear Wheel", "Front Wheel", "All Wheel" })
+            .Field("Engine Torque", &VehicleComponent::EngineTorque).Range(0.0f, 100000.0f).Speed(1.0f).Tooltip("Newton metres")
+            .Field("Max RPM", &VehicleComponent::MaxRPM).Range(500.0f, 30000.0f).Speed(10.0f)
+            .Field("Brake Torque", &VehicleComponent::BrakeTorque).Range(0.0f, 100000.0f).Speed(1.0f)
+            .Field("Hand Brake Torque", &VehicleComponent::HandBrakeTorque).Range(0.0f, 100000.0f).Speed(1.0f)
+            .Field("Wheel Front Left", &VehicleComponent::WheelFrontLeft).Tooltip("Optional visual (e.g. a Cylinder) moved and spun with the wheel")
+            .Field("Wheel Front Right", &VehicleComponent::WheelFrontRight)
+            .Field("Wheel Rear Left", &VehicleComponent::WheelRearLeft)
+            .Field("Wheel Rear Right", &VehicleComponent::WheelRearRight)
+            .Field("Throttle", &VehicleComponent::Throttle).Range(-1.0f, 1.0f).Speed(0.01f).Tooltip("Set by scripts: -1..1, negative reverses")
+            .Field("Steering", &VehicleComponent::Steering).Range(-1.0f, 1.0f).Speed(0.01f).Tooltip("Set by scripts: -1..1, positive steers right")
+            .Field("Brake", &VehicleComponent::Brake).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Hand Brake", &VehicleComponent::HandBrake).Range(0.0f, 1.0f).Speed(0.01f);
+
         Register<AudioSourceComponent>("Audio Source", "Audio")
             .Field("Clip", &AudioSourceComponent::Clip).As(FieldType::Audio)
             .Field("Volume", &AudioSourceComponent::Volume).Range(0.0f, 1.0f).Speed(0.01f)
@@ -393,7 +430,11 @@ namespace Dimension
             .Field("Max Distance", &AudioSourceComponent::MaxDistance).Range(0.01f, 10000.0f)
             .Field("Output", &AudioSourceComponent::Output).Tooltip("Audio Mixer group (Window > Audio Mixer); empty = Master")
             .Field("Stream", &AudioSourceComponent::Stream).Tooltip("Stream from disk while playing (music, long clips)")
-            .Field("Mute", &AudioSourceComponent::Mute);
+            .Field("Mute", &AudioSourceComponent::Mute)
+            .Field("Occlusion", &AudioSourceComponent::Occlusion)
+                .Tooltip("Spatial sources: 3D colliders between the listener and the source muffle and quiet the sound (triggers and the source's own colliders don't; nor does the Ignore Raycast layer)")
+            .Field("Occlusion Volume", &AudioSourceComponent::OcclusionVolume).Range(-60.0f, 0.0f).Speed(0.1f).Tooltip("dB when fully occluded")
+            .Field("Occlusion Cutoff", &AudioSourceComponent::OcclusionCutoff).Range(100.0f, 20000.0f).Speed(10.0f).Tooltip("Low-pass cutoff (Hz) when fully occluded");
 
         // Script fields are drawn/serialized specially (class picker + per-class fields).
         Register<ScriptComponent>("Script", "Scripting"); // custom-serialized list of scripts (see SceneSerializer)
@@ -469,6 +510,9 @@ namespace Dimension
         Register<MeshColliderComponent>("Mesh Collider", "Physics")
             .Field("Mesh", &MeshColliderComponent::Mesh).As(FieldType::Mesh).Tooltip("None = the Mesh Renderer's mesh")
             .Field("Convex", &MeshColliderComponent::Convex).Tooltip("Use the convex hull (always on for dynamic bodies)")
+            .Field("Convex Decomposition", &MeshColliderComponent::ConvexDecomposition)
+                .Tooltip("Convex and dynamic: several convex parts that follow the mesh's shape (holes, hollows) instead of one hull. Computed once per mesh when play starts; the parts show while selected.")
+            .Field("Max Parts", &MeshColliderComponent::MaxParts).Range(1, 256)
             .Field("Friction", &MeshColliderComponent::Friction).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Bounciness", &MeshColliderComponent::Restitution).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Is Trigger", &MeshColliderComponent::IsTrigger);

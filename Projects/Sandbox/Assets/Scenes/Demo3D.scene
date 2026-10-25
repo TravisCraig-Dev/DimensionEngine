@@ -1250,7 +1250,7 @@
           ]
         },
         "UI Text": {
-          "Text": "WASD to move the green cube, Space to jump",
+          "Text": "<b>WASD</b> to move the <color=#5ee08a>green cube</color>, <b>Space</b> to jump  -  <i>rich text</i>, <u>underline</u>, <s>strike</s>, <size=34>size</size>",
           "Font": 0,
           "Font Size": 26,
           "Color": [
@@ -1757,10 +1757,10 @@
         },
         "Transform": {
           "Position": [
-          -4.8,
-          1.1,
-          7.2
-        ],
+            -4.8,
+            1.1,
+            7.2
+          ],
           "Rotation": [
             0,
             0,
@@ -5539,6 +5539,232 @@
           "Intensity": 1.0,
           "Box Projection": true,
           "Realtime": false
+        }
+      }
+    },
+    {
+      "guid": 750001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Tentacle (IK)",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -8.6,
+            0,
+            -2.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 100030,
+          "Material": 100025,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Sway",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true
+        }
+      }
+    },
+    {
+      "guid": 750002,
+      "parent": 750001,
+      "components": {
+        "Tag": {
+          "Name": "IK Orbit",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Rotator",
+              "Fields": {
+                "Degrees Per Second": [
+                  0,
+                  70,
+                  0
+                ]
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 750003,
+      "parent": 750002,
+      "components": {
+        "Tag": {
+          "Name": "IK Target",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            1.1,
+            1.6,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.3,
+            0.3,
+            0.3
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            1.0,
+            0.55,
+            0.2,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 3.0,
+          "Cast Shadows": false
+        },
+        "IK Target": {
+          "Tip": "Bone5",
+          "Chain Length": 5,
+          "Weight": 1.0,
+          "Layer": -1
+        }
+      }
+    },
+    {
+      "guid": 750004,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Spawn Clicks",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0.5,
+            1
+          ],
+          "Anchor Max": [
+            0.5,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            180,
+            -58
+          ],
+          "Size": [
+            320,
+            44
+          ]
+        },
+        "UI Text": {
+          "Text": "Clicks: 0",
+          "Font": 0,
+          "Font Size": 26,
+          "Color": [
+            0.1,
+            0.12,
+            0.18,
+            0.9
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.ButtonCounter",
+              "Fields": {
+                "Button": "Spawn Button",
+                "Limit": 0
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     }

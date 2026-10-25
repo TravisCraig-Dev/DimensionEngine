@@ -2,6 +2,7 @@
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -111,7 +112,7 @@ namespace Dimension
         struct InstanceGPU
         {
             glm::mat4 Model;
-            glm::uvec4 Data; // x: entity id
+            glm::uvec4 Data; // x: entity id, yz: skinning matrices address
         };
 
 
@@ -1245,7 +1246,9 @@ namespace Dimension
                 VkDeviceAddress address = uploadMaterial(mat);
                 if (!address) continue;
                 bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
-                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, mat.DoubleSided, item.Probe }, !skinned && !transparent);
+                // Every part can batch: skinned instances carry their own skinning matrices, and transparent parts
+                // merge with same-batch neighbours in the back-to-front order.
+                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, mat.DoubleSided, item.Probe }, true);
                 m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, transparent, mat.DoubleSided, mat.CastShadows,
                                           (uint32_t)m_RenderItems.size(), batch });
             }
@@ -1271,6 +1274,7 @@ namespace Dimension
             MeshPush Push;
             const Pipeline* Pipe;
             float Depth;
+            uint32_t Part = 0; // transparent draws: the part, for merging same-batch neighbours
         };
         std::vector<Draw> transparent;
         const Pipeline* bound = nullptr;
@@ -1298,6 +1302,9 @@ namespace Dimension
             }
         };
 
+        auto InstanceOf = [](const RenderItem& item) {
+            return InstanceGPU{ item.World, glm::uvec4(item.EntityId, (uint32_t)item.Joints, (uint32_t)(item.Joints >> 32), 0) };
+        };
         glm::vec3 camPos = glm::vec3(glm::inverse(viewProj) * glm::vec4(0, 0, 0, 1)); // only used for sorting
         auto makeDraw = [&](const RenderPart& part) {
             const RenderItem& item = m_RenderItems[part.Item];
@@ -1340,6 +1347,7 @@ namespace Dimension
                     if (depthPass) continue;
                     Draw d = makeDraw(part);
                     d.Depth = glm::distance(item.Center, camPos);
+                    d.Part = p;
                     transparent.push_back(d);
                     continue;
                 }
@@ -1371,11 +1379,7 @@ namespace Dimension
                 {
                     uint32_t n = std::min(count - done, kMaxInstancesPerDraw);
                     InstanceGPU* items = instanceData + instanceCursor;
-                    for (uint32_t k = 0; k < n; ++k)
-                    {
-                        const RenderItem& item = m_RenderItems[m_RenderParts[m_SortedParts[first + done + k]].Item];
-                        items[k] = { item.World, glm::uvec4(item.EntityId, 0, 0, 0) };
-                    }
+                    for (uint32_t k = 0; k < n; ++k) items[k] = InstanceOf(m_RenderItems[m_RenderParts[m_SortedParts[first + done + k]].Item]);
                     Draw batch = makeDraw(m_RenderParts[m_SortedParts[first + done]]);
                     batch.Push.Instances = instanceBlock.Address + instanceCursor * sizeof(InstanceGPU);
                     batch.Push.Flags |= 2u;
@@ -1388,9 +1392,30 @@ namespace Dimension
                 for (uint32_t k = 0; k < count; ++k) submit(makeDraw(m_RenderParts[m_SortedParts[first + k]]), 1);
         }
 
-        // Transparent meshes after opaque ones, far to near.
+        // Transparent meshes after opaque ones, far to near. Runs of neighbours from the same batch become one
+        // instanced draw: instances blend in instance order, so the back-to-front order is kept exactly.
         std::sort(transparent.begin(), transparent.end(), [](const Draw& a, const Draw& b) { return a.Depth > b.Depth; });
-        for (auto& d : transparent) submit(d, 1);
+        for (size_t i = 0; i < transparent.size();)
+        {
+            uint32_t batch = m_RenderParts[transparent[i].Part].Batch;
+            size_t run = 1;
+            if (s_InstancingEnabled && m_BatchInstanceable[batch])
+                while (i + run < transparent.size() && run < kMaxInstancesPerDraw && m_RenderParts[transparent[i + run].Part].Batch == batch) ++run;
+            TransientAllocation block = run > 1 ? device.AllocateTransient(run * sizeof(InstanceGPU), 16) : TransientAllocation{};
+            if (!block)
+            {
+                submit(transparent[i], 1);
+                ++i;
+                continue;
+            }
+            auto* items = (InstanceGPU*)block.Data;
+            for (size_t k = 0; k < run; ++k) items[k] = InstanceOf(m_RenderItems[m_RenderParts[transparent[i + k].Part].Item]);
+            Draw d = transparent[i];
+            d.Push.Instances = block.Address;
+            d.Push.Flags |= 2u;
+            submit(d, (uint32_t)run);
+            i += run;
+        }
     }
 
     std::array<float, ShadowCascades::kMax> ComputeCascadeSplits(float nearDepth, float farDepth, int count, float lambda)
@@ -1592,23 +1617,27 @@ namespace Dimension
             auto font = AssetManager::GetFont(text.Font);
             if (!font) continue;
             glm::vec2 block;
-            auto quads = font->Layout(text.Text, Font::kBakeSize, 0.0f, text.Align, 0.0f, block);
             float s = text.FontSize / font->GetLineHeight();
+            // Layout at bake size: <size=N> (same units as Font Size) is N / s pixels.
+            auto quads = font->Layout(text.Text, Font::kBakeSize, 0.0f, text.Align, 0.0f, block, text.RichText, 1.0f / s);
             glm::vec4 color = ToLinear(text.Color);
-            uint32_t atlas = font->GetAtlas()->GetBindlessIndex();
+            uint32_t atlas = font->GetAtlas()->GetBindlessIndex(), white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
             float depth = (camera.View * t.World[3]).z;
             for (auto& q : quads)
             {
                 // Layout is y-down pixels; center the block on the entity and flip to y-up world units.
                 glm::vec2 c = ((q.Min + q.Max) * 0.5f - block * 0.5f) * s;
                 glm::vec2 size = (q.Max - q.Min) * s;
+                glm::mat4 shear(1.0f);
+                shear[1][0] = q.Skew; // italic: x leans with height (sheared after scaling, so the slope is exact)
                 SpriteDraw d;
-                d.Transform = t.World * glm::translate(glm::mat4(1.0f), glm::vec3(c.x, -c.y, 0.0f)) *
+                // The layout slants around the quad's bottom edge and the sprite around its center: move half the lean.
+                d.Transform = t.World * glm::translate(glm::mat4(1.0f), glm::vec3(c.x + q.Skew * size.y * 0.5f, -c.y, 0.0f)) * shear *
                               glm::scale(glm::mat4(1.0f), glm::vec3(size, 1.0f));
-                d.Color = color;
+                d.Color = q.HasColor ? glm::vec4(glm::vec3(ToLinear(q.Color)), q.Color.a * color.a) : color;
                 d.UVMin = { q.UVMin.x, q.UVMax.y };
                 d.UVMax = { q.UVMax.x, q.UVMin.y };
-                d.Texture = atlas;
+                d.Texture = q.Solid ? white : atlas;
                 d.Entity = e.Index + 1;
                 d.Order = text.SortingOrder;
                 d.Depth = depth;
@@ -1853,8 +1882,9 @@ namespace Dimension
         auto* v = (SpriteVertex*)vb.Data;
         for (auto& c : commands)
         {
-            *v++ = { glm::vec3(c.Min.x, c.Min.y, 0), c.Color, { c.UVMin.x, c.UVMin.y }, c.Texture, 0 };
-            *v++ = { glm::vec3(c.Max.x, c.Min.y, 0), c.Color, { c.UVMax.x, c.UVMin.y }, c.Texture, 0 };
+            float slant = c.Slant * (c.Max.y - c.Min.y); // italic: the top edge leans right
+            *v++ = { glm::vec3(c.Min.x + slant, c.Min.y, 0), c.Color, { c.UVMin.x, c.UVMin.y }, c.Texture, 0 };
+            *v++ = { glm::vec3(c.Max.x + slant, c.Min.y, 0), c.Color, { c.UVMax.x, c.UVMin.y }, c.Texture, 0 };
             *v++ = { glm::vec3(c.Max.x, c.Max.y, 0), c.Color, { c.UVMax.x, c.UVMax.y }, c.Texture, 0 };
             *v++ = { glm::vec3(c.Min.x, c.Max.y, 0), c.Color, { c.UVMin.x, c.UVMax.y }, c.Texture, 0 };
         }
@@ -2268,6 +2298,46 @@ namespace Dimension
             {
                 glm::vec3 p = line->UseWorldSpace ? line->Positions[i] : glm::vec3(t.World * glm::vec4(line->Positions[i], 1.0f));
                 DrawWireSphere(glm::translate(glm::mat4(1.0f), p), glm::vec3(0), i == 0 ? 0.08f : 0.05f, orange);
+            }
+        }
+        if (auto* mc = reg.TryGet<MeshColliderComponent>(sel); mc && mc->ConvexDecomposition)
+        {
+            // The convex parts, each in its own color.
+            auto* mr = reg.TryGet<MeshRendererComponent>(sel);
+            AssetHandle mesh = mc->Mesh.IsValid() ? mc->Mesh : mr ? mr->Mesh : AssetHandle::None();
+            if (auto parts = ConvexDecomposition::Decompose(AssetManager::GetMeshData(mesh), mc->MaxParts))
+                for (size_t i = 0; i < parts->size(); ++i)
+                {
+                    const ConvexPart& part = (*parts)[i];
+                    float hue = std::fmod((float)i * 0.61803f, 1.0f);
+                    glm::vec4 color(glm::clamp(glm::abs(glm::fract(glm::vec3(hue) + glm::vec3(1.0f, 2.0f / 3.0f, 1.0f / 3.0f)) * 6.0f - 3.0f) - 1.0f, 0.0f, 1.0f), 0.9f);
+                    color = glm::vec4(glm::mix(glm::vec3(1.0f), glm::vec3(color), 0.7f), 0.9f);
+                    auto world = [&](uint32_t k) { return glm::vec3(t.World * glm::vec4(part.Points[k], 1.0f)); };
+                    for (size_t k = 0; k + 2 < part.Triangles.size(); k += 3)
+                    {
+                        uint32_t a = part.Triangles[k], b = part.Triangles[k + 1], c = part.Triangles[k + 2];
+                        // Each edge is shared by two faces: draw it from the face that lists it in increasing order.
+                        if (a < b) DrawLine(world(a), world(b), color);
+                        if (b < c) DrawLine(world(b), world(c), color);
+                        if (c < a) DrawLine(world(c), world(a), color);
+                    }
+                }
+        }
+        if (auto* vehicle = reg.TryGet<VehicleComponent>(sel))
+        {
+            // Each wheel at full suspension extension, with its travel from the mount (the body's scale does not apply).
+            const glm::vec4 green{ 0.45f, 1.0f, 0.5f, 1.0f };
+            glm::mat4 body = glm::translate(glm::mat4(1.0f), t.GetWorldPosition()) * glm::toMat4(glm::quat_cast(glm::mat3(glm::normalize(glm::vec3(t.World[0])),
+                                                                                                                         glm::normalize(glm::vec3(t.World[1])),
+                                                                                                                         glm::normalize(glm::vec3(t.World[2])))));
+            float hx = vehicle->TrackWidth * 0.5f, hz = vehicle->WheelBase * 0.5f, drop = 0.05f + vehicle->SuspensionTravel;
+            for (glm::vec3 mount : { glm::vec3(-hx, vehicle->WheelHeight, -hz), glm::vec3(hx, vehicle->WheelHeight, -hz), glm::vec3(-hx, vehicle->WheelHeight, hz),
+                                     glm::vec3(hx, vehicle->WheelHeight, hz) })
+            {
+                glm::vec3 center = mount - glm::vec3(0.0f, drop, 0.0f);
+                for (float side : { -0.5f, 0.5f })
+                    DrawWireCircle(body, center + glm::vec3(side * vehicle->WheelWidth, 0.0f, 0.0f), vehicle->WheelRadius, green, 0);
+                DrawLine(glm::vec3(body * glm::vec4(mount, 1.0f)), glm::vec3(body * glm::vec4(center, 1.0f)), green);
             }
         }
         if (auto* probe = reg.TryGet<ReflectionProbeComponent>(sel))

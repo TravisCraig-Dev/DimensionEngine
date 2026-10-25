@@ -33,6 +33,41 @@ namespace Dimension
         }
     }
 
+    const AnimatorController* AnimatorController::LayerMachine(int layer) const
+    {
+        if (layer == 0) return this;
+        return layer > 0 && layer <= (int)Layers.size() ? &Layers[layer - 1].Machine : nullptr;
+    }
+
+    void AnimatorController::SyncLayerStates()
+    {
+        for (size_t li = 0; li < Layers.size(); ++li)
+        {
+            AnimLayer& layer = Layers[li];
+            // Only earlier, unsynced layers can be followed.
+            if (layer.SyncedLayer < 0) continue;
+            if (layer.SyncedLayer > (int)li || (layer.SyncedLayer > 0 && Layers[layer.SyncedLayer - 1].SyncedLayer >= 0))
+            {
+                layer.SyncedLayer = -1;
+                continue;
+            }
+            const AnimatorController& src = *LayerMachine(layer.SyncedLayer);
+            auto& states = layer.Machine.States;
+            states.resize(src.States.size());
+            for (size_t i = 0; i < states.size(); ++i)
+            {
+                states[i].Name = src.States[i].Name;
+                states[i].EditorPosition = src.States[i].EditorPosition;
+                states[i].Speed = src.States[i].Speed;
+                states[i].Loop = src.States[i].Loop;
+                states[i].Events.clear(); // the source's events fire; a synced copy would fire them twice
+            }
+            layer.Machine.Transitions = src.Transitions;
+            layer.Machine.DefaultState = src.DefaultState;
+            layer.Machine.AnyStatePosition = src.AnyStatePosition;
+        }
+    }
+
     void AnimatorController::RemoveState(int index)
     {
         if (index < 0 || index >= (int)States.size()) return;
@@ -96,12 +131,12 @@ namespace Dimension
                 {
                     st["motion"] = (int)s.Motion;
                     st["blendParameter"] = s.BlendParameter;
-                    if (s.Motion == AnimMotionType::BlendTree2D) st["blendParameterY"] = s.BlendParameterY;
+                    if (IsBlendTree2D(s.Motion)) st["blendParameterY"] = s.BlendParameterY;
                     st["children"] = json::array();
                     for (auto& ch : s.Children)
                     {
                         json child{ { "clip", ch.Clip }, { "threshold", ch.Threshold } };
-                        if (s.Motion == AnimMotionType::BlendTree2D) child["y"] = ch.ThresholdY;
+                        if (IsBlendTree2D(s.Motion)) child["y"] = ch.ThresholdY;
                         st["children"].push_back(child);
                     }
                 }
@@ -142,11 +177,13 @@ namespace Dimension
                 layer.Name = l.value("name", layer.Name);
                 layer.Weight = l.value("weight", 1.0f);
                 layer.Blending = (AnimLayerBlending)l.value("blending", 0);
+                layer.SyncedLayer = l.value("sync", -1);
                 for (auto& m : l.value("mask", json::array()))
                     if (m.is_string()) layer.Mask.push_back(m.get<std::string>());
                 ReadMachine(l, layer.Machine);
                 c->Layers.push_back(std::move(layer));
             }
+            c->SyncLayerStates();
             c->LinkLayers();
         }
         catch (const std::exception& e)
@@ -168,6 +205,7 @@ namespace Dimension
             for (auto& layer : Layers)
             {
                 json l{ { "name", layer.Name }, { "weight", layer.Weight }, { "blending", (int)layer.Blending }, { "mask", layer.Mask } };
+                if (layer.SyncedLayer >= 0) l["sync"] = layer.SyncedLayer;
                 WriteMachine(layer.Machine, l);
                 j["layers"].push_back(std::move(l));
             }
@@ -242,10 +280,83 @@ namespace Dimension
             for (float& w : weights) w /= sum;
         }
 
+        void BlendWeightsDirectional(const AnimState& state, const glm::vec2& p, std::vector<float>& weights)
+        {
+            const auto& ch = state.Children;
+            weights.assign(ch.size(), 0.0f);
+            if (ch.empty()) return;
+            auto at = [&](size_t i) { return glm::vec2(ch[i].Threshold, ch[i].ThresholdY); };
+            int center = -1;
+            std::vector<std::pair<float, int>> dirs; // (angle, child) of the children away from the center
+            for (size_t i = 0; i < ch.size(); ++i)
+            {
+                glm::vec2 v = at(i);
+                if (glm::dot(v, v) < 1e-8f) { if (center < 0) center = (int)i; }
+                else dirs.push_back({ std::atan2(v.y, v.x), (int)i });
+            }
+            auto finish = [&](int a, float wa, int b, float wb) {
+                // wa and wb are the direction children's shares; the center child (if any) takes the rest.
+                float sum = wa + wb;
+                if (center < 0 || sum > 1.0f)
+                {
+                    if (sum <= 1e-6f) { wa = 1.0f; wb = 0.0f; sum = 1.0f; }
+                    wa /= sum;
+                    wb /= sum;
+                }
+                else
+                    weights[center] = 1.0f - sum;
+                if (a >= 0) weights[a] += wa;
+                if (b >= 0) weights[b] += wb;
+            };
+            if (glm::dot(p, p) < 1e-8f || dirs.empty())
+            {
+                if (center >= 0) weights[center] = 1.0f;
+                else
+                    for (auto& [angle, i] : dirs) weights[i] = 1.0f / (float)dirs.size();
+                return;
+            }
+            std::sort(dirs.begin(), dirs.end());
+            float angle = std::atan2(p.y, p.x);
+            constexpr float kTwoPi = 6.28318530718f;
+            // The pair of neighbouring directions that encloses the point's angle (wrapping around).
+            size_t n = dirs.size();
+            size_t hi = 0;
+            while (hi < n && dirs[hi].first < angle) ++hi;
+            size_t lo = (hi + n - 1) % n;
+            hi %= n;
+            int a = dirs[lo].second, b = dirs[hi].second;
+            float gap = dirs[hi].first - dirs[lo].first;
+            if (gap <= 0.0f) gap += kTwoPi;
+            // A single direction, or an opening of 180 degrees or more: only the nearer side's child applies, by how far
+            // the point reaches along it.
+            auto alongOne = [&](int i) {
+                glm::vec2 d = at(i);
+                finish(i, std::max(glm::dot(p, d) / glm::dot(d, d), 0.0f), -1, 0.0f);
+            };
+            if (n == 1 || gap >= kTwoPi * 0.5f - 1e-4f)
+            {
+                float toA = std::abs(std::remainder(angle - dirs[lo].first, kTwoPi)), toB = std::abs(std::remainder(dirs[hi].first - angle, kTwoPi));
+                alongOne(toA <= toB ? a : b);
+                return;
+            }
+            // p = wa * A + wb * B: the point in the triangle (center, A, B).
+            glm::vec2 A = at(a), B = at(b);
+            float det = A.x * B.y - A.y * B.x;
+            if (std::abs(det) < 1e-8f) { alongOne(a); return; }
+            float wa = (p.x * B.y - p.y * B.x) / det, wb = (A.x * p.y - A.y * p.x) / det;
+            finish(a, std::max(wa, 0.0f), b, std::max(wb, 0.0f));
+        }
+
+        void BlendWeightsAt(const AnimState& state, const glm::vec2& value, std::vector<float>& weights)
+        {
+            if (state.Motion == AnimMotionType::BlendTree2DDirectional) BlendWeightsDirectional(state, value, weights);
+            else BlendWeights2D(state, value, weights);
+        }
+
         void TreeWeights(const AnimatorController& controller, const AnimatorRuntime& runtime, const AnimState& state, std::vector<float>& weights)
         {
-            if (state.Motion == AnimMotionType::BlendTree2D)
-                BlendWeights2D(state, { GetParameter(controller, runtime, state.BlendParameter), GetParameter(controller, runtime, state.BlendParameterY) },
+            if (IsBlendTree2D(state.Motion))
+                BlendWeightsAt(state, { GetParameter(controller, runtime, state.BlendParameter), GetParameter(controller, runtime, state.BlendParameterY) },
                                weights);
             else
                 BlendWeights(state, GetParameter(controller, runtime, state.BlendParameter), weights);

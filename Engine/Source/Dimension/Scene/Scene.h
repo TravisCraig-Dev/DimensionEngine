@@ -152,6 +152,13 @@ namespace Dimension
         // Script/physics glue (called by physics worlds).
         void DispatchCollision(Entity a, Entity b, bool begin, bool trigger);
 
+        // Engine events for listeners outside the entity's own scripts (C# events such as UIButton.Clicked). Kinds:
+        // 0 click, 1 value changed (value), 2 text changed, 3 submit (text), 4/5 collision enter/exit and 6/7 trigger
+        // enter/exit (other), -1 play stopped (listeners of this scene end).
+        enum class EventKind : int { Stopped = -1, Click = 0, ValueChanged, TextChanged, Submit, CollisionEnter, CollisionExit, TriggerEnter, TriggerExit };
+        using EventHook = void (*)(Scene& scene, Entity e, EventKind kind, float value, Entity other, const char* text);
+        static void SetEventHook(EventHook hook);
+
         static constexpr float kFixedTimestep = 1.0f / 60.0f;
 
     private:

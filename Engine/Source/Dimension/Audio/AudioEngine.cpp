@@ -1,4 +1,5 @@
 #include "Dimension/Audio/AudioEngine.h"
+#include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Core/Log.h"
@@ -24,7 +25,43 @@ namespace Dimension
     {
         ma_engine* s_Engine = nullptr;
 
+        // A source's sound, and with Occlusion the low-pass between it and its mixer group.
+        struct SourceVoice
+        {
+            ma_sound Sound; // first: SoundOf casts the runtime pointer
+            ma_lpf_node Filter;
+            bool HasFilter = false;
+            float Cutoff = 0.0f; // current filter cutoff (Hz)
+        };
+
         ma_sound* SoundOf(AudioSourceComponent& src) { return static_cast<ma_sound*>(src.Runtime.get()); }
+        SourceVoice* VoiceOf(AudioSourceComponent& src) { return static_cast<SourceVoice*>(src.Runtime.get()); }
+
+        constexpr float kOpenCutoff = 20000.0f;   // filter wide open: no audible effect
+        constexpr float kOcclusionFadeSeconds = 0.15f;
+
+        float DbToLinear(float db) { return std::pow(10.0f, db / 20.0f); }
+
+        // Volume and cutoff for the source's current occlusion amount.
+        float OccludedVolume(const AudioSourceComponent& src)
+        {
+            float base = src.Mute ? 0.0f : src.Volume;
+            return src.Occlusion ? base * (1.0f + (DbToLinear(src.OcclusionVolume) - 1.0f) * src.OcclusionAmount) : base;
+        }
+        float OccludedCutoff(const AudioSourceComponent& src)
+        {
+            float closed = std::clamp(src.OcclusionCutoff, 20.0f, kOpenCutoff);
+            return std::exp(std::log(kOpenCutoff) + (std::log(closed) - std::log(kOpenCutoff)) * std::clamp(src.OcclusionAmount, 0.0f, 1.0f));
+        }
+
+        void SetCutoff(SourceVoice& v, float cutoff)
+        {
+            if (!v.HasFilter || std::abs(cutoff - v.Cutoff) < v.Cutoff * 0.01f) return;
+            ma_lpf_config cfg = ma_lpf_config_init(ma_format_f32, ma_engine_get_channels(s_Engine), ma_engine_get_sample_rate(s_Engine),
+                                                   std::min(cutoff, ma_engine_get_sample_rate(s_Engine) * 0.45f), 2);
+            ma_lpf_node_reinit(&cfg, &v.Filter);
+            v.Cutoff = cutoff;
+        }
 
         // Pass-through node that meters the signal (the group's level meter).
         struct MeterNode
@@ -558,28 +595,55 @@ namespace Dimension
 
     namespace
     {
-        // Sound for `clip` routed into the source's mixer group, with the source's settings.
+        // Sound for `clip` routed into the source's mixer group, with the source's settings. Occluding sources get a
+        // low-pass filter between the sound and the group.
         std::shared_ptr<void> MakeSound(const AudioSourceComponent& src, AssetHandle clip, bool stream)
         {
             fs::path path = AssetManager::GetAbsolutePath(clip);
-            auto* sound = new ma_sound();
+            auto* voice = new SourceVoice();
             auto* group = static_cast<ma_sound_group*>(AudioMixer::GetGroupNode(src.Output.empty() ? 0 : AudioMixer::FindGroup(src.Output)));
             ma_uint32 flags = stream ? MA_SOUND_FLAG_STREAM : MA_SOUND_FLAG_DECODE;
-            if (ma_sound_init_from_file_w(s_Engine, path.c_str(), flags, group, nullptr, sound) != MA_SUCCESS)
+            if (ma_sound_init_from_file_w(s_Engine, path.c_str(), flags, group, nullptr, &voice->Sound) != MA_SUCCESS)
             {
                 Log::Error("Failed to load audio clip '{}'", path.string());
-                delete sound;
+                delete voice;
                 return nullptr;
             }
-            ma_sound_set_volume(sound, src.Mute ? 0.0f : src.Volume);
+            if (src.Occlusion && src.Spatial)
+            {
+                ma_uint32 channels = ma_engine_get_channels(s_Engine), rate = ma_engine_get_sample_rate(s_Engine);
+                ma_lpf_node_config cfg = ma_lpf_node_config_init(channels, rate, std::min(kOpenCutoff, rate * 0.45f), 2);
+                if (ma_lpf_node_init(ma_engine_get_node_graph(s_Engine), &cfg, nullptr, &voice->Filter) == MA_SUCCESS)
+                {
+                    voice->HasFilter = true;
+                    voice->Cutoff = kOpenCutoff;
+                    ma_node* destination = group ? (ma_node*)group : ma_engine_get_endpoint(s_Engine);
+                    ma_node_attach_output_bus(&voice->Filter, 0, destination, 0);
+                    ma_node_attach_output_bus(&voice->Sound, 0, &voice->Filter, 0);
+                    SetCutoff(*voice, OccludedCutoff(src));
+                }
+            }
+            ma_sound* sound = &voice->Sound;
+            ma_sound_set_volume(sound, OccludedVolume(src));
             ma_sound_set_pitch(sound, src.Pitch);
             ma_sound_set_spatialization_enabled(sound, src.Spatial);
             ma_sound_set_min_distance(sound, src.MinDistance);
             ma_sound_set_max_distance(sound, src.MaxDistance);
-            return std::shared_ptr<void>(sound, [](void* p) {
-                ma_sound_uninit(static_cast<ma_sound*>(p));
-                delete static_cast<ma_sound*>(p);
+            return std::shared_ptr<void>(voice, [](void* p) {
+                auto* v = static_cast<SourceVoice*>(p);
+                ma_sound_uninit(&v->Sound);
+                if (v->HasFilter) ma_lpf_node_uninit(&v->Filter, nullptr);
+                delete v;
             });
+        }
+
+        bool IsTriggerCollider(Registry& reg, Entity e)
+        {
+            if (auto* c = reg.TryGet<BoxColliderComponent>(e); c && c->IsTrigger) return true;
+            if (auto* c = reg.TryGet<SphereColliderComponent>(e); c && c->IsTrigger) return true;
+            if (auto* c = reg.TryGet<CapsuleColliderComponent>(e); c && c->IsTrigger) return true;
+            if (auto* c = reg.TryGet<MeshColliderComponent>(e); c && c->IsTrigger) return true;
+            return false;
         }
     }
 
@@ -615,11 +679,44 @@ namespace Dimension
         if (auto* src = m_Scene.GetRegistry().TryGet<AudioSourceComponent>(e)) src->Runtime.reset();
     }
 
-    void AudioWorld::Update()
+    bool AudioWorld::IsOccluded(Scene& scene, const glm::vec3& listener, Entity listenerEntity, Entity source)
     {
-        if (!s_Engine) return;
+        auto& reg = scene.GetRegistry();
+        if (!scene.GetPhysics3D() || !reg.Has<TransformComponent>(source)) return false;
+        auto related = [&](Entity hit, Entity to) { // same entity, or one is an ancestor of the other
+            if (to.IsNull()) return false;
+            for (Entity p = hit; !p.IsNull(); p = scene.GetParent(p))
+                if (p == to) return true;
+            for (Entity p = to; !p.IsNull(); p = scene.GetParent(p))
+                if (p == hit) return true;
+            return false;
+        };
+        glm::vec3 d = reg.Get<TransformComponent>(source).GetWorldPosition() - listener;
+        float len = glm::length(d);
+        if (len < 1e-3f) return false;
+        // Colliders along the line block it, except triggers and the source's and the listener's own.
+        for (const RaycastHit& hit : Physics3DWorld::RaycastAll(scene, listener, d, len))
+            if (!IsTriggerCollider(reg, hit.Hit) && !related(hit.Hit, source) && !related(hit.Hit, listenerEntity)) return true;
+        return false;
+    }
+
+    void AudioWorld::Update(float dt)
+    {
         auto& reg = m_Scene.GetRegistry();
         Entity cam = m_Scene.GetPrimaryCamera();
+        // Occlusion amounts ease toward blocked (1) or clear (0); a first update snaps.
+        if (!cam.IsNull())
+        {
+            glm::vec3 listener = reg.Get<TransformComponent>(cam).GetWorldPosition();
+            float step = dt > 0.0f ? dt / kOcclusionFadeSeconds : 1.0f;
+            for (auto [e, src, t] : reg.ViewOf<AudioSourceComponent, TransformComponent>())
+            {
+                if (!src.Occlusion || !src.Spatial || !t.ActiveInHierarchy) { src.OcclusionAmount = 0.0f; continue; }
+                float target = IsOccluded(m_Scene, listener, cam, e) ? 1.0f : 0.0f;
+                src.OcclusionAmount += std::clamp(target - src.OcclusionAmount, -step, step);
+            }
+        }
+        if (!s_Engine) return;
         if (!cam.IsNull())
         {
             auto& t = reg.Get<TransformComponent>(cam);
@@ -634,8 +731,9 @@ namespace Dimension
             if (!s) continue;
             glm::vec3 p = t.GetWorldPosition();
             ma_sound_set_position(s, p.x, p.y, p.z);
-            ma_sound_set_volume(s, src.Mute ? 0.0f : src.Volume);
+            ma_sound_set_volume(s, OccludedVolume(src));
             ma_sound_set_pitch(s, src.Pitch);
+            SetCutoff(*VoiceOf(src), OccludedCutoff(src));
         }
         // Release finished one-shots.
         std::erase_if(m_OneShots, [](const std::shared_ptr<void>& p) { return ma_sound_at_end(static_cast<ma_sound*>(p.get())); });
@@ -669,7 +767,7 @@ namespace Dimension
         auto sound = MakeSound(*src, clip.IsValid() ? clip : src->Clip, false);
         if (!sound) return;
         auto* s = static_cast<ma_sound*>(sound.get());
-        ma_sound_set_volume(s, (src->Mute ? 0.0f : src->Volume) * volumeScale);
+        ma_sound_set_volume(s, OccludedVolume(*src) * volumeScale); // keeps the occlusion it starts with
         glm::vec3 p = scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition();
         ma_sound_set_position(s, p.x, p.y, p.z);
         ma_sound_start(s);

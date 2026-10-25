@@ -3,6 +3,7 @@
 #include "Dimension/ECS/Entity.h"
 #include "Dimension/Core/Guid.h"
 #include "Dimension/Audio/AudioMixer.h"
+#include <glm/glm.hpp>
 #include <optional>
 
 namespace Dimension
@@ -39,7 +40,11 @@ namespace Dimension
         ~AudioWorld();
 
         void Start();  // creates sounds, starts PlayOnAwake sources
-        void Update(); // listener + spatial source positions
+        // Listener + spatial source positions, and occlusion (eased over `dt` seconds; works without an audio device).
+        void Update(float dt = 0.0f);
+        // Whether 3D colliders block the line from `listener` to the source entity (ignoring triggers, the source's
+        // own hierarchy and the listener's).
+        static bool IsOccluded(Scene& scene, const glm::vec3& listener, Entity listenerEntity, Entity source);
         void CreateSourcesFor(Entity root);
         void OnEntityDestroyed(Entity e);
 

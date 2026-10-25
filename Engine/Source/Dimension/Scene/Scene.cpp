@@ -35,6 +35,13 @@ namespace Dimension
 
     Scene::Scene(std::string name) : m_Name(std::move(name)) {}
 
+    namespace
+    {
+        Scene::EventHook s_EventHook = nullptr;
+    }
+
+    void Scene::SetEventHook(EventHook hook) { s_EventHook = hook; }
+
     Scene::~Scene()
     {
         if (m_Running) OnRuntimeStop();
@@ -412,6 +419,7 @@ namespace Dimension
             for (auto& script : sc.Scripts) script.Instance.reset();
         for (auto& sys : m_Systems) sys->OnStop(*this);
         m_Systems.clear();
+        if (s_EventHook) s_EventHook(*this, Entity::Null(), EventKind::Stopped, 0.0f, Entity::Null(), nullptr);
         m_Audio.reset();
         m_Physics3D.reset();
         m_Physics2D.reset();
@@ -514,7 +522,7 @@ namespace Dimension
         ParticleSystems::Update(*this, dt);
         TrailRenderers::Update(*this, m_Time);
         AudioMixer::Update(dt);
-        m_Audio->Update();
+        m_Audio->Update(dt);
         FlushDeferredDestroys();
     }
 
@@ -546,6 +554,31 @@ namespace Dimension
     {
         Pose current, previous;
         std::vector<std::pair<Entity, std::vector<std::string>>> firedEvents;
+
+        // IK targets, by the Animator they pull on (positions are this frame's world transforms).
+        struct IKGoal
+        {
+            Entity Animator;
+            const IKTargetComponent* Target;
+            glm::vec3 Position, HintPosition;
+            bool HasHint;
+        };
+        std::vector<IKGoal> ikGoals;
+        for (auto [e, ik, t] : m_Registry.ViewOf<IKTargetComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || ik.Weight <= 0.0f || ik.Tip.empty()) continue;
+            Entity owner = ik.Animator;
+            if (owner.IsNull() || !IsValid(owner))
+            {
+                owner = Entity::Null();
+                for (Entity p = GetParent(e); !p.IsNull(); p = GetParent(p))
+                    if (m_Registry.Has<AnimatorComponent>(p)) { owner = p; break; }
+            }
+            if (owner.IsNull() || !m_Registry.Has<AnimatorComponent>(owner)) continue;
+            bool hasHint = !ik.Hint.IsNull() && IsValid(ik.Hint) && m_Registry.Has<TransformComponent>(ik.Hint);
+            ikGoals.push_back({ owner, &ik, glm::vec3(t.World[3]), hasHint ? glm::vec3(m_Registry.Get<TransformComponent>(ik.Hint).World[3]) : glm::vec3(0.0f), hasHint });
+        }
+
         for (auto [e, anim, mr] : m_Registry.ViewOf<AnimatorComponent, MeshRendererComponent>())
         {
             Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
@@ -562,6 +595,24 @@ namespace Dimension
             };
             Ref<AnimatorController> controller = AssetManager::GetAnimatorController(anim.Controller);
             if (controller) controller->LinkLayers();
+
+            // IK goals of this Animator for one layer (-1: the final pass, also taking layers past the last one).
+            int layerCount = controller ? (int)controller->Layers.size() : 0;
+            auto applyIK = [&](int layer, float layerWeight) {
+                bool any = false;
+                for (auto& g : ikGoals) any |= g.Animator == e;
+                if (!any || layerWeight <= 0.0f) return;
+                glm::mat4 toModel = glm::inverse(m_Registry.Get<TransformComponent>(e).World);
+                for (auto& g : ikGoals)
+                {
+                    if (g.Animator != e) continue;
+                    int at = g.Target->Layer < 0 || g.Target->Layer > layerCount ? -1 : g.Target->Layer;
+                    if (at != layer) continue;
+                    glm::vec3 hint = glm::vec3(toModel * glm::vec4(g.HintPosition, 1.0f));
+                    Animation::SolveIK(*skeleton, current, skeleton->FindJoint(g.Target->Tip), g.Target->ChainLength, glm::vec3(toModel * glm::vec4(g.Position, 1.0f)),
+                                       g.HasHint ? &hint : nullptr, std::clamp(g.Target->Weight, 0.0f, 1.0f) * layerWeight);
+                }
+            };
 
             // Samples a blend tree at a normalized time: every weighted child, in sync (1D trees have at most two,
             // 2D trees any number). Children are folded in one at a time, each at its share of the weight so far.
@@ -610,6 +661,8 @@ namespace Dimension
                         }
                         else
                             pb.FadeDuration = 0.0f;
+                        pb.PreviousStateIndex = pb.StateIndex;
+                        pb.StateIndex = index;
                         pb.TreeState = isTree ? index : -1;
                         pb.Clip = isTree ? std::string() : state.Clip;
                         pb.Time = 0.0f;
@@ -708,6 +761,49 @@ namespace Dimension
                 }
             }
 
+            applyIK(0, 1.0f);
+
+            // Samples a state's motion (clip or blend tree) at a normalized time.
+            auto sampleState = [&](const AnimatorController& machine, const AnimatorRuntime& runtime, const AnimState& st, float normalized, Pose& out) {
+                if (st.Motion != AnimMotionType::Clip) { sampleTree(machine, runtime, st, normalized, out); return; }
+                const AnimationClip* c = Animation::FindClip(clips, st.Clip);
+                if (!c) { out.SetBindPose(*skeleton); return; }
+                float frac = st.Loop ? normalized - std::floor(normalized) : std::clamp(normalized, 0.0f, 1.0f);
+                Animation::Sample(*skeleton, *c, frac * c->Duration, out);
+            };
+            // A synced layer: the source layer's current (and crossfading previous) state, each played with this
+            // layer's motion for it, at the source's normalized times.
+            auto evaluateSynced = [&](auto& src, const AnimatorController& srcMachine, const AnimLayer& layer, AnimatorLayerPlayback& pb, Pose& out) {
+                auto motionFor = [&](int state) -> const AnimState* {
+                    if (state < 0 || state >= (int)srcMachine.States.size()) return nullptr;
+                    if (state < (int)layer.Machine.States.size() && HasOwnMotion(layer.Machine.States[state])) return &layer.Machine.States[state];
+                    return &srcMachine.States[state];
+                };
+                auto normalizedOf = [&](int tree, const std::string& clip, float time) {
+                    if (tree >= 0) return time;
+                    float d = duration(clip);
+                    return d > 0.0f ? time / d : 0.0f;
+                };
+                pb.CurrentState = src.CurrentState;
+                pb.Runtime.State = src.Runtime.State;
+                pb.Runtime.StateTime = src.Runtime.StateTime;
+                pb.FadeElapsed = src.FadeElapsed;
+                pb.FadeDuration = src.FadeDuration;
+                pb.StateIndex = src.StateIndex;
+                pb.PreviousStateIndex = src.PreviousStateIndex;
+                const AnimState* st = motionFor(src.StateIndex);
+                if (!st) { out = current; return; } // nothing playing yet: leave the pose alone
+                sampleState(layer.Machine, src.Runtime, *st, normalizedOf(src.TreeState, src.Clip, src.TreeState >= 0 ? src.Runtime.StateTime : src.Time), out);
+                if (src.FadeDuration > 0.0f && src.FadeElapsed < src.FadeDuration)
+                    if (const AnimState* prev = motionFor(src.PreviousStateIndex))
+                    {
+                        sampleState(layer.Machine, src.Runtime, *prev, normalizedOf(src.PreviousTreeState, src.PreviousClip, src.PreviousTime), previous);
+                        Pose blended;
+                        Animation::Blend(previous, out, std::clamp(src.FadeElapsed / src.FadeDuration, 0.0f, 1.0f), blended);
+                        out = std::move(blended);
+                    }
+            };
+
             // Extra layers, in order, on top of the base pose.
             if (controller && !controller->Layers.empty())
             {
@@ -718,28 +814,54 @@ namespace Dimension
                 {
                     const AnimLayer& layer = controller->Layers[li];
                     auto& pb = anim.Layers[li];
-                    // Parameters are shared; a trigger consumed by this layer is consumed for the whole Animator.
-                    pb.Runtime.Parameters = anim.Runtime.Parameters;
-                    pb.Runtime.Triggers = anim.Runtime.Triggers;
-                    evaluate(pb, &layer.Machine, false, layerPose);
-                    for (auto it = anim.Runtime.Triggers.begin(); it != anim.Runtime.Triggers.end();)
-                        it = pb.Runtime.Triggers.contains(*it) ? std::next(it) : anim.Runtime.Triggers.erase(it);
                     float weight = std::clamp(pb.Weight >= 0.0f ? pb.Weight : layer.Weight, 0.0f, 1.0f);
-                    if (weight <= 0.0f || layer.Machine.States.empty()) continue;
-                    Animation::BuildMask(*skeleton, layer.Mask, mask);
-                    if (layer.Blending == AnimLayerBlending::Override)
-                        Animation::LayerOverride(current, layerPose, mask, weight);
+                    bool synced = layer.SyncedLayer >= 0 && layer.SyncedLayer <= (int)li;
+                    if (synced)
+                    {
+                        if (layer.SyncedLayer == 0) evaluateSynced(anim, *controller, layer, pb, layerPose);
+                        else evaluateSynced(anim.Layers[layer.SyncedLayer - 1], controller->Layers[layer.SyncedLayer - 1].Machine, layer, pb, layerPose);
+                    }
                     else
                     {
-                        // Reference: the first frame of the layer's current motion.
-                        const AnimState* st = pb.TreeState >= 0 && pb.TreeState < (int)layer.Machine.States.size() ? &layer.Machine.States[pb.TreeState] : nullptr;
-                        if (st) sampleTree(layer.Machine, pb.Runtime, *st, 0.0f, reference);
-                        else if (const AnimationClip* c = Animation::FindClip(clips, pb.Clip)) Animation::Sample(*skeleton, *c, 0.0f, reference);
-                        else reference = layerPose;
-                        Animation::LayerAdditive(current, layerPose, reference, mask, weight);
+                        // Parameters are shared; a trigger consumed by this layer is consumed for the whole Animator.
+                        pb.Runtime.Parameters = anim.Runtime.Parameters;
+                        pb.Runtime.Triggers = anim.Runtime.Triggers;
+                        evaluate(pb, &layer.Machine, false, layerPose);
+                        for (auto it = anim.Runtime.Triggers.begin(); it != anim.Runtime.Triggers.end();)
+                            it = pb.Runtime.Triggers.contains(*it) ? std::next(it) : anim.Runtime.Triggers.erase(it);
                     }
+                    if (weight > 0.0f && !layer.Machine.States.empty())
+                    {
+                        Animation::BuildMask(*skeleton, layer.Mask, mask);
+                        if (layer.Blending == AnimLayerBlending::Override)
+                            Animation::LayerOverride(current, layerPose, mask, weight);
+                        else
+                        {
+                            // Reference: the first frame of the layer's current motion.
+                            const AnimState* st = nullptr;
+                            if (synced)
+                            {
+                                int s = pb.StateIndex;
+                                if (s >= 0 && s < (int)layer.Machine.States.size()) st = HasOwnMotion(layer.Machine.States[s]) ? &layer.Machine.States[s] : nullptr;
+                                const AnimatorController* src = controller->LayerMachine(layer.SyncedLayer);
+                                if (!st && src && s >= 0 && s < (int)src->States.size()) st = &src->States[s];
+                                if (st) sampleState(layer.Machine, pb.Runtime, *st, 0.0f, reference);
+                                else reference = layerPose;
+                            }
+                            else
+                            {
+                                st = pb.TreeState >= 0 && pb.TreeState < (int)layer.Machine.States.size() ? &layer.Machine.States[pb.TreeState] : nullptr;
+                                if (st) sampleTree(layer.Machine, pb.Runtime, *st, 0.0f, reference);
+                                else if (const AnimationClip* c = Animation::FindClip(clips, pb.Clip)) Animation::Sample(*skeleton, *c, 0.0f, reference);
+                                else reference = layerPose;
+                            }
+                            Animation::LayerAdditive(current, layerPose, reference, mask, weight);
+                        }
+                    }
+                    applyIK((int)li + 1, weight);
                 }
             }
+            applyIK(-1, 1.0f);
             Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
         }
         // After iteration: scripts may change the registry.
@@ -782,12 +904,14 @@ namespace Dimension
     {
         if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
             for (auto& inst : sc->LiveInstances(true)) inst->OnClick();
+        if (s_EventHook && IsValid(e)) s_EventHook(*this, e, EventKind::Click, 0.0f, Entity::Null(), nullptr);
     }
 
     void Scene::DispatchUIValueChanged(Entity e, float value)
     {
         if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
             for (auto& inst : sc->LiveInstances(true)) inst->OnUIValueChanged(value);
+        if (s_EventHook && IsValid(e)) s_EventHook(*this, e, EventKind::ValueChanged, value, Entity::Null(), nullptr);
     }
 
     void Scene::DispatchUIText(Entity e, const std::string& text, bool submit)
@@ -798,6 +922,7 @@ namespace Dimension
                 if (submit) inst->OnUISubmit(text);
                 else inst->OnUITextChanged(text);
             }
+        if (s_EventHook && IsValid(e)) s_EventHook(*this, e, submit ? EventKind::Submit : EventKind::TextChanged, 0.0f, Entity::Null(), text.c_str());
     }
 
     void Scene::DispatchCollision(Entity a, Entity b, bool begin, bool trigger)
@@ -815,6 +940,12 @@ namespace Dimension
         {
             call(a, b);
             call(b, a);
+            if (s_EventHook)
+            {
+                EventKind kind = trigger ? (begin ? EventKind::TriggerEnter : EventKind::TriggerExit) : (begin ? EventKind::CollisionEnter : EventKind::CollisionExit);
+                if (IsValid(a) && IsValid(b)) s_EventHook(*this, a, kind, 0.0f, b, nullptr);
+                if (IsValid(a) && IsValid(b)) s_EventHook(*this, b, kind, 0.0f, a, nullptr);
+            }
         }
     }
 }

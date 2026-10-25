@@ -1,0 +1,1303 @@
+{
+  "version": 1,
+  "name": "Vehicle",
+  "settings": {
+    "ambientColor": [
+      0.55,
+      0.6,
+      0.7
+    ],
+    "ambientIntensity": 0.35,
+    "gravity2D": [
+      0,
+      -9.81
+    ],
+    "gravity": [
+      0,
+      -9.81,
+      0
+    ],
+    "exposure": 1.0,
+    "tonemapping": true,
+    "bloom": true,
+    "bloomIntensity": 0.6,
+    "bloomThreshold": 2.0,
+    "bloomKnee": 0.5,
+    "bloomRadius": 1.0,
+    "fxaa": true,
+    "vignette": 0.25,
+    "skyMode": 1,
+    "skyTexture": 100045,
+    "skyIntensity": 1.0,
+    "skyRotation": 0.0,
+    "reflectionIntensity": 1.0,
+    "ssao": true,
+    "ssaoRadius": 0.6,
+    "ssaoIntensity": 1.5,
+    "ssaoBias": 0.025,
+    "ssaoDebug": false,
+    "uiKeyboardNavigation": false
+  },
+  "entities": [
+    {
+      "guid": 1000001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Sun",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            10,
+            0
+          ],
+          "Rotation": [
+            -0.9599310885968813,
+            -0.6108652381980153,
+            0.0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Directional Light": {
+          "Color": [
+            1.0,
+            0.95,
+            0.85
+          ],
+          "Intensity": 2.2,
+          "Soft Shadows": true,
+          "Light Angle": 2.5
+        }
+      }
+    },
+    {
+      "guid": 1000002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ground",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            20,
+            1,
+            20
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 3,
+          "Albedo": 100001,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            40,
+            40
+          ],
+          "Smoothness": 0.2,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            -0.05,
+            0
+          ],
+          "Size": [
+            10,
+            0.1,
+            10
+          ],
+          "Friction": 1.0,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ramp 1",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.6,
+            -30
+          ],
+          "Rotation": [
+            0.2,
+            0,
+            0
+          ],
+          "Scale": [
+            6,
+            0.4,
+            10
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            0.85,
+            0.85,
+            0.9,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.8,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000004,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ramp 2",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -18,
+            0.6,
+            -55
+          ],
+          "Rotation": [
+            0.2,
+            0.6,
+            0
+          ],
+          "Scale": [
+            6,
+            0.4,
+            10
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            0.85,
+            0.85,
+            0.9,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.8,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000005,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            8.0,
+            0.5,
+            -20
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 20.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000006,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            9.05,
+            0.5,
+            -20
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 20.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000007,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            10.1,
+            0.5,
+            -20
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 20.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000008,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            8.0,
+            1.5,
+            -20
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 20.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000009,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            9.05,
+            1.5,
+            -20
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 20.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000010,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Crate",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            10.1,
+            1.5,
+            -20
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 20.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0,
+            0
+          ],
+          "Size": [
+            1,
+            1,
+            1
+          ],
+          "Friction": 0.6,
+          "Bounciness": 0.0
+        }
+      }
+    },
+    {
+      "guid": 1000011,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Car",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            1.0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Rigidbody": {
+          "Body Type": 1,
+          "Mass": 1200.0,
+          "Linear Damping": 0.05,
+          "Angular Damping": 0.05,
+          "Use Gravity": true
+        },
+        "Box Collider": {
+          "Offset": [
+            0,
+            0.15,
+            0
+          ],
+          "Size": [
+            1.5,
+            0.6,
+            4.2
+          ],
+          "Friction": 0.5,
+          "Bounciness": 0.0
+        },
+        "Vehicle": {
+          "Track Width": 1.75,
+          "Wheel Radius": 0.4,
+          "Wheel Width": 0.28,
+          "Wheel Front Left": 1000014,
+          "Wheel Front Right": 1000015,
+          "Wheel Rear Left": 1000016,
+          "Wheel Rear Right": 1000017
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "CarDriver",
+              "Fields": {
+                "Speedometer": 1000022,
+                "Steer Speed": 4.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 1000012,
+      "parent": 1000011,
+      "components": {
+        "Tag": {
+          "Name": "Body",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.15,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1.5,
+            0.6,
+            4.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true,
+          "Material": 100025
+        }
+      }
+    },
+    {
+      "guid": 1000013,
+      "parent": 1000011,
+      "components": {
+        "Tag": {
+          "Name": "Cabin",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.67,
+            0.35
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1.3,
+            0.5,
+            2.1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true,
+          "Material": 100023
+        }
+      }
+    },
+    {
+      "guid": 1000014,
+      "parent": 1000011,
+      "components": {
+        "Tag": {
+          "Name": "Wheel FL",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -0.875,
+            -0.45,
+            -1.3
+          ],
+          "Rotation": [
+            0,
+            0,
+            1.5707963267948966
+          ],
+          "Scale": [
+            0.8,
+            0.14,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 5,
+          "Albedo": 0,
+          "Color": [
+            0.12,
+            0.12,
+            0.13,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.3,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 1000015,
+      "parent": 1000011,
+      "components": {
+        "Tag": {
+          "Name": "Wheel FR",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.875,
+            -0.45,
+            -1.3
+          ],
+          "Rotation": [
+            0,
+            0,
+            1.5707963267948966
+          ],
+          "Scale": [
+            0.8,
+            0.14,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 5,
+          "Albedo": 0,
+          "Color": [
+            0.12,
+            0.12,
+            0.13,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.3,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 1000016,
+      "parent": 1000011,
+      "components": {
+        "Tag": {
+          "Name": "Wheel RL",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -0.875,
+            -0.45,
+            1.3
+          ],
+          "Rotation": [
+            0,
+            0,
+            1.5707963267948966
+          ],
+          "Scale": [
+            0.8,
+            0.14,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 5,
+          "Albedo": 0,
+          "Color": [
+            0.12,
+            0.12,
+            0.13,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.3,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 1000017,
+      "parent": 1000011,
+      "components": {
+        "Tag": {
+          "Name": "Wheel RR",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.875,
+            -0.45,
+            1.3
+          ],
+          "Rotation": [
+            0,
+            0,
+            1.5707963267948966
+          ],
+          "Scale": [
+            0.8,
+            0.14,
+            0.8
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 5,
+          "Albedo": 0,
+          "Color": [
+            0.12,
+            0.12,
+            0.13,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.3,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 1000018,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            3.5,
+            8
+          ],
+          "Rotation": [
+            -0.25,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 0,
+          "Field Of View": 60,
+          "Orthographic Size": 5,
+          "Near Clip": 0.1,
+          "Far Clip": 500,
+          "Primary": true,
+          "Background": [
+            0.42,
+            0.62,
+            0.86,
+            1
+          ],
+          "Clear Flags": 1
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "ChaseCamera",
+              "Fields": {
+                "Target": 1000011,
+                "Distance": 7.0,
+                "Height": 2.5,
+                "Smoothing": 4.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 1000019,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Canvas",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Canvas": {
+          "Scale Mode": 1,
+          "Reference Resolution": [
+            1920,
+            1080
+          ],
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 1000020,
+      "parent": 1000019,
+      "components": {
+        "Tag": {
+          "Name": "Title",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            34,
+            30
+          ],
+          "Size": [
+            1200,
+            60
+          ]
+        },
+        "UI Text": {
+          "Text": "<b>Vehicle Demo</b>",
+          "Font": 0,
+          "Font Size": 44,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 1000021,
+      "parent": 1000019,
+      "components": {
+        "Tag": {
+          "Name": "Controls",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            34,
+            90
+          ],
+          "Size": [
+            1400,
+            40
+          ]
+        },
+        "UI Text": {
+          "Text": "<b>W/S</b> drive and reverse, <b>A/D</b> steer, <b>Space</b> hand brake  (gamepad: triggers, left stick, B)",
+          "Font": 0,
+          "Font Size": 26,
+          "Color": [
+            0.92,
+            0.95,
+            1,
+            0.9
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 1000022,
+      "parent": 1000019,
+      "components": {
+        "Tag": {
+          "Name": "Speedometer",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            34,
+            -30
+          ],
+          "Size": [
+            900,
+            60
+          ]
+        },
+        "UI Text": {
+          "Text": "0 km/h",
+          "Font": 0,
+          "Font Size": 40,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 2,
+          "Wrap": false
+        }
+      }
+    }
+  ]
+}

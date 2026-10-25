@@ -153,6 +153,29 @@ namespace Dimension
 
         public void Destroy() { if (Scene != IntPtr.Zero) Native.Api.Destroy(Scene, Id); }
 
+        /// <summary>Raised when this entity's collider starts touching another (any script can listen, not only this entity's).</summary>
+        public event Action<Entity> CollisionEnter
+        {
+            add => EngineEvents.Add(this, EngineEvents.Kind.CollisionEnter, value);
+            remove => EngineEvents.Remove(this, EngineEvents.Kind.CollisionEnter, value);
+        }
+        public event Action<Entity> CollisionExit
+        {
+            add => EngineEvents.Add(this, EngineEvents.Kind.CollisionExit, value);
+            remove => EngineEvents.Remove(this, EngineEvents.Kind.CollisionExit, value);
+        }
+        /// <summary>Raised when this entity enters or touches a trigger, or something enters this trigger.</summary>
+        public event Action<Entity> TriggerEnter
+        {
+            add => EngineEvents.Add(this, EngineEvents.Kind.TriggerEnter, value);
+            remove => EngineEvents.Remove(this, EngineEvents.Kind.TriggerEnter, value);
+        }
+        public event Action<Entity> TriggerExit
+        {
+            add => EngineEvents.Add(this, EngineEvents.Kind.TriggerExit, value);
+            remove => EngineEvents.Remove(this, EngineEvents.Kind.TriggerExit, value);
+        }
+
         /// <summary>Finds an entity by name in the scene of the currently running script.</summary>
         public static Entity Find(string name)
         {

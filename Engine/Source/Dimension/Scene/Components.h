@@ -196,6 +196,7 @@ namespace Dimension
         float PreviousTime = 0.0f;
         float FadeElapsed = 0.0f, FadeDuration = 0.0f;
         float Weight = -1.0f; // < 0: use the layer's weight from the controller
+        int StateIndex = -1, PreviousStateIndex = -1; // controller states (synced layers follow them)
     };
 
     struct AnimatorComponent
@@ -238,6 +239,7 @@ namespace Dimension
         int PreviousTreeState = -1;
         float PreviousTime = 0.0f; // seconds for clips, normalized time for blend trees
         float FadeElapsed = 0.0f, FadeDuration = 0.0f;
+        int StateIndex = -1, PreviousStateIndex = -1; // controller states (synced layers follow them)
         std::vector<glm::mat4> SkinMatrices;
 
         // Switches clips, blending from the current pose over `fadeSeconds`.
@@ -256,6 +258,20 @@ namespace Dimension
         }
     };
 
+    // Inverse kinematics target (like Animation Rigging's Two Bone IK and Chain IK constraints). Put it on a target
+    // object: after the Animator samples its pose, the Tip joint of the Animator's skeleton is pulled to this object's
+    // position by turning the Chain Length joints above it. Move the target (in the editor or from scripts) to aim a
+    // hand, plant a foot or point a tentacle.
+    struct IKTargetComponent
+    {
+        Entity Animator = Entity::Null(); // object with the Animator; null = the nearest ancestor that has one
+        std::string Tip;                  // joint that reaches the target
+        int ChainLength = 2;              // joints above the tip that turn (2 = analytic two-bone, others iterate)
+        Entity Hint = Entity::Null();     // optional pole: a two-bone chain bends toward it (an elbow or knee target)
+        float Weight = 1.0f;
+        int Layer = -1;                   // applied after this Animator layer (0 = base); -1 = after all layers
+    };
+
     // World-space text (like TextMeshPro 3D). Drawn through the sprite batcher.
     struct TextRendererComponent
     {
@@ -265,6 +281,7 @@ namespace Dimension
         float FontSize = 0.5f;                  // world units per line
         TextAlign Align = TextAlign::Center;
         int32_t SortingOrder = 0;
+        bool RichText = true;                   // tags as in UI Text
     };
 
     // ---- UI (screen space) --------------------------------------------------------
@@ -420,6 +437,7 @@ namespace Dimension
         TextAlign Align = TextAlign::Center;
         TextVAlign VerticalAlign = TextVAlign::Middle;
         bool Wrap = true;
+        bool RichText = true; // <b>, <i>, <u>, <s>, <color=...>, <size=...> and <br> tags (see Font::ParseRichText)
     };
 
     enum class UINavigationMode : int32_t { Automatic = 0, Explicit = 1, None = 2 };
@@ -473,7 +491,13 @@ namespace Dimension
         std::string Output;          // mixer group name; empty = Master
         bool Stream = false;         // decode while playing (music) instead of loading the whole clip
         bool Mute = false;
-        std::shared_ptr<void> Runtime; // ma_sound, runtime only
+        // Occlusion (spatial sources): when 3D colliders block the line from the listener, the sound gets quieter by
+        // Occlusion Volume (dB) and muffled by a low-pass at Occlusion Cutoff (Hz), easing in and out.
+        bool Occlusion = false;
+        float OcclusionVolume = -9.0f;
+        float OcclusionCutoff = 1200.0f;
+        float OcclusionAmount = 0.0f;  // runtime: 0 = clear line, 1 = fully occluded
+        std::shared_ptr<void> Runtime; // ma_sound (and its occlusion filter), runtime only
     };
 
     // ---- Scripting -----------------------------------------------------------
@@ -559,6 +583,41 @@ namespace Dimension
         uint32_t RuntimeBody = 0xFFFFFFFF; // JPH::BodyID, runtime only
     };
 
+    enum class VehicleDrive : int32_t { RearWheel = 0, FrontWheel = 1, AllWheel = 2 };
+
+    // A four-wheeled car on Jolt's wheeled vehicle (engine, automatic gearbox, differentials, raycast-free cylinder
+    // wheel contacts), like Unity's WheelColliders on a car body. Needs a dynamic Rigidbody and a collider for the body
+    // on the same object; the car faces -Z (forward). Scripts drive it through Throttle, Steering, Brake and Hand Brake.
+    struct VehicleComponent
+    {
+        float WheelBase = 2.6f;      // distance between the front and rear axles
+        float TrackWidth = 1.6f;     // distance between the left and right wheels
+        float WheelHeight = -0.1f;   // height of the suspension mounts (body space)
+        float WheelRadius = 0.36f;
+        float WheelWidth = 0.25f;
+        float SuspensionTravel = 0.3f; // metres
+        float SuspensionFrequency = 1.5f; // Hz (stiffness)
+        float SuspensionDamping = 0.5f;
+        float MaxSteerAngle = 30.0f;   // degrees, front wheels
+        VehicleDrive Drive = VehicleDrive::RearWheel;
+        float EngineTorque = 500.0f;   // newton metres
+        float MaxRPM = 6000.0f;
+        float BrakeTorque = 1500.0f;
+        float HandBrakeTorque = 4000.0f; // rear wheels
+        // Optional wheel visuals (front left, front right, rear left, rear right): placed and spun to follow the wheels.
+        // A cylinder's axis (Y) becomes the axle.
+        Entity WheelFrontLeft = Entity::Null(), WheelFrontRight = Entity::Null(), WheelRearLeft = Entity::Null(), WheelRearRight = Entity::Null();
+
+        // Driver input (scripts): Throttle -1..1 (negative reverses; against the motion it brakes), Steering -1..1
+        // (positive = right), Brake and Hand Brake 0..1.
+        float Throttle = 0.0f, Steering = 0.0f, Brake = 0.0f, HandBrake = 0.0f;
+        // Runtime state.
+        float SpeedKmh = 0.0f; // along the car's forward (negative when reversing)
+        float EngineRPM = 0.0f;
+        int32_t Gear = 0;      // 0 = neutral, negative = reverse
+        bool WheelGrounded[4] = { false, false, false, false };
+    };
+
     struct BoxColliderComponent
     {
         glm::vec3 Offset{ 0.0f };
@@ -592,6 +651,10 @@ namespace Dimension
     {
         AssetHandle Mesh = AssetHandle::None(); // None = the entity's Mesh Renderer mesh
         bool Convex = false;                    // dynamic bodies always use the convex hull
+        // Convex shapes (and dynamic bodies): split a concave mesh into up to Max Parts convex pieces (V-HACD) instead of
+        // one hull, so a ring can slide down a pole and a bowl can hold things.
+        bool ConvexDecomposition = false;
+        int32_t MaxParts = 16;
         float Friction = 0.6f;
         float Restitution = 0.0f;
         bool IsTrigger = false;

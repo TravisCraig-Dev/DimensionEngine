@@ -123,6 +123,7 @@ namespace Dimension
         private static WeakReference BeginUnload()
         {
             s_Classes.Clear();
+            EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);
             s_Context.Unload();
@@ -253,6 +254,17 @@ namespace Dimension
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
+        }
+
+        [UnmanagedCallersOnly]
+        internal static void RaiseEvent(IntPtr scene, ulong entity, int kind, float value, ulong other, byte* text)
+        {
+            try
+            {
+                if (kind < 0) EngineEvents.ClearScene(scene);
+                else EngineEvents.Raise(scene, entity, (EngineEvents.Kind)kind, value, other, text != null ? Native.FromUtf8(text) : null);
+            }
+            catch (Exception e) { Debug.LogError($"Engine event failed: {e}"); }
         }
 
         [UnmanagedCallersOnly]

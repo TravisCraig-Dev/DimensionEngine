@@ -85,6 +85,62 @@ namespace Game
         }
     };
 
+    // Drives a Vehicle: W/S or Up/Down (gamepad: right/left trigger) for throttle and reverse, A/D or Left/Right
+    // (left stick) to steer, Space (gamepad B) for the hand brake. Optionally shows the speed on a UI Text.
+    class CarDriver : public ScriptableEntity
+    {
+    public:
+        Entity Speedometer;
+        float SteerSpeed = 4.0f; // how quickly the wheel turns toward the input (keys snap otherwise)
+
+        void OnUpdate(float dt) override
+        {
+            auto* car = TryGet<VehicleComponent>();
+            if (!car) return;
+            float throttle = 0.0f, steer = 0.0f;
+            if (Input::IsKeyDown(Key::W) || Input::IsKeyDown(Key::Up)) throttle += 1.0f;
+            if (Input::IsKeyDown(Key::S) || Input::IsKeyDown(Key::Down)) throttle -= 1.0f;
+            if (Input::IsKeyDown(Key::A) || Input::IsKeyDown(Key::Left)) steer -= 1.0f;
+            if (Input::IsKeyDown(Key::D) || Input::IsKeyDown(Key::Right)) steer += 1.0f;
+            float pad = Input::GetGamepadAxis(GamepadAxis::RightTrigger) - Input::GetGamepadAxis(GamepadAxis::LeftTrigger);
+            if (pad != 0.0f) throttle = pad;
+            if (float stick = Input::GetGamepadAxis(GamepadAxis::LeftX); stick != 0.0f) steer = stick;
+            car->Throttle = throttle;
+            car->Steering += std::clamp(steer - car->Steering, -SteerSpeed * dt, SteerSpeed * dt);
+            car->HandBrake = Input::IsKeyDown(Key::Space) || Input::IsGamepadButtonDown(GamepadButton::B) ? 1.0f : 0.0f;
+            if (GetScene().IsValid(Speedometer))
+                if (auto* text = GetScene().GetRegistry().TryGet<UITextComponent>(Speedometer))
+                {
+                    std::string gear = car->Gear < 0 ? "R" : car->Gear == 0 ? "N" : std::to_string(car->Gear);
+                    text->Text = std::format("<b>{:.0f}</b> km/h   <color=#9ab>gear</color> <b>{}</b>   <color=#9ab>{:.0f} rpm</color>",
+                                             std::abs(car->SpeedKmh), gear, car->EngineRPM);
+                }
+        }
+    };
+
+    // Chase camera: stays Distance behind and Height above the target's heading and looks at it, smoothly.
+    class ChaseCamera : public ScriptableEntity
+    {
+    public:
+        Entity Target;
+        float Distance = 7.0f, Height = 2.5f, Smoothing = 4.0f;
+
+        void OnUpdate(float dt) override
+        {
+            if (!GetScene().IsValid(Target)) return;
+            auto& target = GetScene().GetRegistry().Get<TransformComponent>(Target);
+            glm::vec3 focus = target.GetWorldPosition(), forward = target.Forward();
+            forward.y = 0.0f;
+            forward = glm::length(forward) > 1e-3f ? glm::normalize(forward) : glm::vec3(0, 0, -1);
+            glm::vec3 goal = focus - forward * Distance + glm::vec3(0.0f, Height, 0.0f);
+            auto& t = Transform();
+            t.Position = glm::mix(t.Position, goal, 1.0f - std::exp(-Smoothing * dt));
+            glm::vec3 look = focus + glm::vec3(0.0f, 0.8f, 0.0f) - t.Position;
+            float yaw = std::atan2(-look.x, -look.z), pitch = std::atan2(look.y, std::sqrt(look.x * look.x + look.z * look.z));
+            t.Rotation = { pitch, yaw, 0.0f };
+        }
+    };
+
     // Smoothly follows a target entity (assign it in the inspector).
     class CameraFollow : public ScriptableEntity
     {
@@ -502,6 +558,14 @@ namespace Game
         ScriptRegistry::Register<MixerVolumeSlider>("MixerVolumeSlider")
             .Field("Group", &MixerVolumeSlider::Group)
             .Field("Label", &MixerVolumeSlider::Label);
+        ScriptRegistry::Register<CarDriver>("CarDriver")
+            .Field("Speedometer", &CarDriver::Speedometer)
+            .Field("Steer Speed", &CarDriver::SteerSpeed).Range(0.1f, 100.0f);
+        ScriptRegistry::Register<ChaseCamera>("ChaseCamera")
+            .Field("Target", &ChaseCamera::Target)
+            .Field("Distance", &ChaseCamera::Distance).Range(0.0f, 100.0f)
+            .Field("Height", &ChaseCamera::Height).Range(-100.0f, 100.0f)
+            .Field("Smoothing", &ChaseCamera::Smoothing).Range(0.0f, 100.0f);
         ScriptRegistry::Register<CharacterMover>("CharacterMover")
             .Field("Move Speed", &CharacterMover::MoveSpeed).Range(0.0f, 100.0f)
             .Field("Jump Speed", &CharacterMover::JumpSpeed).Range(0.0f, 100.0f)

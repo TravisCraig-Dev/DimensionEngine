@@ -77,6 +77,13 @@ namespace Dimension
         void Blend(const Pose& a, const Pose& b, float t, Pose& out);
         // Skinning matrices: jointWorld * inverseBind, in mesh space.
         void ComputeSkinMatrices(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& out);
+        // Model-space transform of every joint (RootTransform * parents * local), the space skinning works in.
+        void JointGlobals(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& out);
+        // Inverse kinematics: turns the `chainLength` ancestors of `tip` so that the tip reaches `target` (model space).
+        // Two joints use an analytic solve that bends toward `hint` (a pole position; null keeps the current bend
+        // plane); other lengths use cyclic coordinate descent. `weight` blends from the input pose. Returns false when
+        // there is nothing to solve.
+        bool SolveIK(const Skeleton& skeleton, Pose& pose, int tip, int chainLength, const glm::vec3& target, const glm::vec3* hint, float weight);
         const AnimationClip* FindClip(const std::vector<AnimationClip>& clips, const std::string& name);
 
         // Animator layers. A mask gives each joint a weight: 1 for the listed joints and all their descendants,

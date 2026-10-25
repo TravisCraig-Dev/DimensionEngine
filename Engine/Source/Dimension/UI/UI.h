@@ -8,6 +8,7 @@
 namespace Dimension
 {
     class Scene;
+    struct UIRectComponent;
 
     // Screen-space UI: Canvas -> UI Rect hierarchy -> Image / Text / Button / Slider / Toggle / Input Field,
     // with Layout Groups and clipped Scroll Views.
@@ -44,6 +45,7 @@ namespace Dimension
             glm::vec2 UVMin, UVMax;
             glm::vec4 Color;
             uint32_t Texture; // bindless index
+            float Slant = 0.0f; // italic text: the top edge moves right by Slant * height
         };
 
         // Resolves every UI Rect under a Canvas to screen pixels (layout groups, scroll offsets, clip rects).
@@ -54,6 +56,24 @@ namespace Dimension
         Entity Update(Scene& scene, const PointerState& pointer, const glm::vec2& screenSize, float dt = 0.0f);
 
         void BuildDrawList(Scene& scene, const glm::vec2& screenSize, std::vector<DrawCommand>& out);
+
+        // Where keyboard/gamepad navigation goes from each reachable widget in each direction (explicit links and
+        // the automatic nearest widget), for the editor's Visualize Navigation overlay. Rects are in layout pixels.
+        enum class NavigationDirection : int { Up = 0, Down = 1, Left = 2, Right = 3 };
+        struct NavigationLink
+        {
+            Entity From, To;
+            NavigationDirection Direction;
+            bool Explicit;
+            glm::vec2 FromMin, FromMax, ToMin, ToMax;
+        };
+        // `order` is ComputeLayout's result.
+        std::vector<NavigationLink> NavigationLinks(Scene& scene, const std::vector<Entity>& order);
+
+        // Editor rect dragging: updates `position` and `size` (canvas units, starting from the rect's values) so that
+        // dragging by `deltaPixels` moves only the chosen edges. `sides` per axis: -1 the min edge, +1 the max edge,
+        // 0 neither; (0, 0) moves the whole rect. Works for any anchors and pivot.
+        void DragRect(const UIRectComponent& rect, glm::ivec2 sides, glm::vec2 deltaPixels, glm::vec2& position, glm::vec2& size);
 
         // Number of UTF-8 codepoints in a string.
         size_t CodepointCount(const std::string& s);

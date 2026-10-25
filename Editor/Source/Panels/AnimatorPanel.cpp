@@ -50,13 +50,16 @@ namespace Editor
                 storage->SetFloat(px, point.x);
                 storage->SetFloat(py, point.y);
             }
-            if (!livePoint) AnimatorStateMachine::BlendWeights2D(st, point, weights);
+            if (!livePoint) AnimatorStateMachine::BlendWeightsAt(st, point, weights);
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddRectFilled(p0, p1, IM_COL32(28, 28, 32, 255), 3.0f);
             ImVec2 o = toScreen({ 0.0f, 0.0f });
             dl->AddLine(ImVec2(p0.x, o.y), ImVec2(p1.x, o.y), IM_COL32(60, 60, 70, 255));
             dl->AddLine(ImVec2(o.x, p0.y), ImVec2(o.x, p1.y), IM_COL32(60, 60, 70, 255));
+            if (st.Motion == AnimMotionType::BlendTree2DDirectional) // directions are spokes from the center
+                for (auto& ch : st.Children)
+                    dl->AddLine(o, toScreen({ ch.Threshold, ch.ThresholdY }), IM_COL32(70, 80, 100, 255));
             int hovered = -1;
             ImVec2 mouse = ImGui::GetIO().MousePos;
             for (int k = 0; k < (int)st.Children.size(); ++k)
@@ -203,7 +206,7 @@ namespace Editor
             {
                 ImGui::PushID(1000 + li);
                 const auto& layer = root.Layers[li];
-                std::string label = layer.Name + (layer.Blending == AnimLayerBlending::Additive ? "  (additive)" : "");
+                std::string label = layer.Name + (layer.Blending == AnimLayerBlending::Additive ? "  (additive)" : "") + (layer.SyncedLayer >= 0 ? "  (synced)" : "");
                 if (ImGui::Selectable(label.c_str(), m_Layer == li + 1)) { m_Layer = li + 1; m_SelectedState = -1; }
                 ImGui::PopID();
             }
@@ -229,6 +232,35 @@ namespace Editor
                 int blending = (int)layer.Blending;
                 ImGui::SetNextItemWidth(180);
                 if (ImGui::Combo("Blending##layer", &blending, "Override\0Additive\0")) { layer.Blending = (AnimLayerBlending)blending; changed = true; }
+                // Sync: follow an earlier, unsynced layer's state machine with this layer's own motions.
+                auto layerName = [&](int index) { return index == 0 ? std::string("Base Layer") : root.Layers[index - 1].Name; };
+                ImGui::SetNextItemWidth(180);
+                if (ImGui::BeginCombo("Sync##layer", layer.SyncedLayer < 0 ? "(none)" : layerName(layer.SyncedLayer).c_str()))
+                {
+                    if (ImGui::Selectable("(none)", layer.SyncedLayer < 0))
+                    {
+                        layer.SyncedLayer = -1;
+                        changed = true;
+                    }
+                    for (int s = 0; s < m_Layer; ++s)
+                    {
+                        if (s > 0 && root.Layers[s - 1].SyncedLayer >= 0) continue;
+                        if (ImGui::Selectable(layerName(s).c_str(), layer.SyncedLayer == s))
+                        {
+                            if (layer.SyncedLayer < 0) // start from "play the source's motion" in every state
+                            {
+                                layer.Machine.States.clear();
+                                layer.Machine.Transitions.clear();
+                            }
+                            layer.SyncedLayer = s;
+                            changed = true;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A synced layer runs the chosen layer's states and transitions, playing its own motion for each state\n"
+                                      "(e.g. a wounded version of every locomotion state). States without a motion play the source's.");
                 if (live && m_Ctx.IsPlaying() && (int)live->Layers.size() >= m_Layer)
                 {
                     float w = live->Layers[m_Layer - 1].Weight >= 0.0f ? live->Layers[m_Layer - 1].Weight : layer.Weight;
@@ -279,8 +311,11 @@ namespace Editor
                 changed = true;
             }
 
-            // The rest of the window edits the selected layer's state machine.
+            // The rest of the window edits the selected layer's state machine. A synced layer mirrors its source's
+            // states and transitions; only each state's motion is its own.
+            root.SyncLayerStates();
             AnimatorController& c = m_Layer == 0 ? root : root.Layers[m_Layer - 1].Machine;
+            const bool syncedLayer = m_Layer > 0 && root.Layers[m_Layer - 1].SyncedLayer >= 0;
             AnimatorRuntime emptyRuntime;
             const AnimatorRuntime* liveRuntime = &emptyRuntime;
             float liveFadeDuration = 0.0f, liveFadeElapsed = 0.0f;
@@ -312,7 +347,13 @@ namespace Editor
                 {
                     auto& st = c.States[m_SelectedState];
                     ImGui::SeparatorText("State");
-                    changed |= ImGui::InputText("Name", &st.Name);
+                    if (syncedLayer)
+                    {
+                        ImGui::Text("%s", st.Name.c_str());
+                        ImGui::TextDisabled(HasOwnMotion(st) ? "This layer's motion for the synced state:" : "Plays the source layer's motion (set one to replace it):");
+                    }
+                    else
+                        changed |= ImGui::InputText("Name", &st.Name);
                     // Clip picker: the preview mesh's clips when available, else free text.
                     auto clipCombo = [&](const char* label, std::string& value) {
                         if (mesh && !mesh->GetClips().empty())
@@ -328,12 +369,16 @@ namespace Editor
                             changed |= ImGui::InputText(label, &value);
                     };
                     int motion = (int)st.Motion;
-                    if (ImGui::Combo("Motion", &motion, "Clip\0Blend Tree 1D\0Blend Tree 2D\0"))
+                    if (ImGui::Combo("Motion", &motion, "Clip\0Blend Tree 1D\0Blend Tree 2D Freeform\0Blend Tree 2D Directional\0"))
                     {
                         st.Motion = (AnimMotionType)motion;
                         changed = true;
                     }
-                    bool tree2D = st.Motion == AnimMotionType::BlendTree2D;
+                    if (ImGui::IsItemHovered() && IsBlendTree2D(st.Motion))
+                        ImGui::SetTooltip(st.Motion == AnimMotionType::BlendTree2DDirectional
+                                              ? "One motion per direction (e.g. walk forward, back, left, right), optionally one at (0, 0) for idle"
+                                              : "Any layout of motions; nearby motions blend (e.g. several speeds per direction)");
+                    bool tree2D = IsBlendTree2D(st.Motion);
                     if (st.Motion == AnimMotionType::Clip)
                         clipCombo("Clip", st.Clip);
                     else
@@ -394,104 +439,120 @@ namespace Editor
                         ImGui::SameLine();
                         ImGui::TextDisabled(tree2D ? "clip / position (X, Y)" : "clip / threshold");
                     }
-                    changed |= ImGui::DragFloat("Speed", &st.Speed, 0.01f, -10.0f, 10.0f);
-                    changed |= ImGui::Checkbox("Loop", &st.Loop);
-
-                    ImGui::SeparatorText("Events");
-                    int removeEvent = -1;
-                    for (int k = 0; k < (int)st.Events.size(); ++k)
+                    if (syncedLayer)
                     {
-                        ImGui::PushID(k + 6000);
-                        ImGui::SetNextItemWidth(70);
-                        changed |= ImGui::SliderFloat("##time", &st.Events[k].Time, 0.0f, 1.0f, "%.2f");
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 28);
-                        changed |= ImGui::InputText("##fn", &st.Events[k].Function);
-                        ImGui::SameLine();
-                        if (ImGui::SmallButton("x")) removeEvent = k;
-                        ImGui::PopID();
-                    }
-                    if (removeEvent >= 0) { st.Events.erase(st.Events.begin() + removeEvent); changed = true; }
-                    if (ImGui::Button("+ Event")) { st.Events.push_back({}); changed = true; }
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("normalized time / OnAnimationEvent name");
-                    ImGui::BeginDisabled(c.DefaultState == m_SelectedState);
-                    if (ImGui::Button("Set as Default State")) { c.DefaultState = m_SelectedState; changed = true; }
-                    ImGui::EndDisabled();
-                }
-                ImGui::SeparatorText(anySelected ? "Transitions from Any State" : "Transitions");
-                int from = anySelected ? -1 : m_SelectedState;
-                int removeTransition = -1;
-                for (int ti = 0; ti < (int)c.Transitions.size(); ++ti)
-                {
-                    auto& t = c.Transitions[ti];
-                    if (t.From != from) continue;
-                    ImGui::PushID(ti);
-                    std::string to = t.To >= 0 && t.To < (int)c.States.size() ? c.States[t.To].Name : "?";
-                    bool openT = ImGui::TreeNodeEx("##t", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap, "-> %s", to.c_str());
-                    ImGui::SameLine(270);
-                    if (ImGui::SmallButton("x")) removeTransition = ti;
-                    if (openT)
-                    {
-                        changed |= ImGui::Checkbox("Exit Time", &t.HasExitTime);
-                        if (t.HasExitTime)
+                        if (HasOwnMotion(st) && ImGui::Button("Use Source Motion"))
                         {
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(80);
-                            changed |= ImGui::DragFloat("##exit", &t.ExitTime, 0.01f, 0.0f, 10.0f);
+                            st.Motion = AnimMotionType::Clip;
+                            st.Clip.clear();
+                            st.Children.clear();
+                            changed = true;
                         }
-                        ImGui::SetNextItemWidth(120);
-                        changed |= ImGui::DragFloat("Blend (s)", &t.Duration, 0.01f, 0.0f, 10.0f);
-                        int removeCond = -1;
-                        for (int ci = 0; ci < (int)t.Conditions.size(); ++ci)
+                    }
+                    else
+                    {
+                        changed |= ImGui::DragFloat("Speed", &st.Speed, 0.01f, -10.0f, 10.0f);
+                        changed |= ImGui::Checkbox("Loop", &st.Loop);
+
+                        ImGui::SeparatorText("Events");
+                        int removeEvent = -1;
+                        for (int k = 0; k < (int)st.Events.size(); ++k)
                         {
-                            auto& cond = t.Conditions[ci];
-                            ImGui::PushID(ci);
-                            ImGui::SetNextItemWidth(100);
-                            if (ImGui::BeginCombo("##param", cond.Parameter.empty() ? "(param)" : cond.Parameter.c_str()))
-                            {
-                                for (auto& p : root.Parameters)
-                                    if (ImGui::Selectable(p.Name.c_str(), p.Name == cond.Parameter))
-                                    {
-                                        cond.Parameter = p.Name;
-                                        if (p.Type == AnimParameterType::Bool || p.Type == AnimParameterType::Trigger) cond.Op = AnimConditionOp::IsTrue;
-                                        else if (cond.Op >= AnimConditionOp::IsTrue) cond.Op = AnimConditionOp::Greater;
-                                        changed = true;
-                                    }
-                                ImGui::EndCombo();
-                            }
-                            const AnimParameter* param = c.FindParameter(cond.Parameter);
-                            AnimParameterType type = param ? param->Type : AnimParameterType::Float;
-                            if (type != AnimParameterType::Trigger)
-                            {
-                                ImGui::SameLine();
-                                ImGui::SetNextItemWidth(70);
-                                int first = type == AnimParameterType::Bool ? 4 : 0, last = type == AnimParameterType::Bool ? 5 : 3;
-                                if (ImGui::BeginCombo("##op", kOpNames[(int)cond.Op]))
-                                {
-                                    for (int o = first; o <= last; ++o)
-                                        if (ImGui::Selectable(kOpNames[o], (int)cond.Op == o)) { cond.Op = (AnimConditionOp)o; changed = true; }
-                                    ImGui::EndCombo();
-                                }
-                                if (type != AnimParameterType::Bool)
-                                {
-                                    ImGui::SameLine();
-                                    ImGui::SetNextItemWidth(55);
-                                    changed |= ImGui::DragFloat("##th", &cond.Threshold, 0.01f);
-                                }
-                            }
-                            ImGui::SameLine(270);
-                            if (ImGui::SmallButton("x")) removeCond = ci;
+                            ImGui::PushID(k + 6000);
+                            ImGui::SetNextItemWidth(70);
+                            changed |= ImGui::SliderFloat("##time", &st.Events[k].Time, 0.0f, 1.0f, "%.2f");
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 28);
+                            changed |= ImGui::InputText("##fn", &st.Events[k].Function);
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("x")) removeEvent = k;
                             ImGui::PopID();
                         }
-                        if (removeCond >= 0) { t.Conditions.erase(t.Conditions.begin() + removeCond); changed = true; }
-                        if (ImGui::SmallButton("+ Condition")) { t.Conditions.push_back({}); changed = true; }
-                        ImGui::TreePop();
+                        if (removeEvent >= 0) { st.Events.erase(st.Events.begin() + removeEvent); changed = true; }
+                        if (ImGui::Button("+ Event")) { st.Events.push_back({}); changed = true; }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("normalized time / OnAnimationEvent name");
+                        ImGui::BeginDisabled(c.DefaultState == m_SelectedState);
+                        if (ImGui::Button("Set as Default State")) { c.DefaultState = m_SelectedState; changed = true; }
+                        ImGui::EndDisabled();
                     }
-                    ImGui::PopID();
                 }
-                if (removeTransition >= 0) { c.Transitions.erase(c.Transitions.begin() + removeTransition); changed = true; }
-                ImGui::TextDisabled("Right-click a state in the graph to add transitions.");
+                if (!syncedLayer) // a synced layer's transitions belong to its source
+                {
+                    ImGui::SeparatorText(anySelected ? "Transitions from Any State" : "Transitions");
+                    int from = anySelected ? -1 : m_SelectedState;
+                    int removeTransition = -1;
+                    for (int ti = 0; ti < (int)c.Transitions.size(); ++ti)
+                    {
+                        auto& t = c.Transitions[ti];
+                        if (t.From != from) continue;
+                        ImGui::PushID(ti);
+                        std::string to = t.To >= 0 && t.To < (int)c.States.size() ? c.States[t.To].Name : "?";
+                        bool openT = ImGui::TreeNodeEx("##t", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap, "-> %s", to.c_str());
+                        ImGui::SameLine(270);
+                        if (ImGui::SmallButton("x")) removeTransition = ti;
+                        if (openT)
+                        {
+                            changed |= ImGui::Checkbox("Exit Time", &t.HasExitTime);
+                            if (t.HasExitTime)
+                            {
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(80);
+                                changed |= ImGui::DragFloat("##exit", &t.ExitTime, 0.01f, 0.0f, 10.0f);
+                            }
+                            ImGui::SetNextItemWidth(120);
+                            changed |= ImGui::DragFloat("Blend (s)", &t.Duration, 0.01f, 0.0f, 10.0f);
+                            int removeCond = -1;
+                            for (int ci = 0; ci < (int)t.Conditions.size(); ++ci)
+                            {
+                                auto& cond = t.Conditions[ci];
+                                ImGui::PushID(ci);
+                                ImGui::SetNextItemWidth(100);
+                                if (ImGui::BeginCombo("##param", cond.Parameter.empty() ? "(param)" : cond.Parameter.c_str()))
+                                {
+                                    for (auto& p : root.Parameters)
+                                        if (ImGui::Selectable(p.Name.c_str(), p.Name == cond.Parameter))
+                                        {
+                                            cond.Parameter = p.Name;
+                                            if (p.Type == AnimParameterType::Bool || p.Type == AnimParameterType::Trigger) cond.Op = AnimConditionOp::IsTrue;
+                                            else if (cond.Op >= AnimConditionOp::IsTrue) cond.Op = AnimConditionOp::Greater;
+                                            changed = true;
+                                        }
+                                    ImGui::EndCombo();
+                                }
+                                const AnimParameter* param = c.FindParameter(cond.Parameter);
+                                AnimParameterType type = param ? param->Type : AnimParameterType::Float;
+                                if (type != AnimParameterType::Trigger)
+                                {
+                                    ImGui::SameLine();
+                                    ImGui::SetNextItemWidth(70);
+                                    int first = type == AnimParameterType::Bool ? 4 : 0, last = type == AnimParameterType::Bool ? 5 : 3;
+                                    if (ImGui::BeginCombo("##op", kOpNames[(int)cond.Op]))
+                                    {
+                                        for (int o = first; o <= last; ++o)
+                                            if (ImGui::Selectable(kOpNames[o], (int)cond.Op == o)) { cond.Op = (AnimConditionOp)o; changed = true; }
+                                        ImGui::EndCombo();
+                                    }
+                                    if (type != AnimParameterType::Bool)
+                                    {
+                                        ImGui::SameLine();
+                                        ImGui::SetNextItemWidth(55);
+                                        changed |= ImGui::DragFloat("##th", &cond.Threshold, 0.01f);
+                                    }
+                                }
+                                ImGui::SameLine(270);
+                                if (ImGui::SmallButton("x")) removeCond = ci;
+                                ImGui::PopID();
+                            }
+                            if (removeCond >= 0) { t.Conditions.erase(t.Conditions.begin() + removeCond); changed = true; }
+                            if (ImGui::SmallButton("+ Condition")) { t.Conditions.push_back({}); changed = true; }
+                            ImGui::TreePop();
+                        }
+                        ImGui::PopID();
+                    }
+                    if (removeTransition >= 0) { c.Transitions.erase(c.Transitions.begin() + removeTransition); changed = true; }
+                    ImGui::TextDisabled("Right-click a state in the graph to add transitions.");
+                }
             }
             ImGui::EndChild();
 
@@ -540,7 +601,7 @@ namespace Editor
                 glm::vec2 anchor(mouse.x - origin.x, mouse.y - origin.y);
                 m_Pan -= anchor * (m_Zoom / before - 1.0f);
             }
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !syncedLayer)
             {
                 m_ContextPos = glm::vec2(mouse.x - origin.x, mouse.y - origin.y) / z - glm::vec2(kNodeW, kNodeH) * 0.5f;
                 ImGui::OpenPopup("GraphContext");
@@ -601,13 +662,13 @@ namespace Editor
                 ImGui::PushID(i + 1000);
                 ImGui::InvisibleButton("node", ImVec2(nodeW, nodeH));
                 if (ImGui::IsItemClicked()) m_SelectedState = i < 0 ? -2 : i;
-                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !syncedLayer)
                 {
                     pos.x += ImGui::GetIO().MouseDelta.x / z;
                     pos.y += ImGui::GetIO().MouseDelta.y / z;
                 }
                 if (ImGui::IsItemDeactivated()) changed = true; // save layout after a drag
-                if (ImGui::BeginPopupContextItem("NodeContext"))
+                if (!syncedLayer && ImGui::BeginPopupContextItem("NodeContext"))
                 {
                     if (ImGui::BeginMenu("Make Transition To"))
                     {
@@ -657,7 +718,11 @@ namespace Editor
                 ImGui::EndPopup();
             }
             ImGui::SetCursorScreenPos(ImVec2(canvasMin.x + 8, canvasMax.y - 22));
-            ImGui::TextDisabled("Right-click: create state / transitions.  Middle-drag: pan.  Wheel: zoom.  Orange: default.  Blue: current.");
+            if (syncedLayer)
+                ImGui::TextDisabled("Synced with %s: its states and transitions drive this layer. Select a state to set this layer's motion for it.",
+                                    root.Layers[m_Layer - 1].SyncedLayer == 0 ? "Base Layer" : root.Layers[root.Layers[m_Layer - 1].SyncedLayer - 1].Name.c_str());
+            else
+                ImGui::TextDisabled("Right-click: create state / transitions.  Middle-drag: pan.  Wheel: zoom.  Orange: default.  Blue: current.");
             ImGui::EndChild();
             ImGui::EndTable();
         }

@@ -22,8 +22,9 @@ namespace Editor
         std::string OpenSceneLater; // request this scene like the UI does, after a few frames (automation/testing)
         bool MenuOpenScene = false; // run File > Open Scene... after a few frames (automation/testing)
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
-        int Theme = -1;
-        int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer           // --theme dark|light|midnight: this session only (preferences stay unchanged)
+        int Theme = -1;           // --theme dark|light|midnight: this session only (preferences stay unchanged)
+        int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
+        bool VisualizeNavigation = false; // Game view overlay of UI navigation links (--visualize-nav starts with it on)
         bool BuildSucceeded = false; // result of the batch build
     };
 
@@ -124,6 +125,12 @@ namespace Editor
         int m_LinePoint = -1;
         Dimension::Entity m_LinePointOwner;
         bool UpdateLinePointEditing(ImVec2 origin, ImVec2 size);
+        void DrawNavigationOverlay(ImVec2 origin, ImVec2 size);
+        // Edit mode: drag the selected UI Rect (move, or resize by its edges and corners) in the Game view, and click a
+        // widget there to select it.
+        void UpdateUIRectEditing(ImVec2 origin, ImVec2 size, bool hovered);
+        int m_UIRectDrag = -1; // -1 none, 0 move, 1..8 handles (see UpdateUIRectEditing)
+        glm::vec2 m_UIRectDragStart{ 0.0f }, m_UIRectStartPosition{ 0.0f }, m_UIRectStartSize{ 0.0f };
         bool DeleteLinePoint(); // removes the picked point; false when no point is picked
         bool m_ShowGrid = true;
         bool m_WasWindowFocused = true;

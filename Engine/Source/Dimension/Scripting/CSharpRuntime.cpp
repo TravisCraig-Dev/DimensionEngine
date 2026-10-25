@@ -122,6 +122,7 @@ namespace Dimension
             void (*InvokeEntity)(intptr_t, int, uint64_t);
             void (*DestroyInstance)(intptr_t);
             void (*InvokeString)(intptr_t, int, const char*);
+            void (*RaiseEvent)(void*, uint64_t, int, float, uint64_t, const char*);
         };
 
         bool s_Available = false;
@@ -581,6 +582,10 @@ namespace Dimension
         FillNativeApi(s_Native);
         if (!initialize(&s_Native, &s_Managed)) return false;
         s_Available = true;
+        // C# events on engine objects (UIButton.Clicked, Entity.CollisionEnter, ...).
+        Scene::SetEventHook([](Scene& scene, Entity e, Scene::EventKind kind, float value, Entity other, const char* text) {
+            if (s_Managed.RaiseEvent) s_Managed.RaiseEvent(&scene, Pack(e), (int)kind, value, Pack(other), text);
+        });
         return true;
     }
 

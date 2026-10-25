@@ -17,6 +17,7 @@
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
+#include <Dimension/UI/UI.h>
 #include <thread>
 #include <cstdio>
 #include <imgui.h>
@@ -1170,7 +1171,162 @@ namespace Editor
             ImGui::SetCursorScreenPos(ImVec2(origin.x + 8, origin.y + 6));
             ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Click to give the game input focus");
         }
+        if (!m_Ctx.IsPlaying()) UpdateUIRectEditing(origin, avail, imageHovered);
+        DrawNavigationOverlay(origin, avail);
         ImGui::End();
+    }
+
+    void EditorLayer::UpdateUIRectEditing(ImVec2 origin, ImVec2 size, bool hovered)
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        auto order = Dimension::UI::ComputeLayout(scene, { size.x, size.y });
+        ImVec2 mouse = ImGui::GetMousePos();
+        glm::vec2 m(mouse.x - origin.x, mouse.y - origin.y);
+        Entity sel = m_Ctx.HasValidSelection() ? m_Ctx.Selected : Entity::Null();
+        auto* rect = sel.IsNull() ? nullptr : reg.TryGet<UIRectComponent>(sel);
+        bool visible = rect && reg.Get<TransformComponent>(sel).ActiveInHierarchy && std::find(order.begin(), order.end(), sel) != order.end();
+        // Children of a layout group are placed by it: outline only.
+        Entity parent = sel.IsNull() ? Entity::Null() : scene.GetParent(sel);
+        bool editable = visible && (parent.IsNull() || !reg.Has<UILayoutGroupComponent>(parent));
+
+        // Handles: 1-4 corners (top-left, top-right, bottom-right, bottom-left), 5-8 edges (top, right, bottom, left).
+        // Each moves the rect's min/max x/y by the mouse: -1 min, +1 max, 0 neither.
+        static const glm::ivec2 kSides[9] = { { 0, 0 }, { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 }, { 0, -1 }, { 1, 0 }, { 0, 1 }, { -1, 0 } };
+        auto handlePos = [&](int h) {
+            glm::vec2 mn = rect->ComputedMin, mx = rect->ComputedMax, c = (mn + mx) * 0.5f;
+            glm::ivec2 sd = kSides[h];
+            return glm::vec2(sd.x < 0 ? mn.x : sd.x > 0 ? mx.x : c.x, sd.y < 0 ? mn.y : sd.y > 0 ? mx.y : c.y);
+        };
+        // The topmost UI element under the mouse (draw order: last on top).
+        Entity topmost = Entity::Null();
+        for (auto it = order.rbegin(); it != order.rend() && topmost.IsNull(); ++it)
+            if (auto* r = reg.TryGet<UIRectComponent>(*it); r && glm::all(glm::greaterThanEqual(m, r->ComputedMin)) && glm::all(glm::lessThanEqual(m, r->ComputedMax)))
+                topmost = *it;
+        int hot = -1;
+        if (editable && m_UIRectDrag < 0 && hovered)
+        {
+            for (int h = 1; h <= 8 && hot < 0; ++h)
+                if (glm::all(glm::lessThanEqual(glm::abs(m - handlePos(h)), glm::vec2(6.0f)))) hot = h;
+            if (hot < 0 && topmost == sel) hot = 0; // dragging inside moves it (unless a child is on top: that selects it)
+        }
+
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            if (hot >= 0)
+            {
+                m_Ctx.RecordUndo();
+                m_UIRectDrag = hot;
+                m_UIRectDragStart = m;
+                m_UIRectStartPosition = rect->Position;
+                m_UIRectStartSize = rect->Size;
+            }
+            else if (!topmost.IsNull())
+                m_Ctx.Select(topmost);
+        }
+        if (m_UIRectDrag >= 0)
+        {
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !editable)
+                m_UIRectDrag = -1;
+            else
+            {
+                float s = std::max(rect->ComputedScale, 1e-4f);
+                glm::vec2 d = (m - m_UIRectDragStart) / s; // canvas units
+                if (ImGui::GetIO().KeyCtrl) d = glm::round(d / 10.0f) * 10.0f; // Ctrl: steps of 10 units
+                glm::vec2 position = m_UIRectStartPosition, sizeUnits = m_UIRectStartSize;
+                Dimension::UI::DragRect(*rect, kSides[m_UIRectDrag], d * s, position, sizeUnits);
+                position = glm::round(position);
+                sizeUnits = glm::round(sizeUnits);
+                if (position != rect->Position || sizeUnits != rect->Size)
+                {
+                    rect->Position = position;
+                    rect->Size = sizeUnits;
+                    Prefabs::RecordFieldOverride(scene, sel, "UI Rect", "Position");
+                    Prefabs::RecordFieldOverride(scene, sel, "UI Rect", "Size");
+                    m_Ctx.MarkDirty();
+                }
+            }
+        }
+
+        if (!visible) return;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+        auto screen = [&](glm::vec2 p) { return ImVec2(origin.x + p.x, origin.y + p.y); };
+        const ImU32 blue = IM_COL32(80, 170, 255, 255), faint = IM_COL32(80, 170, 255, 120);
+        dl->AddRect(screen(rect->ComputedMin), screen(rect->ComputedMax), editable ? blue : faint, 0.0f, 0, 1.5f);
+        if (editable)
+        {
+            for (int h = 1; h <= 8; ++h)
+            {
+                glm::vec2 p = handlePos(h);
+                bool active = hot == h || m_UIRectDrag == h;
+                dl->AddRectFilled(screen(p - glm::vec2(4.0f)), screen(p + glm::vec2(4.0f)), active ? IM_COL32(255, 255, 255, 255) : blue);
+                dl->AddRect(screen(p - glm::vec2(4.0f)), screen(p + glm::vec2(4.0f)), IM_COL32(20, 40, 70, 255));
+            }
+            // Pivot.
+            glm::vec2 pivot = glm::mix(rect->ComputedMin, rect->ComputedMax, rect->Pivot);
+            dl->AddCircle(screen(pivot), 5.0f, blue, 16, 1.5f);
+            if (hot >= 0 || m_UIRectDrag >= 0)
+                ImGui::SetMouseCursor(m_UIRectDrag == 0 || hot == 0 ? ImGuiMouseCursor_ResizeAll
+                                      : (kSides[std::max(hot, m_UIRectDrag)].x == 0 ? ImGuiMouseCursor_ResizeNS
+                                         : kSides[std::max(hot, m_UIRectDrag)].y == 0 ? ImGuiMouseCursor_ResizeEW
+                                         : kSides[std::max(hot, m_UIRectDrag)].x == kSides[std::max(hot, m_UIRectDrag)].y ? ImGuiMouseCursor_ResizeNWSE
+                                                                                                                         : ImGuiMouseCursor_ResizeNESW));
+            if (m_UIRectDrag >= 0)
+            {
+                char info[64];
+                std::snprintf(info, sizeof(info), "pos %.0f, %.0f   size %.0f x %.0f", rect->Position.x, rect->Position.y, rect->Size.x, rect->Size.y);
+                glm::vec2 at = rect->ComputedMax + glm::vec2(6.0f, 4.0f);
+                dl->AddText(screen(at), IM_COL32(255, 255, 255, 230), info);
+            }
+        }
+        dl->PopClipRect();
+    }
+
+    void EditorLayer::DrawNavigationOverlay(ImVec2 origin, ImVec2 size)
+    {
+        // Toggle in the Game view's bottom-right corner, clear of most game HUDs (like the Visualize button on Unity's
+        // Selectables).
+        const char* label = m_Options.VisualizeNavigation ? "Navigation: On" : "Navigation";
+        ImVec2 ts = ImGui::CalcTextSize(label);
+        ImGui::SetCursorScreenPos(ImVec2(origin.x + size.x - ts.x - ImGui::GetStyle().FramePadding.x * 2.0f - 8.0f,
+                                         origin.y + size.y - ImGui::GetFrameHeight() - 6.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, m_Options.VisualizeNavigation ? ImVec4(0.75f, 0.6f, 0.1f, 0.85f) : ImVec4(0.1f, 0.1f, 0.12f, 0.6f));
+        if (ImGui::SmallButton(label)) m_Options.VisualizeNavigation = !m_Options.VisualizeNavigation;
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Shows where the arrow keys and gamepad move between UI widgets.\nYellow: nearest widget (automatic). Cyan: an explicit UI Navigation link.");
+        if (!m_Options.VisualizeNavigation) return;
+
+        Scene& scene = m_Ctx.ActiveScene();
+        auto order = Dimension::UI::ComputeLayout(scene, { size.x, size.y });
+        auto links = Dimension::UI::NavigationLinks(scene, order);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+        for (const auto& link : links)
+        {
+            static const glm::vec2 dirs[4] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
+            glm::vec2 dir = dirs[(int)link.Direction];
+            glm::vec2 perp(-dir.y, dir.x);
+            // Leave from the side facing the move and arrive at the target's side facing back; opposite moves between
+            // the same pair sit side by side.
+            auto sidePoint = [&](glm::vec2 mn, glm::vec2 mx, glm::vec2 side) {
+                glm::vec2 c = (mn + mx) * 0.5f, half = (mx - mn) * 0.5f;
+                glm::vec2 p = c + side * half + perp * std::min(6.0f, std::abs(glm::dot(perp, half)) * 0.8f);
+                return ImVec2(origin.x + p.x, origin.y + p.y);
+            };
+            ImVec2 a = sidePoint(link.FromMin, link.FromMax, dir), b = sidePoint(link.ToMin, link.ToMax, -dir);
+            float reach = std::max(20.0f, std::hypot(b.x - a.x, b.y - a.y) * 0.35f);
+            ImVec2 c1(a.x + dir.x * reach, a.y + dir.y * reach), c2(b.x - dir.x * reach, b.y - dir.y * reach);
+            ImU32 col = link.Explicit ? IM_COL32(80, 220, 255, 230) : IM_COL32(255, 210, 60, 220);
+            dl->AddBezierCubic(a, c1, c2, b, col, 2.0f);
+            // Arrowhead along the final tangent.
+            glm::vec2 t = glm::normalize(glm::vec2(b.x - c2.x, b.y - c2.y) + dir * 1e-3f);
+            glm::vec2 n(-t.y, t.x);
+            dl->AddTriangleFilled(b, ImVec2(b.x - t.x * 9 + n.x * 4.5f, b.y - t.y * 9 + n.y * 4.5f), ImVec2(b.x - t.x * 9 - n.x * 4.5f, b.y - t.y * 9 - n.y * 4.5f), col);
+            dl->AddCircleFilled(a, 2.5f, col);
+        }
+        dl->PopClipRect();
     }
 
     void EditorLayer::DrawStats()
@@ -2001,6 +2157,9 @@ namespace Editor
         }
         else
             fs::copy(Project::GetAssetsDirectory(), projectOut / "Assets", fs::copy_options::recursive, ec);
+        // Convex decompositions already computed (Mesh Colliders), so the game does not redo them.
+        if (fs::path hulls = Project::GetDirectory() / ".dimension" / "Cache" / "Convex"; fs::exists(hulls))
+            fs::copy(hulls, projectOut / ".dimension" / "Cache" / "Convex", fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
         fs::path scripts = CSharpProject::AssemblyPath(Project::GetDirectory());
         if (fs::exists(scripts))
         {

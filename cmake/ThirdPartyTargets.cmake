@@ -13,6 +13,10 @@ target_include_directories(stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 add_library(cgltf INTERFACE)
 target_include_directories(cgltf SYSTEM INTERFACE ${cgltf_SOURCE_DIR})
 
+# V-HACD (convex decomposition): single header, implemented in ConvexDecomposition.cpp.
+add_library(vhacd INTERFACE)
+target_include_directories(vhacd SYSTEM INTERFACE ${vhacd_SOURCE_DIR}/include)
+
 add_library(miniaudio INTERFACE)
 target_include_directories(miniaudio SYSTEM INTERFACE ${miniaudio_SOURCE_DIR})
 

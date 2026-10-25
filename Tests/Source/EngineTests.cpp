@@ -16,6 +16,7 @@
 #include <Dimension/Asset/AssetDependencies.h>
 #include <Dimension/Asset/AssetPrefetch.h>
 #include <Dimension/Scene/SceneManager.h>
+#include <Dimension/Physics/ConvexDecomposition.h>
 #include <set>
 #include <windows.h>
 
@@ -337,6 +338,184 @@ namespace
         CHECK(hit && hit.Hit == ball);
         CHECK(Near(hit.Point.y, 1.5f, 0.05f) && Near(hit.Normal.y, 1.0f, 0.01f));
         CHECK(!Physics3DWorld::Raycast(*runtime, { 0, 10, 0 }, { 0, 1, 0 }, 100.0f));
+        auto all = Physics3DWorld::RaycastAll(*runtime, { 0, 10, 0 }, { 0, -1, 0 }, 100.0f); // through the ball into the ground
+        CHECK(all.size() == 2 && all[0].Hit == ball && all[1].Hit == ground && all[0].Distance < all[1].Distance && Near(all[1].Point.y, 0.5f, 0.01f));
+        runtime->OnRuntimeStop();
+    }
+
+    void TestConvexDecomposition()
+    {
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets"); // CPU mesh data only
+        AssetHandle torusHandle = AssetManager::GetHandle(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Torus.obj");
+        auto torus = AssetManager::GetMeshData(torusHandle);
+        CHECK(torus != nullptr);
+        if (!torus) return;
+        auto parts = ConvexDecomposition::Decompose(torus, 16);
+        CHECK(parts && parts->size() >= 4 && parts->size() <= 16);
+        // Every part is convex (all its points behind each face) and they cover the ring: the hole stays empty.
+        bool convex = true, holeClear = true;
+        glm::vec3 lo(1e9f), hi(-1e9f);
+        for (const ConvexPart& part : *parts)
+        {
+            for (size_t k = 0; k + 2 < part.Triangles.size(); k += 3)
+            {
+                glm::vec3 a = part.Points[part.Triangles[k]], b = part.Points[part.Triangles[k + 1]], c = part.Points[part.Triangles[k + 2]];
+                glm::vec3 n = glm::cross(b - a, c - a);
+                if (glm::length(n) < 1e-9f) continue;
+                n = glm::normalize(n);
+                for (const glm::vec3& p : part.Points) convex &= glm::dot(p - a, n) < 1e-3f;
+            }
+            for (const glm::vec3& p : part.Points)
+            {
+                lo = glm::min(lo, p);
+                hi = glm::max(hi, p);
+            }
+            // No part reaches the ring's middle (hole radius 0.42).
+            glm::vec3 c(0.0f);
+            for (const glm::vec3& p : part.Points) c += p / (float)part.Points.size();
+            holeClear &= glm::length(glm::vec2(c.x, c.z)) > 0.4f;
+        }
+        CHECK(convex && holeClear);
+        CHECK(Near(lo, { -0.98f, -0.28f, -0.98f }, 0.05f) && Near(hi, { 0.98f, 0.28f, 0.98f }, 0.05f));
+        CHECK(ConvexDecomposition::Decompose(torus, 16) == parts); // cached
+
+        // A ring dropped over a thin pole: decomposed, it slides down around the pole to the ground; as one convex
+        // hull it would sit on top of the pole.
+        auto drop = [&](bool decompose) {
+            Scene scene("Ring Toss");
+            auto& reg = scene.GetRegistry();
+            Entity ground = scene.CreateEntity("Ground");
+            reg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            reg.Get<TransformComponent>(ground).Scale = { 20, 1, 20 };
+            reg.Emplace<BoxColliderComponent>(ground);
+            Entity pole = scene.CreateEntity("Pole");
+            reg.Get<TransformComponent>(pole).Position = { 0, 1.5f, 0 };
+            reg.Get<TransformComponent>(pole).Scale = { 0.2f, 3.0f, 0.2f };
+            reg.Emplace<BoxColliderComponent>(pole);
+            Entity ring = scene.CreateEntity("Ring");
+            reg.Get<TransformComponent>(ring).Position = { 0, 4.0f, 0 };
+            reg.Emplace<RigidbodyComponent>(ring);
+            auto& mc = reg.Emplace<MeshColliderComponent>(ring);
+            mc.Mesh = torusHandle;
+            mc.ConvexDecomposition = decompose;
+            auto runtime = scene.Clone();
+            runtime->OnRuntimeStart();
+            for (int i = 0; i < 180; ++i) runtime->OnUpdateRuntime(1.0f / 60.0f);
+            float y = runtime->GetRegistry().Get<TransformComponent>(ring).Position.y;
+            runtime->OnRuntimeStop();
+            return y;
+        };
+        float hullY = drop(false), partsY = drop(true);
+        CHECK(hullY > 2.8f);  // resting on the pole's top (3 units high)
+        CHECK(partsY < 0.6f); // around the pole on the ground
+        AssetManager::Shutdown();
+    }
+
+    void TestVehicles()
+    {
+        Scene scene("Vehicle");
+        auto& reg = scene.GetRegistry();
+        Entity ground = scene.CreateEntity("Ground");
+        reg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+        reg.Get<TransformComponent>(ground).Scale = { 400, 1, 400 };
+        reg.Emplace<BoxColliderComponent>(ground).Friction = 1.0f;
+        Entity car = scene.CreateEntity("Car");
+        reg.Get<TransformComponent>(car).Position = { 0, 1.0f, 0 };
+        reg.Emplace<RigidbodyComponent>(car).Mass = 1200.0f;
+        reg.Emplace<BoxColliderComponent>(car).Size = { 1.8f, 0.5f, 4.2f };
+        reg.Emplace<VehicleComponent>(car);
+        Entity wheel = scene.CreateEntity("Wheel FL");
+        scene.SetParent(wheel, car);
+        reg.Get<VehicleComponent>(car).WheelFrontLeft = wheel;
+
+        auto runtime = scene.Clone();
+        runtime->OnRuntimeStart();
+        auto& rr = runtime->GetRegistry();
+        auto run = [&](float seconds) { for (int i = 0; i < (int)(seconds * 60.0f); ++i) runtime->OnUpdateRuntime(1.0f / 60.0f); };
+        auto& v = rr.Get<VehicleComponent>(car);
+        auto pos = [&] { return rr.Get<TransformComponent>(car).Position; };
+        // Settles on its suspension, all wheels down.
+        run(2.0f);
+        CHECK(v.WheelGrounded[0] && v.WheelGrounded[1] && v.WheelGrounded[2] && v.WheelGrounded[3]);
+        CHECK(pos().y > 0.3f && pos().y < 1.0f && std::abs(v.SpeedKmh) < 1.0f);
+        // The wheel visual sits at the front-left wheel (front is -Z, left is -X), below the body.
+        glm::vec3 w = rr.Get<TransformComponent>(wheel).Position;
+        CHECK(Near(w.x, -0.8f, 0.05f) && Near(w.z, -1.3f, 0.05f) && w.y < -0.3f);
+        // Full throttle: drives forward through the gears.
+        v.Throttle = 1.0f;
+        run(4.0f);
+        CHECK(v.SpeedKmh > 25.0f && pos().z < -10.0f && std::abs(pos().x) < 1.0f);
+        CHECK(v.Gear >= 1 && v.EngineRPM > 1000.0f);
+        // Steering right (+X while facing -Z).
+        float x0 = pos().x;
+        v.Steering = 1.0f;
+        run(1.5f);
+        CHECK(pos().x > x0 + 2.0f);
+        // Brakes stop it.
+        v.Steering = 0.0f;
+        v.Throttle = 0.0f;
+        v.Brake = 1.0f;
+        run(5.0f);
+        CHECK(std::abs(v.SpeedKmh) < 1.0f);
+        // Reverse from rest.
+        v.Brake = 0.0f;
+        v.Throttle = -1.0f;
+        run(2.0f);
+        CHECK(v.SpeedKmh < -5.0f && v.Gear < 0);
+        // Pressing forward while rolling backward brakes before driving off.
+        v.Throttle = 1.0f;
+        run(0.25f);
+        CHECK(v.SpeedKmh < 0.0f && v.Gear <= 0);
+        runtime->OnRuntimeStop();
+    }
+
+    void TestAudioOcclusion()
+    {
+        Scene scene("Occlusion");
+        auto& reg = scene.GetRegistry();
+        Entity listener = scene.CreateEntity("Listener");
+        reg.Get<TransformComponent>(listener).Position = { 0, 1, 0 };
+        reg.Emplace<CameraComponent>(listener).Primary = true;
+        reg.Emplace<SphereColliderComponent>(listener); // the listener's own body never occludes
+        Entity source = scene.CreateEntity("Source");
+        reg.Get<TransformComponent>(source).Position = { 0, 1, -10 };
+        reg.Emplace<SphereColliderComponent>(source); // nor does the source's
+        Entity open = scene.CreateEntity("Open Source");
+        reg.Get<TransformComponent>(open).Position = { 10, 1, 0 };
+        Entity wall = scene.CreateEntity("Wall");
+        reg.Get<TransformComponent>(wall).Position = { 0, 1, -5 };
+        reg.Get<TransformComponent>(wall).Scale = { 4, 4, 0.5f };
+        reg.Emplace<BoxColliderComponent>(wall);
+        Entity zone = scene.CreateEntity("Trigger Zone");
+        reg.Get<TransformComponent>(zone).Position = { 5, 1, 0 };
+        reg.Get<TransformComponent>(zone).Scale = { 1, 4, 4 };
+        reg.Emplace<BoxColliderComponent>(zone).IsTrigger = true; // triggers don't block sound
+        for (Entity e : { source, open })
+        {
+            auto& src = reg.Emplace<AudioSourceComponent>(e);
+            src.Spatial = true;
+            src.Occlusion = true;
+        }
+        auto& plain = reg.Emplace<AudioSourceComponent>(scene.CreateEntity("No Occlusion"));
+        plain.Spatial = true;
+
+        auto runtime = scene.Clone();
+        runtime->OnRuntimeStart(); // the first audio update snaps to the current state
+        auto& rr = runtime->GetRegistry();
+        auto amount = [&](Entity e) { return rr.Get<AudioSourceComponent>(e).OcclusionAmount; };
+        CHECK(Near(amount(source), 1.0f) && Near(amount(open), 0.0f));
+        CHECK(AudioWorld::IsOccluded(*runtime, { 0, 1, 0 }, listener, source) && !AudioWorld::IsOccluded(*runtime, { 0, 1, 0 }, listener, open));
+        CHECK(!AudioWorld::IsOccluded(*runtime, { 3, 1, -10 }, Entity::Null(), source)); // around the wall's end
+        // Remove the wall: the sound clears over 0.15 s instead of jumping.
+        runtime->DestroyEntity(wall);
+        runtime->OnUpdateRuntime(1.0f / 60.0f);
+        runtime->OnUpdateRuntime(1.0f / 60.0f);
+        float easing = amount(source);
+        CHECK(easing > 0.6f && easing < 0.9f);
+        for (int i = 0; i < 12; ++i) runtime->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(Near(amount(source), 0.0f));
+        for (auto [e, src] : rr.ViewOf<AudioSourceComponent>())
+            if (!src.Occlusion) CHECK(src.OcclusionAmount == 0.0f);
         runtime->OnRuntimeStop();
     }
 
@@ -768,6 +947,199 @@ namespace
             CHECK(loaded->GetRegistry().Get<TagComponent>(la).Layer == 7);
         }
         config.LayerCollisionMatrix = savedMatrix;
+    }
+
+    void TestRichText()
+    {
+        auto chars = Font::ParseRichText("a<b>b<i>c</i></b><color=#ff8000>d<color=blue>e</color>f</color><size=40>g<size=50%>h</size></size><u>i</u><s>j</s>");
+        std::string plain;
+        for (auto& c : chars) plain += (char)c.Codepoint;
+        CHECK(plain == "abcdefghij");
+        if (plain != "abcdefghij") return;
+        CHECK(!chars[0].Bold && chars[1].Bold && !chars[1].Italic && chars[2].Bold && chars[2].Italic && !chars[3].Bold);
+        CHECK(chars[3].HasColor && Near(chars[3].Color.r, 1.0f) && Near(chars[3].Color.g, 128.0f / 255.0f) && Near(chars[3].Color.b, 0.0f));
+        CHECK(chars[4].HasColor && chars[4].Color == glm::vec4(0, 0, 1, 1)); // nested color, then back to the outer one
+        CHECK(chars[5].Color == chars[3].Color && !chars[6].HasColor);
+        CHECK(Near(chars[6].Size, 40.0f) && Near(chars[6].SizeScale, 1.0f) && Near(chars[7].Size, 40.0f) && Near(chars[7].SizeScale, 0.5f));
+        CHECK(chars[8].Underline && !chars[8].Strikethrough && chars[9].Strikethrough && chars[9].Size < 0.0f);
+        // Short and alpha hex colors, case-insensitive tags, quotes, and <br>.
+        chars = Font::ParseRichText("<COLOR=\"#0f08\">x</Color><br>y");
+        CHECK(chars.size() == 3 && Near(chars[0].Color.g, 1.0f) && Near(chars[0].Color.a, 136.0f / 255.0f) && chars[1].Codepoint == '\n' && !chars[2].HasColor);
+        // Unknown or malformed tags stay as text; a stray closing tag is harmless.
+        CHECK(Font::StripRichText("a < b > c") == "a < b > c");
+        CHECK(Font::StripRichText("<wave>hi</wave>") == "<wave>hi</wave>");
+        CHECK(Font::StripRichText("<color=nope>x</color>") == "<color=nope>x");
+        CHECK(Font::StripRichText("<size=0>x</b>y") == "<size=0>xy");
+        CHECK(Font::StripRichText("2D Demo >") == "2D Demo >" && Font::StripRichText("<<b>bold</b>") == "<bold");
+        CHECK(Font::StripRichText("caf\xC3\xA9 <i>\xC3\xBC</i>") == "caf\xC3\xA9 \xC3\xBC"); // UTF-8 survives
+    }
+
+    void TestBlendTreesDirectional()
+    {
+        AnimState tree;
+        tree.Motion = AnimMotionType::BlendTree2DDirectional;
+        tree.Children = { { "Idle", 0, 0 }, { "Forward", 0, 1 }, { "Right", 1, 0 }, { "Back", 0, -1 }, { "Left", -1, 0 } };
+        std::vector<float> w;
+        auto weights = [&](glm::vec2 p) { AnimatorStateMachine::BlendWeightsAt(tree, p, w); return w; };
+        auto is = [](const std::vector<float>& got, std::vector<float> want) {
+            if (got.size() != want.size()) return false;
+            for (size_t i = 0; i < got.size(); ++i)
+                if (!Near(got[i], want[i])) return false;
+            return true;
+        };
+        CHECK(is(weights({ 0, 0 }), { 1, 0, 0, 0, 0 }));
+        CHECK(is(weights({ 0, 1 }), { 0, 1, 0, 0, 0 }));
+        CHECK(is(weights({ 0, 0.5f }), { 0.5f, 0.5f, 0, 0, 0 }));      // halfway to Forward: half idle
+        CHECK(is(weights({ 0.5f, 0.5f }), { 0, 0.5f, 0.5f, 0, 0 }));    // on the Forward-Right edge
+        CHECK(is(weights({ 0.25f, 0.25f }), { 0.5f, 0.25f, 0.25f, 0, 0 }));
+        CHECK(is(weights({ 2, 2 }), { 0, 0.5f, 0.5f, 0, 0 }));          // past the edge: direction only
+        CHECK(is(weights({ -0.3f, 0 }), { 0.7f, 0, 0, 0, 0.3f }));
+        CHECK(is(weights({ 0.2f, -0.6f }), { 0.2f, 0, 0.2f, 0.6f, 0 })); // Back-Right quadrant (angle wraps past -90)
+        // Weights always sum to 1, wherever the point is.
+        bool sums = true;
+        for (float a = 0.0f; a < 6.283f; a += 0.37f)
+            for (float r : { 0.1f, 0.6f, 1.0f, 3.0f })
+            {
+                weights({ r * std::cos(a), r * std::sin(a) });
+                float s = 0.0f;
+                for (float x : w) s += x;
+                sums &= Near(s, 1.0f) && std::all_of(w.begin(), w.end(), [](float x) { return x >= 0.0f; });
+            }
+        CHECK(sums);
+        // No center motion: only the direction counts.
+        tree.Children.erase(tree.Children.begin());
+        CHECK(is(weights({ 0, 0.2f }), { 1, 0, 0, 0 }));
+        CHECK(is(weights({ 0.1f, 0.1f }), { 0.5f, 0.5f, 0, 0 }));
+        // Two opposite directions: the nearer one plays.
+        tree.Children = { { "Forward", 0, 1 }, { "Back", 0, -1 } };
+        CHECK(is(weights({ 0.5f, 0.5f }), { 1, 0 }) && is(weights({ 0.4f, -0.1f }), { 0, 1 }));
+
+        // Saved with its Y positions.
+        AnimatorController c;
+        c.States = { tree };
+        c.States[0].BlendParameterY = "Y";
+        fs::path path = fs::temp_directory_path() / "dimension_directional.controller";
+        CHECK(c.Save(path));
+        auto back = AnimatorController::Load(path);
+        CHECK(back->States[0].Motion == AnimMotionType::BlendTree2DDirectional && back->States[0].BlendParameterY == "Y" &&
+              Near(back->States[0].Children[1].ThresholdY, -1.0f));
+        fs::remove(path);
+    }
+
+    void TestInverseKinematics()
+    {
+        // A straight chain up Y: Root -> Mid (1 up) -> Tip (1 up).
+        Skeleton sk;
+        auto joint = [](const char* name, int parent, glm::vec3 t) {
+            Joint j;
+            j.Name = name;
+            j.Parent = parent;
+            j.Translation = t;
+            return j;
+        };
+        sk.Joints = { joint("Root", -1, { 0, 0, 0 }), joint("Mid", 0, { 0, 1, 0 }), joint("Tip", 1, { 0, 1, 0 }) };
+        sk.ComputeOrder();
+        auto globalPos = [&](const Pose& p, int j) {
+            std::vector<glm::mat4> g;
+            Animation::JointGlobals(sk, p, g);
+            return glm::vec3(g[j][3]);
+        };
+        Pose pose;
+        pose.SetBindPose(sk);
+        // Two-bone: reaches a point in range, keeping the bone lengths.
+        glm::vec3 target(1.0f, 1.0f, 0.0f);
+        CHECK(Animation::SolveIK(sk, pose, 2, 2, target, nullptr, 1.0f));
+        CHECK(Near(globalPos(pose, 2), target, 1e-3f));
+        CHECK(Near(glm::distance(globalPos(pose, 0), globalPos(pose, 1)), 1.0f) && Near(glm::distance(globalPos(pose, 1), globalPos(pose, 2)), 1.0f));
+        // The hint picks the side the middle joint bends toward.
+        for (float side : { 1.0f, -1.0f })
+        {
+            pose.SetBindPose(sk);
+            glm::vec3 hint(0.0f, 1.0f, 2.0f * side);
+            CHECK(Animation::SolveIK(sk, pose, 2, 2, { 0.0f, 1.2f, 0.0f }, &hint, 1.0f));
+            CHECK(Near(globalPos(pose, 2), { 0.0f, 1.2f, 0.0f }, 1e-3f) && globalPos(pose, 1).z * side > 0.5f);
+            // Also from a chain already bent the other way (toward +X).
+            pose.SetBindPose(sk);
+            pose.Rotations[0] = glm::angleAxis(glm::radians(-30.0f), glm::vec3(0, 0, 1));
+            pose.Rotations[1] = glm::angleAxis(glm::radians(60.0f), glm::vec3(0, 0, 1));
+            CHECK(globalPos(pose, 1).x > 0.4f);
+            CHECK(Animation::SolveIK(sk, pose, 2, 2, { 0.3f, 1.2f, 0.0f }, &hint, 1.0f));
+            CHECK(Near(globalPos(pose, 2), { 0.3f, 1.2f, 0.0f }, 1e-3f) && globalPos(pose, 1).z * side > 0.5f);
+        }
+        // Out of reach: the chain stretches straight toward the target.
+        pose.SetBindPose(sk);
+        Animation::SolveIK(sk, pose, 2, 2, { 3.0f, 0.0f, 0.0f }, nullptr, 1.0f);
+        CHECK(Near(globalPos(pose, 2), { 2.0f, 0.0f, 0.0f }, 1e-2f));
+        // Half weight lands between the animated pose and the solve.
+        pose.SetBindPose(sk);
+        Animation::SolveIK(sk, pose, 2, 2, target, nullptr, 0.5f);
+        glm::vec3 half = globalPos(pose, 2);
+        CHECK(glm::distance(half, target) > 0.1f && glm::distance(half, { 0, 2, 0 }) > 0.1f);
+        // Nothing to solve: a root joint as the tip, or no weight.
+        CHECK(!Animation::SolveIK(sk, pose, 0, 2, target, nullptr, 1.0f) && !Animation::SolveIK(sk, pose, 2, 2, target, nullptr, 0.0f));
+
+        // Longer chains iterate: the Tentacle's six bones reach a point off to the side.
+        MeshData data;
+        CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Tentacle.gltf", data));
+        const Skeleton& tentacle = *data.SkeletonData;
+        Pose tp;
+        tp.SetBindPose(tentacle);
+        int tip = tentacle.FindJoint("Bone5");
+        std::vector<glm::mat4> g;
+        Animation::JointGlobals(tentacle, tp, g);
+        glm::vec3 base(g[tentacle.FindJoint("Bone0")][3]), end(g[tip][3]);
+        float reach = glm::distance(base, end);
+        glm::vec3 aim = base + glm::normalize(glm::vec3(1.0f, 1.0f, 0.5f)) * reach * 0.7f;
+        CHECK(Animation::SolveIK(tentacle, tp, tip, 5, aim, nullptr, 1.0f));
+        Animation::JointGlobals(tentacle, tp, g);
+        CHECK(glm::distance(glm::vec3(g[tip][3]), aim) < 0.01f * reach);
+    }
+
+    void TestLayerSync()
+    {
+        AnimatorController c;
+        AnimState idle, walk;
+        idle.Name = "Idle";
+        idle.Clip = "Sway";
+        walk.Name = "Walk";
+        walk.Clip = "Wave";
+        walk.EditorPosition = { 200, 0 };
+        walk.Events = { { 0.5f, "OnStep" } };
+        c.States = { idle, walk };
+        c.Transitions = { { 0, 1, true, 1.0f, 0.25f, {} } };
+        AnimLayer hurt;
+        hurt.Name = "Hurt";
+        hurt.SyncedLayer = 0;
+        c.Layers = { hurt };
+        c.SyncLayerStates();
+        const auto& m = c.Layers[0].Machine;
+        // The synced layer takes the source's states and transitions, without motions (it plays the source's) or events.
+        CHECK(m.States.size() == 2 && m.States[1].Name == "Walk" && m.States[1].EditorPosition == glm::vec2(200, 0) && m.Transitions.size() == 1);
+        CHECK(!HasOwnMotion(m.States[0]) && !HasOwnMotion(m.States[1]) && m.States[1].Events.empty());
+        // Its own motion for a state survives syncing again (after the source changed) and save/load.
+        c.Layers[0].Machine.States[1].Clip = "Curl";
+        c.States[1].Name = "Limp";
+        AnimState run;
+        run.Name = "Run";
+        c.States.push_back(run);
+        c.SyncLayerStates();
+        CHECK(m.States.size() == 3 && m.States[1].Name == "Limp" && m.States[1].Clip == "Curl" && m.States[2].Name == "Run");
+        fs::path path = fs::temp_directory_path() / "dimension_sync.controller";
+        CHECK(c.Save(path));
+        auto back = AnimatorController::Load(path);
+        CHECK(back->Layers.size() == 1 && back->Layers[0].SyncedLayer == 0 && back->Layers[0].Machine.States.size() == 3);
+        CHECK(back->Layers[0].Machine.States[1].Clip == "Curl" && !HasOwnMotion(back->Layers[0].Machine.States[0]));
+        fs::remove(path);
+        // Only earlier, unsynced layers can be followed.
+        AnimLayer second;
+        second.SyncedLayer = 1; // the synced "Hurt" layer
+        AnimLayer self;
+        self.SyncedLayer = 3; // itself
+        c.Layers.push_back(second);
+        c.Layers.push_back(self);
+        c.SyncLayerStates();
+        CHECK(c.Layers[1].SyncedLayer == -1 && c.Layers[2].SyncedLayer == -1 && c.Layers[0].SyncedLayer == 0);
+        CHECK(c.LayerMachine(0) == &c && c.LayerMachine(2) == &c.Layers[1].Machine && c.LayerMachine(4) == nullptr);
     }
 
     void TestBlendTrees2D()
@@ -2575,6 +2947,49 @@ namespace
             CHECK(x >= 9.5f && x <= 11.5f);
             rt->OnRuntimeStop();
         }
+        // C# events: a label's script listens to another entity's UI Button (which has no script) and unsubscribes
+        // after its Limit; the listeners end with play mode.
+        {
+            Scene ev("Events");
+            auto& er = ev.GetRegistry();
+            Entity evCanvas = ev.CreateEntity("Canvas");
+            er.Emplace<CanvasComponent>(evCanvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+            Entity button = ev.CreateEntity("Press Me", evCanvas);
+            {
+                auto& br = er.Emplace<UIRectComponent>(button);
+                br.AnchorMin = br.AnchorMax = br.Pivot = { 0, 0 };
+                br.Size = { 200, 50 };
+            }
+            er.Emplace<UIButtonComponent>(button);
+            Entity label = ev.CreateEntity("Counter", evCanvas);
+            er.Emplace<UIRectComponent>(label).Position = { 400, 400 };
+            er.Emplace<UITextComponent>(label).Text = "";
+            auto& counter = er.Emplace<ScriptComponent>(label).Add("Game.ButtonCounter");
+            counter.Fields["Button"] = "Press Me";
+            counter.Fields["Limit"] = 3;
+            ev.UpdateTransforms();
+            for (int round = 0; round < 2; ++round) // the second run checks that the first run's listener is gone
+            {
+                auto rt = ev.Clone();
+                rt->OnRuntimeStart();
+                auto click = [&] {
+                    rt->SetUIInput({ 50, 25 }, true, { 800, 600 });
+                    rt->OnUpdateRuntime(1.0f / 60.0f);
+                    rt->SetUIInput({ 50, 25 }, false, { 800, 600 });
+                    rt->OnUpdateRuntime(1.0f / 60.0f);
+                };
+                auto text = [&] { return rt->GetRegistry().Get<UITextComponent>(label).Text; };
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                CHECK(text() == "Clicks: 0");
+                click();
+                CHECK(text() == "Clicks: 1");
+                click();
+                click();
+                click(); // past the limit: unsubscribed
+                CHECK(text() == "Clicks: 3");
+                rt->OnRuntimeStop();
+            }
+        }
         CSharpRuntime::UnloadScripts();
         CHECK(ScriptRegistry::Find("Game.Spinner") == nullptr);
     }
@@ -3555,7 +3970,63 @@ namespace
         Entity backButton = back->FindEntityByName("Button"), backField = back->FindEntityByName("Field");
         auto* backNav = back->GetRegistry().TryGet<UINavigationComponent>(backButton);
         CHECK(backNav && backNav->Mode == UINavigationMode::Explicit && backNav->SelectOnDown == backField && backNav->SelectOnUp.IsNull());
+
+        // The editor's Visualize Navigation overlay: every move each reachable widget offers, explicit or automatic.
+        auto links = UI::NavigationLinks(*runtime, UI::ComputeLayout(*runtime, screen));
+        auto linkTo = [&](Entity from, UI::NavigationDirection d) -> const UI::NavigationLink* {
+            for (auto& l : links)
+                if (l.From == from && l.Direction == d) return &l;
+            return nullptr;
+        };
+        auto* down = linkTo(button, UI::NavigationDirection::Down);
+        CHECK(down && down->To == field && down->Explicit && Near(down->ToMin, { 300, 200 }));
+        CHECK(!linkTo(button, UI::NavigationDirection::Right) && !linkTo(button, UI::NavigationDirection::Up)); // Explicit: only its link
+        auto* up = linkTo(dropdown, UI::NavigationDirection::Up);
+        CHECK(up && up->To == toggle && up->Explicit);
+        auto* right = linkTo(dropdown, UI::NavigationDirection::Right);
+        CHECK(right && right->To == field && !right->Explicit); // automatic nearest widget
+        bool sliderListed = false;
+        for (auto& l : links) sliderListed |= l.From == slider || l.To == slider; // opted out of navigation
+        CHECK(!sliderListed);
         runtime->OnRuntimeStop();
+    }
+
+    void TestUIRectDragging()
+    {
+        // Stretched anchors, an off-center pivot and a scaled canvas: dragging an edge moves only that edge.
+        Scene scene("Drag");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        auto& cv = reg.Emplace<CanvasComponent>(canvas);
+        cv.ScaleMode = CanvasScaleMode::ScaleWithScreenSize;
+        cv.ReferenceResolution = { 1920, 1080 };
+        Entity e = scene.CreateEntity("Panel", canvas);
+        auto& r = reg.Emplace<UIRectComponent>(e);
+        r.AnchorMin = { 0.2f, 0.3f };
+        r.AnchorMax = { 0.6f, 0.7f };
+        r.Pivot = { 0.25f, 0.75f };
+        r.Position = { 10, -20 };
+        r.Size = { 30, 40 };
+        scene.UpdateTransforms();
+        glm::vec2 screen(960, 540); // canvas scale 0.5
+        auto layout = [&] { UI::ComputeLayout(scene, screen); return std::make_pair(r.ComputedMin, r.ComputedMax); };
+        auto [min0, max0] = layout();
+        CHECK(Near(r.ComputedScale, 0.5f));
+        auto drag = [&](glm::ivec2 sides, glm::vec2 delta) {
+            glm::vec2 p = r.Position, s = r.Size;
+            UI::DragRect(r, sides, delta, p, s);
+            r.Position = p;
+            r.Size = s;
+            return layout();
+        };
+        auto [min1, max1] = drag({ 1, 0 }, { 24, 0 }); // right edge
+        CHECK(Near(max1, max0 + glm::vec2(24, 0)) && Near(min1, min0) && Near(r.Size.x, 30.0f + 48.0f));
+        auto [min2, max2] = drag({ -1, -1 }, { -10, 6 }); // top-left corner
+        CHECK(Near(min2, min1 + glm::vec2(-10, 6)) && Near(max2, max1));
+        auto [min3, max3] = drag({ 0, 1 }, { 0, -8 }); // bottom edge up
+        CHECK(Near(max3, max2 + glm::vec2(0, -8)) && Near(min3, min2));
+        auto [min4, max4] = drag({ 0, 0 }, { 8, 8 }); // move
+        CHECK(Near(min4, min3 + glm::vec2(8)) && Near(max4, max3 + glm::vec2(8)));
     }
 
     void TestBuildDependencies()
@@ -3837,6 +4308,13 @@ int main(int argc, char** argv)
     Run("Animator state machine", TestAnimatorStateMachine);
     Run("Blend trees and animation events", TestBlendTreesAndEvents);
     Run("2D blend trees", TestBlendTrees2D);
+    Run("2D simple directional blend trees", TestBlendTreesDirectional);
+    Run("Rich text tags", TestRichText);
+    Run("Audio occlusion", TestAudioOcclusion);
+    Run("Vehicles", TestVehicles);
+    Run("Convex decomposition", TestConvexDecomposition);
+    Run("Inverse kinematics", TestInverseKinematics);
+    Run("Synced animator layers", TestLayerSync);
     Run("Material slots and soft shadows", TestMaterialSlotsAndSoftShadows);
     Run("Component order", TestComponentOrder);
     Run("Multi-line input fields", TestMultiLineInput);
@@ -3844,6 +4322,7 @@ int main(int argc, char** argv)
     Run("Async scene loading", TestAsyncSceneLoading);
     Run("Build dependencies", TestBuildDependencies);
     Run("UI navigation", TestUINavigation);
+    Run("UI rect dragging", TestUIRectDragging);
     Run("Root motion", TestRootMotion);
     Run("glTF tangents", TestGltfTangents);
     Run("Generated tangents", TestGeneratedTangents);

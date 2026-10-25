@@ -155,19 +155,120 @@ namespace Dimension
             }
         }
 
-        void ComputeSkinMatrices(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& out)
+        void JointGlobals(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& out)
         {
-            size_t n = skeleton.Joints.size();
-            std::vector<glm::mat4> world(n);
+            out.resize(skeleton.Joints.size());
             for (int i : skeleton.Order)
             {
                 glm::mat4 local = glm::translate(glm::mat4(1.0f), pose.Translations[i]) * glm::toMat4(pose.Rotations[i]) *
                                   glm::scale(glm::mat4(1.0f), pose.Scales[i]);
                 int p = skeleton.Joints[i].Parent;
-                world[i] = (p >= 0 ? world[p] : skeleton.RootTransform) * local;
+                out[i] = (p >= 0 ? out[p] : skeleton.RootTransform) * local;
             }
-            out.resize(n);
-            for (size_t i = 0; i < n; ++i) out[i] = world[i] * skeleton.Joints[i].InverseBind;
+        }
+
+        void ComputeSkinMatrices(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& out)
+        {
+            std::vector<glm::mat4> world;
+            JointGlobals(skeleton, pose, world);
+            out.resize(world.size());
+            for (size_t i = 0; i < world.size(); ++i) out[i] = world[i] * skeleton.Joints[i].InverseBind;
+        }
+
+        namespace
+        {
+            glm::quat GlobalRotation(const glm::mat4& m)
+            {
+                glm::mat3 r(m);
+                for (int c = 0; c < 3; ++c)
+                    if (float len = glm::length(r[c]); len > 1e-8f) r[c] /= len;
+                return glm::normalize(glm::quat_cast(r));
+            }
+
+            // Turns `joint` so that its global rotation becomes `delta * current`.
+            void RotateGlobal(const Skeleton& skeleton, Pose& pose, const std::vector<glm::mat4>& globals, int joint, const glm::quat& delta)
+            {
+                int p = skeleton.Joints[joint].Parent;
+                glm::quat parent = GlobalRotation(p >= 0 ? globals[p] : skeleton.RootTransform);
+                pose.Rotations[joint] = glm::normalize(glm::inverse(parent) * delta * parent * pose.Rotations[joint]);
+            }
+
+            float SafeAcos(float x) { return std::acos(std::clamp(x, -1.0f, 1.0f)); }
+            glm::vec3 SafeNormalize(const glm::vec3& v, const glm::vec3& fallback)
+            {
+                float len = glm::length(v);
+                return len > 1e-6f ? v / len : fallback;
+            }
+        }
+
+        bool SolveIK(const Skeleton& skeleton, Pose& pose, int tip, int chainLength, const glm::vec3& target, const glm::vec3* hint, float weight)
+        {
+            if (weight <= 0.0f || tip < 0 || tip >= (int)skeleton.Joints.size() || pose.Rotations.size() != skeleton.Joints.size()) return false;
+            std::vector<int> chain; // the tip's ancestors that turn, nearest first
+            for (int j = skeleton.Joints[tip].Parent; j >= 0 && (int)chain.size() < std::max(chainLength, 1); j = skeleton.Joints[j].Parent)
+                chain.push_back(j);
+            if (chain.empty()) return false;
+            std::vector<glm::quat> original(pose.Rotations);
+            std::vector<glm::mat4> g;
+            auto pos = [&](int j) { return glm::vec3(g[j][3]); };
+            JointGlobals(skeleton, pose, g);
+
+            if (chain.size() == 2)
+            {
+                // Analytic two-bone solve (law of cosines): bend the middle joint to the angle the distance needs, then
+                // swing the chain's root onto the target. The bend stays in the plane of the hint (or the current bend).
+                int a = chain[1], b = chain[0];
+                glm::vec3 pa = pos(a), pb = pos(b), pc = pos(tip);
+                float lab = glm::length(pb - pa), lcb = glm::length(pc - pb);
+                if (lab < 1e-6f || lcb < 1e-6f) return false;
+                float lat = std::clamp(glm::length(target - pa), 1e-4f, (lab + lcb) * 0.9999f);
+                glm::vec3 ac = SafeNormalize(pc - pa, { 0, 1, 0 });
+                if (hint)
+                {
+                    // Turn the chain about its root-to-tip line so the middle joint lies toward the hint.
+                    glm::vec3 cur = pb - pa - ac * glm::dot(pb - pa, ac), want = *hint - pa - ac * glm::dot(*hint - pa, ac);
+                    if (glm::dot(cur, cur) > 1e-10f && glm::dot(want, want) > 1e-10f)
+                    {
+                        RotateGlobal(skeleton, pose, g, a, glm::rotation(glm::normalize(cur), glm::normalize(want)));
+                        JointGlobals(skeleton, pose, g);
+                        pb = pos(b);
+                    }
+                }
+                glm::vec3 axis = glm::cross(ac, pb - pa);
+                if (glm::dot(axis, axis) < 1e-10f && hint) axis = glm::cross(ac, *hint - pa); // straight: bend toward the hint
+                if (glm::dot(axis, axis) < 1e-10f) // straight, no hint: bend about any axis perpendicular to the chain
+                    axis = glm::cross(ac, std::abs(ac.x) < 0.9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 0, 1));
+                axis = glm::normalize(axis);
+                float abAc0 = SafeAcos(glm::dot(ac, glm::normalize(pb - pa)));
+                float baBc0 = SafeAcos(glm::dot(glm::normalize(pa - pb), glm::normalize(pc - pb)));
+                float abAc1 = SafeAcos((lcb * lcb - lab * lab - lat * lat) / (-2.0f * lab * lat));
+                float baBc1 = SafeAcos((lat * lat - lab * lab - lcb * lcb) / (-2.0f * lab * lcb));
+                RotateGlobal(skeleton, pose, g, a, glm::angleAxis(abAc1 - abAc0, axis));
+                JointGlobals(skeleton, pose, g);
+                RotateGlobal(skeleton, pose, g, b, glm::angleAxis(baBc1 - baBc0, axis));
+                JointGlobals(skeleton, pose, g);
+                glm::vec3 from = SafeNormalize(pos(tip) - pos(a), ac), to = SafeNormalize(target - pos(a), from);
+                RotateGlobal(skeleton, pose, g, a, glm::rotation(from, to));
+            }
+            else
+            {
+                // One joint or longer chains: cyclic coordinate descent, tip-most joint first.
+                for (int iter = 0; iter < 16; ++iter)
+                {
+                    for (int j : chain)
+                    {
+                        JointGlobals(skeleton, pose, g);
+                        glm::vec3 from = pos(tip) - pos(j), to = target - pos(j);
+                        if (glm::dot(from, from) < 1e-10f || glm::dot(to, to) < 1e-10f) continue;
+                        RotateGlobal(skeleton, pose, g, j, glm::rotation(glm::normalize(from), glm::normalize(to)));
+                    }
+                    JointGlobals(skeleton, pose, g);
+                    if (glm::distance(pos(tip), target) < 1e-4f) break;
+                }
+            }
+            if (weight < 1.0f)
+                for (int j : chain) pose.Rotations[j] = glm::slerp(original[j], pose.Rotations[j], weight);
+            return true;
         }
 
         const AnimationClip* FindClip(const std::vector<AnimationClip>& clips, const std::string& name)

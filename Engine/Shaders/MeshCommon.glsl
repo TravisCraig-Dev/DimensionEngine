@@ -1,5 +1,6 @@
 // Per-draw data for mesh shaders. Must match MeshPush/MaterialGPU in SceneRenderer.cpp.
 #extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MaterialRef
 {
@@ -23,7 +24,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Jo
 struct MeshInstance
 {
     mat4 Model;
-    uvec4 Data; // x: entity id
+    uvec4 Data; // x: entity id, yz: skinning matrices address (skinned instances)
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstancesRef { MeshInstance Items[]; };
 

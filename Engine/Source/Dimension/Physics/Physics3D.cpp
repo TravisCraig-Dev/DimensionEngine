@@ -1,4 +1,5 @@
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 
@@ -31,6 +32,9 @@
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Project/Project.h"
@@ -151,6 +155,18 @@ namespace Dimension
         std::unordered_map<JPH::uint32, JPH::uint> SubGroupOf; // body id -> sub-group
         JPH::uint NextSubGroup = 0;
         std::vector<Entity> Characters;
+        struct Vehicle
+        {
+            Entity E;
+            JPH::Ref<JPH::VehicleConstraint> Constraint;
+        };
+        std::vector<Vehicle> Vehicles;
+        void RemoveVehicle(size_t i)
+        {
+            System.RemoveStepListener(Vehicles[i].Constraint);
+            System.RemoveConstraint(Vehicles[i].Constraint);
+            Vehicles.erase(Vehicles.begin() + i);
+        }
         struct Event { Entity A, B; bool Begin, Trigger; };
         std::mutex EventMutex;
         std::vector<Event> Events;
@@ -198,6 +214,9 @@ namespace Dimension
         std::vector<Entity> jointed;
         for (auto [e, j] : reg.ViewOf<JointComponent>()) jointed.push_back(e);
         for (Entity e : jointed) CreateJoint(e);
+        std::vector<Entity> vehicles;
+        for (auto [e, v] : reg.ViewOf<VehicleComponent>()) vehicles.push_back(e);
+        for (Entity e : vehicles) CreateVehicle(e);
         m_Impl->System.OptimizeBroadPhase();
     }
 
@@ -205,6 +224,7 @@ namespace Dimension
     {
         for (auto& j : m_Impl->Joints) m_Impl->System.RemoveConstraint(j.Constraint);
         m_Impl->Joints.clear();
+        while (!m_Impl->Vehicles.empty()) m_Impl->RemoveVehicle(m_Impl->Vehicles.size() - 1);
         for (auto [e, cc] : m_Scene.GetRegistry().ViewOf<CharacterControllerComponent>()) cc.Runtime.reset();
         auto& bi = m_Impl->System.GetBodyInterface();
         for (auto [e, rb] : m_Scene.GetRegistry().ViewOf<RigidbodyComponent>())
@@ -235,7 +255,135 @@ namespace Dimension
     void Physics3DWorld::CreateJointsRecursive(Entity e)
     {
         if (m_Scene.GetRegistry().Has<JointComponent>(e)) CreateJoint(e);
+        if (m_Scene.GetRegistry().Has<VehicleComponent>(e)) CreateVehicle(e);
         for (Entity c : m_Scene.GetChildren(e)) CreateJointsRecursive(c);
+    }
+
+    void Physics3DWorld::CreateVehicle(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& vc = reg.Get<VehicleComponent>(e);
+        auto* rb = reg.TryGet<RigidbodyComponent>(e);
+        for (auto& v : m_Impl->Vehicles)
+            if (v.E == e) return;
+        if (!rb || rb->RuntimeBody == 0xFFFFFFFF || rb->Type != BodyType::Dynamic)
+        {
+            Log::Warn("Vehicle '{}' needs a dynamic Rigidbody with a collider", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        JPH::VehicleConstraintSettings settings;
+        settings.mUp = JPH::Vec3(0, 1, 0);
+        settings.mForward = JPH::Vec3(0, 0, -1);
+        settings.mMaxPitchRollAngle = JPH::DegreesToRadians(60.0f);
+        // Wheels: front left, front right, rear left, rear right (the front is -Z, the right +X).
+        float hx = vc.TrackWidth * 0.5f, hz = vc.WheelBase * 0.5f;
+        const glm::vec3 mounts[4] = { { -hx, vc.WheelHeight, -hz }, { hx, vc.WheelHeight, -hz }, { -hx, vc.WheelHeight, hz }, { hx, vc.WheelHeight, hz } };
+        for (int i = 0; i < 4; ++i)
+        {
+            bool front = i < 2;
+            auto* w = new JPH::WheelSettingsWV();
+            w->mPosition = ToJolt(mounts[i]);
+            w->mSuspensionDirection = JPH::Vec3(0, -1, 0);
+            w->mSteeringAxis = JPH::Vec3(0, 1, 0);
+            w->mWheelUp = JPH::Vec3(0, 1, 0);
+            w->mWheelForward = JPH::Vec3(0, 0, -1);
+            w->mSuspensionMinLength = 0.05f;
+            w->mSuspensionMaxLength = 0.05f + std::max(vc.SuspensionTravel, 0.01f);
+            w->mSuspensionSpring.mFrequency = std::max(vc.SuspensionFrequency, 0.1f);
+            w->mSuspensionSpring.mDamping = std::max(vc.SuspensionDamping, 0.0f);
+            w->mRadius = std::max(vc.WheelRadius, 0.05f);
+            w->mWidth = std::max(vc.WheelWidth, 0.02f);
+            w->mMaxSteerAngle = front ? JPH::DegreesToRadians(std::clamp(vc.MaxSteerAngle, 0.0f, 80.0f)) : 0.0f;
+            w->mMaxBrakeTorque = std::max(vc.BrakeTorque, 0.0f);
+            w->mMaxHandBrakeTorque = front ? 0.0f : std::max(vc.HandBrakeTorque, 0.0f);
+            settings.mWheels.push_back(w);
+        }
+        auto* controller = new JPH::WheeledVehicleControllerSettings();
+        controller->mEngine.mMaxTorque = std::max(vc.EngineTorque, 0.0f);
+        controller->mEngine.mMaxRPM = std::max(vc.MaxRPM, 500.0f);
+        controller->mEngine.mMinRPM = std::min(1000.0f, controller->mEngine.mMaxRPM * 0.5f);
+        controller->mDifferentials.clear();
+        auto axle = [&](int left, int right, float share) {
+            JPH::VehicleDifferentialSettings d;
+            d.mLeftWheel = left;
+            d.mRightWheel = right;
+            d.mEngineTorqueRatio = share;
+            controller->mDifferentials.push_back(d);
+        };
+        if (vc.Drive != VehicleDrive::RearWheel) axle(0, 1, vc.Drive == VehicleDrive::AllWheel ? 0.5f : 1.0f);
+        if (vc.Drive != VehicleDrive::FrontWheel) axle(2, 3, vc.Drive == VehicleDrive::AllWheel ? 0.5f : 1.0f);
+        settings.mController = controller;
+
+        JPH::BodyID id(rb->RuntimeBody);
+        JPH::BodyLockWrite lock(m_Impl->System.GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) return;
+        JPH::Body& body = lock.GetBody();
+        auto* constraint = new JPH::VehicleConstraint(body, settings);
+        // Wheels touch what the body's layer collides with, as cylinders (no snagging between ray hits).
+        constraint->SetVehicleCollisionTester(new JPH::VehicleCollisionTesterCastCylinder(body.GetObjectLayer()));
+        m_Impl->System.AddConstraint(constraint);
+        m_Impl->System.AddStepListener(constraint);
+        m_Impl->Vehicles.push_back({ e, constraint });
+    }
+
+    void Physics3DWorld::UpdateVehicles(bool afterStep)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& bi = m_Impl->System.GetBodyInterface();
+        for (auto& v : m_Impl->Vehicles)
+        {
+            auto* vc = reg.TryGet<VehicleComponent>(v.E);
+            auto* rb = reg.TryGet<RigidbodyComponent>(v.E);
+            if (!vc || !rb || rb->RuntimeBody == 0xFFFFFFFF) continue;
+            JPH::BodyID id(rb->RuntimeBody);
+            auto* controller = static_cast<JPH::WheeledVehicleController*>(v.Constraint->GetController());
+            JPH::RVec3 pos;
+            JPH::Quat rot;
+            bi.GetPositionAndRotation(id, pos, rot);
+            glm::quat q = FromJolt(rot);
+            float forwardSpeed = glm::dot(FromJolt(bi.GetLinearVelocity(id)), q * glm::vec3(0, 0, -1));
+            if (!afterStep)
+            {
+                // Throttle against the motion brakes first (then reverses or drives once nearly stopped).
+                float throttle = std::clamp(vc->Throttle, -1.0f, 1.0f), brake = std::clamp(vc->Brake, 0.0f, 1.0f);
+                if ((throttle > 0.0f && forwardSpeed < -1.0f) || (throttle < 0.0f && forwardSpeed > 1.0f))
+                {
+                    brake = std::max(brake, std::abs(throttle));
+                    throttle = 0.0f;
+                }
+                controller->SetDriverInput(throttle, std::clamp(vc->Steering, -1.0f, 1.0f), brake, std::clamp(vc->HandBrake, 0.0f, 1.0f));
+                if (throttle != 0.0f || vc->Steering != 0.0f || brake != 0.0f) bi.ActivateBody(id);
+                continue;
+            }
+            vc->SpeedKmh = forwardSpeed * 3.6f;
+            vc->EngineRPM = controller->GetEngine().GetCurrentRPM();
+            vc->Gear = controller->GetTransmission().GetCurrentGear();
+            // Wheel visuals: the cylinder's Y axis is the axle (pointing out of the car on each side).
+            const Entity visuals[4] = { vc->WheelFrontLeft, vc->WheelFrontRight, vc->WheelRearLeft, vc->WheelRearRight };
+            auto& carT = reg.Get<TransformComponent>(v.E);
+            glm::mat4 carWorld = glm::translate(glm::mat4(1.0f), FromJolt(JPH::Vec3(pos))) * glm::toMat4(q) * glm::scale(glm::mat4(1.0f), carT.Scale);
+            for (int i = 0; i < 4; ++i)
+            {
+                vc->WheelGrounded[i] = v.Constraint->GetWheel(i)->HasContact();
+                Entity w = visuals[i];
+                if (w.IsNull() || !m_Scene.IsValid(w) || w == v.E) continue;
+                JPH::RMat44 m = v.Constraint->GetWheelWorldTransform(i, JPH::Vec3(0, i % 2 == 0 ? -1.0f : 1.0f, 0), JPH::Vec3(1, 0, 0));
+                glm::mat4 world(1.0f);
+                for (int c = 0; c < 4; ++c)
+                {
+                    JPH::Vec4 col = c < 3 ? JPH::Vec4(m.GetColumn3(c), 0.0f) : JPH::Vec4(JPH::Vec3(m.GetTranslation()), 1.0f);
+                    world[c] = glm::vec4(col.GetX(), col.GetY(), col.GetZ(), col.GetW());
+                }
+                Entity parent = m_Scene.GetParent(w);
+                glm::mat4 parentWorld = parent.IsNull() ? glm::mat4(1.0f) : parent == v.E ? carWorld : reg.Get<TransformComponent>(parent).World;
+                glm::mat4 local = glm::inverse(parentWorld) * world;
+                auto& wt = reg.Get<TransformComponent>(w);
+                wt.Position = glm::vec3(local[3]);
+                glm::mat3 r(local);
+                for (int c = 0; c < 3; ++c) r[c] = glm::normalize(r[c]);
+                wt.Rotation = glm::eulerAngles(glm::quat_cast(r));
+            }
+        }
     }
 
     size_t Physics3DWorld::GetJointCount() const { return m_Impl->Joints.size(); }
@@ -461,9 +609,19 @@ namespace Dimension
             else
             {
                 bool convex = mc->Convex || rb.Type == BodyType::Dynamic;
-                if (!mc->Convex && rb.Type == BodyType::Dynamic)
-                    Log::Warn("Mesh Collider on '{}': dynamic bodies use the convex hull", reg.Get<TagComponent>(e).Name);
-                if (convex)
+                if (!mc->Convex && !mc->ConvexDecomposition && rb.Type == BodyType::Dynamic)
+                    Log::Warn("Mesh Collider on '{}': dynamic bodies use the convex hull (or Convex Decomposition)", reg.Get<TagComponent>(e).Name);
+                auto parts = convex && mc->ConvexDecomposition ? ConvexDecomposition::Decompose(data, mc->MaxParts) : nullptr;
+                if (parts && !parts->empty())
+                {
+                    for (const ConvexPart& part : *parts)
+                    {
+                        JPH::Array<JPH::Vec3> points;
+                        for (const glm::vec3& p : part.Points) points.push_back(ToJolt(p * scale));
+                        compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::ConvexHullShapeSettings(points));
+                    }
+                }
+                else if (convex)
                 {
                     // The hull builder only needs a representative point cloud.
                     JPH::Array<JPH::Vec3> points;
@@ -553,6 +711,12 @@ namespace Dimension
             cc->Runtime.reset();
             std::erase(m_Impl->Characters, e);
         }
+        for (size_t i = 0; i < m_Impl->Vehicles.size(); ++i)
+            if (m_Impl->Vehicles[i].E == e)
+            {
+                m_Impl->RemoveVehicle(i);
+                break;
+            }
         auto* rb = m_Scene.GetRegistry().TryGet<RigidbodyComponent>(e);
         if (!rb || rb->RuntimeBody == 0xFFFFFFFF) return;
         auto& bi = m_Impl->System.GetBodyInterface();
@@ -624,6 +788,7 @@ namespace Dimension
             }
         }
 
+        UpdateVehicles(false);
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
 
         // Joint reactions (impulses / dt); joints over their break force or torque are removed.
@@ -692,6 +857,7 @@ namespace Dimension
             t.Position = FromJolt(JPH::Vec3(pos));
             t.Rotation = glm::eulerAngles(FromJolt(rot));
         }
+        UpdateVehicles(true);
 
         std::vector<Impl::Event> events;
         {
@@ -761,6 +927,34 @@ namespace Dimension
         if (lock.Succeeded())
             result.Normal = FromJolt(lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, JPH::RVec3(ToJolt(result.Point))));
         return result;
+    }
+
+    std::vector<RaycastHit> Physics3DWorld::RaycastAll(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+                                                       uint32_t layerMask)
+    {
+        std::vector<RaycastHit> out;
+        Physics3DWorld* world = scene.GetPhysics3D();
+        float len = glm::length(direction);
+        if (!world || len <= 0.0f) return out;
+        glm::vec3 dir = direction / len * maxDistance;
+        auto& system = world->GetImpl()->System;
+        JPH::RRayCast ray(JPH::RVec3(ToJolt(origin)), ToJolt(dir));
+        JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
+        system.GetNarrowPhaseQuery().CastRay(ray, JPH::RayCastSettings(), collector, {}, LayerMaskFilter(layerMask));
+        collector.Sort();
+        for (const JPH::RayCastResult& hit : collector.mHits)
+        {
+            RaycastHit r;
+            r.Hit = world->GetImpl()->Lookup(hit.mBodyID);
+            if (r.Hit.IsNull() || (!out.empty() && out.back().Hit == r.Hit)) continue;
+            r.Distance = hit.mFraction * maxDistance;
+            r.Point = origin + dir * hit.mFraction;
+            JPH::BodyLockRead lock(system.GetBodyLockInterface(), hit.mBodyID);
+            if (lock.Succeeded())
+                r.Normal = FromJolt(lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, JPH::RVec3(ToJolt(r.Point))));
+            out.push_back(r);
+        }
+        return out;
     }
 
     namespace

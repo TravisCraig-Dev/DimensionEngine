@@ -141,6 +141,17 @@ namespace Dimension
         }
     }
 
+    public class UIButton : Component
+    {
+        internal override string NativeName => "UI Button";
+        /// <summary>Raised when the button is clicked (mouse, or Submit while it is selected). Any script can listen.</summary>
+        public event Action Clicked
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.Click, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.Click, value);
+        }
+    }
+
     public unsafe class UISlider : Component
     {
         internal override string NativeName => "UI Slider";
@@ -148,6 +159,12 @@ namespace Dimension
         {
             get => Native.Api.GetUIValue(Entity.Scene, Entity.Id);
             set => Native.Api.SetUIValue(Entity.Scene, Entity.Id, value);
+        }
+        /// <summary>Raised with the new value when the user moves the slider.</summary>
+        public event Action<float> ValueChanged
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.ValueChanged, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.ValueChanged, value);
         }
     }
 
@@ -159,6 +176,12 @@ namespace Dimension
             get => Native.Api.GetUIValue(Entity.Scene, Entity.Id) != 0.0f;
             set => Native.Api.SetUIValue(Entity.Scene, Entity.Id, value ? 1.0f : 0.0f);
         }
+        /// <summary>Raised with the new state when the user flips the toggle.</summary>
+        public event Action<bool> ValueChanged
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.ValueChanged, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.ValueChanged, value);
+        }
     }
 
     public unsafe class UIInputField : Component
@@ -168,6 +191,18 @@ namespace Dimension
         {
             get => Native.FromUtf8(Native.Api.GetUIText(Entity.Scene, Entity.Id));
             set { var e = Entity; Native.WithUtf8(value, p => Native.Api.SetUIText(e.Scene, e.Id, (byte*)p)); }
+        }
+        /// <summary>Raised with the text after each edit.</summary>
+        public event Action<string> TextChanged
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.TextChanged, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.TextChanged, value);
+        }
+        /// <summary>Raised with the text when Enter submits it.</summary>
+        public event Action<string> Submitted
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.Submit, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.Submit, value);
         }
     }
 
@@ -209,6 +244,12 @@ namespace Dimension
         }
         /// <summary>Label of the selected option.</summary>
         public string SelectedText => Native.FromUtf8(Native.Api.GetUIText(Entity.Scene, Entity.Id));
+        /// <summary>Raised with the new option index when the user picks an option.</summary>
+        public event Action<int> ValueChanged
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.ValueChanged, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.ValueChanged, value);
+        }
         public string[] Options
         {
             get
