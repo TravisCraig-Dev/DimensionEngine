@@ -74,6 +74,7 @@ namespace Dimension
         void CreateCharacter(Entity e);
         void CreateVehicle(Entity e);
         void CreateCloth(Entity e);
+        void CreateSoftBody(Entity e);
         void UpdateCloths(float dt, bool afterStep);
         void UpdateVehicles(bool afterStep);
         Scene& m_Scene;

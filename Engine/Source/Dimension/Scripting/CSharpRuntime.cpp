@@ -17,6 +17,8 @@
 
 #ifdef DIM_DOTNET
 #include <windows.h>
+#include <chrono>
+#include <thread>
 #include <nethost.h>
 #include <hostfxr.h>
 #include <coreclr_delegates.h>
@@ -124,6 +126,7 @@ namespace Dimension
             void (*InvokeString)(intptr_t, int, const char*);
             void (*RaiseEvent)(void*, uint64_t, int, float, uint64_t, const char*);
             const char* (*GetFields)(intptr_t); // JSON array of the field values (entities as packed ids)
+            int (*Debugger)(int);                // 0 attached?, 1 launch, 2 break
         };
 
         bool s_Available = false;
@@ -665,7 +668,29 @@ namespace Dimension
     }
 
     size_t CSharpRuntime::GetScriptCount() { return s_Classes.size(); }
+
+    bool CSharpRuntime::IsDebuggerAttached() { return s_Available && s_Managed.Debugger && s_Managed.Debugger(0) != 0; }
+    bool CSharpRuntime::LaunchDebugger() { return s_Available && s_Managed.Debugger && s_Managed.Debugger(1) != 0; }
+
+    bool CSharpRuntime::WaitForDebugger(float seconds)
+    {
+        if (!s_Available) return false;
+        DWORD pid = GetCurrentProcessId();
+        Log::Info("Waiting up to {:g} s for a C# debugger: attach to process {} (Rider: Run > Attach to Process, .NET; Visual Studio: "
+                  "Debug > Attach to Process, Managed (.NET Core))", seconds, (unsigned)pid);
+        auto end = std::chrono::steady_clock::now() + std::chrono::duration<float>(std::max(seconds, 0.0f));
+        while (!IsDebuggerAttached())
+        {
+            if (std::chrono::steady_clock::now() >= end) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        Log::Info("C# debugger attached");
+        return true;
+    }
 #else
+    bool CSharpRuntime::IsDebuggerAttached() { return false; }
+    bool CSharpRuntime::LaunchDebugger() { return false; }
+    bool CSharpRuntime::WaitForDebugger(float) { return false; }
     bool CSharpRuntime::Init(const fs::path&) { return false; }
     bool CSharpRuntime::IsAvailable() { return false; }
     bool CSharpRuntime::LoadScripts(const fs::path&) { return false; }

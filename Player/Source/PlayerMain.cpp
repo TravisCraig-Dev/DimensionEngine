@@ -3,6 +3,7 @@
 //        [--move x,y,frame] [--click x,y,frame]   simulated pointer for automated checks (framebuffer pixels)
 //        [--no-instancing] [--no-vsync]           draw every mesh separately / uncapped frame rate (for comparisons)
 //        [--no-clusters]                          shade every light at every pixel (for comparisons)
+//        [--wait-for-debugger]                    wait up to 60 s for a C# debugger to attach
 // A built game ships as DimensionPlayer.exe next to a "Project" folder.
 #include <Dimension/Dimension.h>
 #include <Dimension/Project/Project.h>
@@ -159,7 +160,7 @@ int main(int argc, char** argv)
     int maxFrames = 0;
     std::string screenshot;
     std::vector<PointerEvent> pointerEvents;
-    bool noVSync = false;
+    bool noVSync = false, waitForDebugger = false;
     for (int i = 1; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) sceneOverride = argv[++i];
@@ -168,6 +169,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--no-instancing")) SceneRenderer::SetInstancingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-clusters")) SceneRenderer::SetLightClusteringEnabled(false);
         else if (!std::strcmp(argv[i], "--no-vsync")) noVSync = true;
+        else if (!std::strcmp(argv[i], "--wait-for-debugger")) waitForDebugger = true;
         else if ((!std::strcmp(argv[i], "--click") || !std::strcmp(argv[i], "--move")) && i + 1 < argc)
         {
             bool click = !std::strcmp(argv[i], "--click");
@@ -217,7 +219,10 @@ int main(int argc, char** argv)
             }
         GameModule::Load(ExecutableDirectory() / (config.GameModule + ".dll"));
         if (CSharpRuntime::Init(ExecutableDirectory() / "managed"))
+        {
+            if (waitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);
             CSharpRuntime::LoadScripts(CSharpProject::AssemblyPath(Project::GetDirectory()));
+        }
 
         auto buildScenes = SceneManager::GetBuildScenes();
         fs::path scene = !sceneOverride.empty() ? sceneOverride : buildScenes.empty() ? fs::path() : AssetManager::GetAbsolutePath(buildScenes[0]);

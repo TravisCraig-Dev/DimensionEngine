@@ -33,6 +33,7 @@ namespace Dimension
         float BloomKnee = 0.5f;      // soft transition below the threshold (fraction of it)
         float BloomRadius = 1.0f;    // upsample filter spread
         bool FXAA = false;
+        int MSAA = 1; // samples per pixel: 1 (off), 2, 4 or 8
         float Vignette = 0.0f;
         // Screen-space ambient occlusion: darkens ambient and reflected light in creases and contact areas.
         bool SSAO = false;

@@ -52,6 +52,16 @@ namespace Dimension
         int32_t BaseColorImage = -1, NormalImage = -1, MetallicRoughnessImage = -1, EmissionImage = -1;
     };
 
+    // Per-model import settings (stored in the model's .meta).
+    struct MeshImportSettings
+    {
+        float Scale = 1.0f;          // uniform: vertices, skeleton, bind poses and animated translations
+        bool ImportAnimations = true;
+        bool ImportMaterials = true; // false: every part uses the Mesh Renderer's material
+        std::string Key() const;     // distinguishes cached imports with other settings
+        bool IsDefault() const { return Scale == 1.0f && ImportAnimations && ImportMaterials; }
+    };
+
     // CPU-side mesh as imported from a file (no GPU resources; usable in tools and tests).
     struct MeshData
     {
@@ -65,7 +75,9 @@ namespace Dimension
         std::vector<ImportedMaterial> Materials; // material slots (glTF materials)
         std::vector<ImportedImage> Images;
 
-        static bool LoadFromFile(const fs::path& path, MeshData& out);
+        static bool LoadFromFile(const fs::path& path, MeshData& out, const MeshImportSettings& settings = {});
+        // Applies import settings to freshly imported data.
+        void ApplyImportSettings(const MeshImportSettings& settings);
         static MeshData FromArrays(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name);
         // Fills in tangents for vertices that have none, from the UV layout (as MikkTSpace does: per-corner tangents
         // weighted by corner angle, orthogonalized against the normal). Where triangles with mirrored UVs share a

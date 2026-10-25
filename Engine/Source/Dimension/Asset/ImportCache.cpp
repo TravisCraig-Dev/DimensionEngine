@@ -1,5 +1,6 @@
 #include "Dimension/Asset/ImportCache.h"
 #include "Dimension/Asset/AssetPrefetch.h"
+#include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Project/Project.h"
 #include "Dimension/Core/Log.h"
@@ -37,7 +38,7 @@ namespace Dimension::ImportCache
         }
 
         // Cache file for a source: hash of its normalized path, size, write time, the kind and its version.
-        fs::path EntryFor(const fs::path& source, const char* kind, uint32_t version)
+        fs::path EntryFor(const fs::path& source, const char* kind, uint32_t version, const std::string& variant = {})
         {
             fs::path dir = Directory();
             if (dir.empty() || !s_Enabled) return {};
@@ -52,6 +53,7 @@ namespace Dimension::ImportCache
             h = Hash(&time, sizeof(time), h);
             h = Hash(kind, std::strlen(kind), h);
             h = Hash(&version, sizeof(version), h);
+            if (!variant.empty()) h = Hash(variant.data(), variant.size(), h);
             char name[48];
             std::snprintf(name, sizeof(name), "%016llx.%s", (unsigned long long)h, kind);
             return dir / name;
@@ -150,9 +152,9 @@ namespace Dimension::ImportCache
         WriteFile(file, w.Bytes);
     }
 
-    bool LoadMesh(const fs::path& source, MeshData& out)
+    bool LoadMesh(const fs::path& source, const std::string& variant, MeshData& out)
     {
-        fs::path file = EntryFor(source, "mesh", kMeshVersion);
+        fs::path file = EntryFor(source, "mesh", kMeshVersion, variant);
         std::vector<uint8_t> bytes;
         if (file.empty() || !ReadFile(file, bytes)) return false;
         Reader r{ bytes.data(), bytes.data() + bytes.size() };
@@ -220,9 +222,9 @@ namespace Dimension::ImportCache
         return true;
     }
 
-    void StoreMesh(const fs::path& source, const MeshData& m)
+    void StoreMesh(const fs::path& source, const std::string& variant, const MeshData& m)
     {
-        fs::path file = EntryFor(source, "mesh", kMeshVersion);
+        fs::path file = EntryFor(source, "mesh", kMeshVersion, variant);
         if (file.empty()) return;
         static_assert(std::is_trivially_copyable_v<Material> && std::is_trivially_copyable_v<Vertex> && std::is_trivially_copyable_v<SkinVertex>);
         Writer w;
@@ -293,7 +295,11 @@ namespace Dimension::ImportCache
         {
             if (!entry.is_regular_file()) continue;
             for (auto [kind, version] : { std::pair{ "image", kImageVersion }, std::pair{ "mesh", kMeshVersion } })
-                if (fs::path p = EntryFor(entry.path(), kind, version); !p.empty()) live.insert(p.filename().string());
+            {
+                // Models are keyed with their import settings too.
+                std::string variant = std::string(kind) == "mesh" ? AssetManager::GetMeshImportSettings(AssetManager::GetHandle(entry.path())).Key() : std::string();
+                if (fs::path p = EntryFor(entry.path(), kind, version, variant); !p.empty()) live.insert(p.filename().string());
+            }
         }
         size_t removed = 0;
         for (auto& entry : fs::directory_iterator(dir, ec))

@@ -36,6 +36,7 @@ namespace Dimension
         std::vector<ColorAttachmentDesc> ColorAttachments;
         VkFormat DepthFormat = VK_FORMAT_UNDEFINED;
         const char* DebugName = nullptr;
+        VkSampleCountFlagBits Samples = VK_SAMPLE_COUNT_1_BIT; // must match the attachments' (MSAA)
     };
 
     // Graphics pipeline using the device-wide pipeline layout and dynamic rendering.

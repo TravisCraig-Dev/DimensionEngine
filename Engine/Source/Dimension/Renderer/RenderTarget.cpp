@@ -22,6 +22,13 @@ namespace Dimension
         m_Depth = Image({ m_Width, m_Height, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneDepth" });
         m_Output = Image({ m_Width, m_Height, kOutputFormat,
                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "SceneOutput" });
+        if (m_Samples > 1)
+        {
+            auto samples = (VkSampleCountFlagBits)m_Samples;
+            m_HdrMS = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 1, "SceneHDR MSAA", samples });
+            m_IdsMS = Image({ m_Width, m_Height, kIdFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 1, "SceneIds MSAA", samples });
+            m_DepthMS = Image({ m_Width, m_Height, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1, "SceneDepth MSAA", samples });
+        }
 
         m_Ldr = Image({ m_Width, m_Height, kOutputFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneLDR" });
         uint32_t aw = std::max(1u, m_Width / 2), ah = std::max(1u, m_Height / 2);
@@ -80,6 +87,24 @@ namespace Dimension
         m_Ids = Image();
         m_Depth = Image();
         m_Output = Image();
+        m_HdrMS = Image();
+        m_IdsMS = Image();
+        m_DepthMS = Image();
+    }
+
+    void SceneRenderTarget::SetSamples(uint32_t samples)
+    {
+        // The largest supported count not above the request (color and depth both).
+        const auto& limits = RenderDevice::Get().GetProperties().limits;
+        VkSampleCountFlags supported = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts;
+        uint32_t s = 1;
+        for (uint32_t c : { 2u, 4u, 8u })
+            if (c <= samples && (supported & c)) s = c;
+        if (s == m_Samples) return;
+        Destroy();
+        m_Samples = s;
+        m_PickRequest.reset();
+        Create();
     }
 
     void SceneRenderTarget::Resize(uint32_t width, uint32_t height)

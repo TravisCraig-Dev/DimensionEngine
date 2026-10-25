@@ -177,6 +177,11 @@ namespace Dimension
             std::vector<uint32_t> Pinned;
             std::vector<uint32_t> Indices;
             std::vector<Vertex> Template; // UVs and rest tangents for the rendered vertices
+            // Soft bodies: the simulated (welded) vertex of each mesh vertex, and the welded triangles for normals.
+            bool IsSoftBody = false;
+            glm::vec3 CenterOffset{ 0.0f }; // soft bodies: center of mass minus the object's position at the start
+            std::vector<uint32_t> WeldOf;
+            std::vector<uint32_t> WeldedIndices;
         };
         std::vector<ClothBody> Cloths;
         void RemoveCloth(size_t i)
@@ -246,6 +251,9 @@ namespace Dimension
         std::vector<Entity> cloths;
         for (auto [e, c] : reg.ViewOf<ClothComponent>()) cloths.push_back(e);
         for (Entity e : cloths) CreateCloth(e);
+        std::vector<Entity> softBodies;
+        for (auto [e, c] : reg.ViewOf<SoftBodyComponent>()) softBodies.push_back(e);
+        for (Entity e : softBodies) CreateSoftBody(e);
         m_Impl->System.OptimizeBroadPhase();
     }
 
@@ -256,6 +264,11 @@ namespace Dimension
         while (!m_Impl->Vehicles.empty()) m_Impl->RemoveVehicle(m_Impl->Vehicles.size() - 1);
         while (!m_Impl->Cloths.empty()) m_Impl->RemoveCloth(m_Impl->Cloths.size() - 1);
         for (auto [e, c] : m_Scene.GetRegistry().ViewOf<ClothComponent>())
+        {
+            c.SimulatedPositions.clear();
+            c.SimulatedNormals.clear();
+        }
+        for (auto [e, c] : m_Scene.GetRegistry().ViewOf<SoftBodyComponent>())
         {
             c.SimulatedPositions.clear();
             c.SimulatedNormals.clear();
@@ -292,6 +305,7 @@ namespace Dimension
         if (m_Scene.GetRegistry().Has<JointComponent>(e)) CreateJoint(e);
         if (m_Scene.GetRegistry().Has<VehicleComponent>(e)) CreateVehicle(e);
         if (m_Scene.GetRegistry().Has<ClothComponent>(e)) CreateCloth(e);
+        if (m_Scene.GetRegistry().Has<SoftBodyComponent>(e)) CreateSoftBody(e);
         for (Entity c : m_Scene.GetChildren(e)) CreateJointsRecursive(c);
     }
 
@@ -347,21 +361,133 @@ namespace Dimension
         m_Impl->Cloths.push_back(std::move(body));
     }
 
+    void Physics3DWorld::CreateSoftBody(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& sb = reg.Get<SoftBodyComponent>(e);
+        for (auto& c : m_Impl->Cloths)
+            if (c.E == e) return;
+        auto* mr = reg.TryGet<MeshRendererComponent>(e);
+        auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
+        if (!data || data->Vertices.empty() || data->Indices.size() < 3)
+        {
+            Log::Warn("Soft Body on '{}' needs a Mesh Renderer with a mesh", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        auto& t = reg.Get<TransformComponent>(e);
+        Impl::ClothBody body;
+        body.E = e;
+        body.IsSoftBody = true;
+        body.Indices = data->Indices;
+        body.Template = data->Vertices;
+        // Weld vertices at the same position (UV seams, hard edges) so the surface is one closed sheet.
+        std::map<std::tuple<int64_t, int64_t, int64_t>, uint32_t> welded;
+        glm::vec3 origin = t.GetWorldPosition();
+        JPH::Ref<JPH::SoftBodySharedSettings> shared = new JPH::SoftBodySharedSettings();
+        body.WeldOf.resize(data->Vertices.size());
+        for (size_t i = 0; i < data->Vertices.size(); ++i)
+        {
+            glm::vec3 p = data->Vertices[i].Position;
+            auto key = std::make_tuple((int64_t)std::llround(p.x * 1e4), (int64_t)std::llround(p.y * 1e4), (int64_t)std::llround(p.z * 1e4));
+            auto [it, added] = welded.try_emplace(key, (uint32_t)shared->mVertices.size());
+            if (added)
+            {
+                body.Rest.push_back(p);
+                glm::vec3 w = glm::vec3(t.World * glm::vec4(p, 1.0f)) - origin;
+                shared->mVertices.push_back(JPH::SoftBodySharedSettings::Vertex(JPH::Float3(w.x, w.y, w.z)));
+            }
+            body.WeldOf[i] = it->second;
+        }
+        float invMass = (float)shared->mVertices.size() / std::max(sb.Mass, 1e-4f);
+        for (auto& v : shared->mVertices) v.mInvMass = invMass;
+        for (size_t k = 0; k + 2 < data->Indices.size(); k += 3)
+        {
+            uint32_t a = body.WeldOf[data->Indices[k]], b = body.WeldOf[data->Indices[k + 1]], c = body.WeldOf[data->Indices[k + 2]];
+            if (a == b || b == c || a == c) continue; // collapsed by welding (sphere poles)
+            shared->mFaces.push_back(JPH::SoftBodySharedSettings::Face(a, b, c));
+            body.WeldedIndices.insert(body.WeldedIndices.end(), { a, b, c });
+        }
+        JPH::SoftBodySharedSettings::VertexAttributes attributes(std::max(sb.StretchCompliance, 0.0f), std::max(sb.StretchCompliance, 0.0f) * 10.0f,
+                                                                std::max(sb.BendCompliance, 0.0f));
+        shared->CreateConstraints(&attributes, 1, JPH::SoftBodySharedSettings::EBendType::Distance);
+        shared->Optimize();
+        JPH::SoftBodyCreationSettings settings(shared, JPH::RVec3(ToJolt(origin)), JPH::Quat::sIdentity(), Layers::Make(reg.Get<TagComponent>(e).Layer, true));
+        settings.mNumIterations = (JPH::uint32)std::clamp(sb.Iterations, 1, 64);
+        settings.mLinearDamping = std::max(sb.Damping, 0.0f);
+        settings.mFriction = std::clamp(sb.Friction, 0.0f, 1.0f);
+        settings.mRestitution = std::clamp(sb.Restitution, 0.0f, 1.0f);
+        settings.mPressure = std::max(sb.Pressure, 0.0f);
+        settings.mVertexRadius = std::max(sb.Thickness, 0.0f);
+        auto& bi = m_Impl->System.GetBodyInterface();
+        body.Body = bi.CreateAndAddSoftBody(settings, JPH::EActivation::Activate);
+        if (body.Body.IsInvalid())
+        {
+            Log::Error("Too many physics bodies (soft body '{}')", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        m_Impl->BodyToEntity[body.Body.GetIndexAndSequenceNumber()] = e;
+        body.CenterOffset = FromJolt(JPH::Vec3(bi.GetCenterOfMassPosition(body.Body))) - origin;
+        m_Impl->Cloths.push_back(std::move(body));
+    }
+
     void Physics3DWorld::UpdateCloths(float dt, bool afterStep)
     {
         auto& reg = m_Scene.GetRegistry();
         auto& lockInterface = m_Impl->System.GetBodyLockInterface();
         for (auto& c : m_Impl->Cloths)
         {
-            auto* cloth = reg.TryGet<ClothComponent>(c.E);
-            if (!cloth) continue;
             auto& t = reg.Get<TransformComponent>(c.E);
             JPH::BodyLockWrite lock(lockInterface, c.Body);
             if (!lock.Succeeded()) continue;
             JPH::Body& body = lock.GetBody();
             auto* mp = static_cast<JPH::SoftBodyMotionProperties*>(body.GetMotionProperties());
-            glm::vec3 origin = FromJolt(JPH::Vec3(body.GetCenterOfMassPosition()));
+            glm::vec3 origin = FromJolt(JPH::Vec3(body.GetCenterOfMassTransform().GetTranslation()));
+            glm::mat4 com(1.0f);
+            {
+                JPH::RMat44 m = body.GetCenterOfMassTransform();
+                for (int k = 0; k < 3; ++k)
+                {
+                    JPH::Vec3 col = m.GetColumn3(k);
+                    com[k] = glm::vec4(col.GetX(), col.GetY(), col.GetZ(), 0.0f);
+                }
+                com[3] = glm::vec4(origin, 1.0f);
+            }
             auto& vertices = mp->GetVertices();
+            if (c.IsSoftBody)
+            {
+                // A soft body moves freely: its simulated shape, in the object's (fixed) space, for rendering.
+                auto* sb = reg.TryGet<SoftBodyComponent>(c.E);
+                if (!sb || !afterStep) continue;
+                // The object follows the body (roots only; its rotation stays, the shape carries the tumbling).
+                if (m_Scene.GetParent(c.E).IsNull())
+                {
+                    t.Position = origin - c.CenterOffset;
+                    t.World[3] = glm::vec4(t.Position, 1.0f);
+                }
+                glm::mat4 toLocal = glm::inverse(t.World) * com;
+                std::vector<glm::vec3> pos(vertices.size()), normal(vertices.size(), glm::vec3(0.0f));
+                for (size_t i = 0; i < vertices.size(); ++i) pos[i] = glm::vec3(toLocal * glm::vec4(FromJolt(vertices[i].mPosition), 1.0f));
+                for (size_t k = 0; k + 2 < c.WeldedIndices.size(); k += 3)
+                {
+                    uint32_t a = c.WeldedIndices[k], b = c.WeldedIndices[k + 1], d = c.WeldedIndices[k + 2];
+                    glm::vec3 n = glm::cross(pos[b] - pos[a], pos[d] - pos[a]);
+                    normal[a] += n;
+                    normal[b] += n;
+                    normal[d] += n;
+                }
+                sb->SimulatedPositions.resize(c.WeldOf.size());
+                sb->SimulatedNormals.resize(c.WeldOf.size());
+                for (size_t i = 0; i < c.WeldOf.size(); ++i)
+                {
+                    uint32_t w = c.WeldOf[i];
+                    sb->SimulatedPositions[i] = pos[w];
+                    float len = glm::length(normal[w]);
+                    sb->SimulatedNormals[i] = len > 1e-12f ? normal[w] / len : c.Template[i].Normal;
+                }
+                continue;
+            }
+            auto* cloth = reg.TryGet<ClothComponent>(c.E);
+            if (!cloth) continue;
             if (!afterStep)
             {
                 // Pinned vertices follow the object: Jolt moves kinematic vertices by their velocity, so they get the
@@ -794,6 +920,7 @@ namespace Dimension
             CreateCharacter(e); // characters are not rigid bodies (their colliders are ignored)
             return;
         }
+        if (reg.Has<SoftBodyComponent>(e)) return; // the soft body is its own collider
         if (!reg.Has<RigidbodyComponent>(e)) reg.Emplace<RigidbodyComponent>(e).Type = BodyType::Static;
         auto& rb = reg.Get<RigidbodyComponent>(e);
         if (rb.RuntimeBody != 0xFFFFFFFF) return;

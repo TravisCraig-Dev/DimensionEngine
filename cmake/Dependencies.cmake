@@ -21,6 +21,10 @@ FetchContent_Declare(box2d          GIT_REPOSITORY https://github.com/erincatto/
 FetchContent_Declare(jolt           GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git        GIT_TAG v5.6.0 GIT_SHALLOW TRUE SOURCE_SUBDIR Build)
 FetchContent_Declare(miniaudio      GIT_REPOSITORY https://github.com/mackron/miniaudio.git         GIT_TAG 0.11.25 GIT_SHALLOW TRUE SOURCE_SUBDIR _header_only)
 FetchContent_Declare(vhacd          GIT_REPOSITORY https://github.com/kmammou/v-hacd.git          GIT_TAG v4.1.0 GIT_SHALLOW TRUE SOURCE_SUBDIR _header_only)
+# Opus audio: libogg + libopus, read through opusfile (built in ThirdPartyTargets.cmake: it has no CMake project).
+FetchContent_Declare(ogg            GIT_REPOSITORY https://github.com/xiph/ogg.git                  GIT_TAG v1.3.6 GIT_SHALLOW TRUE)
+FetchContent_Declare(opus           GIT_REPOSITORY https://github.com/xiph/opus.git                 GIT_TAG v1.5.2 GIT_SHALLOW TRUE)
+FetchContent_Declare(opusfile       GIT_REPOSITORY https://github.com/xiph/opusfile.git             GIT_TAG v0.12  GIT_SHALLOW TRUE)
 FetchContent_Declare(glslang        GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git      GIT_TAG ${DIM_VULKAN_SDK_TAG} GIT_SHALLOW TRUE)
 
 # --- options for sub-projects
@@ -50,5 +54,10 @@ set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
 set(TARGET_SAMPLES OFF CACHE BOOL "" FORCE)
 set(TARGET_VIEWER OFF CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(INSTALL_DOCS OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf box2d jolt miniaudio vhacd glslang)
+FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf box2d jolt miniaudio vhacd ogg opus opusfile glslang)

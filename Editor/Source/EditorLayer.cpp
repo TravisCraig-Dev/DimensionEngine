@@ -20,6 +20,7 @@
 #include <Dimension/UI/UI.h>
 #include <Dimension/Asset/ImportCache.h>
 #include <thread>
+#include <process.h>
 #include <cstdio>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -870,6 +871,14 @@ namespace Editor
             if (ImGui::MenuItem("Build C# Scripts", nullptr, false, CSharpRuntime::IsAvailable() && !csBuilding)) BuildCSharp();
             if (ImGui::MenuItem("Open C# Project Folder", nullptr, false, CSharpRuntime::IsAvailable()))
                 FileDialogs::OpenWithDefaultApp(CSharpProject::ScriptsDirectory(Project::GetDirectory()));
+            if (ImGui::BeginMenu("C# Debugger", CSharpRuntime::IsAvailable()))
+            {
+                bool attached = CSharpRuntime::IsDebuggerAttached();
+                ImGui::TextDisabled(attached ? "A debugger is attached" : "No debugger attached");
+                ImGui::TextDisabled("Attach from Rider (Run > Attach to Process) or Visual Studio to process %d", _getpid());
+                if (ImGui::MenuItem("Launch Debugger Prompt...", nullptr, false, !attached)) CSharpRuntime::LaunchDebugger();
+                ImGui::EndMenu();
+            }
             ImGui::TextDisabled(CSharpRuntime::IsAvailable() ? "C#: %zu classes" : "C#: unavailable", CSharpRuntime::GetScriptCount());
             ImGui::Separator();
             ImGui::TextDisabled("Module: %s", GameModule::GetPath().filename().string().c_str());
@@ -2303,6 +2312,7 @@ namespace Editor
     void EditorLayer::InitCSharp()
     {
         if (!CSharpRuntime::Init(ExecutableDirectory() / "managed")) return;
+        if (m_Options.WaitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);
         fs::path project = Project::GetDirectory();
         CSharpProject::Scaffold(project, ExecutableDirectory() / "managed");
         fs::path dll = CSharpProject::AssemblyPath(project);

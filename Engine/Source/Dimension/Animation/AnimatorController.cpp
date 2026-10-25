@@ -63,6 +63,8 @@ namespace Dimension
                 states[i].Events.clear(); // the source's events fire; a synced copy would fire them twice
             }
             layer.Machine.Transitions = src.Transitions;
+            layer.Machine.Groups = src.Groups;
+            for (size_t i = 0; i < states.size(); ++i) states[i].Group = src.States[i].Group;
             layer.Machine.DefaultState = src.DefaultState;
             layer.Machine.AnyStatePosition = src.AnyStatePosition;
         }
@@ -72,7 +74,7 @@ namespace Dimension
     {
         if (index < 0 || index >= (int)States.size()) return;
         States.erase(States.begin() + index);
-        std::erase_if(Transitions, [&](const AnimTransition& t) { return t.From == index || t.To == index; });
+        std::erase_if(Transitions, [&](const AnimTransition& t) { return t.From == index || (t.To == index && t.ToGroup < 0); });
         for (auto& t : Transitions)
         {
             if (t.From > index) --t.From;
@@ -80,6 +82,49 @@ namespace Dimension
         }
         if (DefaultState >= (int)States.size()) DefaultState = 0;
         else if (DefaultState > index) --DefaultState;
+        for (auto& g : Groups)
+        {
+            if (g.DefaultState == index) g.DefaultState = -1;
+            else if (g.DefaultState > index) --g.DefaultState;
+        }
+    }
+
+    bool AnimatorController::IsInGroup(int state, int group) const
+    {
+        if (state < 0 || state >= (int)States.size() || group < 0) return false;
+        for (int g = States[state].Group, depth = 0; g >= 0 && g < (int)Groups.size() && depth < 64; g = Groups[g].Parent, ++depth)
+            if (g == group) return true;
+        return false;
+    }
+
+    int AnimatorController::EntryState(int group) const
+    {
+        if (group < 0 || group >= (int)Groups.size()) return -1;
+        int d = Groups[group].DefaultState;
+        if (d >= 0 && d < (int)States.size() && IsInGroup(d, group)) return d;
+        for (int i = 0; i < (int)States.size(); ++i)
+            if (IsInGroup(i, group)) return i; // no (valid) default: the first state inside
+        return -1;
+    }
+
+    void AnimatorController::RemoveGroup(int group)
+    {
+        if (group < 0 || group >= (int)Groups.size()) return;
+        int parent = Groups[group].Parent;
+        for (auto& s : States)
+            if (s.Group == group) s.Group = parent;
+        for (auto& g : Groups)
+            if (g.Parent == group) g.Parent = parent;
+        std::erase_if(Transitions, [&](const AnimTransition& t) { return AnimTransition::GroupOf(t.From) == group || t.ToGroup == group; });
+        Groups.erase(Groups.begin() + group);
+        auto fix = [&](int& g) { if (g > group) --g; };
+        for (auto& s : States) fix(s.Group);
+        for (auto& g : Groups) fix(g.Parent);
+        for (auto& t : Transitions)
+        {
+            if (int g = AnimTransition::GroupOf(t.From); g > group) t.From = AnimTransition::FromGroup(g - 1);
+            fix(t.ToGroup);
+        }
     }
 
     namespace
@@ -102,7 +147,17 @@ namespace Dimension
                 for (auto& ev : s.value("events", json::array()))
                     st.Events.push_back({ ev.value("time", 0.0f), ev.value("function", std::string()) });
                 if (s.contains("position")) st.EditorPosition = { s["position"][0].get<float>(), s["position"][1].get<float>() };
+                st.Group = s.value("group", -1);
                 c.States.push_back(st);
+            }
+            for (auto& g : j.value("groups", json::array()))
+            {
+                AnimStateGroup grp;
+                grp.Name = g.value("name", grp.Name);
+                grp.Parent = g.value("parent", -1);
+                grp.DefaultState = g.value("defaultState", -1);
+                if (g.contains("position")) grp.EditorPosition = { g["position"][0].get<float>(), g["position"][1].get<float>() };
+                c.Groups.push_back(grp);
             }
             for (auto& t : j.value("transitions", json::array()))
             {
@@ -112,6 +167,7 @@ namespace Dimension
                 tr.HasExitTime = t.value("hasExitTime", false);
                 tr.ExitTime = t.value("exitTime", 1.0f);
                 tr.Duration = t.value("duration", 0.25f);
+                tr.ToGroup = t.value("toGroup", -1);
                 for (auto& cond : t.value("conditions", json::array()))
                     tr.Conditions.push_back({ cond.value("parameter", std::string()), (AnimConditionOp)cond.value("op", 4), cond.value("threshold", 0.0f) });
                 c.Transitions.push_back(tr);
@@ -145,15 +201,25 @@ namespace Dimension
                     st["events"] = json::array();
                     for (auto& ev : s.Events) st["events"].push_back({ { "time", ev.Time }, { "function", ev.Function } });
                 }
+                if (s.Group >= 0) st["group"] = s.Group;
                 j["states"].push_back(std::move(st));
+            }
+            if (!c.Groups.empty())
+            {
+                j["groups"] = json::array();
+                for (auto& g : c.Groups)
+                    j["groups"].push_back({ { "name", g.Name }, { "parent", g.Parent }, { "defaultState", g.DefaultState },
+                                            { "position", { g.EditorPosition.x, g.EditorPosition.y } } });
             }
             j["transitions"] = json::array();
             for (auto& t : c.Transitions)
             {
                 json conds = json::array();
                 for (auto& cond : t.Conditions) conds.push_back({ { "parameter", cond.Parameter }, { "op", (int)cond.Op }, { "threshold", cond.Threshold } });
-                j["transitions"].push_back({ { "from", t.From }, { "to", t.To }, { "hasExitTime", t.HasExitTime }, { "exitTime", t.ExitTime },
-                                             { "duration", t.Duration }, { "conditions", conds } });
+                json tr{ { "from", t.From }, { "to", t.To }, { "hasExitTime", t.HasExitTime }, { "exitTime", t.ExitTime },
+                         { "duration", t.Duration }, { "conditions", conds } };
+                if (t.ToGroup >= 0) tr["toGroup"] = t.ToGroup;
+                j["transitions"].push_back(std::move(tr));
             }
             j["defaultState"] = c.DefaultState;
             j["anyStatePosition"] = { c.AnyStatePosition.x, c.AnyStatePosition.y };
@@ -454,24 +520,28 @@ namespace Dimension
             };
 
             float normalized = NormalizedTime(controller, runtime, clipDuration);
-            // Any-state transitions take priority, then the current state's, in list order (like Unity).
-            for (int pass = 0; pass < 2; ++pass)
+            // Any-state transitions take priority, then those of the sub-state machines the current state is in, then
+            // the current state's own, in list order (like Unity).
+            for (int pass = 0; pass < 3; ++pass)
                 for (size_t i = 0; i < controller.Transitions.size(); ++i)
                 {
                     const AnimTransition& t = controller.Transitions[i];
-                    bool fromAny = t.From < 0;
-                    if ((pass == 0) != fromAny) continue;
-                    if (!fromAny && t.From != runtime.State) continue;
-                    if (t.To < 0 || t.To >= (int)controller.States.size()) continue;
-                    if (fromAny && t.To == runtime.State) continue; // avoid re-entering every frame
+                    int group = AnimTransition::GroupOf(t.From);
+                    bool fromAny = t.From == -1, fromGroup = group >= 0;
+                    if (pass == 0 && !fromAny) continue;
+                    if (pass == 1 && (!fromGroup || !controller.IsInGroup(runtime.State, group))) continue;
+                    if (pass == 2 && (fromAny || fromGroup || t.From != runtime.State)) continue;
+                    int to = t.ToGroup >= 0 ? controller.EntryState(t.ToGroup) : t.To; // into a sub-state machine: its entry
+                    if (to < 0 || to >= (int)controller.States.size()) continue;
+                    if ((fromAny || fromGroup) && to == runtime.State) continue; // avoid re-entering every frame
                     if (t.HasExitTime && normalized < t.ExitTime) continue;
                     if (!t.HasExitTime && t.Conditions.empty()) continue; // would fire immediately forever
                     std::vector<std::string> used;
                     if (!conditionsMet(t, used)) continue;
                     for (auto& trig : used) runtime.Triggers.erase(trig);
-                    runtime.State = t.To;
+                    runtime.State = to;
                     runtime.StateTime = 0.0f;
-                    enter(controller.States[t.To], t.Duration);
+                    enter(controller.States[to], t.Duration);
                     return (int)i;
                 }
             return -1;

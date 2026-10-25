@@ -317,6 +317,24 @@ namespace Dimension
             }
         }
 
+        // Debugger support for the engine: 0 asks whether a managed debugger is attached, 1 offers to attach one (the
+        // system's just-in-time debugger prompt), 2 breaks into an attached debugger.
+        [UnmanagedCallersOnly]
+        internal static int DebuggerControl(int action)
+        {
+            try
+            {
+                switch (action)
+                {
+                    case 0: return System.Diagnostics.Debugger.IsAttached ? 1 : 0;
+                    case 1: return System.Diagnostics.Debugger.Launch() ? 1 : 0;
+                    case 2: if (System.Diagnostics.Debugger.IsAttached) System.Diagnostics.Debugger.Break(); return 1;
+                }
+            }
+            catch (Exception e) { Debug.LogError($"Debugger request failed: {e.Message}"); }
+            return 0;
+        }
+
         [UnmanagedCallersOnly]
         internal static void RaiseEvent(IntPtr scene, ulong entity, int kind, float value, ulong other, byte* text)
         {

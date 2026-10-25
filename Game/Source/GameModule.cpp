@@ -503,7 +503,7 @@ namespace Game
 
     void RegisterGameModule()
     {
-        ScriptRegistry::Register<Rotator>("Rotator").Field("Degrees Per Second", &Rotator::DegreesPerSecond);
+        ScriptRegistry::Register<Rotator>("Rotator", { .Menu = "Effects/Rotator" }).Field("Degrees Per Second", &Rotator::DegreesPerSecond);
         ScriptRegistry::Register<Bobber>("Bobber")
             .Field("Amplitude", &Bobber::Amplitude).Speed(0.01f)
             .Field("Frequency", &Bobber::Frequency).Speed(0.01f);
@@ -558,7 +558,7 @@ namespace Game
         ScriptRegistry::Register<MixerVolumeSlider>("MixerVolumeSlider")
             .Field("Group", &MixerVolumeSlider::Group)
             .Field("Label", &MixerVolumeSlider::Label);
-        ScriptRegistry::Register<CarDriver>("CarDriver")
+        ScriptRegistry::Register<CarDriver>("CarDriver", { .Menu = "Physics/Car Driver", .Requires = { "Rigidbody", "Box Collider", "Vehicle" } })
             .Field("Speedometer", &CarDriver::Speedometer)
             .Field("Steer Speed", &CarDriver::SteerSpeed).Range(0.1f, 100.0f);
         ScriptRegistry::Register<ChaseCamera>("ChaseCamera")
@@ -566,7 +566,7 @@ namespace Game
             .Field("Distance", &ChaseCamera::Distance).Range(0.0f, 100.0f)
             .Field("Height", &ChaseCamera::Height).Range(-100.0f, 100.0f)
             .Field("Smoothing", &ChaseCamera::Smoothing).Range(0.0f, 100.0f);
-        ScriptRegistry::Register<CharacterMover>("CharacterMover")
+        ScriptRegistry::Register<CharacterMover>("CharacterMover", { .Menu = "Physics/Character Mover", .Requires = { "Character Controller" } })
             .Field("Move Speed", &CharacterMover::MoveSpeed).Range(0.0f, 100.0f)
             .Field("Jump Speed", &CharacterMover::JumpSpeed).Range(0.0f, 100.0f)
             .Field("Turn Speed", &CharacterMover::TurnSpeed).Range(0.0f, 100.0f);

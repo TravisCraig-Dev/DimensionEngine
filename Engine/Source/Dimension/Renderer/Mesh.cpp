@@ -415,10 +415,47 @@ namespace Dimension
         }
     }
 
-    bool MeshData::LoadFromFile(const fs::path& path, MeshData& out)
+    std::string MeshImportSettings::Key() const
+    {
+        if (IsDefault()) return {};
+        char key[64];
+        std::snprintf(key, sizeof(key), "s%g a%d m%d", Scale, ImportAnimations ? 1 : 0, ImportMaterials ? 1 : 0);
+        return key;
+    }
+
+    void MeshData::ApplyImportSettings(const MeshImportSettings& settings)
+    {
+        if (!settings.ImportAnimations) Clips.clear();
+        if (!settings.ImportMaterials)
+        {
+            Materials.clear();
+            Images.clear();
+            for (auto& sub : SubMeshes) sub.MaterialSlot = -1;
+        }
+        float s = settings.Scale;
+        if (s == 1.0f || s <= 0.0f) return;
+        // A uniform scale of the whole model: positions and every translation (joint offsets, the bind pose's
+        // translation, animated translations, the root transform) grow by s; rotations and scales stay.
+        for (auto& v : Vertices) v.Position *= s;
+        if (SkeletonData)
+        {
+            SkeletonData->RootTransform[3] = glm::vec4(glm::vec3(SkeletonData->RootTransform[3]) * s, 1.0f);
+            for (auto& j : SkeletonData->Joints)
+            {
+                j.Translation *= s;
+                j.InverseBind[3] = glm::vec4(glm::vec3(j.InverseBind[3]) * s, 1.0f);
+            }
+        }
+        for (auto& clip : Clips)
+            for (auto& ch : clip.Channels)
+                if (ch.Path == AnimationPath::Translation)
+                    for (auto& value : ch.Values) value = glm::vec4(glm::vec3(value) * s, value.w);
+    }
+
+    bool MeshData::LoadFromFile(const fs::path& path, MeshData& out, const MeshImportSettings& settings)
     {
         out = MeshData();
-        if (ImportCache::LoadMesh(path, out)) return true;
+        if (ImportCache::LoadMesh(path, settings.Key(), out)) return true;
         out.Name = path.filename().string();
         auto ext = path.extension().string();
         for (auto& c : ext) c = (char)std::tolower(c);
@@ -430,7 +467,8 @@ namespace Dimension
         if (ok)
         {
             out.GenerateTangents();
-            ImportCache::StoreMesh(path, out);
+            out.ApplyImportSettings(settings);
+            ImportCache::StoreMesh(path, settings.Key(), out);
         }
         return ok;
     }

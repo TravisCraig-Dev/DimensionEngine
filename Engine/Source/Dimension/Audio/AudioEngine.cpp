@@ -18,12 +18,16 @@
 #include <extras/nodes/ma_reverb_node/ma_reverb_node.c>
 #undef STB_VORBIS_HEADER_ONLY
 #include <extras/stb_vorbis.c>
+// Opus (.opus, Ogg Opus) through libopus + opusfile, as a custom miniaudio decoding backend.
+#include <extras/decoders/libopus/miniaudio_libopus.c>
 
 namespace Dimension
 {
     namespace
     {
         ma_engine* s_Engine = nullptr;
+        ma_resource_manager* s_ResourceManager = nullptr;
+        ma_decoding_backend_vtable* s_CustomBackends[] = { ma_decoding_backend_libopus };
 
         // A source's sound, and with Occlusion the low-pass between it and its mixer group.
         struct SourceVoice
@@ -289,6 +293,8 @@ namespace Dimension
     std::optional<AudioClipInfo> AudioEngine::GetClipInfo(const fs::path& file)
     {
         ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+        cfg.ppCustomBackendVTables = s_CustomBackends;
+        cfg.customBackendCount = 1;
         ma_decoder decoder;
         if (ma_decoder_init_file_w(file.wstring().c_str(), &cfg, &decoder) != MA_SUCCESS) return std::nullopt;
         AudioClipInfo info;
@@ -307,7 +313,7 @@ namespace Dimension
         ma_decoder_uninit(&decoder);
         std::string ext = file.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-        info.Format = ext == ".ogg" ? "Ogg Vorbis" : ext == ".mp3" ? "MP3" : ext == ".flac" ? "FLAC" : "WAV";
+        info.Format = ext == ".opus" ? "Opus" : ext == ".ogg" ? "Ogg Vorbis" : ext == ".mp3" ? "MP3" : ext == ".flac" ? "FLAC" : "WAV";
         return info;
     }
 
@@ -558,12 +564,31 @@ namespace Dimension
     void AudioEngine::Init()
     {
         if (s_Engine) return;
+        // Our own resource manager, so sounds can decode Opus too.
+        s_ResourceManager = new ma_resource_manager();
+        ma_resource_manager_config rm = ma_resource_manager_config_init();
+        rm.decodedFormat = ma_format_f32;
+        rm.ppCustomDecodingBackendVTables = s_CustomBackends;
+        rm.customDecodingBackendCount = 1;
+        if (ma_resource_manager_init(&rm, s_ResourceManager) != MA_SUCCESS)
+        {
+            delete s_ResourceManager;
+            s_ResourceManager = nullptr;
+        }
+        ma_engine_config config = ma_engine_config_init();
+        config.pResourceManager = s_ResourceManager;
         s_Engine = new ma_engine();
-        if (ma_engine_init(nullptr, s_Engine) != MA_SUCCESS)
+        if (ma_engine_init(&config, s_Engine) != MA_SUCCESS)
         {
             Log::Warn("No audio device available; audio disabled");
             delete s_Engine;
             s_Engine = nullptr;
+            if (s_ResourceManager)
+            {
+                ma_resource_manager_uninit(s_ResourceManager);
+                delete s_ResourceManager;
+                s_ResourceManager = nullptr;
+            }
             return;
         }
         Log::Info("Audio engine initialized ({} Hz)", ma_engine_get_sample_rate(s_Engine));
@@ -576,6 +601,12 @@ namespace Dimension
         ma_engine_uninit(s_Engine);
         delete s_Engine;
         s_Engine = nullptr;
+        if (s_ResourceManager)
+        {
+            ma_resource_manager_uninit(s_ResourceManager);
+            delete s_ResourceManager;
+            s_ResourceManager = nullptr;
+        }
     }
 
     bool AudioEngine::IsAvailable() { return s_Engine != nullptr; }

@@ -56,16 +56,32 @@ namespace Dimension
         bool Loop = true;
         std::vector<AnimEvent> Events;
         glm::vec2 EditorPosition{ 0.0f }; // graph layout
+        int Group = -1;                   // sub-state machine (index into Groups); -1 = the top level
+    };
+
+    // A sub-state machine: a named group of states (and other groups) shown as one node in the graph. A transition
+    // to the group enters its Default State; transitions from the group (AnimTransition::FromGroup) apply from any
+    // state inside it, like an Any State scoped to the group.
+    struct AnimStateGroup
+    {
+        std::string Name = "Sub-State Machine";
+        int Parent = -1;       // enclosing group, -1 = the top level
+        int DefaultState = -1; // entered by transitions to the group
+        glm::vec2 EditorPosition{ 0.0f }; // in the parent's graph
     };
 
     struct AnimTransition
     {
+        // Source: a state index, -1 = Any State, or FromGroup(g) for "any state inside group g".
+        static constexpr int FromGroup(int group) { return -2 - group; }
+        static constexpr int GroupOf(int from) { return from <= -2 ? -2 - from : -1; }
         int From = -1; // -1 = Any State
         int To = 0;
         bool HasExitTime = false;
         float ExitTime = 1.0f;  // normalized time of the source state (1 = end of the clip)
         float Duration = 0.25f; // crossfade seconds
         std::vector<AnimCondition> Conditions;
+        int ToGroup = -1; // >= 0: into this sub-state machine, at its entry state (To is then unused)
     };
 
     enum class AnimLayerBlending : int32_t { Override = 0, Additive = 1 };
@@ -79,6 +95,7 @@ namespace Dimension
         std::vector<AnimParameter> Parameters;
         std::vector<AnimState> States;
         std::vector<AnimTransition> Transitions;
+        std::vector<AnimStateGroup> Groups; // sub-state machines
         int DefaultState = 0;
         glm::vec2 AnyStatePosition{ -220.0f, 0.0f };
         std::vector<AnimLayer> Layers;
@@ -97,6 +114,12 @@ namespace Dimension
         const AnimatorController* LayerMachine(int layer) const;
         // Fixes indices after a state is removed.
         void RemoveState(int index);
+        // True when `state` is inside `group` (directly or in a group within it).
+        bool IsInGroup(int state, int group) const;
+        // Removes a sub-state machine: its states and groups move to its parent; transitions from it are dropped.
+        void RemoveGroup(int group);
+        // The group's entry state, following nested groups' defaults; -1 when it has no states.
+        int EntryState(int group) const;
 
         static Ref<AnimatorController> Load(const fs::path& path);
         bool Save(const fs::path& path) const;

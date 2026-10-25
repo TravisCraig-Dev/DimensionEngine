@@ -99,7 +99,7 @@ namespace Dimension
                 else
                 {
                     auto mesh = std::make_shared<MeshData>();
-                    if (MeshData::LoadFromFile(info.Path, *mesh)) AssetPrefetch::StoreMesh(info.Path, std::move(mesh));
+                    if (AssetManager::LoadMeshData(info.Path, *mesh)) AssetPrefetch::StoreMesh(info.Path, std::move(mesh));
                 }
                 op->Progress = 0.1f + 0.8f * (float)(i + 1) / (float)toDecode.size();
             }

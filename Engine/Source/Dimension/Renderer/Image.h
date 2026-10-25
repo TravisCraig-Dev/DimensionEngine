@@ -11,6 +11,7 @@ namespace Dimension
         VkImageUsageFlags Usage = VK_IMAGE_USAGE_SAMPLED_BIT;
         uint32_t MipLevels = 1;
         const char* DebugName = nullptr;
+        VkSampleCountFlagBits Samples = VK_SAMPLE_COUNT_1_BIT; // multisampled render targets (MSAA)
     };
 
     // RAII 2D image + default view. Destruction is deferred past in-flight frames.

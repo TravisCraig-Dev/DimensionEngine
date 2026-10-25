@@ -17,6 +17,17 @@ target_include_directories(cgltf SYSTEM INTERFACE ${cgltf_SOURCE_DIR})
 add_library(vhacd INTERFACE)
 target_include_directories(vhacd SYSTEM INTERFACE ${vhacd_SOURCE_DIR}/include)
 
+# opusfile (Opus in Ogg), without its HTTP streaming.
+add_library(opusfile STATIC
+    ${opusfile_SOURCE_DIR}/src/opusfile.c ${opusfile_SOURCE_DIR}/src/info.c
+    ${opusfile_SOURCE_DIR}/src/internal.c ${opusfile_SOURCE_DIR}/src/stream.c)
+target_include_directories(opusfile SYSTEM PUBLIC ${opusfile_SOURCE_DIR}/include PRIVATE ${opusfile_SOURCE_DIR}/src)
+target_link_libraries(opusfile PUBLIC Ogg::ogg Opus::opus)
+if(MSVC)
+    target_compile_options(opusfile PRIVATE /W0)
+    target_compile_definitions(opusfile PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 add_library(miniaudio INTERFACE)
 target_include_directories(miniaudio SYSTEM INTERFACE ${miniaudio_SOURCE_DIR})
 

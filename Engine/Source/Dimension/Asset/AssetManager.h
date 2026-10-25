@@ -8,6 +8,7 @@ namespace Dimension
     class Texture2D;
     class Mesh;
     struct MeshData;
+    struct MeshImportSettings;
     struct Material;
     class Font;
     struct AnimatorController;
@@ -68,6 +69,9 @@ namespace Dimension
         // Material per slot of a model (glTF materials). Until extracted these are read-only sub-assets of the
         // model, built from the file; after ExtractMeshMaterials they are editable .mat assets. Loads the mesh.
         static const std::vector<AssetHandle>& GetMeshMaterials(AssetHandle mesh);
+        // A model's import settings from its .meta (defaults for other assets), and loading it with them.
+        static MeshImportSettings GetMeshImportSettings(AssetHandle mesh);
+        static bool LoadMeshData(const fs::path& file, MeshData& out);
         static std::vector<std::string> GetMeshMaterialNames(AssetHandle mesh);
         static bool AreMeshMaterialsExtracted(AssetHandle mesh);
         // Writes the model's materials (and embedded textures) next to it as assets and uses them from now on.

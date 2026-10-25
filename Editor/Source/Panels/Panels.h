@@ -96,6 +96,8 @@ namespace Editor
         AssetHandle m_Handle = AssetHandle::None();
         AssetHandle m_FramedHandle = AssetHandle::None();
         int m_SelectedState = -1; // -2 = Any State
+        int m_SelectedGroup = -1; // selected sub-state machine
+        int m_ViewGroup = -1;     // sub-state machine shown in the graph (-1 = the top level)
         int m_Layer = 0;          // 0 = base layer, i = controller Layers[i - 1]
         glm::vec2 m_Pan{ 0.0f };
         float m_Zoom = 1.0f;

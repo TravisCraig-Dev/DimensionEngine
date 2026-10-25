@@ -22,6 +22,13 @@ namespace Dimension
         ~SceneRenderTarget();
 
         void Resize(uint32_t width, uint32_t height);
+        // MSAA: 1 (off), 2, 4 or 8 samples (clamped to what the GPU supports). With more than one, the scene is drawn
+        // into multisampled color, id and depth images that resolve into GetHdr(), GetIds() and GetDepth().
+        void SetSamples(uint32_t samples);
+        uint32_t GetSamples() const { return m_Samples; }
+        const Image& GetHdrMS() const { return m_HdrMS; }
+        const Image& GetIdsMS() const { return m_IdsMS; }
+        const Image& GetDepthMS() const { return m_DepthMS; }
         uint32_t GetWidth() const { return m_Width; }
         uint32_t GetHeight() const { return m_Height; }
         float GetAspect() const { return m_Height ? (float)m_Width / (float)m_Height : 1.0f; }
@@ -65,7 +72,9 @@ namespace Dimension
         void Destroy();
 
         uint32_t m_Width, m_Height;
+        uint32_t m_Samples = 1;
         Image m_Hdr, m_Ids, m_Depth, m_Output;
+        Image m_HdrMS, m_IdsMS, m_DepthMS; // only with MSAA
         uint32_t m_HdrBindless = 0;
         static constexpr uint32_t kMaxBloomLevels = 6;
         std::vector<Image> m_Bloom;

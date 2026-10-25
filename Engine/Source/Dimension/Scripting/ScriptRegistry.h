@@ -18,15 +18,24 @@ namespace Dimension
         std::vector<std::string> Requires; // components (registry names) added with the script in the editor
     };
 
+    // Editor options of a C++ script (what C# scripts say with [AddComponentMenu] and [RequireComponent]).
+    struct ScriptOptions
+    {
+        std::string Menu;                  // "Category/Name" in the Add Component menu
+        std::vector<std::string> Requires; // component names added with the script, e.g. { "Rigidbody" }
+    };
+
     // Registry of native script classes, filled by game code at startup.
     class ScriptRegistry
     {
     public:
         template <class T>
-        static FieldListBuilder<T> Register(const std::string& name)
+        static FieldListBuilder<T> Register(const std::string& name, ScriptOptions options = {})
         {
             ScriptInfo& info = Scripts().emplace_back();
             info.Name = name;
+            info.Menu = std::move(options.Menu);
+            info.Requires = std::move(options.Requires);
             info.Create = [] { return std::make_shared<T>(); };
             info.ToObject = [](ScriptableEntity* base) -> void* { return static_cast<T*>(base); };
             return FieldListBuilder<T>(info.Fields);

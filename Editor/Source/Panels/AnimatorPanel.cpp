@@ -200,14 +200,14 @@ namespace Editor
             // ---------------- Layers ----------------
             ImGui::SeparatorText("Layers");
             m_Layer = std::clamp(m_Layer, 0, (int)root.Layers.size());
-            if (ImGui::Selectable("Base Layer", m_Layer == 0)) { m_Layer = 0; m_SelectedState = -1; }
+            if (ImGui::Selectable("Base Layer", m_Layer == 0)) { m_Layer = 0; m_SelectedState = -1; m_ViewGroup = m_SelectedGroup = -1; }
             int removeLayer = -1;
             for (int li = 0; li < (int)root.Layers.size(); ++li)
             {
                 ImGui::PushID(1000 + li);
                 const auto& layer = root.Layers[li];
                 std::string label = layer.Name + (layer.Blending == AnimLayerBlending::Additive ? "  (additive)" : "") + (layer.SyncedLayer >= 0 ? "  (synced)" : "");
-                if (ImGui::Selectable(label.c_str(), m_Layer == li + 1)) { m_Layer = li + 1; m_SelectedState = -1; }
+                if (ImGui::Selectable(label.c_str(), m_Layer == li + 1)) { m_Layer = li + 1; m_SelectedState = -1; m_ViewGroup = m_SelectedGroup = -1; }
                 ImGui::PopID();
             }
             if (ImGui::SmallButton("+ Layer"))
@@ -341,9 +341,27 @@ namespace Editor
 
             bool anySelected = m_SelectedState == -2;
             if (m_SelectedState >= (int)c.States.size()) m_SelectedState = -1;
-            if (m_SelectedState >= 0 || anySelected)
+            if (m_SelectedGroup >= (int)c.Groups.size()) m_SelectedGroup = -1;
+            if (m_ViewGroup >= (int)c.Groups.size()) m_ViewGroup = -1;
+            bool groupSelected = m_SelectedGroup >= 0 && m_SelectedState < 0;
+            if (groupSelected)
             {
-                if (!anySelected)
+                auto& grp = c.Groups[m_SelectedGroup];
+                ImGui::SeparatorText("Sub-State Machine");
+                if (syncedLayer) ImGui::Text("%s", grp.Name.c_str());
+                else changed |= ImGui::InputText("Name##group", &grp.Name);
+                int entry = c.EntryState(m_SelectedGroup);
+                if (!syncedLayer && ImGui::BeginCombo("Entry State", entry >= 0 ? c.States[entry].Name.c_str() : "(no states)"))
+                {
+                    for (int k = 0; k < (int)c.States.size(); ++k)
+                        if (c.IsInGroup(k, m_SelectedGroup) && ImGui::Selectable(c.States[k].Name.c_str(), k == entry)) { grp.DefaultState = k; changed = true; }
+                    ImGui::EndCombo();
+                }
+                ImGui::TextDisabled("Transitions into it start at the entry state; its transitions below apply from any state inside it.");
+            }
+            if (m_SelectedState >= 0 || anySelected || groupSelected)
+            {
+                if (!anySelected && !groupSelected)
                 {
                     auto& st = c.States[m_SelectedState];
                     ImGui::SeparatorText("State");
@@ -479,15 +497,16 @@ namespace Editor
                 }
                 if (!syncedLayer) // a synced layer's transitions belong to its source
                 {
-                    ImGui::SeparatorText(anySelected ? "Transitions from Any State" : "Transitions");
-                    int from = anySelected ? -1 : m_SelectedState;
+                    ImGui::SeparatorText(anySelected ? "Transitions from Any State" : groupSelected ? "Transitions from the Sub-State Machine" : "Transitions");
+                    int from = anySelected ? -1 : groupSelected ? AnimTransition::FromGroup(m_SelectedGroup) : m_SelectedState;
                     int removeTransition = -1;
                     for (int ti = 0; ti < (int)c.Transitions.size(); ++ti)
                     {
                         auto& t = c.Transitions[ti];
                         if (t.From != from) continue;
                         ImGui::PushID(ti);
-                        std::string to = t.To >= 0 && t.To < (int)c.States.size() ? c.States[t.To].Name : "?";
+                        std::string to = t.ToGroup >= 0 && t.ToGroup < (int)c.Groups.size() ? c.Groups[t.ToGroup].Name + " (entry)"
+                                       : t.To >= 0 && t.To < (int)c.States.size() ? c.States[t.To].Name : "?";
                         bool openT = ImGui::TreeNodeEx("##t", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap, "-> %s", to.c_str());
                         ImGui::SameLine(270);
                         if (ImGui::SmallButton("x")) removeTransition = ti;
@@ -567,6 +586,7 @@ namespace Editor
             if (m_FramedHandle != m_Handle)
             {
                 m_FramedHandle = m_Handle;
+                m_ViewGroup = m_SelectedGroup = -1;
                 glm::vec2 lo = c.AnyStatePosition, hi = c.AnyStatePosition;
                 for (auto& st : c.States)
                 {
@@ -591,7 +611,7 @@ namespace Editor
                 m_Pan.x += ImGui::GetIO().MouseDelta.x;
                 m_Pan.y += ImGui::GetIO().MouseDelta.y;
             }
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) m_SelectedState = -1;
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) m_SelectedState = m_SelectedGroup = -1;
             ImVec2 mouse = ImGui::GetMousePos();
             if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f)
             {
@@ -607,45 +627,101 @@ namespace Editor
                 ImGui::OpenPopup("GraphContext");
             }
 
-            auto nodeCenter = [&](int index) {
-                glm::vec2 p = index < 0 ? c.AnyStatePosition : c.States[index].EditorPosition;
+            // Nodes of the shown level (the top level or an open sub-state machine): its states and groups, Any State,
+            // and an "Up" node standing for everything outside. Ids: state >= 0, -1 Any State, kUpNode, groupNode(g).
+            constexpr int kUpNode = -99;
+            auto groupNode = [](int g) { return -100 - g; };
+            auto nodeGroup = [](int id) { return id <= -100 ? -100 - id : -1; };
+            // The node a state shows as: itself, the child group of the view that contains it, or Up.
+            auto visibleOf = [&](int state) {
+                if (state < 0 || state >= (int)c.States.size()) return kUpNode;
+                if (c.States[state].Group == m_ViewGroup) return state;
+                for (int g = c.States[state].Group, depth = 0; g >= 0 && depth < 64; g = c.Groups[g].Parent, ++depth)
+                    if (c.Groups[g].Parent == m_ViewGroup) return groupNode(g);
+                return kUpNode;
+            };
+            auto visibleOfGroup = [&](int group) {
+                for (int g = group, depth = 0; g >= 0 && depth < 64; g = c.Groups[g].Parent, ++depth)
+                    if (c.Groups[g].Parent == m_ViewGroup) return groupNode(g);
+                return kUpNode;
+            };
+            glm::vec2 upPosition = c.AnyStatePosition + glm::vec2(0.0f, -90.0f);
+            auto nodePos = [&](int id) -> glm::vec2& {
+                if (id >= 0) return c.States[id].EditorPosition;
+                if (id <= -100) return c.Groups[nodeGroup(id)].EditorPosition;
+                if (id == kUpNode) return upPosition;
+                return c.AnyStatePosition;
+            };
+            auto nodeCenter = [&](int id) {
+                glm::vec2 p = nodePos(id);
                 return ImVec2(origin.x + (p.x + kNodeW * 0.5f) * z, origin.y + (p.y + kNodeH * 0.5f) * z);
             };
 
             dl->PushClipRect(canvasMin, canvasMax, true);
             int activeTransition = -1;
             if (live && m_Ctx.IsPlaying() && liveFadeDuration > 0.0f && liveFadeElapsed < liveFadeDuration) activeTransition = (*liveRuntime).State;
+            auto fromNode = [&](const AnimTransition& t) {
+                if (t.From == -1) return -1;
+                if (int g = AnimTransition::GroupOf(t.From); g >= 0) return g == m_ViewGroup ? kUpNode : visibleOfGroup(g);
+                return visibleOf(t.From);
+            };
+            auto toNode = [&](const AnimTransition& t) { return t.ToGroup >= 0 ? visibleOfGroup(t.ToGroup) : visibleOf(t.To); };
             for (auto& t : c.Transitions)
             {
-                if (t.To < 0 || t.To >= (int)c.States.size() || (t.From >= (int)c.States.size())) continue;
+                if (t.ToGroup < 0 && (t.To < 0 || t.To >= (int)c.States.size())) continue;
+                if (t.From >= (int)c.States.size() || t.ToGroup >= (int)c.Groups.size()) continue;
+                int a = fromNode(t), b = toNode(t);
+                if (a == b || (a == -1 && m_ViewGroup >= 0 && b == kUpNode)) continue;
                 bool reverse = false;
-                for (auto& o : c.Transitions) reverse |= o.From == t.To && o.To == t.From;
+                for (auto& o : c.Transitions) reverse |= fromNode(o) == b && toNode(o) == a;
                 bool hot = activeTransition == t.To && live && c.FindState(liveState) == t.To;
-                Arrow(dl, nodeCenter(t.From), nodeCenter(t.To), hot ? IM_COL32(110, 190, 255, 255) : IM_COL32(200, 200, 205, 220), reverse ? 6.0f : 0.0f);
+                Arrow(dl, nodeCenter(a), nodeCenter(b), hot ? IM_COL32(110, 190, 255, 255) : IM_COL32(200, 200, 205, 220), reverse ? 6.0f : 0.0f);
             }
 
-            // Nodes (Any State + states)
-            for (int i = -1; i < (int)c.States.size(); ++i)
+            std::vector<int> nodes = { -1 };
+            if (m_ViewGroup >= 0) nodes.push_back(kUpNode);
+            for (int g = 0; g < (int)c.Groups.size(); ++g)
+                if (c.Groups[g].Parent == m_ViewGroup) nodes.push_back(groupNode(g));
+            for (int i = 0; i < (int)c.States.size(); ++i)
+                if (c.States[i].Group == m_ViewGroup) nodes.push_back(i);
+            // Targets for "Make Transition To": every state and sub-state machine, by path.
+            auto groupPath = [&](int g) {
+                std::string path;
+                for (int depth = 0; g >= 0 && depth < 64; g = c.Groups[g].Parent, ++depth) path = c.Groups[g].Name + "/" + path;
+                return path;
+            };
+            int liveCurrent = live ? (*liveRuntime).State : -1;
+            bool deleted = false;
+            for (int id : nodes)
             {
-                glm::vec2& pos = i < 0 ? c.AnyStatePosition : c.States[i].EditorPosition;
+                if (deleted) break;
+                int i = id; // state index when >= 0
+                int g = nodeGroup(id);
+                glm::vec2& pos = nodePos(id);
                 ImVec2 min(origin.x + pos.x * z, origin.y + pos.y * z), max(min.x + kNodeW * z, min.y + kNodeH * z);
                 float nodeW = kNodeW * z, nodeH = kNodeH * z;
-                bool isCurrent = live && i >= 0 && (*liveRuntime).State == i && c.FindState(liveState) == i;
-                bool selected = (i < 0 && m_SelectedState == -2) || (i >= 0 && m_SelectedState == i);
-                ImU32 fill = i < 0 ? IM_COL32(40, 120, 115, 255) : i == c.DefaultState ? IM_COL32(170, 100, 35, 255) : IM_COL32(70, 72, 78, 255);
-                if (isCurrent) fill = IM_COL32(45, 105, 175, 255);
+                bool isCurrent = live && i >= 0 && liveCurrent == i && c.FindState(liveState) == i;
+                bool containsCurrent = live && g >= 0 && c.IsInGroup(liveCurrent, g);
+                bool selected = (id == -1 && m_SelectedState == -2) || (i >= 0 && m_SelectedState == i) || (g >= 0 && m_SelectedGroup == g);
+                ImU32 fill = id == -1 ? IM_COL32(40, 120, 115, 255) : id == kUpNode ? IM_COL32(55, 58, 66, 255)
+                           : g >= 0 ? IM_COL32(88, 70, 120, 255) : i == c.DefaultState ? IM_COL32(170, 100, 35, 255) : IM_COL32(70, 72, 78, 255);
+                if (isCurrent || containsCurrent) fill = IM_COL32(45, 105, 175, 255);
+                if (g >= 0) // a stacked look for sub-state machines
+                    dl->AddRectFilled(ImVec2(min.x + 4 * z, min.y - 4 * z), ImVec2(max.x + 4 * z, max.y - 4 * z), IM_COL32(60, 50, 85, 255), 6.0f);
                 dl->AddRectFilled(min, max, fill, 6.0f);
                 dl->AddRect(min, max, selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 255), 6.0f, 0, selected ? 2.0f : 1.0f);
-                const char* name = i < 0 ? "Any State" : c.States[i].Name.c_str();
+                std::string upName = m_ViewGroup >= 0 && c.Groups[m_ViewGroup].Parent >= 0 ? "(Up) " + c.Groups[c.Groups[m_ViewGroup].Parent].Name : "(Up) Top Level";
+                const char* name = id == -1 ? "Any State" : id == kUpNode ? upName.c_str() : g >= 0 ? c.Groups[g].Name.c_str() : c.States[i].Name.c_str();
                 ImVec2 ts = ImGui::CalcTextSize(name);
                 bool isTree = i >= 0 && c.States[i].Motion != AnimMotionType::Clip;
-                dl->AddText(ImVec2(min.x + (nodeW - ts.x) * 0.5f, min.y + (nodeH - ts.y) * 0.5f - (isCurrent || isTree ? 5 : 0)), IM_COL32(240, 240, 240, 255), name);
-                if (isTree && !isCurrent) // the progress bar takes this space on the current state
+                bool sub = isTree || g >= 0;
+                dl->AddText(ImVec2(min.x + (nodeW - ts.x) * 0.5f, min.y + (nodeH - ts.y) * 0.5f - (isCurrent || sub ? 5 : 0)), IM_COL32(240, 240, 240, 255), name);
+                if (sub && !isCurrent) // the progress bar takes this space on the current state
                 {
-                    const char* sub = "Blend Tree";
-                    ImVec2 ss = ImGui::CalcTextSize(sub);
+                    const char* label = g >= 0 ? "Sub-State Machine" : "Blend Tree";
+                    ImVec2 ss = ImGui::CalcTextSize(label);
                     dl->AddText(nullptr, ImGui::GetFontSize() * 0.8f, ImVec2(min.x + (nodeW - ss.x * 0.8f) * 0.5f, min.y + nodeH * 0.5f + 2),
-                                IM_COL32(190, 200, 215, 255), sub);
+                                IM_COL32(190, 200, 215, 255), label);
                 }
                 if (isCurrent && mesh)
                 {
@@ -659,43 +735,75 @@ namespace Editor
                 }
 
                 ImGui::SetCursorScreenPos(min);
-                ImGui::PushID(i + 1000);
+                ImGui::PushID(id + 100000);
                 ImGui::InvisibleButton("node", ImVec2(nodeW, nodeH));
-                if (ImGui::IsItemClicked()) m_SelectedState = i < 0 ? -2 : i;
-                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !syncedLayer)
+                if (ImGui::IsItemClicked())
+                {
+                    m_SelectedState = id == -1 ? -2 : i >= 0 ? i : -1;
+                    m_SelectedGroup = g;
+                }
+                // Double-click opens a sub-state machine; Up goes back out.
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && (g >= 0 || id == kUpNode))
+                {
+                    m_ViewGroup = g >= 0 ? g : c.Groups[m_ViewGroup].Parent;
+                    m_SelectedState = m_SelectedGroup = -1;
+                }
+                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !syncedLayer && id != kUpNode)
                 {
                     pos.x += ImGui::GetIO().MouseDelta.x / z;
                     pos.y += ImGui::GetIO().MouseDelta.y / z;
                 }
                 if (ImGui::IsItemDeactivated()) changed = true; // save layout after a drag
-                if (!syncedLayer && ImGui::BeginPopupContextItem("NodeContext"))
+                if (!syncedLayer && id != kUpNode && ImGui::BeginPopupContextItem("NodeContext"))
                 {
                     if (ImGui::BeginMenu("Make Transition To"))
                     {
+                        auto add = [&](int to, int toGroup) {
+                            AnimTransition t;
+                            t.From = g >= 0 ? AnimTransition::FromGroup(g) : i;
+                            t.To = to;
+                            t.ToGroup = toGroup;
+                            t.HasExitTime = i >= 0; // Any State and sub-state machine transitions need a condition instead
+                            c.Transitions.push_back(t);
+                            m_SelectedState = id == -1 ? -2 : i >= 0 ? i : -1;
+                            m_SelectedGroup = g;
+                            changed = true;
+                        };
                         for (int j = 0; j < (int)c.States.size(); ++j)
-                            if (j != i && ImGui::MenuItem(c.States[j].Name.c_str()))
-                            {
-                                AnimTransition t;
-                                t.From = i;
-                                t.To = j;
-                                t.HasExitTime = i >= 0; // Any State transitions need a condition instead
-                                c.Transitions.push_back(t);
-                                m_SelectedState = i < 0 ? -2 : i;
-                                changed = true;
-                            }
+                            if (j != i && ImGui::MenuItem((groupPath(c.States[j].Group) + c.States[j].Name).c_str())) add(j, -1);
+                        if (!c.Groups.empty()) ImGui::Separator();
+                        for (int k = 0; k < (int)c.Groups.size(); ++k)
+                            if (k != g && ImGui::MenuItem((groupPath(k) + "  (its entry state)").c_str())) add(0, k);
                         ImGui::EndMenu();
                     }
                     if (i >= 0)
                     {
+                        if (ImGui::BeginMenu("Move To"))
+                        {
+                            if (ImGui::MenuItem("Top Level", nullptr, c.States[i].Group == -1)) { c.States[i].Group = -1; changed = true; }
+                            for (int k = 0; k < (int)c.Groups.size(); ++k)
+                                if (ImGui::MenuItem(groupPath(k).c_str(), nullptr, c.States[i].Group == k)) { c.States[i].Group = k; changed = true; }
+                            ImGui::EndMenu();
+                        }
                         if (ImGui::MenuItem("Set as Default State")) { c.DefaultState = i; changed = true; }
+                        if (c.States[i].Group >= 0 && ImGui::MenuItem("Set as Sub-State Machine Entry")) { c.Groups[c.States[i].Group].DefaultState = i; changed = true; }
                         if (ImGui::MenuItem("Delete State"))
                         {
                             c.RemoveState(i);
                             m_SelectedState = -1;
                             changed = true;
-                            ImGui::EndPopup();
-                            ImGui::PopID();
-                            break;
+                            deleted = true;
+                        }
+                    }
+                    if (g >= 0)
+                    {
+                        if (ImGui::MenuItem("Open")) { m_ViewGroup = g; m_SelectedGroup = -1; }
+                        if (ImGui::MenuItem("Delete Sub-State Machine (keeps its states)"))
+                        {
+                            c.RemoveGroup(g);
+                            m_SelectedGroup = -1;
+                            changed = true;
+                            deleted = true;
                         }
                     }
                     ImGui::EndPopup();
@@ -711,18 +819,48 @@ namespace Editor
                     AnimState st;
                     st.Name = "State " + std::to_string(c.States.size());
                     st.EditorPosition = m_ContextPos;
+                    st.Group = m_ViewGroup;
                     c.States.push_back(st);
                     m_SelectedState = (int)c.States.size() - 1;
+                    m_SelectedGroup = -1;
+                    changed = true;
+                }
+                if (ImGui::MenuItem("Create Sub-State Machine"))
+                {
+                    AnimStateGroup grp;
+                    grp.Name = "Sub-State Machine " + std::to_string(c.Groups.size() + 1);
+                    grp.Parent = m_ViewGroup;
+                    grp.EditorPosition = m_ContextPos;
+                    c.Groups.push_back(grp);
+                    m_SelectedGroup = (int)c.Groups.size() - 1;
+                    m_SelectedState = -1;
                     changed = true;
                 }
                 ImGui::EndPopup();
+            }
+            // Where we are: Base Layer > Locomotion > ...
+            {
+                std::vector<int> chain;
+                for (int g = m_ViewGroup, depth = 0; g >= 0 && depth < 64; g = c.Groups[g].Parent, ++depth) chain.insert(chain.begin(), g);
+                ImGui::SetCursorScreenPos(ImVec2(canvasMin.x + 8, canvasMin.y + 6));
+                std::string layerName = m_Layer == 0 ? "Base Layer" : root.Layers[m_Layer - 1].Name;
+                if (ImGui::SmallButton(layerName.c_str())) { m_ViewGroup = -1; m_SelectedState = m_SelectedGroup = -1; }
+                for (int g : chain)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled(">");
+                    ImGui::SameLine();
+                    ImGui::PushID(g);
+                    if (ImGui::SmallButton(c.Groups[g].Name.c_str())) { m_ViewGroup = g; m_SelectedState = m_SelectedGroup = -1; }
+                    ImGui::PopID();
+                }
             }
             ImGui::SetCursorScreenPos(ImVec2(canvasMin.x + 8, canvasMax.y - 22));
             if (syncedLayer)
                 ImGui::TextDisabled("Synced with %s: its states and transitions drive this layer. Select a state to set this layer's motion for it.",
                                     root.Layers[m_Layer - 1].SyncedLayer == 0 ? "Base Layer" : root.Layers[root.Layers[m_Layer - 1].SyncedLayer - 1].Name.c_str());
             else
-                ImGui::TextDisabled("Right-click: create state / transitions.  Middle-drag: pan.  Wheel: zoom.  Orange: default.  Blue: current.");
+                ImGui::TextDisabled("Right-click: states, sub-state machines, transitions.  Double-click a sub-state machine to open it.  Middle-drag: pan.  Wheel: zoom.");
             ImGui::EndChild();
             ImGui::EndTable();
         }

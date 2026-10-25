@@ -30,7 +30,8 @@
       "position": [
         120,
         -90
-      ]
+      ],
+      "group": 0
     },
     {
       "name": "Curl",
@@ -40,7 +41,8 @@
       "position": [
         120,
         90
-      ]
+      ],
+      "group": 0
     }
   ],
   "transitions": [
@@ -99,5 +101,16 @@
   "anyStatePosition": [
     -180,
     -160
+  ],
+  "groups": [
+    {
+      "name": "Active",
+      "parent": -1,
+      "defaultState": 1,
+      "position": [
+        140,
+        0
+      ]
+    }
   ]
 }

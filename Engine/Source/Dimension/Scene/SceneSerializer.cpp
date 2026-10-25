@@ -164,6 +164,7 @@ namespace Dimension
                           { "bloomKnee", s.BloomKnee },
                           { "bloomRadius", s.BloomRadius },
                           { "fxaa", s.FXAA },
+                          { "msaa", s.MSAA },
                           { "vignette", s.Vignette },
                           { "ssao", s.SSAO },
                           { "ssaoRadius", s.SSAORadius },
@@ -211,6 +212,7 @@ namespace Dimension
         s.BloomKnee = js.value("bloomKnee", s.BloomKnee);
         s.BloomRadius = js.value("bloomRadius", s.BloomRadius);
         s.FXAA = js.value("fxaa", s.FXAA);
+        s.MSAA = std::clamp(js.value("msaa", s.MSAA), 1, 8);
         s.Vignette = js.value("vignette", s.Vignette);
         s.SSAO = js.value("ssao", s.SSAO);
         s.SSAORadius = js.value("ssaoRadius", s.SSAORadius);

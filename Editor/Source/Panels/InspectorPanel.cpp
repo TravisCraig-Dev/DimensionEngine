@@ -837,6 +837,20 @@ namespace Editor
         }
         else if (meta->Type == AssetType::Mesh)
         {
+            // Import settings: re-import (and refresh every user of the model) when they change.
+            ImGui::SeparatorText("Import Settings");
+            nlohmann::json settings = meta->ImportSettings;
+            MeshImportSettings current = AssetManager::GetMeshImportSettings(handle);
+            bool changed = false;
+            float scale = current.Scale;
+            ImGui::DragFloat("Scale", &scale, 0.01f, 0.0001f, 10000.0f, "%.4g");
+            if (ImGui::IsItemDeactivatedAfterEdit() && scale != current.Scale) { settings["scale"] = scale; changed = true; }
+            ImGui::SetItemTooltip("Uniform scale applied on import (e.g. 0.01 for a model made in centimeters)");
+            bool animations = current.ImportAnimations, materials = current.ImportMaterials;
+            if (ImGui::Checkbox("Import Animations", &animations)) { settings["animations"] = animations; changed = true; }
+            if (ImGui::Checkbox("Import Materials", &materials)) { settings["importMaterials"] = materials; changed = true; }
+            ImGui::SetItemTooltip("Off: every part uses the Mesh Renderer's own material");
+            if (changed) AssetManager::SetImportSettings(handle, settings);
             if (auto mesh = AssetManager::GetMesh(handle))
             {
                 ImGui::Text("Vertices: %u", mesh->GetVertexCount());
@@ -1021,6 +1035,17 @@ namespace Editor
         }
         track(ImGui::SliderFloat("Vignette", &s.Vignette, 0.0f, 1.0f));
         track(ImGui::Checkbox("FXAA (anti-aliasing)", &s.FXAA));
+        {
+            int msaa = s.MSAA >= 8 ? 3 : s.MSAA >= 4 ? 2 : s.MSAA >= 2 ? 1 : 0;
+            if (ImGui::Combo("MSAA", &msaa, "Off\0" "2x\0" "4x\0" "8x\0"))
+            {
+                s.MSAA = 1 << msaa;
+                r.Changed = true;
+                r.Activated = true;
+            }
+            ImGui::SetItemTooltip("Multisample anti-aliasing: smooth geometry edges by shading each pixel once but testing\n"
+                                  "coverage at several points. Costs memory and fill rate; combines with FXAA.");
+        }
         ImGui::SeparatorText("UI");
         track(ImGui::Checkbox("Keyboard Navigation", &s.UIKeyboardNavigation));
         ImGui::SetItemTooltip("Arrows move the UI selection and Enter/Space press it. Turn off when gameplay uses those keys; "

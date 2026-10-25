@@ -36,7 +36,8 @@
     "ssaoIntensity": 1.5,
     "ssaoBias": 0.025,
     "ssaoDebug": false,
-    "uiKeyboardNavigation": false
+    "uiKeyboardNavigation": false,
+    "msaa": 4
   },
   "entities": [
     {
@@ -5878,6 +5879,63 @@
             0.5,
             1.5
           ]
+        }
+      }
+    },
+    {
+      "guid": 750007,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Soft Ball",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -4.6,
+            2.5,
+            5.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.9,
+            0.9,
+            0.9
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.35,
+            0.75,
+            1.0,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.85,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Soft Body": {
+          "Mass": 1.0,
+          "Pressure": 25.0,
+          "Stretch Compliance": 0.0005,
+          "Bend Compliance": 0.01,
+          "Damping": 0.1,
+          "Friction": 0.6,
+          "Bounciness": 0.3,
+          "Iterations": 8,
+          "Thickness": 0.02
         }
       }
     }

@@ -101,6 +101,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, byte*, void> InvokeString;
         public delegate* unmanaged<IntPtr, ulong, int, float, ulong, byte*, void> RaiseEvent;
         public delegate* unmanaged<IntPtr, byte*> GetFields;
+        public delegate* unmanaged<int, int> Debugger; // 0 = is attached?, 1 = launch (JIT debugger prompt), 2 = break
     }
 
     internal static unsafe class Native
@@ -152,6 +153,7 @@ namespace Dimension.Interop
                 api->InvokeString = &ScriptHost.InvokeString;
                 api->RaiseEvent = &ScriptHost.RaiseEvent;
                 api->GetFields = &ScriptHost.GetFields;
+                api->Debugger = &ScriptHost.DebuggerControl;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

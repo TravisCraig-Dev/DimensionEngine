@@ -235,6 +235,10 @@ namespace Dimension
         std::vector<FrameProbe> m_FrameProbes;
         Scope<SceneRenderTarget> m_ProbeTarget;
         bool m_Capturing = false;
+        uint32_t m_Samples = 1; // MSAA samples of the view being rendered
+        // A main-pass pipeline (MainPipelines::Kind) for m_Samples.
+        const Pipeline& MainPipeline(int kind) const;
+        static void MultisampleInto(VkRenderingAttachmentInfo& att, const Image& multisampled, const Image& resolved, VkResolveModeFlagBits mode);
         void UpdateReflectionProbes(VkCommandBuffer cmd, Scene& scene);
         void BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t resolution);
 

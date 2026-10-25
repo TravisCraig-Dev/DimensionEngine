@@ -25,6 +25,7 @@ namespace Editor
         int Theme = -1;           // --theme dark|light|midnight: this session only (preferences stay unchanged)
         int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
         bool VisualizeNavigation = false; // Game view overlay of UI navigation links (--visualize-nav starts with it on)
+        bool WaitForDebugger = false;     // --wait-for-debugger: wait up to 60 s for a C# debugger before loading scripts
         bool BuildSucceeded = false; // result of the batch build
     };
 

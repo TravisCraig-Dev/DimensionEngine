@@ -23,5 +23,13 @@ namespace Dimension
         // True when the assembly on disk is newer than the loaded one.
         static bool ScriptsChangedOnDisk();
         static size_t GetScriptCount();
+
+        // Debugging C# scripts: any .NET debugger can attach to the running editor or game (Rider: Run > Attach to
+        // Process; Visual Studio: Attach to Process, Managed (.NET Core)), and breakpoints in the script sources work.
+        static bool IsDebuggerAttached();
+        // Offers to attach one through the system's just-in-time debugger prompt (Visual Studio).
+        static bool LaunchDebugger();
+        // Blocks until a debugger attaches or `seconds` pass (the --wait-for-debugger flag); true when attached.
+        static bool WaitForDebugger(float seconds);
     };
 }

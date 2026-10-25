@@ -18,7 +18,7 @@ namespace Dimension
         info.extent = { desc.Width, desc.Height, 1 };
         info.mipLevels = desc.MipLevels;
         info.arrayLayers = 1;
-        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.samples = desc.Samples;
         info.tiling = VK_IMAGE_TILING_OPTIMAL;
         info.usage = desc.Usage;
         info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;

@@ -620,6 +620,26 @@ namespace Dimension
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
     };
 
+    // A soft, deformable version of the object's mesh (Mesh Renderer), simulated as a Jolt soft body while playing:
+    // balloons, jelly, cushions. Pressure inflates closed meshes; without it the shape is held by its edges and bends.
+    // Vertices at the same position (UV seams) are welded so the surface stays closed. The body is its own collider
+    // (other colliders on the object are ignored), and the object's position follows it.
+    struct SoftBodyComponent
+    {
+        float Mass = 1.0f;                 // total, kg
+        float Pressure = 20.0f;            // inflation of a closed mesh (0 = none)
+        float StretchCompliance = 0.0001f; // edges: larger = stretchier
+        float BendCompliance = 0.01f;      // larger = loses its shape more easily
+        float Damping = 0.1f;
+        float Friction = 0.5f;
+        float Restitution = 0.0f;
+        int32_t Iterations = 8;
+        float Thickness = 0.02f;
+
+        // Runtime: the simulated mesh vertices in the object's space (empty = the mesh as it is).
+        std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
+    };
+
     enum class VehicleDrive : int32_t { RearWheel = 0, FrontWheel = 1, AllWheel = 2 };
     // Car: four wheels. Motorcycle: two on the center line that lean into turns. Tank: tracks (Track Wheels per side)
     // steered by driving the sides at different speeds, turning on the spot when standing.

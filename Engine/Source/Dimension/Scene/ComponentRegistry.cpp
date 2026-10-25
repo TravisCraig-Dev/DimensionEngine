@@ -411,6 +411,16 @@ namespace Dimension
             .Field("Iterations", &ClothComponent::Iterations).Range(1, 64)
             .Field("Thickness", &ClothComponent::Thickness).Range(0.0f, 1.0f).Speed(0.001f).Tooltip("How far it stays from what it touches")
             .Field("Wind", &ClothComponent::Wind).Speed(0.05f).Tooltip("World-space acceleration (m/s^2) on the free vertices");
+        Register<SoftBodyComponent>("Soft Body", "Physics")
+            .Field("Mass", &SoftBodyComponent::Mass).Range(0.001f, 10000.0f).Speed(0.01f)
+            .Field("Pressure", &SoftBodyComponent::Pressure).Range(0.0f, 100000.0f).Speed(0.5f).Tooltip("Inflates a closed mesh like a balloon (0 = none)")
+            .Field("Stretch Compliance", &SoftBodyComponent::StretchCompliance).Range(0.0f, 1.0f).Speed(0.00001f).Tooltip("0 = edges do not stretch; larger = stretchier")
+            .Field("Bend Compliance", &SoftBodyComponent::BendCompliance).Range(0.0f, 100.0f).Speed(0.001f).Tooltip("Larger = loses its shape more easily (jelly)")
+            .Field("Damping", &SoftBodyComponent::Damping).Range(0.0f, 10.0f).Speed(0.01f)
+            .Field("Friction", &SoftBodyComponent::Friction).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Bounciness", &SoftBodyComponent::Restitution).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Iterations", &SoftBodyComponent::Iterations).Range(1, 64)
+            .Field("Thickness", &SoftBodyComponent::Thickness).Range(0.0f, 1.0f).Speed(0.001f);
         Register<AudioOccluderComponent>("Audio Occluder", "Audio")
             .Field("Occlusion", &AudioOccluderComponent::Occlusion).Range(0.0f, 1.0f).Speed(0.01f)
                 .Tooltip("How much this collider blocks occluding Audio Sources (0 = not at all, 1 = fully; colliders without this component block fully). Several along the line add up.");

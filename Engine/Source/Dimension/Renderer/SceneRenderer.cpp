@@ -302,9 +302,20 @@ namespace Dimension
         }
     }
 
+    // The pipelines that draw into the scene's main pass; MSAA needs a copy of each built for its sample count.
+    struct MainPipelines
+    {
+        enum Kind { Mesh, MeshDoubleSided, MeshTransparent, DepthPrepass, DepthPrepassDoubleSided, Sky, Sprite, SpriteAdditive, Line, Count };
+        Pipeline Pipelines[Count];
+        const Pipeline& operator[](Kind k) const { return Pipelines[k]; }
+    };
+
     struct Renderer::Resources
     {
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
+        // Descriptions of the main-pass pipelines (single-sampled above) and their multisampled builds, made on demand.
+        GraphicsPipelineDesc MainDescs[MainPipelines::Count];
+        std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
@@ -332,15 +343,18 @@ namespace Dimension
         mesh.DepthFormat = F::kDepthFormat;
         mesh.DebugName = "MeshPipeline";
         r.Mesh = Pipeline(mesh);
+        r.MainDescs[MainPipelines::Mesh] = mesh;
         GraphicsPipelineDesc meshTwoSided = mesh;
         meshTwoSided.CullMode = VK_CULL_MODE_NONE;
         meshTwoSided.DebugName = "MeshDoubleSidedPipeline";
         r.MeshDoubleSided = Pipeline(meshTwoSided);
+        r.MainDescs[MainPipelines::MeshDoubleSided] = meshTwoSided;
         GraphicsPipelineDesc meshTransparent = meshTwoSided;
         meshTransparent.DepthWrite = false;
         meshTransparent.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat } };
         meshTransparent.DebugName = "MeshTransparentPipeline";
         r.MeshTransparent = Pipeline(meshTransparent);
+        r.MainDescs[MainPipelines::MeshTransparent] = meshTransparent;
 
         GraphicsPipelineDesc shadow = mesh;
         shadow.FragmentSpirv = kShadow_frag;
@@ -355,9 +369,11 @@ namespace Dimension
         prepass.DepthBias = false;
         prepass.DebugName = "DepthPrepassPipeline";
         r.DepthPrepass = Pipeline(prepass);
+        r.MainDescs[MainPipelines::DepthPrepass] = prepass;
         prepass.CullMode = VK_CULL_MODE_NONE;
         prepass.DebugName = "DepthPrepassDoubleSidedPipeline";
         r.DepthPrepassDoubleSided = Pipeline(prepass);
+        r.MainDescs[MainPipelines::DepthPrepassDoubleSided] = prepass;
 
         GraphicsPipelineDesc sky;
         sky.VertexSpirv = kSky_vert;
@@ -366,6 +382,7 @@ namespace Dimension
         sky.DepthFormat = F::kDepthFormat;
         sky.DebugName = "SkyPipeline";
         r.Sky = Pipeline(sky);
+        r.MainDescs[MainPipelines::Sky] = sky;
 
         struct SV { glm::vec3 P; glm::vec4 C; glm::vec2 UV; uint32_t T; uint32_t E; };
         GraphicsPipelineDesc sprite;
@@ -383,10 +400,12 @@ namespace Dimension
         sprite.DepthFormat = F::kDepthFormat;
         sprite.DebugName = "SpritePipeline";
         r.Sprite = Pipeline(sprite);
+        r.MainDescs[MainPipelines::Sprite] = sprite;
         GraphicsPipelineDesc additive = sprite;
         additive.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive }, { F::kIdFormat } };
         additive.DebugName = "SpriteAdditivePipeline";
         r.SpriteAdditive = Pipeline(additive);
+        r.MainDescs[MainPipelines::SpriteAdditive] = additive;
 
         GraphicsPipelineDesc ui = sprite;
         ui.VertexSpirv = kUI_vert;
@@ -409,6 +428,7 @@ namespace Dimension
         line.DepthFormat = F::kDepthFormat;
         line.DebugName = "LinePipeline";
         r.Line = Pipeline(line);
+        r.MainDescs[MainPipelines::Line] = line;
         GraphicsPipelineDesc overlay = line;
         overlay.FragmentSpirv = kOverlay_frag;
         overlay.DepthTest = false;
@@ -567,6 +587,9 @@ namespace Dimension
     {
         // Reflection probes capture the scene with nested Render calls, so they run before this view collects anything.
         if (!options.ProbeCapture) UpdateReflectionProbes(cmd, scene);
+        // MSAA for this view (probe faces stay single-sampled).
+        target.SetSamples(options.ProbeCapture ? 1u : (uint32_t)std::clamp(scene.GetSettings().MSAA, 1, 8));
+        m_Samples = target.GetSamples();
         m_Capturing = options.ProbeCapture;
         auto cpuStart = std::chrono::steady_clock::now();
         auto& device = RenderDevice::Get();
@@ -749,6 +772,13 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetIds().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_ASPECT_DEPTH_BIT);
+        if (m_Samples > 1)
+        {
+            Vk::TransitionImage(cmd, target.GetHdrMS().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            Vk::TransitionImage(cmd, target.GetIdsMS().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            Vk::TransitionImage(cmd, target.GetDepthMS().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
 
         // SSAO needs a perspective view of opaque geometry; orthographic (2D) cameras skip it.
         bool ssao = settings.SSAO && !camera.Orthographic && !options.ProbeCapture;
@@ -791,6 +821,13 @@ namespace Dimension
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
         depth.storeOp = dof ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth of field reads it
         depth.clearValue.depthStencil = { 1.0f, 0 };
+        if (m_Samples > 1)
+        {
+            // Draw into the multisampled images and resolve at the end: color averaged, ids and depth from sample 0.
+            MultisampleInto(colors[0], target.GetHdrMS(), target.GetHdr(), VK_RESOLVE_MODE_AVERAGE_BIT);
+            MultisampleInto(colors[1], target.GetIdsMS(), target.GetIds(), VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
+            MultisampleInto(depth, target.GetDepthMS(), target.GetDepth(), VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
+        }
 
         VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
         rendering.renderArea = { { 0, 0 }, extent };
@@ -812,7 +849,7 @@ namespace Dimension
 
         if (camera.Skybox)
         {
-            res.Sky.Bind(cmd);
+            MainPipeline(MainPipelines::Sky).Bind(cmd);
             vkCmdDraw(cmd, 3, 1, 0, 0);
             m_Stats.DrawCalls++;
         }
@@ -823,7 +860,7 @@ namespace Dimension
             SceneUniforms gridU = u;
             gridU.GridParams.x = (options.Grid2D || camera.Orthographic) ? 0.0f : 60.0f;
             device.BindUniforms(cmd, &gridU, sizeof(gridU));
-            FlushLines(cmd, m_GridLines, res.Line);
+            FlushLines(cmd, m_GridLines, MainPipeline(MainPipelines::Line));
             device.BindUniforms(cmd, &u, sizeof(u));
         }
 
@@ -1223,23 +1260,28 @@ namespace Dimension
             if (!t.ActiveInHierarchy) continue;
             // Cloth draws its own grid, with this frame's simulated vertices when playing.
             const ClothComponent* cloth = reg.TryGet<ClothComponent>(e);
+            const SoftBodyComponent* soft = cloth ? nullptr : reg.TryGet<SoftBodyComponent>(e);
             Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : AssetManager::GetMesh(mr.Mesh);
             if (!mesh) continue;
             RenderItem item;
             item.World = t.World;
             AABB bounds = mesh->GetBounds();
-            if (cloth && cloth->SimulatedPositions.size() == mesh->GetVertexCount() && !cloth->SimulatedPositions.empty())
+            // Simulated vertices (cloth, soft bodies) replace the mesh's, on top of its UVs and tangents.
+            const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : nullptr;
+            const std::vector<glm::vec3>* simNormals = cloth ? &cloth->SimulatedNormals : soft ? &soft->SimulatedNormals : nullptr;
+            std::shared_ptr<const MeshData> softData = soft ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
+            const std::vector<Vertex>* base = cloth ? &Cloth::GridVertices(*cloth) : softData ? &softData->Vertices : nullptr;
+            if (simPositions && base && !simPositions->empty() && simPositions->size() == mesh->GetVertexCount() && base->size() == simPositions->size())
             {
-                const auto& grid = Cloth::GridVertices(*cloth);
-                if (TransientAllocation block = device.AllocateTransient(grid.size() * sizeof(Vertex), 16))
+                if (TransientAllocation block = device.AllocateTransient(base->size() * sizeof(Vertex), 16))
                 {
                     auto* out = (Vertex*)block.Data;
-                    bounds.Min = bounds.Max = cloth->SimulatedPositions[0];
-                    for (size_t i = 0; i < grid.size(); ++i)
+                    bounds.Min = bounds.Max = (*simPositions)[0];
+                    for (size_t i = 0; i < base->size(); ++i)
                     {
-                        out[i] = grid[i];
-                        out[i].Position = cloth->SimulatedPositions[i];
-                        out[i].Normal = cloth->SimulatedNormals[i];
+                        out[i] = (*base)[i];
+                        out[i].Position = (*simPositions)[i];
+                        out[i].Normal = (*simNormals)[i];
                         bounds.Min = glm::min(bounds.Min, out[i].Position);
                         bounds.Max = glm::max(bounds.Max, out[i].Position);
                     }
@@ -1385,8 +1427,8 @@ namespace Dimension
             d.Vertices = item.Vertices;
             d.VertexOffset = item.VertexOffset;
             d.Pipe = shadowPass  ? &res.Shadow
-                   : depthPass   ? (part.DoubleSided ? &res.DepthPrepassDoubleSided : &res.DepthPrepass)
-                   : part.Transparent ? &res.MeshTransparent : part.DoubleSided ? &res.MeshDoubleSided : &res.Mesh;
+                   : depthPass   ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
+                   : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
             return d;
         };
 
@@ -1480,6 +1522,45 @@ namespace Dimension
             submit(d, (uint32_t)run);
             i += run;
         }
+    }
+
+    const Pipeline& SceneRenderer::MainPipeline(int kind) const
+    {
+        auto& r = Renderer::Get();
+        if (m_Samples <= 1)
+            switch (kind)
+            {
+            case MainPipelines::Mesh: return r.Mesh;
+            case MainPipelines::MeshDoubleSided: return r.MeshDoubleSided;
+            case MainPipelines::MeshTransparent: return r.MeshTransparent;
+            case MainPipelines::DepthPrepass: return r.DepthPrepass;
+            case MainPipelines::DepthPrepassDoubleSided: return r.DepthPrepassDoubleSided;
+            case MainPipelines::Sky: return r.Sky;
+            case MainPipelines::Sprite: return r.Sprite;
+            case MainPipelines::SpriteAdditive: return r.SpriteAdditive;
+            default: return r.Line;
+            }
+        auto& set = r.Multisampled[m_Samples];
+        if (!set)
+        {
+            set = std::make_unique<MainPipelines>();
+            for (int k = 0; k < MainPipelines::Count; ++k)
+            {
+                GraphicsPipelineDesc desc = r.MainDescs[k];
+                desc.Samples = (VkSampleCountFlagBits)m_Samples;
+                set->Pipelines[k] = Pipeline(desc);
+            }
+        }
+        return set->Pipelines[kind];
+    }
+
+    void SceneRenderer::MultisampleInto(VkRenderingAttachmentInfo& att, const Image& multisampled, const Image& resolved, VkResolveModeFlagBits mode)
+    {
+        att.imageView = multisampled.GetView();
+        att.resolveMode = mode;
+        att.resolveImageView = resolved.GetView();
+        att.resolveImageLayout = att.imageLayout;
+        if (att.storeOp == VK_ATTACHMENT_STORE_OP_STORE) att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // the resolve keeps the result
     }
 
     int LightClusters::SliceOf(float d) const
@@ -2001,7 +2082,7 @@ namespace Dimension
             bool additive = m_Sprites[runStart].Additive;
             size_t runEnd = runStart;
             while (runEnd < count && m_Sprites[runEnd].Additive == additive && runEnd - runStart < kMaxQuadsPerDraw) ++runEnd;
-            const Pipeline* pipeline = additive ? &res.SpriteAdditive : &res.Sprite;
+            const Pipeline* pipeline = &MainPipeline(additive ? MainPipelines::SpriteAdditive : MainPipelines::Sprite);
             if (pipeline != bound)
             {
                 pipeline->Bind(cmd);
@@ -2111,6 +2192,12 @@ namespace Dimension
         depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         depth.clearValue.depthStencil = { 1.0f, 0 };
+        if (m_Samples > 1)
+        {
+            // Multisampled depth (the main pass loads it), resolved for SSAO to read.
+            MultisampleInto(depth, target.GetDepthMS(), target.GetDepth(), VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        }
         VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
         info.renderArea = { { 0, 0 }, extent };
         info.layerCount = 1;

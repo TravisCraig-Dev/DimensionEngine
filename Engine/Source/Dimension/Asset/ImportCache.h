@@ -14,8 +14,9 @@ namespace Dimension
     {
         bool LoadImage(const fs::path& source, DecodedImage& out);
         void StoreImage(const fs::path& source, const DecodedImage& image);
-        bool LoadMesh(const fs::path& source, MeshData& out);
-        void StoreMesh(const fs::path& source, const MeshData& mesh);
+        // `variant` tells imports with other settings apart (empty for the defaults).
+        bool LoadMesh(const fs::path& source, const std::string& variant, MeshData& out);
+        void StoreMesh(const fs::path& source, const std::string& variant, const MeshData& mesh);
 
         fs::path Directory(); // empty without a project
         // Removes entries whose source file no longer has that key (changed or deleted). Returns how many.

@@ -230,7 +230,7 @@ namespace Dimension
         if (ext == ".mat") return AssetType::Material;
         if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
         if (ext == ".controller") return AssetType::AnimatorController;
-        if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg") return AssetType::Audio;
+        if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" || ext == ".opus") return AssetType::Audio;
         return AssetType::None;
     }
 
@@ -445,7 +445,7 @@ namespace Dimension
                     ok = true;
                 }
                 else
-                    ok = MeshData::LoadFromFile(s->AssetsDir / meta->Path, data);
+                    ok = LoadMeshData(s->AssetsDir / meta->Path, data);
                 if (ok)
                 {
                     RegisterMeshMaterials(handle, *meta, data);
@@ -476,7 +476,7 @@ namespace Dimension
                 if (!data)
                 {
                     data = std::make_shared<MeshData>();
-                    if (!MeshData::LoadFromFile(s->AssetsDir / meta->Path, *data)) data.reset();
+                    if (!LoadMeshData(s->AssetsDir / meta->Path, *data)) data.reset();
                 }
             }
         }
@@ -507,13 +507,31 @@ namespace Dimension
 
     bool AssetManager::IsSubAsset(AssetHandle handle) { return s->SubAssetNames.contains(handle); }
 
+    MeshImportSettings AssetManager::GetMeshImportSettings(AssetHandle mesh)
+    {
+        MeshImportSettings settings;
+        if (!s) return settings;
+        auto* meta = GetMetadata(mesh);
+        if (!meta || meta->Type != AssetType::Mesh) return settings;
+        settings.Scale = std::clamp(meta->ImportSettings.value("scale", 1.0f), 0.0001f, 10000.0f);
+        settings.ImportAnimations = meta->ImportSettings.value("animations", true);
+        settings.ImportMaterials = meta->ImportSettings.value("importMaterials", true);
+        return settings;
+    }
+
+    bool AssetManager::LoadMeshData(const fs::path& file, MeshData& out)
+    {
+        MeshImportSettings settings = s ? GetMeshImportSettings(GetHandle(file)) : MeshImportSettings{};
+        return MeshData::LoadFromFile(file, out, settings);
+    }
+
     bool AssetManager::ExtractMeshMaterials(AssetHandle mesh)
     {
         auto* meta = GetMetadata(mesh);
         if (!meta || meta->Type != AssetType::Mesh) return false;
         fs::path modelPath = s->AssetsDir / meta->Path;
         MeshData data;
-        if (!MeshData::LoadFromFile(modelPath, data) || data.Materials.empty()) return false;
+        if (!LoadMeshData(modelPath, data) || data.Materials.empty()) return false;
 
         fs::path dir = modelPath.parent_path() / (modelPath.stem().string() + " Materials");
         std::error_code ec;

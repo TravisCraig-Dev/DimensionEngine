@@ -288,6 +288,38 @@ namespace
         runtime->OnRuntimeStop();
     }
 
+    void TestMeshImportSettings()
+    {
+        fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
+        MeshData plain, big;
+        MeshImportSettings twice;
+        twice.Scale = 2.0f;
+        CHECK(twice.Key() != MeshImportSettings{}.Key() && MeshImportSettings{}.Key().empty());
+        CHECK(MeshData::LoadFromFile(models / "Tentacle.gltf", plain) && MeshData::LoadFromFile(models / "Tentacle.gltf", big, twice));
+        CHECK(plain.Vertices.size() == big.Vertices.size() && Near(big.Vertices[7].Position, plain.Vertices[7].Position * 2.0f, 1e-4f));
+        // The bind pose still skins every vertex onto itself, and animated translations scale too.
+        Pose bind;
+        bind.SetBindPose(*big.SkeletonData);
+        std::vector<glm::mat4> skin;
+        Animation::ComputeSkinMatrices(*big.SkeletonData, bind, skin);
+        bool identity = true;
+        for (auto& m : skin)
+            for (int c = 0; c < 4; ++c) identity &= Near(glm::vec3(m[c]), glm::vec3(glm::mat4(1.0f)[c]), 1e-3f);
+        CHECK(identity);
+        int b1 = plain.SkeletonData->FindJoint("Bone1");
+        CHECK(Near(big.SkeletonData->Joints[b1].Translation, plain.SkeletonData->Joints[b1].Translation * 2.0f, 1e-5f));
+        // Without animations or materials.
+        MeshImportSettings bare;
+        bare.ImportAnimations = false;
+        bare.ImportMaterials = false;
+        MeshData showcase, stripped;
+        CHECK(MeshData::LoadFromFile(models / "Showcase.glb", showcase) && MeshData::LoadFromFile(models / "Showcase.glb", stripped, bare));
+        CHECK(!showcase.Materials.empty() && stripped.Materials.empty() && stripped.Images.empty());
+        CHECK(std::all_of(stripped.SubMeshes.begin(), stripped.SubMeshes.end(), [](const SubMesh& m) { return m.MaterialSlot == -1; }));
+        MeshData still;
+        CHECK(MeshData::LoadFromFile(models / "Tentacle.gltf", still, bare) && still.Clips.empty() && !plain.Clips.empty());
+    }
+
     void TestImportCache()
     {
         fs::path dir = fs::temp_directory_path() / "dimension_import_cache";
@@ -609,6 +641,55 @@ namespace
             }
             rt->OnRuntimeStop();
         }
+    }
+
+    void TestSoftBodies()
+    {
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets"); // CPU mesh data only
+        // A sphere dropped on the ground: inflated, it keeps its shape (slightly squashed); limp, it flattens.
+        auto drop = [](float pressure, float stretch) {
+            Scene scene("Soft");
+            auto& reg = scene.GetRegistry();
+            Entity ground = scene.CreateEntity("Ground");
+            reg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            reg.Get<TransformComponent>(ground).Scale = { 20, 1, 20 };
+            reg.Emplace<BoxColliderComponent>(ground);
+            Entity ball = scene.CreateEntity("Ball");
+            reg.Get<TransformComponent>(ball).Position = { 0, 1.5f, 0 };
+            reg.Emplace<MeshRendererComponent>(ball).Mesh = AssetManager::kSphere;
+            auto& sb = reg.Emplace<SoftBodyComponent>(ball);
+            sb.Pressure = pressure;
+            sb.StretchCompliance = stretch;
+            reg.Emplace<SphereColliderComponent>(ball); // ignored: the soft body is the collider
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 180; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            auto& rr = rt->GetRegistry();
+            auto& sim = rr.Get<SoftBodyComponent>(ball);
+            auto& t = rr.Get<TransformComponent>(ball);
+            float top = -1e9f, bottom = 1e9f;
+            for (auto& p : sim.SimulatedPositions)
+            {
+                float y = glm::vec3(t.World * glm::vec4(p, 1.0f)).y;
+                top = std::max(top, y);
+                bottom = std::min(bottom, y);
+            }
+            struct Result { float Top, Bottom, Y; size_t Vertices; bool RigidBody; };
+            Result r{ top, bottom, t.Position.y, sim.SimulatedPositions.size(), rr.Has<RigidbodyComponent>(ball) && rr.Get<RigidbodyComponent>(ball).RuntimeBody != 0xFFFFFFFF };
+            rt->OnRuntimeStop();
+            return r;
+        };
+        // (A triangulated closed surface is rigid by its edges alone, so "limp" also needs stretchy edges.)
+        auto firm = drop(40.0f, 0.0001f), limp = drop(0.0f, 0.05f);
+        std::printf("  firm top %.2f bottom %.2f, limp top %.2f%c", firm.Top, firm.Bottom, limp.Top, 10);
+        CHECK(firm.Vertices == AssetManager::GetMeshData(AssetManager::kSphere)->Vertices.size()); // every mesh vertex follows
+        CHECK(!firm.RigidBody);
+        CHECK(firm.Bottom > -0.1f && firm.Bottom < 0.15f);   // resting on the ground
+        CHECK(firm.Top > 0.75f && firm.Top < 1.1f);          // about its 1 m height
+        CHECK(firm.Y < 1.0f && firm.Y > 0.2f);               // the object came down with it
+        CHECK(limp.Top < firm.Top - 0.2f);                   // without pressure it slumps
+        AssetManager::Shutdown();
     }
 
     void TestVehicles()
@@ -1481,6 +1562,56 @@ namespace
         CHECK(c.LayerMachine(0) == &c && c.LayerMachine(2) == &c.Layers[1].Machine && c.LayerMachine(4) == nullptr);
     }
 
+    void TestSubStateMachines()
+    {
+        // Idle at the top level; a "Combat" sub-state machine holding Slash -> Recover, entered at Slash.
+        AnimatorController c;
+        c.Parameters = { { "Fight", AnimParameterType::Trigger, 0.0f }, { "Calm", AnimParameterType::Trigger, 0.0f } };
+        auto state = [](const char* name, int group) { AnimState st; st.Name = name; st.Clip = name; st.Group = group; return st; };
+        c.Groups = { { "Combat", -1, 2, { 300, 0 } }, { "Inner", 0, -1, { 0, 0 } } };
+        c.States = { state("Idle", -1), state("Recover", 0), state("Slash", 0), state("Feint", 1) };
+        AnimTransition fight{ 0, 0, false, 1.0f, 0.1f, { { "Fight", AnimConditionOp::IsTrue, 0.0f } } };
+        fight.ToGroup = 0;
+        AnimTransition slashDone{ 2, 1, true, 1.0f, 0.1f, {} };
+        AnimTransition calm{ AnimTransition::FromGroup(0), 0, false, 1.0f, 0.1f, { { "Calm", AnimConditionOp::IsTrue, 0.0f } } };
+        c.Transitions = { fight, slashDone, calm };
+        CHECK(c.EntryState(0) == 2 && c.EntryState(1) == 3); // Inner has no default: its first state
+        CHECK(c.IsInGroup(3, 0) && c.IsInGroup(3, 1) && !c.IsInGroup(0, 0) && c.IsInGroup(1, 0));
+
+        AnimatorRuntime rt;
+        auto duration = [](const std::string&) { return 1.0f; };
+        auto step = [&](float dt) { return AnimatorStateMachine::Update(c, rt, dt, duration, [](const AnimState&, float) {}); };
+        step(0.1f);
+        CHECK(rt.State == 0);
+        rt.Triggers.insert("Fight");
+        CHECK(step(0.1f) == 0 && rt.State == 2); // into the group: its entry state
+        CHECK(step(1.0f) == 1 && rt.State == 1);  // inside the group, normal transitions
+        rt.Triggers.insert("Calm");
+        CHECK(step(0.1f) == 2 && rt.State == 0);  // the group's transition applies from Recover
+        rt.Triggers.insert("Calm");
+        CHECK(step(0.1f) == -1 && rt.State == 0); // but not from outside the group
+        // A nested state counts as inside the outer group too.
+        rt.State = 3;
+        rt.Triggers.insert("Calm");
+        CHECK(step(0.1f) == 2 && rt.State == 0);
+
+        // Groups, membership and group transitions survive save/load.
+        fs::path path = fs::temp_directory_path() / "dimension_substates.controller";
+        CHECK(c.Save(path));
+        auto back = AnimatorController::Load(path);
+        CHECK(back->Groups.size() == 2 && back->Groups[1].Parent == 0 && back->Groups[0].DefaultState == 2 && back->States[3].Group == 1);
+        CHECK(back->Transitions[0].ToGroup == 0 && back->Transitions[2].From == AnimTransition::FromGroup(0));
+        fs::remove(path);
+        // Removing a group moves its contents up and drops its transitions.
+        c.RemoveGroup(0);
+        CHECK(c.Groups.size() == 1 && c.Groups[0].Parent == -1 && c.States[1].Group == -1 && c.States[3].Group == 0);
+        CHECK(c.Transitions.size() == 1 && c.Transitions[0].From == 2);
+        // Removing a state fixes group entries.
+        c.Groups[0].DefaultState = 3;
+        c.RemoveState(0);
+        CHECK(c.Groups[0].DefaultState == 2);
+    }
+
     void TestBlendTrees2D()
     {
         // Idle in the middle, Forward/Right/Back/Left around it (a typical locomotion space).
@@ -2314,6 +2445,17 @@ namespace
             if (IsCoroutineRunning(done)) Steps.push_back("immediate kept");
         }
     };
+
+    void TestScriptOptions()
+    {
+        // C++ scripts get the Add Component menu and required components through ScriptOptions.
+        ScriptRegistry::Register<ClickCounter>("Menu Probe", { .Menu = "Gameplay/Probe", .Requires = { "Rigidbody", "Sphere Collider" } });
+        const ScriptInfo* info = ScriptRegistry::Find("Menu Probe");
+        CHECK(info && info->Menu == "Gameplay/Probe" && info->Requires == std::vector<std::string>({ "Rigidbody", "Sphere Collider" }) && info->Module == "native");
+        const ScriptInfo* plain = ScriptRegistry::Find("ClickCounter");
+        CHECK(plain && plain->Menu.empty() && plain->Requires.empty());
+        for (auto& name : info->Requires) CHECK(ComponentRegistry::Find(name) != nullptr); // real component names
+    }
 
     void TestCoroutines()
     {
@@ -3310,6 +3452,12 @@ namespace
             return;
         }
         CHECK(CSharpRuntime::LoadScripts(scripts));
+        // Debugger queries reach .NET: none is attached in a test run, and waiting gives up after its time.
+        CHECK(!CSharpRuntime::IsDebuggerAttached());
+        auto waitStart = std::chrono::steady_clock::now();
+        CHECK(!CSharpRuntime::WaitForDebugger(0.2f));
+        float waited = std::chrono::duration<float>(std::chrono::steady_clock::now() - waitStart).count();
+        CHECK(waited >= 0.19f && waited < 1.0f);
         const ScriptInfo* spinner = ScriptRegistry::Find("Game.Spinner");
         CHECK(spinner != nullptr && spinner->Module == "csharp");
         if (!spinner) return;
@@ -4062,6 +4210,32 @@ namespace
         auto chime = AudioEngine::GetClipInfo(audio / "Chime.wav");
         CHECK(chime && chime->Format == "WAV" && chime->Seconds > 0.1f);
         CHECK(!AudioEngine::GetClipInfo(audio / "Missing.ogg"));
+        // Opus (libopus + opusfile): a 1 s stereo 440 Hz tone at 48 kHz, written with libsndfile.
+        auto tone = AudioEngine::GetClipInfo(fs::path(DIM_SOURCE_DIR) / "Tests" / "Data" / "Tone.opus");
+        CHECK(tone && tone->Format == "Opus" && tone->Channels == 2 && tone->SampleRate == 48000 && Near(tone->Seconds, 1.0f, 0.01f));
+        CHECK(AssetManager::TypeFromExtension("Music.opus") == AssetType::Audio);
+        // And it plays through an Audio Source (the resource manager decodes it), when there is an audio device.
+        AudioEngine::Init();
+        if (AudioEngine::IsAvailable())
+        {
+            fs::path assets = fs::temp_directory_path() / "dimension_opus_test" / "Assets";
+            fs::remove_all(assets.parent_path());
+            fs::create_directories(assets);
+            fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Tests" / "Data" / "Tone.opus", assets / "Tone.opus");
+            AssetManager::Init(assets);
+            Scene scene("Opus");
+            Entity e = scene.CreateEntity("Speaker");
+            auto& src = scene.GetRegistry().Emplace<AudioSourceComponent>(e);
+            src.Clip = AssetManager::GetHandle(assets / "Tone.opus");
+            src.Loop = true;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(src.Clip.IsValid() && AudioWorld::IsPlaying(*rt, e));
+            rt->OnRuntimeStop();
+            AssetManager::Shutdown();
+            fs::remove_all(assets.parent_path());
+        }
 
         // Group effects round trip through the project file.
         fs::path dir = fs::temp_directory_path() / "dimension_fx_project";
@@ -4732,6 +4906,7 @@ int main(int argc, char** argv)
     Run("Inactive colliders", TestInactiveColliders);
     Run("Clustered lights", TestLightClusters);
     Run("Import cache", TestImportCache);
+    Run("Model import settings", TestMeshImportSettings);
     Run("Physics layers, triggers, joints", TestPhysicsLayersTriggersJoints);
     Run("Mesh colliders and characters", TestMeshCollidersAndCharacters);
     Run("Reflection JSON", TestReflectionJson);
@@ -4754,6 +4929,7 @@ int main(int argc, char** argv)
     Run("Particle texture sheets and noise", TestParticleSheetsAndNoise);
     Run("Script timers", TestScriptTimers);
     Run("Coroutines (C++)", TestCoroutines);
+    Run("C++ script options", TestScriptOptions);
     Run("Audio mixer", TestAudioMixer);
     Run("Environment lighting", TestEnvironmentLighting);
     Run("Tilemaps", TestTilemaps);
@@ -4765,11 +4941,13 @@ int main(int argc, char** argv)
     Run("Animator state machine", TestAnimatorStateMachine);
     Run("Blend trees and animation events", TestBlendTreesAndEvents);
     Run("2D blend trees", TestBlendTrees2D);
+    Run("Sub-state machines", TestSubStateMachines);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);
     Run("Rich text tags", TestRichText);
     Run("Audio occlusion", TestAudioOcclusion);
     Run("Vehicles", TestVehicles);
     Run("Cloth", TestCloth);
+    Run("Soft bodies", TestSoftBodies);
     Run("Motorcycles and tanks", TestMotorcycleAndTank);
     Run("Convex decomposition", TestConvexDecomposition);
     Run("Inverse kinematics", TestInverseKinematics);
