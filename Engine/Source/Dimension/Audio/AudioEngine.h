@@ -48,6 +48,8 @@ namespace Dimension
         // How much the line is blocked, 0..1: the sum of the blocking colliders' Audio Occluder amounts (1 each without
         // the component).
         static float Occlusion(Scene& scene, const glm::vec3& listener, Entity listenerEntity, Entity source);
+        // The Audio Reverb Zones' combined effect on a mixer group for a listener position (weight 0 outside them all).
+        static AudioMixer::ZoneReverb ReverbZoneAt(Scene& scene, const glm::vec3& listener, const std::string& group);
         void CreateSourcesFor(Entity root);
         void OnEntityDestroyed(Entity e);
 

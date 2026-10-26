@@ -60,21 +60,30 @@ namespace Dimension
     };
 
     // A sub-state machine: a named group of states (and other groups) shown as one node in the graph. A transition
-    // to the group enters its Default State; transitions from the group (AnimTransition::FromGroup) apply from any
-    // state inside it, like an Any State scoped to the group.
+    // to the group goes through its Entry node: the first entry transition (AnimTransition::FromEntry) whose
+    // conditions hold picks the state, otherwise its Default State. Transitions from the group
+    // (AnimTransition::FromGroup) apply from any state inside it, like an Any State scoped to the group. A transition
+    // to Exit leaves the group: the group's own transitions whose conditions hold are taken, otherwise the parent's
+    // entry (as in Unity).
     struct AnimStateGroup
     {
         std::string Name = "Sub-State Machine";
         int Parent = -1;       // enclosing group, -1 = the top level
         int DefaultState = -1; // entered by transitions to the group
         glm::vec2 EditorPosition{ 0.0f }; // in the parent's graph
+        glm::vec2 EntryPosition{ -420.0f, 0.0f }, ExitPosition{ 420.0f, 0.0f }; // its Entry and Exit nodes, in its own graph
     };
 
     struct AnimTransition
     {
-        // Source: a state index, -1 = Any State, or FromGroup(g) for "any state inside group g".
+        // Source: a state index, -1 = Any State, FromGroup(g) for "any state inside group g", or FromEntry(g) for the
+        // Entry node of group g (-1 = the top level: chooses the first state).
+        static constexpr int kEntryBase = -1000000;
         static constexpr int FromGroup(int group) { return -2 - group; }
-        static constexpr int GroupOf(int from) { return from <= -2 ? -2 - from : -1; }
+        static constexpr int GroupOf(int from) { return from <= -2 && from > kEntryBase ? -2 - from : -1; }
+        static constexpr int FromEntry(int group) { return kEntryBase - 1 - group; }
+        static constexpr bool IsEntry(int from) { return from <= kEntryBase; }
+        static constexpr int EntryGroupOf(int from) { return kEntryBase - 1 - from; }
         int From = -1; // -1 = Any State
         int To = 0;
         bool HasExitTime = false;
@@ -82,6 +91,7 @@ namespace Dimension
         float Duration = 0.25f; // crossfade seconds
         std::vector<AnimCondition> Conditions;
         int ToGroup = -1; // >= 0: into this sub-state machine, at its entry state (To is then unused)
+        bool ToExit = false; // leave the source's sub-state machine (To and ToGroup unused)
     };
 
     enum class AnimLayerBlending : int32_t { Override = 0, Additive = 1 };
@@ -98,6 +108,7 @@ namespace Dimension
         std::vector<AnimStateGroup> Groups; // sub-state machines
         int DefaultState = 0;
         glm::vec2 AnyStatePosition{ -220.0f, 0.0f };
+        glm::vec2 EntryPosition{ -420.0f, 0.0f }, ExitPosition{ 420.0f, 0.0f }; // the top level's Entry and Exit nodes
         std::vector<AnimLayer> Layers;
 
         // Set on a layer's machine: parameters are looked up in the controller that owns the layer.

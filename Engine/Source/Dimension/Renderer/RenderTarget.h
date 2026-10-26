@@ -17,6 +17,8 @@ namespace Dimension
         static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
         static constexpr VkFormat kOutputFormat = VK_FORMAT_R8G8B8A8_UNORM;
         static constexpr VkFormat kAOFormat = VK_FORMAT_R8_UNORM;
+        // Per-pixel surface data for screen-space reflections (see Mesh.frag's outSurface).
+        static constexpr VkFormat kSurfaceFormat = VK_FORMAT_R32G32_UINT;
 
         SceneRenderTarget(uint32_t width, uint32_t height);
         ~SceneRenderTarget();
@@ -29,6 +31,12 @@ namespace Dimension
         const Image& GetHdrMS() const { return m_HdrMS; }
         const Image& GetIdsMS() const { return m_IdsMS; }
         const Image& GetDepthMS() const { return m_DepthMS; }
+        const Image& GetSurfaceMS() const { return m_SurfaceMS; }
+        // Screen-space reflections: the surface buffer the main pass writes, and the traced reflections (HDR).
+        const Image& GetSurface() const { return m_Surface; }
+        uint32_t GetSurfaceBindless() const { return m_SurfaceBindless; }
+        const Image& GetReflections() const { return m_Reflections; }
+        uint32_t GetReflectionsBindless() const { return m_ReflectionsBindless; }
         uint32_t GetWidth() const { return m_Width; }
         uint32_t GetHeight() const { return m_Height; }
         float GetAspect() const { return m_Height ? (float)m_Width / (float)m_Height : 1.0f; }
@@ -74,7 +82,9 @@ namespace Dimension
         uint32_t m_Width, m_Height;
         uint32_t m_Samples = 1;
         Image m_Hdr, m_Ids, m_Depth, m_Output;
-        Image m_HdrMS, m_IdsMS, m_DepthMS; // only with MSAA
+        Image m_HdrMS, m_IdsMS, m_DepthMS, m_SurfaceMS; // only with MSAA
+        Image m_Surface, m_Reflections;
+        uint32_t m_SurfaceBindless = 0, m_ReflectionsBindless = 0;
         uint32_t m_HdrBindless = 0;
         static constexpr uint32_t kMaxBloomLevels = 6;
         std::vector<Image> m_Bloom;

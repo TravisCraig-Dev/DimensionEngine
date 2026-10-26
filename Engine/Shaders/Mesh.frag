@@ -16,6 +16,9 @@ layout(location = 4) in vec4 vTangent;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out uint outEntity;
+// For screen-space reflections: x the world normal (octahedral, half floats), y the reflection weight (the
+// environment BRDF times its occlusion, rgb) and roughness (a), unorm8. 0 = no reflections.
+layout(location = 2) out uvec2 outSurface;
 
 const float PI = 3.14159265359;
 
@@ -110,34 +113,11 @@ void main()
     // Ambient: flat diffuse term plus sky reflections (rougher = blurrier, approximated by blending to the horizon tone).
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 R = reflect(-V, N);
-    vec3 env;
+    // Image-based lighting: the environment for specular, SH irradiance of a sky texture for diffuse.
+    vec3 env = EnvironmentReflection(vWorldPos, R, roughness);
     vec3 ambient = uScene.Ambient.rgb;
-    if (HasSkyTexture())
-    {
-        // Image-based lighting: the GGX-prefiltered sky (one roughness per mip), SH irradiance for diffuse.
-        if (uScene.SkyFilter.x > 0.5)
-            env = SampleEquirect(uint(uScene.SkyFilter.x), DirToEquirect(R), roughness * uScene.SkyFilter.y) * uScene.EnvParams.x;
-        else
-            env = SkyRadiance(R, roughness * max(uScene.EnvParams.y - 1.0, 0.0)) / max(uScene.SkyParams.z, 1e-4) * uScene.EnvParams.x;
-        if (uScene.EnvParams.z > 0.5) ambient = SkyIrradiance(N) * uScene.EnvParams.w;
-    }
-    else
-        env = mix(SkyColor(R), SkyColor(vec3(0.0, 1.0, 0.0)) * 0.5 + uScene.SkyHorizon.rgb * 0.5, roughness);
-    // Reflection probes, blended per pixel: smallest boxes first, each fading out over its Blend Distance toward its
-    // walls; whatever weight is left over goes to the next probe and finally to the sky.
-    {
-        vec3 probeSum = vec3(0.0);
-        float remaining = 1.0;
-        for (int i = 0; i < uScene.Counts.y && remaining > 1e-3; ++i)
-        {
-            ReflectionProbe probe = uScene.Probes[i];
-            float w = ProbeWeight(probe, vWorldPos) * remaining;
-            if (w <= 0.0) continue;
-            probeSum += SampleProbe(probe, vWorldPos, R, roughness) * w;
-            remaining -= w;
-        }
-        env = probeSum + env * remaining;
-    }
+    if (HasSkyTexture() && uScene.EnvParams.z > 0.5) ambient = SkyIrradiance(N) * uScene.EnvParams.w;
+    float envOcclusion = 1.0;
     // Screen-space ambient occlusion only darkens indirect light (opaque surfaces are in the depth prepass).
     if (uScene.AOParams.x > 0.5 && m.Flags.x != 2u)
     {
@@ -146,13 +126,17 @@ void main()
         {
             outColor = vec4(vec3(ao), 1.0);
             outEntity = vEntity;
+            outSurface = uvec2(0u);
             return;
         }
         ambient *= ao;
-        env *= mix(ao, 1.0, 0.25);
+        envOcclusion = mix(ao, 1.0, 0.25);
+        env *= envOcclusion;
     }
     vec3 color = albedo * (1.0 - metallic) * ambient;
-    color += env * EnvBRDFApprox(F0, roughness, NdotV); // the sky is the environment, at full strength
+    vec3 envBRDF = EnvBRDFApprox(F0, roughness, NdotV);
+    color += env * envBRDF; // the sky is the environment, at full strength
+    outSurface = uvec2(packHalf2x16(OctEncode(N)), packUnorm4x8(vec4(clamp(envBRDF * envOcclusion, 0.0, 1.0), roughness)));
 
     if (uScene.LightDirection.w > 0.5)
         color += DirectLight(N, V, normalize(-uScene.LightDirection.xyz), uScene.LightColor.rgb, albedo, metallic, roughness) *

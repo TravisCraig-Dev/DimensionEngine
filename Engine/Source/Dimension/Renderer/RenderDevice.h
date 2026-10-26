@@ -66,9 +66,9 @@ namespace Dimension
 
         TransientAllocation AllocateTransient(VkDeviceSize size, VkDeviceSize alignment = 16);
         // Binds the bindless texture table at set 0.
-        void BindBindless(VkCommandBuffer cmd);
+        void BindBindless(VkCommandBuffer cmd, VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS);
         // Copies a uniform block (<= kUniformBlockSize) into the transient ring and binds it at set 1.
-        void BindUniforms(VkCommandBuffer cmd, const void* data, size_t size);
+        void BindUniforms(VkCommandBuffer cmd, const void* data, size_t size, VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS);
         static constexpr VkDeviceSize kUniformBlockSize = 8192;
 
         uint32_t RegisterTexture(VkImageView view, VkSampler sampler);

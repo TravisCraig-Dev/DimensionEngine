@@ -28,6 +28,27 @@ if(MSVC)
     target_compile_definitions(opusfile PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+# msdfgen's core: shapes, edge coloring and distance field generation (no FreeType; outlines come from stb_truetype).
+file(GLOB DIM_MSDFGEN_SOURCES ${msdfgen_SOURCE_DIR}/core/*.cpp)
+add_library(msdfgen STATIC ${DIM_MSDFGEN_SOURCES})
+# The config header its own CMake project would generate (a static library: no export macros).
+set(DIM_MSDFGEN_CONFIG_DIR ${CMAKE_BINARY_DIR}/generated/msdfgen)
+file(WRITE ${DIM_MSDFGEN_CONFIG_DIR}/msdfgen/msdfgen-config.h
+     "#pragma once
+#define MSDFGEN_PUBLIC
+#define MSDFGEN_EXT_PUBLIC
+#define MSDFGEN_VERSION 1.12
+"
+     "#define MSDFGEN_VERSION_MAJOR 1
+#define MSDFGEN_VERSION_MINOR 12
+#define MSDFGEN_VERSION_REVISION 0
+#define MSDFGEN_COPYRIGHT_YEAR 2024
+")
+target_include_directories(msdfgen SYSTEM PUBLIC ${msdfgen_SOURCE_DIR} ${DIM_MSDFGEN_CONFIG_DIR})
+if(MSVC)
+    target_compile_options(msdfgen PRIVATE /W0)
+endif()
+
 add_library(miniaudio INTERFACE)
 target_include_directories(miniaudio SYSTEM INTERFACE ${miniaudio_SOURCE_DIR})
 

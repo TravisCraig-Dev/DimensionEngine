@@ -1,0 +1,72 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#include "Common.glsl"
+
+// GPU light culling: one invocation per cluster tests every point and spot light's sphere against the cluster's
+// view-space bounds and writes the cluster's light list (MaxPerCluster entries each) for Mesh.frag. The clusters
+// match the ones Mesh.frag picks (tiles of the screen, logarithmic depth slices; linear when orthographic).
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightListRef { PointLight Lights[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) writeonly buffer ClusterCellsOut { uvec2 Cells[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer ClusterIndexOut { uint Indices[]; };
+
+layout(push_constant) uniform Push
+{
+    uint MaxPerCluster;
+} uPush;
+
+// The view-space point at view depth `depth` (positive) that projects to `ndc`.
+vec3 ViewPoint(vec2 ndc, float depth)
+{
+    vec4 p = uScene.InvProj * vec4(ndc, 0.0, 1.0);
+    p.xyz /= p.w;
+    if (uScene.ClusterParams.z > 0.5) return vec3(p.xy, -depth);
+    return p.xyz * (depth / -p.z);
+}
+
+void main()
+{
+    const uint count = CLUSTER_TILES_X * CLUSTER_TILES_Y * CLUSTER_SLICES;
+    uint cluster = gl_GlobalInvocationID.x;
+    if (cluster >= count) return;
+    uint x = cluster % CLUSTER_TILES_X, y = (cluster / CLUSTER_TILES_X) % CLUSTER_TILES_Y, s = cluster / (CLUSTER_TILES_X * CLUSTER_TILES_Y);
+
+    // Depth range of the slice (the inverse of the slice formula in Mesh.frag).
+    float n = uScene.ClusterParams.x, f = uScene.ClusterParams.y;
+    bool ortho = uScene.ClusterParams.z > 0.5;
+    float t0 = float(s) / float(CLUSTER_SLICES), t1 = float(s + 1u) / float(CLUSTER_SLICES);
+    float d0 = ortho ? n + (f - n) * t0 : n * exp(uScene.ClusterParams.w * t0);
+    float d1 = ortho ? n + (f - n) * t1 : n * exp(uScene.ClusterParams.w * t1);
+    if (s == 0u && !ortho) d0 = 0.0; // fragments in front of the near plane are clipped, but stay conservative
+
+    // Bounding box of the tile's frustum piece.
+    vec2 lo2 = vec2(-1.0) + 2.0 * vec2(x, y) / vec2(CLUSTER_TILES_X, CLUSTER_TILES_Y);
+    vec2 hi2 = vec2(-1.0) + 2.0 * vec2(x + 1u, y + 1u) / vec2(CLUSTER_TILES_X, CLUSTER_TILES_Y);
+    vec3 lo = vec3(1e30), hi = vec3(-1e30);
+    for (int k = 0; k < 8; ++k)
+    {
+        vec2 ndc = vec2((k & 1) != 0 ? hi2.x : lo2.x, (k & 2) != 0 ? hi2.y : lo2.y);
+        vec3 p = ViewPoint(ndc, (k & 4) != 0 ? d1 : d0);
+        lo = min(lo, p);
+        hi = max(hi, p);
+    }
+    // A little slack so fragments on a cluster boundary (rounded the other way by Mesh.frag) still find their lights.
+    vec3 pad = (hi - lo) * 0.01 + 1e-4;
+    lo -= pad;
+    hi += pad;
+
+    LightListRef lights = LightListRef(uScene.LightBuffers.xy);
+    ClusterIndexOut indices = ClusterIndexOut(uScene.LightIndexBuffer.xy);
+    uint base = cluster * uPush.MaxPerCluster, found = 0u;
+    for (int i = 0; i < uScene.Counts.x && found < uPush.MaxPerCluster; ++i)
+    {
+        vec4 sphere = lights.Lights[i].PositionRange;
+        vec3 c = (uScene.View * vec4(sphere.xyz, 1.0)).xyz;
+        vec3 d = c - clamp(c, lo, hi);
+        if (dot(d, d) <= sphere.w * sphere.w) indices.Indices[base + found++] = uint(i);
+    }
+    ClusterCellsOut(uScene.LightBuffers.zw).Cells[cluster] = uvec2(base, found);
+}

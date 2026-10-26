@@ -182,6 +182,15 @@ namespace Dimension
             glm::vec3 CenterOffset{ 0.0f }; // soft bodies: center of mass minus the object's position at the start
             std::vector<uint32_t> WeldOf;
             std::vector<uint32_t> WeldedIndices;
+            // Tearing cloth: the starting vertex positions (relative to the body) and inverse masses, the faces still
+            // attached, and their edges with rest lengths and the (up to two) faces on each.
+            glm::vec3 Origin{ 0.0f };
+            std::vector<glm::vec3> Initial;
+            std::vector<float> InvMass;
+            std::vector<uint32_t> LiveIndices;
+            std::vector<glm::uvec2> Edges;
+            std::vector<float> EdgeRest;
+            std::vector<glm::ivec2> EdgeFaces;
         };
         std::vector<ClothBody> Cloths;
         void RemoveCloth(size_t i)
@@ -309,6 +318,37 @@ namespace Dimension
         for (Entity c : m_Scene.GetChildren(e)) CreateJointsRecursive(c);
     }
 
+    namespace
+    {
+        template <class ClothBody>
+        JPH::BodyID CreateClothBody(JPH::BodyInterface& bi, const ClothComponent& cloth, int32_t layer, const ClothBody& body);
+
+        // The unique edges of a cloth's attached faces, with their rest lengths and the faces on each side.
+        template <class ClothBody> void BuildClothEdges(ClothBody& c)
+        {
+            c.Edges.clear();
+            c.EdgeRest.clear();
+            c.EdgeFaces.clear();
+            std::unordered_map<uint64_t, uint32_t> index;
+            for (size_t f = 0; f * 3 + 2 < c.LiveIndices.size(); ++f)
+                for (int k = 0; k < 3; ++k)
+                {
+                    uint32_t a = c.LiveIndices[f * 3 + k], b = c.LiveIndices[f * 3 + (k + 1) % 3];
+                    if (a > b) std::swap(a, b);
+                    uint64_t key = (uint64_t)a << 32 | b;
+                    auto [it, added] = index.try_emplace(key, (uint32_t)c.Edges.size());
+                    if (added)
+                    {
+                        c.Edges.push_back({ a, b });
+                        c.EdgeRest.push_back(glm::distance(c.Initial[a], c.Initial[b]));
+                        c.EdgeFaces.push_back({ (int)f, -1 });
+                    }
+                    else
+                        c.EdgeFaces[it->second].y = (int)f;
+                }
+        }
+    }
+
     void Physics3DWorld::CreateCloth(Entity e)
     {
         auto& reg = m_Scene.GetRegistry();
@@ -321,27 +361,52 @@ namespace Dimension
         body.E = e;
         body.Pinned = Cloth::PinnedVertices(cloth);
         body.Indices = grid.Indices;
+        body.LiveIndices = grid.Indices;
         body.Template = grid.Vertices;
         // Vertices in world space at the start (the soft body keeps them relative to its fixed position).
-        JPH::Ref<JPH::SoftBodySharedSettings> shared = new JPH::SoftBodySharedSettings();
         float invMass = (float)grid.Vertices.size() / std::max(cloth.Mass, 1e-4f);
         std::vector<bool> pinned(grid.Vertices.size(), false);
         for (uint32_t p : body.Pinned) pinned[p] = true;
-        glm::vec3 origin = t.GetWorldPosition();
+        body.Origin = t.GetWorldPosition();
         for (size_t i = 0; i < grid.Vertices.size(); ++i)
         {
             body.Rest.push_back(grid.Vertices[i].Position);
-            glm::vec3 w = glm::vec3(t.World * glm::vec4(grid.Vertices[i].Position, 1.0f)) - origin;
-            shared->mVertices.push_back(JPH::SoftBodySharedSettings::Vertex(JPH::Float3(w.x, w.y, w.z), JPH::Float3(0, 0, 0), pinned[i] ? 0.0f : invMass));
+            body.Initial.push_back(glm::vec3(t.World * glm::vec4(grid.Vertices[i].Position, 1.0f)) - body.Origin);
+            body.InvMass.push_back(pinned[i] ? 0.0f : invMass);
         }
-        for (size_t k = 0; k + 2 < grid.Indices.size(); k += 3)
-            shared->mFaces.push_back(JPH::SoftBodySharedSettings::Face(grid.Indices[k], grid.Indices[k + 1], grid.Indices[k + 2]));
+        if (cloth.TearStretch > 0.0f) BuildClothEdges(body);
+        cloth.TornIndices.clear();
+        cloth.TornEdges = 0;
+        body.Body = CreateClothBody(m_Impl->System.GetBodyInterface(), cloth, reg.Get<TagComponent>(e).Layer, body);
+        if (body.Body.IsInvalid())
+        {
+            Log::Error("Too many physics bodies (cloth '{}')", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        m_Impl->BodyToEntity[body.Body.GetIndexAndSequenceNumber()] = e;
+        m_Impl->Cloths.push_back(std::move(body));
+    }
+
+    namespace
+    {
+    // A cloth's soft body from its starting shape and the faces still attached (constraints from those faces' edges,
+    // at their rest lengths).
+    template <class ClothBody>
+    JPH::BodyID CreateClothBody(JPH::BodyInterface& bi, const ClothComponent& cloth, int32_t layer, const ClothBody& body)
+    {
+        JPH::Ref<JPH::SoftBodySharedSettings> shared = new JPH::SoftBodySharedSettings();
+        for (size_t i = 0; i < body.Initial.size(); ++i)
+        {
+            const glm::vec3& w = body.Initial[i];
+            shared->mVertices.push_back(JPH::SoftBodySharedSettings::Vertex(JPH::Float3(w.x, w.y, w.z), JPH::Float3(0, 0, 0), body.InvMass[i]));
+        }
+        for (size_t k = 0; k + 2 < body.LiveIndices.size(); k += 3)
+            shared->mFaces.push_back(JPH::SoftBodySharedSettings::Face(body.LiveIndices[k], body.LiveIndices[k + 1], body.LiveIndices[k + 2]));
         JPH::SoftBodySharedSettings::VertexAttributes attributes(std::max(cloth.StretchCompliance, 0.0f), std::max(cloth.StretchCompliance, 0.0f) * 10.0f,
                                                                 std::max(cloth.BendCompliance, 0.0f));
         shared->CreateConstraints(&attributes, 1, JPH::SoftBodySharedSettings::EBendType::Distance);
         shared->Optimize();
-        JPH::SoftBodyCreationSettings settings(shared, JPH::RVec3(ToJolt(origin)), JPH::Quat::sIdentity(),
-                                               Layers::Make(reg.Get<TagComponent>(e).Layer, true));
+        JPH::SoftBodyCreationSettings settings(shared, JPH::RVec3(ToJolt(body.Origin)), JPH::Quat::sIdentity(), Layers::Make(layer, true));
         settings.mNumIterations = (JPH::uint32)std::clamp(cloth.Iterations, 1, 64);
         settings.mLinearDamping = std::max(cloth.Damping, 0.0f);
         settings.mFriction = std::clamp(cloth.Friction, 0.0f, 1.0f);
@@ -350,15 +415,8 @@ namespace Dimension
         settings.mMakeRotationIdentity = false;
         settings.mAllowSleeping = false;  // pinned vertices may move with the object at any time
         settings.mFacesDoubleSided = true;
-        auto& bi = m_Impl->System.GetBodyInterface();
-        body.Body = bi.CreateAndAddSoftBody(settings, JPH::EActivation::Activate);
-        if (body.Body.IsInvalid())
-        {
-            Log::Error("Too many physics bodies (cloth '{}')", reg.Get<TagComponent>(e).Name);
-            return;
-        }
-        m_Impl->BodyToEntity[body.Body.GetIndexAndSequenceNumber()] = e;
-        m_Impl->Cloths.push_back(std::move(body));
+        return bi.CreateAndAddSoftBody(settings, JPH::EActivation::Activate);
+    }
     }
 
     void Physics3DWorld::CreateSoftBody(Entity e)
@@ -434,8 +492,12 @@ namespace Dimension
     {
         auto& reg = m_Scene.GetRegistry();
         auto& lockInterface = m_Impl->System.GetBodyLockInterface();
-        for (auto& c : m_Impl->Cloths)
+        // Torn cloths: rebuilt after the loop with their current vertex positions and velocities.
+        struct Rebuild { size_t Cloth; std::vector<JPH::Vec3> Positions, Velocities; };
+        std::vector<Rebuild> rebuilds;
+        for (size_t ci = 0; ci < m_Impl->Cloths.size(); ++ci)
         {
+            auto& c = m_Impl->Cloths[ci];
             auto& t = reg.Get<TransformComponent>(c.E);
             JPH::BodyLockWrite lock(lockInterface, c.Body);
             if (!lock.Succeeded()) continue;
@@ -457,6 +519,7 @@ namespace Dimension
             {
                 // A soft body moves freely: its simulated shape, in the object's (fixed) space, for rendering.
                 auto* sb = reg.TryGet<SoftBodyComponent>(c.E);
+                if (sb && !afterStep && mp->GetPressure() != std::max(sb->Pressure, 0.0f)) mp->SetPressure(std::max(sb->Pressure, 0.0f)); // live edits
                 if (!sb || !afterStep) continue;
                 // The object follows the body (roots only; its rotation stays, the shape carries the tumbling).
                 if (m_Scene.GetParent(c.E).IsNull())
@@ -504,12 +567,46 @@ namespace Dimension
                         if (v.mInvMass > 0.0f) v.mVelocity += ToJolt(cloth->Wind * dt);
                 continue;
             }
+            // Tearing: an edge stretched past (1 + Tear Stretch) times its rest length breaks, and the faces on it
+            // come off (the rest of the cloth hangs on by what is left).
+            if (cloth->TearStretch > 0.0f && !c.Edges.empty())
+            {
+                float limit = 1.0f + cloth->TearStretch;
+                std::vector<bool> dropFace(c.LiveIndices.size() / 3, false);
+                int broken = 0;
+                for (size_t k = 0; k < c.Edges.size(); ++k)
+                {
+                    glm::uvec2 edge = c.Edges[k];
+                    float len = glm::length(FromJolt(vertices[edge.x].mPosition) - FromJolt(vertices[edge.y].mPosition));
+                    if (len <= c.EdgeRest[k] * limit) continue;
+                    for (int f : { c.EdgeFaces[k].x, c.EdgeFaces[k].y })
+                        if (f >= 0) dropFace[f] = true;
+                    ++broken;
+                }
+                if (broken > 0)
+                {
+                    std::vector<uint32_t> kept;
+                    for (size_t f = 0; f < dropFace.size(); ++f)
+                        if (!dropFace[f]) kept.insert(kept.end(), c.LiveIndices.begin() + f * 3, c.LiveIndices.begin() + f * 3 + 3);
+                    c.LiveIndices = std::move(kept);
+                    BuildClothEdges(c);
+                    cloth->TornIndices = c.LiveIndices;
+                    cloth->TornEdges += broken;
+                    Rebuild r{ ci };
+                    for (auto& v : vertices)
+                    {
+                        r.Positions.push_back(v.mPosition);
+                        r.Velocities.push_back(v.mVelocity);
+                    }
+                    rebuilds.push_back(std::move(r));
+                }
+            }
             // Simulated shape back into the object's space, for rendering.
             glm::mat4 toLocal = glm::inverse(t.World);
             std::vector<Vertex> shaped = c.Template;
             for (size_t i = 0; i < vertices.size() && i < shaped.size(); ++i)
                 shaped[i].Position = glm::vec3(toLocal * glm::vec4(origin + FromJolt(vertices[i].mPosition), 1.0f));
-            Cloth::RecomputeNormals(shaped, c.Indices);
+            Cloth::RecomputeNormals(shaped, c.LiveIndices);
             cloth->SimulatedPositions.resize(shaped.size());
             cloth->SimulatedNormals.resize(shaped.size());
             for (size_t i = 0; i < shaped.size(); ++i)
@@ -518,6 +615,27 @@ namespace Dimension
                 cloth->SimulatedNormals[i] = shaped[i].Normal;
             }
         }
+        auto& bi = m_Impl->System.GetBodyInterface();
+        for (auto& r : rebuilds)
+        {
+            auto& c = m_Impl->Cloths[r.Cloth];
+            bi.RemoveBody(c.Body);
+            bi.DestroyBody(c.Body);
+            m_Impl->BodyToEntity.erase(c.Body.GetIndexAndSequenceNumber());
+            c.Body = CreateClothBody(bi, reg.Get<ClothComponent>(c.E), reg.Get<TagComponent>(c.E).Layer, c);
+            if (c.Body.IsInvalid()) continue;
+            m_Impl->BodyToEntity[c.Body.GetIndexAndSequenceNumber()] = c.E;
+            JPH::BodyLockWrite lock(lockInterface, c.Body);
+            if (!lock.Succeeded()) continue;
+            auto& vertices = static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties())->GetVertices();
+            for (size_t i = 0; i < vertices.size() && i < r.Positions.size(); ++i)
+            {
+                vertices[i].mPosition = r.Positions[i];
+                vertices[i].mPreviousPosition = r.Positions[i] - r.Velocities[i] * (dt > 0.0f ? dt : 0.0f);
+                vertices[i].mVelocity = r.Velocities[i];
+            }
+        }
+        // Cloths removed while torn are erased by RemoveCloth as usual.
     }
 
     void Physics3DWorld::CreateVehicle(Entity e)

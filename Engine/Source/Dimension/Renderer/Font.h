@@ -56,6 +56,9 @@ namespace Dimension
         // Bindless index of the atlas with kDistanceFieldBit set: the UI and sprite shaders read its alpha as a signed
         // distance (0.5 on the outline) instead of coverage.
         static constexpr uint32_t kDistanceFieldBit = 0x80000000u;
+        // With it: a multi-channel field (the median of RGB is the distance; alpha the plain one).
+        static constexpr uint32_t kMultiChannelBit = 0x40000000u;
+        static constexpr uint32_t kTextureIndexMask = 0x3FFFFFFFu;
         uint32_t GetAtlasIndex() const;
         float GetAscent() const { return m_Ascent; }   // pixels at bake size
         float GetDescent() const { return m_Descent; } // negative

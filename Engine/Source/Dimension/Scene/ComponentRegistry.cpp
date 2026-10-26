@@ -168,8 +168,11 @@ namespace Dimension
             .Field("Start Color B", &PS::StartColorB).As(FieldType::Color4).Tooltip("Each particle picks a color between A and B")
             .Field("Gravity Modifier", &PS::GravityModifier).Speed(0.01f)
             .Field("Drag", &PS::Drag).Range(0.0f, 100.0f).Speed(0.01f)
-            .Field("Max Particles", &PS::MaxParticles).Range(1, 100000)
+            .Field("Max Particles", &PS::MaxParticles).Range(1, 1000000)
             .Field("Simulation Space", &PS::SimulationSpace).Enum({ "Local", "World" })
+            .Field("Simulate On GPU", &PS::SimulateOnGpu)
+                .Tooltip("A compute shader simulates the particles (up to a million). Not on the GPU: Velocity over Lifetime,\n"
+                         "World collision, Trails, sorting, and triggering a Sub Emitter")
             .Field("Rate Over Time", &PS::RateOverTime).Range(0.0f, 100000.0f).Speed(0.5f)
             .Field("Burst Count", &PS::BurstCount).Range(0, 100000)
             .Field("Shape", &PS::Shape).Enum({ "Cone", "Sphere", "Box", "Point" })
@@ -409,6 +412,9 @@ namespace Dimension
             .Field("Damping", &ClothComponent::Damping).Range(0.0f, 10.0f).Speed(0.01f)
             .Field("Friction", &ClothComponent::Friction).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Iterations", &ClothComponent::Iterations).Range(1, 64)
+            .Field("Tear Stretch", &ClothComponent::TearStretch).Range(0.0f, 10.0f).Speed(0.01f)
+                .Tooltip("Edges stretched past (1 + this) times their length tear (0 = never), e.g. 0.5 tears at one and a\n"
+                         "half times the rest length. Pinned cloth under a load, or hit hard, rips.")
             .Field("Thickness", &ClothComponent::Thickness).Range(0.0f, 1.0f).Speed(0.001f).Tooltip("How far it stays from what it touches")
             .Field("Wind", &ClothComponent::Wind).Speed(0.05f).Tooltip("World-space acceleration (m/s^2) on the free vertices");
         Register<SoftBodyComponent>("Soft Body", "Physics")
@@ -424,6 +430,15 @@ namespace Dimension
         Register<AudioOccluderComponent>("Audio Occluder", "Audio")
             .Field("Occlusion", &AudioOccluderComponent::Occlusion).Range(0.0f, 1.0f).Speed(0.01f)
                 .Tooltip("How much this collider blocks occluding Audio Sources (0 = not at all, 1 = fully; colliders without this component block fully). Several along the line add up.");
+        Register<AudioReverbZoneComponent>("Audio Reverb Zone", "Audio")
+            .Field("Min Distance", &AudioReverbZoneComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.05f)
+                .Tooltip("Full reverb while the listener is this close")
+            .Field("Max Distance", &AudioReverbZoneComponent::MaxDistance).Range(0.0f, 10000.0f).Speed(0.05f)
+                .Tooltip("The reverb fades out by this distance")
+            .Field("Room Size", &AudioReverbZoneComponent::RoomSize).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Damping", &AudioReverbZoneComponent::Damping).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("High-frequency absorption")
+            .Field("Wet", &AudioReverbZoneComponent::Wet).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Group", &AudioReverbZoneComponent::Group).Tooltip("Mixer group whose reverb the zone drives (Master = everything)");
         Register<VehicleComponent>("Vehicle", "Physics")
             .Field("Type", &VehicleComponent::Type).Enum({ "Car", "Motorcycle", "Tank" })
                 .Tooltip("Car: four wheels. Motorcycle: two wheels that lean into turns (visuals in the Front/Rear Left slots). Tank: tracks steered by side speed, turning on the spot.")

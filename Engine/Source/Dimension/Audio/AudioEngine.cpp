@@ -154,11 +154,18 @@ namespace Dimension
             s_BuildOrder.clear();
         }
 
+        // Reverb zones' current influence, per group.
+        std::vector<AudioMixer::ZoneReverb> s_ZoneReverbs;
+        AudioMixer::ZoneReverb ZoneOf(int group)
+        {
+            return group >= 0 && group < (int)s_ZoneReverbs.size() ? s_ZoneReverbs[group] : AudioMixer::ZoneReverb{};
+        }
+
         // Chains filter -> [echo] -> [reverb] -> meter for the effects that are on. miniaudio allows re-linking while
         // the device runs, so effects switch on and off live.
-        void LinkEffects(GroupNodes& n, const AudioMixerGroup& g)
+        void LinkEffects(GroupNodes& n, const AudioMixerGroup& g, bool reverbOn)
         {
-            bool echo = n.HasEcho && g.Echo, reverb = n.HasReverb && g.Reverb;
+            bool echo = n.HasEcho && g.Echo, reverb = n.HasReverb && reverbOn;
             if (n.Valid && echo == n.EchoLinked && reverb == n.ReverbLinked) return;
             ma_node* chain[4];
             int count = 0;
@@ -471,7 +478,7 @@ namespace Dimension
             ma_node_attach_output_bus(&nodes->Meter.Base, 0, &nodes->Splitter, 0);
             ma_node_attach_output_bus(&nodes->Splitter, 0, destination, 0);
             ma_node_attach_output_bus(&nodes->Splitter, 1, &nodes->Send.Base, 0);
-            LinkEffects(*nodes, groups[i]);
+            LinkEffects(*nodes, groups[i], AudioMixer::EffectiveReverb(groups[i], ZoneOf(i)).On);
             nodes->Valid = true;
             s_Groups[i] = std::move(nodes);
         }
@@ -499,17 +506,57 @@ namespace Dimension
                 ma_delay_node_set_dry(&g->Echo, 1.0f);
                 ma_delay_node_set_decay(&g->Echo, std::clamp(mg.EchoDecay, 0.0f, 0.95f)); // a new delay time applies at the next rebuild (play start)
             }
-            if (g->HasReverb)
+            ReverbParams reverb = EffectiveReverb(mg, ZoneOf((int)i));
+            if (g->HasReverb && reverb.On)
             {
-                verblib_set_room_size(&g->Reverb.reverb, std::clamp(mg.ReverbRoomSize, 0.0f, 1.0f));
-                verblib_set_damping(&g->Reverb.reverb, std::clamp(mg.ReverbDamping, 0.0f, 1.0f));
-                verblib_set_wet(&g->Reverb.reverb, std::clamp(mg.ReverbWet, 0.0f, 1.0f) * 3.0f); // verblib's wet scale is 0-3
+                verblib_set_room_size(&g->Reverb.reverb, reverb.RoomSize);
+                verblib_set_damping(&g->Reverb.reverb, reverb.Damping);
+                verblib_set_wet(&g->Reverb.reverb, reverb.Wet * 3.0f); // verblib's wet scale is 0-3
                 verblib_set_dry(&g->Reverb.reverb, 1.0f);
             }
-            LinkEffects(*g, mg);
+            LinkEffects(*g, mg, reverb.On);
             ma_lpf_config cfg = ma_lpf_config_init(ma_format_f32, channels, rate, CutoffOf(groups[i], rate), 2);
             ma_lpf_node_reinit(&cfg, &g->LowPass);
         }
+    }
+
+    AudioMixer::ReverbParams AudioMixer::EffectiveReverb(const AudioMixerGroup& g, const ZoneReverb& zone)
+    {
+        ReverbParams own{ g.Reverb, std::clamp(g.ReverbRoomSize, 0.0f, 1.0f), std::clamp(g.ReverbDamping, 0.0f, 1.0f), std::clamp(g.ReverbWet, 0.0f, 1.0f) };
+        float w = std::clamp(zone.Weight, 0.0f, 1.0f);
+        if (w <= 0.0f) return own;
+        // Without its own reverb the group fades from dry (no wet) in the zone's room.
+        if (!own.On) own = { false, zone.RoomSize, zone.Damping, 0.0f };
+        auto mix = [&](float a, float b) { return std::clamp(a + (b - a) * w, 0.0f, 1.0f); };
+        return { true, mix(own.RoomSize, zone.RoomSize), mix(own.Damping, zone.Damping), mix(own.Wet, zone.Wet) };
+    }
+
+    void AudioMixer::SetZoneReverb(int group, const ZoneReverb& zone)
+    {
+        if (group < 0) return;
+        if ((int)s_ZoneReverbs.size() <= group) s_ZoneReverbs.resize(group + 1);
+        if (s_ZoneReverbs[group] == zone) return;
+        s_ZoneReverbs[group] = zone;
+        if (!s_Engine || group >= (int)s_Groups.size() || group >= (int)Groups().size()) return;
+        auto& g = s_Groups[group];
+        if (!g || !g->Valid) return;
+        ReverbParams reverb = EffectiveReverb(Groups()[group], zone);
+        if (g->HasReverb && reverb.On)
+        {
+            verblib_set_room_size(&g->Reverb.reverb, reverb.RoomSize);
+            verblib_set_damping(&g->Reverb.reverb, reverb.Damping);
+            verblib_set_wet(&g->Reverb.reverb, reverb.Wet * 3.0f);
+            verblib_set_dry(&g->Reverb.reverb, 1.0f);
+        }
+        LinkEffects(*g, Groups()[group], reverb.On);
+    }
+
+    AudioMixer::ZoneReverb AudioMixer::GetZoneReverb(int group) { return ZoneOf(group); }
+
+    void AudioMixer::ClearZoneReverbs()
+    {
+        for (int i = 0; i < (int)s_ZoneReverbs.size(); ++i) SetZoneReverb(i, {});
+        s_ZoneReverbs.clear();
     }
 
     void AudioMeter::Process(const float* samples, uint32_t frames, uint32_t channels, uint32_t sampleRate)
@@ -622,6 +669,35 @@ namespace Dimension
     {
         for (auto [e, src] : m_Scene.GetRegistry().ViewOf<AudioSourceComponent>()) src.Runtime.reset();
         m_OneShots.clear();
+        AudioMixer::ClearZoneReverbs();
+    }
+
+    AudioMixer::ZoneReverb AudioWorld::ReverbZoneAt(Scene& scene, const glm::vec3& listener, const std::string& group)
+    {
+        // Strength 1 inside Min Distance, falling linearly to 0 at Max Distance; overlapping zones blend their
+        // settings by strength, and the strongest sets the weight.
+        AudioMixer::ZoneReverb z;
+        float total = 0.0f;
+        for (auto [e, zone, t] : scene.GetRegistry().ViewOf<AudioReverbZoneComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || (zone.Group.empty() ? std::string("Master") : zone.Group) != group) continue;
+            float d = glm::distance(listener, t.GetWorldPosition());
+            float lo = std::max(zone.MinDistance, 0.0f), hi = std::max(zone.MaxDistance, lo + 1e-3f);
+            float w = d <= lo ? 1.0f : d >= hi ? 0.0f : 1.0f - (d - lo) / (hi - lo);
+            if (w <= 0.0f) continue;
+            z.RoomSize += std::clamp(zone.RoomSize, 0.0f, 1.0f) * w;
+            z.Damping += std::clamp(zone.Damping, 0.0f, 1.0f) * w;
+            z.Wet += std::clamp(zone.Wet, 0.0f, 1.0f) * w;
+            total += w;
+            z.Weight = std::max(z.Weight, w);
+        }
+        if (total > 0.0f)
+        {
+            z.RoomSize /= total;
+            z.Damping /= total;
+            z.Wet /= total;
+        }
+        return z;
     }
 
     namespace
@@ -757,6 +833,9 @@ namespace Dimension
                 float target = Occlusion(m_Scene, listener, cam, e);
                 src.OcclusionAmount += std::clamp(target - src.OcclusionAmount, -step, step);
             }
+            // Reverb zones drive their groups' reverb from where the listener is.
+            auto& groups = AudioMixer::Groups();
+            for (int g = 0; g < (int)groups.size(); ++g) AudioMixer::SetZoneReverb(g, ReverbZoneAt(m_Scene, listener, groups[g].Name));
         }
         if (!s_Engine) return;
         if (!cam.IsNull())

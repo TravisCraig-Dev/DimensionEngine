@@ -518,6 +518,15 @@ namespace Editor
 
     void InspectorPanel::DrawPrefabHeader(Scene& scene, Entity e)
     {
+        // Part of a prefab nested inside this one: changes here are overrides of it; opening it edits it everywhere.
+        if (auto* l = scene.GetRegistry().TryGet<PrefabLinkComponent>(e); l && l->NestedPrefab.IsValid() && AssetManager::GetMetadata(l->NestedPrefab))
+        {
+            ImGui::TextDisabled("Nested prefab:");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(AssetManager::GetDisplayName(l->NestedPrefab).c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Open##nested")) m_Ctx.RequestOpenPrefab = l->NestedPrefab;
+        }
         if (m_Ctx.InPrefabMode()) return; // the stage *is* the prefab: no instance header
         Entity root = Prefabs::FindInstanceRoot(scene, e);
         if (root.IsNull()) return;
@@ -850,6 +859,35 @@ namespace Editor
             if (ImGui::Checkbox("Import Animations", &animations)) { settings["animations"] = animations; changed = true; }
             if (ImGui::Checkbox("Import Materials", &materials)) { settings["importMaterials"] = materials; changed = true; }
             ImGui::SetItemTooltip("Off: every part uses the Mesh Renderer's own material");
+            if (animations)
+            {
+                // Which clips to import: the imported ones, plus the excluded ones (known from the settings).
+                std::vector<std::pair<std::string, bool>> clips;
+                if (auto mesh = AssetManager::GetMesh(handle))
+                    for (const auto& c : mesh->GetClips()) clips.push_back({ c.Name, true });
+                for (const auto& name : current.ExcludedClips)
+                    if (std::none_of(clips.begin(), clips.end(), [&](const auto& c) { return c.first == name; })) clips.push_back({ name, false });
+                if (!clips.empty() && ImGui::TreeNodeEx("Clips", ImGuiTreeNodeFlags_DefaultOpen, "Clips (%zu)", clips.size()))
+                {
+                    for (auto& [name, included] : clips)
+                    {
+                        bool on = included;
+                        ImGui::PushID(name.c_str());
+                        if (ImGui::Checkbox(name.empty() ? "(unnamed)" : name.c_str(), &on))
+                        {
+                            nlohmann::json excluded = nlohmann::json::array();
+                            for (const auto& other : current.ExcludedClips)
+                                if (other != name) excluded.push_back(other);
+                            if (!on) excluded.push_back(name);
+                            if (excluded.empty()) settings.erase("excludedClips");
+                            else settings["excludedClips"] = excluded;
+                            changed = true;
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::TreePop();
+                }
+            }
             if (changed) AssetManager::SetImportSettings(handle, settings);
             if (auto mesh = AssetManager::GetMesh(handle))
             {
@@ -1022,6 +1060,19 @@ namespace Editor
             track(ImGui::DragFloat("Intensity##ssao", &s.SSAOIntensity, 0.01f, 0.0f, 4.0f));
             track(ImGui::DragFloat("Bias##ssao", &s.SSAOBias, 0.001f, 0.0f, 0.5f, "%.3f"));
             track(ImGui::Checkbox("Show Occlusion##ssao", &s.SSAODebug));
+            ImGui::Unindent();
+        }
+        track(ImGui::Checkbox("Screen-Space Reflections", &s.SSR));
+        ImGui::SetItemTooltip("Smooth surfaces reflect what is on screen (perspective cameras). Off screen, behind\n"
+                              "objects and on rough surfaces, reflection probes and the sky take over.");
+        if (s.SSR)
+        {
+            ImGui::Indent();
+            track(ImGui::DragFloat("Intensity##ssr", &s.SSRIntensity, 0.01f, 0.0f, 2.0f));
+            track(ImGui::DragFloat("Max Distance##ssr", &s.SSRMaxDistance, 0.1f, 0.5f, 500.0f));
+            track(ImGui::DragFloat("Thickness##ssr", &s.SSRThickness, 0.01f, 0.01f, 10.0f));
+            track(ImGui::SliderFloat("Max Roughness##ssr", &s.SSRMaxRoughness, 0.05f, 1.0f));
+            track(ImGui::SliderInt("Steps##ssr", &s.SSRSteps, 8, 256));
             ImGui::Unindent();
         }
         track(ImGui::Checkbox("Depth of Field", &s.DepthOfField));

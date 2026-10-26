@@ -18,6 +18,10 @@ namespace Dimension
                              VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
                              uint32_t baseMip = 0, uint32_t mipCount = VK_REMAINING_MIP_LEVELS);
 
+        // Global memory barrier (buffers written by one stage and read by another, e.g. compute -> fragment).
+        void MemoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                           VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess);
+
         VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t mipLevels = 1, uint32_t baseMip = 0);
         void SetDebugName(VkObjectType type, uint64_t handle, const char* name);
     }

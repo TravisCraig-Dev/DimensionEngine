@@ -1,0 +1,201 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "ParticleCommon.glsl"
+
+// GPU particle simulation, one invocation per slot of a fixed-capacity ring. This frame's new particles take the
+// slots from the ring head on (replacing the oldest); every other live particle is integrated. Mirrors the CPU
+// simulation in ParticleSystem.cpp for the modules the GPU supports.
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform Push
+{
+    uvec2 Particles;
+    uvec2 Params;
+} pc;
+
+const float TWO_PI = 6.28318530718;
+
+uint g_Rng;
+float Random01()
+{
+    // PCG hash step.
+    g_Rng = g_Rng * 747796405u + 2891336453u;
+    uint w = ((g_Rng >> ((g_Rng >> 28u) + 4u)) ^ g_Rng) * 277803737u;
+    return float((w >> 22u) ^ w) * (1.0 / 4294967296.0);
+}
+float Range(vec2 r) { return r.x + (r.y - r.x) * Random01(); }
+
+// Gradient noise and its curl, as ParticleSystems::GradientNoise / CurlNoise.
+uint HashCell(ivec3 c)
+{
+    uint h = uint(c.x) * 0x8da6b343u ^ uint(c.y) * 0xd8163841u ^ uint(c.z) * 0xcb1ab31fu;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    h *= 0x297a2d39u;
+    return h ^ (h >> 15);
+}
+
+float GradDot(uint hash, vec3 d)
+{
+    switch (hash % 12u)
+    {
+    case 0u: return d.x + d.y;
+    case 1u: return -d.x + d.y;
+    case 2u: return d.x - d.y;
+    case 3u: return -d.x - d.y;
+    case 4u: return d.x + d.z;
+    case 5u: return -d.x + d.z;
+    case 6u: return d.x - d.z;
+    case 7u: return -d.x - d.z;
+    case 8u: return d.y + d.z;
+    case 9u: return -d.y + d.z;
+    case 10u: return d.y - d.z;
+    default: return -d.y - d.z;
+    }
+}
+
+float GradientNoise(vec3 p)
+{
+    vec3 cell = floor(p), f = p - cell;
+    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    ivec3 c = ivec3(cell);
+    float c000 = GradDot(HashCell(c), f), c100 = GradDot(HashCell(c + ivec3(1, 0, 0)), f - vec3(1, 0, 0));
+    float c010 = GradDot(HashCell(c + ivec3(0, 1, 0)), f - vec3(0, 1, 0)), c110 = GradDot(HashCell(c + ivec3(1, 1, 0)), f - vec3(1, 1, 0));
+    float c001 = GradDot(HashCell(c + ivec3(0, 0, 1)), f - vec3(0, 0, 1)), c101 = GradDot(HashCell(c + ivec3(1, 0, 1)), f - vec3(1, 0, 1));
+    float c011 = GradDot(HashCell(c + ivec3(0, 1, 1)), f - vec3(0, 1, 1)), c111 = GradDot(HashCell(c + ivec3(1, 1, 1)), f - vec3(1, 1, 1));
+    float x00 = mix(c000, c100, u.x), x10 = mix(c010, c110, u.x), x01 = mix(c001, c101, u.x), x11 = mix(c011, c111, u.x);
+    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+}
+
+vec3 Psi(vec3 q)
+{
+    return vec3(GradientNoise(q), GradientNoise(q + vec3(31.416, -47.853, 12.793)), GradientNoise(q + vec3(-73.219, 19.371, 58.111)));
+}
+
+vec3 CurlNoise(vec3 p)
+{
+    const float e = 0.05;
+    vec3 dx = (Psi(p + vec3(e, 0, 0)) - Psi(p - vec3(e, 0, 0))) / (2.0 * e);
+    vec3 dy = (Psi(p + vec3(0, e, 0)) - Psi(p - vec3(0, e, 0))) / (2.0 * e);
+    vec3 dz = (Psi(p + vec3(0, 0, e)) - Psi(p - vec3(0, 0, e))) / (2.0 * e);
+    return vec3(dy.z - dz.y, dz.x - dx.z, dx.y - dy.x) * 0.5;
+}
+
+GpuParticle Emit(GpuParticleParamsRef P, uint k)
+{
+    // Which emission segment this new particle belongs to (bursts at points, then the emitter itself).
+    uint segment = 0u;
+    for (uint s = 0u; s < PARTICLE_SEGMENTS; ++s)
+    {
+        uint n = P.SegmentCounts[s / 4u][s % 4u];
+        if (k < n) { segment = s; break; }
+        k -= n;
+    }
+    vec3 pos = vec3(0.0), dir = vec3(0.0, 1.0, 0.0);
+    int shape = int(P.Shape.x + 0.5);
+    if (shape == 0) // cone
+    {
+        float a = Random01() * TWO_PI;
+        float r = sqrt(Random01()) * P.Shape.z;
+        pos = vec3(cos(a) * r, 0.0, sin(a) * r);
+        float spread = P.Shape.y * sqrt(Random01());
+        float b = Random01() * TWO_PI;
+        dir = vec3(sin(spread) * cos(b), cos(spread), sin(spread) * sin(b));
+    }
+    else if (shape == 1) // sphere
+    {
+        float z = Random01() * 2.0 - 1.0, a = Random01() * TWO_PI;
+        float s = sqrt(max(0.0, 1.0 - z * z));
+        dir = vec3(s * cos(a), z, s * sin(a));
+        pos = dir * P.Shape.z * pow(Random01(), 1.0 / 3.0);
+    }
+    else if (shape == 2) // box
+        pos = (vec3(Random01(), Random01(), Random01()) - 0.5) * P.Box.xyz;
+
+    mat4 frame = P.Emitter;
+    vec4 origin = P.SegmentOrigins[segment];
+    bool atOrigin = origin.w > 0.5;
+    if (atOrigin) frame[3] = vec4(origin.xyz, 1.0);
+    float speed = Range(P.Lifetime.zw);
+    vec3 worldPos = (frame * vec4(pos, 1.0)).xyz;
+    GpuParticle p;
+    if (P.Shape.w > 0.5)
+    {
+        vec3 d = mat3(frame) * dir;
+        p.PosAge = vec4(worldPos, 0.0);
+        p.VelLife.xyz = (length(d) > 1e-6 ? normalize(d) : dir) * speed;
+    }
+    else
+    {
+        p.PosAge = vec4(atOrigin ? (P.WorldToSim * vec4(worldPos, 1.0)).xyz : pos, 0.0);
+        p.VelLife.xyz = dir * speed;
+    }
+    p.Color = mix(P.ColorA, P.ColorB, Random01());
+    p.VelLife.w = max(0.01, Range(P.Lifetime.xy));
+    p.Misc = vec4(Range(P.SizeRot.xy), Range(P.SizeRot.zw), Range(P.Spin.xy), P.Misc.z > 0.5 ? Random01() : 0.0);
+    return p;
+}
+
+void Integrate(GpuParticleParamsRef P, inout GpuParticle p)
+{
+    float dt = P.Spin.w;
+    p.PosAge.w += dt;
+    float life = clamp(p.PosAge.w / p.VelLife.w, 0.0, 1.0);
+    vec4 curves = SampleCurveLut(P, life);
+    vec3 accel = P.Gravity.xyz;
+    if (P.Gravity.w > 0.5) accel += P.Force.xyz * curves.z;
+    p.VelLife.xyz = (p.VelLife.xyz + accel * dt) * max(0.0, 1.0 - P.Spin.z * dt);
+    vec3 previous = p.PosAge.xyz;
+    p.PosAge.xyz += p.VelLife.xyz * curves.y * dt;
+    p.Misc.y += p.Misc.z * dt;
+    if (P.Noise.z > 0.5 && P.Noise.x != 0.0)
+    {
+        vec3 wp = (P.SimToWorld * vec4(p.PosAge.xyz, 1.0)).xyz;
+        vec3 drift = CurlNoise(wp * P.Noise.y + vec3(0.0, 0.0, P.Box.w)) * P.Noise.x;
+        p.PosAge.xyz += mat3(P.WorldToSim) * drift * dt;
+    }
+    if (P.Collision.x < 0.5) return;
+
+    // Plane collision (world Y).
+    vec3 from = (P.SimToWorld * vec4(previous, 1.0)).xyz, to = (P.SimToWorld * vec4(p.PosAge.xyz, 1.0)).xyz;
+    float plane = P.Collision.y;
+    if (to.y >= plane) return;
+    vec3 hitPoint = vec3(to.x, plane, to.z);
+    if (from.y >= plane - 1e-4)
+    {
+        float t = (from.y - plane) / max(from.y - to.y, 1e-6);
+        hitPoint = mix(from, to, clamp(t, 0.0, 1.0));
+        hitPoint.y = plane;
+    }
+    vec3 v = mat3(P.SimToWorld) * p.VelLife.xyz;
+    if (v.y < 0.0)
+    {
+        vec3 normalPart = vec3(0.0, v.y, 0.0), tangent = v - normalPart;
+        v = tangent * (1.0 - P.Collision.w) - normalPart * P.Collision.z;
+    }
+    p.VelLife.xyz = mat3(P.WorldToSim) * v;
+    p.PosAge.xyz = (P.WorldToSim * vec4(hitPoint, 1.0)).xyz;
+    p.VelLife.w -= p.VelLife.w * clamp(P.Misc.x, 0.0, 1.0);
+}
+
+void main()
+{
+    GpuParticleParamsRef P = GpuParticleParamsRef(pc.Params);
+    uint capacity = P.Counts.x;
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= capacity) return;
+    GpuParticlesRef particles = GpuParticlesRef(pc.Particles);
+    uint offset = (i + capacity - P.Counts.y % capacity) % capacity; // position after the ring head
+    if (offset < P.Counts.z)
+    {
+        g_Rng = i * 1973u + P.Counts.w * 9277u + 26699u;
+        Random01();
+        particles.Items[i] = Emit(P, offset);
+        return;
+    }
+    GpuParticle p = particles.Items[i];
+    if (!ParticleAlive(p) || P.Spin.w <= 0.0) return;
+    Integrate(P, p);
+    particles.Items[i] = p;
+}

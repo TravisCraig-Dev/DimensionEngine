@@ -52,6 +52,20 @@ namespace Dimension
             vkCmdPipelineBarrier2(cmd, &dep);
         }
 
+        void MemoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                           VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess)
+        {
+            VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+            barrier.srcStageMask = srcStage;
+            barrier.srcAccessMask = srcAccess;
+            barrier.dstStageMask = dstStage;
+            barrier.dstAccessMask = dstAccess;
+            VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers = &barrier;
+            vkCmdPipelineBarrier2(cmd, &dep);
+        }
+
         VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t mipLevels, uint32_t baseMip)
         {
             VkImageViewCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };

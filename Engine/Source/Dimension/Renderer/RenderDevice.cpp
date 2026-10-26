@@ -603,12 +603,12 @@ namespace Dimension
         return { f.Transient.GetHandle(), offset, (uint8_t*)f.Transient.GetMapped() + offset, f.TransientAddress + offset };
     }
 
-    void RenderDevice::BindBindless(VkCommandBuffer cmd)
+    void RenderDevice::BindBindless(VkCommandBuffer cmd, VkPipelineBindPoint bindPoint)
     {
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &m_BindlessSet, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, bindPoint, m_PipelineLayout, 0, 1, &m_BindlessSet, 0, nullptr);
     }
 
-    void RenderDevice::BindUniforms(VkCommandBuffer cmd, const void* data, size_t size)
+    void RenderDevice::BindUniforms(VkCommandBuffer cmd, const void* data, size_t size, VkPipelineBindPoint bindPoint)
     {
         DIM_ASSERT(size <= kUniformBlockSize, "Uniform block too large");
         VkDeviceSize align = std::max<VkDeviceSize>(m_Properties.limits.minUniformBufferOffsetAlignment, 16);
@@ -617,7 +617,7 @@ namespace Dimension
         std::memcpy(a.Data, data, size);
         uint32_t dynamicOffset = (uint32_t)a.Offset;
         PerFrame& f = m_Frames[m_FrameNumber % kFramesInFlight];
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 1, 1, &f.UniformSet, 1, &dynamicOffset);
+        vkCmdBindDescriptorSets(cmd, bindPoint, m_PipelineLayout, 1, 1, &f.UniformSet, 1, &dynamicOffset);
     }
 
     uint32_t RenderDevice::RegisterTexture(VkImageView view, VkSampler sampler)

@@ -71,6 +71,11 @@ namespace Dimension
         uint64_t SourceId = 0;                 // guid of the corresponding entity inside the prefab file
         bool IsRoot = false;
         std::vector<std::string> Overrides;    // "Component.Field", "+Component" (added), "-Component" (removed)
+        // Part of a prefab nested inside Prefab: the inner prefab, this entity's id in it, and whether it is the
+        // nested instance's root (saving the outer prefab stores the nested instance as a reference to the inner one).
+        AssetHandle NestedPrefab = AssetHandle::None();
+        uint64_t NestedSource = 0;
+        bool NestedRoot = false;
 
         bool HasOverride(const std::string& key) const
         {
@@ -514,6 +519,19 @@ namespace Dimension
         float Occlusion = 0.5f;
     };
 
+    // A region where a mixer group gets reverb, like Unity's Audio Reverb Zone: full strength while the listener (the
+    // primary camera) is within Min Distance of the object, fading out by Max Distance. Overlapping zones blend by
+    // strength. The reverb is the group's own (Audio Mixer), so the group's effect settings are what zones fade from.
+    struct AudioReverbZoneComponent
+    {
+        float MinDistance = 4.0f;
+        float MaxDistance = 10.0f;
+        float RoomSize = 0.8f; // 0-1
+        float Damping = 0.4f;  // 0-1
+        float Wet = 0.6f;      // 0-1
+        std::string Group = "Master"; // mixer group whose reverb the zone drives
+    };
+
     // ---- Scripting -----------------------------------------------------------
 
     // One script attached to an entity.
@@ -615,9 +633,15 @@ namespace Dimension
         int32_t Iterations = 8;       // solver iterations per step (more = stiffer)
         float Thickness = 0.02f;      // collision radius of the vertices
         glm::vec3 Wind{ 0.0f };       // world-space acceleration on the free vertices (m/s^2)
+        // Tearing: an edge stretched past (1 + Tear Stretch) times its length breaks and the faces on it come off.
+        // 0 = never tears.
+        float TearStretch = 0.0f;
 
-        // Runtime: the simulated grid in the object's space (empty = the flat rest shape).
+        // Runtime: the simulated grid in the object's space (empty = the flat rest shape), and once it has torn, the
+        // triangles still attached (empty = all of them) and how many edges broke.
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
+        std::vector<uint32_t> TornIndices;
+        int32_t TornEdges = 0;
     };
 
     // A soft, deformable version of the object's mesh (Mesh Renderer), simulated as a Jolt soft body while playing:

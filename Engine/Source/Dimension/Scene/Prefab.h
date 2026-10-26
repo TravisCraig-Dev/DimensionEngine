@@ -25,6 +25,12 @@ namespace Dimension
         AssetHandle GetVariantBase(AssetHandle prefab); // None for a plain prefab
         bool IsVariantOf(AssetHandle prefab, AssetHandle base); // directly or through other variants
 
+        // Nested prefabs: an instance of another prefab inside a prefab is saved as a reference to that prefab (plus
+        // the instance's own changes, like a variant), so later edits to the inner prefab reach every prefab that
+        // contains it and their instances. Nesting works to any depth; a prefab cannot contain itself.
+        bool IsNestedPart(Scene& scene, Entity e); // part of a nested prefab instance inside an instance
+        AssetHandle GetNestedPrefab(Scene& scene, Entity e); // that inner prefab (None otherwise)
+
         Entity FindInstanceRoot(Scene& scene, Entity e);
         bool IsInstanceOwned(bool isRoot, const std::string& component, const std::string& field);
 

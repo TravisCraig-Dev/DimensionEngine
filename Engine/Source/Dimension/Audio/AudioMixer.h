@@ -112,5 +112,19 @@ namespace Dimension
         // Advances a transition (called every frame while playing).
         static void Update(float dt);
         static void Shutdown();
+
+        // Reverb zones' influence on a group (runtime only): Weight 0 = none, 1 = the zone's reverb replaces the
+        // group's own. Applied live to the group's reverb effect.
+        struct ZoneReverb
+        {
+            float Weight = 0.0f, RoomSize = 0.0f, Damping = 0.0f, Wet = 0.0f;
+            bool operator==(const ZoneReverb&) const = default;
+        };
+        static void SetZoneReverb(int group, const ZoneReverb& zone);
+        static ZoneReverb GetZoneReverb(int group);
+        static void ClearZoneReverbs();
+        // The reverb a group runs with: its own effect settings faded toward the zone's by the zone's weight.
+        struct ReverbParams { bool On = false; float RoomSize = 0.0f, Damping = 0.0f, Wet = 0.0f; };
+        static ReverbParams EffectiveReverb(const AudioMixerGroup& group, const ZoneReverb& zone);
     };
 }

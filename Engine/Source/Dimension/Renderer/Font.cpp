@@ -5,11 +5,41 @@
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
+#include <msdfgen.h>
 
 namespace Dimension
 {
     namespace
     {
+        // A glyph's outline as an msdfgen shape (font units, y up); false for glyphs without one (space).
+        bool GlyphShape(const stbtt_fontinfo& info, int codepoint, msdfgen::Shape& shape)
+        {
+            stbtt_vertex* v = nullptr;
+            int count = stbtt_GetCodepointShape(&info, codepoint, &v);
+            if (count <= 0) return false;
+            msdfgen::Contour* contour = nullptr;
+            msdfgen::Point2 at;
+            for (int i = 0; i < count; ++i)
+            {
+                msdfgen::Point2 p(v[i].x, v[i].y);
+                switch (v[i].type)
+                {
+                case STBTT_vmove: contour = &shape.addContour(); break;
+                case STBTT_vline: if (contour && p != at) contour->addEdge(msdfgen::EdgeHolder(at, p)); break;
+                case STBTT_vcurve: if (contour) contour->addEdge(msdfgen::EdgeHolder(at, msdfgen::Point2(v[i].cx, v[i].cy), p)); break;
+                case STBTT_vcubic:
+                    if (contour) contour->addEdge(msdfgen::EdgeHolder(at, msdfgen::Point2(v[i].cx, v[i].cy), msdfgen::Point2(v[i].cx1, v[i].cy1), p));
+                    break;
+                }
+                at = p;
+            }
+            stbtt_FreeShape(&info, v);
+            shape.normalize();
+            if (shape.contours.empty()) return false;
+            msdfgen::edgeColoringSimple(shape, 3.0);
+            return true;
+        }
+
         // Decodes one UTF-8 codepoint; invalid sequences yield U+FFFD.
         uint32_t NextCodepoint(std::string_view s, size_t& i)
         {
@@ -36,10 +66,12 @@ namespace Dimension
             return nullptr;
         }
 
-        // Signed distance field glyphs: the alpha channel holds the distance to the outline (0.5 on it, kSpread pixels
-        // of falloff each way at the bake size), so text stays sharp at any size and can be shaded in the shader.
+        // Multi-channel signed distance field glyphs (MTSDF): RGB hold three distances whose median is the distance to
+        // the outline with its corners kept sharp, alpha the true distance (for outlines and soft effects); 0.5 is on
+        // the outline, with kSpread pixels of falloff each way at the bake size. Text stays crisp at any size.
         constexpr int kWidth = 2048, kHeight = 1024, kSpread = 6;
-        std::vector<uint8_t> distance(size_t(kWidth) * kHeight, 0);
+        std::vector<uint32_t> rgba(size_t(kWidth) * kHeight, 0u); // outside everywhere (the gutters too)
+        auto toByte = [](float d) { return (uint32_t)std::clamp((int)std::lround(d * 255.0f), 0, 255); };
         auto font = MakeRef<Font>();
         float scale = stbtt_ScaleForPixelHeight(&info, kBakeSize);
         int ascent, descent, lineGap;
@@ -57,14 +89,42 @@ namespace Dimension
             int advance, bearing;
             stbtt_GetCodepointHMetrics(&info, cp, &advance, &bearing);
             g.Advance = advance * scale;
-            int w = 0, h = 0, xoff = 0, yoff = 0;
-            unsigned char* sdf = stbtt_GetCodepointSDF(&info, scale, cp, kSpread, 128, 128.0f / kSpread, &w, &h, &xoff, &yoff);
-            if (!sdf) continue; // blank glyph (space)
+            // The glyph's box at the bake size, padded by the spread (as stb_truetype's own SDF does).
+            int x0, y0, x1, y1;
+            stbtt_GetCodepointBitmapBox(&info, cp, scale, scale, &x0, &y0, &x1, &y1);
+            if (x1 <= x0 || y1 <= y0) continue; // blank glyph (space)
+            int w = x1 - x0 + 2 * kSpread, h = y1 - y0 + 2 * kSpread, xoff = x0 - kSpread, yoff = y0 - kSpread;
             // Shelf packing, one pixel apart.
             if (penX + w + 1 > kWidth) { penX = 1; penY += rowHeight + 1; rowHeight = 0; }
-            if (penY + h + 1 > kHeight) { full = true; stbtt_FreeSDF(sdf, nullptr); continue; }
-            for (int y = 0; y < h; ++y) std::memcpy(&distance[size_t(penY + y) * kWidth + penX], sdf + size_t(y) * w, (size_t)w);
-            stbtt_FreeSDF(sdf, nullptr);
+            if (penY + h + 1 > kHeight) { full = true; continue; }
+            msdfgen::Shape shape;
+            if (GlyphShape(info, cp, shape))
+            {
+                // Pixel (x, row from the bottom) <- font units: x = scale * (fx + tx), row = scale * (fy + ty).
+                msdfgen::Bitmap<float, 4> field(w, h);
+                msdfgen::Projection projection(msdfgen::Vector2(scale), msdfgen::Vector2(-xoff / scale, (h + yoff) / scale));
+                msdfgen::generateMTSDF(field, shape, msdfgen::SDFTransformation(projection, msdfgen::Range(2.0 * kSpread / scale)));
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const float* d = field(x, h - 1 - y); // msdfgen rows go up, the atlas's down
+                        rgba[size_t(penY + y) * kWidth + penX + x] = toByte(d[0]) | toByte(d[1]) << 8 | toByte(d[2]) << 16 | toByte(d[3]) << 24;
+                    }
+            }
+            else
+            {
+                // No outline msdfgen can use: stb_truetype's single-channel field in all four channels.
+                int sw = 0, sh = 0, sx = 0, sy = 0;
+                unsigned char* sdf = stbtt_GetCodepointSDF(&info, scale, cp, kSpread, 128, 128.0f / kSpread, &sw, &sh, &sx, &sy);
+                if (!sdf) continue;
+                for (int y = 0; y < std::min(sh, h); ++y)
+                    for (int x = 0; x < std::min(sw, w); ++x)
+                    {
+                        uint32_t d = sdf[size_t(y) * sw + x];
+                        rgba[size_t(penY + y) * kWidth + penX + x] = d | d << 8 | d << 16 | d << 24;
+                    }
+                stbtt_FreeSDF(sdf, nullptr);
+            }
             g.UVMin = { penX / (float)kWidth, penY / (float)kHeight };
             g.UVMax = { (penX + w) / (float)kWidth, (penY + h) / (float)kHeight };
             g.Min = { (float)xoff, (float)yoff };
@@ -74,9 +134,6 @@ namespace Dimension
         }
         if (full) Log::Warn("Font '{}': some glyphs did not fit in the atlas", name);
 
-        // White RGB with the distance in alpha, so the sprite/UI shaders can tint it.
-        std::vector<uint32_t> rgba(distance.size());
-        for (size_t i = 0; i < distance.size(); ++i) rgba[i] = 0x00FFFFFFu | (uint32_t(distance[i]) << 24);
         TextureSettings settings;
         settings.SRGB = false;
         settings.GenerateMips = true;
@@ -84,7 +141,7 @@ namespace Dimension
         return font;
     }
 
-    uint32_t Font::GetAtlasIndex() const { return m_Atlas ? (m_Atlas->GetBindlessIndex() | kDistanceFieldBit) : 0u; }
+    uint32_t Font::GetAtlasIndex() const { return m_Atlas ? (m_Atlas->GetBindlessIndex() | kDistanceFieldBit | kMultiChannelBit) : 0u; }
 
     Ref<Font> Font::LoadFromFile(const fs::path& path)
     {

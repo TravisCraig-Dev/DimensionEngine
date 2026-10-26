@@ -1355,9 +1355,15 @@ namespace Editor
         ImGui::Text("Scene view: %u draw calls, %u triangles", st.DrawCalls, st.Triangles);
         ImGui::Text("Meshes: %u   Sprites: %u   Culled: %u", st.Meshes, st.Sprites, st.Culled);
         ImGui::Text("Shadow casters: %u   Instanced meshes: %u", st.ShadowCasters, st.InstancedMeshes);
-        ImGui::Text("Point/spot lights: %u   in clusters: %u", st.Lights, st.ClusterLightRefs);
+        bool gpuCulling = SceneRenderer::IsGpuLightCullingEnabled();
+        if (gpuCulling) ImGui::Text("Point/spot lights: %u   (culled on the GPU)", st.Lights);
+        else ImGui::Text("Point/spot lights: %u   in clusters: %u", st.Lights, st.ClusterLightRefs);
         ImGui::SameLine();
         UI::HelpMarker("Lights are sorted into 16 x 9 x 24 view clusters; each pixel shades only its cluster's lights (up to 1024 lights).");
+        if (ImGui::Checkbox("GPU Light Culling", &gpuCulling)) SceneRenderer::SetGpuLightCullingEnabled(gpuCulling);
+        ImGui::SameLine();
+        UI::HelpMarker("A compute shader fills the clusters, testing each light against each cluster's bounds. Off: the CPU builds them.");
+        if (st.GpuParticleCapacity > 0) ImGui::Text("GPU particle slots: %u", st.GpuParticleCapacity);
         bool instancing = SceneRenderer::IsInstancingEnabled();
         if (ImGui::Checkbox("GPU Instancing", &instancing)) SceneRenderer::SetInstancingEnabled(instancing);
         ImGui::SameLine();

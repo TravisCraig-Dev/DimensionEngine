@@ -16,6 +16,7 @@ function(dim_compile_shaders target)
             COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.3 --quiet
                     -I${CMAKE_CURRENT_SOURCE_DIR}/Shaders --vn ${var} -o ${header} ${src}
             DEPENDS ${src} glslang-standalone ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Common.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/MeshCommon.glsl
+                    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ParticleCommon.glsl
             COMMENT "Compiling shader ${name}.${stage}"
             VERBATIM)
         list(APPEND headers ${header})

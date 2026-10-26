@@ -1,5 +1,5 @@
 file(GLOB_RECURSE DIM_ENGINE_SOURCES CONFIGURE_DEPENDS Source/*.cpp Source/*.h)
-file(GLOB DIM_SHADERS CONFIGURE_DEPENDS Shaders/*.vert Shaders/*.frag)
+file(GLOB DIM_SHADERS CONFIGURE_DEPENDS Shaders/*.vert Shaders/*.frag Shaders/*.comp)
 
 # The engine is a DLL so that the editor, the player and hot-reloadable game
 # modules all share a single copy of engine state (registries, input, assets, ImGui).
@@ -10,7 +10,7 @@ target_include_directories(DimensionEngine PUBLIC Source)
 # Public: headers only. Private: libraries whose state must exist exactly once (inside this DLL).
 target_link_libraries(DimensionEngine
     PUBLIC volk_headers vma glm::glm nlohmann_json::nlohmann_json imgui_headers
-    PRIVATE volk glfw stb cgltf box2d Jolt miniaudio vhacd opusfile)
+    PRIVATE volk glfw stb cgltf box2d Jolt miniaudio vhacd opusfile msdfgen)
 target_compile_definitions(DimensionEngine
     PUBLIC GLFW_INCLUDE_NONE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS GLM_ENABLE_EXPERIMENTAL $<$<CONFIG:Debug>:DIM_DEBUG>
     PRIVATE "IMGUI_API=__declspec(dllexport)"

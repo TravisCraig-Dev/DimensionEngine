@@ -340,6 +340,7 @@ namespace Editor
             }
 
             bool anySelected = m_SelectedState == -2;
+            bool entrySelected = m_SelectedState == -3; // the Entry node of the shown level
             if (m_SelectedState >= (int)c.States.size()) m_SelectedState = -1;
             if (m_SelectedGroup >= (int)c.Groups.size()) m_SelectedGroup = -1;
             if (m_ViewGroup >= (int)c.Groups.size()) m_ViewGroup = -1;
@@ -359,9 +360,13 @@ namespace Editor
                 }
                 ImGui::TextDisabled("Transitions into it start at the entry state; its transitions below apply from any state inside it.");
             }
-            if (m_SelectedState >= 0 || anySelected || groupSelected)
+            if (m_SelectedState >= 0 || anySelected || groupSelected || entrySelected)
             {
-                if (!anySelected && !groupSelected)
+                if (entrySelected)
+                    ImGui::TextDisabled("Entering %s: the first entry transition whose conditions hold picks the state;\n"
+                                        "otherwise the %s.", m_ViewGroup >= 0 ? "this sub-state machine" : "the layer",
+                                        m_ViewGroup >= 0 ? "Entry State" : "default state");
+                if (!anySelected && !groupSelected && !entrySelected)
                 {
                     auto& st = c.States[m_SelectedState];
                     ImGui::SeparatorText("State");
@@ -497,30 +502,36 @@ namespace Editor
                 }
                 if (!syncedLayer) // a synced layer's transitions belong to its source
                 {
-                    ImGui::SeparatorText(anySelected ? "Transitions from Any State" : groupSelected ? "Transitions from the Sub-State Machine" : "Transitions");
-                    int from = anySelected ? -1 : groupSelected ? AnimTransition::FromGroup(m_SelectedGroup) : m_SelectedState;
+                    ImGui::SeparatorText(anySelected ? "Transitions from Any State" : groupSelected ? "Transitions from the Sub-State Machine"
+                                         : entrySelected ? "Entry Transitions" : "Transitions");
+                    int from = anySelected ? -1 : groupSelected ? AnimTransition::FromGroup(m_SelectedGroup)
+                             : entrySelected ? AnimTransition::FromEntry(m_ViewGroup) : m_SelectedState;
                     int removeTransition = -1;
                     for (int ti = 0; ti < (int)c.Transitions.size(); ++ti)
                     {
                         auto& t = c.Transitions[ti];
                         if (t.From != from) continue;
                         ImGui::PushID(ti);
-                        std::string to = t.ToGroup >= 0 && t.ToGroup < (int)c.Groups.size() ? c.Groups[t.ToGroup].Name + " (entry)"
+                        std::string to = t.ToExit ? std::string("Exit")
+                                       : t.ToGroup >= 0 && t.ToGroup < (int)c.Groups.size() ? c.Groups[t.ToGroup].Name + " (entry)"
                                        : t.To >= 0 && t.To < (int)c.States.size() ? c.States[t.To].Name : "?";
                         bool openT = ImGui::TreeNodeEx("##t", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap, "-> %s", to.c_str());
                         ImGui::SameLine(270);
                         if (ImGui::SmallButton("x")) removeTransition = ti;
                         if (openT)
                         {
-                            changed |= ImGui::Checkbox("Exit Time", &t.HasExitTime);
-                            if (t.HasExitTime)
+                            if (!entrySelected) // entering picks a state at once: no timing
                             {
-                                ImGui::SameLine();
-                                ImGui::SetNextItemWidth(80);
-                                changed |= ImGui::DragFloat("##exit", &t.ExitTime, 0.01f, 0.0f, 10.0f);
+                                changed |= ImGui::Checkbox("Exit Time", &t.HasExitTime);
+                                if (t.HasExitTime)
+                                {
+                                    ImGui::SameLine();
+                                    ImGui::SetNextItemWidth(80);
+                                    changed |= ImGui::DragFloat("##exit", &t.ExitTime, 0.01f, 0.0f, 10.0f);
+                                }
+                                ImGui::SetNextItemWidth(120);
+                                changed |= ImGui::DragFloat("Blend (s)", &t.Duration, 0.01f, 0.0f, 10.0f);
                             }
-                            ImGui::SetNextItemWidth(120);
-                            changed |= ImGui::DragFloat("Blend (s)", &t.Duration, 0.01f, 0.0f, 10.0f);
                             int removeCond = -1;
                             for (int ci = 0; ci < (int)t.Conditions.size(); ++ci)
                             {
@@ -629,7 +640,7 @@ namespace Editor
 
             // Nodes of the shown level (the top level or an open sub-state machine): its states and groups, Any State,
             // and an "Up" node standing for everything outside. Ids: state >= 0, -1 Any State, kUpNode, groupNode(g).
-            constexpr int kUpNode = -99;
+            constexpr int kUpNode = -99, kEntryNode = -98, kExitNode = -97, kHidden = -96;
             auto groupNode = [](int g) { return -100 - g; };
             auto nodeGroup = [](int id) { return id <= -100 ? -100 - id : -1; };
             // The node a state shows as: itself, the child group of the view that contains it, or Up.
@@ -645,11 +656,16 @@ namespace Editor
                     if (c.Groups[g].Parent == m_ViewGroup) return groupNode(g);
                 return kUpNode;
             };
+            // Up sits above Any State (not saved); Entry and Exit belong to the shown level.
             glm::vec2 upPosition = c.AnyStatePosition + glm::vec2(0.0f, -90.0f);
+            glm::vec2& entryPosition = m_ViewGroup >= 0 ? c.Groups[m_ViewGroup].EntryPosition : c.EntryPosition;
+            glm::vec2& exitPosition = m_ViewGroup >= 0 ? c.Groups[m_ViewGroup].ExitPosition : c.ExitPosition;
             auto nodePos = [&](int id) -> glm::vec2& {
                 if (id >= 0) return c.States[id].EditorPosition;
                 if (id <= -100) return c.Groups[nodeGroup(id)].EditorPosition;
                 if (id == kUpNode) return upPosition;
+                if (id == kEntryNode) return entryPosition;
+                if (id == kExitNode) return exitPosition;
                 return c.AnyStatePosition;
             };
             auto nodeCenter = [&](int id) {
@@ -662,15 +678,20 @@ namespace Editor
             if (live && m_Ctx.IsPlaying() && liveFadeDuration > 0.0f && liveFadeElapsed < liveFadeDuration) activeTransition = (*liveRuntime).State;
             auto fromNode = [&](const AnimTransition& t) {
                 if (t.From == -1) return -1;
+                if (AnimTransition::IsEntry(t.From)) return AnimTransition::EntryGroupOf(t.From) == m_ViewGroup ? kEntryNode : kHidden;
                 if (int g = AnimTransition::GroupOf(t.From); g >= 0) return g == m_ViewGroup ? kUpNode : visibleOfGroup(g);
                 return visibleOf(t.From);
             };
-            auto toNode = [&](const AnimTransition& t) { return t.ToGroup >= 0 ? visibleOfGroup(t.ToGroup) : visibleOf(t.To); };
+            auto toNode = [&](const AnimTransition& t) {
+                if (t.ToExit) return t.From >= 0 && t.From < (int)c.States.size() && c.States[t.From].Group == m_ViewGroup ? kExitNode : kHidden;
+                return t.ToGroup >= 0 ? visibleOfGroup(t.ToGroup) : visibleOf(t.To);
+            };
             for (auto& t : c.Transitions)
             {
-                if (t.ToGroup < 0 && (t.To < 0 || t.To >= (int)c.States.size())) continue;
+                if (!t.ToExit && t.ToGroup < 0 && (t.To < 0 || t.To >= (int)c.States.size())) continue;
                 if (t.From >= (int)c.States.size() || t.ToGroup >= (int)c.Groups.size()) continue;
                 int a = fromNode(t), b = toNode(t);
+                if (a == kHidden || b == kHidden) continue;
                 if (a == b || (a == -1 && m_ViewGroup >= 0 && b == kUpNode)) continue;
                 bool reverse = false;
                 for (auto& o : c.Transitions) reverse |= fromNode(o) == b && toNode(o) == a;
@@ -678,7 +699,11 @@ namespace Editor
                 Arrow(dl, nodeCenter(a), nodeCenter(b), hot ? IM_COL32(110, 190, 255, 255) : IM_COL32(200, 200, 205, 220), reverse ? 6.0f : 0.0f);
             }
 
-            std::vector<int> nodes = { -1 };
+            // Entry's default: the layer's default state, or the open sub-state machine's Entry State (orange).
+            if (int def = m_ViewGroup >= 0 ? c.EntryState(m_ViewGroup) : c.DefaultState; def >= 0 && def < (int)c.States.size())
+                Arrow(dl, nodeCenter(kEntryNode), nodeCenter(visibleOf(def)), IM_COL32(230, 150, 60, 230), 0.0f);
+
+            std::vector<int> nodes = { -1, kEntryNode, kExitNode };
             if (m_ViewGroup >= 0) nodes.push_back(kUpNode);
             for (int g = 0; g < (int)c.Groups.size(); ++g)
                 if (c.Groups[g].Parent == m_ViewGroup) nodes.push_back(groupNode(g));
@@ -702,8 +727,10 @@ namespace Editor
                 float nodeW = kNodeW * z, nodeH = kNodeH * z;
                 bool isCurrent = live && i >= 0 && liveCurrent == i && c.FindState(liveState) == i;
                 bool containsCurrent = live && g >= 0 && c.IsInGroup(liveCurrent, g);
-                bool selected = (id == -1 && m_SelectedState == -2) || (i >= 0 && m_SelectedState == i) || (g >= 0 && m_SelectedGroup == g);
+                bool selected = (id == -1 && m_SelectedState == -2) || (id == kEntryNode && m_SelectedState == -3) || (i >= 0 && m_SelectedState == i) ||
+                                (g >= 0 && m_SelectedGroup == g);
                 ImU32 fill = id == -1 ? IM_COL32(40, 120, 115, 255) : id == kUpNode ? IM_COL32(55, 58, 66, 255)
+                           : id == kEntryNode ? IM_COL32(60, 125, 60, 255) : id == kExitNode ? IM_COL32(140, 45, 45, 255)
                            : g >= 0 ? IM_COL32(88, 70, 120, 255) : i == c.DefaultState ? IM_COL32(170, 100, 35, 255) : IM_COL32(70, 72, 78, 255);
                 if (isCurrent || containsCurrent) fill = IM_COL32(45, 105, 175, 255);
                 if (g >= 0) // a stacked look for sub-state machines
@@ -711,7 +738,8 @@ namespace Editor
                 dl->AddRectFilled(min, max, fill, 6.0f);
                 dl->AddRect(min, max, selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 20, 255), 6.0f, 0, selected ? 2.0f : 1.0f);
                 std::string upName = m_ViewGroup >= 0 && c.Groups[m_ViewGroup].Parent >= 0 ? "(Up) " + c.Groups[c.Groups[m_ViewGroup].Parent].Name : "(Up) Top Level";
-                const char* name = id == -1 ? "Any State" : id == kUpNode ? upName.c_str() : g >= 0 ? c.Groups[g].Name.c_str() : c.States[i].Name.c_str();
+                const char* name = id == -1 ? "Any State" : id == kUpNode ? upName.c_str() : id == kEntryNode ? "Entry" : id == kExitNode ? "Exit"
+                                 : g >= 0 ? c.Groups[g].Name.c_str() : c.States[i].Name.c_str();
                 ImVec2 ts = ImGui::CalcTextSize(name);
                 bool isTree = i >= 0 && c.States[i].Motion != AnimMotionType::Clip;
                 bool sub = isTree || g >= 0;
@@ -739,7 +767,7 @@ namespace Editor
                 ImGui::InvisibleButton("node", ImVec2(nodeW, nodeH));
                 if (ImGui::IsItemClicked())
                 {
-                    m_SelectedState = id == -1 ? -2 : i >= 0 ? i : -1;
+                    m_SelectedState = id == -1 ? -2 : id == kEntryNode ? -3 : i >= 0 ? i : -1;
                     m_SelectedGroup = g;
                 }
                 // Double-click opens a sub-state machine; Up goes back out.
@@ -748,21 +776,48 @@ namespace Editor
                     m_ViewGroup = g >= 0 ? g : c.Groups[m_ViewGroup].Parent;
                     m_SelectedState = m_SelectedGroup = -1;
                 }
+                bool fixedNode = id == kUpNode || id == kEntryNode || id == kExitNode; // no state context menu
                 if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !syncedLayer && id != kUpNode)
                 {
                     pos.x += ImGui::GetIO().MouseDelta.x / z;
                     pos.y += ImGui::GetIO().MouseDelta.y / z;
                 }
                 if (ImGui::IsItemDeactivated()) changed = true; // save layout after a drag
-                if (!syncedLayer && id != kUpNode && ImGui::BeginPopupContextItem("NodeContext"))
+                if (!syncedLayer && id == kEntryNode && ImGui::BeginPopupContextItem("NodeContext"))
+                {
+                    // Entry transitions go to the states and sub-state machines of this level.
+                    if (ImGui::BeginMenu("Make Entry Transition To"))
+                    {
+                        auto add = [&](int to, int toGroup) {
+                            AnimTransition t;
+                            t.From = AnimTransition::FromEntry(m_ViewGroup);
+                            t.To = to;
+                            t.ToGroup = toGroup;
+                            t.Duration = 0.0f;
+                            t.Conditions.push_back({});
+                            c.Transitions.push_back(t);
+                            m_SelectedState = -3;
+                            m_SelectedGroup = -1;
+                            changed = true;
+                        };
+                        for (int j = 0; j < (int)c.States.size(); ++j)
+                            if (c.States[j].Group == m_ViewGroup && ImGui::MenuItem(c.States[j].Name.c_str())) add(j, -1);
+                        for (int k = 0; k < (int)c.Groups.size(); ++k)
+                            if (c.Groups[k].Parent == m_ViewGroup && ImGui::MenuItem((c.Groups[k].Name + "  (sub-state machine)").c_str())) add(0, k);
+                        ImGui::EndMenu();
+                    }
+                    ImGui::EndPopup();
+                }
+                if (!syncedLayer && !fixedNode && ImGui::BeginPopupContextItem("NodeContext"))
                 {
                     if (ImGui::BeginMenu("Make Transition To"))
                     {
-                        auto add = [&](int to, int toGroup) {
+                        auto add = [&](int to, int toGroup, bool toExit = false) {
                             AnimTransition t;
                             t.From = g >= 0 ? AnimTransition::FromGroup(g) : i;
                             t.To = to;
                             t.ToGroup = toGroup;
+                            t.ToExit = toExit;
                             t.HasExitTime = i >= 0; // Any State and sub-state machine transitions need a condition instead
                             c.Transitions.push_back(t);
                             m_SelectedState = id == -1 ? -2 : i >= 0 ? i : -1;
@@ -774,6 +829,11 @@ namespace Editor
                         if (!c.Groups.empty()) ImGui::Separator();
                         for (int k = 0; k < (int)c.Groups.size(); ++k)
                             if (k != g && ImGui::MenuItem((groupPath(k) + "  (its entry state)").c_str())) add(0, k);
+                        if (i >= 0)
+                        {
+                            ImGui::Separator();
+                            if (ImGui::MenuItem(c.States[i].Group >= 0 ? "Exit (leave this sub-state machine)" : "Exit (back to Entry)")) add(0, -1, true);
+                        }
                         ImGui::EndMenu();
                     }
                     if (i >= 0)

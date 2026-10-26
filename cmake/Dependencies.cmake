@@ -25,6 +25,8 @@ FetchContent_Declare(vhacd          GIT_REPOSITORY https://github.com/kmammou/v-
 FetchContent_Declare(ogg            GIT_REPOSITORY https://github.com/xiph/ogg.git                  GIT_TAG v1.3.6 GIT_SHALLOW TRUE)
 FetchContent_Declare(opus           GIT_REPOSITORY https://github.com/xiph/opus.git                 GIT_TAG v1.5.2 GIT_SHALLOW TRUE)
 FetchContent_Declare(opusfile       GIT_REPOSITORY https://github.com/xiph/opusfile.git             GIT_TAG v0.12  GIT_SHALLOW TRUE)
+# Multi-channel signed distance fields for text (core only, built in ThirdPartyTargets.cmake).
+FetchContent_Declare(msdfgen        GIT_REPOSITORY https://github.com/Chlumsky/msdfgen.git          GIT_TAG v1.12  GIT_SHALLOW TRUE SOURCE_SUBDIR _sources_only)
 FetchContent_Declare(glslang        GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git      GIT_TAG ${DIM_VULKAN_SDK_TAG} GIT_SHALLOW TRUE)
 
 # --- options for sub-projects
@@ -60,4 +62,4 @@ set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf box2d jolt miniaudio vhacd ogg opus opusfile glslang)
+FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf box2d jolt miniaudio vhacd ogg opus opusfile msdfgen glslang)

@@ -3,6 +3,7 @@
 #include "Dimension/Core/Curve.h"
 #include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -55,6 +56,11 @@ namespace Dimension
         float Drag = 0.0f;                          // velocity damping per second
         int32_t MaxParticles = 1000;
         ParticleSpace SimulationSpace = ParticleSpace::World;
+        // Simulate On GPU: a compute shader moves the particles, so a system can have up to a million. It supports
+        // the main module, emission, shape, color/size/speed over lifetime, force over lifetime, noise, plane
+        // collision and the texture sheet; velocity over lifetime, world collision, trails, sorting and acting as a
+        // sub emitter's source stay CPU-only (a GPU system can be a sub emitter's target).
+        bool SimulateOnGpu = false;
 
         // Emission
         float RateOverTime = 20.0f;
@@ -134,13 +140,26 @@ namespace Dimension
         bool Playing = false;
         bool Started = false;
         int32_t PendingEmit = 0;
+        // GPU simulation hand-off: particles to create (at the emitter or at burst points) and time to simulate,
+        // consumed by the renderer once per frame. Generation changes clear the GPU particles.
+        static constexpr int kMaxGpuEmissions = 16;
+        struct GpuEmission { glm::vec3 Origin; int32_t Count; bool AtOrigin; };
+        std::vector<GpuEmission> GpuEmissions;
+        float GpuPendingDt = 0.0f;
+        float GpuSinceEmit = 1e9f; // seconds since particles were last created
+        uint32_t GpuGeneration = 0;
+        uint32_t GpuSeed = 0;
 
         void Play() { Playing = true; Started = false; Time = 0.0f; }
         void Stop() { Playing = false; }  // existing particles finish their lives
-        void Clear() { Particles.clear(); }
+        void Clear() { Particles.clear(); GpuEmissions.clear(); ++GpuGeneration; GpuSinceEmit = 1e9f; }
         void Emit(int count) { PendingEmit += count; }
         void EmitAt(const glm::vec3& worldPosition, int count) { PendingBursts.push_back({ worldPosition, count }); }
-        bool IsAlive() const { return Playing || !Particles.empty() || !PendingBursts.empty(); }
+        bool IsAlive() const
+        {
+            if (SimulateOnGpu) return Playing || !GpuEmissions.empty() || !PendingBursts.empty() || GpuSinceEmit < std::max(StartLifetime.x, StartLifetime.y);
+            return Playing || !Particles.empty() || !PendingBursts.empty();
+        }
 
         // Flipbook frame of a particle (0 when the texture sheet is off), and the frame's UV rectangle
         // (min = left/bottom, max = right/top, matching the renderer's sprite UVs).

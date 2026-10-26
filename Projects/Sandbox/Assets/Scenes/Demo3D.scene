@@ -5879,6 +5879,23 @@
             0.5,
             1.5
           ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.WindGust",
+              "Fields": {
+                "BaseWind": [
+                  -7.0,
+                  0.5,
+                  1.5
+                ],
+                "Gustiness": 1.2,
+                "Speed": 0.6
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     },

@@ -5,11 +5,48 @@ using Dimension.Interop;
 namespace Dimension
 {
     /// <summary>Thin wrapper over an engine component on an entity.</summary>
-    public abstract class Component
+    public abstract unsafe class Component
     {
         public Entity Entity { get; internal set; }
         /// <summary>Component name in the engine registry (as shown in the Inspector).</summary>
         internal abstract string NativeName { get; }
+
+        // Any numeric field shown in the Inspector, by its label (e.g. "Max Steer Angle"): bools, ints, enums (by index),
+        // floats, vectors and colors. Missing fields read as 0.
+        private int ReadField(string field, float* values)
+        {
+            var e = Entity;
+            string component = NativeName;
+            IntPtr v = (IntPtr)values;
+            return Native.WithUtf8(component, c => Native.WithUtf8(field, f => Native.Api.GetComponentField(e.Scene, e.Id, (byte*)c, (byte*)f, (float*)v)));
+        }
+        private bool WriteField(string field, float* values, int count)
+        {
+            var e = Entity;
+            string component = NativeName;
+            IntPtr v = (IntPtr)values;
+            return Native.WithUtf8(component, c => Native.WithUtf8(field, f => Native.Api.SetComponentField(e.Scene, e.Id, (byte*)c, (byte*)f, (float*)v, count))) != 0;
+        }
+        public float GetFloat(string field) { float* v = stackalloc float[4]; return ReadField(field, v) > 0 ? v[0] : 0.0f; }
+        public bool SetFloat(string field, float value) => WriteField(field, &value, 1);
+        public int GetInt(string field) => (int)GetFloat(field);
+        public bool SetInt(string field, int value) => SetFloat(field, value);
+        public bool GetBool(string field) => GetFloat(field) != 0.0f;
+        public bool SetBool(string field, bool value) => SetFloat(field, value ? 1.0f : 0.0f);
+        public Vector3 GetVector3(string field) { float* v = stackalloc float[4]; ReadField(field, v); return new Vector3(v[0], v[1], v[2]); }
+        public bool SetVector3(string field, Vector3 value) => WriteField(field, (float*)&value, 3);
+        public Vector4 GetVector4(string field) { float* v = stackalloc float[4]; ReadField(field, v); return new Vector4(v[0], v[1], v[2], v[3]); }
+        public bool SetVector4(string field, Vector4 value) => WriteField(field, (float*)&value, 4);
+    }
+
+    /// <summary>Any engine component by its Inspector name, for components without their own class
+    /// (<c>entity.GetComponent("Point Light").SetFloat("Intensity", 2)</c>).</summary>
+    public sealed class NamedComponent : Component
+    {
+        private readonly string m_Name;
+        public NamedComponent() : this("") { }
+        public NamedComponent(string name) { m_Name = name; }
+        internal override string NativeName => m_Name;
     }
 
     public unsafe class Transform : Component
@@ -232,6 +269,64 @@ namespace Dimension
         /// <summary>Reaction force (N) and torque (N*m) during the last physics step.</summary>
         public float Force => State(2);
         public float Torque => State(3);
+    }
+
+    /// <summary>Limits, spring and breaking of a 3D joint (see Joint for the motor).</summary>
+    public unsafe class Joint3D : Joint
+    {
+        public bool UseLimits { get => GetBool("Use Limits"); set => SetBool("Use Limits", value); }
+        /// <summary>Hinge limits in degrees.</summary>
+        public float MinAngle { get => GetFloat("Min Angle"); set => SetFloat("Min Angle", value); }
+        public float MaxAngle { get => GetFloat("Max Angle"); set => SetFloat("Max Angle", value); }
+        /// <summary>Distance joint limits (m).</summary>
+        public float MinDistance { get => GetFloat("Min Distance"); set => SetFloat("Min Distance", value); }
+        public float MaxDistance { get => GetFloat("Max Distance"); set => SetFloat("Max Distance", value); }
+        public float SpringFrequency { get => GetFloat("Spring Frequency"); set => SetFloat("Spring Frequency", value); }
+        public float SpringDamping { get => GetFloat("Spring Damping"); set => SetFloat("Spring Damping", value); }
+        public float MotorMaxTorque { get => GetFloat("Motor Max Torque"); set => SetFloat("Motor Max Torque", value); }
+        /// <summary>Force (N) and torque (N*m) at which the joint breaks; 0 = unbreakable.</summary>
+        public float BreakForce { get => GetFloat("Break Force"); set => SetFloat("Break Force", value); }
+        public float BreakTorque { get => GetFloat("Break Torque"); set => SetFloat("Break Torque", value); }
+    }
+
+    /// <summary>Drives a Vehicle (car, motorcycle or tank) and reads its state.</summary>
+    public unsafe class Vehicle : Component
+    {
+        internal override string NativeName => "Vehicle";
+        /// <summary>-1 (reverse) to 1 (full throttle).</summary>
+        public float Throttle { get => GetFloat("Throttle"); set => SetFloat("Throttle", Math.Clamp(value, -1.0f, 1.0f)); }
+        /// <summary>-1 (left) to 1 (right).</summary>
+        public float Steering { get => GetFloat("Steering"); set => SetFloat("Steering", Math.Clamp(value, -1.0f, 1.0f)); }
+        public float Brake { get => GetFloat("Brake"); set => SetFloat("Brake", Math.Clamp(value, 0.0f, 1.0f)); }
+        public float HandBrake { get => GetFloat("Hand Brake"); set => SetFloat("Hand Brake", Math.Clamp(value, 0.0f, 1.0f)); }
+        public float EngineTorque { get => GetFloat("Engine Torque"); set => SetFloat("Engine Torque", value); }
+        public float MaxSteerAngle { get => GetFloat("Max Steer Angle"); set => SetFloat("Max Steer Angle", value); }
+        /// <summary>Speed along the vehicle's forward axis (negative when reversing), from the last physics step.</summary>
+        public float SpeedKmh => Native.Api.VehicleState(Entity.Scene, Entity.Id, 0);
+        public float EngineRPM => Native.Api.VehicleState(Entity.Scene, Entity.Id, 1);
+        /// <summary>0 = neutral, negative = reverse.</summary>
+        public int Gear => (int)Native.Api.VehicleState(Entity.Scene, Entity.Id, 2);
+        /// <summary>Whether a wheel touches the ground (0 front left, 1 front right, 2 rear left, 3 rear right).</summary>
+        public bool IsWheelGrounded(int wheel) => Native.Api.VehicleState(Entity.Scene, Entity.Id, 3 + Math.Clamp(wheel, 0, 3)) != 0.0f;
+    }
+
+    /// <summary>A simulated cloth sheet.</summary>
+    public unsafe class Cloth : Component
+    {
+        internal override string NativeName => "Cloth";
+        /// <summary>World-space acceleration on the free vertices (m/s^2), applied live.</summary>
+        public Vector3 Wind { get => GetVector3("Wind"); set => SetVector3("Wind", value); }
+        /// <summary>Takes effect when the cloth is created (play start).</summary>
+        public float StretchCompliance { get => GetFloat("Stretch Compliance"); set => SetFloat("Stretch Compliance", value); }
+        public float BendCompliance { get => GetFloat("Bend Compliance"); set => SetFloat("Bend Compliance", value); }
+    }
+
+    /// <summary>A pressurized soft body made from the object's mesh.</summary>
+    public unsafe class SoftBody : Component
+    {
+        internal override string NativeName => "Soft Body";
+        /// <summary>Inflation; applied live (0 = limp).</summary>
+        public float Pressure { get => GetFloat("Pressure"); set => SetFloat("Pressure", value); }
     }
 
     public unsafe class Joint2D : Joint

@@ -86,6 +86,7 @@ namespace Dimension
         }
 
         public T GetComponent<T>() where T : Component, new() => Entity.GetComponent<T>();
+        public Component GetComponent(string componentName) => Entity.GetComponent(componentName);
         public bool HasComponent<T>() where T : Component, new() => Entity.HasComponent<T>();
         public Entity Find(string name) => Entity.Find(name);
         public Entity Instantiate(ulong prefabGuid, Vector3 position) => Entity.Instantiate(prefabGuid, position);
@@ -139,6 +140,9 @@ namespace Dimension
             return Native.WithUtf8(componentName, p => Native.Api.HasComponent(self.Scene, self.Id, (byte*)p)) != 0;
         }
         public bool HasComponent<T>() where T : Component, new() => HasComponent(new T().NativeName);
+
+        /// <summary>Any component by its Inspector name (null if the entity has none), for its numeric fields.</summary>
+        public Component GetComponent(string componentName) => HasComponent(componentName) ? new NamedComponent(componentName) { Entity = this } : null;
 
         public T GetComponent<T>() where T : Component, new()
         {

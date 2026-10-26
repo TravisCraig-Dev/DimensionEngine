@@ -318,6 +318,18 @@ namespace
         CHECK(std::all_of(stripped.SubMeshes.begin(), stripped.SubMeshes.end(), [](const SubMesh& m) { return m.MaterialSlot == -1; }));
         MeshData still;
         CHECK(MeshData::LoadFromFile(models / "Tentacle.gltf", still, bare) && still.Clips.empty() && !plain.Clips.empty());
+        // Leaving out single clips by name.
+        if (plain.Clips.size() >= 2)
+        {
+            MeshImportSettings some;
+            some.ExcludedClips = { plain.Clips[0].Name };
+            MeshData fewer;
+            CHECK(!some.IsDefault() && some.Key() != MeshImportSettings{}.Key());
+            CHECK(MeshData::LoadFromFile(models / "Tentacle.gltf", fewer, some) && fewer.Clips.size() == plain.Clips.size() - 1);
+            CHECK(std::none_of(fewer.Clips.begin(), fewer.Clips.end(), [&](const AnimationClip& c) { return c.Name == plain.Clips[0].Name; }));
+        }
+        else
+            CHECK(false); // the Tentacle model has several clips
     }
 
     void TestImportCache()
@@ -612,6 +624,39 @@ namespace
             }
             rt->OnRuntimeStop();
         }
+        // Tearing: a heavy, stretchy curtain hung by its two top corners rips near them; without Tear Stretch the
+        // same cloth only stretches.
+        for (float tear : { 0.0f, 0.3f })
+        {
+            Scene scene("Rip");
+            auto& reg = scene.GetRegistry();
+            Entity e = scene.CreateEntity("Rag");
+            reg.Get<TransformComponent>(e).Position = { 0, 3, 0 };
+            auto& c = reg.Emplace<ClothComponent>(e);
+            c.Resolution = 10;
+            c.Pin = ClothPin::TopCorners;
+            c.Mass = 40.0f;
+            c.StretchCompliance = 0.01f;
+            c.TearStretch = tear;
+            reg.Emplace<MeshRendererComponent>(e);
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            run(rt, 2.0f);
+            auto& sim = rt->GetRegistry().Get<ClothComponent>(e);
+            size_t full = Cloth::BuildGrid(c).Indices.size();
+            if (tear == 0.0f)
+                CHECK(sim.TornEdges == 0 && sim.TornIndices.empty());
+            else
+            {
+                CHECK(sim.TornEdges > 0 && !sim.TornIndices.empty() && sim.TornIndices.size() < full && sim.TornIndices.size() % 3 == 0);
+                // Still simulated (every vertex, finite) after the rebuilds.
+                bool finite = sim.SimulatedPositions.size() == 121;
+                for (auto& p : sim.SimulatedPositions) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+                CHECK(finite);
+            }
+            rt->OnRuntimeStop();
+        }
         // An unpinned sheet dropped on a sphere drapes over it: its middle rests on top, its edges hang lower.
         {
             Scene scene("Drape");
@@ -844,6 +889,61 @@ namespace
             CHECK(glm::length(glm::vec2(t.Position.x - stopped.x, t.Position.z - stopped.z)) < 1.5f); // on the spot
             rt->OnRuntimeStop();
         }
+    }
+
+    void TestReverbZones()
+    {
+        // A hall (full reverb within 2 m, gone by 6 m) and a smaller cave overlapping its edge, both on SFX.
+        Scene scene("Zones");
+        auto& reg = scene.GetRegistry();
+        Entity listener = scene.CreateEntity("Listener");
+        reg.Emplace<CameraComponent>(listener).Primary = true;
+        auto zone = [&](const char* name, glm::vec3 pos, float lo, float hi, float wet, float room) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = pos;
+            auto& z = reg.Emplace<AudioReverbZoneComponent>(e);
+            z.MinDistance = lo;
+            z.MaxDistance = hi;
+            z.Wet = wet;
+            z.RoomSize = room;
+            z.Group = "SFX";
+            return e;
+        };
+        zone("Hall", { 10, 0, 0 }, 2.0f, 6.0f, 0.8f, 0.9f);
+        Entity cave = zone("Cave", { 16, 0, 0 }, 1.0f, 3.0f, 0.4f, 0.3f);
+        auto runtime = scene.Clone();
+        runtime->OnRuntimeStart();
+        auto at = [&](float x, const char* group = "SFX") { return AudioWorld::ReverbZoneAt(*runtime, { x, 0, 0 }, group); };
+        CHECK(at(0.0f).Weight == 0.0f);                                   // far away
+        CHECK(Near(at(9.0f).Weight, 1.0f) && Near(at(9.0f).Wet, 0.8f));     // inside the hall's Min Distance
+        CHECK(Near(at(13.0f).Weight, 0.75f) && Near(at(13.0f).Wet, 0.8f));  // fading, with the hall's settings
+        CHECK(at(9.0f, "Music").Weight == 0.0f);                          // other groups are unaffected
+        AudioMixer::ZoneReverb mixed = at(15.5f); // hall at 0.125, cave at 1
+        CHECK(Near(mixed.Weight, 1.0f) && mixed.Wet > 0.4f && mixed.Wet < 0.5f && mixed.RoomSize > 0.3f && mixed.RoomSize < 0.4f);
+        runtime->GetRegistry().Get<TagComponent>(cave).Active = false; // inactive zones do nothing
+        runtime->OnUpdateRuntime(0.0f);
+        CHECK(Near(at(15.5f).Weight, 0.125f));
+
+        // The group's reverb: its own settings faded toward the zone's.
+        AudioMixerGroup g;
+        g.Reverb = false;
+        CHECK(!AudioMixer::EffectiveReverb(g, {}).On);
+        auto half = AudioMixer::EffectiveReverb(g, { 0.5f, 0.8f, 0.4f, 0.6f });
+        CHECK(half.On && Near(half.Wet, 0.3f) && Near(half.RoomSize, 0.8f)); // from dry, in the zone's room
+        g.Reverb = true;
+        g.ReverbWet = 0.2f;
+        g.ReverbRoomSize = 0.2f;
+        auto full = AudioMixer::EffectiveReverb(g, { 1.0f, 0.8f, 0.4f, 0.6f });
+        CHECK(full.On && Near(full.Wet, 0.6f) && Near(full.RoomSize, 0.8f));
+        CHECK(Near(AudioMixer::EffectiveReverb(g, {}).Wet, 0.2f));
+        // Play mode drives the mixer from the listener's position, and stopping clears it.
+        int sfx = AudioMixer::FindGroup("SFX");
+        runtime->GetRegistry().Get<TransformComponent>(listener).Position = { 9, 0, 0 };
+        runtime->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(sfx < 0 || Near(AudioMixer::GetZoneReverb(sfx).Weight, 1.0f));
+        runtime->OnRuntimeStop();
+        runtime.reset();
+        CHECK(sfx < 0 || AudioMixer::GetZoneReverb(sfx).Weight == 0.0f);
     }
 
     void TestAudioOcclusion()
@@ -1610,6 +1710,68 @@ namespace
         c.Groups[0].DefaultState = 3;
         c.RemoveState(0);
         CHECK(c.Groups[0].DefaultState == 2);
+
+        // Entry and Exit nodes. Combat's Entry picks Heavy (in the nested Inner group) when "Heavy" is set, else its
+        // default; Slash -> Exit leaves Combat for the top level's Entry ("Armed" -> straight back into Combat, else the
+        // default state Idle); Heavy -> Exit leaves Inner: Inner's own transitions decide ("Rest" -> Rest), else
+        // Combat's Entry.
+        AnimatorController d;
+        d.Parameters = { { "Fight", AnimParameterType::Trigger, 0.0f }, { "Heavy", AnimParameterType::Bool, 0.0f },
+                         { "Armed", AnimParameterType::Bool, 0.0f }, { "Rest", AnimParameterType::Bool, 0.0f } };
+        d.Groups = { { "Combat", -1, 1, { 300, 0 } }, { "Inner", 0, 2, { 0, 0 } } };
+        d.States = { state("Idle", -1), state("Slash", 0), state("Heavy", 1), state("Rest", -1) };
+        AnimTransition enter{ 0, 0, false, 1.0f, 0.1f, { { "Fight", AnimConditionOp::IsTrue, 0.0f } } };
+        enter.ToGroup = 0;
+        AnimTransition heavyEntry{ AnimTransition::FromEntry(0), 0, false, 1.0f, 0.0f, { { "Heavy", AnimConditionOp::IsTrue, 0.0f } } };
+        heavyEntry.ToGroup = 1;
+        AnimTransition slashExit{ 1, 0, true, 1.0f, 0.1f, {} };
+        slashExit.ToExit = true;
+        AnimTransition heavyExit{ 2, 0, true, 1.0f, 0.1f, {} };
+        heavyExit.ToExit = true;
+        AnimTransition restFromInner{ AnimTransition::FromGroup(1), 3, true, 50.0f, 0.1f, { { "Rest", AnimConditionOp::IsTrue, 0.0f } } };
+        AnimTransition armedEntry{ AnimTransition::FromEntry(-1), 0, false, 1.0f, 0.0f, { { "Armed", AnimConditionOp::IsTrue, 0.0f } } };
+        armedEntry.ToGroup = 0;
+        d.Transitions = { enter, heavyEntry, slashExit, heavyExit, restFromInner, armedEntry };
+        CHECK(AnimTransition::GroupOf(heavyEntry.From) == -1 && AnimTransition::IsEntry(heavyEntry.From) &&
+              AnimTransition::EntryGroupOf(heavyEntry.From) == 0 && AnimTransition::EntryGroupOf(armedEntry.From) == -1);
+        AnimatorRuntime r;
+        auto stepD = [&](float dt) { return AnimatorStateMachine::Update(d, r, dt, duration, [](const AnimState&, float) {}); };
+        stepD(0.1f);
+        CHECK(r.State == 0);
+        r.Triggers.insert("Fight");
+        CHECK(stepD(0.1f) == 0 && r.State == 1); // no entry condition holds: Combat's default
+        CHECK(stepD(1.0f) == 2 && r.State == 0); // Exit, nothing in Combat holds, top-level entry: Idle
+        r.Parameters["Heavy"] = 1.0f;
+        r.Triggers.insert("Fight");
+        CHECK(stepD(0.1f) == 0 && r.State == 2); // Entry picks Inner, whose default is Heavy
+        r.Parameters["Rest"] = 1.0f;
+        CHECK(stepD(1.0f) == 3 && r.State == 3); // Heavy -> Exit (leaves Inner): Inner's transition to Rest holds
+        r.Parameters["Rest"] = 0.0f;
+        r.Parameters["Heavy"] = 0.0f;
+        r.State = 2;
+        r.StateTime = 0.0f;
+        CHECK(stepD(1.0f) == 3 && r.State == 1); // without it: Combat's Entry (Heavy unset: its default, Slash)
+        // Exiting to the top level goes through its Entry: Armed sends it straight back into Combat.
+        r.Parameters["Rest"] = 0.0f;
+        r.Parameters["Heavy"] = 0.0f;
+        r.Parameters["Armed"] = 1.0f;
+        r.State = 1;
+        r.StateTime = 0.0f;
+        CHECK(stepD(1.0f) == 2 && r.State == 1);
+        // A fresh runtime starts through the top-level Entry too.
+        AnimatorRuntime fresh;
+        fresh.Parameters["Armed"] = 1.0f;
+        AnimatorStateMachine::Update(d, fresh, 0.0f, duration, [](const AnimState&, float) {});
+        CHECK(fresh.State == 1);
+        fs::path entryPath = fs::temp_directory_path() / "dimension_entry_exit.controller";
+        CHECK(d.Save(entryPath));
+        auto loaded = AnimatorController::Load(entryPath);
+        CHECK(loaded->Transitions[1].From == AnimTransition::FromEntry(0) && loaded->Transitions[2].ToExit && !loaded->Transitions[0].ToExit &&
+              loaded->Transitions[5].From == AnimTransition::FromEntry(-1));
+        fs::remove(entryPath);
+        d.RemoveGroup(1); // its transitions go with it; Combat's stay
+        CHECK(std::none_of(d.Transitions.begin(), d.Transitions.end(), [](const AnimTransition& t) { return t.ToGroup == 1 || AnimTransition::GroupOf(t.From) == 1; }));
+        CHECK(std::count_if(d.Transitions.begin(), d.Transitions.end(), [](const AnimTransition& t) { return AnimTransition::IsEntry(t.From); }) == 1);
     }
 
     void TestBlendTrees2D()
@@ -3186,6 +3348,125 @@ namespace
         if (const char* extra = std::getenv("DIM_TEST_EXTRA_GLTF")) CheckSkinnedFile(extra, 1, 1);
     }
 
+    void TestNestedPrefabs()
+    {
+        fs::path assets = fs::temp_directory_path() / "dimension_nested_test" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        Scene scene("Nested");
+        auto& reg = scene.GetRegistry();
+        auto color = [&](Scene& s, Entity e) { return s.GetRegistry().Get<MeshRendererComponent>(e).Color; };
+        auto findChild = [](Scene& s, Entity parent, const char* name) {
+            for (Entity c : s.GetChildren(parent))
+                if (s.GetRegistry().Get<TagComponent>(c).Name == name) return c;
+            return Entity::Null();
+        };
+
+        // Inner prefab: a Wheel with a red Hub.
+        Entity wheel = scene.CreateEntity("Wheel");
+        Entity hub = scene.CreateEntity("Hub", wheel);
+        reg.Emplace<MeshRendererComponent>(hub).Color = { 1, 0, 0, 1 };
+        AssetHandle wheelPrefab = Prefabs::CreateFromEntity(scene, wheel, assets / "Wheel.prefab");
+        CHECK(wheelPrefab.IsValid());
+
+        // Outer prefab: a Cart with two wheel instances, the right one's hub recolored blue (an override on the nested
+        // instance).
+        Entity cart = scene.CreateEntity("Cart");
+        Entity left = Prefabs::Instantiate(scene, wheelPrefab, cart);
+        Entity right = Prefabs::Instantiate(scene, wheelPrefab, cart);
+        reg.Get<TransformComponent>(left).Position = { -1, 0, 0 };
+        reg.Get<TransformComponent>(right).Position = { 1, 0, 0 };
+        reg.Get<TagComponent>(left).Name = "Left Wheel";
+        reg.Get<TagComponent>(right).Name = "Right Wheel";
+        reg.Get<MeshRendererComponent>(scene.GetChildren(right)[0]).Color = { 0, 0, 1, 1 };
+        Prefabs::RecordFieldOverride(scene, scene.GetChildren(right)[0], "Mesh Renderer", "Color");
+        AssetHandle cartPrefab = Prefabs::CreateFromEntity(scene, cart, assets / "Cart.prefab");
+        CHECK(cartPrefab.IsValid());
+        // The file holds the cart and two references to the wheel (not copies of its objects).
+        nlohmann::json file = nlohmann::json::parse(std::ifstream(assets / "Cart.prefab"));
+        int references = 0;
+        for (auto& rec : file["entities"]) references += rec.contains("nested") && rec["nested"]["prefab"].get<uint64_t>() == (uint64_t)wheelPrefab;
+        CHECK(file["entities"].size() == 3 && references == 2);
+        CHECK(Prefabs::IsNestedPart(scene, scene.GetChildren(left)[0]) && Prefabs::GetNestedPrefab(scene, left) == wheelPrefab);
+
+        // An instance of the cart has both wheels with their hubs and names; the right hub keeps its override.
+        Scene world("World");
+        Entity c1 = Prefabs::Instantiate(world, cartPrefab);
+        CHECK(!c1.IsNull() && world.GetChildren(c1).size() == 2);
+        Entity lw = findChild(world, c1, "Left Wheel"), rw = findChild(world, c1, "Right Wheel");
+        CHECK(!lw.IsNull() && !rw.IsNull());
+        if (lw.IsNull() || rw.IsNull()) return;
+        CHECK(world.GetChildren(lw).size() == 1 && world.GetChildren(rw).size() == 1);
+        CHECK(color(world, findChild(world, lw, "Hub")) == glm::vec4(1, 0, 0, 1) && color(world, findChild(world, rw, "Hub")) == glm::vec4(0, 0, 1, 1));
+        CHECK(Near(world.GetRegistry().Get<TransformComponent>(rw).Position, { 1, 0, 0 }));
+        size_t before = world.GetEntityCount();
+
+        // Edit the wheel: a green hub and a new Tire. Both nested wheels follow (the override stays blue), in new
+        // instances and, after a sync, in the existing one.
+        {
+            auto stage = Prefabs::OpenForEditing(wheelPrefab);
+            Entity root = Prefabs::FindEditedRoot(*stage, wheelPrefab);
+            stage->GetRegistry().Get<MeshRendererComponent>(stage->GetChildren(root)[0]).Color = { 0, 1, 0, 1 };
+            stage->GetRegistry().Emplace<MeshRendererComponent>(stage->CreateEntity("Tire", root)).Color = { 0.1f, 0.1f, 0.1f, 1 };
+            CHECK(Prefabs::SaveEdited(*stage, wheelPrefab));
+        }
+        Prefabs::SyncAll(world);
+        CHECK(world.GetEntityCount() == before + 2); // one tire per wheel, nothing duplicated
+        CHECK(!findChild(world, lw, "Tire").IsNull() && !findChild(world, rw, "Tire").IsNull());
+        CHECK(color(world, findChild(world, lw, "Hub")) == glm::vec4(0, 1, 0, 1) && color(world, findChild(world, rw, "Hub")) == glm::vec4(0, 0, 1, 1));
+        Entity c2 = Prefabs::Instantiate(world, cartPrefab);
+        CHECK(color(world, findChild(world, findChild(world, c2, "Left Wheel"), "Hub")) == glm::vec4(0, 1, 0, 1));
+
+        // Saving the cart again (Prefab Mode) keeps the wheels as references, and its instances stay matched.
+        {
+            auto stage = Prefabs::OpenForEditing(cartPrefab);
+            Entity root = Prefabs::FindEditedRoot(*stage, cartPrefab);
+            CHECK(Prefabs::IsNestedPart(*stage, stage->GetChildren(root)[0]));
+            stage->GetRegistry().Get<TransformComponent>(root).Scale = { 2, 2, 2 };
+            CHECK(Prefabs::SaveEdited(*stage, cartPrefab));
+        }
+        file = nlohmann::json::parse(std::ifstream(assets / "Cart.prefab"));
+        references = 0;
+        for (auto& rec : file["entities"]) references += rec.contains("nested");
+        CHECK(file["entities"].size() == 3 && references == 2);
+        size_t count = world.GetEntityCount();
+        Prefabs::SyncAll(world);
+        CHECK(world.GetEntityCount() == count && Near(world.GetRegistry().Get<TransformComponent>(c1).Scale, { 2, 2, 2 }));
+        CHECK(color(world, findChild(world, rw, "Hub")) == glm::vec4(0, 0, 1, 1));
+
+        // Nesting the cart in a Train nests two levels deep, and a wheel edit still reaches the train.
+        Entity train = world.CreateEntity("Train");
+        world.SetParent(c2, train);
+        AssetHandle trainPrefab = Prefabs::CreateFromEntity(world, train, assets / "Train.prefab");
+        Scene depot("Depot");
+        Entity t1 = Prefabs::Instantiate(depot, trainPrefab);
+        CHECK(!t1.IsNull() && depot.GetChildren(t1).size() == 1 && depot.GetEntityCount() == 1 + 1 + 2 * 3);
+        if (t1.IsNull() || depot.GetChildren(t1).empty()) return;
+        {
+            auto stage = Prefabs::OpenForEditing(wheelPrefab);
+            Entity root = Prefabs::FindEditedRoot(*stage, wheelPrefab);
+            stage->GetRegistry().Get<MeshRendererComponent>(findChild(*stage, root, "Tire")).Color = { 1, 1, 0, 1 };
+            CHECK(Prefabs::SaveEdited(*stage, wheelPrefab));
+        }
+        Prefabs::SyncAll(depot);
+        Entity depotCart = depot.GetChildren(t1)[0];
+        Entity depotWheel = findChild(depot, depotCart, "Right Wheel");
+        CHECK(!depotWheel.IsNull() && color(depot, findChild(depot, depotWheel, "Tire")) == glm::vec4(1, 1, 0, 1));
+        // A prefab cannot end up inside itself: a wheel holding a train is refused at load, without hanging.
+        {
+            auto stage = Prefabs::OpenForEditing(wheelPrefab);
+            Entity root = Prefabs::FindEditedRoot(*stage, wheelPrefab);
+            Prefabs::Instantiate(*stage, trainPrefab, root);
+            Prefabs::SaveEdited(*stage, wheelPrefab);
+        }
+        Scene broken("Broken");
+        Prefabs::Instantiate(broken, trainPrefab); // logs the cycle
+        CHECK(broken.GetEntityCount() < 2000);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     void TestPrefabVariants()
     {
         fs::path assets = fs::temp_directory_path() / "dimension_variant_test" / "Assets";
@@ -3590,6 +3871,38 @@ namespace
                 CHECK(text() == "Clicks: 3");
                 rt->OnRuntimeStop();
             }
+        }
+        {
+            // Engine components from C#: a vehicle driven through the Vehicle class (and a field set by name), and a
+            // cloth whose wind a script changes.
+            Scene phys("CSharp Physics");
+            auto& pr = phys.GetRegistry();
+            Entity car = phys.CreateEntity("Car");
+            pr.Get<TransformComponent>(car).Position = { 0, 1, 0 };
+            pr.Emplace<RigidbodyComponent>(car).Mass = 1200.0f;
+            pr.Emplace<BoxColliderComponent>(car).Size = { 1.8f, 0.6f, 4.0f };
+            pr.Emplace<VehicleComponent>(car);
+            auto& drive = pr.Emplace<ScriptComponent>(car).Add("Game.VehicleInput");
+            drive.Fields["CruiseThrottle"] = 0.7f;
+            drive.Fields["SteerAngle"] = 22.0f;
+            Entity ground = phys.CreateEntity("Ground");
+            pr.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            pr.Emplace<BoxColliderComponent>(ground).Size = { 200, 1, 200 };
+            Entity flag = phys.CreateEntity("Flag");
+            pr.Get<TransformComponent>(flag).Position = { 10, 3, 0 };
+            pr.Emplace<ClothComponent>(flag).Resolution = 6;
+            pr.Emplace<MeshRendererComponent>(flag);
+            pr.Emplace<ScriptComponent>(flag).Add("Game.WindGust");
+            phys.UpdateTransforms();
+            auto rt = phys.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 60; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            auto& vc = rt->GetRegistry().Get<VehicleComponent>(car);
+            CHECK(Near(vc.Throttle, 0.7f) && Near(vc.MaxSteerAngle, 22.0f));
+            CHECK(vc.SpeedKmh > 1.0f); // and it drives
+            glm::vec3 wind = rt->GetRegistry().Get<ClothComponent>(flag).Wind;
+            CHECK(glm::length(wind) > 1.0f);
+            rt->OnRuntimeStop();
         }
         CSharpRuntime::UnloadScripts();
         CHECK(ScriptRegistry::Find("Game.Spinner") == nullptr);
@@ -4942,6 +5255,8 @@ int main(int argc, char** argv)
     Run("Blend trees and animation events", TestBlendTreesAndEvents);
     Run("2D blend trees", TestBlendTrees2D);
     Run("Sub-state machines", TestSubStateMachines);
+    Run("Reverb zones", TestReverbZones);
+    Run("Nested prefabs", TestNestedPrefabs);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);
     Run("Rich text tags", TestRichText);
     Run("Audio occlusion", TestAudioOcclusion);

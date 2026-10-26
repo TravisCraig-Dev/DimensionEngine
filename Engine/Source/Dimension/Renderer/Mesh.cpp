@@ -420,12 +420,17 @@ namespace Dimension
         if (IsDefault()) return {};
         char key[64];
         std::snprintf(key, sizeof(key), "s%g a%d m%d", Scale, ImportAnimations ? 1 : 0, ImportMaterials ? 1 : 0);
-        return key;
+        std::string result = key;
+        for (const auto& name : ExcludedClips) result += " -" + name;
+        return result;
     }
 
     void MeshData::ApplyImportSettings(const MeshImportSettings& settings)
     {
         if (!settings.ImportAnimations) Clips.clear();
+        std::erase_if(Clips, [&](const AnimationClip& c) {
+            return std::find(settings.ExcludedClips.begin(), settings.ExcludedClips.end(), c.Name) != settings.ExcludedClips.end();
+        });
         if (!settings.ImportMaterials)
         {
             Materials.clear();

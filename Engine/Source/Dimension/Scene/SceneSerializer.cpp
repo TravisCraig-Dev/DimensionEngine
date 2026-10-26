@@ -43,6 +43,12 @@ namespace Dimension
                     c["SourceId"] = link->SourceId;
                     c["Root"] = link->IsRoot;
                     c["Overrides"] = link->Overrides;
+                    if (link->NestedPrefab.IsValid())
+                    {
+                        c["NestedPrefab"] = (uint64_t)link->NestedPrefab;
+                        c["NestedSource"] = link->NestedSource;
+                        c["NestedRoot"] = link->NestedRoot;
+                    }
                 }
                 comps[info.Name] = std::move(c);
             }
@@ -136,6 +142,9 @@ namespace Dimension
                         link->IsRoot = data.value("Root", false);
                         if (data.contains("Overrides") && data["Overrides"].is_array())
                             link->Overrides = data["Overrides"].get<std::vector<std::string>>();
+                        link->NestedPrefab = AssetHandle(data.value("NestedPrefab", uint64_t(0)));
+                        link->NestedSource = data.value("NestedSource", uint64_t(0));
+                        link->NestedRoot = data.value("NestedRoot", false);
                     }
                 }
             }
@@ -171,6 +180,12 @@ namespace Dimension
                           { "ssaoIntensity", s.SSAOIntensity },
                           { "ssaoBias", s.SSAOBias },
                           { "ssaoDebug", s.SSAODebug },
+                          { "ssr", s.SSR },
+                          { "ssrIntensity", s.SSRIntensity },
+                          { "ssrMaxDistance", s.SSRMaxDistance },
+                          { "ssrThickness", s.SSRThickness },
+                          { "ssrMaxRoughness", s.SSRMaxRoughness },
+                          { "ssrSteps", s.SSRSteps },
                           { "uiKeyboardNavigation", s.UIKeyboardNavigation },
                           { "dof", s.DepthOfField },
                           { "focusDistance", s.FocusDistance },
@@ -219,6 +234,12 @@ namespace Dimension
         s.SSAOIntensity = js.value("ssaoIntensity", s.SSAOIntensity);
         s.SSAOBias = js.value("ssaoBias", s.SSAOBias);
         s.SSAODebug = js.value("ssaoDebug", s.SSAODebug);
+        s.SSR = js.value("ssr", s.SSR);
+        s.SSRIntensity = js.value("ssrIntensity", s.SSRIntensity);
+        s.SSRMaxDistance = js.value("ssrMaxDistance", s.SSRMaxDistance);
+        s.SSRThickness = js.value("ssrThickness", s.SSRThickness);
+        s.SSRMaxRoughness = js.value("ssrMaxRoughness", s.SSRMaxRoughness);
+        s.SSRSteps = js.value("ssrSteps", s.SSRSteps);
         s.UIKeyboardNavigation = js.value("uiKeyboardNavigation", s.UIKeyboardNavigation);
         s.DepthOfField = js.value("dof", s.DepthOfField);
         s.FocusDistance = js.value("focusDistance", s.FocusDistance);

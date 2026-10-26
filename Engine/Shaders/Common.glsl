@@ -268,6 +268,51 @@ vec3 SampleProbe(ReflectionProbe probe, vec3 pos, vec3 R, float roughness)
     return SampleEquirect(uint(probe.BoxMin.w), DirToEquirectRaw(normalize(dir)), lod) * probe.CenterIntensity.w;
 }
 
+// Reflected environment along R at pos: the sky (GGX-prefiltered when it is a texture; rougher = blurrier, otherwise
+// approximated by blending to the horizon tone), and reflection probes blended per pixel: smallest boxes first, each
+// fading out over its Blend Distance toward its walls; whatever weight is left over goes to the next probe and
+// finally to the sky. Mesh.frag shades with it, and screen-space reflections replace it where they find a hit.
+vec3 EnvironmentReflection(vec3 pos, vec3 R, float roughness)
+{
+    vec3 env;
+    if (HasSkyTexture())
+    {
+        if (uScene.SkyFilter.x > 0.5)
+            env = SampleEquirect(uint(uScene.SkyFilter.x), DirToEquirect(R), roughness * uScene.SkyFilter.y) * uScene.EnvParams.x;
+        else
+            env = SkyRadiance(R, roughness * max(uScene.EnvParams.y - 1.0, 0.0)) / max(uScene.SkyParams.z, 1e-4) * uScene.EnvParams.x;
+    }
+    else
+        env = mix(SkyColor(R), SkyColor(vec3(0.0, 1.0, 0.0)) * 0.5 + uScene.SkyHorizon.rgb * 0.5, roughness);
+    vec3 probeSum = vec3(0.0);
+    float remaining = 1.0;
+    for (int i = 0; i < uScene.Counts.y && remaining > 1e-3; ++i)
+    {
+        ReflectionProbe probe = uScene.Probes[i];
+        float w = ProbeWeight(probe, pos) * remaining;
+        if (w <= 0.0) continue;
+        probeSum += SampleProbe(probe, pos, R, roughness) * w;
+        remaining -= w;
+    }
+    return probeSum + env * remaining;
+}
+
+// Octahedral unit-vector encoding (for the surface buffer screen-space reflections read).
+vec2 OctEncode(vec3 n)
+{
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+    vec2 e = n.xy;
+    if (n.z < 0.0) e = (1.0 - abs(n.yx)) * vec2(e.x >= 0.0 ? 1.0 : -1.0, e.y >= 0.0 ? 1.0 : -1.0);
+    return e;
+}
+
+vec3 OctDecode(vec2 e)
+{
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
+}
+
 // Spot light cookie coordinates (mirrors SpotCookieUV in SceneRenderer.cpp).
 vec2 SpotCookieUV(vec3 dir, float cosOuter, float roll, vec3 toPoint)
 {

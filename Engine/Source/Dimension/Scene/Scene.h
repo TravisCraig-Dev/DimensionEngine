@@ -41,6 +41,13 @@ namespace Dimension
         float SSAOIntensity = 1.5f; // exponent applied to the occlusion
         float SSAOBias = 0.025f;    // view-space depth bias against self-occlusion
         bool SSAODebug = false;     // show the occlusion buffer instead of the lit scene
+        // Screen-space reflections: smooth surfaces reflect what is on screen, falling back to probes and the sky.
+        bool SSR = false;
+        float SSRIntensity = 1.0f;
+        float SSRMaxDistance = 25.0f;  // view-space length of a reflection ray
+        float SSRThickness = 0.3f;     // world units an object is assumed to extend behind its depth
+        float SSRMaxRoughness = 0.6f;  // rougher surfaces keep only probe and sky reflections
+        int SSRSteps = 48;
         bool UIKeyboardNavigation = true; // arrows/Enter/Space move and press the UI selection (off when gameplay uses them)
         // Depth of field: objects nearer or farther than the focus distance blur (perspective cameras).
         bool DepthOfField = false;

@@ -15,18 +15,20 @@ vec3 LinearToSRGB(vec3 c)
 }
 
 // UI is composited in display (sRGB) space; sRGB textures are re-encoded after the hardware decode.
-// Text atlases (top bit of the index) store a signed distance in alpha: 0.5 on the outline, anti-aliased over about
-// a pixel on screen whatever the size.
+// Text atlases (top bit of the index) store a signed distance: 0.5 on the outline, anti-aliased over about a pixel on
+// screen whatever the size. Multi-channel ones (bit 30) keep it as the median of RGB, which keeps corners sharp.
 float DistanceAlpha(float d)
 {
     float w = max(fwidth(d) * 0.75, 1e-4);
     return smoothstep(0.5 - w, 0.5 + w, d);
 }
 
+float Median(vec3 c) { return max(min(c.r, c.g), min(max(c.r, c.g), c.b)); }
+
 void main()
 {
-    uint index = vTexture & 0x7FFFFFFFu;
+    uint index = vTexture & 0x3FFFFFFFu;
     vec4 t = texture(uTextures[nonuniformEXT(index)], vUV);
-    if ((vTexture & 0x80000000u) != 0u) t = vec4(1.0, 1.0, 1.0, DistanceAlpha(t.a));
+    if ((vTexture & 0x80000000u) != 0u) t = vec4(1.0, 1.0, 1.0, DistanceAlpha((vTexture & 0x40000000u) != 0u ? Median(t.rgb) : t.a));
     outColor = vec4(LinearToSRGB(t.rgb) * vColor.rgb, t.a * vColor.a);
 }

@@ -176,10 +176,29 @@ namespace Dimension
                 subEmits.push_back({ ps.SubEmitter, hitPoint, ps.SubEmitCount });
         }
 
+        // GPU systems only count what to create; the renderer's compute pass makes and moves the particles.
+        void QueueGpuEmission(ParticleSystemComponent& ps, const glm::vec3* origin, int count)
+        {
+            if (count <= 0) return;
+            auto& list = ps.GpuEmissions;
+            bool atOrigin = origin != nullptr;
+            glm::vec3 at = origin ? *origin : glm::vec3(0.0f);
+            if (!list.empty() && list.back().AtOrigin == atOrigin && (!atOrigin || list.back().Origin == at))
+                list.back().Count += count;
+            else if ((int)list.size() < ParticleSystemComponent::kMaxGpuEmissions)
+                list.push_back({ at, count, atOrigin });
+            else
+                list.back().Count += count; // out of segments: join the last one
+            ps.GpuSinceEmit = 0.0f;
+        }
+
         void Simulate(Scene& scene, ParticleSystemComponent& ps, const glm::mat4& world, bool active, float dt,
                       std::vector<SubEmitRequest>& subEmits)
         {
-            auto emit = [&](const glm::vec3* origin) { EmitOne(ps, world, origin, subEmits); };
+            auto emit = [&](const glm::vec3* origin) {
+                if (ps.SimulateOnGpu) QueueGpuEmission(ps, origin, 1);
+                else EmitOne(ps, world, origin, subEmits);
+            };
             if (!ps.Started && ps.Playing)
             {
                 ps.Started = true;
@@ -214,8 +233,15 @@ namespace Dimension
                 for (int i = 0; i < burst.Count; ++i) emit(&burst.WorldPosition);
             ps.PendingBursts.clear();
 
-            glm::mat4 invWorld = glm::inverse(world);
             ps.NoiseTime += dt;
+            if (ps.SimulateOnGpu)
+            {
+                ps.Particles.clear();
+                ps.GpuPendingDt += dt;
+                ps.GpuSinceEmit += dt;
+                return;
+            }
+            glm::mat4 invWorld = glm::inverse(world);
             glm::vec3 gravity(0.0f, -9.81f * ps.GravityModifier, 0.0f);
             if (ps.SimulationSpace == ParticleSpace::Local) gravity = glm::vec3(invWorld * glm::vec4(gravity, 0.0f));
             float damping = std::max(0.0f, 1.0f - ps.Drag * dt);
@@ -361,6 +387,10 @@ namespace Dimension
                 ps.Started = false;
                 ps.Playing = ps.PlayOnAwake;
                 ps.PendingEmit = 0;
+                ps.GpuEmissions.clear();
+                ps.GpuPendingDt = 0.0f;
+                ps.GpuSinceEmit = 1e9f;
+                ++ps.GpuGeneration;
             }
         }
     }

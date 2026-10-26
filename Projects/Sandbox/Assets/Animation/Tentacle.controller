@@ -94,7 +94,8 @@
       "hasExitTime": true,
       "exitTime": 1.0,
       "duration": 0.4,
-      "conditions": []
+      "conditions": [],
+      "toExit": true
     }
   ],
   "defaultState": 0,
@@ -110,7 +111,23 @@
       "position": [
         140,
         0
+      ],
+      "entryPosition": [
+        -140,
+        0
+      ],
+      "exitPosition": [
+        400,
+        0
       ]
     }
+  ],
+  "entryPosition": [
+    -420,
+    0
+  ],
+  "exitPosition": [
+    420,
+    0
   ]
 }

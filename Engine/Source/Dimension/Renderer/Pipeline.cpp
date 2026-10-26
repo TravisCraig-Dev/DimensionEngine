@@ -115,6 +115,21 @@ namespace Dimension
         vkDestroyShaderModule(device, fs, nullptr);
     }
 
+    Pipeline Pipeline::Compute(std::span<const uint32_t> spirv, const char* debugName)
+    {
+        VkDevice device = RenderDevice::Get().GetDevice();
+        VkShaderModule cs = CreateModule(spirv);
+        VkComputePipelineCreateInfo info{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+        info.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main", nullptr };
+        info.layout = RenderDevice::Get().GetPipelineLayout();
+        Pipeline p;
+        p.m_BindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+        VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &p.m_Pipeline));
+        if (debugName) Vk::SetDebugName(VK_OBJECT_TYPE_PIPELINE, (uint64_t)p.m_Pipeline, debugName);
+        vkDestroyShaderModule(device, cs, nullptr);
+        return p;
+    }
+
     Pipeline::~Pipeline()
     {
         if (!m_Pipeline) return;

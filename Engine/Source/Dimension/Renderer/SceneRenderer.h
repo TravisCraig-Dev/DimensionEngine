@@ -81,6 +81,8 @@ namespace Dimension
 
         static int CellIndex(int x, int y, int slice) { return (slice * kTilesY + y) * kTilesX + x; }
         int SliceOf(float viewDepth) const;
+        // Near, far and orthographic from the projection (Build calls it; GPU culling needs only this).
+        void SetPlanes(const glm::mat4& projection);
         // Lights as (world position, range) spheres; near/far come from the projection. Without culling every cluster
         // lists every light (for comparisons).
         void Build(const std::vector<glm::vec4>& spheres, const glm::mat4& view, const glm::mat4& projection, bool cull = true);
@@ -98,6 +100,7 @@ namespace Dimension
         uint32_t RenderListItems = 0; // mesh renderers resolved this frame (once, shared by all passes)
         uint32_t Lights = 0;          // point and spot lights in view's clusters
         uint32_t ClusterLightRefs = 0; // light entries over all clusters
+        uint32_t GpuParticleCapacity = 0; // particle slots drawn by GPU particle systems
         float CpuMs = 0.0f;           // CPU time spent recording this view
         float ListMs = 0.0f;          // part of CpuMs: building the render list
     };
@@ -140,6 +143,9 @@ namespace Dimension
         // instanced call. On by default; turning it off is useful for comparisons.
         static void SetInstancingEnabled(bool enabled);
         static void SetLightClusteringEnabled(bool enabled); // false: every light in every cluster (comparisons)
+        // Light culling runs in a compute shader by default; false builds the clusters on the CPU (comparisons).
+        static void SetGpuLightCullingEnabled(bool enabled);
+        static bool IsGpuLightCullingEnabled();
         static bool IsInstancingEnabled();
         // Re-captures every reflection probe on the next frame (all renderers).
         static void RequestProbeBake();
@@ -196,6 +202,9 @@ namespace Dimension
             VkDeviceAddress Skin = 0, Joints = 0;
             VkBuffer Vertices = VK_NULL_HANDLE; // this frame's vertices instead of the mesh's (simulated cloth)
             VkDeviceSize VertexOffset = 0;
+            VkBuffer Indices = VK_NULL_HANDLE;  // and triangles instead of the mesh's (torn cloth)
+            VkDeviceSize IndexOffset = 0;
+            uint32_t IndexCount = 0;
             bool AlwaysVisible;        // skinned: animated bounds are unknown
             bool CastShadows;          // the renderer's flag
             uint32_t FirstPart, PartCount;
@@ -205,6 +214,10 @@ namespace Dimension
         std::vector<uint8_t> m_BatchInstanceable;       // per batch: false for skinned parts (one draw each)
         std::vector<uint32_t> m_BatchStart, m_BatchFill; // per-pass scratch for the counting sort
         LightClusters m_Clusters; // this view's light clusters (rebuilt every Render)
+        // GPU light culling output: per cluster (offset, count) and a fixed-capacity light list per cluster.
+        Buffer m_GpuClusterCells, m_GpuClusterIndices;
+        VkDeviceAddress m_GpuClusterCellsAddress = 0, m_GpuClusterIndicesAddress = 0;
+        bool CullLightsOnGpu(VkCommandBuffer cmd, const void* uniforms, size_t size);
         std::vector<uint32_t> m_VisibleParts, m_SortedParts;
         void BuildRenderList(Scene& scene);
 
@@ -258,6 +271,18 @@ namespace Dimension
         void DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass);
         // Depth prepass, half-resolution SSAO and its blur (leaves the depth attachment ready to load).
         void RenderDepthOfField(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera, const SceneSettings& settings);
+        void RenderReflections(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings);
+        // GPU particle systems: compute simulation before the main pass, then camera-facing quads in it.
+        struct GpuParticleDraw
+        {
+            VkDeviceAddress Particles, Params;
+            uint32_t Capacity, Texture, Entity;
+            bool Additive;
+            int32_t Order;
+        };
+        std::vector<GpuParticleDraw> m_GpuParticleDraws;
+        void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene);
+        void DrawGpuParticles(VkCommandBuffer cmd);
         void RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
                                     const SceneSettings& settings);
         // Renders the directional shadow map; returns the light view-projection.

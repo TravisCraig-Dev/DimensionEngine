@@ -1,0 +1,657 @@
+{
+  "version": 1,
+  "name": "Particles",
+  "settings": {
+    "ambientColor": [
+      0.55,
+      0.6,
+      0.7
+    ],
+    "ambientIntensity": 0.05,
+    "gravity2D": [
+      0,
+      -9.81
+    ],
+    "gravity": [
+      0,
+      -9.81,
+      0
+    ],
+    "exposure": 1.0,
+    "tonemapping": true,
+    "bloom": true,
+    "bloomIntensity": 0.6,
+    "bloomThreshold": 2.0,
+    "bloomKnee": 0.5,
+    "bloomRadius": 1.0,
+    "fxaa": true,
+    "vignette": 0.25,
+    "skyMode": 1,
+    "skyTexture": 100045,
+    "skyIntensity": 0.08,
+    "skyRotation": 0.0,
+    "reflectionIntensity": 0.2,
+    "ssao": false,
+    "ssaoRadius": 0.6,
+    "ssaoIntensity": 1.5,
+    "ssaoBias": 0.025,
+    "ssaoDebug": false,
+    "uiKeyboardNavigation": false,
+    "ssr": true,
+    "msaa": 1
+  },
+  "entities": [
+    {
+      "guid": 2000001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            6,
+            18
+          ],
+          "Rotation": [
+            -0.25,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 0,
+          "Field Of View": 60,
+          "Orthographic Size": 5,
+          "Near Clip": 0.1,
+          "Far Clip": 300,
+          "Primary": true,
+          "Background": [
+            0.02,
+            0.02,
+            0.03,
+            1
+          ],
+          "Clear Flags": 1
+        }
+      }
+    },
+    {
+      "guid": 2000002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ground",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            3,
+            1,
+            3
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 3,
+          "Albedo": 100001,
+          "Color": [
+            0.22,
+            0.22,
+            0.25,
+            1
+          ],
+          "Tiling": [
+            10,
+            10
+          ],
+          "Smoothness": 0.9,
+          "Emission": 0.0,
+          "Cast Shadows": false
+        }
+      }
+    },
+    {
+      "guid": 2000381,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Canvas",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Canvas": {
+          "Scale Mode": 1,
+          "Reference Resolution": [
+            1920,
+            1080
+          ],
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 2000382,
+      "parent": 2000381,
+      "components": {
+        "Tag": {
+          "Name": "Title",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            34,
+            30
+          ],
+          "Size": [
+            1400,
+            60
+          ]
+        },
+        "UI Text": {
+          "Text": "<b>1,000,000 GPU particles</b>  <color=#9ab>(simulated in a compute shader; the floor shows screen-space reflections)</color>",
+          "Font": 0,
+          "Font Size": 36,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 2000901,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Fountain",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -5,
+            0.05,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Simulate On GPU": true,
+          "Simulation Space": 1,
+          "Blend": 1,
+          "Play On Awake": true,
+          "Looping": true,
+          "Max Particles": 300000,
+          "Rate Over Time": 80000,
+          "Start Lifetime": [
+            2.5,
+            3.6
+          ],
+          "Start Speed": [
+            7,
+            10
+          ],
+          "Start Size": [
+            0.025,
+            0.05
+          ],
+          "Shape": 0,
+          "Shape Angle": 10,
+          "Shape Radius": 0.15,
+          "Gravity Modifier": 0.6,
+          "Start Color A": [
+            0.3,
+            0.65,
+            1.0,
+            1
+          ],
+          "Start Color B": [
+            0.55,
+            0.95,
+            1.0,
+            1
+          ],
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              0.8,
+              1,
+              1,
+              1,
+              0.8
+            ],
+            [
+              1,
+              1,
+              1,
+              1,
+              0
+            ]
+          ],
+          "Collision": 1,
+          "Collision Plane Height": 0.0,
+          "Bounce": 0.35,
+          "Collision Dampen": 0.2,
+          "Drag": 0.05
+        }
+      }
+    },
+    {
+      "guid": 2000902,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Nebula",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            3.5,
+            -2
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Simulate On GPU": true,
+          "Simulation Space": 1,
+          "Blend": 1,
+          "Play On Awake": true,
+          "Looping": true,
+          "Max Particles": 500000,
+          "Rate Over Time": 100000,
+          "Start Lifetime": [
+            4,
+            5
+          ],
+          "Start Speed": [
+            0,
+            0.2
+          ],
+          "Start Size": [
+            0.02,
+            0.045
+          ],
+          "Shape": 1,
+          "Shape Radius": 2.5,
+          "Gravity Modifier": 0.0,
+          "Start Color A": [
+            1.0,
+            0.35,
+            0.8,
+            1
+          ],
+          "Start Color B": [
+            0.6,
+            0.3,
+            1.0,
+            1
+          ],
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              0
+            ],
+            [
+              0.2,
+              1,
+              1,
+              1,
+              0.7
+            ],
+            [
+              1,
+              1,
+              1,
+              1,
+              0
+            ]
+          ],
+          "Noise": true,
+          "Noise Strength": 1.6,
+          "Noise Frequency": 0.35,
+          "Noise Scroll Speed": 0.3
+        }
+      }
+    },
+    {
+      "guid": 2000903,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Embers",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            5,
+            0.05,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Particle System": {
+          "Simulate On GPU": true,
+          "Simulation Space": 1,
+          "Blend": 1,
+          "Play On Awake": true,
+          "Looping": true,
+          "Max Particles": 200000,
+          "Rate Over Time": 40000,
+          "Start Lifetime": [
+            3,
+            5
+          ],
+          "Start Speed": [
+            0.5,
+            1.5
+          ],
+          "Start Size": [
+            0.03,
+            0.07
+          ],
+          "Shape": 0,
+          "Shape Angle": 25,
+          "Shape Radius": 0.8,
+          "Gravity Modifier": -0.12,
+          "Start Color A": [
+            1.0,
+            0.75,
+            0.3,
+            1
+          ],
+          "Start Color B": [
+            1.0,
+            0.35,
+            0.05,
+            1
+          ],
+          "Color Over Lifetime": [
+            [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              0.6,
+              0.2,
+              0.1,
+              0
+            ]
+          ],
+          "Size Over Lifetime": [
+            [
+              0,
+              1.0
+            ],
+            [
+              1,
+              0.2
+            ]
+          ],
+          "Noise": true,
+          "Noise Strength": 0.8,
+          "Noise Frequency": 0.9,
+          "Noise Scroll Speed": 1.0
+        }
+      }
+    },
+    {
+      "guid": 2000910,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Pedestal",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -5,
+            0.25,
+            2.2
+          ],
+          "Rotation": [
+            0,
+            0.6,
+            0
+          ],
+          "Scale": [
+            1.2,
+            0.5,
+            1.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            0.3,
+            0.65,
+            1.0,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.6,
+          "Cast Shadows": false
+        }
+      }
+    },
+    {
+      "guid": 2000911,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Pedestal",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0.25,
+            2.2
+          ],
+          "Rotation": [
+            0,
+            0.6,
+            0
+          ],
+          "Scale": [
+            1.2,
+            0.5,
+            1.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            1.0,
+            0.35,
+            0.8,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.6,
+          "Cast Shadows": false
+        }
+      }
+    },
+    {
+      "guid": 2000912,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Pedestal",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            5,
+            0.25,
+            2.2
+          ],
+          "Rotation": [
+            0,
+            0.6,
+            0
+          ],
+          "Scale": [
+            1.2,
+            0.5,
+            1.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            1.0,
+            0.6,
+            0.2,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.7,
+          "Emission": 0.6,
+          "Cast Shadows": false
+        }
+      }
+    }
+  ]
+}

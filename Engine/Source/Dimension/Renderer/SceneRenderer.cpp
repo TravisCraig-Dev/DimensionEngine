@@ -44,6 +44,11 @@
 #include "shaders/DofBlur.frag.h"
 #include "shaders/ProbeEquirect.frag.h"
 #include "shaders/ProbePrefilter.frag.h"
+#include "shaders/LightCull.comp.h"
+#include "shaders/ParticleSim.comp.h"
+#include "shaders/ParticleGpu.vert.h"
+#include "shaders/Ssr.frag.h"
+#include "shaders/SsrApply.frag.h"
 
 namespace Dimension
 {
@@ -123,6 +128,7 @@ namespace Dimension
 
         bool s_InstancingEnabled = true;
         bool s_ClusterCulling = true;
+        bool s_GpuLightCulling = true;
         uint64_t s_ProbeBakeGeneration = 0;
         constexpr uint32_t kMaxInstancesPerDraw = 16384;
 
@@ -305,7 +311,8 @@ namespace Dimension
     // The pipelines that draw into the scene's main pass; MSAA needs a copy of each built for its sample count.
     struct MainPipelines
     {
-        enum Kind { Mesh, MeshDoubleSided, MeshTransparent, DepthPrepass, DepthPrepassDoubleSided, Sky, Sprite, SpriteAdditive, Line, Count };
+        enum Kind { Mesh, MeshDoubleSided, MeshTransparent, DepthPrepass, DepthPrepassDoubleSided, Sky, Sprite, SpriteAdditive, Line,
+                    GpuParticles, GpuParticlesAdditive, Count };
         Pipeline Pipelines[Count];
         const Pipeline& operator[](Kind k) const { return Pipelines[k]; }
     };
@@ -317,6 +324,18 @@ namespace Dimension
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
+        Pipeline LightCull, ParticleSim; // compute
+        Pipeline GpuParticles, GpuParticlesAdditive;
+        // GPU particle systems' simulation buffers, per (scene, entity); dropped when unused for a while.
+        struct GpuParticleState
+        {
+            Buffer Particles;
+            VkDeviceAddress Address = 0;
+            uint32_t Capacity = 0, Head = 0, Generation = 0;
+            uint64_t LastFrame = 0;
+        };
+        std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
+        Pipeline Ssr, SsrApply;
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
     };
@@ -339,7 +358,8 @@ namespace Dimension
                             { 3, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, Tangent) } };
         mesh.CullMode = VK_CULL_MODE_BACK_BIT;
         mesh.DepthTest = mesh.DepthWrite = true;
-        mesh.ColorAttachments = { { F::kHdrFormat }, { F::kIdFormat } };
+        // HDR color, entity ids and the surface buffer for screen-space reflections (opaque meshes only write it).
+        mesh.ColorAttachments = { { F::kHdrFormat }, { F::kIdFormat }, { F::kSurfaceFormat } };
         mesh.DepthFormat = F::kDepthFormat;
         mesh.DebugName = "MeshPipeline";
         r.Mesh = Pipeline(mesh);
@@ -351,7 +371,7 @@ namespace Dimension
         r.MainDescs[MainPipelines::MeshDoubleSided] = meshTwoSided;
         GraphicsPipelineDesc meshTransparent = meshTwoSided;
         meshTransparent.DepthWrite = false;
-        meshTransparent.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat } };
+        meshTransparent.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat }, { F::kSurfaceFormat, BlendMode::Opaque, false } };
         meshTransparent.DebugName = "MeshTransparentPipeline";
         r.MeshTransparent = Pipeline(meshTransparent);
         r.MainDescs[MainPipelines::MeshTransparent] = meshTransparent;
@@ -378,7 +398,7 @@ namespace Dimension
         GraphicsPipelineDesc sky;
         sky.VertexSpirv = kSky_vert;
         sky.FragmentSpirv = kSky_frag;
-        sky.ColorAttachments = { { F::kHdrFormat }, { F::kIdFormat, BlendMode::Opaque, false } };
+        sky.ColorAttachments = { { F::kHdrFormat }, { F::kIdFormat, BlendMode::Opaque, false }, { F::kSurfaceFormat, BlendMode::Opaque, false } };
         sky.DepthFormat = F::kDepthFormat;
         sky.DebugName = "SkyPipeline";
         r.Sky = Pipeline(sky);
@@ -396,16 +416,27 @@ namespace Dimension
                               { 4, VK_FORMAT_R32_UINT, offsetof(SV, E) } };
         sprite.DepthTest = true;
         sprite.DepthWrite = false;
-        sprite.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat } };
+        sprite.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat }, { F::kSurfaceFormat, BlendMode::Opaque, false } };
         sprite.DepthFormat = F::kDepthFormat;
         sprite.DebugName = "SpritePipeline";
         r.Sprite = Pipeline(sprite);
         r.MainDescs[MainPipelines::Sprite] = sprite;
         GraphicsPipelineDesc additive = sprite;
-        additive.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive }, { F::kIdFormat } };
+        additive.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive }, { F::kIdFormat }, { F::kSurfaceFormat, BlendMode::Opaque, false } };
         additive.DebugName = "SpriteAdditivePipeline";
         r.SpriteAdditive = Pipeline(additive);
         r.MainDescs[MainPipelines::SpriteAdditive] = additive;
+        GraphicsPipelineDesc gpuParticles = sprite;
+        gpuParticles.VertexSpirv = kParticleGpu_vert;
+        gpuParticles.VertexStride = 0;
+        gpuParticles.Attributes = {};
+        gpuParticles.DebugName = "GpuParticlesPipeline";
+        r.GpuParticles = Pipeline(gpuParticles);
+        r.MainDescs[MainPipelines::GpuParticles] = gpuParticles;
+        gpuParticles.ColorAttachments = additive.ColorAttachments;
+        gpuParticles.DebugName = "GpuParticlesAdditivePipeline";
+        r.GpuParticlesAdditive = Pipeline(gpuParticles);
+        r.MainDescs[MainPipelines::GpuParticlesAdditive] = gpuParticles;
 
         GraphicsPipelineDesc ui = sprite;
         ui.VertexSpirv = kUI_vert;
@@ -424,7 +455,8 @@ namespace Dimension
         line.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(LV, P) }, { 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(LV, C) } };
         line.Topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
         line.DepthTest = true;
-        line.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat, BlendMode::Opaque, false } };
+        line.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat, BlendMode::Opaque, false },
+                                  { F::kSurfaceFormat, BlendMode::Opaque, false } };
         line.DepthFormat = F::kDepthFormat;
         line.DebugName = "LinePipeline";
         r.Line = Pipeline(line);
@@ -478,6 +510,16 @@ namespace Dimension
         post.FragmentSpirv = kSsaoBlur_frag;
         post.DebugName = "SsaoBlurPipeline";
         r.SsaoBlur = Pipeline(post);
+        post.FragmentSpirv = kSsr_frag;
+        post.ColorAttachments = { { F::kHdrFormat } };
+        post.DebugName = "SsrPipeline";
+        r.Ssr = Pipeline(post);
+        post.FragmentSpirv = kSsrApply_frag;
+        post.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive } };
+        post.DebugName = "SsrApplyPipeline";
+        r.SsrApply = Pipeline(post);
+        r.LightCull = Pipeline::Compute(kLightCull_comp, "LightCullPipeline");
+        r.ParticleSim = Pipeline::Compute(kParticleSim_comp, "ParticleSimPipeline");
 
         std::vector<uint32_t> indices(kMaxQuadsPerDraw * 6);
         for (uint32_t q = 0; q < kMaxQuadsPerDraw; ++q)
@@ -706,9 +748,35 @@ namespace Dimension
                                glm::vec4(dir, cosOuter), glm::vec4(cosInner, cookie, roll, 0.0f) });
         }
 
-        // Clustered lights: the light array, each cluster's (offset, count) and the light index list, in the
-        // transient ring for this view.
-        if (!lights.empty())
+        // Clustered lights: the light array, each cluster's (offset, count) and the light index list. A compute
+        // shader fills the clusters by default (into this view's buffers); otherwise they are built here and go in
+        // the transient ring.
+        u.InvProj = glm::inverse(u.Proj);
+        bool gpuCulled = false;
+        if (!lights.empty() && s_GpuLightCulling && s_ClusterCulling)
+        {
+            TransientAllocation lightBlock = device.AllocateTransient(lights.size() * sizeof(PointLightGPU), 16);
+            if (lightBlock)
+            {
+                std::memcpy(lightBlock.Data, lights.data(), lights.size() * sizeof(PointLightGPU));
+                m_Clusters.SetPlanes(camera.Projection);
+                glm::uvec2 a = SplitAddress(lightBlock.Address);
+                u.LightBuffers = glm::uvec4(a, 0u, 0u);
+                u.Counts.x = (int)lights.size();
+                u.ClusterParams = glm::vec4(m_Clusters.Near, m_Clusters.Far, m_Clusters.Orthographic ? 1.0f : 0.0f, std::log(m_Clusters.Far / m_Clusters.Near));
+                gpuCulled = CullLightsOnGpu(cmd, &u, sizeof(u)); // sets the cluster buffer addresses in u first
+                if (gpuCulled)
+                {
+                    u.LightBuffers = glm::uvec4(a, SplitAddress(m_GpuClusterCellsAddress));
+                    u.LightIndexBuffer = glm::uvec4(SplitAddress(m_GpuClusterIndicesAddress), 0u, 0u);
+                    m_Stats.Lights = (uint32_t)lights.size();
+                    m_Stats.ClusterLightRefs = 0; // not read back
+                }
+                else
+                    u.Counts.x = 0;
+            }
+        }
+        if (!lights.empty() && !gpuCulled)
         {
             std::vector<glm::vec4> spheres(lights.size());
             for (size_t i = 0; i < lights.size(); ++i) spheres[i] = lights[i].PositionRange;
@@ -730,6 +798,9 @@ namespace Dimension
                 m_Stats.ClusterLightRefs = (uint32_t)m_Clusters.Indices.size();
             }
         }
+
+        // GPU particles: simulate (once per frame, whichever view renders first) and list their draws.
+        SimulateGpuParticles(cmd, scene);
 
         // Prepare CPU-side draw lists
         CollectSprites(scene, camera);
@@ -772,8 +843,12 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetIds().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_ASPECT_DEPTH_BIT);
+        // Screen-space reflections need a perspective view too; without them the surface buffer is not stored.
+        bool ssr = settings.SSR && settings.SSRIntensity > 0.0f && !camera.Orthographic && !options.ProbeCapture;
+        Vk::TransitionImage(cmd, target.GetSurface().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         if (m_Samples > 1)
         {
+            Vk::TransitionImage(cmd, target.GetSurfaceMS().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             Vk::TransitionImage(cmd, target.GetHdrMS().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             Vk::TransitionImage(cmd, target.GetIdsMS().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             Vk::TransitionImage(cmd, target.GetDepthMS().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -790,7 +865,6 @@ namespace Dimension
                                 glm::vec4(p.BoxProjection ? 1.0f : 0.0f, p.BlendDistance, 0.0f, 0.0f) };
                 u.Counts.y = (int)i + 1;
             }
-        u.InvProj = glm::inverse(u.Proj);
         if (ssao)
         {
             u.AOParams = glm::vec4(settings.SSAODebug ? 2.0f : 1.0f, (float)target.GetAOBindless(1), 1.0f / extent.width, 1.0f / extent.height);
@@ -800,7 +874,7 @@ namespace Dimension
         }
 
         glm::vec4 clear = ToLinear(camera.ClearColor);
-        VkRenderingAttachmentInfo colors[2]{};
+        VkRenderingAttachmentInfo colors[3]{};
         colors[0] = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         colors[0].imageView = target.GetHdr().GetView();
         colors[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -813,26 +887,31 @@ namespace Dimension
         colors[1].clearValue.color.uint32[1] = 0;
         colors[1].clearValue.color.uint32[2] = 0;
         colors[1].clearValue.color.uint32[3] = 0;
+        colors[2] = colors[1];
+        colors[2].imageView = target.GetSurface().GetView();
+        if (!ssr) colors[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         depth.imageView = target.GetDepth().GetView();
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depth.loadOp = ssao ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; // reuse the prepass depth
         // Depth of field focuses for the game camera: the editor's Scene view (overlays on) stays sharp.
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
-        depth.storeOp = dof ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth of field reads it
+        depth.storeOp = dof || ssr ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth of field and SSR read it
         depth.clearValue.depthStencil = { 1.0f, 0 };
         if (m_Samples > 1)
         {
             // Draw into the multisampled images and resolve at the end: color averaged, ids and depth from sample 0.
             MultisampleInto(colors[0], target.GetHdrMS(), target.GetHdr(), VK_RESOLVE_MODE_AVERAGE_BIT);
             MultisampleInto(colors[1], target.GetIdsMS(), target.GetIds(), VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
+            MultisampleInto(colors[2], target.GetSurfaceMS(), target.GetSurface(), ssr ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE);
+            if (!ssr) colors[2].resolveImageView = VK_NULL_HANDLE;
             MultisampleInto(depth, target.GetDepthMS(), target.GetDepth(), VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
         }
 
         VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
         rendering.renderArea = { { 0, 0 }, extent };
         rendering.layerCount = 1;
-        rendering.colorAttachmentCount = 2;
+        rendering.colorAttachmentCount = 3;
         rendering.pColorAttachments = colors;
         rendering.pDepthAttachment = &depth;
         vkCmdBeginRendering(cmd, &rendering);
@@ -865,6 +944,7 @@ namespace Dimension
         }
 
         DrawSprites(cmd);
+        DrawGpuParticles(cmd);
 
         vkCmdEndRendering(cmd);
         target.RecordPickCopy(cmd);
@@ -883,14 +963,17 @@ namespace Dimension
         // Post processing: bloom (HDR) -> composite (exposure, tonemap, vignette) -> optional FXAA -> overlays and UI.
         Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         device.BindBindless(cmd);
-        bool bloom = settings.Bloom && settings.BloomIntensity > 0.0f && target.GetBloomLevels() > 0;
-        if (bloom) RenderBloom(cmd, target, settings);
-        if (dof)
-        {
+        if (dof || ssr)
             Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                 VK_IMAGE_ASPECT_DEPTH_BIT);
-            RenderDepthOfField(cmd, target, camera, settings);
+        if (ssr)
+        {
+            device.BindUniforms(cmd, &u, sizeof(u));
+            RenderReflections(cmd, target, settings);
         }
+        bool bloom = settings.Bloom && settings.BloomIntensity > 0.0f && target.GetBloomLevels() > 0;
+        if (bloom) RenderBloom(cmd, target, settings);
+        if (dof) RenderDepthOfField(cmd, target, camera, settings);
 
         VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
         CompositePush push{ target.GetHdrBindless(), settings.Exposure, settings.Tonemapping ? 1u : 0u,
@@ -1019,6 +1102,45 @@ namespace Dimension
 
     void SceneRenderer::SetInstancingEnabled(bool enabled) { s_InstancingEnabled = enabled; }
     void SceneRenderer::SetLightClusteringEnabled(bool enabled) { s_ClusterCulling = enabled; }
+    void SceneRenderer::SetGpuLightCullingEnabled(bool enabled) { s_GpuLightCulling = enabled; }
+    bool SceneRenderer::IsGpuLightCullingEnabled() { return s_GpuLightCulling; }
+
+    bool SceneRenderer::CullLightsOnGpu(VkCommandBuffer cmd, const void* uniforms, size_t size)
+    {
+        auto& device = RenderDevice::Get();
+        if (!m_GpuClusterCells.IsValid())
+        {
+            auto make = [&](VkDeviceSize bytes, const char* name, VkDeviceAddress& address) {
+                Buffer b(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, MemoryUsage::GpuOnly, name);
+                VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+                info.buffer = b.GetHandle();
+                address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                return b;
+            };
+            m_GpuClusterCells = make(LightClusters::kCount * sizeof(glm::uvec2), "GpuClusterCells", m_GpuClusterCellsAddress);
+            m_GpuClusterIndices = make((VkDeviceSize)LightClusters::kCount * LightClusters::kMaxPerCluster * sizeof(uint32_t), "GpuClusterIndices",
+                                       m_GpuClusterIndicesAddress);
+        }
+        SceneUniforms u = *static_cast<const SceneUniforms*>(uniforms);
+        DIM_ASSERT(size == sizeof(u), "Scene uniforms size mismatch");
+        u.LightBuffers.z = (uint32_t)m_GpuClusterCellsAddress;
+        u.LightBuffers.w = (uint32_t)(m_GpuClusterCellsAddress >> 32);
+        u.LightIndexBuffer = glm::uvec4((uint32_t)m_GpuClusterIndicesAddress, (uint32_t)(m_GpuClusterIndicesAddress >> 32), 0u, 0u);
+
+        // The previous view's shading (earlier in this or an in-flight frame, same queue) must be done reading.
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        auto& res = Renderer::Get();
+        res.LightCull.Bind(cmd);
+        device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+        device.BindUniforms(cmd, &u, sizeof(u), VK_PIPELINE_BIND_POINT_COMPUTE);
+        uint32_t maxPerCluster = LightClusters::kMaxPerCluster;
+        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(maxPerCluster), &maxPerCluster);
+        vkCmdDispatch(cmd, (LightClusters::kCount + 63) / 64, 1, 1);
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        return true;
+    }
     void SceneRenderer::RequestProbeBake() { ++s_ProbeBakeGeneration; }
 
     SceneRenderer::ProbeResources::~ProbeResources()
@@ -1262,7 +1384,7 @@ namespace Dimension
             const ClothComponent* cloth = reg.TryGet<ClothComponent>(e);
             const SoftBodyComponent* soft = cloth ? nullptr : reg.TryGet<SoftBodyComponent>(e);
             Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : AssetManager::GetMesh(mr.Mesh);
-            if (!mesh) continue;
+            if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
             AABB bounds = mesh->GetBounds();
@@ -1288,6 +1410,15 @@ namespace Dimension
                     item.Vertices = block.Buffer;
                     item.VertexOffset = block.Offset;
                 }
+                // Torn cloth: only the triangles still attached.
+                if (cloth && !cloth->TornIndices.empty() && item.Vertices)
+                    if (TransientAllocation block = device.AllocateTransient(cloth->TornIndices.size() * sizeof(uint32_t), 16))
+                    {
+                        std::memcpy(block.Data, cloth->TornIndices.data(), cloth->TornIndices.size() * sizeof(uint32_t));
+                        item.Indices = block.Buffer;
+                        item.IndexOffset = block.Offset;
+                        item.IndexCount = (uint32_t)cloth->TornIndices.size();
+                    }
             }
             glm::mat3 m(t.World);
             glm::vec3 ext = bounds.Extents();
@@ -1346,8 +1477,12 @@ namespace Dimension
                 // Every part can batch: skinned instances carry their own skinning matrices, and transparent parts
                 // merge with same-batch neighbours in the back-to-front order. Parts with their own vertices cannot.
                 uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, doubleSided, item.Probe }, !item.Vertices);
-                m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, transparent, doubleSided, mat.CastShadows,
-                                          (uint32_t)m_RenderItems.size(), batch });
+                if (item.Indices) // its own triangles: one part over all of them
+                    m_RenderParts.push_back({ 0u, item.IndexCount, address, transparent, doubleSided, mat.CastShadows, (uint32_t)m_RenderItems.size(), batch });
+                else
+                    m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, transparent, doubleSided, mat.CastShadows,
+                                              (uint32_t)m_RenderItems.size(), batch });
+                if (item.Indices) break;
             }
             item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
             item.MeshRef = std::move(mesh);
@@ -1374,6 +1509,8 @@ namespace Dimension
             uint32_t Part = 0; // transparent draws: the part, for merging same-batch neighbours
             VkBuffer Vertices = VK_NULL_HANDLE; // vertices other than the mesh's (cloth)
             VkDeviceSize VertexOffset = 0;
+            VkBuffer Indices = VK_NULL_HANDLE;  // and indices (torn cloth)
+            VkDeviceSize IndexOffset = 0;
         };
         std::vector<Draw> transparent;
         const Pipeline* bound = nullptr;
@@ -1395,6 +1532,7 @@ namespace Dimension
                 vkCmdBindVertexBuffers(cmd, 0, 1, &d.Vertices, &d.VertexOffset);
                 boundMesh = nullptr; // the next draw binds its mesh's vertices again
             }
+            if (d.Indices) vkCmdBindIndexBuffer(cmd, d.Indices, d.IndexOffset, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(cmd, d.IndexCount, instances, d.FirstIndex, 0, 0);
             m_Stats.DrawCalls++;
             if (shadowPass) m_Stats.ShadowCasters += instances;
@@ -1426,6 +1564,8 @@ namespace Dimension
             d.Push.Probe = item.Probe;
             d.Vertices = item.Vertices;
             d.VertexOffset = item.VertexOffset;
+            d.Indices = item.Indices;
+            d.IndexOffset = item.IndexOffset;
             d.Pipe = shadowPass  ? &res.Shadow
                    : depthPass   ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
                    : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
@@ -1538,6 +1678,8 @@ namespace Dimension
             case MainPipelines::Sky: return r.Sky;
             case MainPipelines::Sprite: return r.Sprite;
             case MainPipelines::SpriteAdditive: return r.SpriteAdditive;
+            case MainPipelines::GpuParticles: return r.GpuParticles;
+            case MainPipelines::GpuParticlesAdditive: return r.GpuParticlesAdditive;
             default: return r.Line;
             }
         auto& set = r.Multisampled[m_Samples];
@@ -1569,7 +1711,7 @@ namespace Dimension
         return std::clamp((int)(s * kSlices), 0, kSlices - 1);
     }
 
-    void LightClusters::Build(const std::vector<glm::vec4>& spheres, const glm::mat4& view, const glm::mat4& proj, bool cull)
+    void LightClusters::SetPlanes(const glm::mat4& proj)
     {
         // Near and far planes from the projection (right-handed, depth 0..1).
         Orthographic = proj[3][3] == 1.0f;
@@ -1578,6 +1720,11 @@ namespace Dimension
         Near = std::max(n, Orthographic ? -1e6f : 0.01f);
         Far = std::clamp(f, Near + 0.01f, Near + 10000.0f);
         if (!std::isfinite(Near) || !std::isfinite(Far)) { Near = 0.1f; Far = 1000.0f; }
+    }
+
+    void LightClusters::Build(const std::vector<glm::vec4>& spheres, const glm::mat4& view, const glm::mat4& proj, bool cull)
+    {
+        SetPlanes(proj);
 
         // Each light's range of clusters: depth slices from its sphere, tiles from the screen bounds of its box.
         struct Range { int X0, X1, Y0, Y1, S0, S1; };
@@ -2127,6 +2274,211 @@ namespace Dimension
             vkCmdDrawIndexed(cmd, n * 6, 1, 0, (int32_t)(first * 4), 0);
             m_Stats.DrawCalls++;
         }
+    }
+
+    namespace
+    {
+        // std430 mirror of GpuParticle and GpuParticleParamsRef in ParticleCommon.glsl.
+        constexpr int kParticleLut = 32;
+        struct GpuParticleParams
+        {
+            glm::mat4 Emitter, SimToWorld, WorldToSim;
+            glm::vec4 Lifetime, SizeRot, Spin, ColorA, ColorB, Shape, Box, Gravity, Force, Noise, Collision, Misc;
+            glm::uvec4 Counts, Sheet;
+            glm::uvec4 SegmentCounts[ParticleSystemComponent::kMaxGpuEmissions / 4];
+            glm::vec4 SegmentOrigins[ParticleSystemComponent::kMaxGpuEmissions];
+            glm::vec4 ColorLut[kParticleLut], CurveLut[kParticleLut];
+        };
+        constexpr VkDeviceSize kGpuParticleSize = 64;
+        constexpr uint32_t kMaxGpuParticles = 1000000;
+    }
+
+    void SceneRenderer::SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene)
+    {
+        m_GpuParticleDraws.clear();
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        uint64_t frame = device.Frame().FrameNumber;
+        bool first = true;
+        for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
+        {
+            if (!ps.SimulateOnGpu || !t.ActiveInHierarchy) continue;
+            uint32_t capacity = (uint32_t)std::clamp(ps.MaxParticles, 1, (int32_t)kMaxGpuParticles);
+            uint64_t key = (uint64_t)(uintptr_t)&scene * 1000003ull ^ ((uint64_t)e.Index << 1);
+            auto& st = res.GpuParticleStates[key];
+            st.LastFrame = frame;
+            bool clear = false;
+            if (!st.Particles.IsValid() || st.Capacity != capacity)
+            {
+                st.Particles = Buffer(capacity * kGpuParticleSize,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      MemoryUsage::GpuOnly, "GpuParticles");
+                VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+                info.buffer = st.Particles.GetHandle();
+                st.Address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                st.Capacity = capacity;
+                clear = true;
+            }
+            if (st.Generation != ps.GpuGeneration) clear = true;
+            if (clear)
+            {
+                st.Generation = ps.GpuGeneration;
+                st.Head = 0;
+            }
+
+            // Parameters for this frame (simulation and drawing).
+            bool worldSpace = ps.SimulationSpace == ParticleSpace::World;
+            glm::mat4 world = t.World, invWorld = glm::inverse(world);
+            GpuParticleParams p{};
+            p.Emitter = world;
+            p.SimToWorld = worldSpace ? glm::mat4(1.0f) : world;
+            p.WorldToSim = worldSpace ? glm::mat4(1.0f) : invWorld;
+            auto toSim = [&](const glm::vec3& v, ParticleSpace space) {
+                if (space == ps.SimulationSpace) return v;
+                return space == ParticleSpace::Local ? glm::vec3(world * glm::vec4(v, 0.0f)) : glm::vec3(invWorld * glm::vec4(v, 0.0f));
+            };
+            float dt = std::min(ps.GpuPendingDt, 0.25f);
+            ps.GpuPendingDt = 0.0f;
+            p.Lifetime = glm::vec4(ps.StartLifetime, ps.StartSpeed);
+            p.SizeRot = glm::vec4(ps.StartSize, glm::radians(ps.StartRotation));
+            p.Spin = glm::vec4(glm::radians(ps.AngularVelocity), ps.Drag, dt);
+            p.ColorA = ps.StartColorA;
+            p.ColorB = ps.StartColorB;
+            p.Shape = glm::vec4((float)ps.Shape, glm::radians(ps.ShapeAngle), ps.ShapeRadius, worldSpace ? 1.0f : 0.0f);
+            p.Box = glm::vec4(ps.BoxSize, ps.NoiseTime * ps.NoiseScrollSpeed);
+            p.Gravity = glm::vec4(toSim(glm::vec3(0.0f, -9.81f * ps.GravityModifier, 0.0f), ParticleSpace::World), ps.ForceOverLifetime ? 1.0f : 0.0f);
+            p.Force = glm::vec4(toSim(ps.Force, ps.ForceSpace), 0.0f);
+            p.Noise = glm::vec4(ps.NoiseStrength, ps.NoiseFrequency, ps.Noise ? 1.0f : 0.0f, 0.0f);
+            p.Collision = glm::vec4(ps.Collision == ParticleCollision::Plane ? 1.0f : 0.0f, ps.CollisionPlaneHeight + ps.CollisionRadius, ps.Bounce,
+                                    ps.CollisionDampen);
+            p.Misc = glm::vec4(ps.LifetimeLoss, worldSpace ? 1.0f : glm::length(glm::vec3(world[0])), ps.SheetRandomStart ? 1.0f : 0.0f,
+                               std::max(ps.SheetCycles, 0.0f));
+            uint32_t total = 0;
+            for (size_t i = 0; i < ps.GpuEmissions.size() && i < ParticleSystemComponent::kMaxGpuEmissions; ++i)
+            {
+                uint32_t n = std::min<uint32_t>((uint32_t)std::max(ps.GpuEmissions[i].Count, 0), capacity - total);
+                p.SegmentCounts[i / 4][i % 4] = n;
+                p.SegmentOrigins[i] = glm::vec4(ps.GpuEmissions[i].Origin, ps.GpuEmissions[i].AtOrigin ? 1.0f : 0.0f);
+                total += n;
+            }
+            ps.GpuEmissions.clear();
+            p.Counts = glm::uvec4(capacity, st.Head, total, ++ps.GpuSeed * 2654435761u ^ (e.Index + 1) * 40503u);
+            p.Sheet = glm::uvec4((uint32_t)std::max(ps.SheetColumns, 1), (uint32_t)std::max(ps.SheetRows, 1), (uint32_t)std::max(ps.SheetFrames, 0),
+                                 ps.TextureSheet ? 1u : 0u);
+            for (int i = 0; i < kParticleLut; ++i)
+            {
+                float x = (float)i / (kParticleLut - 1);
+                p.ColorLut[i] = ps.ColorOverLifetime.Evaluate(x);
+                p.CurveLut[i] = glm::vec4(ps.SizeOverLifetime.Evaluate(x), ps.SpeedOverLifetime.Evaluate(x), ps.ForceCurve.Evaluate(x), 0.0f);
+            }
+            TransientAllocation params = device.AllocateTransient(sizeof(p), 16);
+            if (!params) continue;
+            std::memcpy(params.Data, &p, sizeof(p));
+
+            if (clear || dt > 0.0f || total > 0)
+            {
+                if (first)
+                {
+                    // Earlier draws (this or an in-flight frame) must be done reading the particle buffers.
+                    Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                      VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                                      VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    res.ParticleSim.Bind(cmd);
+                    first = false;
+                }
+                if (clear)
+                {
+                    // Zero = every slot dead (age 0 is not below lifetime 0).
+                    vkCmdFillBuffer(cmd, st.Particles.GetHandle(), 0, VK_WHOLE_SIZE, 0);
+                    Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                      VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+                }
+                struct { glm::uvec2 Particles, Params; } push{ SplitAddress(st.Address), SplitAddress(params.Address) };
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                vkCmdDispatch(cmd, (capacity + 63) / 64, 1, 1);
+                st.Head = (st.Head + total) % capacity;
+            }
+
+            auto tex = ps.Texture.IsValid() ? AssetManager::GetTexture(ps.Texture) : nullptr;
+            m_GpuParticleDraws.push_back({ st.Address, params.Address, capacity, (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex(),
+                                           e.Index + 1, ps.Blend == ParticleBlend::Additive, ps.SortingOrder });
+        }
+        if (!first)
+            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                              VK_ACCESS_2_SHADER_READ_BIT);
+
+        // Forget systems no view has drawn for a while (deleted, or their scene closed).
+        if (frame % 120 == 0)
+            std::erase_if(res.GpuParticleStates, [&](const auto& kv) { return kv.second.LastFrame + 240 < frame; });
+        std::stable_sort(m_GpuParticleDraws.begin(), m_GpuParticleDraws.end(),
+                         [](const GpuParticleDraw& a, const GpuParticleDraw& b) { return a.Order < b.Order; });
+    }
+
+    void SceneRenderer::DrawGpuParticles(VkCommandBuffer cmd)
+    {
+        if (m_GpuParticleDraws.empty()) return;
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        vkCmdBindIndexBuffer(cmd, res.QuadIndices.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
+        for (const GpuParticleDraw& d : m_GpuParticleDraws)
+        {
+            MainPipeline(d.Additive ? MainPipelines::GpuParticlesAdditive : MainPipelines::GpuParticles).Bind(cmd);
+            struct { glm::uvec2 Particles, Params; uint32_t Texture, Entity; } push{ SplitAddress(d.Particles), SplitAddress(d.Params), d.Texture, d.Entity };
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            for (uint32_t firstQuad = 0; firstQuad < d.Capacity; firstQuad += kMaxQuadsPerDraw)
+            {
+                uint32_t n = std::min(kMaxQuadsPerDraw, d.Capacity - firstQuad);
+                vkCmdDrawIndexed(cmd, n * 6, 1, 0, (int32_t)(firstQuad * 4), 0);
+                m_Stats.DrawCalls++;
+            }
+            m_Stats.GpuParticleCapacity += d.Capacity;
+        }
+    }
+
+    void SceneRenderer::RenderReflections(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings)
+    {
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
+        auto pass = [&](const Image& dst, bool load, const Pipeline& pipeline, const void* push, uint32_t pushSize) {
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            att.imageView = dst.GetView();
+            att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att.loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+            info.renderArea = { { 0, 0 }, extent };
+            info.layerCount = 1;
+            info.colorAttachmentCount = 1;
+            info.pColorAttachments = &att;
+            vkCmdBeginRendering(cmd, &info);
+            VkViewport viewport{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
+            VkRect2D scissor{ { 0, 0 }, extent };
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            pipeline.Bind(cmd);
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, pushSize, push);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+            Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_Stats.DrawCalls++;
+        };
+
+        // Trace into the reflections image (reading the HDR image), then add it onto the HDR image.
+        Vk::TransitionImage(cmd, target.GetSurface().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        struct
+        {
+            uint32_t Hdr, Depth, Surface, Steps;
+            glm::vec2 Texel;
+            float MaxDistance, Thickness, MaxRoughness, Intensity;
+        } trace{ target.GetHdrBindless(), target.GetDepthBindless(), target.GetSurfaceBindless(), (uint32_t)std::clamp(settings.SSRSteps, 8, 256),
+                 glm::vec2(1.0f / extent.width, 1.0f / extent.height), std::max(settings.SSRMaxDistance, 0.1f),
+                 std::max(settings.SSRThickness, 0.001f), std::clamp(settings.SSRMaxRoughness, 0.01f, 1.0f), settings.SSRIntensity };
+        pass(target.GetReflections(), false, res.Ssr, &trace, sizeof(trace));
+        struct { uint32_t Reflections, Pad; glm::vec2 Texel; } apply{ target.GetReflectionsBindless(), 0u, trace.Texel };
+        pass(target.GetHdr(), true, res.SsrApply, &apply, sizeof(apply));
     }
 
     void SceneRenderer::RenderBloom(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings)
@@ -2732,6 +3084,12 @@ namespace Dimension
             glm::mat4 m = glm::translate(glm::mat4(1.0f), t.GetWorldPosition());
             DrawWireSphere(m, glm::vec3(0), src->MinDistance, { 0.6f, 0.8f, 1.0f, 0.8f });
             DrawWireSphere(m, glm::vec3(0), src->MaxDistance, { 0.4f, 0.6f, 1.0f, 0.5f });
+        }
+        if (auto* zone = reg.TryGet<AudioReverbZoneComponent>(sel))
+        {
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), t.GetWorldPosition());
+            DrawWireSphere(m, glm::vec3(0), zone->MinDistance, { 1.0f, 0.75f, 0.3f, 0.85f });
+            DrawWireSphere(m, glm::vec3(0), zone->MaxDistance, { 1.0f, 0.6f, 0.2f, 0.45f });
         }
     }
 }

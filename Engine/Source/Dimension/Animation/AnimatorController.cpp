@@ -67,6 +67,8 @@ namespace Dimension
             for (size_t i = 0; i < states.size(); ++i) states[i].Group = src.States[i].Group;
             layer.Machine.DefaultState = src.DefaultState;
             layer.Machine.AnyStatePosition = src.AnyStatePosition;
+            layer.Machine.EntryPosition = src.EntryPosition;
+            layer.Machine.ExitPosition = src.ExitPosition;
         }
     }
 
@@ -74,7 +76,7 @@ namespace Dimension
     {
         if (index < 0 || index >= (int)States.size()) return;
         States.erase(States.begin() + index);
-        std::erase_if(Transitions, [&](const AnimTransition& t) { return t.From == index || (t.To == index && t.ToGroup < 0); });
+        std::erase_if(Transitions, [&](const AnimTransition& t) { return t.From == index || (t.To == index && t.ToGroup < 0 && !t.ToExit); });
         for (auto& t : Transitions)
         {
             if (t.From > index) --t.From;
@@ -115,7 +117,10 @@ namespace Dimension
             if (s.Group == group) s.Group = parent;
         for (auto& g : Groups)
             if (g.Parent == group) g.Parent = parent;
-        std::erase_if(Transitions, [&](const AnimTransition& t) { return AnimTransition::GroupOf(t.From) == group || t.ToGroup == group; });
+        std::erase_if(Transitions, [&](const AnimTransition& t) {
+            return AnimTransition::GroupOf(t.From) == group || t.ToGroup == group ||
+                   (AnimTransition::IsEntry(t.From) && AnimTransition::EntryGroupOf(t.From) == group);
+        });
         Groups.erase(Groups.begin() + group);
         auto fix = [&](int& g) { if (g > group) --g; };
         for (auto& s : States) fix(s.Group);
@@ -123,6 +128,8 @@ namespace Dimension
         for (auto& t : Transitions)
         {
             if (int g = AnimTransition::GroupOf(t.From); g > group) t.From = AnimTransition::FromGroup(g - 1);
+            if (AnimTransition::IsEntry(t.From))
+                if (int g = AnimTransition::EntryGroupOf(t.From); g > group) t.From = AnimTransition::FromEntry(g - 1);
             fix(t.ToGroup);
         }
     }
@@ -157,6 +164,8 @@ namespace Dimension
                 grp.Parent = g.value("parent", -1);
                 grp.DefaultState = g.value("defaultState", -1);
                 if (g.contains("position")) grp.EditorPosition = { g["position"][0].get<float>(), g["position"][1].get<float>() };
+                if (g.contains("entryPosition")) grp.EntryPosition = { g["entryPosition"][0].get<float>(), g["entryPosition"][1].get<float>() };
+                if (g.contains("exitPosition")) grp.ExitPosition = { g["exitPosition"][0].get<float>(), g["exitPosition"][1].get<float>() };
                 c.Groups.push_back(grp);
             }
             for (auto& t : j.value("transitions", json::array()))
@@ -168,12 +177,15 @@ namespace Dimension
                 tr.ExitTime = t.value("exitTime", 1.0f);
                 tr.Duration = t.value("duration", 0.25f);
                 tr.ToGroup = t.value("toGroup", -1);
+                tr.ToExit = t.value("toExit", false);
                 for (auto& cond : t.value("conditions", json::array()))
                     tr.Conditions.push_back({ cond.value("parameter", std::string()), (AnimConditionOp)cond.value("op", 4), cond.value("threshold", 0.0f) });
                 c.Transitions.push_back(tr);
             }
             c.DefaultState = j.value("defaultState", 0);
             if (j.contains("anyStatePosition")) c.AnyStatePosition = { j["anyStatePosition"][0].get<float>(), j["anyStatePosition"][1].get<float>() };
+            if (j.contains("entryPosition")) c.EntryPosition = { j["entryPosition"][0].get<float>(), j["entryPosition"][1].get<float>() };
+            if (j.contains("exitPosition")) c.ExitPosition = { j["exitPosition"][0].get<float>(), j["exitPosition"][1].get<float>() };
         }
 
         void WriteMachine(const AnimatorController& c, json& j)
@@ -209,7 +221,9 @@ namespace Dimension
                 j["groups"] = json::array();
                 for (auto& g : c.Groups)
                     j["groups"].push_back({ { "name", g.Name }, { "parent", g.Parent }, { "defaultState", g.DefaultState },
-                                            { "position", { g.EditorPosition.x, g.EditorPosition.y } } });
+                                            { "position", { g.EditorPosition.x, g.EditorPosition.y } },
+                                            { "entryPosition", { g.EntryPosition.x, g.EntryPosition.y } },
+                                            { "exitPosition", { g.ExitPosition.x, g.ExitPosition.y } } });
             }
             j["transitions"] = json::array();
             for (auto& t : c.Transitions)
@@ -219,10 +233,13 @@ namespace Dimension
                 json tr{ { "from", t.From }, { "to", t.To }, { "hasExitTime", t.HasExitTime }, { "exitTime", t.ExitTime },
                          { "duration", t.Duration }, { "conditions", conds } };
                 if (t.ToGroup >= 0) tr["toGroup"] = t.ToGroup;
+                if (t.ToExit) tr["toExit"] = true;
                 j["transitions"].push_back(std::move(tr));
             }
             j["defaultState"] = c.DefaultState;
             j["anyStatePosition"] = { c.AnyStatePosition.x, c.AnyStatePosition.y };
+            j["entryPosition"] = { c.EntryPosition.x, c.EntryPosition.y };
+            j["exitPosition"] = { c.ExitPosition.x, c.ExitPosition.y };
         }
     }
 
@@ -473,25 +490,7 @@ namespace Dimension
         {
             runtime.FiredEvents.clear();
             if (controller.States.empty()) return -1;
-            if (runtime.State < 0 || runtime.State >= (int)controller.States.size())
-            {
-                runtime.State = std::clamp(controller.DefaultState, 0, (int)controller.States.size() - 1);
-                runtime.StateTime = 0.0f;
-                enter(controller.States[runtime.State], 0.0f);
-            }
-            {
-                const AnimState& state = controller.States[runtime.State];
-                float before = NormalizedTime(controller, runtime, clipDuration);
-                if (state.Motion != AnimMotionType::Clip)
-                {
-                    // Blend trees advance in normalized time so children stay in sync.
-                    float d = StateDuration(controller, runtime, state, clipDuration);
-                    runtime.StateTime += d > 0.0f ? dt * state.Speed / d : 0.0f;
-                }
-                else
-                    runtime.StateTime += dt * state.Speed;
-                CollectEvents(state, before, NormalizedTime(controller, runtime, clipDuration), runtime.FiredEvents);
-            }
+            bool starting = runtime.State < 0 || runtime.State >= (int)controller.States.size();
 
             auto conditionsMet = [&](const AnimTransition& t, std::vector<std::string>& usedTriggers) {
                 for (auto& c : t.Conditions)
@@ -519,6 +518,70 @@ namespace Dimension
                 return true;
             };
 
+            // Where a transition leads: a state, the state an Entry node picks, or (Exit) where leaving a group leads.
+            // Triggers the decision used are added to `used`.
+            const int stateCount = (int)controller.States.size();
+            std::function<int(int, std::vector<std::string>&, int)> enterGroup, exitGroup;
+            auto target = [&](const AnimTransition& t, int sourceGroup, std::vector<std::string>& used, int depth) {
+                if (t.ToExit) return exitGroup(sourceGroup, used, depth + 1);
+                if (t.ToGroup >= 0) return enterGroup(t.ToGroup, used, depth + 1);
+                return t.To;
+            };
+            enterGroup = [&](int group, std::vector<std::string>& used, int depth) -> int {
+                if (depth < 32)
+                    for (const AnimTransition& t : controller.Transitions)
+                    {
+                        if (!AnimTransition::IsEntry(t.From) || AnimTransition::EntryGroupOf(t.From) != group || t.ToExit) continue;
+                        std::vector<std::string> mine;
+                        if (!conditionsMet(t, mine)) continue;
+                        int to = target(t, group, mine, depth);
+                        if (to < 0 || to >= stateCount) continue;
+                        used.insert(used.end(), mine.begin(), mine.end());
+                        return to;
+                    }
+                if (group < 0) return std::clamp(controller.DefaultState, 0, stateCount - 1);
+                return controller.EntryState(group);
+            };
+            exitGroup = [&](int group, std::vector<std::string>& used, int depth) -> int {
+                if (group < 0 || group >= (int)controller.Groups.size()) return enterGroup(-1, used, depth);
+                if (depth < 32)
+                    for (const AnimTransition& t : controller.Transitions)
+                    {
+                        if (AnimTransition::GroupOf(t.From) != group) continue;
+                        std::vector<std::string> mine;
+                        if (!conditionsMet(t, mine)) continue;
+                        int to = target(t, controller.Groups[group].Parent, mine, depth);
+                        if (to < 0 || to >= stateCount) continue;
+                        used.insert(used.end(), mine.begin(), mine.end());
+                        return to;
+                    }
+                return enterGroup(controller.Groups[group].Parent, used, depth);
+            };
+            if (starting)
+            {
+                // The top level's Entry node picks the first state (its transitions, else the default state).
+                std::vector<std::string> used;
+                runtime.State = enterGroup(-1, used, 0);
+                if (runtime.State < 0 || runtime.State >= stateCount) runtime.State = std::clamp(controller.DefaultState, 0, stateCount - 1);
+                for (auto& trig : used) runtime.Triggers.erase(trig);
+                runtime.StateTime = 0.0f;
+                enter(controller.States[runtime.State], 0.0f);
+            }
+            // Time in the current state, and the events it passes.
+            {
+                const AnimState& state = controller.States[runtime.State];
+                float before = NormalizedTime(controller, runtime, clipDuration);
+                if (state.Motion != AnimMotionType::Clip)
+                {
+                    // Blend trees advance in normalized time so children stay in sync.
+                    float d = StateDuration(controller, runtime, state, clipDuration);
+                    runtime.StateTime += d > 0.0f ? dt * state.Speed / d : 0.0f;
+                }
+                else
+                    runtime.StateTime += dt * state.Speed;
+                CollectEvents(state, before, NormalizedTime(controller, runtime, clipDuration), runtime.FiredEvents);
+            }
+
             float normalized = NormalizedTime(controller, runtime, clipDuration);
             // Any-state transitions take priority, then those of the sub-state machines the current state is in, then
             // the current state's own, in list order (like Unity).
@@ -531,13 +594,15 @@ namespace Dimension
                     if (pass == 0 && !fromAny) continue;
                     if (pass == 1 && (!fromGroup || !controller.IsInGroup(runtime.State, group))) continue;
                     if (pass == 2 && (fromAny || fromGroup || t.From != runtime.State)) continue;
-                    int to = t.ToGroup >= 0 ? controller.EntryState(t.ToGroup) : t.To; // into a sub-state machine: its entry
-                    if (to < 0 || to >= (int)controller.States.size()) continue;
-                    if ((fromAny || fromGroup) && to == runtime.State) continue; // avoid re-entering every frame
                     if (t.HasExitTime && normalized < t.ExitTime) continue;
                     if (!t.HasExitTime && t.Conditions.empty()) continue; // would fire immediately forever
+                    if (fromAny && t.ToExit) continue; // Any State has no group to leave
                     std::vector<std::string> used;
                     if (!conditionsMet(t, used)) continue;
+                    int sourceGroup = fromGroup ? group : controller.States[runtime.State].Group;
+                    int to = target(t, sourceGroup, used, 0);
+                    if (to < 0 || to >= stateCount) continue;
+                    if ((fromAny || fromGroup) && to == runtime.State) continue; // avoid re-entering every frame
                     for (auto& trig : used) runtime.Triggers.erase(trig);
                     runtime.State = to;
                     runtime.StateTime = 0.0f;

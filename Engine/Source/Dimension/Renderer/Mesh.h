@@ -58,8 +58,9 @@ namespace Dimension
         float Scale = 1.0f;          // uniform: vertices, skeleton, bind poses and animated translations
         bool ImportAnimations = true;
         bool ImportMaterials = true; // false: every part uses the Mesh Renderer's material
+        std::vector<std::string> ExcludedClips; // animation clips (by name) left out of the import
         std::string Key() const;     // distinguishes cached imports with other settings
-        bool IsDefault() const { return Scale == 1.0f && ImportAnimations && ImportMaterials; }
+        bool IsDefault() const { return Scale == 1.0f && ImportAnimations && ImportMaterials && ExcludedClips.empty(); }
     };
 
     // CPU-side mesh as imported from a file (no GPU resources; usable in tools and tests).

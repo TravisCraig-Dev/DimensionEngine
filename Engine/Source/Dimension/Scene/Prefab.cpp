@@ -4,6 +4,7 @@
 #include "Dimension/Scripting/ScriptRegistry.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Core/Log.h"
+#include <algorithm>
 #include <fstream>
 #include <optional>
 #include <unordered_map>
@@ -68,11 +69,116 @@ namespace Dimension::Prefabs
             return base;
         }
 
-        // The prefab's full content: a plain prefab as stored, a variant resolved through its chain of bases.
-        std::optional<json> LoadPrefabJson(AssetHandle prefab, int depth = 0)
+        // Entity references inside a record's components (fields and script fields), rewritten by `remap`.
+        void RemapRecordRefs(json& comps, const std::function<uint64_t(uint64_t)>& remap)
+        {
+            for (auto& [name, data] : comps.items())
+            {
+                const ComponentInfo* info = ComponentRegistry::Find(name);
+                if (!info) continue;
+                for (auto& f : info->Fields)
+                    if (f.Type == FieldType::EntityRef && data.contains(f.Name) && data[f.Name].is_number_unsigned())
+                        data[f.Name] = remap(data[f.Name].get<uint64_t>());
+                if (name == "Script" && data.contains("Scripts"))
+                    for (auto& s : data["Scripts"])
+                        if (s.contains("Fields")) RemapScriptEntityRefs(s["Fields"], s.value("Class", std::string()), remap);
+            }
+        }
+
+        // The id a nested prefab's entity gets inside the prefab that contains it: stable for a given nested instance
+        // (its root keeps the reference's id), so instances and their overrides line up across loads.
+        uint64_t DeriveNestedId(uint64_t outerRoot, uint64_t inner)
+        {
+            uint64_t x = outerRoot ^ (inner * 0x9E3779B97F4A7C15ull + 0x632BE59BD9B4E019ull);
+            x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull; // splitmix64 finalizer
+            x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+            x ^= x >> 31;
+            return x ? x : 1;
+        }
+
+        std::optional<json> LoadPrefabJson(AssetHandle prefab, int depth = 0);
+        // Prefabs being loaded (outermost first), to catch a prefab nested inside itself.
+        std::vector<AssetHandle> s_Loading;
+
+        // Replaces nested prefab references ({ "guid", "parent", "nested": { "prefab", "variant" } }) with the inner
+        // prefab's entities (its current content, with the variant's changes applied), under derived ids. Each such
+        // record gets "nestedLink": { "prefab", "source", "root" } so instances know what they came from.
+        json ExpandNested(json tree, int depth)
+        {
+            if (!tree.contains("entities")) return tree;
+            bool any = false;
+            for (auto& rec : tree["entities"]) any |= rec.contains("nested");
+            if (!any) return tree;
+            json out = json::array();
+            for (auto& rec : tree["entities"])
+            {
+                if (!rec.contains("nested"))
+                {
+                    out.push_back(rec);
+                    continue;
+                }
+                AssetHandle inner(rec["nested"].value("prefab", uint64_t(0)));
+                uint64_t outerRoot = rec.value("guid", uint64_t(0)), parent = rec.value("parent", uint64_t(0));
+                bool cycle = std::find(s_Loading.begin(), s_Loading.end(), inner) != s_Loading.end();
+                std::optional<json> content = !cycle && depth < 32 ? LoadPrefabJson(inner, depth + 1) : std::nullopt;
+                if (!content)
+                {
+                    // Missing inner prefab (or a nesting cycle): keep an empty object in its place.
+                    if (cycle)
+                    {
+                        static std::unordered_set<uint64_t> reported;
+                        if (reported.insert((uint64_t)inner).second)
+                            Log::Error("Prefab '{}' contains itself through nested prefabs; that instance is left empty",
+                                       AssetManager::GetAbsolutePath(inner).filename().string());
+                    }
+                    json placeholder = rec;
+                    placeholder.erase("nested");
+                    if (!placeholder.contains("components") || placeholder["components"].empty())
+                        placeholder["components"] = { { "Tag", { { "Name", "Missing Prefab" } } } };
+                    out.push_back(placeholder);
+                    continue;
+                }
+                json resolved = ExpandNested(ApplyVariant(std::move(*content), rec["nested"].value("variant", json::object())), depth + 1);
+                json& entities = resolved["entities"];
+                if (entities.empty()) continue;
+                uint64_t innerRoot = entities[0].value("guid", uint64_t(0));
+                std::unordered_map<uint64_t, uint64_t> ids;
+                for (auto& r : entities)
+                {
+                    uint64_t id = r.value("guid", uint64_t(0));
+                    ids[id] = id == innerRoot ? outerRoot : DeriveNestedId(outerRoot, id);
+                }
+                auto remap = [&](uint64_t g) {
+                    auto it = ids.find(g);
+                    return it != ids.end() ? it->second : g;
+                };
+                for (auto& r : entities)
+                {
+                    uint64_t source = r.value("guid", uint64_t(0));
+                    r["guid"] = remap(source);
+                    if (source == innerRoot)
+                    {
+                        if (parent) r["parent"] = parent;
+                        else r.erase("parent");
+                    }
+                    else if (uint64_t p = r.value("parent", uint64_t(0))) r["parent"] = remap(p);
+                    if (r.contains("components")) RemapRecordRefs(r["components"], remap);
+                    r["nestedLink"] = { { "prefab", (uint64_t)inner }, { "source", source }, { "root", source == innerRoot } };
+                    out.push_back(std::move(r));
+                }
+            }
+            tree["entities"] = std::move(out);
+            return tree;
+        }
+
+        // The prefab's full content: a plain prefab as stored, a variant resolved through its chain of bases, with
+        // nested prefabs expanded.
+        std::optional<json> LoadPrefabJson(AssetHandle prefab, int depth)
         {
             auto j = ReadRaw(prefab);
             if (!j) return std::nullopt;
+            s_Loading.push_back(prefab);
+            struct Pop { ~Pop() { s_Loading.pop_back(); } } pop;
             if (j->contains("base"))
             {
                 AssetHandle base((*j)["base"].get<uint64_t>());
@@ -87,9 +193,9 @@ namespace Dimension::Prefabs
                     Log::Error("Base prefab of variant '{}' is missing", AssetManager::GetAbsolutePath(prefab).filename().string());
                     return std::nullopt;
                 }
-                return ApplyVariant(std::move(*resolved), *j);
+                return ExpandNested(ApplyVariant(std::move(*resolved), *j), depth);
             }
-            if (j->contains("entities") && (*j)["entities"].is_array() && !(*j)["entities"].empty()) return j;
+            if (j->contains("entities") && (*j)["entities"].is_array() && !(*j)["entities"].empty()) return ExpandNested(std::move(*j), depth);
             return std::nullopt;
         }
 
@@ -153,13 +259,26 @@ namespace Dimension::Prefabs
             return link && link->Prefab == prefab ? link : nullptr;
         }
 
-        // Serializes an instance in prefab-id space: entity ids become the stable SourceIds,
-        // references inside the subtree are remapped, and link components are stripped.
-        json BuildPrefabJson(Scene& scene, Entity root, AssetHandle prefab)
+        // How saving a prefab links each scene entity to it (by scene guid): its id in the file, and for parts of a
+        // nested prefab, which one and the entity's id there.
+        struct LinkAssignment
+        {
+            uint64_t Id = 0;
+            AssetHandle Nested = AssetHandle::None();
+            uint64_t NestedSource = 0;
+            bool NestedRoot = false;
+        };
+        using LinkAssignments = std::unordered_map<uint64_t, LinkAssignment>;
+
+        // Serializes an instance in prefab-id space: entity ids become the stable SourceIds, references inside the
+        // subtree are remapped, and link components are stripped. Instances of other prefabs inside it (and nested
+        // parts it already had) become nested references; `assigned` receives each entity's resulting link.
+        json BuildPrefabJson(Scene& scene, Entity root, AssetHandle prefab, LinkAssignments* assigned = nullptr)
         {
             json tree = SceneSerializer::SerializeEntityTree(scene, root);
             std::vector<Entity> subtree;
             CollectSubtree(scene, root, subtree);
+            auto& reg = scene.GetRegistry();
             std::unordered_map<uint64_t, uint64_t> ids; // scene guid -> prefab id
             for (Entity e : subtree)
             {
@@ -178,20 +297,152 @@ namespace Dimension::Prefabs
                 if (uint64_t p = rec.value("parent", uint64_t(0))) rec["parent"] = remap(p);
                 json& comps = rec["components"];
                 comps.erase("Prefab Link");
-                for (auto& [name, data] : comps.items())
-                {
-                    const ComponentInfo* info = ComponentRegistry::Find(name);
-                    if (!info) continue;
-                    for (auto& f : info->Fields)
-                        if (f.Type == FieldType::EntityRef && data.contains(f.Name) && data[f.Name].is_number_unsigned())
-                            data[f.Name] = remap(data[f.Name].get<uint64_t>());
-                    if (name == "Script" && data.contains("Scripts"))
-                        for (auto& s : data["Scripts"])
-                            if (s.contains("Fields")) RemapScriptEntityRefs(s["Fields"], s.value("Class", std::string()), remap);
-                }
+                RemapRecordRefs(comps, remap);
             }
             tree["prefab"] = true;
+
+            // Nested prefab instances, deepest first: parts this prefab already nests, and instances of other prefabs
+            // placed inside it (not the root itself: that is what the prefab is made from).
+            struct Nested { Entity Root; AssetHandle Prefab; bool Existing; int Depth; };
+            std::vector<Nested> nested;
+            for (Entity e : subtree)
+            {
+                if (e == root) continue;
+                auto* link = reg.TryGet<PrefabLinkComponent>(e);
+                if (!link) continue;
+                bool existing = link->Prefab == prefab && link->NestedRoot && link->NestedPrefab.IsValid();
+                bool placed = link->Prefab != prefab && link->IsRoot && link->Prefab.IsValid();
+                if (!existing && !placed) continue;
+                int depth = 0;
+                for (Entity p = scene.GetParent(e); !p.IsNull() && p != root; p = scene.GetParent(p)) ++depth;
+                nested.push_back({ e, existing ? link->NestedPrefab : link->Prefab, existing, depth });
+            }
+            std::stable_sort(nested.begin(), nested.end(), [](const Nested& a, const Nested& b) { return a.Depth > b.Depth; });
+
+            std::unordered_map<uint64_t, LinkAssignment> links; // scene guid -> link (ids change as instances collapse)
+            for (Entity e : subtree) links[scene.GetGuid(e)] = { ids[scene.GetGuid(e)] };
+            for (const Nested& n : nested)
+            {
+                if (n.Prefab == prefab) { Log::Error("A prefab cannot contain an instance of itself"); continue; }
+                auto innerJson = LoadPrefabJson(n.Prefab);
+                if (!innerJson) continue; // inner prefab missing: its objects stay part of this prefab
+                std::vector<Entity> sub;
+                CollectSubtree(scene, n.Root, sub);
+                // Each entity's id in the inner prefab: members map to theirs; added objects (and references to deeper
+                // nested prefabs) keep their current id.
+                std::unordered_map<uint64_t, uint64_t> toInner; // id in this prefab -> id in the inner prefab's space
+                for (Entity e : sub)
+                {
+                    uint64_t current = links[scene.GetGuid(e)].Id;
+                    uint64_t inner = current;
+                    auto* link = reg.TryGet<PrefabLinkComponent>(e);
+                    if (n.Existing && link && link->Prefab == prefab && link->NestedPrefab == n.Prefab && link->NestedSource) inner = link->NestedSource;
+                    if (!n.Existing && link && link->Prefab == n.Prefab && link->SourceId) inner = link->SourceId;
+                    toInner[current] = inner;
+                }
+                uint64_t outerRoot = links[scene.GetGuid(n.Root)].Id;
+                json content{ { "prefab", true }, { "entities", json::array() } };
+                json kept = json::array();
+                size_t rootAt = SIZE_MAX;
+                uint64_t rootParent = 0;
+                for (auto& rec : tree["entities"])
+                {
+                    uint64_t id = rec.value("guid", uint64_t(0));
+                    auto it = toInner.find(id);
+                    if (it == toInner.end())
+                    {
+                        kept.push_back(rec);
+                        continue;
+                    }
+                    json r = rec;
+                    r["guid"] = it->second;
+                    if (id == outerRoot)
+                    {
+                        rootAt = kept.size();
+                        rootParent = rec.value("parent", uint64_t(0));
+                        r.erase("parent");
+                    }
+                    else if (uint64_t p = r.value("parent", uint64_t(0)))
+                        if (auto pit = toInner.find(p); pit != toInner.end()) r["parent"] = pit->second;
+                    RemapRecordRefs(r["components"], [&](uint64_t g) {
+                        auto x = toInner.find(g);
+                        return x != toInner.end() ? x->second : g;
+                    });
+                    if (id == outerRoot) content["entities"].insert(content["entities"].begin(), std::move(r));
+                    else content["entities"].push_back(std::move(r));
+                }
+                if (rootAt == SIZE_MAX || content["entities"].empty()) continue;
+                // The instance's changes to the inner prefab, as a variant; its root's place and name always belong to
+                // this prefab.
+                json variant = DiffVariant(n.Prefab, *innerJson, content);
+                variant.erase("prefab");
+                variant.erase("base");
+                const json& rootRec = content["entities"][0];
+                uint64_t innerRoot = rootRec.value("guid", uint64_t(0));
+                json* rootOverride = nullptr;
+                for (auto& o : variant["overrides"])
+                    if (o.value("guid", uint64_t(0)) == innerRoot) rootOverride = &o;
+                if (!rootOverride)
+                {
+                    variant["overrides"].push_back({ { "guid", innerRoot } });
+                    rootOverride = &variant["overrides"].back();
+                }
+                const json& rc = rootRec["components"];
+                for (const char* field : { "Position", "Rotation" })
+                    if (rc.contains("Transform") && rc["Transform"].contains(field)) (*rootOverride)["components"]["Transform"][field] = rc["Transform"][field];
+                if (rc.contains("Tag") && rc["Tag"].contains("Name")) (*rootOverride)["components"]["Tag"]["Name"] = rc["Tag"]["Name"];
+                json reference{ { "guid", outerRoot }, { "nested", { { "prefab", (uint64_t)n.Prefab }, { "variant", variant } } }, { "components", json::object() } };
+                if (rootParent) reference["parent"] = rootParent;
+                kept.insert(kept.begin() + (std::ptrdiff_t)rootAt, std::move(reference));
+                tree["entities"] = std::move(kept);
+                // Where loading puts each of these objects (see ExpandNested).
+                for (Entity e : sub)
+                {
+                    auto& a = links[scene.GetGuid(e)];
+                    uint64_t inner = toInner[a.Id];
+                    a = { inner == innerRoot ? outerRoot : DeriveNestedId(outerRoot, inner), n.Prefab, inner, e == n.Root };
+                }
+            }
+            if (assigned) *assigned = std::move(links);
             return tree;
+        }
+
+        // Links the saved subtree to `prefab` as `assigned` says (adopting new objects), clearing overrides.
+        void LinkSaved(Scene& scene, Entity root, AssetHandle prefab, const LinkAssignments& assigned)
+        {
+            std::vector<Entity> subtree;
+            CollectSubtree(scene, root, subtree);
+            auto& reg = scene.GetRegistry();
+            for (Entity e : subtree)
+            {
+                auto it = assigned.find(scene.GetGuid(e));
+                if (it == assigned.end()) continue;
+                auto& link = reg.EmplaceOrReplace<PrefabLinkComponent>(e);
+                link.Prefab = prefab;
+                link.SourceId = it->second.Id;
+                link.IsRoot = e == root;
+                link.Overrides.clear();
+                link.NestedPrefab = it->second.Nested;
+                link.NestedSource = it->second.NestedSource;
+                link.NestedRoot = it->second.NestedRoot;
+            }
+        }
+
+        // A record's nested-prefab origin onto its entity's link.
+        void ReadNestedLink(PrefabLinkComponent& link, const json& rec)
+        {
+            if (const auto it = rec.find("nestedLink"); it != rec.end() && it->is_object())
+            {
+                link.NestedPrefab = AssetHandle(it->value("prefab", uint64_t(0)));
+                link.NestedSource = it->value("source", uint64_t(0));
+                link.NestedRoot = it->value("root", false);
+            }
+            else
+            {
+                link.NestedPrefab = AssetHandle::None();
+                link.NestedSource = 0;
+                link.NestedRoot = false;
+            }
         }
 
         bool WriteJson(const fs::path& path, const json& j)
@@ -208,8 +459,9 @@ namespace Dimension::Prefabs
             auto raw = ReadRaw(prefab);
             if (raw && raw->contains("base"))
             {
+                // Compared with the base as loaded (nested prefabs expanded on both sides).
                 AssetHandle base((*raw)["base"].get<uint64_t>());
-                if (auto baseJson = LoadPrefabJson(base)) return WriteJson(path, DiffVariant(base, *baseJson, full));
+                if (auto baseJson = LoadPrefabJson(base)) return WriteJson(path, DiffVariant(base, *baseJson, ExpandNested(full, 0)));
                 Log::Error("Cannot save variant '{}': its base prefab is missing", path.filename().string());
                 return false;
             }
@@ -274,6 +526,8 @@ namespace Dimension::Prefabs
         std::vector<std::pair<uint64_t, Entity>> mapping;
         Entity root = SceneSerializer::DeserializeEntityTree(scene, *tree, parent, true, &mapping);
         auto& reg = scene.GetRegistry();
+        std::unordered_map<uint64_t, const json*> records;
+        for (auto& rec : (*tree)["entities"]) records[rec.value("guid", uint64_t(0))] = &rec;
         for (auto& [source, e] : mapping)
         {
             auto& link = reg.EmplaceOrReplace<PrefabLinkComponent>(e);
@@ -281,31 +535,34 @@ namespace Dimension::Prefabs
             link.SourceId = source;
             link.IsRoot = e == root;
             link.Overrides.clear();
+            if (auto it = records.find(source); it != records.end()) ReadNestedLink(link, *it->second);
         }
         return root;
+    }
+
+    bool IsNestedPart(Scene& scene, Entity e)
+    {
+        auto* link = scene.GetRegistry().TryGet<PrefabLinkComponent>(e);
+        return link && link->NestedPrefab.IsValid();
+    }
+
+    AssetHandle GetNestedPrefab(Scene& scene, Entity e)
+    {
+        auto* link = scene.GetRegistry().TryGet<PrefabLinkComponent>(e);
+        return link ? link->NestedPrefab : AssetHandle::None();
     }
 
     AssetHandle CreateFromEntity(Scene& scene, Entity root, const fs::path& path)
     {
         if (!scene.IsValid(root)) return AssetHandle::None();
-        // Entities that were instances of another prefab become part of the new one.
-        json tree = BuildPrefabJson(scene, root, AssetHandle::None());
+        // Instances of other prefabs inside it are nested (the root's own prefab, if it is an instance, is not: the
+        // new prefab starts as a copy of it).
+        LinkAssignments assigned;
+        json tree = BuildPrefabJson(scene, root, AssetHandle::None(), &assigned);
         if (!WriteJson(path, tree)) return AssetHandle::None();
         AssetHandle handle = AssetManager::Import(path);
         if (!handle.IsValid()) return handle;
-
-        std::vector<Entity> subtree;
-        CollectSubtree(scene, root, subtree);
-        auto& reg = scene.GetRegistry();
-        for (Entity e : subtree)
-        {
-            uint64_t guid = scene.GetGuid(e);
-            auto& link = reg.EmplaceOrReplace<PrefabLinkComponent>(e);
-            link.Prefab = handle;
-            link.SourceId = guid;
-            link.IsRoot = e == root;
-            link.Overrides.clear();
-        }
+        LinkSaved(scene, root, handle, assigned);
         Log::Info("Created prefab '{}'", path.filename().string());
         return handle;
     }
@@ -349,25 +606,10 @@ namespace Dimension::Prefabs
             if (e != root) ++outside;
         if (outside) Log::Warn("{} object(s) outside the prefab root are not saved; parent them under '{}'", outside,
                                scene.GetRegistry().Get<TagComponent>(root).Name);
-        if (!WritePrefab(prefab, path, BuildPrefabJson(scene, root, prefab))) return false;
-        // New objects become linked so later saves keep their ids.
-        std::vector<Entity> subtree;
-        CollectSubtree(scene, root, subtree);
-        auto& reg = scene.GetRegistry();
-        for (Entity e : subtree)
-        {
-            if (auto* link = LinkOf(scene, e, prefab))
-            {
-                link->Overrides.clear();
-                continue;
-            }
-            uint64_t guid = scene.GetGuid(e);
-            auto& added = reg.EmplaceOrReplace<PrefabLinkComponent>(e);
-            added.Prefab = prefab;
-            added.SourceId = guid;
-            added.IsRoot = false;
-            added.Overrides.clear();
-        }
+        LinkAssignments assigned;
+        if (!WritePrefab(prefab, path, BuildPrefabJson(scene, root, prefab, &assigned))) return false;
+        // New objects become linked so later saves keep their ids; prefab instances placed inside are now nested.
+        LinkSaved(scene, root, prefab, assigned);
         return true;
     }
 
@@ -409,6 +651,9 @@ namespace Dimension::Prefabs
             link.SourceId = source;
             bySource[source] = e;
         }
+        for (const auto& rec : records)
+            if (auto it = bySource.find(rec.value("guid", uint64_t(0))); it != bySource.end())
+                if (auto* link = reg.TryGet<PrefabLinkComponent>(it->second)) ReadNestedLink(*link, rec);
 
         EntityRefResolver resolver;
         resolver.ToGuid = [&](Entity x) { return scene.IsValid(x) ? (uint64_t)scene.GetGuid(x) : uint64_t(0); };
@@ -498,26 +743,12 @@ namespace Dimension::Prefabs
             Log::Error("Cannot apply: the prefab asset is missing");
             return false;
         }
-        if (!WritePrefab(prefab, path, BuildPrefabJson(scene, root, prefab))) return false;
+        LinkAssignments assigned;
+        if (!WritePrefab(prefab, path, BuildPrefabJson(scene, root, prefab, &assigned))) return false;
 
-        // Everything in the instance now matches the asset: adopt new objects and clear overrides.
-        std::vector<Entity> subtree;
-        CollectSubtree(scene, root, subtree);
-        for (Entity e : subtree)
-        {
-            auto* link = LinkOf(scene, e, prefab);
-            if (!link)
-            {
-                uint64_t guid = scene.GetGuid(e);
-                auto& added = reg.EmplaceOrReplace<PrefabLinkComponent>(e);
-                added.Prefab = prefab;
-                added.SourceId = guid;
-                added.IsRoot = false;
-                added.Overrides.clear();
-            }
-            else
-                link->Overrides.clear();
-        }
+        // Everything in the instance now matches the asset: adopt new objects (prefab instances added to it become
+        // nested) and clear overrides.
+        LinkSaved(scene, root, prefab, assigned);
         Log::Info("Applied changes to prefab '{}'", path.filename().string());
         SyncAll(scene); // other instances in this scene pick up the change immediately
         return true;

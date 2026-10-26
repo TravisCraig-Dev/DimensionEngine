@@ -108,6 +108,11 @@ namespace Dimension
             int (*AsyncState)(int, float*);              // progress out; returns 1 when done, 0 while loading, -1 unknown id
             void (*AsyncAllowActivation)(int, int);
             void (*GamepadVibrate)(float, float, float, int); // low, high, seconds (0 = until changed), pad
+            // Reflected component fields (as in the Inspector) as floats: bools 0/1, ints and enums by value, vectors
+            // and colors by component. Get returns the float count (0 = no such component or field).
+            int (*GetComponentField)(void*, uint64_t, const char*, const char*, float*);
+            int (*SetComponentField)(void*, uint64_t, const char*, const char*, const float*, int);
+            float (*VehicleState)(void*, uint64_t, int); // 0 km/h, 1 RPM, 2 gear, 3-6 wheel grounded
         };
 
         // Background scene loads started from C#, by id.
@@ -140,6 +145,62 @@ namespace Dimension
         uint64_t Pack(Entity e) { return (uint64_t(e.Generation) << 32) | e.Index; }
         Entity Unpack(uint64_t v) { return Entity{ uint32_t(v & 0xFFFFFFFFu), uint32_t(v >> 32) }; }
         Scene& S(void* scene) { return *static_cast<Scene*>(scene); }
+
+        // A reflected field of a component on an entity (null when the entity, component or field is missing).
+        void* ReflectedField(void* scene, uint64_t e, const char* component, const char* field, const FieldInfo*& info)
+        {
+            if (!scene || !component || !field) return nullptr;
+            Entity entity = Unpack(e);
+            if (!S(scene).IsValid(entity)) return nullptr;
+            const ComponentInfo* c = ComponentRegistry::Find(component);
+            if (!c || !c->Has(S(scene), entity)) return nullptr;
+            for (const FieldInfo& f : c->Fields)
+                if (f.Name == field)
+                {
+                    info = &f;
+                    return f.Access(c->Get(S(scene), entity));
+                }
+            return nullptr;
+        }
+
+        int FloatCount(FieldType type)
+        {
+            switch (type)
+            {
+            case FieldType::Bool: case FieldType::Int: case FieldType::Float: case FieldType::Enum: return 1;
+            case FieldType::Vec2: return 2;
+            case FieldType::Vec3: case FieldType::Color3: case FieldType::Angles: return 3;
+            case FieldType::Vec4: case FieldType::Color4: return 4;
+            default: return 0; // strings, assets, curves, ... are not numeric
+            }
+        }
+
+        int FieldToFloats(const FieldInfo& f, const void* value, float* out)
+        {
+            int n = FloatCount(f.Type);
+            switch (f.Type)
+            {
+            case FieldType::Bool: out[0] = *static_cast<const bool*>(value) ? 1.0f : 0.0f; break;
+            case FieldType::Int: case FieldType::Enum: out[0] = (float)*static_cast<const int32_t*>(value); break;
+            default: if (n > 0) std::memcpy(out, value, n * sizeof(float)); break;
+            }
+            return n;
+        }
+
+        bool FieldFromFloats(const FieldInfo& f, void* value, const float* in, int count)
+        {
+            int n = FloatCount(f.Type);
+            if (n == 0 || count < n) return false;
+            auto clamp = [&](float v) { return f.Min < f.Max ? std::clamp(v, f.Min, f.Max) : v; };
+            switch (f.Type)
+            {
+            case FieldType::Bool: *static_cast<bool*>(value) = in[0] != 0.0f; break;
+            case FieldType::Int: case FieldType::Enum: *static_cast<int32_t*>(value) = (int32_t)std::lround(clamp(in[0])); break;
+            case FieldType::Float: *static_cast<float*>(value) = clamp(in[0]); break;
+            default: std::memcpy(value, in, n * sizeof(float)); break;
+            }
+            return true;
+        }
         template <class T> T* Comp(void* scene, uint64_t e) { return scene ? S(scene).GetRegistry().TryGet<T>(Unpack(e)) : nullptr; }
 
         // ---- Managed class proxies ------------------------------------------------------------------
@@ -514,6 +575,24 @@ namespace Dimension
                 return axis >= 0 && axis <= (int)GamepadAxis::RightTrigger ? Input::GetGamepadAxis((GamepadAxis)axis, pad) : 0.0f;
             };
             a.GamepadVibrate = [](float low, float high, float seconds, int pad) { Input::SetGamepadVibration(low, high, seconds, pad); };
+            a.GetComponentField = [](void* s, uint64_t e, const char* component, const char* field, float* out) -> int {
+                const FieldInfo* f = nullptr;
+                void* value = ReflectedField(s, e, component, field, f);
+                return value ? FieldToFloats(*f, value, out) : 0;
+            };
+            a.SetComponentField = [](void* s, uint64_t e, const char* component, const char* field, const float* in, int count) -> int {
+                const FieldInfo* f = nullptr;
+                void* value = ReflectedField(s, e, component, field, f);
+                return value && FieldFromFloats(*f, value, in, count) ? 1 : 0;
+            };
+            a.VehicleState = [](void* s, uint64_t e, int what) -> float {
+                auto* v = Comp<VehicleComponent>(s, e);
+                if (!v) return 0.0f;
+                if (what == 0) return v->SpeedKmh;
+                if (what == 1) return v->EngineRPM;
+                if (what == 2) return (float)v->Gear;
+                return what >= 3 && what <= 6 && v->WheelGrounded[what - 3] ? 1.0f : 0.0f;
+            };
             a.MixerTransition = [](const char* name, float seconds) -> int {
                 return AudioMixer::TransitionToSnapshot(name ? name : "", seconds) ? 1 : 0;
             };

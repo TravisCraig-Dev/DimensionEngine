@@ -85,6 +85,9 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, float*, int> AsyncState;
         public delegate* unmanaged<int, int, void> AsyncAllowActivation;
         public delegate* unmanaged<float, float, float, int, void> GamepadVibrate;
+        public delegate* unmanaged<IntPtr, ulong, byte*, byte*, float*, int> GetComponentField;
+        public delegate* unmanaged<IntPtr, ulong, byte*, byte*, float*, int, int> SetComponentField;
+        public delegate* unmanaged<IntPtr, ulong, int, float> VehicleState;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
