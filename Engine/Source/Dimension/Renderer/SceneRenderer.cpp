@@ -4,6 +4,7 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Physics/Cloth.h"
+#include "Dimension/Physics/Water.h"
 #include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
@@ -22,6 +23,8 @@
 
 #include "shaders/Mesh.vert.h"
 #include "shaders/Mesh.frag.h"
+#include "shaders/MeshOit.frag.h"
+#include "shaders/OitComposite.frag.h"
 #include "shaders/Sprite.vert.h"
 #include "shaders/Sprite.frag.h"
 #include "shaders/Line.vert.h"
@@ -350,6 +353,7 @@ namespace Dimension
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
         Pipeline Ssr, SsrApply, Taa, Fog;
+        Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline Decals[3]; // by DecalBlend
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
@@ -390,6 +394,11 @@ namespace Dimension
         meshTransparent.DebugName = "MeshTransparentPipeline";
         r.MeshTransparent = Pipeline(meshTransparent);
         r.MainDescs[MainPipelines::MeshTransparent] = meshTransparent;
+        GraphicsPipelineDesc meshOit = meshTransparent;
+        meshOit.FragmentSpirv = kMeshOit_frag;
+        meshOit.ColorAttachments = { { F::kOitAccumFormat, BlendMode::Accumulate }, { F::kOitRevealFormat, BlendMode::Revealage } };
+        meshOit.DebugName = "MeshOitPipeline";
+        r.MeshOit = Pipeline(meshOit);
 
         GraphicsPipelineDesc shadow = mesh;
         shadow.FragmentSpirv = kShadow_frag;
@@ -541,6 +550,9 @@ namespace Dimension
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Premultiplied } };
         post.DebugName = "FogPipeline";
         r.Fog = Pipeline(post);
+        post.FragmentSpirv = kOitComposite_frag;
+        post.DebugName = "OitCompositePipeline";
+        r.OitComposite = Pipeline(post);
         {
             GraphicsPipelineDesc decal;
             decal.VertexSpirv = kDecal_vert;
@@ -998,7 +1010,10 @@ namespace Dimension
         m_ParticleDepthKept = readDepth && !camera.Orthographic;
         m_ParticleDepthViewProj = camera.Projection * camera.View;
         m_ParticleDepthSize = glm::uvec2(target.GetWidth(), target.GetHeight());
-        depth.storeOp = readDepth ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        // Order-independent transparency (game views): transparent meshes leave the main pass for their own.
+        m_Oit = settings.OIT && !options.ProbeCapture && !options.EditorOverlays &&
+                std::any_of(m_RenderParts.begin(), m_RenderParts.end(), [](const RenderPart& p) { return p.Transparent; });
+        depth.storeOp = readDepth || m_Oit ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depth.clearValue.depthStencil = { 1.0f, 0 };
         if (m_Samples > 1)
         {
@@ -1074,6 +1089,51 @@ namespace Dimension
         // HDR effects that need the finished opaque image: decals onto surfaces, reflections, fog, then TAA over all.
         if (!m_Decals.empty()) DrawDecals(cmd, target);
         if (ssr) RenderReflections(cmd, target, settings);
+        if (m_Oit)
+        {
+            // Transparent meshes sum into the OIT targets, tested against the opaque depth, then resolve over the scene.
+            VkImage depthImage = target.GetDepth().GetHandle();
+            VkImageLayout depthLayout = readDepth ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            if (readDepth)
+                Vk::TransitionImage(cmd, depthImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, depthLayout, VK_IMAGE_ASPECT_DEPTH_BIT);
+            Vk::TransitionImage(cmd, target.GetOitAccum().GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            Vk::TransitionImage(cmd, target.GetOitReveal().GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo oit[2]{};
+            for (int i = 0; i < 2; ++i)
+            {
+                oit[i] = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+                oit[i].imageView = i == 0 ? target.GetOitAccum().GetView() : target.GetOitReveal().GetView();
+                oit[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                oit[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                oit[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                float c = i == 0 ? 0.0f : 1.0f; // no color yet, nothing in the way
+                oit[i].clearValue.color = { { c, c, c, c } };
+            }
+            VkRenderingAttachmentInfo oitDepth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            oitDepth.imageView = target.GetDepth().GetView();
+            oitDepth.imageLayout = depthLayout;
+            oitDepth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            oitDepth.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
+            VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+            info.renderArea = { { 0, 0 }, extent };
+            info.layerCount = 1;
+            info.colorAttachmentCount = 2;
+            info.pColorAttachments = oit;
+            info.pDepthAttachment = &oitDepth;
+            vkCmdBeginRendering(cmd, &info);
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            device.BindBindless(cmd);
+            device.BindUniforms(cmd, &u, sizeof(u));
+            DrawMeshes(cmd, u.ViewProj, MeshPass::Transparent);
+            vkCmdEndRendering(cmd);
+            Vk::TransitionImage(cmd, target.GetOitAccum().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            Vk::TransitionImage(cmd, target.GetOitReveal().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (readDepth)
+                Vk::TransitionImage(cmd, depthImage, depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+            struct { uint32_t Accum, Reveal; } push{ target.GetOitAccumBindless(), target.GetOitRevealBindless() };
+            FullscreenPass(cmd, target.GetHdr(), true, res.OitComposite, &push, sizeof(push));
+        }
         if (fog)
         {
             struct
@@ -1529,16 +1589,18 @@ namespace Dimension
             const SoftBodyComponent* soft = cloth ? nullptr : reg.TryGet<SoftBodyComponent>(e);
             const TerrainComponent* terrain = reg.TryGet<TerrainComponent>(e);
             const Terrain::Runtime* terrainRt = terrain ? Terrain::GetRuntime(*terrain) : nullptr;
-            Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : terrainRt ? terrainRt->Surface : AssetManager::GetMesh(mr.Mesh);
+            // A Water Volume draws its surface grid, moved by the waves.
+            const WaterVolumeComponent* water = cloth || soft ? nullptr : reg.TryGet<WaterVolumeComponent>(e);
+            Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface : AssetManager::GetMesh(mr.Mesh);
             if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
             AABB bounds = mesh->GetBounds();
             // Simulated vertices (cloth, soft bodies) replace the mesh's, on top of its UVs and tangents.
-            const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : nullptr;
-            const std::vector<glm::vec3>* simNormals = cloth ? &cloth->SimulatedNormals : soft ? &soft->SimulatedNormals : nullptr;
+            const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : water ? &water->SimulatedPositions : nullptr;
+            const std::vector<glm::vec3>* simNormals = cloth ? &cloth->SimulatedNormals : soft ? &soft->SimulatedNormals : water ? &water->SimulatedNormals : nullptr;
             std::shared_ptr<const MeshData> softData = soft ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
-            const std::vector<Vertex>* base = cloth ? &Cloth::GridVertices(*cloth) : softData ? &softData->Vertices : nullptr;
+            const std::vector<Vertex>* base = cloth ? &Cloth::GridVertices(*cloth) : softData ? &softData->Vertices : water ? &Water::SurfaceVertices(*water) : nullptr;
             if (simPositions && base && !simPositions->empty() && simPositions->size() == mesh->GetVertexCount() && base->size() == simPositions->size())
             {
                 if (TransientAllocation block = device.AllocateTransient(base->size() * sizeof(Vertex), 16))
@@ -1651,13 +1713,75 @@ namespace Dimension
             item.MeshRef = std::move(mesh);
             m_RenderItems.push_back(std::move(item));
         }
+
+        // Terrain details: an instance of the tree or grass mesh wherever one was scattered (they batch into
+        // instanced draws; picking one selects the terrain).
+        for (auto [e, terrain, t] : reg.ViewOf<TerrainComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy) continue;
+            const Terrain::DetailInstances& details = Terrain::GetDetails(terrain);
+            const auto* terrainRenderer = reg.TryGet<MeshRendererComponent>(e);
+            for (int kind = 0; kind < 2; ++kind)
+            {
+                const std::vector<glm::mat4>& list = kind == 0 ? details.Trees : details.Grass;
+                AssetHandle meshHandle = kind == 0 ? terrain.TreeMesh : terrain.GrassMesh;
+                Ref<Mesh> mesh = list.empty() ? nullptr : AssetManager::GetMesh(meshHandle);
+                if (!mesh) continue;
+                Ref<Material> overrideMat = AssetManager::GetMaterial(kind == 0 ? terrain.TreeMaterial : terrain.GrassMaterial);
+                const auto& slots = AssetManager::GetMeshMaterials(meshHandle);
+                struct DetailPart
+                {
+                    uint32_t FirstIndex, IndexCount;
+                    VkDeviceAddress Address;
+                    bool Transparent, DoubleSided, CastShadows;
+                    uint32_t Batch;
+                };
+                std::vector<DetailPart> parts;
+                static const Material kDefaultMaterial;
+                for (const SubMesh& sub : mesh->GetSubMeshes())
+                {
+                    Ref<Material> slotMat;
+                    const Material* mat = overrideMat.get();
+                    if (!mat && sub.MaterialSlot >= 0 && sub.MaterialSlot < (int32_t)slots.size())
+                    {
+                        slotMat = AssetManager::GetMaterial(slots[sub.MaterialSlot]);
+                        mat = slotMat.get();
+                    }
+                    if (!mat) mat = &kDefaultMaterial;
+                    VkDeviceAddress address = uploadMaterial(*mat);
+                    if (!address) continue;
+                    uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, mat->DoubleSided, 0u }, true);
+                    parts.push_back({ sub.IndexOffset, sub.IndexCount, address, mat->BlendMode == MaterialBlendMode::Transparent, mat->DoubleSided,
+                                      mat->CastShadows, batch });
+                }
+                AABB bounds = mesh->GetBounds();
+                glm::vec3 ext = bounds.Extents();
+                for (const glm::mat4& local : list)
+                {
+                    RenderItem item;
+                    item.World = t.World * local;
+                    glm::mat3 m(item.World);
+                    item.Center = glm::vec3(item.World * glm::vec4(bounds.Center(), 1.0f));
+                    item.Extents = glm::abs(m[0]) * ext.x + glm::abs(m[1]) * ext.y + glm::abs(m[2]) * ext.z;
+                    item.EntityId = e.Index + 1;
+                    item.AlwaysVisible = false;
+                    item.CastShadows = terrainRenderer ? terrainRenderer->CastShadows : true;
+                    item.FirstPart = (uint32_t)m_RenderParts.size();
+                    for (const DetailPart& p : parts)
+                        m_RenderParts.push_back({ p.FirstIndex, p.IndexCount, p.Address, p.Transparent, p.DoubleSided, p.CastShadows, (uint32_t)m_RenderItems.size(), p.Batch });
+                    item.PartCount = (uint32_t)parts.size();
+                    item.MeshRef = mesh;
+                    m_RenderItems.push_back(std::move(item));
+                }
+            }
+        }
         m_Stats.RenderListItems = (uint32_t)m_RenderItems.size();
         m_Stats.ListMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - listStart).count();
     }
 
     void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass)
     {
-        bool shadowPass = pass == MeshPass::Shadow, depthPass = pass == MeshPass::Depth;
+        bool shadowPass = pass == MeshPass::Shadow, depthPass = pass == MeshPass::Depth, oitPass = pass == MeshPass::Transparent;
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
         Frustum frustum(viewProj);
@@ -1730,6 +1854,7 @@ namespace Dimension
             d.Indices = item.Indices;
             d.IndexOffset = item.IndexOffset;
             d.Pipe = shadowPass  ? &res.Shadow
+                   : oitPass     ? &res.MeshOit
                    : depthPass   ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
                    : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
             return d;
@@ -1753,13 +1878,14 @@ namespace Dimension
                 if (shadowPass && (!part.CastShadows || part.Transparent)) continue;
                 if (part.Transparent)
                 {
-                    if (depthPass) continue;
+                    if (depthPass || (pass == MeshPass::Main && m_Oit)) continue; // OIT draws them in their own pass
                     Draw d = makeDraw(part);
                     d.Depth = glm::distance(item.Center, camPos);
                     d.Part = p;
                     transparent.push_back(d);
                     continue;
                 }
+                if (oitPass) continue; // opaque parts were drawn in the main pass
                 m_VisibleParts.push_back(p);
                 m_BatchStart[part.Batch + 1]++;
             }
@@ -3402,6 +3528,20 @@ namespace Dimension
             DrawWireCircle(m, glm::vec3(circle->Offset * glm::vec2(t.Scale), 0), circle->Radius * s, green, 2);
         }
         if (auto* box = reg.TryGet<BoxColliderComponent>(sel)) DrawWireBox(t.World, box->Offset, box->Size * 0.5f, green);
+        if (auto* water = reg.TryGet<WaterVolumeComponent>(sel))
+        {
+            glm::mat4 at = glm::translate(glm::mat4(1.0f), t.GetWorldPosition()) * glm::scale(glm::mat4(1.0f), glm::abs(t.Scale));
+            DrawWireBox(at, glm::vec3(0.0f), water->Size * 0.5f, { 0.3f, 0.6f, 1.0f, 0.9f });
+        }
+        if (auto* ragdoll = reg.TryGet<RagdollComponent>(sel))
+            for (const auto& c : ragdoll->Capsules) // while playing: the capsules where they are
+            {
+                for (float y : { -c.HalfHeight, c.HalfHeight })
+                    for (int axis = 0; axis < 3; ++axis) DrawWireCircle(c.World, { 0, y, 0 }, c.Radius, { 1.0f, 0.7f, 0.3f, 1.0f }, axis);
+                for (glm::vec3 d : { glm::vec3(c.Radius, 0, 0), glm::vec3(-c.Radius, 0, 0), glm::vec3(0, 0, c.Radius), glm::vec3(0, 0, -c.Radius) })
+                    DrawLine(glm::vec3(c.World * glm::vec4(d - glm::vec3(0, c.HalfHeight, 0), 1)), glm::vec3(c.World * glm::vec4(d + glm::vec3(0, c.HalfHeight, 0), 1)),
+                             { 1.0f, 0.7f, 0.3f, 1.0f });
+            }
         if (auto* sphere = reg.TryGet<SphereColliderComponent>(sel))
         {
             float s = std::max({ std::abs(t.Scale.x), std::abs(t.Scale.y), std::abs(t.Scale.z) });

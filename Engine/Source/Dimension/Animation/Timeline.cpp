@@ -2,6 +2,7 @@
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Scene/ComponentRegistry.h"
 #include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Core/Log.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -29,6 +30,20 @@ namespace Dimension
                 track.Field = t.value("field", std::string());
                 track.Interpolation = (TimelineInterpolation)t.value("interpolation", 0);
                 track.Muted = t.value("muted", false);
+                track.Kind = (TimelineTrackKind)std::clamp(t.value("kind", 0), 0, 3);
+                for (auto& c : t.value("clips", json::array()))
+                {
+                    TimelineClip clip;
+                    clip.Start = c.value("start", 0.0f);
+                    clip.Duration = std::max(c.value("duration", 1.0f), 0.01f);
+                    clip.Audio = AssetHandle(c.value("audio", (uint64_t)0));
+                    clip.Animation = c.value("animation", std::string());
+                    clip.Speed = c.value("speed", 1.0f);
+                    clip.ClipIn = c.value("clipIn", 0.0f);
+                    clip.Loop = c.value("loop", true);
+                    track.Clips.push_back(clip);
+                }
+                Timeline::SortClips(track);
                 for (auto& k : t.value("keys", json::array()))
                 {
                     TimelineKey key;
@@ -56,8 +71,33 @@ namespace Dimension
         {
             json keys = json::array();
             for (auto& k : t.Keys) keys.push_back({ { "t", k.Time }, { "v", { k.Value[0], k.Value[1], k.Value[2], k.Value[3] } } });
-            j["tracks"].push_back({ { "path", t.Path }, { "component", t.Component }, { "field", t.Field }, { "interpolation", (int)t.Interpolation },
-                                    { "muted", t.Muted }, { "keys", keys } });
+            json track{ { "path", t.Path }, { "muted", t.Muted } };
+            if (t.IsClipTrack())
+            {
+                json clips = json::array();
+                for (auto& c : t.Clips)
+                {
+                    json clip{ { "start", c.Start }, { "duration", c.Duration }, { "clipIn", c.ClipIn } };
+                    if (t.Kind == TimelineTrackKind::Audio) clip["audio"] = (uint64_t)c.Audio;
+                    if (t.Kind == TimelineTrackKind::Animation)
+                    {
+                        clip["animation"] = c.Animation;
+                        clip["speed"] = c.Speed;
+                        clip["loop"] = c.Loop;
+                    }
+                    clips.push_back(clip);
+                }
+                track["kind"] = (int)t.Kind;
+                track["clips"] = clips;
+            }
+            else
+            {
+                track["component"] = t.Component;
+                track["field"] = t.Field;
+                track["interpolation"] = (int)t.Interpolation;
+                track["keys"] = keys;
+            }
+            j["tracks"].push_back(track);
         }
         for (auto& e : Events) j["events"].push_back({ { "t", e.Time }, { "function", e.Function } });
         std::ofstream out(path);
@@ -166,12 +206,85 @@ namespace Dimension
             return cur == root ? path : std::string();
         }
 
+        void SortClips(TimelineTrack& track)
+        {
+            std::stable_sort(track.Clips.begin(), track.Clips.end(), [](const TimelineClip& a, const TimelineClip& b) { return a.Start < b.Start; });
+        }
+
+        namespace
+        {
+            // Activation: active while `time` is inside any clip.
+            bool ApplyActivation(Scene& scene, Entity target, const TimelineTrack& track, float time)
+            {
+                bool active = false;
+                for (const TimelineClip& c : track.Clips) active |= time >= c.Start && time < c.End();
+                scene.GetRegistry().Get<TagComponent>(target).Active = active;
+                return true;
+            }
+
+            // Animation: the latest clip containing `time`, crossfaded from an earlier one it overlaps; after the last
+            // clip its final frame holds; before the first clip and in gaps the Animator plays on its own.
+            bool ApplyAnimation(Scene& scene, Entity target, const TimelineTrack& track, float time)
+            {
+                auto* anim = scene.GetRegistry().TryGet<AnimatorComponent>(target);
+                if (!anim) return false;
+                const TimelineClip *cur = nullptr, *prev = nullptr;
+                for (const TimelineClip& c : track.Clips)
+                    if (time >= c.Start && time < c.End())
+                    {
+                        prev = cur;
+                        cur = &c;
+                    }
+                float local = 0.0f;
+                if (!cur && !track.Clips.empty())
+                {
+                    bool afterAll = true;
+                    for (const TimelineClip& c : track.Clips) afterAll &= time >= c.End();
+                    if (afterAll)
+                        for (const TimelineClip& c : track.Clips)
+                            if (!cur || c.End() >= cur->End()) cur = &c;
+                    if (cur) local = cur->Duration;
+                }
+                else if (cur)
+                    local = time - cur->Start;
+                if (!cur)
+                {
+                    anim->TimelineDriven = false;
+                    return false;
+                }
+                anim->TimelineDriven = true;
+                anim->TimelineClip = cur->Animation;
+                anim->TimelineTime = cur->ClipIn + local * cur->Speed;
+                anim->TimelineLoop = cur->Loop;
+                anim->TimelinePrevClip.clear();
+                anim->TimelineWeight = 1.0f;
+                if (prev && prev->End() > cur->Start)
+                {
+                    float overlap = std::max(prev->End() - cur->Start, 1e-4f);
+                    anim->TimelinePrevClip = prev->Animation;
+                    anim->TimelinePrevTime = prev->ClipIn + (time - prev->Start) * prev->Speed;
+                    anim->TimelinePrevLoop = prev->Loop;
+                    anim->TimelineWeight = std::clamp((time - cur->Start) / overlap, 0.0f, 1.0f);
+                }
+                return true;
+            }
+        }
+
         int Apply(Scene& scene, Entity root, const TimelineAsset& timeline, float time)
         {
             int written = 0;
             for (const TimelineTrack& track : timeline.Tracks)
             {
-                if (track.Muted || track.Keys.empty()) continue;
+                if (track.Muted) continue;
+                if (track.IsClipTrack())
+                {
+                    Entity target = ResolvePath(scene, root, track.Path);
+                    if (target.IsNull()) continue;
+                    if (track.Kind == TimelineTrackKind::Activation) written += ApplyActivation(scene, target, track, time);
+                    else if (track.Kind == TimelineTrackKind::Animation) written += ApplyAnimation(scene, target, track, time);
+                    continue;
+                }
+                if (track.Keys.empty()) continue;
                 Entity target = ResolvePath(scene, root, track.Path);
                 const ComponentInfo* info = ComponentRegistry::Find(track.Component);
                 if (target.IsNull() || !info || !info->Has(scene, target)) continue;
@@ -195,21 +308,49 @@ namespace Dimension
             return FieldToFloats(*field, field->Access(info->Get(scene, target)), out);
         }
 
+        void PlayAudio(Scene& scene, Entity root, const TimelineAsset& timeline, float from, float to)
+        {
+            for (const TimelineTrack& track : timeline.Tracks)
+            {
+                if (track.Muted || track.Kind != TimelineTrackKind::Audio) continue;
+                Entity target = ResolvePath(scene, root, track.Path);
+                if (target.IsNull() || !scene.GetRegistry().Has<AudioSourceComponent>(target)) continue;
+                for (const TimelineClip& c : track.Clips)
+                {
+                    if (c.End() > from && c.End() <= to) AudioWorld::Stop(scene, target);
+                    if (c.Start > from && c.Start <= to && c.End() > to) AudioWorld::PlayClip(scene, target, c.Audio, c.ClipIn + (to - c.Start));
+                }
+            }
+        }
+
+        void Release(Scene& scene, Entity root, const TimelineAsset& timeline)
+        {
+            for (const TimelineTrack& track : timeline.Tracks)
+            {
+                if (track.Kind != TimelineTrackKind::Animation) continue;
+                Entity target = ResolvePath(scene, root, track.Path);
+                if (auto* anim = target.IsNull() ? nullptr : scene.GetRegistry().TryGet<AnimatorComponent>(target)) anim->TimelineDriven = false;
+            }
+        }
+
         void Update(Scene& scene, float dt)
         {
             for (auto [e, tl, t] : scene.GetRegistry().ViewOf<TimelineComponent, TransformComponent>())
             {
                 if (!t.ActiveInHierarchy) continue;
+                bool starting = false;
                 if (!tl.Started)
                 {
                     tl.Started = true;
                     tl.Playing = tl.PlayOnAwake;
                     tl.Time = 0.0f;
+                    starting = tl.Playing;
                 }
                 if (!tl.Playing) continue;
                 auto asset = AssetManager::GetTimeline(tl.Timeline);
                 if (!asset) continue;
-                float before = tl.Time;
+                // Things at exactly 0 s fire on the first frame (Play() restarts from there too).
+                float before = starting || tl.Time <= 0.0f ? -1.0f : tl.Time;
                 tl.Time += dt * tl.Speed;
                 float duration = std::max(asset->Duration, 0.01f);
                 // Events passed this frame (a loop wrap fires the ones after `before` and before the new time).
@@ -221,10 +362,12 @@ namespace Dimension
                 if (tl.Time >= duration)
                 {
                     collect(before, duration);
+                    PlayAudio(scene, e, *asset, before, duration);
                     if (tl.Loop)
                     {
                         tl.Time = std::fmod(tl.Time, duration);
                         collect(-1.0f, tl.Time);
+                        PlayAudio(scene, e, *asset, -1.0f, tl.Time);
                     }
                     else
                     {
@@ -233,7 +376,10 @@ namespace Dimension
                     }
                 }
                 else
+                {
                     collect(before, tl.Time);
+                    PlayAudio(scene, e, *asset, before, tl.Time);
+                }
                 Apply(scene, e, *asset, tl.Time);
                 for (const auto& fn : fired) scene.DispatchAnimationEvent(e, fn);
             }

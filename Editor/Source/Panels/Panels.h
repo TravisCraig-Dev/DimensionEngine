@@ -115,9 +115,14 @@ namespace Editor
         EditorContext& m_Ctx;
         AssetHandle m_Handle = AssetHandle::None();
         float m_Time = 0.0f;
-        bool m_Previewing = false, m_DraggingKey = false;
-        int m_Track = -1, m_Key = -1;
-        int m_AddObject = 0;
+        bool m_Previewing = false;
+        enum DragMode { DragNone, DragKey, DragClip, DragClipEnd };
+        DragMode m_Drag = DragNone;
+        float m_DragOffset = 0.0f;
+        int m_Track = -1, m_Key = -1, m_Clip = -1;
+        int m_CurveDragKey = -1, m_CurveDragChannel = 0;
+        float m_CurveMin = 0.0f, m_CurveMax = 1.0f;
+        int m_AddObject = 0, m_AddKind = 0;
         std::string m_AddComponent, m_AddField;
     };
 

@@ -84,6 +84,16 @@ namespace Dimension
                 b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 b.alphaBlendOp = VK_BLEND_OP_ADD;
+                if (att.Blend == BlendMode::Accumulate)
+                {
+                    b.srcColorBlendFactor = b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                    b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                }
+                else if (att.Blend == BlendMode::Revealage)
+                {
+                    b.srcColorBlendFactor = b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                    b.dstColorBlendFactor = b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+                }
             }
             blends.push_back(b);
             colorFormats.push_back(att.Format);

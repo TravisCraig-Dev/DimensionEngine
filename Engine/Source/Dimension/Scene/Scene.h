@@ -48,6 +48,9 @@ namespace Dimension
         float SSRThickness = 0.3f;     // world units an object is assumed to extend behind its depth
         float SSRMaxRoughness = 0.6f;  // rougher surfaces keep only probe and sky reflections
         int SSRSteps = 48;
+        // Order-independent transparency: transparent meshes blend by a weighted average instead of being sorted
+        // per object, so intersecting and nested see-through objects look right in any order.
+        bool OIT = false;
         bool UIKeyboardNavigation = true; // arrows/Enter/Space move and press the UI selection (off when gameplay uses them)
         // Depth of field: objects nearer or farther than the focus distance blur (perspective cameras).
         bool DepthOfField = false;
@@ -215,6 +218,7 @@ namespace Dimension
         bool m_UIDown = false, m_UIWasDown = false, m_UIInputValid = false;
         float m_UIScroll = 0.0f;
         float m_Time = 0.0f, m_DeltaTime = 0.0f;
+        float m_EditorTime = 0.0f; // waves and other previews while editing
         uint64_t m_FrameCount = 0;
         std::string m_UIInjectedText;
         bool m_UIInjectedBackspace = false, m_UIInjectedEnter = false;

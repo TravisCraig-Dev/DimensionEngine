@@ -421,11 +421,11 @@ namespace Editor
                     {
                         // Brushes: pick a tool, then drag on the terrain in the Scene view.
                         auto& terrain = *static_cast<TerrainComponent*>(info.Get(scene, e));
-                        static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow" };
+                        static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow", "Trees", "Grass Tufts", "Erase Details" };
                         ImGui::SeparatorText("Sculpt and Paint");
-                        for (int i = 0; i < 7; ++i)
+                        for (int i = 0; i < 10; ++i)
                         {
-                            if (i > 0 && i != 4) ImGui::SameLine();
+                            if (i > 0 && i != 4 && i != 7) ImGui::SameLine();
                             bool active = m_Ctx.TerrainTool == i + 1;
                             if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
                             if (ImGui::Button(tools[i])) m_Ctx.TerrainTool = active ? 0 : i + 1;
@@ -446,6 +446,17 @@ namespace Editor
                         }
                         ImGui::EndDisabled();
                         if (edited) { ImGui::SameLine(); ImGui::TextDisabled("(sculpted terrains ignore the heightmap and noise)"); }
+                        ImGui::BeginDisabled(terrain.PaintedDetails.empty());
+                        if (ImGui::Button("Clear Details"))
+                        {
+                            m_Ctx.RecordUndo();
+                            Terrain::ClearDetails(terrain);
+                            m_Ctx.MarkDirty();
+                        }
+                        ImGui::EndDisabled();
+                        const auto& details = Terrain::GetDetails(terrain);
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%zu trees, %zu grass tufts", details.Trees.size(), details.Grass.size());
                     }
                     if (info.TypeId == GetComponentTypeId<LightProbeVolumeComponent>())
                     {
@@ -1132,6 +1143,9 @@ namespace Editor
             track(ImGui::SliderInt("Steps##ssr", &s.SSRSteps, 8, 256));
             ImGui::Unindent();
         }
+        track(ImGui::Checkbox("Order-Independent Transparency", &s.OIT));
+        ImGui::SetItemTooltip("Transparent meshes blend by a weighted average instead of being sorted per object, so\n"
+                              "overlapping and intersecting glass looks right from every angle (Game view and Player).");
         track(ImGui::Checkbox("Depth of Field", &s.DepthOfField));
         if (s.DepthOfField)
         {

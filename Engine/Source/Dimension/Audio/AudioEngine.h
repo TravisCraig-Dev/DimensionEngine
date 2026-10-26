@@ -58,6 +58,8 @@ namespace Dimension
         static bool IsPlaying(Scene& scene, Entity e);
         // Fire-and-forget sound through the entity's Audio Source settings (output group, spatial position).
         static void PlayOneShot(Scene& scene, Entity e, AssetHandle clip, float volumeScale = 1.0f);
+        // Switches the entity's Audio Source to `clip` (if it plays another) and plays it from `offset` seconds.
+        static void PlayClip(Scene& scene, Entity e, AssetHandle clip, float offset = 0.0f);
 
     private:
         void CreateSource(Entity e, bool autoplay);

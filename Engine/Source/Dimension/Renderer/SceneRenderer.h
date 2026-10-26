@@ -249,6 +249,7 @@ namespace Dimension
         std::vector<FrameProbe> m_FrameProbes;
         Scope<SceneRenderTarget> m_ProbeTarget;
         bool m_Capturing = false;
+        bool m_Oit = false; // this frame draws transparent meshes order-independently
         uint32_t m_Samples = 1; // MSAA samples of the view being rendered
         // A main-pass pipeline (MainPipelines::Kind) for m_Samples.
         const Pipeline& MainPipeline(int kind) const;
@@ -282,7 +283,7 @@ namespace Dimension
         FilteredSky m_FilteredSky;
         const FilteredSky* FilterSky(VkCommandBuffer cmd, const Ref<Texture2D>& sky);
 
-        enum class MeshPass { Main, Shadow, Depth };
+        enum class MeshPass { Main, Shadow, Depth, Transparent }; // Transparent: the order-independent transparency pass
         void DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass);
         // Depth prepass, half-resolution SSAO and its blur (leaves the depth attachment ready to load).
         void RenderDepthOfField(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera, const SceneSettings& settings);

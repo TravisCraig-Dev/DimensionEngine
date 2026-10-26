@@ -120,6 +120,7 @@ namespace Dimension
             float (*MicrophoneState)(int);                       // 0 stop, 1 recording, 2 level, 3 peak, 4 position, 5 rate
             int (*MicrophoneSave)(const char*);
             const char* (*MicrophoneDevices)();                  // names, one per line
+            void (*RagdollImpulse)(void*, uint64_t, const float*, const float*); // impulse, world point
         };
 
         // Background scene loads started from C#, by id.
@@ -588,6 +589,9 @@ namespace Dimension
                 names.clear();
                 for (const auto& d : Microphone::Devices()) names += d + "\n";
                 return names.c_str();
+            };
+            a.RagdollImpulse = [](void* s, uint64_t e, const float* v, const float* p) {
+                Physics3DWorld::AddRagdollImpulse(S(s), Unpack(e), { v[0], v[1], v[2] }, { p[0], p[1], p[2] });
             };
             a.TimelineControl = [](void* s, uint64_t e, int action, float value) -> float {
                 auto* tl = Comp<TimelineComponent>(s, e);

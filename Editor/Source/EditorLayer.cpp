@@ -1950,7 +1950,8 @@ namespace Editor
                 points[i] = ImVec2(origin.x + (n.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - n.y * 0.5f) * size.y);
             }
             bool paint = m_Ctx.TerrainTool - 1 >= (int)Terrain::BrushMode::PaintGrass;
-            ImGui::GetWindowDrawList()->AddPolyline(points, 49, paint ? IM_COL32(120, 230, 120, 255) : IM_COL32(90, 200, 255, 255), 0, 2.0f);
+            bool detail = Terrain::IsDetailMode((Terrain::BrushMode)(m_Ctx.TerrainTool - 1));
+            ImGui::GetWindowDrawList()->AddPolyline(points, 49, detail ? IM_COL32(240, 200, 90, 255) : paint ? IM_COL32(120, 230, 120, 255) : IM_COL32(90, 200, 255, 255), 0, 2.0f);
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
             {
                 m_Ctx.RecordUndo();

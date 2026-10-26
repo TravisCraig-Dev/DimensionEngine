@@ -1,6 +1,7 @@
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Physics/Cloth.h"
+#include "Dimension/Physics/Water.h"
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
@@ -33,6 +34,9 @@
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include "Dimension/Animation/Animation.h"
+#include <glm/gtx/quaternion.hpp>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include "Dimension/Terrain/Terrain.h"
@@ -202,6 +206,35 @@ namespace Dimension
             std::vector<glm::ivec2> EdgeFaces;
         };
         std::vector<ClothBody> Cloths;
+        // Ragdolls: a capsule body per significant bone of a skinned mesh, joined by swing-twist constraints.
+        struct RagdollRig
+        {
+            Entity E;
+            std::shared_ptr<const MeshData> Data; // keeps the skeleton alive
+            std::vector<glm::mat4> BindGlobal;     // per joint: its bind-pose transform in model space
+            std::vector<int> BodyOf;               // per joint: the body it rides on
+            std::vector<int> BodyJoint;            // per body: its joint
+            std::vector<glm::mat4> Offset;         // per body: the capsule's frame in its joint's rigid frame
+            std::vector<JPH::BodyID> Bodies;
+            std::vector<glm::mat4> JointInBody;    // per joint, while simulating: its world transform in its body's frame
+            std::vector<JPH::Ref<JPH::Constraint>> Constraints;
+            JPH::Ref<JPH::GroupFilterTable> Filter;
+            bool Simulating = false;
+            glm::vec3 RootOffset{ 0.0f };          // root body minus the object's position when simulation started
+        };
+        std::vector<RagdollRig> Ragdolls;
+        void RemoveRagdoll(size_t i)
+        {
+            auto& bi = System.GetBodyInterface();
+            for (auto& c : Ragdolls[i].Constraints) System.RemoveConstraint(c);
+            for (JPH::BodyID id : Ragdolls[i].Bodies)
+            {
+                if (bi.IsAdded(id)) bi.RemoveBody(id);
+                bi.DestroyBody(id);
+                BodyToEntity.erase(id.GetIndexAndSequenceNumber());
+            }
+            Ragdolls.erase(Ragdolls.begin() + i);
+        }
         void RemoveCloth(size_t i)
         {
             auto& bi = System.GetBodyInterface();
@@ -273,6 +306,9 @@ namespace Dimension
         std::vector<Entity> softBodies;
         for (auto [e, c] : reg.ViewOf<SoftBodyComponent>()) softBodies.push_back(e);
         for (Entity e : softBodies) CreateSoftBody(e);
+        std::vector<Entity> ragdolls;
+        for (auto [e, r] : reg.ViewOf<RagdollComponent>()) ragdolls.push_back(e);
+        for (Entity e : ragdolls) CreateRagdoll(e);
         m_Impl->System.OptimizeBroadPhase();
     }
 
@@ -282,6 +318,13 @@ namespace Dimension
         m_Impl->Joints.clear();
         while (!m_Impl->Vehicles.empty()) m_Impl->RemoveVehicle(m_Impl->Vehicles.size() - 1);
         while (!m_Impl->Cloths.empty()) m_Impl->RemoveCloth(m_Impl->Cloths.size() - 1);
+        while (!m_Impl->Ragdolls.empty()) m_Impl->RemoveRagdoll(m_Impl->Ragdolls.size() - 1);
+        for (auto [e, r] : m_Scene.GetRegistry().ViewOf<RagdollComponent>())
+        {
+            r.Pose.clear();
+            r.Capsules.clear();
+            r.Driving = false;
+        }
         for (auto [e, c] : m_Scene.GetRegistry().ViewOf<ClothComponent>())
         {
             c.SimulatedPositions.clear();
@@ -326,6 +369,7 @@ namespace Dimension
         if (m_Scene.GetRegistry().Has<VehicleComponent>(e)) CreateVehicle(e);
         if (m_Scene.GetRegistry().Has<ClothComponent>(e)) CreateCloth(e);
         if (m_Scene.GetRegistry().Has<SoftBodyComponent>(e)) CreateSoftBody(e);
+        if (m_Scene.GetRegistry().Has<RagdollComponent>(e)) CreateRagdoll(e);
         for (Entity c : m_Scene.GetChildren(e)) CreateJointsRecursive(c);
     }
 
@@ -831,23 +875,292 @@ namespace Dimension
         for (auto [w, water, wt] : reg.ViewOf<WaterVolumeComponent, TransformComponent>())
         {
             if (!wt.ActiveInHierarchy) continue;
-            glm::vec3 center = wt.GetWorldPosition(), half = glm::abs(water.Size * wt.Scale) * 0.5f;
+            glm::vec3 center = wt.GetWorldPosition(), scale = glm::max(glm::abs(wt.Scale), glm::vec3(1e-4f)), half = water.Size * scale * 0.5f;
             glm::vec3 lo = center - half, hi = center + half;
-            JPH::RVec3 surface(center.x, hi.y, center.z);
+            bool waves = Water::HasWaves(water);
+            float waveRoom = waves ? water.WaveHeight * scale.y : 0.0f; // crests rise above the box
+            // Dynamic rigidbodies, and the capsules of limp ragdolls.
+            std::vector<JPH::BodyID> bodies;
             for (auto [e, rb, t] : reg.ViewOf<RigidbodyComponent, TransformComponent>())
+                if (rb.RuntimeBody != 0xFFFFFFFF && rb.Type == BodyType::Dynamic && t.ActiveInHierarchy) bodies.push_back(JPH::BodyID(rb.RuntimeBody));
+            for (auto& rig : m_Impl->Ragdolls)
+                if (rig.Simulating) bodies.insert(bodies.end(), rig.Bodies.begin(), rig.Bodies.end());
+            for (JPH::BodyID id : bodies)
             {
-                if (rb.RuntimeBody == 0xFFFFFFFF || rb.Type != BodyType::Dynamic || !t.ActiveInHierarchy) continue;
-                JPH::BodyLockWrite lock(lockInterface, JPH::BodyID(rb.RuntimeBody));
+                JPH::BodyLockWrite lock(lockInterface, id);
                 if (!lock.Succeeded()) continue;
                 JPH::Body& body = lock.GetBody();
                 JPH::AABox box = body.GetWorldSpaceBounds();
                 glm::vec3 bmin = FromJolt(box.mMin), bmax = FromJolt(box.mMax);
-                if (bmax.x < lo.x || bmin.x > hi.x || bmax.z < lo.z || bmin.z > hi.z || bmin.y > hi.y || bmax.y < lo.y) continue;
+                if (bmax.x < lo.x || bmin.x > hi.x || bmax.z < lo.z || bmin.z > hi.z || bmin.y > hi.y + waveRoom || bmax.y < lo.y) continue;
+                // The surface under the body: the top face, or the waves there (a plane through that point, tilted
+                // with them, and water moving with their orbits).
+                glm::vec3 point(0.5f * (bmin.x + bmax.x), hi.y, 0.5f * (bmin.z + bmax.z)), normal(0.0f, 1.0f, 0.0f), flow = water.Flow;
+                if (waves)
+                {
+                    glm::vec2 local((point.x - center.x) / scale.x, (point.z - center.z) / scale.z);
+                    Water::SurfacePoint s = Water::Sample(water, local, m_Scene.GetTime());
+                    point.y = center.y + s.Height * scale.y;
+                    normal = glm::normalize(s.Normal / scale);
+                    flow += s.Velocity * scale;
+                }
                 // Jolt measures the part of the shape below the surface plane and pushes it up (and drags it).
-                if (body.ApplyBuoyancyImpulse(surface, JPH::Vec3::sAxisY(), std::max(water.Buoyancy, 0.0f), std::max(water.LinearDrag, 0.0f),
-                                              std::max(water.AngularDrag, 0.0f), ToJolt(water.Flow), gravity, dt))
+                if (body.ApplyBuoyancyImpulse(JPH::RVec3(ToJolt(point)), ToJolt(normal), std::max(water.Buoyancy, 0.0f), std::max(water.LinearDrag, 0.0f),
+                                              std::max(water.AngularDrag, 0.0f), ToJolt(flow), gravity, dt))
                     if (!body.IsActive()) m_Impl->System.GetBodyInterfaceNoLock().ActivateBody(body.GetID());
             }
+        }
+    }
+
+    namespace
+    {
+        // Position and rotation of a transform, without scale (orthonormalized).
+        glm::mat4 RigidPart(const glm::mat4& m)
+        {
+            glm::mat3 r(m);
+            for (int c = 0; c < 3; ++c)
+                if (float len = glm::length(r[c]); len > 1e-8f) r[c] /= len;
+            glm::mat4 out = glm::mat4_cast(glm::normalize(glm::quat_cast(r)));
+            out[3] = m[3];
+            return out;
+        }
+
+        glm::mat4 BodyFrame(JPH::BodyInterface& bi, JPH::BodyID id)
+        {
+            JPH::RVec3 p;
+            JPH::Quat q;
+            bi.GetPositionAndRotation(id, p, q);
+            glm::mat4 m = glm::mat4_cast(FromJolt(q));
+            m[3] = glm::vec4(FromJolt(JPH::Vec3(p)), 1.0f);
+            return m;
+        }
+
+        // The skeleton's joints in world space now: the Animator's pose (its skin matrices), or the bind pose.
+        template <class Rig> void RagdollJointWorlds(Scene& scene, const Rig& rig, std::vector<glm::mat4>& out)
+        {
+            auto& reg = scene.GetRegistry();
+            const glm::mat4& world = reg.Get<TransformComponent>(rig.E).World;
+            const auto* anim = reg.TryGet<AnimatorComponent>(rig.E);
+            size_t n = rig.BindGlobal.size();
+            bool posed = anim && anim->SkinMatrices.size() == n;
+            out.resize(n);
+            for (size_t j = 0; j < n; ++j) out[j] = world * (posed ? anim->SkinMatrices[j] * rig.BindGlobal[j] : rig.BindGlobal[j]);
+        }
+    }
+
+    void Physics3DWorld::CreateRagdoll(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& comp = reg.Get<RagdollComponent>(e);
+        auto* mr = reg.TryGet<MeshRendererComponent>(e);
+        auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
+        const Skeleton* skeleton = data ? data->SkeletonData.get() : nullptr;
+        if (!skeleton || skeleton->Joints.empty())
+        {
+            Log::Warn("Ragdoll on '{}' needs a skinned Mesh Renderer", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        for (auto& r : m_Impl->Ragdolls)
+            if (r.E == e) return;
+        Impl::RagdollRig rig;
+        rig.E = e;
+        rig.Data = data;
+        size_t n = skeleton->Joints.size();
+        rig.BindGlobal.resize(n);
+        for (size_t j = 0; j < n; ++j) rig.BindGlobal[j] = glm::inverse(skeleton->Joints[j].InverseBind);
+        std::vector<glm::mat4> worlds;
+        RagdollJointWorlds(m_Scene, rig, worlds);
+
+        // Bones: each joint to its farthest child. The skeleton's size sets the shortest bone that gets a capsule.
+        std::vector<std::vector<int>> children(n);
+        for (size_t j = 0; j < n; ++j)
+            if (int p = skeleton->Joints[j].Parent; p >= 0 && p < (int)n) children[p].push_back((int)j);
+        glm::vec3 lo(1e30f), hi(-1e30f);
+        for (auto& w : worlds) { lo = glm::min(lo, glm::vec3(w[3])); hi = glm::max(hi, glm::vec3(w[3])); }
+        float height = std::max({ hi.x - lo.x, hi.y - lo.y, hi.z - lo.z, 1e-3f });
+        float minLength = std::max(comp.MinBoneLength, 0.0f) * height;
+
+        struct Capsule { glm::vec3 Start, Dir; float Length, Radius, HalfHeight; };
+        std::vector<Capsule> capsules;
+        rig.BodyOf.assign(n, -1);
+        for (int j : skeleton->Order)
+        {
+            int p = skeleton->Joints[j].Parent;
+            glm::vec3 start(worlds[j][3]), end = start;
+            float length = 0.0f;
+            for (int c : children[j])
+                if (float d = glm::distance(start, glm::vec3(worlds[c][3])); d > length) { length = d; end = glm::vec3(worlds[c][3]); }
+            bool root = p < 0 || rig.BodyOf[p] < 0;
+            if (!root && (children[j].empty() || length < minLength))
+            {
+                rig.BodyOf[j] = rig.BodyOf[p]; // rides along with its parent's capsule
+                continue;
+            }
+            glm::vec3 dir = length > 1e-5f ? (end - start) / length : glm::vec3(0.0f, 1.0f, 0.0f);
+            length = std::max(length, std::max(minLength, height * 0.02f));
+            float radius = std::clamp(length * comp.Thickness, length * 0.02f, length * 0.5f);
+            capsules.push_back({ start, dir, length, radius, std::max(length * 0.5f - radius, length * 0.02f) });
+            rig.BodyOf[j] = (int)rig.BodyJoint.size();
+            rig.BodyJoint.push_back(j);
+        }
+        size_t bodyCount = rig.BodyJoint.size();
+        if (bodyCount == 0) return;
+
+        // Mass by volume; parent and child capsules (and siblings on the same parent) do not collide.
+        float totalVolume = 0.0f;
+        for (auto& c : capsules) totalVolume += glm::pi<float>() * c.Radius * c.Radius * (2.0f * c.HalfHeight + 4.0f / 3.0f * c.Radius);
+        rig.Filter = new JPH::GroupFilterTable((JPH::uint)bodyCount);
+        std::vector<int> parentBody(bodyCount, -1);
+        for (size_t b = 0; b < bodyCount; ++b)
+        {
+            int p = skeleton->Joints[rig.BodyJoint[b]].Parent;
+            if (p >= 0) parentBody[b] = rig.BodyOf[p];
+            if (parentBody[b] >= 0) rig.Filter->DisableCollision((JPH::CollisionGroup::SubGroupID)b, (JPH::CollisionGroup::SubGroupID)parentBody[b]);
+        }
+        for (size_t a = 0; a < bodyCount; ++a)
+            for (size_t b = a + 1; b < bodyCount; ++b)
+                if (parentBody[a] >= 0 && parentBody[a] == parentBody[b]) rig.Filter->DisableCollision((JPH::CollisionGroup::SubGroupID)a, (JPH::CollisionGroup::SubGroupID)b);
+
+        auto& bi = m_Impl->System.GetBodyInterface();
+        JPH::ObjectLayer layer = Layers::Make(reg.Get<TagComponent>(e).Layer, true);
+        comp.Capsules.clear();
+        for (size_t b = 0; b < bodyCount; ++b)
+        {
+            const Capsule& c = capsules[b];
+            glm::quat rot = glm::rotation(glm::vec3(0.0f, 1.0f, 0.0f), c.Dir);
+            glm::vec3 center = c.Start + c.Dir * (c.Length * 0.5f);
+            glm::mat4 frame = glm::mat4_cast(rot);
+            frame[3] = glm::vec4(center, 1.0f);
+            rig.Offset.push_back(glm::inverse(RigidPart(worlds[rig.BodyJoint[b]])) * frame);
+            JPH::BodyCreationSettings settings(new JPH::CapsuleShape(c.HalfHeight, c.Radius), JPH::RVec3(ToJolt(center)), ToJolt(rot),
+                                               JPH::EMotionType::Kinematic, layer);
+            settings.mAllowDynamicOrKinematic = true;
+            settings.mFriction = std::clamp(comp.Friction, 0.0f, 1.0f);
+            settings.mLinearDamping = std::max(comp.LinearDamping, 0.0f);
+            settings.mAngularDamping = std::max(comp.AngularDamping, 0.0f);
+            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+            float volume = glm::pi<float>() * c.Radius * c.Radius * (2.0f * c.HalfHeight + 4.0f / 3.0f * c.Radius);
+            settings.mMassPropertiesOverride.mMass = std::max(comp.Mass, 0.01f) * volume / std::max(totalVolume, 1e-9f);
+            settings.mCollisionGroup = JPH::CollisionGroup(rig.Filter, (JPH::CollisionGroup::GroupID)(0x40000000u | e.Index), (JPH::CollisionGroup::SubGroupID)b);
+            JPH::BodyID id = bi.CreateAndAddBody(settings, JPH::EActivation::Activate);
+            if (id.IsInvalid()) continue;
+            rig.Bodies.push_back(id);
+            m_Impl->BodyToEntity[id.GetIndexAndSequenceNumber()] = e;
+            comp.Capsules.push_back({ frame, c.Radius, c.HalfHeight });
+        }
+        if (rig.Bodies.size() != bodyCount)
+        {
+            m_Impl->Ragdolls.push_back(std::move(rig));
+            m_Impl->RemoveRagdoll(m_Impl->Ragdolls.size() - 1);
+            return;
+        }
+        // A swing-twist joint where each bone meets its parent's capsule: the twist axis along the bone.
+        for (size_t b = 0; b < bodyCount; ++b)
+        {
+            if (parentBody[b] < 0) continue;
+            const Capsule& c = capsules[b];
+            glm::vec3 plane = glm::normalize(glm::cross(c.Dir, std::abs(c.Dir.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0)));
+            JPH::SwingTwistConstraintSettings s;
+            s.mSpace = JPH::EConstraintSpace::WorldSpace;
+            s.mPosition1 = s.mPosition2 = JPH::RVec3(ToJolt(c.Start));
+            s.mTwistAxis1 = s.mTwistAxis2 = ToJolt(c.Dir);
+            s.mPlaneAxis1 = s.mPlaneAxis2 = ToJolt(plane);
+            s.mNormalHalfConeAngle = s.mPlaneHalfConeAngle = glm::radians(std::clamp(comp.SwingLimit, 0.0f, 180.0f));
+            float twist = glm::radians(std::clamp(comp.TwistLimit, 0.0f, 180.0f));
+            s.mTwistMinAngle = -twist;
+            s.mTwistMaxAngle = twist;
+            JPH::Ref<JPH::Constraint> constraint = bi.CreateConstraint(&s, rig.Bodies[parentBody[b]], rig.Bodies[b]);
+            if (!constraint) continue;
+            m_Impl->System.AddConstraint(constraint);
+            rig.Constraints.push_back(constraint);
+        }
+        m_Impl->Ragdolls.push_back(std::move(rig));
+    }
+
+    void Physics3DWorld::UpdateRagdolls(float dt, bool afterStep)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& bi = m_Impl->System.GetBodyInterface();
+        std::vector<glm::mat4> worlds;
+        for (auto& rig : m_Impl->Ragdolls)
+        {
+            auto* comp = reg.TryGet<RagdollComponent>(rig.E);
+            if (!comp) continue;
+            auto& t = reg.Get<TransformComponent>(rig.E);
+            size_t n = rig.BindGlobal.size();
+            if (!afterStep)
+            {
+                if (comp->Simulate != rig.Simulating)
+                {
+                    rig.Simulating = comp->Simulate;
+                    if (rig.Simulating)
+                    {
+                        // Go limp from the current pose: every joint keeps its place on its capsule.
+                        RagdollJointWorlds(m_Scene, rig, worlds);
+                        rig.JointInBody.resize(n);
+                        for (size_t j = 0; j < n; ++j)
+                        {
+                            int b = rig.BodyOf[j];
+                            glm::mat4 frame = RigidPart(worlds[rig.BodyJoint[b]]) * rig.Offset[b];
+                            rig.JointInBody[j] = glm::inverse(frame) * worlds[j];
+                        }
+                        for (JPH::BodyID id : rig.Bodies) bi.SetMotionType(id, JPH::EMotionType::Dynamic, JPH::EActivation::Activate);
+                        rig.RootOffset = glm::vec3(BodyFrame(bi, rig.Bodies[0])[3]) - glm::vec3(t.World[3]);
+                    }
+                    else
+                    {
+                        for (JPH::BodyID id : rig.Bodies) bi.SetMotionType(id, JPH::EMotionType::Kinematic, JPH::EActivation::Activate);
+                        comp->Driving = false;
+                    }
+                }
+                if (rig.Simulating || dt <= 0.0f) continue;
+                // Animated: the capsules follow the pose.
+                RagdollJointWorlds(m_Scene, rig, worlds);
+                for (size_t b = 0; b < rig.Bodies.size(); ++b)
+                {
+                    glm::mat4 frame = RigidPart(worlds[rig.BodyJoint[b]]) * rig.Offset[b];
+                    bi.MoveKinematic(rig.Bodies[b], JPH::RVec3(ToJolt(glm::vec3(frame[3]))), ToJolt(glm::normalize(glm::quat_cast(glm::mat3(frame)))), dt);
+                    if (b < comp->Capsules.size()) comp->Capsules[b].World = frame;
+                }
+                continue;
+            }
+            if (!rig.Simulating) continue;
+            // Simulated: the object follows the root capsule and the joints ride their capsules.
+            std::vector<glm::mat4> frames(rig.Bodies.size());
+            for (size_t b = 0; b < rig.Bodies.size(); ++b)
+            {
+                frames[b] = BodyFrame(bi, rig.Bodies[b]);
+                if (b < comp->Capsules.size()) comp->Capsules[b].World = frames[b];
+            }
+            glm::vec3 worldPos = glm::vec3(frames[0][3]) - rig.RootOffset;
+            Entity parent = m_Scene.GetParent(rig.E);
+            t.Position = parent.IsNull() ? worldPos : glm::vec3(glm::inverse(reg.Get<TransformComponent>(parent).World) * glm::vec4(worldPos, 1.0f));
+            t.World[3] = glm::vec4(worldPos, 1.0f);
+            glm::mat4 toModel = glm::inverse(t.World);
+            comp->Pose.resize(n);
+            for (size_t j = 0; j < n; ++j) comp->Pose[j] = toModel * frames[rig.BodyOf[j]] * rig.JointInBody[j];
+            comp->Driving = true;
+        }
+    }
+
+    void Physics3DWorld::AddRagdollImpulse(Scene& scene, Entity e, const glm::vec3& impulse, const glm::vec3& point)
+    {
+        Physics3DWorld* world = scene.GetPhysics3D();
+        if (!world) return;
+        world->UpdateRagdolls(0.0f, false); // a Simulate switched on this frame goes limp first, so the hit lands
+        auto& bi = world->m_Impl->System.GetBodyInterface();
+        for (auto& rig : world->m_Impl->Ragdolls)
+        {
+            if (rig.E != e || rig.Bodies.empty()) continue;
+            // The capsule nearest the point takes it (at that point, so it also turns the body).
+            size_t best = 0;
+            float bestDistance = 1e30f;
+            for (size_t b = 0; b < rig.Bodies.size(); ++b)
+            {
+                float d = glm::distance(glm::vec3(BodyFrame(bi, rig.Bodies[b])[3]), point);
+                if (d < bestDistance) { bestDistance = d; best = b; }
+            }
+            bi.AddImpulse(rig.Bodies[best], ToJolt(impulse), JPH::RVec3(ToJolt(point)));
         }
     }
 
@@ -1168,6 +1481,23 @@ namespace Dimension
             compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::HeightFieldShapeSettings(heights.data(), offset, cell, (JPH::uint32)n));
             if (rb.Type != BodyType::Static) Log::Warn("Terrain on '{}' only collides as a static body", reg.Get<TagComponent>(e).Name);
             ++shapeCount;
+            // Trees collide as upright trunk capsules, as tall as their mesh.
+            auto treeData = terrain->TreeColliderRadius > 0.0f ? AssetManager::GetMeshData(terrain->TreeMesh) : nullptr;
+            if (treeData && !treeData->Vertices.empty())
+            {
+                float top = -1e30f, bottom = 1e30f;
+                for (const Vertex& v : treeData->Vertices) { top = std::max(top, v.Position.y); bottom = std::min(bottom, v.Position.y); }
+                for (const glm::mat4& tree : Terrain::BuildDetails(*terrain, heights).Trees)
+                {
+                    float s = glm::length(glm::vec3(tree[0]));
+                    float radius = std::max(terrain->TreeColliderRadius * s * std::max(scale.x, scale.z), 0.01f);
+                    float height = std::max((top - std::max(bottom, 0.0f)) * s * scale.y, radius * 2.0f + 0.02f);
+                    glm::vec3 base = glm::vec3(tree[3]) * scale + glm::vec3(0.0f, std::max(bottom, 0.0f) * s * scale.y, 0.0f);
+                    compound.AddShape(ToJolt(base + glm::vec3(0.0f, height * 0.5f, 0.0f)), JPH::Quat::sIdentity(),
+                                      new JPH::CapsuleShapeSettings(height * 0.5f - radius, radius));
+                    ++shapeCount;
+                }
+            }
         }
         if (auto* mc = reg.TryGet<MeshColliderComponent>(e))
         {
@@ -1298,6 +1628,12 @@ namespace Dimension
                 m_Impl->RemoveCloth(i);
                 break;
             }
+        for (size_t i = 0; i < m_Impl->Ragdolls.size(); ++i)
+            if (m_Impl->Ragdolls[i].E == e)
+            {
+                m_Impl->RemoveRagdoll(i);
+                break;
+            }
         auto* rb = m_Scene.GetRegistry().TryGet<RigidbodyComponent>(e);
         if (!rb || rb->RuntimeBody == 0xFFFFFFFF) return;
         auto& bi = m_Impl->System.GetBodyInterface();
@@ -1386,8 +1722,10 @@ namespace Dimension
         UpdateVehicles(false);
         UpdateCloths(dt, false);
         UpdateWater(dt);
+        UpdateRagdolls(dt, false);
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
         UpdateCloths(dt, true);
+        UpdateRagdolls(dt, true);
 
         // Joint reactions (impulses / dt); joints over their break force or torque are removed.
         std::vector<std::pair<Entity, float>> broken;

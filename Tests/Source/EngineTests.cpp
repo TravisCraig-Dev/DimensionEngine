@@ -14,6 +14,7 @@
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Audio/Microphone.h>
+#include <Dimension/Physics/Water.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Platform/AppIcon.h>
@@ -1039,6 +1040,368 @@ namespace
         auto info = AudioEngine::GetClipInfo(wav);
         CHECK(info && info->Format == "WAV" && info->Channels == 1 && info->SampleRate == rate && info->Frames == samples.size());
         fs::remove(wav);
+    }
+
+    void TestTimelineClips()
+    {
+        // Clip tracks: activation, animation (with crossfades) and audio, saved and loaded.
+        fs::path assets = fs::temp_directory_path() / "dimension_timeline_clips" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Tests" / "Data" / "Tone.opus", assets / "Tone.opus");
+        AssetManager::Init(assets);
+        AssetHandle tone = AssetManager::GetHandle(assets / "Tone.opus");
+        AssetHandle handle = AssetManager::CreateTimeline(assets / "Cutscene.timeline");
+        {
+            auto tl = AssetManager::GetTimeline(handle);
+            tl->Duration = 3.0f;
+            TimelineTrack act;
+            act.Kind = TimelineTrackKind::Activation;
+            act.Path = "Lamp";
+            act.Clips = { { 0.5f, 0.5f } };
+            TimelineTrack anim;
+            anim.Kind = TimelineTrackKind::Animation;
+            anim.Path = "Hero";
+            TimelineClip walk;
+            walk.Start = 0.2f;
+            walk.Duration = 0.8f;
+            walk.Animation = "Walk";
+            TimelineClip run;
+            run.Start = 0.8f;
+            run.Duration = 1.2f;
+            run.Animation = "Run";
+            run.Speed = 2.0f;
+            run.ClipIn = 0.1f;
+            run.Loop = false;
+            anim.Clips = { run, walk };
+            Timeline::SortClips(anim);
+            TimelineTrack audio;
+            audio.Kind = TimelineTrackKind::Audio;
+            audio.Path = "Speaker";
+            TimelineClip beep;
+            beep.Start = 0.0f;
+            beep.Duration = 0.9f;
+            beep.Audio = tone;
+            audio.Clips = { beep };
+            tl->Tracks = { act, anim, audio };
+            AssetManager::SaveTimeline(handle);
+        }
+        auto back = TimelineAsset::Load(assets / "Cutscene.timeline");
+        CHECK(back->Tracks.size() == 3 && back->Tracks[0].Kind == TimelineTrackKind::Activation && back->Tracks[0].Clips.size() == 1);
+        const TimelineTrack& animBack = back->Tracks[1];
+        CHECK(animBack.Kind == TimelineTrackKind::Animation && animBack.Clips.size() == 2 && animBack.Clips[0].Animation == "Walk" &&
+              Near(animBack.Clips[1].Speed, 2.0f) && Near(animBack.Clips[1].ClipIn, 0.1f) && !animBack.Clips[1].Loop);
+        CHECK(back->Tracks[2].Kind == TimelineTrackKind::Audio && back->Tracks[2].Clips[0].Audio == tone);
+
+        Scene scene("Clips");
+        auto& reg = scene.GetRegistry();
+        Entity root = scene.CreateEntity("Cutscene");
+        Entity lamp = scene.CreateEntity("Lamp", root);
+        Entity hero = scene.CreateEntity("Hero", root);
+        Entity speaker = scene.CreateEntity("Speaker", root);
+        reg.Emplace<AnimatorComponent>(hero);
+        auto& src = reg.Emplace<AudioSourceComponent>(speaker);
+        src.PlayOnAwake = false;
+        auto& tag = reg.Get<TagComponent>(lamp);
+        auto& animator = reg.Get<AnimatorComponent>(hero);
+        // Activation: only inside the clip.
+        Timeline::Apply(scene, root, *back, 0.2f);
+        CHECK(!tag.Active);
+        Timeline::Apply(scene, root, *back, 0.7f);
+        CHECK(tag.Active);
+        Timeline::Apply(scene, root, *back, 1.2f);
+        CHECK(!tag.Active);
+        // Animation: before the first clip the Animator is its own; then Walk; then a crossfade into Run; then Run holds.
+        Timeline::Apply(scene, root, *back, 0.1f);
+        CHECK(!animator.TimelineDriven);
+        Timeline::Apply(scene, root, *back, 0.5f);
+        CHECK(animator.TimelineDriven && animator.TimelineClip == "Walk" && Near(animator.TimelineTime, 0.3f) && animator.TimelinePrevClip.empty());
+        Timeline::Apply(scene, root, *back, 0.9f);
+        CHECK(animator.TimelineClip == "Run" && animator.TimelinePrevClip == "Walk" && Near(animator.TimelineWeight, 0.5f) &&
+              Near(animator.TimelineTime, 0.1f + 0.1f * 2.0f) && Near(animator.TimelinePrevTime, 0.7f) && !animator.TimelineLoop);
+        Timeline::Apply(scene, root, *back, 2.5f);
+        CHECK(animator.TimelineDriven && animator.TimelineClip == "Run" && Near(animator.TimelineTime, 0.1f + 1.2f * 2.0f));
+        Timeline::Release(scene, root, *back);
+        CHECK(!animator.TimelineDriven);
+
+        // Played: the audio clip starts on the first frame through the Audio Source (when there is a device) and stops at its end.
+        reg.Emplace<TimelineComponent>(root).Timeline = handle;
+        AudioEngine::Init();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(rr.Get<AudioSourceComponent>(speaker).Clip == tone);
+        if (AudioEngine::IsAvailable()) CHECK(AudioWorld::IsPlaying(*rt, speaker));
+        for (int i = 0; i < 60; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        if (AudioEngine::IsAvailable()) CHECK(!AudioWorld::IsPlaying(*rt, speaker));
+        CHECK(rr.Get<AnimatorComponent>(hero).TimelineDriven && rr.Get<AnimatorComponent>(hero).TimelineClip == "Run");
+        rt->OnRuntimeStop();
+        rt.reset();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestWaves()
+    {
+        // Gerstner waves: the surface sampled over a displaced point is that point's height; heights stay within the
+        // waves' amplitude; the surface moves; the grid follows.
+        WaterVolumeComponent w;
+        w.Size = { 40, 4, 40 };
+        w.WaveHeight = 1.0f;
+        w.WaveLength = 10.0f;
+        w.WaveDirection = 30.0f;
+        w.Steepness = 0.6f;
+        CHECK(Water::HasWaves(w));
+        float maxDiff = 0.0f, lo = 1e9f, hi = -1e9f;
+        for (int i = 0; i < 50; ++i)
+        {
+            glm::vec2 rest(std::sin(i * 1.7f) * 15.0f, std::cos(i * 2.3f) * 15.0f);
+            float time = i * 0.37f;
+            glm::vec3 p = Water::Displace(w, rest, time);
+            Water::SurfacePoint s = Water::Sample(w, glm::vec2(p.x, p.z), time);
+            maxDiff = std::max(maxDiff, std::abs(s.Height - p.y));
+            lo = std::min(lo, p.y);
+            hi = std::max(hi, p.y);
+            CHECK(s.Normal.y > 0.3f && Near(glm::length(s.Normal), 1.0f, 1e-3f));
+        }
+        CHECK(maxDiff < 0.02f);
+        float amplitude = 0.5f * (1.0f + 0.45f + 0.25f);
+        CHECK(lo >= 2.0f - amplitude - 1e-3f && hi <= 2.0f + amplitude + 1e-3f && hi - lo > 0.8f);
+        CHECK(Water::Sample(w, glm::vec2(0.0f), 0.0f).Height != Water::Sample(w, glm::vec2(0.0f), 0.7f).Height);
+        // Flat water: the top face.
+        WaterVolumeComponent flat;
+        CHECK(!Water::HasWaves(flat) && Water::Sample(flat, glm::vec2(3.0f), 1.0f).Height == 2.0f);
+
+        Scene scene("Sea");
+        auto& reg = scene.GetRegistry();
+        Entity sea = scene.CreateEntity("Sea");
+        reg.Get<TransformComponent>(sea).Position = { 0, 2, 0 };
+        reg.Emplace<WaterVolumeComponent>(sea) = w;
+        Water::Update(scene, 1.0f);
+        auto& ws = reg.Get<WaterVolumeComponent>(sea);
+        CHECK(ws.SimulatedPositions.size() == Water::SurfaceVertices(ws).size() && ws.SimulatedNormals.size() == ws.SimulatedPositions.size());
+
+        // A floating ball rides the waves: it bobs up and down by about their height.
+        Entity floor = scene.CreateEntity("Floor");
+        reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+        reg.Emplace<BoxColliderComponent>(floor).Size = { 100, 1, 100 };
+        Entity ball = scene.CreateEntity("Ball");
+        reg.Get<TransformComponent>(ball).Position = { 0, 4.2f, 0 };
+        reg.Emplace<RigidbodyComponent>(ball).Mass = 2.0f;
+        reg.Emplace<SphereColliderComponent>(ball).Radius = 0.3f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        float bobLo = 1e9f, bobHi = -1e9f;
+        for (int i = 0; i < 12 * 60; ++i)
+        {
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            if (i > 4 * 60)
+            {
+                float y = rt->GetRegistry().Get<TransformComponent>(ball).GetWorldPosition().y;
+                bobLo = std::min(bobLo, y);
+                bobHi = std::max(bobHi, y);
+            }
+        }
+        rt->OnRuntimeStop();
+        CHECK(bobHi - bobLo > 0.4f && bobLo > 2.0f && bobHi < 5.5f);
+    }
+
+    void TestRagdoll()
+    {
+        // The Tentacle (a chain of bones 0.5 apart) standing on a floor: capsules follow it while animated, and
+        // with Simulate on it collapses onto the floor without falling through.
+        fs::path assets = fs::temp_directory_path() / "dimension_ragdoll_test" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Tentacle.gltf", assets / "Tentacle.gltf");
+        AssetManager::Init(assets);
+        AssetHandle model = AssetManager::GetHandle(assets / "Tentacle.gltf");
+        auto data = AssetManager::GetMeshData(model);
+        CHECK(data && data->SkeletonData && data->SkeletonData->Joints.size() >= 4);
+        if (!data || !data->SkeletonData)
+        {
+            AssetManager::Shutdown();
+            return;
+        }
+        size_t joints = data->SkeletonData->Joints.size();
+        Scene scene("Ragdoll");
+        auto& reg = scene.GetRegistry();
+        Entity floor = scene.CreateEntity("Floor");
+        reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+        reg.Emplace<BoxColliderComponent>(floor).Size = { 40, 1, 40 };
+        Entity tentacle = scene.CreateEntity("Tentacle");
+        reg.Get<TransformComponent>(tentacle).Position = { 0, 0.3f, 0 };
+        reg.Emplace<MeshRendererComponent>(tentacle).Mesh = model;
+        // (no Animator: skinning would need the GPU mesh; the capsules follow the bind pose)
+        auto& rd = reg.Emplace<RagdollComponent>(tentacle);
+        rd.Mass = 20.0f;
+        rd.MinBoneLength = 0.05f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto& ragdoll = rr.Get<RagdollComponent>(tentacle);
+        size_t capsules = ragdoll.Capsules.size();
+        CHECK(capsules >= 3 && capsules < joints + 1); // the leaf rides along with its parent
+        auto topY = [&] {
+            float y = -1e9f;
+            for (auto& c : ragdoll.Capsules) y = std::max(y, c.World[3].y);
+            return y;
+        };
+        auto lowY = [&] {
+            float y = 1e9f;
+            for (auto& c : ragdoll.Capsules) y = std::min(y, c.World[3].y - c.Radius);
+            return y;
+        };
+        float standing = topY();
+        for (int i = 0; i < 60; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(Near(topY(), standing, 0.01f) && !ragdoll.Driving); // kinematic: holds the pose
+        // Moving the object carries the capsules.
+        rr.Get<TransformComponent>(tentacle).Position.x = 2.0f;
+        for (int i = 0; i < 10; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(Near(ragdoll.Capsules[0].World[3].x, 2.0f, 0.05f));
+        // Limp: it falls over, rests on the floor, and drives the pose.
+        ragdoll.Simulate = true;
+        Physics3DWorld::AddRagdollImpulse(*rt, tentacle, glm::vec3(30.0f, 0.0f, 0.0f), glm::vec3(2.0f, standing, 0.0f));
+        for (int i = 0; i < 4 * 60; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(ragdoll.Driving && ragdoll.Pose.size() == joints);
+        CHECK(topY() < standing - 1.0f && lowY() > -0.05f);
+        // The object followed its root capsule, so the pose stays near it.
+        glm::vec3 objectPos = rr.Get<TransformComponent>(tentacle).GetWorldPosition();
+        CHECK(glm::distance(objectPos, glm::vec3(ragdoll.Capsules[0].World[3])) < 1.0f);
+        // Raycasts hit the capsules (as the ragdoll's object).
+        RaycastHit hit = Physics3DWorld::Raycast(*rt, glm::vec3(ragdoll.Capsules[1].World[3]) + glm::vec3(0, 3, 0), glm::vec3(0, -1, 0), 10.0f);
+        CHECK(hit && hit.Hit == tentacle);
+        // Back to animated: it no longer drives the pose.
+        ragdoll.Simulate = false;
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(!ragdoll.Driving);
+        rt->OnRuntimeStop();
+        rt.reset();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestTerrainDetails()
+    {
+        // Painting trees and grass tufts: they grow only where painted, about Density per 100 m2, the same every
+        // build; erasing removes them; trees collide as capsules.
+        TerrainComponent t;
+        t.Size = { 60.0f, 60.0f };
+        t.Height = 0.0f; // flat: no slope limits
+        t.Resolution = 64;
+        t.TreeDensity = 4.0f;
+        t.GrassDensity = 100.0f;
+        CHECK(Terrain::DetailMap(t).empty() && Terrain::BuildDetails(t, Terrain::BuildHeights(t)).Trees.empty());
+        Terrain::BeginEdit(t);
+        // Full-strength strokes: trees in a 10 m circle at (-15, 0), grass in one at (15, 0).
+        for (int i = 0; i < 40; ++i)
+        {
+            Terrain::ApplyBrush(t, Terrain::BrushMode::PlaceTrees, { -15.0f, 0.0f }, 10.0f, 1.0f, 0.1f, 0.0f);
+            Terrain::ApplyBrush(t, Terrain::BrushMode::PlaceGrass, { 15.0f, 0.0f }, 10.0f, 1.0f, 0.1f, 0.0f);
+        }
+        Terrain::CommitEdit(t);
+        CHECK(!t.PaintedDetails.empty() && t.EditDetails.empty() && Terrain::DetailMap(t).size() == (size_t)64 * 64 * 2);
+        std::vector<float> heights = Terrain::BuildHeights(t);
+        auto details = Terrain::BuildDetails(t, heights);
+        bool treesInside = !details.Trees.empty(), grassInside = !details.Grass.empty();
+        for (auto& m : details.Trees) treesInside &= glm::distance(glm::vec2(m[3].x, m[3].z), glm::vec2(-15, 0)) < 10.5f;
+        for (auto& m : details.Grass) grassInside &= glm::distance(glm::vec2(m[3].x, m[3].z), glm::vec2(15, 0)) < 10.5f;
+        CHECK(treesInside && grassInside);
+        // About density x area: the soft brush edge thins the outer ring, so expect 40-110% of the full-circle count.
+        float area = 3.14159f * 100.0f;
+        CHECK(details.Trees.size() > area / 100.0f * 4.0f * 0.4f && details.Trees.size() < area / 100.0f * 4.0f * 1.1f);
+        CHECK(details.Grass.size() > area / 100.0f * 100.0f * 0.4f && details.Grass.size() < area / 100.0f * 100.0f * 1.1f);
+        float lo = 1e9f, hi = 0.0f;
+        for (auto& m : details.Grass) { float sc = glm::length(glm::vec3(m[0])); lo = std::min(lo, sc); hi = std::max(hi, sc); }
+        CHECK(lo >= t.GrassScale.x - 1e-3f && hi <= t.GrassScale.y + 1e-3f && hi - lo > 0.2f);
+        auto again = Terrain::BuildDetails(t, heights);
+        CHECK(again.Grass.size() == details.Grass.size() && again.Grass[0] == details.Grass[0]); // deterministic
+        CHECK(Terrain::GetDetails(t).Trees.size() == details.Trees.size());
+        // Too steep for grass: none on a 45 degree ramp with Max Slope 30.
+        {
+            TerrainComponent ramp = t;
+            ramp.SculptedHeights.clear();
+            ramp.Height = 60.0f;
+            Terrain::BeginEdit(ramp);
+            int n = Terrain::SampleCount(ramp);
+            for (int r = 0; r < n; ++r)
+                for (int c = 0; c < n; ++c) ramp.EditHeights[(size_t)r * n + c] = c * (60.0f / (n - 1));
+            ramp.GrassMaxSlope = 30.0f;
+            CHECK(Terrain::BuildDetails(ramp, ramp.EditHeights).Grass.empty());
+            ramp.GrassMaxSlope = 60.0f;
+            CHECK(!Terrain::BuildDetails(ramp, ramp.EditHeights).Grass.empty());
+        }
+        // Trees collide as capsules (with a tree mesh and a collider radius).
+        fs::path assets = fs::temp_directory_path() / "dimension_terrain_details" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        {
+            Scene scene("Forest");
+            Entity e = scene.CreateEntity("Terrain");
+            auto& tc = scene.GetRegistry().Emplace<TerrainComponent>(e) = t;
+            tc.TreeMesh = AssetHandle(5); // the built-in cylinder, 1 m tall
+            tc.TreeColliderRadius = 0.5f;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            glm::vec3 tree = glm::vec3(details.Trees[0][3]);
+            RaycastHit hit = Physics3DWorld::Raycast(*rt, tree + glm::vec3(-5.0f, 0.3f, 0.0f), glm::vec3(1, 0, 0), 10.0f);
+            CHECK(hit && hit.Hit == e && hit.Distance < 5.0f);
+            rt->OnRuntimeStop();
+        }
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+        // Erasing removes both kinds.
+        Terrain::BeginEdit(t);
+        for (int i = 0; i < 40; ++i) Terrain::ApplyBrush(t, Terrain::BrushMode::EraseDetails, { 0.0f, 0.0f }, 40.0f, 1.0f, 0.1f, 0.0f);
+        Terrain::CommitEdit(t);
+        auto erased = Terrain::BuildDetails(t, heights);
+        CHECK(erased.Trees.empty() && erased.Grass.empty() && t.PaintedDetails.empty());
+    }
+
+    void TestObjMaterials()
+    {
+        // usemtl groups become sub-meshes with the .mtl's materials (color, opacity, shininess, texture).
+        fs::path dir = fs::temp_directory_path() / "dimension_obj_materials";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir);
+        {
+            std::ofstream mtl(dir / "Two.mtl");
+            mtl << "newmtl Bark\nKd 0.4 0.2 0.1\nNs 10\nnewmtl Glass\nKd 0.2 0.5 1.0\nd 0.25\nmap_Kd -bm 1 tex/Glass.png\n";
+            std::ofstream obj(dir / "Two.obj");
+            obj << "mtllib Two.mtl\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+                   "usemtl Bark\nf 1 2 3\nusemtl Glass\nf 1 3 4\nusemtl Bark\nf 3 2 1\nusemtl Missing\nf 4 3 1\n";
+        }
+        MeshData data;
+        CHECK(MeshData::LoadFromFile(dir / "Two.obj", data));
+        CHECK(data.Materials.size() == 2 && data.Materials[0].Name == "Bark" && data.Materials[1].Name == "Glass");
+        CHECK(data.SubMeshes.size() == 3); // Bark (two triangles, grouped), Glass, and the unknown material
+        int bark = -1, glass = -1, none = -1;
+        for (int i = 0; i < (int)data.SubMeshes.size(); ++i)
+        {
+            if (data.SubMeshes[i].MaterialSlot == 0) bark = i;
+            if (data.SubMeshes[i].MaterialSlot == 1) glass = i;
+            if (data.SubMeshes[i].MaterialSlot == -1) none = i;
+        }
+        CHECK(bark >= 0 && glass >= 0 && none >= 0 && data.SubMeshes[bark].IndexCount == 6 && data.SubMeshes[glass].IndexCount == 3);
+        const Material& b = data.Materials[0].Values;
+        CHECK(Near(b.BaseColor.r, 0.4f) && Near(b.BaseColor.a, 1.0f) && b.BlendMode == MaterialBlendMode::Opaque && b.Roughness > 0.35f && b.Roughness < 0.45f);
+        const Material& g = data.Materials[1].Values;
+        CHECK(Near(g.BaseColor.a, 0.25f) && g.BlendMode == MaterialBlendMode::Transparent && data.Materials[1].BaseColorImage == 0);
+        CHECK(data.Images.size() == 1 && data.Images[0].File == (dir / "tex" / "Glass.png").lexically_normal());
+        // Without a library the model is one plain part.
+        MeshData torus;
+        CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Torus.obj", torus) && torus.Materials.empty() &&
+              torus.SubMeshes.size() == 1 && torus.SubMeshes[0].MaterialSlot == -1);
+        fs::remove_all(dir, ec);
     }
 
     void TestBuoyancy()
@@ -5687,8 +6050,13 @@ int main(int argc, char** argv)
     Run("Convolution reverb", TestConvolutionReverb);
     Run("Animation retargeting", TestRetargeting);
     Run("Terrain", TestTerrain);
+    Run("Terrain details", TestTerrainDetails);
+    Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
+    Run("Water waves", TestWaves);
+    Run("Ragdoll", TestRagdoll);
     Run("Timelines", TestTimelines);
+    Run("Timeline clip tracks", TestTimelineClips);
     Run("Microphone", TestMicrophone);
     Run("Nested prefabs", TestNestedPrefabs);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);

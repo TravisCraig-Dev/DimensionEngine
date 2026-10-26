@@ -951,6 +951,25 @@ namespace Dimension
         return src && SoundOf(*src) && ma_sound_is_playing(SoundOf(*src));
     }
 
+    void AudioWorld::PlayClip(Scene& scene, Entity e, AssetHandle clip, float offset)
+    {
+        AudioWorld* world = scene.GetAudio();
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        if (!world || !src || !s_Engine || !clip.IsValid()) return;
+        if (src->Clip != clip || !SoundOf(*src))
+        {
+            src->Runtime.reset();
+            src->Clip = clip;
+            world->CreateSource(e, false);
+        }
+        ma_sound* sound = SoundOf(*src);
+        if (!sound) return;
+        ma_uint32 rate = 0;
+        ma_sound_get_data_format(sound, nullptr, nullptr, &rate, nullptr, 0);
+        ma_sound_seek_to_pcm_frame(sound, (ma_uint64)(std::max(offset, 0.0f) * (float)rate));
+        ma_sound_start(sound);
+    }
+
     void AudioWorld::PlayOneShot(Scene& scene, Entity e, AssetHandle clip, float volumeScale)
     {
         AudioWorld* world = scene.GetAudio();

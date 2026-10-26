@@ -5,7 +5,8 @@
 namespace Dimension
 {
     // Multiply: result = src * dst. Premultiplied: result = src + dst * (1 - src alpha).
-    enum class BlendMode { Opaque, Alpha, Additive, Multiply, Premultiplied };
+    // Accumulate adds color and alpha (weighted blended OIT sums); Revealage multiplies the target by 1 - source.
+    enum class BlendMode { Opaque, Alpha, Additive, Multiply, Premultiplied, Accumulate, Revealage };
 
     struct VertexAttribute
     {

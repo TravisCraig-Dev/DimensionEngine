@@ -356,6 +356,65 @@ namespace Dimension
             return true;
         }
 
+        // An OBJ material library (.mtl): diffuse color (Kd) and map, opacity (d, or Tr = 1 - d), shininess (Ns, as
+        // roughness), emission (Ke) and normal map (map_Bump, bump, norm), into `out`'s images; returns name -> slot.
+        std::unordered_map<std::string, int32_t> LoadMtl(const fs::path& file, MeshData& out)
+        {
+            std::unordered_map<std::string, int32_t> slots;
+            std::ifstream in(file);
+            if (!in)
+            {
+                Log::Warn("OBJ material library '{}' not found", file.string());
+                return slots;
+            }
+            auto image = [&](std::istringstream& ss) -> int32_t {
+                std::string rest, token;
+                while (ss >> token)
+                    if (token[0] != '-') rest = token; // options (-bm 1 ...) come before the file name
+                    else ss >> std::ws;
+                if (rest.empty()) return -1;
+                ImportedImage im;
+                im.Name = fs::u8path(rest).stem().string();
+                im.File = (file.parent_path() / fs::u8path(rest)).lexically_normal();
+                out.Images.push_back(std::move(im));
+                return (int32_t)out.Images.size() - 1;
+            };
+            ImportedMaterial* m = nullptr;
+            std::string line;
+            while (std::getline(in, line))
+            {
+                std::istringstream ss(line);
+                std::string tag;
+                ss >> tag;
+                if (tag == "newmtl")
+                {
+                    std::string name;
+                    std::getline(ss >> std::ws, name);
+                    slots[name] = (int32_t)out.Materials.size();
+                    out.Materials.push_back({});
+                    m = &out.Materials.back();
+                    m->Name = name;
+                    m->Values.Metallic = 0.0f;
+                }
+                else if (!m) continue;
+                else if (tag == "Kd") { glm::vec3 c(1.0f); ss >> c.r >> c.g >> c.b; m->Values.BaseColor = glm::vec4(c, m->Values.BaseColor.a); }
+                else if (tag == "d" || tag == "Tr")
+                {
+                    float d = 1.0f;
+                    ss >> d;
+                    float alpha = std::clamp(tag == "Tr" ? 1.0f - d : d, 0.0f, 1.0f);
+                    m->Values.BaseColor.a = alpha;
+                    if (alpha < 0.999f) m->Values.BlendMode = MaterialBlendMode::Transparent;
+                }
+                else if (tag == "Ns") { float ns = 0.0f; ss >> ns; m->Values.Roughness = std::clamp(std::sqrt(2.0f / (std::max(ns, 0.0f) + 2.0f)), 0.05f, 1.0f); }
+                else if (tag == "Ke") { glm::vec3 c(0.0f); ss >> c.r >> c.g >> c.b; m->Values.EmissionColor = c; }
+                else if (tag == "map_Kd") m->BaseColorImage = image(ss);
+                else if (tag == "map_Bump" || tag == "bump" || tag == "norm") m->NormalImage = image(ss);
+                else if (tag == "map_Ke") m->EmissionImage = image(ss);
+            }
+            return slots;
+        }
+
         bool LoadObj(const fs::path& path, MeshData& out)
         {
             std::ifstream in(path);
@@ -369,7 +428,10 @@ namespace Dimension
             std::unordered_map<std::string, uint32_t> cache;
             bool hasNormals = false;
             auto& vertices = out.Vertices;
-            auto& indices = out.Indices;
+            // Triangles per material (usemtl), joined into one sub-mesh each at the end.
+            std::unordered_map<std::string, int32_t> library;
+            std::vector<std::pair<int32_t, std::vector<uint32_t>>> groups{ { -1, {} } };
+            size_t current = 0;
 
             auto resolve = [&](const std::string& token) -> uint32_t {
                 if (auto it = cache.find(token); it != cache.end()) return it->second;
@@ -401,6 +463,7 @@ namespace Dimension
                     std::vector<uint32_t> face;
                     std::string tok;
                     while (ss >> tok) face.push_back(resolve(tok));
+                    auto& indices = groups[current].second;
                     for (size_t i = 1; i + 1 < face.size(); ++i)
                     {
                         indices.push_back(face[0]);
@@ -408,9 +471,35 @@ namespace Dimension
                         indices.push_back(face[i + 1]);
                     }
                 }
+                else if (tag == "mtllib")
+                {
+                    std::string file;
+                    std::getline(ss >> std::ws, file);
+                    while (!file.empty() && (file.back() == '\r' || file.back() == ' ')) file.pop_back();
+                    for (auto& [name, slot] : LoadMtl(path.parent_path() / fs::u8path(file), out)) library[name] = slot;
+                }
+                else if (tag == "usemtl")
+                {
+                    std::string name;
+                    std::getline(ss >> std::ws, name);
+                    while (!name.empty() && (name.back() == '\r' || name.back() == ' ')) name.pop_back();
+                    auto it = library.find(name);
+                    int32_t slot = it != library.end() ? it->second : -1;
+                    current = groups.size();
+                    for (size_t g = 0; g < groups.size(); ++g)
+                        if (groups[g].first == slot) current = g;
+                    if (current == groups.size()) groups.push_back({ slot, {} });
+                }
             }
             if (vertices.empty()) return false;
-            if (!hasNormals) ComputeNormals(vertices, indices);
+            for (auto& [slot, indices] : groups)
+            {
+                if (indices.empty()) continue;
+                out.SubMeshes.push_back({ (uint32_t)out.Indices.size(), (uint32_t)indices.size(), slot });
+                out.Indices.insert(out.Indices.end(), indices.begin(), indices.end());
+            }
+            if (out.SubMeshes.size() == 1 && out.SubMeshes[0].MaterialSlot < 0) out.SubMeshes.clear(); // one plain part
+            if (!hasNormals) ComputeNormals(vertices, out.Indices);
             return true;
         }
     }

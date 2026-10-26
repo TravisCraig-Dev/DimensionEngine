@@ -136,9 +136,23 @@ namespace Dimension
         // Sculpted and painted terrain (the editor's brushes): the heights (0-1 of Height, 16-bit) and layer weights
         // (RGB) per sample, base64, replacing the heightmap/noise and the automatic layers. Empty = not edited.
         std::string SculptedHeights, PaintedLayers;
+        // Details: trees (bushes, rocks) and grass tufts scattered where the detail brushes painted them, as instances
+        // of a mesh: Density per 100 m2 where painted at full strength, each turned at random and sized between the
+        // Min and Max Scale, only on ground flatter than Max Slope. Trees can collide as upright capsules.
+        AssetHandle TreeMesh = AssetHandle::None(), TreeMaterial = AssetHandle::None();
+        float TreeDensity = 3.0f;
+        glm::vec2 TreeScale{ 0.8f, 1.25f };
+        float TreeMaxSlope = 30.0f;
+        float TreeColliderRadius = 0.0f; // per unit of scale; 0 = trees do not collide
+        AssetHandle GrassMesh = AssetHandle::None(), GrassMaterial = AssetHandle::None();
+        float GrassDensity = 80.0f;
+        glm::vec2 GrassScale{ 0.7f, 1.3f };
+        float GrassMaxSlope = 35.0f;
+        std::string PaintedDetails; // tree and grass density per sample (2 bytes each), base64. Empty = none
         // Runtime: decoded edits while brushing (encoded back when a stroke ends), and a counter that changes with them.
         std::vector<float> EditHeights;
         std::vector<uint32_t> EditLayers;
+        std::vector<uint8_t> EditDetails;
         uint64_t EditRevision = 0;
     };
 
@@ -283,6 +297,12 @@ namespace Dimension
             Layers[layer - 1].Weight = std::clamp(weight, 0.0f, 1.0f);
         }
         std::vector<AnimatorLayerPlayback> Layers; // runtime, one per extra controller layer
+        // Timeline animation tracks (runtime): while TimelineDriven, the Animator plays TimelineClip at TimelineTime
+        // (crossfaded from TimelinePrevClip by 1 - TimelineWeight) instead of its own clip or controller.
+        bool TimelineDriven = false;
+        std::string TimelineClip, TimelinePrevClip;
+        float TimelineTime = 0.0f, TimelinePrevTime = 0.0f, TimelineWeight = 1.0f;
+        bool TimelineLoop = true, TimelinePrevLoop = true;
         void ResetTrigger(const std::string& name) { Runtime.Triggers.erase(name); }
 
         // Runtime state (not serialized).
@@ -625,6 +645,16 @@ namespace Dimension
         float LinearDrag = 0.5f;
         float AngularDrag = 0.05f;
         glm::vec3 Flow{ 0.0f };   // current, m/s
+        // Waves: three Gerstner waves (the main one of Wave Height and Wave Length along Wave Direction, two smaller
+        // ones turned to either side) that move at deep-water speed. Floating bodies ride them and drift with their
+        // orbital motion; with a Mesh Renderer the surface draws as a grid of Surface Resolution following them.
+        float WaveHeight = 0.0f;     // crest to trough of the main wave, m (0 = flat)
+        float WaveLength = 8.0f;     // m
+        float WaveDirection = 0.0f;  // degrees around Y from +X
+        float Steepness = 0.5f;      // 0 = round sine waves, 1 = sharp crests
+        int32_t SurfaceResolution = 64;
+        // Runtime: the surface grid's displaced vertices and normals (object space) this frame.
+        std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
     };
 
     struct AudioReverbZoneComponent
@@ -750,6 +780,29 @@ namespace Dimension
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
         std::vector<uint32_t> TornIndices;
         int32_t TornEdges = 0;
+    };
+
+    // A ragdoll for a skinned character (Animator + skinned Mesh Renderer), like Unity's ragdoll: every bone at least
+    // Min Bone Length long (a fraction of the skeleton's height) becomes a capsule, and each joint a swing-twist
+    // constraint limited to Swing Limit and Twist Limit; shorter bones (fingers, toes) ride along with their parent's
+    // capsule. While Simulate is off the capsules follow the animation (kinematic: they push things and are hit by
+    // raycasts); with Simulate on the character goes limp under physics and the object follows the root capsule.
+    struct RagdollComponent
+    {
+        bool Simulate = false;
+        float Mass = 60.0f;           // whole body, shared by the capsules' volumes
+        float Thickness = 0.25f;      // capsule radius as a fraction of the bone's length
+        float MinBoneLength = 0.08f;  // fraction of the skeleton's height
+        float SwingLimit = 45.0f;     // degrees
+        float TwistLimit = 20.0f;     // degrees
+        float Friction = 0.6f;
+        float LinearDamping = 0.05f;
+        float AngularDamping = 0.3f;
+        // Runtime: the joints' simulated model-space transforms (they drive the skin while Driving) and the capsules.
+        std::vector<glm::mat4> Pose;
+        bool Driving = false;
+        struct Capsule { glm::mat4 World; float Radius, HalfHeight; };
+        std::vector<Capsule> Capsules; // for gizmos and tests
     };
 
     // A soft, deformable version of the object's mesh (Mesh Renderer), simulated as a Jolt soft body while playing:

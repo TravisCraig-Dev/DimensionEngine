@@ -19,6 +19,9 @@ namespace Dimension
         static constexpr VkFormat kAOFormat = VK_FORMAT_R8_UNORM;
         // Per-pixel surface data for screen-space reflections (see Mesh.frag's outSurface).
         static constexpr VkFormat kSurfaceFormat = VK_FORMAT_R32G32_UINT;
+        // Order-independent transparency: weighted color and alpha sums, and the product of (1 - alpha).
+        static constexpr VkFormat kOitAccumFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+        static constexpr VkFormat kOitRevealFormat = VK_FORMAT_R16_SFLOAT;
 
         SceneRenderTarget(uint32_t width, uint32_t height);
         ~SceneRenderTarget();
@@ -35,6 +38,10 @@ namespace Dimension
         // Screen-space reflections: the surface buffer the main pass writes, and the traced reflections (HDR).
         const Image& GetSurface() const { return m_Surface; }
         uint32_t GetSurfaceBindless() const { return m_SurfaceBindless; }
+        const Image& GetOitAccum() const { return m_OitAccum; }
+        const Image& GetOitReveal() const { return m_OitReveal; }
+        uint32_t GetOitAccumBindless() const { return m_OitAccumBindless; }
+        uint32_t GetOitRevealBindless() const { return m_OitRevealBindless; }
         const Image& GetReflections() const { return m_Reflections; }
         uint32_t GetReflectionsBindless() const { return m_ReflectionsBindless; }
         uint32_t GetWidth() const { return m_Width; }
@@ -95,6 +102,8 @@ namespace Dimension
         Image m_Hdr, m_Ids, m_Depth, m_Output;
         Image m_HdrMS, m_IdsMS, m_DepthMS, m_SurfaceMS; // only with MSAA
         Image m_Surface, m_Reflections;
+        Image m_OitAccum, m_OitReveal;
+        uint32_t m_OitAccumBindless = 0, m_OitRevealBindless = 0;
         Image m_TaaHistory[2];
         uint32_t m_TaaHistoryBindless[2] = {};
         uint32_t m_SurfaceBindless = 0, m_ReflectionsBindless = 0;

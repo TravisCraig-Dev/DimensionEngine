@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/Core/Base.h"
+#include "Dimension/Core/Guid.h"
 #include "Dimension/ECS/Entity.h"
 #include <array>
 #include <string>
@@ -12,8 +13,23 @@ namespace Dimension
     // A timeline asset (".timeline"), like a Unity Timeline / Animation clip for properties: tracks of keyframes that
     // animate any numeric field of any component (Transform position, light intensity, material color, a script's
     // public float, ...) of the timeline's object or the objects under it (by name path), plus events that call a
-    // function on the object's scripts. A Timeline component plays it.
+    // function on the object's scripts. A Timeline component plays it. Besides property tracks there are clip tracks:
+    // Activation (the object is active only during its clips), Audio (each clip plays an audio clip through the
+    // object's Audio Source) and Animation (each clip plays an animation clip on the object's Animator, overriding its
+    // controller, with overlapping clips crossfading).
     enum class TimelineInterpolation : int32_t { Smooth = 0, Linear = 1, Step = 2 };
+    enum class TimelineTrackKind : int32_t { Property = 0, Activation = 1, Audio = 2, Animation = 3 };
+
+    struct TimelineClip
+    {
+        float Start = 0.0f, Duration = 1.0f;
+        AssetHandle Audio = AssetHandle::None(); // Audio tracks
+        std::string Animation;                   // Animation tracks: the clip's name in the Animator's model
+        float Speed = 1.0f;                      // Animation: playback rate
+        float ClipIn = 0.0f;                     // seconds into the audio or animation clip where it starts
+        bool Loop = true;                        // Animation: wrap past the clip's end (otherwise hold the last frame)
+        float End() const { return Start + Duration; }
+    };
 
     struct TimelineKey
     {
@@ -23,12 +39,15 @@ namespace Dimension
 
     struct TimelineTrack
     {
+        TimelineTrackKind Kind = TimelineTrackKind::Property;
         std::string Path;      // child objects by name from the timeline's object ("Door/Hinge"); empty = the object itself
         std::string Component; // as in the Inspector, e.g. "Transform", "Point Light"
         std::string Field;     // e.g. "Position", "Intensity"
         TimelineInterpolation Interpolation = TimelineInterpolation::Smooth;
         bool Muted = false;
         std::vector<TimelineKey> Keys; // sorted by time
+        std::vector<TimelineClip> Clips; // clip tracks, sorted by start
+        bool IsClipTrack() const { return Kind != TimelineTrackKind::Property; }
     };
 
     struct TimelineEvent
@@ -57,8 +76,15 @@ namespace Dimension
         // "" with ok = false when target is not under root).
         Entity ResolvePath(Scene& scene, Entity root, const std::string& path);
         std::string PathOf(Scene& scene, Entity root, Entity target, bool* ok = nullptr);
-        // Writes every (unmuted) track's value at `time`. Returns how many fields were set.
+        // Writes every (unmuted) track's state at `time`: property values, activation, animation poses (audio plays
+        // only while playing). Returns how many tracks applied.
         int Apply(Scene& scene, Entity root, const TimelineAsset& timeline, float time);
+        // Audio clips starting in (from, to] (and stopping ones that ended), for playback.
+        void PlayAudio(Scene& scene, Entity root, const TimelineAsset& timeline, float from, float to);
+        // Hands Animators driven by the timeline's animation tracks back to their own playback.
+        void Release(Scene& scene, Entity root, const TimelineAsset& timeline);
+        // Sorts clips by start (after editing).
+        void SortClips(TimelineTrack& track);
         // Reads a track's field from its object now (for keying the current value). Returns the channel count.
         int ReadCurrent(Scene& scene, Entity root, const TimelineTrack& track, float out[4]);
         // Plays the scene's Timeline components (play mode), firing events passed this frame.

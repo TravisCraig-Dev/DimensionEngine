@@ -181,6 +181,7 @@ namespace Dimension
                           { "ssaoBias", s.SSAOBias },
                           { "ssaoDebug", s.SSAODebug },
                           { "ssr", s.SSR },
+                          { "oit", s.OIT },
                           { "ssrIntensity", s.SSRIntensity },
                           { "ssrMaxDistance", s.SSRMaxDistance },
                           { "ssrThickness", s.SSRThickness },
@@ -247,6 +248,7 @@ namespace Dimension
         s.SSAOBias = js.value("ssaoBias", s.SSAOBias);
         s.SSAODebug = js.value("ssaoDebug", s.SSAODebug);
         s.SSR = js.value("ssr", s.SSR);
+        s.OIT = js.value("oit", s.OIT);
         s.SSRIntensity = js.value("ssrIntensity", s.SSRIntensity);
         s.SSRMaxDistance = js.value("ssrMaxDistance", s.SSRMaxDistance);
         s.SSRThickness = js.value("ssrThickness", s.SSRThickness);

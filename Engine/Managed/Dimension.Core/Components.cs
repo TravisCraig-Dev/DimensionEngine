@@ -339,6 +339,16 @@ namespace Dimension
         public bool Loop { get => GetBool("Loop"); set => SetBool("Loop", value); }
     }
 
+    /// <summary>Ragdoll: capsules per bone that follow the animation, or go limp under physics with Simulate.</summary>
+    public unsafe class Ragdoll : Component
+    {
+        internal override string NativeName => "Ragdoll";
+        /// <summary>On: limp under physics (the object follows it). Off: the capsules follow the animation.</summary>
+        public bool Simulate { get => GetBool("Simulate"); set => SetBool("Simulate", value); }
+        /// <summary>Knocks the capsule nearest `point` (world space), e.g. where a raycast hit it.</summary>
+        public void AddImpulse(Vector3 impulse, Vector3 point) => Native.Api.RagdollImpulse(Entity.Scene, Entity.Id, (float*)&impulse, (float*)&point);
+    }
+
     public unsafe class SoftBody : Component
     {
         internal override string NativeName => "Soft Body";

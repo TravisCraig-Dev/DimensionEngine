@@ -8,7 +8,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 #include <unordered_map>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace Dimension::Terrain
 {
@@ -307,10 +310,26 @@ namespace Dimension::Terrain
 
     void ReleaseRuntimes() { Runtimes().clear(); }
 
+    std::vector<uint8_t> DetailMap(const TerrainComponent& terrain)
+    {
+        int n = SampleCount(terrain);
+        size_t count = (size_t)n * n * 2;
+        if (terrain.EditDetails.size() == count) return terrain.EditDetails;
+        if (terrain.PaintedDetails.empty()) return {};
+        std::vector<uint8_t> bytes = Decode(terrain.PaintedDetails);
+        if (bytes.size() != count) return {}; // painted at another resolution
+        return bytes;
+    }
+
     void BeginEdit(TerrainComponent& terrain)
     {
         int n = SampleCount(terrain);
         if (terrain.EditHeights.size() != (size_t)n * n) terrain.EditHeights = BuildHeights(terrain);
+        if (terrain.EditDetails.size() != (size_t)n * n * 2)
+        {
+            terrain.EditDetails = DetailMap(terrain);
+            terrain.EditDetails.resize((size_t)n * n * 2, 0);
+        }
         if (terrain.EditLayers.size() != (size_t)n * n)
         {
             MeshData mesh = BuildMesh(terrain, terrain.EditHeights);
@@ -339,6 +358,23 @@ namespace Dimension::Terrain
                 float falloff = 1.0f - Smooth(0.0f, 1.0f, d); // soft edge
                 size_t i = (size_t)r * n + c;
                 float& h = terrain.EditHeights[i];
+                if (IsDetailMode(mode))
+                {
+                    // Detail density moves toward full (or, erasing, toward none for both kinds).
+                    float amount = std::min(rate * 4.0f * falloff, 1.0f);
+                    for (int k = 0; k < 2; ++k)
+                    {
+                        bool target = (mode == BrushMode::PlaceTrees && k == 0) || (mode == BrushMode::PlaceGrass && k == 1);
+                        if (mode != BrushMode::EraseDetails && !target) continue;
+                        uint8_t& d = terrain.EditDetails[i * 2 + k];
+                        float v = d / 255.0f;
+                        v += ((target ? 1.0f : 0.0f) - v) * amount;
+                        int next = std::clamp((int)std::lround(v * 255.0f), 0, 255);
+                        if (next == d && amount > 0.0f) next = std::clamp(d + (target ? 1 : -1), 0, 255); // rounding would stall it
+                        d = (uint8_t)next;
+                    }
+                    continue;
+                }
                 switch (mode)
                 {
                 case BrushMode::Raise: h += terrain.Height * 0.5f * rate * falloff; break;
@@ -402,10 +438,108 @@ namespace Dimension::Terrain
             }
             terrain.PaintedLayers = Encode(bytes.data(), bytes.size());
         }
+        if (terrain.EditDetails.size() == (size_t)n * n * 2)
+        {
+            bool any = std::any_of(terrain.EditDetails.begin(), terrain.EditDetails.end(), [](uint8_t d) { return d != 0; });
+            terrain.PaintedDetails = any ? Encode(terrain.EditDetails.data(), terrain.EditDetails.size()) : std::string();
+        }
         // The serialized edits are now the source; the stored heights round to 16 bits.
         terrain.EditHeights.clear();
         terrain.EditLayers.clear();
+        terrain.EditDetails.clear();
         ++terrain.EditRevision;
+    }
+
+    void ClearDetails(TerrainComponent& terrain)
+    {
+        terrain.PaintedDetails.clear();
+        terrain.EditDetails.clear();
+        ++terrain.EditRevision;
+    }
+
+    namespace
+    {
+        uint32_t Hash(uint32_t x)
+        {
+            x ^= x >> 16;
+            x *= 0x7feb352dU;
+            x ^= x >> 15;
+            x *= 0x846ca68bU;
+            x ^= x >> 16;
+            return x;
+        }
+        float Random01(uint32_t& state)
+        {
+            state = Hash(state + 0x9e3779b9U);
+            return (state >> 8) * (1.0f / 16777216.0f);
+        }
+    }
+
+    DetailInstances BuildDetails(const TerrainComponent& terrain, const std::vector<float>& heights)
+    {
+        DetailInstances out;
+        std::vector<uint8_t> map = DetailMap(terrain);
+        if (map.empty()) return out;
+        int n = SampleCount(terrain);
+        glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+        glm::vec2 step = size / (float)(n - 1);
+        auto densityAt = [&](float x, float z, int kind) {
+            float fx = std::clamp((x / size.x + 0.5f) * (n - 1), 0.0f, (float)(n - 1)), fz = std::clamp((z / size.y + 0.5f) * (n - 1), 0.0f, (float)(n - 1));
+            int c0 = std::min((int)fx, n - 2), r0 = std::min((int)fz, n - 2);
+            float tx = fx - c0, tz = fz - r0;
+            auto at = [&](int c, int r) { return map[((size_t)r * n + c) * 2 + kind] / 255.0f; };
+            return (at(c0, r0) * (1 - tx) + at(c0 + 1, r0) * tx) * (1 - tz) + (at(c0, r0 + 1) * (1 - tx) + at(c0 + 1, r0 + 1) * tx) * tz;
+        };
+        auto upAt = [&](float x, float z) {
+            float dx = (HeightAt(terrain, heights, x + step.x, z) - HeightAt(terrain, heights, x - step.x, z)) / (2.0f * step.x);
+            float dz = (HeightAt(terrain, heights, x, z + step.y) - HeightAt(terrain, heights, x, z - step.y)) / (2.0f * step.y);
+            return 1.0f / std::sqrt(1.0f + dx * dx + dz * dz); // the normal's y
+        };
+        for (int kind = 0; kind < 2; ++kind)
+        {
+            float density = kind == 0 ? terrain.TreeDensity : terrain.GrassDensity;
+            glm::vec2 scale = kind == 0 ? terrain.TreeScale : terrain.GrassScale;
+            float maxSlope = kind == 0 ? terrain.TreeMaxSlope : terrain.GrassMaxSlope;
+            if (density <= 0.0f) continue;
+            constexpr float kMaxCells = 60000.0f; // per kind: denser settings spread the same count wider
+            float cell = std::max(std::sqrt(100.0f / density), std::sqrt(size.x * size.y / kMaxCells));
+            int cx = std::max(1, (int)std::ceil(size.x / cell)), cz = std::max(1, (int)std::ceil(size.y / cell));
+            float minUp = std::cos(glm::radians(std::clamp(maxSlope, 0.0f, 90.0f)));
+            auto& list = kind == 0 ? out.Trees : out.Grass;
+            for (int j = 0; j < cz; ++j)
+                for (int i = 0; i < cx; ++i)
+                {
+                    uint32_t state = Hash((uint32_t)i * 73856093u ^ (uint32_t)j * 19349663u ^ (uint32_t)(kind + 1) * 83492791u ^ (uint32_t)terrain.Seed * 2654435761u);
+                    float x = -size.x * 0.5f + (i + Random01(state)) * cell, z = -size.y * 0.5f + (j + Random01(state)) * cell;
+                    float chance = Random01(state);
+                    if (std::abs(x) > size.x * 0.5f || std::abs(z) > size.y * 0.5f || chance >= densityAt(x, z, kind)) continue;
+                    if (upAt(x, z) < minUp) continue;
+                    float yaw = Random01(state) * glm::two_pi<float>();
+                    float s = glm::mix(scale.x, scale.y, Random01(state));
+                    glm::mat4 m = glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(x, HeightAt(terrain, heights, x, z), z)), yaw, glm::vec3(0, 1, 0));
+                    list.push_back(glm::scale(m, glm::vec3(std::max(s, 0.01f))));
+                }
+        }
+        return out;
+    }
+
+    const DetailInstances& GetDetails(const TerrainComponent& terrain)
+    {
+        uint64_t key = SettingsKey(terrain);
+        auto mix = [&](const void* p, size_t size) {
+            const auto* b = static_cast<const uint8_t*>(p);
+            for (size_t i = 0; i < size; ++i) key = (key ^ b[i]) * 1099511628211ull;
+        };
+        for (const float* f : { &terrain.TreeDensity, &terrain.TreeScale.x, &terrain.TreeScale.y, &terrain.TreeMaxSlope, &terrain.GrassDensity,
+                                &terrain.GrassScale.x, &terrain.GrassScale.y, &terrain.GrassMaxSlope })
+            mix(f, sizeof(float));
+        mix(terrain.PaintedDetails.data(), terrain.PaintedDetails.size());
+        static std::mutex mutex;
+        static std::unordered_map<uint64_t, DetailInstances> cache;
+        std::lock_guard lock(mutex);
+        if (auto it = cache.find(key); it != cache.end()) return it->second;
+        if (cache.size() > 16) cache.clear();
+        return cache[key] = BuildDetails(terrain, terrain.EditHeights.size() == (size_t)SampleCount(terrain) * SampleCount(terrain) ? terrain.EditHeights : BuildHeights(terrain));
     }
 
     void ClearEdits(TerrainComponent& terrain)

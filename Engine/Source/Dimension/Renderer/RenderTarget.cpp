@@ -37,6 +37,8 @@ namespace Dimension
         }
         m_Surface = Image({ m_Width, m_Height, kSurfaceFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneSurface" });
         m_Reflections = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSR" });
+        m_OitAccum = Image({ m_Width, m_Height, kOitAccumFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "OITAccum" });
+        m_OitReveal = Image({ m_Width, m_Height, kOitRevealFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "OITReveal" });
 
         m_Ldr = Image({ m_Width, m_Height, kOutputFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneLDR" });
         uint32_t aw = std::max(1u, m_Width / 2), ah = std::max(1u, m_Height / 2);
@@ -58,6 +60,8 @@ namespace Dimension
         m_DepthBindless = device.RegisterTexture(m_Depth.GetView(), device.GetNearestClampSampler());
         m_SurfaceBindless = device.RegisterTexture(m_Surface.GetView(), device.GetNearestClampSampler());
         m_ReflectionsBindless = device.RegisterTexture(m_Reflections.GetView(), device.GetClampSampler());
+        m_OitAccumBindless = device.RegisterTexture(m_OitAccum.GetView(), device.GetNearestClampSampler());
+        m_OitRevealBindless = device.RegisterTexture(m_OitReveal.GetView(), device.GetNearestClampSampler());
         for (int i = 0; i < 2; ++i) m_TaaHistoryBindless[i] = device.RegisterTexture(m_TaaHistory[i].GetView(), device.GetClampSampler());
         for (int i = 0; i < 2; ++i) m_AOBindless[i] = device.RegisterTexture(m_AO[i].GetView(), device.GetClampSampler());
         for (int i = 0; i < 2; ++i) m_DofBindless[i] = device.RegisterTexture(m_Dof[i].GetView(), device.GetClampSampler());
@@ -66,7 +70,7 @@ namespace Dimension
         // Establish the between-frames layouts so the images can be sampled even before the first render.
         std::vector<VkImage> images{ m_Hdr.GetHandle(), m_Output.GetHandle(), m_Ldr.GetHandle(), m_AO[0].GetHandle(), m_AO[1].GetHandle(),
                                      m_Dof[0].GetHandle(), m_Dof[1].GetHandle(), m_Reflections.GetHandle(), m_TaaHistory[0].GetHandle(),
-                                     m_TaaHistory[1].GetHandle() };
+                                     m_TaaHistory[1].GetHandle(), m_OitAccum.GetHandle(), m_OitReveal.GetHandle() };
         for (auto& b : m_Bloom) images.push_back(b.GetHandle());
         device.ImmediateSubmit([&](VkCommandBuffer cmd) {
             for (VkImage image : images) Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -81,6 +85,10 @@ namespace Dimension
         device.UnregisterTexture(m_DepthBindless);
         device.UnregisterTexture(m_SurfaceBindless);
         device.UnregisterTexture(m_ReflectionsBindless);
+        device.UnregisterTexture(m_OitAccumBindless);
+        device.UnregisterTexture(m_OitRevealBindless);
+        m_OitAccum = Image();
+        m_OitReveal = Image();
         for (uint32_t index : m_TaaHistoryBindless) device.UnregisterTexture(index);
         m_TaaHistory[0] = Image();
         m_TaaHistory[1] = Image();

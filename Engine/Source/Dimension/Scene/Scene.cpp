@@ -4,6 +4,7 @@
 #include "Dimension/Scripting/ScriptRegistry.h"
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Physics/Water.h"
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/UI/UI.h"
@@ -568,6 +569,7 @@ namespace Dimension
         Timeline::Update(*this, dt);
         UpdateTransforms();
         UpdateAnimators(dt);
+        Water::Update(*this, m_Time);
         ParticleSystems::Update(*this, dt);
         TrailRenderers::Update(*this, m_Time);
         AudioMixer::Update(dt);
@@ -597,6 +599,8 @@ namespace Dimension
         UpdateTransforms();
         UpdateAnimators(0.0f);
         ParticleSystems::Update(*this, dt); // live preview while editing, like Unity's scene view
+        m_EditorTime += dt;
+        Water::Update(*this, m_EditorTime); // waves move in the editor too
     }
 
     namespace
@@ -803,6 +807,36 @@ namespace Dimension
                     }
                 }
             };
+            if (auto* ragdoll = m_Registry.TryGet<RagdollComponent>(e); ragdoll && ragdoll->Driving && ragdoll->Pose.size() == skeleton->Joints.size())
+            {
+                // A simulating ragdoll poses the skeleton from its capsules.
+                anim.SkinMatrices.resize(skeleton->Joints.size());
+                for (size_t j = 0; j < skeleton->Joints.size(); ++j) anim.SkinMatrices[j] = ragdoll->Pose[j] * skeleton->Joints[j].InverseBind;
+                continue;
+            }
+            if (anim.TimelineDriven)
+            {
+                // A timeline's animation track plays this Animator (its own clip, controller and layers wait).
+                auto sampleAt = [&](const std::string& name, float time, bool loop, Pose& out) {
+                    const AnimationClip* c = Animation::FindClip(clips, name);
+                    if (!c) { out.SetBindPose(*skeleton); return; }
+                    float d = c->Duration;
+                    float t = d <= 0.0f ? 0.0f : loop ? std::fmod(std::fmod(time, d) + d, d) : std::clamp(time, 0.0f, d);
+                    Animation::Sample(*skeleton, *c, t, out);
+                };
+                sampleAt(anim.TimelineClip, anim.TimelineTime, anim.TimelineLoop, current);
+                if (!anim.TimelinePrevClip.empty() && anim.TimelineWeight < 1.0f)
+                {
+                    sampleAt(anim.TimelinePrevClip, anim.TimelinePrevTime, anim.TimelinePrevLoop, previous);
+                    Pose blended;
+                    Animation::Blend(previous, current, anim.TimelineWeight, blended);
+                    current = std::move(blended);
+                }
+                applyIK(0, 1.0f);
+                applyIK(-1, 1.0f);
+                Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
+                continue;
+            }
             evaluate(anim, controller.get(), true, current);
 
             // Root motion from the base layer (play mode only).
