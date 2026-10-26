@@ -16,6 +16,7 @@
 #include "Dimension/Core/Input.h"
 #include <glm/gtx/matrix_decompose.hpp>
 #include <algorithm>
+#include <map>
 #include <fstream>
 
 namespace Dimension
@@ -595,6 +596,34 @@ namespace Dimension
         ParticleSystems::Update(*this, dt); // live preview while editing, like Unity's scene view
     }
 
+    namespace
+    {
+        // The clips an Animator plays: its mesh's own, or its Animation Source's retargeted onto the mesh's skeleton
+        // (cached per source and target mesh, and rebuilt when either is reloaded).
+        const std::vector<AnimationClip>& AnimatorClips(const AnimatorComponent& anim, const Ref<Mesh>& mesh)
+        {
+            if (!anim.ClipSource.IsValid()) return mesh->GetClips();
+            Ref<Mesh> source = AssetManager::GetMesh(anim.ClipSource);
+            if (!source || !source->GetSkeleton() || source == mesh) return mesh->GetClips();
+            struct Entry
+            {
+                std::weak_ptr<Mesh> Source, Target;
+                std::vector<AnimationClip> Clips;
+            };
+            static std::map<std::pair<const Mesh*, const Mesh*>, Entry> cache;
+            Entry& entry = cache[{ source.get(), mesh.get() }];
+            if (entry.Source.lock() != source || entry.Target.lock() != mesh)
+            {
+                entry.Source = source;
+                entry.Target = mesh;
+                entry.Clips.clear();
+                for (const AnimationClip& clip : source->GetClips())
+                    entry.Clips.push_back(Animation::RetargetClip(*source->GetSkeleton(), *mesh->GetSkeleton(), clip));
+            }
+            return entry.Clips;
+        }
+    }
+
     void Scene::UpdateAnimators(float dt)
     {
         Pose current, previous;
@@ -633,7 +662,7 @@ namespace Dimension
                 anim.SkinMatrices.clear();
                 continue;
             }
-            const auto& clips = mesh->GetClips();
+            const auto& clips = AnimatorClips(anim, mesh);
             auto duration = [&](const std::string& name) {
                 const AnimationClip* c = Animation::FindClip(clips, name);
                 return c ? c->Duration : 0.0f;

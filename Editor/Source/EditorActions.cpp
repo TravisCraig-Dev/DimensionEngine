@@ -14,7 +14,8 @@ namespace Editor
         static const char* names[] = { "GameObject", "Sprite", "Square", "Cube", "Sphere", "Plane", "Quad", "Cylinder",
                                        "Camera", "Directional Light", "Point Light", "Audio Source", "Physics Cube", "Physics Sphere",
                                        "Text", "Canvas", "Image", "Text", "Button", "Particle System",
-                                       "Panel", "Slider", "Toggle", "Input Field", "Scroll View", "Spot Light", "Tilemap", "Line", "Trail", "Dropdown", "Reflection Probe" };
+                                       "Panel", "Slider", "Toggle", "Input Field", "Scroll View", "Spot Light", "Tilemap", "Line", "Trail", "Dropdown", "Reflection Probe",
+                                       "Terrain" };
 
         // UI elements must live under a Canvas: use the selection if it is UI, else an existing canvas, else make one.
         bool isUI = kind == ObjectKind::UIImage || kind == ObjectKind::UIText || kind == ObjectKind::UIButton ||
@@ -74,6 +75,12 @@ namespace Editor
             break;
         case ObjectKind::Tilemap: reg.Emplace<TilemapComponent>(e); break;
         case ObjectKind::LineRenderer: reg.Emplace<LineRendererComponent>(e); break;
+        case ObjectKind::Terrain:
+            mesh(AssetManager::kPlane);
+            reg.Get<MeshRendererComponent>(e).Smoothness = 0.05f;
+            reg.Emplace<TerrainComponent>(e);
+            if (!position) t.Position = { 0.0f, 0.0f, 0.0f };
+            break;
         case ObjectKind::ReflectionProbe:
             reg.Emplace<ReflectionProbeComponent>(e);
             if (!position) t.Position = { 0.0f, 1.5f, 0.0f };
@@ -179,6 +186,7 @@ namespace Editor
             if (ImGui::MenuItem("Cylinder")) CreateObject(ctx, ObjectKind::Cylinder, parent);
             if (ImGui::MenuItem("Plane")) CreateObject(ctx, ObjectKind::Plane, parent);
             if (ImGui::MenuItem("Quad")) CreateObject(ctx, ObjectKind::Quad, parent);
+            if (ImGui::MenuItem("Terrain")) CreateObject(ctx, ObjectKind::Terrain, parent);
             ImGui::Separator();
             if (ImGui::MenuItem("Physics Cube")) CreateObject(ctx, ObjectKind::PhysicsCube, parent);
             if (ImGui::MenuItem("Physics Sphere")) CreateObject(ctx, ObjectKind::PhysicsSphere, parent);

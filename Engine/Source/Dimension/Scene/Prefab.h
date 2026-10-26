@@ -30,6 +30,10 @@ namespace Dimension
         // contains it and their instances. Nesting works to any depth; a prefab cannot contain itself.
         bool IsNestedPart(Scene& scene, Entity e); // part of a nested prefab instance inside an instance
         AssetHandle GetNestedPrefab(Scene& scene, Entity e); // that inner prefab (None otherwise)
+        // Writes the nested instance that `part` belongs to into its inner prefab (Unity's "Apply to Prefab
+        // 'Wheel'"): changed fields, added and removed components and added objects. Everything using the inner
+        // prefab updates; the instance's own overrides on it are cleared.
+        bool ApplyToNested(Scene& scene, Entity part);
 
         Entity FindInstanceRoot(Scene& scene, Entity e);
         bool IsInstanceOwned(bool isRoot, const std::string& component, const std::string& field);

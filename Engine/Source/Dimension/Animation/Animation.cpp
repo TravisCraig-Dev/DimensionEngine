@@ -309,5 +309,72 @@ namespace Dimension
                 if (c.Name == name) return &c;
             return nullptr;
         }
+
+        namespace
+        {
+            std::string JointKey(const std::string& name)
+            {
+                size_t cut = name.find_last_of(":|");
+                std::string key = cut == std::string::npos ? name : name.substr(cut + 1);
+                for (char& c : key) c = (char)std::tolower((unsigned char)c);
+                return key;
+            }
+        }
+
+        int MatchJoint(const Skeleton& skeleton, const std::string& name)
+        {
+            if (int exact = skeleton.FindJoint(name); exact >= 0) return exact;
+            std::string key = JointKey(name);
+            for (int i = 0; i < (int)skeleton.Joints.size(); ++i)
+                if (JointKey(skeleton.Joints[i].Name) == key) return i;
+            return -1;
+        }
+
+        AnimationClip RetargetClip(const Skeleton& source, const Skeleton& target, const AnimationClip& clip)
+        {
+            // Root heights (model space, bind pose) set how much root translation scales.
+            auto rootHeight = [](const Skeleton& s, int joint) {
+                Pose bind;
+                bind.SetBindPose(s);
+                std::vector<glm::mat4> globals;
+                JointGlobals(s, bind, globals);
+                return joint >= 0 && joint < (int)globals.size() ? std::abs(globals[joint][3].y) : 0.0f;
+            };
+            AnimationClip out;
+            out.Name = clip.Name;
+            out.Duration = clip.Duration;
+            for (const AnimationChannel& ch : clip.Channels)
+            {
+                if (ch.Joint < 0 || ch.Joint >= (int)source.Joints.size()) continue;
+                const Joint& from = source.Joints[ch.Joint];
+                int t = MatchJoint(target, from.Name);
+                if (t < 0) continue;
+                const Joint& to = target.Joints[t];
+                AnimationChannel mapped = ch;
+                mapped.Joint = t;
+                if (ch.Path == AnimationPath::Rotation)
+                {
+                    // The change from the source's bind rotation, applied on the target's bind rotation.
+                    glm::quat inverseBind = glm::inverse(from.Rotation);
+                    for (glm::vec4& v : mapped.Values)
+                    {
+                        glm::quat q = to.Rotation * (inverseBind * glm::quat(v.w, v.x, v.y, v.z));
+                        v = glm::vec4(q.x, q.y, q.z, q.w);
+                    }
+                }
+                else if (ch.Path == AnimationPath::Translation)
+                {
+                    if (to.Parent >= 0 || from.Parent >= 0) continue; // proportions belong to the target
+                    float hs = rootHeight(source, ch.Joint), ht = rootHeight(target, t);
+                    float scale = hs > 1e-4f && ht > 1e-4f ? ht / hs : 1.0f;
+                    for (glm::vec4& v : mapped.Values)
+                        v = glm::vec4(to.Translation + (glm::vec3(v) - from.Translation) * scale, v.w);
+                }
+                else
+                    continue; // scale animation stays with the source
+                out.Channels.push_back(std::move(mapped));
+            }
+            return out;
+        }
     }
 }

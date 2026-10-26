@@ -8,8 +8,9 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Ma
     vec4 Emission;      // linear rgb * strength
     vec4 Params;        // x metallic, y roughness, z alpha cutoff, w normal strength
     vec4 TilingOffset;  // xy tiling, zw offset
-    uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission
-    uvec4 Flags;        // x blend mode (0 opaque, 1 cutout, 2 transparent), y has normal map
+    uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission (terrain: splat, grass, rock, snow)
+    uvec4 Flags;        // x blend mode (0 opaque, 1 cutout, 2 transparent), y has normal map, z 1 = terrain
+    vec4 Layers[3];     // terrain: grass, rock and snow tint (linear rgb), w texture repeats per meter
 };
 
 struct SkinVertex

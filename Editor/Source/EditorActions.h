@@ -9,6 +9,7 @@ namespace Editor
         Camera, DirectionalLight, PointLight, AudioSource, PhysicsCube, PhysicsSphere,
         Text3D, Canvas, UIImage, UIText, UIButton, ParticleSystem,
         UIPanel, UISlider, UIToggle, UIInputField, UIScrollView, SpotLight, Tilemap, LineRenderer, TrailRenderer, UIDropdown, ReflectionProbe,
+        Terrain,
     };
 
     // Creates a preconfigured GameObject (records undo, selects it).

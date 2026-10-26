@@ -108,6 +108,44 @@ namespace Dimension
         glm::mat4 GetProjection(float aspect) const;
     };
 
+    // Projects a texture onto whatever surfaces lie inside its box (Size, centered on the object), along the object's
+    // -Z axis, like Unity's Decal Projector: dirt, scorch marks, puddles, signs. Multiply darkens what is under it,
+    // Alpha paints over it and Additive makes it glow. Surfaces turned away from the projector fade out.
+    // A landscape (see Dimension/Terrain/Terrain.h): needs a Mesh Renderer, whose own mesh it replaces.
+    struct TerrainComponent
+    {
+        glm::vec2 Size{ 100.0f, 100.0f }; // meters along X and Z, centered on the object
+        float Height = 12.0f;             // meters at full heightmap value
+        int32_t Resolution = 128;         // samples per side
+        AssetHandle Heightmap = AssetHandle::None(); // grayscale image (16-bit keeps detail); None = generated noise
+        // Generated terrain: fractal noise.
+        int32_t Seed = 1;
+        float NoiseScale = 0.02f; // features per meter of the largest hills
+        int32_t Octaves = 5;
+        float Roughness = 0.5f;   // how much each finer octave adds
+        float FlatCenter = 0.0f;  // radius (fraction of the half size) kept at Flat Height, e.g. for a play area
+        float FlatHeight = 0.2f;  // 0-1 of Height
+        // Surface layers, blended by slope and height: grass on gentle ground, rock on steep slopes, snow up high.
+        AssetHandle GrassTexture = AssetHandle::None(), RockTexture = AssetHandle::None(), SnowTexture = AssetHandle::None();
+        glm::vec4 GrassColor{ 0.36f, 0.55f, 0.24f, 1.0f };
+        glm::vec4 RockColor{ 0.46f, 0.43f, 0.40f, 1.0f };
+        glm::vec4 SnowColor{ 0.95f, 0.96f, 1.0f, 1.0f };
+        float TextureTiling = 0.25f; // layer texture repeats per meter
+        float RockSlope = 35.0f;     // degrees where rock takes over
+        float SnowHeight = 0.72f;    // 0-1 of Height where snow starts
+    };
+
+    enum class DecalBlend : int32_t { Alpha = 0, Multiply = 1, Additive = 2 };
+    struct DecalComponent
+    {
+        AssetHandle Texture = AssetHandle::None(); // None = a soft round spot
+        glm::vec4 Color{ 1.0f };   // sRGB tint, alpha = opacity
+        glm::vec3 Size{ 1.0f, 1.0f, 1.0f }; // width, height (texture) and projection depth
+        DecalBlend Blend = DecalBlend::Multiply;
+        float AngleFade = 0.3f;    // cosine of the surface angle where it starts to fade
+        int32_t SortingOrder = 0;
+    };
+
     struct SpriteRendererComponent
     {
         glm::vec4 Color{ 1.0f };
@@ -213,6 +251,9 @@ namespace Dimension
         bool Playing = true;
         bool ApplyRootMotion = false;  // the root joint's horizontal movement moves the object (or its Character Controller)
         std::string RootMotionJoint;   // empty = the skeleton's first root joint
+        // Animation Source: another model whose clips this one plays, retargeted onto its own skeleton by joint name
+        // (None = the clips of its own mesh).
+        AssetHandle ClipSource = AssetHandle::None();
 
         // Root motion (runtime): movement applied this frame, world space.
         glm::vec3 RootMotionDelta{ 0.0f };

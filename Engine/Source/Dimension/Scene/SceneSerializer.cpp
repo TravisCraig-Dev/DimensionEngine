@@ -191,6 +191,18 @@ namespace Dimension
                           { "focusDistance", s.FocusDistance },
                           { "focusRange", s.FocusRange },
                           { "bokehSize", s.BokehSize },
+                          { "taa", s.TAA },
+                          { "taaFeedback", s.TAAFeedback },
+                          { "fog", s.Fog },
+                          { "fogColor", { s.FogColor.r, s.FogColor.g, s.FogColor.b } },
+                          { "fogIntensity", s.FogIntensity },
+                          { "fogDensity", s.FogDensity },
+                          { "fogHeight", s.FogHeight },
+                          { "fogHeightFalloff", s.FogHeightFalloff },
+                          { "fogMaxDistance", s.FogMaxDistance },
+                          { "fogSunScattering", s.FogSunScattering },
+                          { "fogAnisotropy", s.FogAnisotropy },
+                          { "fogSteps", s.FogSteps },
                           { "skyMode", s.SkyMode },
                           { "skyTexture", (uint64_t)s.SkyTexture },
                           { "skyIntensity", s.SkyIntensity },
@@ -245,6 +257,19 @@ namespace Dimension
         s.FocusDistance = js.value("focusDistance", s.FocusDistance);
         s.FocusRange = js.value("focusRange", s.FocusRange);
         s.BokehSize = js.value("bokehSize", s.BokehSize);
+        s.TAA = js.value("taa", s.TAA);
+        s.TAAFeedback = js.value("taaFeedback", s.TAAFeedback);
+        s.Fog = js.value("fog", s.Fog);
+        if (js.contains("fogColor") && js["fogColor"].is_array() && js["fogColor"].size() == 3)
+            s.FogColor = { js["fogColor"][0].get<float>(), js["fogColor"][1].get<float>(), js["fogColor"][2].get<float>() };
+        s.FogIntensity = js.value("fogIntensity", s.FogIntensity);
+        s.FogDensity = js.value("fogDensity", s.FogDensity);
+        s.FogHeight = js.value("fogHeight", s.FogHeight);
+        s.FogHeightFalloff = js.value("fogHeightFalloff", s.FogHeightFalloff);
+        s.FogMaxDistance = js.value("fogMaxDistance", s.FogMaxDistance);
+        s.FogSunScattering = js.value("fogSunScattering", s.FogSunScattering);
+        s.FogAnisotropy = js.value("fogAnisotropy", s.FogAnisotropy);
+        s.FogSteps = js.value("fogSteps", s.FogSteps);
         s.SkyMode = js.value("skyMode", s.SkyMode);
         s.SkyTexture = Guid(js.value("skyTexture", uint64_t(0)));
         s.SkyIntensity = js.value("skyIntensity", s.SkyIntensity);

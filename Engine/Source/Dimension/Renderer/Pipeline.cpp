@@ -73,6 +73,13 @@ namespace Dimension
                 b.blendEnable = VK_TRUE;
                 b.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
                 b.dstColorBlendFactor = att.Blend == BlendMode::Additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                if (att.Blend == BlendMode::Multiply)
+                {
+                    b.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+                    b.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+                }
+                else if (att.Blend == BlendMode::Premultiplied)
+                    b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.colorBlendOp = VK_BLEND_OP_ADD;
                 b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;

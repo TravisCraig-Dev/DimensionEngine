@@ -10,6 +10,8 @@
 #include <Dimension/Renderer/Environment.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Audio/Convolver.h>
+#include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Platform/AppIcon.h>
@@ -889,6 +891,190 @@ namespace
             CHECK(glm::length(glm::vec2(t.Position.x - stopped.x, t.Position.z - stopped.z)) < 1.5f); // on the spot
             rt->OnRuntimeStop();
         }
+    }
+
+    void TestTerrain()
+    {
+        TerrainComponent t;
+        t.Size = { 80.0f, 60.0f };
+        t.Height = 20.0f;
+        t.Resolution = 65; // rounds up to an even count for Jolt
+        CHECK(Terrain::SampleCount(t) == 66);
+        std::vector<float> heights = Terrain::BuildHeights(t);
+        CHECK(heights.size() == 66u * 66u && heights == Terrain::BuildHeights(t)); // deterministic
+        float lo = *std::min_element(heights.begin(), heights.end()), hi = *std::max_element(heights.begin(), heights.end());
+        CHECK(lo >= 0.0f && hi <= 20.0f && hi - lo > 2.0f); // hilly, within Height
+        // Exact at the samples; corners of the size map to the corner samples.
+        CHECK(Near(Terrain::HeightAt(t, heights, -40.0f, -30.0f), heights[0]) && Near(Terrain::HeightAt(t, heights, 40.0f, 30.0f), heights.back()));
+        MeshData mesh = Terrain::BuildMesh(t, heights);
+        CHECK(mesh.Vertices.size() == heights.size() && mesh.Indices.size() == 65u * 65u * 6u);
+        bool upward = true;
+        for (auto& v : mesh.Vertices) upward &= v.Normal.y > 0.0f;
+        CHECK(upward);
+        std::vector<uint32_t> splat = Terrain::BuildSplat(t, mesh);
+        bool weighted = true;
+        for (uint32_t s : splat) weighted &= std::abs((int)((s & 255) + (s >> 8 & 255) + (s >> 16 & 255)) - 255) <= 3;
+        CHECK(weighted);
+        // A flat center stays at Flat Height; a different seed gives different hills.
+        TerrainComponent flat = t;
+        flat.FlatCenter = 0.4f;
+        flat.FlatHeight = 0.25f;
+        std::vector<float> fh = Terrain::BuildHeights(flat);
+        CHECK(Near(Terrain::HeightAt(flat, fh, 0.0f, 0.0f), 5.0f, 1e-3f));
+        TerrainComponent other = t;
+        other.Seed = 2;
+        CHECK(Terrain::BuildHeights(other) != heights && Terrain::SettingsKey(other) != Terrain::SettingsKey(t));
+
+        // Physics: the terrain is a static height field matching HeightAt (rays from above land on the surface).
+        Scene scene("Terrain");
+        Entity e = scene.CreateEntity("Terrain");
+        scene.GetRegistry().Get<TransformComponent>(e).Position = { 5, -2, 3 };
+        scene.GetRegistry().Emplace<TerrainComponent>(e) = t;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        bool matches = true;
+        for (glm::vec2 p : { glm::vec2(0, 0), glm::vec2(12.3f, -7.1f), glm::vec2(-31.0f, 22.5f), glm::vec2(38.0f, 28.0f) })
+        {
+            RaycastHit hit = Physics3DWorld::Raycast(*rt, { p.x + 5, 100, p.y + 3 }, { 0, -1, 0 }, 500.0f, Physics::kAllLayers);
+            matches &= hit && Near(hit.Point.y, Terrain::HeightAt(t, heights, p.x, p.y) - 2.0f, 0.02f);
+        }
+        CHECK(matches);
+        rt->OnRuntimeStop();
+    }
+
+    void TestRetargeting()
+    {
+        MeshData tentacle;
+        CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Tentacle.gltf", tentacle));
+        if (!tentacle.SkeletonData || tentacle.Clips.empty()) return;
+        const Skeleton& source = *tentacle.SkeletonData;
+        // The target: the same joints under rig-style names, twice as long, with a different bind rotation on one.
+        Skeleton target = source;
+        for (auto& j : target.Joints)
+        {
+            j.Name = "mixamorig:" + j.Name;
+            j.Translation *= 2.0f;
+        }
+        int twisted = (int)target.Joints.size() / 2;
+        target.Joints[twisted].Rotation = glm::angleAxis(0.7f, glm::vec3(0, 0, 1)) * target.Joints[twisted].Rotation;
+        CHECK(Animation::MatchJoint(target, source.Joints[0].Name) == 0 && Animation::MatchJoint(target, "Armature|" + source.Joints[1].Name) == 1);
+        CHECK(Animation::MatchJoint(target, "NoSuchJoint") == -1);
+
+        const AnimationClip& clip = tentacle.Clips[0];
+        AnimationClip mapped = Animation::RetargetClip(source, target, clip);
+        CHECK(mapped.Name == clip.Name && Near(mapped.Duration, clip.Duration) && !mapped.Channels.empty());
+        // At any time, each joint turns away from its own bind pose exactly as the source joint does from its own.
+        Pose ps, pt;
+        bool same = true;
+        for (float t : { 0.0f, clip.Duration * 0.37f, clip.Duration * 0.81f })
+        {
+            Animation::Sample(source, clip, t, ps);
+            Animation::Sample(target, mapped, t, pt);
+            for (size_t j = 0; j < source.Joints.size(); ++j)
+            {
+                glm::quat ds = glm::inverse(source.Joints[j].Rotation) * ps.Rotations[j];
+                glm::quat dt = glm::inverse(target.Joints[j].Rotation) * pt.Rotations[j];
+                same &= std::abs(std::abs(glm::dot(ds, dt)) - 1.0f) < 1e-4f;
+                if (source.Joints[j].Parent >= 0) same &= Near(pt.Translations[j], target.Joints[j].Translation, 1e-4f); // its own proportions
+            }
+        }
+        CHECK(same);
+    }
+
+    void TestConvolutionReverb()
+    {
+        // FFT round trip.
+        std::vector<std::complex<float>> data(64);
+        for (size_t i = 0; i < data.size(); ++i) data[i] = { std::sin(i * 0.37f), std::cos(i * 0.11f) };
+        auto original = data;
+        Convolver::FFT(data, false);
+        Convolver::FFT(data, true);
+        float fftError = 0.0f;
+        for (size_t i = 0; i < data.size(); ++i) fftError = std::max(fftError, std::abs(data[i] - original[i]));
+        CHECK(fftError < 1e-4f);
+
+        // A unit impulse passes the signal through, one block late.
+        Convolver delta;
+        float one = 1.0f;
+        delta.Init(&one, 1, 1, 1, 256);
+        CHECK(delta.IsReady() && delta.GetLatency() == 256);
+        std::vector<float> in(2000), out(2000);
+        for (size_t i = 0; i < in.size(); ++i) in[i] = std::sin(i * 0.05f) + ((i * 7919) % 13) * 0.01f;
+        delta.Process(in.data(), out.data(), in.size(), 1.0f, 0.0f);
+        float delayError = 0.0f;
+        for (size_t i = 256; i < in.size(); ++i) delayError = std::max(delayError, std::abs(out[i] - in[i - 256]));
+        CHECK(delayError < 1e-4f);
+
+        // A long random response (several partitions), stereo from a mono response, in odd-sized chunks: matches
+        // direct convolution with the normalized response.
+        std::vector<float> ir(1500);
+        uint32_t seed = 12345;
+        auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (float)(seed >> 8) / 16777216.0f - 0.5f; };
+        for (auto& v : ir) v = rnd();
+        double energy = 0.0;
+        for (float v : ir) energy += (double)v * v;
+        Convolver conv;
+        conv.Init(ir.data(), ir.size(), 1, 2, 256);
+        size_t frames = 4000;
+        std::vector<float> stereo(frames * 2), result(frames * 2);
+        for (auto& v : stereo) v = rnd();
+        for (size_t at = 0; at < frames;)
+        {
+            size_t n = std::min<size_t>(frames - at, 37 + at % 101);
+            conv.Process(stereo.data() + at * 2, result.data() + at * 2, n, 1.0f, 0.0f);
+            at += n;
+        }
+        float maxError = 0.0f;
+        for (size_t f = 256; f < frames; f += 7)
+            for (int c = 0; c < 2; ++c)
+            {
+                double expected = 0.0;
+                size_t t = f - 256;
+                for (size_t k = 0; k < ir.size() && k <= t; ++k) expected += (double)ir[k] * stereo[(t - k) * 2 + c];
+                expected /= std::sqrt(energy);
+                maxError = std::max(maxError, (float)std::abs(expected - result[f * 2 + c]));
+            }
+        CHECK(maxError < 2e-3f);
+        // The sample impulse response is a readable audio asset.
+        fs::path hall = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Audio/Hall IR.wav";
+        CHECK(fs::exists(hall));
+
+        // With an audio device: Master runs through the hall's response and a tone still reaches the output.
+        AudioEngine::Init();
+        if (!AudioEngine::IsAvailable()) return;
+        fs::path assets = fs::temp_directory_path() / "dimension_convolution_test" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        fs::copy_file(hall, assets / "Hall IR.wav");
+        fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Tests" / "Data" / "Tone.opus", assets / "Tone.opus");
+        AssetManager::Init(assets);
+        AssetHandle impulse = AssetManager::GetHandle(assets / "Hall IR.wav");
+        AssetHandle tone = AssetManager::GetHandle(assets / "Tone.opus");
+        CHECK(impulse.IsValid() && tone.IsValid());
+        AudioMixer::Groups()[0].Convolution = true;
+        AudioMixer::Groups()[0].ConvolutionImpulse = (uint64_t)impulse;
+        AudioMixer::Rebuild();
+        {
+            Scene scene("Hall");
+            Entity speaker = scene.CreateEntity("Speaker");
+            auto& src = scene.GetRegistry().Emplace<AudioSourceComponent>(speaker);
+            src.Clip = tone;
+            src.Loop = true;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            AudioMixer::GetLevel(0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(AudioMixer::GetLevel(0).Peak > 0.01f);
+            rt->OnRuntimeStop();
+        }
+        AudioMixer::Groups()[0].Convolution = false;
+        AudioMixer::Groups()[0].ConvolutionImpulse = 0;
+        AudioMixer::Rebuild();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
     }
 
     void TestReverbZones()
@@ -3435,13 +3621,28 @@ namespace
         CHECK(world.GetEntityCount() == count && Near(world.GetRegistry().Get<TransformComponent>(c1).Scale, { 2, 2, 2 }));
         CHECK(color(world, findChild(world, rw, "Hub")) == glm::vec4(0, 0, 1, 1));
 
+        // Apply to Nested: the right wheel's blue hub (and a Cap added to it) go into the wheel prefab itself, so every
+        // wheel turns blue; the override is gone.
+        {
+            Entity rightHub = findChild(world, rw, "Hub");
+            Entity cap = world.CreateEntity("Cap", rw);
+            world.GetRegistry().Emplace<MeshRendererComponent>(cap).Color = { 1, 1, 1, 1 };
+            CHECK(Prefabs::ApplyToNested(world, rightHub));
+            CHECK(world.GetRegistry().Get<PrefabLinkComponent>(rightHub).Overrides.empty());
+            CHECK(color(world, findChild(world, lw, "Hub")) == glm::vec4(0, 0, 1, 1));
+            CHECK(!findChild(world, lw, "Cap").IsNull() && !findChild(world, rw, "Cap").IsNull()); // the added object too
+            CHECK(world.GetChildren(rw).size() == 3 && world.GetChildren(lw).size() == 3); // hub, tire, cap: not doubled
+            nlohmann::json wheelFile = nlohmann::json::parse(std::ifstream(assets / "Wheel.prefab"));
+            CHECK(wheelFile["entities"].size() == 4); // wheel, hub, tire, cap
+        }
+
         // Nesting the cart in a Train nests two levels deep, and a wheel edit still reaches the train.
         Entity train = world.CreateEntity("Train");
         world.SetParent(c2, train);
         AssetHandle trainPrefab = Prefabs::CreateFromEntity(world, train, assets / "Train.prefab");
         Scene depot("Depot");
         Entity t1 = Prefabs::Instantiate(depot, trainPrefab);
-        CHECK(!t1.IsNull() && depot.GetChildren(t1).size() == 1 && depot.GetEntityCount() == 1 + 1 + 2 * 3);
+        CHECK(!t1.IsNull() && depot.GetChildren(t1).size() == 1 && depot.GetEntityCount() == 1 + 1 + 2 * 4);
         if (t1.IsNull() || depot.GetChildren(t1).empty()) return;
         {
             auto stage = Prefabs::OpenForEditing(wheelPrefab);
@@ -5178,11 +5379,22 @@ namespace
         CHECK(withCamera.size() == 5 && withCamera.back() == "Camera");
     }
 
-    const char* g_Filter = nullptr; // run only tests whose name contains this (first command-line argument)
+    const char* g_Filter = nullptr; // run only tests whose name contains this (first command-line argument; '|' separates several)
 
     void Run(const char* name, void (*fn)())
     {
-        if (g_Filter && !std::strstr(name, g_Filter)) return;
+        if (g_Filter)
+        {
+            bool match = false;
+            for (const char* f = g_Filter; *f && !match;)
+            {
+                const char* end = std::strchr(f, '|');
+                std::string part(f, end ? (size_t)(end - f) : std::strlen(f));
+                match = !part.empty() && std::strstr(name, part.c_str()) != nullptr;
+                f = end ? end + 1 : f + part.size();
+            }
+            if (!match) return;
+        }
         g_Current = name;
         int before = g_Failures;
         fn();
@@ -5256,6 +5468,9 @@ int main(int argc, char** argv)
     Run("2D blend trees", TestBlendTrees2D);
     Run("Sub-state machines", TestSubStateMachines);
     Run("Reverb zones", TestReverbZones);
+    Run("Convolution reverb", TestConvolutionReverb);
+    Run("Animation retargeting", TestRetargeting);
+    Run("Terrain", TestTerrain);
     Run("Nested prefabs", TestNestedPrefabs);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);
     Run("Rich text tags", TestRichText);

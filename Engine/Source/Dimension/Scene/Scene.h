@@ -54,6 +54,20 @@ namespace Dimension
         float FocusDistance = 10.0f; // world units from the camera
         float FocusRange = 6.0f;     // distance from the focus at which blur reaches its maximum
         float BokehSize = 0.012f;    // maximum blur radius as a fraction of the image height
+        // Temporal anti-aliasing (perspective game views): jittered frames blended over time.
+        bool TAA = false;
+        float TAAFeedback = 0.1f;    // weight of each new frame: lower is smoother but trails more
+        // Volumetric fog: height fog lit by the ambient Fog Color and the sun (with light shafts through its shadows).
+        bool Fog = false;
+        glm::vec3 FogColor{ 0.55f, 0.6f, 0.7f }; // sRGB, the light the fog itself gives off (sky and bounce)
+        float FogIntensity = 0.6f;
+        float FogDensity = 0.02f;        // extinction per meter at the base height
+        float FogHeight = 0.0f;          // base height: full density below
+        float FogHeightFalloff = 0.15f;  // per meter above it
+        float FogMaxDistance = 150.0f;
+        float FogSunScattering = 1.0f;   // sunlight in the fog (0 = none)
+        float FogAnisotropy = 0.6f;      // > 0: brighter looking toward the sun
+        int FogSteps = 24;
     };
 
     // A scene: an ECS registry plus hierarchy, identity (Guid) mapping and the

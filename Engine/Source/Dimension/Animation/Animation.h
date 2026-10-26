@@ -91,6 +91,14 @@ namespace Dimension
                          float maxAngle, float weight);
         const AnimationClip* FindClip(const std::vector<AnimationClip>& clips, const std::string& name);
 
+        // Retargeting: plays a clip made for one skeleton on another whose joints have the same names (ignoring case
+        // and prefixes such as "mixamorig:" or "Armature|"). Rotations carry over as changes from each skeleton's bind
+        // pose; translations only for root joints, scaled by the ratio of the skeletons' root heights (so a tall and a
+        // short character walk at their own stride); the other joints keep the target's proportions. Joints the
+        // target lacks are skipped.
+        int MatchJoint(const Skeleton& skeleton, const std::string& name);
+        AnimationClip RetargetClip(const Skeleton& source, const Skeleton& target, const AnimationClip& clip);
+
         // Animator layers. A mask gives each joint a weight: 1 for the listed joints and all their descendants,
         // 0 elsewhere (an empty list covers the whole skeleton).
         void BuildMask(const Skeleton& skeleton, const std::vector<std::string>& joints, std::vector<float>& weights);

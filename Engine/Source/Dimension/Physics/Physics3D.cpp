@@ -34,6 +34,8 @@
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
+#include "Dimension/Terrain/Terrain.h"
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -247,7 +249,8 @@ namespace Dimension
         std::vector<Entity> entities;
         reg.EachEntity([&](Entity e) {
             if (reg.Has<RigidbodyComponent>(e) || reg.Has<BoxColliderComponent>(e) || reg.Has<SphereColliderComponent>(e) ||
-                reg.Has<CapsuleColliderComponent>(e) || reg.Has<MeshColliderComponent>(e) || reg.Has<CharacterControllerComponent>(e))
+                reg.Has<CapsuleColliderComponent>(e) || reg.Has<MeshColliderComponent>(e) || reg.Has<CharacterControllerComponent>(e) ||
+                reg.Has<TerrainComponent>(e))
                 entities.push_back(e);
         });
         for (Entity e : entities) CreateBody(e);
@@ -304,7 +307,8 @@ namespace Dimension
     {
         auto& reg = m_Scene.GetRegistry();
         if (reg.Has<RigidbodyComponent>(e) || reg.Has<BoxColliderComponent>(e) || reg.Has<SphereColliderComponent>(e) ||
-            reg.Has<CapsuleColliderComponent>(e) || reg.Has<MeshColliderComponent>(e) || reg.Has<CharacterControllerComponent>(e))
+            reg.Has<CapsuleColliderComponent>(e) || reg.Has<MeshColliderComponent>(e) || reg.Has<CharacterControllerComponent>(e) ||
+            reg.Has<TerrainComponent>(e))
             CreateBody(e);
         for (Entity c : m_Scene.GetChildren(e)) CreateBodiesRecursive(c);
     }
@@ -1076,6 +1080,18 @@ namespace Dimension
             friction = cap->Friction;
             restitution = cap->Restitution;
             sensor |= cap->IsTrigger;
+            ++shapeCount;
+        }
+        if (auto* terrain = reg.TryGet<TerrainComponent>(e))
+        {
+            // The terrain collides as a height field over the same samples it renders.
+            int n = Terrain::SampleCount(*terrain);
+            std::vector<float> heights = Terrain::BuildHeights(*terrain);
+            glm::vec2 size = glm::max(terrain->Size, glm::vec2(0.01f));
+            JPH::Vec3 offset(-size.x * 0.5f * scale.x, 0.0f, -size.y * 0.5f * scale.z);
+            JPH::Vec3 cell(size.x / (n - 1) * scale.x, scale.y, size.y / (n - 1) * scale.z);
+            compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::HeightFieldShapeSettings(heights.data(), offset, cell, (JPH::uint32)n));
+            if (rb.Type != BodyType::Static) Log::Warn("Terrain on '{}' only collides as a static body", reg.Get<TagComponent>(e).Name);
             ++shapeCount;
         }
         if (auto* mc = reg.TryGet<MeshColliderComponent>(e))

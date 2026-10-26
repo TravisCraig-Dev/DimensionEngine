@@ -39,6 +39,11 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Gp
     vec4 SegmentOrigins[PARTICLE_SEGMENTS];     // xyz world origin, w 1 = at the origin (else at the emitter)
     vec4 ColorLut[PARTICLE_LUT];                // color over lifetime
     vec4 CurveLut[PARTICLE_LUT];                // x size, y speed, z force over lifetime
+    // Depth-buffer collision (Collision.x == 2): the last frame's depth and the view it was rendered with.
+    mat4 DepthViewProj;
+    mat4 DepthInvViewProj;
+    uvec4 DepthInfo; // x bindless depth, y 1 = valid
+    vec4 DepthParams; // x thickness (m), y particle radius
 };
 
 vec4 SampleColorLut(GpuParticleParamsRef p, float t)

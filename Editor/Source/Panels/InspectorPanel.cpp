@@ -324,9 +324,10 @@ namespace Editor
                         bool handled = false;
                         if (info.TypeId == GetComponentTypeId<AnimatorComponent>() && f.Name == "Clip")
                         {
-                            // Offer the clips of the entity's skinned mesh.
+                            // Offer the clips of the entity's skinned mesh (or of its Animation Source).
                             auto* mr = reg.TryGet<MeshRendererComponent>(e);
-                            auto mesh = mr ? AssetManager::GetMesh(mr->Mesh) : nullptr;
+                            AssetHandle source = static_cast<AnimatorComponent*>(data)->ClipSource;
+                            auto mesh = source.IsValid() ? AssetManager::GetMesh(source) : mr ? AssetManager::GetMesh(mr->Mesh) : nullptr;
                             if (mesh && !mesh->GetClips().empty())
                             {
                                 auto& anim = *static_cast<AnimatorComponent*>(data);
@@ -526,6 +527,15 @@ namespace Editor
             ImGui::TextUnformatted(AssetManager::GetDisplayName(l->NestedPrefab).c_str());
             ImGui::SameLine();
             if (ImGui::SmallButton("Open##nested")) m_Ctx.RequestOpenPrefab = l->NestedPrefab;
+            ImGui::SameLine();
+            ImGui::BeginDisabled(m_Ctx.IsPlaying());
+            if (ImGui::SmallButton("Apply to Nested"))
+            {
+                m_Ctx.RecordUndo();
+                Prefabs::ApplyToNested(scene, e);
+            }
+            ImGui::SetItemTooltip("Write this nested instance's changes into its own prefab, for every prefab that uses it");
+            ImGui::EndDisabled();
         }
         if (m_Ctx.InPrefabMode()) return; // the stage *is* the prefab: no instance header
         Entity root = Prefabs::FindInstanceRoot(scene, e);
@@ -1096,6 +1106,30 @@ namespace Editor
             }
             ImGui::SetItemTooltip("Multisample anti-aliasing: smooth geometry edges by shading each pixel once but testing\n"
                                   "coverage at several points. Costs memory and fill rate; combines with FXAA.");
+        }
+        track(ImGui::Checkbox("TAA (temporal anti-aliasing)", &s.TAA));
+        ImGui::SetItemTooltip("Renders each frame with a sub-pixel offset and blends it with the previous frames: smooths\n"
+                              "edges, thin lines and shimmering detail (game views; the Scene view stays unjittered).");
+        if (s.TAA)
+        {
+            ImGui::Indent();
+            track(ImGui::SliderFloat("New Frame Weight##taa", &s.TAAFeedback, 0.02f, 0.5f));
+            ImGui::Unindent();
+        }
+        track(ImGui::Checkbox("Volumetric Fog", &s.Fog));
+        if (s.Fog)
+        {
+            ImGui::Indent();
+            track(ImGui::ColorEdit3("Fog Color", &s.FogColor.x));
+            track(ImGui::DragFloat("Intensity##fog", &s.FogIntensity, 0.01f, 0.0f, 20.0f));
+            track(ImGui::DragFloat("Density##fog", &s.FogDensity, 0.001f, 0.0f, 2.0f, "%.4f"));
+            track(ImGui::DragFloat("Base Height##fog", &s.FogHeight, 0.05f));
+            track(ImGui::DragFloat("Height Falloff##fog", &s.FogHeightFalloff, 0.005f, 0.0f, 10.0f, "%.3f"));
+            track(ImGui::DragFloat("Max Distance##fog", &s.FogMaxDistance, 0.5f, 1.0f, 10000.0f));
+            track(ImGui::DragFloat("Sun Scattering##fog", &s.FogSunScattering, 0.01f, 0.0f, 20.0f));
+            track(ImGui::SliderFloat("Anisotropy##fog", &s.FogAnisotropy, -0.9f, 0.9f));
+            track(ImGui::SliderInt("Steps##fog", &s.FogSteps, 4, 128));
+            ImGui::Unindent();
         }
         ImGui::SeparatorText("UI");
         track(ImGui::Checkbox("Keyboard Navigation", &s.UIKeyboardNavigation));

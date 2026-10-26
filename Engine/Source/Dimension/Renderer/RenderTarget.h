@@ -75,6 +75,17 @@ namespace Dimension
         // Used by SceneRenderer.
         void RecordPickCopy(VkCommandBuffer cmd);
 
+        // Temporal anti-aliasing: two history images (one read, one written each frame) and what they were made with.
+        const Image& GetTaaHistory(uint32_t i) const { return m_TaaHistory[i]; }
+        uint32_t GetTaaHistoryBindless(uint32_t i) const { return m_TaaHistoryBindless[i]; }
+        struct TemporalState
+        {
+            uint32_t Frame = 0;   // jitter sequence position
+            uint32_t Written = 0; // history image written last
+            bool Valid = false;   // history holds a previous frame
+            glm::mat4 PrevViewProj{ 1.0f };
+        } Temporal;
+
     private:
         void Create();
         void Destroy();
@@ -84,6 +95,8 @@ namespace Dimension
         Image m_Hdr, m_Ids, m_Depth, m_Output;
         Image m_HdrMS, m_IdsMS, m_DepthMS, m_SurfaceMS; // only with MSAA
         Image m_Surface, m_Reflections;
+        Image m_TaaHistory[2];
+        uint32_t m_TaaHistoryBindless[2] = {};
         uint32_t m_SurfaceBindless = 0, m_ReflectionsBindless = 0;
         uint32_t m_HdrBindless = 0;
         static constexpr uint32_t kMaxBloomLevels = 6;

@@ -1727,7 +1727,7 @@ namespace Editor
                 {
                     bool sending = g.SendTarget >= 0 && g.SendTarget < (int)groups.size() && g.SendTarget != i;
                     std::string fx = std::string("FX") + (g.Echo ? " E" : "") + (g.Reverb ? " R" : "") + (sending ? " >" : "") + "##fx";
-                    bool any = g.Echo || g.Reverb || sending;
+                    bool any = g.Echo || g.Reverb || g.Convolution || sending;
                     if (any) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.45f, 0.7f, 1));
                     if (ImGui::Button(fx.c_str(), ImVec2(controlsW, 0))) ImGui::OpenPopup("##effects");
                     if (any) ImGui::PopStyleColor();
@@ -1754,6 +1754,21 @@ namespace Editor
                         edited(ImGui::SliderFloat("Damping", &g.ReverbDamping, 0.0f, 1.0f));
                         ImGui::SetNextItemWidth(180);
                         edited(ImGui::SliderFloat("Wet##reverb", &g.ReverbWet, 0.0f, 1.0f));
+                        ImGui::SeparatorText("Convolution Reverb");
+                        if (ImGui::Checkbox("Enabled##conv", &g.Convolution)) live = save = true;
+                        {
+                            AssetHandle impulse(g.ConvolutionImpulse);
+                            ImGui::SetNextItemWidth(180);
+                            if (UI::AssetField("Impulse Response", impulse, AssetType::Audio).Changed)
+                            {
+                                g.ConvolutionImpulse = (uint64_t)impulse;
+                                save = true;
+                            }
+                            ImGui::SetItemTooltip("An audio clip of a room's response (a recorded clap or a generated tail);\n"
+                                                  "a new one applies when play starts");
+                        }
+                        ImGui::SetNextItemWidth(180);
+                        edited(ImGui::SliderFloat("Wet##conv", &g.ConvolutionWet, 0.0f, 2.0f));
                         ImGui::SeparatorText("Send");
                         ImGui::SetNextItemWidth(180);
                         const char* sendName = sending ? groups[g.SendTarget].Name.c_str() : "None";

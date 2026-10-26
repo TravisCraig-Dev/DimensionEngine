@@ -4,7 +4,8 @@
 
 namespace Dimension
 {
-    enum class BlendMode { Opaque, Alpha, Additive };
+    // Multiply: result = src * dst. Premultiplied: result = src + dst * (1 - src alpha).
+    enum class BlendMode { Opaque, Alpha, Additive, Multiply, Premultiplied };
 
     struct VertexAttribute
     {

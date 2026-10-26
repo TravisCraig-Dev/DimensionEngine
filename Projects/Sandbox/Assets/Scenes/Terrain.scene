@@ -1,0 +1,966 @@
+{
+  "version": 1,
+  "name": "Terrain",
+  "settings": {
+    "ambientColor": [
+      0.550000011920929,
+      0.6000000238418579,
+      0.699999988079071
+    ],
+    "ambientIntensity": 0.3499999940395355,
+    "bloom": true,
+    "bloomIntensity": 0.6000000238418579,
+    "bloomKnee": 0.5,
+    "bloomRadius": 1.0,
+    "bloomThreshold": 2.0,
+    "bokehSize": 0.012000000104308128,
+    "dof": false,
+    "exposure": 1.0,
+    "focusDistance": 10.0,
+    "focusRange": 6.0,
+    "fxaa": true,
+    "gravity": [
+      0.0,
+      -9.8100004196167,
+      0.0
+    ],
+    "gravity2D": [
+      0.0,
+      -9.8100004196167
+    ],
+    "msaa": 1,
+    "reflectionIntensity": 1.0,
+    "skyGround": [
+      0.33000001311302185,
+      0.3100000023841858,
+      0.28999999165534973
+    ],
+    "skyHorizon": [
+      0.699999988079071,
+      0.800000011920929,
+      0.9200000166893005
+    ],
+    "skyIntensity": 1.0,
+    "skyMode": 1,
+    "skyRotation": 0.0,
+    "skyTexture": 100045,
+    "skyTop": [
+      0.25,
+      0.44999998807907104,
+      0.800000011920929
+    ],
+    "ssao": true,
+    "ssaoBias": 0.02500000037252903,
+    "ssaoDebug": false,
+    "ssaoIntensity": 1.5,
+    "ssaoRadius": 0.6000000238418579,
+    "ssr": false,
+    "ssrIntensity": 1.0,
+    "ssrMaxDistance": 25.0,
+    "ssrMaxRoughness": 0.6000000238418579,
+    "ssrSteps": 48,
+    "ssrThickness": 0.30000001192092896,
+    "tonemapping": true,
+    "uiKeyboardNavigation": false,
+    "vignette": 0.25,
+    "taa": true,
+    "fog": true,
+    "fogDensity": 0.006,
+    "fogHeight": 2.0,
+    "fogHeightFalloff": 0.08,
+    "fogSunScattering": 1.2,
+    "fogIntensity": 0.45,
+    "fogMaxDistance": 300,
+    "fogAnisotropy": 0.6
+  },
+  "entities": [
+    {
+      "guid": 4000001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "MainCamera",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            26,
+            78
+          ],
+          "Rotation": [
+            -0.3,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 0,
+          "Field Of View": 55,
+          "Orthographic Size": 5,
+          "Near Clip": 0.3,
+          "Far Clip": 800,
+          "Primary": true,
+          "Background": [
+            0.42,
+            0.62,
+            0.86,
+            1
+          ],
+          "Clear Flags": 1
+        }
+      }
+    },
+    {
+      "components": {
+        "Directional Light": {
+          "Cast Shadows": true,
+          "Color": [
+            1.0,
+            0.949999988079071,
+            0.8500000238418579
+          ],
+          "Debug Cascades": false,
+          "Intensity": 2.200000047683716,
+          "Light Angle": 2.5,
+          "Shadow Bias": 0.001500000013038516,
+          "Shadow Cascades": 4,
+          "Shadow Distance": 40.0,
+          "Soft Shadows": true
+        },
+        "Tag": {
+          "Active": true,
+          "Component Order": [],
+          "Layer": 0,
+          "Name": "Sun",
+          "Tag": "Untagged"
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "Rotation": [
+            -0.45,
+            0.9,
+            0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "guid": 500003,
+      "parent": 0
+    },
+    {
+      "guid": 4000002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Terrain",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 3,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.05,
+          "Emission": 0.0
+        },
+        "Terrain": {
+          "Size": [
+            220,
+            220
+          ],
+          "Height": 38,
+          "Resolution": 256,
+          "Seed": 7,
+          "Noise Scale": 0.011,
+          "Octaves": 6,
+          "Roughness": 0.5,
+          "Flat Center": 0.18,
+          "Flat Height": 0.12,
+          "Rock Slope": 32,
+          "Snow Height": 0.7,
+          "Texture Tiling": 0.3
+        }
+      }
+    },
+    {
+      "guid": 4000100,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -31.444244748973034,
+            55.88458450591904,
+            -26.704035010672868
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.9,
+            0.3,
+            0.25,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000101,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            12.470404631543332,
+            57.51440608216108,
+            -54.10240266841682
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.25,
+            0.5,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000102,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -58.4198410134151,
+            61.749381641929205,
+            -36.658138710479314
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.95,
+            0.8,
+            0.2,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000103,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -31.880284674396435,
+            64.91289671020925,
+            -17.676284322979683
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.7,
+            0.3,
+            0.9,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000104,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            40.37537415292665,
+            54.5270641739867,
+            -2.483867351025424
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.9,
+            0.3,
+            0.25,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000105,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -41.92602911717713,
+            57.69721316570377,
+            18.124077642896708
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.25,
+            0.5,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000106,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            2.781745245996163,
+            59.825037124029805,
+            0.4270327832633285
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.95,
+            0.8,
+            0.2,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000107,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -52.31622741276033,
+            60.16460492573635,
+            -6.801037536181418
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.7,
+            0.3,
+            0.9,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000108,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -23.84788085811452,
+            45.620235029395,
+            17.897451328105106
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.9,
+            0.3,
+            0.25,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000109,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -3.2701093601439766,
+            59.37647848131606,
+            19.09315202299335
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.25,
+            0.5,
+            0.95,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000110,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            25.695538033344306,
+            63.421973351677494,
+            -24.453293639933044
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.95,
+            0.8,
+            0.2,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000111,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            36.1090525182274,
+            53.89242112101521,
+            24.202804953406897
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.7,
+            0.3,
+            0.9,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.4,
+          "Emission": 0.0
+        },
+        "Rigidbody": {
+          "Mass": 50
+        },
+        "Sphere Collider": {
+          "Radius": 0.5,
+          "Friction": 0.6,
+          "Bounciness": 0.2
+        }
+      }
+    },
+    {
+      "guid": 4000900,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Canvas",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Canvas": {
+          "Scale Mode": 1,
+          "Reference Resolution": [
+            1920,
+            1080
+          ],
+          "Sorting Order": 0
+        }
+      }
+    },
+    {
+      "guid": 4000901,
+      "parent": 4000900,
+      "components": {
+        "Tag": {
+          "Name": "Title",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            34,
+            30
+          ],
+          "Size": [
+            1400,
+            60
+          ]
+        },
+        "UI Text": {
+          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: grass, rock and snow by slope and height; volumetric fog; TAA)</color>",
+          "Font": 0,
+          "Font Size": 36,
+          "Color": [
+            0.08,
+            0.1,
+            0.13,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    }
+  ]
+}

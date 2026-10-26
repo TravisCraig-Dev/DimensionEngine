@@ -98,6 +98,37 @@ namespace Dimension
             .Field("Clear Flags", &CameraComponent::Clear).Enum({ "Solid Color", "Skybox" })
             .Field("Background", &CameraComponent::ClearColor).As(FieldType::Color4);
 
+        Register<TerrainComponent>("Terrain", "Rendering")
+            .Field("Size", &TerrainComponent::Size).Speed(0.5f).Tooltip("Meters along X and Z, centered on the object")
+            .Field("Height", &TerrainComponent::Height).Range(0.0f, 10000.0f).Speed(0.1f)
+            .Field("Resolution", &TerrainComponent::Resolution).Range(4, 1024).Tooltip("Height samples per side")
+            .Field("Heightmap", &TerrainComponent::Heightmap).As(FieldType::Texture).Tooltip("Grayscale image (16-bit keeps detail). None = generated")
+            .Field("Seed", &TerrainComponent::Seed).Header("Generated")
+            .Field("Noise Scale", &TerrainComponent::NoiseScale).Range(0.0001f, 1.0f).Speed(0.0005f).Tooltip("Features per meter of the largest hills")
+            .Field("Octaves", &TerrainComponent::Octaves).Range(1, 10)
+            .Field("Roughness", &TerrainComponent::Roughness).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Flat Center", &TerrainComponent::FlatCenter).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Radius kept flat (fraction of the half size)")
+            .Field("Flat Height", &TerrainComponent::FlatHeight).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Grass Texture", &TerrainComponent::GrassTexture).As(FieldType::Texture).Header("Layers")
+            .Field("Grass Color", &TerrainComponent::GrassColor).As(FieldType::Color4)
+            .Field("Rock Texture", &TerrainComponent::RockTexture).As(FieldType::Texture)
+            .Field("Rock Color", &TerrainComponent::RockColor).As(FieldType::Color4)
+            .Field("Snow Texture", &TerrainComponent::SnowTexture).As(FieldType::Texture)
+            .Field("Snow Color", &TerrainComponent::SnowColor).As(FieldType::Color4)
+            .Field("Texture Tiling", &TerrainComponent::TextureTiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Layer texture repeats per meter")
+            .Field("Rock Slope", &TerrainComponent::RockSlope).Range(1.0f, 89.0f).Speed(0.5f).Tooltip("Degrees where rock takes over")
+            .Field("Snow Height", &TerrainComponent::SnowHeight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of Height where snow starts");
+
+        Register<DecalComponent>("Decal", "Rendering")
+            .Field("Texture", &DecalComponent::Texture).As(FieldType::Texture).Tooltip("None = a soft round spot")
+            .Field("Color", &DecalComponent::Color).As(FieldType::Color4).Tooltip("Tint; alpha is the opacity")
+            .Field("Size", &DecalComponent::Size).Speed(0.01f).Tooltip("Width and height of the texture, and how deep it projects (along -Z)")
+            .Field("Blend", &DecalComponent::Blend).Enum({ "Alpha", "Multiply", "Additive" })
+                .Tooltip("Multiply darkens (dirt, scorch marks), Alpha paints over, Additive glows")
+            .Field("Angle Fade", &DecalComponent::AngleFade).Range(0.0f, 1.0f).Speed(0.01f)
+                .Tooltip("Surfaces tilted away from the projector fade out (cosine where fading starts)")
+            .Field("Sorting Order", &DecalComponent::SortingOrder);
+
         Register<SpriteRendererComponent>("Sprite Renderer", "Rendering")
             .Field("Sprite", &SpriteRendererComponent::Texture).As(FieldType::Texture)
             .Field("Color", &SpriteRendererComponent::Color).As(FieldType::Color4)
@@ -138,7 +169,9 @@ namespace Dimension
             .Field("Playing", &AnimatorComponent::Playing)
             .Field("Apply Root Motion", &AnimatorComponent::ApplyRootMotion)
                 .Tooltip("Moves the object by the animation's root movement (walk cycles that travel). With a Character Controller it moves the character.")
-            .Field("Root Motion Joint", &AnimatorComponent::RootMotionJoint).Tooltip("Empty = the first root joint (e.g. Hips)");
+            .Field("Root Motion Joint", &AnimatorComponent::RootMotionJoint).Tooltip("Empty = the first root joint (e.g. Hips)")
+            .Field("Animation Source", &AnimatorComponent::ClipSource).As(FieldType::Mesh)
+                .Tooltip("Play the clips of another model, retargeted onto this skeleton by joint name (None = this mesh's own)");
 
         Register<IKTargetComponent>("IK Target", "Animation")
             .Field("Animator", &IKTargetComponent::Animator).Tooltip("Object with the Animator. None = the nearest parent with one.")

@@ -4,6 +4,7 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Physics/Cloth.h"
+#include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -49,6 +50,10 @@
 #include "shaders/ParticleGpu.vert.h"
 #include "shaders/Ssr.frag.h"
 #include "shaders/SsrApply.frag.h"
+#include "shaders/Taa.frag.h"
+#include "shaders/Fog.frag.h"
+#include "shaders/Decal.vert.h"
+#include "shaders/Decal.frag.h"
 
 namespace Dimension
 {
@@ -141,6 +146,7 @@ namespace Dimension
             glm::vec4 TilingOffset;
             glm::uvec4 Maps;
             glm::uvec4 Flags;
+            glm::vec4 Layers[3]; // terrain layers
         };
         static_assert(sizeof(MeshPush) <= kPushConstantSize);
 
@@ -335,7 +341,8 @@ namespace Dimension
             uint64_t LastFrame = 0;
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
-        Pipeline Ssr, SsrApply;
+        Pipeline Ssr, SsrApply, Taa, Fog;
+        Pipeline Decals[3]; // by DecalBlend
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
     };
@@ -518,6 +525,29 @@ namespace Dimension
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive } };
         post.DebugName = "SsrApplyPipeline";
         r.SsrApply = Pipeline(post);
+        post.FragmentSpirv = kTaa_frag;
+        post.ColorAttachments = { { F::kHdrFormat } };
+        post.DebugName = "TaaPipeline";
+        r.Taa = Pipeline(post);
+        post.FragmentSpirv = kFog_frag;
+        post.ColorAttachments = { { F::kHdrFormat, BlendMode::Premultiplied } };
+        post.DebugName = "FogPipeline";
+        r.Fog = Pipeline(post);
+        {
+            GraphicsPipelineDesc decal;
+            decal.VertexSpirv = kDecal_vert;
+            decal.FragmentSpirv = kDecal_frag;
+            decal.VertexStride = sizeof(Vertex);
+            decal.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Position) } };
+            const BlendMode blends[3] = { BlendMode::Alpha, BlendMode::Multiply, BlendMode::Additive };
+            const char* names[3] = { "DecalAlphaPipeline", "DecalMultiplyPipeline", "DecalAdditivePipeline" };
+            for (int i = 0; i < 3; ++i)
+            {
+                decal.ColorAttachments = { { F::kHdrFormat, blends[i] } };
+                decal.DebugName = names[i];
+                r.Decals[i] = Pipeline(decal);
+            }
+        }
         r.LightCull = Pipeline::Compute(kLightCull_comp, "LightCullPipeline");
         r.ParticleSim = Pipeline::Compute(kParticleSim_comp, "ParticleSimPipeline");
 
@@ -624,11 +654,38 @@ namespace Dimension
 
     // ---- Rendering ------------------------------------------------------------------------
 
-    void SceneRenderer::Render(VkCommandBuffer cmd, Scene& scene, const CameraData& camera, SceneRenderTarget& target,
+    namespace
+    {
+        float Halton(uint32_t index, uint32_t base)
+        {
+            float f = 1.0f, r = 0.0f;
+            for (uint32_t i = index; i > 0; i /= base)
+            {
+                f /= (float)base;
+                r += f * (float)(i % base);
+            }
+            return r;
+        }
+    }
+
+    void SceneRenderer::Render(VkCommandBuffer cmd, Scene& scene, const CameraData& view, SceneRenderTarget& target,
                                const SceneRenderOptions& options)
     {
         // Reflection probes capture the scene with nested Render calls, so they run before this view collects anything.
         if (!options.ProbeCapture) UpdateReflectionProbes(cmd, scene);
+        // Temporal anti-aliasing renders the game view with a sub-pixel offset that cycles through a Halton sequence;
+        // the Scene view and probe faces are never jittered.
+        CameraData camera = view;
+        glm::mat4 unjitteredViewProj = view.Projection * view.View;
+        bool taa = scene.GetSettings().TAA && !options.ProbeCapture && !options.EditorOverlays;
+        if (taa)
+        {
+            uint32_t i = ++target.Temporal.Frame % 8 + 1;
+            glm::vec2 jitter((Halton(i, 2) - 0.5f) * 2.0f / (float)target.GetWidth(), (Halton(i, 3) - 0.5f) * 2.0f / (float)target.GetHeight());
+            camera.Projection = glm::translate(glm::mat4(1.0f), glm::vec3(jitter, 0.0f)) * camera.Projection;
+        }
+        else
+            target.Temporal.Valid = false;
         // MSAA for this view (probe faces stay single-sampled).
         target.SetSamples(options.ProbeCapture ? 1u : (uint32_t)std::clamp(scene.GetSettings().MSAA, 1, 8));
         m_Samples = target.GetSamples();
@@ -800,7 +857,7 @@ namespace Dimension
         }
 
         // GPU particles: simulate (once per frame, whichever view renders first) and list their draws.
-        SimulateGpuParticles(cmd, scene);
+        SimulateGpuParticles(cmd, scene, target);
 
         // Prepare CPU-side draw lists
         CollectSprites(scene, camera);
@@ -857,6 +914,8 @@ namespace Dimension
 
         // SSAO needs a perspective view of opaque geometry; orthographic (2D) cameras skip it.
         bool ssao = settings.SSAO && !camera.Orthographic && !options.ProbeCapture;
+        bool fog = settings.Fog && settings.FogDensity > 0.0f && !camera.Orthographic && !options.ProbeCapture;
+        CollectDecals(scene);
         if (!m_Capturing)
             for (size_t i = 0; i < m_FrameProbes.size(); ++i)
             {
@@ -896,7 +955,13 @@ namespace Dimension
         depth.loadOp = ssao ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; // reuse the prepass depth
         // Depth of field focuses for the game camera: the editor's Scene view (overlays on) stays sharp.
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
-        depth.storeOp = dof || ssr ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth of field and SSR read it
+        // Passes after this one read the depth: depth of field, SSR, decals, fog and TAA (and next frame's GPU particle
+        // collision).
+        bool readDepth = dof || ssr || fog || taa || !m_Decals.empty() || m_ParticleDepthWanted;
+        m_ParticleDepthKept = readDepth && !camera.Orthographic;
+        m_ParticleDepthViewProj = camera.Projection * camera.View;
+        m_ParticleDepthSize = glm::uvec2(target.GetWidth(), target.GetHeight());
+        depth.storeOp = readDepth ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depth.clearValue.depthStencil = { 1.0f, 0 };
         if (m_Samples > 1)
         {
@@ -963,13 +1028,54 @@ namespace Dimension
         // Post processing: bloom (HDR) -> composite (exposure, tonemap, vignette) -> optional FXAA -> overlays and UI.
         Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         device.BindBindless(cmd);
-        if (dof || ssr)
+        if (readDepth)
+        {
             Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                 VK_IMAGE_ASPECT_DEPTH_BIT);
-        if (ssr)
-        {
             device.BindUniforms(cmd, &u, sizeof(u));
-            RenderReflections(cmd, target, settings);
+        }
+        // HDR effects that need the finished opaque image: decals onto surfaces, reflections, fog, then TAA over all.
+        if (!m_Decals.empty()) DrawDecals(cmd, target);
+        if (ssr) RenderReflections(cmd, target, settings);
+        if (fog)
+        {
+            struct
+            {
+                glm::vec4 Color;
+                uint32_t Depth, Steps;
+                float Density, HeightFalloff, BaseHeight, MaxDistance, Anisotropy, Noise;
+            } push{ glm::vec4(ToLinear(settings.FogColor) * settings.FogIntensity, std::max(settings.FogSunScattering, 0.0f)), target.GetDepthBindless(),
+                    (uint32_t)std::clamp(settings.FogSteps, 4, 128), settings.FogDensity, std::max(settings.FogHeightFalloff, 0.0f), settings.FogHeight,
+                    std::max(settings.FogMaxDistance, 1.0f), settings.FogAnisotropy, taa ? Halton(target.Temporal.Frame % 16 + 1, 5) : 0.0f };
+            FullscreenPass(cmd, target.GetHdr(), true, res.Fog, &push, sizeof(push));
+        }
+        if (taa)
+        {
+            // Blend into the history image not read this frame, then copy the result back as this frame's color.
+            uint32_t read = target.Temporal.Written, write = 1 - read;
+            struct
+            {
+                glm::mat4 PrevViewProj;
+                uint32_t Current, History, Depth, HasHistory;
+                glm::vec2 Texel;
+                float Feedback, Pad;
+            } push{ target.Temporal.PrevViewProj, target.GetHdrBindless(), target.GetTaaHistoryBindless(read), target.GetDepthBindless(),
+                    target.Temporal.Valid ? 1u : 0u, glm::vec2(1.0f / extent.width, 1.0f / extent.height),
+                    std::clamp(settings.TAAFeedback, 0.01f, 1.0f), 0.0f };
+            FullscreenPass(cmd, target.GetTaaHistory(write), false, res.Taa, &push, sizeof(push));
+            VkImage hdr = target.GetHdr().GetHandle(), result = target.GetTaaHistory(write).GetHandle();
+            Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageCopy copy{};
+            copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.dstSubresource = copy.srcSubresource;
+            copy.extent = { extent.width, extent.height, 1 };
+            vkCmdCopyImage(cmd, result, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hdr, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            target.Temporal.Written = write;
+            target.Temporal.Valid = true;
+            target.Temporal.PrevViewProj = unjitteredViewProj;
         }
         bool bloom = settings.Bloom && settings.BloomIntensity > 0.0f && target.GetBloomLevels() > 0;
         if (bloom) RenderBloom(cmd, target, settings);
@@ -1367,8 +1473,8 @@ namespace Dimension
         };
 
         std::unordered_map<MaterialKey, VkDeviceAddress, MaterialKeyHash> materialCache;
-        auto uploadMaterial = [&](const Material& m) -> VkDeviceAddress {
-            MaterialKey key{ BuildMaterialGPU(m) };
+        auto uploadMaterialGPU = [&](const MaterialGPU& gpu) -> VkDeviceAddress {
+            MaterialKey key{ gpu };
             if (auto it = materialCache.find(key); it != materialCache.end()) return it->second;
             TransientAllocation a = device.AllocateTransient(sizeof(MaterialGPU), 16);
             if (!a) return 0;
@@ -1376,6 +1482,7 @@ namespace Dimension
             materialCache.emplace(key, a.Address);
             return a.Address;
         };
+        auto uploadMaterial = [&](const Material& m) { return uploadMaterialGPU(BuildMaterialGPU(m)); };
 
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
@@ -1383,7 +1490,9 @@ namespace Dimension
             // Cloth draws its own grid, with this frame's simulated vertices when playing.
             const ClothComponent* cloth = reg.TryGet<ClothComponent>(e);
             const SoftBodyComponent* soft = cloth ? nullptr : reg.TryGet<SoftBodyComponent>(e);
-            Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : AssetManager::GetMesh(mr.Mesh);
+            const TerrainComponent* terrain = reg.TryGet<TerrainComponent>(e);
+            const Terrain::Runtime* terrainRt = terrain ? Terrain::GetRuntime(*terrain) : nullptr;
+            Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : terrainRt ? terrainRt->Surface : AssetManager::GetMesh(mr.Mesh);
             if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
@@ -1470,7 +1579,24 @@ namespace Dimension
                 }
                 if (!matPtr) matPtr = &ResolveMaterial(mr, scratch);
                 const Material& mat = *matPtr;
-                VkDeviceAddress address = uploadMaterial(mat);
+                VkDeviceAddress address;
+                if (terrainRt)
+                {
+                    // Terrain: its splat map and layers in place of the material's maps (the material's other values stay).
+                    MaterialGPU gpu = BuildMaterialGPU(mat);
+                    uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
+                    gpu.BaseColor = glm::vec4(1.0f);
+                    gpu.Maps = glm::uvec4(terrainRt->Splat->GetBindlessIndex(), TextureIndex(terrain->GrassTexture, white),
+                                          TextureIndex(terrain->RockTexture, white), TextureIndex(terrain->SnowTexture, white));
+                    gpu.Flags = glm::uvec4(0u, 0u, 1u, 0u);
+                    float tiling = std::max(terrain->TextureTiling, 1e-4f);
+                    gpu.Layers[0] = glm::vec4(glm::vec3(ToLinear(terrain->GrassColor)), tiling);
+                    gpu.Layers[1] = glm::vec4(glm::vec3(ToLinear(terrain->RockColor)), tiling);
+                    gpu.Layers[2] = glm::vec4(glm::vec3(ToLinear(terrain->SnowColor)), tiling);
+                    address = uploadMaterialGPU(gpu);
+                }
+                else
+                    address = uploadMaterial(mat);
                 if (!address) continue;
                 bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
                 bool doubleSided = mat.DoubleSided || cloth; // cloth is seen from both sides
@@ -2288,18 +2414,25 @@ namespace Dimension
             glm::uvec4 SegmentCounts[ParticleSystemComponent::kMaxGpuEmissions / 4];
             glm::vec4 SegmentOrigins[ParticleSystemComponent::kMaxGpuEmissions];
             glm::vec4 ColorLut[kParticleLut], CurveLut[kParticleLut];
+            glm::mat4 DepthViewProj, DepthInvViewProj;
+            glm::uvec4 DepthInfo;
+            glm::vec4 DepthParams;
         };
         constexpr VkDeviceSize kGpuParticleSize = 64;
         constexpr uint32_t kMaxGpuParticles = 1000000;
     }
 
-    void SceneRenderer::SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene)
+    void SceneRenderer::SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target)
     {
         m_GpuParticleDraws.clear();
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
         uint64_t frame = device.Frame().FrameNumber;
         bool first = true;
+        // The depth this view kept from its last frame (for world collision), if it is still the same size.
+        bool depthValid = m_ParticleDepthKept && m_ParticleDepthSize == glm::uvec2(target.GetWidth(), target.GetHeight());
+        uint32_t depthBindless = target.GetDepthBindless();
+        m_ParticleDepthWanted = false;
         for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
         {
             if (!ps.SimulateOnGpu || !t.ActiveInHierarchy) continue;
@@ -2349,7 +2482,17 @@ namespace Dimension
             p.Gravity = glm::vec4(toSim(glm::vec3(0.0f, -9.81f * ps.GravityModifier, 0.0f), ParticleSpace::World), ps.ForceOverLifetime ? 1.0f : 0.0f);
             p.Force = glm::vec4(toSim(ps.Force, ps.ForceSpace), 0.0f);
             p.Noise = glm::vec4(ps.NoiseStrength, ps.NoiseFrequency, ps.Noise ? 1.0f : 0.0f, 0.0f);
-            p.Collision = glm::vec4(ps.Collision == ParticleCollision::Plane ? 1.0f : 0.0f, ps.CollisionPlaneHeight + ps.CollisionRadius, ps.Bounce,
+            // World collision runs against the depth buffer this view rendered last frame.
+            bool depthCollision = ps.Collision == ParticleCollision::World;
+            if (depthCollision)
+            {
+                m_ParticleDepthWanted = true;
+                p.DepthViewProj = m_ParticleDepthViewProj;
+                p.DepthInvViewProj = glm::inverse(m_ParticleDepthViewProj);
+                p.DepthInfo = glm::uvec4(depthBindless, depthValid ? 1u : 0u, 0u, 0u);
+                p.DepthParams = glm::vec4(0.6f + ps.CollisionRadius, ps.CollisionRadius, 0.0f, 0.0f);
+            }
+            p.Collision = glm::vec4(ps.Collision == ParticleCollision::Plane ? 1.0f : depthCollision ? 2.0f : 0.0f, ps.CollisionPlaneHeight + ps.CollisionRadius, ps.Bounce,
                                     ps.CollisionDampen);
             p.Misc = glm::vec4(ps.LifetimeLoss, worldSpace ? 1.0f : glm::length(glm::vec3(world[0])), ps.SheetRandomStart ? 1.0f : 0.0f,
                                std::max(ps.SheetCycles, 0.0f));
@@ -2385,6 +2528,7 @@ namespace Dimension
                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
                                       VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
                     res.ParticleSim.Bind(cmd);
+                    device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
                     first = false;
                 }
                 if (clear)
@@ -2434,6 +2578,89 @@ namespace Dimension
             }
             m_Stats.GpuParticleCapacity += d.Capacity;
         }
+    }
+
+    void SceneRenderer::FullscreenPass(VkCommandBuffer cmd, const Image& dst, bool load, const Pipeline& pipeline, const void* push, uint32_t pushSize)
+    {
+        auto& device = RenderDevice::Get();
+        Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        att.imageView = dst.GetView();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        info.renderArea = { { 0, 0 }, dst.GetExtent() };
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cmd, &info);
+        VkViewport viewport{ 0.0f, 0.0f, (float)dst.GetWidth(), (float)dst.GetHeight(), 0.0f, 1.0f };
+        VkRect2D scissor{ { 0, 0 }, dst.GetExtent() };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        pipeline.Bind(cmd);
+        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, pushSize, push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+        Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        m_Stats.DrawCalls++;
+    }
+
+    void SceneRenderer::CollectDecals(Scene& scene)
+    {
+        m_Decals.clear();
+        for (auto [e, d, t] : scene.GetRegistry().ViewOf<DecalComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || d.Color.a <= 0.0f) continue;
+            auto tex = d.Texture.IsValid() ? AssetManager::GetTexture(d.Texture) : nullptr;
+            DecalDraw draw;
+            draw.Model = t.World * glm::scale(glm::mat4(1.0f), glm::max(glm::abs(d.Size), glm::vec3(1e-3f)));
+            draw.Color = ToLinear(d.Color);
+            draw.Texture = (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex();
+            draw.Blend = (uint32_t)std::clamp((int)d.Blend, 0, 2);
+            draw.AngleFade = std::clamp(d.AngleFade, 0.0f, 1.0f);
+            draw.Order = d.SortingOrder;
+            m_Decals.push_back(draw);
+        }
+        std::stable_sort(m_Decals.begin(), m_Decals.end(), [](const DecalDraw& a, const DecalDraw& b) { return a.Order < b.Order; });
+    }
+
+    void SceneRenderer::DrawDecals(VkCommandBuffer cmd, SceneRenderTarget& target)
+    {
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        Ref<Mesh> cube = AssetManager::GetMesh(AssetManager::kCube);
+        if (!cube) return;
+        VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
+        Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        att.imageView = target.GetHdr().GetView();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        info.renderArea = { { 0, 0 }, extent };
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cmd, &info);
+        VkViewport viewport{ 0.0f, (float)extent.height, (float)extent.width, -(float)extent.height, 0.0f, 1.0f }; // as the main pass
+        VkRect2D scissor{ { 0, 0 }, extent };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        cube->Bind(cmd);
+        for (const DecalDraw& d : m_Decals)
+        {
+            res.Decals[d.Blend].Bind(cmd);
+            struct { glm::mat4 Model; glm::vec4 Color; uint32_t Texture, Depth, Blend; float AngleFade; } push{
+                d.Model, d.Color, d.Texture, target.GetDepthBindless(), d.Blend, d.AngleFade };
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            vkCmdDrawIndexed(cmd, cube->GetIndexCount(), 1, 0, 0, 0);
+            m_Stats.DrawCalls++;
+        }
+        vkCmdEndRendering(cmd);
+        Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     void SceneRenderer::RenderReflections(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings)

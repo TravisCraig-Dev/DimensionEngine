@@ -272,6 +272,19 @@ namespace Dimension
         // Depth prepass, half-resolution SSAO and its blur (leaves the depth attachment ready to load).
         void RenderDepthOfField(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera, const SceneSettings& settings);
         void RenderReflections(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings);
+        // A full-screen triangle into `dst` (from and back to shader-read layout).
+        void FullscreenPass(VkCommandBuffer cmd, const Image& dst, bool load, const Pipeline& pipeline, const void* push, uint32_t pushSize);
+        struct DecalDraw
+        {
+            glm::mat4 Model;
+            glm::vec4 Color;
+            uint32_t Texture, Blend;
+            float AngleFade;
+            int32_t Order;
+        };
+        std::vector<DecalDraw> m_Decals;
+        void CollectDecals(Scene& scene);
+        void DrawDecals(VkCommandBuffer cmd, SceneRenderTarget& target);
         // GPU particle systems: compute simulation before the main pass, then camera-facing quads in it.
         struct GpuParticleDraw
         {
@@ -281,7 +294,11 @@ namespace Dimension
             int32_t Order;
         };
         std::vector<GpuParticleDraw> m_GpuParticleDraws;
-        void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene);
+        void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target);
+        // GPU particle world collision reads the depth this view stored last frame (with its view-projection).
+        bool m_ParticleDepthWanted = false, m_ParticleDepthKept = false;
+        glm::mat4 m_ParticleDepthViewProj{ 1.0f };
+        glm::uvec2 m_ParticleDepthSize{ 0 };
         void DrawGpuParticles(VkCommandBuffer cmd);
         void RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
                                     const SceneSettings& settings);

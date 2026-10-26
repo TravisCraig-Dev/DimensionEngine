@@ -552,6 +552,106 @@ namespace Dimension::Prefabs
         return link ? link->NestedPrefab : AssetHandle::None();
     }
 
+    bool ApplyToNested(Scene& scene, Entity part)
+    {
+        auto& reg = scene.GetRegistry();
+        auto* partLink = reg.TryGet<PrefabLinkComponent>(part);
+        if (!partLink || !partLink->NestedPrefab.IsValid()) return false;
+        AssetHandle inner = partLink->NestedPrefab, outer = partLink->Prefab;
+        // The nested instance's root: the nearest ancestor (or the part) that roots this nested prefab.
+        Entity root = Entity::Null();
+        for (Entity cur = part; !cur.IsNull(); cur = scene.GetParent(cur))
+            if (auto* l = reg.TryGet<PrefabLinkComponent>(cur); l && l->Prefab == outer && l->NestedPrefab == inner && l->NestedRoot)
+            {
+                root = cur;
+                break;
+            }
+        if (root.IsNull()) return false;
+
+        // Edit the inner prefab as Prefab Mode would: its own scene, where its nested prefabs stay references.
+        auto stage = OpenForEditing(inner);
+        if (!stage) return false;
+        auto& sreg = stage->GetRegistry();
+        std::unordered_map<uint64_t, Entity> stageBySource;
+        for (auto [e, link] : sreg.ViewOf<PrefabLinkComponent>())
+            if (link.Prefab == inner) stageBySource[link.SourceId] = e;
+
+        std::vector<Entity> subtree, added;
+        CollectSubtree(scene, root, subtree);
+        auto memberSource = [&](Entity e) -> uint64_t {
+            auto* l = reg.TryGet<PrefabLinkComponent>(e);
+            return l && l->Prefab == outer && l->NestedPrefab == inner ? l->NestedSource : 0;
+        };
+        // Entity references inside the instance point at the matching stage objects.
+        EntityRefResolver toStage;
+        toStage.ToGuid = [&](Entity x) -> uint64_t {
+            if (!scene.IsValid(x)) return 0;
+            if (uint64_t s = memberSource(x)) return s;
+            return (uint64_t)scene.GetGuid(x);
+        };
+        toStage.FromGuid = [&](uint64_t g) -> Entity {
+            auto it = stageBySource.find(g);
+            return it != stageBySource.end() ? it->second : Entity::Null();
+        };
+        for (Entity e : subtree)
+        {
+            uint64_t source = memberSource(e);
+            auto it = source ? stageBySource.find(source) : stageBySource.end();
+            if (it == stageBySource.end())
+            {
+                // An object added to the instance: copy it (with its children) under its parent's counterpart.
+                Entity parent = scene.GetParent(e);
+                if (!memberSource(parent)) continue; // inside another added object: copied with it
+                auto pit = stageBySource.find(memberSource(parent));
+                if (pit == stageBySource.end()) continue;
+                SceneSerializer::DeserializeEntityTree(*stage, SceneSerializer::SerializeEntityTree(scene, e), pit->second, true);
+                added.push_back(e);
+                continue;
+            }
+            Entity target = it->second;
+            bool isRoot = e == root;
+            for (const ComponentInfo& info : ComponentRegistry::All())
+            {
+                if (info.TypeId == GetComponentTypeId<PrefabLinkComponent>()) continue;
+                bool has = info.Has(scene, e), stageHas = info.Has(*stage, target);
+                if (!has)
+                {
+                    if (stageHas && info.Removable) info.Remove(*stage, target);
+                    continue;
+                }
+                if (!stageHas) info.Add(*stage, target);
+                const void* from = info.Get(scene, e);
+                void* to = info.Get(*stage, target);
+                for (const FieldInfo& f : info.Fields)
+                {
+                    if (IsInstanceOwned(isRoot, info.Name, f.Name)) continue; // where the instance sits is its own
+                    FieldFromJson(f, to, FieldToJson(f, from, &toStage), &toStage);
+                }
+                if (info.TypeId == GetComponentTypeId<ScriptComponent>())
+                {
+                    auto& dst = *static_cast<ScriptComponent*>(to);
+                    dst.Scripts.clear();
+                    for (const auto& s : static_cast<const ScriptComponent*>(from)->Scripts)
+                    {
+                        ScriptInstance& copy = dst.Add(s.ClassName);
+                        copy.Enabled = s.Enabled;
+                        copy.Fields = s.Fields;
+                    }
+                }
+            }
+        }
+        if (!SaveEdited(*stage, inner)) return false;
+        // The instance now matches the inner prefab: drop its overrides there, and the added objects (they come back from
+        // the prefab, linked), then refresh everything.
+        for (Entity e : subtree)
+            if (auto* l = reg.TryGet<PrefabLinkComponent>(e); l && memberSource(e)) l->Overrides.clear();
+        for (Entity e : added)
+            if (scene.IsValid(e)) scene.DestroyEntity(e);
+        SyncAll(scene);
+        Log::Info("Applied the nested instance to prefab '{}'", AssetManager::GetAbsolutePath(inner).filename().string());
+        return true;
+    }
+
     AssetHandle CreateFromEntity(Scene& scene, Entity root, const fs::path& path)
     {
         if (!scene.IsValid(root)) return AssetHandle::None();

@@ -1,4 +1,5 @@
 #include "Dimension/Audio/AudioEngine.h"
+#include "Dimension/Audio/Convolver.h"
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Asset/AssetManager.h"
@@ -107,6 +108,50 @@ namespace Dimension
 
         ma_node_vtable s_SendVtable = { SendProcess, nullptr, 1, 1, 0 };
 
+        // Convolution reverb insert (see Convolver): dry signal plus the impulse-response tail at Wet.
+        struct ConvolutionNode
+        {
+            ma_node_base Base;
+            Convolver Conv;
+            std::atomic<float> Wet{ 0.4f };
+        };
+
+        void ConvolutionProcess(ma_node* node, const float** framesIn, ma_uint32* frameCountIn, float** framesOut, ma_uint32* frameCountOut)
+        {
+            auto* n = reinterpret_cast<ConvolutionNode*>(node);
+            ma_uint32 frames = std::min(*frameCountIn, *frameCountOut);
+            *frameCountIn = *frameCountOut = frames;
+            n->Conv.Process(framesIn[0], framesOut[0], frames, n->Wet.load(std::memory_order_relaxed));
+        }
+
+        ma_node_vtable s_ConvolutionVtable = { ConvolutionProcess, nullptr, 1, 1, 0 };
+
+        // An audio file as interleaved floats at `rate` (its own channel count), at most `maxSeconds` long.
+        bool DecodeFile(const fs::path& file, ma_uint32 rate, double maxSeconds, std::vector<float>& out, ma_uint32& channels)
+        {
+            ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, rate);
+            cfg.ppCustomBackendVTables = s_CustomBackends;
+            cfg.customBackendCount = 1;
+            ma_decoder decoder;
+            if (ma_decoder_init_file_w(file.wstring().c_str(), &cfg, &decoder) != MA_SUCCESS) return false;
+            ma_format format;
+            ma_uint32 sampleRate = 0;
+            ma_decoder_get_data_format(&decoder, &format, &channels, &sampleRate, nullptr, 0);
+            ma_uint64 limit = (ma_uint64)(maxSeconds * rate);
+            out.clear();
+            std::vector<float> chunk(4096 * (size_t)std::max(channels, 1u));
+            ma_uint64 total = 0;
+            while (total < limit)
+            {
+                ma_uint64 read = 0;
+                if (ma_decoder_read_pcm_frames(&decoder, chunk.data(), std::min<ma_uint64>(4096, limit - total), &read) != MA_SUCCESS || read == 0) break;
+                out.insert(out.end(), chunk.begin(), chunk.begin() + (size_t)(read * channels));
+                total += read;
+            }
+            ma_decoder_uninit(&decoder);
+            return total > 0 && channels > 0;
+        }
+
         // Mixer graph: per group a sound group (sounds attach here) feeding a low-pass filter, the optional echo and
         // reverb effects, then a meter and a splitter: output 0 feeds the parent, output 1 the send target (if any).
         // Effects that are off are bypassed (unlinked).
@@ -116,11 +161,12 @@ namespace Dimension
             ma_lpf_node LowPass;
             ma_delay_node Echo;
             ma_reverb_node Reverb;
+            ConvolutionNode Convolution;
             MeterNode Meter;
             ma_splitter_node Splitter;
             SendNode Send;
-            bool HasEcho = false, HasReverb = false; // initialized
-            bool EchoLinked = false, ReverbLinked = false;
+            bool HasEcho = false, HasReverb = false, HasConvolution = false; // initialized
+            bool EchoLinked = false, ReverbLinked = false, ConvolutionLinked = false;
             int LinkedSend = -1;
             bool Valid = false;
         };
@@ -145,6 +191,7 @@ namespace Dimension
                 ma_node_uninit(&g->Send.Base, nullptr);
                 ma_splitter_node_uninit(&g->Splitter, nullptr);
                 ma_node_uninit(&g->Meter.Base, nullptr);
+                if (g->HasConvolution) ma_node_uninit(&g->Convolution.Base, nullptr);
                 if (g->HasReverb) ma_reverb_node_uninit(&g->Reverb, nullptr);
                 if (g->HasEcho) ma_delay_node_uninit(&g->Echo, nullptr);
                 ma_lpf_node_uninit(&g->LowPass, nullptr);
@@ -165,19 +212,22 @@ namespace Dimension
         // the device runs, so effects switch on and off live.
         void LinkEffects(GroupNodes& n, const AudioMixerGroup& g, bool reverbOn)
         {
-            bool echo = n.HasEcho && g.Echo, reverb = n.HasReverb && reverbOn;
-            if (n.Valid && echo == n.EchoLinked && reverb == n.ReverbLinked) return;
-            ma_node* chain[4];
+            bool echo = n.HasEcho && g.Echo, reverb = n.HasReverb && reverbOn, conv = n.HasConvolution && g.Convolution;
+            if (n.Valid && echo == n.EchoLinked && reverb == n.ReverbLinked && conv == n.ConvolutionLinked) return;
+            ma_node* chain[5];
             int count = 0;
             chain[count++] = &n.LowPass;
             if (echo) chain[count++] = &n.Echo;
             if (reverb) chain[count++] = &n.Reverb;
+            if (conv) chain[count++] = &n.Convolution.Base;
             chain[count++] = &n.Meter.Base;
             if (!echo && n.HasEcho) ma_node_detach_output_bus(&n.Echo, 0);
             if (!reverb && n.HasReverb) ma_node_detach_output_bus(&n.Reverb, 0);
+            if (!conv && n.HasConvolution) ma_node_detach_output_bus(&n.Convolution.Base, 0);
             for (int k = 0; k + 1 < count; ++k) ma_node_attach_output_bus(chain[k], 0, chain[k + 1], 0);
             n.EchoLinked = echo;
             n.ReverbLinked = reverb;
+            n.ConvolutionLinked = conv;
         }
 
         // Points the group's send (splitter output 1 -> send gain) at its target group (live).
@@ -451,6 +501,25 @@ namespace Dimension
                 ma_reverb_node_config reverbCfg = ma_reverb_node_config_init(channels, rate);
                 nodes->HasReverb = ma_reverb_node_init(graph, &reverbCfg, nullptr, &nodes->Reverb) == MA_SUCCESS;
             }
+            // Convolution: the impulse response is decoded at the device rate (up to 6 s).
+            if (groups[i].ConvolutionImpulse)
+            {
+                std::vector<float> impulse;
+                ma_uint32 irChannels = 0;
+                fs::path irPath = AssetManager::GetAbsolutePath(AssetHandle(groups[i].ConvolutionImpulse));
+                if (!irPath.empty() && DecodeFile(irPath, rate, 6.0, impulse, irChannels))
+                {
+                    nodes->Convolution.Conv.Init(impulse.data(), impulse.size() / irChannels, (int)irChannels, (int)channels, 1024);
+                    ma_node_config convCfg = ma_node_config_init();
+                    convCfg.vtable = &s_ConvolutionVtable;
+                    convCfg.pInputChannels = &channels;
+                    convCfg.pOutputChannels = &channels;
+                    nodes->HasConvolution = nodes->Convolution.Conv.IsReady() &&
+                                            ma_node_init(graph, &convCfg, nullptr, &nodes->Convolution.Base) == MA_SUCCESS;
+                }
+                else
+                    Log::Warn("Audio mixer: cannot read the impulse response of group '{}'", groups[i].Name);
+            }
             ma_splitter_node_config splitCfg = ma_splitter_node_config_init(channels);
             ma_node_config sendCfg = ma_node_config_init();
             sendCfg.vtable = &s_SendVtable;
@@ -465,6 +534,7 @@ namespace Dimension
             }
             if (!splitOk)
             {
+                if (nodes->HasConvolution) ma_node_uninit(&nodes->Convolution.Base, nullptr);
                 if (nodes->HasReverb) ma_reverb_node_uninit(&nodes->Reverb, nullptr);
                 if (nodes->HasEcho) ma_delay_node_uninit(&nodes->Echo, nullptr);
                 ma_node_uninit(&nodes->Meter.Base, nullptr);
@@ -506,6 +576,7 @@ namespace Dimension
                 ma_delay_node_set_dry(&g->Echo, 1.0f);
                 ma_delay_node_set_decay(&g->Echo, std::clamp(mg.EchoDecay, 0.0f, 0.95f)); // a new delay time applies at the next rebuild (play start)
             }
+            g->Convolution.Wet.store(std::clamp(mg.ConvolutionWet, 0.0f, 2.0f), std::memory_order_relaxed);
             ReverbParams reverb = EffectiveReverb(mg, ZoneOf((int)i));
             if (g->HasReverb && reverb.On)
             {

@@ -26,6 +26,11 @@ namespace Dimension
         float ReverbRoomSize = 0.6f; // 0-1
         float ReverbDamping = 0.5f;  // high-frequency absorption, 0-1
         float ReverbWet = 0.35f;     // 0-1
+        // Convolution reverb through an impulse response (an audio asset recorded in a room, or generated): the real
+        // sound of a hall, cave or church. A new response applies when the mixer is rebuilt (play start).
+        bool Convolution = false;
+        uint64_t ConvolutionImpulse = 0; // audio asset guid
+        float ConvolutionWet = 0.4f;     // 0-2
 
         // Send: a copy of this group's output (after its volume and effects) also goes to another group, at Send
         // Level. Typically several groups send to one "return" group holding a shared reverb. Applies live; a send

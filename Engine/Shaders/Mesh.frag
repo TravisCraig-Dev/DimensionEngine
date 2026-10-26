@@ -80,7 +80,19 @@ void main()
 {
     MaterialRef m = pc.Material;
     vec2 uv = vUV * m.TilingOffset.xy + m.TilingOffset.zw;
-    vec4 base = SampleTexture(m.Maps.x, uv) * m.BaseColor;
+    vec4 base;
+    if (m.Flags.z == 1u)
+    {
+        // Terrain: the splat map's weights blend three layers, tiled in world space.
+        vec3 w = SampleTexture(m.Maps.x, vUV).rgb;
+        w /= max(w.r + w.g + w.b, 1e-4);
+        vec2 world = vWorldPos.xz;
+        base = vec4(SampleTexture(m.Maps.y, world * m.Layers[0].w).rgb * m.Layers[0].rgb * w.r +
+                    SampleTexture(m.Maps.z, world * m.Layers[1].w).rgb * m.Layers[1].rgb * w.g +
+                    SampleTexture(m.Maps.w, world * m.Layers[2].w).rgb * m.Layers[2].rgb * w.b, 1.0) * m.BaseColor;
+    }
+    else
+        base = SampleTexture(m.Maps.x, uv) * m.BaseColor;
     if (m.Flags.x == 1u && base.a < m.Params.z) discard;
 
     vec3 N = normalize(vNormal);
@@ -103,7 +115,7 @@ void main()
             N = normalize(CotangentFrame(N, vWorldPos, uv) * t);
         }
     }
-    vec4 mr = SampleTexture(m.Maps.z, uv);
+    vec4 mr = m.Flags.z == 1u ? vec4(1.0) : SampleTexture(m.Maps.z, uv);
     float roughness = clamp(m.Params.y * mr.g, 0.02, 1.0);
     float metallic = clamp(m.Params.x * mr.b, 0.0, 1.0);
     vec3 albedo = base.rgb;
@@ -185,7 +197,7 @@ void main()
             attenuation *= PointShadow(shadowSlot - 1u, light.PositionRange.xyz, spot, vWorldPos, normalize(vNormal));
         color += DirectLight(N, V, toLight / max(dist, 1e-4), lightColor * attenuation, albedo, metallic, roughness);
     }
-    color += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
+    if (m.Flags.z != 1u) color += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
     if (uScene.CascadeParams.z > 0.5) color *= CascadeDebugColor(vWorldPos);
 
     outColor = vec4(color, m.Flags.x == 2u ? base.a : 1.0);
