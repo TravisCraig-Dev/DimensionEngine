@@ -6,40 +6,10 @@ layout(location = 0) in vec3 vDirection;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out uint outEntity; // write-masked
 
-// Volumetric clouds: a layer between two altitudes filled with drifting fractal noise (thinned by Coverage, rounded
-// at its base and top), marched along the view ray. Each step is lit by the sun through the cloud above it (a short
+#include "Clouds.glsl"
+
+// Volumetric clouds, marched along the view ray. Each step is lit by the sun through the cloud above it (a short
 // march toward the sun, forward-scattering) and by the sky's light from above.
-float Hash3(vec3 p)
-{
-    p = fract(p * 0.3183099 + 0.1);
-    p *= 17.0;
-    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-}
-float ValueNoise(vec3 p)
-{
-    vec3 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(mix(Hash3(i), Hash3(i + vec3(1, 0, 0)), f.x), mix(Hash3(i + vec3(0, 1, 0)), Hash3(i + vec3(1, 1, 0)), f.x), f.y),
-               mix(mix(Hash3(i + vec3(0, 0, 1)), Hash3(i + vec3(1, 0, 1)), f.x), mix(Hash3(i + vec3(0, 1, 1)), Hash3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
-}
-float CloudDensity(vec3 p, int octaves)
-{
-    vec4 c = uScene.CloudParams;
-    float h = (p.y - c.z) / max(c.w - c.z, 1.0);
-    if (h <= 0.0 || h >= 1.0) return 0.0;
-    vec3 q = (p - vec3(uScene.Wind.x, 0.0, uScene.Wind.z) * (uScene.Wind.w * 15.0)) / max(uScene.CloudParams2.x, 1.0);
-    float n = 0.0, amp = 0.55, total = 0.0;
-    for (int o = 0; o < octaves; ++o)
-    {
-        n += ValueNoise(q) * amp;
-        total += amp;
-        q = q * 2.03 + vec3(17.1, 3.7, 9.3);
-        amp *= 0.5;
-    }
-    n /= total;
-    float shape = smoothstep(0.0, 0.2, h) * smoothstep(1.0, 0.55, h); // flat-ish bases, rounded tops
-    return max(n * shape - (1.0 - c.x), 0.0) / max(c.x, 0.05) * c.y;
-}
 // In-scattered light (rgb) and transmittance (a) of the cloud layer along a view direction.
 vec4 Clouds(vec3 dir)
 {

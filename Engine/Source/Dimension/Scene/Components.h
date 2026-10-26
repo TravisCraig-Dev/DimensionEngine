@@ -108,6 +108,22 @@ namespace Dimension
         glm::mat4 GetProjection(float aspect) const;
     };
 
+    // A road or river shaped into a terrain (see Terrain::ApplyPath): a smooth curve through Points (the object's space),
+    // Width wide and blending into the land over Falloff on each side. Road levels the ground across it to the curve's
+    // height; River carves a channel Depth below the curve (deepest in the middle) and lowers its banks to it. Either can
+    // paint a terrain layer along it. Inspector > Apply to Terrain bakes it into Terrain (None = the scene's first).
+    enum class TerrainPathMode : int32_t { Road = 0, River = 1 };
+    struct TerrainPathComponent
+    {
+        std::vector<glm::vec3> Points{ { -10.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 5.0f }, { 10.0f, 0.0f, 0.0f } };
+        TerrainPathMode Mode = TerrainPathMode::Road;
+        float Width = 4.0f;
+        float Falloff = 3.0f;
+        float Depth = 1.5f;        // River
+        int32_t PaintLayer = 3;    // 0 grass, 1 rock, 2 snow, 3 dirt, 4 sand, 5 moss; -1 = none
+        Entity Terrain = Entity::Null();
+    };
+
     // Projects a texture onto whatever surfaces lie inside its box (Size, centered on the object), along the object's
     // -Z axis, like Unity's Decal Projector: dirt, scorch marks, puddles, signs. Multiply darkens what is under it,
     // Alpha paints over it and Additive makes it glow. Surfaces turned away from the projector fade out.
@@ -184,6 +200,22 @@ namespace Dimension
         float WindResponse = 0.5f;
         glm::vec4 TipColor{ 1.15f, 1.1f, 1.05f, 1.0f }; // multiplies the material's color at the tips
         float RootShade = 0.45f; // brightness at the roots (fake self-shadowing)
+    };
+
+    // Weather: rain and snow falling around the primary camera (GPU particles over Area, starting Height above it,
+    // stopped by what the camera sees), and its marks on every surface: Wetness darkens them and makes them glossy
+    // (flat ground most), Snow Cover settles snow on what faces up. Scripts can fade any of them.
+    struct WeatherComponent
+    {
+        float Rain = 0.0f;      // falling rain, 0-1
+        float Snowfall = 0.0f;  // falling snow, 0-1
+        float Wetness = 0.0f;   // wet surfaces, 0-1
+        float SnowCover = 0.0f; // snow on the ground, 0-1
+        float Area = 40.0f;     // meters around the camera
+        float Height = 18.0f;   // meters above the camera where it starts
+        // Runtime: the precipitation's GPU particle systems and where they emit from (set every update; +Y down).
+        ParticleSystemComponent RainParticles, SnowParticles;
+        glm::mat4 EmitterWorld{ 1.0f }, RainWorld{ 1.0f }, SnowWorld{ 1.0f };
     };
 
     enum class DecalBlend : int32_t { Alpha = 0, Multiply = 1, Additive = 2 };
@@ -815,6 +847,40 @@ namespace Dimension
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
         std::vector<uint32_t> TornIndices;
         int32_t TornEdges = 0;
+    };
+
+    // Dents (car bodies, crates, cans): a hit faster than Min Speed pushes the Mesh Renderer's surface in around the
+    // contact point, Strength centimeters per m/s over Min Speed, spread over Radius and never deeper than Max Dent in
+    // all. The shading follows the dents; the collider keeps its shape. Scripts can Repair it (Physics3DWorld::Dent
+    // dents it by hand).
+    struct DeformableComponent
+    {
+        float MinSpeed = 3.0f;  // m/s
+        float Strength = 1.0f;  // centimeters per m/s
+        float Radius = 0.5f;    // meters (world)
+        float MaxDent = 0.25f;  // meters (world)
+        // Runtime: the dented vertices in the object's space (empty = undented) and how far each has moved.
+        std::vector<glm::vec3> DentedPositions, DentedNormals;
+        std::vector<float> DentDepth;
+        void Repair() { DentedPositions.clear(); DentedNormals.clear(); DentDepth.clear(); }
+    };
+
+    // A boat (on a dynamic Rigidbody floating in a Water Volume): its engine pushes along its +Z at the Propeller point
+    // while that is under water, the rudder turns it (more the faster it goes through the water, a little at rest), and
+    // its keel resists sliding sideways so it carves turns. Throttle and Steering (-1..1) come from scripts, or from WASD
+    // / arrows / the left stick with Drive With Input.
+    struct BoatComponent
+    {
+        float Throttle = 0.0f;
+        float Steering = 0.0f;
+        float EngineForce = 4000.0f;      // newtons at full throttle (reverse: half)
+        float TurnRate = 45.0f;           // degrees per second at full steering and speed
+        float TurnSpeed = 4.0f;           // m/s at which the rudder reaches full effect
+        float Keel = 1.5f;                // sideways drag, per second (times the mass)
+        glm::vec3 Propeller{ 0.0f, -0.4f, -2.0f }; // where the engine pushes, the object's space
+        bool DriveWithInput = false;
+        // Runtime.
+        bool PropellerInWater = false;
     };
 
     // A rope (see Dimension/Physics/Rope.h): Segments + 1 points simulated as a soft body while playing, drawn as a

@@ -1324,6 +1324,121 @@ namespace
         CHECK(bobHi - bobLo > 0.4f && bobLo > 2.0f && bobHi < 5.5f);
     }
 
+    void TestDents()
+    {
+        // A ball dropped on a deformable block: a fast hit pushes the block's top in around the contact (and no deeper
+        // than Max Dent), a gentle one leaves no mark; Dent() dents by hand and Repair() undoes it.
+        fs::path assets = fs::temp_directory_path() / "dimension_dent_test" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        auto drop = [&](float height, DeformableComponent* out) {
+            Scene scene("Dent");
+            auto& reg = scene.GetRegistry();
+            Entity block = scene.CreateEntity("Block");
+            reg.Get<TransformComponent>(block).Scale = { 4.0f, 4.0f, 4.0f }; // a big ball (the collider matches the mesh)
+            reg.Emplace<MeshRendererComponent>(block).Mesh = AssetManager::kSphere; // a smooth, finely divided surface
+            reg.Emplace<SphereColliderComponent>(block).Radius = 0.5f;
+            auto& d = reg.Emplace<DeformableComponent>(block);
+            d.MinSpeed = 3.0f;
+            d.Strength = 2.0f;
+            d.Radius = 0.8f;
+            d.MaxDent = 0.15f;
+            Entity ball = scene.CreateEntity("Ball");
+            reg.Get<TransformComponent>(ball).Position = { 0.0f, 2.0f + height, 0.0f };
+            reg.Emplace<SphereColliderComponent>(ball).Radius = 0.3f;
+            reg.Emplace<RigidbodyComponent>(ball).Mass = 50.0f;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 90; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            *out = rt->GetRegistry().Get<DeformableComponent>(block);
+            rt->OnRuntimeStop();
+        };
+        DeformableComponent hard, soft;
+        drop(6.0f, &hard);  // about 11 m/s
+        drop(0.05f, &soft); // about 2 m/s
+        auto mesh = AssetManager::GetMeshData(AssetManager::kSphere);
+        CHECK(soft.DentedPositions.empty() && hard.DentedPositions.size() == mesh->Vertices.size());
+        float deepest = 0.0f;
+        bool farUntouched = true, inward = true;
+        for (size_t i = 0; i < hard.DentedPositions.size(); ++i)
+        {
+            glm::vec3 a = mesh->Vertices[i].Position, b = hard.DentedPositions[i];
+            float moved = glm::distance(a, b) * 4.0f; // in meters (the block is scaled 4x)
+            deepest = std::max(deepest, moved);
+            if (a.y < 0.0f) farUntouched &= moved < 1e-6f;
+            if (moved > 1e-4f) inward &= b.y < a.y;
+        }
+        CHECK(deepest > 0.05f && deepest <= 0.15f + 1e-4f && farUntouched && inward);
+        // By hand, then repaired.
+        Scene scene("Manual");
+        Entity can = scene.CreateEntity("Can");
+        scene.GetRegistry().Emplace<MeshRendererComponent>(can).Mesh = AssetManager::kCube;
+        scene.GetRegistry().Emplace<DeformableComponent>(can).MaxDent = 0.2f;
+        scene.GetRegistry().Get<DeformableComponent>(can).Radius = 1.0f; // reaches the cube's top corners
+        scene.UpdateTransforms();
+        CHECK(Physics3DWorld::Dent(scene, can, { 0.0f, 0.5f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 0.1f) > 0);
+        auto& dc = scene.GetRegistry().Get<DeformableComponent>(can);
+        CHECK(!dc.DentedPositions.empty());
+        dc.Repair();
+        CHECK(dc.DentedPositions.empty());
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestBoat()
+    {
+        // A boat floating in a Water Volume: full throttle drives it along its +Z, right steering turns it right
+        // (clockwise seen from above), the keel keeps it from sliding sideways, and out of the water it has no thrust.
+        auto run = [&](float throttle, float steering, float startY, float seconds) {
+            Scene scene("Boat");
+            auto& reg = scene.GetRegistry();
+            Entity sea = scene.CreateEntity("Sea");
+            reg.Get<TransformComponent>(sea).Position = { 0, -2, 0 };
+            auto& water = reg.Emplace<WaterVolumeComponent>(sea);
+            water.Size = { 200, 4, 200 };
+            water.Buoyancy = 2.0f;
+            water.LinearDrag = 0.5f;
+            water.AngularDrag = 0.5f;
+            Entity boat = scene.CreateEntity("Boat");
+            reg.Get<TransformComponent>(boat).Position = { 0, startY, 0 };
+            reg.Emplace<BoxColliderComponent>(boat).Size = { 1.6f, 0.8f, 4.0f };
+            reg.Emplace<RigidbodyComponent>(boat).Mass = 400.0f;
+            auto& b = reg.Emplace<BoatComponent>(boat);
+            b.Throttle = throttle;
+            b.Steering = steering;
+            b.Propeller = { 0.0f, -0.4f, -2.0f };
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            bool everInWater = false;
+            for (int i = 0; i < (int)(seconds * 16.0f); ++i)
+            {
+                rt->OnUpdateRuntime(0.0625f);
+                everInWater |= rt->GetRegistry().Get<BoatComponent>(boat).PropellerInWater;
+            }
+            auto& t = rt->GetRegistry().Get<TransformComponent>(boat);
+            glm::vec3 pos = t.Position, forward = glm::normalize(glm::vec3(t.World[2])), right = glm::normalize(glm::vec3(t.World[0]));
+            glm::vec3 vel = Physics3DWorld::GetLinearVelocity(*rt, boat);
+            rt->OnRuntimeStop();
+            struct Result { glm::vec3 Pos, Forward, Velocity, Right; bool InWater; };
+            return Result{ pos, forward, vel, right, everInWater };
+        };
+        auto idle = run(0.0f, 0.0f, 0.2f, 4.0f);
+        auto ahead = run(1.0f, 0.0f, 0.2f, 4.0f);
+        CHECK(idle.InWater && glm::length(glm::vec2(idle.Pos.x, idle.Pos.z)) < 0.5f);
+        CHECK(ahead.Pos.z > 5.0f && std::abs(ahead.Pos.x) < 1.0f);
+        auto turning = run(1.0f, 1.0f, 0.2f, 2.0f); // up to 45 degrees per second
+        // Heading turned clockwise from +Z (toward -X, the boat's right), and it moves mostly along its heading.
+        float heading = std::atan2(turning.Forward.x, turning.Forward.z);
+        CHECK(heading < -0.4f && heading > -1.6f);
+        CHECK(std::abs(glm::dot(turning.Velocity, turning.Right)) < 0.5f * std::abs(glm::dot(turning.Velocity, turning.Forward)));
+        auto dry = run(1.0f, 0.0f, 50.0f, 1.0f); // falling from high up: the propeller never touches water
+        CHECK(!dry.InWater && std::abs(dry.Pos.z) < 0.01f);
+    }
+
     void TestDestructible()
     {
         // A static wall broken by a script: with strong glue its pieces stay standing (stuck to each other and the
@@ -1839,6 +1954,51 @@ namespace
         CHECK(Near(Terrain::HeightAt(t, Terrain::BuildHeights(t), 0, 0), peak, 0.01f));
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestTerrainPath()
+    {
+        // The curve passes through its points; a road levels the ground to its height across Width and blends out
+        // over Falloff; a river carves a channel Depth deep in the middle; both paint their layer; the far ground stays.
+        std::vector<glm::vec3> pts = { { -20, 0, 0 }, { 0, 0, 5 }, { 20, 0, 0 } };
+        auto curve = Terrain::PathCurve(pts, 8);
+        CHECK(curve.size() == 17 && glm::distance(curve.front(), pts[0]) < 1e-5f && glm::distance(curve[8], pts[1]) < 1e-5f && glm::distance(curve.back(), pts[2]) < 1e-5f);
+
+        TerrainComponent t;
+        t.Size = { 80.0f, 80.0f };
+        t.Height = 20.0f;
+        t.Resolution = 128;
+        t.FlatCenter = 2.0f; // flat everywhere at 5 m
+        t.FlatHeight = 0.25f;
+        Terrain::BeginEdit(t);
+        CHECK(Near(Terrain::HeightAt(t, t.EditHeights, 0, 0), 5.0f, 1e-3f));
+        TerrainPathComponent road;
+        road.Points = { { -30, 7, -10 }, { 0, 7, -10 }, { 30, 7, -10 } };
+        road.Width = 4.0f;
+        road.Falloff = 4.0f;
+        road.PaintLayer = 3;
+        glm::mat4 id(1.0f);
+        CHECK(Terrain::ApplyPath(t, id, road, id) > 100);
+        TerrainPathComponent river = road;
+        river.Mode = TerrainPathMode::River;
+        river.Points = { { -30, 5, 15 }, { 0, 5, 15 }, { 30, 5, 15 } };
+        river.Depth = 2.0f;
+        river.PaintLayer = 4;
+        // The path object moved: its points are in its space.
+        glm::mat4 moved = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.0f));
+        CHECK(Terrain::ApplyPath(t, id, river, moved) > 100);
+        auto at = [&](float x, float z) { return Terrain::HeightAt(t, t.EditHeights, x, z); };
+        CHECK(Near(at(0, -10), 7.0f, 0.05f) && Near(at(5, -11), 7.0f, 0.05f));     // the road
+        float shoulder = at(0, -6.0f);
+        CHECK(shoulder > 5.05f && shoulder < 6.95f);                                // blending out
+        CHECK(Near(at(0, -2.0f), 5.0f, 1e-3f) && Near(at(0, 5.0f), 5.0f, 1e-3f));   // beyond reach
+        CHECK(Near(at(0, 15), 3.0f, 0.1f) && at(0, 16.5f) > 3.0f && at(0, 16.5f) < 5.0f); // the river bed and its slope
+        int n = Terrain::SampleCount(t);
+        auto sampleAt = [&](float x, float z) { return (size_t)std::lround((z / 80.0f + 0.5f) * (n - 1)) * n + (size_t)std::lround((x / 80.0f + 0.5f) * (n - 1)); };
+        CHECK((t.EditLayers[(size_t)n * n + sampleAt(0, -10)] & 255) > 240);       // dirt on the road
+        CHECK((t.EditLayers[(size_t)n * n + sampleAt(0, 15)] >> 8 & 255) > 240);   // sand in the river
+        Terrain::CommitEdit(t);
+        CHECK(Near(Terrain::HeightAt(t, Terrain::BuildHeights(t), 0, -10), 7.0f, 0.05f));
     }
 
     void TestTerrainErosion()
@@ -3656,6 +3816,42 @@ namespace
             else CHECK(std::abs(moved) < 0.3f);
             scene.OnRuntimeStop();
         }
+    }
+
+    void TestParticleDecals()
+    {
+        auto run = [&](int maxDecals, float decalLifetime, float seconds) {
+            Scene scene("Decals");
+            Entity e = scene.CreateEntity("Paint");
+            scene.GetRegistry().Get<TransformComponent>(e).Position = { 0, 3, 0 };
+            auto& ps = scene.GetRegistry().Emplace<ParticleSystemComponent>(e);
+            ps.Shape = ParticleShape::Sphere;
+            ps.ShapeRadius = 0.5f;
+            ps.StartSpeed = { 0.0f, 0.0f };
+            ps.StartLifetime = { 10.0f, 10.0f };
+            ps.GravityModifier = 1.0f;
+            ps.RateOverTime = 0.0f;
+            ps.BurstCount = 50;
+            ps.Looping = false;
+            ps.Duration = 100.0f;
+            ps.Collision = ParticleCollision::Plane;
+            ps.CollisionPlaneHeight = 0.0f;
+            ps.CollisionRadius = 0.05f;
+            ps.Bounce = 0.5f; // they bounce, but mark only once
+            ps.CollisionDecals = true;
+            ps.MaxDecals = maxDecals;
+            ps.DecalLifetime = decalLifetime;
+            scene.UpdateTransforms();
+            ParticleSystems::Restart(scene);
+            for (int i = 0; i < (int)(seconds * 60.0f); ++i) ParticleSystems::Update(scene, 1.0f / 60.0f);
+            return scene.GetRegistry().Get<ParticleSystemComponent>(e).Decals;
+        };
+        auto marks = run(128, 30.0f, 2.0f);
+        bool onGround = true;
+        for (auto& m : marks) onGround &= Near(m.Position.y, 0.0f, 1e-3f) && Near(m.Normal.y, 1.0f, 1e-4f) && m.Size > 0.2f;
+        CHECK(marks.size() == 50 && onGround);
+        CHECK(run(20, 30.0f, 2.0f).size() == 20);   // at most Max Decals
+        CHECK(run(128, 1.0f, 4.0f).empty());         // gone after their lifetime
     }
 
     void TestParticleMeshShape()
@@ -6746,6 +6942,7 @@ int main(int argc, char** argv)
     Run("Joint motors, breaking and moving platforms", TestJointMotorsAndPlatforms);
     Run("Particle texture sheets and noise", TestParticleSheetsAndNoise);
     Run("Particle mesh shape", TestParticleMeshShape);
+    Run("Particle decals", TestParticleDecals);
     Run("Script timers", TestScriptTimers);
     Run("Coroutines (C++)", TestCoroutines);
     Run("C++ script options", TestScriptOptions);
@@ -6768,6 +6965,7 @@ int main(int argc, char** argv)
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);
     Run("Terrain erosion", TestTerrainErosion);
+    Run("Terrain path", TestTerrainPath);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);
@@ -6778,6 +6976,8 @@ int main(int argc, char** argv)
     Run("Fracture", TestFracture);
     Run("Rope", TestRope);
     Run("Destructible", TestDestructible);
+    Run("Boat", TestBoat);
+    Run("Dents", TestDents);
     Run("Microphone", TestMicrophone);
     Run("Nested prefabs", TestNestedPrefabs);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);

@@ -47,6 +47,9 @@ namespace Dimension
         static void AddImpulse(Scene& scene, Entity e, const glm::vec3& impulse);
         // A Ragdoll's capsule nearest `point` takes the impulse there (a hit knocks the limb it lands on).
         static void AddRagdollImpulse(Scene& scene, Entity e, const glm::vec3& impulse, const glm::vec3& point);
+        // Dents a Deformable object at a world point, pushing its surface along `direction` (world, into the object) by up
+        // to `depth` meters at the point (less out to its Radius). Returns how many vertices moved.
+        static int Dent(Scene& scene, Entity e, const glm::vec3& point, const glm::vec3& direction, float depth);
         // Breaks a Breakable object into its pieces now, flying apart from `point` (world space). Returns the pieces.
         static std::vector<Entity> Break(Scene& scene, Entity e, const glm::vec3& point);
         // Closest hit along a ray (direction need not be normalized). Triggers are hit too.
@@ -79,6 +82,7 @@ namespace Dimension
         void CreateCharacter(Entity e);
         void CreateVehicle(Entity e);
         void CreateCloth(Entity e);
+        void UpdateBoats(float dt);
         void CreateRope(Entity e);
         void UpdateRopes(float dt, bool afterStep);
         void CreateSoftBody(Entity e);

@@ -475,6 +475,28 @@ namespace Editor
                         ImGui::SameLine();
                         ImGui::TextDisabled("%zu trees, %zu grass tufts", details.Trees.size(), details.Grass.size());
                     }
+                    if (info.TypeId == GetComponentTypeId<TerrainPathComponent>())
+                    {
+                        // Bake the road or river into its terrain (one undo step).
+                        auto& path = *static_cast<TerrainPathComponent*>(info.Get(scene, e));
+                        auto& reg = scene.GetRegistry();
+                        Entity target = !path.Terrain.IsNull() && scene.IsValid(path.Terrain) && reg.Has<TerrainComponent>(path.Terrain) ? path.Terrain : Entity::Null();
+                        if (target.IsNull())
+                            for (auto [te, tc] : reg.ViewOf<TerrainComponent>()) { target = te; break; }
+                        ImGui::BeginDisabled(target.IsNull());
+                        if (ImGui::Button("Apply to Terrain"))
+                        {
+                            m_Ctx.RecordUndo();
+                            auto& terrain = reg.Get<TerrainComponent>(target);
+                            Terrain::BeginEdit(terrain);
+                            Terrain::ApplyPath(terrain, reg.Get<TransformComponent>(target).World, path, reg.Get<TransformComponent>(e).World);
+                            Terrain::CommitEdit(terrain);
+                            m_Ctx.MarkDirty();
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::TextDisabled(target.IsNull() ? "(no terrain in the scene)" : "into '%s'", reg.Get<TagComponent>(target.IsNull() ? e : target).Name.c_str());
+                    }
                     if (info.TypeId == GetComponentTypeId<LightProbeVolumeComponent>())
                     {
                         auto& lpv = *static_cast<LightProbeVolumeComponent*>(info.Get(scene, e));
@@ -1174,6 +1196,8 @@ namespace Editor
             track(ImGui::DragFloat("Top##clouds", &s.CloudTop, 10.0f, -1000.0f, 20000.0f, "%.0f m"));
             track(ImGui::DragFloat("Scale##clouds", &s.CloudScale, 10.0f, 10.0f, 50000.0f, "%.0f m"));
             track(ImGui::SliderInt("Steps##clouds", &s.CloudSteps, 8, 128));
+            track(ImGui::Checkbox("Shadows##clouds", &s.CloudShadows));
+            ImGui::SetItemTooltip("The clouds' shadows drift over the ground (they shade the sun)");
             ImGui::Unindent();
         }
         track(ImGui::Checkbox("Screen-Space Global Illumination", &s.SSGI));

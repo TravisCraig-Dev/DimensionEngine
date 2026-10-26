@@ -358,6 +358,26 @@ namespace Dimension
         public float GetUpProgress => Native.Api.RagdollQuery(Entity.Scene, Entity.Id, 1);
     }
 
+    /// <summary>Boat: an engine, rudder and keel for a body floating in a Water Volume.</summary>
+    public class Boat : Component
+    {
+        internal override string NativeName => "Boat";
+        /// <summary>-1 (reverse) to 1.</summary>
+        public float Throttle { get => GetFloat("Throttle"); set => SetFloat("Throttle", value); }
+        /// <summary>-1 (left) to 1 (right).</summary>
+        public float Steering { get => GetFloat("Steering"); set => SetFloat("Steering", value); }
+    }
+
+    /// <summary>Weather: falling rain and snow around the camera, wet and snowy surfaces (fade them from scripts).</summary>
+    public class Weather : Component
+    {
+        internal override string NativeName => "Weather";
+        public float Rain { get => GetFloat("Rain"); set => SetFloat("Rain", value); }
+        public float Snowfall { get => GetFloat("Snowfall"); set => SetFloat("Snowfall", value); }
+        public float Wetness { get => GetFloat("Wetness"); set => SetFloat("Wetness", value); }
+        public float SnowCover { get => GetFloat("Snow Cover"); set => SetFloat("Snow Cover", value); }
+    }
+
     /// <summary>Breakable: breaks into pieces on a hard enough hit, or when Break is called.</summary>
     public unsafe class Breakable : Component
     {

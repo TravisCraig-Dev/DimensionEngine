@@ -145,6 +145,13 @@ namespace Dimension
             .Field("Painted Holes", &TerrainComponent::PaintedHoles).HideInInspector()
             .Field("Painted Details", &TerrainComponent::PaintedDetails).HideInInspector();
 
+        Register<WeatherComponent>("Weather", "Rendering")
+            .Field("Rain", &WeatherComponent::Rain).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Falling rain around the camera, 0-1")
+            .Field("Snowfall", &WeatherComponent::Snowfall).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Falling snow around the camera, 0-1")
+            .Field("Wetness", &WeatherComponent::Wetness).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Surfaces darker and glossy (flat ground most)")
+            .Field("Snow Cover", &WeatherComponent::SnowCover).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Snow on surfaces facing up")
+            .Field("Area", &WeatherComponent::Area).Range(4.0f, 500.0f).Speed(0.5f).Tooltip("Meters around the camera where it falls")
+            .Field("Height", &WeatherComponent::Height).Range(1.0f, 200.0f).Speed(0.1f).Tooltip("Meters above the camera where it starts");
         Register<FurComponent>("Fur", "Rendering")
             .Field("Length", &FurComponent::Length).Range(0.0f, 2.0f).Speed(0.001f).Tooltip("Meters (with the object's scale)")
             .Field("Shells", &FurComponent::Shells).Range(1, 64).Tooltip("Layers drawn: more look denser and smoother at the sides")
@@ -154,6 +161,14 @@ namespace Dimension
             .Field("Wind Response", &FurComponent::WindResponse).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("Sway in the scene's Wind")
             .Field("Tip Color", &FurComponent::TipColor).As(FieldType::Color4).Tooltip("Multiplies the material's color toward the tips")
             .Field("Root Shade", &FurComponent::RootShade).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Brightness at the roots");
+        Register<TerrainPathComponent>("Terrain Path", "Rendering")
+            .Field("Points", &TerrainPathComponent::Points).Tooltip("The curve passes through these (the object's space)")
+            .Field("Mode", &TerrainPathComponent::Mode).Enum({ "Road", "River" })
+            .Field("Width", &TerrainPathComponent::Width).Range(0.1f, 500.0f).Speed(0.05f)
+            .Field("Falloff", &TerrainPathComponent::Falloff).Range(0.0f, 500.0f).Speed(0.05f).Tooltip("Blend into the land on each side, meters")
+            .Field("Depth", &TerrainPathComponent::Depth).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("River: the channel's depth below the curve")
+            .Field("Paint Layer", &TerrainPathComponent::PaintLayer).Range(-1, 5).Tooltip("0 grass, 1 rock, 2 snow, 3 dirt, 4 sand, 5 moss; -1 = none")
+            .Field("Terrain", &TerrainPathComponent::Terrain).Tooltip("The terrain it shapes (None = the scene's first)");
         Register<DecalComponent>("Decal", "Rendering")
             .Field("Texture", &DecalComponent::Texture).As(FieldType::Texture).Tooltip("None = a soft round spot")
             .Field("Color", &DecalComponent::Color).As(FieldType::Color4).Tooltip("Tint; alpha is the opacity")
@@ -287,6 +302,12 @@ namespace Dimension
             .Field("Collision Dampen", &PS::CollisionDampen).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Lifetime Loss", &PS::LifetimeLoss).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of the lifetime lost per collision")
             .Field("Collision Radius", &PS::CollisionRadius).Range(0.0f, 10.0f).Speed(0.005f)
+            .Field("Collision Decals", &PS::CollisionDecals).Tooltip("CPU systems: each particle's first impact leaves a mark where it hit")
+            .Field("Decal Size", &PS::DecalSize).Range(0.001f, 100.0f).Speed(0.005f)
+            .Field("Decal Lifetime", &PS::DecalLifetime).Range(0.0f, 3600.0f).Speed(0.1f).Tooltip("Seconds a mark lasts (fading over the last part)")
+            .Field("Max Decals", &PS::MaxDecals).Range(0, 4096).Tooltip("Marks at once (the oldest go first)")
+            .Field("Decal Texture", &PS::DecalTexture).As(FieldType::Texture).Tooltip("None = a soft round spot")
+            .Field("Decal Blend", &PS::DecalBlendMode).Range(0, 2).Tooltip("0 alpha, 1 multiply, 2 additive")
             .Field("Collide With Colliders", &PS::CollideWithColliders)
                 .Tooltip("GPU systems: bounce off the 32 sphere, box and capsule colliders (and characters) nearest the emitter")
             .Field("Sub Emitter", &PS::SubEmitter).Tooltip("Another Particle System that bursts at this system's particles")
@@ -530,6 +551,20 @@ namespace Dimension
             .Field("Align On Get Up", &RagdollComponent::AlignOnGetUp)
                 .Tooltip("When Simulate turns off, move the object under the body onto the ground and turn it along the body\n"
                          "(toward the head lying face down, toward the feet face up)");
+        Register<DeformableComponent>("Deformable", "Physics")
+            .Field("Min Speed", &DeformableComponent::MinSpeed).Range(0.0f, 1000.0f).Speed(0.05f).Tooltip("Gentler hits (m/s) leave no dent")
+            .Field("Strength", &DeformableComponent::Strength).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Dent depth, centimeters per m/s over Min Speed")
+            .Field("Radius", &DeformableComponent::Radius).Range(0.01f, 100.0f).Speed(0.01f).Tooltip("How wide a dent spreads, meters")
+            .Field("Max Dent", &DeformableComponent::MaxDent).Range(0.0f, 100.0f).Speed(0.005f).Tooltip("Deepest any point can be pushed in, meters");
+        Register<BoatComponent>("Boat", "Physics")
+            .Field("Throttle", &BoatComponent::Throttle).Range(-1.0f, 1.0f).Speed(0.01f).Tooltip("-1 (reverse) to 1; scripts set it")
+            .Field("Steering", &BoatComponent::Steering).Range(-1.0f, 1.0f).Speed(0.01f).Tooltip("-1 (left) to 1 (right); scripts set it")
+            .Field("Engine Force", &BoatComponent::EngineForce).Range(0.0f, 1e7f).Speed(10.0f).Tooltip("Newtons at full throttle")
+            .Field("Turn Rate", &BoatComponent::TurnRate).Range(0.0f, 720.0f).Speed(0.5f).Tooltip("Degrees per second at full steering and speed")
+            .Field("Turn Speed", &BoatComponent::TurnSpeed).Range(0.1f, 100.0f).Speed(0.05f).Tooltip("Speed (m/s) at which the rudder bites fully")
+            .Field("Keel", &BoatComponent::Keel).Range(0.0f, 20.0f).Speed(0.01f).Tooltip("Resistance to sliding sideways")
+            .Field("Propeller", &BoatComponent::Propeller).Speed(0.01f).Tooltip("Where the engine pushes (it must be under water)")
+            .Field("Drive With Input", &BoatComponent::DriveWithInput).Tooltip("WASD / arrows / left stick steer it");
         Register<RopeComponent>("Rope", "Physics")
             .Field("Length", &RopeComponent::Length).Range(0.01f, 1000.0f).Speed(0.01f)
             .Field("Segments", &RopeComponent::Segments).Range(1, 256).Tooltip("Simulated pieces (more bend more smoothly)")

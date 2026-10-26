@@ -42,6 +42,7 @@
 #include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Physics/Fracture.h"
 #include "Dimension/Physics/Rope.h"
+#include "Dimension/Core/Input.h"
 #include <map>
 #include <tuple>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
@@ -276,7 +277,7 @@ namespace Dimension
             System.RemoveConstraint(Vehicles[i].Constraint);
             Vehicles.erase(Vehicles.begin() + i);
         }
-        struct Event { Entity A, B; bool Begin, Trigger; float Speed = 0.0f; glm::vec3 Point{ 0.0f }, VelocityA{ 0.0f }, VelocityB{ 0.0f }; };
+        struct Event { Entity A, B; bool Begin, Trigger; float Speed = 0.0f; glm::vec3 Point{ 0.0f }, VelocityA{ 0.0f }, VelocityB{ 0.0f }, Normal{ 0.0f }; };
         std::mutex EventMutex;
         std::vector<Event> Events;
         // Breakables: pieces cut once per mesh and settings (shared by every copy that breaks), and pieces that go.
@@ -328,7 +329,7 @@ namespace Dimension
             float speed = std::abs((a.GetPointVelocity(point) - b.GetPointVelocity(point)).Dot(manifold.mWorldSpaceNormal));
             std::lock_guard lock(EventMutex);
             Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true, a.IsSensor() || b.IsSensor(), speed, FromJolt(JPH::Vec3(point)),
-                               FromJolt(a.GetLinearVelocity()), FromJolt(b.GetLinearVelocity()) });
+                               FromJolt(a.GetLinearVelocity()), FromJolt(b.GetLinearVelocity()), FromJolt(manifold.mWorldSpaceNormal) });
         }
 
         void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
@@ -1083,6 +1084,61 @@ namespace Dimension
         m_Impl->System.AddConstraint(constraint);
         m_Impl->System.AddStepListener(constraint);
         m_Impl->Vehicles.push_back({ e, constraint });
+    }
+
+    void Physics3DWorld::UpdateBoats(float dt)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& bi = m_Impl->System.GetBodyInterface();
+        // Whether a world point is under the water of any Water Volume (its waves included).
+        auto underwater = [&](const glm::vec3& p) {
+            for (auto [w, water, wt] : reg.ViewOf<WaterVolumeComponent, TransformComponent>())
+            {
+                if (!wt.ActiveInHierarchy) continue;
+                glm::vec3 center = wt.GetWorldPosition(), scale = glm::max(glm::abs(wt.Scale), glm::vec3(1e-4f)), half = water.Size * scale * 0.5f;
+                if (std::abs(p.x - center.x) > half.x || std::abs(p.z - center.z) > half.z || p.y < center.y - half.y) continue;
+                float surface = center.y + half.y;
+                if (Water::HasWaves(water))
+                    surface = center.y + Water::Sample(water, glm::vec2((p.x - center.x) / scale.x, (p.z - center.z) / scale.z), m_Scene.GetTime()).Height * scale.y;
+                if (p.y < surface) return true;
+            }
+            return false;
+        };
+        for (auto [e, boat, rb, t] : reg.ViewOf<BoatComponent, RigidbodyComponent, TransformComponent>())
+        {
+            if (rb.RuntimeBody == 0xFFFFFFFF || rb.Type != BodyType::Dynamic || !t.ActiveInHierarchy) continue;
+            if (boat.DriveWithInput)
+            {
+                float forward = (Input::IsKeyDown(Key::W) || Input::IsKeyDown(Key::Up) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::S) || Input::IsKeyDown(Key::Down) ? 1.0f : 0.0f);
+                float turn = (Input::IsKeyDown(Key::D) || Input::IsKeyDown(Key::Right) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::A) || Input::IsKeyDown(Key::Left) ? 1.0f : 0.0f);
+                float stickX = Input::GetGamepadAxis(GamepadAxis::LeftX), stickY = -Input::GetGamepadAxis(GamepadAxis::LeftY);
+                boat.Throttle = std::abs(stickY) > std::abs(forward) ? stickY : forward;
+                boat.Steering = std::abs(stickX) > std::abs(turn) ? stickX : turn;
+            }
+            JPH::BodyID id(rb.RuntimeBody);
+            glm::vec3 forward = glm::normalize(glm::vec3(t.World[2])), right = glm::normalize(glm::vec3(t.World[0])), up(0.0f, 1.0f, 0.0f);
+            glm::vec3 propeller = glm::vec3(t.World * glm::vec4(boat.Propeller, 1.0f));
+            boat.PropellerInWater = underwater(propeller);
+            if (!boat.PropellerInWater) continue; // out of the water (a jump, the shore): no thrust, rudder or keel
+            glm::vec3 velocity = FromJolt(bi.GetLinearVelocity(id));
+            float throttle = std::clamp(boat.Throttle, -1.0f, 1.0f), steering = std::clamp(boat.Steering, -1.0f, 1.0f);
+            // The engine pushes along the boat, level with the water (a tilted hull does not drive itself under).
+            glm::vec3 push = forward - up * glm::dot(forward, up);
+            if (glm::dot(push, push) > 1e-6f)
+                bi.AddForce(id, ToJolt(glm::normalize(push) * throttle * boat.EngineForce * (throttle < 0.0f ? 0.5f : 1.0f)), JPH::RVec3(ToJolt(propeller)));
+            // The rudder: the boat's turn about up eases toward Turn Rate by steering and the speed through the water
+            // (backwards turns the other way, a little at rest), whatever the hull's size.
+            float speed = glm::dot(velocity, forward);
+            float bite = std::clamp(speed / std::max(boat.TurnSpeed, 0.1f), -1.0f, 1.0f);
+            if (std::abs(bite) < 0.2f) bite = bite < 0.0f ? -0.2f : 0.2f; // a little at rest
+            glm::vec3 spin = FromJolt(bi.GetAngularVelocity(id));
+            float target = -steering * glm::radians(std::max(boat.TurnRate, 0.0f)) * bite;
+            spin.y += (target - spin.y) * std::min(dt * 3.0f, 1.0f);
+            bi.SetAngularVelocity(id, ToJolt(spin));
+            // The keel: sliding sideways is damped.
+            float slide = glm::dot(velocity, right);
+            bi.AddForce(id, ToJolt(-right * slide * std::max(boat.Keel, 0.0f) * rb.Mass));
+        }
     }
 
     void Physics3DWorld::UpdateWater(float dt)
@@ -2056,6 +2112,7 @@ namespace Dimension
         UpdateCloths(dt, false);
         UpdateRopes(dt, false);
         UpdateWater(dt);
+        UpdateBoats(dt);
         UpdateRagdolls(dt, false);
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
         UpdateCloths(dt, true);
@@ -2170,7 +2227,75 @@ namespace Dimension
                 }
             }
         }
+        // Hits dent Deformables: the normal points from A to B, so each is pushed in away from the other.
+        for (auto& ev : events)
+        {
+            if (!ev.Begin || ev.Trigger) continue;
+            for (int side = 0; side < 2; ++side)
+            {
+                Entity e = side == 0 ? ev.A : ev.B;
+                auto* dent = m_Scene.IsValid(e) ? reg.TryGet<DeformableComponent>(e) : nullptr;
+                if (!dent || ev.Speed <= dent->MinSpeed) continue;
+                float depth = std::min(dent->Strength * 0.01f * (ev.Speed - dent->MinSpeed), dent->MaxDent);
+                Dent(m_Scene, e, ev.Point, side == 0 ? -ev.Normal : ev.Normal, depth);
+            }
+        }
         UpdateDebris(dt);
+    }
+
+    int Physics3DWorld::Dent(Scene& scene, Entity e, const glm::vec3& point, const glm::vec3& direction, float depth)
+    {
+        auto& reg = scene.GetRegistry();
+        auto* dent = scene.IsValid(e) ? reg.TryGet<DeformableComponent>(e) : nullptr;
+        auto* mr = dent ? reg.TryGet<MeshRendererComponent>(e) : nullptr;
+        auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
+        if (!data || data->Vertices.empty() || data->SkeletonData || depth <= 0.0f || glm::dot(direction, direction) < 1e-12f) return 0;
+        size_t n = data->Vertices.size();
+        if (dent->DentedPositions.size() != n)
+        {
+            dent->DentedPositions.resize(n);
+            dent->DentedNormals.resize(n);
+            for (size_t i = 0; i < n; ++i)
+            {
+                dent->DentedPositions[i] = data->Vertices[i].Position;
+                dent->DentedNormals[i] = data->Vertices[i].Normal;
+            }
+            dent->DentDepth.assign(n, 0.0f);
+        }
+        // In the object's space: the point, the push, and how a world meter scales there (non-uniform scale: per axis).
+        const glm::mat4& world = reg.Get<TransformComponent>(e).World;
+        glm::mat4 toLocal = glm::inverse(world);
+        glm::vec3 push = glm::vec3(toLocal * glm::vec4(glm::normalize(direction), 0.0f));
+        float radius = std::max(dent->Radius, 1e-3f);
+        int moved = 0;
+        for (size_t i = 0; i < n; ++i)
+        {
+            // Falloff by world distance from the contact.
+            float d = glm::distance(glm::vec3(world * glm::vec4(dent->DentedPositions[i], 1.0f)), point);
+            if (d >= radius) continue;
+            float f = 1.0f - d / radius;
+            float amount = std::min(depth * f * f, std::max(dent->MaxDent - dent->DentDepth[i], 0.0f));
+            if (amount <= 0.0f) continue;
+            dent->DentedPositions[i] += push * amount;
+            dent->DentDepth[i] += amount;
+            ++moved;
+        }
+        // Fresh normals from the dented triangles (vertices split at hard edges keep their own faces).
+        std::vector<glm::vec3> normals(n, glm::vec3(0.0f));
+        for (size_t k = 0; k + 2 < data->Indices.size(); k += 3)
+        {
+            uint32_t a = data->Indices[k], b = data->Indices[k + 1], c = data->Indices[k + 2];
+            glm::vec3 fn = glm::cross(dent->DentedPositions[b] - dent->DentedPositions[a], dent->DentedPositions[c] - dent->DentedPositions[a]);
+            normals[a] += fn;
+            normals[b] += fn;
+            normals[c] += fn;
+        }
+        for (size_t i = 0; i < n; ++i)
+        {
+            float len = glm::length(normals[i]);
+            dent->DentedNormals[i] = len > 1e-12f ? normals[i] / len : data->Vertices[i].Normal;
+        }
+        return moved;
     }
 
     std::vector<Entity> Physics3DWorld::Break(Scene& scene, Entity e, const glm::vec3& point)

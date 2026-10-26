@@ -1,5 +1,6 @@
 // The mesh fragment shader's body, shared by Mesh.frag (the main pass) and MeshOit.frag (order-independent
 // transparency, with DIM_OIT defined).
+#include "Clouds.glsl"
 
 // Clustered point and spot lights (see LightClusters).
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightListRef { PointLight Lights[]; };
@@ -177,6 +178,26 @@ void main()
     float roughness = clamp(m.Params.y * mr.g, 0.02, 1.0);
     float metallic = clamp(m.Params.x * mr.b, 0.0, 1.0);
     vec3 albedo = base.rgb;
+    // Weather: snow settles on upward-facing surfaces (patchy at its edge), and wet surfaces darken and turn glossy,
+    // the more so the flatter they are (water pools there).
+    if (m.Flags.x != 2u)
+    {
+        float cover = uScene.Weather.y;
+        if (cover > 0.0)
+        {
+            float patchiness = ValueNoise(vWorldPos * 1.3) * 0.25 + ValueNoise(vWorldPos * 5.1) * 0.1;
+            float snow = smoothstep(0.0, 0.15, N.y + patchiness - 1.0 + cover * 1.2) * smoothstep(0.0, 0.05, cover);
+            albedo = mix(albedo, vec3(0.88, 0.9, 0.94), snow);
+            roughness = mix(roughness, 0.7, snow);
+            metallic = mix(metallic, 0.0, snow);
+        }
+        float wet = uScene.Weather.x * (0.6 + 0.4 * clamp(N.y, 0.0, 1.0));
+        if (wet > 0.0)
+        {
+            albedo *= mix(1.0, 0.5, wet * (1.0 - metallic));
+            roughness = mix(roughness, 0.06, wet);
+        }
+    }
     vec3 V = normalize(uScene.CameraPosition.xyz - vWorldPos);
     float NdotV = max(dot(N, V), 1e-4);
 
@@ -216,7 +237,7 @@ void main()
 
     if (uScene.LightDirection.w > 0.5)
         color += DirectLight(N, V, normalize(-uScene.LightDirection.xyz), uScene.LightColor.rgb, albedo, metallic, roughness) *
-                 DirectionalShadow(vWorldPos, normalize(vNormal));
+                 DirectionalShadow(vWorldPos, normalize(vNormal)) * CloudShadow(vWorldPos);
 
     // The point and spot lights of this pixel's cluster.
     uvec2 cell = uvec2(0u);

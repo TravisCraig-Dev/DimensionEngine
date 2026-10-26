@@ -706,6 +706,99 @@ namespace Dimension::Terrain
         return false;
     }
 
+    std::vector<glm::vec3> PathCurve(const std::vector<glm::vec3>& points, int perSegment)
+    {
+        if (points.size() < 2) return points;
+        std::vector<glm::vec3> curve;
+        size_t n = points.size();
+        for (size_t i = 0; i + 1 < n; ++i)
+        {
+            const glm::vec3& p0 = points[i > 0 ? i - 1 : 0];
+            const glm::vec3& p1 = points[i];
+            const glm::vec3& p2 = points[i + 1];
+            const glm::vec3& p3 = points[std::min(i + 2, n - 1)];
+            for (int k = 0; k < perSegment; ++k)
+            {
+                float t = (float)k / perSegment, t2 = t * t, t3 = t2 * t;
+                curve.push_back(0.5f * (2.0f * p1 + (p2 - p0) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (3.0f * p1 - p0 - 3.0f * p2 + p3) * t3));
+            }
+        }
+        curve.push_back(points.back());
+        return curve;
+    }
+
+    int ApplyPath(TerrainComponent& terrain, const glm::mat4& terrainWorld, const TerrainPathComponent& path, const glm::mat4& pathWorld)
+    {
+        int n = SampleCount(terrain);
+        if (terrain.EditHeights.size() != (size_t)n * n || terrain.EditLayers.size() != (size_t)n * n * 2) return 0;
+        // The curve in the terrain's space.
+        glm::mat4 toTerrain = glm::inverse(terrainWorld) * pathWorld;
+        std::vector<glm::vec3> curve = PathCurve(path.Points);
+        for (glm::vec3& p : curve) p = glm::vec3(toTerrain * glm::vec4(p, 1.0f));
+        if (curve.size() < 2) return 0;
+        float half = std::max(path.Width, 0.0f) * 0.5f, falloff = std::max(path.Falloff, 0.0f), reach = half + falloff;
+        glm::vec2 lo(1e30f), hi(-1e30f);
+        for (const glm::vec3& p : curve) { lo = glm::min(lo, glm::vec2(p.x, p.z)); hi = glm::max(hi, glm::vec2(p.x, p.z)); }
+        glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+        glm::vec2 cell = size / (float)(n - 1);
+        int c0 = std::max(0, (int)std::floor((lo.x - reach) / cell.x + (n - 1) * 0.5f)), c1 = std::min(n - 1, (int)std::ceil((hi.x + reach) / cell.x + (n - 1) * 0.5f));
+        int r0 = std::max(0, (int)std::floor((lo.y - reach) / cell.y + (n - 1) * 0.5f)), r1 = std::min(n - 1, (int)std::ceil((hi.y + reach) / cell.y + (n - 1) * 0.5f));
+        int changed = 0;
+        for (int r = r0; r <= r1; ++r)
+            for (int c = c0; c <= c1; ++c)
+            {
+                glm::vec2 p(-size.x * 0.5f + c * cell.x, -size.y * 0.5f + r * cell.y);
+                // The nearest point of the curve (across XZ) and its height.
+                float best = 1e30f, height = 0.0f;
+                for (size_t k = 0; k + 1 < curve.size(); ++k)
+                {
+                    glm::vec2 a(curve[k].x, curve[k].z), b(curve[k + 1].x, curve[k + 1].z);
+                    glm::vec2 ab = b - a;
+                    float t = glm::dot(ab, ab) > 1e-12f ? std::clamp(glm::dot(p - a, ab) / glm::dot(ab, ab), 0.0f, 1.0f) : 0.0f;
+                    float d = glm::distance(p, a + ab * t);
+                    if (d < best)
+                    {
+                        best = d;
+                        height = glm::mix(curve[k].y, curve[k + 1].y, t);
+                    }
+                }
+                if (best >= reach) continue;
+                size_t i = (size_t)r * n + c;
+                float& h = terrain.EditHeights[i];
+                // Full effect across the width, easing out over the falloff.
+                float w = best <= half ? 1.0f : 1.0f - Smooth(half, reach, best);
+                if (path.Mode == TerrainPathMode::Road)
+                    h = glm::mix(h, height, w);
+                else
+                {
+                    // River: a rounded channel below the curve, banks lowered to the curve's height.
+                    float inside = half > 0.0f ? std::clamp(best / half, 0.0f, 1.0f) : 1.0f;
+                    float bed = height - std::max(path.Depth, 0.0f) * (1.0f - inside * inside);
+                    float target = best <= half ? bed : std::min(h, height);
+                    h = glm::mix(h, std::min(h, target), w);
+                }
+                h = std::clamp(h, 0.0f, terrain.Height);
+                if (path.PaintLayer >= 0 && path.PaintLayer < kLayerCount)
+                {
+                    float paint = best <= half ? 1.0f : 1.0f - Smooth(half, half + falloff * 0.5f, best);
+                    uint32_t& s0 = terrain.EditLayers[i];
+                    uint32_t& s1 = terrain.EditLayers[(size_t)n * n + i];
+                    float wl[kLayerCount];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        wl[k] = (s0 >> (k * 8) & 255) / 255.0f;
+                        wl[k + 3] = (s1 >> (k * 8) & 255) / 255.0f;
+                    }
+                    for (int k = 0; k < kLayerCount; ++k) wl[k] += ((k == path.PaintLayer ? 1.0f : 0.0f) - wl[k]) * paint;
+                    s0 = PackWeights(wl);
+                    s1 = PackWeights(wl + 3);
+                }
+                ++changed;
+            }
+        ++terrain.EditRevision;
+        return changed;
+    }
+
     void Erode(TerrainComponent& terrain, const glm::vec2& at, float radius, int droplets, uint32_t seed)
     {
         int n = SampleCount(terrain);

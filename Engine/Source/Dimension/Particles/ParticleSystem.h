@@ -35,6 +35,7 @@ namespace Dimension
         std::array<glm::vec3, kTrailPoints> Trail;
         uint8_t TrailCount = 0;
         float TrailTimer = 0.0f;
+        bool LeftDecal = false; // collision decals: only a particle's first impact marks
     };
 
     // CPU particle emitter (a compact take on Unity's ParticleSystem modules).
@@ -103,6 +104,15 @@ namespace Dimension
         float CollisionDampen = 0.1f;      // fraction of the tangential velocity lost
         float LifetimeLoss = 0.0f;         // fraction of the lifetime lost per collision
         float CollisionRadius = 0.05f;
+        // Collision decals (CPU systems): each particle's first impact leaves a mark on what it hit (paint, blood, scorch,
+        // footprints of rain), Decal Size across, in the particle's color, fading out over the last part of Decal
+        // Lifetime; at most Max Decals at once (the oldest go first). Blend: 0 alpha, 1 multiply, 2 additive.
+        bool CollisionDecals = false;
+        float DecalSize = 0.3f;
+        float DecalLifetime = 10.0f;
+        int32_t MaxDecals = 128;
+        AssetHandle DecalTexture = AssetHandle::None(); // None = a soft round spot
+        int32_t DecalBlendMode = 0;
         // GPU systems: also bounce off the 3D colliders (sphere, box and capsule colliders, characters) nearest the
         // emitter, up to 32, wherever they are and however they move (with any Collision mode, or none).
         bool CollideWithColliders = false;
@@ -139,6 +149,8 @@ namespace Dimension
 
         // Runtime state (not serialized)
         struct Burst { glm::vec3 WorldPosition; int32_t Count; };
+        struct DecalMark { glm::vec3 Position, Normal; glm::vec4 Color; float Size, Age, Spin; };
+        std::vector<DecalMark> Decals; // collision decals, world space
         std::vector<Particle> Particles;
         std::vector<Burst> PendingBursts; // sub-emitter requests
         float Time = 0.0f;

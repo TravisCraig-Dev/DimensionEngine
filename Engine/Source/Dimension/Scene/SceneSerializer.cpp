@@ -171,6 +171,7 @@ namespace Dimension
                           { "cloudTop", s.CloudTop },
                           { "cloudScale", s.CloudScale },
                           { "cloudSteps", s.CloudSteps },
+                          { "cloudShadows", s.CloudShadows },
                           { "exposure", s.Exposure },
                           { "skyTop", { s.SkyTop.r, s.SkyTop.g, s.SkyTop.b } },
                           { "skyHorizon", { s.SkyHorizon.r, s.SkyHorizon.g, s.SkyHorizon.b } },
@@ -252,6 +253,7 @@ namespace Dimension
         s.CloudTop = js.value("cloudTop", s.CloudTop);
         s.CloudScale = js.value("cloudScale", s.CloudScale);
         s.CloudSteps = std::clamp(js.value("cloudSteps", s.CloudSteps), 8, 128);
+        s.CloudShadows = js.value("cloudShadows", s.CloudShadows);
         s.Exposure = js.value("exposure", s.Exposure);
         if (js.contains("skyTop")) vec(js["skyTop"], &s.SkyTop.x, 3);
         if (js.contains("skyHorizon")) vec(js["skyHorizon"], &s.SkyHorizon.x, 3);

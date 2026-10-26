@@ -122,7 +122,8 @@ namespace Dimension
             glm::vec4 WindParams; // x gusts, y grass bender count
             glm::vec4 GrassBenders[SceneRenderer::kMaxGrassBenders]; // xyz sphere center, w radius
             glm::vec4 CloudParams;  // x coverage, y density, z base, w top
-            glm::vec4 CloudParams2; // x feature size, y steps, z 1 = on
+            glm::vec4 CloudParams2; // x feature size, y steps, z 1 = on, w 1 = shadows
+            glm::vec4 Weather;      // x wetness, y snow cover
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
@@ -925,8 +926,15 @@ namespace Dimension
         {
             float bottom = settings.CloudBase, top = std::max(settings.CloudTop, settings.CloudBase + 1.0f);
             u.CloudParams = glm::vec4(std::clamp(settings.CloudCoverage, 0.0f, 1.0f), std::max(settings.CloudDensity, 0.0f), bottom, top);
-            u.CloudParams2 = glm::vec4(std::max(settings.CloudScale, 1.0f), (float)std::clamp(settings.CloudSteps, 8, 128), 1.0f, 0.0f);
+            u.CloudParams2 = glm::vec4(std::max(settings.CloudScale, 1.0f), (float)std::clamp(settings.CloudSteps, 8, 128), 1.0f, settings.CloudShadows ? 1.0f : 0.0f);
         }
+        // Weather: the first active Weather component's wet and snowy surfaces.
+        for (auto [we, w, wt] : reg.ViewOf<WeatherComponent, TransformComponent>())
+            if (wt.ActiveInHierarchy)
+            {
+                u.Weather = glm::vec4(std::clamp(w.Wetness, 0.0f, 1.0f), std::clamp(w.SnowCover, 0.0f, 1.0f), 0.0f, 0.0f);
+                break;
+            }
         bool gpuCulled = false;
         if (!lights.empty() && s_GpuLightCulling && s_ClusterCulling)
         {
@@ -1698,10 +1706,14 @@ namespace Dimension
                     }
                 }
             }
-            // Simulated vertices (cloth, soft bodies) replace the mesh's, on top of its UVs and tangents.
-            const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : water ? &water->SimulatedPositions : nullptr;
-            const std::vector<glm::vec3>* simNormals = cloth ? &cloth->SimulatedNormals : soft ? &soft->SimulatedNormals : water ? &water->SimulatedNormals : nullptr;
-            std::shared_ptr<const MeshData> softData = soft ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
+            // Simulated vertices (cloth, soft bodies, dents) replace the mesh's, on top of its UVs and tangents.
+            const DeformableComponent* dented = cloth || soft || water || rope || terrainRt ? nullptr : reg.TryGet<DeformableComponent>(e);
+            if (dented && dented->DentedPositions.empty()) dented = nullptr;
+            const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : water ? &water->SimulatedPositions
+                                                       : dented ? &dented->DentedPositions : nullptr;
+            const std::vector<glm::vec3>* simNormals = cloth ? &cloth->SimulatedNormals : soft ? &soft->SimulatedNormals : water ? &water->SimulatedNormals
+                                                     : dented ? &dented->DentedNormals : nullptr;
+            std::shared_ptr<const MeshData> softData = soft || dented ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
             const std::vector<Vertex>* base = cloth ? &Cloth::GridVertices(*cloth) : softData ? &softData->Vertices : water ? &Water::SurfaceVertices(*water) : nullptr;
             if (simPositions && base && !simPositions->empty() && simPositions->size() == mesh->GetVertexCount() && base->size() == simPositions->size())
             {
@@ -2748,11 +2760,11 @@ namespace Dimension
         bool depthValid = m_ParticleDepthKept && m_ParticleDepthSize == glm::uvec2(target.GetWidth(), target.GetHeight());
         uint32_t depthBindless = target.GetDepthBindless();
         m_ParticleDepthWanted = false;
-        for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
-        {
-            if (!ps.SimulateOnGpu || !t.ActiveInHierarchy) continue;
+        // One GPU system: its buffers, this frame's parameters, simulation (and sorting) and its draw. `salt` tells apart
+        // several systems on one object (a Weather's rain and snow).
+        auto simulateOne = [&](Entity e, ParticleSystemComponent& ps, const glm::mat4& emitterWorld, uint64_t salt) {
             uint32_t capacity = (uint32_t)std::clamp(ps.MaxParticles, 1, (int32_t)kMaxGpuParticles);
-            uint64_t key = (uint64_t)(uintptr_t)&scene * 1000003ull ^ ((uint64_t)e.Index << 1);
+            uint64_t key = (uint64_t)(uintptr_t)&scene * 1000003ull ^ ((uint64_t)e.Index << 1) ^ salt;
             auto& st = res.GpuParticleStates[key];
             st.LastFrame = frame;
             bool clear = false;
@@ -2787,7 +2799,7 @@ namespace Dimension
 
             // Parameters for this frame (simulation and drawing).
             bool worldSpace = ps.SimulationSpace == ParticleSpace::World;
-            glm::mat4 world = t.World, invWorld = glm::inverse(world);
+            glm::mat4 world = emitterWorld, invWorld = glm::inverse(world);
             GpuParticleParams p{};
             p.Emitter = world;
             p.SimToWorld = worldSpace ? glm::mat4(1.0f) : world;
@@ -2915,7 +2927,7 @@ namespace Dimension
                 p.CurveLut[i] = glm::vec4(ps.SizeOverLifetime.Evaluate(x), ps.SpeedOverLifetime.Evaluate(x), ps.ForceCurve.Evaluate(x), 0.0f);
             }
             TransientAllocation params = device.AllocateTransient(sizeof(p), 16);
-            if (!params) continue;
+            if (!params) return;
             std::memcpy(params.Data, &p, sizeof(p));
 
             bool sort = ps.GpuSorting && ps.Blend == ParticleBlend::Alpha;
@@ -2984,6 +2996,14 @@ namespace Dimension
             auto tex = ps.Texture.IsValid() ? AssetManager::GetTexture(ps.Texture) : nullptr;
             m_GpuParticleDraws.push_back({ st.Address, params.Address, capacity, (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex(),
                                            e.Index + 1, ps.Blend == ParticleBlend::Additive, ps.SortingOrder, sort ? st.SortAddress : 0, trails });
+        };
+        for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
+            if (ps.SimulateOnGpu && t.ActiveInHierarchy) simulateOne(e, ps, t.World, 0);
+        for (auto [e, w, t] : scene.GetRegistry().ViewOf<WeatherComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy) continue;
+            if (w.RainParticles.IsAlive()) simulateOne(e, w.RainParticles, w.RainWorld, 1ull << 40);
+            if (w.SnowParticles.IsAlive()) simulateOne(e, w.SnowParticles, w.SnowWorld, 2ull << 40);
         }
         if (!first)
             Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
@@ -3075,6 +3095,33 @@ namespace Dimension
             draw.AngleFade = std::clamp(d.AngleFade, 0.0f, 1.0f);
             draw.Order = d.SortingOrder;
             m_Decals.push_back(draw);
+        }
+        // Particles' collision decals: each mark a small projector facing into the surface it struck, turned at random
+        // and fading out over the last third of its life.
+        for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
+        {
+            if (ps.Decals.empty() || !t.ActiveInHierarchy) continue;
+            auto tex = ps.DecalTexture.IsValid() ? AssetManager::GetTexture(ps.DecalTexture) : nullptr;
+            uint32_t texture = (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex();
+            float lifetime = std::max(ps.DecalLifetime, 1e-4f);
+            for (const auto& mark : ps.Decals)
+            {
+                glm::vec3 z = glm::normalize(mark.Normal); // the decal projects along its -Z: into the surface
+                glm::vec3 x = glm::normalize(glm::cross(std::abs(z.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0), z));
+                glm::vec3 y = glm::cross(z, x);
+                float c = std::cos(mark.Spin), s = std::sin(mark.Spin);
+                glm::vec3 rx = x * c + y * s, ry = y * c - x * s;
+                DecalDraw draw;
+                draw.Model = glm::mat4(glm::vec4(rx * mark.Size, 0), glm::vec4(ry * mark.Size, 0), glm::vec4(z * mark.Size * 0.5f, 0), glm::vec4(mark.Position, 1));
+                glm::vec4 color = ToLinear(mark.Color);
+                color.a *= std::clamp((lifetime - mark.Age) / (lifetime / 3.0f), 0.0f, 1.0f);
+                draw.Color = color;
+                draw.Texture = texture;
+                draw.Blend = (uint32_t)std::clamp(ps.DecalBlendMode, 0, 2);
+                draw.AngleFade = 0.3f;
+                draw.Order = ps.SortingOrder;
+                m_Decals.push_back(draw);
+            }
         }
         std::stable_sort(m_Decals.begin(), m_Decals.end(), [](const DecalDraw& a, const DecalDraw& b) { return a.Order < b.Order; });
     }
@@ -3822,6 +3869,22 @@ namespace Dimension
             DrawWireCircle(m, glm::vec3(circle->Offset * glm::vec2(t.Scale), 0), circle->Radius * s, green, 2);
         }
         if (auto* box = reg.TryGet<BoxColliderComponent>(sel)) DrawWireBox(t.World, box->Offset, box->Size * 0.5f, green);
+        if (auto* path = reg.TryGet<TerrainPathComponent>(sel))
+        {
+            // The curve, and its width on either side.
+            std::vector<glm::vec3> curve = Terrain::PathCurve(path->Points);
+            glm::vec4 color = path->Mode == TerrainPathMode::River ? glm::vec4(0.3f, 0.6f, 1.0f, 1.0f) : glm::vec4(0.95f, 0.75f, 0.4f, 1.0f);
+            for (size_t k = 0; k + 1 < curve.size(); ++k)
+            {
+                glm::vec3 a = glm::vec3(t.World * glm::vec4(curve[k], 1.0f)), b = glm::vec3(t.World * glm::vec4(curve[k + 1], 1.0f));
+                glm::vec3 side = glm::cross(b - a, glm::vec3(0, 1, 0));
+                side = glm::dot(side, side) > 1e-12f ? glm::normalize(side) * (path->Width * 0.5f) : glm::vec3(0.0f);
+                DrawLine(a, b, color);
+                DrawLine(a + side, b + side, color * glm::vec4(1, 1, 1, 0.5f));
+                DrawLine(a - side, b - side, color * glm::vec4(1, 1, 1, 0.5f));
+            }
+            for (const glm::vec3& p : path->Points) DrawWireCircle(t.World, p, 0.3f, color, 1);
+        }
         if (auto* water = reg.TryGet<WaterVolumeComponent>(sel))
         {
             glm::mat4 at = glm::translate(glm::mat4(1.0f), t.GetWorldPosition()) * glm::scale(glm::mat4(1.0f), glm::abs(t.Scale));

@@ -184,6 +184,17 @@ namespace Dimension
             }
             p.Velocity = local ? glm::vec3(invWorld * glm::vec4(v, 0.0f)) : v;
             p.Position = local ? glm::vec3(invWorld * glm::vec4(hitPoint, 1.0f)) : hitPoint;
+            // A mark where it struck (moving into the surface, the first time only).
+            if (ps.CollisionDecals && !p.LeftDecal && vn < -0.3f && ps.MaxDecals > 0)
+            {
+                if ((int32_t)ps.Decals.size() >= ps.MaxDecals) ps.Decals.erase(ps.Decals.begin());
+                float life = std::clamp(p.Age / std::max(p.Lifetime, 1e-4f), 0.0f, 1.0f);
+                glm::vec4 color = p.Color * ps.ColorOverLifetime.Evaluate(life);
+                color.a = std::max(p.Color.a, 0.0f);
+                ps.Decals.push_back({ hitPoint - normal * ps.CollisionRadius, normal, color, std::max(ps.DecalSize, 0.001f) * glm::mix(0.8f, 1.2f, Random01(ps.RandomState)),
+                                      0.0f, Random01(ps.RandomState) * glm::two_pi<float>() });
+                p.LeftDecal = true;
+            }
             p.Lifetime -= p.Lifetime * std::clamp(ps.LifetimeLoss, 0.0f, 1.0f);
             if (ps.SubEmitterTrigger == ParticleSubEmitTrigger::Collision && !ps.SubEmitter.IsNull())
                 subEmits.push_back({ ps.SubEmitter, hitPoint, ps.SubEmitCount });
@@ -220,6 +231,9 @@ namespace Dimension
                 for (int i = 0; i < ps.BurstCount; ++i) emit(nullptr);
             }
 
+            // Collision decals age and go (also after the system stops).
+            for (auto& d : ps.Decals) d.Age += dt;
+            std::erase_if(ps.Decals, [&](const ParticleSystemComponent::DecalMark& d) { return d.Age >= std::max(ps.DecalLifetime, 0.0f); });
             if (ps.Playing && active)
             {
                 ps.Time += dt;
@@ -387,6 +401,77 @@ namespace Dimension
                 size_t first = subEmits.size();
                 Simulate(scene, ps, t.World, t.ActiveInHierarchy, dt, subEmits);
                 for (size_t i = first; i < subEmits.size(); ++i) subEmits[i].Source = e;
+            }
+            // Weather: rain and snow fall around the primary camera (the first one found), configured from the amounts.
+            glm::vec3 eye(0.0f);
+            for (auto [ce, cam, ct] : reg.ViewOf<CameraComponent, TransformComponent>())
+                if (cam.Primary && ct.ActiveInHierarchy)
+                {
+                    eye = glm::vec3(ct.World[3]);
+                    break;
+                }
+            for (auto [e, w, t] : reg.ViewOf<WeatherComponent, TransformComponent>())
+            {
+                float area = std::max(w.Area, 1.0f);
+                w.EmitterWorld = glm::translate(glm::mat4(1.0f), eye + glm::vec3(0.0f, std::max(w.Height, 0.5f), 0.0f));
+                auto setup = [&](ParticleSystemComponent& ps, float amount, bool rain) {
+                    ps.SimulateOnGpu = true;
+                    ps.SimulationSpace = ParticleSpace::World;
+                    ps.Shape = ParticleShape::Box;
+                    ps.BoxSize = { area, 0.5f, area };
+                    ps.Looping = true;
+                    ps.Collision = ParticleCollision::World; // stops on what the camera sees
+                    ps.LifetimeLoss = 1.0f;
+                    ps.Bounce = 0.0f;
+                    ps.GpuSorting = false;
+                    ps.Blend = rain ? ParticleBlend::Additive : ParticleBlend::Alpha;
+                    if (rain)
+                    {
+                        ps.MaxParticles = 60000;
+                        ps.RateOverTime = 30000.0f * amount;
+                        ps.StartSpeed = { 9.0f, 11.0f };
+                        ps.GravityModifier = 0.0f;
+                        ps.StartLifetime = { 3.0f, 3.0f };
+                        ps.StartSize = { 0.008f, 0.012f };
+                        ps.StartColorA = ps.StartColorB = glm::vec4(0.55f, 0.6f, 0.7f, 0.35f);
+                        ps.Trails = true; // streaks
+                        ps.TrailLifetime = 0.04f;
+                        ps.TrailWidth = 1.0f;
+                        ps.Noise = false;
+                    }
+                    else
+                    {
+                        ps.MaxParticles = 120000;
+                        ps.RateOverTime = 5000.0f * amount;
+                        ps.StartSpeed = { 0.8f, 1.3f };
+                        ps.GravityModifier = 0.0f;
+                        ps.StartLifetime = { 22.0f, 22.0f };
+                        ps.StartSize = { 0.025f, 0.05f };
+                        ps.StartColorA = ps.StartColorB = glm::vec4(1.0f, 1.0f, 1.0f, 0.9f);
+                        ps.Trails = false;
+                        ps.Noise = true;
+                        ps.NoiseStrength = 0.6f;
+                        ps.NoiseFrequency = 0.4f;
+                    }
+                    ps.ColorOverLifetime = Gradient::Linear(glm::vec4(1.0f), glm::vec4(1.0f));
+                    ps.PlayOnAwake = true;
+                    if (amount > 0.0f && !ps.Playing) ps.Play();
+                    if (amount <= 0.0f && ps.Playing) ps.Stop();
+                };
+                setup(w.RainParticles, std::clamp(w.Rain, 0.0f, 1.0f), true);
+                setup(w.SnowParticles, std::clamp(w.Snowfall, 0.0f, 1.0f), false);
+                // Falling (the emitters' +Y turned down, slanted by the wind): rain at about 10 m/s, snow at about 1 m/s
+                // drifting more with the wind.
+                glm::vec3 wind = scene.GetSettings().Wind;
+                auto frame = [&](float slant) {
+                    glm::vec3 fall = glm::normalize(glm::vec3(wind.x * slant, -1.0f, wind.z * slant));
+                    return w.EmitterWorld * glm::mat4_cast(glm::rotation(glm::vec3(0.0f, 1.0f, 0.0f), fall));
+                };
+                w.RainWorld = frame(0.1f);
+                w.SnowWorld = frame(0.4f);
+                std::vector<SubEmitRequest> none;
+                Simulate(scene, w.RainParticles, w.RainWorld, t.ActiveInHierarchy, dt, none);
+                Simulate(scene, w.SnowParticles, w.SnowWorld, t.ActiveInHierarchy, dt, none);
             }
             // Queued for the target's next update (a system cannot feed itself).
             for (auto& s : subEmits)

@@ -6,6 +6,7 @@
 namespace Dimension
 {
     struct TerrainComponent;
+    struct TerrainPathComponent;
     class Texture2D;
 
     // Terrain (with a Mesh Renderer for its smoothness and the like): a height field of Resolution x Resolution
@@ -66,6 +67,12 @@ namespace Dimension
                         const StampSettings* stamp = nullptr);
         // The stamp's value (0-1) at a point relative to the brush center, or -1 outside its square.
         float StampValue(const StampSettings& stamp, const glm::vec2& offset, float radius);
+        // A Terrain Path's curve: Catmull-Rom through its points (each segment split into `perSegment` pieces).
+        std::vector<glm::vec3> PathCurve(const std::vector<glm::vec3>& points, int perSegment = 16);
+        // Shapes the terrain along a Terrain Path (its curve in world space via pathWorld; terrainWorld is the terrain
+        // object's transform): levels a road or carves a river, and paints its layer. Works on the edit arrays (BeginEdit
+        // first, CommitEdit after). Returns how many samples changed.
+        int ApplyPath(TerrainComponent& terrain, const glm::mat4& terrainWorld, const TerrainPathComponent& path, const glm::mat4& pathWorld);
         // Hydraulic erosion (the Erode brush): `droplets` raindrops start at random inside the circle (the same `seed`
         // gives the same drops) and run downhill over the heights, picking up sediment where they speed up and the
         // ground falls away, and dropping it where they slow down or climb, which carves gullies and fills basins.
