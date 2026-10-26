@@ -25,6 +25,7 @@
 #include <Dimension/Asset/ImportCache.h>
 #include <Dimension/Physics/Cloth.h>
 #include <Dimension/Physics/Fracture.h>
+#include <Dimension/Physics/Rope.h>
 #include <set>
 #include <windows.h>
 
@@ -1323,6 +1324,184 @@ namespace
         CHECK(bobHi - bobLo > 0.4f && bobLo > 2.0f && bobHi < 5.5f);
     }
 
+    void TestDestructible()
+    {
+        // A static wall broken by a script: with strong glue its pieces stay standing (stuck to each other and the
+        // ground); without glue, or with glue too weak for their weight, they collapse.
+        fs::path assets = fs::temp_directory_path() / "dimension_destructible_test" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        auto collapse = [&](float glue) {
+            Scene scene("Wall");
+            auto& reg = scene.GetRegistry();
+            Entity floor = scene.CreateEntity("Floor");
+            reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+            reg.Emplace<BoxColliderComponent>(floor).Size = { 40, 1, 40 };
+            Entity wall = scene.CreateEntity("Wall");
+            reg.Get<TransformComponent>(wall).Position = { 0, 1.5f, 0 };
+            reg.Get<TransformComponent>(wall).Scale = { 4.0f, 3.0f, 0.3f };
+            reg.Emplace<MeshRendererComponent>(wall).Mesh = AssetManager::kCube;
+            reg.Emplace<BoxColliderComponent>(wall);
+            reg.Emplace<RigidbodyComponent>(wall).Mass = 200.0f;
+            reg.Get<RigidbodyComponent>(wall).Type = BodyType::Static;
+            auto& br = reg.Emplace<BreakableComponent>(wall);
+            br.Pieces = 16;
+            br.BreakSpeed = 0.0f;
+            br.ExplosionSpeed = 0.0f;
+            br.DebrisLifetime = 0.0f;
+            br.GlueStrength = glue;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            std::vector<Entity> pieces = Physics3DWorld::Break(*rt, wall, { 0.0f, 1.5f, 0.15f });
+            std::vector<glm::vec3> start;
+            for (Entity p : pieces) start.push_back(rt->GetRegistry().Get<TransformComponent>(p).Position);
+            for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            float drop = 0.0f;
+            for (size_t i = 0; i < pieces.size(); ++i) drop += (start[i].y - rt->GetRegistry().Get<TransformComponent>(pieces[i]).Position.y) / pieces.size();
+            rt->OnRuntimeStop();
+            return std::make_pair(pieces.size(), drop);
+        };
+        // A heavy ball swinging on a rope into a glued wall: the hit breaks it, the ball keeps its speed into the
+        // pieces (rather than stopping against the whole wall), and part of the wall comes loose while the rest stands.
+        {
+            Scene scene("Wrecking");
+            auto& reg = scene.GetRegistry();
+            Entity floor = scene.CreateEntity("Floor");
+            reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+            reg.Emplace<BoxColliderComponent>(floor).Size = { 40, 1, 40 };
+            Entity wall = scene.CreateEntity("Wall");
+            reg.Get<TransformComponent>(wall).Position = { 1.0f, 1.5f, 0 };
+            reg.Get<TransformComponent>(wall).Scale = { 0.3f, 3.0f, 4.0f };
+            reg.Emplace<MeshRendererComponent>(wall).Mesh = AssetManager::kCube;
+            reg.Emplace<BoxColliderComponent>(wall);
+            auto& wb = reg.Emplace<BreakableComponent>(wall);
+            wb.Pieces = 40;
+            wb.Seed = 2;
+            wb.BreakSpeed = 3.0f;
+            wb.ImpactFocus = 0.5f;
+            wb.FocusRadius = 0.3f;
+            wb.GlueStrength = 4000.0f; // holds the wall up, not the blow
+            wb.DebrisLifetime = 0.0f;
+            Entity ball = scene.CreateEntity("Ball");
+            reg.Get<TransformComponent>(ball).Position = { -3.9f, 7.0f, 0 };
+            reg.Get<TransformComponent>(ball).Scale = { 1.2f, 1.2f, 1.2f };
+            reg.Emplace<SphereColliderComponent>(ball).Radius = 0.5f;
+            reg.Emplace<RigidbodyComponent>(ball).Mass = 600.0f;
+            Entity chain = scene.CreateEntity("Chain");
+            reg.Get<TransformComponent>(chain).Position = { 0, 6.9f, 0 };
+            auto& rope = reg.Emplace<RopeComponent>(chain);
+            rope.Length = 4.0f; // strikes 2.3 m up, above the pieces anchored to the ground
+            rope.AttachTo = ball;
+            rope.AttachOffset = { 0, 0.5f, 0 };
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rr = rt->GetRegistry();
+            float hitSpeed = 0.0f;
+            for (int i = 0; i < 200 && rt->IsValid(wall); ++i)
+            {
+                hitSpeed = glm::length(Physics3DWorld::GetLinearVelocity(*rt, ball));
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+            }
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            float afterSpeed = glm::length(Physics3DWorld::GetLinearVelocity(*rt, ball));
+            std::vector<std::pair<Entity, glm::vec3>> pieces;
+            for (auto [e, tag, t] : rr.ViewOf<TagComponent, TransformComponent>())
+                if (tag.Name == "Wall Piece") pieces.push_back({ e, t.Position });
+            for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            int loose = 0, standing = 0;
+            for (auto& [e, start] : pieces)
+                (glm::distance(rr.Get<TransformComponent>(e).Position, start) > 0.15f ? loose : standing)++;
+            printf("  wrecking: hit %.2f m/s, %.2f m/s after the break, %d pieces loose, %d standing\n", hitSpeed, afterSpeed, loose, standing);
+            CHECK(!rt->IsValid(wall) && hitSpeed > 7.0f && afterSpeed > 0.3f * hitSpeed && loose >= 3 && standing >= 10);
+            rt->OnRuntimeStop();
+        }
+        auto [glued, gluedDrop] = collapse(1e6f);
+        auto [loose, looseDrop] = collapse(0.0f);
+        auto [weak, weakDrop] = collapse(1.0f);
+        CHECK(glued >= 8 && loose == glued && weak == glued);
+        CHECK(gluedDrop < 0.02f && looseDrop > 0.3f && weakDrop > 0.3f);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestRope()
+    {
+        // The starting shapes: straight down, or sagging between two ends to exactly Length.
+        RopeComponent shape;
+        shape.Length = 5.0f;
+        shape.Segments = 20;
+        auto down = Rope::RestPoints(shape, { 0, 3, 0 }, { 0, -1, 0 }, nullptr);
+        CHECK(down.size() == 21 && Near(down.back().y, -2.0f, 1e-4f));
+        glm::vec3 end(4, 3, 0);
+        auto sag = Rope::RestPoints(shape, { 0, 3, 0 }, { 0, -1, 0 }, &end);
+        float length = 0.0f, lowest = 3.0f;
+        for (size_t i = 1; i < sag.size(); ++i) { length += glm::distance(sag[i], sag[i - 1]); lowest = std::min(lowest, sag[i].y); }
+        CHECK(Near(length, 5.0f, 0.01f) && lowest < 2.0f && Near(sag.back().x, 4.0f, 1e-4f));
+        std::vector<Vertex> tube;
+        Rope::BuildTube(shape, down, tube);
+        CHECK(tube.size() == 21u * (Rope::kSides + 1) && Near(glm::distance(tube[0].Position, down[0]), shape.Radius, 1e-4f));
+
+        // Simulated: a rope hanging from an object settles at its length below it (without stretching) and follows the
+        // object; a lamp on a rope between two posts hangs on it instead of falling; a rope lies on the floor.
+        Scene scene("Ropes");
+        auto& reg = scene.GetRegistry();
+        Entity floor = scene.CreateEntity("Floor");
+        reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+        reg.Emplace<BoxColliderComponent>(floor).Size = { 40, 1, 40 };
+        Entity hook = scene.CreateEntity("Hook");
+        reg.Get<TransformComponent>(hook).Position = { 0, 4, 0 };
+        auto& hanging = reg.Emplace<RopeComponent>(hook);
+        hanging.Length = 2.0f;
+        hanging.Segments = 16;
+        Entity post = scene.CreateEntity("Post");
+        reg.Get<TransformComponent>(post).Position = { 5, 5, 0 };
+        Entity lamp = scene.CreateEntity("Lamp");
+        reg.Get<TransformComponent>(lamp).Position = { 6, 5, 0 }; // 1 m out: it swings down and hangs 3 m below
+        reg.Emplace<SphereColliderComponent>(lamp).Radius = 0.2f;
+        reg.Emplace<RigidbodyComponent>(lamp).Mass = 5.0f;
+        auto& cord = reg.Emplace<RopeComponent>(post);
+        cord.Length = 3.0f;
+        cord.AttachTo = lamp;
+        Entity coil = scene.CreateEntity("Coil");
+        reg.Get<TransformComponent>(coil).Position = { -5, 3.0f, 0 };
+        reg.Get<TransformComponent>(coil).Rotation = { 0, 0, 0.6f }; // falls tilted (straight down it would balance on its end)
+        auto& loose = reg.Emplace<RopeComponent>(coil);
+        loose.PinStart = false;
+        loose.Length = 1.5f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        for (int i = 0; i < 240; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        const auto& pts = rr.Get<RopeComponent>(hook).SimulatedPoints;
+        float simLength = 0.0f;
+        for (size_t i = 1; i < pts.size(); ++i) simLength += glm::distance(pts[i], pts[i - 1]);
+        CHECK(pts.size() == 17 && glm::length(pts[0]) < 0.01f && Near(pts.back().y, -2.0f, 0.1f) && Near(simLength, 2.0f, 0.05f));
+        // Moving the hook (at 3 m/s) drags the rope along: its points are in the hook's space, so they trail behind.
+        for (int i = 0; i < 20; ++i)
+        {
+            rr.Get<TransformComponent>(hook).Position.x += 0.05f;
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+        }
+        CHECK(glm::length(pts[0]) < 0.06f && pts.back().x < -0.05f);
+        glm::vec3 lampPos = rr.Get<TransformComponent>(lamp).Position;
+        CHECK(glm::distance(lampPos, glm::vec3(5, 5, 0)) < 3.1f && lampPos.y > 1.5f); // hangs, held by the rope
+        const auto& coilPts = rr.Get<RopeComponent>(coil).SimulatedPoints;
+        bool onFloor = !coilPts.empty();
+        const glm::mat4& coilWorld = rr.Get<TransformComponent>(coil).World;
+        for (const glm::vec3& p : coilPts)
+        {
+            float y = (coilWorld * glm::vec4(p, 1.0f)).y; // the points are in the coil's space
+            onFloor &= y > -0.01f && y < 0.2f;
+        }
+        CHECK(onFloor);
+        rt->OnRuntimeStop();
+    }
+
     void TestFracture()
     {
         // Shattering: the pieces fill the mesh exactly (their volumes add up), each is closed by its caps (its own
@@ -1660,6 +1839,47 @@ namespace
         CHECK(Near(Terrain::HeightAt(t, Terrain::BuildHeights(t), 0, 0), peak, 0.01f));
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestTerrainErosion()
+    {
+        // Rain on hills: material only moves (the volume stays), only near the brush, downhill overall (the heights'
+        // potential energy, the sum of squares, drops), and the same seed erodes the same way.
+        TerrainComponent t;
+        t.Size = { 100.0f, 100.0f };
+        t.Height = 30.0f;
+        t.Resolution = 128;
+        t.NoiseScale = 0.03f;
+        Terrain::BeginEdit(t);
+        std::vector<float> before = t.EditHeights;
+        TerrainComponent copy = t;
+        Terrain::Erode(t, { 0.0f, 0.0f }, 20.0f, 3000, 1);
+        Terrain::Erode(copy, { 0.0f, 0.0f }, 20.0f, 3000, 1);
+        CHECK(t.EditHeights == copy.EditHeights);
+        double sumBefore = 0, sumAfter = 0, energyBefore = 0, energyAfter = 0;
+        float maxChange = 0.0f;
+        bool local = true;
+        int n = Terrain::SampleCount(t);
+        float cell = 100.0f / (n - 1);
+        for (int r = 0; r < n; ++r)
+            for (int c = 0; c < n; ++c)
+            {
+                size_t i = (size_t)r * n + c;
+                float a = before[i], b = t.EditHeights[i];
+                sumBefore += a;
+                sumAfter += b;
+                energyBefore += (double)a * a;
+                energyAfter += (double)b * b;
+                float change = std::abs(b - a);
+                maxChange = std::max(maxChange, change);
+                glm::vec2 p(-50.0f + c * cell, -50.0f + r * cell);
+                if (change > 1e-5f) local &= glm::length(p) < 20.0f * 1.5f + 4.0f * cell;
+            }
+        CHECK(std::abs(sumAfter - sumBefore) < sumBefore * 1e-4 && maxChange > 0.05f && local && energyAfter < energyBefore);
+        // The brush rains in proportion to strength and time (and does nothing off the terrain).
+        TerrainComponent brushed = copy;
+        CHECK(Terrain::ApplyBrush(brushed, Terrain::BrushMode::Erode, { 10.0f, 10.0f }, 8.0f, 1.0f, 0.1f, 0.0f) && brushed.EditHeights != copy.EditHeights);
+        CHECK(!Terrain::ApplyBrush(brushed, Terrain::BrushMode::Erode, { 500.0f, 0.0f }, 8.0f, 1.0f, 0.1f, 0.0f));
     }
 
     void TestTerrainDetails()
@@ -3436,6 +3656,55 @@ namespace
             else CHECK(std::abs(moved) < 0.3f);
             scene.OnRuntimeStop();
         }
+    }
+
+    void TestParticleMeshShape()
+    {
+        // The Mesh shape: spawn points on the surface by area (each cube face gets a sixth), particles starting on a
+        // sphere's surface and leaving along its normals; without a mesh nothing is sampled.
+        fs::path assets = fs::temp_directory_path() / "dimension_particle_mesh" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        const auto* cube = ParticleSystems::MeshSurfaceSamples(AssetManager::kCube);
+        CHECK(cube && cube->size() == (size_t)ParticleSystems::kMeshSamples * 2);
+        int faces[6] = {};
+        bool onSurface = true;
+        for (size_t i = 0; cube && i < cube->size(); i += 2)
+        {
+            glm::vec3 p((*cube)[i]), n((*cube)[i + 1]);
+            int axis = std::abs(n.x) > 0.9f ? 0 : std::abs(n.y) > 0.9f ? 1 : 2;
+            onSurface &= Near(std::abs(p[axis]), 0.5f, 1e-4f) && Near(p[axis] * n[axis], 0.5f, 1e-3f);
+            faces[axis * 2 + (n[axis] > 0.0f)]++;
+        }
+        bool even = true;
+        for (int f : faces) even &= std::abs(f - ParticleSystems::kMeshSamples / 6) < ParticleSystems::kMeshSamples / 24;
+        CHECK(onSurface && even && ParticleSystems::MeshSurfaceSamples(AssetHandle::None()) == nullptr);
+
+        Scene scene("MeshShape");
+        Entity e = scene.CreateEntity("Emitter");
+        scene.GetRegistry().Get<TransformComponent>(e).Position = { 0, 2, 0 };
+        scene.GetRegistry().Emplace<MeshRendererComponent>(e).Mesh = AssetManager::kSphere; // the shape's mesh (None in Shape Mesh)
+        auto& ps = scene.GetRegistry().Emplace<ParticleSystemComponent>(e);
+        ps.Shape = ParticleShape::Mesh;
+        ps.RateOverTime = 0.0f;
+        ps.BurstCount = 300;
+        ps.StartSpeed = { 1.0f, 1.0f };
+        ps.MaxParticles = 1000;
+        scene.UpdateTransforms();
+        ParticleSystems::Restart(scene);
+        ParticleSystems::Update(scene, 1e-4f);
+        bool fromSurface = !ps.Particles.empty(), outward = true;
+        for (const Particle& p : ps.Particles)
+        {
+            glm::vec3 rel = p.Position - glm::vec3(0, 2, 0);
+            fromSurface &= Near(glm::length(rel), 0.5f, 0.02f);
+            outward &= glm::dot(glm::normalize(rel), glm::normalize(p.Velocity)) > 0.95f;
+        }
+        CHECK(ps.Particles.size() >= 250 && fromSurface && outward);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
     }
 
     void TestParticleSheetsAndNoise()
@@ -6476,6 +6745,7 @@ int main(int argc, char** argv)
     Run("Multi-scene runtime", TestMultiScene);
     Run("Joint motors, breaking and moving platforms", TestJointMotorsAndPlatforms);
     Run("Particle texture sheets and noise", TestParticleSheetsAndNoise);
+    Run("Particle mesh shape", TestParticleMeshShape);
     Run("Script timers", TestScriptTimers);
     Run("Coroutines (C++)", TestCoroutines);
     Run("C++ script options", TestScriptOptions);
@@ -6497,6 +6767,7 @@ int main(int argc, char** argv)
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);
+    Run("Terrain erosion", TestTerrainErosion);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);
@@ -6505,6 +6776,8 @@ int main(int argc, char** argv)
     Run("Timeline clip tracks", TestTimelineClips);
     Run("Nested timelines", TestNestedTimelines);
     Run("Fracture", TestFracture);
+    Run("Rope", TestRope);
+    Run("Destructible", TestDestructible);
     Run("Microphone", TestMicrophone);
     Run("Nested prefabs", TestNestedPrefabs);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);

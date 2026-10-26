@@ -44,8 +44,17 @@ namespace Dimension
         uint32_t GetOitRevealBindless() const { return m_OitRevealBindless; }
         const Image& GetReflections() const { return m_Reflections; }
         uint32_t GetReflectionsBindless() const { return m_ReflectionsBindless; }
-        const Image& GetIndirect() const { return m_Indirect; } // screen-space GI
+        const Image& GetIndirect() const { return m_Indirect; } // screen-space GI: this frame's half-resolution trace
         uint32_t GetIndirectBindless() const { return m_IndirectBindless; }
+        // Screen-space GI's temporal filter: two full-resolution history images (one read, one written each frame).
+        const Image& GetGiHistory(uint32_t i) const { return m_GiHistory[i]; }
+        uint32_t GetGiHistoryBindless(uint32_t i) const { return m_GiHistoryBindless[i]; }
+        struct GiState
+        {
+            uint32_t Written = 0; // history image written last
+            bool Valid = false;
+            glm::mat4 PrevViewProj{ 1.0f };
+        } Gi;
         uint32_t GetWidth() const { return m_Width; }
         uint32_t GetHeight() const { return m_Height; }
         float GetAspect() const { return m_Height ? (float)m_Width / (float)m_Height : 1.0f; }
@@ -108,6 +117,8 @@ namespace Dimension
         uint32_t m_OitAccumBindless = 0, m_OitRevealBindless = 0;
         Image m_TaaHistory[2];
         uint32_t m_TaaHistoryBindless[2] = {};
+        Image m_GiHistory[2];
+        uint32_t m_GiHistoryBindless[2] = {};
         uint32_t m_SurfaceBindless = 0, m_ReflectionsBindless = 0, m_IndirectBindless = 0;
         uint32_t m_HdrBindless = 0;
         static constexpr uint32_t kMaxBloomLevels = 6;

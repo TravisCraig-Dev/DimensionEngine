@@ -404,6 +404,18 @@ namespace Dimension::Terrain
     bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight,
                     const StampSettings* stamp)
     {
+        if (mode == BrushMode::Erode)
+        {
+            // Rain on the brush: drops in proportion to its area, strength and time.
+            BeginEdit(terrain);
+            glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+            if (std::abs(at.x) > size.x * 0.5f + radius || std::abs(at.y) > size.y * 0.5f + radius) return false;
+            glm::vec2 cell = size / (float)(SampleCount(terrain) - 1);
+            float area = glm::pi<float>() * radius * radius / std::max(cell.x * cell.y, 1e-6f);
+            int droplets = std::max(1, (int)(area * std::clamp(strength, 0.0f, 1.0f) * dt * 4.0f));
+            Erode(terrain, at, radius, droplets, (uint32_t)terrain.EditRevision * 7919u + 13u);
+            return true;
+        }
         if (mode == BrushMode::Stamp && (!stamp || StampValue(*stamp, glm::vec2(0.0f), std::max(radius, 1e-3f)) < 0.0f)) return false;
         BeginEdit(terrain);
         int n = SampleCount(terrain);
@@ -692,5 +704,88 @@ namespace Dimension::Terrain
             prev = a;
         }
         return false;
+    }
+
+    void Erode(TerrainComponent& terrain, const glm::vec2& at, float radius, int droplets, uint32_t seed)
+    {
+        int n = SampleCount(terrain);
+        std::vector<float>& h = terrain.EditHeights;
+        if (h.size() != (size_t)n * n) return;
+        glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+        glm::vec2 cell = size / (float)(n - 1);
+        float cellSize = 0.5f * (cell.x + cell.y);
+        // Sample space: x = column, y = row (fractional).
+        glm::vec2 center((at.x / size.x + 0.5f) * (n - 1), (at.y / size.y + 0.5f) * (n - 1));
+        float r = radius / cellSize;
+        auto heightAndGradient = [&](const glm::vec2& p, glm::vec2& gradient) {
+            int x = std::clamp((int)p.x, 0, n - 2), y = std::clamp((int)p.y, 0, n - 2);
+            float fx = p.x - x, fy = p.y - y;
+            float h00 = h[(size_t)y * n + x], h10 = h[(size_t)y * n + x + 1], h01 = h[(size_t)(y + 1) * n + x], h11 = h[(size_t)(y + 1) * n + x + 1];
+            gradient = { (h10 - h00) * (1 - fy) + (h11 - h01) * fy, (h01 - h00) * (1 - fx) + (h11 - h10) * fx }; // meters per sample
+            return h00 * (1 - fx) * (1 - fy) + h10 * fx * (1 - fy) + h01 * (1 - fx) * fy + h11 * fx * fy;
+        };
+        // Adds (or takes, with a negative amount) material at a point, shared by its four samples.
+        auto deposit = [&](const glm::vec2& p, float amount) {
+            int x = std::clamp((int)p.x, 0, n - 2), y = std::clamp((int)p.y, 0, n - 2);
+            float fx = p.x - x, fy = p.y - y;
+            h[(size_t)y * n + x] += amount * (1 - fx) * (1 - fy);
+            h[(size_t)y * n + x + 1] += amount * fx * (1 - fy);
+            h[(size_t)(y + 1) * n + x] += amount * (1 - fx) * fy;
+            h[(size_t)(y + 1) * n + x + 1] += amount * fx * fy;
+        };
+        constexpr float kInertia = 0.1f, kCapacity = 4.0f, kMinSlope = 0.01f, kErode = 0.3f, kDeposit = 0.3f, kEvaporate = 0.02f, kGravity = 4.0f;
+        constexpr int kLifetime = 40;
+        uint32_t state = Hash(seed * 2654435761u + 0x51ed27u);
+        for (int d = 0; d < droplets; ++d)
+        {
+            float angle = Random01(state) * glm::two_pi<float>(), dist = std::sqrt(Random01(state)) * r;
+            glm::vec2 pos = center + glm::vec2(std::cos(angle), std::sin(angle)) * dist;
+            glm::vec2 dir(0.0f);
+            float speed = 1.0f, water = 1.0f, sediment = 0.0f;
+            for (int step = 0; step < kLifetime; ++step)
+            {
+                if (pos.x < 0.0f || pos.y < 0.0f || pos.x > n - 1.001f || pos.y > n - 1.001f) break;
+                glm::vec2 gradient;
+                float height = heightAndGradient(pos, gradient);
+                dir = dir * kInertia - gradient * (1.0f - kInertia);
+                float len = glm::length(dir);
+                if (len < 1e-6f)
+                {
+                    deposit(pos, sediment); // flat: it soaks in where it stands
+                    break;
+                }
+                dir /= len;
+                glm::vec2 next = pos + dir;
+                // Off the terrain or well past the brush: the drop leaves what it carries where it is.
+                if (next.x < 0.0f || next.y < 0.0f || next.x > n - 1.001f || next.y > n - 1.001f || glm::length(next - center) > r * 1.5f + 2.0f)
+                {
+                    deposit(pos, sediment);
+                    break;
+                }
+                glm::vec2 unused;
+                float delta = heightAndGradient(next, unused) - height; // meters
+                float capacity = std::max(-delta / cellSize, kMinSlope) * speed * water * kCapacity * cellSize;
+                if (sediment > capacity || delta > 0.0f)
+                {
+                    // Uphill: fill the step behind it (as much as it carries); slowing: drop part of the excess.
+                    float amount = delta > 0.0f ? std::min(delta, sediment) : (sediment - capacity) * kDeposit;
+                    sediment -= amount;
+                    deposit(pos, amount);
+                }
+                else
+                {
+                    // Take what it can carry, never digging deeper than the drop to the next point.
+                    float amount = std::min((capacity - sediment) * kErode, -delta);
+                    deposit(pos, -amount);
+                    sediment += amount;
+                }
+                speed = std::sqrt(std::max(speed * speed - delta / cellSize * kGravity, 0.0f));
+                water *= 1.0f - kEvaporate;
+                pos = next;
+                if (step == kLifetime - 1) deposit(pos, sediment);
+            }
+        }
+        for (float& v : h) v = std::clamp(v, 0.0f, terrain.Height);
+        ++terrain.EditRevision;
     }
 }

@@ -19,6 +19,14 @@ namespace Dimension
         // Wind (m/s, world space) that sways terrain grass; Gusts adds stronger waves moving through it.
         glm::vec3 Wind{ 1.5f, 0.0f, 0.8f };
         float WindGusts = 0.5f;
+        // Volumetric clouds in the sky: a layer from Cloud Base to Cloud Top (meters) of drifting noise (moved by the
+        // Wind), Coverage of the sky, lit by the sun through them; features about Cloud Scale meters across.
+        bool Clouds = false;
+        float CloudCoverage = 0.45f;
+        float CloudDensity = 0.004f; // extinction per meter
+        float CloudBase = 1500.0f, CloudTop = 3500.0f;
+        float CloudScale = 3000.0f;
+        int CloudSteps = 48;
         glm::vec3 SkyTop{ 0.25f, 0.45f, 0.80f };     // sRGB
         glm::vec3 SkyHorizon{ 0.70f, 0.80f, 0.92f };
         glm::vec3 SkyGround{ 0.33f, 0.31f, 0.29f };

@@ -1,5 +1,6 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Physics/Cloth.h"
+#include "Dimension/Physics/Rope.h"
 #include "Dimension/Physics/Water.h"
 #include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Core/Log.h"
@@ -219,6 +220,7 @@ namespace Dimension
     void AssetManager::Shutdown()
     {
         Cloth::ReleaseMeshes(); // GPU grids, before the device goes
+        Rope::ReleaseMeshes();
         Water::ReleaseMeshes();
         Terrain::ReleaseRuntimes();
         delete s;

@@ -422,7 +422,7 @@ namespace Editor
                         // Brushes: pick a tool, then drag on the terrain in the Scene view.
                         auto& terrain = *static_cast<TerrainComponent*>(info.Get(scene, e));
                         static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow", "Dirt", "Sand", "Moss",
-                                                       "Trees", "Grass Tufts", "Erase Details", "Dig Hole", "Fill Hole", "Stamp" };
+                                                       "Trees", "Grass Tufts", "Erase Details", "Dig Hole", "Fill Hole", "Stamp", "Erode" };
                         static_assert(IM_ARRAYSIZE(tools) == (int)Terrain::BrushMode::Count);
                         ImGui::SeparatorText("Sculpt and Paint");
                         for (int i = 0; i < IM_ARRAYSIZE(tools); ++i)
@@ -1161,6 +1161,19 @@ namespace Editor
             track(ImGui::DragFloat("Thickness##ssr", &s.SSRThickness, 0.01f, 0.01f, 10.0f));
             track(ImGui::SliderFloat("Max Roughness##ssr", &s.SSRMaxRoughness, 0.05f, 1.0f));
             track(ImGui::SliderInt("Steps##ssr", &s.SSRSteps, 8, 256));
+            ImGui::Unindent();
+        }
+        track(ImGui::Checkbox("Volumetric Clouds", &s.Clouds));
+        ImGui::SetItemTooltip("A layer of drifting clouds in the sky, lit by the sun through them and moved by the Wind");
+        if (s.Clouds)
+        {
+            ImGui::Indent();
+            track(ImGui::SliderFloat("Coverage##clouds", &s.CloudCoverage, 0.0f, 1.0f));
+            track(ImGui::DragFloat("Density##clouds", &s.CloudDensity, 0.0001f, 0.0f, 0.1f, "%.4f"));
+            track(ImGui::DragFloat("Base##clouds", &s.CloudBase, 10.0f, -1000.0f, 20000.0f, "%.0f m"));
+            track(ImGui::DragFloat("Top##clouds", &s.CloudTop, 10.0f, -1000.0f, 20000.0f, "%.0f m"));
+            track(ImGui::DragFloat("Scale##clouds", &s.CloudScale, 10.0f, 10.0f, 50000.0f, "%.0f m"));
+            track(ImGui::SliderInt("Steps##clouds", &s.CloudSteps, 8, 128));
             ImGui::Unindent();
         }
         track(ImGui::Checkbox("Screen-Space Global Illumination", &s.SSGI));

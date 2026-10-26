@@ -41,6 +41,7 @@
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Physics/Fracture.h"
+#include "Dimension/Physics/Rope.h"
 #include <map>
 #include <tuple>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
@@ -227,6 +228,28 @@ namespace Dimension
             glm::vec3 RootOffset{ 0.0f };          // root body minus the object's position when simulation started
         };
         std::vector<RagdollRig> Ragdolls;
+        // Ropes: a soft body of points joined by stretch (neighbours) and bend (every other point) edges.
+        struct RopeBody
+        {
+            Entity E;
+            JPH::BodyID Body;
+            glm::vec3 Origin{ 0.0f };     // the body's fixed position (its points are relative to it)
+            Entity Attached = Entity::Null();
+            bool PinStart = true, PinEnd = false;
+            glm::vec3 LastMomentum{ 0.0f }, PullForce{ 0.0f };
+            bool HasMomentum = false;
+            JPH::Ref<JPH::Constraint> Tether; // a dynamic body on the end: never farther than Length from the start
+        };
+        std::vector<RopeBody> Ropes;
+        void RemoveRope(size_t i)
+        {
+            auto& bi = System.GetBodyInterface();
+            if (Ropes[i].Tether) System.RemoveConstraint(Ropes[i].Tether);
+            if (bi.IsAdded(Ropes[i].Body)) bi.RemoveBody(Ropes[i].Body);
+            bi.DestroyBody(Ropes[i].Body);
+            BodyToEntity.erase(Ropes[i].Body.GetIndexAndSequenceNumber());
+            Ropes.erase(Ropes.begin() + i);
+        }
         void RemoveRagdoll(size_t i)
         {
             auto& bi = System.GetBodyInterface();
@@ -253,7 +276,7 @@ namespace Dimension
             System.RemoveConstraint(Vehicles[i].Constraint);
             Vehicles.erase(Vehicles.begin() + i);
         }
-        struct Event { Entity A, B; bool Begin, Trigger; float Speed = 0.0f; glm::vec3 Point{ 0.0f }; };
+        struct Event { Entity A, B; bool Begin, Trigger; float Speed = 0.0f; glm::vec3 Point{ 0.0f }, VelocityA{ 0.0f }, VelocityB{ 0.0f }; };
         std::mutex EventMutex;
         std::vector<Event> Events;
         // Breakables: pieces cut once per mesh and settings (shared by every copy that breaks), and pieces that go.
@@ -266,6 +289,21 @@ namespace Dimension
         std::map<std::tuple<uint64_t, int32_t, int32_t, int32_t>, FractureSet> Fractures;
         struct Debris { Entity E; float Age, Lifetime; glm::vec3 Scale; };
         std::vector<Debris> DebrisList;
+        // Glued pieces of destructible structures: fixed joints between neighbours that break under more than Strength
+        // newtons (or newton-meters twisting), and to the world (B null, Strength 0: unbreakable).
+        struct Glue { JPH::Ref<JPH::Constraint> C; Entity A, B; float Strength; };
+        std::vector<Glue> Glues;
+        void RemoveGlues(Entity e)
+        {
+            for (auto it = Glues.begin(); it != Glues.end();)
+                if (it->A == e || it->B == e)
+                {
+                    System.RemoveConstraint(it->C);
+                    it = Glues.erase(it);
+                }
+                else
+                    ++it;
+        }
         // Pieces cut for one break (focused on its point): their meshes go with them.
         std::unordered_map<uint32_t, AssetHandle> OwnMeshes; // by entity index
         void ReleaseOwnMesh(Entity e)
@@ -289,7 +327,8 @@ namespace Dimension
             JPH::RVec3 point = manifold.GetWorldSpaceContactPointOn1(0);
             float speed = std::abs((a.GetPointVelocity(point) - b.GetPointVelocity(point)).Dot(manifold.mWorldSpaceNormal));
             std::lock_guard lock(EventMutex);
-            Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true, a.IsSensor() || b.IsSensor(), speed, FromJolt(JPH::Vec3(point)) });
+            Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true, a.IsSensor() || b.IsSensor(), speed, FromJolt(JPH::Vec3(point)),
+                               FromJolt(a.GetLinearVelocity()), FromJolt(b.GetLinearVelocity()) });
         }
 
         void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
@@ -336,6 +375,9 @@ namespace Dimension
         std::vector<Entity> ragdolls;
         for (auto [e, r] : reg.ViewOf<RagdollComponent>()) ragdolls.push_back(e);
         for (Entity e : ragdolls) CreateRagdoll(e);
+        std::vector<Entity> ropes;
+        for (auto [e, r] : reg.ViewOf<RopeComponent>()) ropes.push_back(e);
+        for (Entity e : ropes) CreateRope(e);
         m_Impl->System.OptimizeBroadPhase();
     }
 
@@ -344,10 +386,14 @@ namespace Dimension
         for (auto& [key, set] : m_Impl->Fractures)
             for (AssetHandle h : set.Meshes) AssetManager::ReleaseRuntimeMesh(h);
         for (auto& [index, h] : m_Impl->OwnMeshes) AssetManager::ReleaseRuntimeMesh(h);
+        for (auto& g : m_Impl->Glues) m_Impl->System.RemoveConstraint(g.C);
+        m_Impl->Glues.clear();
         for (auto& j : m_Impl->Joints) m_Impl->System.RemoveConstraint(j.Constraint);
         m_Impl->Joints.clear();
         while (!m_Impl->Vehicles.empty()) m_Impl->RemoveVehicle(m_Impl->Vehicles.size() - 1);
         while (!m_Impl->Cloths.empty()) m_Impl->RemoveCloth(m_Impl->Cloths.size() - 1);
+        while (!m_Impl->Ropes.empty()) m_Impl->RemoveRope(m_Impl->Ropes.size() - 1);
+        for (auto [e, r] : m_Scene.GetRegistry().ViewOf<RopeComponent>()) r.SimulatedPoints.clear();
         while (!m_Impl->Ragdolls.empty()) m_Impl->RemoveRagdoll(m_Impl->Ragdolls.size() - 1);
         for (auto [e, r] : m_Scene.GetRegistry().ViewOf<RagdollComponent>())
         {
@@ -400,6 +446,7 @@ namespace Dimension
         if (m_Scene.GetRegistry().Has<ClothComponent>(e)) CreateCloth(e);
         if (m_Scene.GetRegistry().Has<SoftBodyComponent>(e)) CreateSoftBody(e);
         if (m_Scene.GetRegistry().Has<RagdollComponent>(e)) CreateRagdoll(e);
+        if (m_Scene.GetRegistry().Has<RopeComponent>(e)) CreateRope(e);
         for (Entity c : m_Scene.GetChildren(e)) CreateJointsRecursive(c);
     }
 
@@ -431,6 +478,148 @@ namespace Dimension
                     else
                         c.EdgeFaces[it->second].y = (int)f;
                 }
+        }
+    }
+
+    void Physics3DWorld::CreateRope(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& rope = reg.Get<RopeComponent>(e);
+        for (auto& r : m_Impl->Ropes)
+            if (r.E == e) return;
+        auto& t = reg.Get<TransformComponent>(e);
+        Impl::RopeBody body;
+        body.E = e;
+        body.PinStart = rope.PinStart;
+        glm::vec3 start(t.World[3]), end;
+        bool attached = !rope.AttachTo.IsNull() && m_Scene.IsValid(rope.AttachTo) && rope.AttachTo != e;
+        if (attached)
+        {
+            body.Attached = rope.AttachTo;
+            body.PinEnd = true;
+            end = glm::vec3(reg.Get<TransformComponent>(rope.AttachTo).World * glm::vec4(rope.AttachOffset, 1.0f));
+        }
+        std::vector<glm::vec3> points = Rope::RestPoints(rope, start, -glm::vec3(t.World[1]), attached ? &end : nullptr);
+        int count = (int)points.size();
+        float segment = std::max(rope.Length, 0.01f) / (count - 1);
+        float invMass = (float)count / std::max(rope.Mass, 1e-4f);
+        body.Origin = start;
+        JPH::Ref<JPH::SoftBodySharedSettings> shared = new JPH::SoftBodySharedSettings();
+        for (int i = 0; i < count; ++i)
+        {
+            glm::vec3 p = points[i] - body.Origin;
+            bool pinned = (i == 0 && body.PinStart) || (i == count - 1 && body.PinEnd);
+            shared->mVertices.push_back(JPH::SoftBodySharedSettings::Vertex(JPH::Float3(p.x, p.y, p.z), JPH::Float3(0, 0, 0), pinned ? 0.0f : invMass));
+        }
+        // Rest lengths from Length (not the starting shape, which may be stretched between far-apart ends).
+        for (int i = 0; i + 1 < count; ++i)
+        {
+            JPH::SoftBodySharedSettings::Edge edge(i, i + 1, std::max(rope.StretchCompliance, 0.0f));
+            edge.mRestLength = segment;
+            shared->mEdgeConstraints.push_back(edge);
+        }
+        for (int i = 0; i + 2 < count; ++i)
+        {
+            JPH::SoftBodySharedSettings::Edge edge(i, i + 2, std::max(rope.BendCompliance, 0.0f));
+            edge.mRestLength = segment * 2.0f;
+            shared->mEdgeConstraints.push_back(edge);
+        }
+        shared->Optimize();
+        JPH::SoftBodyCreationSettings settings(shared, JPH::RVec3(ToJolt(body.Origin)), JPH::Quat::sIdentity(), Layers::Make(reg.Get<TagComponent>(e).Layer, true));
+        settings.mNumIterations = (JPH::uint32)std::clamp(rope.Iterations, 1, 64);
+        settings.mLinearDamping = std::max(rope.Damping, 0.0f);
+        settings.mFriction = std::clamp(rope.Friction, 0.0f, 1.0f);
+        settings.mVertexRadius = std::max(rope.Radius, 0.0f);
+        settings.mUpdatePosition = false;
+        settings.mMakeRotationIdentity = false;
+        settings.mAllowSleeping = false;
+        body.Body = m_Impl->System.GetBodyInterface().CreateAndAddSoftBody(settings, JPH::EActivation::Activate);
+        if (body.Body.IsInvalid())
+        {
+            Log::Error("Too many physics bodies (rope '{}')", reg.Get<TagComponent>(e).Name);
+            return;
+        }
+        m_Impl->BodyToEntity[body.Body.GetIndexAndSequenceNumber()] = e;
+        // A dynamic body on the end hangs on the rope: a distance limit of Length from the start (the object's body,
+        // or the world), while the soft body's momentum adds its swing.
+        if (attached && body.PinStart)
+            if (auto* holderRb = reg.TryGet<RigidbodyComponent>(rope.AttachTo); holderRb && holderRb->Type == BodyType::Dynamic && holderRb->RuntimeBody != 0xFFFFFFFF)
+            {
+                auto* ownRb = reg.TryGet<RigidbodyComponent>(e);
+                JPH::BodyID startBody = ownRb && ownRb->RuntimeBody != 0xFFFFFFFF ? JPH::BodyID(ownRb->RuntimeBody) : JPH::BodyID();
+                JPH::DistanceConstraintSettings s;
+                s.mPoint1 = JPH::RVec3(ToJolt(start));
+                s.mPoint2 = JPH::RVec3(ToJolt(end));
+                s.mMinDistance = 0.0f;
+                s.mMaxDistance = std::max(rope.Length, glm::distance(start, end));
+                auto& bi = m_Impl->System.GetBodyInterface();
+                body.Tether = bi.CreateConstraint(&s, startBody, JPH::BodyID(holderRb->RuntimeBody)); // invalid start = the world
+                if (body.Tether) m_Impl->System.AddConstraint(body.Tether);
+            }
+        m_Impl->Ropes.push_back(body);
+        glm::mat4 toLocal = glm::inverse(t.World);
+        rope.SimulatedPoints.clear();
+        for (const glm::vec3& p : points) rope.SimulatedPoints.push_back(glm::vec3(toLocal * glm::vec4(p, 1.0f)));
+    }
+
+    void Physics3DWorld::UpdateRopes(float dt, bool afterStep)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& lockInterface = m_Impl->System.GetBodyLockInterface();
+        for (auto& r : m_Impl->Ropes)
+        {
+            auto* rope = reg.TryGet<RopeComponent>(r.E);
+            if (!rope) continue;
+            auto& t = reg.Get<TransformComponent>(r.E);
+            const TransformComponent* holder = !r.Attached.IsNull() && m_Scene.IsValid(r.Attached) ? reg.TryGet<TransformComponent>(r.Attached) : nullptr;
+            JPH::BodyLockWrite lock(lockInterface, r.Body);
+            if (!lock.Succeeded()) continue;
+            auto* mp = static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+            auto& vertices = mp->GetVertices();
+            size_t count = vertices.size();
+            if (!afterStep)
+            {
+                // Held ends follow their holders: Jolt moves kinematic vertices by their velocity.
+                auto hold = [&](size_t i, const glm::vec3& world) {
+                    glm::vec3 target = world - r.Origin, now = FromJolt(vertices[i].mPosition);
+                    if (dt > 0.0f) vertices[i].mVelocity = ToJolt((target - now) / dt);
+                    else vertices[i].mPosition = ToJolt(target);
+                };
+                if (r.PinStart) hold(0, glm::vec3(t.World[3]));
+                if (r.PinEnd && holder) hold(count - 1, glm::vec3(holder->World * glm::vec4(rope->AttachOffset, 1.0f)));
+                continue;
+            }
+            // A dynamic body holding the end feels the rope's pull: the change of the free points' momentum less
+            // gravity, smoothed and capped (as attached cloth).
+            if (r.PinEnd && dt > 0.0f)
+                if (auto* holderRb = reg.TryGet<RigidbodyComponent>(r.Attached); holderRb && holderRb->Type == BodyType::Dynamic && holderRb->RuntimeBody != 0xFFFFFFFF)
+                {
+                    glm::vec3 momentum(0.0f);
+                    float freeMass = 0.0f;
+                    for (auto& v : vertices)
+                        if (v.mInvMass > 0.0f)
+                        {
+                            momentum += FromJolt(v.mVelocity) / v.mInvMass;
+                            freeMass += 1.0f / v.mInvMass;
+                        }
+                    if (r.HasMomentum)
+                    {
+                        glm::vec3 weight = freeMass * FromJolt(m_Impl->System.GetGravity());
+                        glm::vec3 onRope = (momentum - r.LastMomentum) / dt - weight;
+                        r.PullForce += (onRope - r.PullForce) * (1.0f - std::exp(-dt / 0.03f));
+                        float cap = 3.0f * glm::length(weight) + 1e-3f;
+                        if (glm::length(r.PullForce) > cap) r.PullForce *= cap / glm::length(r.PullForce);
+                        // Shared by the two ends when both are held; only the end's share pulls the body.
+                        glm::vec3 share = r.PinStart ? r.PullForce * 0.5f : r.PullForce;
+                        glm::vec3 at = r.Origin + FromJolt(vertices[count - 1].mPosition);
+                        m_Impl->System.GetBodyInterfaceNoLock().AddForce(JPH::BodyID(holderRb->RuntimeBody), ToJolt(-share), JPH::RVec3(ToJolt(at)));
+                    }
+                    r.LastMomentum = momentum;
+                    r.HasMomentum = true;
+                }
+            glm::mat4 toLocal = glm::inverse(t.World);
+            rope->SimulatedPoints.resize(count);
+            for (size_t i = 0; i < count; ++i) rope->SimulatedPoints[i] = glm::vec3(toLocal * glm::vec4(r.Origin + FromJolt(vertices[i].mPosition), 1.0f));
         }
     }
 
@@ -1735,6 +1924,13 @@ namespace Dimension
 
     void Physics3DWorld::OnEntityDestroyed(Entity e)
     {
+        m_Impl->RemoveGlues(e); // before the piece's body goes
+        for (size_t i = 0; i < m_Impl->Ropes.size(); ++i)
+            if (m_Impl->Ropes[i].E == e)
+            {
+                m_Impl->RemoveRope(i);
+                break;
+            }
         m_Impl->ReleaseOwnMesh(e); // a focused break's piece
         // Constraints must go before their bodies.
         auto& joints = m_Impl->Joints;
@@ -1858,10 +2054,12 @@ namespace Dimension
 
         UpdateVehicles(false);
         UpdateCloths(dt, false);
+        UpdateRopes(dt, false);
         UpdateWater(dt);
         UpdateRagdolls(dt, false);
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
         UpdateCloths(dt, true);
+        UpdateRopes(dt, true);
         UpdateRagdolls(dt, true);
 
         // Joint reactions (impulses / dt); joints over their break force or torque are removed.
@@ -1939,18 +2137,36 @@ namespace Dimension
         }
         for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, ev.Trigger);
         for (auto& [e, force] : broken) m_Scene.DispatchJointBreak(e, force);
+        // Glue that is pulled or twisted too hard lets go.
+        if (dt > 0.0f)
+            for (auto it = m_Impl->Glues.begin(); it != m_Impl->Glues.end();)
+            {
+                auto* f = static_cast<JPH::FixedConstraint*>(it->C.GetPtr());
+                float force = f->GetTotalLambdaPosition().Length() / dt, torque = f->GetTotalLambdaRotation().Length() / dt;
+                if (it->Strength > 0.0f && (force > it->Strength || torque > it->Strength))
+                {
+                    m_Impl->System.RemoveConstraint(it->C);
+                    it = m_Impl->Glues.erase(it);
+                }
+                else
+                    ++it;
+            }
         // Hits hard enough break Breakables (each once).
         std::vector<Entity> breaking;
         for (auto& ev : events)
         {
             if (!ev.Begin || ev.Trigger) continue;
-            for (Entity e : { ev.A, ev.B })
+            for (int side = 0; side < 2; ++side)
             {
+                Entity e = side == 0 ? ev.A : ev.B, other = side == 0 ? ev.B : ev.A;
                 auto* br = m_Scene.IsValid(e) ? reg.TryGet<BreakableComponent>(e) : nullptr;
                 if (br && br->BreakSpeed > 0.0f && ev.Speed >= br->BreakSpeed && std::find(breaking.begin(), breaking.end(), e) == breaking.end())
                 {
                     breaking.push_back(e);
                     BreakNow(e, ev.Point);
+                    // The hitter bounced off the whole object this step; it gets its speed back to strike the pieces.
+                    if (auto* orb = m_Scene.IsValid(other) ? reg.TryGet<RigidbodyComponent>(other) : nullptr; orb && orb->Type == BodyType::Dynamic && orb->RuntimeBody != 0xFFFFFFFF)
+                        bi.SetLinearVelocity(JPH::BodyID(orb->RuntimeBody), ToJolt(side == 0 ? ev.VelocityB : ev.VelocityA));
                 }
             }
         }
@@ -2013,17 +2229,19 @@ namespace Dimension
         glm::vec3 linear(0.0f), angular(0.0f);
         float mass = 1.0f;
         auto& bi = m_Impl->System.GetBodyInterface();
+        float total = 0.0f;
+        for (float v : set.Volumes) total += v;
+        // A dynamic body's mass is shared by its pieces; a static or kinematic one (a wall) gets mass by Density.
+        mass = std::max(br->Density, 1.0f) * total * std::abs(scale.x * scale.y * scale.z);
         if (auto* rb = reg.TryGet<RigidbodyComponent>(e))
         {
-            mass = rb->Mass;
+            if (rb->Type == BodyType::Dynamic) mass = rb->Mass;
             if (rb->RuntimeBody != 0xFFFFFFFF)
             {
                 linear = FromJolt(bi.GetLinearVelocity(JPH::BodyID(rb->RuntimeBody)));
                 angular = FromJolt(bi.GetAngularVelocity(JPH::BodyID(rb->RuntimeBody)));
             }
         }
-        float total = 0.0f;
-        for (float v : set.Volumes) total += v;
         glm::vec3 origin(world[3]);
         std::string name = reg.Get<TagComponent>(e).Name;
         uint32_t layer = reg.Get<TagComponent>(e).Layer;
@@ -2033,7 +2251,10 @@ namespace Dimension
             if (renderer.Materials.size() <= (size_t)capSlot) renderer.Materials.resize((size_t)capSlot + 1, AssetHandle::None());
             renderer.Materials[capSlot] = br->InsideMaterial;
         }
-        float lifetime = br->DebrisLifetime, explosion = br->ExplosionSpeed;
+        float lifetime = br->DebrisLifetime, explosion = br->ExplosionSpeed, glue = br->GlueStrength;
+        bool anchored = !reg.TryGet<RigidbodyComponent>(e) || reg.Get<RigidbodyComponent>(e).Type != BodyType::Dynamic;
+        std::vector<std::pair<glm::vec3, glm::vec3>> pieceBounds; // world AABBs (glued pieces)
+        std::vector<std::vector<glm::vec3>> cutVertices;           // and their cut faces' corners (world)
         for (size_t i = 0; i < set.Meshes.size(); ++i)
         {
             Entity piece = m_Scene.CreateEntity(name + " Piece");
@@ -2062,10 +2283,71 @@ namespace Dimension
             if (lifetime > 0.0f) m_Impl->DebrisList.push_back({ piece, 0.0f, lifetime, scale });
             if (focused) m_Impl->OwnMeshes[piece.Index] = set.Meshes[i];
             pieces.push_back(piece);
+            if (glue > 0.0f)
+            {
+                glm::vec3 lo(1e30f), hi(-1e30f);
+                std::vector<glm::vec3> cut;
+                if (auto pd = AssetManager::GetMeshData(set.Meshes[i]))
+                {
+                    for (const Vertex& v : pd->Vertices)
+                    {
+                        glm::vec3 w = glm::vec3(pt.World * glm::vec4(v.Position, 1.0f));
+                        lo = glm::min(lo, w);
+                        hi = glm::max(hi, w);
+                    }
+                    // The cap sub-mesh (last, with the cap slot) holds the cut faces.
+                    if (!pd->SubMeshes.empty() && pd->SubMeshes.back().MaterialSlot == capSlot)
+                    {
+                        const SubMesh& caps = pd->SubMeshes.back();
+                        for (uint32_t k = caps.IndexOffset; k < caps.IndexOffset + caps.IndexCount; ++k)
+                            cut.push_back(glm::vec3(pt.World * glm::vec4(pd->Vertices[pd->Indices[k]].Position, 1.0f)));
+                    }
+                }
+                pieceBounds.push_back({ lo, hi });
+                cutVertices.push_back(std::move(cut));
+            }
+        }
+        if (glue > 0.0f && pieceBounds.size() == pieces.size())
+        {
+            // Neighbours: pieces sharing a cut face (at least three of their cut faces' corners meet, within a little of
+            // the object's size); a static object's lowest pieces also hold on to the world.
+            glm::vec3 lo(1e30f), hi(-1e30f);
+            for (auto& [a, b] : pieceBounds) { lo = glm::min(lo, a); hi = glm::max(hi, b); }
+            float slack = glm::length(hi - lo) * 0.01f;
+            auto glueTo = [&](Entity a, Entity b) {
+                auto* ra = reg.TryGet<RigidbodyComponent>(a);
+                auto* rb = b.IsNull() ? nullptr : reg.TryGet<RigidbodyComponent>(b);
+                if (!ra || ra->RuntimeBody == 0xFFFFFFFF || (!b.IsNull() && (!rb || rb->RuntimeBody == 0xFFFFFFFF))) return;
+                JPH::FixedConstraintSettings s;
+                s.mAutoDetectPoint = true;
+                JPH::Ref<JPH::Constraint> c = bi.CreateConstraint(&s, rb ? JPH::BodyID(rb->RuntimeBody) : JPH::BodyID(), JPH::BodyID(ra->RuntimeBody));
+                if (!c) return;
+                m_Impl->System.AddConstraint(c);
+                m_Impl->Glues.push_back({ c, a, b, b.IsNull() ? 0.0f : glue }); // the ground holds (0 = unbreakable)
+            };
+            for (size_t a = 0; a < pieces.size(); ++a)
+            {
+                for (size_t b = a + 1; b < pieces.size(); ++b)
+                {
+                    const auto &pa = pieceBounds[a], &pb = pieceBounds[b];
+                    if (!glm::all(glm::lessThanEqual(pa.first, pb.second + slack)) || !glm::all(glm::lessThanEqual(pb.first, pa.second + slack))) continue;
+                    std::vector<glm::vec3> shared;
+                    for (const glm::vec3& va : cutVertices[a])
+                    {
+                        bool meets = false, seen = false;
+                        for (const glm::vec3& vb : cutVertices[b]) meets |= glm::distance(va, vb) <= slack;
+                        for (const glm::vec3& s : shared) seen |= glm::distance(va, s) <= slack;
+                        if (meets && !seen) shared.push_back(va);
+                        if (shared.size() >= 3) break;
+                    }
+                    if (shared.size() >= 3) glueTo(pieces[a], pieces[b]);
+                }
+                if (anchored && pieceBounds[a].first.y <= lo.y + (hi.y - lo.y) * 0.05f) glueTo(pieces[a], Entity::Null());
+            }
         }
         // Gone now: its body leaves the world (so the pieces do not collide with it) and it is destroyed at the frame's end.
         reg.Get<TagComponent>(e).Active = false;
-        t.ActiveInHierarchy = false;
+        reg.Get<TransformComponent>(e).ActiveInHierarchy = false; // (fetched again: creating the pieces may have moved it)
         if (auto* rb = reg.TryGet<RigidbodyComponent>(e); rb && rb->RuntimeBody != 0xFFFFFFFF && bi.IsAdded(JPH::BodyID(rb->RuntimeBody)))
             bi.RemoveBody(JPH::BodyID(rb->RuntimeBody));
         m_Scene.DestroyEntityDeferred(e);

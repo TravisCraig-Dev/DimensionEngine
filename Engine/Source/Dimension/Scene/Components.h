@@ -817,6 +817,28 @@ namespace Dimension
         int32_t TornEdges = 0;
     };
 
+    // A rope (see Dimension/Physics/Rope.h): Segments + 1 points simulated as a soft body while playing, drawn as a
+    // tube of Radius with the object's Mesh Renderer material. Its start hangs from the object (with Pin Start) and
+    // it falls along the object's -Y; with Attach To its end holds on to that object at Attach Offset (its space), and
+    // a dynamic body there feels the rope's pull. It collides with 3D colliders.
+    struct RopeComponent
+    {
+        float Length = 3.0f;
+        int32_t Segments = 24;
+        float Radius = 0.03f;
+        float Mass = 1.0f;                  // total, kg
+        float StretchCompliance = 0.00001f; // 0 = does not stretch
+        float BendCompliance = 0.5f;        // larger = floppier (a chain), smaller = stiffer (a cable)
+        float Damping = 0.1f;
+        float Friction = 0.5f;
+        int32_t Iterations = 12;
+        bool PinStart = true;
+        Entity AttachTo = Entity::Null();
+        glm::vec3 AttachOffset{ 0.0f };
+        // Runtime: the simulated points in the object's space (empty = the starting shape).
+        std::vector<glm::vec3> SimulatedPoints;
+    };
+
     // A ragdoll for a skinned character (Animator + skinned Mesh Renderer), like Unity's ragdoll: every bone at least
     // Min Bone Length long (a fraction of the skeleton's height) becomes a capsule, and each joint a swing-twist
     // constraint limited to Swing Limit and Twist Limit; shorter bones (fingers, toes) ride along with their parent's
@@ -869,6 +891,11 @@ namespace Dimension
         // once and shared by every copy), within Focus Radius (a fraction of the object's size).
         float ImpactFocus = 0.0f;
         float FocusRadius = 0.25f;
+        // Destructible structures: with Glue Strength above 0 the pieces stay stuck to their neighbours (and, when the
+        // object was not a dynamic body, its bottom pieces to the world) until a force above Glue Strength (N) pulls
+        // a joint apart, so a wall cracks where it is hit and crumbles as it is loaded, instead of falling apart at once.
+        float GlueStrength = 0.0f;
+        float Density = 1500.0f; // kg per m3 of the pieces when the object was not a dynamic body (else its mass is shared)
     };
 
     // A soft, deformable version of the object's mesh (Mesh Renderer), simulated as a Jolt soft body while playing:

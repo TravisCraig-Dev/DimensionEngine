@@ -40,6 +40,7 @@ namespace Dimension
             PlaceTrees, PlaceGrass, EraseDetails,
             DigHole, FillHole,
             Stamp,
+            Erode,
             Count
         };
         inline bool IsPaintMode(BrushMode m) { return m >= BrushMode::PaintGrass && m <= BrushMode::PaintMoss; }
@@ -65,6 +66,11 @@ namespace Dimension
                         const StampSettings* stamp = nullptr);
         // The stamp's value (0-1) at a point relative to the brush center, or -1 outside its square.
         float StampValue(const StampSettings& stamp, const glm::vec2& offset, float radius);
+        // Hydraulic erosion (the Erode brush): `droplets` raindrops start at random inside the circle (the same `seed`
+        // gives the same drops) and run downhill over the heights, picking up sediment where they speed up and the
+        // ground falls away, and dropping it where they slow down or climb, which carves gullies and fills basins.
+        // Material only moves (except where it would leave 0 - Height). Works on the edit arrays (BeginEdit first).
+        void Erode(TerrainComponent& terrain, const glm::vec2& at, float radius, int droplets, uint32_t seed);
         // Writes the editable arrays into the serialized fields (call when a stroke ends).
         void CommitEdit(TerrainComponent& terrain);
         // Drops the edits: back to the heightmap/noise and automatic layers, without holes (details stay).

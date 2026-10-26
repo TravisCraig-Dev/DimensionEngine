@@ -67,6 +67,8 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 Wind;           // xyz wind (m/s), w seconds since start
     vec4 WindParams;     // x gusts, y grass bender count
     vec4 GrassBenders[MAX_GRASS_BENDERS]; // xyz sphere center, w radius
+    vec4 CloudParams;    // x coverage 0-1, y density (extinction per meter), z base altitude, w top altitude (m)
+    vec4 CloudParams2;   // x feature size (m), y march steps, z 1 = clouds on
 } uScene;
 
 // Procedural sky gradient, also used as a cheap environment for reflections.

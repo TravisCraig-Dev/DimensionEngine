@@ -56,7 +56,9 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Gp
     // (box z axis, half z).
     uvec4 ColliderCount; // x count
     vec4 Colliders[PARTICLE_COLLIDERS * 4];
+    uvec4 MeshSamples;   // Mesh shape: xy address of (position, normal) vec4 pairs, z count
 };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MeshSamplesRef { vec4 Items[]; };
 
 vec4 SampleColorLut(GpuParticleParamsRef p, float t)
 {

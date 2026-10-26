@@ -6,6 +6,7 @@
 #include "Dimension/Physics/Cloth.h"
 #include "Dimension/Physics/Water.h"
 #include "Dimension/Terrain/Terrain.h"
+#include "Dimension/Physics/Rope.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -56,6 +57,7 @@
 #include "shaders/ParticleGpu.vert.h"
 #include "shaders/ParticleTrail.vert.h"
 #include "shaders/Ssgi.frag.h"
+#include "shaders/SsgiTemporal.frag.h"
 #include "shaders/Ssr.frag.h"
 #include "shaders/SsrApply.frag.h"
 #include "shaders/Taa.frag.h"
@@ -119,6 +121,8 @@ namespace Dimension
             glm::vec4 Wind;       // xyz wind (m/s), w seconds since start (grass motion)
             glm::vec4 WindParams; // x gusts, y grass bender count
             glm::vec4 GrassBenders[SceneRenderer::kMaxGrassBenders]; // xyz sphere center, w radius
+            glm::vec4 CloudParams;  // x coverage, y density, z base, w top
+            glm::vec4 CloudParams2; // x feature size, y steps, z 1 = on
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
@@ -360,7 +364,10 @@ namespace Dimension
             uint32_t SortPadded = 0;
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
-        Pipeline Ssr, SsrApply, Ssgi, Taa, Fog;
+        // Mesh-shaped GPU emitters' spawn points (ParticleSystems::MeshSurfaceSamples), uploaded once per mesh.
+        struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
+        std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
+        Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog;
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline Decals[3]; // by DecalBlend
         Buffer QuadIndices;
@@ -559,6 +566,9 @@ namespace Dimension
         post.FragmentSpirv = kSsgi_frag;
         post.DebugName = "SsgiPipeline";
         r.Ssgi = Pipeline(post);
+        post.FragmentSpirv = kSsgiTemporal_frag;
+        post.DebugName = "SsgiTemporalPipeline";
+        r.SsgiTemporal = Pipeline(post);
         post.FragmentSpirv = kSsrApply_frag;
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive } };
         post.DebugName = "SsrApplyPipeline";
@@ -911,6 +921,12 @@ namespace Dimension
             for (size_t i = 0; i < count; ++i) u.GrassBenders[i] = benders[i].Sphere;
             u.WindParams = glm::vec4(std::max(settings.WindGusts, 0.0f), (float)count, 0.0f, 0.0f);
         }
+        if (settings.Clouds)
+        {
+            float bottom = settings.CloudBase, top = std::max(settings.CloudTop, settings.CloudBase + 1.0f);
+            u.CloudParams = glm::vec4(std::clamp(settings.CloudCoverage, 0.0f, 1.0f), std::max(settings.CloudDensity, 0.0f), bottom, top);
+            u.CloudParams2 = glm::vec4(std::max(settings.CloudScale, 1.0f), (float)std::clamp(settings.CloudSteps, 8, 128), 1.0f, 0.0f);
+        }
         bool gpuCulled = false;
         if (!lights.empty() && s_GpuLightCulling && s_ClusterCulling)
         {
@@ -1145,7 +1161,8 @@ namespace Dimension
         if (!m_Decals.empty()) DrawDecals(cmd, target);
         if (surface)
             Vk::TransitionImage(cmd, target.GetSurface().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        if (ssgi) RenderIndirect(cmd, target, settings);
+        if (ssgi) RenderIndirect(cmd, target, settings, u.ViewProj);
+        else target.Gi.Valid = false;
         if (ssr) RenderReflections(cmd, target, settings);
         if (m_Oit)
         {
@@ -1649,11 +1666,38 @@ namespace Dimension
             const Terrain::Runtime* terrainRt = terrain ? Terrain::GetRuntime(*terrain) : nullptr;
             // A Water Volume draws its surface grid, moved by the waves.
             const WaterVolumeComponent* water = cloth || soft ? nullptr : reg.TryGet<WaterVolumeComponent>(e);
-            Ref<Mesh> mesh = cloth ? Cloth::GridMesh(*cloth) : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface : AssetManager::GetMesh(mr.Mesh);
+            // A rope draws a tube along its points (simulated, or its starting shape in the editor).
+            const RopeComponent* rope = cloth || soft || water ? nullptr : reg.TryGet<RopeComponent>(e);
+            Ref<Mesh> mesh = rope ? Rope::TubeMesh(*rope) : cloth ? Cloth::GridMesh(*cloth) : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface : AssetManager::GetMesh(mr.Mesh);
             if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
             AABB bounds = mesh->GetBounds();
+            if (rope)
+            {
+                std::vector<glm::vec3> points = rope->SimulatedPoints;
+                if ((int)points.size() != Rope::PointCount(*rope))
+                {
+                    glm::mat4 toLocal = glm::inverse(t.World);
+                    bool attached = !rope->AttachTo.IsNull() && scene.IsValid(rope->AttachTo) && rope->AttachTo != e;
+                    glm::vec3 end = attached ? glm::vec3(toLocal * (reg.Get<TransformComponent>(rope->AttachTo).World * glm::vec4(rope->AttachOffset, 1.0f))) : glm::vec3(0.0f);
+                    points = Rope::RestPoints(*rope, glm::vec3(0.0f), glm::vec3(0.0f, -1.0f, 0.0f), attached ? &end : nullptr);
+                }
+                std::vector<Vertex> tube;
+                Rope::BuildTube(*rope, points, tube);
+                if (TransientAllocation block = tube.size() == mesh->GetVertexCount() ? device.AllocateTransient(tube.size() * sizeof(Vertex), 16) : TransientAllocation{})
+                {
+                    std::memcpy(block.Data, tube.data(), tube.size() * sizeof(Vertex));
+                    item.Vertices = block.Buffer;
+                    item.VertexOffset = block.Offset;
+                    bounds.Min = bounds.Max = tube[0].Position;
+                    for (const Vertex& v : tube)
+                    {
+                        bounds.Min = glm::min(bounds.Min, v.Position);
+                        bounds.Max = glm::max(bounds.Max, v.Position);
+                    }
+                }
+            }
             // Simulated vertices (cloth, soft bodies) replace the mesh's, on top of its UVs and tangents.
             const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : water ? &water->SimulatedPositions : nullptr;
             const std::vector<glm::vec3>* simNormals = cloth ? &cloth->SimulatedNormals : soft ? &soft->SimulatedNormals : water ? &water->SimulatedNormals : nullptr;
@@ -2685,6 +2729,7 @@ namespace Dimension
             glm::uvec4 TrailBuffer;
             glm::uvec4 ColliderCount;
             glm::vec4 Colliders[32 * 4]; // PARTICLE_COLLIDERS
+            glm::uvec4 MeshSamples;
         };
         constexpr VkDeviceSize kGpuParticleSize = 64;
         constexpr uint32_t kMaxGpuParticles = 1000000;
@@ -2777,6 +2822,22 @@ namespace Dimension
                                     ps.CollisionDampen);
             p.Misc = glm::vec4(ps.LifetimeLoss, worldSpace ? 1.0f : glm::length(glm::vec3(world[0])), ps.SheetRandomStart ? 1.0f : 0.0f,
                                std::max(ps.SheetCycles, 0.0f));
+            if (ps.Shape == ParticleShape::Mesh)
+                if (const auto* samples = ParticleSystems::MeshSurfaceSamples(ps.EmitMesh))
+                {
+                    auto& buffer = res.MeshSampleBuffers[(uint64_t)ps.EmitMesh];
+                    if (buffer.Source != samples || !buffer.Data.IsValid())
+                    {
+                        buffer.Data = Buffer(samples->size() * sizeof(glm::vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                             MemoryUsage::CpuToGpu, "ParticleMeshSamples");
+                        std::memcpy(buffer.Data.GetMapped(), samples->data(), samples->size() * sizeof(glm::vec4));
+                        VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+                        info.buffer = buffer.Data.GetHandle();
+                        buffer.Address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                        buffer.Source = samples;
+                    }
+                    p.MeshSamples = glm::uvec4(SplitAddress(buffer.Address), (uint32_t)(samples->size() / 2), 0u);
+                }
             if (ps.CollideWithColliders)
             {
                 // The 32 colliders nearest the emitter, in world space.
@@ -3055,23 +3116,39 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
-    void SceneRenderer::RenderIndirect(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings)
+    void SceneRenderer::RenderIndirect(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings, const glm::mat4& viewProj)
     {
-        // Trace bounce light into the indirect image (reading the HDR image), then add it onto the HDR image through
-        // the reflections' blur.
+        // Trace bounce light at half resolution (reading the HDR image), filter it over time into a full-resolution
+        // history (reprojected, clamped to the trace), then add that onto the HDR image through the reflections' blur.
         auto& res = Renderer::Get();
         VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
+        const Image& traced = target.GetIndirect();
         struct
         {
             uint32_t Hdr, Depth, Surface, Rays;
             glm::vec2 Texel;
             float MaxDistance, Thickness, Intensity;
             uint32_t Steps;
+            float Scale;
         } trace{ target.GetHdrBindless(), target.GetDepthBindless(), target.GetSurfaceBindless(), (uint32_t)std::clamp(settings.SSGIRays, 1, 16),
-                 glm::vec2(1.0f / extent.width, 1.0f / extent.height), std::max(settings.SSGIDistance, 0.05f), std::max(settings.SSGIThickness, 0.001f),
-                 settings.SSGIIntensity, 16u };
-        FullscreenPass(cmd, target.GetIndirect(), false, res.Ssgi, &trace, sizeof(trace));
-        struct { uint32_t Reflections, Pad; glm::vec2 Texel; } apply{ target.GetIndirectBindless(), 0u, trace.Texel };
+                 glm::vec2(1.0f / traced.GetWidth(), 1.0f / traced.GetHeight()), std::max(settings.SSGIDistance, 0.05f), std::max(settings.SSGIThickness, 0.001f),
+                 settings.SSGIIntensity, 16u, (float)extent.width / traced.GetWidth() };
+        FullscreenPass(cmd, traced, false, res.Ssgi, &trace, sizeof(trace));
+        auto& gi = target.Gi;
+        uint32_t read = gi.Written, write = 1 - gi.Written;
+        struct
+        {
+            glm::mat4 PrevViewProj;
+            uint32_t Current, History, Depth, Valid;
+            glm::vec2 Texel;
+            float Blend;
+        } temporal{ gi.PrevViewProj, target.GetIndirectBindless(), target.GetGiHistoryBindless(read), target.GetDepthBindless(), gi.Valid ? 1u : 0u,
+                    trace.Texel, 0.9f };
+        FullscreenPass(cmd, target.GetGiHistory(write), false, res.SsgiTemporal, &temporal, sizeof(temporal));
+        gi.Written = write;
+        gi.Valid = true;
+        gi.PrevViewProj = viewProj;
+        struct { uint32_t Reflections, Pad; glm::vec2 Texel; } apply{ target.GetGiHistoryBindless(write), 0u, glm::vec2(1.0f / extent.width, 1.0f / extent.height) };
         FullscreenPass(cmd, target.GetHdr(), true, res.SsrApply, &apply, sizeof(apply));
     }
 

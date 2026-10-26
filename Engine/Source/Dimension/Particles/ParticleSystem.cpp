@@ -1,9 +1,13 @@
 #include "Dimension/Particles/ParticleSystem.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Renderer/Mesh.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
+#include <unordered_map>
 
 namespace Dimension
 {
@@ -52,6 +56,15 @@ namespace Dimension
                 pos = (glm::vec3(Random01(rng), Random01(rng), Random01(rng)) - 0.5f) * ps.BoxSize;
                 break;
             case ParticleShape::Point: break;
+            case ParticleShape::Mesh:
+                // A spawn point on the surface, outward along its normal.
+                if (const auto* samples = ParticleSystems::MeshSurfaceSamples(ps.EmitMesh))
+                {
+                    size_t k = std::min((size_t)(Random01(rng) * ParticleSystems::kMeshSamples), (size_t)ParticleSystems::kMeshSamples - 1);
+                    pos = glm::vec3((*samples)[k * 2]);
+                    dir = glm::vec3((*samples)[k * 2 + 1]);
+                }
+                break;
             }
 
             // The emitter frame: its transform, moved to the burst origin for sub-emitter bursts.
@@ -364,6 +377,11 @@ namespace Dimension
             for (auto [e, ps, t] : reg.ViewOf<ParticleSystemComponent, TransformComponent>())
             {
                 if (ps.RandomState == 0x9E3779B9u) ps.RandomState ^= (e.Index + 1) * 2654435761u; // distinct streams
+                if (ps.Shape == ParticleShape::Mesh)
+                {
+                    const auto* mr = reg.TryGet<MeshRendererComponent>(e);
+                    ps.EmitMesh = ps.ShapeMesh.IsValid() ? ps.ShapeMesh : mr ? mr->Mesh : AssetHandle::None();
+                }
                 if (!ps.Started && !ps.Playing && ps.PlayOnAwake && ps.Time == 0.0f && ps.Particles.empty() && ps.PendingEmit == 0)
                     ps.Playing = true;
                 size_t first = subEmits.size();
@@ -374,6 +392,45 @@ namespace Dimension
             for (auto& s : subEmits)
                 if (s.Target != s.Source && scene.IsValid(s.Target))
                     if (auto* target = reg.TryGet<ParticleSystemComponent>(s.Target)) target->EmitAt(s.Position, s.Count);
+        }
+
+        const std::vector<glm::vec4>* MeshSurfaceSamples(AssetHandle mesh)
+        {
+            static std::mutex mutex;
+            static std::unordered_map<uint64_t, std::pair<std::weak_ptr<const MeshData>, std::vector<glm::vec4>>> cache;
+            auto data = AssetManager::GetMeshData(mesh);
+            if (!data || data->Indices.size() < 3) return nullptr;
+            std::lock_guard lock(mutex);
+            auto& entry = cache[(uint64_t)mesh];
+            if (entry.first.lock() == data && !entry.second.empty()) return &entry.second;
+            // Area-weighted: a running total of triangle areas, searched with uniform random numbers.
+            std::vector<float> cumulative;
+            float total = 0.0f;
+            for (size_t i = 0; i + 2 < data->Indices.size(); i += 3)
+            {
+                const glm::vec3 &a = data->Vertices[data->Indices[i]].Position, &b = data->Vertices[data->Indices[i + 1]].Position,
+                                &c = data->Vertices[data->Indices[i + 2]].Position;
+                total += 0.5f * glm::length(glm::cross(b - a, c - a));
+                cumulative.push_back(total);
+            }
+            if (total <= 0.0f) return nullptr;
+            uint32_t rng = 0x2545F491u;
+            std::vector<glm::vec4> samples;
+            samples.reserve(kMeshSamples * 2);
+            for (int s = 0; s < kMeshSamples; ++s)
+            {
+                size_t t = std::min((size_t)(std::lower_bound(cumulative.begin(), cumulative.end(), Random01(rng) * total) - cumulative.begin()), cumulative.size() - 1);
+                const Vertex &a = data->Vertices[data->Indices[t * 3]], &b = data->Vertices[data->Indices[t * 3 + 1]], &c = data->Vertices[data->Indices[t * 3 + 2]];
+                float u = Random01(rng), v = Random01(rng);
+                if (u + v > 1.0f) { u = 1.0f - u; v = 1.0f - v; }
+                glm::vec3 p = a.Position + (b.Position - a.Position) * u + (c.Position - a.Position) * v;
+                glm::vec3 n = a.Normal * (1.0f - u - v) + b.Normal * u + c.Normal * v;
+                if (glm::dot(n, n) < 1e-12f) n = glm::cross(b.Position - a.Position, c.Position - a.Position);
+                samples.push_back(glm::vec4(p, 0.0f));
+                samples.push_back(glm::vec4(glm::normalize(n), 0.0f));
+            }
+            entry = { data, std::move(samples) };
+            return &entry.second;
         }
 
         void Restart(Scene& scene)

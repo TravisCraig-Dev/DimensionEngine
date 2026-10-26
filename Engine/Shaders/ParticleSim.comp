@@ -115,6 +115,13 @@ GpuParticle Emit(GpuParticleParamsRef P, uint k)
     }
     else if (shape == 2) // box
         pos = (vec3(Random01(), Random01(), Random01()) - 0.5) * P.Box.xyz;
+    else if (shape == 4 && P.MeshSamples.z > 0u) // mesh surface, out along its normal
+    {
+        MeshSamplesRef samples = MeshSamplesRef(P.MeshSamples.xy);
+        uint k = min(uint(Random01() * float(P.MeshSamples.z)), P.MeshSamples.z - 1u);
+        pos = samples.Items[k * 2u].xyz;
+        dir = samples.Items[k * 2u + 1u].xyz;
+    }
 
     mat4 frame = P.Emitter;
     vec4 origin = P.SegmentOrigins[segment];

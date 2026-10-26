@@ -12,7 +12,7 @@ namespace Dimension
 {
     class Scene;
 
-    enum class ParticleShape : int32_t { Cone = 0, Sphere = 1, Box = 2, Point = 3 };
+    enum class ParticleShape : int32_t { Cone = 0, Sphere = 1, Box = 2, Point = 3, Mesh = 4 };
     enum class ParticleSpace : int32_t { Local = 0, World = 1 };
     enum class ParticleBlend : int32_t { Alpha = 0, Additive = 1 };
     enum class ParticleCollision : int32_t { None = 0, Plane = 1, World = 2 };
@@ -73,6 +73,9 @@ namespace Dimension
         float ShapeAngle = 25.0f;                   // cone half angle, degrees
         float ShapeRadius = 0.25f;
         glm::vec3 BoxSize{ 1.0f };
+        // Mesh shape: particles start at random points on the mesh's surface (more where it has more area) and move out
+        // along its normals. None = the object's Mesh Renderer mesh (skinned meshes in their bind pose).
+        AssetHandle ShapeMesh = AssetHandle::None();
 
         // Over lifetime (normalized age 0-1)
         Gradient ColorOverLifetime = Gradient::Linear(glm::vec4(1.0f), glm::vec4(1.0f, 1.0f, 1.0f, 0.0f)); // multiplies the start color
@@ -144,6 +147,7 @@ namespace Dimension
         float NoiseTime = 0.0f;
         bool Playing = false;
         bool Started = false;
+        AssetHandle EmitMesh = AssetHandle::None(); // the Mesh shape's mesh, resolved every update
         int32_t PendingEmit = 0;
         // GPU simulation hand-off: particles to create (at the emitter or at burst points) and time to simulate,
         // consumed by the renderer once per frame. Generation changes clear the GPU particles.
@@ -182,5 +186,9 @@ namespace Dimension
         // Smooth 3D gradient noise in about [-1, 1], and its curl (a divergence-free swirl field, magnitude ~1).
         float GradientNoise(const glm::vec3& p);
         glm::vec3 CurlNoise(const glm::vec3& p);
+        // The Mesh shape's spawn points: kMeshSamples points on the mesh's surface picked by area, each as two vec4s
+        // (position, normal) in the mesh's space; cached per mesh. Null when the mesh has no triangles.
+        constexpr int kMeshSamples = 4096;
+        const std::vector<glm::vec4>* MeshSurfaceSamples(AssetHandle mesh);
     }
 }

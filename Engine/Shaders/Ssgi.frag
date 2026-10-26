@@ -20,6 +20,7 @@ layout(push_constant) uniform Push
     float Thickness;   // how far behind a depth sample a ray still counts as hitting it
     float Intensity;
     uint Steps;
+    float Scale;       // full-resolution pixels per traced pixel
 } pc;
 
 layout(location = 0) in vec2 vUV;
@@ -45,7 +46,7 @@ float Hash(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.0
 void main()
 {
     outColor = vec4(0.0);
-    uvec4 surface = texelFetch(uUintTextures[nonuniformEXT(pc.Surface)], ivec2(gl_FragCoord.xy), 0);
+    uvec4 surface = texelFetch(uUintTextures[nonuniformEXT(pc.Surface)], ivec2(gl_FragCoord.xy * pc.Scale), 0);
     vec3 diffuse = unpackUnorm4x8(surface.z).rgb;
     if (surface.x == 0u || dot(diffuse, diffuse) <= 0.0) return; // sky, sprites, transparent or black surfaces
     float depth = Depth(vUV);

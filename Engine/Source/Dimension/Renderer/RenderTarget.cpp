@@ -23,6 +23,9 @@ namespace Dimension
             m_TaaHistory[i] = Image({ m_Width, m_Height, kHdrFormat,
                                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "TAAHistory" });
         Temporal.Valid = false;
+        for (int i = 0; i < 2; ++i)
+            m_GiHistory[i] = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSGIHistory" });
+        Gi.Valid = false;
         m_Ids = Image({ m_Width, m_Height, kIdFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "SceneIds" });
         m_Depth = Image({ m_Width, m_Height, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneDepth" });
         m_Output = Image({ m_Width, m_Height, kOutputFormat,
@@ -37,7 +40,7 @@ namespace Dimension
         }
         m_Surface = Image({ m_Width, m_Height, kSurfaceFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SceneSurface" });
         m_Reflections = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSR" });
-        m_Indirect = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSGI" });
+        m_Indirect = Image({ std::max(1u, m_Width / 2), std::max(1u, m_Height / 2), kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSGI" });
         m_OitAccum = Image({ m_Width, m_Height, kOitAccumFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "OITAccum" });
         m_OitReveal = Image({ m_Width, m_Height, kOitRevealFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "OITReveal" });
 
@@ -65,6 +68,7 @@ namespace Dimension
         m_OitAccumBindless = device.RegisterTexture(m_OitAccum.GetView(), device.GetNearestClampSampler());
         m_OitRevealBindless = device.RegisterTexture(m_OitReveal.GetView(), device.GetNearestClampSampler());
         for (int i = 0; i < 2; ++i) m_TaaHistoryBindless[i] = device.RegisterTexture(m_TaaHistory[i].GetView(), device.GetClampSampler());
+        for (int i = 0; i < 2; ++i) m_GiHistoryBindless[i] = device.RegisterTexture(m_GiHistory[i].GetView(), device.GetClampSampler());
         for (int i = 0; i < 2; ++i) m_AOBindless[i] = device.RegisterTexture(m_AO[i].GetView(), device.GetClampSampler());
         for (int i = 0; i < 2; ++i) m_DofBindless[i] = device.RegisterTexture(m_Dof[i].GetView(), device.GetClampSampler());
         for (auto& b : m_Bloom) m_BloomBindless.push_back(device.RegisterTexture(b.GetView(), device.GetClampSampler()));
@@ -72,7 +76,8 @@ namespace Dimension
         // Establish the between-frames layouts so the images can be sampled even before the first render.
         std::vector<VkImage> images{ m_Hdr.GetHandle(), m_Output.GetHandle(), m_Ldr.GetHandle(), m_AO[0].GetHandle(), m_AO[1].GetHandle(),
                                      m_Dof[0].GetHandle(), m_Dof[1].GetHandle(), m_Reflections.GetHandle(), m_Indirect.GetHandle(), m_TaaHistory[0].GetHandle(),
-                                     m_TaaHistory[1].GetHandle(), m_OitAccum.GetHandle(), m_OitReveal.GetHandle() };
+                                     m_TaaHistory[1].GetHandle(), m_OitAccum.GetHandle(), m_OitReveal.GetHandle(), m_GiHistory[0].GetHandle(),
+                                     m_GiHistory[1].GetHandle() };
         for (auto& b : m_Bloom) images.push_back(b.GetHandle());
         device.ImmediateSubmit([&](VkCommandBuffer cmd) {
             for (VkImage image : images) Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -95,6 +100,9 @@ namespace Dimension
         for (uint32_t index : m_TaaHistoryBindless) device.UnregisterTexture(index);
         m_TaaHistory[0] = Image();
         m_TaaHistory[1] = Image();
+        for (uint32_t index : m_GiHistoryBindless) device.UnregisterTexture(index);
+        m_GiHistory[0] = Image();
+        m_GiHistory[1] = Image();
         m_Surface = Image();
         m_Reflections = Image();
         m_Indirect = Image();

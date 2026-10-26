@@ -164,6 +164,13 @@ namespace Dimension
                           { "gravity", { s.Gravity.x, s.Gravity.y, s.Gravity.z } },
                           { "wind", { s.Wind.x, s.Wind.y, s.Wind.z } },
                           { "windGusts", s.WindGusts },
+                          { "clouds", s.Clouds },
+                          { "cloudCoverage", s.CloudCoverage },
+                          { "cloudDensity", s.CloudDensity },
+                          { "cloudBase", s.CloudBase },
+                          { "cloudTop", s.CloudTop },
+                          { "cloudScale", s.CloudScale },
+                          { "cloudSteps", s.CloudSteps },
                           { "exposure", s.Exposure },
                           { "skyTop", { s.SkyTop.r, s.SkyTop.g, s.SkyTop.b } },
                           { "skyHorizon", { s.SkyHorizon.r, s.SkyHorizon.g, s.SkyHorizon.b } },
@@ -238,6 +245,13 @@ namespace Dimension
         if (js.contains("gravity")) vec(js["gravity"], &s.Gravity.x, 3);
         if (js.contains("wind")) vec(js["wind"], &s.Wind.x, 3);
         s.WindGusts = js.value("windGusts", s.WindGusts);
+        s.Clouds = js.value("clouds", s.Clouds);
+        s.CloudCoverage = js.value("cloudCoverage", s.CloudCoverage);
+        s.CloudDensity = js.value("cloudDensity", s.CloudDensity);
+        s.CloudBase = js.value("cloudBase", s.CloudBase);
+        s.CloudTop = js.value("cloudTop", s.CloudTop);
+        s.CloudScale = js.value("cloudScale", s.CloudScale);
+        s.CloudSteps = std::clamp(js.value("cloudSteps", s.CloudSteps), 8, 128);
         s.Exposure = js.value("exposure", s.Exposure);
         if (js.contains("skyTop")) vec(js["skyTop"], &s.SkyTop.x, 3);
         if (js.contains("skyHorizon")) vec(js["skyHorizon"], &s.SkyHorizon.x, 3);

@@ -264,10 +264,11 @@ namespace Dimension
                          "World collision, Trails, and triggering a Sub Emitter")
             .Field("Rate Over Time", &PS::RateOverTime).Range(0.0f, 100000.0f).Speed(0.5f)
             .Field("Burst Count", &PS::BurstCount).Range(0, 100000)
-            .Field("Shape", &PS::Shape).Enum({ "Cone", "Sphere", "Box", "Point" })
+            .Field("Shape", &PS::Shape).Enum({ "Cone", "Sphere", "Box", "Point", "Mesh" })
             .Field("Shape Angle", &PS::ShapeAngle).Range(0.0f, 90.0f).Speed(0.5f)
             .Field("Shape Radius", &PS::ShapeRadius).Range(0.0f, 1000.0f).Speed(0.01f)
             .Field("Box Size", &PS::BoxSize).Speed(0.01f)
+            .Field("Shape Mesh", &PS::ShapeMesh).As(FieldType::Mesh).Tooltip("Mesh shape: emit from this mesh's surface (None = the Mesh Renderer's)")
             .Field("Color Over Lifetime", &PS::ColorOverLifetime).Tooltip("Multiplied with the start color (normalized age 0-1)")
             .Field("Size Over Lifetime", &PS::SizeOverLifetime).Tooltip("Multiplies the start size")
             .Field("Speed Over Lifetime", &PS::SpeedOverLifetime).Tooltip("Multiplies the velocity")
@@ -529,6 +530,19 @@ namespace Dimension
             .Field("Align On Get Up", &RagdollComponent::AlignOnGetUp)
                 .Tooltip("When Simulate turns off, move the object under the body onto the ground and turn it along the body\n"
                          "(toward the head lying face down, toward the feet face up)");
+        Register<RopeComponent>("Rope", "Physics")
+            .Field("Length", &RopeComponent::Length).Range(0.01f, 1000.0f).Speed(0.01f)
+            .Field("Segments", &RopeComponent::Segments).Range(1, 256).Tooltip("Simulated pieces (more bend more smoothly)")
+            .Field("Radius", &RopeComponent::Radius).Range(0.001f, 2.0f).Speed(0.001f).Tooltip("Thickness drawn and colliding")
+            .Field("Mass", &RopeComponent::Mass).Range(0.001f, 10000.0f).Speed(0.01f).Tooltip("Total, kg")
+            .Field("Stretch Compliance", &RopeComponent::StretchCompliance).Range(0.0f, 1.0f).Speed(0.00001f).Tooltip("0 = does not stretch")
+            .Field("Bend Compliance", &RopeComponent::BendCompliance).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Larger = floppier (a chain), smaller = stiffer (a cable)")
+            .Field("Damping", &RopeComponent::Damping).Range(0.0f, 10.0f).Speed(0.01f)
+            .Field("Friction", &RopeComponent::Friction).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Iterations", &RopeComponent::Iterations).Range(1, 64)
+            .Field("Pin Start", &RopeComponent::PinStart).Tooltip("The start holds on to this object (off: the whole rope falls)")
+            .Field("Attach To", &RopeComponent::AttachTo).Tooltip("The end holds on to this object (a dynamic body feels the pull)")
+            .Field("Attach Offset", &RopeComponent::AttachOffset).Speed(0.01f).Tooltip("Where on Attach To, in its space");
         Register<BreakableComponent>("Breakable", "Physics")
             .Field("Pieces", &BreakableComponent::Pieces).Range(2, 64).Tooltip("Voronoi cells cut from the mesh (fewer where a cell misses it)")
             .Field("Seed", &BreakableComponent::Seed).Tooltip("The same seed breaks the same way")
@@ -541,7 +555,12 @@ namespace Dimension
             .Field("Impact Focus", &BreakableComponent::ImpactFocus).Range(0.0f, 1.0f).Speed(0.01f)
                 .Tooltip("Share of the pieces cut small around where it breaks (0 = spread evenly)")
             .Field("Focus Radius", &BreakableComponent::FocusRadius).Range(0.01f, 1.0f).Speed(0.005f)
-                .Tooltip("How far the small pieces reach from the break point, as a fraction of the object's size");
+                .Tooltip("How far the small pieces reach from the break point, as a fraction of the object's size")
+            .Field("Glue Strength", &BreakableComponent::GlueStrength).Range(0.0f, 1e7f).Speed(10.0f)
+                .Tooltip("Above 0: pieces stay stuck to their neighbours (a static object's bottom ones to the ground) until\n"
+                         "a force above this (N) pulls them apart: walls crack and crumble instead of falling apart at once")
+            .Field("Density", &BreakableComponent::Density).Range(1.0f, 20000.0f).Speed(10.0f)
+                .Tooltip("kg per m3 of the pieces when the object is not a dynamic body (a dynamic body's mass is shared)");
         Register<SoftBodyComponent>("Soft Body", "Physics")
             .Field("Mass", &SoftBodyComponent::Mass).Range(0.001f, 10000.0f).Speed(0.01f)
             .Field("Pressure", &SoftBodyComponent::Pressure).Range(0.0f, 100000.0f).Speed(0.5f).Tooltip("Inflates a closed mesh like a balloon (0 = none)")
