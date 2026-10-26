@@ -123,6 +123,7 @@ namespace Editor::UI
         case AssetType::Material: return { 0.95f, 0.85f, 0.4f, 1 };
         case AssetType::Font: return { 0.75f, 0.75f, 0.95f, 1 };
         case AssetType::AnimatorController: return { 0.55f, 0.9f, 0.7f, 1 };
+        case AssetType::Timeline: return { 0.95f, 0.75f, 0.45f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -139,6 +140,7 @@ namespace Editor::UI
         case AssetType::Material: return "MAT";
         case AssetType::Font: return "FONT";
         case AssetType::AnimatorController: return "ANIM";
+        case AssetType::Timeline: return "TIME";
         default: return "FILE";
         }
     }
@@ -672,6 +674,7 @@ namespace Editor::UI
         case FieldType::Material: r = AssetField(label, *(AssetHandle*)p, AssetType::Material); break;
         case FieldType::Font: r = AssetField(label, *(AssetHandle*)p, AssetType::Font); break;
         case FieldType::AnimatorController: r = AssetField(label, *(AssetHandle*)p, AssetType::AnimatorController); break;
+        case FieldType::Timeline: r = AssetField(label, *(AssetHandle*)p, AssetType::Timeline); break;
         case FieldType::EntityRef:
             if (scene) r = EntityField(label, *(Entity*)p, *scene);
             break;

@@ -1,3 +1,4 @@
+#include <Dimension/Terrain/Terrain.h>
 #include "EditorLayer.h"
 #include "Dimension/Platform/AppIcon.h"
 #include "Dimension/ImGui/ImGuiLayer.h"
@@ -107,6 +108,7 @@ namespace Editor
         m_Console = MakeScope<ConsolePanel>();
         m_SceneSettings = MakeScope<SceneSettingsPanel>(m_Ctx);
         m_Animator = MakeScope<AnimatorPanel>(m_Ctx);
+        m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
 
         // Per-project editor layout (like Unity's Library/ folder, not meant for version control).
         fs::path settingsDir = Project::GetDirectory() / ".dimension";
@@ -124,6 +126,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Preferences") m_ShowPreferences = true;
         else if (m_Options.OpenWindow == "Project Settings") m_ShowProjectSettings = true;
         else if (m_Options.OpenWindow == "Audio Mixer") m_ShowAudioMixer = true;
+        else if (m_Options.OpenWindow == "Timeline") m_ShowTimeline = true;
         else if (m_Options.OpenWindow == "Tile Palette") m_ShowTilePalette = true;
 
         LoadGameModule();
@@ -745,6 +748,7 @@ namespace Editor
         if (m_ShowConsole) m_Console->OnImGui(&m_ShowConsole);
         if (m_ShowSceneSettings) m_SceneSettings->OnImGui(&m_ShowSceneSettings);
         if (m_ShowAnimator) m_Animator->OnImGui(&m_ShowAnimator);
+        if (m_ShowTimeline) m_Timeline->OnImGui(&m_ShowTimeline);
         if (m_ShowStats) DrawStats();
         DrawGameView();
         DrawSceneView();
@@ -790,6 +794,7 @@ namespace Editor
         ImGui::DockBuilderDockWindow("Console", bottom);
         ImGui::DockBuilderDockWindow("Animator", bottom);
         ImGui::DockBuilderDockWindow("Audio Mixer", bottom);
+        ImGui::DockBuilderDockWindow("Timeline", bottom);
         ImGui::DockBuilderFinish(id);
     }
 
@@ -898,6 +903,7 @@ namespace Editor
             ImGui::MenuItem("Console", nullptr, &m_ShowConsole);
             ImGui::MenuItem("Scene Settings", nullptr, &m_ShowSceneSettings);
             ImGui::MenuItem("Animator", nullptr, &m_ShowAnimator);
+            ImGui::MenuItem("Timeline", nullptr, &m_ShowTimeline);
             ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
             ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);
@@ -1048,7 +1054,7 @@ namespace Editor
             ImGui::EndDragDropTarget();
         }
 
-        bool tilePainting = UpdateTilePainting(origin, avail);
+        bool tilePainting = UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail);
         bool lineEditing = UpdateLinePointEditing(origin, avail);
 
         // Transform gizmo
@@ -1904,6 +1910,71 @@ namespace Editor
             m_Ctx.MarkDirty();
         }
         ImGui::End();
+    }
+
+    bool EditorLayer::UpdateTerrainBrush(const ImVec2& origin, const ImVec2& size)
+    {
+        // The Inspector's terrain tool sculpts or paints the selected terrain where the mouse points.
+        Scene& scene = m_Ctx.ActiveScene();
+        auto* terrain = m_Ctx.HasValidSelection() && m_Ctx.TerrainTool > 0 && !m_Ctx.IsPlaying()
+                            ? scene.GetRegistry().TryGet<TerrainComponent>(m_Ctx.Selected) : nullptr;
+        if (!terrain || m_Camera.IsControlling())
+        {
+            if (m_TerrainStroke && terrain) Terrain::CommitEdit(*terrain);
+            m_TerrainStroke = false;
+            return false;
+        }
+        auto& t = scene.GetRegistry().Get<TransformComponent>(m_Ctx.Selected);
+        glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
+        glm::mat4 inv = glm::inverse(viewProj);
+        ImVec2 mouse = ImGui::GetMousePos();
+        glm::vec2 ndc((mouse.x - origin.x) / size.x * 2.0f - 1.0f, 1.0f - (mouse.y - origin.y) / size.y * 2.0f);
+        glm::vec4 a = inv * glm::vec4(ndc, 0.0f, 1.0f), b = inv * glm::vec4(ndc, 1.0f, 1.0f);
+        glm::vec3 from = glm::vec3(a) / a.w, to = glm::vec3(b) / b.w;
+        glm::vec3 hit;
+        bool onTerrain = m_SceneViewHovered && Terrain::Raycast(*terrain, t.World, from, to - from, hit);
+        if (onTerrain)
+        {
+            // The brush outline, following the ground.
+            std::vector<float> heights = Terrain::BuildHeights(*terrain);
+            glm::mat4 toLocal = glm::inverse(t.World);
+            glm::vec3 local = glm::vec3(toLocal * glm::vec4(hit, 1.0f));
+            float radius = m_Ctx.TerrainBrushSize;
+            ImVec2 points[49];
+            for (int i = 0; i <= 48; ++i)
+            {
+                float angle = i / 48.0f * 6.2831853f;
+                glm::vec2 p(local.x + std::cos(angle) * radius, local.z + std::sin(angle) * radius);
+                glm::vec4 c = viewProj * (t.World * glm::vec4(p.x, Terrain::HeightAt(*terrain, heights, p.x, p.y) + 0.05f, p.y, 1.0f));
+                glm::vec2 n = glm::vec2(c) / std::max(c.w, 1e-4f);
+                points[i] = ImVec2(origin.x + (n.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - n.y * 0.5f) * size.y);
+            }
+            bool paint = m_Ctx.TerrainTool - 1 >= (int)Terrain::BrushMode::PaintGrass;
+            ImGui::GetWindowDrawList()->AddPolyline(points, 49, paint ? IM_COL32(120, 230, 120, 255) : IM_COL32(90, 200, 255, 255), 0, 2.0f);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
+            {
+                m_Ctx.RecordUndo();
+                Terrain::BeginEdit(*terrain);
+                m_TerrainFlatten = local.y;
+                m_TerrainStroke = true;
+            }
+            if (m_TerrainStroke && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+                auto mode = (Terrain::BrushMode)(m_Ctx.TerrainTool - 1);
+                // Shift reverses raise and lower.
+                if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::Raise) mode = Terrain::BrushMode::Lower;
+                else if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::Lower) mode = Terrain::BrushMode::Raise;
+                Terrain::ApplyBrush(*terrain, mode, glm::vec2(local.x, local.z), radius, m_Ctx.TerrainBrushStrength,
+                                    std::min(ImGui::GetIO().DeltaTime, 0.05f), m_TerrainFlatten);
+            }
+        }
+        if (m_TerrainStroke && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            Terrain::CommitEdit(*terrain);
+            m_Ctx.MarkDirty();
+            m_TerrainStroke = false;
+        }
+        return m_SceneViewHovered || m_TerrainStroke;
     }
 
     bool EditorLayer::UpdateTilePainting(const ImVec2& origin, const ImVec2& size)

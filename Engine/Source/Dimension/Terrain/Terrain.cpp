@@ -63,6 +63,73 @@ namespace Dimension::Terrain
         }
     }
 
+    namespace
+    {
+        const char* kBase64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+        std::string Encode(const uint8_t* data, size_t size)
+        {
+            std::string out;
+            out.reserve((size + 2) / 3 * 4);
+            for (size_t i = 0; i < size; i += 3)
+            {
+                uint32_t v = (uint32_t)data[i] << 16 | (i + 1 < size ? (uint32_t)data[i + 1] << 8 : 0u) | (i + 2 < size ? data[i + 2] : 0u);
+                out += kBase64[v >> 18 & 63];
+                out += kBase64[v >> 12 & 63];
+                out += i + 1 < size ? kBase64[v >> 6 & 63] : '=';
+                out += i + 2 < size ? kBase64[v & 63] : '=';
+            }
+            return out;
+        }
+
+        std::vector<uint8_t> Decode(const std::string& text)
+        {
+            int table[256];
+            std::fill(std::begin(table), std::end(table), -1);
+            for (int i = 0; i < 64; ++i) table[(uint8_t)kBase64[i]] = i;
+            std::vector<uint8_t> out;
+            out.reserve(text.size() / 4 * 3);
+            uint32_t acc = 0;
+            int bits = 0;
+            for (char c : text)
+            {
+                int v = table[(uint8_t)c];
+                if (v < 0) continue; // padding, whitespace
+                acc = acc << 6 | (uint32_t)v;
+                bits += 6;
+                if (bits >= 8)
+                {
+                    bits -= 8;
+                    out.push_back((uint8_t)(acc >> bits & 0xFF));
+                }
+            }
+            return out;
+        }
+
+        // The sculpted heights (meters) when the edits match the resolution; empty otherwise.
+        std::vector<float> EditedHeights(const TerrainComponent& t, int n)
+        {
+            if (t.EditHeights.size() == (size_t)n * n) return t.EditHeights;
+            if (t.SculptedHeights.empty()) return {};
+            std::vector<uint8_t> bytes = Decode(t.SculptedHeights);
+            if (bytes.size() != (size_t)n * n * 2) return {};
+            std::vector<float> h((size_t)n * n);
+            for (size_t i = 0; i < h.size(); ++i) h[i] = (bytes[i * 2] | bytes[i * 2 + 1] << 8) / 65535.0f * t.Height;
+            return h;
+        }
+
+        std::vector<uint32_t> EditedLayers(const TerrainComponent& t, size_t count)
+        {
+            if (t.EditLayers.size() == count) return t.EditLayers;
+            if (t.PaintedLayers.empty()) return {};
+            std::vector<uint8_t> bytes = Decode(t.PaintedLayers);
+            if (bytes.size() != count * 3) return {};
+            std::vector<uint32_t> s(count);
+            for (size_t i = 0; i < count; ++i) s[i] = bytes[i * 3] | bytes[i * 3 + 1] << 8 | bytes[i * 3 + 2] << 16 | 0xFF000000u;
+            return s;
+        }
+    }
+
     int SampleCount(const TerrainComponent& terrain)
     {
         int n = std::clamp(terrain.Resolution, 4, 1024);
@@ -72,6 +139,7 @@ namespace Dimension::Terrain
     std::vector<float> BuildHeights(const TerrainComponent& terrain)
     {
         int n = SampleCount(terrain);
+        if (std::vector<float> edited = EditedHeights(terrain, n); !edited.empty()) return edited;
         std::vector<float> heights((size_t)n * n, 0.0f);
         const HeightImage* image = terrain.Heightmap.IsValid() ? LoadHeightmap(terrain.Heightmap) : nullptr;
         glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
@@ -154,6 +222,7 @@ namespace Dimension::Terrain
 
     std::vector<uint32_t> BuildSplat(const TerrainComponent& terrain, const MeshData& mesh)
     {
+        if (std::vector<uint32_t> painted = EditedLayers(terrain, mesh.Vertices.size()); !painted.empty()) return painted;
         std::vector<uint32_t> splat(mesh.Vertices.size());
         float slopeAt = std::cos(glm::radians(std::clamp(terrain.RockSlope, 1.0f, 89.0f)));
         for (size_t i = 0; i < mesh.Vertices.size(); ++i)
@@ -191,6 +260,14 @@ namespace Dimension::Terrain
         mix(&t.FlatHeight, sizeof(t.FlatHeight));
         mix(&t.RockSlope, sizeof(t.RockSlope));
         mix(&t.SnowHeight, sizeof(t.SnowHeight));
+        auto mixString = [&](const std::string& s) {
+            size_t size = s.size();
+            mix(&size, sizeof(size));
+            mix(s.data(), s.size());
+        };
+        mixString(t.SculptedHeights);
+        mixString(t.PaintedLayers);
+        mix(&t.EditRevision, sizeof(t.EditRevision));
         if (t.Heightmap.IsValid())
         {
             std::error_code ec;
@@ -229,4 +306,151 @@ namespace Dimension::Terrain
     }
 
     void ReleaseRuntimes() { Runtimes().clear(); }
+
+    void BeginEdit(TerrainComponent& terrain)
+    {
+        int n = SampleCount(terrain);
+        if (terrain.EditHeights.size() != (size_t)n * n) terrain.EditHeights = BuildHeights(terrain);
+        if (terrain.EditLayers.size() != (size_t)n * n)
+        {
+            MeshData mesh = BuildMesh(terrain, terrain.EditHeights);
+            terrain.EditLayers = BuildSplat(terrain, mesh);
+        }
+    }
+
+    bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight)
+    {
+        BeginEdit(terrain);
+        int n = SampleCount(terrain);
+        glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+        if (std::abs(at.x) > size.x * 0.5f + radius || std::abs(at.y) > size.y * 0.5f + radius) return false;
+        glm::vec2 cell = size / (float)(n - 1);
+        radius = std::max(radius, std::min(cell.x, cell.y));
+        int c0 = std::max(0, (int)std::floor((at.x - radius) / cell.x + (n - 1) * 0.5f)), c1 = std::min(n - 1, (int)std::ceil((at.x + radius) / cell.x + (n - 1) * 0.5f));
+        int r0 = std::max(0, (int)std::floor((at.y - radius) / cell.y + (n - 1) * 0.5f)), r1 = std::min(n - 1, (int)std::ceil((at.y + radius) / cell.y + (n - 1) * 0.5f));
+        std::vector<float> before = mode == BrushMode::Smooth ? terrain.EditHeights : std::vector<float>();
+        float rate = std::clamp(strength, 0.0f, 1.0f) * dt;
+        for (int r = r0; r <= r1; ++r)
+            for (int c = c0; c <= c1; ++c)
+            {
+                glm::vec2 p(-size.x * 0.5f + c * cell.x, -size.y * 0.5f + r * cell.y);
+                float d = glm::length(p - at) / radius;
+                if (d >= 1.0f) continue;
+                float falloff = 1.0f - Smooth(0.0f, 1.0f, d); // soft edge
+                size_t i = (size_t)r * n + c;
+                float& h = terrain.EditHeights[i];
+                switch (mode)
+                {
+                case BrushMode::Raise: h += terrain.Height * 0.5f * rate * falloff; break;
+                case BrushMode::Lower: h -= terrain.Height * 0.5f * rate * falloff; break;
+                case BrushMode::Flatten: h += (flattenHeight - h) * std::min(rate * 6.0f * falloff, 1.0f); break;
+                case BrushMode::Smooth:
+                {
+                    float sum = 0.0f;
+                    int count = 0;
+                    for (int dr = -1; dr <= 1; ++dr)
+                        for (int dc = -1; dc <= 1; ++dc)
+                        {
+                            int rr = std::clamp(r + dr, 0, n - 1), cc = std::clamp(c + dc, 0, n - 1);
+                            sum += before[(size_t)rr * n + cc];
+                            ++count;
+                        }
+                    h += (sum / count - h) * std::min(rate * 8.0f * falloff, 1.0f);
+                    break;
+                }
+                default:
+                {
+                    // Painting: move this sample's weights toward the layer.
+                    int layer = (int)mode - (int)BrushMode::PaintGrass;
+                    uint32_t& s = terrain.EditLayers[i];
+                    float w[3] = { (s & 255) / 255.0f, (s >> 8 & 255) / 255.0f, (s >> 16 & 255) / 255.0f };
+                    float amount = std::min(rate * 4.0f * falloff, 1.0f);
+                    for (int k = 0; k < 3; ++k) w[k] += ((k == layer ? 1.0f : 0.0f) - w[k]) * amount;
+                    auto byte = [](float x) { return (uint32_t)std::clamp((int)std::lround(x * 255.0f), 0, 255); };
+                    s = byte(w[0]) | byte(w[1]) << 8 | byte(w[2]) << 16 | 0xFF000000u;
+                    break;
+                }
+                }
+                h = std::clamp(h, 0.0f, terrain.Height);
+            }
+        ++terrain.EditRevision;
+        return true;
+    }
+
+    void CommitEdit(TerrainComponent& terrain)
+    {
+        int n = SampleCount(terrain);
+        if (terrain.EditHeights.size() == (size_t)n * n)
+        {
+            std::vector<uint8_t> bytes((size_t)n * n * 2);
+            for (size_t i = 0; i < terrain.EditHeights.size(); ++i)
+            {
+                uint16_t v = (uint16_t)std::clamp((int)std::lround(terrain.EditHeights[i] / std::max(terrain.Height, 1e-4f) * 65535.0f), 0, 65535);
+                bytes[i * 2] = (uint8_t)(v & 0xFF);
+                bytes[i * 2 + 1] = (uint8_t)(v >> 8);
+            }
+            terrain.SculptedHeights = Encode(bytes.data(), bytes.size());
+        }
+        if (terrain.EditLayers.size() == (size_t)n * n)
+        {
+            std::vector<uint8_t> bytes((size_t)n * n * 3);
+            for (size_t i = 0; i < terrain.EditLayers.size(); ++i)
+            {
+                bytes[i * 3] = (uint8_t)(terrain.EditLayers[i] & 255);
+                bytes[i * 3 + 1] = (uint8_t)(terrain.EditLayers[i] >> 8 & 255);
+                bytes[i * 3 + 2] = (uint8_t)(terrain.EditLayers[i] >> 16 & 255);
+            }
+            terrain.PaintedLayers = Encode(bytes.data(), bytes.size());
+        }
+        // The serialized edits are now the source; the stored heights round to 16 bits.
+        terrain.EditHeights.clear();
+        terrain.EditLayers.clear();
+        ++terrain.EditRevision;
+    }
+
+    void ClearEdits(TerrainComponent& terrain)
+    {
+        terrain.SculptedHeights.clear();
+        terrain.PaintedLayers.clear();
+        terrain.EditHeights.clear();
+        terrain.EditLayers.clear();
+        ++terrain.EditRevision;
+    }
+
+    bool Raycast(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& origin, const glm::vec3& direction, glm::vec3& hit)
+    {
+        // March in the object's space, then bisect the crossing.
+        glm::mat4 inv = glm::inverse(world);
+        glm::vec3 o = glm::vec3(inv * glm::vec4(origin, 1.0f)), d = glm::vec3(inv * glm::vec4(direction, 0.0f));
+        float len = glm::length(d);
+        if (len < 1e-8f) return false;
+        d /= len;
+        std::vector<float> heights = BuildHeights(terrain);
+        glm::vec2 half = glm::max(terrain.Size, glm::vec2(0.01f)) * 0.5f;
+        float reach = glm::length(glm::vec3(half.x, terrain.Height, half.y)) * 2.0f + glm::length(o);
+        float step = std::max(std::min(terrain.Size.x, terrain.Size.y) / (float)SampleCount(terrain) * 0.5f, 0.01f);
+        auto above = [&](const glm::vec3& p) { return p.y - HeightAt(terrain, heights, p.x, p.z); };
+        float prevT = 0.0f, prev = above(o);
+        for (float t = step; t < reach; t += step)
+        {
+            glm::vec3 p = o + d * t;
+            bool inside = std::abs(p.x) <= half.x && std::abs(p.z) <= half.y;
+            float a = above(p);
+            if (inside && prev > 0.0f && a <= 0.0f)
+            {
+                float lo = prevT, hi = t;
+                for (int k = 0; k < 20; ++k)
+                {
+                    float mid = 0.5f * (lo + hi);
+                    if (above(o + d * mid) > 0.0f) lo = mid;
+                    else hi = mid;
+                }
+                hit = glm::vec3(world * glm::vec4(o + d * hi, 1.0f));
+                return true;
+            }
+            prevT = t;
+            prev = a;
+        }
+        return false;
+    }
 }

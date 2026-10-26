@@ -77,6 +77,7 @@ namespace Dimension
         void CreateSoftBody(Entity e);
         void UpdateCloths(float dt, bool afterStep);
         void UpdateVehicles(bool afterStep);
+        void UpdateWater(float dt); // buoyancy and drag from Water Volumes
         Scene& m_Scene;
         Scope<Impl> m_Impl;
     };

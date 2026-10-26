@@ -12,8 +12,9 @@ namespace Dimension
     struct Material;
     class Font;
     struct AnimatorController;
+    struct TimelineAsset;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -87,6 +88,10 @@ namespace Dimension
         static Ref<AnimatorController> GetAnimatorController(AssetHandle handle);
         static void SaveAnimatorController(AssetHandle handle);
         static AssetHandle CreateAnimatorController(const fs::path& absolutePath);
+        // Timelines (.timeline) are editable in place too; SaveTimeline writes the changes.
+        static Ref<TimelineAsset> GetTimeline(AssetHandle handle);
+        static void SaveTimeline(AssetHandle handle);
+        static AssetHandle CreateTimeline(const fs::path& absolutePath);
         static Ref<Font> GetDefaultFont();
         static Ref<Texture2D> GetWhiteTexture();
         static Ref<Texture2D> GetCheckerTexture();

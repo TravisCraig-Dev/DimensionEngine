@@ -150,6 +150,7 @@ namespace Dimension
         // Re-captures every reflection probe on the next frame (all renderers).
         static void RequestProbeBake();
         static constexpr uint32_t kMaxReflectionProbes = 8;
+        static constexpr uint32_t kMaxProbeVolumes = 4; // light probe volumes shading a view (MAX_PROBE_VOLUMES in Common.glsl)
 
     private:
         struct LineVertex
@@ -253,6 +254,20 @@ namespace Dimension
         const Pipeline& MainPipeline(int kind) const;
         static void MultisampleInto(VkRenderingAttachmentInfo& att, const Image& multisampled, const Image& resolved, VkResolveModeFlagBits mode);
         void UpdateReflectionProbes(VkCommandBuffer cmd, Scene& scene);
+        // Light probe volumes: one probe captured per frame while baking, read back a few frames later.
+        void UpdateLightProbes(VkCommandBuffer cmd, Scene& scene);
+        struct Readback
+        {
+            Buffer Data;
+            bool Busy = false;
+            uint64_t Frame = 0;
+            const Scene* Owner = nullptr;
+            uint32_t EntityIndex = 0, EntityGeneration = 0;
+            int Probe = 0;
+            uint32_t Width = 0, Height = 0;
+        };
+        std::vector<Readback> m_LightProbeReadbacks;
+        std::unique_ptr<ProbeResources> m_LightProbeCapture;
         void BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t resolution);
 
         // GGX-prefiltered copy of the HDR sky texture for reflections (mip m = roughness m / (mips - 1)), rebuilt
@@ -292,9 +307,10 @@ namespace Dimension
             uint32_t Capacity, Texture, Entity;
             bool Additive;
             int32_t Order;
+            VkDeviceAddress Sorted = 0; // back-to-front slot order, 0 = unsorted
         };
         std::vector<GpuParticleDraw> m_GpuParticleDraws;
-        void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target);
+        void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& view);
         // GPU particle world collision reads the depth this view stored last frame (with its view-projection).
         bool m_ParticleDepthWanted = false, m_ParticleDepthKept = false;
         glm::mat4 m_ParticleDepthViewProj{ 1.0f };

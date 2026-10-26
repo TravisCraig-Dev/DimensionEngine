@@ -8,6 +8,7 @@
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Animation/AnimatorController.h"
+#include "Dimension/Animation/Timeline.h"
 #include "embedded/kDefaultFontData.h"
 #include <algorithm>
 #include <cmath>
@@ -33,6 +34,7 @@ namespace Dimension
             std::unordered_map<AssetHandle, Ref<Material>> Materials;
             std::unordered_map<AssetHandle, Ref<Font>> Fonts;
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
+            std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
             // Model sub-assets (embedded materials/textures), keyed by the model.
             std::unordered_map<AssetHandle, std::vector<AssetHandle>> MeshMaterials;
             std::unordered_map<AssetHandle, std::vector<std::string>> MeshMaterialNames;
@@ -97,6 +99,7 @@ namespace Dimension
             s->Materials.erase(h);
             s->Fonts.erase(h);
             s->Controllers.erase(h);
+            s->Timelines.erase(h);
         }
     }
 
@@ -112,6 +115,7 @@ namespace Dimension
         case AssetType::Material: return "Material";
         case AssetType::Font: return "Font";
         case AssetType::AnimatorController: return "Animator Controller";
+        case AssetType::Timeline: return "Timeline";
         default: return "None";
         }
     }
@@ -232,6 +236,7 @@ namespace Dimension
         if (ext == ".mat") return AssetType::Material;
         if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
         if (ext == ".controller") return AssetType::AnimatorController;
+        if (ext == ".timeline") return AssetType::Timeline;
         if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" || ext == ".opus") return AssetType::Audio;
         return AssetType::None;
     }
@@ -688,6 +693,35 @@ namespace Dimension
         idle.Name = "Idle";
         controller.States.push_back(idle);
         if (!controller.Save(absolutePath)) return AssetHandle::None();
+        return Import(absolutePath);
+    }
+
+    Ref<TimelineAsset> AssetManager::GetTimeline(AssetHandle handle)
+    {
+        if (!handle.IsValid() || !s) return nullptr;
+        if (auto it = s->Timelines.find(handle); it != s->Timelines.end()) return it->second;
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::Timeline) return nullptr;
+        auto timeline = TimelineAsset::Load(s->AssetsDir / meta->Path);
+        s->Timelines[handle] = timeline;
+        return timeline;
+    }
+
+    void AssetManager::SaveTimeline(AssetHandle handle)
+    {
+        auto it = s->Timelines.find(handle);
+        auto* meta = GetMetadata(handle);
+        if (it == s->Timelines.end() || !it->second || !meta) return;
+        fs::path path = s->AssetsDir / meta->Path;
+        it->second->Save(path);
+        std::error_code ec;
+        s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
+    }
+
+    AssetHandle AssetManager::CreateTimeline(const fs::path& absolutePath)
+    {
+        TimelineAsset timeline;
+        if (!timeline.Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
     }
 

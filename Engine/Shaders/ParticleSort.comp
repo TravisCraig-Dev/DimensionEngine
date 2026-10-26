@@ -1,0 +1,33 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+// GPU particle sorting, step 2: one compare-and-swap stage of a bitonic sort over the (key, slot) list (run for every
+// K = 2, 4, ... and J = K / 2 ... 1; ascending overall).
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer SortRef { uvec2 Items[]; };
+
+layout(push_constant) uniform Push
+{
+    uvec2 Sort;
+    uint J;
+    uint K;
+    uint Padded;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.Padded) return;
+    uint l = i ^ pc.J;
+    if (l <= i) return;
+    SortRef list = SortRef(pc.Sort);
+    uvec2 a = list.Items[i], b = list.Items[l];
+    bool ascending = (i & pc.K) == 0u;
+    if ((a.x > b.x) == ascending)
+    {
+        list.Items[i] = b;
+        list.Items[l] = a;
+    }
+}

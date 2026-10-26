@@ -24,6 +24,21 @@ namespace Dimension
         // Layer weights per sample (r grass, g rock, b snow) as RGBA8.
         std::vector<uint32_t> BuildSplat(const TerrainComponent& terrain, const MeshData& mesh);
 
+        // Editing (the editor's brushes). Sculpt modes change the heights; paint modes add a layer's weight.
+        enum class BrushMode : int32_t { Raise = 0, Lower, Smooth, Flatten, PaintGrass, PaintRock, PaintSnow, Count };
+        // Starts editing: the current heights and layers (from the edits, or else the heightmap/noise and automatic
+        // layers) become the editable arrays.
+        void BeginEdit(TerrainComponent& terrain);
+        // One brush step at a point in the object's space (XZ), radius in meters, strength 0-1, over dt seconds.
+        // Flatten moves toward `flattenHeight` (meters). Returns false when the point is off the terrain.
+        bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight);
+        // Writes the editable arrays into the serialized fields (call when a stroke ends).
+        void CommitEdit(TerrainComponent& terrain);
+        // Drops the edits: back to the heightmap/noise and automatic layers.
+        void ClearEdits(TerrainComponent& terrain);
+        // Where a ray (world space) first meets the terrain (`world` is the object's transform).
+        bool Raycast(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& origin, const glm::vec3& direction, glm::vec3& hit);
+
         // The GPU mesh and splat texture for a terrain's current settings (cached; rebuilt when they change).
         struct Runtime
         {

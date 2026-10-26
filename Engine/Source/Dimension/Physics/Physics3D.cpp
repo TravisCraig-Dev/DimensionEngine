@@ -176,6 +176,13 @@ namespace Dimension
             Entity E;
             JPH::BodyID Body;
             std::vector<glm::vec3> Rest;   // grid positions in the object's space
+            // Attached cloth: the pinned vertices in the attached object's space, and the free vertices' momentum last
+            // step (its change, less gravity and wind, is what the pins carry).
+            Entity Attached = Entity::Null();
+            std::vector<glm::vec3> AttachedRest;
+            glm::vec3 LastMomentum{ 0.0f };
+            bool HasMomentum = false;
+            glm::vec3 PullForce{ 0.0f }; // smoothed force of the pins on the cloth
             std::vector<uint32_t> Pinned;
             std::vector<uint32_t> Indices;
             std::vector<Vertex> Template; // UVs and rest tangents for the rendered vertices
@@ -364,6 +371,14 @@ namespace Dimension
         Impl::ClothBody body;
         body.E = e;
         body.Pinned = Cloth::PinnedVertices(cloth);
+        if (!cloth.AttachTo.IsNull() && m_Scene.IsValid(cloth.AttachTo) && cloth.AttachTo != e)
+        {
+            body.Attached = cloth.AttachTo;
+            glm::mat4 toAttached = glm::inverse(reg.Get<TransformComponent>(cloth.AttachTo).World) * t.World;
+            MeshData restGrid = Cloth::BuildGrid(cloth);
+            body.AttachedRest.resize(restGrid.Vertices.size());
+            for (uint32_t p : body.Pinned) body.AttachedRest[p] = glm::vec3(toAttached * glm::vec4(restGrid.Vertices[p].Position, 1.0f));
+        }
         body.Indices = grid.Indices;
         body.LiveIndices = grid.Indices;
         body.Template = grid.Vertices;
@@ -559,9 +574,11 @@ namespace Dimension
             {
                 // Pinned vertices follow the object: Jolt moves kinematic vertices by their velocity, so they get the
                 // velocity that reaches the object's pose over this step. Wind pushes the others.
+                const TransformComponent* holder = !c.Attached.IsNull() && m_Scene.IsValid(c.Attached) ? reg.TryGet<TransformComponent>(c.Attached) : nullptr;
                 for (uint32_t p : c.Pinned)
                 {
-                    glm::vec3 target = glm::vec3(t.World * glm::vec4(c.Rest[p], 1.0f)) - origin;
+                    glm::vec3 target = (holder ? glm::vec3(holder->World * glm::vec4(c.AttachedRest[p], 1.0f))
+                                               : glm::vec3(t.World * glm::vec4(c.Rest[p], 1.0f))) - origin;
                     glm::vec3 now = FromJolt(vertices[p].mPosition);
                     if (dt > 0.0f) vertices[p].mVelocity = ToJolt((target - now) / dt);
                     else vertices[p].mPosition = ToJolt(target);
@@ -571,6 +588,35 @@ namespace Dimension
                         if (v.mInvMass > 0.0f) v.mVelocity += ToJolt(cloth->Wind * dt);
                 continue;
             }
+            // Attached cloth pulls on the body holding it: the force the pins exert on the cloth is the change of the
+            // free vertices' momentum minus gravity and wind; the body gets the opposite, at the pins' center.
+            if (!c.Attached.IsNull() && m_Scene.IsValid(c.Attached) && dt > 0.0f)
+                if (auto* holderRb = reg.TryGet<RigidbodyComponent>(c.Attached); holderRb && holderRb->Type == BodyType::Dynamic && holderRb->RuntimeBody != 0xFFFFFFFF)
+                {
+                    glm::vec3 momentum(0.0f), pinCenter(0.0f);
+                    float freeMass = 0.0f;
+                    for (auto& v : vertices)
+                        if (v.mInvMass > 0.0f)
+                        {
+                            momentum += FromJolt(v.mVelocity) / v.mInvMass;
+                            freeMass += 1.0f / v.mInvMass;
+                        }
+                    for (uint32_t p : c.Pinned) pinCenter += origin + FromJolt(vertices[p].mPosition);
+                    if (!c.Pinned.empty()) pinCenter /= (float)c.Pinned.size();
+                    if (c.HasMomentum)
+                    {
+                        glm::vec3 external = freeMass * (FromJolt(m_Impl->System.GetGravity()) + cloth->Wind);
+                        glm::vec3 onCloth = (momentum - c.LastMomentum) / dt - external;
+                        // The momentum change is noisy step to step (and feeds back through the pins), so the body
+                        // gets it smoothed over about a tenth of a second and capped at a few times the cloth's weight.
+                        c.PullForce += (onCloth - c.PullForce) * (1.0f - std::exp(-dt / 0.03f));
+                        float cap = 3.0f * glm::length(external) + 1e-3f;
+                        if (glm::length(c.PullForce) > cap) c.PullForce *= cap / glm::length(c.PullForce);
+                        m_Impl->System.GetBodyInterfaceNoLock().AddForce(JPH::BodyID(holderRb->RuntimeBody), ToJolt(-c.PullForce), JPH::RVec3(ToJolt(pinCenter)));
+                    }
+                    c.LastMomentum = momentum;
+                    c.HasMomentum = true;
+                }
             // Tearing: an edge stretched past (1 + Tear Stretch) times its rest length breaks, and the faces on it
             // come off (the rest of the cloth hangs on by what is left).
             if (cloth->TearStretch > 0.0f && !c.Edges.empty())
@@ -774,6 +820,35 @@ namespace Dimension
         m_Impl->System.AddConstraint(constraint);
         m_Impl->System.AddStepListener(constraint);
         m_Impl->Vehicles.push_back({ e, constraint });
+    }
+
+    void Physics3DWorld::UpdateWater(float dt)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        if (dt <= 0.0f) return;
+        auto& lockInterface = m_Impl->System.GetBodyLockInterface();
+        JPH::Vec3 gravity = m_Impl->System.GetGravity();
+        for (auto [w, water, wt] : reg.ViewOf<WaterVolumeComponent, TransformComponent>())
+        {
+            if (!wt.ActiveInHierarchy) continue;
+            glm::vec3 center = wt.GetWorldPosition(), half = glm::abs(water.Size * wt.Scale) * 0.5f;
+            glm::vec3 lo = center - half, hi = center + half;
+            JPH::RVec3 surface(center.x, hi.y, center.z);
+            for (auto [e, rb, t] : reg.ViewOf<RigidbodyComponent, TransformComponent>())
+            {
+                if (rb.RuntimeBody == 0xFFFFFFFF || rb.Type != BodyType::Dynamic || !t.ActiveInHierarchy) continue;
+                JPH::BodyLockWrite lock(lockInterface, JPH::BodyID(rb.RuntimeBody));
+                if (!lock.Succeeded()) continue;
+                JPH::Body& body = lock.GetBody();
+                JPH::AABox box = body.GetWorldSpaceBounds();
+                glm::vec3 bmin = FromJolt(box.mMin), bmax = FromJolt(box.mMax);
+                if (bmax.x < lo.x || bmin.x > hi.x || bmax.z < lo.z || bmin.z > hi.z || bmin.y > hi.y || bmax.y < lo.y) continue;
+                // Jolt measures the part of the shape below the surface plane and pushes it up (and drags it).
+                if (body.ApplyBuoyancyImpulse(surface, JPH::Vec3::sAxisY(), std::max(water.Buoyancy, 0.0f), std::max(water.LinearDrag, 0.0f),
+                                              std::max(water.AngularDrag, 0.0f), ToJolt(water.Flow), gravity, dt))
+                    if (!body.IsActive()) m_Impl->System.GetBodyInterfaceNoLock().ActivateBody(body.GetID());
+            }
+        }
     }
 
     void Physics3DWorld::UpdateVehicles(bool afterStep)
@@ -1310,6 +1385,7 @@ namespace Dimension
 
         UpdateVehicles(false);
         UpdateCloths(dt, false);
+        UpdateWater(dt);
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
         UpdateCloths(dt, true);
 

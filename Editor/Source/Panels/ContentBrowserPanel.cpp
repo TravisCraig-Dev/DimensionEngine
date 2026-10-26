@@ -338,6 +338,11 @@ namespace Editor
                     AssetHandle h = AssetManager::CreateAnimatorController(UniquePath(m_Current / "New Animator.controller"));
                     if (h.IsValid()) m_Ctx.SelectAsset(h);
                 }
+                if (ImGui::MenuItem("New Timeline"))
+                {
+                    AssetHandle h = AssetManager::CreateTimeline(UniquePath(m_Current / "New Timeline.timeline"));
+                    if (h.IsValid()) m_Ctx.SelectAsset(h);
+                }
                 if (ImGui::MenuItem("New Scene"))
                 {
                     fs::path p = UniquePath(m_Current / "New Scene.scene");

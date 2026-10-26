@@ -12,6 +12,8 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
+#include <Dimension/Animation/Timeline.h>
+#include <Dimension/Audio/Microphone.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Platform/AppIcon.h>
@@ -659,6 +661,42 @@ namespace
             }
             rt->OnRuntimeStop();
         }
+        // Attach To: a 10 kg box without gravity holding a 2 kg banner by its top edge is pulled down by it (together
+        // they fall at about 2/12 g), and the banner's top edge travels with the box. Unattached, the box stays put.
+        for (bool attached : { false, true })
+        {
+            Scene scene("Banner");
+            auto& reg = scene.GetRegistry();
+            Entity holder = scene.CreateEntity("Holder");
+            reg.Get<TransformComponent>(holder).Position = { 0, 5, 0 };
+            auto& rb = reg.Emplace<RigidbodyComponent>(holder);
+            rb.Mass = 10.0f;
+            rb.UseGravity = false;
+            rb.LinearDamping = 0.0f;
+            reg.Emplace<BoxColliderComponent>(holder).Size = { 0.2f, 0.2f, 0.2f };
+            Entity banner = scene.CreateEntity("Banner");
+            reg.Get<TransformComponent>(banner).Position = { 0, 3.8f, 0 }; // top edge at y = 4.8, just under the holder
+            auto& c = reg.Emplace<ClothComponent>(banner);
+            c.Resolution = 8;
+            c.Mass = 2.0f;
+            if (attached) c.AttachTo = holder;
+            reg.Emplace<MeshRendererComponent>(banner);
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            run(rt, 1.0f);
+            float y = rt->GetRegistry().Get<TransformComponent>(holder).GetWorldPosition().y;
+            if (!attached)
+                CHECK(Near(y, 5.0f, 0.01f));
+            else
+            {
+                CHECK(y < 4.7f && y > 3.6f); // dragged down by the banner's weight (about 0.8 m in a second)
+                auto& sim = rt->GetRegistry().Get<ClothComponent>(banner);
+                glm::vec3 top = glm::vec3(rt->GetRegistry().Get<TransformComponent>(banner).World * glm::vec4(sim.SimulatedPositions[8 * 9 + 4], 1.0f));
+                CHECK(sim.SimulatedPositions.size() == 81 && Near(top.y, y - 0.2f, 0.1f)); // the pinned edge stayed with it
+            }
+            rt->OnRuntimeStop();
+        }
         // An unpinned sheet dropped on a sphere drapes over it: its middle rests on top, its edges hang lower.
         {
             Scene scene("Drape");
@@ -893,6 +931,152 @@ namespace
         }
     }
 
+    void TestTimelines()
+    {
+        // Sampling: linear halfway, step holds, smooth eases (flat at the ends, matches the keys).
+        TimelineTrack track;
+        float zero[4] = { 0, 0, 0, 0 }, ten[4] = { 10, 20, 0, 0 }, four[4] = { 4, 0, 0, 0 };
+        Timeline::SetKey(track, 2.0f, ten, 2);
+        Timeline::SetKey(track, 0.0f, zero, 2);
+        CHECK(track.Keys.size() == 2 && track.Keys[0].Time == 0.0f); // sorted
+        Timeline::SetKey(track, 2.0f, four, 1); // same time: replaced
+        CHECK(track.Keys.size() == 2 && track.Keys[1].Value[0] == 4.0f);
+        Timeline::SetKey(track, 2.0f, ten, 2);
+        float v[4];
+        track.Interpolation = TimelineInterpolation::Linear;
+        CHECK(Timeline::Sample(track, 1.0f, v) && Near(v[0], 5.0f) && Near(v[1], 10.0f));
+        CHECK(Timeline::Sample(track, -1.0f, v) && v[0] == 0.0f && Timeline::Sample(track, 9.0f, v) && v[0] == 10.0f); // clamped
+        track.Interpolation = TimelineInterpolation::Step;
+        CHECK(Timeline::Sample(track, 1.99f, v) && v[0] == 0.0f);
+        track.Interpolation = TimelineInterpolation::Smooth;
+        float early[4], mid[4];
+        Timeline::Sample(track, 0.2f, early);
+        Timeline::Sample(track, 1.0f, mid);
+        CHECK(early[0] < 1.0f && Near(mid[0], 5.0f)); // eases in, symmetric in the middle
+
+        // An asset animating the object's position and a child light's intensity (by path), with an event.
+        fs::path assets = fs::temp_directory_path() / "dimension_timeline_test" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        AssetHandle handle = AssetManager::CreateTimeline(assets / "Door.timeline");
+        CHECK(handle.IsValid() && AssetManager::GetTimeline(handle) != nullptr);
+        {
+            auto tl = AssetManager::GetTimeline(handle);
+            tl->Duration = 2.0f;
+            TimelineTrack pos;
+            pos.Component = "Transform";
+            pos.Field = "Position";
+            pos.Interpolation = TimelineInterpolation::Linear;
+            float a[4] = { 0, 0, 0, 0 }, b[4] = { 0, 4, 0, 0 };
+            Timeline::SetKey(pos, 0.0f, a, 3);
+            Timeline::SetKey(pos, 2.0f, b, 3);
+            TimelineTrack light;
+            light.Path = "Lamp";
+            light.Component = "Point Light";
+            light.Field = "Intensity";
+            light.Interpolation = TimelineInterpolation::Linear;
+            float off[4] = { 0 }, on[4] = { 8 };
+            Timeline::SetKey(light, 0.0f, off, 1);
+            Timeline::SetKey(light, 1.0f, on, 1);
+            tl->Tracks = { pos, light };
+            tl->Events = { { 1.5f, "OnDoorOpen" } };
+            AssetManager::SaveTimeline(handle);
+        }
+        auto back = TimelineAsset::Load(assets / "Door.timeline");
+        CHECK(back->Tracks.size() == 2 && back->Tracks[1].Path == "Lamp" && back->Tracks[0].Keys.size() == 2 && Near(back->Tracks[0].Keys[1].Value[1], 4.0f) &&
+              back->Events.size() == 1 && Near(back->Duration, 2.0f));
+
+        Scene scene("Timeline");
+        auto& reg = scene.GetRegistry();
+        Entity door = scene.CreateEntity("Door");
+        Entity lamp = scene.CreateEntity("Lamp", door);
+        reg.Emplace<PointLightComponent>(lamp).Intensity = 1.0f;
+        CHECK(Timeline::ResolvePath(scene, door, "Lamp") == lamp && Timeline::ResolvePath(scene, door, "") == door &&
+              Timeline::ResolvePath(scene, door, "Nope").IsNull() && Timeline::PathOf(scene, door, lamp) == "Lamp");
+        CHECK(Timeline::Apply(scene, door, *back, 0.5f) == 2);
+        CHECK(Near(reg.Get<TransformComponent>(door).Position.y, 1.0f) && Near(reg.Get<PointLightComponent>(lamp).Intensity, 4.0f));
+        // Played by a Timeline component while playing: it plays once and stops at the end.
+        auto& comp = reg.Emplace<TimelineComponent>(door);
+        comp.Timeline = handle;
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        for (int i = 0; i < 60; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        auto& rr = rt->GetRegistry();
+        CHECK(Near(rr.Get<TransformComponent>(door).Position.y, 2.0f, 0.1f) && Near(rr.Get<PointLightComponent>(lamp).Intensity, 8.0f, 0.01f));
+        for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(!rr.Get<TimelineComponent>(door).Playing && Near(rr.Get<TransformComponent>(door).Position.y, 4.0f));
+        rt->OnRuntimeStop();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
+    void TestMicrophone()
+    {
+        // Records ~0.3 s from the default capture device (skipped on machines without one), then saves it as a WAV clip.
+        if (!Microphone::Start(-1, 1.0f, false))
+        {
+            std::printf("    (no capture device; skipped)\n");
+            CHECK(!Microphone::IsRecording());
+            return;
+        }
+        CHECK(Microphone::IsRecording());
+        uint32_t rate = Microphone::GetSampleRate();
+        CHECK(rate >= 8000);
+        CHECK(Microphone::GetBufferFrames() == (size_t)rate);
+        auto start = std::chrono::steady_clock::now();
+        while (Microphone::GetPosition() < rate / 4 && std::chrono::steady_clock::now() - start < std::chrono::seconds(3))
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(Microphone::GetPosition() >= rate / 4);
+        CHECK(Microphone::GetLevel() >= 0.0f && Microphone::GetLevel() <= 1.5f);
+        Microphone::Stop();
+        CHECK(!Microphone::IsRecording());
+        uint64_t frames = Microphone::GetPosition();
+        std::vector<float> samples;
+        CHECK(Microphone::GetSamples(samples) == (size_t)std::min<uint64_t>(frames, rate));
+        fs::path wav = fs::temp_directory_path() / "dimension_microphone_test.wav";
+        CHECK(Microphone::SaveWav(wav));
+        auto info = AudioEngine::GetClipInfo(wav);
+        CHECK(info && info->Format == "WAV" && info->Channels == 1 && info->SampleRate == rate && info->Frames == samples.size());
+        fs::remove(wav);
+    }
+
+    void TestBuoyancy()
+    {
+        // A pool (surface at y = 4) over a floor; balls dropped in float, sink or drift with the current.
+        auto pool = [](float buoyancy, glm::vec3 flow, float seconds) {
+            Scene scene("Pool");
+            auto& reg = scene.GetRegistry();
+            Entity floor = scene.CreateEntity("Floor");
+            reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+            reg.Emplace<BoxColliderComponent>(floor).Size = { 100, 1, 100 };
+            Entity water = scene.CreateEntity("Water");
+            reg.Get<TransformComponent>(water).Position = { 0, 2, 0 };
+            auto& w = reg.Emplace<WaterVolumeComponent>(water);
+            w.Size = { 60, 4, 60 };
+            w.Buoyancy = buoyancy;
+            w.Flow = flow;
+            Entity ball = scene.CreateEntity("Ball");
+            reg.Get<TransformComponent>(ball).Position = { 0, 7, 0 };
+            reg.Emplace<RigidbodyComponent>(ball).Mass = 5.0f;
+            reg.Emplace<SphereColliderComponent>(ball).Radius = 0.5f;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < (int)(seconds * 60); ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            glm::vec3 p = rt->GetRegistry().Get<TransformComponent>(ball).GetWorldPosition();
+            glm::vec3 v = Physics3DWorld::GetLinearVelocity(*rt, ball);
+            rt->OnRuntimeStop();
+            return std::pair{ p, v };
+        };
+        auto [floatPos, floatVel] = pool(1.6f, glm::vec3(0.0f), 8.0f);
+        CHECK(floatPos.y > 3.6f && floatPos.y < 4.6f && glm::length(floatVel) < 1.0f); // bobbing gently at the surface
+        auto [sinkPos, sinkVel] = pool(0.4f, glm::vec3(0.0f), 8.0f);
+        CHECK(sinkPos.y < 0.7f); // on the floor
+        auto [driftPos, driftVel] = pool(1.6f, glm::vec3(1.5f, 0.0f, 0.0f), 8.0f);
+        CHECK(driftPos.x > 3.0f && driftVel.x > 0.5f); // carried along by the current
+    }
+
     void TestTerrain()
     {
         TerrainComponent t;
@@ -924,6 +1108,38 @@ namespace
         TerrainComponent other = t;
         other.Seed = 2;
         CHECK(Terrain::BuildHeights(other) != heights && Terrain::SettingsKey(other) != Terrain::SettingsKey(t));
+
+        // Sculpting: raising at the center lifts it (and leaves far away alone); the edit survives as serialized data
+        // (16-bit), a copy built from that data alone matches, and Clear goes back to the noise.
+        {
+            TerrainComponent s = t;
+            float center0 = Terrain::HeightAt(s, heights, 0.0f, 0.0f), far0 = Terrain::HeightAt(s, heights, 35.0f, 25.0f);
+            for (int i = 0; i < 30; ++i) CHECK(Terrain::ApplyBrush(s, Terrain::BrushMode::Raise, { 0.0f, 0.0f }, 6.0f, 1.0f, 1.0f / 30.0f, 0.0f));
+            std::vector<float> raised = Terrain::BuildHeights(s);
+            CHECK(Terrain::HeightAt(s, raised, 0.0f, 0.0f) > center0 + 5.0f && Near(Terrain::HeightAt(s, raised, 35.0f, 25.0f), far0));
+            CHECK(Terrain::SettingsKey(s) != Terrain::SettingsKey(t));
+            Terrain::ApplyBrush(s, Terrain::BrushMode::PaintRock, { 20.0f, 0.0f }, 4.0f, 1.0f, 1.0f, 0.0f);
+            Terrain::CommitEdit(s);
+            CHECK(!s.SculptedHeights.empty() && !s.PaintedLayers.empty() && s.EditHeights.empty());
+            TerrainComponent copy = t;
+            copy.SculptedHeights = s.SculptedHeights;
+            copy.PaintedLayers = s.PaintedLayers;
+            std::vector<float> reloaded = Terrain::BuildHeights(copy);
+            bool same = reloaded.size() == raised.size();
+            for (size_t i = 0; same && i < raised.size(); ++i) same = std::abs(reloaded[i] - raised[i]) < 20.0f / 65535.0f * 2.0f;
+            CHECK(same);
+            MeshData m = Terrain::BuildMesh(copy, reloaded);
+            std::vector<uint32_t> layers = Terrain::BuildSplat(copy, m);
+            int n = Terrain::SampleCount(copy);
+            uint32_t painted = layers[(size_t)(n / 2) * n + (int)((20.0f / 80.0f + 0.5f) * (n - 1))];
+            CHECK((painted >> 8 & 255) > 200); // rock there
+            // Rays land on the sculpted surface.
+            glm::vec3 hit;
+            CHECK(Terrain::Raycast(copy, glm::mat4(1.0f), { 0.0f, 100.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, hit) &&
+                  Near(hit.y, Terrain::HeightAt(copy, reloaded, 0.0f, 0.0f), 0.02f));
+            Terrain::ClearEdits(copy);
+            CHECK(Terrain::BuildHeights(copy) == heights);
+        }
 
         // Physics: the terrain is a static height field matching HeightAt (rays from above land on the surface).
         Scene scene("Terrain");
@@ -5471,6 +5687,9 @@ int main(int argc, char** argv)
     Run("Convolution reverb", TestConvolutionReverb);
     Run("Animation retargeting", TestRetargeting);
     Run("Terrain", TestTerrain);
+    Run("Buoyancy", TestBuoyancy);
+    Run("Timelines", TestTimelines);
+    Run("Microphone", TestMicrophone);
     Run("Nested prefabs", TestNestedPrefabs);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);
     Run("Rich text tags", TestRichText);

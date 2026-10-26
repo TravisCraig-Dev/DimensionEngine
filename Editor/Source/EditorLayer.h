@@ -83,6 +83,10 @@ namespace Editor
         void DrawTilePalette();
         // Scene-view tile painting for the selected Tilemap; returns true while it owns the mouse.
         bool UpdateTilePainting(const ImVec2& origin, const ImVec2& size);
+        // Terrain sculpting/painting with the Inspector's brush (true while it owns the mouse).
+        bool UpdateTerrainBrush(const ImVec2& origin, const ImVec2& size);
+        bool m_TerrainStroke = false;
+        float m_TerrainFlatten = 0.0f;
         void ApplyPreferences();
         void Autosave(float dt);
         void DrawAbout();
@@ -110,6 +114,7 @@ namespace Editor
         Scope<ConsolePanel> m_Console;
         Scope<SceneSettingsPanel> m_SceneSettings;
         Scope<AnimatorPanel> m_Animator;
+        Scope<TimelinePanel> m_Timeline;
 
         Scope<SceneRenderTarget> m_SceneTarget, m_GameTarget;
         SceneRenderer m_SceneRenderer, m_GameRenderer;
@@ -148,6 +153,7 @@ namespace Editor
 
         bool m_ShowHierarchy = true, m_ShowInspector = true, m_ShowContent = true, m_ShowConsole = true;
         bool m_ShowAnimator = true;
+        bool m_ShowTimeline = false;
         bool m_ShowStats = true, m_ShowSceneSettings = true, m_ShowProjectSettings = false, m_ShowAbout = false;
         bool m_ShowBuildSettings = false, m_ShowPreferences = false, m_ShowAudioMixer = true, m_ShowTilePalette = false;
         int m_TileBrush = 0;

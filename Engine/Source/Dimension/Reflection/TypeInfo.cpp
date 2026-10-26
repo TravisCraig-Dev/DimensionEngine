@@ -1,6 +1,9 @@
 #include "Dimension/Reflection/TypeInfo.h"
 #include "Dimension/Core/Log.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 
 namespace Dimension
 {
@@ -39,7 +42,8 @@ namespace Dimension
         case FieldType::Audio:
         case FieldType::Material:
         case FieldType::Font:
-        case FieldType::AnimatorController: return (uint64_t) * (const Guid*)p;
+        case FieldType::AnimatorController:
+        case FieldType::Timeline: return (uint64_t) * (const Guid*)p;
         case FieldType::EntityRef:
         {
             Entity e = *(const Entity*)p;
@@ -106,7 +110,8 @@ namespace Dimension
             case FieldType::Audio:
             case FieldType::Material:
             case FieldType::Font:
-            case FieldType::AnimatorController: *(Guid*)p = Guid(v.get<uint64_t>()); break;
+            case FieldType::AnimatorController:
+            case FieldType::Timeline: *(Guid*)p = Guid(v.get<uint64_t>()); break;
             case FieldType::EntityRef:
                 *(Entity*)p = resolver ? resolver->FromGuid(v.get<uint64_t>()) : Entity::Null();
                 break;
@@ -176,5 +181,44 @@ namespace Dimension
         {
             Log::Warn("Failed to read field '{}': {}", field.Name, e.what());
         }
+    }
+
+    int FloatCount(FieldType type)
+    {
+        switch (type)
+        {
+        case FieldType::Bool: case FieldType::Int: case FieldType::Float: case FieldType::Enum: return 1;
+        case FieldType::Vec2: return 2;
+        case FieldType::Vec3: case FieldType::Color3: case FieldType::Angles: return 3;
+        case FieldType::Vec4: case FieldType::Color4: return 4;
+        default: return 0;
+        }
+    }
+
+    int FieldToFloats(const FieldInfo& f, const void* value, float* out)
+    {
+        int n = FloatCount(f.Type);
+        switch (f.Type)
+        {
+        case FieldType::Bool: out[0] = *static_cast<const bool*>(value) ? 1.0f : 0.0f; break;
+        case FieldType::Int: case FieldType::Enum: out[0] = (float)*static_cast<const int32_t*>(value); break;
+        default: if (n > 0) std::memcpy(out, value, n * sizeof(float)); break;
+        }
+        return n;
+    }
+
+    bool FieldFromFloats(const FieldInfo& f, void* value, const float* in, int count)
+    {
+        int n = FloatCount(f.Type);
+        if (n == 0 || count < n) return false;
+        auto clamp = [&](float v) { return f.Min < f.Max ? std::clamp(v, f.Min, f.Max) : v; };
+        switch (f.Type)
+        {
+        case FieldType::Bool: *static_cast<bool*>(value) = in[0] >= 0.5f; break;
+        case FieldType::Int: case FieldType::Enum: *static_cast<int32_t*>(value) = (int32_t)std::lround(clamp(in[0])); break;
+        case FieldType::Float: *static_cast<float*>(value) = clamp(in[0]); break;
+        default: std::memcpy(value, in, n * sizeof(float)); break;
+        }
+        return true;
     }
 }

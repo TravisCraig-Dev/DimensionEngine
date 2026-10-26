@@ -12,7 +12,10 @@ layout(push_constant) uniform Push
     uvec2 Params;
     uint Texture;
     uint Entity;
+    uvec2 Sorted; // back-to-front slot order (ParticleSort), 0 = draw in slot order
 } pc;
+
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer SortedRef { uvec2 Items[]; };
 
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out vec2 vUV;
@@ -23,10 +26,13 @@ void main()
 {
     GpuParticleParamsRef P = GpuParticleParamsRef(pc.Params);
     uint index = uint(gl_VertexIndex) / 4u, corner = uint(gl_VertexIndex) % 4u;
-    GpuParticle p = GpuParticlesRef(pc.Particles).Items[index];
+    if (pc.Sorted != uvec2(0u)) index = SortedRef(pc.Sorted).Items[index].y;
     vTexture = pc.Texture;
     vEntity = pc.Entity;
-    if (!ParticleAlive(p) || index >= P.Counts.x)
+    bool valid = index < P.Counts.x;
+    GpuParticle p;
+    if (valid) p = GpuParticlesRef(pc.Particles).Items[index];
+    if (!valid || !ParticleAlive(p))
     {
         vColor = vec4(0.0);
         vUV = vec2(0.0);

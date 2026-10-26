@@ -61,6 +61,7 @@ namespace Dimension
         // collision and the texture sheet; velocity over lifetime, world collision, trails, sorting and acting as a
         // sub emitter's source stay CPU-only (a GPU system can be a sub emitter's target).
         bool SimulateOnGpu = false;
+        bool GpuSorting = true; // GPU systems with Alpha blend draw back to front (a GPU sort per view)
 
         // Emission
         float RateOverTime = 20.0f;

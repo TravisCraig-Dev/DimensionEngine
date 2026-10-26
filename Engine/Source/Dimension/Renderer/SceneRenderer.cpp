@@ -9,6 +9,7 @@
 #include "Dimension/Core/Log.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/packing.hpp>
 #include "Dimension/Renderer/Environment.h"
 #include <algorithm>
 #include <cstdint>
@@ -47,6 +48,8 @@
 #include "shaders/ProbePrefilter.frag.h"
 #include "shaders/LightCull.comp.h"
 #include "shaders/ParticleSim.comp.h"
+#include "shaders/ParticleSortKeys.comp.h"
+#include "shaders/ParticleSort.comp.h"
 #include "shaders/ParticleGpu.vert.h"
 #include "shaders/Ssr.frag.h"
 #include "shaders/SsrApply.frag.h"
@@ -106,6 +109,8 @@ namespace Dimension
             {
                 glm::vec4 CenterIntensity, BoxMin, BoxMax, Params; // see ReflectionProbe in Common.glsl
             } Probes[SceneRenderer::kMaxReflectionProbes];
+            glm::uvec4 ProbeVolumeBuffer;
+            glm::vec4 ProbeVolumes[SceneRenderer::kMaxProbeVolumes * 3];
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
@@ -330,7 +335,7 @@ namespace Dimension
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
-        Pipeline LightCull, ParticleSim; // compute
+        Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort; // compute
         Pipeline GpuParticles, GpuParticlesAdditive;
         // GPU particle systems' simulation buffers, per (scene, entity); dropped when unused for a while.
         struct GpuParticleState
@@ -339,6 +344,9 @@ namespace Dimension
             VkDeviceAddress Address = 0;
             uint32_t Capacity = 0, Head = 0, Generation = 0;
             uint64_t LastFrame = 0;
+            Buffer Sort; // (key, slot) pairs for back-to-front drawing
+            VkDeviceAddress SortAddress = 0;
+            uint32_t SortPadded = 0;
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
         Pipeline Ssr, SsrApply, Taa, Fog;
@@ -550,6 +558,8 @@ namespace Dimension
         }
         r.LightCull = Pipeline::Compute(kLightCull_comp, "LightCullPipeline");
         r.ParticleSim = Pipeline::Compute(kParticleSim_comp, "ParticleSimPipeline");
+        r.ParticleSortKeys = Pipeline::Compute(kParticleSortKeys_comp, "ParticleSortKeysPipeline");
+        r.ParticleSort = Pipeline::Compute(kParticleSort_comp, "ParticleSortPipeline");
 
         std::vector<uint32_t> indices(kMaxQuadsPerDraw * 6);
         for (uint32_t q = 0; q < kMaxQuadsPerDraw; ++q)
@@ -671,8 +681,13 @@ namespace Dimension
     void SceneRenderer::Render(VkCommandBuffer cmd, Scene& scene, const CameraData& view, SceneRenderTarget& target,
                                const SceneRenderOptions& options)
     {
-        // Reflection probes capture the scene with nested Render calls, so they run before this view collects anything.
-        if (!options.ProbeCapture) UpdateReflectionProbes(cmd, scene);
+        // Reflection probes capture the scene with nested Render calls, so they run before this view collects anything
+        // (and light probe volumes bake through the same captures).
+        if (!options.ProbeCapture)
+        {
+            UpdateReflectionProbes(cmd, scene);
+            UpdateLightProbes(cmd, scene);
+        }
         // Temporal anti-aliasing renders the game view with a sub-pixel offset that cycles through a Halton sequence;
         // the Scene view and probe faces are never jittered.
         CameraData camera = view;
@@ -809,6 +824,28 @@ namespace Dimension
         // shader fills the clusters by default (into this view's buffers); otherwise they are built here and go in
         // the transient ring.
         u.InvProj = glm::inverse(u.Proj);
+        // Baked light probe volumes: their SH in the transient ring, their boxes in the uniforms.
+        {
+            std::vector<glm::vec4> sh;
+            uint32_t volumes = 0;
+            for (auto [e, lpv, t] : reg.ViewOf<LightProbeVolumeComponent, TransformComponent>())
+            {
+                if (!t.ActiveInHierarchy || !lpv.IsBaked() || volumes >= kMaxProbeVolumes) continue;
+                glm::vec3 center = t.GetWorldPosition(), half = glm::abs(lpv.Size) * 0.5f;
+                u.ProbeVolumes[volumes * 3] = glm::vec4(center - half, (float)std::max(lpv.ProbesX, 1));
+                u.ProbeVolumes[volumes * 3 + 1] = glm::vec4(center + half, (float)std::max(lpv.ProbesY, 1));
+                u.ProbeVolumes[volumes * 3 + 2] = glm::vec4((float)std::max(lpv.ProbesZ, 1), (float)(sh.size() / 9), std::max(lpv.BlendDistance, 0.0f), lpv.Intensity);
+                for (const glm::vec3& c : lpv.Baked) sh.push_back(glm::vec4(c, 0.0f));
+                ++volumes;
+            }
+            if (volumes > 0)
+                if (TransientAllocation block = device.AllocateTransient(sh.size() * sizeof(glm::vec4), 16))
+                {
+                    std::memcpy(block.Data, sh.data(), sh.size() * sizeof(glm::vec4));
+                    glm::uvec2 a = SplitAddress(block.Address);
+                    u.ProbeVolumeBuffer = glm::uvec4(a, volumes, 0u);
+                }
+        }
         bool gpuCulled = false;
         if (!lights.empty() && s_GpuLightCulling && s_ClusterCulling)
         {
@@ -857,7 +894,7 @@ namespace Dimension
         }
 
         // GPU particles: simulate (once per frame, whichever view renders first) and list their draws.
-        SimulateGpuParticles(cmd, scene, target);
+        SimulateGpuParticles(cmd, scene, target, camera.View);
 
         // Prepare CPU-side draw lists
         CollectSprites(scene, camera);
@@ -2422,7 +2459,7 @@ namespace Dimension
         constexpr uint32_t kMaxGpuParticles = 1000000;
     }
 
-    void SceneRenderer::SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target)
+    void SceneRenderer::SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& view)
     {
         m_GpuParticleDraws.clear();
         auto& device = RenderDevice::Get();
@@ -2518,19 +2555,21 @@ namespace Dimension
             if (!params) continue;
             std::memcpy(params.Data, &p, sizeof(p));
 
+            bool sort = ps.GpuSorting && ps.Blend == ParticleBlend::Alpha;
+            auto beginCompute = [&] {
+                if (!first) return;
+                // Earlier draws (this or an in-flight frame) must be done reading the particle and sort buffers.
+                Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                  VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                                  VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+                first = false;
+            };
             if (clear || dt > 0.0f || total > 0)
             {
-                if (first)
-                {
-                    // Earlier draws (this or an in-flight frame) must be done reading the particle buffers.
-                    Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                      VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
-                                      VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                    res.ParticleSim.Bind(cmd);
-                    device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
-                    first = false;
-                }
+                beginCompute();
+                res.ParticleSim.Bind(cmd);
                 if (clear)
                 {
                     // Zero = every slot dead (age 0 is not below lifetime 0).
@@ -2543,10 +2582,45 @@ namespace Dimension
                 vkCmdDispatch(cmd, (capacity + 63) / 64, 1, 1);
                 st.Head = (st.Head + total) % capacity;
             }
+            if (sort)
+            {
+                // Back to front for this view: keys from view depth, then a bitonic sort over a power-of-two list.
+                beginCompute();
+                uint32_t padded = 64;
+                while (padded < capacity) padded <<= 1;
+                if (!st.Sort.IsValid() || st.SortPadded != padded)
+                {
+                    st.Sort = Buffer((VkDeviceSize)padded * 8, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     MemoryUsage::GpuOnly, "GpuParticleSort");
+                    VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+                    info.buffer = st.Sort.GetHandle();
+                    st.SortAddress = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                    st.SortPadded = padded;
+                }
+                auto computeToCompute = [&] {
+                    Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT,
+                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+                };
+                computeToCompute(); // the simulation above wrote the particles
+                res.ParticleSortKeys.Bind(cmd);
+                struct { glm::mat4 View; glm::uvec2 Particles, Params, Sort; uint32_t Count, Padded; } keys{
+                    view, SplitAddress(st.Address), SplitAddress(params.Address), SplitAddress(st.SortAddress), capacity, padded };
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(keys), &keys);
+                vkCmdDispatch(cmd, padded / 64, 1, 1);
+                res.ParticleSort.Bind(cmd);
+                for (uint32_t k = 2; k <= padded; k <<= 1)
+                    for (uint32_t j = k >> 1; j > 0; j >>= 1)
+                    {
+                        computeToCompute();
+                        struct { glm::uvec2 Sort; uint32_t J, K, Padded; } step{ SplitAddress(st.SortAddress), j, k, padded };
+                        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(step), &step);
+                        vkCmdDispatch(cmd, padded / 64, 1, 1);
+                    }
+            }
 
             auto tex = ps.Texture.IsValid() ? AssetManager::GetTexture(ps.Texture) : nullptr;
             m_GpuParticleDraws.push_back({ st.Address, params.Address, capacity, (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex(),
-                                           e.Index + 1, ps.Blend == ParticleBlend::Additive, ps.SortingOrder });
+                                           e.Index + 1, ps.Blend == ParticleBlend::Additive, ps.SortingOrder, sort ? st.SortAddress : 0 });
         }
         if (!first)
             Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
@@ -2568,7 +2642,8 @@ namespace Dimension
         for (const GpuParticleDraw& d : m_GpuParticleDraws)
         {
             MainPipeline(d.Additive ? MainPipelines::GpuParticlesAdditive : MainPipelines::GpuParticles).Bind(cmd);
-            struct { glm::uvec2 Particles, Params; uint32_t Texture, Entity; } push{ SplitAddress(d.Particles), SplitAddress(d.Params), d.Texture, d.Entity };
+            struct { glm::uvec2 Particles, Params; uint32_t Texture, Entity; glm::uvec2 Sorted; } push{
+                SplitAddress(d.Particles), SplitAddress(d.Params), d.Texture, d.Entity, SplitAddress(d.Sorted) };
             vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
             for (uint32_t firstQuad = 0; firstQuad < d.Capacity; firstQuad += kMaxQuadsPerDraw)
             {
@@ -2861,6 +2936,72 @@ namespace Dimension
             glm::vec3 sa = a.Max - a.Min, sb = b.Max - b.Min;
             return sa.x * sa.y * sa.z < sb.x * sb.y * sb.z;
         });
+    }
+
+    void SceneRenderer::UpdateLightProbes(VkCommandBuffer cmd, Scene& scene)
+    {
+        auto& device = RenderDevice::Get();
+        auto& reg = scene.GetRegistry();
+        // Captures whose frame has finished: their equirect images become SH coefficients in the component.
+        uint64_t completed = device.GetCompletedFrameNumber();
+        for (auto& rb : m_LightProbeReadbacks)
+        {
+            if (!rb.Busy || rb.Frame > completed) continue;
+            rb.Busy = false;
+            Entity e{ rb.EntityIndex, rb.EntityGeneration };
+            auto* lpv = rb.Owner == &scene && scene.IsValid(e) ? reg.TryGet<LightProbeVolumeComponent>(e) : nullptr;
+            if (!lpv) continue;
+            lpv->BakePending = std::max(lpv->BakePending - 1, 0);
+            if ((int)lpv->Baked.size() != lpv->ProbeCount() * 9) lpv->Baked.assign((size_t)lpv->ProbeCount() * 9, glm::vec3(0.0f));
+            if (rb.Probe >= lpv->ProbeCount()) continue;
+            const auto* half = static_cast<const uint16_t*>(rb.Data.GetMapped());
+            size_t texels = (size_t)rb.Width * rb.Height;
+            std::vector<float> rgba(texels * 4);
+            for (size_t i = 0; i < texels * 4; ++i) rgba[i] = glm::unpackHalf1x16(half[i]);
+            Environment::SH9 sh = Environment::ComputeIrradianceSH(rgba.data(), rb.Width, rb.Height);
+            for (int k = 0; k < 9; ++k) lpv->Baked[(size_t)rb.Probe * 9 + k] = sh[k];
+        }
+        // Start the next capture (one per frame, so baking never stalls the editor): the six-face capture of the
+        // reflection probes at the probe's position, its equirect image copied back to the CPU.
+        for (auto [e, lpv, t] : reg.ViewOf<LightProbeVolumeComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy) continue;
+            if (!lpv.IsBaked() && lpv.BakeNext < 0 && lpv.BakePending == 0) lpv.BakeNext = 0; // unbaked: bake now
+            if (lpv.BakeNext < 0) continue;
+            if (lpv.BakeNext >= lpv.ProbeCount())
+            {
+                lpv.BakeNext = -1;
+                continue;
+            }
+            Readback* slot = nullptr;
+            for (auto& rb : m_LightProbeReadbacks)
+                if (!rb.Busy) slot = &rb;
+            if (!slot)
+            {
+                if (m_LightProbeReadbacks.size() >= 4) break; // all in flight: continue next frame
+                slot = &m_LightProbeReadbacks.emplace_back();
+            }
+            const uint32_t res = 32, width = res * 4, height = res * 2;
+            if (!m_LightProbeCapture) m_LightProbeCapture = std::make_unique<ProbeResources>();
+            BakeProbe(cmd, scene, *m_LightProbeCapture, lpv.ProbePosition(t.GetWorldPosition(), lpv.BakeNext), res);
+            if (!slot->Data.IsValid())
+                slot->Data = Buffer((VkDeviceSize)width * height * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT, MemoryUsage::GpuToCpu, "LightProbeReadback");
+            VkBufferImageCopy region{};
+            region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            region.imageExtent = { width, height, 1 };
+            vkCmdCopyImageToBuffer(cmd, m_LightProbeCapture->Base.GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, slot->Data.GetHandle(), 1, &region);
+            slot->Busy = true;
+            slot->Frame = device.Frame().FrameNumber;
+            slot->Owner = &scene;
+            slot->EntityIndex = e.Index;
+            slot->EntityGeneration = e.Generation;
+            slot->Probe = lpv.BakeNext;
+            slot->Width = width;
+            slot->Height = height;
+            ++lpv.BakeNext;
+            ++lpv.BakePending;
+            break; // one capture per frame
+        }
     }
 
     void SceneRenderer::BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t res)
@@ -3317,6 +3458,18 @@ namespace Dimension
             glm::mat4 m = glm::translate(glm::mat4(1.0f), t.GetWorldPosition());
             DrawWireSphere(m, glm::vec3(0), zone->MinDistance, { 1.0f, 0.75f, 0.3f, 0.85f });
             DrawWireSphere(m, glm::vec3(0), zone->MaxDistance, { 1.0f, 0.6f, 0.2f, 0.45f });
+        }
+        if (auto* lpv = reg.TryGet<LightProbeVolumeComponent>(sel))
+        {
+            // The box, and each probe as a small circle tinted by its baked light (gray before baking).
+            glm::vec3 center = t.GetWorldPosition();
+            DrawWireBox(glm::mat4(1.0f), center, glm::abs(lpv->Size) * 0.5f, { 0.95f, 0.85f, 0.4f, 0.8f });
+            for (int i = 0; i < lpv->ProbeCount(); ++i)
+            {
+                glm::vec3 color(0.6f);
+                if (lpv->IsBaked()) color = glm::clamp(lpv->Baked[(size_t)i * 9] * 0.282095f * 1.5f, glm::vec3(0.05f), glm::vec3(1.0f));
+                DrawWireSphere(glm::mat4(1.0f), lpv->ProbePosition(center, i), 0.12f, glm::vec4(color, 1.0f));
+            }
         }
     }
 }

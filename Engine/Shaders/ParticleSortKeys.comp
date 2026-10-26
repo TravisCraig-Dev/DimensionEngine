@@ -1,0 +1,37 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "ParticleCommon.glsl"
+
+// GPU particle sorting, step 1: a (key, slot) pair per slot of the padded (power of two) list. Ascending keys give
+// back-to-front order for this view; dead slots and padding sort to the end.
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer SortRef { uvec2 Items[]; };
+
+layout(push_constant) uniform Push
+{
+    mat4 View;
+    uvec2 Particles;
+    uvec2 Params;
+    uvec2 Sort;
+    uint Count;  // particle slots
+    uint Padded; // sorted entries (power of two >= Count)
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.Padded) return;
+    uvec2 item = uvec2(0xFFFFFFFFu, i);
+    if (i < pc.Count)
+    {
+        GpuParticle p = GpuParticlesRef(pc.Particles).Items[i];
+        if (ParticleAlive(p))
+        {
+            vec3 world = (GpuParticleParamsRef(pc.Params).SimToWorld * vec4(p.PosAge.xyz, 1.0)).xyz;
+            float depth = max(-(pc.View * vec4(world, 1.0)).z, 0.0);
+            item.x = 0xFFFFFFFEu - floatBitsToUint(depth); // farther = smaller key (positive floats order like their bits)
+        }
+    }
+    SortRef(pc.Sort).Items[i] = item;
+}

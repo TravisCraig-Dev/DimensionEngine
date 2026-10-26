@@ -88,7 +88,7 @@ namespace Dimension::AssetDependencies
         std::vector<AssetHandle> pending(roots.begin(), roots.end());
 
         // Everything under Assets/Resources ships, like Unity's Resources folders.
-        for (int type = (int)AssetType::Texture; type <= (int)AssetType::AnimatorController; ++type)
+        for (int type = (int)AssetType::Texture; type <= (int)AssetType::Timeline; ++type)
             for (AssetHandle h : AssetManager::GetAssetsOfType((AssetType)type))
                 if (const AssetMetadata* m = AssetManager::GetMetadata(h))
                 {

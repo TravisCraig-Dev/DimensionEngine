@@ -17,6 +17,7 @@ struct PointLight
 #define CLUSTER_SLICES 24
 #define MAX_POINT_SHADOWS 4
 #define MAX_REFLECTION_PROBES 8
+#define MAX_PROBE_VOLUMES 4
 
 struct ReflectionProbe
 {
@@ -60,6 +61,8 @@ layout(set = 1, binding = 0) uniform SceneData
     uvec4 LightIndexBuffer; // xy: cluster light indices (buffer address)
     vec4 ClusterParams;  // x near, y far, z 1 = orthographic, w log(far / near)
     ReflectionProbe Probes[MAX_REFLECTION_PROBES]; // Counts.y in use
+    uvec4 ProbeVolumeBuffer; // xy: SH of every volume's probes (9 vec4 each, buffer address), z: volume count
+    vec4 ProbeVolumes[MAX_PROBE_VOLUMES * 3]; // per volume: min (w probes x), max (w probes y), (probes z, first probe, blend, intensity)
 } uScene;
 
 // Procedural sky gradient, also used as a cheap environment for reflections.
@@ -114,6 +117,15 @@ vec3 SkyIrradiance(vec3 n)
            + uScene.IrradianceSH[6].rgb * 0.315392 * (3.0 * n.z * n.z - 1.0)
            + uScene.IrradianceSH[7].rgb * 1.092548 * n.x * n.z
            + uScene.IrradianceSH[8].rgb * 0.546274 * (n.x * n.x - n.y * n.y);
+    return max(r, vec3(0.0));
+}
+
+// Irradiance from 9 SH coefficients (as SkyIrradiance).
+vec3 EvaluateSH(vec3 sh[9], vec3 n)
+{
+    vec3 r = sh[0] * 0.282095 + sh[1] * 0.488603 * n.y + sh[2] * 0.488603 * n.z + sh[3] * 0.488603 * n.x
+           + sh[4] * 1.092548 * n.x * n.y + sh[5] * 1.092548 * n.y * n.z + sh[6] * 0.315392 * (3.0 * n.z * n.z - 1.0)
+           + sh[7] * 1.092548 * n.x * n.z + sh[8] * 0.546274 * (n.x * n.x - n.y * n.y);
     return max(r, vec3(0.0));
 }
 

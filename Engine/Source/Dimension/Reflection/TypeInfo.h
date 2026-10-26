@@ -19,7 +19,7 @@ namespace Dimension
         Angles,           // vec3 radians, shown in degrees
         String,
         Enum,             // int32-backed enum with display names
-        Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, // AssetHandle referencing an asset of that type
+        Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, // AssetHandle referencing an asset of that type
         EntityRef,        // Entity, serialized as the target's Guid
         Curve,            // Dimension::Curve (normalized time -> value)
         Gradient,         // Dimension::Gradient (normalized time -> color)
@@ -109,4 +109,10 @@ namespace Dimension
 
     nlohmann::json FieldToJson(const FieldInfo& field, const void* object, const EntityRefResolver* resolver);
     void FieldFromJson(const FieldInfo& field, void* object, const nlohmann::json& value, const EntityRefResolver* resolver);
+
+    // Numeric fields as floats (scripting, timelines): bools 0/1, ints and enums by value, vectors and colors by
+    // component. FloatCount is 0 for other types (strings, assets, curves, ...). `value` points at the field itself.
+    int FloatCount(FieldType type);
+    int FieldToFloats(const FieldInfo& field, const void* value, float* out); // returns the count written
+    bool FieldFromFloats(const FieldInfo& field, void* value, const float* in, int count); // clamps to the field's range
 }

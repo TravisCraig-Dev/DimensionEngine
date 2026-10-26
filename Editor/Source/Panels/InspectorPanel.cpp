@@ -1,3 +1,4 @@
+#include <Dimension/Terrain/Terrain.h>
 #include "Panels.h"
 #include "../EditorUI.h"
 #include <Dimension/Scene/ComponentRegistry.h>
@@ -416,6 +417,52 @@ namespace Editor
                         }
                     }
                     UI::EndProperties();
+                    if (info.TypeId == GetComponentTypeId<TerrainComponent>())
+                    {
+                        // Brushes: pick a tool, then drag on the terrain in the Scene view.
+                        auto& terrain = *static_cast<TerrainComponent*>(info.Get(scene, e));
+                        static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow" };
+                        ImGui::SeparatorText("Sculpt and Paint");
+                        for (int i = 0; i < 7; ++i)
+                        {
+                            if (i > 0 && i != 4) ImGui::SameLine();
+                            bool active = m_Ctx.TerrainTool == i + 1;
+                            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                            if (ImGui::Button(tools[i])) m_Ctx.TerrainTool = active ? 0 : i + 1;
+                            if (active) ImGui::PopStyleColor();
+                        }
+                        ImGui::SetNextItemWidth(160);
+                        ImGui::SliderFloat("Brush Size", &m_Ctx.TerrainBrushSize, 0.5f, 60.0f, "%.1f m");
+                        ImGui::SetNextItemWidth(160);
+                        ImGui::SliderFloat("Strength", &m_Ctx.TerrainBrushStrength, 0.01f, 1.0f);
+                        ImGui::TextDisabled(m_Ctx.TerrainTool ? "Drag on the terrain in the Scene view (Shift reverses Raise/Lower)." : "Pick a tool to edit.");
+                        bool edited = !terrain.SculptedHeights.empty() || !terrain.PaintedLayers.empty();
+                        ImGui::BeginDisabled(!edited);
+                        if (ImGui::Button("Clear Sculpting and Painting"))
+                        {
+                            m_Ctx.RecordUndo();
+                            Terrain::ClearEdits(terrain);
+                            m_Ctx.MarkDirty();
+                        }
+                        ImGui::EndDisabled();
+                        if (edited) { ImGui::SameLine(); ImGui::TextDisabled("(sculpted terrains ignore the heightmap and noise)"); }
+                    }
+                    if (info.TypeId == GetComponentTypeId<LightProbeVolumeComponent>())
+                    {
+                        auto& lpv = *static_cast<LightProbeVolumeComponent*>(info.Get(scene, e));
+                        bool baking = lpv.BakeNext >= 0 || lpv.BakePending > 0;
+                        ImGui::BeginDisabled(baking);
+                        if (ImGui::Button("Bake Light Probes")) lpv.RequestBake();
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        if (baking)
+                            ImGui::TextDisabled("Baking %d / %d", std::max(lpv.BakeNext, 0) - lpv.BakePending, lpv.ProbeCount());
+                        else
+                            ImGui::TextDisabled(lpv.IsBaked() ? "%d probes baked" : "not baked", lpv.ProbeCount());
+                        ImGui::SameLine();
+                        UI::HelpMarker("Each probe captures the scene around it (one per frame) as irradiance. Bake again after\n"
+                                       "changing lights or geometry; save the scene to keep the result.");
+                    }
                     if (info.TypeId == GetComponentTypeId<ReflectionProbeComponent>())
                     {
                         if (ImGui::Button("Bake Reflection Probes")) SceneRenderer::RequestProbeBake();

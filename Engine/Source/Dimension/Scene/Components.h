@@ -133,6 +133,13 @@ namespace Dimension
         float TextureTiling = 0.25f; // layer texture repeats per meter
         float RockSlope = 35.0f;     // degrees where rock takes over
         float SnowHeight = 0.72f;    // 0-1 of Height where snow starts
+        // Sculpted and painted terrain (the editor's brushes): the heights (0-1 of Height, 16-bit) and layer weights
+        // (RGB) per sample, base64, replacing the heightmap/noise and the automatic layers. Empty = not edited.
+        std::string SculptedHeights, PaintedLayers;
+        // Runtime: decoded edits while brushing (encoded back when a stroke ends), and a counter that changes with them.
+        std::vector<float> EditHeights;
+        std::vector<uint32_t> EditLayers;
+        uint64_t EditRevision = 0;
     };
 
     enum class DecalBlend : int32_t { Alpha = 0, Multiply = 1, Additive = 2 };
@@ -563,6 +570,63 @@ namespace Dimension
     // A region where a mixer group gets reverb, like Unity's Audio Reverb Zone: full strength while the listener (the
     // primary camera) is within Min Distance of the object, fading out by Max Distance. Overlapping zones blend by
     // strength. The reverb is the group's own (Audio Mixer), so the group's effect settings are what zones fade from.
+    // A body of water: dynamic rigidbodies inside its box float (or sink) by the part of their shape under its top
+    // face, are slowed by the water and carried by its Flow. The box is axis aligned (the object's rotation is
+    // ignored); the visuals are up to the scene (e.g. a translucent plane at the surface).
+    struct WaterVolumeComponent;
+
+    // Baked indirect light (like Unity's Light Probe Group, on a grid): a box of probes, each a capture of the scene
+    // around it reduced to spherical-harmonic irradiance. Surfaces inside take their ambient light from the probes
+    // around them, so a room lit by a window is bright near it and dim in the corners, and color bleeds from lit
+    // walls. Bake after changing the scene (Inspector); unbaked volumes bake themselves when first shown.
+    struct LightProbeVolumeComponent
+    {
+        glm::vec3 Size{ 10.0f, 4.0f, 10.0f }; // centered on the object
+        int32_t ProbesX = 4, ProbesY = 2, ProbesZ = 4;
+        float Intensity = 1.0f;
+        float BlendDistance = 1.0f; // fades to the scene's own ambient over this distance inside the box
+        std::vector<glm::vec3> Baked; // 9 irradiance SH coefficients per probe (x fastest, then y, then z)
+        // Runtime: next probe to capture (-1 = not baking) and captures still on their way back from the GPU.
+        int32_t BakeNext = -1;
+        int32_t BakePending = 0;
+        int ProbeCount() const { return std::max(ProbesX, 1) * std::max(ProbesY, 1) * std::max(ProbesZ, 1); }
+        glm::vec3 ProbePosition(const glm::vec3& center, int index) const
+        {
+            int nx = std::max(ProbesX, 1), ny = std::max(ProbesY, 1), nz = std::max(ProbesZ, 1);
+            glm::ivec3 i(index % nx, (index / nx) % ny, index / (nx * ny));
+            glm::vec3 n(nx, ny, nz), f = glm::vec3(i) / glm::max(n - 1.0f, glm::vec3(1.0f));
+            for (int a = 0; a < 3; ++a)
+                if (n[a] <= 1.0f) f[a] = 0.5f;
+            return center + (f - 0.5f) * glm::abs(Size);
+        }
+        bool IsBaked() const { return (int)Baked.size() == ProbeCount() * 9; }
+        void RequestBake() { BakeNext = 0; }
+    };
+
+    // Plays a Timeline asset (see Dimension/Animation/Timeline.h) on this object and the objects under it.
+    struct TimelineComponent
+    {
+        AssetHandle Timeline = AssetHandle::None();
+        bool PlayOnAwake = true;
+        bool Loop = false;
+        float Speed = 1.0f;
+        // Runtime.
+        float Time = 0.0f;
+        bool Playing = false;
+        bool Started = false;
+        void Play() { Playing = true; Started = true; Time = 0.0f; }
+        void Stop() { Playing = false; Started = true; }
+    };
+
+    struct WaterVolumeComponent
+    {
+        glm::vec3 Size{ 10.0f, 4.0f, 10.0f }; // centered on the object; the top face is the surface
+        float Buoyancy = 1.4f;    // 1 = neutral, above floats, below sinks
+        float LinearDrag = 0.5f;
+        float AngularDrag = 0.05f;
+        glm::vec3 Flow{ 0.0f };   // current, m/s
+    };
+
     struct AudioReverbZoneComponent
     {
         float MinDistance = 4.0f;
@@ -677,6 +741,9 @@ namespace Dimension
         // Tearing: an edge stretched past (1 + Tear Stretch) times its length breaks and the faces on it come off.
         // 0 = never tears.
         float TearStretch = 0.0f;
+        // Attach To: the pinned vertices hold on to this object instead of the cloth's own (a cape on a character, a
+        // sail on a boat), and the cloth's pull (its weight, swing and wind load) acts back on its Rigidbody.
+        Entity AttachTo = Entity::Null();
 
         // Runtime: the simulated grid in the object's space (empty = the flat rest shape), and once it has torn, the
         // triangles still attached (empty = all of them) and how many edges broke.

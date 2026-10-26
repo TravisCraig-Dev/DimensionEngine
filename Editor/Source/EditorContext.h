@@ -114,6 +114,10 @@ namespace Editor
         void ExitPrefabMode();
         bool PrefabAutoSave = true;
 
+        // Terrain brush (Inspector picks it, the Scene view paints with it): 0 = off, else Terrain::BrushMode + 1.
+        int TerrainTool = 0;
+        float TerrainBrushSize = 6.0f, TerrainBrushStrength = 0.5f;
+
         // Deferred requests handled by the EditorLayer at a safe point in the frame.
         std::optional<AssetHandle> RequestOpenPrefab;
         std::optional<fs::path> RequestOpenScene;

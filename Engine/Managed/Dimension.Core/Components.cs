@@ -322,6 +322,23 @@ namespace Dimension
     }
 
     /// <summary>A pressurized soft body made from the object's mesh.</summary>
+    /// <summary>Plays a Timeline asset on this object and the objects under it.</summary>
+    public unsafe class Timeline : Component
+    {
+        internal override string NativeName => "Timeline";
+        public void Play() => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 0, 0.0f);
+        public void Stop() => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 1, 0.0f);
+        public bool IsPlaying => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 4, 0.0f) != 0.0f;
+        /// <summary>Seconds into the timeline; setting it jumps there.</summary>
+        public float Time
+        {
+            get => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 2, 0.0f);
+            set => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 3, value);
+        }
+        public float Speed { get => GetFloat("Speed"); set => SetFloat("Speed", value); }
+        public bool Loop { get => GetBool("Loop"); set => SetBool("Loop", value); }
+    }
+
     public unsafe class SoftBody : Component
     {
         internal override string NativeName => "Soft Body";
@@ -468,5 +485,24 @@ namespace Dimension
         public static bool TransitionToSnapshot(string snapshot, float seconds) => Native.WithUtf8(snapshot, p => Native.Api.MixerTransition((byte*)p, seconds)) != 0;
         /// <summary>Linear 0-1 to decibels (0 = -80 dB).</summary>
         public static float LinearToDecibels(float v) => v <= 1e-4f ? -80.0f : System.MathF.Max(-80.0f, 20.0f * System.MathF.Log10(v));
+    }
+
+    /// <summary>Microphone input: record, read the level (voice activation), save the recording as a clip.</summary>
+    public static unsafe class Microphone
+    {
+        public static string[] Devices =>
+            (Native.FromUtf8(Native.Api.MicrophoneDevices()) ?? "").Split('\n', System.StringSplitOptions.RemoveEmptyEntries);
+        /// <summary>Starts recording `seconds` (device: an index into Devices, -1 = the default). False without one.</summary>
+        public static bool Start(int device = -1, float seconds = 10.0f, bool loop = true) => Native.Api.MicrophoneStart(device, seconds, loop ? 1 : 0) != 0;
+        public static void Stop() => Native.Api.MicrophoneState(0);
+        public static bool IsRecording => Native.Api.MicrophoneState(1) != 0.0f;
+        /// <summary>Loudness of the last ~50 ms (RMS, 0-1).</summary>
+        public static float Level => Native.Api.MicrophoneState(2);
+        public static float Peak => Native.Api.MicrophoneState(3);
+        /// <summary>Samples recorded so far (wraps when looping).</summary>
+        public static long Position => (long)Native.Api.MicrophoneState(4);
+        public static int SampleRate => (int)Native.Api.MicrophoneState(5);
+        /// <summary>Saves the recording as a WAV file (relative paths are in Assets) and imports it as an audio clip.</summary>
+        public static bool SaveWav(string path) => Native.WithUtf8(path, p => Native.Api.MicrophoneSave((byte*)p)) != 0;
     }
 }

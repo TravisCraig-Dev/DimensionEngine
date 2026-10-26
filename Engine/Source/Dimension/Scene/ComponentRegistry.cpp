@@ -117,7 +117,9 @@ namespace Dimension
             .Field("Snow Color", &TerrainComponent::SnowColor).As(FieldType::Color4)
             .Field("Texture Tiling", &TerrainComponent::TextureTiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Layer texture repeats per meter")
             .Field("Rock Slope", &TerrainComponent::RockSlope).Range(1.0f, 89.0f).Speed(0.5f).Tooltip("Degrees where rock takes over")
-            .Field("Snow Height", &TerrainComponent::SnowHeight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of Height where snow starts");
+            .Field("Snow Height", &TerrainComponent::SnowHeight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of Height where snow starts")
+            .Field("Sculpted Heights", &TerrainComponent::SculptedHeights).HideInInspector()
+            .Field("Painted Layers", &TerrainComponent::PaintedLayers).HideInInspector();
 
         Register<DecalComponent>("Decal", "Rendering")
             .Field("Texture", &DecalComponent::Texture).As(FieldType::Texture).Tooltip("None = a soft round spot")
@@ -173,6 +175,22 @@ namespace Dimension
             .Field("Animation Source", &AnimatorComponent::ClipSource).As(FieldType::Mesh)
                 .Tooltip("Play the clips of another model, retargeted onto this skeleton by joint name (None = this mesh's own)");
 
+        Register<LightProbeVolumeComponent>("Light Probe Volume", "Rendering")
+            .Field("Size", &LightProbeVolumeComponent::Size).Speed(0.05f).Tooltip("Box centered on the object")
+            .Field("Probes X", &LightProbeVolumeComponent::ProbesX).Range(1, 32)
+            .Field("Probes Y", &LightProbeVolumeComponent::ProbesY).Range(1, 32)
+            .Field("Probes Z", &LightProbeVolumeComponent::ProbesZ).Range(1, 32)
+            .Field("Intensity", &LightProbeVolumeComponent::Intensity).Range(0.0f, 20.0f).Speed(0.01f)
+            .Field("Blend Distance", &LightProbeVolumeComponent::BlendDistance).Range(0.0f, 100.0f).Speed(0.01f)
+                .Tooltip("Fades to the scene's own ambient light over this distance inside the box")
+            .Field("Baked", &LightProbeVolumeComponent::Baked).HideInInspector();
+
+        Register<TimelineComponent>("Timeline", "Animation")
+            .Field("Timeline", &TimelineComponent::Timeline).As(FieldType::Timeline).Tooltip("Timeline asset (.timeline); edit it in Window > Timeline")
+            .Field("Play On Awake", &TimelineComponent::PlayOnAwake)
+            .Field("Loop", &TimelineComponent::Loop)
+            .Field("Speed", &TimelineComponent::Speed).Range(-10.0f, 10.0f).Speed(0.01f);
+
         Register<IKTargetComponent>("IK Target", "Animation")
             .Field("Animator", &IKTargetComponent::Animator).Tooltip("Object with the Animator. None = the nearest parent with one.")
             .Field("Mode", &IKTargetComponent::Mode).Enum({ "Reach", "Look At" })
@@ -203,9 +221,10 @@ namespace Dimension
             .Field("Drag", &PS::Drag).Range(0.0f, 100.0f).Speed(0.01f)
             .Field("Max Particles", &PS::MaxParticles).Range(1, 1000000)
             .Field("Simulation Space", &PS::SimulationSpace).Enum({ "Local", "World" })
+            .Field("GPU Sorting", &PS::GpuSorting).Tooltip("Alpha-blended GPU particles draw back to front (sorted on the GPU for each view)")
             .Field("Simulate On GPU", &PS::SimulateOnGpu)
                 .Tooltip("A compute shader simulates the particles (up to a million). Not on the GPU: Velocity over Lifetime,\n"
-                         "World collision, Trails, sorting, and triggering a Sub Emitter")
+                         "World collision, Trails, and triggering a Sub Emitter")
             .Field("Rate Over Time", &PS::RateOverTime).Range(0.0f, 100000.0f).Speed(0.5f)
             .Field("Burst Count", &PS::BurstCount).Range(0, 100000)
             .Field("Shape", &PS::Shape).Enum({ "Cone", "Sphere", "Box", "Point" })
@@ -449,7 +468,9 @@ namespace Dimension
                 .Tooltip("Edges stretched past (1 + this) times their length tear (0 = never), e.g. 0.5 tears at one and a\n"
                          "half times the rest length. Pinned cloth under a load, or hit hard, rips.")
             .Field("Thickness", &ClothComponent::Thickness).Range(0.0f, 1.0f).Speed(0.001f).Tooltip("How far it stays from what it touches")
-            .Field("Wind", &ClothComponent::Wind).Speed(0.05f).Tooltip("World-space acceleration (m/s^2) on the free vertices");
+            .Field("Wind", &ClothComponent::Wind).Speed(0.05f).Tooltip("World-space acceleration (m/s^2) on the free vertices")
+            .Field("Attach To", &ClothComponent::AttachTo)
+                .Tooltip("The pinned vertices hold on to this object (None = the cloth's own), and the cloth pulls on its Rigidbody");
         Register<SoftBodyComponent>("Soft Body", "Physics")
             .Field("Mass", &SoftBodyComponent::Mass).Range(0.001f, 10000.0f).Speed(0.01f)
             .Field("Pressure", &SoftBodyComponent::Pressure).Range(0.0f, 100000.0f).Speed(0.5f).Tooltip("Inflates a closed mesh like a balloon (0 = none)")
@@ -463,6 +484,12 @@ namespace Dimension
         Register<AudioOccluderComponent>("Audio Occluder", "Audio")
             .Field("Occlusion", &AudioOccluderComponent::Occlusion).Range(0.0f, 1.0f).Speed(0.01f)
                 .Tooltip("How much this collider blocks occluding Audio Sources (0 = not at all, 1 = fully; colliders without this component block fully). Several along the line add up.");
+        Register<WaterVolumeComponent>("Water Volume", "Physics")
+            .Field("Size", &WaterVolumeComponent::Size).Speed(0.05f).Tooltip("Box centered on the object; its top face is the water surface")
+            .Field("Buoyancy", &WaterVolumeComponent::Buoyancy).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("1 = neutral, above floats, below sinks")
+            .Field("Linear Drag", &WaterVolumeComponent::LinearDrag).Range(0.0f, 50.0f).Speed(0.01f)
+            .Field("Angular Drag", &WaterVolumeComponent::AngularDrag).Range(0.0f, 50.0f).Speed(0.01f)
+            .Field("Flow", &WaterVolumeComponent::Flow).Speed(0.05f).Tooltip("Current (m/s) that carries floating bodies");
         Register<AudioReverbZoneComponent>("Audio Reverb Zone", "Audio")
             .Field("Min Distance", &AudioReverbZoneComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.05f)
                 .Tooltip("Full reverb while the listener is this close")

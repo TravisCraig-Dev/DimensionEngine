@@ -88,6 +88,11 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, byte*, byte*, float*, int> GetComponentField;
         public delegate* unmanaged<IntPtr, ulong, byte*, byte*, float*, int, int> SetComponentField;
         public delegate* unmanaged<IntPtr, ulong, int, float> VehicleState;
+        public delegate* unmanaged<IntPtr, ulong, int, float, float> TimelineControl;
+        public delegate* unmanaged<int, float, int, int> MicrophoneStart;
+        public delegate* unmanaged<int, float> MicrophoneState; // 0 stop (returns 0), 1 recording, 2 level, 3 peak, 4 position, 5 sample rate
+        public delegate* unmanaged<byte*, int> MicrophoneSave;
+        public delegate* unmanaged<byte*> MicrophoneDevices;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

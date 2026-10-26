@@ -7,6 +7,42 @@
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightListRef { PointLight Lights[]; };
 layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer ClusterCellsRef { uvec2 Cells[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer ClusterIndexRef { uint Indices[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer ProbeSHRef { vec4 Coefficients[]; };
+
+// Light probe volumes: irradiance at `pos` from the 8 probes of its grid cell (SH blended trilinearly), and how much it
+// counts (1 inside, fading out over Blend Distance toward the box's walls). The first volume containing the point wins.
+float ProbeVolumeIrradiance(vec3 pos, vec3 n, out vec3 irradiance)
+{
+    irradiance = vec3(0.0);
+    uint count = uScene.ProbeVolumeBuffer.z;
+    if (count == 0u) return 0.0;
+    ProbeSHRef probes = ProbeSHRef(uScene.ProbeVolumeBuffer.xy);
+    for (uint v = 0u; v < count; ++v)
+    {
+        vec4 lo = uScene.ProbeVolumes[v * 3u], hi = uScene.ProbeVolumes[v * 3u + 1u], info = uScene.ProbeVolumes[v * 3u + 2u];
+        vec3 local = (pos - lo.xyz) / max(hi.xyz - lo.xyz, vec3(1e-4));
+        if (any(lessThan(local, vec3(0.0))) || any(greaterThan(local, vec3(1.0)))) continue;
+        vec3 inside = min(pos - lo.xyz, hi.xyz - pos);
+        float weight = info.z > 0.0 ? clamp(min(inside.x, min(inside.y, inside.z)) / info.z, 0.0, 1.0) : 1.0;
+        ivec3 res = ivec3(int(lo.w), int(hi.w), int(info.x));
+        vec3 g = local * vec3(max(res - 1, ivec3(0)));
+        ivec3 i0 = clamp(ivec3(floor(g)), ivec3(0), max(res - 2, ivec3(0)));
+        vec3 f = clamp(g - vec3(i0), 0.0, 1.0);
+        vec3 sh[9];
+        for (int k = 0; k < 9; ++k) sh[k] = vec3(0.0);
+        for (int c = 0; c < 8; ++c)
+        {
+            ivec3 o = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
+            ivec3 p = min(i0 + o, res - 1);
+            float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) * (o.z == 1 ? f.z : 1.0 - f.z);
+            uint index = uint(info.y) + uint((p.z * res.y + p.y) * res.x + p.x);
+            for (int k = 0; k < 9; ++k) sh[k] += probes.Coefficients[index * 9u + uint(k)].rgb * w;
+        }
+        irradiance = EvaluateSH(sh, n) * info.w;
+        return weight;
+    }
+    return 0.0;
+}
 
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vNormal;
@@ -129,6 +165,11 @@ void main()
     vec3 env = EnvironmentReflection(vWorldPos, R, roughness);
     vec3 ambient = uScene.Ambient.rgb;
     if (HasSkyTexture() && uScene.EnvParams.z > 0.5) ambient = SkyIrradiance(N) * uScene.EnvParams.w;
+    {
+        vec3 probeLight;
+        float probeWeight = ProbeVolumeIrradiance(vWorldPos, N, probeLight);
+        if (probeWeight > 0.0) ambient = mix(ambient, probeLight, probeWeight);
+    }
     float envOcclusion = 1.0;
     // Screen-space ambient occlusion only darkens indirect light (opaque surfaces are in the depth prepass).
     if (uScene.AOParams.x > 0.5 && m.Flags.x != 2u)

@@ -7,6 +7,8 @@
 #include "Dimension/Scene/SceneManager.h"
 #include <unordered_map>
 #include "Dimension/Audio/AudioEngine.h"
+#include "Dimension/Audio/Microphone.h"
+#include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
 #include <nlohmann/json.hpp>
@@ -113,6 +115,11 @@ namespace Dimension
             int (*GetComponentField)(void*, uint64_t, const char*, const char*, float*);
             int (*SetComponentField)(void*, uint64_t, const char*, const char*, const float*, int);
             float (*VehicleState)(void*, uint64_t, int); // 0 km/h, 1 RPM, 2 gear, 3-6 wheel grounded
+            float (*TimelineControl)(void*, uint64_t, int, float); // 0 play, 1 stop, 2 get time, 3 set time, 4 is playing
+            int (*MicrophoneStart)(int, float, int);             // device, seconds, loop
+            float (*MicrophoneState)(int);                       // 0 stop, 1 recording, 2 level, 3 peak, 4 position, 5 rate
+            int (*MicrophoneSave)(const char*);
+            const char* (*MicrophoneDevices)();                  // names, one per line
         };
 
         // Background scene loads started from C#, by id.
@@ -163,44 +170,6 @@ namespace Dimension
             return nullptr;
         }
 
-        int FloatCount(FieldType type)
-        {
-            switch (type)
-            {
-            case FieldType::Bool: case FieldType::Int: case FieldType::Float: case FieldType::Enum: return 1;
-            case FieldType::Vec2: return 2;
-            case FieldType::Vec3: case FieldType::Color3: case FieldType::Angles: return 3;
-            case FieldType::Vec4: case FieldType::Color4: return 4;
-            default: return 0; // strings, assets, curves, ... are not numeric
-            }
-        }
-
-        int FieldToFloats(const FieldInfo& f, const void* value, float* out)
-        {
-            int n = FloatCount(f.Type);
-            switch (f.Type)
-            {
-            case FieldType::Bool: out[0] = *static_cast<const bool*>(value) ? 1.0f : 0.0f; break;
-            case FieldType::Int: case FieldType::Enum: out[0] = (float)*static_cast<const int32_t*>(value); break;
-            default: if (n > 0) std::memcpy(out, value, n * sizeof(float)); break;
-            }
-            return n;
-        }
-
-        bool FieldFromFloats(const FieldInfo& f, void* value, const float* in, int count)
-        {
-            int n = FloatCount(f.Type);
-            if (n == 0 || count < n) return false;
-            auto clamp = [&](float v) { return f.Min < f.Max ? std::clamp(v, f.Min, f.Max) : v; };
-            switch (f.Type)
-            {
-            case FieldType::Bool: *static_cast<bool*>(value) = in[0] != 0.0f; break;
-            case FieldType::Int: case FieldType::Enum: *static_cast<int32_t*>(value) = (int32_t)std::lround(clamp(in[0])); break;
-            case FieldType::Float: *static_cast<float*>(value) = clamp(in[0]); break;
-            default: std::memcpy(value, in, n * sizeof(float)); break;
-            }
-            return true;
-        }
         template <class T> T* Comp(void* scene, uint64_t e) { return scene ? S(scene).GetRegistry().TryGet<T>(Unpack(e)) : nullptr; }
 
         // ---- Managed class proxies ------------------------------------------------------------------
@@ -592,6 +561,45 @@ namespace Dimension
                 if (what == 1) return v->EngineRPM;
                 if (what == 2) return (float)v->Gear;
                 return what >= 3 && what <= 6 && v->WheelGrounded[what - 3] ? 1.0f : 0.0f;
+            };
+            a.MicrophoneStart = [](int device, float seconds, int loop) -> int { return Microphone::Start(device, seconds, loop != 0) ? 1 : 0; };
+            a.MicrophoneState = [](int what) -> float {
+                switch (what)
+                {
+                case 0: Microphone::Stop(); return 0.0f;
+                case 1: return Microphone::IsRecording() ? 1.0f : 0.0f;
+                case 2: return Microphone::GetLevel();
+                case 3: return Microphone::GetPeak();
+                case 4: return (float)Microphone::GetPosition();
+                case 5: return (float)Microphone::GetSampleRate();
+                }
+                return 0.0f;
+            };
+            a.MicrophoneSave = [](const char* path) -> int {
+                // Relative paths are inside the project's Assets folder (so the recording can be used as a clip).
+                fs::path p = fs::u8path(path ? path : "");
+                if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
+                bool ok = Microphone::SaveWav(p);
+                if (ok) AssetManager::Import(p);
+                return ok ? 1 : 0;
+            };
+            a.MicrophoneDevices = []() -> const char* {
+                static std::string names;
+                names.clear();
+                for (const auto& d : Microphone::Devices()) names += d + "\n";
+                return names.c_str();
+            };
+            a.TimelineControl = [](void* s, uint64_t e, int action, float value) -> float {
+                auto* tl = Comp<TimelineComponent>(s, e);
+                if (!tl) return 0.0f;
+                switch (action)
+                {
+                case 0: tl->Play(); break;
+                case 1: tl->Stop(); break;
+                case 3: tl->Time = std::max(value, 0.0f); tl->Started = true; break;
+                case 4: return tl->Playing ? 1.0f : 0.0f;
+                }
+                return tl->Time;
             };
             a.MixerTransition = [](const char* name, float seconds) -> int {
                 return AudioMixer::TransitionToSnapshot(name ? name : "", seconds) ? 1 : 0;

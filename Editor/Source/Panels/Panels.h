@@ -104,6 +104,23 @@ namespace Editor
         glm::vec2 m_ContextPos{ 0.0f };
     };
 
+    // Tracks and keys of the selected object's Timeline (like Unity's Timeline/Animation window), with preview.
+    class TimelinePanel
+    {
+    public:
+        explicit TimelinePanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open);
+
+    private:
+        EditorContext& m_Ctx;
+        AssetHandle m_Handle = AssetHandle::None();
+        float m_Time = 0.0f;
+        bool m_Previewing = false, m_DraggingKey = false;
+        int m_Track = -1, m_Key = -1;
+        int m_AddObject = 0;
+        std::string m_AddComponent, m_AddField;
+    };
+
     class SceneSettingsPanel
     {
     public:

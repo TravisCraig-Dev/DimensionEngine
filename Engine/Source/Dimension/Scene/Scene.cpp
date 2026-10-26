@@ -11,6 +11,7 @@
 #include "Dimension/Particles/ParticleSystem.h"
 #include "Dimension/Animation/Animation.h"
 #include "Dimension/Animation/AnimatorController.h"
+#include "Dimension/Animation/Timeline.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Core/Log.h"
 #include "Dimension/Core/Input.h"
@@ -374,6 +375,7 @@ namespace Dimension
         m_Persistent.clear();
 
         ParticleSystems::Restart(*this);
+        Timeline::Restart(*this);
         TrailRenderers::ClearAll(*this);
         for (auto [e, anim] : m_Registry.ViewOf<AnimatorComponent>())
             if (anim.Controller.IsValid())
@@ -563,6 +565,7 @@ namespace Dimension
             m_FixedAccumulator -= kFixedTimestep;
         }
 
+        Timeline::Update(*this, dt);
         UpdateTransforms();
         UpdateAnimators(dt);
         ParticleSystems::Update(*this, dt);
