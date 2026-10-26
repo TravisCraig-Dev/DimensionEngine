@@ -15,19 +15,21 @@ namespace Dimension
     // public float, ...) of the timeline's object or the objects under it (by name path), plus events that call a
     // function on the object's scripts. A Timeline component plays it. Besides property tracks there are clip tracks:
     // Activation (the object is active only during its clips), Audio (each clip plays an audio clip through the
-    // object's Audio Source) and Animation (each clip plays an animation clip on the object's Animator, overriding its
-    // controller, with overlapping clips crossfading).
+    // object's Audio Source), Animation (each clip plays an animation clip on the object's Animator, overriding its
+    // controller, with overlapping clips crossfading) and Control (each clip plays another timeline on the object:
+    // nested sequences, with its tracks resolved from that object, its events and its audio).
     enum class TimelineInterpolation : int32_t { Smooth = 0, Linear = 1, Step = 2 };
-    enum class TimelineTrackKind : int32_t { Property = 0, Activation = 1, Audio = 2, Animation = 3 };
+    enum class TimelineTrackKind : int32_t { Property = 0, Activation = 1, Audio = 2, Animation = 3, Control = 4 };
 
     struct TimelineClip
     {
         float Start = 0.0f, Duration = 1.0f;
         AssetHandle Audio = AssetHandle::None(); // Audio tracks
         std::string Animation;                   // Animation tracks: the clip's name in the Animator's model
-        float Speed = 1.0f;                      // Animation: playback rate
-        float ClipIn = 0.0f;                     // seconds into the audio or animation clip where it starts
-        bool Loop = true;                        // Animation: wrap past the clip's end (otherwise hold the last frame)
+        AssetHandle Timeline = AssetHandle::None(); // Control tracks: the timeline played
+        float Speed = 1.0f;                      // Animation and Control: playback rate
+        float ClipIn = 0.0f;                     // seconds into the audio, animation or timeline where it starts
+        bool Loop = true;                        // Animation and Control: wrap past the end (otherwise hold the last frame)
         float End() const { return Start + Duration; }
     };
 
@@ -76,11 +78,16 @@ namespace Dimension
         // "" with ok = false when target is not under root).
         Entity ResolvePath(Scene& scene, Entity root, const std::string& path);
         std::string PathOf(Scene& scene, Entity root, Entity target, bool* ok = nullptr);
-        // Writes every (unmuted) track's state at `time`: property values, activation, animation poses (audio plays
-        // only while playing). Returns how many tracks applied.
+        // Writes every (unmuted) track's state at `time`: property values, activation, animation poses and the nested
+        // timelines of control clips (audio plays only while playing). Returns how many tracks applied.
         int Apply(Scene& scene, Entity root, const TimelineAsset& timeline, float time);
         // Audio clips starting in (from, to] (and stopping ones that ended), for playback.
         void PlayAudio(Scene& scene, Entity root, const TimelineAsset& timeline, float from, float to);
+        // A control clip's time in its timeline (Clip In, Speed, then looped or held at the end) at timeline time `time`.
+        float ControlTime(const TimelineClip& clip, float nestedDuration, float time);
+        // Playback from `from` to `to` (from < 0 includes things at 0): audio clips started and stopped, and the events
+        // passed, as (object, function) pairs, on this timeline and on the timelines its control clips play.
+        void Advance(Scene& scene, Entity root, const TimelineAsset& timeline, float from, float to, std::vector<std::pair<Entity, std::string>>& events);
         // Hands Animators driven by the timeline's animation tracks back to their own playback.
         void Release(Scene& scene, Entity root, const TimelineAsset& timeline);
         // Sorts clips by start (after editing).

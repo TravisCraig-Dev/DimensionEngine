@@ -1949,9 +1949,10 @@ namespace Editor
                 glm::vec2 n = glm::vec2(c) / std::max(c.w, 1e-4f);
                 points[i] = ImVec2(origin.x + (n.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - n.y * 0.5f) * size.y);
             }
-            bool paint = m_Ctx.TerrainTool - 1 >= (int)Terrain::BrushMode::PaintGrass;
-            bool detail = Terrain::IsDetailMode((Terrain::BrushMode)(m_Ctx.TerrainTool - 1));
-            ImGui::GetWindowDrawList()->AddPolyline(points, 49, detail ? IM_COL32(240, 200, 90, 255) : paint ? IM_COL32(120, 230, 120, 255) : IM_COL32(90, 200, 255, 255), 0, 2.0f);
+            auto tool = (Terrain::BrushMode)(m_Ctx.TerrainTool - 1);
+            ImU32 color = Terrain::IsDetailMode(tool) ? IM_COL32(240, 200, 90, 255) : Terrain::IsPaintMode(tool) ? IM_COL32(120, 230, 120, 255)
+                        : Terrain::IsHoleMode(tool)   ? IM_COL32(240, 90, 90, 255) : IM_COL32(90, 200, 255, 255);
+            ImGui::GetWindowDrawList()->AddPolyline(points, 49, color, 0, 2.0f);
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
             {
                 m_Ctx.RecordUndo();
@@ -1965,6 +1966,8 @@ namespace Editor
                 // Shift reverses raise and lower.
                 if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::Raise) mode = Terrain::BrushMode::Lower;
                 else if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::Lower) mode = Terrain::BrushMode::Raise;
+                else if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::DigHole) mode = Terrain::BrushMode::FillHole;
+                else if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::FillHole) mode = Terrain::BrushMode::DigHole;
                 Terrain::ApplyBrush(*terrain, mode, glm::vec2(local.x, local.z), radius, m_Ctx.TerrainBrushStrength,
                                     std::min(ImGui::GetIO().DeltaTime, 0.05f), m_TerrainFlatten);
             }

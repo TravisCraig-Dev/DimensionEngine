@@ -121,6 +121,8 @@ namespace Dimension
             int (*MicrophoneSave)(const char*);
             const char* (*MicrophoneDevices)();                  // names, one per line
             void (*RagdollImpulse)(void*, uint64_t, const float*, const float*); // impulse, world point
+            float (*RagdollQuery)(void*, uint64_t, int);                       // 0 face up (1/0), 1 get-up progress
+            int (*BreakableBreak)(void*, uint64_t, const float*);              // world point; returns the piece count
         };
 
         // Background scene loads started from C#, by id.
@@ -592,6 +594,14 @@ namespace Dimension
             };
             a.RagdollImpulse = [](void* s, uint64_t e, const float* v, const float* p) {
                 Physics3DWorld::AddRagdollImpulse(S(s), Unpack(e), { v[0], v[1], v[2] }, { p[0], p[1], p[2] });
+            };
+            a.BreakableBreak = [](void* s, uint64_t e, const float* p) -> int {
+                return (int)Physics3DWorld::Break(S(s), Unpack(e), { p[0], p[1], p[2] }).size();
+            };
+            a.RagdollQuery = [](void* s, uint64_t e, int what) -> float {
+                auto* r = Comp<RagdollComponent>(s, e);
+                if (!r) return what == 1 ? 1.0f : 0.0f;
+                return what == 0 ? (r->FaceUp ? 1.0f : 0.0f) : r->GetUpProgress();
             };
             a.TimelineControl = [](void* s, uint64_t e, int action, float value) -> float {
                 auto* tl = Comp<TimelineComponent>(s, e);

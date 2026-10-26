@@ -54,6 +54,7 @@
 #include "shaders/ParticleSortKeys.comp.h"
 #include "shaders/ParticleSort.comp.h"
 #include "shaders/ParticleGpu.vert.h"
+#include "shaders/ParticleTrail.vert.h"
 #include "shaders/Ssr.frag.h"
 #include "shaders/SsrApply.frag.h"
 #include "shaders/Taa.frag.h"
@@ -114,6 +115,9 @@ namespace Dimension
             } Probes[SceneRenderer::kMaxReflectionProbes];
             glm::uvec4 ProbeVolumeBuffer;
             glm::vec4 ProbeVolumes[SceneRenderer::kMaxProbeVolumes * 3];
+            glm::vec4 Wind;       // xyz wind (m/s), w seconds since start (grass motion)
+            glm::vec4 WindParams; // x gusts, y grass bender count
+            glm::vec4 GrassBenders[SceneRenderer::kMaxGrassBenders]; // xyz sphere center, w radius
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
@@ -127,15 +131,15 @@ namespace Dimension
             VkDeviceAddress Joints;
             VkDeviceAddress Instances;
             uint32_t EntityId;
-            uint32_t Flags; // bit 0: skinned, bit 1: instanced
-            uint32_t Probe; // unused (probes blend per pixel); kept for the push constant layout
+            uint32_t Flags;  // bit 0: skinned, bit 1: instanced
+            uint32_t Motion; // grass tufts: half floats (sway, bending); 0 = rigid
         };
 
         // std430 mirror of MeshInstance in MeshCommon.glsl.
         struct InstanceGPU
         {
             glm::mat4 Model;
-            glm::uvec4 Data; // x: entity id, yz: skinning matrices address
+            glm::uvec4 Data; // x: entity id, yz: skinning matrices address, w: grass motion (see MeshPush)
         };
 
 
@@ -154,7 +158,8 @@ namespace Dimension
             glm::vec4 TilingOffset;
             glm::uvec4 Maps;
             glm::uvec4 Flags;
-            glm::vec4 Layers[3]; // terrain layers
+            glm::vec4 Layers[Terrain::kLayerCount]; // terrain layers
+            glm::uvec4 Maps2;                       // terrain: second splat map, dirt, sand, moss
         };
         static_assert(sizeof(MeshPush) <= kPushConstantSize);
 
@@ -326,7 +331,7 @@ namespace Dimension
     struct MainPipelines
     {
         enum Kind { Mesh, MeshDoubleSided, MeshTransparent, DepthPrepass, DepthPrepassDoubleSided, Sky, Sprite, SpriteAdditive, Line,
-                    GpuParticles, GpuParticlesAdditive, Count };
+                    GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive, Count };
         Pipeline Pipelines[Count];
         const Pipeline& operator[](Kind k) const { return Pipelines[k]; }
     };
@@ -339,12 +344,14 @@ namespace Dimension
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
         Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort; // compute
-        Pipeline GpuParticles, GpuParticlesAdditive;
+        Pipeline GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive;
         // GPU particle systems' simulation buffers, per (scene, entity); dropped when unused for a while.
         struct GpuParticleState
         {
             Buffer Particles;
             VkDeviceAddress Address = 0;
+            Buffer Trails; // recorded trail points (systems with trails)
+            VkDeviceAddress TrailAddress = 0;
             uint32_t Capacity = 0, Head = 0, Generation = 0;
             uint64_t LastFrame = 0;
             Buffer Sort; // (key, slot) pairs for back-to-front drawing
@@ -461,6 +468,16 @@ namespace Dimension
         gpuParticles.DebugName = "GpuParticlesAdditivePipeline";
         r.GpuParticlesAdditive = Pipeline(gpuParticles);
         r.MainDescs[MainPipelines::GpuParticlesAdditive] = gpuParticles;
+        GraphicsPipelineDesc gpuTrails = gpuParticles;
+        gpuTrails.VertexSpirv = kParticleTrail_vert;
+        gpuTrails.ColorAttachments = sprite.ColorAttachments;
+        gpuTrails.DebugName = "GpuTrailsPipeline";
+        r.GpuTrails = Pipeline(gpuTrails);
+        r.MainDescs[MainPipelines::GpuTrails] = gpuTrails;
+        gpuTrails.ColorAttachments = additive.ColorAttachments;
+        gpuTrails.DebugName = "GpuTrailsAdditivePipeline";
+        r.GpuTrailsAdditive = Pipeline(gpuTrails);
+        r.MainDescs[MainPipelines::GpuTrailsAdditive] = gpuTrails;
 
         GraphicsPipelineDesc ui = sprite;
         ui.VertexSpirv = kUI_vert;
@@ -857,6 +874,38 @@ namespace Dimension
                     glm::uvec2 a = SplitAddress(block.Address);
                     u.ProbeVolumeBuffer = glm::uvec4(a, volumes, 0u);
                 }
+        }
+        // Wind and the bodies that push grass aside: characters and dynamic rigid bodies near the camera, each as a
+        // sphere at its lowest part (a capsule's bottom cap, a sphere, a box's inscribed sphere at its bottom).
+        {
+            static const auto start = std::chrono::steady_clock::now();
+            u.Wind = glm::vec4(settings.Wind, std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count());
+            struct Bender
+            {
+                glm::vec4 Sphere;
+                float Distance;
+            };
+            std::vector<Bender> benders;
+            auto add = [&](const TransformComponent& t, glm::vec3 offset, float radius, float halfHeight) {
+                glm::vec3 scale(glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[1])), glm::length(glm::vec3(t.World[2])));
+                radius *= std::max(std::abs(scale.x), std::abs(scale.z));
+                glm::vec3 center = glm::vec3(t.World * glm::vec4(offset, 1.0f)) - glm::vec3(0.0f, std::max(halfHeight * std::abs(scale.y) - radius, 0.0f), 0.0f);
+                if (radius > 0.0f) benders.push_back({ glm::vec4(center, radius), glm::distance(center, camera.Position) });
+            };
+            for (auto [e, cc, t] : reg.ViewOf<CharacterControllerComponent, TransformComponent>())
+                if (t.ActiveInHierarchy) add(t, cc.Center, cc.Radius, cc.Height * 0.5f);
+            for (auto [e, rb, t] : reg.ViewOf<RigidbodyComponent, TransformComponent>())
+            {
+                if (!t.ActiveInHierarchy || rb.Type != BodyType::Dynamic || reg.Has<CharacterControllerComponent>(e)) continue;
+                if (auto* s = reg.TryGet<SphereColliderComponent>(e)) add(t, s->Offset, s->Radius, 0.0f);
+                else if (auto* c = reg.TryGet<CapsuleColliderComponent>(e)) add(t, c->Offset, c->Radius, c->Height * 0.5f);
+                else if (auto* b = reg.TryGet<BoxColliderComponent>(e)) add(t, b->Offset, std::min(b->Size.x, b->Size.z) * 0.5f, b->Size.y * 0.5f);
+            }
+            if (benders.size() > kMaxGrassBenders)
+                std::partial_sort(benders.begin(), benders.begin() + kMaxGrassBenders, benders.end(), [](const Bender& a, const Bender& b) { return a.Distance < b.Distance; });
+            size_t count = std::min<size_t>(benders.size(), kMaxGrassBenders);
+            for (size_t i = 0; i < count; ++i) u.GrassBenders[i] = benders[i].Sphere;
+            u.WindParams = glm::vec4(std::max(settings.WindGusts, 0.0f), (float)count, 0.0f, 0.0f);
         }
         bool gpuCulled = false;
         if (!lights.empty() && s_GpuLightCulling && s_ClusterCulling)
@@ -1689,9 +1738,11 @@ namespace Dimension
                                           TextureIndex(terrain->RockTexture, white), TextureIndex(terrain->SnowTexture, white));
                     gpu.Flags = glm::uvec4(0u, 0u, 1u, 0u);
                     float tiling = std::max(terrain->TextureTiling, 1e-4f);
-                    gpu.Layers[0] = glm::vec4(glm::vec3(ToLinear(terrain->GrassColor)), tiling);
-                    gpu.Layers[1] = glm::vec4(glm::vec3(ToLinear(terrain->RockColor)), tiling);
-                    gpu.Layers[2] = glm::vec4(glm::vec3(ToLinear(terrain->SnowColor)), tiling);
+                    gpu.Maps2 = glm::uvec4(terrainRt->Splat2->GetBindlessIndex(), TextureIndex(terrain->DirtTexture, white),
+                                           TextureIndex(terrain->SandTexture, white), TextureIndex(terrain->MossTexture, white));
+                    const glm::vec4* colors[] = { &terrain->GrassColor, &terrain->RockColor, &terrain->SnowColor,
+                                                  &terrain->DirtColor, &terrain->SandColor, &terrain->MossColor };
+                    for (int k = 0; k < Terrain::kLayerCount; ++k) gpu.Layers[k] = glm::vec4(glm::vec3(ToLinear(*colors[k])), tiling);
                     address = uploadMaterialGPU(gpu);
                 }
                 else
@@ -1729,6 +1780,9 @@ namespace Dimension
                 if (!mesh) continue;
                 Ref<Material> overrideMat = AssetManager::GetMaterial(kind == 0 ? terrain.TreeMaterial : terrain.GrassMaterial);
                 const auto& slots = AssetManager::GetMeshMaterials(meshHandle);
+                // Grass tufts sway in the wind and bend away from bodies (in the vertex shader).
+                uint32_t motion = kind == 1 && (terrain.GrassSway > 0.0f || terrain.GrassBending > 0.0f)
+                                      ? glm::packHalf2x16(glm::vec2(terrain.GrassSway, terrain.GrassBending)) : 0u;
                 struct DetailPart
                 {
                     uint32_t FirstIndex, IndexCount;
@@ -1766,6 +1820,8 @@ namespace Dimension
                     item.EntityId = e.Index + 1;
                     item.AlwaysVisible = false;
                     item.CastShadows = terrainRenderer ? terrainRenderer->CastShadows : true;
+                    item.Motion = motion;
+                    if (motion) item.Extents += glm::vec3(1.0f, 0.0f, 1.0f); // swaying tips reach past the mesh's bounds
                     item.FirstPart = (uint32_t)m_RenderParts.size();
                     for (const DetailPart& p : parts)
                         m_RenderParts.push_back({ p.FirstIndex, p.IndexCount, p.Address, p.Transparent, p.DoubleSided, p.CastShadows, (uint32_t)m_RenderItems.size(), p.Batch });
@@ -1832,7 +1888,7 @@ namespace Dimension
         };
 
         auto InstanceOf = [](const RenderItem& item) {
-            return InstanceGPU{ item.World, glm::uvec4(item.EntityId, (uint32_t)item.Joints, (uint32_t)(item.Joints >> 32), 0) };
+            return InstanceGPU{ item.World, glm::uvec4(item.EntityId, (uint32_t)item.Joints, (uint32_t)(item.Joints >> 32), item.Motion) };
         };
         glm::vec3 camPos = glm::vec3(glm::inverse(viewProj) * glm::vec4(0, 0, 0, 1)); // only used for sorting
         auto makeDraw = [&](const RenderPart& part) {
@@ -1848,7 +1904,7 @@ namespace Dimension
             d.Push.Joints = item.Joints;
             d.Push.Instances = 0;
             d.Push.Flags = item.Joints ? 1u : 0u;
-            d.Push.Probe = item.Probe;
+            d.Push.Motion = item.Motion;
             d.Vertices = item.Vertices;
             d.VertexOffset = item.VertexOffset;
             d.Indices = item.Indices;
@@ -1969,6 +2025,8 @@ namespace Dimension
             case MainPipelines::SpriteAdditive: return r.SpriteAdditive;
             case MainPipelines::GpuParticles: return r.GpuParticles;
             case MainPipelines::GpuParticlesAdditive: return r.GpuParticlesAdditive;
+            case MainPipelines::GpuTrails: return r.GpuTrails;
+            case MainPipelines::GpuTrailsAdditive: return r.GpuTrailsAdditive;
             default: return r.Line;
             }
         auto& set = r.Multisampled[m_Samples];
@@ -2580,9 +2638,13 @@ namespace Dimension
             glm::mat4 DepthViewProj, DepthInvViewProj;
             glm::uvec4 DepthInfo;
             glm::vec4 DepthParams;
+            glm::vec4 Trail;
+            glm::uvec4 TrailBuffer;
         };
         constexpr VkDeviceSize kGpuParticleSize = 64;
         constexpr uint32_t kMaxGpuParticles = 1000000;
+        constexpr uint32_t kGpuTrailPoints = 8;              // TRAIL_POINTS in ParticleCommon.glsl
+        constexpr uint32_t kMaxGpuTrailParticles = 262144;   // trails' history: 128 bytes per particle (32 MB here)
     }
 
     void SceneRenderer::SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& view)
@@ -2614,6 +2676,17 @@ namespace Dimension
                 st.Address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
                 st.Capacity = capacity;
                 clear = true;
+            }
+            // Trails keep a history per slot (made with the system's first frame with trails, so it starts cleared).
+            bool trails = ps.Trails && capacity <= kMaxGpuTrailParticles;
+            if (trails && (!st.Trails.IsValid() || st.Trails.GetSize() != (VkDeviceSize)capacity * kGpuTrailPoints * 16))
+            {
+                st.Trails = Buffer((VkDeviceSize)capacity * kGpuTrailPoints * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                   MemoryUsage::GpuOnly, "GpuParticleTrails");
+                VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+                info.buffer = st.Trails.GetHandle();
+                st.TrailAddress = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                clear = true; // existing particles have no history
             }
             if (st.Generation != ps.GpuGeneration) clear = true;
             if (clear)
@@ -2659,6 +2732,12 @@ namespace Dimension
                                     ps.CollisionDampen);
             p.Misc = glm::vec4(ps.LifetimeLoss, worldSpace ? 1.0f : glm::length(glm::vec3(world[0])), ps.SheetRandomStart ? 1.0f : 0.0f,
                                std::max(ps.SheetCycles, 0.0f));
+            if (trails)
+            {
+                p.Trail = glm::vec4(1.0f, std::max(ps.TrailLifetime, 1e-3f) / kGpuTrailPoints, ps.TrailWidth, 0.0f);
+                glm::uvec2 a = SplitAddress(st.TrailAddress);
+                p.TrailBuffer = glm::uvec4(a, 0u, 0u);
+            }
             uint32_t total = 0;
             for (size_t i = 0; i < ps.GpuEmissions.size() && i < ParticleSystemComponent::kMaxGpuEmissions; ++i)
             {
@@ -2746,7 +2825,7 @@ namespace Dimension
 
             auto tex = ps.Texture.IsValid() ? AssetManager::GetTexture(ps.Texture) : nullptr;
             m_GpuParticleDraws.push_back({ st.Address, params.Address, capacity, (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex(),
-                                           e.Index + 1, ps.Blend == ParticleBlend::Additive, ps.SortingOrder, sort ? st.SortAddress : 0 });
+                                           e.Index + 1, ps.Blend == ParticleBlend::Additive, ps.SortingOrder, sort ? st.SortAddress : 0, trails });
         }
         if (!first)
             Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
@@ -2767,6 +2846,21 @@ namespace Dimension
         vkCmdBindIndexBuffer(cmd, res.QuadIndices.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
         for (const GpuParticleDraw& d : m_GpuParticleDraws)
         {
+            if (d.Trails)
+            {
+                // The ribbons first, under the particles: TRAIL_POINTS segments per slot.
+                MainPipeline(d.Additive ? MainPipelines::GpuTrailsAdditive : MainPipelines::GpuTrails).Bind(cmd);
+                struct { glm::uvec2 Particles, Params; uint32_t Texture, Entity; } push{ SplitAddress(d.Particles), SplitAddress(d.Params),
+                                                                                      AssetManager::GetParticleTexture()->GetBindlessIndex(), d.Entity };
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                uint32_t segments = d.Capacity * kGpuTrailPoints;
+                for (uint32_t firstQuad = 0; firstQuad < segments; firstQuad += kMaxQuadsPerDraw)
+                {
+                    uint32_t n = std::min(kMaxQuadsPerDraw, segments - firstQuad);
+                    vkCmdDrawIndexed(cmd, n * 6, 1, 0, (int32_t)(firstQuad * 4), 0);
+                    m_Stats.DrawCalls++;
+                }
+            }
             MainPipeline(d.Additive ? MainPipelines::GpuParticlesAdditive : MainPipelines::GpuParticles).Bind(cmd);
             struct { glm::uvec2 Particles, Params; uint32_t Texture, Entity; glm::uvec2 Sorted; } push{
                 SplitAddress(d.Particles), SplitAddress(d.Params), d.Texture, d.Entity, SplitAddress(d.Sorted) };
@@ -3087,46 +3181,53 @@ namespace Dimension
             Environment::SH9 sh = Environment::ComputeIrradianceSH(rgba.data(), rb.Width, rb.Height);
             for (int k = 0; k < 9; ++k) lpv->Baked[(size_t)rb.Probe * 9 + k] = sh[k];
         }
-        // Start the next capture (one per frame, so baking never stalls the editor): the six-face capture of the
-        // reflection probes at the probe's position, its equirect image copied back to the CPU.
+        // Start the next captures (one per frame, so baking never stalls the editor; a realtime volume takes Probes
+        // Per Frame and starts over when done): the six-face capture of the reflection probes at the probe's
+        // position, its equirect image copied back to the CPU.
+        bool baking = false; // one bake capture per frame across all volumes
         for (auto [e, lpv, t] : reg.ViewOf<LightProbeVolumeComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
             if (!lpv.IsBaked() && lpv.BakeNext < 0 && lpv.BakePending == 0) lpv.BakeNext = 0; // unbaked: bake now
-            if (lpv.BakeNext < 0) continue;
-            if (lpv.BakeNext >= lpv.ProbeCount())
+            if (lpv.Realtime && lpv.BakeNext < 0) lpv.BakeNext = 0;
+            int count = lpv.Realtime && lpv.IsBaked() ? std::clamp(lpv.ProbesPerFrame, 1, 4) : baking ? 0 : 1;
+            for (int capture = 0; capture < count; ++capture)
             {
-                lpv.BakeNext = -1;
-                continue;
+                if (lpv.BakeNext < 0) break;
+                if (lpv.BakeNext >= lpv.ProbeCount())
+                {
+                    lpv.BakeNext = lpv.Realtime ? 0 : -1;
+                    if (!lpv.Realtime) break;
+                }
+                Readback* slot = nullptr;
+                for (auto& rb : m_LightProbeReadbacks)
+                    if (!rb.Busy) slot = &rb;
+                if (!slot)
+                {
+                    if (m_LightProbeReadbacks.size() >= 12) break; // all in flight: continue next frame
+                    slot = &m_LightProbeReadbacks.emplace_back();
+                }
+                const uint32_t res = 32, width = res * 4, height = res * 2;
+                if (!m_LightProbeCapture) m_LightProbeCapture = std::make_unique<ProbeResources>();
+                BakeProbe(cmd, scene, *m_LightProbeCapture, lpv.ProbePosition(t.GetWorldPosition(), lpv.BakeNext), res);
+                if (!slot->Data.IsValid())
+                    slot->Data = Buffer((VkDeviceSize)width * height * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT, MemoryUsage::GpuToCpu, "LightProbeReadback");
+                VkBufferImageCopy region{};
+                region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+                region.imageExtent = { width, height, 1 };
+                vkCmdCopyImageToBuffer(cmd, m_LightProbeCapture->Base.GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, slot->Data.GetHandle(), 1, &region);
+                slot->Busy = true;
+                slot->Frame = device.Frame().FrameNumber;
+                slot->Owner = &scene;
+                slot->EntityIndex = e.Index;
+                slot->EntityGeneration = e.Generation;
+                slot->Probe = lpv.BakeNext;
+                slot->Width = width;
+                slot->Height = height;
+                ++lpv.BakeNext;
+                ++lpv.BakePending;
+                if (!lpv.Realtime || !lpv.IsBaked()) baking = true;
             }
-            Readback* slot = nullptr;
-            for (auto& rb : m_LightProbeReadbacks)
-                if (!rb.Busy) slot = &rb;
-            if (!slot)
-            {
-                if (m_LightProbeReadbacks.size() >= 4) break; // all in flight: continue next frame
-                slot = &m_LightProbeReadbacks.emplace_back();
-            }
-            const uint32_t res = 32, width = res * 4, height = res * 2;
-            if (!m_LightProbeCapture) m_LightProbeCapture = std::make_unique<ProbeResources>();
-            BakeProbe(cmd, scene, *m_LightProbeCapture, lpv.ProbePosition(t.GetWorldPosition(), lpv.BakeNext), res);
-            if (!slot->Data.IsValid())
-                slot->Data = Buffer((VkDeviceSize)width * height * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT, MemoryUsage::GpuToCpu, "LightProbeReadback");
-            VkBufferImageCopy region{};
-            region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            region.imageExtent = { width, height, 1 };
-            vkCmdCopyImageToBuffer(cmd, m_LightProbeCapture->Base.GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, slot->Data.GetHandle(), 1, &region);
-            slot->Busy = true;
-            slot->Frame = device.Frame().FrameNumber;
-            slot->Owner = &scene;
-            slot->EntityIndex = e.Index;
-            slot->EntityGeneration = e.Generation;
-            slot->Probe = lpv.BakeNext;
-            slot->Width = width;
-            slot->Height = height;
-            ++lpv.BakeNext;
-            ++lpv.BakePending;
-            break; // one capture per frame
         }
     }
 

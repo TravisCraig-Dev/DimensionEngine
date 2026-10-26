@@ -8,6 +8,7 @@
 namespace Dimension
 {
     class Scene;
+    struct RagdollComponent;
 
     namespace Physics
     {
@@ -46,6 +47,8 @@ namespace Dimension
         static void AddImpulse(Scene& scene, Entity e, const glm::vec3& impulse);
         // A Ragdoll's capsule nearest `point` takes the impulse there (a hit knocks the limb it lands on).
         static void AddRagdollImpulse(Scene& scene, Entity e, const glm::vec3& impulse, const glm::vec3& point);
+        // Breaks a Breakable object into its pieces now, flying apart from `point` (world space). Returns the pieces.
+        static std::vector<Entity> Break(Scene& scene, Entity e, const glm::vec3& point);
         // Closest hit along a ray (direction need not be normalized). Triggers are hit too.
         static RaycastHit Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                                   uint32_t layerMask = Physics::kDefaultQueryMask);
@@ -79,6 +82,10 @@ namespace Dimension
         void CreateSoftBody(Entity e);
         void CreateRagdoll(Entity e);
         void UpdateRagdolls(float dt, bool afterStep);
+        std::vector<Entity> BreakNow(Entity e, const glm::vec3& point);
+        void UpdateDebris(float dt);
+        // Simulate turned off: aligns the object with the limp body (by its root joint) and starts blending the animation in.
+        void BeginGetUp(Entity e, RagdollComponent& comp, const std::vector<glm::mat4>& bindGlobal, int rootJoint);
         void UpdateCloths(float dt, bool afterStep);
         void UpdateVehicles(bool afterStep);
         void UpdateWater(float dt); // buoyancy and drag from Water Volumes

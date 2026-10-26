@@ -10,7 +10,8 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Ma
     vec4 TilingOffset;  // xy tiling, zw offset
     uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission (terrain: splat, grass, rock, snow)
     uvec4 Flags;        // x blend mode (0 opaque, 1 cutout, 2 transparent), y has normal map, z 1 = terrain
-    vec4 Layers[3];     // terrain: grass, rock and snow tint (linear rgb), w texture repeats per meter
+    vec4 Layers[6];     // terrain: grass, rock, snow, dirt, sand and moss tint (linear rgb), w texture repeats per meter
+    uvec4 Maps2;        // terrain: second splat map, dirt, sand, moss
 };
 
 struct SkinVertex
@@ -25,7 +26,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Jo
 struct MeshInstance
 {
     mat4 Model;
-    uvec4 Data; // x: entity id, yz: skinning matrices address (skinned instances)
+    uvec4 Data; // x: entity id, yz: skinning matrices address (skinned instances), w: grass motion (see Push)
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstancesRef { MeshInstance Items[]; };
 
@@ -38,5 +39,5 @@ layout(push_constant) uniform Push
     InstancesRef Instances; // valid when Flags & 2 (Model and EntityId then come from here)
     uint EntityId;
     uint Flags;         // bit 0: skinned, bit 1: instanced
-    uint Probe;         // unused: reflection probes blend per pixel
+    uint Motion;        // grass tufts: half floats (sway, bending); 0 = rigid
 } pc;

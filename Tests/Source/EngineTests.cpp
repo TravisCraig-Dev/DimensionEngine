@@ -24,6 +24,7 @@
 #include <Dimension/Physics/ConvexDecomposition.h>
 #include <Dimension/Asset/ImportCache.h>
 #include <Dimension/Physics/Cloth.h>
+#include <Dimension/Physics/Fracture.h>
 #include <set>
 #include <windows.h>
 
@@ -1042,6 +1043,119 @@ namespace
         fs::remove(wav);
     }
 
+    void TestNestedTimelines()
+    {
+        // Control tracks: a master timeline's clips play another timeline on an object, with Clip In, Speed and loop
+        // or hold; the nested timeline's tracks resolve from that object and its events fire on it.
+        fs::path assets = fs::temp_directory_path() / "dimension_nested_timelines" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        AssetHandle doorHandle = AssetManager::CreateTimeline(assets / "Door.timeline");
+        AssetHandle masterHandle = AssetManager::CreateTimeline(assets / "Master.timeline");
+        AssetHandle selfHandle = AssetManager::CreateTimeline(assets / "Self.timeline");
+        {
+            auto door = AssetManager::GetTimeline(doorHandle);
+            door->Duration = 2.0f;
+            TimelineTrack rise;
+            rise.Component = "Transform";
+            rise.Field = "Position";
+            rise.Interpolation = TimelineInterpolation::Linear;
+            float a[3] = { 0, 0, 0 }, b[3] = { 0, 4, 0 };
+            Timeline::SetKey(rise, 0.0f, a, 3);
+            Timeline::SetKey(rise, 2.0f, b, 3);
+            door->Tracks = { rise };
+            door->Events = { { 1.0f, "OnHalfOpen" } };
+            AssetManager::SaveTimeline(doorHandle);
+
+            auto master = AssetManager::GetTimeline(masterHandle);
+            master->Duration = 6.0f;
+            TimelineTrack control;
+            control.Kind = TimelineTrackKind::Control;
+            control.Path = "Door";
+            TimelineClip once;
+            once.Start = 1.0f;
+            once.Duration = 3.0f;
+            once.Timeline = doorHandle;
+            once.Loop = false;
+            TimelineClip looped;
+            looped.Start = 4.5f;
+            looped.Duration = 1.5f;
+            looped.Timeline = doorHandle;
+            looped.ClipIn = 0.5f;
+            looped.Speed = 2.0f;
+            control.Clips = { once, looped };
+            master->Tracks = { control };
+            AssetManager::SaveTimeline(masterHandle);
+
+            auto self = AssetManager::GetTimeline(selfHandle);
+            TimelineTrack loop;
+            loop.Kind = TimelineTrackKind::Control;
+            TimelineClip again;
+            again.Duration = 5.0f;
+            again.Timeline = selfHandle;
+            loop.Clips = { again };
+            self->Tracks = { loop };
+        }
+        auto master = TimelineAsset::Load(assets / "Master.timeline");
+        CHECK(master->Tracks.size() == 1 && master->Tracks[0].Kind == TimelineTrackKind::Control && master->Tracks[0].Clips.size() == 2);
+        const TimelineClip& loopedBack = master->Tracks[0].Clips[1];
+        CHECK(loopedBack.Timeline == doorHandle && Near(loopedBack.ClipIn, 0.5f) && Near(loopedBack.Speed, 2.0f) && loopedBack.Loop &&
+              !master->Tracks[0].Clips[0].Loop);
+        CHECK(Near(Timeline::ControlTime(loopedBack, 2.0f, 5.9f), std::fmod(0.5f + 1.4f * 2.0f, 2.0f)) &&
+              Near(Timeline::ControlTime(master->Tracks[0].Clips[0], 2.0f, 3.9f), 2.0f));
+
+        Scene scene("Nested");
+        auto& reg = scene.GetRegistry();
+        Entity root = scene.CreateEntity("Cutscene");
+        Entity door = scene.CreateEntity("Door", root);
+        auto& pos = reg.Get<TransformComponent>(door).Position;
+        pos = { 9, 9, 9 };
+        Timeline::Apply(scene, root, *master, 0.5f);
+        CHECK(Near(pos.y, 9.0f)); // before the first clip: untouched
+        Timeline::Apply(scene, root, *master, 2.0f);
+        CHECK(Near(pos.x, 0.0f) && Near(pos.y, 2.0f));
+        Timeline::Apply(scene, root, *master, 3.9f);
+        CHECK(Near(pos.y, 4.0f)); // held at the nested timeline's end
+        pos.y = 7.0f;
+        Timeline::Apply(scene, root, *master, 4.25f);
+        CHECK(Near(pos.y, 7.0f)); // a gap: nothing applied
+        Timeline::Apply(scene, root, *master, 5.0f);
+        CHECK(Near(pos.y, 3.0f)); // 0.5 + 0.5 * 2 = 1.5 s in
+        Timeline::Apply(scene, root, *master, 5.9f);
+        CHECK(Near(pos.y, 2.6f, 1e-3f)); // 3.3 s wraps to 1.3 s
+
+        // Events: once in the first clip, and in each pass of the looped clip (0.5 -> 2 and 0 -> 1.5).
+        std::vector<std::pair<Entity, std::string>> events;
+        Timeline::Advance(scene, root, *master, -1.0f, 6.0f, events);
+        CHECK(events.size() == 3);
+        bool onDoor = true;
+        for (auto& [target, fn] : events) onDoor &= target == door && fn == "OnHalfOpen";
+        CHECK(onDoor);
+        events.clear();
+        Timeline::Advance(scene, root, *master, 1.5f, 1.9f, events);
+        CHECK(events.empty());
+        Timeline::Advance(scene, root, *master, 1.9f, 2.1f, events);
+        CHECK(events.size() == 1);
+
+        // A timeline that plays itself stops nesting instead of recursing forever.
+        auto self = AssetManager::GetTimeline(selfHandle);
+        CHECK(Timeline::Apply(scene, root, *self, 1.0f) == 1);
+        events.clear();
+        Timeline::Advance(scene, root, *self, -1.0f, 5.0f, events);
+
+        // Played: the master's Timeline component drives the door through the nested timeline.
+        reg.Emplace<TimelineComponent>(root).Timeline = masterHandle;
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        for (int i = 0; i < 32; ++i) rt->OnUpdateRuntime(0.0625f); // 2 s
+        CHECK(Near(rt->GetRegistry().Get<TransformComponent>(door).Position.y, 2.0f, 1e-3f));
+        rt->OnRuntimeStop();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
     void TestTimelineClips()
     {
         // Clip tracks: activation, animation (with crossfades) and audio, saved and loaded.
@@ -1209,6 +1323,107 @@ namespace
         CHECK(bobHi - bobLo > 0.4f && bobLo > 2.0f && bobHi < 5.5f);
     }
 
+    void TestFracture()
+    {
+        // Shattering: the pieces fill the mesh exactly (their volumes add up), each is closed by its caps (its own
+        // mesh's volume matches), stays inside the source, and the same seed gives the same pieces.
+        MeshData cube = MeshData::Cube();
+        float cubeVolume = Fracture::Volume(cube);
+        CHECK(Near(cubeVolume, 1.0f, 1e-4f));
+        auto pieces = Fracture::Shatter(cube, 8, 3, 1);
+        CHECK(pieces.size() >= 4 && pieces.size() <= 8);
+        float sum = 0.0f;
+        bool closed = true, inside = true, capped = true;
+        for (auto& p : pieces)
+        {
+            sum += p.Volume;
+            closed &= Near(Fracture::Volume(p.Mesh), p.Volume, 1e-4f) && p.Volume > 0.0f;
+            for (auto& v : p.Mesh.Vertices)
+            {
+                glm::vec3 q = v.Position + p.Center;
+                inside &= std::abs(q.x) <= 0.5001f && std::abs(q.y) <= 0.5001f && std::abs(q.z) <= 0.5001f;
+            }
+            capped &= !p.Mesh.SubMeshes.empty() && p.Mesh.SubMeshes.back().MaterialSlot == 1;
+        }
+        CHECK(Near(sum, cubeVolume, 1e-3f) && closed && inside && capped);
+        auto again = Fracture::Shatter(cube, 8, 3, 1);
+        bool same = again.size() == pieces.size();
+        for (size_t i = 0; same && i < pieces.size(); ++i) same = Near(again[i].Volume, pieces[i].Volume, 1e-6f) && again[i].Mesh.Vertices.size() == pieces[i].Mesh.Vertices.size();
+        CHECK(same && Fracture::Shatter(cube, 8, 4, 1).size() > 0);
+        // A rounder mesh too.
+        MeshData sphere = MeshData::Sphere(24, 12);
+        float sphereSum = 0.0f;
+        for (auto& p : Fracture::Shatter(sphere, 6, 1, 0)) sphereSum += p.Volume;
+        CHECK(Near(sphereSum, Fracture::Volume(sphere), Fracture::Volume(sphere) * 0.002f));
+
+        // In a scene: a falling crate breaks on the floor into pieces that share its mass and go after their lifetime;
+        // a script breaks a static wall; the pieces' meshes are released when play stops.
+        fs::path assets = fs::temp_directory_path() / "dimension_fracture_test" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        Scene scene("Fracture");
+        auto& reg = scene.GetRegistry();
+        Entity floor = scene.CreateEntity("Floor");
+        reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+        reg.Emplace<BoxColliderComponent>(floor).Size = { 40, 1, 40 };
+        Entity crate = scene.CreateEntity("Crate");
+        reg.Get<TransformComponent>(crate).Position = { 0, 5, 0 };
+        reg.Emplace<MeshRendererComponent>(crate).Mesh = AssetManager::kCube;
+        reg.Emplace<BoxColliderComponent>(crate);
+        reg.Emplace<RigidbodyComponent>(crate).Mass = 12.0f;
+        auto& breakable = reg.Emplace<BreakableComponent>(crate);
+        breakable.Pieces = 6;
+        breakable.BreakSpeed = 4.0f;
+        breakable.DebrisLifetime = 1.5f;
+        Entity wall = scene.CreateEntity("Wall");
+        reg.Get<TransformComponent>(wall).Position = { 6, 1, 0 };
+        reg.Get<TransformComponent>(wall).Scale = { 0.3f, 2, 3 };
+        reg.Emplace<MeshRendererComponent>(wall).Mesh = AssetManager::kCube;
+        reg.Emplace<BoxColliderComponent>(wall);
+        reg.Emplace<BreakableComponent>(wall).BreakSpeed = 0.0f; // scripts only
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto countPieces = [&] {
+            int n = 0;
+            float mass = 0.0f;
+            for (auto [e, tag] : rr.ViewOf<TagComponent>())
+                if (tag.Name == "Crate Piece") { ++n; mass += rr.Get<RigidbodyComponent>(e).Mass; }
+            return std::make_pair(n, mass);
+        };
+        for (int i = 0; i < 90 && rt->IsValid(crate); ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(!rt->IsValid(crate)); // fell about 4.5 m (9 m/s at the floor) and broke
+        auto [count, mass] = countPieces();
+        CHECK(count >= 3 && count <= 6 && Near(mass, 12.0f, 0.05f));
+        AssetHandle pieceMesh = AssetHandle::None();
+        for (auto [e, tag] : rr.ViewOf<TagComponent>())
+            if (tag.Name == "Crate Piece") pieceMesh = rr.Get<MeshRendererComponent>(e).Mesh;
+        CHECK(AssetManager::GetMeshData(pieceMesh) != nullptr);
+        // The wall stands until broken; then its pieces fly away from the point, toward -X here.
+        CHECK(Physics3DWorld::Break(*rt, floor, { 0, 0, 0 }).empty()); // not Breakable
+        std::vector<Entity> wallPieces = Physics3DWorld::Break(*rt, wall, { 6.5f, 1.0f, 0.0f });
+        CHECK(wallPieces.size() >= 3);
+        for (int i = 0; i < 10; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        float meanX = 0.0f;
+        for (Entity p : wallPieces) meanX += rr.Get<TransformComponent>(p).Position.x / wallPieces.size();
+        CHECK(!rt->IsValid(wall) && meanX < 6.0f);
+        // Debris goes after its lifetime (the crate's 1.5 s; the wall's stay 8 s).
+        for (int i = 0; i < 100; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(countPieces().first == 0);
+        bool wallStays = true;
+        for (Entity p : wallPieces) wallStays &= rt->IsValid(p);
+        CHECK(wallStays);
+        rt->OnRuntimeStop();
+        rt.reset();
+        CHECK(AssetManager::GetMeshData(pieceMesh) == nullptr);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
     void TestRagdoll()
     {
         // The Tentacle (a chain of bones 0.5 apart) standing on a floor: capsules follow it while animated, and
@@ -1276,10 +1491,23 @@ namespace
         // Raycasts hit the capsules (as the ragdoll's object).
         RaycastHit hit = Physics3DWorld::Raycast(*rt, glm::vec3(ragdoll.Capsules[1].World[3]) + glm::vec3(0, 3, 0), glm::vec3(0, -1, 0), 10.0f);
         CHECK(hit && hit.Hit == tentacle);
-        // Back to animated: it no longer drives the pose.
+        // Back to animated: it no longer drives the pose, and gets up. The object moves onto the floor under the limp
+        // root joint, turning only about Y, and the blend starts from exactly the limp pose.
+        auto& tt = rr.Get<TransformComponent>(tentacle);
+        glm::mat4 limpWorld = tt.World;
+        std::vector<glm::mat4> limp(joints);
+        for (size_t j = 0; j < joints; ++j) limp[j] = limpWorld * ragdoll.Pose[j];
+        int rootJoint = data->SkeletonData->Order[0];
         ragdoll.Simulate = false;
         rt->OnUpdateRuntime(1.0f / 60.0f);
         CHECK(!ragdoll.Driving);
+        CHECK(ragdoll.BlendFrom.size() == joints && Near(ragdoll.BlendDuration, 0.6f) && ragdoll.GetUpProgress() < 0.01f);
+        CHECK(Near(tt.World[3].y, 0.0f, 0.05f) && Near(tt.Rotation.x, 0.0f, 1e-3f) && Near(tt.Rotation.z, 0.0f, 1e-3f) && Near(tt.World[1].y, 1.0f, 1e-4f));
+        bool samePose = true;
+        for (size_t j = 0; j < joints; ++j) samePose &= glm::distance(glm::vec3((tt.World * ragdoll.BlendFrom[j])[3]), glm::vec3(limp[j][3])) < 1e-3f;
+        CHECK(samePose);
+        glm::vec3 bindRoot = glm::vec3(tt.World * glm::inverse(data->SkeletonData->Joints[rootJoint].InverseBind)[3]);
+        CHECK(Near(bindRoot.x, limp[rootJoint][3].x, 0.01f) && Near(bindRoot.z, limp[rootJoint][3].z, 0.01f));
         rt->OnRuntimeStop();
         rt.reset();
         AssetManager::Shutdown();
@@ -1459,9 +1687,15 @@ namespace
         for (auto& v : mesh.Vertices) upward &= v.Normal.y > 0.0f;
         CHECK(upward);
         std::vector<uint32_t> splat = Terrain::BuildSplat(t, mesh);
-        bool weighted = true;
-        for (uint32_t s : splat) weighted &= std::abs((int)((s & 255) + (s >> 8 & 255) + (s >> 16 & 255)) - 255) <= 3;
-        CHECK(weighted);
+        CHECK(splat.size() == mesh.Vertices.size() * 2);
+        bool weighted = true, paintOnlyEmpty = true;
+        for (size_t i = 0; i < mesh.Vertices.size(); ++i)
+        {
+            uint32_t s = splat[i];
+            weighted &= std::abs((int)((s & 255) + (s >> 8 & 255) + (s >> 16 & 255)) - 255) <= 3;
+            paintOnlyEmpty &= (splat[mesh.Vertices.size() + i] & 0xFFFFFFu) == 0; // dirt, sand and moss are painted only
+        }
+        CHECK(weighted && paintOnlyEmpty);
         // A flat center stays at Flat Height; a different seed gives different hills.
         TerrainComponent flat = t;
         flat.FlatCenter = 0.4f;
@@ -1502,6 +1736,69 @@ namespace
                   Near(hit.y, Terrain::HeightAt(copy, reloaded, 0.0f, 0.0f), 0.02f));
             Terrain::ClearEdits(copy);
             CHECK(Terrain::BuildHeights(copy) == heights);
+        }
+
+        // Paint-only layers: painting sand fills the second splat map there; an edit without them still saves the
+        // older 3 bytes per sample, and with them 6.
+        {
+            TerrainComponent s = t;
+            Terrain::ApplyBrush(s, Terrain::BrushMode::PaintRock, { 0.0f, 0.0f }, 4.0f, 1.0f, 1.0f, 0.0f);
+            Terrain::CommitEdit(s);
+            int n = Terrain::SampleCount(s);
+            size_t count = (size_t)n * n;
+            std::string threeBytes = s.PaintedLayers;
+            for (int i = 0; i < 10; ++i) Terrain::ApplyBrush(s, Terrain::BrushMode::PaintSand, { -20.0f, 10.0f }, 5.0f, 1.0f, 0.1f, 0.0f);
+            Terrain::CommitEdit(s);
+            CHECK(s.PaintedLayers.size() > threeBytes.size() * 3 / 2); // 6 bytes per sample now
+            std::vector<uint32_t> layers = Terrain::BuildSplat(s, Terrain::BuildMesh(s, Terrain::BuildHeights(s)));
+            size_t at = (size_t)((10.0f / 60.0f + 0.5f) * (n - 1) + 0.5f) * n + (size_t)((-20.0f / 80.0f + 0.5f) * (n - 1) + 0.5f);
+            uint32_t first = layers[at], second = layers[count + at];
+            CHECK((second >> 8 & 255) > 200 && (first & 0xFFFFFFu) != 0xFFFFFFu && (first & 255) + (first >> 8 & 255) + (first >> 16 & 255) < 40);
+            CHECK((layers[count + (size_t)(n / 2) * n + n / 2] & 0xFFFFFFu) == 0); // the rock patch has no sand
+        }
+
+        // Holes: digging removes the triangles around the samples from the mesh and the collider (rays and bodies
+        // fall through), keeps the rest, saves as bits and closes again with Fill.
+        {
+            TerrainComponent s = t;
+            for (int i = 0; i < 3; ++i) CHECK(Terrain::ApplyBrush(s, Terrain::BrushMode::DigHole, { 10.0f, -5.0f }, 3.0f, 1.0f, 0.1f, 0.0f));
+            Terrain::CommitEdit(s);
+            CHECK(!s.PaintedHoles.empty() && s.EditHoles.empty());
+            std::vector<uint8_t> holes = Terrain::HoleMap(s);
+            int n = Terrain::SampleCount(s);
+            CHECK(holes.size() == (size_t)n * n);
+            CHECK(Terrain::IsHoleAt(s, holes, 10.0f, -5.0f) && !Terrain::IsHoleAt(s, holes, -30.0f, 20.0f));
+            MeshData m = Terrain::BuildMesh(s, Terrain::BuildHeights(s));
+            CHECK(m.Indices.size() < 65u * 65u * 6u && m.Indices.size() > 65u * 65u * 5u && m.Indices.size() % 3 == 0);
+            bool skipsHoles = true;
+            for (uint32_t i : m.Indices) skipsHoles &= holes[i] == 0;
+            CHECK(skipsHoles);
+            TerrainComponent copy = t;
+            copy.PaintedHoles = s.PaintedHoles;
+            CHECK(Terrain::HoleMap(copy) == holes && Terrain::SettingsKey(copy) != Terrain::SettingsKey(t));
+
+            Scene scene("TerrainHoles");
+            Entity e = scene.CreateEntity("Terrain");
+            scene.GetRegistry().Emplace<TerrainComponent>(e) = s;
+            Entity ball = scene.CreateEntity("Ball");
+            scene.GetRegistry().Get<TransformComponent>(ball).Position = { 10.0f, Terrain::HeightAt(s, Terrain::BuildHeights(s), 10.0f, -5.0f) + 2.0f, -5.0f };
+            scene.GetRegistry().Emplace<RigidbodyComponent>(ball);
+            scene.GetRegistry().Emplace<SphereColliderComponent>(ball).Radius = 0.3f;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            RaycastHit throughHole = Physics3DWorld::Raycast(*rt, { 11.5f, 100.0f, -5.0f }, { 0, -1, 0 }, 500.0f, Physics::kAllLayers);
+            RaycastHit solid = Physics3DWorld::Raycast(*rt, { -30.0f, 100.0f, 20.0f }, { 0, -1, 0 }, 500.0f, Physics::kAllLayers);
+            CHECK(!throughHole && solid);
+            float startY = rt->GetRegistry().Get<TransformComponent>(ball).Position.y;
+            for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(rt->GetRegistry().Get<TransformComponent>(ball).Position.y < startY - 6.0f); // fell into the hole
+            rt->OnRuntimeStop();
+
+            Terrain::BeginEdit(s);
+            for (int i = 0; i < 3; ++i) Terrain::ApplyBrush(s, Terrain::BrushMode::FillHole, { 10.0f, -5.0f }, 4.0f, 1.0f, 0.1f, 0.0f);
+            Terrain::CommitEdit(s);
+            CHECK(s.PaintedHoles.empty() && Terrain::HoleMap(s).empty());
         }
 
         // Physics: the terrain is a static height field matching HeightAt (rays from above land on the surface).
@@ -6057,6 +6354,8 @@ int main(int argc, char** argv)
     Run("Ragdoll", TestRagdoll);
     Run("Timelines", TestTimelines);
     Run("Timeline clip tracks", TestTimelineClips);
+    Run("Nested timelines", TestNestedTimelines);
+    Run("Fracture", TestFracture);
     Run("Microphone", TestMicrophone);
     Run("Nested prefabs", TestNestedPrefabs);
     Run("2D simple directional blend trees", TestBlendTreesDirectional);

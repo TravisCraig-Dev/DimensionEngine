@@ -67,6 +67,10 @@ namespace Dimension
         static Ref<Mesh> GetMesh(AssetHandle handle);
         // CPU geometry of a mesh asset or built-in primitive (colliders, tools); cached, no GPU needed.
         static std::shared_ptr<const MeshData> GetMeshData(AssetHandle handle);
+        // A mesh made at runtime (a Breakable's pieces): kept in memory under a fresh handle, with `materials` as its
+        // model material slots, until released. Never saved.
+        static AssetHandle RegisterRuntimeMesh(MeshData data, std::vector<AssetHandle> materials = {});
+        static void ReleaseRuntimeMesh(AssetHandle handle);
         // Material per slot of a model (glTF materials). Until extracted these are read-only sub-assets of the
         // model, built from the file; after ExtractMeshMaterials they are editable .mat assets. Loads the mesh.
         static const std::vector<AssetHandle>& GetMeshMaterials(AssetHandle mesh);

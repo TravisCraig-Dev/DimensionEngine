@@ -347,6 +347,25 @@ namespace Dimension
         public bool Simulate { get => GetBool("Simulate"); set => SetBool("Simulate", value); }
         /// <summary>Knocks the capsule nearest `point` (world space), e.g. where a raycast hit it.</summary>
         public void AddImpulse(Vector3 impulse, Vector3 point) => Native.Api.RagdollImpulse(Entity.Scene, Entity.Id, (float*)&impulse, (float*)&point);
+        /// <summary>Seconds the animation blends in from the limp pose when Simulate turns off.</summary>
+        public float GetUpTime { get => GetFloat("Get Up Time"); set => SetFloat("Get Up Time", value); }
+        /// <summary>Lying on its back (pick a get-up animation by it before turning Simulate off).</summary>
+        public bool IsFaceUp => Native.Api.RagdollQuery(Entity.Scene, Entity.Id, 0) > 0.5f;
+        /// <summary>How far the blend back into the animation is, 0-1 (1 when done or not getting up).</summary>
+        public float GetUpProgress => Native.Api.RagdollQuery(Entity.Scene, Entity.Id, 1);
+    }
+
+    /// <summary>Breakable: breaks into pieces on a hard enough hit, or when Break is called.</summary>
+    public unsafe class Breakable : Component
+    {
+        internal override string NativeName => "Breakable";
+        /// <summary>Impact speed (m/s) that breaks it; 0 = only Break().</summary>
+        public float BreakSpeed { get => GetFloat("Break Speed"); set => SetFloat("Break Speed", value); }
+        public int Pieces { get => GetInt("Pieces"); set => SetInt("Pieces", value); }
+        /// <summary>Breaks it now, the pieces flying apart from `point` (world space). Returns how many pieces.</summary>
+        public int Break(Vector3 point) => Native.Api.BreakableBreak(Entity.Scene, Entity.Id, (float*)&point);
+        /// <summary>Breaks it now from its center.</summary>
+        public int Break() => Break(Entity.Transform.Position);
     }
 
     public unsafe class SoftBody : Component

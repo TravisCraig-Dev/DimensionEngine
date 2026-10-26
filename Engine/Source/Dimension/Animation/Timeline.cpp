@@ -30,7 +30,7 @@ namespace Dimension
                 track.Field = t.value("field", std::string());
                 track.Interpolation = (TimelineInterpolation)t.value("interpolation", 0);
                 track.Muted = t.value("muted", false);
-                track.Kind = (TimelineTrackKind)std::clamp(t.value("kind", 0), 0, 3);
+                track.Kind = (TimelineTrackKind)std::clamp(t.value("kind", 0), 0, 4);
                 for (auto& c : t.value("clips", json::array()))
                 {
                     TimelineClip clip;
@@ -38,6 +38,7 @@ namespace Dimension
                     clip.Duration = std::max(c.value("duration", 1.0f), 0.01f);
                     clip.Audio = AssetHandle(c.value("audio", (uint64_t)0));
                     clip.Animation = c.value("animation", std::string());
+                    clip.Timeline = AssetHandle(c.value("timeline", (uint64_t)0));
                     clip.Speed = c.value("speed", 1.0f);
                     clip.ClipIn = c.value("clipIn", 0.0f);
                     clip.Loop = c.value("loop", true);
@@ -79,9 +80,10 @@ namespace Dimension
                 {
                     json clip{ { "start", c.Start }, { "duration", c.Duration }, { "clipIn", c.ClipIn } };
                     if (t.Kind == TimelineTrackKind::Audio) clip["audio"] = (uint64_t)c.Audio;
-                    if (t.Kind == TimelineTrackKind::Animation)
+                    if (t.Kind == TimelineTrackKind::Animation || t.Kind == TimelineTrackKind::Control)
                     {
-                        clip["animation"] = c.Animation;
+                        if (t.Kind == TimelineTrackKind::Animation) clip["animation"] = c.Animation;
+                        else clip["timeline"] = (uint64_t)c.Timeline;
                         clip["speed"] = c.Speed;
                         clip["loop"] = c.Loop;
                     }
@@ -117,6 +119,21 @@ namespace Dimension
                     if (f.Name == name) return &f;
                 return nullptr;
             }
+
+            // Nested timelines deeper than this are ignored (a timeline that plays itself would never end).
+            constexpr int kMaxNesting = 8;
+        }
+
+        float ControlTime(const TimelineClip& clip, float nestedDuration, float time)
+        {
+            float d = std::max(nestedDuration, 0.01f);
+            float local = clip.ClipIn + std::clamp(time - clip.Start, 0.0f, clip.Duration) * clip.Speed;
+            if (clip.Loop)
+            {
+                local = std::fmod(local, d);
+                return local < 0.0f ? local + d : local;
+            }
+            return std::clamp(local, 0.0f, d);
         }
 
         int Sample(const TimelineTrack& track, float time, float out[4])
@@ -270,31 +287,64 @@ namespace Dimension
             }
         }
 
+        namespace
+        {
+            int ApplyNested(Scene& scene, Entity root, const TimelineAsset& timeline, float time, int depth);
+
+            // Control: the latest clip containing `time` plays its timeline on the target; after the last clip that
+            // timeline holds where it ended; before the first clip and in gaps nothing is applied.
+            int ApplyControl(Scene& scene, Entity target, const TimelineTrack& track, float time, int depth)
+            {
+                const TimelineClip* cur = nullptr;
+                for (const TimelineClip& c : track.Clips)
+                    if (time >= c.Start && time < c.End()) cur = &c;
+                if (!cur)
+                {
+                    bool afterAll = !track.Clips.empty();
+                    for (const TimelineClip& c : track.Clips) afterAll &= time >= c.End();
+                    if (afterAll)
+                        for (const TimelineClip& c : track.Clips)
+                            if (!cur || c.End() >= cur->End()) cur = &c;
+                }
+                auto nested = cur ? AssetManager::GetTimeline(cur->Timeline) : nullptr;
+                if (!nested) return 0;
+                ApplyNested(scene, target, *nested, ControlTime(*cur, nested->Duration, time), depth + 1);
+                return 1;
+            }
+
+            int ApplyNested(Scene& scene, Entity root, const TimelineAsset& timeline, float time, int depth)
+            {
+                if (depth > kMaxNesting) return 0;
+                int written = 0;
+                for (const TimelineTrack& track : timeline.Tracks)
+                {
+                    if (track.Muted) continue;
+                    if (track.IsClipTrack())
+                    {
+                        Entity target = ResolvePath(scene, root, track.Path);
+                        if (target.IsNull()) continue;
+                        if (track.Kind == TimelineTrackKind::Activation) written += ApplyActivation(scene, target, track, time);
+                        else if (track.Kind == TimelineTrackKind::Animation) written += ApplyAnimation(scene, target, track, time);
+                        else if (track.Kind == TimelineTrackKind::Control) written += ApplyControl(scene, target, track, time, depth);
+                        continue;
+                    }
+                    if (track.Keys.empty()) continue;
+                    Entity target = ResolvePath(scene, root, track.Path);
+                    const ComponentInfo* info = ComponentRegistry::Find(track.Component);
+                    if (target.IsNull() || !info || !info->Has(scene, target)) continue;
+                    const FieldInfo* field = FindField(info, track.Field);
+                    if (!field) continue;
+                    float value[4];
+                    int n = Sample(track, time, value);
+                    if (n && FieldFromFloats(*field, field->Access(info->Get(scene, target)), value, 4)) ++written;
+                }
+                return written;
+            }
+        }
+
         int Apply(Scene& scene, Entity root, const TimelineAsset& timeline, float time)
         {
-            int written = 0;
-            for (const TimelineTrack& track : timeline.Tracks)
-            {
-                if (track.Muted) continue;
-                if (track.IsClipTrack())
-                {
-                    Entity target = ResolvePath(scene, root, track.Path);
-                    if (target.IsNull()) continue;
-                    if (track.Kind == TimelineTrackKind::Activation) written += ApplyActivation(scene, target, track, time);
-                    else if (track.Kind == TimelineTrackKind::Animation) written += ApplyAnimation(scene, target, track, time);
-                    continue;
-                }
-                if (track.Keys.empty()) continue;
-                Entity target = ResolvePath(scene, root, track.Path);
-                const ComponentInfo* info = ComponentRegistry::Find(track.Component);
-                if (target.IsNull() || !info || !info->Has(scene, target)) continue;
-                const FieldInfo* field = FindField(info, track.Field);
-                if (!field) continue;
-                float value[4];
-                int n = Sample(track, time, value);
-                if (n && FieldFromFloats(*field, field->Access(info->Get(scene, target)), value, 4)) ++written;
-            }
-            return written;
+            return ApplyNested(scene, root, timeline, time, 0);
         }
 
         int ReadCurrent(Scene& scene, Entity root, const TimelineTrack& track, float out[4])
@@ -323,14 +373,75 @@ namespace Dimension
             }
         }
 
+        namespace
+        {
+            void ReleaseNested(Scene& scene, Entity root, const TimelineAsset& timeline, int depth)
+            {
+                if (depth > kMaxNesting) return;
+                for (const TimelineTrack& track : timeline.Tracks)
+                {
+                    if (track.Kind != TimelineTrackKind::Animation && track.Kind != TimelineTrackKind::Control) continue;
+                    Entity target = ResolvePath(scene, root, track.Path);
+                    if (target.IsNull()) continue;
+                    if (track.Kind == TimelineTrackKind::Control)
+                    {
+                        for (const TimelineClip& c : track.Clips)
+                            if (auto nested = AssetManager::GetTimeline(c.Timeline)) ReleaseNested(scene, target, *nested, depth + 1);
+                    }
+                    else if (auto* anim = scene.GetRegistry().TryGet<AnimatorComponent>(target))
+                        anim->TimelineDriven = false;
+                }
+            }
+
+            void AdvanceNested(Scene& scene, Entity root, const TimelineAsset& timeline, float from, float to,
+                               std::vector<std::pair<Entity, std::string>>& events, int depth)
+            {
+                if (depth > kMaxNesting || to <= from) return;
+                for (const TimelineEvent& ev : timeline.Events)
+                    if (ev.Time > from && ev.Time <= to) events.push_back({ root, ev.Function });
+                PlayAudio(scene, root, timeline, from, to);
+                for (const TimelineTrack& track : timeline.Tracks)
+                {
+                    if (track.Muted || track.Kind != TimelineTrackKind::Control) continue;
+                    Entity target = ResolvePath(scene, root, track.Path);
+                    if (target.IsNull()) continue;
+                    for (const TimelineClip& c : track.Clips)
+                    {
+                        if (to < c.Start || from >= c.End()) continue;
+                        auto nested = AssetManager::GetTimeline(c.Timeline);
+                        if (!nested) continue;
+                        // The part of (from, to] inside the clip, in the nested timeline's own (unwrapped) time; entering
+                        // the clip includes things at its Clip In.
+                        float speed = std::max(c.Speed, 0.0f);
+                        float a = from < c.Start ? c.ClipIn - 1e-4f : c.ClipIn + (from - c.Start) * speed;
+                        float b = c.ClipIn + (std::min(to, c.End()) - c.Start) * speed;
+                        float d = std::max(nested->Duration, 0.01f);
+                        if (!c.Loop)
+                        {
+                            AdvanceNested(scene, target, *nested, a, std::min(b, d), events, depth + 1);
+                            continue;
+                        }
+                        // Looping: one pass per cycle the range crosses (each new cycle includes things at 0).
+                        for (int guard = 0; a < b && guard < 64; ++guard)
+                        {
+                            float cycle = std::floor(std::max(a, 0.0f) / d) * d;
+                            float end = std::min(b, cycle + d);
+                            AdvanceNested(scene, target, *nested, a - cycle <= 0.0f ? -1e-4f : a - cycle, end - cycle, events, depth + 1);
+                            a = end;
+                        }
+                    }
+                }
+            }
+        }
+
         void Release(Scene& scene, Entity root, const TimelineAsset& timeline)
         {
-            for (const TimelineTrack& track : timeline.Tracks)
-            {
-                if (track.Kind != TimelineTrackKind::Animation) continue;
-                Entity target = ResolvePath(scene, root, track.Path);
-                if (auto* anim = target.IsNull() ? nullptr : scene.GetRegistry().TryGet<AnimatorComponent>(target)) anim->TimelineDriven = false;
-            }
+            ReleaseNested(scene, root, timeline, 0);
+        }
+
+        void Advance(Scene& scene, Entity root, const TimelineAsset& timeline, float from, float to, std::vector<std::pair<Entity, std::string>>& events)
+        {
+            AdvanceNested(scene, root, timeline, from, to, events, 0);
         }
 
         void Update(Scene& scene, float dt)
@@ -353,21 +464,16 @@ namespace Dimension
                 float before = starting || tl.Time <= 0.0f ? -1.0f : tl.Time;
                 tl.Time += dt * tl.Speed;
                 float duration = std::max(asset->Duration, 0.01f);
-                // Events passed this frame (a loop wrap fires the ones after `before` and before the new time).
-                std::vector<std::string> fired;
-                auto collect = [&](float from, float to) {
-                    for (const TimelineEvent& ev : asset->Events)
-                        if (ev.Time > from && ev.Time <= to) fired.push_back(ev.Function);
-                };
+                // Events and audio passed this frame, nested timelines' too (a loop wrap fires the ones after `before`
+                // and before the new time).
+                std::vector<std::pair<Entity, std::string>> fired;
                 if (tl.Time >= duration)
                 {
-                    collect(before, duration);
-                    PlayAudio(scene, e, *asset, before, duration);
+                    Advance(scene, e, *asset, before, duration, fired);
                     if (tl.Loop)
                     {
                         tl.Time = std::fmod(tl.Time, duration);
-                        collect(-1.0f, tl.Time);
-                        PlayAudio(scene, e, *asset, -1.0f, tl.Time);
+                        Advance(scene, e, *asset, -1.0f, tl.Time, fired);
                     }
                     else
                     {
@@ -376,12 +482,9 @@ namespace Dimension
                     }
                 }
                 else
-                {
-                    collect(before, tl.Time);
-                    PlayAudio(scene, e, *asset, before, tl.Time);
-                }
+                    Advance(scene, e, *asset, before, tl.Time, fired);
                 Apply(scene, e, *asset, tl.Time);
-                for (const auto& fn : fired) scene.DispatchAnimationEvent(e, fn);
+                for (const auto& [target, fn] : fired) scene.DispatchAnimationEvent(target, fn);
             }
         }
 

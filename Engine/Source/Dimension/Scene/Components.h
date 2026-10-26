@@ -133,9 +133,17 @@ namespace Dimension
         float TextureTiling = 0.25f; // layer texture repeats per meter
         float RockSlope = 35.0f;     // degrees where rock takes over
         float SnowHeight = 0.72f;    // 0-1 of Height where snow starts
+        // Paint-only layers (the automatic blend uses the first three): dirt paths, sand, moss.
+        AssetHandle DirtTexture = AssetHandle::None(), SandTexture = AssetHandle::None(), MossTexture = AssetHandle::None();
+        glm::vec4 DirtColor{ 0.40f, 0.30f, 0.21f, 1.0f };
+        glm::vec4 SandColor{ 0.78f, 0.71f, 0.52f, 1.0f };
+        glm::vec4 MossColor{ 0.22f, 0.31f, 0.14f, 1.0f };
         // Sculpted and painted terrain (the editor's brushes): the heights (0-1 of Height, 16-bit) and layer weights
-        // (RGB) per sample, base64, replacing the heightmap/noise and the automatic layers. Empty = not edited.
+        // (3 or 6 bytes) per sample, base64, replacing the heightmap/noise and the automatic layers. Empty = not edited.
         std::string SculptedHeights, PaintedLayers;
+        // Holes (caves, tunnels, a well): one bit per sample, base64; triangles touching a hole sample neither render
+        // nor collide. Empty = none.
+        std::string PaintedHoles;
         // Details: trees (bushes, rocks) and grass tufts scattered where the detail brushes painted them, as instances
         // of a mesh: Density per 100 m2 where painted at full strength, each turned at random and sized between the
         // Min and Max Scale, only on ground flatter than Max Slope. Trees can collide as upright capsules.
@@ -148,11 +156,16 @@ namespace Dimension
         float GrassDensity = 80.0f;
         glm::vec2 GrassScale{ 0.7f, 1.3f };
         float GrassMaxSlope = 35.0f;
+        // Grass tufts move: Sway is how much they bend in the scene's Wind, Bending how far rigid bodies and characters
+        // walking through push them aside (0 = rigid).
+        float GrassSway = 1.0f;
+        float GrassBending = 1.0f;
         std::string PaintedDetails; // tree and grass density per sample (2 bytes each), base64. Empty = none
         // Runtime: decoded edits while brushing (encoded back when a stroke ends), and a counter that changes with them.
         std::vector<float> EditHeights;
-        std::vector<uint32_t> EditLayers;
+        std::vector<uint32_t> EditLayers; // two RGBA8 splat maps one after the other (grass/rock/snow, dirt/sand/moss)
         std::vector<uint8_t> EditDetails;
+        std::vector<uint8_t> EditHoles;   // 1 per hole sample
         uint64_t EditRevision = 0;
     };
 
@@ -605,6 +618,11 @@ namespace Dimension
         int32_t ProbesX = 4, ProbesY = 2, ProbesZ = 4;
         float Intensity = 1.0f;
         float BlendDistance = 1.0f; // fades to the scene's own ambient over this distance inside the box
+        // Realtime: the probes keep being captured again, Probes Per Frame at a time in turn, so bounce light follows
+        // moving lights and objects (a full refresh every ProbeCount / Probes Per Frame frames). Each capture sees the
+        // volume's own light from the last pass, so light bounces more than once.
+        bool Realtime = false;
+        int32_t ProbesPerFrame = 2;
         std::vector<glm::vec3> Baked; // 9 irradiance SH coefficients per probe (x fastest, then y, then z)
         // Runtime: next probe to capture (-1 = not baking) and captures still on their way back from the GPU.
         int32_t BakeNext = -1;
@@ -798,11 +816,33 @@ namespace Dimension
         float Friction = 0.6f;
         float LinearDamping = 0.05f;
         float AngularDamping = 0.3f;
+        // Getting up: when Simulate turns off, the animation blends in from the limp pose over Get Up Time (0 = snap),
+        // and with Align On Get Up the object first moves under the body onto the ground and turns along it (toward the
+        // head when lying face down, toward the feet face up), so a get-up animation starts where the body lies.
+        float GetUpTime = 0.6f;
+        bool AlignOnGetUp = true;
         // Runtime: the joints' simulated model-space transforms (they drive the skin while Driving) and the capsules.
         std::vector<glm::mat4> Pose;
         bool Driving = false;
+        bool FaceUp = false;              // while simulating: lying on its back (the model's +Z faces up)
+        std::vector<glm::mat4> BlendFrom; // getting up: the limp pose (model space) the animation blends in from
+        float BlendTime = 0.0f, BlendDuration = 0.0f;
+        float GetUpProgress() const { return BlendDuration > 0.0f ? std::clamp(BlendTime / BlendDuration, 0.0f, 1.0f) : 1.0f; }
         struct Capsule { glm::mat4 World; float Radius, HalfHeight; };
         std::vector<Capsule> Capsules; // for gizmos and tests
+    };
+
+    // Breaks into pieces (see Dimension/Physics/Fracture.h) when something hits it at Break Speed or faster (along the
+    // contact normal), or when a script breaks it: the object goes and its pieces fly apart from the hit as convex
+    // rigid bodies sharing its mass, with its Mesh Renderer's materials outside and Inside Material on the cut faces.
+    struct BreakableComponent
+    {
+        int32_t Pieces = 8;
+        int32_t Seed = 1;                // the same seed breaks the same way
+        float BreakSpeed = 6.0f;         // m/s; 0 = only scripts break it
+        AssetHandle InsideMaterial = AssetHandle::None(); // the cut faces; None = the outside's material
+        float ExplosionSpeed = 1.5f;     // pieces fly apart from the break point at up to this speed
+        float DebrisLifetime = 8.0f;     // seconds before pieces shrink away (over the last second); 0 = they stay
     };
 
     // A soft, deformable version of the object's mesh (Mesh Renderer), simulated as a Jolt soft body while playing:

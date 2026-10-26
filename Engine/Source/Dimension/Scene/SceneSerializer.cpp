@@ -162,6 +162,8 @@ namespace Dimension
                           { "ambientIntensity", s.AmbientIntensity },
                           { "gravity2D", { s.Gravity2D.x, s.Gravity2D.y } },
                           { "gravity", { s.Gravity.x, s.Gravity.y, s.Gravity.z } },
+                          { "wind", { s.Wind.x, s.Wind.y, s.Wind.z } },
+                          { "windGusts", s.WindGusts },
                           { "exposure", s.Exposure },
                           { "skyTop", { s.SkyTop.r, s.SkyTop.g, s.SkyTop.b } },
                           { "skyHorizon", { s.SkyHorizon.r, s.SkyHorizon.g, s.SkyHorizon.b } },
@@ -229,6 +231,8 @@ namespace Dimension
         s.AmbientIntensity = js.value("ambientIntensity", s.AmbientIntensity);
         if (js.contains("gravity2D")) vec(js["gravity2D"], &s.Gravity2D.x, 2);
         if (js.contains("gravity")) vec(js["gravity"], &s.Gravity.x, 3);
+        if (js.contains("wind")) vec(js["wind"], &s.Wind.x, 3);
+        s.WindGusts = js.value("windGusts", s.WindGusts);
         s.Exposure = js.value("exposure", s.Exposure);
         if (js.contains("skyTop")) vec(js["skyTop"], &s.SkyTop.x, 3);
         if (js.contains("skyHorizon")) vec(js["skyHorizon"], &s.SkyHorizon.x, 3);

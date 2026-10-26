@@ -14,7 +14,7 @@ namespace Editor
     namespace
     {
         const char* kInterpNames[] = { "Smooth", "Linear", "Step" };
-        const char* kKindNames[] = { "Property", "Activation", "Audio", "Animation" };
+        const char* kKindNames[] = { "Property", "Activation", "Audio", "Animation", "Control" };
         const ImU32 kChannelColors[4] = { IM_COL32(235, 90, 90, 255), IM_COL32(110, 205, 95, 255), IM_COL32(90, 150, 245, 255), IM_COL32(220, 220, 220, 255) };
 
         void CollectObjects(Scene& scene, Entity e, std::vector<Entity>& out)
@@ -48,6 +48,8 @@ namespace Editor
                     if (const AnimationClip* c = Animation::FindClip(*clips, clip.Animation)) return c->Duration / std::max(std::abs(clip.Speed), 0.01f);
             if (track.Kind == TimelineTrackKind::Audio && clip.Audio.IsValid())
                 if (auto info = AudioEngine::GetClipInfo(AssetManager::GetAbsolutePath(clip.Audio))) return info->Seconds;
+            if (track.Kind == TimelineTrackKind::Control)
+                if (auto nested = AssetManager::GetTimeline(clip.Timeline)) return nested->Duration / std::max(std::abs(clip.Speed), 0.01f);
             return 0.0f;
         }
 
@@ -55,6 +57,7 @@ namespace Editor
         {
             if (track.Kind == TimelineTrackKind::Animation) return clip.Animation.empty() ? "(no clip)" : clip.Animation;
             if (track.Kind == TimelineTrackKind::Audio) return clip.Audio.IsValid() ? AssetManager::GetDisplayName(clip.Audio) : "(no audio)";
+            if (track.Kind == TimelineTrackKind::Control) return clip.Timeline.IsValid() ? AssetManager::GetDisplayName(clip.Timeline) : "(no timeline)";
             return "Active";
         }
     }
@@ -202,7 +205,7 @@ namespace Editor
             bool hitEdge = false;
             if (track.IsClipTrack())
             {
-                const ImU32 fill[4] = { 0, IM_COL32(70, 120, 80, 255), IM_COL32(150, 110, 60, 255), IM_COL32(80, 100, 160, 255) };
+                const ImU32 fill[5] = { 0, IM_COL32(70, 120, 80, 255), IM_COL32(150, 110, 60, 255), IM_COL32(80, 100, 160, 255), IM_COL32(130, 85, 150, 255) };
                 for (int c = 0; c < (int)track.Clips.size(); ++c)
                 {
                     const TimelineClip& clip = track.Clips[c];
@@ -372,6 +375,20 @@ namespace Editor
                 }
                 if (!reg.Has<AudioSourceComponent>(target)) ImGui::TextDisabled("The track's object needs an Audio Source to play this.");
             }
+            if (track.Kind == TimelineTrackKind::Control)
+            {
+                if (UI::BeginProperties("##clipcontrol"))
+                {
+                    if (UI::AssetField("Timeline", clip.Timeline, AssetType::Timeline).Changed) changed = true;
+                    UI::EndProperties();
+                }
+                ImGui::SetNextItemWidth(70);
+                if (ImGui::DragFloat("Speed", &clip.Speed, 0.01f, 0.0f, 10.0f, "%.2f")) changed = true;
+                ImGui::SameLine();
+                if (ImGui::Checkbox("Loop", &clip.Loop)) changed = true;
+                ImGui::SetItemTooltip("Loop the nested timeline over the clip (otherwise it holds its end)");
+                if (clip.Timeline == m_Handle) ImGui::TextDisabled("A timeline playing itself is ignored past %d levels.", 8);
+            }
             float length = ContentLength(scene, target, track, clip);
             if (length > 0.0f)
             {
@@ -492,9 +509,10 @@ namespace Editor
             CollectObjects(scene, entity, objects);
             if (m_AddObject >= (int)objects.size()) m_AddObject = 0;
             ImGui::SetNextItemWidth(100);
-            if (ImGui::Combo("##kind", &m_AddKind, kKindNames, 4)) { m_AddComponent.clear(); m_AddField.clear(); }
+            if (ImGui::Combo("##kind", &m_AddKind, kKindNames, IM_ARRAYSIZE(kKindNames))) { m_AddComponent.clear(); m_AddField.clear(); }
             ImGui::SetItemTooltip("Property: animate a field. Activation: the object is active during clips.\n"
-                                  "Audio: clips play through the object's Audio Source. Animation: clips play on its Animator.");
+                                  "Audio: clips play through the object's Audio Source. Animation: clips play on its Animator.\n"
+                                  "Control: clips play other timelines on the object (nested sequences).");
             ImGui::SameLine();
             // Activation tracks drive objects under this one (deactivating the timeline's own object would stop it).
             if (m_AddKind == (int)TimelineTrackKind::Activation && m_AddObject == 0 && objects.size() > 1) m_AddObject = 1;
@@ -556,6 +574,8 @@ namespace Editor
                 canAdd = reg.Has<AudioSourceComponent>(target);
                 if (!canAdd) missing = "needs an Audio Source";
             }
+            else if (m_AddKind == (int)TimelineTrackKind::Control)
+                canAdd = true;
             else
             {
                 canAdd = reg.Has<AnimatorComponent>(target);

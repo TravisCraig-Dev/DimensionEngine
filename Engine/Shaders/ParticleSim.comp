@@ -242,10 +242,27 @@ void main()
         g_Rng = i * 1973u + P.Counts.w * 9277u + 26699u;
         Random01();
         particles.Items[i] = Emit(P, offset);
+        if (P.Trail.x > 0.5)
+        {
+            GpuTrailRef trail = GpuTrailRef(P.TrailBuffer.xy);
+            for (uint k = 0u; k < TRAIL_POINTS; ++k) trail.Points[i * TRAIL_POINTS + k] = vec4(0.0, 0.0, 0.0, -1.0);
+        }
         return;
     }
     GpuParticle p = particles.Items[i];
     if (!ParticleAlive(p) || P.Spin.w <= 0.0) return;
     Integrate(P, p);
     particles.Items[i] = p;
+    if (P.Trail.x > 0.5)
+    {
+        // Records the position every interval (and at once the first time), pushing the older points back.
+        GpuTrailRef trail = GpuTrailRef(P.TrailBuffer.xy);
+        uint base = i * TRAIL_POINTS;
+        float last = trail.Points[base].w;
+        if (last < 0.0 || p.PosAge.w - last >= P.Trail.y)
+        {
+            for (uint k = TRAIL_POINTS - 1u; k > 0u; --k) trail.Points[base + k] = trail.Points[base + k - 1u];
+            trail.Points[base] = vec4(p.PosAge.xyz, p.PosAge.w);
+        }
+    }
 }

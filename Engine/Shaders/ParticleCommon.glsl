@@ -15,6 +15,10 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuParticle
 
 #define PARTICLE_LUT 32
 #define PARTICLE_SEGMENTS 16
+#define TRAIL_POINTS 8u
+
+// Trails: TRAIL_POINTS recorded positions per slot, newest first (xyz simulation space, w age when recorded; < 0 = none).
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuTrailRef { vec4 Points[]; };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer GpuParticleParamsRef
 {
@@ -44,6 +48,8 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Gp
     mat4 DepthInvViewProj;
     uvec4 DepthInfo; // x bindless depth, y 1 = valid
     vec4 DepthParams; // x thickness (m), y particle radius
+    vec4 Trail;        // x 1 = trails, y seconds between recorded points, z width (times the particle size)
+    uvec4 TrailBuffer; // xy: GpuTrailRef address
 };
 
 vec4 SampleColorLut(GpuParticleParamsRef p, float t)

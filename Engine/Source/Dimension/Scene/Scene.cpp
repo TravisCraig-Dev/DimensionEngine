@@ -629,6 +629,24 @@ namespace Dimension
             }
             return entry.Clips;
         }
+
+        // Blends two joint transforms: positions and scales linearly, rotations along the shortest arc.
+        glm::mat4 BlendTransforms(const glm::mat4& a, const glm::mat4& b, float w)
+        {
+            glm::vec3 sa(glm::length(glm::vec3(a[0])), glm::length(glm::vec3(a[1])), glm::length(glm::vec3(a[2])));
+            glm::vec3 sb(glm::length(glm::vec3(b[0])), glm::length(glm::vec3(b[1])), glm::length(glm::vec3(b[2])));
+            glm::mat3 ra(a), rb(b);
+            for (int c = 0; c < 3; ++c)
+            {
+                ra[c] /= std::max(sa[c], 1e-8f);
+                rb[c] /= std::max(sb[c], 1e-8f);
+            }
+            glm::mat4 out = glm::mat4_cast(glm::slerp(glm::normalize(glm::quat_cast(ra)), glm::normalize(glm::quat_cast(rb)), w));
+            glm::vec3 s = glm::mix(sa, sb, w);
+            for (int c = 0; c < 3; ++c) out[c] *= s[c];
+            out[3] = glm::vec4(glm::mix(glm::vec3(a[3]), glm::vec3(b[3]), w), 1.0f);
+            return out;
+        }
     }
 
     void Scene::UpdateAnimators(float dt)
@@ -807,6 +825,21 @@ namespace Dimension
                     }
                 }
             };
+            // A ragdoll getting up: the animated pose blends in from the limp one over its Get Up Time.
+            auto blendGetUp = [&]() {
+                auto* r = m_Registry.TryGet<RagdollComponent>(e);
+                size_t n = skeleton->Joints.size();
+                if (!r || r->Driving || r->BlendTime >= r->BlendDuration || r->BlendFrom.size() != n || anim.SkinMatrices.size() != n) return;
+                r->BlendTime += dt;
+                float w = r->GetUpProgress();
+                w = w * w * (3.0f - 2.0f * w);
+                for (size_t j = 0; j < n; ++j)
+                {
+                    const glm::mat4& inverseBind = skeleton->Joints[j].InverseBind;
+                    glm::mat4 animated = anim.SkinMatrices[j] * glm::inverse(inverseBind);
+                    anim.SkinMatrices[j] = BlendTransforms(r->BlendFrom[j], animated, w) * inverseBind;
+                }
+            };
             if (auto* ragdoll = m_Registry.TryGet<RagdollComponent>(e); ragdoll && ragdoll->Driving && ragdoll->Pose.size() == skeleton->Joints.size())
             {
                 // A simulating ragdoll poses the skeleton from its capsules.
@@ -835,6 +868,7 @@ namespace Dimension
                 applyIK(0, 1.0f);
                 applyIK(-1, 1.0f);
                 Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
+                blendGetUp();
                 continue;
             }
             evaluate(anim, controller.get(), true, current);
@@ -978,6 +1012,7 @@ namespace Dimension
             }
             applyIK(-1, 1.0f);
             Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
+            blendGetUp();
         }
         // After iteration: scripts may change the registry.
         for (auto& [e, names] : firedEvents)

@@ -121,16 +121,57 @@ namespace Dimension::Terrain
             return h;
         }
 
+        // Both splat maps (2 * count) from the edits: 3 bytes per sample (the first three layers) or 6 (all of them).
         std::vector<uint32_t> EditedLayers(const TerrainComponent& t, size_t count)
         {
-            if (t.EditLayers.size() == count) return t.EditLayers;
+            if (t.EditLayers.size() == count * 2) return t.EditLayers;
             if (t.PaintedLayers.empty()) return {};
             std::vector<uint8_t> bytes = Decode(t.PaintedLayers);
-            if (bytes.size() != count * 3) return {};
-            std::vector<uint32_t> s(count);
-            for (size_t i = 0; i < count; ++i) s[i] = bytes[i * 3] | bytes[i * 3 + 1] << 8 | bytes[i * 3 + 2] << 16 | 0xFF000000u;
+            size_t stride = bytes.size() == count * 3 ? 3 : bytes.size() == count * 6 ? 6 : 0;
+            if (!stride) return {};
+            std::vector<uint32_t> s(count * 2, 0xFF000000u);
+            for (size_t i = 0; i < count; ++i)
+            {
+                const uint8_t* b = &bytes[i * stride];
+                s[i] = b[0] | b[1] << 8 | b[2] << 16 | 0xFF000000u;
+                if (stride == 6) s[count + i] = b[3] | b[4] << 8 | b[5] << 16 | 0xFF000000u;
+            }
             return s;
         }
+
+        uint32_t PackWeights(const float* w)
+        {
+            auto byte = [](float x) { return (uint32_t)std::clamp((int)std::lround(x * 255.0f), 0, 255); };
+            return byte(w[0]) | byte(w[1]) << 8 | byte(w[2]) << 16 | 0xFF000000u;
+        }
+    }
+
+    std::vector<uint8_t> HoleMap(const TerrainComponent& terrain)
+    {
+        int n = SampleCount(terrain);
+        size_t count = (size_t)n * n;
+        if (terrain.EditHoles.size() == count)
+            return std::any_of(terrain.EditHoles.begin(), terrain.EditHoles.end(), [](uint8_t h) { return h != 0; }) ? terrain.EditHoles : std::vector<uint8_t>();
+        if (terrain.PaintedHoles.empty()) return {};
+        std::vector<uint8_t> bits = Decode(terrain.PaintedHoles);
+        if (bits.size() != (count + 7) / 8) return {}; // cut at another resolution
+        std::vector<uint8_t> holes(count);
+        for (size_t i = 0; i < count; ++i) holes[i] = bits[i / 8] >> (i % 8) & 1;
+        return holes;
+    }
+
+    bool IsHoleAt(const TerrainComponent& terrain, const std::vector<uint8_t>& holes, float x, float z)
+    {
+        int n = SampleCount(terrain);
+        if (holes.size() != (size_t)n * n) return false;
+        glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+        float fx = (x / size.x + 0.5f) * (n - 1), fz = (z / size.y + 0.5f) * (n - 1);
+        if (fx < 0.0f || fz < 0.0f || fx > n - 1 || fz > n - 1) return false;
+        int c0 = std::min((int)fx, n - 2), r0 = std::min((int)fz, n - 2);
+        auto at = [&](int c, int r) { return holes[(size_t)r * n + c] != 0; };
+        // The triangle the point is in (split as in HeightAt).
+        if (fx - c0 >= fz - r0) return at(c0, r0) || at(c0 + 1, r0) || at(c0 + 1, r0 + 1);
+        return at(c0, r0) || at(c0, r0 + 1) || at(c0 + 1, r0 + 1);
     }
 
     int SampleCount(const TerrainComponent& terrain)
@@ -212,12 +253,15 @@ namespace Dimension::Terrain
             }
         std::vector<uint32_t> indices;
         indices.reserve((size_t)(n - 1) * (n - 1) * 6);
+        std::vector<uint8_t> holes = HoleMap(terrain);
+        auto solid = [&](uint32_t i, uint32_t j, uint32_t k) { return holes.empty() || !(holes[i] | holes[j] | holes[k]); };
         for (int r = 0; r + 1 < n; ++r)
             for (int c = 0; c + 1 < n; ++c)
             {
                 uint32_t a = r * n + c, b = a + 1, d = a + n, e = d + 1;
                 // Counter-clockwise seen from above, split along (c, r) -> (c + 1, r + 1).
-                indices.insert(indices.end(), { a, e, b, a, d, e });
+                if (solid(a, e, b)) indices.insert(indices.end(), { a, e, b });
+                if (solid(a, d, e)) indices.insert(indices.end(), { a, d, e });
             }
         MeshData mesh = MeshData::FromArrays(std::move(vertices), std::move(indices), "Terrain");
         return mesh;
@@ -226,7 +270,7 @@ namespace Dimension::Terrain
     std::vector<uint32_t> BuildSplat(const TerrainComponent& terrain, const MeshData& mesh)
     {
         if (std::vector<uint32_t> painted = EditedLayers(terrain, mesh.Vertices.size()); !painted.empty()) return painted;
-        std::vector<uint32_t> splat(mesh.Vertices.size());
+        std::vector<uint32_t> splat(mesh.Vertices.size() * 2, 0xFF000000u);
         float slopeAt = std::cos(glm::radians(std::clamp(terrain.RockSlope, 1.0f, 89.0f)));
         for (size_t i = 0; i < mesh.Vertices.size(); ++i)
         {
@@ -237,8 +281,8 @@ namespace Dimension::Terrain
             float snow = Smooth(terrain.SnowHeight - 0.04f, terrain.SnowHeight + 0.04f, height) * (1.0f - rock * 0.7f);
             float grass = std::max(0.0f, 1.0f - rock - snow);
             float sum = std::max(grass + rock + snow, 1e-4f);
-            auto byte = [](float x) { return (uint32_t)std::clamp((int)std::lround(x * 255.0f), 0, 255); };
-            splat[i] = byte(grass / sum) | byte(rock / sum) << 8 | byte(snow / sum) << 16 | 0xFF000000u;
+            float w[3] = { grass / sum, rock / sum, snow / sum };
+            splat[i] = PackWeights(w);
         }
         return splat;
     }
@@ -270,6 +314,7 @@ namespace Dimension::Terrain
         };
         mixString(t.SculptedHeights);
         mixString(t.PaintedLayers);
+        mixString(t.PaintedHoles);
         mix(&t.EditRevision, sizeof(t.EditRevision));
         if (t.Heightmap.IsValid())
         {
@@ -300,11 +345,13 @@ namespace Dimension::Terrain
         int n = SampleCount(terrain);
         Runtime rt;
         rt.Key = key;
+        if (data.Indices.empty()) data.Indices = { 0, 0, 0 }; // all holes: one degenerate triangle keeps the mesh valid
         rt.Surface = MakeRef<Mesh>(std::move(data.Vertices), std::move(data.Indices), "Terrain");
         TextureSettings settings;
         settings.SRGB = false;
         settings.GenerateMips = true;
         rt.Splat = MakeRef<Texture2D>(splat.data(), (uint32_t)n, (uint32_t)n, settings, "TerrainSplat");
+        rt.Splat2 = MakeRef<Texture2D>(splat.data() + (size_t)n * n, (uint32_t)n, (uint32_t)n, settings, "TerrainSplat2");
         return &(runtimes[key] = std::move(rt));
     }
 
@@ -330,10 +377,15 @@ namespace Dimension::Terrain
             terrain.EditDetails = DetailMap(terrain);
             terrain.EditDetails.resize((size_t)n * n * 2, 0);
         }
-        if (terrain.EditLayers.size() != (size_t)n * n)
+        if (terrain.EditLayers.size() != (size_t)n * n * 2)
         {
             MeshData mesh = BuildMesh(terrain, terrain.EditHeights);
             terrain.EditLayers = BuildSplat(terrain, mesh);
+        }
+        if (terrain.EditHoles.size() != (size_t)n * n)
+        {
+            terrain.EditHoles = HoleMap(terrain);
+            terrain.EditHoles.resize((size_t)n * n, 0);
         }
     }
 
@@ -358,6 +410,11 @@ namespace Dimension::Terrain
                 float falloff = 1.0f - Smooth(0.0f, 1.0f, d); // soft edge
                 size_t i = (size_t)r * n + c;
                 float& h = terrain.EditHeights[i];
+                if (IsHoleMode(mode))
+                {
+                    terrain.EditHoles[i] = mode == BrushMode::DigHole ? 1 : 0; // holes are all or nothing
+                    continue;
+                }
                 if (IsDetailMode(mode))
                 {
                     // Detail density moves toward full (or, erasing, toward none for both kinds).
@@ -396,14 +453,20 @@ namespace Dimension::Terrain
                 }
                 default:
                 {
-                    // Painting: move this sample's weights toward the layer.
+                    // Painting: move this sample's weights (both splat maps) toward the layer.
                     int layer = (int)mode - (int)BrushMode::PaintGrass;
-                    uint32_t& s = terrain.EditLayers[i];
-                    float w[3] = { (s & 255) / 255.0f, (s >> 8 & 255) / 255.0f, (s >> 16 & 255) / 255.0f };
+                    uint32_t& s0 = terrain.EditLayers[i];
+                    uint32_t& s1 = terrain.EditLayers[(size_t)n * n + i];
+                    float w[kLayerCount];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        w[k] = (s0 >> (k * 8) & 255) / 255.0f;
+                        w[k + 3] = (s1 >> (k * 8) & 255) / 255.0f;
+                    }
                     float amount = std::min(rate * 4.0f * falloff, 1.0f);
-                    for (int k = 0; k < 3; ++k) w[k] += ((k == layer ? 1.0f : 0.0f) - w[k]) * amount;
-                    auto byte = [](float x) { return (uint32_t)std::clamp((int)std::lround(x * 255.0f), 0, 255); };
-                    s = byte(w[0]) | byte(w[1]) << 8 | byte(w[2]) << 16 | 0xFF000000u;
+                    for (int k = 0; k < kLayerCount; ++k) w[k] += ((k == layer ? 1.0f : 0.0f) - w[k]) * amount;
+                    s0 = PackWeights(w);
+                    s1 = PackWeights(w + 3);
                     break;
                 }
                 }
@@ -427,16 +490,29 @@ namespace Dimension::Terrain
             }
             terrain.SculptedHeights = Encode(bytes.data(), bytes.size());
         }
-        if (terrain.EditLayers.size() == (size_t)n * n)
+        size_t count = (size_t)n * n;
+        if (terrain.EditLayers.size() == count * 2)
         {
-            std::vector<uint8_t> bytes((size_t)n * n * 3);
-            for (size_t i = 0; i < terrain.EditLayers.size(); ++i)
-            {
-                bytes[i * 3] = (uint8_t)(terrain.EditLayers[i] & 255);
-                bytes[i * 3 + 1] = (uint8_t)(terrain.EditLayers[i] >> 8 & 255);
-                bytes[i * 3 + 2] = (uint8_t)(terrain.EditLayers[i] >> 16 & 255);
-            }
+            // 3 bytes per sample while the paint-only layers are unused (older scenes read the same), else 6.
+            bool extra = std::any_of(terrain.EditLayers.begin() + count, terrain.EditLayers.end(), [](uint32_t s) { return (s & 0xFFFFFFu) != 0; });
+            size_t stride = extra ? 6 : 3;
+            std::vector<uint8_t> bytes(count * stride);
+            for (size_t i = 0; i < count; ++i)
+                for (size_t k = 0; k < stride; ++k)
+                    bytes[i * stride + k] = (uint8_t)(terrain.EditLayers[i + (k / 3) * count] >> (k % 3 * 8) & 255);
             terrain.PaintedLayers = Encode(bytes.data(), bytes.size());
+        }
+        if (terrain.EditHoles.size() == count)
+        {
+            std::vector<uint8_t> bits((count + 7) / 8, 0);
+            bool any = false;
+            for (size_t i = 0; i < count; ++i)
+                if (terrain.EditHoles[i])
+                {
+                    bits[i / 8] |= (uint8_t)(1u << (i % 8));
+                    any = true;
+                }
+            terrain.PaintedHoles = any ? Encode(bits.data(), bits.size()) : std::string();
         }
         if (terrain.EditDetails.size() == (size_t)n * n * 2)
         {
@@ -447,6 +523,7 @@ namespace Dimension::Terrain
         terrain.EditHeights.clear();
         terrain.EditLayers.clear();
         terrain.EditDetails.clear();
+        terrain.EditHoles.clear();
         ++terrain.EditRevision;
     }
 
@@ -480,6 +557,7 @@ namespace Dimension::Terrain
         DetailInstances out;
         std::vector<uint8_t> map = DetailMap(terrain);
         if (map.empty()) return out;
+        std::vector<uint8_t> holes = HoleMap(terrain);
         int n = SampleCount(terrain);
         glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
         glm::vec2 step = size / (float)(n - 1);
@@ -513,7 +591,7 @@ namespace Dimension::Terrain
                     float x = -size.x * 0.5f + (i + Random01(state)) * cell, z = -size.y * 0.5f + (j + Random01(state)) * cell;
                     float chance = Random01(state);
                     if (std::abs(x) > size.x * 0.5f || std::abs(z) > size.y * 0.5f || chance >= densityAt(x, z, kind)) continue;
-                    if (upAt(x, z) < minUp) continue;
+                    if (upAt(x, z) < minUp || IsHoleAt(terrain, holes, x, z)) continue;
                     float yaw = Random01(state) * glm::two_pi<float>();
                     float s = glm::mix(scale.x, scale.y, Random01(state));
                     glm::mat4 m = glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(x, HeightAt(terrain, heights, x, z), z)), yaw, glm::vec3(0, 1, 0));
@@ -534,6 +612,7 @@ namespace Dimension::Terrain
                                 &terrain.GrassScale.x, &terrain.GrassScale.y, &terrain.GrassMaxSlope })
             mix(f, sizeof(float));
         mix(terrain.PaintedDetails.data(), terrain.PaintedDetails.size());
+        mix(terrain.EditHoles.data(), terrain.EditHoles.size());
         static std::mutex mutex;
         static std::unordered_map<uint64_t, DetailInstances> cache;
         std::lock_guard lock(mutex);
@@ -546,8 +625,10 @@ namespace Dimension::Terrain
     {
         terrain.SculptedHeights.clear();
         terrain.PaintedLayers.clear();
+        terrain.PaintedHoles.clear();
         terrain.EditHeights.clear();
         terrain.EditLayers.clear();
+        terrain.EditHoles.clear();
         ++terrain.EditRevision;
     }
 

@@ -94,6 +94,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<byte*, int> MicrophoneSave;
         public delegate* unmanaged<byte*> MicrophoneDevices;
         public delegate* unmanaged<IntPtr, ulong, float*, float*, void> RagdollImpulse;
+        public delegate* unmanaged<IntPtr, ulong, int, float> RagdollQuery; // 0 face up (1/0), 1 get-up progress
+        public delegate* unmanaged<IntPtr, ulong, float*, int> BreakableBreak; // world point; returns the piece count
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

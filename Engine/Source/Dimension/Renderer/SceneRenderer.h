@@ -151,6 +151,7 @@ namespace Dimension
         static void RequestProbeBake();
         static constexpr uint32_t kMaxReflectionProbes = 8;
         static constexpr uint32_t kMaxProbeVolumes = 4; // light probe volumes shading a view (MAX_PROBE_VOLUMES in Common.glsl)
+        static constexpr uint32_t kMaxGrassBenders = 16; // bodies bending grass per view (MAX_GRASS_BENDERS in Common.glsl)
 
     private:
         struct LineVertex
@@ -208,6 +209,7 @@ namespace Dimension
             uint32_t IndexCount = 0;
             bool AlwaysVisible;        // skinned: animated bounds are unknown
             bool CastShadows;          // the renderer's flag
+            uint32_t Motion = 0;       // grass tufts: half floats (sway, bending), 0 = rigid
             uint32_t FirstPart, PartCount;
         };
         std::vector<RenderItem> m_RenderItems;
@@ -309,6 +311,7 @@ namespace Dimension
             bool Additive;
             int32_t Order;
             VkDeviceAddress Sorted = 0; // back-to-front slot order, 0 = unsorted
+            bool Trails = false;        // also draw the slots' trail ribbons
         };
         std::vector<GpuParticleDraw> m_GpuParticleDraws;
         void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& view);

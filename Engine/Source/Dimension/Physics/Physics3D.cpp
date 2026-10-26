@@ -40,6 +40,9 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include "Dimension/Terrain/Terrain.h"
+#include "Dimension/Physics/Fracture.h"
+#include <map>
+#include <tuple>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -249,9 +252,19 @@ namespace Dimension
             System.RemoveConstraint(Vehicles[i].Constraint);
             Vehicles.erase(Vehicles.begin() + i);
         }
-        struct Event { Entity A, B; bool Begin, Trigger; };
+        struct Event { Entity A, B; bool Begin, Trigger; float Speed = 0.0f; glm::vec3 Point{ 0.0f }; };
         std::mutex EventMutex;
         std::vector<Event> Events;
+        // Breakables: pieces cut once per mesh and settings (shared by every copy that breaks), and pieces that go.
+        struct FractureSet
+        {
+            std::vector<AssetHandle> Meshes;
+            std::vector<glm::vec3> Centers;
+            std::vector<float> Volumes;
+        };
+        std::map<std::tuple<uint64_t, int32_t, int32_t, int32_t>, FractureSet> Fractures;
+        struct Debris { Entity E; float Age, Lifetime; glm::vec3 Scale; };
+        std::vector<Debris> DebrisList;
 
         Entity Lookup(const JPH::BodyID& id) const
         {
@@ -259,10 +272,13 @@ namespace Dimension
             return it != BodyToEntity.end() ? it->second : Entity::Null();
         }
 
-        void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold&, JPH::ContactSettings&) override
+        void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
         {
+            // The impact speed along the normal (Breakables compare it with their Break Speed).
+            JPH::RVec3 point = manifold.GetWorldSpaceContactPointOn1(0);
+            float speed = std::abs((a.GetPointVelocity(point) - b.GetPointVelocity(point)).Dot(manifold.mWorldSpaceNormal));
             std::lock_guard lock(EventMutex);
-            Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true, a.IsSensor() || b.IsSensor() });
+            Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true, a.IsSensor() || b.IsSensor(), speed, FromJolt(JPH::Vec3(point)) });
         }
 
         void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
@@ -314,6 +330,8 @@ namespace Dimension
 
     Physics3DWorld::~Physics3DWorld()
     {
+        for (auto& [key, set] : m_Impl->Fractures)
+            for (AssetHandle h : set.Meshes) AssetManager::ReleaseRuntimeMesh(h);
         for (auto& j : m_Impl->Joints) m_Impl->System.RemoveConstraint(j.Constraint);
         m_Impl->Joints.clear();
         while (!m_Impl->Vehicles.empty()) m_Impl->RemoveVehicle(m_Impl->Vehicles.size() - 1);
@@ -1111,6 +1129,7 @@ namespace Dimension
                     {
                         for (JPH::BodyID id : rig.Bodies) bi.SetMotionType(id, JPH::EMotionType::Kinematic, JPH::EActivation::Activate);
                         comp->Driving = false;
+                        if (comp->Pose.size() == n) BeginGetUp(rig.E, *comp, rig.BindGlobal, rig.BodyJoint[0]);
                     }
                 }
                 if (rig.Simulating || dt <= 0.0f) continue;
@@ -1140,6 +1159,64 @@ namespace Dimension
             comp->Pose.resize(n);
             for (size_t j = 0; j < n; ++j) comp->Pose[j] = toModel * frames[rig.BodyOf[j]] * rig.JointInBody[j];
             comp->Driving = true;
+            comp->BlendDuration = 0.0f;
+            // Lying on its back: the model's forward, as the root joint now holds it, points up.
+            int root = rig.BodyJoint[0];
+            glm::mat3 implied = glm::mat3(RigidPart(t.World * comp->Pose[root])) * glm::transpose(glm::mat3(RigidPart(rig.BindGlobal[root])));
+            comp->FaceUp = (implied * glm::vec3(0.0f, 0.0f, 1.0f)).y > 0.0f;
+        }
+    }
+
+    void Physics3DWorld::BeginGetUp(Entity e, RagdollComponent& comp, const std::vector<glm::mat4>& bindGlobal, int root)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& t = reg.Get<TransformComponent>(e);
+        size_t n = bindGlobal.size();
+        glm::mat4 oldWorld = t.World;
+        if (comp.AlignOnGetUp && n > 0)
+        {
+            // The root joint (hips) in the limp pose and in the bind pose, and the model orientation the hips imply.
+            glm::mat4 hips = oldWorld * comp.Pose[root];
+            glm::mat3 implied = glm::mat3(RigidPart(hips)) * glm::transpose(glm::mat3(RigidPart(bindGlobal[root])));
+            // Heading: along the body (model up, hips to head) toward the head face down and the feet face up; when
+            // the body is upright, its forward.
+            glm::vec3 up = implied * glm::vec3(0.0f, 1.0f, 0.0f), forward = implied * glm::vec3(0.0f, 0.0f, 1.0f);
+            glm::vec2 heading(up.x, up.z);
+            if (glm::length(heading) < 0.3f) heading = glm::vec2(forward.x, forward.z);
+            else if (forward.y > 0.0f) heading = -heading;
+            glm::vec3 oldForward = glm::mat3(oldWorld) * glm::vec3(0.0f, 0.0f, 1.0f);
+            float turn = glm::length(heading) > 1e-4f ? std::atan2(heading.x, heading.y) - std::atan2(oldForward.x, oldForward.z) : 0.0f;
+            glm::mat4 rotated = glm::rotate(glm::mat4(1.0f), turn, glm::vec3(0.0f, 1.0f, 0.0f)) * glm::mat4(glm::mat3(oldWorld));
+            // Position: the bind-pose hips over the limp hips, standing on the ground found under them (not this body).
+            glm::vec3 hipsPos(hips[3]), bindHips = glm::vec3(rotated * glm::vec4(glm::vec3(bindGlobal[root][3]), 1.0f));
+            glm::vec3 pos(hipsPos.x - bindHips.x, oldWorld[3].y, hipsPos.z - bindHips.z);
+            for (const RaycastHit& hit : RaycastAll(m_Scene, hipsPos + glm::vec3(0.0f, 0.25f, 0.0f), { 0.0f, -1.0f, 0.0f }, 50.0f))
+                if (hit.Hit != e)
+                {
+                    pos.y = hit.Point.y;
+                    break;
+                }
+            glm::mat4 world = rotated;
+            world[3] = glm::vec4(pos, 1.0f);
+            t.World = world;
+            Entity parent = m_Scene.GetParent(e);
+            glm::mat4 local = parent.IsNull() ? world : glm::inverse(reg.Get<TransformComponent>(parent).World) * world;
+            t.Position = glm::vec3(local[3]);
+            glm::mat3 r(local);
+            for (int c = 0; c < 3; ++c) r[c] = glm::normalize(r[c]);
+            // A turn about Y alone keeps its Euler angles as one (eulerAngles would write some as (180, y, 180)).
+            t.Rotation = std::abs(r[1].y) > 0.9999f ? glm::vec3(0.0f, std::atan2(r[2].x, r[2].z), 0.0f) : glm::eulerAngles(glm::quat_cast(r));
+        }
+        // The limp pose relative to where the object now stands; the skin shows it until the Animator blends away.
+        glm::mat4 toNew = glm::inverse(t.World) * oldWorld;
+        comp.BlendFrom.resize(n);
+        for (size_t j = 0; j < n; ++j) comp.BlendFrom[j] = toNew * comp.Pose[j];
+        comp.BlendTime = 0.0f;
+        comp.BlendDuration = std::max(comp.GetUpTime, 0.0f);
+        if (auto* anim = reg.TryGet<AnimatorComponent>(e); anim && comp.BlendDuration > 0.0f)
+        {
+            anim->SkinMatrices.resize(n);
+            for (size_t j = 0; j < n; ++j) anim->SkinMatrices[j] = comp.BlendFrom[j] * glm::inverse(bindGlobal[j]);
         }
     }
 
@@ -1478,7 +1555,12 @@ namespace Dimension
             glm::vec2 size = glm::max(terrain->Size, glm::vec2(0.01f));
             JPH::Vec3 offset(-size.x * 0.5f * scale.x, 0.0f, -size.y * 0.5f * scale.z);
             JPH::Vec3 cell(size.x / (n - 1) * scale.x, scale.y, size.y / (n - 1) * scale.z);
-            compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::HeightFieldShapeSettings(heights.data(), offset, cell, (JPH::uint32)n));
+            // Holes: Jolt drops every triangle touching a sample at cNoCollisionValue, as the mesh does.
+            std::vector<float> samples = heights;
+            std::vector<uint8_t> holes = Terrain::HoleMap(*terrain);
+            for (size_t i = 0; i < holes.size(); ++i)
+                if (holes[i]) samples[i] = JPH::HeightFieldShapeConstants::cNoCollisionValue;
+            compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::HeightFieldShapeSettings(samples.data(), offset, cell, (JPH::uint32)n));
             if (rb.Type != BodyType::Static) Log::Warn("Terrain on '{}' only collides as a static body", reg.Get<TagComponent>(e).Name);
             ++shapeCount;
             // Trees collide as upright trunk capsules, as tall as their mesh.
@@ -1802,6 +1884,157 @@ namespace Dimension
         }
         for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, ev.Trigger);
         for (auto& [e, force] : broken) m_Scene.DispatchJointBreak(e, force);
+        // Hits hard enough break Breakables (each once).
+        std::vector<Entity> breaking;
+        for (auto& ev : events)
+        {
+            if (!ev.Begin || ev.Trigger) continue;
+            for (Entity e : { ev.A, ev.B })
+            {
+                auto* br = m_Scene.IsValid(e) ? reg.TryGet<BreakableComponent>(e) : nullptr;
+                if (br && br->BreakSpeed > 0.0f && ev.Speed >= br->BreakSpeed && std::find(breaking.begin(), breaking.end(), e) == breaking.end())
+                {
+                    breaking.push_back(e);
+                    BreakNow(e, ev.Point);
+                }
+            }
+        }
+        UpdateDebris(dt);
+    }
+
+    std::vector<Entity> Physics3DWorld::Break(Scene& scene, Entity e, const glm::vec3& point)
+    {
+        Physics3DWorld* world = scene.GetPhysics3D();
+        return world ? world->BreakNow(e, point) : std::vector<Entity>{};
+    }
+
+    std::vector<Entity> Physics3DWorld::BreakNow(Entity e, const glm::vec3& point)
+    {
+        std::vector<Entity> pieces;
+        auto& reg = m_Scene.GetRegistry();
+        auto* br = m_Scene.IsValid(e) ? reg.TryGet<BreakableComponent>(e) : nullptr;
+        auto* mr = br ? reg.TryGet<MeshRendererComponent>(e) : nullptr;
+        if (!br || !mr || !reg.Get<TagComponent>(e).Active) return pieces;
+        auto data = AssetManager::GetMeshData(mr->Mesh);
+        if (!data || data->Indices.empty() || data->SkeletonData)
+        {
+            Log::Warn("Breakable on '{}' needs a static (not skinned) mesh", reg.Get<TagComponent>(e).Name);
+            return pieces;
+        }
+        // The cut faces' material slot: past the model's slots and sub-meshes, filled by the pieces' renderers.
+        static const std::vector<AssetHandle> kNoSlots;
+        const std::vector<AssetHandle>& modelSlots = AssetManager::IsBuiltin(mr->Mesh) ? kNoSlots : AssetManager::GetMeshMaterials(mr->Mesh);
+        int32_t capSlot = std::max((int32_t)modelSlots.size(), (int32_t)std::max<size_t>(data->SubMeshes.size(), 1));
+        for (const SubMesh& sub : data->SubMeshes) capSlot = std::max(capSlot, sub.MaterialSlot + 1);
+        if (!br->InsideMaterial.IsValid()) capSlot = data->SubMeshes.empty() || data->SubMeshes[0].MaterialSlot < 0 ? 0 : data->SubMeshes[0].MaterialSlot;
+        auto key = std::make_tuple((uint64_t)mr->Mesh, std::clamp(br->Pieces, 2, 64), br->Seed, capSlot);
+        auto it = m_Impl->Fractures.find(key);
+        if (it == m_Impl->Fractures.end())
+        {
+            Impl::FractureSet set;
+            for (Fracture::Piece& p : Fracture::Shatter(*data, std::get<1>(key), (uint32_t)br->Seed, capSlot))
+            {
+                set.Meshes.push_back(AssetManager::RegisterRuntimeMesh(std::move(p.Mesh), modelSlots));
+                set.Centers.push_back(p.Center);
+                set.Volumes.push_back(p.Volume);
+            }
+            it = m_Impl->Fractures.emplace(key, std::move(set)).first;
+        }
+        const Impl::FractureSet& set = it->second;
+        if (set.Meshes.empty()) return pieces;
+
+        // The object's motion carries into its pieces, plus a push away from the break point.
+        auto& t = reg.Get<TransformComponent>(e);
+        glm::mat4 world = t.World;
+        glm::vec3 scale(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])));
+        glm::mat3 rot(world);
+        for (int c = 0; c < 3; ++c) rot[c] /= std::max(scale[c], 1e-8f);
+        glm::vec3 euler = glm::eulerAngles(glm::normalize(glm::quat_cast(rot)));
+        glm::vec3 linear(0.0f), angular(0.0f);
+        float mass = 1.0f;
+        auto& bi = m_Impl->System.GetBodyInterface();
+        if (auto* rb = reg.TryGet<RigidbodyComponent>(e))
+        {
+            mass = rb->Mass;
+            if (rb->RuntimeBody != 0xFFFFFFFF)
+            {
+                linear = FromJolt(bi.GetLinearVelocity(JPH::BodyID(rb->RuntimeBody)));
+                angular = FromJolt(bi.GetAngularVelocity(JPH::BodyID(rb->RuntimeBody)));
+            }
+        }
+        float total = 0.0f;
+        for (float v : set.Volumes) total += v;
+        glm::vec3 origin(world[3]);
+        std::string name = reg.Get<TagComponent>(e).Name;
+        uint32_t layer = reg.Get<TagComponent>(e).Layer;
+        MeshRendererComponent renderer = *mr;
+        if (br->InsideMaterial.IsValid())
+        {
+            if (renderer.Materials.size() <= (size_t)capSlot) renderer.Materials.resize((size_t)capSlot + 1, AssetHandle::None());
+            renderer.Materials[capSlot] = br->InsideMaterial;
+        }
+        float lifetime = br->DebrisLifetime, explosion = br->ExplosionSpeed;
+        for (size_t i = 0; i < set.Meshes.size(); ++i)
+        {
+            Entity piece = m_Scene.CreateEntity(name + " Piece");
+            glm::vec3 center = glm::vec3(world * glm::vec4(set.Centers[i], 1.0f));
+            auto& pt = reg.Get<TransformComponent>(piece);
+            pt.Position = center;
+            pt.Rotation = euler;
+            pt.Scale = scale;
+            pt.World = glm::translate(glm::mat4(1.0f), center) * glm::mat4(rot) * glm::scale(glm::mat4(1.0f), scale);
+            reg.Get<TagComponent>(piece).Layer = layer;
+            MeshRendererComponent& pmr = reg.Emplace<MeshRendererComponent>(piece) = renderer;
+            pmr.Mesh = set.Meshes[i];
+            auto& mc = reg.Emplace<MeshColliderComponent>(piece);
+            mc.Convex = true;
+            auto& prb = reg.Emplace<RigidbodyComponent>(piece);
+            prb.Type = BodyType::Dynamic;
+            prb.Mass = std::max(mass * set.Volumes[i] / std::max(total, 1e-9f), 0.001f);
+            CreateBody(piece);
+            if (prb.RuntimeBody != 0xFFFFFFFF)
+            {
+                glm::vec3 away = center - point;
+                float dist = glm::length(away);
+                glm::vec3 push = dist > 1e-4f ? away / dist * explosion / (1.0f + dist) : glm::vec3(0.0f);
+                bi.SetLinearAndAngularVelocity(JPH::BodyID(prb.RuntimeBody), ToJolt(linear + glm::cross(angular, center - origin) + push), ToJolt(angular));
+            }
+            if (lifetime > 0.0f) m_Impl->DebrisList.push_back({ piece, 0.0f, lifetime, scale });
+            pieces.push_back(piece);
+        }
+        // Gone now: its body leaves the world (so the pieces do not collide with it) and it is destroyed at the frame's end.
+        reg.Get<TagComponent>(e).Active = false;
+        t.ActiveInHierarchy = false;
+        if (auto* rb = reg.TryGet<RigidbodyComponent>(e); rb && rb->RuntimeBody != 0xFFFFFFFF && bi.IsAdded(JPH::BodyID(rb->RuntimeBody)))
+            bi.RemoveBody(JPH::BodyID(rb->RuntimeBody));
+        m_Scene.DestroyEntityDeferred(e);
+        return pieces;
+    }
+
+    void Physics3DWorld::UpdateDebris(float dt)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& list = m_Impl->DebrisList;
+        for (size_t i = 0; i < list.size();)
+        {
+            Impl::Debris& d = list[i];
+            if (!m_Scene.IsValid(d.E))
+            {
+                list.erase(list.begin() + i);
+                continue;
+            }
+            d.Age += dt;
+            if (d.Age >= d.Lifetime)
+            {
+                m_Scene.DestroyEntityDeferred(d.E);
+                list.erase(list.begin() + i);
+                continue;
+            }
+            // Shrinks away over the last second (only its look: the collider keeps its size).
+            float fade = std::clamp(d.Lifetime - d.Age, 0.0f, 1.0f);
+            reg.Get<TransformComponent>(d.E).Scale = d.Scale * fade;
+            ++i;
+        }
     }
 
     namespace

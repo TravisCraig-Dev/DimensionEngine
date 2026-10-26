@@ -41,6 +41,7 @@ namespace Dimension
             std::unordered_map<AssetHandle, std::vector<std::string>> MeshMaterialNames;
             std::unordered_map<AssetHandle, std::vector<AssetHandle>> SubAssets;
             std::unordered_map<AssetHandle, std::string> SubAssetNames;
+            std::unordered_map<AssetHandle, bool> RuntimeMeshes; // handles made by RegisterRuntimeMesh
             Ref<Font> DefaultFont;
             Ref<Texture2D> White, Checker, Particle, Circle;
         };
@@ -444,7 +445,11 @@ namespace Dimension
         case 4: mesh = Mesh::CreateQuad(); break;
         case 5: mesh = Mesh::CreateCylinder(); break;
         default:
-            if (auto* meta = GetMetadata(handle); meta && meta->Type == AssetType::Mesh)
+            if (s->RuntimeMeshes.contains(handle))
+            {
+                if (auto it = s->MeshDatas.find(handle); it != s->MeshDatas.end() && it->second) mesh = MakeRef<Mesh>(MeshData(*it->second));
+            }
+            else if (auto* meta = GetMetadata(handle); meta && meta->Type == AssetType::Mesh)
             {
                 MeshData data;
                 bool ok;
@@ -491,6 +496,23 @@ namespace Dimension
         }
         s->MeshDatas[handle] = data;
         return data;
+    }
+
+    AssetHandle AssetManager::RegisterRuntimeMesh(MeshData data, std::vector<AssetHandle> materials)
+    {
+        AssetHandle handle; // a fresh random id
+        s->RuntimeMeshes[handle] = true;
+        s->MeshDatas[handle] = std::make_shared<const MeshData>(std::move(data));
+        s->MeshMaterials[handle] = std::move(materials);
+        return handle;
+    }
+
+    void AssetManager::ReleaseRuntimeMesh(AssetHandle handle)
+    {
+        if (!s || !s->RuntimeMeshes.erase(handle)) return;
+        s->MeshDatas.erase(handle);
+        s->Meshes.erase(handle);
+        s->MeshMaterials.erase(handle);
     }
 
     const std::vector<AssetHandle>& AssetManager::GetMeshMaterials(AssetHandle mesh)

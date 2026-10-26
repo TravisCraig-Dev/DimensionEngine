@@ -18,6 +18,7 @@ struct PointLight
 #define MAX_POINT_SHADOWS 4
 #define MAX_REFLECTION_PROBES 8
 #define MAX_PROBE_VOLUMES 4
+#define MAX_GRASS_BENDERS 16
 
 struct ReflectionProbe
 {
@@ -63,6 +64,9 @@ layout(set = 1, binding = 0) uniform SceneData
     ReflectionProbe Probes[MAX_REFLECTION_PROBES]; // Counts.y in use
     uvec4 ProbeVolumeBuffer; // xy: SH of every volume's probes (9 vec4 each, buffer address), z: volume count
     vec4 ProbeVolumes[MAX_PROBE_VOLUMES * 3]; // per volume: min (w probes x), max (w probes y), (probes z, first probe, blend, intensity)
+    vec4 Wind;           // xyz wind (m/s), w seconds since start
+    vec4 WindParams;     // x gusts, y grass bender count
+    vec4 GrassBenders[MAX_GRASS_BENDERS]; // xyz sphere center, w radius
 } uScene;
 
 // Procedural sky gradient, also used as a cheap environment for reflections.

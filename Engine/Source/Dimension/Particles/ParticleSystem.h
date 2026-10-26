@@ -57,9 +57,10 @@ namespace Dimension
         int32_t MaxParticles = 1000;
         ParticleSpace SimulationSpace = ParticleSpace::World;
         // Simulate On GPU: a compute shader moves the particles, so a system can have up to a million. It supports
-        // the main module, emission, shape, color/size/speed over lifetime, force over lifetime, noise, plane
-        // collision and the texture sheet; velocity over lifetime, world collision, trails, sorting and acting as a
-        // sub emitter's source stay CPU-only (a GPU system can be a sub emitter's target).
+        // the main module, emission, shape, color/size/speed over lifetime, force over lifetime, noise, plane and world
+        // (depth buffer) collision, the texture sheet, sorting and trails (8 recorded points per particle, for systems
+        // of up to 262,144 particles); velocity over lifetime and acting as a sub emitter's source stay CPU-only (a GPU
+        // system can be a sub emitter's target).
         bool SimulateOnGpu = false;
         bool GpuSorting = true; // GPU systems with Alpha blend draw back to front (a GPU sort per view)
 

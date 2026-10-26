@@ -16,6 +16,9 @@ namespace Dimension
         float AmbientIntensity = 0.25f;
         glm::vec2 Gravity2D{ 0.0f, -9.81f };
         glm::vec3 Gravity{ 0.0f, -9.81f, 0.0f };
+        // Wind (m/s, world space) that sways terrain grass; Gusts adds stronger waves moving through it.
+        glm::vec3 Wind{ 1.5f, 0.0f, 0.8f };
+        float WindGusts = 0.5f;
         glm::vec3 SkyTop{ 0.25f, 0.45f, 0.80f };     // sRGB
         glm::vec3 SkyHorizon{ 0.70f, 0.80f, 0.92f };
         glm::vec3 SkyGround{ 0.33f, 0.31f, 0.29f };

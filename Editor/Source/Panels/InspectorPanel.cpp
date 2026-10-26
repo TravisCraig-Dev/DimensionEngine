@@ -421,11 +421,15 @@ namespace Editor
                     {
                         // Brushes: pick a tool, then drag on the terrain in the Scene view.
                         auto& terrain = *static_cast<TerrainComponent*>(info.Get(scene, e));
-                        static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow", "Trees", "Grass Tufts", "Erase Details" };
+                        static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow", "Dirt", "Sand", "Moss",
+                                                       "Trees", "Grass Tufts", "Erase Details", "Dig Hole", "Fill Hole" };
+                        static_assert(IM_ARRAYSIZE(tools) == (int)Terrain::BrushMode::Count);
                         ImGui::SeparatorText("Sculpt and Paint");
-                        for (int i = 0; i < 10; ++i)
+                        for (int i = 0; i < IM_ARRAYSIZE(tools); ++i)
                         {
-                            if (i > 0 && i != 4 && i != 7) ImGui::SameLine();
+                            // Rows: sculpt, paint, details, holes.
+                            if (i > 0 && i != (int)Terrain::BrushMode::PaintGrass && i != (int)Terrain::BrushMode::PlaceTrees && i != (int)Terrain::BrushMode::DigHole)
+                                ImGui::SameLine();
                             bool active = m_Ctx.TerrainTool == i + 1;
                             if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
                             if (ImGui::Button(tools[i])) m_Ctx.TerrainTool = active ? 0 : i + 1;
@@ -435,8 +439,8 @@ namespace Editor
                         ImGui::SliderFloat("Brush Size", &m_Ctx.TerrainBrushSize, 0.5f, 60.0f, "%.1f m");
                         ImGui::SetNextItemWidth(160);
                         ImGui::SliderFloat("Strength", &m_Ctx.TerrainBrushStrength, 0.01f, 1.0f);
-                        ImGui::TextDisabled(m_Ctx.TerrainTool ? "Drag on the terrain in the Scene view (Shift reverses Raise/Lower)." : "Pick a tool to edit.");
-                        bool edited = !terrain.SculptedHeights.empty() || !terrain.PaintedLayers.empty();
+                        ImGui::TextDisabled(m_Ctx.TerrainTool ? "Drag on the terrain in the Scene view (Shift reverses Raise/Lower and Dig/Fill)." : "Pick a tool to edit.");
+                        bool edited = !terrain.SculptedHeights.empty() || !terrain.PaintedLayers.empty() || !terrain.PaintedHoles.empty();
                         ImGui::BeginDisabled(!edited);
                         if (ImGui::Button("Clear Sculpting and Painting"))
                         {
@@ -461,12 +465,15 @@ namespace Editor
                     if (info.TypeId == GetComponentTypeId<LightProbeVolumeComponent>())
                     {
                         auto& lpv = *static_cast<LightProbeVolumeComponent*>(info.Get(scene, e));
-                        bool baking = lpv.BakeNext >= 0 || lpv.BakePending > 0;
-                        ImGui::BeginDisabled(baking);
+                        bool realtime = lpv.Realtime && lpv.IsBaked();
+                        bool baking = !realtime && (lpv.BakeNext >= 0 || lpv.BakePending > 0);
+                        ImGui::BeginDisabled(baking || realtime);
                         if (ImGui::Button("Bake Light Probes")) lpv.RequestBake();
                         ImGui::EndDisabled();
                         ImGui::SameLine();
-                        if (baking)
+                        if (realtime)
+                            ImGui::TextDisabled("%d probes, updating in real time", lpv.ProbeCount());
+                        else if (baking)
                             ImGui::TextDisabled("Baking %d / %d", std::max(lpv.BakeNext, 0) - lpv.BakePending, lpv.ProbeCount());
                         else
                             ImGui::TextDisabled(lpv.IsBaked() ? "%d probes baked" : "not baked", lpv.ProbeCount());
@@ -1199,6 +1206,9 @@ namespace Editor
         ImGui::SeparatorText("Physics");
         track(ImGui::DragFloat2("Gravity 2D", &s.Gravity2D.x, 0.05f));
         track(ImGui::DragFloat3("Gravity 3D", &s.Gravity.x, 0.05f));
+        track(ImGui::DragFloat3("Wind", &s.Wind.x, 0.05f));
+        ImGui::SetItemTooltip("Wind in m/s (world space): sways terrain grass tufts");
+        track(ImGui::SliderFloat("Wind Gusts", &s.WindGusts, 0.0f, 2.0f));
         ApplyEdit(m_Ctx, r, s, before);
         std::string name = scene.GetName();
         ImGui::SeparatorText("Scene");

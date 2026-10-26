@@ -118,6 +118,12 @@ namespace Dimension
             .Field("Texture Tiling", &TerrainComponent::TextureTiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Layer texture repeats per meter")
             .Field("Rock Slope", &TerrainComponent::RockSlope).Range(1.0f, 89.0f).Speed(0.5f).Tooltip("Degrees where rock takes over")
             .Field("Snow Height", &TerrainComponent::SnowHeight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of Height where snow starts")
+            .Field("Dirt Texture", &TerrainComponent::DirtTexture).As(FieldType::Texture).Header("Painted Layers")
+            .Field("Dirt Color", &TerrainComponent::DirtColor).As(FieldType::Color4)
+            .Field("Sand Texture", &TerrainComponent::SandTexture).As(FieldType::Texture)
+            .Field("Sand Color", &TerrainComponent::SandColor).As(FieldType::Color4)
+            .Field("Moss Texture", &TerrainComponent::MossTexture).As(FieldType::Texture)
+            .Field("Moss Color", &TerrainComponent::MossColor).As(FieldType::Color4)
             .Field("Tree Mesh", &TerrainComponent::TreeMesh).As(FieldType::Mesh).Header("Details")
                 .Tooltip("Placed where the Trees brush paints (trees, bushes, rocks)")
             .Field("Tree Material", &TerrainComponent::TreeMaterial).As(FieldType::Material).Tooltip("None = the model's own materials")
@@ -131,8 +137,12 @@ namespace Dimension
             .Field("Grass Density", &TerrainComponent::GrassDensity).Range(0.0f, 5000.0f).Speed(0.5f).Tooltip("Per 100 m2 where painted at full strength")
             .Field("Grass Scale", &TerrainComponent::GrassScale).Speed(0.01f)
             .Field("Grass Max Slope", &TerrainComponent::GrassMaxSlope).Range(0.0f, 90.0f).Speed(0.5f)
+            .Field("Grass Sway", &TerrainComponent::GrassSway).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("How much tufts bend in the scene's Wind (0 = still)")
+            .Field("Grass Bending", &TerrainComponent::GrassBending).Range(0.0f, 4.0f).Speed(0.01f)
+                .Tooltip("How far rigid bodies and characters push tufts aside (0 = not at all)")
             .Field("Sculpted Heights", &TerrainComponent::SculptedHeights).HideInInspector()
             .Field("Painted Layers", &TerrainComponent::PaintedLayers).HideInInspector()
+            .Field("Painted Holes", &TerrainComponent::PaintedHoles).HideInInspector()
             .Field("Painted Details", &TerrainComponent::PaintedDetails).HideInInspector();
 
         Register<DecalComponent>("Decal", "Rendering")
@@ -197,6 +207,10 @@ namespace Dimension
             .Field("Intensity", &LightProbeVolumeComponent::Intensity).Range(0.0f, 20.0f).Speed(0.01f)
             .Field("Blend Distance", &LightProbeVolumeComponent::BlendDistance).Range(0.0f, 100.0f).Speed(0.01f)
                 .Tooltip("Fades to the scene's own ambient light over this distance inside the box")
+            .Field("Realtime", &LightProbeVolumeComponent::Realtime)
+                .Tooltip("Keep capturing the probes again in turn, so bounce light follows moving lights and objects")
+            .Field("Probes Per Frame", &LightProbeVolumeComponent::ProbesPerFrame).Range(1, 4)
+                .Tooltip("Realtime: probes captured each frame (each is six small scene renders)")
             .Field("Baked", &LightProbeVolumeComponent::Baked).HideInInspector();
 
         Register<TimelineComponent>("Timeline", "Animation")
@@ -495,7 +509,21 @@ namespace Dimension
             .Field("Twist Limit", &RagdollComponent::TwistLimit).Range(0.0f, 180.0f).Speed(0.5f).Tooltip("How far each bone turns around itself, degrees")
             .Field("Friction", &RagdollComponent::Friction).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Linear Damping", &RagdollComponent::LinearDamping).Range(0.0f, 10.0f).Speed(0.01f)
-            .Field("Angular Damping", &RagdollComponent::AngularDamping).Range(0.0f, 10.0f).Speed(0.01f);
+            .Field("Angular Damping", &RagdollComponent::AngularDamping).Range(0.0f, 10.0f).Speed(0.01f)
+            .Field("Get Up Time", &RagdollComponent::GetUpTime).Range(0.0f, 10.0f).Speed(0.01f).Header("Getting Up")
+                .Tooltip("Seconds the animation takes to blend in from the limp pose when Simulate turns off (0 = snap)")
+            .Field("Align On Get Up", &RagdollComponent::AlignOnGetUp)
+                .Tooltip("When Simulate turns off, move the object under the body onto the ground and turn it along the body\n"
+                         "(toward the head lying face down, toward the feet face up)");
+        Register<BreakableComponent>("Breakable", "Physics")
+            .Field("Pieces", &BreakableComponent::Pieces).Range(2, 64).Tooltip("Voronoi cells cut from the mesh (fewer where a cell misses it)")
+            .Field("Seed", &BreakableComponent::Seed).Tooltip("The same seed breaks the same way")
+            .Field("Break Speed", &BreakableComponent::BreakSpeed).Range(0.0f, 1000.0f).Speed(0.1f)
+                .Tooltip("Impact speed along the contact normal that breaks it, m/s (0 = only scripts)")
+            .Field("Inside Material", &BreakableComponent::InsideMaterial).As(FieldType::Material).Tooltip("The cut faces. None = the outside's material")
+            .Field("Explosion Speed", &BreakableComponent::ExplosionSpeed).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Pieces fly apart from the break point at up to this speed")
+            .Field("Debris Lifetime", &BreakableComponent::DebrisLifetime).Range(0.0f, 3600.0f).Speed(0.1f)
+                .Tooltip("Seconds before the pieces shrink away (0 = they stay)");
         Register<SoftBodyComponent>("Soft Body", "Physics")
             .Field("Mass", &SoftBodyComponent::Mass).Range(0.001f, 10000.0f).Speed(0.01f)
             .Field("Pressure", &SoftBodyComponent::Pressure).Range(0.0f, 100000.0f).Speed(0.5f).Tooltip("Inflates a closed mesh like a balloon (0 = none)")
