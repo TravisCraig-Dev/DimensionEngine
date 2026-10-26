@@ -825,10 +825,17 @@ namespace Dimension
                     }
                 }
             };
-            // A ragdoll getting up: the animated pose blends in from the limp one over its Get Up Time.
+            // A partial ragdoll's limp joints follow its capsules over the animation; a ragdoll getting up blends the
+            // animated pose in from the limp one over its Get Up Time.
             auto blendGetUp = [&]() {
                 auto* r = m_Registry.TryGet<RagdollComponent>(e);
                 size_t n = skeleton->Joints.size();
+                if (r && r->Driving && r->Limp.size() == n && r->Pose.size() == n && anim.SkinMatrices.size() == n)
+                {
+                    for (size_t j = 0; j < n; ++j)
+                        if (r->Limp[j]) anim.SkinMatrices[j] = r->Pose[j] * skeleton->Joints[j].InverseBind;
+                    return;
+                }
                 if (!r || r->Driving || r->BlendTime >= r->BlendDuration || r->BlendFrom.size() != n || anim.SkinMatrices.size() != n) return;
                 r->BlendTime += dt;
                 float w = r->GetUpProgress();
@@ -840,7 +847,7 @@ namespace Dimension
                     anim.SkinMatrices[j] = BlendTransforms(r->BlendFrom[j], animated, w) * inverseBind;
                 }
             };
-            if (auto* ragdoll = m_Registry.TryGet<RagdollComponent>(e); ragdoll && ragdoll->Driving && ragdoll->Pose.size() == skeleton->Joints.size())
+            if (auto* ragdoll = m_Registry.TryGet<RagdollComponent>(e); ragdoll && ragdoll->Driving && ragdoll->Limp.empty() && ragdoll->Pose.size() == skeleton->Joints.size())
             {
                 // A simulating ragdoll poses the skeleton from its capsules.
                 anim.SkinMatrices.resize(skeleton->Joints.size());

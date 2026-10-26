@@ -389,27 +389,52 @@ namespace Dimension::Terrain
         }
     }
 
-    bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight)
+    float StampValue(const StampSettings& stamp, const glm::vec2& offset, float radius)
     {
+        const HeightImage* image = stamp.Image.IsValid() ? LoadHeightmap(stamp.Image) : nullptr;
+        if (!image || radius <= 0.0f) return -1.0f;
+        // Into the stamp's turned square: u to the right, v toward +Z (the image's top).
+        float a = glm::radians(stamp.Rotation), c = std::cos(a), s = std::sin(a);
+        glm::vec2 local(c * offset.x + s * offset.y, -s * offset.x + c * offset.y);
+        glm::vec2 uv = local / (2.0f * radius) + 0.5f;
+        if (uv.x < 0.0f || uv.y < 0.0f || uv.x > 1.0f || uv.y > 1.0f) return -1.0f;
+        return SampleImage(*image, uv.x, 1.0f - uv.y);
+    }
+
+    bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight,
+                    const StampSettings* stamp)
+    {
+        if (mode == BrushMode::Stamp && (!stamp || StampValue(*stamp, glm::vec2(0.0f), std::max(radius, 1e-3f)) < 0.0f)) return false;
         BeginEdit(terrain);
         int n = SampleCount(terrain);
         glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
-        if (std::abs(at.x) > size.x * 0.5f + radius || std::abs(at.y) > size.y * 0.5f + radius) return false;
         glm::vec2 cell = size / (float)(n - 1);
         radius = std::max(radius, std::min(cell.x, cell.y));
-        int c0 = std::max(0, (int)std::floor((at.x - radius) / cell.x + (n - 1) * 0.5f)), c1 = std::min(n - 1, (int)std::ceil((at.x + radius) / cell.x + (n - 1) * 0.5f));
-        int r0 = std::max(0, (int)std::floor((at.y - radius) / cell.y + (n - 1) * 0.5f)), r1 = std::min(n - 1, (int)std::ceil((at.y + radius) / cell.y + (n - 1) * 0.5f));
+        float reach = mode == BrushMode::Stamp ? radius * 1.4143f : radius; // the stamp's square reaches its corners
+        if (std::abs(at.x) > size.x * 0.5f + reach || std::abs(at.y) > size.y * 0.5f + reach) return false;
+        int c0 = std::max(0, (int)std::floor((at.x - reach) / cell.x + (n - 1) * 0.5f)), c1 = std::min(n - 1, (int)std::ceil((at.x + reach) / cell.x + (n - 1) * 0.5f));
+        int r0 = std::max(0, (int)std::floor((at.y - reach) / cell.y + (n - 1) * 0.5f)), r1 = std::min(n - 1, (int)std::ceil((at.y + reach) / cell.y + (n - 1) * 0.5f));
         std::vector<float> before = mode == BrushMode::Smooth ? terrain.EditHeights : std::vector<float>();
         float rate = std::clamp(strength, 0.0f, 1.0f) * dt;
         for (int r = r0; r <= r1; ++r)
             for (int c = c0; c <= c1; ++c)
             {
                 glm::vec2 p(-size.x * 0.5f + c * cell.x, -size.y * 0.5f + r * cell.y);
+                size_t i = (size_t)r * n + c;
+                float& h = terrain.EditHeights[i];
+                if (mode == BrushMode::Stamp)
+                {
+                    // Toward the image's shape over the base height, one way only.
+                    float v = StampValue(*stamp, p - at, radius);
+                    if (v <= 0.0f) continue;
+                    float target = flattenHeight + (stamp->Carve ? -v : v) * stamp->Height;
+                    if (stamp->Carve ? target < h : target > h) h += (target - h) * std::min(rate * 8.0f, 1.0f);
+                    h = std::clamp(h, 0.0f, terrain.Height);
+                    continue;
+                }
                 float d = glm::length(p - at) / radius;
                 if (d >= 1.0f) continue;
                 float falloff = 1.0f - Smooth(0.0f, 1.0f, d); // soft edge
-                size_t i = (size_t)r * n + c;
-                float& h = terrain.EditHeights[i];
                 if (IsHoleMode(mode))
                 {
                     terrain.EditHoles[i] = mode == BrushMode::DigHole ? 1 : 0; // holes are all or nothing

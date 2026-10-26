@@ -169,6 +169,23 @@ namespace Dimension
         uint64_t EditRevision = 0;
     };
 
+    // Fur (and short grass, moss, carpet) on the object's Mesh Renderer, drawn as shells: the mesh again Shells times,
+    // each pushed out along its normals by up to Length, where only the strands' cross-sections stay (Density strands
+    // per UV unit, Thickness of their cells at the root, tapering to the tip, of random heights). The strands droop
+    // under gravity, sway in the scene's Wind, darken toward the roots and take Tip Color toward the tips. Skinned
+    // meshes work too.
+    struct FurComponent
+    {
+        float Length = 0.04f;    // meters
+        int32_t Shells = 16;
+        float Density = 300.0f;  // strands per UV unit
+        float Thickness = 0.7f;  // root width as a fraction of a strand's cell
+        float Droop = 0.4f;      // how far the tips hang down, times Length
+        float WindResponse = 0.5f;
+        glm::vec4 TipColor{ 1.15f, 1.1f, 1.05f, 1.0f }; // multiplies the material's color at the tips
+        float RootShade = 0.45f; // brightness at the roots (fake self-shadowing)
+    };
+
     enum class DecalBlend : int32_t { Alpha = 0, Multiply = 1, Additive = 2 };
     struct DecalComponent
     {
@@ -821,10 +838,15 @@ namespace Dimension
         // head when lying face down, toward the feet face up), so a get-up animation starts where the body lies.
         float GetUpTime = 0.6f;
         bool AlignOnGetUp = true;
+        // Partial ragdoll: a bone's name (an arm hit, a tail, a hanging limb). Simulate then makes only that bone and the
+        // ones under it go limp, hanging from capsules that keep following the animation, while the rest animates on
+        // and the object stays where its animation puts it. Empty = the whole body.
+        std::string PartialRoot;
         // Runtime: the joints' simulated model-space transforms (they drive the skin while Driving) and the capsules.
         std::vector<glm::mat4> Pose;
         bool Driving = false;
         bool FaceUp = false;              // while simulating: lying on its back (the model's +Z faces up)
+        std::vector<uint8_t> Limp;        // partial ragdolls while simulating: 1 per limp joint (empty = all of them)
         std::vector<glm::mat4> BlendFrom; // getting up: the limp pose (model space) the animation blends in from
         float BlendTime = 0.0f, BlendDuration = 0.0f;
         float GetUpProgress() const { return BlendDuration > 0.0f ? std::clamp(BlendTime / BlendDuration, 0.0f, 1.0f) : 1.0f; }
@@ -843,6 +865,10 @@ namespace Dimension
         AssetHandle InsideMaterial = AssetHandle::None(); // the cut faces; None = the outside's material
         float ExplosionSpeed = 1.5f;     // pieces fly apart from the break point at up to this speed
         float DebrisLifetime = 8.0f;     // seconds before pieces shrink away (over the last second); 0 = they stay
+        // Impact Focus: the share of pieces cut small around the break point (0 = spread evenly, and the pieces are cut
+        // once and shared by every copy), within Focus Radius (a fraction of the object's size).
+        float ImpactFocus = 0.0f;
+        float FocusRadius = 0.25f;
     };
 
     // A soft, deformable version of the object's mesh (Mesh Renderer), simulated as a Jolt soft body while playing:

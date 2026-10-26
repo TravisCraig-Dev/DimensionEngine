@@ -189,6 +189,11 @@ namespace Dimension
                           { "ssrThickness", s.SSRThickness },
                           { "ssrMaxRoughness", s.SSRMaxRoughness },
                           { "ssrSteps", s.SSRSteps },
+                          { "ssgi", s.SSGI },
+                          { "ssgiIntensity", s.SSGIIntensity },
+                          { "ssgiDistance", s.SSGIDistance },
+                          { "ssgiThickness", s.SSGIThickness },
+                          { "ssgiRays", s.SSGIRays },
                           { "uiKeyboardNavigation", s.UIKeyboardNavigation },
                           { "dof", s.DepthOfField },
                           { "focusDistance", s.FocusDistance },
@@ -258,6 +263,11 @@ namespace Dimension
         s.SSRThickness = js.value("ssrThickness", s.SSRThickness);
         s.SSRMaxRoughness = js.value("ssrMaxRoughness", s.SSRMaxRoughness);
         s.SSRSteps = js.value("ssrSteps", s.SSRSteps);
+        s.SSGI = js.value("ssgi", s.SSGI);
+        s.SSGIIntensity = js.value("ssgiIntensity", s.SSGIIntensity);
+        s.SSGIDistance = js.value("ssgiDistance", s.SSGIDistance);
+        s.SSGIThickness = js.value("ssgiThickness", s.SSGIThickness);
+        s.SSGIRays = std::clamp(js.value("ssgiRays", s.SSGIRays), 1, 16);
         s.UIKeyboardNavigation = js.value("uiKeyboardNavigation", s.UIKeyboardNavigation);
         s.DepthOfField = js.value("dof", s.DepthOfField);
         s.FocusDistance = js.value("focusDistance", s.FocusDistance);

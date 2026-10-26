@@ -347,6 +347,9 @@ namespace Dimension
         public bool Simulate { get => GetBool("Simulate"); set => SetBool("Simulate", value); }
         /// <summary>Knocks the capsule nearest `point` (world space), e.g. where a raycast hit it.</summary>
         public void AddImpulse(Vector3 impulse, Vector3 point) => Native.Api.RagdollImpulse(Entity.Scene, Entity.Id, (float*)&impulse, (float*)&point);
+        /// <summary>Sets the bone that Simulate makes go limp, with the bones under it (null or "" = the whole body),
+        /// e.g. the arm a shot hit. Takes effect when Simulate next turns on.</summary>
+        public void SetPartialRoot(string bone) { var e = Entity; Native.WithUtf8(bone, p => Native.Api.RagdollSetPartial(e.Scene, e.Id, (byte*)p)); }
         /// <summary>Seconds the animation blends in from the limp pose when Simulate turns off.</summary>
         public float GetUpTime { get => GetFloat("Get Up Time"); set => SetFloat("Get Up Time", value); }
         /// <summary>Lying on its back (pick a get-up animation by it before turning Simulate off).</summary>

@@ -51,6 +51,13 @@ namespace Dimension
         float SSRThickness = 0.3f;     // world units an object is assumed to extend behind its depth
         float SSRMaxRoughness = 0.6f;  // rougher surfaces keep only probe and sky reflections
         int SSRSteps = 48;
+        // Screen-space global illumination: light bouncing off what is on screen onto nearby surfaces (a red wall
+        // tints the floor beside it), on top of the ambient, sky and probe light (perspective cameras).
+        bool SSGI = false;
+        float SSGIIntensity = 1.0f;
+        float SSGIDistance = 3.0f;   // view-space ray length
+        float SSGIThickness = 0.5f;  // world units an object is assumed to extend behind its depth
+        int SSGIRays = 4;            // per pixel and frame (TAA averages them over frames)
         // Order-independent transparency: transparent meshes blend by a weighted average instead of being sorted
         // per object, so intersecting and nested see-through objects look right in any order.
         bool OIT = false;

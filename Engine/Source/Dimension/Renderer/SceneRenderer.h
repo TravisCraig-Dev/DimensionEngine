@@ -320,6 +320,7 @@ namespace Dimension
         glm::mat4 m_ParticleDepthViewProj{ 1.0f };
         glm::uvec2 m_ParticleDepthSize{ 0 };
         void DrawGpuParticles(VkCommandBuffer cmd);
+        void RenderIndirect(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings); // screen-space GI
         void RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
                                     const SceneSettings& settings);
         // Renders the directional shadow map; returns the light view-projection.

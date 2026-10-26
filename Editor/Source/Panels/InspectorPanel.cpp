@@ -422,7 +422,7 @@ namespace Editor
                         // Brushes: pick a tool, then drag on the terrain in the Scene view.
                         auto& terrain = *static_cast<TerrainComponent*>(info.Get(scene, e));
                         static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow", "Dirt", "Sand", "Moss",
-                                                       "Trees", "Grass Tufts", "Erase Details", "Dig Hole", "Fill Hole" };
+                                                       "Trees", "Grass Tufts", "Erase Details", "Dig Hole", "Fill Hole", "Stamp" };
                         static_assert(IM_ARRAYSIZE(tools) == (int)Terrain::BrushMode::Count);
                         ImGui::SeparatorText("Sculpt and Paint");
                         for (int i = 0; i < IM_ARRAYSIZE(tools); ++i)
@@ -439,7 +439,20 @@ namespace Editor
                         ImGui::SliderFloat("Brush Size", &m_Ctx.TerrainBrushSize, 0.5f, 60.0f, "%.1f m");
                         ImGui::SetNextItemWidth(160);
                         ImGui::SliderFloat("Strength", &m_Ctx.TerrainBrushStrength, 0.01f, 1.0f);
-                        ImGui::TextDisabled(m_Ctx.TerrainTool ? "Drag on the terrain in the Scene view (Shift reverses Raise/Lower and Dig/Fill)." : "Pick a tool to edit.");
+                        if (m_Ctx.TerrainTool - 1 == (int)Terrain::BrushMode::Stamp)
+                        {
+                            if (UI::BeginProperties("##stamp"))
+                            {
+                                UI::AssetField("Stamp Image", m_Ctx.TerrainStamp.Image, AssetType::Texture);
+                                UI::EndProperties();
+                            }
+                            ImGui::SetNextItemWidth(160);
+                            ImGui::SliderFloat("Stamp Height", &m_Ctx.TerrainStamp.Height, 0.1f, std::max(terrain.Height, 0.2f), "%.1f m");
+                            ImGui::SetNextItemWidth(160);
+                            ImGui::SliderFloat("Stamp Rotation", &m_Ctx.TerrainStamp.Rotation, -180.0f, 180.0f, "%.0f deg");
+                            if (!m_Ctx.TerrainStamp.Image.IsValid()) ImGui::TextDisabled("Pick a grayscale image to stamp (white = Stamp Height).");
+                        }
+                        ImGui::TextDisabled(m_Ctx.TerrainTool ? "Drag on the terrain in the Scene view (Shift reverses Raise/Lower and Dig/Fill, and carves a Stamp)." : "Pick a tool to edit.");
                         bool edited = !terrain.SculptedHeights.empty() || !terrain.PaintedLayers.empty() || !terrain.PaintedHoles.empty();
                         ImGui::BeginDisabled(!edited);
                         if (ImGui::Button("Clear Sculpting and Painting"))
@@ -1148,6 +1161,18 @@ namespace Editor
             track(ImGui::DragFloat("Thickness##ssr", &s.SSRThickness, 0.01f, 0.01f, 10.0f));
             track(ImGui::SliderFloat("Max Roughness##ssr", &s.SSRMaxRoughness, 0.05f, 1.0f));
             track(ImGui::SliderInt("Steps##ssr", &s.SSRSteps, 8, 256));
+            ImGui::Unindent();
+        }
+        track(ImGui::Checkbox("Screen-Space Global Illumination", &s.SSGI));
+        ImGui::SetItemTooltip("Light bounces off what is on screen onto nearby surfaces (perspective cameras), on top of\n"
+                              "the ambient, sky and probe light. Rays turn every frame: use TAA to average the noise.");
+        if (s.SSGI)
+        {
+            ImGui::Indent();
+            track(ImGui::DragFloat("Intensity##ssgi", &s.SSGIIntensity, 0.01f, 0.0f, 4.0f));
+            track(ImGui::DragFloat("Distance##ssgi", &s.SSGIDistance, 0.05f, 0.1f, 50.0f));
+            track(ImGui::DragFloat("Thickness##ssgi", &s.SSGIThickness, 0.01f, 0.01f, 10.0f));
+            track(ImGui::SliderInt("Rays##ssgi", &s.SSGIRays, 1, 16));
             ImGui::Unindent();
         }
         track(ImGui::Checkbox("Order-Independent Transparency", &s.OIT));

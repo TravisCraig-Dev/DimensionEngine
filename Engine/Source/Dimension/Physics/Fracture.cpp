@@ -159,7 +159,7 @@ namespace Dimension::Fracture
         return volume;
     }
 
-    std::vector<Piece> Shatter(const MeshData& mesh, int count, uint32_t seed, int32_t capSlot)
+    std::vector<Piece> Shatter(const MeshData& mesh, int count, uint32_t seed, int32_t capSlot, const Focus* focus)
     {
         std::vector<Piece> pieces;
         if (mesh.Vertices.empty() || mesh.Indices.size() < 3) return pieces;
@@ -193,7 +193,18 @@ namespace Dimension::Fracture
         count = std::clamp(count, 1, 256);
         uint32_t state = Hash(seed * 2654435761u + 17u);
         std::vector<glm::vec3> seeds;
-        for (int i = 0; i < count; ++i)
+        // Focused seeds: around the point, pulled a little toward the centroid so a point on the surface still seeds
+        // cells inside.
+        int focused = focus ? (int)std::lround(std::clamp(focus->Amount, 0.0f, 1.0f) * count) : 0;
+        for (int i = 0; i < focused; ++i)
+        {
+            glm::vec3 dir;
+            do dir = glm::vec3(Random01(state), Random01(state), Random01(state)) * 2.0f - 1.0f;
+            while (glm::dot(dir, dir) > 1.0f);
+            glm::vec3 p = focus->Point + dir * (std::max(focus->Radius, 0.01f) * size * 0.5f);
+            seeds.push_back(glm::mix(p, centroid, 0.2f));
+        }
+        for (int i = focused; i < count; ++i)
         {
             float pick = Random01(state) * total;
             size_t t = std::min((size_t)(std::lower_bound(area.begin(), area.end(), pick) - area.begin()), source.size() - 1);

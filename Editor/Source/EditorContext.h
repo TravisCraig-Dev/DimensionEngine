@@ -1,6 +1,7 @@
 #pragma once
 #include <Dimension/Scene/Scene.h>
 #include <Dimension/Asset/AssetManager.h>
+#include <Dimension/Terrain/Terrain.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <deque>
@@ -117,6 +118,7 @@ namespace Editor
         // Terrain brush (Inspector picks it, the Scene view paints with it): 0 = off, else Terrain::BrushMode + 1.
         int TerrainTool = 0;
         float TerrainBrushSize = 6.0f, TerrainBrushStrength = 0.5f;
+        Terrain::StampSettings TerrainStamp; // the Stamp tool's image, height and turn
 
         // Deferred requests handled by the EditorLayer at a safe point in the frame.
         std::optional<AssetHandle> RequestOpenPrefab;

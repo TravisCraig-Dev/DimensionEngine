@@ -13,6 +13,7 @@ layout(location = 1) out vec3 vNormal;
 layout(location = 2) out vec2 vUV;
 layout(location = 3) flat out uint vEntity;
 layout(location = 4) out vec4 vTangent;
+layout(location = 5) out float vShell; // fur shells: height 0-1 (0 for everything else)
 
 invariant gl_Position; // the depth prepass and the main pass must produce identical depths
 
@@ -80,9 +81,26 @@ void main()
         motion = pc.Instances.Items[gl_InstanceIndex].Data.w;
     }
     vec4 world = model * vec4(position, 1.0);
-    if (motion != 0u) world.xyz = GrassMotion(world.xyz, model[3].xyz, unpackHalf2x16(motion));
-    vWorldPos = world.xyz;
     vNormal = normalize(transpose(inverse(mat3(model))) * normal);
+    vShell = 0.0;
+    if (motion != 0u)
+    {
+        vec2 mv = unpackHalf2x16(motion);
+        if (mv.y < 0.0)
+        {
+            // A fur shell: out along the normal, the tips hanging down and swaying in the wind.
+            vec4 fur = pc.Material.Layers[0];
+            float h = -mv.y, len = mv.x;
+            vShell = h;
+            world.xyz += vNormal * len * h;
+            world.y -= fur.z * len * h * h;
+            float sway = 0.75 + 0.25 * sin(uScene.Wind.w * 3.0 + world.x * 1.7 + world.z * 1.3);
+            world.xz += uScene.Wind.xz * (fur.w * 0.1 * len * h * h * sway);
+        }
+        else
+            world.xyz = GrassMotion(world.xyz, model[3].xyz, mv);
+    }
+    vWorldPos = world.xyz;
     // Tangents transform like positions (they lie in the surface); a mirrored model flips the handedness.
     vTangent = aTangent.w == 0.0 ? vec4(0.0) : vec4(mat3(model) * tangent, aTangent.w * sign(determinant(mat3(model))));
     vUV = aUV;

@@ -1940,11 +1940,22 @@ namespace Editor
             glm::mat4 toLocal = glm::inverse(t.World);
             glm::vec3 local = glm::vec3(toLocal * glm::vec4(hit, 1.0f));
             float radius = m_Ctx.TerrainBrushSize;
+            bool stamping = m_Ctx.TerrainTool - 1 == (int)Terrain::BrushMode::Stamp;
             ImVec2 points[49];
             for (int i = 0; i <= 48; ++i)
             {
                 float angle = i / 48.0f * 6.2831853f;
                 glm::vec2 p(local.x + std::cos(angle) * radius, local.z + std::sin(angle) * radius);
+                if (stamping)
+                {
+                    // The stamp's turned square, 12 points per side.
+                    int side = (i / 12) % 4;
+                    float f = (i % 12) / 12.0f * 2.0f - 1.0f;
+                    glm::vec2 q = side == 0 ? glm::vec2(f, -1) : side == 1 ? glm::vec2(1, f) : side == 2 ? glm::vec2(-f, 1) : glm::vec2(-1, -f);
+                    float a = glm::radians(m_Ctx.TerrainStamp.Rotation), c = std::cos(a), s = std::sin(a);
+                    q *= radius;
+                    p = glm::vec2(local.x + c * q.x - s * q.y, local.z + s * q.x + c * q.y);
+                }
                 glm::vec4 c = viewProj * (t.World * glm::vec4(p.x, Terrain::HeightAt(*terrain, heights, p.x, p.y) + 0.05f, p.y, 1.0f));
                 glm::vec2 n = glm::vec2(c) / std::max(c.w, 1e-4f);
                 points[i] = ImVec2(origin.x + (n.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - n.y * 0.5f) * size.y);
@@ -1968,8 +1979,10 @@ namespace Editor
                 else if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::Lower) mode = Terrain::BrushMode::Raise;
                 else if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::DigHole) mode = Terrain::BrushMode::FillHole;
                 else if (ImGui::GetIO().KeyShift && mode == Terrain::BrushMode::FillHole) mode = Terrain::BrushMode::DigHole;
+                Terrain::StampSettings stamp = m_Ctx.TerrainStamp;
+                stamp.Carve = ImGui::GetIO().KeyShift;
                 Terrain::ApplyBrush(*terrain, mode, glm::vec2(local.x, local.z), radius, m_Ctx.TerrainBrushStrength,
-                                    std::min(ImGui::GetIO().DeltaTime, 0.05f), m_TerrainFlatten);
+                                    std::min(ImGui::GetIO().DeltaTime, 0.05f), m_TerrainFlatten, &stamp);
             }
         }
         if (m_TerrainStroke && !ImGui::IsMouseDown(ImGuiMouseButton_Left))

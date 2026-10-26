@@ -17,8 +17,8 @@ namespace Dimension
         static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
         static constexpr VkFormat kOutputFormat = VK_FORMAT_R8G8B8A8_UNORM;
         static constexpr VkFormat kAOFormat = VK_FORMAT_R8_UNORM;
-        // Per-pixel surface data for screen-space reflections (see Mesh.frag's outSurface).
-        static constexpr VkFormat kSurfaceFormat = VK_FORMAT_R32G32_UINT;
+        // Per-pixel surface data for screen-space reflections and GI (see MeshSurface.glsl's outSurface).
+        static constexpr VkFormat kSurfaceFormat = VK_FORMAT_R32G32B32A32_UINT;
         // Order-independent transparency: weighted color and alpha sums, and the product of (1 - alpha).
         static constexpr VkFormat kOitAccumFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
         static constexpr VkFormat kOitRevealFormat = VK_FORMAT_R16_SFLOAT;
@@ -44,6 +44,8 @@ namespace Dimension
         uint32_t GetOitRevealBindless() const { return m_OitRevealBindless; }
         const Image& GetReflections() const { return m_Reflections; }
         uint32_t GetReflectionsBindless() const { return m_ReflectionsBindless; }
+        const Image& GetIndirect() const { return m_Indirect; } // screen-space GI
+        uint32_t GetIndirectBindless() const { return m_IndirectBindless; }
         uint32_t GetWidth() const { return m_Width; }
         uint32_t GetHeight() const { return m_Height; }
         float GetAspect() const { return m_Height ? (float)m_Width / (float)m_Height : 1.0f; }
@@ -101,12 +103,12 @@ namespace Dimension
         uint32_t m_Samples = 1;
         Image m_Hdr, m_Ids, m_Depth, m_Output;
         Image m_HdrMS, m_IdsMS, m_DepthMS, m_SurfaceMS; // only with MSAA
-        Image m_Surface, m_Reflections;
+        Image m_Surface, m_Reflections, m_Indirect;
         Image m_OitAccum, m_OitReveal;
         uint32_t m_OitAccumBindless = 0, m_OitRevealBindless = 0;
         Image m_TaaHistory[2];
         uint32_t m_TaaHistoryBindless[2] = {};
-        uint32_t m_SurfaceBindless = 0, m_ReflectionsBindless = 0;
+        uint32_t m_SurfaceBindless = 0, m_ReflectionsBindless = 0, m_IndirectBindless = 0;
         uint32_t m_HdrBindless = 0;
         static constexpr uint32_t kMaxBloomLevels = 6;
         std::vector<Image> m_Bloom;

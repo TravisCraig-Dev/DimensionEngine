@@ -16,6 +16,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuParticle
 #define PARTICLE_LUT 32
 #define PARTICLE_SEGMENTS 16
 #define TRAIL_POINTS 8u
+#define PARTICLE_COLLIDERS 32
 
 // Trails: TRAIL_POINTS recorded positions per slot, newest first (xyz simulation space, w age when recorded; < 0 = none).
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuTrailRef { vec4 Points[]; };
@@ -50,6 +51,11 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Gp
     vec4 DepthParams; // x thickness (m), y particle radius
     vec4 Trail;        // x 1 = trails, y seconds between recorded points, z width (times the particle size)
     uvec4 TrailBuffer; // xy: GpuTrailRef address
+    // 3D colliders to bounce off (world space), 4 vec4 each: (center, type 0 sphere / 1 box / 2 capsule),
+    // (box x axis, half x; sphere and capsule: w radius), (box y axis or capsule axis, half y or half segment),
+    // (box z axis, half z).
+    uvec4 ColliderCount; // x count
+    vec4 Colliders[PARTICLE_COLLIDERS * 4];
 };
 
 vec4 SampleColorLut(GpuParticleParamsRef p, float t)

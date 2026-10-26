@@ -223,6 +223,7 @@ namespace Dimension
             std::vector<JPH::Ref<JPH::Constraint>> Constraints;
             JPH::Ref<JPH::GroupFilterTable> Filter;
             bool Simulating = false;
+            std::vector<uint8_t> BodyLimp;         // per body, while simulating (all 1 for a whole-body ragdoll)
             glm::vec3 RootOffset{ 0.0f };          // root body minus the object's position when simulation started
         };
         std::vector<RagdollRig> Ragdolls;
@@ -265,6 +266,16 @@ namespace Dimension
         std::map<std::tuple<uint64_t, int32_t, int32_t, int32_t>, FractureSet> Fractures;
         struct Debris { Entity E; float Age, Lifetime; glm::vec3 Scale; };
         std::vector<Debris> DebrisList;
+        // Pieces cut for one break (focused on its point): their meshes go with them.
+        std::unordered_map<uint32_t, AssetHandle> OwnMeshes; // by entity index
+        void ReleaseOwnMesh(Entity e)
+        {
+            if (auto it = OwnMeshes.find(e.Index); it != OwnMeshes.end())
+            {
+                AssetManager::ReleaseRuntimeMesh(it->second);
+                OwnMeshes.erase(it);
+            }
+        }
 
         Entity Lookup(const JPH::BodyID& id) const
         {
@@ -332,6 +343,7 @@ namespace Dimension
     {
         for (auto& [key, set] : m_Impl->Fractures)
             for (AssetHandle h : set.Meshes) AssetManager::ReleaseRuntimeMesh(h);
+        for (auto& [index, h] : m_Impl->OwnMeshes) AssetManager::ReleaseRuntimeMesh(h);
         for (auto& j : m_Impl->Joints) m_Impl->System.RemoveConstraint(j.Constraint);
         m_Impl->Joints.clear();
         while (!m_Impl->Vehicles.empty()) m_Impl->RemoveVehicle(m_Impl->Vehicles.size() - 1);
@@ -1122,7 +1134,32 @@ namespace Dimension
                             glm::mat4 frame = RigidPart(worlds[rig.BodyJoint[b]]) * rig.Offset[b];
                             rig.JointInBody[j] = glm::inverse(frame) * worlds[j];
                         }
-                        for (JPH::BodyID id : rig.Bodies) bi.SetMotionType(id, JPH::EMotionType::Dynamic, JPH::EActivation::Activate);
+                        // Which bodies go limp: all of them, or the Partial Root bone's and those under it.
+                        comp->Limp.clear();
+                        rig.BodyLimp.assign(rig.Bodies.size(), 1);
+                        if (!comp->PartialRoot.empty())
+                        {
+                            const Skeleton& skeleton = *rig.Data->SkeletonData;
+                            auto matches = [&](const std::string& name) {
+                                auto lower = [](std::string s) {
+                                    for (auto& ch : s) ch = (char)std::tolower((unsigned char)ch);
+                                    size_t colon = s.rfind(':');
+                                    return colon == std::string::npos ? s : s.substr(colon + 1);
+                                };
+                                return lower(name) == lower(comp->PartialRoot);
+                            };
+                            comp->Limp.assign(n, 0);
+                            for (int j : skeleton.Order)
+                            {
+                                int p = skeleton.Joints[j].Parent;
+                                comp->Limp[j] = matches(skeleton.Joints[j].Name) || (p >= 0 && comp->Limp[p]);
+                            }
+                            if (std::find(comp->Limp.begin(), comp->Limp.end(), 1) == comp->Limp.end())
+                                Log::Warn("Ragdoll on '{}': no bone named '{}'", reg.Get<TagComponent>(rig.E).Name, comp->PartialRoot);
+                            for (size_t b = 0; b < rig.Bodies.size(); ++b) rig.BodyLimp[b] = comp->Limp[rig.BodyJoint[b]];
+                        }
+                        for (size_t b = 0; b < rig.Bodies.size(); ++b)
+                            if (rig.BodyLimp[b]) bi.SetMotionType(rig.Bodies[b], JPH::EMotionType::Dynamic, JPH::EActivation::Activate);
                         rig.RootOffset = glm::vec3(BodyFrame(bi, rig.Bodies[0])[3]) - glm::vec3(t.World[3]);
                     }
                     else
@@ -1130,13 +1167,16 @@ namespace Dimension
                         for (JPH::BodyID id : rig.Bodies) bi.SetMotionType(id, JPH::EMotionType::Kinematic, JPH::EActivation::Activate);
                         comp->Driving = false;
                         if (comp->Pose.size() == n) BeginGetUp(rig.E, *comp, rig.BindGlobal, rig.BodyJoint[0]);
+                        comp->Limp.clear();
                     }
                 }
-                if (rig.Simulating || dt <= 0.0f) continue;
-                // Animated: the capsules follow the pose.
+                bool partial = rig.Simulating && !comp->Limp.empty();
+                if ((rig.Simulating && !partial) || dt <= 0.0f) continue;
+                // Animated: the capsules follow the pose (a partial ragdoll's limp ones excepted).
                 RagdollJointWorlds(m_Scene, rig, worlds);
                 for (size_t b = 0; b < rig.Bodies.size(); ++b)
                 {
+                    if (partial && rig.BodyLimp[b]) continue;
                     glm::mat4 frame = RigidPart(worlds[rig.BodyJoint[b]]) * rig.Offset[b];
                     bi.MoveKinematic(rig.Bodies[b], JPH::RVec3(ToJolt(glm::vec3(frame[3]))), ToJolt(glm::normalize(glm::quat_cast(glm::mat3(frame)))), dt);
                     if (b < comp->Capsules.size()) comp->Capsules[b].World = frame;
@@ -1150,6 +1190,20 @@ namespace Dimension
             {
                 frames[b] = BodyFrame(bi, rig.Bodies[b]);
                 if (b < comp->Capsules.size()) comp->Capsules[b].World = frames[b];
+            }
+            if (!comp->Limp.empty() && comp->Limp.size() == n)
+            {
+                // Partial: the object stays animated; limp joints ride their capsules, the others keep the animation.
+                glm::mat4 toModel = glm::inverse(t.World);
+                const auto* anim = reg.TryGet<AnimatorComponent>(rig.E);
+                bool posed = anim && anim->SkinMatrices.size() == n;
+                comp->Pose.resize(n);
+                for (size_t j = 0; j < n; ++j)
+                    comp->Pose[j] = comp->Limp[j] ? toModel * frames[rig.BodyOf[j]] * rig.JointInBody[j]
+                                                  : posed ? anim->SkinMatrices[j] * rig.BindGlobal[j] : rig.BindGlobal[j];
+                comp->Driving = true;
+                comp->BlendDuration = 0.0f;
+                continue;
             }
             glm::vec3 worldPos = glm::vec3(frames[0][3]) - rig.RootOffset;
             Entity parent = m_Scene.GetParent(rig.E);
@@ -1173,7 +1227,7 @@ namespace Dimension
         auto& t = reg.Get<TransformComponent>(e);
         size_t n = bindGlobal.size();
         glm::mat4 oldWorld = t.World;
-        if (comp.AlignOnGetUp && n > 0)
+        if (comp.AlignOnGetUp && comp.Limp.empty() && n > 0) // a partial ragdoll's object never left its animation
         {
             // The root joint (hips) in the limp pose and in the bind pose, and the model orientation the hips imply.
             glm::mat4 hips = oldWorld * comp.Pose[root];
@@ -1681,6 +1735,7 @@ namespace Dimension
 
     void Physics3DWorld::OnEntityDestroyed(Entity e)
     {
+        m_Impl->ReleaseOwnMesh(e); // a focused break's piece
         // Constraints must go before their bodies.
         auto& joints = m_Impl->Joints;
         for (auto it = joints.begin(); it != joints.end();)
@@ -1927,25 +1982,30 @@ namespace Dimension
         int32_t capSlot = std::max((int32_t)modelSlots.size(), (int32_t)std::max<size_t>(data->SubMeshes.size(), 1));
         for (const SubMesh& sub : data->SubMeshes) capSlot = std::max(capSlot, sub.MaterialSlot + 1);
         if (!br->InsideMaterial.IsValid()) capSlot = data->SubMeshes.empty() || data->SubMeshes[0].MaterialSlot < 0 ? 0 : data->SubMeshes[0].MaterialSlot;
+        auto& t = reg.Get<TransformComponent>(e);
+        glm::mat4 world = t.World;
         auto key = std::make_tuple((uint64_t)mr->Mesh, std::clamp(br->Pieces, 2, 64), br->Seed, capSlot);
+        // Focused on the break point: cut for this break alone. Otherwise once per mesh and settings.
+        bool focused = br->ImpactFocus > 0.0f;
+        Impl::FractureSet own;
         auto it = m_Impl->Fractures.find(key);
-        if (it == m_Impl->Fractures.end())
+        if (focused || it == m_Impl->Fractures.end())
         {
             Impl::FractureSet set;
-            for (Fracture::Piece& p : Fracture::Shatter(*data, std::get<1>(key), (uint32_t)br->Seed, capSlot))
+            Fracture::Focus focus{ glm::vec3(glm::inverse(world) * glm::vec4(point, 1.0f)), br->ImpactFocus, br->FocusRadius };
+            for (Fracture::Piece& p : Fracture::Shatter(*data, std::get<1>(key), (uint32_t)br->Seed, capSlot, focused ? &focus : nullptr))
             {
                 set.Meshes.push_back(AssetManager::RegisterRuntimeMesh(std::move(p.Mesh), modelSlots));
                 set.Centers.push_back(p.Center);
                 set.Volumes.push_back(p.Volume);
             }
-            it = m_Impl->Fractures.emplace(key, std::move(set)).first;
+            if (focused) own = std::move(set);
+            else it = m_Impl->Fractures.emplace(key, std::move(set)).first;
         }
-        const Impl::FractureSet& set = it->second;
+        const Impl::FractureSet& set = focused ? own : it->second;
         if (set.Meshes.empty()) return pieces;
 
         // The object's motion carries into its pieces, plus a push away from the break point.
-        auto& t = reg.Get<TransformComponent>(e);
-        glm::mat4 world = t.World;
         glm::vec3 scale(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])));
         glm::mat3 rot(world);
         for (int c = 0; c < 3; ++c) rot[c] /= std::max(scale[c], 1e-8f);
@@ -2000,6 +2060,7 @@ namespace Dimension
                 bi.SetLinearAndAngularVelocity(JPH::BodyID(prb.RuntimeBody), ToJolt(linear + glm::cross(angular, center - origin) + push), ToJolt(angular));
             }
             if (lifetime > 0.0f) m_Impl->DebrisList.push_back({ piece, 0.0f, lifetime, scale });
+            if (focused) m_Impl->OwnMeshes[piece.Index] = set.Meshes[i];
             pieces.push_back(piece);
         }
         // Gone now: its body leaves the world (so the pieces do not collide with it) and it is destroyed at the frame's end.

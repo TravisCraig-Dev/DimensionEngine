@@ -47,6 +47,7 @@ layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vUV;
 layout(location = 3) flat in uint vEntity;
 layout(location = 4) in vec4 vTangent;
+layout(location = 5) in float vShell; // fur shells: height 0-1
 
 #ifdef DIM_OIT
 // Weighted blended order-independent transparency (McGuire and Bavoil 2013): the shaded color, weighted by its alpha
@@ -56,13 +57,13 @@ layout(location = 0) out vec4 outAccum;
 layout(location = 1) out float outReveal;
 vec4 outColor;
 uint outEntity;
-uvec2 outSurface;
+uvec4 outSurface;
 #else
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out uint outEntity;
-// For screen-space reflections: x the world normal (octahedral, half floats), y the reflection weight (the
-// environment BRDF times its occlusion, rgb) and roughness (a), unorm8. 0 = no reflections.
-layout(location = 2) out uvec2 outSurface;
+// For screen-space reflections and GI: x the world normal (octahedral, half floats), y the reflection weight (the
+// environment BRDF times its occlusion, rgb) and roughness (a), z the diffuse color (rgb), unorm8. 0 = none.
+layout(location = 2) out uvec4 outSurface;
 #endif
 
 const float PI = 3.14159265359;
@@ -145,6 +146,12 @@ void main()
     else
         base = SampleTexture(m.Maps.x, uv) * m.BaseColor;
     if (m.Flags.x == 1u && base.a < m.Params.z) discard;
+    if (m.Flags.w == 1u)
+    {
+        // A fur shell: only the strands, darker at the roots and tinted toward the tips.
+        if (FurDiscard(m, vUV, vShell)) discard;
+        base.rgb *= mix(m.Layers[1].w, 1.0, vShell) * mix(vec3(1.0), m.Layers[1].rgb, vShell);
+    }
 
     vec3 N = normalize(vNormal);
     if (!gl_FrontFacing) N = -N;
@@ -194,7 +201,7 @@ void main()
         {
             outColor = vec4(vec3(ao), 1.0);
             outEntity = vEntity;
-            outSurface = uvec2(0u);
+            outSurface = uvec4(0u);
             return;
         }
         ambient *= ao;
@@ -204,7 +211,8 @@ void main()
     vec3 color = albedo * (1.0 - metallic) * ambient;
     vec3 envBRDF = EnvBRDFApprox(F0, roughness, NdotV);
     color += env * envBRDF; // the sky is the environment, at full strength
-    outSurface = uvec2(packHalf2x16(OctEncode(N)), packUnorm4x8(vec4(clamp(envBRDF * envOcclusion, 0.0, 1.0), roughness)));
+    outSurface = uvec4(packHalf2x16(OctEncode(N)), packUnorm4x8(vec4(clamp(envBRDF * envOcclusion, 0.0, 1.0), roughness)),
+                       packUnorm4x8(vec4(clamp(albedo * (1.0 - metallic), 0.0, 1.0), 1.0)), 0u);
 
     if (uScene.LightDirection.w > 0.5)
         color += DirectLight(N, V, normalize(-uScene.LightDirection.xyz), uScene.LightColor.rgb, albedo, metallic, roughness) *

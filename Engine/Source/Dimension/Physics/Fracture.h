@@ -17,9 +17,17 @@ namespace Dimension
             glm::vec3 Center;   // the piece's centroid in the source mesh's space
             float Volume = 0.0f;
         };
-        // Up to `count` pieces (cells with nothing of the mesh in them are left out); the same seed gives the same
-        // pieces. The cap sub-mesh uses material slot `capSlot`.
-        std::vector<Piece> Shatter(const MeshData& mesh, int count, uint32_t seed, int32_t capSlot);
+        // Focus: a share (Amount, 0-1) of the seeds clusters around a point (mesh space, e.g. where it was hit) within
+        // Radius (a fraction of the mesh's size), so it breaks into small shards there and larger pieces farther away.
+        struct Focus
+        {
+            glm::vec3 Point{ 0.0f };
+            float Amount = 0.0f;
+            float Radius = 0.25f;
+        };
+        // Up to `count` pieces (cells with nothing of the mesh in them are left out); the same seed (and focus) gives
+        // the same pieces. The cap sub-mesh uses material slot `capSlot`.
+        std::vector<Piece> Shatter(const MeshData& mesh, int count, uint32_t seed, int32_t capSlot, const Focus* focus = nullptr);
         // Volume enclosed by a closed triangle mesh (signed tetrahedra from the origin).
         float Volume(const MeshData& mesh);
     }

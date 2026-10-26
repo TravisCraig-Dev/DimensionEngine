@@ -100,6 +100,9 @@ namespace Dimension
         float CollisionDampen = 0.1f;      // fraction of the tangential velocity lost
         float LifetimeLoss = 0.0f;         // fraction of the lifetime lost per collision
         float CollisionRadius = 0.05f;
+        // GPU systems: also bounce off the 3D colliders (sphere, box and capsule colliders, characters) nearest the
+        // emitter, up to 32, wherever they are and however they move (with any Collision mode, or none).
+        bool CollideWithColliders = false;
 
         // Sub emitter: another Particle System that emits a burst at this system's particles.
         Entity SubEmitter = Entity::Null();

@@ -39,6 +39,7 @@ namespace Dimension
             PaintGrass, PaintRock, PaintSnow, PaintDirt, PaintSand, PaintMoss,
             PlaceTrees, PlaceGrass, EraseDetails,
             DigHole, FillHole,
+            Stamp,
             Count
         };
         inline bool IsPaintMode(BrushMode m) { return m >= BrushMode::PaintGrass && m <= BrushMode::PaintMoss; }
@@ -47,9 +48,23 @@ namespace Dimension
         // Starts editing: the current heights and layers (from the edits, or else the heightmap/noise and automatic
         // layers) become the editable arrays.
         void BeginEdit(TerrainComponent& terrain);
+        // Stamp brush: a grayscale image (a mountain, a crater, a mesa) laid over a square of twice the brush radius,
+        // turned by Rotation (degrees). The ground rises toward the stroke's starting height plus the image times
+        // Height, or with Carve sinks toward it minus that (only ever moving one way, so stamps can overlap).
+        struct StampSettings
+        {
+            AssetHandle Image = AssetHandle::None();
+            float Height = 5.0f; // meters at white
+            float Rotation = 0.0f;
+            bool Carve = false;
+        };
         // One brush step at a point in the object's space (XZ), radius in meters, strength 0-1, over dt seconds.
-        // Flatten moves toward `flattenHeight` (meters). Returns false when the point is off the terrain.
-        bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight);
+        // Flatten moves toward `flattenHeight` (meters), which is also the stamp's base. Returns false when the point
+        // is off the terrain (or a stamp has no readable image).
+        bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight,
+                        const StampSettings* stamp = nullptr);
+        // The stamp's value (0-1) at a point relative to the brush center, or -1 outside its square.
+        float StampValue(const StampSettings& stamp, const glm::vec2& offset, float radius);
         // Writes the editable arrays into the serialized fields (call when a stroke ends).
         void CommitEdit(TerrainComponent& terrain);
         // Drops the edits: back to the heightmap/noise and automatic layers, without holes (details stay).

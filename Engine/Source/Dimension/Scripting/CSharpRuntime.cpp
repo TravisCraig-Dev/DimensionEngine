@@ -123,6 +123,7 @@ namespace Dimension
             void (*RagdollImpulse)(void*, uint64_t, const float*, const float*); // impulse, world point
             float (*RagdollQuery)(void*, uint64_t, int);                       // 0 face up (1/0), 1 get-up progress
             int (*BreakableBreak)(void*, uint64_t, const float*);              // world point; returns the piece count
+            void (*RagdollSetPartial)(void*, uint64_t, const char*);           // bone name ("" = whole body)
         };
 
         // Background scene loads started from C#, by id.
@@ -594,6 +595,9 @@ namespace Dimension
             };
             a.RagdollImpulse = [](void* s, uint64_t e, const float* v, const float* p) {
                 Physics3DWorld::AddRagdollImpulse(S(s), Unpack(e), { v[0], v[1], v[2] }, { p[0], p[1], p[2] });
+            };
+            a.RagdollSetPartial = [](void* s, uint64_t e, const char* bone) {
+                if (auto* r = Comp<RagdollComponent>(s, e)) r->PartialRoot = bone ? bone : "";
             };
             a.BreakableBreak = [](void* s, uint64_t e, const float* p) -> int {
                 return (int)Physics3DWorld::Break(S(s), Unpack(e), { p[0], p[1], p[2] }).size();

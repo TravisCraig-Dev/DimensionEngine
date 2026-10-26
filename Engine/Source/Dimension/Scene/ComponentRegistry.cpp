@@ -145,6 +145,15 @@ namespace Dimension
             .Field("Painted Holes", &TerrainComponent::PaintedHoles).HideInInspector()
             .Field("Painted Details", &TerrainComponent::PaintedDetails).HideInInspector();
 
+        Register<FurComponent>("Fur", "Rendering")
+            .Field("Length", &FurComponent::Length).Range(0.0f, 2.0f).Speed(0.001f).Tooltip("Meters (with the object's scale)")
+            .Field("Shells", &FurComponent::Shells).Range(1, 64).Tooltip("Layers drawn: more look denser and smoother at the sides")
+            .Field("Density", &FurComponent::Density).Range(1.0f, 5000.0f).Speed(1.0f).Tooltip("Strands per UV unit")
+            .Field("Thickness", &FurComponent::Thickness).Range(0.05f, 1.0f).Speed(0.01f).Tooltip("Root width as a fraction of a strand's cell")
+            .Field("Droop", &FurComponent::Droop).Range(0.0f, 2.0f).Speed(0.01f).Tooltip("How far the tips hang down, times Length")
+            .Field("Wind Response", &FurComponent::WindResponse).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("Sway in the scene's Wind")
+            .Field("Tip Color", &FurComponent::TipColor).As(FieldType::Color4).Tooltip("Multiplies the material's color toward the tips")
+            .Field("Root Shade", &FurComponent::RootShade).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Brightness at the roots");
         Register<DecalComponent>("Decal", "Rendering")
             .Field("Texture", &DecalComponent::Texture).As(FieldType::Texture).Tooltip("None = a soft round spot")
             .Field("Color", &DecalComponent::Color).As(FieldType::Color4).Tooltip("Tint; alpha is the opacity")
@@ -277,6 +286,8 @@ namespace Dimension
             .Field("Collision Dampen", &PS::CollisionDampen).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Lifetime Loss", &PS::LifetimeLoss).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of the lifetime lost per collision")
             .Field("Collision Radius", &PS::CollisionRadius).Range(0.0f, 10.0f).Speed(0.005f)
+            .Field("Collide With Colliders", &PS::CollideWithColliders)
+                .Tooltip("GPU systems: bounce off the 32 sphere, box and capsule colliders (and characters) nearest the emitter")
             .Field("Sub Emitter", &PS::SubEmitter).Tooltip("Another Particle System that bursts at this system's particles")
             .Field("Sub Emitter Trigger", &PS::SubEmitterTrigger).Enum({ "Birth", "Collision", "Death" })
             .Field("Sub Emit Count", &PS::SubEmitCount).Range(0, 10000)
@@ -512,6 +523,9 @@ namespace Dimension
             .Field("Angular Damping", &RagdollComponent::AngularDamping).Range(0.0f, 10.0f).Speed(0.01f)
             .Field("Get Up Time", &RagdollComponent::GetUpTime).Range(0.0f, 10.0f).Speed(0.01f).Header("Getting Up")
                 .Tooltip("Seconds the animation takes to blend in from the limp pose when Simulate turns off (0 = snap)")
+            .Field("Partial Root", &RagdollComponent::PartialRoot).Header("Partial")
+                .Tooltip("A bone's name: Simulate makes only it and the bones under it go limp, while the rest animates on\n"
+                         "(empty = the whole body)")
             .Field("Align On Get Up", &RagdollComponent::AlignOnGetUp)
                 .Tooltip("When Simulate turns off, move the object under the body onto the ground and turn it along the body\n"
                          "(toward the head lying face down, toward the feet face up)");
@@ -523,7 +537,11 @@ namespace Dimension
             .Field("Inside Material", &BreakableComponent::InsideMaterial).As(FieldType::Material).Tooltip("The cut faces. None = the outside's material")
             .Field("Explosion Speed", &BreakableComponent::ExplosionSpeed).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Pieces fly apart from the break point at up to this speed")
             .Field("Debris Lifetime", &BreakableComponent::DebrisLifetime).Range(0.0f, 3600.0f).Speed(0.1f)
-                .Tooltip("Seconds before the pieces shrink away (0 = they stay)");
+                .Tooltip("Seconds before the pieces shrink away (0 = they stay)")
+            .Field("Impact Focus", &BreakableComponent::ImpactFocus).Range(0.0f, 1.0f).Speed(0.01f)
+                .Tooltip("Share of the pieces cut small around where it breaks (0 = spread evenly)")
+            .Field("Focus Radius", &BreakableComponent::FocusRadius).Range(0.01f, 1.0f).Speed(0.005f)
+                .Tooltip("How far the small pieces reach from the break point, as a fraction of the object's size");
         Register<SoftBodyComponent>("Soft Body", "Physics")
             .Field("Mass", &SoftBodyComponent::Mass).Range(0.001f, 10000.0f).Speed(0.01f)
             .Field("Pressure", &SoftBodyComponent::Pressure).Range(0.0f, 100000.0f).Speed(0.5f).Tooltip("Inflates a closed mesh like a balloon (0 = none)")

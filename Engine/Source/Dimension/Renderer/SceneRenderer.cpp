@@ -55,6 +55,7 @@
 #include "shaders/ParticleSort.comp.h"
 #include "shaders/ParticleGpu.vert.h"
 #include "shaders/ParticleTrail.vert.h"
+#include "shaders/Ssgi.frag.h"
 #include "shaders/Ssr.frag.h"
 #include "shaders/SsrApply.frag.h"
 #include "shaders/Taa.frag.h"
@@ -359,7 +360,7 @@ namespace Dimension
             uint32_t SortPadded = 0;
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
-        Pipeline Ssr, SsrApply, Taa, Fog;
+        Pipeline Ssr, SsrApply, Ssgi, Taa, Fog;
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline Decals[3]; // by DecalBlend
         Buffer QuadIndices;
@@ -555,6 +556,9 @@ namespace Dimension
         post.ColorAttachments = { { F::kHdrFormat } };
         post.DebugName = "SsrPipeline";
         r.Ssr = Pipeline(post);
+        post.FragmentSpirv = kSsgi_frag;
+        post.DebugName = "SsgiPipeline";
+        r.Ssgi = Pipeline(post);
         post.FragmentSpirv = kSsrApply_frag;
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive } };
         post.DebugName = "SsrApplyPipeline";
@@ -998,8 +1002,10 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetIds().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_ASPECT_DEPTH_BIT);
-        // Screen-space reflections need a perspective view too; without them the surface buffer is not stored.
+        // Screen-space reflections and GI need a perspective view too; without them the surface buffer is not stored.
         bool ssr = settings.SSR && settings.SSRIntensity > 0.0f && !camera.Orthographic && !options.ProbeCapture;
+        bool ssgi = settings.SSGI && settings.SSGIIntensity > 0.0f && !camera.Orthographic && !options.ProbeCapture;
+        bool surface = ssr || ssgi;
         Vk::TransitionImage(cmd, target.GetSurface().GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         if (m_Samples > 1)
         {
@@ -1046,7 +1052,7 @@ namespace Dimension
         colors[1].clearValue.color.uint32[3] = 0;
         colors[2] = colors[1];
         colors[2].imageView = target.GetSurface().GetView();
-        if (!ssr) colors[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        if (!surface) colors[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         depth.imageView = target.GetDepth().GetView();
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -1055,7 +1061,7 @@ namespace Dimension
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
         // Passes after this one read the depth: depth of field, SSR, decals, fog and TAA (and next frame's GPU particle
         // collision).
-        bool readDepth = dof || ssr || fog || taa || !m_Decals.empty() || m_ParticleDepthWanted;
+        bool readDepth = dof || surface || fog || taa || !m_Decals.empty() || m_ParticleDepthWanted;
         m_ParticleDepthKept = readDepth && !camera.Orthographic;
         m_ParticleDepthViewProj = camera.Projection * camera.View;
         m_ParticleDepthSize = glm::uvec2(target.GetWidth(), target.GetHeight());
@@ -1069,8 +1075,8 @@ namespace Dimension
             // Draw into the multisampled images and resolve at the end: color averaged, ids and depth from sample 0.
             MultisampleInto(colors[0], target.GetHdrMS(), target.GetHdr(), VK_RESOLVE_MODE_AVERAGE_BIT);
             MultisampleInto(colors[1], target.GetIdsMS(), target.GetIds(), VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
-            MultisampleInto(colors[2], target.GetSurfaceMS(), target.GetSurface(), ssr ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE);
-            if (!ssr) colors[2].resolveImageView = VK_NULL_HANDLE;
+            MultisampleInto(colors[2], target.GetSurfaceMS(), target.GetSurface(), surface ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE);
+            if (!surface) colors[2].resolveImageView = VK_NULL_HANDLE;
             MultisampleInto(depth, target.GetDepthMS(), target.GetDepth(), VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
         }
 
@@ -1137,6 +1143,9 @@ namespace Dimension
         }
         // HDR effects that need the finished opaque image: decals onto surfaces, reflections, fog, then TAA over all.
         if (!m_Decals.empty()) DrawDecals(cmd, target);
+        if (surface)
+            Vk::TransitionImage(cmd, target.GetSurface().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (ssgi) RenderIndirect(cmd, target, settings);
         if (ssr) RenderReflections(cmd, target, settings);
         if (m_Oit)
         {
@@ -1708,6 +1717,10 @@ namespace Dimension
             Ref<Material> overrideMat = AssetManager::GetMaterial(mr.Material);
             const auto& slots = AssetManager::GetMeshMaterials(mr.Mesh);
             const auto& subMeshes = mesh->GetSubMeshes();
+            // Fur: each part also gets a shell material (its own, with the strand settings), drawn below.
+            const FurComponent* fur = terrainRt || item.Vertices ? nullptr : reg.TryGet<FurComponent>(e);
+            if (fur && (fur->Length <= 0.0f || fur->Shells <= 0)) fur = nullptr;
+            std::vector<VkDeviceAddress> furMaterials;
             for (size_t si = 0; si < subMeshes.size(); ++si)
             {
                 const SubMesh& sub = subMeshes[si];
@@ -1748,6 +1761,14 @@ namespace Dimension
                 else
                     address = uploadMaterial(mat);
                 if (!address) continue;
+                if (fur)
+                {
+                    MaterialGPU shell = BuildMaterialGPU(mat);
+                    shell.Flags.w = 1u;
+                    shell.Layers[0] = glm::vec4(std::max(fur->Density, 1.0f), std::clamp(fur->Thickness, 0.01f, 1.0f), std::max(fur->Droop, 0.0f), fur->WindResponse);
+                    shell.Layers[1] = glm::vec4(glm::vec3(fur->TipColor), std::clamp(fur->RootShade, 0.0f, 1.0f));
+                    furMaterials.push_back(uploadMaterialGPU(shell));
+                }
                 bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
                 bool doubleSided = mat.DoubleSided || cloth; // cloth is seen from both sides
                 // Every part can batch: skinned instances carry their own skinning matrices, and transparent parts
@@ -1763,6 +1784,28 @@ namespace Dimension
             item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
             item.MeshRef = std::move(mesh);
             m_RenderItems.push_back(std::move(item));
+            if (fur && furMaterials.size() == m_RenderItems.back().PartCount)
+            {
+                // The shells: copies of the item, each pushed out to its height (they batch into instanced draws).
+                int shells = std::clamp(fur->Shells, 1, 64);
+                for (int k = 1; k <= shells; ++k)
+                {
+                    RenderItem shell = m_RenderItems.back();
+                    shell.Motion = glm::packHalf2x16(glm::vec2(fur->Length, -(float)k / shells));
+                    shell.Extents += glm::vec3(fur->Length * 2.0f);
+                    shell.FirstPart = (uint32_t)m_RenderParts.size();
+                    for (uint32_t p = 0; p < shell.PartCount; ++p)
+                    {
+                        RenderPart part = m_RenderParts[m_RenderItems.back().FirstPart + p];
+                        part.Material = furMaterials[p];
+                        part.Transparent = false;
+                        part.Item = (uint32_t)m_RenderItems.size();
+                        part.Batch = batchOf({ shell.MeshRef.get(), part.FirstIndex, part.IndexCount, part.Material, part.DoubleSided, shell.Probe }, true);
+                        m_RenderParts.push_back(part);
+                    }
+                    m_RenderItems.push_back(std::move(shell));
+                }
+            }
         }
 
         // Terrain details: an instance of the tree or grass mesh wherever one was scattered (they batch into
@@ -2640,6 +2683,8 @@ namespace Dimension
             glm::vec4 DepthParams;
             glm::vec4 Trail;
             glm::uvec4 TrailBuffer;
+            glm::uvec4 ColliderCount;
+            glm::vec4 Colliders[32 * 4]; // PARTICLE_COLLIDERS
         };
         constexpr VkDeviceSize kGpuParticleSize = 64;
         constexpr uint32_t kMaxGpuParticles = 1000000;
@@ -2732,6 +2777,58 @@ namespace Dimension
                                     ps.CollisionDampen);
             p.Misc = glm::vec4(ps.LifetimeLoss, worldSpace ? 1.0f : glm::length(glm::vec3(world[0])), ps.SheetRandomStart ? 1.0f : 0.0f,
                                std::max(ps.SheetCycles, 0.0f));
+            if (ps.CollideWithColliders)
+            {
+                // The 32 colliders nearest the emitter, in world space.
+                struct Shape { float Distance; glm::vec4 Rows[4]; };
+                std::vector<Shape> shapes;
+                glm::vec3 emitter(world[3]);
+                auto axes = [](const glm::mat4& m, glm::vec3 axis[3], glm::vec3& scale) {
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        scale[k] = glm::length(glm::vec3(m[k]));
+                        axis[k] = scale[k] > 1e-8f ? glm::vec3(m[k]) / scale[k] : glm::vec3(0.0f);
+                    }
+                };
+                auto& reg = scene.GetRegistry();
+                auto add = [&](const glm::vec3& center, const glm::vec4 r1, const glm::vec4 r2, const glm::vec4 r3, float type) {
+                    shapes.push_back({ glm::distance(center, emitter), { glm::vec4(center, type), r1, r2, r3 } });
+                };
+                for (auto [ce, sc, ct] : reg.ViewOf<SphereColliderComponent, TransformComponent>())
+                {
+                    if (!ct.ActiveInHierarchy || sc.IsTrigger) continue;
+                    glm::vec3 axis[3], scale;
+                    axes(ct.World, axis, scale);
+                    add(glm::vec3(ct.World * glm::vec4(sc.Offset, 1.0f)), glm::vec4(0, 0, 0, sc.Radius * std::max({ scale.x, scale.y, scale.z })), {}, {}, 0.0f);
+                }
+                for (auto [ce, bc, ct] : reg.ViewOf<BoxColliderComponent, TransformComponent>())
+                {
+                    if (!ct.ActiveInHierarchy || bc.IsTrigger) continue;
+                    glm::vec3 axis[3], scale;
+                    axes(ct.World, axis, scale);
+                    glm::vec3 half = glm::abs(bc.Size) * 0.5f * scale;
+                    add(glm::vec3(ct.World * glm::vec4(bc.Offset, 1.0f)), glm::vec4(axis[0], half.x), glm::vec4(axis[1], half.y), glm::vec4(axis[2], half.z), 1.0f);
+                }
+                auto capsule = [&](const TransformComponent& ct, const glm::vec3& offset, float radius, float height) {
+                    glm::vec3 axis[3], scale;
+                    axes(ct.World, axis, scale);
+                    float r = radius * std::max(scale.x, scale.z);
+                    add(glm::vec3(ct.World * glm::vec4(offset, 1.0f)), glm::vec4(0, 0, 0, r), glm::vec4(axis[1], std::max(height * 0.5f * scale.y - r, 0.0f)), {}, 2.0f);
+                };
+                for (auto [ce, cc, ct] : reg.ViewOf<CapsuleColliderComponent, TransformComponent>())
+                    if (ct.ActiveInHierarchy && !cc.IsTrigger) capsule(ct, cc.Offset, cc.Radius, cc.Height);
+                for (auto [ce, ch, ct] : reg.ViewOf<CharacterControllerComponent, TransformComponent>())
+                    if (ct.ActiveInHierarchy) capsule(ct, ch.Center, ch.Radius, ch.Height);
+                if (shapes.size() > 32)
+                    std::partial_sort(shapes.begin(), shapes.begin() + 32, shapes.end(), [](const Shape& a, const Shape& b) { return a.Distance < b.Distance; });
+                uint32_t count = (uint32_t)std::min<size_t>(shapes.size(), 32);
+                for (uint32_t k = 0; k < count; ++k)
+                    for (int row = 0; row < 4; ++row) p.Colliders[k * 4 + row] = shapes[k].Rows[row];
+                p.ColliderCount = glm::uvec4(count, 0u, 0u, 0u);
+                p.Collision.z = ps.Bounce;
+                p.Collision.w = ps.CollisionDampen;
+                p.DepthParams.y = ps.CollisionRadius;
+            }
             if (trails)
             {
                 p.Trail = glm::vec4(1.0f, std::max(ps.TrailLifetime, 1e-3f) / kGpuTrailPoints, ps.TrailWidth, 0.0f);
@@ -2958,6 +3055,26 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetHdr().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
+    void SceneRenderer::RenderIndirect(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings)
+    {
+        // Trace bounce light into the indirect image (reading the HDR image), then add it onto the HDR image through
+        // the reflections' blur.
+        auto& res = Renderer::Get();
+        VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
+        struct
+        {
+            uint32_t Hdr, Depth, Surface, Rays;
+            glm::vec2 Texel;
+            float MaxDistance, Thickness, Intensity;
+            uint32_t Steps;
+        } trace{ target.GetHdrBindless(), target.GetDepthBindless(), target.GetSurfaceBindless(), (uint32_t)std::clamp(settings.SSGIRays, 1, 16),
+                 glm::vec2(1.0f / extent.width, 1.0f / extent.height), std::max(settings.SSGIDistance, 0.05f), std::max(settings.SSGIThickness, 0.001f),
+                 settings.SSGIIntensity, 16u };
+        FullscreenPass(cmd, target.GetIndirect(), false, res.Ssgi, &trace, sizeof(trace));
+        struct { uint32_t Reflections, Pad; glm::vec2 Texel; } apply{ target.GetIndirectBindless(), 0u, trace.Texel };
+        FullscreenPass(cmd, target.GetHdr(), true, res.SsrApply, &apply, sizeof(apply));
+    }
+
     void SceneRenderer::RenderReflections(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings)
     {
         auto& device = RenderDevice::Get();
@@ -2989,7 +3106,6 @@ namespace Dimension
         };
 
         // Trace into the reflections image (reading the HDR image), then add it onto the HDR image.
-        Vk::TransitionImage(cmd, target.GetSurface().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         struct
         {
             uint32_t Hdr, Depth, Surface, Steps;

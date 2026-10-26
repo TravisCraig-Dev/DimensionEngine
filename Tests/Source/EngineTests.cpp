@@ -1350,6 +1350,20 @@ namespace
         bool same = again.size() == pieces.size();
         for (size_t i = 0; same && i < pieces.size(); ++i) same = Near(again[i].Volume, pieces[i].Volume, 1e-6f) && again[i].Mesh.Vertices.size() == pieces[i].Mesh.Vertices.size();
         CHECK(same && Fracture::Shatter(cube, 8, 4, 1).size() > 0);
+        // Focused on a corner: the pieces there are smaller than the rest, and they still fill the cube.
+        {
+            Fracture::Focus focus{ glm::vec3(0.5f), 0.6f, 0.3f };
+            auto shards = Fracture::Shatter(cube, 20, 7, 1, &focus);
+            float total = 0.0f, nearSum = 0.0f, farSum = 0.0f;
+            int nearCount = 0, farCount = 0;
+            for (auto& p : shards)
+            {
+                total += p.Volume;
+                if (glm::distance(p.Center, glm::vec3(0.5f)) < 0.45f) { nearSum += p.Volume; ++nearCount; }
+                else { farSum += p.Volume; ++farCount; }
+            }
+            CHECK(Near(total, 1.0f, 1e-3f) && nearCount >= 4 && farCount >= 2 && nearSum / nearCount < 0.5f * farSum / farCount);
+        }
         // A rounder mesh too.
         MeshData sphere = MeshData::Sphere(24, 12);
         float sphereSum = 0.0f;
@@ -1411,9 +1425,21 @@ namespace
         float meanX = 0.0f;
         for (Entity p : wallPieces) meanX += rr.Get<TransformComponent>(p).Position.x / wallPieces.size();
         CHECK(!rt->IsValid(wall) && meanX < 6.0f);
-        // Debris goes after its lifetime (the crate's 1.5 s; the wall's stay 8 s).
+        // A focused break cuts its own pieces, whose meshes go when the pieces do.
+        Entity vase = rt->CreateEntity("Vase");
+        rr.Get<TransformComponent>(vase).Position = { -6, 1, 0 };
+        rr.Emplace<MeshRendererComponent>(vase).Mesh = AssetManager::kCube;
+        auto& vb = rr.Emplace<BreakableComponent>(vase);
+        vb.ImpactFocus = 0.5f;
+        vb.DebrisLifetime = 1.0f;
+        rt->UpdateTransforms();
+        std::vector<Entity> shards = Physics3DWorld::Break(*rt, vase, { -6.5f, 1.5f, 0.5f });
+        CHECK(shards.size() >= 3);
+        AssetHandle shardMesh = shards.empty() ? AssetHandle::None() : rr.Get<MeshRendererComponent>(shards[0]).Mesh;
+        CHECK(shardMesh != pieceMesh && AssetManager::GetMeshData(shardMesh) != nullptr);
+        // Debris goes after its lifetime (the crate's 1.5 s, the vase's 1 s; the wall's stay 8 s).
         for (int i = 0; i < 100; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
-        CHECK(countPieces().first == 0);
+        CHECK(countPieces().first == 0 && AssetManager::GetMeshData(shardMesh) == nullptr);
         bool wallStays = true;
         for (Entity p : wallPieces) wallStays &= rt->IsValid(p);
         CHECK(wallStays);
@@ -1509,7 +1535,129 @@ namespace
         glm::vec3 bindRoot = glm::vec3(tt.World * glm::inverse(data->SkeletonData->Joints[rootJoint].InverseBind)[3]);
         CHECK(Near(bindRoot.x, limp[rootJoint][3].x, 0.01f) && Near(bindRoot.z, limp[rootJoint][3].z, 0.01f));
         rt->OnRuntimeStop();
+
+        // Partial: only the bones from the middle of the chain up go limp; the base keeps its (bind) pose and the
+        // object stays put, while the knocked top falls over. Turning it off neither moves nor turns the object.
+        {
+            const Skeleton& skeleton = *data->SkeletonData;
+            int mid = skeleton.Order[skeleton.Order.size() / 2];
+            Scene ps("Partial");
+            auto& preg = ps.GetRegistry();
+            Entity pfloor = ps.CreateEntity("Floor");
+            preg.Get<TransformComponent>(pfloor).Position = { 0, -0.5f, 0 };
+            preg.Emplace<BoxColliderComponent>(pfloor).Size = { 40, 1, 40 };
+            Entity arm = ps.CreateEntity("Arm");
+            preg.Get<TransformComponent>(arm).Position = { 0, 0.3f, 0 };
+            preg.Emplace<MeshRendererComponent>(arm).Mesh = model;
+            auto& prd = preg.Emplace<RagdollComponent>(arm);
+            prd.Mass = 20.0f;
+            prd.MinBoneLength = 0.05f;
+            prd.PartialRoot = "SomePrefix:" + skeleton.Joints[mid].Name; // prefixes are ignored, as in retargeting
+            ps.UpdateTransforms();
+            auto prt = ps.Clone();
+            prt->OnRuntimeStart();
+            auto& pr = prt->GetRegistry().Get<RagdollComponent>(arm);
+            std::vector<glm::mat4> standingCaps;
+            for (auto& c : pr.Capsules) standingCaps.push_back(c.World);
+            pr.Simulate = true;
+            float top = 0.0f;
+            for (auto& c : pr.Capsules) top = std::max(top, c.World[3].y);
+            Physics3DWorld::AddRagdollImpulse(*prt, arm, glm::vec3(20.0f, 0.0f, 0.0f), glm::vec3(0.0f, top, 0.0f));
+            for (int i = 0; i < 120; ++i) prt->OnUpdateRuntime(1.0f / 60.0f);
+            size_t limpCount = std::count(pr.Limp.begin(), pr.Limp.end(), (uint8_t)1);
+            CHECK(pr.Driving && pr.Limp.size() == joints && limpCount > 0 && limpCount < joints && pr.Limp[mid] == 1);
+            bool baseStill = true, topMoved = false;
+            for (size_t b = 0; b < pr.Capsules.size(); ++b)
+            {
+                float moved = glm::distance(glm::vec3(pr.Capsules[b].World[3]), glm::vec3(standingCaps[b][3]));
+                if (standingCaps[b][3].y < standingCaps[0][3].y + 0.01f) baseStill &= moved < 0.01f; // the root's capsule
+                topMoved |= moved > 0.3f;
+            }
+            float newTop = 0.0f;
+            for (auto& c : pr.Capsules) newTop = std::max(newTop, c.World[3].y);
+            auto& at = prt->GetRegistry().Get<TransformComponent>(arm);
+            CHECK(baseStill && topMoved && newTop < top - 0.2f && Near(at.Position.y, 0.3f, 1e-4f) && Near(at.Position.x, 0.0f, 1e-4f));
+            // Unlimped joints keep the (bind) pose in the skin.
+            bool baseBind = true;
+            for (size_t j = 0; j < joints; ++j)
+                if (!pr.Limp[j]) baseBind &= glm::distance(glm::vec3(pr.Pose[j][3]), glm::vec3(glm::inverse(skeleton.Joints[j].InverseBind)[3])) < 1e-3f;
+            CHECK(baseBind);
+            pr.Simulate = false;
+            prt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(!pr.Driving && pr.Limp.empty() && pr.BlendFrom.size() == joints && Near(at.Position.y, 0.3f, 1e-4f) && Near(at.Rotation.y, 0.0f, 1e-5f));
+            prt->OnRuntimeStop();
+        }
         rt.reset();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
+    // An uncompressed 8-bit grayscale TGA (type 3), rows bottom to top.
+    void WriteGrayTga(const fs::path& path, int w, int h, const std::function<uint8_t(int x, int y)>& pixel)
+    {
+        std::ofstream out(path, std::ios::binary);
+        uint8_t header[18] = {};
+        header[2] = 3;
+        header[12] = (uint8_t)(w & 255); header[13] = (uint8_t)(w >> 8);
+        header[14] = (uint8_t)(h & 255); header[15] = (uint8_t)(h >> 8);
+        header[16] = 8;
+        out.write((const char*)header, 18);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+            {
+                uint8_t v = pixel(x, y);
+                out.write((const char*)&v, 1);
+            }
+    }
+
+    void TestTerrainStamp()
+    {
+        // A stamp lays its image over the brush's square: a cone rises at the center to base + Height, nothing changes
+        // outside the square, stamping again does not raise it further, carving digs the same shape down, and a turned
+        // stamp of a one-sided ramp lifts the other side.
+        fs::path assets = fs::temp_directory_path() / "dimension_terrain_stamp" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        WriteGrayTga(assets / "Cone.tga", 64, 64, [](int x, int y) {
+            float d = glm::length(glm::vec2(x - 31.5f, y - 31.5f)) / 32.0f;
+            return (uint8_t)std::clamp((int)std::lround((1.0f - d) * 255.0f), 0, 255);
+        });
+        WriteGrayTga(assets / "Ramp.tga", 64, 64, [](int x, int) { return (uint8_t)(x * 255 / 63); });
+        AssetManager::Init(assets);
+        TerrainComponent t;
+        t.Size = { 64.0f, 64.0f };
+        t.Height = 20.0f;
+        t.Resolution = 64;
+        t.FlatCenter = 1.0f; // all flat at Flat Height
+        t.FlatHeight = 0.25f;
+        float base = 5.0f;
+        Terrain::StampSettings stamp;
+        stamp.Image = AssetManager::GetHandle(assets / "Cone.tga");
+        stamp.Height = 8.0f;
+        CHECK(stamp.Image.IsValid() && Near(Terrain::StampValue(stamp, { 0.0f, 0.0f }, 10.0f), 1.0f, 0.03f) &&
+              Terrain::StampValue(stamp, { 11.0f, 0.0f }, 10.0f) < 0.0f);
+        Terrain::BeginEdit(t);
+        CHECK(!Terrain::ApplyBrush(t, Terrain::BrushMode::Stamp, { 0, 0 }, 10.0f, 1.0f, 0.1f, base)); // no stamp settings
+        for (int i = 0; i < 30; ++i) CHECK(Terrain::ApplyBrush(t, Terrain::BrushMode::Stamp, { 0.0f, 0.0f }, 10.0f, 1.0f, 0.1f, base, &stamp));
+        auto at = [&](float x, float z) { return Terrain::HeightAt(t, t.EditHeights, x, z); };
+        CHECK(Near(at(0, 0), base + 8.0f, 0.8f) && Near(at(5, 0), base + 4.0f, 0.5f) && Near(at(20, 0), base, 1e-3f));
+        float peak = at(0, 0);
+        for (int i = 0; i < 10; ++i) Terrain::ApplyBrush(t, Terrain::BrushMode::Stamp, { 0.0f, 0.0f }, 10.0f, 1.0f, 0.1f, base, &stamp);
+        CHECK(Near(at(0, 0), peak, 1e-3f)); // one way: already there
+        stamp.Carve = true;
+        stamp.Height = 4.0f; // (the ground stays within 0 and Height)
+        for (int i = 0; i < 30; ++i) Terrain::ApplyBrush(t, Terrain::BrushMode::Stamp, { -20.0f, -20.0f }, 8.0f, 1.0f, 0.1f, base, &stamp);
+        CHECK(Near(at(-20, -20), base - 4.0f, 0.6f) && Near(at(0, 0), peak, 1e-3f));
+        // The ramp turned 180 degrees: high on -X instead of +X.
+        Terrain::StampSettings ramp;
+        ramp.Image = AssetManager::GetHandle(assets / "Ramp.tga");
+        ramp.Height = 6.0f;
+        ramp.Rotation = 180.0f;
+        for (int i = 0; i < 30; ++i) Terrain::ApplyBrush(t, Terrain::BrushMode::Stamp, { 20.0f, 20.0f }, 8.0f, 1.0f, 0.1f, base, &ramp);
+        CHECK(at(14.0f, 20.0f) > base + 4.5f && at(26.0f, 20.0f) < base + 1.5f);
+        Terrain::CommitEdit(t);
+        CHECK(Near(Terrain::HeightAt(t, Terrain::BuildHeights(t), 0, 0), peak, 0.01f));
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path(), ec);
     }
@@ -6348,6 +6496,7 @@ int main(int argc, char** argv)
     Run("Animation retargeting", TestRetargeting);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
+    Run("Terrain stamp", TestTerrainStamp);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

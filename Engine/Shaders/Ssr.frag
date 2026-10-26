@@ -44,7 +44,7 @@ float Hash(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.0
 void main()
 {
     outColor = vec4(0.0);
-    uvec2 surface = texelFetch(uUintTextures[nonuniformEXT(pc.Surface)], ivec2(gl_FragCoord.xy), 0).xy;
+    uvec2 surface = texelFetch(uUintTextures[nonuniformEXT(pc.Surface)], ivec2(gl_FragCoord.xy), 0).xy; // (z: diffuse color, for GI)
     if (surface.y == 0u) return; // sky, sprites, transparent or unlit pixels
     vec4 weightRough = unpackUnorm4x8(surface.y);
     float roughness = weightRough.a;
