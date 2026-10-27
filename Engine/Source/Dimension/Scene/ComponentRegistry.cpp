@@ -342,6 +342,14 @@ namespace Dimension
             .Field("Trails", &PS::Trails)
             .Field("Trail Lifetime", &PS::TrailLifetime).Range(0.01f, 10.0f).Speed(0.01f)
             .Field("Trail Width", &PS::TrailWidth).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Multiplier of the particle size")
+            .Field("Lights", &PS::Lights).Tooltip("Some particles light the scene (CPU systems)")
+            .Field("Light Ratio", &PS::LightRatio).Range(0.0f, 1.0f).Speed(0.005f).Tooltip("The fraction of particles carrying a light")
+            .Field("Max Lights", &PS::MaxLights).Range(0, 256).Tooltip("At most this many at once (per system)")
+            .Field("Light Color", &PS::LightColor).As(FieldType::Color4)
+            .Field("Use Particle Color", &PS::UseParticleColor).Tooltip("Multiply by the particle's color")
+            .Field("Light Intensity", &PS::LightIntensity).Range(0.0f, 1000.0f).Speed(0.05f).Tooltip("Times the particle's alpha")
+            .Field("Light Range", &PS::LightRange).Range(0.01f, 1000.0f).Speed(0.02f).Tooltip("Meters")
+            .Field("Size Affects Range", &PS::SizeAffectsRange).Tooltip("Multiply the range by the particle's size")
             .Field("Texture", &PS::Texture).As(FieldType::Texture)
             .Field("Blend", &PS::Blend).Enum({ "Alpha", "Additive" })
             .Field("Sorting Order", &PS::SortingOrder);
@@ -599,7 +607,10 @@ namespace Dimension
             .Field("Iterations", &RopeComponent::Iterations).Range(1, 64)
             .Field("Pin Start", &RopeComponent::PinStart).Tooltip("The start holds on to this object (off: the whole rope falls)")
             .Field("Attach To", &RopeComponent::AttachTo).Tooltip("The end holds on to this object (a dynamic body feels the pull)")
-            .Field("Attach Offset", &RopeComponent::AttachOffset).Speed(0.01f).Tooltip("Where on Attach To, in its space");
+            .Field("Attach Offset", &RopeComponent::AttachOffset).Speed(0.01f).Tooltip("Where on Attach To, in its space")
+            .Field("Break Force", &RopeComponent::BreakForce).Range(0.0f, 1e8f).Speed(10.0f).Tooltip("Newtons of load that snap it (0 = never)")
+            .Field("Break Stretch", &RopeComponent::BreakStretch).Range(0.0f, 10.0f).Speed(0.01f)
+                .Tooltip("Snaps when pulled this fraction longer than Length (0 = never)");
         Register<BreakableComponent>("Breakable", "Physics")
             .Field("Pieces", &BreakableComponent::Pieces).Range(2, 64).Tooltip("Voronoi cells cut from the mesh (fewer where a cell misses it)")
             .Field("Seed", &BreakableComponent::Seed).Tooltip("The same seed breaks the same way")
@@ -642,7 +653,11 @@ namespace Dimension
             .Field("Wave Direction", &WaterVolumeComponent::WaveDirection).Range(-360.0f, 360.0f).Speed(0.5f).Tooltip("Degrees around Y from +X")
             .Field("Steepness", &WaterVolumeComponent::Steepness).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("0 = round waves, 1 = sharp crests")
             .Field("Surface Resolution", &WaterVolumeComponent::SurfaceResolution).Range(2, 256)
-                .Tooltip("Quads per side of the drawn surface (with a Mesh Renderer for its material)");
+                .Tooltip("Quads per side of the drawn surface (with a Mesh Renderer for its material)")
+            .Field("Underwater Color", &WaterVolumeComponent::UnderwaterColor).As(FieldType::Color4).Tooltip("The murk seen through the water")
+            .Field("Underwater Fog", &WaterVolumeComponent::UnderwaterFog).Range(0.0f, 10.0f).Speed(0.005f).Tooltip("How thick the murk is, per meter (0 = clear)")
+            .Field("Caustics", &WaterVolumeComponent::Caustics).Range(0.0f, 4.0f).Speed(0.01f).Tooltip("Rippling sunlight on surfaces under water (0 = none)")
+            .Field("Caustics Scale", &WaterVolumeComponent::CausticsScale).Range(0.1f, 50.0f).Speed(0.01f).Tooltip("Meters across the caustic pattern's cells");
         Register<AudioReverbZoneComponent>("Audio Reverb Zone", "Audio")
             .Field("Min Distance", &AudioReverbZoneComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.05f)
                 .Tooltip("Full reverb while the listener is this close")

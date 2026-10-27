@@ -48,6 +48,8 @@ namespace Dimension::Rope
         out.resize(count * (kSides + 1));
         if (count < 2) return;
         float radius = std::max(rope.Radius, 0.001f);
+        // A snapped rope: the rings either side of the break shrink to points, so the gap between them vanishes and
+        // the two ends taper off (frayed).
         // A frame carried along the rope (parallel transport), so the tube does not twist where it bends.
         glm::vec3 tangent = glm::normalize(points[1] - points[0] + glm::vec3(0.0f, 1e-7f, 0.0f));
         glm::vec3 normal = glm::normalize(glm::cross(tangent, std::abs(tangent.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0)));
@@ -69,7 +71,8 @@ namespace Dimension::Rope
                 float a = glm::two_pi<float>() * s / kSides;
                 glm::vec3 n = normal * std::cos(a) + binormal * std::sin(a);
                 Vertex& v = out[i * (kSides + 1) + s];
-                v.Position = points[i] + n * radius;
+                bool frayed = rope.BrokenAt >= 0 && (i == (size_t)rope.BrokenAt || i == (size_t)rope.BrokenAt + 1);
+                v.Position = points[i] + n * (frayed ? 0.0f : radius);
                 v.Normal = n;
                 v.UV = { (float)s / kSides, along };
                 v.Tangent = glm::vec4(-normal * std::sin(a) + binormal * std::cos(a), 1.0f);

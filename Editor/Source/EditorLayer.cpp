@@ -29,6 +29,7 @@
 #include <ImGuizmo.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <optional>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -570,15 +571,39 @@ namespace Editor
         }
     }
 
-    // Line Renderer points: with a line selected, its points show as handles in the Scene view. Clicking one picks
-    // it and a move gizmo edits that point (undoable); clicking elsewhere returns to the object's own gizmo.
-    // Shift-click on a segment inserts a point there; Delete removes the picked point (a line keeps at least two).
+    namespace
+    {
+        // The points edited with handles in the Scene view: a Line Renderer's, or the curve of a Terrain Path or a
+        // Path Placer (the object's space).
+        struct EditablePoints
+        {
+            std::vector<glm::vec3>& Positions;
+            bool UseWorldSpace, Loop;
+            const char* Component;
+            const char* Field;
+        };
+        std::optional<EditablePoints> EditablePointsOf(Dimension::Scene& scene, Dimension::Entity e)
+        {
+            auto& reg = scene.GetRegistry();
+            if (auto* line = reg.TryGet<Dimension::LineRendererComponent>(e))
+                return EditablePoints{ line->Positions, line->UseWorldSpace, line->Loop, "Line Renderer", "Positions" };
+            if (auto* path = reg.TryGet<Dimension::TerrainPathComponent>(e)) return EditablePoints{ path->Points, false, false, "Terrain Path", "Points" };
+            if (auto* placer = reg.TryGet<Dimension::PathPlacerComponent>(e))
+                return EditablePoints{ placer->Points, false, placer->Closed, "Path Placer", "Points" };
+            return std::nullopt;
+        }
+    }
+
+    // Line Renderer, Terrain Path and Path Placer points: with one selected, its points show as handles in the Scene
+    // view. Clicking one picks it and a move gizmo edits that point (undoable); clicking elsewhere returns to the
+    // object's own gizmo. Shift-click on a segment inserts a point there; Delete removes the picked point (a line
+    // keeps at least two).
     // Returns true while the mouse is over a handle, a segment being inserted on, or the point gizmo (so the click
     // does not re-select).
     bool EditorLayer::UpdateLinePointEditing(ImVec2 origin, ImVec2 size)
     {
         Scene& scene = m_Ctx.ActiveScene();
-        auto* line = m_Ctx.HasValidSelection() ? scene.GetRegistry().TryGet<LineRendererComponent>(m_Ctx.Selected) : nullptr;
+        auto line = m_Ctx.HasValidSelection() ? EditablePointsOf(scene, m_Ctx.Selected) : std::nullopt;
         if (!line || m_Ctx.Selection.size() > 1 || m_Camera.IsControlling())
         {
             if (!line) m_LinePoint = -1;
@@ -674,7 +699,7 @@ namespace Editor
             {
                 glm::vec3 world(m[3]);
                 line->Positions[(size_t)m_LinePoint] = line->UseWorldSpace ? world : glm::vec3(glm::inverse(t.World) * glm::vec4(world, 1.0f));
-                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, "Line Renderer", "Positions");
+                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->Field);
                 m_Ctx.MarkDirty();
             }
             overGizmo |= ImGuizmo::IsUsing();
@@ -688,7 +713,7 @@ namespace Editor
                 m_Ctx.RecordUndo();
                 glm::vec3 p = line->UseWorldSpace ? insertWorld : glm::vec3(glm::inverse(t.World) * glm::vec4(insertWorld, 1.0f));
                 line->Positions.insert(line->Positions.begin() + insertAfter + 1, p);
-                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, "Line Renderer", "Positions");
+                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->Field);
                 m_Ctx.MarkDirty();
                 m_LinePoint = insertAfter + 1;
                 return true;
@@ -707,13 +732,13 @@ namespace Editor
     bool EditorLayer::DeleteLinePoint()
     {
         Scene& scene = m_Ctx.ActiveScene();
-        auto* line = m_LinePoint >= 0 && m_Ctx.HasValidSelection() ? scene.GetRegistry().TryGet<LineRendererComponent>(m_Ctx.Selected) : nullptr;
+        auto line = m_LinePoint >= 0 && m_Ctx.HasValidSelection() ? EditablePointsOf(scene, m_Ctx.Selected) : std::nullopt;
         if (!line || m_LinePoint >= (int)line->Positions.size()) return false;
         if (line->Positions.size() > 2)
         {
             m_Ctx.RecordUndo();
             line->Positions.erase(line->Positions.begin() + m_LinePoint);
-            Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, "Line Renderer", "Positions");
+            Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->Field);
             m_Ctx.MarkDirty();
         }
         m_LinePoint = std::min(m_LinePoint, (int)line->Positions.size() - 1);

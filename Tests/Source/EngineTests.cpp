@@ -1635,6 +1635,174 @@ namespace
         fs::remove_all(assets.parent_path(), ec);
     }
 
+    void TestParticleLights()
+    {
+        // About Light Ratio of the particles carry a light, the same ones as they move and age; none at 0, all at 1.
+        ParticleSystemComponent ps;
+        ps.LightRatio = 0.3f;
+        std::vector<Particle> particles(4000);
+        uint32_t state = 12345u;
+        auto rnd = [&] { state = state * 1664525u + 1013904223u; return (state >> 8) / 16777216.0f; };
+        int carrying = 0;
+        for (auto& q : particles)
+        {
+            q.Lifetime = 1.5f + rnd();
+            q.AngularVelocity = glm::radians(-45.0f + 90.0f * rnd());
+            carrying += ps.CarriesLight(q);
+        }
+        CHECK(carrying > 1000 && carrying < 1400);
+        bool stable = true;
+        for (auto& q : particles)
+        {
+            bool before = ps.CarriesLight(q);
+            q.Age = 0.7f;
+            q.Position = glm::vec3(rnd(), rnd(), rnd());
+            q.Color.a = 0.5f;
+            stable &= ps.CarriesLight(q) == before;
+        }
+        CHECK(stable);
+        ps.LightRatio = 0.0f;
+        CHECK(!ps.CarriesLight(particles[0]) && !ps.CarriesLight(particles[1]));
+        ps.LightRatio = 1.0f;
+        CHECK(ps.CarriesLight(particles[0]) && ps.CarriesLight(particles[1]));
+    }
+
+    void TestSoftBuoyancy()
+    {
+        // A loose sheet of cloth and a soft ball dropped into water float at the surface; in water too thin to hold
+        // them (Buoyancy below 1) they sink to the bottom.
+        fs::path assets = fs::temp_directory_path() / "dimension_soft_buoyancy" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        auto run = [&](float buoyancy) {
+            Scene scene("Pond");
+            auto& reg = scene.GetRegistry();
+            Entity bed = scene.CreateEntity("Bed");
+            reg.Get<TransformComponent>(bed).Position = { 0, -4.5f, 0 };
+            reg.Emplace<BoxColliderComponent>(bed).Size = { 30, 1, 30 };
+            Entity pond = scene.CreateEntity("Pond");
+            reg.Get<TransformComponent>(pond).Position = { 0, -2, 0 };
+            auto& water = reg.Emplace<WaterVolumeComponent>(pond);
+            water.Size = { 20, 4, 20 }; // the surface at y = 0
+            water.Buoyancy = buoyancy;
+            water.LinearDrag = 1.0f;
+            Entity sheet = scene.CreateEntity("Sheet");
+            reg.Get<TransformComponent>(sheet).Position = { -3, 1, 0 };
+            reg.Get<TransformComponent>(sheet).Rotation = { -glm::half_pi<float>(), 0, 0 }; // lying flat
+            auto& c = reg.Emplace<ClothComponent>(sheet);
+            c.Pin = ClothPin::None;
+            c.Resolution = 10;
+            reg.Emplace<MeshRendererComponent>(sheet);
+            Entity ball = scene.CreateEntity("Ball");
+            reg.Get<TransformComponent>(ball).Position = { 3, 1.5f, 0 };
+            reg.Emplace<MeshRendererComponent>(ball).Mesh = AssetManager::kSphere;
+            reg.Emplace<SoftBodyComponent>(ball);
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 300; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            auto& rr = rt->GetRegistry();
+            auto meanY = [&](Entity e, const std::vector<glm::vec3>& points) {
+                float sum = 0.0f;
+                for (const glm::vec3& q : points) sum += glm::vec3(rr.Get<TransformComponent>(e).World * glm::vec4(q, 1.0f)).y;
+                return points.empty() ? 1e9f : sum / points.size();
+            };
+            glm::vec2 out(meanY(sheet, rr.Get<ClothComponent>(sheet).SimulatedPositions), meanY(ball, rr.Get<SoftBodyComponent>(ball).SimulatedPositions));
+            rt->OnRuntimeStop();
+            return out;
+        };
+        glm::vec2 floating = run(1.8f);
+        CHECK(floating.x > -0.3f && floating.x < 0.3f);  // the sheet lies on the surface
+        CHECK(floating.y > -0.6f && floating.y < 0.6f);  // the ball bobs in it
+        glm::vec2 sunk = run(0.3f);
+        CHECK(sunk.x < -3.0f && sunk.y < -3.0f);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestRopeSnap()
+    {
+        // A lamp hanging on a rope loads it with its weight; over Break Force the rope snaps and the lamp falls.
+        auto lampScene = [&](float breakForce) {
+            auto scene = std::make_unique<Scene>("Lamp");
+            auto& reg = scene->GetRegistry();
+            Entity floor = scene->CreateEntity("Floor");
+            reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+            reg.Emplace<BoxColliderComponent>(floor).Size = { 40, 1, 40 };
+            Entity post = scene->CreateEntity("Post");
+            reg.Get<TransformComponent>(post).Position = { 0, 5, 0 };
+            Entity lamp = scene->CreateEntity("Lamp");
+            reg.Get<TransformComponent>(lamp).Position = { 0, 2.05f, 0 };
+            reg.Emplace<SphereColliderComponent>(lamp).Radius = 0.2f;
+            reg.Emplace<RigidbodyComponent>(lamp).Mass = 5.0f;
+            auto& cord = reg.Emplace<RopeComponent>(post);
+            cord.Length = 3.0f;
+            cord.AttachTo = lamp;
+            cord.BreakForce = breakForce;
+            scene->UpdateTransforms();
+            return std::make_tuple(std::move(scene), post, lamp);
+        };
+        {
+            auto [scene, post, lamp] = lampScene(0.0f);
+            auto rt = scene->Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 180; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            auto& rr = rt->GetRegistry();
+            float tension = rr.Get<RopeComponent>(post).Tension;
+            CHECK(tension > 30.0f && tension < 90.0f); // about its weight, 49 N
+            CHECK(rr.Get<RopeComponent>(post).BrokenAt < 0 && rr.Get<TransformComponent>(lamp).Position.y > 1.5f);
+            rt->OnRuntimeStop();
+        }
+        {
+            auto [scene, post, lamp] = lampScene(25.0f);
+            auto rt = scene->Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 180; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            auto& rr = rt->GetRegistry();
+            CHECK(rr.Get<RopeComponent>(post).BrokenAt >= 0 && rr.Get<TransformComponent>(lamp).Position.y < 0.5f);
+            rt->OnRuntimeStop();
+        }
+
+        // A rope tied between two objects snaps when they pull it more than Break Stretch longer than it is; the pieces
+        // hang from either end, and the tube closes up at the break.
+        Scene scene("Line");
+        auto& reg = scene.GetRegistry();
+        Entity a = scene.CreateEntity("A"), b = scene.CreateEntity("B");
+        reg.Get<TransformComponent>(a).Position = { 0, 5, 0 };
+        reg.Get<TransformComponent>(b).Position = { 2.9f, 5, 0 };
+        auto& line = reg.Emplace<RopeComponent>(a);
+        line.Length = 3.0f;
+        line.Segments = 12;
+        line.AttachTo = b;
+        line.BreakStretch = 0.2f;
+        line.Damping = 3.0f; // the pieces settle quickly
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        for (int i = 0; i < 30; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(rr.Get<RopeComponent>(a).BrokenAt < 0);
+        for (int i = 0; i < 60 && rr.Get<RopeComponent>(a).BrokenAt < 0; ++i)
+        {
+            rr.Get<TransformComponent>(b).Position.x += 0.05f; // 3 m/s apart
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+        }
+        const auto& snapped = rr.Get<RopeComponent>(a);
+        CHECK(snapped.BrokenAt >= 0 && rr.Get<TransformComponent>(b).Position.x < 3.9f);
+        for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        const auto& pts = snapped.SimulatedPoints;
+        int k = snapped.BrokenAt;
+        CHECK(pts.size() == 13 && k >= 3 && k <= 8 && glm::length(pts[0]) < 0.05f && glm::distance(pts[k], pts[k + 1]) > 1.0f &&
+              pts[k].y < -0.5f && pts[k + 1].y < -0.5f); // both pieces hang down, broken near the middle
+        std::vector<Vertex> tube;
+        Rope::BuildTube(snapped, pts, tube);
+        CHECK(tube.size() == 13u * (Rope::kSides + 1) && glm::distance(tube[k * (Rope::kSides + 1) + 2].Position, pts[k]) < 1e-5f &&
+              glm::distance(tube[0 * (Rope::kSides + 1) + 2].Position, pts[0]) > 0.01f);
+        rt->OnRuntimeStop();
+    }
+
     void TestRope()
     {
         // The starting shapes: straight down, or sagging between two ends to exactly Length.
@@ -7161,6 +7329,9 @@ int main(int argc, char** argv)
     Run("Terrain erosion", TestTerrainErosion);
     Run("Terrain path", TestTerrainPath);
     Run("Path placer", TestPathPlacer);
+    Run("Rope snap", TestRopeSnap);
+    Run("Particle lights", TestParticleLights);
+    Run("Soft buoyancy", TestSoftBuoyancy);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

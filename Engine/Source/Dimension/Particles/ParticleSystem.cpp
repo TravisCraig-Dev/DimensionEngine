@@ -6,6 +6,7 @@
 #include "Dimension/Audio/AudioEngine.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
@@ -300,6 +301,20 @@ namespace Dimension
                 return true;
             });
         }
+    }
+
+    bool ParticleSystemComponent::CarriesLight(const Particle& p) const
+    {
+        if (LightRatio >= 1.0f) return true;
+        if (LightRatio <= 0.0f) return false;
+        uint32_t a, b;
+        std::memcpy(&a, &p.Lifetime, 4);
+        std::memcpy(&b, &p.AngularVelocity, 4);
+        uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u);
+        h ^= h >> 15;
+        h *= 0x2C1B3C6Du;
+        h ^= h >> 12;
+        return (h & 0xFFFF) / 65536.0f < LightRatio;
     }
 
     int32_t ParticleSystemComponent::SheetFrame(const Particle& p) const

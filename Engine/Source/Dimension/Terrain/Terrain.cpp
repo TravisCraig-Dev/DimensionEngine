@@ -658,6 +658,19 @@ namespace Dimension::Terrain
         return cache[key] = BuildDetails(terrain, terrain.EditHeights.size() == (size_t)SampleCount(terrain) * SampleCount(terrain) ? terrain.EditHeights : BuildHeights(terrain));
     }
 
+    std::vector<float> GetHeights(const TerrainComponent& terrain)
+    {
+        int n = SampleCount(terrain);
+        if (terrain.EditHeights.size() == (size_t)n * n) return terrain.EditHeights;
+        uint64_t key = SettingsKey(terrain);
+        static std::mutex mutex;
+        static std::unordered_map<uint64_t, std::vector<float>> cache;
+        std::lock_guard lock(mutex);
+        if (auto it = cache.find(key); it != cache.end()) return it->second;
+        if (cache.size() > 8) cache.clear();
+        return cache[key] = BuildHeights(terrain);
+    }
+
     void ClearEdits(TerrainComponent& terrain)
     {
         terrain.SculptedHeights.clear();

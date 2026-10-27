@@ -183,6 +183,8 @@ namespace Dimension
         void SetUINavigating(bool navigating) { m_UINavigating = navigating; }
         // Play-mode clock: seconds and frames since OnRuntimeStart (paused frames do not count).
         float GetTime() const { return m_Time; }
+        // Play time while running, otherwise the editor's preview clock (waves move in the editor too).
+        float GetDisplayTime() const { return m_Running ? m_Time : m_EditorTime; }
         float GetDeltaTime() const { return m_DeltaTime; } // this frame's (clamped) update step
         uint64_t GetFrameCount() const { return m_FrameCount; }
         // Extra UI keyboard input for this frame (tests / injected input); combined with the Input module.

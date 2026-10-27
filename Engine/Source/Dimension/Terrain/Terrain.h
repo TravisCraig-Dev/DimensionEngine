@@ -94,6 +94,8 @@ namespace Dimension
         DetailInstances BuildDetails(const TerrainComponent& terrain, const std::vector<float>& heights);
         // Cached for the current settings and edits (rebuilt when they change).
         const DetailInstances& GetDetails(const TerrainComponent& terrain);
+        // The heights (as BuildHeights, or the edit arrays while editing), cached for the current settings and edits.
+        std::vector<float> GetHeights(const TerrainComponent& terrain);
         // Where a ray (world space) first meets the terrain (`world` is the object's transform).
         bool Raycast(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& origin, const glm::vec3& direction, glm::vec3& hit);
 

@@ -63,6 +63,7 @@
 #include "shaders/SsrApply.frag.h"
 #include "shaders/Taa.frag.h"
 #include "shaders/Fog.frag.h"
+#include "shaders/Underwater.frag.h"
 #include "shaders/Decal.vert.h"
 #include "shaders/Decal.frag.h"
 
@@ -125,6 +126,7 @@ namespace Dimension
             glm::vec4 CloudParams;  // x coverage, y density, z base, w top
             glm::vec4 CloudParams2; // x feature size, y steps, z 1 = on, w 1 = shadows
             glm::vec4 Weather;      // x wetness, y snow cover, z rain, w lightning flash
+            glm::vec4 WaterMin, WaterMax, WaterFog, WaterParams;
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
@@ -372,7 +374,7 @@ namespace Dimension
         // Mesh-shaped GPU emitters' spawn points (ParticleSystems::MeshSurfaceSamples), uploaded once per mesh.
         struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
-        Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog;
+        Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater;
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline Decals[3]; // by DecalBlend
         Buffer QuadIndices;
@@ -586,6 +588,9 @@ namespace Dimension
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Premultiplied } };
         post.DebugName = "FogPipeline";
         r.Fog = Pipeline(post);
+        post.FragmentSpirv = kUnderwater_frag;
+        post.DebugName = "UnderwaterPipeline";
+        r.Underwater = Pipeline(post);
         post.FragmentSpirv = kOitComposite_frag;
         post.DebugName = "OitCompositePipeline";
         r.OitComposite = Pipeline(post);
@@ -867,6 +872,30 @@ namespace Dimension
             lights.push_back({ glm::vec4(pos, light.Range), glm::vec4(ToLinear(light.Color) * light.Intensity, slot),
                                glm::vec4(dir, cosOuter), glm::vec4(cosInner, cookie, roll, 0.0f) });
         }
+        // Particle lights: unshadowed point lights on the particles that carry one.
+        for (auto [e, ps, t] : reg.ViewOf<ParticleSystemComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || !ps.Lights || ps.SimulateOnGpu || ps.MaxLights <= 0 || ps.LightIntensity <= 0.0f) continue;
+            bool local = ps.SimulationSpace == ParticleSpace::Local;
+            float worldScale = local ? glm::length(glm::vec3(t.World[0])) : 1.0f;
+            glm::vec3 tint = ToLinear(glm::vec3(ps.LightColor));
+            int count = 0;
+            for (const auto& p : ps.Particles)
+            {
+                if (count >= ps.MaxLights || lights.size() >= kMaxPointLights) break;
+                if (!ps.CarriesLight(p)) continue;
+                float life = std::clamp(p.Age / std::max(p.Lifetime, 1e-4f), 0.0f, 1.0f);
+                glm::vec4 color = p.Color * ps.ColorOverLifetime.Evaluate(life);
+                float strength = ps.LightIntensity * color.a * ps.LightColor.a;
+                if (strength <= 1e-3f) continue;
+                float range = ps.LightRange * (ps.SizeAffectsRange ? p.Size * ps.SizeOverLifetime.Evaluate(life) * worldScale : 1.0f);
+                if (range <= 0.01f) continue;
+                glm::vec3 rgb = tint * (ps.UseParticleColor ? ToLinear(glm::vec3(color)) : glm::vec3(1.0f)) * strength;
+                glm::vec3 pos = local ? glm::vec3(t.World * glm::vec4(p.Position, 1.0f)) : p.Position;
+                lights.push_back({ glm::vec4(pos, range), glm::vec4(rgb, 0.0f), glm::vec4(0.0f, 0.0f, 0.0f, -2.0f), glm::vec4(0.0f, 0.0f, 0.0f, 1.0f) });
+                ++count;
+            }
+        }
 
         // Clustered lights: the light array, each cluster's (offset, count) and the light index list. A compute
         // shader fills the clusters by default (into this view's buffers); otherwise they are built here and go in
@@ -941,6 +970,33 @@ namespace Dimension
                 u.Ambient += glm::vec4(glm::vec3(0.55f, 0.6f, 0.85f) * (w.Flash * 2.5f), 0.0f);
                 break;
             }
+        // Water: the Water Volume the camera is over (or in), else the nearest one, for caustics and underwater murk.
+        // Its surface is the top face, or the waves over the camera while it is over the water.
+        bool underwaterFog = false;
+        {
+            float bestScore = 1e30f;
+            for (auto [we, water, wt] : reg.ViewOf<WaterVolumeComponent, TransformComponent>())
+            {
+                if (!wt.ActiveInHierarchy) continue;
+                glm::vec3 center = wt.GetWorldPosition(), scale = glm::max(glm::abs(wt.Scale), glm::vec3(1e-4f)), half = water.Size * scale * 0.5f;
+                glm::vec3 lo = center - half, hi = center + half;
+                glm::vec3 nearest = glm::clamp(camera.Position, lo, hi);
+                bool over = camera.Position.x >= lo.x && camera.Position.x <= hi.x && camera.Position.z >= lo.z && camera.Position.z <= hi.z;
+                float score = over ? 0.0f : glm::distance(nearest, camera.Position) + 1.0f;
+                if (score >= bestScore) continue;
+                bestScore = score;
+                if (over && Water::HasWaves(water))
+                {
+                    glm::vec2 local((camera.Position.x - center.x) / scale.x, (camera.Position.z - center.z) / scale.z);
+                    hi.y = center.y + Water::Sample(water, local, scene.GetDisplayTime()).Height * scale.y;
+                }
+                u.WaterMin = glm::vec4(lo, 1.0f);
+                u.WaterMax = glm::vec4(hi, std::max(water.Caustics, 0.0f));
+                u.WaterFog = glm::vec4(ToLinear(glm::vec3(water.UnderwaterColor)), std::max(water.UnderwaterFog, 0.0f));
+                u.WaterParams = glm::vec4(std::max(water.CausticsScale, 0.1f), 0.0f, 0.0f, 0.0f);
+            }
+            underwaterFog = u.WaterMin.w > 0.0f && u.WaterFog.a > 0.0f && !camera.Orthographic && !options.ProbeCapture;
+        }
         bool gpuCulled = false;
         if (!lights.empty() && s_GpuLightCulling && s_ClusterCulling)
         {
@@ -1091,7 +1147,7 @@ namespace Dimension
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
         // Passes after this one read the depth: depth of field, SSR, decals, fog and TAA (and next frame's GPU particle
         // collision).
-        bool readDepth = dof || surface || fog || taa || !m_Decals.empty() || m_ParticleDepthWanted;
+        bool readDepth = dof || surface || fog || underwaterFog || taa || !m_Decals.empty() || m_ParticleDepthWanted;
         m_ParticleDepthKept = readDepth && !camera.Orthographic;
         m_ParticleDepthViewProj = camera.Projection * camera.View;
         m_ParticleDepthSize = glm::uvec2(target.GetWidth(), target.GetHeight());
@@ -1234,6 +1290,11 @@ namespace Dimension
                     (uint32_t)std::clamp(settings.FogSteps, 4, 128), settings.FogDensity, std::max(settings.FogHeightFalloff, 0.0f), settings.FogHeight,
                     std::max(settings.FogMaxDistance, 1.0f), settings.FogAnisotropy, taa ? Halton(target.Temporal.Frame % 16 + 1, 5) : 0.0f };
             FullscreenPass(cmd, target.GetHdr(), true, res.Fog, &push, sizeof(push));
+        }
+        if (underwaterFog)
+        {
+            uint32_t depth = target.GetDepthBindless();
+            FullscreenPass(cmd, target.GetHdr(), true, res.Underwater, &depth, sizeof(depth));
         }
         if (taa)
         {

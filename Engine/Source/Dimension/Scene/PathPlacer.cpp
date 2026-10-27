@@ -51,7 +51,7 @@ namespace Dimension::PathPlacer
         std::vector<Ground> grounds;
         if (pp->SnapToGround)
             for (auto [te, terrain, tt] : reg.ViewOf<TerrainComponent, TransformComponent>())
-                grounds.push_back({ &terrain, tt.World, glm::inverse(tt.World), Terrain::BuildHeights(terrain) });
+                grounds.push_back({ &terrain, tt.World, glm::inverse(tt.World), Terrain::GetHeights(terrain) });
         for (Spot& s : spots)
         {
             glm::vec3 right = glm::cross(s.Direction, glm::vec3(0.0f, 1.0f, 0.0f));

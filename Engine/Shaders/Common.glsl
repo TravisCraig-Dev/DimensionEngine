@@ -70,6 +70,10 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 CloudParams;    // x coverage 0-1, y density (extinction per meter), z base altitude, w top altitude (m)
     vec4 CloudParams2;   // x feature size (m), y march steps, z 1 = clouds on, w 1 = cloud shadows
     vec4 Weather;        // x wetness 0-1, y snow cover 0-1, z rain 0-1 (puddle ripples), w lightning flash
+    vec4 WaterMin;       // the Water Volume shown: xyz box min, w 1 = one
+    vec4 WaterMax;       // xyz box max (y: the surface), w caustics strength
+    vec4 WaterFog;       // rgb underwater color (linear), a extinction per meter
+    vec4 WaterParams;    // x caustics cell size (m)
 } uScene;
 
 // Procedural sky gradient, also used as a cheap environment for reflections.

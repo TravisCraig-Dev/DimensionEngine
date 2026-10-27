@@ -6,6 +6,7 @@
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 
@@ -149,8 +150,18 @@ namespace Dimension
         glm::quat FromJolt(const JPH::Quat& q) { return glm::quat(q.GetW(), q.GetX(), q.GetY(), q.GetZ()); }
     }
 
-    struct Physics3DWorld::Impl : public JPH::ContactListener
+    struct Physics3DWorld::Impl : public JPH::ContactListener, public JPH::SoftBodyContactListener
     {
+        // Soft bodies that pass through particular bodies: a rope through the objects holding its ends (its pinned end
+        // sits inside them, and would shove them about). Pairs of (soft body, body) ids.
+        std::vector<std::pair<uint32_t, uint32_t>> SoftIgnores;
+        JPH::SoftBodyValidateResult OnSoftBodyContactValidate(const JPH::Body& soft, const JPH::Body& other, JPH::SoftBodyContactSettings&) override
+        {
+            uint32_t a = soft.GetID().GetIndexAndSequenceNumber(), b = other.GetID().GetIndexAndSequenceNumber();
+            for (const auto& [s, o] : SoftIgnores)
+                if (s == a && o == b) return JPH::SoftBodyValidateResult::RejectContact;
+            return JPH::SoftBodyValidateResult::AcceptContact;
+        }
         BroadPhaseLayerInterfaceImpl BroadPhase;
         ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhase;
         ObjectLayerPairFilterImpl ObjectPair;
@@ -237,6 +248,7 @@ namespace Dimension
             glm::vec3 Origin{ 0.0f };     // the body's fixed position (its points are relative to it)
             Entity Attached = Entity::Null();
             bool PinStart = true, PinEnd = false;
+            int BrokenAt = -1;            // the segment it snapped at
             glm::vec3 LastMomentum{ 0.0f }, PullForce{ 0.0f };
             bool HasMomentum = false;
             JPH::Ref<JPH::Constraint> Tether; // a dynamic body on the end: never farther than Length from the start
@@ -249,6 +261,8 @@ namespace Dimension
         {
             auto& bi = System.GetBodyInterface();
             if (Ropes[i].Tether) System.RemoveConstraint(Ropes[i].Tether);
+            uint32_t soft = Ropes[i].Body.GetIndexAndSequenceNumber();
+            std::erase_if(SoftIgnores, [&](const auto& p) { return p.first == soft; });
             if (bi.IsAdded(Ropes[i].Body)) bi.RemoveBody(Ropes[i].Body);
             bi.DestroyBody(Ropes[i].Body);
             BodyToEntity.erase(Ropes[i].Body.GetIndexAndSequenceNumber());
@@ -354,6 +368,7 @@ namespace Dimension
         m_Impl->System.Init(65536, 0, 65536, 10240, m_Impl->BroadPhase, m_Impl->ObjectVsBroadPhase, m_Impl->ObjectPair);
         m_Impl->System.SetGravity(ToJolt(scene.GetSettings().Gravity));
         m_Impl->System.SetContactListener(m_Impl.get());
+        m_Impl->System.SetSoftBodyContactListener(m_Impl.get());
 
         auto& reg = scene.GetRegistry();
         std::vector<Entity> entities;
@@ -506,46 +521,17 @@ namespace Dimension
             end = glm::vec3(reg.Get<TransformComponent>(rope.AttachTo).World * glm::vec4(rope.AttachOffset, 1.0f));
         }
         std::vector<glm::vec3> points = Rope::RestPoints(rope, start, -glm::vec3(t.World[1]), attached ? &end : nullptr);
-        int count = (int)points.size();
-        float segment = std::max(rope.Length, 0.01f) / (count - 1);
-        float invMass = (float)count / std::max(rope.Mass, 1e-4f);
         body.Origin = start;
-        JPH::Ref<JPH::SoftBodySharedSettings> shared = new JPH::SoftBodySharedSettings();
-        for (int i = 0; i < count; ++i)
-        {
-            glm::vec3 p = points[i] - body.Origin;
-            bool pinned = (i == 0 && body.PinStart) || (i == count - 1 && body.PinEnd);
-            shared->mVertices.push_back(JPH::SoftBodySharedSettings::Vertex(JPH::Float3(p.x, p.y, p.z), JPH::Float3(0, 0, 0), pinned ? 0.0f : invMass));
-        }
-        // Rest lengths from Length (not the starting shape, which may be stretched between far-apart ends).
-        for (int i = 0; i + 1 < count; ++i)
-        {
-            JPH::SoftBodySharedSettings::Edge edge(i, i + 1, std::max(rope.StretchCompliance, 0.0f));
-            edge.mRestLength = segment;
-            shared->mEdgeConstraints.push_back(edge);
-        }
-        for (int i = 0; i + 2 < count; ++i)
-        {
-            JPH::SoftBodySharedSettings::Edge edge(i, i + 2, std::max(rope.BendCompliance, 0.0f));
-            edge.mRestLength = segment * 2.0f;
-            shared->mEdgeConstraints.push_back(edge);
-        }
-        shared->Optimize();
-        JPH::SoftBodyCreationSettings settings(shared, JPH::RVec3(ToJolt(body.Origin)), JPH::Quat::sIdentity(), Layers::Make(reg.Get<TagComponent>(e).Layer, true));
-        settings.mNumIterations = (JPH::uint32)std::clamp(rope.Iterations, 1, 64);
-        settings.mLinearDamping = std::max(rope.Damping, 0.0f);
-        settings.mFriction = std::clamp(rope.Friction, 0.0f, 1.0f);
-        settings.mVertexRadius = std::max(rope.Radius, 0.0f);
-        settings.mUpdatePosition = false;
-        settings.mMakeRotationIdentity = false;
-        settings.mAllowSleeping = false;
-        body.Body = m_Impl->System.GetBodyInterface().CreateAndAddSoftBody(settings, JPH::EActivation::Activate);
+        rope.BrokenAt = -1;
+        rope.Tension = 0.0f;
+        std::vector<glm::vec3> relative;
+        for (const glm::vec3& p : points) relative.push_back(p - body.Origin);
+        body.Body = JPH::BodyID(AddRopeBody(e, body.Origin, relative, body.PinStart, body.PinEnd, -1));
         if (body.Body.IsInvalid())
         {
             Log::Error("Too many physics bodies (rope '{}')", reg.Get<TagComponent>(e).Name);
             return;
         }
-        m_Impl->BodyToEntity[body.Body.GetIndexAndSequenceNumber()] = e;
         // A dynamic body on the end hangs on the rope: a distance limit of Length from the start (the object's body,
         // or the world), while the soft body's momentum adds its swing.
         if (attached && body.PinStart)
@@ -568,8 +554,107 @@ namespace Dimension
         for (const glm::vec3& p : points) rope.SimulatedPoints.push_back(glm::vec3(toLocal * glm::vec4(p, 1.0f)));
     }
 
+    uint32_t Physics3DWorld::AddRopeBody(Entity e, const glm::vec3& origin, const std::vector<glm::vec3>& points, bool pinStart, bool pinEnd, int brokenAt)
+    {
+        // A soft body of the points (relative to the rope's origin): stretch edges between neighbours and bend edges
+        // to every other point, none across a break.
+        auto& reg = m_Scene.GetRegistry();
+        const auto& rope = reg.Get<RopeComponent>(e);
+        int count = (int)points.size();
+        float segment = std::max(rope.Length, 0.01f) / (count - 1);
+        float invMass = (float)count / std::max(rope.Mass, 1e-4f);
+        JPH::Ref<JPH::SoftBodySharedSettings> shared = new JPH::SoftBodySharedSettings();
+        for (int i = 0; i < count; ++i)
+        {
+            const glm::vec3& p = points[i];
+            bool pinned = (i == 0 && pinStart) || (i == count - 1 && pinEnd);
+            shared->mVertices.push_back(JPH::SoftBodySharedSettings::Vertex(JPH::Float3(p.x, p.y, p.z), JPH::Float3(0, 0, 0), pinned ? 0.0f : invMass));
+        }
+        auto crosses = [&](int a, int b) { return brokenAt >= 0 && a <= brokenAt && b > brokenAt; };
+        // Rest lengths from Length (not the starting shape, which may be stretched between far-apart ends).
+        for (int i = 0; i + 1 < count; ++i)
+        {
+            if (crosses(i, i + 1)) continue;
+            JPH::SoftBodySharedSettings::Edge edge(i, i + 1, std::max(rope.StretchCompliance, 0.0f));
+            edge.mRestLength = segment;
+            shared->mEdgeConstraints.push_back(edge);
+        }
+        for (int i = 0; i + 2 < count; ++i)
+        {
+            if (crosses(i, i + 2)) continue;
+            JPH::SoftBodySharedSettings::Edge edge(i, i + 2, std::max(rope.BendCompliance, 0.0f));
+            edge.mRestLength = segment * 2.0f;
+            shared->mEdgeConstraints.push_back(edge);
+        }
+        shared->Optimize();
+        JPH::SoftBodyCreationSettings settings(shared, JPH::RVec3(ToJolt(origin)), JPH::Quat::sIdentity(), Layers::Make(reg.Get<TagComponent>(e).Layer, true));
+        settings.mNumIterations = (JPH::uint32)std::clamp(rope.Iterations, 1, 64);
+        settings.mLinearDamping = std::max(rope.Damping, 0.0f);
+        settings.mFriction = std::clamp(rope.Friction, 0.0f, 1.0f);
+        settings.mVertexRadius = std::max(rope.Radius, 0.0f);
+        settings.mUpdatePosition = false;
+        settings.mMakeRotationIdentity = false;
+        settings.mAllowSleeping = false;
+        JPH::BodyID id = m_Impl->System.GetBodyInterface().CreateAndAddSoftBody(settings, JPH::EActivation::Activate);
+        if (id.IsInvalid()) return JPH::BodyID::cInvalidBodyID;
+        m_Impl->BodyToEntity[id.GetIndexAndSequenceNumber()] = e;
+        for (Entity holder : { e, rope.AttachTo })
+            if (auto* rb = !holder.IsNull() && m_Scene.IsValid(holder) ? reg.TryGet<RigidbodyComponent>(holder) : nullptr; rb && rb->RuntimeBody != 0xFFFFFFFF)
+                m_Impl->SoftIgnores.push_back({ id.GetIndexAndSequenceNumber(), rb->RuntimeBody });
+        return id.GetIndexAndSequenceNumber();
+    }
+
+    void Physics3DWorld::SnapRope(Entity e, int segment)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto* rope = reg.TryGet<RopeComponent>(e);
+        if (!rope) return;
+        for (auto& r : m_Impl->Ropes)
+        {
+            if (r.E != e || r.BrokenAt >= 0) continue;
+            // The points where they are now, moving as they were, rebuilt without the edges across the segment.
+            std::vector<glm::vec3> positions, velocities;
+            {
+                JPH::BodyLockRead lock(m_Impl->System.GetBodyLockInterface(), r.Body);
+                if (!lock.Succeeded()) return;
+                auto* mp = static_cast<const JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+                for (const auto& v : mp->GetVertices())
+                {
+                    positions.push_back(FromJolt(v.mPosition));
+                    velocities.push_back(FromJolt(v.mVelocity));
+                }
+            }
+            int count = (int)positions.size();
+            if (count < 2) return;
+            segment = std::clamp(segment, 0, count - 2);
+            if (r.Tether)
+            {
+                m_Impl->System.RemoveConstraint(r.Tether);
+                r.Tether = nullptr;
+            }
+            auto& bi = m_Impl->System.GetBodyInterface();
+            m_Impl->BodyToEntity.erase(r.Body.GetIndexAndSequenceNumber());
+            std::erase_if(m_Impl->SoftIgnores, [&](const auto& p) { return p.first == r.Body.GetIndexAndSequenceNumber(); });
+            bi.RemoveBody(r.Body);
+            bi.DestroyBody(r.Body);
+            r.BrokenAt = segment;
+            r.HasMomentum = false;
+            r.PullForce = glm::vec3(0.0f);
+            r.Body = JPH::BodyID(AddRopeBody(e, r.Origin, positions, r.PinStart, r.PinEnd, segment));
+            rope->BrokenAt = segment;
+            if (r.Body.IsInvalid()) return;
+            JPH::BodyLockWrite lock(m_Impl->System.GetBodyLockInterface(), r.Body);
+            if (!lock.Succeeded()) return;
+            auto* mp = static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+            auto& vertices = mp->GetVertices();
+            for (size_t i = 0; i < vertices.size() && i < velocities.size(); ++i) vertices[i].mVelocity = ToJolt(velocities[i]);
+            return;
+        }
+    }
+
     void Physics3DWorld::UpdateRopes(float dt, bool afterStep)
     {
+        std::vector<std::pair<Entity, int>> snaps;
         auto& reg = m_Scene.GetRegistry();
         auto& lockInterface = m_Impl->System.GetBodyLockInterface();
         for (auto& r : m_Impl->Ropes)
@@ -596,14 +681,14 @@ namespace Dimension
                 continue;
             }
             // A dynamic body holding the end feels the rope's pull: the change of the free points' momentum less
-            // gravity, smoothed and capped (as attached cloth).
+            // gravity, smoothed and capped (as attached cloth). Once snapped, only the piece it holds pulls.
             if (r.PinEnd && dt > 0.0f)
                 if (auto* holderRb = reg.TryGet<RigidbodyComponent>(r.Attached); holderRb && holderRb->Type == BodyType::Dynamic && holderRb->RuntimeBody != 0xFFFFFFFF)
                 {
                     glm::vec3 momentum(0.0f);
                     float freeMass = 0.0f;
-                    for (auto& v : vertices)
-                        if (v.mInvMass > 0.0f)
+                    for (size_t i = r.BrokenAt >= 0 ? (size_t)r.BrokenAt + 1 : 0; i < count; ++i)
+                        if (const auto& v = vertices[i]; v.mInvMass > 0.0f)
                         {
                             momentum += FromJolt(v.mVelocity) / v.mInvMass;
                             freeMass += 1.0f / v.mInvMass;
@@ -616,7 +701,7 @@ namespace Dimension
                         float cap = 3.0f * glm::length(weight) + 1e-3f;
                         if (glm::length(r.PullForce) > cap) r.PullForce *= cap / glm::length(r.PullForce);
                         // Shared by the two ends when both are held; only the end's share pulls the body.
-                        glm::vec3 share = r.PinStart ? r.PullForce * 0.5f : r.PullForce;
+                        glm::vec3 share = r.PinStart && r.BrokenAt < 0 ? r.PullForce * 0.5f : r.PullForce;
                         glm::vec3 at = r.Origin + FromJolt(vertices[count - 1].mPosition);
                         m_Impl->System.GetBodyInterfaceNoLock().AddForce(JPH::BodyID(holderRb->RuntimeBody), ToJolt(-share), JPH::RVec3(ToJolt(at)));
                     }
@@ -626,7 +711,39 @@ namespace Dimension
             glm::mat4 toLocal = glm::inverse(t.World);
             rope->SimulatedPoints.resize(count);
             for (size_t i = 0; i < count; ++i) rope->SimulatedPoints[i] = glm::vec3(toLocal * glm::vec4(r.Origin + FromJolt(vertices[i].mPosition), 1.0f));
+            // Its load: a body hanging on it (the tether's pull) or its pull on a held body; and how far it is
+            // stretched (the most stretched segment is where it gives).
+            if (r.BrokenAt >= 0 || dt <= 0.0f)
+            {
+                rope->Tension = 0.0f;
+                continue;
+            }
+            float tension = glm::length(r.PullForce);
+            if (r.Tether) tension = std::max(tension, std::abs(static_cast<JPH::DistanceConstraint*>(r.Tether.GetPtr())->GetTotalLambdaPosition()) / dt);
+            rope->Tension = tension;
+            float segment = std::max(rope->Length, 0.01f) / (float)(count - 1), stretch = 0.0f, total = 0.0f;
+            std::vector<float> stretches(count - 1);
+            for (size_t i = 0; i + 1 < count; ++i)
+            {
+                float length = glm::length(FromJolt(vertices[i + 1].mPosition) - FromJolt(vertices[i].mPosition));
+                total += length;
+                stretches[i] = length / segment - 1.0f;
+                stretch = std::max(stretch, stretches[i]);
+            }
+            // It gives at one of the most stretched segments (within a fifth of the most), the nearest the middle.
+            int weakest = (int)(count - 1) / 2;
+            float bestMiddle = 1e30f;
+            for (size_t i = 0; i + 1 < count; ++i)
+                if (stretches[i] >= stretch * 0.8f && std::abs((float)i - (count - 2) * 0.5f) < bestMiddle)
+                {
+                    bestMiddle = std::abs((float)i - (count - 2) * 0.5f);
+                    weakest = (int)i;
+                }
+            bool overloaded = rope->BreakForce > 0.0f && tension > rope->BreakForce;
+            bool overstretched = rope->BreakStretch > 0.0f && total > std::max(rope->Length, 0.01f) * (1.0f + rope->BreakStretch);
+            if (overloaded || overstretched) snaps.push_back({ r.E, weakest });
         }
+        for (auto& [e, segment] : snaps) SnapRope(e, segment);
     }
 
     void Physics3DWorld::CreateCloth(Entity e)
@@ -1241,6 +1358,47 @@ namespace Dimension
                 if (body.ApplyBuoyancyImpulse(JPH::RVec3(ToJolt(point)), ToJolt(normal), std::max(water.Buoyancy, 0.0f), std::max(water.LinearDrag, 0.0f),
                                               std::max(water.AngularDrag, 0.0f), ToJolt(flow), gravity, dt))
                     if (!body.IsActive()) m_Impl->System.GetBodyInterfaceNoLock().ActivateBody(body.GetID());
+            }
+            // Cloth, soft bodies and ropes float point by point: each point under the surface (by its depth over its
+            // radius) is lifted against gravity by Buoyancy, slowed by Linear Drag and carried by the Flow and the
+            // waves' motion. A sheet floats flat on the waves; a soft ball bobs; a rope sinks or drifts.
+            std::vector<JPH::BodyID> soft;
+            for (auto& c : m_Impl->Cloths) soft.push_back(c.Body);
+            for (auto& r : m_Impl->Ropes) soft.push_back(r.Body);
+            for (JPH::BodyID id : soft)
+            {
+                JPH::BodyLockWrite lock(lockInterface, id);
+                if (!lock.Succeeded()) continue;
+                JPH::Body& body = lock.GetBody();
+                JPH::AABox box = body.GetWorldSpaceBounds();
+                glm::vec3 bmin = FromJolt(box.mMin), bmax = FromJolt(box.mMax);
+                if (bmax.x < lo.x || bmin.x > hi.x || bmax.z < lo.z || bmin.z > hi.z || bmin.y > hi.y + waveRoom || bmax.y < lo.y) continue;
+                auto* mp = static_cast<JPH::SoftBodyMotionProperties*>(body.GetMotionProperties());
+                glm::vec3 origin = FromJolt(JPH::Vec3(body.GetCenterOfMassPosition()));
+                float thickness = std::max(2.0f * mp->GetVertexRadius(), 0.1f);
+                bool wet = false;
+                for (auto& v : mp->GetVertices())
+                {
+                    if (v.mInvMass <= 0.0f) continue;
+                    glm::vec3 p = origin + FromJolt(v.mPosition);
+                    if (p.x < lo.x || p.x > hi.x || p.z < lo.z || p.z > hi.z || p.y < lo.y) continue;
+                    float surface = hi.y;
+                    glm::vec3 flow = water.Flow;
+                    if (waves)
+                    {
+                        Water::SurfacePoint s = Water::Sample(water, glm::vec2((p.x - center.x) / scale.x, (p.z - center.z) / scale.z), m_Scene.GetTime());
+                        surface = center.y + s.Height * scale.y;
+                        flow += s.Velocity * scale;
+                    }
+                    float submerged = std::clamp((surface - p.y) / thickness + 0.5f, 0.0f, 1.0f);
+                    if (submerged <= 0.0f) continue;
+                    wet = true;
+                    glm::vec3 velocity = FromJolt(v.mVelocity);
+                    velocity -= FromJolt(gravity) * (std::max(water.Buoyancy, 0.0f) * submerged * dt);
+                    velocity += (flow - velocity) * std::min(std::max(water.LinearDrag, 0.0f) * submerged * dt, 1.0f);
+                    v.mVelocity = ToJolt(velocity);
+                }
+                if (wet && !body.IsActive()) m_Impl->System.GetBodyInterfaceNoLock().ActivateBody(body.GetID());
             }
         }
     }

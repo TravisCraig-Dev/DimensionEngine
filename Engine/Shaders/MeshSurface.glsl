@@ -135,6 +135,47 @@ vec3 PuddleNormal(vec2 p, float rain)
     return normalize(vec3(-slope.x * 0.25, 1.0, -slope.y * 0.25));
 }
 
+// Caustics: the web of bright lines that waves focus sunlight into, as the edges of drifting Voronoi cells (1 on an
+// edge, 0 inside a cell).
+float CausticLayer(vec2 p, float t)
+{
+    vec2 cell = floor(p), f = fract(p);
+    float d1 = 8.0, d2 = 8.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+        {
+            vec2 o = vec2(x, y), c = cell + o;
+            vec2 h = vec2(Hash3(vec3(c, 4.1)), Hash3(vec3(c, 8.3)));
+            vec2 d = o + 0.5 + 0.4 * sin(t * 0.9 + 6.2831853 * h) - f;
+            float dd = dot(d, d);
+            if (dd < d1) { d2 = d1; d1 = dd; }
+            else if (dd < d2) d2 = dd;
+        }
+    float edge = sqrt(d2) - sqrt(d1);
+    return pow(1.0 - smoothstep(0.0, 0.16, edge), 3.0);
+}
+
+// The sunlight reaching a point under the shown Water Volume's surface: dimmed by the water above it and gathered into
+// caustics (two layers drifting at different scales). 1 out of the water.
+float UnderwaterSun(vec3 p)
+{
+    if (uScene.WaterMin.w < 0.5 || any(lessThan(p, uScene.WaterMin.xyz)) || p.x > uScene.WaterMax.x || p.z > uScene.WaterMax.z) return 1.0;
+    float depth = uScene.WaterMax.y - p.y;
+    if (depth <= 0.0) return 1.0;
+    float sun = exp(-depth * uScene.WaterFog.a * 0.5);
+    float strength = uScene.WaterMax.w * smoothstep(0.0, 0.3, depth) * exp(-depth * 0.08);
+    if (strength > 0.0)
+    {
+        float t = uScene.Wind.w;
+        vec2 q = p.xz / uScene.WaterParams.x;
+        q += 0.25 * sin(q.yx * 2.3 + t * 0.7); // bends the cells' edges into curves
+        float c = CausticLayer(q, t) + 0.7 * CausticLayer(q * 1.37 + 3.1, t * 1.3 + 1.7);
+        c *= 0.6 + 0.8 * ValueNoise(vec3(q * 0.35, t * 0.2)); // brighter and dimmer stretches
+        sun *= max(1.0 + (0.5 + 2.4 * c - 1.0) * strength, 0.0);
+    }
+    return sun;
+}
+
 // Light intensities are scaled by PI so a white light at intensity 1 lights a white diffuse surface to 1.
 vec3 DirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, float metallic, float roughness)
 {
@@ -277,7 +318,7 @@ void main()
 
     if (uScene.LightDirection.w > 0.5)
         color += DirectLight(N, V, normalize(-uScene.LightDirection.xyz), uScene.LightColor.rgb, albedo, metallic, roughness) *
-                 DirectionalShadow(vWorldPos, normalize(vNormal)) * CloudShadow(vWorldPos);
+                 DirectionalShadow(vWorldPos, normalize(vNormal)) * CloudShadow(vWorldPos) * (m.Flags.x != 2u ? UnderwaterSun(vWorldPos) : 1.0);
 
     // The point and spot lights of this pixel's cluster.
     uvec2 cell = uvec2(0u);

@@ -750,6 +750,13 @@ namespace Dimension
         float WaveDirection = 0.0f;  // degrees around Y from +X
         float Steepness = 0.5f;      // 0 = round sine waves, 1 = sharp crests
         int32_t SurfaceResolution = 64;
+        // Under water: surfaces below the surface catch rippling caustics (the sunlight focused by the waves, Caustics
+        // strength, Caustics Scale meters across), and with the camera below the surface (or looking down into the
+        // water) everything is seen through Underwater Color murk, thicker by Underwater Fog per meter.
+        glm::vec4 UnderwaterColor{ 0.05f, 0.32f, 0.38f, 1.0f };
+        float UnderwaterFog = 0.12f;
+        float Caustics = 1.0f;
+        float CausticsScale = 1.5f;
         // Runtime: the surface grid's displaced vertices and normals (object space) this frame.
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
     };
@@ -916,7 +923,9 @@ namespace Dimension
     // A rope (see Dimension/Physics/Rope.h): Segments + 1 points simulated as a soft body while playing, drawn as a
     // tube of Radius with the object's Mesh Renderer material. Its start hangs from the object (with Pin Start) and
     // it falls along the object's -Y; with Attach To its end holds on to that object at Attach Offset (its space), and
-    // a dynamic body there feels the rope's pull. It collides with 3D colliders.
+    // a dynamic body there feels the rope's pull. It collides with 3D colliders. It snaps (in two, at its most stretched
+    // segment) when it carries more than Break Force newtons (a weight hanging on it, or its pull on a held body) or is
+    // pulled over Break Stretch (a fraction) longer than Length; 0 = never.
     struct RopeComponent
     {
         float Length = 3.0f;
@@ -931,8 +940,13 @@ namespace Dimension
         bool PinStart = true;
         Entity AttachTo = Entity::Null();
         glm::vec3 AttachOffset{ 0.0f };
-        // Runtime: the simulated points in the object's space (empty = the starting shape).
+        float BreakForce = 0.0f;
+        float BreakStretch = 0.0f;
+        // Runtime: the simulated points in the object's space (empty = the starting shape), the load it carries
+        // (newtons) and the segment it snapped at (-1 = whole).
         std::vector<glm::vec3> SimulatedPoints;
+        float Tension = 0.0f;
+        int32_t BrokenAt = -1;
     };
 
     // A ragdoll for a skinned character (Animator + skinned Mesh Renderer), like Unity's ragdoll: every bone at least

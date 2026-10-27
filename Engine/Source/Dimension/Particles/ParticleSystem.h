@@ -142,6 +142,21 @@ namespace Dimension
         float TrailLifetime = 0.25f; // seconds of history
         float TrailWidth = 0.5f;     // multiplier of the particle size
 
+        // Lights (like Unity's Lights module; CPU systems): Light Ratio of the particles (0-1, the same ones all their
+        // life) carry a point light that lights the scene, at most Max Lights per system: Light Color times the
+        // particle's (Use Particle Color), Light Intensity times its alpha (so it fades out with it), Light Range
+        // meters (times its size with Size Affects Range). Sparks, embers, fireflies, muzzle flashes.
+        bool Lights = false;
+        float LightRatio = 0.25f;
+        int32_t MaxLights = 16;
+        glm::vec4 LightColor{ 1.0f };
+        bool UseParticleColor = true;
+        float LightIntensity = 1.0f;
+        float LightRange = 2.0f;
+        bool SizeAffectsRange = false;
+        // Whether this particle carries a light (by a hash of its random start values, so it keeps it).
+        bool CarriesLight(const Particle& p) const;
+
         // Renderer
         AssetHandle Texture = AssetHandle::None();    // None = built-in soft particle
         ParticleBlend Blend = ParticleBlend::Alpha;

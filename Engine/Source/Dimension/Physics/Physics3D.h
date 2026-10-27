@@ -50,6 +50,8 @@ namespace Dimension
         // Dents a Deformable object at a world point, pushing its surface along `direction` (world, into the object) by up
         // to `depth` meters at the point (less out to its Radius). Returns how many vertices moved.
         static int Dent(Scene& scene, Entity e, const glm::vec3& point, const glm::vec3& direction, float depth);
+        // Snaps a rope in two between point `segment` and the next (as Break Force and Break Stretch do); once only.
+        void SnapRope(Entity e, int segment);
         // Breaks a Breakable object into its pieces now, flying apart from `point` (world space). Returns the pieces.
         static std::vector<Entity> Break(Scene& scene, Entity e, const glm::vec3& point);
         // Closest hit along a ray (direction need not be normalized). Triggers are hit too.
@@ -87,6 +89,7 @@ namespace Dimension
         void CreateCloth(Entity e);
         void UpdateBoats(float dt);
         void UpdateHitches(float dt);
+        uint32_t AddRopeBody(Entity e, const glm::vec3& origin, const std::vector<glm::vec3>& points, bool pinStart, bool pinEnd, int brokenAt);
         void CreateRope(Entity e);
         void UpdateRopes(float dt, bool afterStep);
         void CreateSoftBody(Entity e);

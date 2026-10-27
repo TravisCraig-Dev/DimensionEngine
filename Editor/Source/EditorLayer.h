@@ -127,7 +127,7 @@ namespace Editor
         int m_FocusRequestFrames = 3; // frames left to request focus (docking may not be ready on the first one)
         int m_GizmoOperation = 7; // ImGuizmo::TRANSLATE
         bool m_GizmoLocal = false;
-        // Line Renderer point editing in the Scene view: the picked point of the selected line (-1 = none).
+        // Point editing in the Scene view (Line Renderer, Terrain Path, Path Placer): the picked point (-1 = none).
         int m_LinePoint = -1;
         Dimension::Entity m_LinePointOwner;
         bool UpdateLinePointEditing(ImVec2 origin, ImVec2 size);
