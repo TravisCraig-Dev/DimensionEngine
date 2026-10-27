@@ -1,0 +1,2917 @@
+{
+ "version": 1,
+ "name": "Harbor",
+ "settings": {
+  "ambientColor": [
+   0.55,
+   0.6,
+   0.7
+  ],
+  "ambientIntensity": 0.35,
+  "gravity2D": [
+   0,
+   -9.81
+  ],
+  "gravity": [
+   0,
+   -9.81,
+   0
+  ],
+  "exposure": 1.0,
+  "tonemapping": true,
+  "bloom": true,
+  "bloomIntensity": 0.6,
+  "bloomThreshold": 2.0,
+  "bloomKnee": 0.5,
+  "bloomRadius": 1.0,
+  "fxaa": true,
+  "vignette": 0.25,
+  "skyMode": 1,
+  "skyTexture": 100045,
+  "skyIntensity": 1.0,
+  "skyRotation": 0.0,
+  "reflectionIntensity": 1.0,
+  "ssao": true,
+  "ssaoRadius": 0.6,
+  "ssaoIntensity": 1.5,
+  "ssaoBias": 0.025,
+  "ssaoDebug": false,
+  "uiKeyboardNavigation": false,
+  "wind": [
+   2.0,
+   0.0,
+   1.2
+  ],
+  "windGusts": 0.5,
+  "clouds": true,
+  "cloudCoverage": 0.45,
+  "cloudShadows": true,
+  "ssr": false,
+  "taa": false
+ },
+ "entities": [
+  {
+   "guid": 5000001,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Sun",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      10,
+      0
+     ],
+     "Rotation": [
+      -0.75,
+      -0.7,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Directional Light": {
+     "Color": [
+      1.0,
+      0.94,
+      0.84
+     ],
+     "Intensity": 2.4,
+     "Soft Shadows": true,
+     "Light Angle": 2.0
+    }
+   }
+  },
+  {
+   "guid": 5000002,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Sea",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      -3,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Water Volume": {
+     "Size": [
+      300,
+      6,
+      300
+     ],
+     "Buoyancy": 1.8,
+     "Linear Drag": 0.8,
+     "Angular Drag": 0.6,
+     "Flow": [
+      0.15,
+      0,
+      0.1
+     ],
+     "Wave Height": 0.6,
+     "Wave Length": 14,
+     "Wave Direction": 30,
+     "Steepness": 0.45,
+     "Surface Resolution": 256
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100060,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": false
+    }
+   }
+  },
+  {
+   "guid": 5000003,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Sea Bed",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      -6.5,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      300,
+      1,
+      300
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100063,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000004,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Beach",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      -1.6,
+      -40
+     ],
+     "Rotation": [
+      0.12,
+      0,
+      0
+     ],
+     "Scale": [
+      300,
+      3,
+      30
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100063,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000005,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      12,
+      0.9,
+      -6
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      3,
+      0.3,
+      22
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000006,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      10.8,
+      -2.6,
+      -15
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000007,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      13.2,
+      -2.6,
+      -15
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000008,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      10.8,
+      -2.6,
+      -9
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000009,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      13.2,
+      -2.6,
+      -9
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000010,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      10.8,
+      -2.6,
+      -3
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000011,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      13.2,
+      -2.6,
+      -3
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000012,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      10.8,
+      -2.6,
+      3
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000013,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Pier Post",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      13.2,
+      -2.6,
+      3
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.35,
+      7,
+      0.35
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    }
+   }
+  },
+  {
+   "guid": 5000014,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Boat",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -6,
+      0.4,
+      12
+     ],
+     "Rotation": [
+      0,
+      -1.5707963267948966,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 700,
+     "Linear Damping": 0.1,
+     "Angular Damping": 0.3,
+     "Use Gravity": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      2.0,
+      0.9,
+      5.0
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Boat": {
+     "Throttle": 0,
+     "Steering": 0,
+     "Engine Force": 3000,
+     "Turn Rate": 50,
+     "Turn Speed": 4,
+     "Keel": 1.2,
+     "Propeller": [
+      0,
+      -0.45,
+      2.4
+     ],
+     "Drive With Input": true
+    }
+   }
+  },
+  {
+   "guid": 5000015,
+   "parent": 5000014,
+   "components": {
+    "Tag": {
+     "Name": "Hull",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0.3
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      2.0,
+      0.9,
+      4.4
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100062,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 5000016,
+   "parent": 5000014,
+   "components": {
+    "Tag": {
+     "Name": "Bow",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      -2.05
+     ],
+     "Rotation": [
+      0,
+      0.785,
+      0
+     ],
+     "Scale": [
+      1.41,
+      0.9,
+      1.41
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100062,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 5000017,
+   "parent": 5000014,
+   "components": {
+    "Tag": {
+     "Name": "Cabin",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0.95,
+      0.8
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1.4,
+      1.0,
+      1.6
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 5000018,
+   "parent": 5000014,
+   "components": {
+    "Tag": {
+     "Name": "Mast",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      2.3,
+      -0.4
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.1,
+      2.6,
+      0.1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 5000019,
+   "parent": 5000014,
+   "components": {
+    "Tag": {
+     "Name": "Bow Light",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0.6,
+      -2.6
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.18,
+      0.18,
+      0.18
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 3.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 5000020,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -6,
+      0.6,
+      -2
+     ],
+     "Rotation": [
+      0.0,
+      0.0,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000021,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -4,
+      0.8999999999999999,
+      3
+     ],
+     "Rotation": [
+      0.2,
+      0.7,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000022,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      5,
+      1.1,
+      14
+     ],
+     "Rotation": [
+      0.4,
+      1.4,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000023,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      7,
+      0.8,
+      -12
+     ],
+     "Rotation": [
+      0.6000000000000001,
+      2.0999999999999996,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000024,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -12,
+      1.0,
+      10
+     ],
+     "Rotation": [
+      0.8,
+      2.8,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000025,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -15,
+      1.4,
+      -6
+     ],
+     "Rotation": [
+      1.0,
+      3.5,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000026,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      18,
+      0.8,
+      18
+     ],
+     "Rotation": [
+      1.2000000000000002,
+      4.199999999999999,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000027,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Crate",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      3,
+      1.7999999999999998,
+      -18
+     ],
+     "Rotation": [
+      1.4000000000000001,
+      4.8999999999999995,
+      0.1
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100061,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 60,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000028,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Barrel",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -8,
+      0.8,
+      12
+     ],
+     "Rotation": [
+      1.57,
+      0.0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      0.8,
+      1.1,
+      0.8
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 40,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000029,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Barrel",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      9,
+      0.8,
+      6
+     ],
+     "Rotation": [
+      1.57,
+      0.5,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      0.8,
+      1.1,
+      0.8
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 40,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000030,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Barrel",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -18,
+      0.8,
+      0
+     ],
+     "Rotation": [
+      1.57,
+      1.0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      0.8,
+      1.1,
+      0.8
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 40,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000031,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Barrel",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      15,
+      0.8,
+      -16
+     ],
+     "Rotation": [
+      1.57,
+      1.5,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      0.8,
+      1.1,
+      0.8
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 40,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000032,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Barrel",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0.8,
+      -10
+     ],
+     "Rotation": [
+      1.57,
+      2.0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Box Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      0.8,
+      1.1,
+      0.8
+     ],
+     "Friction": 0.6,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 40,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.05,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000033,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Buoy",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -10,
+      0.2,
+      -14
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.9,
+      0.9,
+      0.9
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Sphere Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Radius": 0.5,
+     "Friction": 0.5,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 25,
+     "Linear Damping": 0.1,
+     "Angular Damping": 0.2,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000034,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Mooring",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -9.5,
+      -5.85,
+      -13.5
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.6,
+      0.3,
+      0.6
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100063,
+     "Albedo": 0,
+     "Color": [
+      0.25,
+      0.22,
+      0.2,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Rope": {
+     "Length": 7.0,
+     "Segments": 20,
+     "Radius": 0.03,
+     "Mass": 0.5,
+     "Bend Compliance": 1.0,
+     "Attach To": 5000033,
+     "Attach Offset": [
+      0,
+      -0.5,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "guid": 5000035,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Buoy",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -2,
+      0.2,
+      -22
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.9,
+      0.9,
+      0.9
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Sphere Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Radius": 0.5,
+     "Friction": 0.5,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 25,
+     "Linear Damping": 0.1,
+     "Angular Damping": 0.2,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000036,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Mooring",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -1.5,
+      -5.85,
+      -21.5
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.6,
+      0.3,
+      0.6
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100063,
+     "Albedo": 0,
+     "Color": [
+      0.25,
+      0.22,
+      0.2,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Rope": {
+     "Length": 7.0,
+     "Segments": 20,
+     "Radius": 0.03,
+     "Mass": 0.5,
+     "Bend Compliance": 1.0,
+     "Attach To": 5000035,
+     "Attach Offset": [
+      0,
+      -0.5,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "guid": 5000037,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Buoy",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      8,
+      0.2,
+      -26
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.9,
+      0.9,
+      0.9
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Sphere Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Radius": 0.5,
+     "Friction": 0.5,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 25,
+     "Linear Damping": 0.1,
+     "Angular Damping": 0.2,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000038,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Mooring",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      8.5,
+      -5.85,
+      -25.5
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.6,
+      0.3,
+      0.6
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100063,
+     "Albedo": 0,
+     "Color": [
+      0.25,
+      0.22,
+      0.2,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Rope": {
+     "Length": 7.0,
+     "Segments": 20,
+     "Radius": 0.03,
+     "Mass": 0.5,
+     "Bend Compliance": 1.0,
+     "Attach To": 5000037,
+     "Attach Offset": [
+      0,
+      -0.5,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "guid": 5000039,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Buoy",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      20,
+      0.2,
+      -4
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.9,
+      0.9,
+      0.9
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Sphere Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Radius": 0.5,
+     "Friction": 0.5,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 25,
+     "Linear Damping": 0.1,
+     "Angular Damping": 0.2,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000040,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Mooring",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      20.5,
+      -5.85,
+      -3.5
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.6,
+      0.3,
+      0.6
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100063,
+     "Albedo": 0,
+     "Color": [
+      0.25,
+      0.22,
+      0.2,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Rope": {
+     "Length": 7.0,
+     "Segments": 20,
+     "Radius": 0.03,
+     "Mass": 0.5,
+     "Bend Compliance": 1.0,
+     "Attach To": 5000039,
+     "Attach Offset": [
+      0,
+      -0.5,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "guid": 5000041,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Buoy",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -22,
+      0.2,
+      14
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.9,
+      0.9,
+      0.9
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Sphere Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Radius": 0.5,
+     "Friction": 0.5,
+     "Bounciness": 0.0
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 25,
+     "Linear Damping": 0.1,
+     "Angular Damping": 0.2,
+     "Use Gravity": true
+    }
+   }
+  },
+  {
+   "guid": 5000042,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Mooring",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -21.5,
+      -5.85,
+      14.5
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.6,
+      0.3,
+      0.6
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100063,
+     "Albedo": 0,
+     "Color": [
+      0.25,
+      0.22,
+      0.2,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Rope": {
+     "Length": 7.0,
+     "Segments": 20,
+     "Radius": 0.03,
+     "Mass": 0.5,
+     "Bend Compliance": 1.0,
+     "Attach To": 5000041,
+     "Attach Offset": [
+      0,
+      -0.5,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "guid": 5000043,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Swimmer",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -3,
+      1.5,
+      -6
+     ],
+     "Rotation": [
+      0,
+      0,
+      1.4
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 100030,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Animator": {
+     "Clip": "",
+     "Speed": 1,
+     "Loop": true,
+     "Playing": true
+    },
+    "Ragdoll": {
+     "Simulate": true,
+     "Mass": 20,
+     "Min Bone Length": 0.05
+    }
+   }
+  },
+  {
+   "guid": 5000044,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Main Camera",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -16,
+      4,
+      12
+     ],
+     "Rotation": [
+      -0.2,
+      -1.5707963267948966,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Camera": {
+     "Projection": 0,
+     "Field Of View": 60,
+     "Orthographic Size": 5,
+     "Near Clip": 0.1,
+     "Far Clip": 600,
+     "Primary": true,
+     "Background": [
+      0.42,
+      0.62,
+      0.86,
+      1
+     ],
+     "Clear Flags": 1
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "ChaseCamera",
+       "Fields": {
+        "Target": 5000014,
+        "Distance": 10.0,
+        "Height": 3.5,
+        "Smoothing": 3.0
+       },
+       "Enabled": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "guid": 5000045,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Canvas",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Canvas": {
+     "Scale Mode": 1,
+     "Reference Resolution": [
+      1920,
+      1080
+     ],
+     "Sorting Order": 0
+    }
+   }
+  },
+  {
+   "guid": 5000046,
+   "parent": 5000045,
+   "components": {
+    "Tag": {
+     "Name": "Title",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "UI Rect": {
+     "Anchor Min": [
+      0,
+      0
+     ],
+     "Anchor Max": [
+      0,
+      0
+     ],
+     "Pivot": [
+      0,
+      0
+     ],
+     "Position": [
+      34,
+      30
+     ],
+     "Size": [
+      1600,
+      60
+     ]
+    },
+    "UI Text": {
+     "Text": "<b>Harbor</b>  (Water Volume waves and buoyancy, boats, moored buoys)",
+     "Font": 0,
+     "Font Size": 44,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Alignment": 0,
+     "Vertical Alignment": 0,
+     "Wrap": true
+    }
+   }
+  },
+  {
+   "guid": 5000047,
+   "parent": 5000045,
+   "components": {
+    "Tag": {
+     "Name": "Controls",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "UI Rect": {
+     "Anchor Min": [
+      0,
+      0
+     ],
+     "Anchor Max": [
+      0,
+      0
+     ],
+     "Pivot": [
+      0,
+      0
+     ],
+     "Position": [
+      34,
+      90
+     ],
+     "Size": [
+      1700,
+      42
+     ]
+    },
+    "UI Text": {
+     "Text": "<b>W/S</b> throttle and reverse, <b>A/D</b> rudder  (gamepad: left stick). Push the crates and barrels around; the buoys are moored with ropes.",
+     "Font": 0,
+     "Font Size": 26,
+     "Color": [
+      0.92,
+      0.95,
+      1,
+      0.9
+     ],
+     "Alignment": 0,
+     "Vertical Alignment": 0,
+     "Wrap": true
+    }
+   }
+  }
+ ]
+}

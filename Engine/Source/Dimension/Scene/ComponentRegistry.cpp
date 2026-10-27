@@ -563,7 +563,7 @@ namespace Dimension
             .Field("Turn Rate", &BoatComponent::TurnRate).Range(0.0f, 720.0f).Speed(0.5f).Tooltip("Degrees per second at full steering and speed")
             .Field("Turn Speed", &BoatComponent::TurnSpeed).Range(0.1f, 100.0f).Speed(0.05f).Tooltip("Speed (m/s) at which the rudder bites fully")
             .Field("Keel", &BoatComponent::Keel).Range(0.0f, 20.0f).Speed(0.01f).Tooltip("Resistance to sliding sideways")
-            .Field("Propeller", &BoatComponent::Propeller).Speed(0.01f).Tooltip("Where the engine pushes (it must be under water)")
+            .Field("Propeller", &BoatComponent::Propeller).Speed(0.01f).Tooltip("The engine works only while this point (the stern) is under water")
             .Field("Drive With Input", &BoatComponent::DriveWithInput).Tooltip("WASD / arrows / left stick steer it");
         Register<RopeComponent>("Rope", "Physics")
             .Field("Length", &RopeComponent::Length).Range(0.01f, 1000.0f).Speed(0.01f)

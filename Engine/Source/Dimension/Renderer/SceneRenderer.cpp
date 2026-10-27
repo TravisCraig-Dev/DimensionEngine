@@ -1719,15 +1719,18 @@ namespace Dimension
             {
                 if (TransientAllocation block = device.AllocateTransient(base->size() * sizeof(Vertex), 16))
                 {
+                    // Each vertex is put together here and written once: the block is mapped GPU memory, slow to
+                    // read back (the bounds come from the simulated positions).
                     auto* out = (Vertex*)block.Data;
                     bounds.Min = bounds.Max = (*simPositions)[0];
                     for (size_t i = 0; i < base->size(); ++i)
                     {
-                        out[i] = (*base)[i];
-                        out[i].Position = (*simPositions)[i];
-                        out[i].Normal = (*simNormals)[i];
-                        bounds.Min = glm::min(bounds.Min, out[i].Position);
-                        bounds.Max = glm::max(bounds.Max, out[i].Position);
+                        Vertex v = (*base)[i];
+                        v.Position = (*simPositions)[i];
+                        v.Normal = (*simNormals)[i];
+                        out[i] = v;
+                        bounds.Min = glm::min(bounds.Min, v.Position);
+                        bounds.Max = glm::max(bounds.Max, v.Position);
                     }
                     item.Vertices = block.Buffer;
                     item.VertexOffset = block.Offset;

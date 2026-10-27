@@ -1116,16 +1116,17 @@ namespace Dimension
                 boat.Steering = std::abs(stickX) > std::abs(turn) ? stickX : turn;
             }
             JPH::BodyID id(rb.RuntimeBody);
-            glm::vec3 forward = glm::normalize(glm::vec3(t.World[2])), right = glm::normalize(glm::vec3(t.World[0])), up(0.0f, 1.0f, 0.0f);
+            glm::vec3 forward = t.Forward(), right = t.Right(), up(0.0f, 1.0f, 0.0f); // -Z forward, as vehicles
             glm::vec3 propeller = glm::vec3(t.World * glm::vec4(boat.Propeller, 1.0f));
             boat.PropellerInWater = underwater(propeller);
             if (!boat.PropellerInWater) continue; // out of the water (a jump, the shore): no thrust, rudder or keel
             glm::vec3 velocity = FromJolt(bi.GetLinearVelocity(id));
             float throttle = std::clamp(boat.Throttle, -1.0f, 1.0f), steering = std::clamp(boat.Steering, -1.0f, 1.0f);
-            // The engine pushes along the boat, level with the water (a tilted hull does not drive itself under).
+            // The engine pushes along the boat, level with the water and through its center of mass: pushed from the
+            // propeller, low at the stern, it would stand the boat on its end (a real hull planes; this one only floats).
             glm::vec3 push = forward - up * glm::dot(forward, up);
             if (glm::dot(push, push) > 1e-6f)
-                bi.AddForce(id, ToJolt(glm::normalize(push) * throttle * boat.EngineForce * (throttle < 0.0f ? 0.5f : 1.0f)), JPH::RVec3(ToJolt(propeller)));
+                bi.AddForce(id, ToJolt(glm::normalize(push) * throttle * boat.EngineForce * (throttle < 0.0f ? 0.5f : 1.0f)));
             // The rudder: the boat's turn about up eases toward Turn Rate by steering and the speed through the water
             // (backwards turns the other way, a little at rest), whatever the hull's size.
             float speed = glm::dot(velocity, forward);

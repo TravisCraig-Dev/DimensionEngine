@@ -1390,7 +1390,7 @@ namespace
 
     void TestBoat()
     {
-        // A boat floating in a Water Volume: full throttle drives it along its +Z, right steering turns it right
+        // A boat floating in a Water Volume: full throttle drives it forward (-Z), right steering turns it right
         // (clockwise seen from above), the keel keeps it from sliding sideways, and out of the water it has no thrust.
         auto run = [&](float throttle, float steering, float startY, float seconds) {
             Scene scene("Boat");
@@ -1409,7 +1409,7 @@ namespace
             auto& b = reg.Emplace<BoatComponent>(boat);
             b.Throttle = throttle;
             b.Steering = steering;
-            b.Propeller = { 0.0f, -0.4f, -2.0f };
+            b.Propeller = { 0.0f, -0.4f, 2.0f };
             scene.UpdateTransforms();
             auto rt = scene.Clone();
             rt->OnRuntimeStart();
@@ -1420,20 +1420,21 @@ namespace
                 everInWater |= rt->GetRegistry().Get<BoatComponent>(boat).PropellerInWater;
             }
             auto& t = rt->GetRegistry().Get<TransformComponent>(boat);
-            glm::vec3 pos = t.Position, forward = glm::normalize(glm::vec3(t.World[2])), right = glm::normalize(glm::vec3(t.World[0]));
+            glm::vec3 pos = t.Position, forward = t.Forward(), right = t.Right();
             glm::vec3 vel = Physics3DWorld::GetLinearVelocity(*rt, boat);
             rt->OnRuntimeStop();
-            struct Result { glm::vec3 Pos, Forward, Velocity, Right; bool InWater; };
-            return Result{ pos, forward, vel, right, everInWater };
+            float upright = t.Up().y;
+            struct Result { glm::vec3 Pos, Forward, Velocity, Right; bool InWater; float Upright; };
+            return Result{ pos, forward, vel, right, everInWater, upright };
         };
         auto idle = run(0.0f, 0.0f, 0.2f, 4.0f);
         auto ahead = run(1.0f, 0.0f, 0.2f, 4.0f);
         CHECK(idle.InWater && glm::length(glm::vec2(idle.Pos.x, idle.Pos.z)) < 0.5f);
-        CHECK(ahead.Pos.z > 5.0f && std::abs(ahead.Pos.x) < 1.0f);
+        CHECK(ahead.Pos.z < -5.0f && std::abs(ahead.Pos.x) < 1.0f && ahead.Upright > 0.9f); // and level, not standing on its stern
         auto turning = run(1.0f, 1.0f, 0.2f, 2.0f); // up to 45 degrees per second
-        // Heading turned clockwise from +Z (toward -X, the boat's right), and it moves mostly along its heading.
-        float heading = std::atan2(turning.Forward.x, turning.Forward.z);
-        CHECK(heading < -0.4f && heading > -1.6f);
+        // Heading turned clockwise seen from above, from -Z toward +X (the boat's right), and it moves mostly along it.
+        float turned = std::atan2(turning.Forward.x, -turning.Forward.z);
+        CHECK(turned > 0.4f && turned < 1.6f);
         CHECK(std::abs(glm::dot(turning.Velocity, turning.Right)) < 0.5f * std::abs(glm::dot(turning.Velocity, turning.Forward)));
         auto dry = run(1.0f, 0.0f, 50.0f, 1.0f); // falling from high up: the propeller never touches water
         CHECK(!dry.InWater && std::abs(dry.Pos.z) < 0.01f);

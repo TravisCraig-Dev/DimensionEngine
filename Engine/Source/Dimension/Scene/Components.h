@@ -865,8 +865,8 @@ namespace Dimension
         void Repair() { DentedPositions.clear(); DentedNormals.clear(); DentDepth.clear(); }
     };
 
-    // A boat (on a dynamic Rigidbody floating in a Water Volume): its engine pushes along its +Z at the Propeller point
-    // while that is under water, the rudder turns it (more the faster it goes through the water, a little at rest), and
+    // A boat (on a dynamic Rigidbody floating in a Water Volume): its engine pushes it forward (-Z, as vehicles) while the
+    // Propeller point is under water, the rudder turns it (more the faster it goes through the water, a little at rest), and
     // its keel resists sliding sideways so it carves turns. Throttle and Steering (-1..1) come from scripts, or from WASD
     // / arrows / the left stick with Drive With Input.
     struct BoatComponent
@@ -877,7 +877,7 @@ namespace Dimension
         float TurnRate = 45.0f;           // degrees per second at full steering and speed
         float TurnSpeed = 4.0f;           // m/s at which the rudder reaches full effect
         float Keel = 1.5f;                // sideways drag, per second (times the mass)
-        glm::vec3 Propeller{ 0.0f, -0.4f, -2.0f }; // where the engine pushes, the object's space
+        glm::vec3 Propeller{ 0.0f, -0.4f, 2.0f }; // the engine works while this point (the stern, object's space) is under water
         bool DriveWithInput = false;
         // Runtime.
         bool PropellerInWater = false;
