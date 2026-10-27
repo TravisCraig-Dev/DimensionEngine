@@ -1877,6 +1877,152 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    // A wall across the yard (z = 0) with a 1.4 m door at x = 0 and a 5 m gap past x = 10; baked for agents from 0.3 m.
+    Entity BuildDoorYard(Scene& scene)
+    {
+        auto& reg = scene.GetRegistry();
+        auto box = [&](const char* name, glm::vec3 at, glm::vec3 size) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = at;
+            reg.Emplace<BoxColliderComponent>(e).Size = size;
+            return e;
+        };
+        box("Ground", { 0.0f, -0.5f, 0.0f }, { 30.0f, 1.0f, 30.0f });
+        box("Wall West", { -7.85f, 1.5f, 0.0f }, { 14.3f, 3.0f, 0.6f });
+        box("Wall East", { 5.35f, 1.5f, 0.0f }, { 9.3f, 3.0f, 0.6f });
+        Entity surface = scene.CreateEntity("Navigation");
+        auto& s = reg.Emplace<NavMeshSurfaceComponent>(surface);
+        s.Size = { 30.0f, 10.0f, 30.0f };
+        s.AgentRadius = 0.3f;
+        scene.UpdateTransforms();
+        return surface;
+    }
+
+    void TestNavAgentSizesAndAreas()
+    {
+        // One surface for agents of any size: a 0.3 m agent goes through the door, a 0.9 m one around by the gap.
+        Scene scene("Doors");
+        Entity surface = BuildDoorYard(scene);
+        auto& reg = scene.GetRegistry();
+        auto mesh = Navigation::Bake(scene, surface);
+        CHECK(mesh && mesh->Clearance.size() == (size_t)mesh->NodeCount());
+        if (!mesh) return;
+        auto maxX = [](const std::vector<glm::vec3>& corners) {
+            float x = -100.0f;
+            for (const glm::vec3& c : corners) x = std::max(x, c.x);
+            return x;
+        };
+        std::vector<glm::vec3> corners;
+        glm::vec3 from(-3.0f, 0.0f, -5.0f), to(-3.0f, 0.0f, 5.0f);
+        Navigation::Filter small{ 0.3f }, big{ 0.9f };
+        CHECK(Navigation::FindPath(*mesh, from, to, corners, {}, nullptr, small) == NavPathStatus::Complete && maxX(corners) < 2.0f);
+        CHECK(Navigation::FindPath(*mesh, from, to, corners, {}, nullptr, big) == NavPathStatus::Complete && maxX(corners) > 10.0f);
+        int door = Navigation::Nearest(*mesh, { 0.0f, 0.0f, 0.0f }, 0.2f);
+        CHECK(door >= 0 && mesh->Clearance[door] > 0.3f && mesh->Clearance[door] < 0.9f);
+
+        // Mud (cost 10) over the door: the small agent goes round too; with mud left out of its Area Mask likewise;
+        // with cost 1 and mud allowed it goes through again.
+        Entity mud = scene.CreateEntity("Mud");
+        auto& volume = reg.Emplace<NavMeshModifierVolumeComponent>(mud);
+        volume.Size = { 4.0f, 2.0f, 4.0f };
+        volume.Area = NavArea::Mud;
+        volume.Cost = 10.0f;
+        scene.UpdateTransforms();
+        mesh = Navigation::Bake(scene, surface);
+        door = Navigation::Nearest(*mesh, { 0.0f, 0.0f, 0.0f }, 0.2f);
+        CHECK(door >= 0 && mesh->Areas[door] == (uint8_t)NavArea::Mud && mesh->Costs[door] == 10.0f);
+        CHECK(Navigation::FindPath(*mesh, from, to, corners, {}, nullptr, small) == NavPathStatus::Complete && maxX(corners) > 10.0f);
+        volume.Cost = 1.0f;
+        mesh = Navigation::Bake(scene, surface);
+        CHECK(Navigation::FindPath(*mesh, from, to, corners, {}, nullptr, small) == NavPathStatus::Complete && maxX(corners) < 2.0f);
+        Navigation::Filter noMud{ 0.3f, ~(1u << (int)NavArea::Mud) };
+        CHECK(Navigation::FindPath(*mesh, from, to, corners, {}, nullptr, noMud) == NavPathStatus::Complete && maxX(corners) > 10.0f);
+        // Not Walkable: the door is gone from the mesh.
+        volume.Area = NavArea::NotWalkable;
+        mesh = Navigation::Bake(scene, surface);
+        CHECK(Navigation::Nearest(*mesh, { 0.0f, 0.0f, 0.0f }, 0.5f) < 0 && Navigation::Nearest(*mesh, { 0.0f, 0.0f, -2.5f }, 0.2f) >= 0);
+        reg.Remove<NavMeshModifierVolumeComponent>(mud);
+
+        // Playing: both agents arrive, the big one never in the doorway.
+        auto agent = [&](const char* name, glm::vec3 at, float radius) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = at;
+            auto& a = reg.Emplace<NavMeshAgentComponent>(e);
+            a.Radius = radius;
+            a.Speed = 6.0f;
+            a.Acceleration = 20.0f;
+            return e;
+        };
+        Entity mouse = agent("Mouse", { -3.0f, 0.0f, -5.0f }, 0.3f), bear = agent("Bear", { -6.0f, 0.0f, -5.0f }, 0.9f);
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        CHECK(Navigation::SetDestination(*rt, mouse, { -3.0f, 0.0f, 5.0f }) && Navigation::SetDestination(*rt, bear, { -6.0f, 0.0f, 5.0f }));
+        bool bearInDoor = false;
+        for (int i = 0; i < 900; ++i)
+        {
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            glm::vec3 b = rr.Get<TransformComponent>(bear).Position;
+            bearInDoor |= std::abs(b.x) < 1.5f && std::abs(b.z) < 1.0f;
+        }
+        CHECK(Near(rr.Get<TransformComponent>(mouse).Position, { -3.0f, 0.0f, 5.0f }, 0.1f));
+        CHECK(!bearInDoor && Near(rr.Get<TransformComponent>(bear).Position, { -6.0f, 0.0f, 5.0f }, 0.1f));
+        rt->OnRuntimeStop();
+    }
+
+    void TestNavGeneratedLinks()
+    {
+        // Generate Links: the yard's platform (1 m up, no way up) gets drops down its edges, one way.
+        Scene scene("Yard");
+        Entity surface = BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        auto& s = reg.Get<NavMeshSurfaceComponent>(surface);
+        s.GenerateLinks = true;
+        s.DropHeight = 2.0f;
+        auto mesh = Navigation::Bake(scene, surface);
+        CHECK(mesh && !mesh->AutoLinks.empty());
+        if (!mesh) return;
+        auto rt = scene.Clone();
+        rt->StartQueryPhysics();
+        auto links = Navigation::LinksOn(*rt, *mesh);
+        std::vector<glm::vec3> corners;
+        std::vector<float> arcs;
+        CHECK(Navigation::FindPath(*mesh, { 10.0f, 1.0f, 10.0f }, { 0.0f, 0.0f, 10.0f }, corners, links, &arcs) == NavPathStatus::Complete);
+        CHECK(std::count_if(arcs.begin(), arcs.end(), [](float a) { return a >= 0.0f; }) == 1);
+        CHECK(Navigation::FindPath(*mesh, { 0.0f, 0.0f, 10.0f }, { 10.0f, 1.0f, 10.0f }, corners, links) == NavPathStatus::Partial);
+        // No links over the 3 m wall (higher than Drop Height is not the point: its top is too narrow to stand on).
+        for (const NavMeshData::AutoLink& l : mesh->AutoLinks) CHECK(mesh->Heights[l.From] < 1.5f);
+
+        // Two slabs a meter apart over a deep pit: jumps across, both ways, when Jump Distance allows.
+        Scene pit("Pit");
+        auto& pr = pit.GetRegistry();
+        auto slab = [&](const char* name, float x) {
+            Entity e = pit.CreateEntity(name);
+            pr.Get<TransformComponent>(e).Position = { x, -0.5f, 0.0f };
+            pr.Emplace<BoxColliderComponent>(e).Size = { 5.0f, 1.0f, 5.0f };
+        };
+        slab("West", -3.0f);
+        slab("East", 3.0f);
+        Entity bottom = pit.CreateEntity("Bottom");
+        pr.Get<TransformComponent>(bottom).Position = { 0.0f, -20.0f, 0.0f };
+        pr.Emplace<BoxColliderComponent>(bottom).Size = { 20.0f, 1.0f, 20.0f };
+        Entity pitSurface = pit.CreateEntity("Navigation");
+        auto& ps = pr.Emplace<NavMeshSurfaceComponent>(pitSurface);
+        ps.Size = { 16.0f, 30.0f, 10.0f };
+        ps.GenerateLinks = true;
+        ps.JumpDistance = 1.5f;
+        pit.UpdateTransforms();
+        auto pitMesh = Navigation::Bake(pit, pitSurface);
+        auto pitRt = pit.Clone();
+        pitRt->StartQueryPhysics();
+        CHECK(Navigation::FindPath(*pitMesh, { -3.0f, 0.0f, 0.0f }, { 3.0f, 0.0f, 0.0f }, corners, Navigation::LinksOn(*pitRt, *pitMesh), &arcs) == NavPathStatus::Complete);
+        CHECK(Navigation::FindPath(*pitMesh, { 3.0f, 0.0f, 0.0f }, { -3.0f, 0.0f, 0.0f }, corners, Navigation::LinksOn(*pitRt, *pitMesh)) == NavPathStatus::Complete);
+        pr.Get<NavMeshSurfaceComponent>(pitSurface).JumpDistance = 0.5f;
+        pitMesh = Navigation::Bake(pit, pitSurface);
+        CHECK(Navigation::FindPath(*pitMesh, { -3.0f, 0.0f, 0.0f }, { 3.0f, 0.0f, 0.0f }, corners, Navigation::LinksOn(*pitRt, *pitMesh)) == NavPathStatus::Partial);
+    }
+
     void TestNavMeshObstacles()
     {
         // A carving obstacle filling the gap past the wall's end cuts the mesh there: the far side is out of reach
@@ -7896,6 +8042,8 @@ int main(int argc, char** argv)
     Run("LOD fade and generated", TestLODFadeAndGenerated);
     Run("NavMesh obstacles", TestNavMeshObstacles);
     Run("Off-mesh links", TestOffMeshLinks);
+    Run("NavMesh agent sizes and areas", TestNavAgentSizesAndAreas);
+    Run("NavMesh generated links", TestNavGeneratedLinks);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

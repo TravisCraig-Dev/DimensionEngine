@@ -30,6 +30,7 @@
 #include <ImGuizmo.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <functional>
 #include <optional>
 #ifdef _WIN32
 #include <windows.h>
@@ -514,6 +515,12 @@ namespace Editor
         ImGui::PopStyleVar();
     }
 
+    namespace
+    {
+        // The sphere around an object's point handles (false: it has none).
+        bool HandleBounds(Dimension::Scene& scene, Dimension::Entity e, glm::vec3& center, float& radius);
+    }
+
     void EditorLayer::FocusSelected()
     {
         if (!m_Ctx.HasValidSelection()) return;
@@ -527,6 +534,8 @@ namespace Editor
                 center = glm::vec3(t.World * glm::vec4(mesh->GetBounds().Center(), 1.0f));
                 radius = glm::length(mesh->GetBounds().Extents() * glm::abs(t.Scale));
             }
+        // Objects drawn only by handles (links, paths, obstacles): frame the handles.
+        if (!scene.GetRegistry().Has<MeshRendererComponent>(m_Ctx.Selected)) HandleBounds(scene, m_Ctx.Selected, center, radius);
         m_Camera.Focus(center, radius);
     }
 
@@ -578,27 +587,96 @@ namespace Editor
     namespace
     {
         // The points edited with handles in the Scene view: a Line Renderer's, or the curve of a Terrain Path or a
-        // Path Placer (the object's space).
+        // Path Placer (a list: points can be inserted and removed), or fixed handles: an Off Mesh Link's ends, a NavMesh
+        // Obstacle's center and size (box) or height and radius (capsule). In the object's space unless UseWorldSpace.
         struct EditablePoints
         {
-            std::vector<glm::vec3>& Positions;
-            bool UseWorldSpace, Loop;
-            const char* Component;
-            const char* Field;
+            std::vector<glm::vec3> Positions;
+            bool UseWorldSpace = false, Loop = false;
+            const char* Component = "";
+            std::vector<const char*> Fields; // per handle (one entry: the list's field)
+            std::vector<const char*> Names;  // per handle, for the tooltip (empty: numbered points)
+            std::vector<glm::vec3>* List = nullptr;
+            std::function<void(size_t, const glm::vec3&)> Set;
+            const char* FieldOf(size_t i) const { return Fields[std::min(i, Fields.size() - 1)]; }
         };
+        EditablePoints ListPoints(std::vector<glm::vec3>& list, bool world, bool loop, const char* component, const char* field)
+        {
+            EditablePoints p;
+            p.Positions = list;
+            p.UseWorldSpace = world;
+            p.Loop = loop;
+            p.Component = component;
+            p.Fields = { field };
+            p.List = &list;
+            p.Set = [&list](size_t i, const glm::vec3& v) { list[i] = v; };
+            return p;
+        }
         std::optional<EditablePoints> EditablePointsOf(Dimension::Scene& scene, Dimension::Entity e)
         {
             auto& reg = scene.GetRegistry();
-            if (auto* line = reg.TryGet<Dimension::LineRendererComponent>(e))
-                return EditablePoints{ line->Positions, line->UseWorldSpace, line->Loop, "Line Renderer", "Positions" };
-            if (auto* path = reg.TryGet<Dimension::TerrainPathComponent>(e)) return EditablePoints{ path->Points, false, false, "Terrain Path", "Points" };
-            if (auto* placer = reg.TryGet<Dimension::PathPlacerComponent>(e))
-                return EditablePoints{ placer->Points, false, placer->Closed, "Path Placer", "Points" };
+            if (auto* line = reg.TryGet<Dimension::LineRendererComponent>(e)) return ListPoints(line->Positions, line->UseWorldSpace, line->Loop, "Line Renderer", "Positions");
+            if (auto* path = reg.TryGet<Dimension::TerrainPathComponent>(e)) return ListPoints(path->Points, false, false, "Terrain Path", "Points");
+            if (auto* placer = reg.TryGet<Dimension::PathPlacerComponent>(e)) return ListPoints(placer->Points, false, placer->Closed, "Path Placer", "Points");
+            if (auto* link = reg.TryGet<Dimension::OffMeshLinkComponent>(e))
+            {
+                EditablePoints p;
+                p.Positions = { link->Start, link->End };
+                p.Component = "Off Mesh Link";
+                p.Fields = p.Names = { "Start", "End" };
+                p.Set = [link](size_t i, const glm::vec3& v) { (i == 0 ? link->Start : link->End) = v; };
+                return p;
+            }
+            if (auto* ob = reg.TryGet<Dimension::NavMeshObstacleComponent>(e))
+            {
+                EditablePoints p;
+                p.Component = "NavMesh Obstacle";
+                if (ob->Shape == Dimension::NavObstacleShape::Box)
+                {
+                    p.Positions = { ob->Center, ob->Center + ob->Size * 0.5f };
+                    p.Fields = { "Center", "Size" };
+                    p.Names = { "Center", "Corner (Size)" };
+                    p.Set = [ob](size_t i, const glm::vec3& v) {
+                        if (i == 0) ob->Center = v;
+                        else ob->Size = glm::max(glm::abs(v - ob->Center) * 2.0f, glm::vec3(0.01f));
+                    };
+                }
+                else
+                {
+                    p.Positions = { ob->Center, ob->Center + glm::vec3(0.0f, ob->Height * 0.5f, 0.0f), ob->Center + glm::vec3(ob->Radius, 0.0f, 0.0f) };
+                    p.Fields = { "Center", "Height", "Radius" };
+                    p.Names = { "Center", "Top (Height)", "Side (Radius)" };
+                    p.Set = [ob](size_t i, const glm::vec3& v) {
+                        if (i == 0) ob->Center = v;
+                        else if (i == 1) ob->Height = std::max(2.0f * (v.y - ob->Center.y), 0.01f);
+                        else ob->Radius = std::max(glm::length(glm::vec2(v.x - ob->Center.x, v.z - ob->Center.z)), 0.01f);
+                    };
+                }
+                return p;
+            }
             return std::nullopt;
+        }
+
+        bool HandleBounds(Dimension::Scene& scene, Dimension::Entity e, glm::vec3& center, float& radius)
+        {
+            auto points = EditablePointsOf(scene, e);
+            if (!points || points->Positions.empty()) return false;
+            const glm::mat4& world = scene.GetRegistry().Get<Dimension::TransformComponent>(e).World;
+            glm::vec3 lo(1e30f), hi(-1e30f);
+            for (const glm::vec3& p : points->Positions)
+            {
+                glm::vec3 w = points->UseWorldSpace ? p : glm::vec3(world * glm::vec4(p, 1.0f));
+                lo = glm::min(lo, w);
+                hi = glm::max(hi, w);
+            }
+            center = (lo + hi) * 0.5f;
+            radius = std::max(glm::length(hi - lo) * 0.5f, 1.0f);
+            return true;
         }
     }
 
-    // Line Renderer, Terrain Path and Path Placer points: with one selected, its points show as handles in the Scene
+    // Line Renderer, Terrain Path and Path Placer points (and Off Mesh Link ends, NavMesh Obstacle shapes): with one
+    // selected, its points show as handles in the Scene
     // view. Clicking one picks it and a move gizmo edits that point (undoable); clicking elsewhere returns to the
     // object's own gizmo. Shift-click on a segment inserts a point there; Delete removes the picked point (a line
     // keeps at least two).
@@ -649,12 +727,18 @@ namespace Editor
             dl->AddCircleFilled(s, picked ? 6.0f : 4.5f, picked ? accent : IM_COL32(255, 170, 60, 255));
             dl->AddCircle(s, picked ? 6.0f : 4.5f, IM_COL32(20, 20, 20, 255), 0, 1.5f);
         }
-        if (hovered >= 0) ImGui::SetTooltip("Point %d (click to move it%s)", hovered, line->Positions.size() > 2 ? ", Delete removes it" : "");
+        if (hovered >= 0)
+        {
+            if (!line->Names.empty())
+                ImGui::SetTooltip("%s (click to move it)", line->Names[std::min((size_t)hovered, line->Names.size() - 1)]);
+            else
+                ImGui::SetTooltip("Point %d (click to move it%s)", hovered, line->Positions.size() > 2 ? ", Delete removes it" : "");
+        }
 
         // Shift: a "+" marker follows the mouse along the nearest segment; clicking inserts a point there.
         int insertAfter = -1;
         glm::vec3 insertWorld(0.0f);
-        if (hovered < 0 && m_SceneViewHovered && ImGui::GetIO().KeyShift && !ImGuizmo::IsUsing() && line->Positions.size() >= 2)
+        if (line->List && hovered < 0 && m_SceneViewHovered && ImGui::GetIO().KeyShift && !ImGuizmo::IsUsing() && line->Positions.size() >= 2)
         {
             size_t segments = line->Positions.size() - (line->Loop ? 0 : 1);
             float nearest = 10.0f;
@@ -702,8 +786,8 @@ namespace Editor
                                      snap ? snaps : nullptr))
             {
                 glm::vec3 world(m[3]);
-                line->Positions[(size_t)m_LinePoint] = line->UseWorldSpace ? world : glm::vec3(glm::inverse(t.World) * glm::vec4(world, 1.0f));
-                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->Field);
+                line->Set((size_t)m_LinePoint, line->UseWorldSpace ? world : glm::vec3(glm::inverse(t.World) * glm::vec4(world, 1.0f)));
+                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->FieldOf((size_t)m_LinePoint));
                 m_Ctx.MarkDirty();
             }
             overGizmo |= ImGuizmo::IsUsing();
@@ -716,8 +800,8 @@ namespace Editor
             {
                 m_Ctx.RecordUndo();
                 glm::vec3 p = line->UseWorldSpace ? insertWorld : glm::vec3(glm::inverse(t.World) * glm::vec4(insertWorld, 1.0f));
-                line->Positions.insert(line->Positions.begin() + insertAfter + 1, p);
-                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->Field);
+                line->List->insert(line->List->begin() + insertAfter + 1, p);
+                Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->FieldOf(0));
                 m_Ctx.MarkDirty();
                 m_LinePoint = insertAfter + 1;
                 return true;
@@ -738,14 +822,14 @@ namespace Editor
         Scene& scene = m_Ctx.ActiveScene();
         auto line = m_LinePoint >= 0 && m_Ctx.HasValidSelection() ? EditablePointsOf(scene, m_Ctx.Selected) : std::nullopt;
         if (!line || m_LinePoint >= (int)line->Positions.size()) return false;
-        if (line->Positions.size() > 2)
+        if (line->List && line->List->size() > 2)
         {
             m_Ctx.RecordUndo();
-            line->Positions.erase(line->Positions.begin() + m_LinePoint);
-            Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->Field);
+            line->List->erase(line->List->begin() + m_LinePoint);
+            Prefabs::RecordFieldOverride(scene, m_Ctx.Selected, line->Component, line->FieldOf(0));
             m_Ctx.MarkDirty();
         }
-        m_LinePoint = std::min(m_LinePoint, (int)line->Positions.size() - 1);
+        m_LinePoint = std::min(m_LinePoint, (int)(line->List ? line->List->size() : line->Positions.size()) - 1);
         return true; // handled even when kept at two points: Delete never removes the object while a point is picked
     }
 

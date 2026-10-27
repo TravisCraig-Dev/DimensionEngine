@@ -993,12 +993,76 @@
      "Agent Height": 2.0,
      "Max Slope": 45,
      "Step Height": 0.4,
-     "Show NavMesh": true
+     "Show NavMesh": true,
+     "Generate Links": true,
+     "Drop Height": 1.5,
+     "Jump Distance": 1.0
     }
    }
   },
   {
    "guid": 6000017,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Mud",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      6,
+      0.01,
+      12
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.8,
+      1,
+      0.5
+     ]
+    },
+    "NavMesh Modifier Volume": {
+     "Center": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      8,
+      2,
+      5
+     ],
+     "Area": 4,
+     "Cost": 4.0
+    },
+    "Mesh Renderer": {
+     "Mesh": 3,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      0.35,
+      0.24,
+      0.12,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": false
+    }
+   }
+  },
+  {
+   "guid": 6000018,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1027,8 +1091,8 @@
    }
   },
   {
-   "guid": 6000018,
-   "parent": 6000017,
+   "guid": 6000019,
+   "parent": 6000018,
    "components": {
     "Tag": {
      "Name": "Pole",
@@ -1074,8 +1138,8 @@
    }
   },
   {
-   "guid": 6000019,
-   "parent": 6000017,
+   "guid": 6000020,
+   "parent": 6000018,
    "components": {
     "Tag": {
      "Name": "Cloth",
@@ -1121,7 +1185,7 @@
    }
   },
   {
-   "guid": 6000020,
+   "guid": 6000021,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1158,13 +1222,13 @@
      "Base Offset": 0,
      "Obstacle Avoidance": true,
      "Avoidance Priority": 50,
-     "Target": 6000017
+     "Target": 6000018
     }
    }
   },
   {
-   "guid": 6000021,
-   "parent": 6000020,
+   "guid": 6000022,
+   "parent": 6000021,
    "components": {
     "Tag": {
      "Name": "Body",
@@ -1210,8 +1274,8 @@
    }
   },
   {
-   "guid": 6000022,
-   "parent": 6000020,
+   "guid": 6000023,
+   "parent": 6000021,
    "components": {
     "Tag": {
      "Name": "Visor",
@@ -1257,7 +1321,7 @@
    }
   },
   {
-   "guid": 6000023,
+   "guid": 6000024,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1286,8 +1350,8 @@
    }
   },
   {
-   "guid": 6000024,
-   "parent": 6000023,
+   "guid": 6000025,
+   "parent": 6000024,
    "components": {
     "Tag": {
      "Name": "Pole",
@@ -1333,8 +1397,8 @@
    }
   },
   {
-   "guid": 6000025,
-   "parent": 6000023,
+   "guid": 6000026,
+   "parent": 6000024,
    "components": {
     "Tag": {
      "Name": "Cloth",
@@ -1380,7 +1444,7 @@
    }
   },
   {
-   "guid": 6000026,
+   "guid": 6000027,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1417,13 +1481,13 @@
      "Base Offset": 0,
      "Obstacle Avoidance": true,
      "Avoidance Priority": 50,
-     "Target": 6000023
+     "Target": 6000024
     }
    }
   },
   {
-   "guid": 6000027,
-   "parent": 6000026,
+   "guid": 6000028,
+   "parent": 6000027,
    "components": {
     "Tag": {
      "Name": "Body",
@@ -1469,8 +1533,8 @@
    }
   },
   {
-   "guid": 6000028,
-   "parent": 6000026,
+   "guid": 6000029,
+   "parent": 6000027,
    "components": {
     "Tag": {
      "Name": "Visor",
@@ -1516,7 +1580,7 @@
    }
   },
   {
-   "guid": 6000029,
+   "guid": 6000030,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1545,8 +1609,8 @@
    }
   },
   {
-   "guid": 6000030,
-   "parent": 6000029,
+   "guid": 6000031,
+   "parent": 6000030,
    "components": {
     "Tag": {
      "Name": "Pole",
@@ -1592,8 +1656,8 @@
    }
   },
   {
-   "guid": 6000031,
-   "parent": 6000029,
+   "guid": 6000032,
+   "parent": 6000030,
    "components": {
     "Tag": {
      "Name": "Cloth",
@@ -1639,7 +1703,7 @@
    }
   },
   {
-   "guid": 6000032,
+   "guid": 6000033,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1676,13 +1740,13 @@
      "Base Offset": 0,
      "Obstacle Avoidance": true,
      "Avoidance Priority": 50,
-     "Target": 6000029
+     "Target": 6000030
     }
    }
   },
   {
-   "guid": 6000033,
-   "parent": 6000032,
+   "guid": 6000034,
+   "parent": 6000033,
    "components": {
     "Tag": {
      "Name": "Body",
@@ -1728,8 +1792,8 @@
    }
   },
   {
-   "guid": 6000034,
-   "parent": 6000032,
+   "guid": 6000035,
+   "parent": 6000033,
    "components": {
     "Tag": {
      "Name": "Visor",
@@ -1775,7 +1839,7 @@
    }
   },
   {
-   "guid": 6000035,
+   "guid": 6000036,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1804,8 +1868,8 @@
    }
   },
   {
-   "guid": 6000036,
-   "parent": 6000035,
+   "guid": 6000037,
+   "parent": 6000036,
    "components": {
     "Tag": {
      "Name": "Pole",
@@ -1851,8 +1915,8 @@
    }
   },
   {
-   "guid": 6000037,
-   "parent": 6000035,
+   "guid": 6000038,
+   "parent": 6000036,
    "components": {
     "Tag": {
      "Name": "Cloth",
@@ -1898,7 +1962,7 @@
    }
   },
   {
-   "guid": 6000038,
+   "guid": 6000039,
    "parent": 0,
    "components": {
     "Tag": {
@@ -1935,13 +1999,13 @@
      "Base Offset": 0,
      "Obstacle Avoidance": true,
      "Avoidance Priority": 50,
-     "Target": 6000035
+     "Target": 6000036
     }
    }
   },
   {
-   "guid": 6000039,
-   "parent": 6000038,
+   "guid": 6000040,
+   "parent": 6000039,
    "components": {
     "Tag": {
      "Name": "Body",
@@ -1987,8 +2051,8 @@
    }
   },
   {
-   "guid": 6000040,
-   "parent": 6000038,
+   "guid": 6000041,
+   "parent": 6000039,
    "components": {
     "Tag": {
      "Name": "Visor",
@@ -2034,7 +2098,7 @@
    }
   },
   {
-   "guid": 6000041,
+   "guid": 6000042,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2063,8 +2127,8 @@
    }
   },
   {
-   "guid": 6000042,
-   "parent": 6000041,
+   "guid": 6000043,
+   "parent": 6000042,
    "components": {
     "Tag": {
      "Name": "Pole",
@@ -2110,8 +2174,8 @@
    }
   },
   {
-   "guid": 6000043,
-   "parent": 6000041,
+   "guid": 6000044,
+   "parent": 6000042,
    "components": {
     "Tag": {
      "Name": "Cloth",
@@ -2157,7 +2221,7 @@
    }
   },
   {
-   "guid": 6000044,
+   "guid": 6000045,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2194,13 +2258,13 @@
      "Base Offset": 0,
      "Obstacle Avoidance": true,
      "Avoidance Priority": 50,
-     "Target": 6000041
+     "Target": 6000042
     }
    }
   },
   {
-   "guid": 6000045,
-   "parent": 6000044,
+   "guid": 6000046,
+   "parent": 6000045,
    "components": {
     "Tag": {
      "Name": "Body",
@@ -2246,8 +2310,8 @@
    }
   },
   {
-   "guid": 6000046,
-   "parent": 6000044,
+   "guid": 6000047,
+   "parent": 6000045,
    "components": {
     "Tag": {
      "Name": "Visor",
@@ -2293,7 +2357,7 @@
    }
   },
   {
-   "guid": 6000047,
+   "guid": 6000048,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2322,8 +2386,8 @@
    }
   },
   {
-   "guid": 6000048,
-   "parent": 6000047,
+   "guid": 6000049,
+   "parent": 6000048,
    "components": {
     "Tag": {
      "Name": "Pole",
@@ -2369,8 +2433,8 @@
    }
   },
   {
-   "guid": 6000049,
-   "parent": 6000047,
+   "guid": 6000050,
+   "parent": 6000048,
    "components": {
     "Tag": {
      "Name": "Cloth",
@@ -2416,7 +2480,7 @@
    }
   },
   {
-   "guid": 6000050,
+   "guid": 6000051,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2453,13 +2517,13 @@
      "Base Offset": 0,
      "Obstacle Avoidance": true,
      "Avoidance Priority": 50,
-     "Target": 6000047
+     "Target": 6000048
     }
    }
   },
   {
-   "guid": 6000051,
-   "parent": 6000050,
+   "guid": 6000052,
+   "parent": 6000051,
    "components": {
     "Tag": {
      "Name": "Body",
@@ -2505,8 +2569,8 @@
    }
   },
   {
-   "guid": 6000052,
-   "parent": 6000050,
+   "guid": 6000053,
+   "parent": 6000051,
    "components": {
     "Tag": {
      "Name": "Visor",
@@ -2552,7 +2616,7 @@
    }
   },
   {
-   "guid": 6000053,
+   "guid": 6000054,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2616,7 +2680,7 @@
    }
   },
   {
-   "guid": 6000054,
+   "guid": 6000055,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2661,7 +2725,7 @@
    }
   },
   {
-   "guid": 6000055,
+   "guid": 6000056,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2719,7 +2783,7 @@
    }
   },
   {
-   "guid": 6000056,
+   "guid": 6000057,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2777,7 +2841,7 @@
    }
   },
   {
-   "guid": 6000057,
+   "guid": 6000058,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2835,7 +2899,172 @@
    }
   },
   {
-   "guid": 6000058,
+   "guid": 6000059,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Flag 7",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -16,
+      0,
+      -14
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "guid": 6000060,
+   "parent": 6000059,
+   "components": {
+    "Tag": {
+     "Name": "Pole",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      1.0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.08,
+      2.0,
+      0.08
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 100026,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 6000061,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Ogre",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      16,
+      0,
+      8
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "NavMesh Agent": {
+     "Speed": 2.5,
+     "Angular Speed": 240,
+     "Acceleration": 6,
+     "Stopping Distance": 1.0,
+     "Auto Braking": true,
+     "Radius": 0.9,
+     "Height": 2.6,
+     "Base Offset": 0,
+     "Obstacle Avoidance": true,
+     "Avoidance Priority": 10,
+     "Target": 6000059
+    }
+   }
+  },
+  {
+   "guid": 6000062,
+   "parent": 6000061,
+   "components": {
+    "Tag": {
+     "Name": "Body",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      1.3,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1.8,
+      2.6,
+      1.8
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      0.45,
+      0.55,
+      0.3,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 6000063,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2875,8 +3104,8 @@
    }
   },
   {
-   "guid": 6000059,
-   "parent": 6000058,
+   "guid": 6000064,
+   "parent": 6000063,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -2904,8 +3133,8 @@
    }
   },
   {
-   "guid": 6000060,
-   "parent": 6000059,
+   "guid": 6000065,
+   "parent": 6000064,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -2951,8 +3180,8 @@
    }
   },
   {
-   "guid": 6000061,
-   "parent": 6000059,
+   "guid": 6000066,
+   "parent": 6000064,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -2998,8 +3227,8 @@
    }
   },
   {
-   "guid": 6000062,
-   "parent": 6000058,
+   "guid": 6000067,
+   "parent": 6000063,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3045,8 +3274,8 @@
    }
   },
   {
-   "guid": 6000063,
-   "parent": 6000058,
+   "guid": 6000068,
+   "parent": 6000063,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3092,7 +3321,7 @@
    }
   },
   {
-   "guid": 6000064,
+   "guid": 6000069,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3132,8 +3361,8 @@
    }
   },
   {
-   "guid": 6000065,
-   "parent": 6000064,
+   "guid": 6000070,
+   "parent": 6000069,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3161,8 +3390,8 @@
    }
   },
   {
-   "guid": 6000066,
-   "parent": 6000065,
+   "guid": 6000071,
+   "parent": 6000070,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3208,8 +3437,8 @@
    }
   },
   {
-   "guid": 6000067,
-   "parent": 6000065,
+   "guid": 6000072,
+   "parent": 6000070,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -3255,8 +3484,8 @@
    }
   },
   {
-   "guid": 6000068,
-   "parent": 6000064,
+   "guid": 6000073,
+   "parent": 6000069,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3302,8 +3531,8 @@
    }
   },
   {
-   "guid": 6000069,
-   "parent": 6000064,
+   "guid": 6000074,
+   "parent": 6000069,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3349,7 +3578,7 @@
    }
   },
   {
-   "guid": 6000070,
+   "guid": 6000075,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3389,8 +3618,8 @@
    }
   },
   {
-   "guid": 6000071,
-   "parent": 6000070,
+   "guid": 6000076,
+   "parent": 6000075,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3418,8 +3647,8 @@
    }
   },
   {
-   "guid": 6000072,
-   "parent": 6000071,
+   "guid": 6000077,
+   "parent": 6000076,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3465,8 +3694,8 @@
    }
   },
   {
-   "guid": 6000073,
-   "parent": 6000071,
+   "guid": 6000078,
+   "parent": 6000076,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -3512,8 +3741,8 @@
    }
   },
   {
-   "guid": 6000074,
-   "parent": 6000070,
+   "guid": 6000079,
+   "parent": 6000075,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3559,8 +3788,8 @@
    }
   },
   {
-   "guid": 6000075,
-   "parent": 6000070,
+   "guid": 6000080,
+   "parent": 6000075,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3606,7 +3835,7 @@
    }
   },
   {
-   "guid": 6000076,
+   "guid": 6000081,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3646,8 +3875,8 @@
    }
   },
   {
-   "guid": 6000077,
-   "parent": 6000076,
+   "guid": 6000082,
+   "parent": 6000081,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3675,8 +3904,8 @@
    }
   },
   {
-   "guid": 6000078,
-   "parent": 6000077,
+   "guid": 6000083,
+   "parent": 6000082,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3722,8 +3951,8 @@
    }
   },
   {
-   "guid": 6000079,
-   "parent": 6000077,
+   "guid": 6000084,
+   "parent": 6000082,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -3769,8 +3998,8 @@
    }
   },
   {
-   "guid": 6000080,
-   "parent": 6000076,
+   "guid": 6000085,
+   "parent": 6000081,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3816,8 +4045,8 @@
    }
   },
   {
-   "guid": 6000081,
-   "parent": 6000076,
+   "guid": 6000086,
+   "parent": 6000081,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3863,7 +4092,7 @@
    }
   },
   {
-   "guid": 6000082,
+   "guid": 6000087,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3903,8 +4132,8 @@
    }
   },
   {
-   "guid": 6000083,
-   "parent": 6000082,
+   "guid": 6000088,
+   "parent": 6000087,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3932,8 +4161,8 @@
    }
   },
   {
-   "guid": 6000084,
-   "parent": 6000083,
+   "guid": 6000089,
+   "parent": 6000088,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3979,8 +4208,8 @@
    }
   },
   {
-   "guid": 6000085,
-   "parent": 6000083,
+   "guid": 6000090,
+   "parent": 6000088,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -4026,8 +4255,8 @@
    }
   },
   {
-   "guid": 6000086,
-   "parent": 6000082,
+   "guid": 6000091,
+   "parent": 6000087,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -4073,8 +4302,8 @@
    }
   },
   {
-   "guid": 6000087,
-   "parent": 6000082,
+   "guid": 6000092,
+   "parent": 6000087,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -4120,7 +4349,7 @@
    }
   },
   {
-   "guid": 6000088,
+   "guid": 6000093,
    "parent": 0,
    "components": {
     "Tag": {
@@ -4160,8 +4389,8 @@
    }
   },
   {
-   "guid": 6000089,
-   "parent": 6000088,
+   "guid": 6000094,
+   "parent": 6000093,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -4189,8 +4418,8 @@
    }
   },
   {
-   "guid": 6000090,
-   "parent": 6000089,
+   "guid": 6000095,
+   "parent": 6000094,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -4236,8 +4465,8 @@
    }
   },
   {
-   "guid": 6000091,
-   "parent": 6000089,
+   "guid": 6000096,
+   "parent": 6000094,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -4283,8 +4512,8 @@
    }
   },
   {
-   "guid": 6000092,
-   "parent": 6000088,
+   "guid": 6000097,
+   "parent": 6000093,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -4330,8 +4559,8 @@
    }
   },
   {
-   "guid": 6000093,
-   "parent": 6000088,
+   "guid": 6000098,
+   "parent": 6000093,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -4377,7 +4606,7 @@
    }
   },
   {
-   "guid": 6000094,
+   "guid": 6000099,
    "parent": 0,
    "components": {
     "Tag": {
@@ -4421,7 +4650,7 @@
    }
   },
   {
-   "guid": 6000095,
+   "guid": 6000100,
    "parent": 0,
    "components": {
     "Tag": {
@@ -4458,8 +4687,8 @@
    }
   },
   {
-   "guid": 6000096,
-   "parent": 6000095,
+   "guid": 6000101,
+   "parent": 6000100,
    "components": {
     "Tag": {
      "Name": "Title",
@@ -4523,8 +4752,8 @@
    }
   },
   {
-   "guid": 6000097,
-   "parent": 6000095,
+   "guid": 6000102,
+   "parent": 6000100,
    "components": {
     "Tag": {
      "Name": "Info",

@@ -675,7 +675,15 @@ namespace Dimension
             .Field("Agent Height", &NavMeshSurfaceComponent::AgentHeight).Range(0.1f, 20.0f).Speed(0.01f).Tooltip("Headroom needed to walk under things")
             .Field("Max Slope", &NavMeshSurfaceComponent::MaxSlope).Range(0.0f, 89.0f).Speed(0.5f).Tooltip("Steepest walkable ground, degrees")
             .Field("Step Height", &NavMeshSurfaceComponent::StepHeight).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("Highest step walked up")
-            .Field("Show NavMesh", &NavMeshSurfaceComponent::ShowNavMesh);
+            .Field("Show NavMesh", &NavMeshSurfaceComponent::ShowNavMesh)
+            .Field("Generate Links", &NavMeshSurfaceComponent::GenerateLinks).Tooltip("Off-mesh links down ledges and across gaps")
+            .Field("Drop Height", &NavMeshSurfaceComponent::DropHeight).Range(0.0f, 50.0f).Speed(0.05f).Tooltip("Highest ledge agents drop down (one way)")
+            .Field("Jump Distance", &NavMeshSurfaceComponent::JumpDistance).Range(0.0f, 20.0f).Speed(0.05f).Tooltip("Widest gap agents jump across");
+        Register<NavMeshModifierVolumeComponent>("NavMesh Modifier Volume", "Navigation")
+            .Field("Center", &NavMeshModifierVolumeComponent::Center).Speed(0.01f)
+            .Field("Size", &NavMeshModifierVolumeComponent::Size).Speed(0.05f)
+            .Field("Area", &NavMeshModifierVolumeComponent::Area).Enum({ "Walkable", "Not Walkable", "Road", "Grass", "Mud", "Water", "Area 6", "Area 7" })
+            .Field("Cost", &NavMeshModifierVolumeComponent::Cost).Range(0.05f, 100.0f).Speed(0.05f).Tooltip("Walking here counts this many times (below 1: preferred)");
         Register<NavMeshObstacleComponent>("NavMesh Obstacle", "Navigation")
             .Field("Shape", &NavMeshObstacleComponent::Shape).Enum({ "Box", "Capsule" })
             .Field("Center", &NavMeshObstacleComponent::Center).Speed(0.01f)
@@ -704,7 +712,8 @@ namespace Dimension
             .Field("Base Offset", &NavMeshAgentComponent::BaseOffset).Speed(0.01f).Tooltip("How far its object stands above the ground")
             .Field("Obstacle Avoidance", &NavMeshAgentComponent::ObstacleAvoidance).Tooltip("Steers around other agents")
             .Field("Avoidance Priority", &NavMeshAgentComponent::AvoidancePriority).Range(0.0f, 99.0f).Tooltip("Gives way to agents with a lower number")
-            .Field("Target", &NavMeshAgentComponent::Target).Tooltip("Keeps walking to this object (optional; scripts can set destinations instead)");
+            .Field("Target", &NavMeshAgentComponent::Target).Tooltip("Keeps walking to this object (optional; scripts can set destinations instead)")
+            .Field("Area Mask", &NavMeshAgentComponent::AreaMask).Tooltip("A bit per area it may walk: 1 Walkable, 4 Road, 8 Grass, 16 Mud, 32 Water, ... (-1 = all)");
         Register<AudioReverbZoneComponent>("Audio Reverb Zone", "Audio")
             .Field("Min Distance", &AudioReverbZoneComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.05f)
                 .Tooltip("Full reverb while the listener is this close")

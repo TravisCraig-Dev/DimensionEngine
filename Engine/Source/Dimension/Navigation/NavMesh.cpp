@@ -6,6 +6,7 @@
 #include <limits>
 #include <cstring>
 #include <queue>
+#include <set>
 #include <unordered_map>
 
 namespace Dimension
@@ -81,10 +82,35 @@ namespace Dimension
                     }
             }
 
-            // Keeps only the nodes for which keep[] is set.
+            // Distances along the mesh: from the nodes already given one (the rest kInf), on through the links.
+            void Spread(const NavMeshData& m, std::vector<float>& dist)
+            {
+                using Item = std::pair<float, int>;
+                std::priority_queue<Item, std::vector<Item>, std::greater<>> open;
+                for (int a = 0; a < (int)dist.size(); ++a)
+                    if (dist[a] < kInf) open.push({ dist[a], a });
+                while (!open.empty())
+                {
+                    auto [da, a] = open.top();
+                    open.pop();
+                    if (da > dist[a]) continue;
+                    for (int d = 0; d < 8; ++d)
+                    {
+                        int b = m.Links[(size_t)a * 8 + d];
+                        float nd = da + (d < 4 ? m.CellSize : m.CellSize * 1.41421356f);
+                        if (b >= 0 && nd < dist[b])
+                        {
+                            dist[b] = nd;
+                            open.push({ nd, b });
+                        }
+                    }
+                }
+            }
+
+            // Keeps only the nodes for which keep[] is set (and their Clearance).
             void Compact(NavMeshData& m, const std::vector<uint8_t>& keep)
             {
-                std::vector<float> heights;
+                std::vector<float> heights, clearance;
                 std::vector<int32_t> columns;
                 std::vector<uint32_t> starts(m.ColumnStart.size(), 0);
                 for (size_t c = 0; c + 1 < m.ColumnStart.size(); ++c)
@@ -95,10 +121,12 @@ namespace Dimension
                         {
                             heights.push_back(m.Heights[a]);
                             columns.push_back((int32_t)c);
+                            if (!m.Clearance.empty()) clearance.push_back(m.Clearance[a]);
                         }
                 }
                 starts.back() = (uint32_t)heights.size();
                 m.Heights = std::move(heights);
+                m.Clearance = std::move(clearance);
                 m.Columns = std::move(columns);
                 m.ColumnStart = std::move(starts);
                 BuildLinks(m);
@@ -133,6 +161,60 @@ namespace Dimension
                 }
             }
 
+            // Links of the mesh's own: from each spot at an edge, looking straight out past it for the first ground to land
+            // on: lower by more than a step and at most Drop Height (a drop, one way), or level across a gap up to Jump
+            // Distance (both ways), with nothing in between. At most one per meter of edge and area landed in.
+            void GenerateLinks(Scene& scene, NavMeshData& m, float dropHeight, float jumpDistance)
+            {
+                auto& reg = scene.GetRegistry();
+                float c = m.CellSize;
+                int reach = (int)std::ceil((jumpDistance + 2.0f * m.AgentRadius + c) / c);
+                std::set<std::tuple<int, int, int, int>> taken;
+                const glm::vec3 lift(0.0f, m.AgentHeight * 0.5f, 0.0f);
+                for (int a = 0; a < m.NodeCount(); ++a)
+                    for (int d = 0; d < 4; ++d)
+                    {
+                        if (m.Links[(size_t)a * 8 + d] >= 0) continue;
+                        int col = m.Columns[a], x = col % m.Width, z = col / m.Width;
+                        float ya = m.Heights[a];
+                        for (int k = 1; k <= reach; ++k)
+                        {
+                            int nc = m.Column(x + kDirX[d] * k, z + kDirZ[d] * k);
+                            if (nc < 0) break;
+                            int land = -1;
+                            bool across = false;
+                            for (uint32_t b = m.ColumnStart[nc]; b < m.ColumnStart[nc + 1]; ++b)
+                            {
+                                float dy = ya - m.Heights[b];
+                                if (dy > m.StepHeight && dy <= dropHeight && (land < 0 || m.Heights[b] > m.Heights[land])) land = (int)b;
+                                else if (std::abs(dy) <= m.StepHeight && k >= 2 && k * c - 2.0f * m.AgentRadius - c <= jumpDistance)
+                                {
+                                    land = (int)b;
+                                    across = true;
+                                    break;
+                                }
+                            }
+                            if (land < 0) continue;
+                            glm::vec3 pa = m.NodePosition(a), pb = m.NodePosition(land);
+                            auto key = std::make_tuple(d, (int)std::floor(pa.x), (int)std::floor(pa.z), m.Islands[land]);
+                            if (taken.count(key)) break;
+                            bool clear = true;
+                            glm::vec3 dir = pb - pa;
+                            for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, pa + lift, dir, glm::length(dir)))
+                                if (!Ignored(reg, h.Hit))
+                                {
+                                    clear = false;
+                                    break;
+                                }
+                            if (!clear) break;
+                            taken.insert(key);
+                            m.AutoLinks.push_back({ a, land, across ? 0.5f : 0.3f });
+                            if (across) m.AutoLinks.push_back({ land, a, 0.5f });
+                            break;
+                        }
+                    }
+            }
+
             std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& s, const glm::vec3& center)
             {
                 auto& reg = scene.GetRegistry();
@@ -149,6 +231,29 @@ namespace Dimension
                 float top = center.y + size.y * 0.5f;
                 float cosSlope = std::cos(glm::radians(std::clamp(s.MaxSlope, 0.0f, 89.0f)));
                 const glm::vec3 down(0.0f, -1.0f, 0.0f), up(0.0f, 1.0f, 0.0f);
+
+                // Modifier volumes, as boxes in their objects' space.
+                struct Volume
+                {
+                    glm::mat4 ToLocal;
+                    glm::vec3 Center, Half;
+                    int Area;
+                    float Cost;
+                    bool Contains(const glm::vec3& p) const
+                    {
+                        glm::vec3 local = glm::vec3(ToLocal * glm::vec4(p, 1.0f)) - Center;
+                        return glm::all(glm::lessThanEqual(glm::abs(local), Half));
+                    }
+                };
+                std::vector<Volume> volumes;
+                for (auto [e, v, t] : reg.ViewOf<NavMeshModifierVolumeComponent, TransformComponent>())
+                    if (t.ActiveInHierarchy)
+                        volumes.push_back({ glm::inverse(t.World), v.Center, glm::abs(v.Size) * 0.5f, std::clamp((int)v.Area, 0, kAreaCount - 1), std::max(v.Cost, 0.01f) });
+                auto notWalkable = [&](const glm::vec3& p) {
+                    for (const Volume& v : volumes)
+                        if (v.Area == kNotWalkable && v.Contains(p)) return true;
+                    return false;
+                };
 
                 // Every column: the surfaces under its center, top down. A surface is walkable when it is flat enough,
                 // nothing seen above it is within Agent Height, and a ray up finds no underside (or solid) that close.
@@ -174,7 +279,7 @@ namespace Dimension
                                     blocked = true;
                                     break;
                                 }
-                            if (blocked) continue;
+                            if (blocked || notWalkable(h.Point)) continue;
                             m->Heights.push_back(y);
                             m->Columns.push_back(z * m->Width + x);
                         }
@@ -182,43 +287,39 @@ namespace Dimension
                 m->ColumnStart.push_back((uint32_t)m->Heights.size());
                 BuildLinks(*m);
 
-                // Room for the agent: drop the nodes nearer than Agent Radius to an edge (a node missing a side is half a
-                // cell from it), measured along the mesh.
+                // Each spot's clearance: how far it is from an edge along the mesh (a node missing a side is half a cell
+                // from it). Room for the agent: the spots nearer than Agent Radius go.
                 int n = m->NodeCount();
+                m->Clearance.assign(n, kInf);
+                for (int a = 0; a < n; ++a)
+                    for (int d = 0; d < 4; ++d)
+                        if (m->Links[(size_t)a * 8 + d] < 0)
+                        {
+                            m->Clearance[a] = 0.5f * c;
+                            break;
+                        }
+                Spread(*m, m->Clearance);
                 if (m->AgentRadius > 0.0f && n > 0)
                 {
-                    std::vector<float> dist(n, kInf);
-                    using Item = std::pair<float, int>;
-                    std::priority_queue<Item, std::vector<Item>, std::greater<>> open;
-                    for (int a = 0; a < n; ++a)
-                        for (int d = 0; d < 4; ++d)
-                            if (m->Links[(size_t)a * 8 + d] < 0)
-                            {
-                                dist[a] = 0.5f * c;
-                                open.push({ dist[a], a });
-                                break;
-                            }
-                    while (!open.empty())
-                    {
-                        auto [da, a] = open.top();
-                        open.pop();
-                        if (da > dist[a]) continue;
-                        for (int d = 0; d < 8; ++d)
-                        {
-                            int b = m->Links[(size_t)a * 8 + d];
-                            float nd = da + (d < 4 ? c : c * 1.41421356f);
-                            if (b >= 0 && nd < dist[b])
-                            {
-                                dist[b] = nd;
-                                open.push({ nd, b });
-                            }
-                        }
-                    }
                     std::vector<uint8_t> keep(n);
-                    for (int a = 0; a < n; ++a) keep[a] = dist[a] >= m->AgentRadius - 1e-4f;
+                    for (int a = 0; a < n; ++a) keep[a] = m->Clearance[a] >= m->AgentRadius - 1e-4f;
                     Compact(*m, keep);
                 }
+                n = m->NodeCount();
+                // Areas and costs from the modifier volumes (the last one containing a spot wins).
+                m->Areas.assign(n, 0);
+                m->Costs.assign(n, 1.0f);
+                for (int a = 0; a < n; ++a)
+                    for (const Volume& v : volumes)
+                        if (v.Area != kNotWalkable && v.Contains(m->NodePosition(a) + glm::vec3(0.0f, 0.05f, 0.0f)))
+                        {
+                            m->Areas[a] = (uint8_t)v.Area;
+                            m->Costs[a] = v.Cost;
+                        }
+                m->MinCost = 1.0f;
+                for (float cost : m->Costs) m->MinCost = std::min(m->MinCost, cost);
                 BuildIslands(*m);
+                if (s.GenerateLinks) GenerateLinks(scene, *m, std::max(s.DropHeight, 0.0f), std::max(s.JumpDistance, 0.0f));
                 return m;
             }
 
@@ -245,11 +346,12 @@ namespace Dimension
             }
 
             NavPathStatus PathFrom(const NavMeshData& m, int start, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners,
-                                   const std::vector<Link>& links, std::vector<float>* linkArcs)
+                                   const std::vector<Link>& links, std::vector<float>* linkArcs, const Filter& filter)
             {
                 corners.clear();
                 if (linkArcs) linkArcs->clear();
                 if (start < 0 || start >= m.NodeCount() || m.IsBlocked(start)) return NavPathStatus::Invalid;
+                auto cost = [&](int node) { return m.Costs.empty() ? 1.0f : m.Costs[node]; };
                 int n = m.NodeCount();
                 // The areas reachable from the start's, across off-mesh links.
                 int islandCount = 0;
@@ -263,14 +365,14 @@ namespace Dimension
                         if (reachable[m.Islands[l.From]] && !reachable[m.Islands[l.To]]) reachable[m.Islands[l.To]] = grew = true;
                 }
                 NavPathStatus status = NavPathStatus::Complete;
-                int goal = Nearest(m, to, std::max(10.0f, m.AgentHeight * 2.0f));
+                int goal = Nearest(m, to, std::max(10.0f, m.AgentHeight * 2.0f), filter);
                 if (goal < 0 || !reachable[m.Islands[goal]])
                 {
                     // Out of reach: as near to it as the reachable areas get.
                     status = NavPathStatus::Partial;
                     float best = kInf;
                     for (int a = 0; a < n; ++a)
-                        if (reachable[m.Islands[a]] && !m.IsBlocked(a))
+                        if (reachable[m.Islands[a]] && filter.Passes(m, a))
                         {
                             glm::vec3 d = m.NodePosition(a) - to;
                             float d2 = glm::dot(d, d);
@@ -291,8 +393,13 @@ namespace Dimension
                 using Item = std::pair<float, int>;
                 std::priority_queue<Item, std::vector<Item>, std::greater<>> open;
                 glm::vec3 goalPos = m.NodePosition(goal);
+                float h = std::min(m.MinCost, 1.0f); // keeps the estimate below the real cost on cheap ground
                 g[start] = 0.0f;
-                open.push({ glm::distance(m.NodePosition(start), goalPos), start });
+                open.push({ glm::distance(m.NodePosition(start), goalPos) * h, start });
+                // The spot reached nearest the goal, should the goal not be reached (too narrow for the agent, or
+                // only through areas it leaves out).
+                int nearestReached = start;
+                float nearestD = glm::distance(m.NodePosition(start), to);
                 while (!open.empty())
                 {
                     int a = open.top().second;
@@ -301,23 +408,32 @@ namespace Dimension
                     closed[a] = 1;
                     if (a == goal) break;
                     glm::vec3 pa = m.NodePosition(a);
-                    auto relax = [&](int b, float cost, int link) {
-                        if (b < 0 || closed[b]) return;
-                        float nd = g[a] + cost;
+                    if (float d = glm::distance(pa, to); d < nearestD)
+                    {
+                        nearestD = d;
+                        nearestReached = a;
+                    }
+                    auto relax = [&](int b, float edge, int link) {
+                        if (b < 0 || closed[b] || !filter.Passes(m, b)) return;
+                        float nd = g[a] + edge;
                         if (nd < g[b])
                         {
                             g[b] = nd;
                             parent[b] = a;
                             parentLink[b] = link;
-                            open.push({ nd + glm::distance(m.NodePosition(b), goalPos), b });
+                            open.push({ nd + glm::distance(m.NodePosition(b), goalPos) * h, b });
                         }
                     };
                     for (int d = 0; d < 8; ++d)
-                        if (int b = m.Links[(size_t)a * 8 + d]; b >= 0) relax(b, glm::distance(pa, m.NodePosition(b)), -1);
+                        if (int b = m.Links[(size_t)a * 8 + d]; b >= 0) relax(b, glm::distance(pa, m.NodePosition(b)) * 0.5f * (cost(a) + cost(b)), -1);
                     if (auto it = linksFrom.find(a); it != linksFrom.end())
                         for (int k : it->second) relax(links[k].To, links[k].Cost, k);
                 }
-                if (!closed[goal]) return NavPathStatus::Invalid;
+                if (!closed[goal])
+                {
+                    status = NavPathStatus::Partial;
+                    goal = nearestReached;
+                }
                 std::vector<int> nodes, arrivedBy; // arrivedBy: the link that led to the node (-1 = walked)
                 for (int a = goal; a >= 0; a = parent[a])
                 {
@@ -351,7 +467,7 @@ namespace Dimension
                         {
                             glm::vec3 pk = point(k);
                             int endNode = -1;
-                            if (!Walk(m, nodes[i], cur, { pk.x, pk.z }, &endNode) || endNode != nodes[k]) break;
+                            if (!Walk(m, nodes[i], cur, { pk.x, pk.z }, &endNode, nullptr, filter) || endNode != nodes[k] || cost(nodes[k]) != cost(nodes[i])) break;
                             far = k;
                         }
                         corners.push_back(point(far));
@@ -381,6 +497,8 @@ namespace Dimension
                 return status;
             }
 
+            Filter FilterOf(const NavMeshAgentComponent& agent) { return { agent.Radius, (uint32_t)agent.AreaMask }; }
+
             NavMeshAgentComponent* AgentOf(Scene& scene, Entity e) { return scene.IsValid(e) ? scene.GetRegistry().TryGet<NavMeshAgentComponent>(e) : nullptr; }
 
             glm::vec3 GroundOf(Scene& scene, Entity e, const NavMeshAgentComponent& agent)
@@ -403,7 +521,7 @@ namespace Dimension
             {
                 glm::ivec2 cell;
                 glm::vec3 ground = GroundOf(scene, e, agent);
-                if (agent.Mesh && agent.Node >= 0 && agent.Node < agent.Mesh->NodeCount() && !agent.Mesh->IsBlocked(agent.Node))
+                if (agent.Mesh && agent.Node >= 0 && agent.Node < agent.Mesh->NodeCount() && FilterOf(agent).Passes(*agent.Mesh, agent.Node))
                 {
                     // Still in (or next to) its node's column? Otherwise it was moved: look again.
                     cell = CellOf(*agent.Mesh, { ground.x, ground.z });
@@ -411,7 +529,8 @@ namespace Dimension
                     if (std::abs(cell.x - col % agent.Mesh->Width) <= 1 && std::abs(cell.y - col / agent.Mesh->Width) <= 1) return true;
                 }
                 int node = -1;
-                agent.Mesh = MeshNear(scene, ground, std::max(agent.Height, 2.0f), &node);
+                agent.Mesh = MeshNear(scene, ground, std::max(agent.Height, 2.0f), &node, FilterOf(agent));
+                if (!agent.Mesh) agent.Mesh = MeshNear(scene, ground, std::max(agent.Height, 2.0f), &node); // nowhere roomy enough: anywhere
                 agent.Node = agent.Mesh ? node : -1;
                 if (agent.Node < 0) return false;
                 glm::vec3 on = OnMesh(*agent.Mesh, agent.Node, { ground.x, ground.z });
@@ -430,7 +549,7 @@ namespace Dimension
                     return;
                 }
                 agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, GroundOf(scene, e, agent), agent.Destination, agent.Path,
-                                            LinksOn(scene, *agent.Mesh), &agent.PathLinks);
+                                            LinksOn(scene, *agent.Mesh), &agent.PathLinks, FilterOf(agent));
             }
 
             float Horizontal(const glm::vec3& a, const glm::vec3& b) { return glm::length(glm::vec2(a.x - b.x, a.z - b.z)); }
@@ -443,7 +562,7 @@ namespace Dimension
             }
         }
 
-        int Nearest(const NavMeshData& m, const glm::vec3& p, float maxDistance)
+        int Nearest(const NavMeshData& m, const glm::vec3& p, float maxDistance, const Filter& filter)
         {
             if (m.NodeCount() == 0 || maxDistance < 0.0f) return -1;
             float c = m.CellSize;
@@ -461,7 +580,7 @@ namespace Dimension
                 {
                     float dy = m.Heights[a] - p.y;
                     float d2 = dx * dx + dz * dz + dy * dy;
-                    if (d2 < bestD2 && !m.IsBlocked((int)a))
+                    if (d2 < bestD2 && filter.Passes(m, (int)a))
                     {
                         bestD2 = d2;
                         best = (int)a;
@@ -513,7 +632,7 @@ namespace Dimension
             return glm::mix(glm::mix(h[0][0], h[0][1], tx), glm::mix(h[1][0], h[1][1], tx), tz);
         }
 
-        bool Walk(const NavMeshData& m, int startNode, glm::vec2 from, glm::vec2 to, int* endNode, glm::vec2* reached)
+        bool Walk(const NavMeshData& m, int startNode, glm::vec2 from, glm::vec2 to, int* endNode, glm::vec2* reached, const Filter& filter)
         {
             int node = startNode;
             int col = m.Columns[node];
@@ -545,7 +664,7 @@ namespace Dimension
                     tMaxZ += tDeltaZ;
                 }
                 int next = m.Links[(size_t)node * 8 + dir];
-                if (next < 0)
+                if (next < 0 || !filter.Passes(m, next))
                 {
                     if (endNode) *endNode = node;
                     if (reached)
@@ -567,9 +686,9 @@ namespace Dimension
         }
 
         NavPathStatus FindPath(const NavMeshData& mesh, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners,
-                               const std::vector<Link>& links, std::vector<float>* linkArcs)
+                               const std::vector<Link>& links, std::vector<float>* linkArcs, const Filter& filter)
         {
-            return PathFrom(mesh, Nearest(mesh, from, std::max(mesh.AgentHeight, 2.0f)), from, to, corners, links, linkArcs);
+            return PathFrom(mesh, Nearest(mesh, from, std::max(mesh.AgentHeight, 2.0f), filter), from, to, corners, links, linkArcs, filter);
         }
 
         std::vector<Link> LinksOn(Scene& scene, const NavMeshData& mesh)
@@ -586,6 +705,13 @@ namespace Dimension
                 float cost = glm::distance(a, b) * std::max(link.CostModifier, 0.0f);
                 out.push_back({ na, nb, a, b, cost, std::max(link.ArcHeight, 0.0f) });
                 if (link.Bidirectional) out.push_back({ nb, na, b, a, cost, std::max(link.ArcHeight, 0.0f) });
+            }
+            // The bake's own (a little dearer than walking the same length, so they are used where they save a way round).
+            for (const NavMeshData::AutoLink& l : mesh.AutoLinks)
+            {
+                if (mesh.IsBlocked(l.From) || mesh.IsBlocked(l.To)) continue;
+                glm::vec3 a = mesh.NodePosition(l.From), b = mesh.NodePosition(l.To);
+                out.push_back({ l.From, l.To, a, b, glm::distance(a, b) * 1.5f + 0.5f, l.Arc });
             }
             return out;
         }
@@ -647,6 +773,15 @@ namespace Dimension
                     int& l = m->Links[(size_t)a * 8 + d];
                     if (l >= 0 && (m->Blocked[a] || m->Blocked[l])) l = -1;
                 }
+            // Less room next to the holes: about Agent Radius at their edge, more farther off.
+            std::vector<float> hole(n, kInf);
+            for (int a = 0; a < n; ++a)
+                if (!m->Blocked[a])
+                    for (int d = 0; d < 8; ++d)
+                        if (int b = baked.Links[(size_t)a * 8 + d]; b >= 0 && m->Blocked[b]) hole[a] = radius;
+            Spread(*m, hole);
+            if (m->Clearance.size() == (size_t)n)
+                for (int a = 0; a < n; ++a) m->Clearance[a] = std::min(m->Clearance[a], hole[a]);
             BuildIslands(*m);
             return m;
         }
@@ -687,7 +822,7 @@ namespace Dimension
             for (Entity e : surfaces) Bake(scene, e);
         }
 
-        std::shared_ptr<const NavMeshData> MeshNear(Scene& scene, const glm::vec3& point, float maxDistance, int* node)
+        std::shared_ptr<const NavMeshData> MeshNear(Scene& scene, const glm::vec3& point, float maxDistance, int* node, const Filter& filter)
         {
             std::shared_ptr<const NavMeshData> best;
             float bestD = kInf;
@@ -695,7 +830,7 @@ namespace Dimension
             for (auto [e, s, t] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent, TransformComponent>())
             {
                 if (!s.Data || !t.ActiveInHierarchy) continue;
-                int a = Nearest(*s.Data, point, maxDistance);
+                int a = Nearest(*s.Data, point, maxDistance, filter);
                 if (a < 0) continue;
                 glm::vec3 on = OnMesh(*s.Data, a, { point.x, point.z });
                 float d = glm::distance(on, point);
@@ -724,7 +859,7 @@ namespace Dimension
             int node = -1;
             corners.clear();
             auto mesh = MeshNear(scene, from, 2.0f, &node);
-            return mesh ? PathFrom(*mesh, node, from, to, corners, LinksOn(scene, *mesh), nullptr) : NavPathStatus::Invalid;
+            return mesh ? PathFrom(*mesh, node, from, to, corners, LinksOn(scene, *mesh), nullptr, {}) : NavPathStatus::Invalid;
         }
 
         bool SetDestination(Scene& scene, Entity e, const glm::vec3& destination)
@@ -876,7 +1011,7 @@ namespace Dimension
                 // from where it stands (not across an off-mesh link, which is not walked).
                 bool onLink = agent.Corner >= 1 && agent.Corner - 1 < agent.PathLinks.size() && agent.PathLinks[agent.Corner - 1] >= 0.0f;
                 if (!onLink && !agent.PathDirty && agent.HasDestination && agent.RepathTimer <= 0.0f && agent.Corner < agent.Path.size() &&
-                    !Walk(*agent.Mesh, agent.Node, { mv.Ground.x, mv.Ground.z }, { agent.Path[agent.Corner].x, agent.Path[agent.Corner].z }))
+                    !Walk(*agent.Mesh, agent.Node, { mv.Ground.x, mv.Ground.z }, { agent.Path[agent.Corner].x, agent.Path[agent.Corner].z }, nullptr, nullptr, FilterOf(agent)))
                 {
                     agent.PathDirty = true;
                     agent.RepathTimer = 0.2f;
@@ -911,7 +1046,7 @@ namespace Dimension
                     if (t >= 1.0f)
                     {
                         agent.Traversing = false;
-                        agent.Node = Nearest(*agent.Mesh, agent.TraverseTo, 1.0f);
+                        agent.Node = Nearest(*agent.Mesh, agent.TraverseTo, 1.0f, FilterOf(agent));
                     }
                     continue;
                 }
@@ -1042,11 +1177,12 @@ namespace Dimension
                     step = glm::normalize(step) * brakeDistance; // no overshooting the end
                 glm::vec2 target = p + step, reached = p;
                 int node = agent.Node;
-                if (glm::length(step) > 1e-7f && !Walk(mesh, agent.Node, p, target, &node, &reached))
+                Filter filter = FilterOf(agent);
+                if (glm::length(step) > 1e-7f && !Walk(mesh, agent.Node, p, target, &node, &reached, filter))
                 {
                     int along = node;
                     glm::vec2 slid;
-                    if (Walk(mesh, agent.Node, p, { target.x, p.y }, &along, &slid) || Walk(mesh, agent.Node, p, { p.x, target.y }, &along, &slid))
+                    if (Walk(mesh, agent.Node, p, { target.x, p.y }, &along, &slid, filter) || Walk(mesh, agent.Node, p, { p.x, target.y }, &along, &slid, filter))
                     {
                         node = along;
                         reached = slid;

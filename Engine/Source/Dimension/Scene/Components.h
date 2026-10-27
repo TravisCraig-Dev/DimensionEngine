@@ -794,6 +794,11 @@ namespace Dimension
         float MaxSlope = 45.0f; // degrees
         float StepHeight = 0.4f;
         bool ShowNavMesh = true; // the baked mesh in the Scene view while the object is selected
+        // Generate Links: off-mesh links of its own, down ledges up to Drop Height (one way) and across gaps up to Jump
+        // Distance wide (both ways).
+        bool GenerateLinks = false;
+        float DropHeight = 2.0f;
+        float JumpDistance = 1.5f;
         std::shared_ptr<const NavMeshData> Data;  // runtime: the mesh agents walk (the baked one with obstacles' holes)
         std::shared_ptr<const NavMeshData> Baked; // runtime: as baked
         uint64_t CarveKey = 0;                    // runtime: which obstacles cut Data, and where
@@ -822,6 +827,18 @@ namespace Dimension
         glm::mat4 CarvedAt{ 0.0f }; // its transform when it last cut the mesh
     };
 
+    // A NavMesh Modifier Volume (like Unity's): the navigation mesh inside its box (Center, Size, in the object's
+    // space) is of an Area: Not Walkable takes it out (agents keep Agent Radius from it), the others make walking
+    // there count Cost times on paths (a road below 1, mud above) and can be left out by agents' Area Mask.
+    enum class NavArea : int32_t { Walkable = 0, NotWalkable = 1, Road = 2, Grass = 3, Mud = 4, Water = 5, Area6 = 6, Area7 = 7 };
+    struct NavMeshModifierVolumeComponent
+    {
+        glm::vec3 Center{ 0.0f };
+        glm::vec3 Size{ 4.0f, 2.0f, 4.0f };
+        NavArea Area = NavArea::Mud;
+        float Cost = 3.0f;
+    };
+
     // An Off-Mesh Link (like Unity's): a way between two points of the navigation mesh that is not walked on it (a
     // jump across a gap or down a ledge, a ladder). Start and End are in the object's space; agents route through it
     // and cross it in a jump Arc Height high (0 = straight, as on a ladder). Its length counts Cost Modifier times
@@ -840,7 +857,8 @@ namespace Dimension
     // at up to Speed (m/s) speeding up and slowing by Acceleration, turning by Angular Speed (degrees/s) to face the
     // way it goes, slowing to arrive (Auto Braking) Stopping Distance short. Agents steer around each other (Obstacle
     // Avoidance), giving way to ones of a lower Avoidance Priority number. With a Target it keeps following that
-    // object. It moves its object (keep agents as hierarchy roots), Base Offset above the ground.
+    // object. It moves its object (keep agents as hierarchy roots), Base Offset above the ground. Agents of any Radius
+    // share a surface: they go only where it has room for them (bake with the smallest agent's radius).
     enum class NavPathStatus : int32_t { Complete = 0, Partial = 1, Invalid = 2 };
     struct NavMeshAgentComponent
     {
@@ -855,6 +873,7 @@ namespace Dimension
         bool ObstacleAvoidance = true;
         int32_t AvoidancePriority = 50; // 0 most important - 99 least
         Entity Target = Entity::Null();
+        int32_t AreaMask = -1; // a bit per area it may walk (NavMesh Modifier Volume areas); -1 = all
         // Runtime
         glm::vec3 Destination{ 0.0f };
         bool HasDestination = false, PathDirty = false, IsStopped = false;

@@ -4115,8 +4115,11 @@ namespace Dimension
             }
         }
         // Navigation: the baked mesh (links between its spots, its edges brighter), an agent's room and path.
+        // Area colors (Walkable, Not Walkable, Road, Grass, Mud, Water, Area 6, Area 7).
+        static const glm::vec4 kAreaColors[8] = { { 0.35f, 0.7f, 1.0f, 0.3f }, { 1.0f, 0.3f, 0.3f, 0.4f }, { 0.75f, 0.75f, 0.8f, 0.5f }, { 0.4f, 0.9f, 0.35f, 0.45f },
+                                                  { 0.7f, 0.45f, 0.2f, 0.55f }, { 0.2f, 0.85f, 0.95f, 0.45f }, { 0.9f, 0.5f, 0.9f, 0.45f }, { 0.95f, 0.85f, 0.3f, 0.45f } };
         auto drawNavMesh = [&](const NavMeshData& m) {
-            const glm::vec4 fill(0.35f, 0.7f, 1.0f, 0.3f), edge(0.45f, 0.85f, 1.0f, 0.95f);
+            const glm::vec4 edge(0.45f, 0.85f, 1.0f, 0.95f);
             const glm::vec3 lift(0.0f, 0.04f, 0.0f);
             int n = m.NodeCount();
             bool interior = n <= 40000; // big meshes: only their edges
@@ -4130,14 +4133,35 @@ namespace Dimension
                     int b = m.Links[(size_t)a * 8 + d];
                     if (b >= 0)
                     {
-                        if (interior && d < 2) DrawLine(p, m.NodePosition(b) + lift, fill);
+                        if (interior && d < 2) DrawLine(p, m.NodePosition(b) + lift, kAreaColors[m.Areas.empty() ? 0 : m.Areas[a] & 7]);
                         continue;
                     }
                     glm::vec3 out(Navigation::kDirX[d] * h, 0.0f, Navigation::kDirZ[d] * h), side(Navigation::kDirZ[d] * h, 0.0f, Navigation::kDirX[d] * h);
                     DrawLine(p + out - side, p + out + side, edge);
                 }
             }
+            // Generated links: small arcs, an arrow head where they land.
+            for (const NavMeshData::AutoLink& l : m.AutoLinks)
+            {
+                if (m.IsBlocked(l.From) || m.IsBlocked(l.To)) continue;
+                glm::vec3 a = m.NodePosition(l.From) + lift, b = m.NodePosition(l.To) + lift, prev = a;
+                const glm::vec4 color(1.0f, 0.7f, 0.3f, 0.9f);
+                for (int i = 1; i <= 8; ++i)
+                {
+                    float s = i / 8.0f;
+                    glm::vec3 q = glm::mix(a, b, s) + glm::vec3(0.0f, l.Arc * 4.0f * s * (1.0f - s), 0.0f);
+                    DrawLine(prev, q, color);
+                    prev = q;
+                }
+                DrawLine(b, b + glm::vec3(0.0f, 0.15f, 0.0f), color);
+            }
         };
+        if (auto* volume = reg.TryGet<NavMeshModifierVolumeComponent>(sel))
+        {
+            glm::vec4 color = kAreaColors[(int)volume->Area & 7];
+            color.a = 1.0f;
+            DrawWireBox(t.World, volume->Center, volume->Size * 0.5f, color);
+        }
         // Off-mesh links: an arc from start to end (arrow heads at the ends it can be crossed to).
         auto drawLink = [&](Entity e, const OffMeshLinkComponent& link) {
             const glm::mat4& w = reg.Get<TransformComponent>(e).World;

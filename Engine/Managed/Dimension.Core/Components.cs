@@ -564,6 +564,9 @@ namespace Dimension
         public bool Warp(Vector3 position) => Op(8, position) != 0.0f;
         public float Speed { get => GetFloat("Speed"); set => SetFloat("Speed", value); }
         public float StoppingDistance { get => GetFloat("Stopping Distance"); set => SetFloat("Stopping Distance", value); }
+        /// <summary>A bit per area it may walk (1 Walkable, 4 Road, 8 Grass, 16 Mud, 32 Water, ...); -1 = all. Takes
+        /// effect on its next path.</summary>
+        public int AreaMask { get => GetInt("Area Mask"); set => SetInt("Area Mask", value); }
     }
 
     /// <summary>Queries on the baked navigation meshes.</summary>
