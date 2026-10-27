@@ -358,6 +358,15 @@ namespace Dimension
         public float GetUpProgress => Native.Api.RagdollQuery(Entity.Scene, Entity.Id, 1);
     }
 
+    /// <summary>Tow Hitch: hangs this object (a trailer) on another by a ball joint.</summary>
+    public class TowHitch : Component
+    {
+        internal override string NativeName => "Tow Hitch";
+        /// <summary>Clear to unhitch; set to hitch again where it stands.</summary>
+        public bool Attached { get => GetBool("Attached"); set => SetBool("Attached", value); }
+        public float BreakForce { get => GetFloat("Break Force"); set => SetFloat("Break Force", value); }
+    }
+
     /// <summary>Boat: an engine, rudder and keel for a body floating in a Water Volume.</summary>
     public class Boat : Component
     {

@@ -6,6 +6,7 @@
 #include "Dimension/Physics/Cloth.h"
 #include "Dimension/Physics/Water.h"
 #include "Dimension/Terrain/Terrain.h"
+#include "Dimension/Scene/PathPlacer.h"
 #include "Dimension/Physics/Rope.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
@@ -123,7 +124,7 @@ namespace Dimension
             glm::vec4 GrassBenders[SceneRenderer::kMaxGrassBenders]; // xyz sphere center, w radius
             glm::vec4 CloudParams;  // x coverage, y density, z base, w top
             glm::vec4 CloudParams2; // x feature size, y steps, z 1 = on, w 1 = shadows
-            glm::vec4 Weather;      // x wetness, y snow cover
+            glm::vec4 Weather;      // x wetness, y snow cover, z rain, w lightning flash
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
@@ -358,6 +359,9 @@ namespace Dimension
             VkDeviceAddress Address = 0;
             Buffer Trails; // recorded trail points (systems with trails)
             VkDeviceAddress TrailAddress = 0;
+            Buffer Hits[kFramesInFlight + 1]; // collision decal hits, read back once their frame is done
+            VkDeviceAddress HitsAddress[kFramesInFlight + 1] = {};
+            uint64_t HitsFrame[kFramesInFlight + 1] = {}, HitsHandled = ~0ull;
             uint32_t Capacity = 0, Head = 0, Generation = 0;
             uint64_t LastFrame = 0;
             Buffer Sort; // (key, slot) pairs for back-to-front drawing
@@ -932,7 +936,9 @@ namespace Dimension
         for (auto [we, w, wt] : reg.ViewOf<WeatherComponent, TransformComponent>())
             if (wt.ActiveInHierarchy)
             {
-                u.Weather = glm::vec4(std::clamp(w.Wetness, 0.0f, 1.0f), std::clamp(w.SnowCover, 0.0f, 1.0f), 0.0f, 0.0f);
+                u.Weather = glm::vec4(std::clamp(w.Wetness, 0.0f, 1.0f), std::clamp(w.SnowCover, 0.0f, 1.0f), std::clamp(w.Rain, 0.0f, 1.0f), w.Flash);
+                // A lightning flash lights everything from the sky.
+                u.Ambient += glm::vec4(glm::vec3(0.55f, 0.6f, 0.85f) * (w.Flash * 2.5f), 0.0f);
                 break;
             }
         bool gpuCulled = false;
@@ -2745,7 +2751,10 @@ namespace Dimension
             glm::uvec4 ColliderCount;
             glm::vec4 Colliders[32 * 4]; // PARTICLE_COLLIDERS
             glm::uvec4 MeshSamples;
+            glm::uvec4 DecalBuffer;
         };
+        // Collision decal hits read back per GPU system: a ring of buffers, one per frame until the GPU is done with it.
+        constexpr uint32_t kHitRing = kFramesInFlight + 1, kMaxHitsPerFrame = 128;
         constexpr VkDeviceSize kGpuParticleSize = 64;
         constexpr uint32_t kMaxGpuParticles = 1000000;
         constexpr uint32_t kGpuTrailPoints = 8;              // TRAIL_POINTS in ParticleCommon.glsl
@@ -2929,6 +2938,49 @@ namespace Dimension
                 p.ColorLut[i] = ps.ColorOverLifetime.Evaluate(x);
                 p.CurveLut[i] = glm::vec4(ps.SizeOverLifetime.Evaluate(x), ps.SpeedOverLifetime.Evaluate(x), ps.ForceCurve.Evaluate(x), 0.0f);
             }
+            // Collision decals: last time around this ring slot's hits (that frame is finished) become decals, and
+            // the slot records this frame's.
+            bool dispatching = clear || dt > 0.0f || total > 0;
+            bool decals = ps.CollisionDecals && ps.MaxDecals > 0 && (ps.Collision != ParticleCollision::None || ps.CollideWithColliders);
+            uint32_t hitSlot = (uint32_t)(frame % kHitRing);
+            bool clearHits = false;
+            if (decals && st.HitsHandled != frame)
+            {
+                st.HitsHandled = frame;
+                Buffer& hits = st.Hits[hitSlot];
+                if (hits.IsValid() && st.HitsFrame[hitSlot] != 0 && st.HitsFrame[hitSlot] <= device.GetCompletedFrameNumber())
+                {
+                    const auto* words = static_cast<const uint32_t*>(hits.GetMapped());
+                    uint32_t count = std::min(words[0], kMaxHitsPerFrame);
+                    const auto* items = reinterpret_cast<const glm::vec4*>(words + 4);
+                    for (uint32_t k = 0; k < count; ++k)
+                    {
+                        uint32_t h = (uint32_t)(frame * 2654435761u) ^ (k * 40503u);
+                        h = (h ^ (h >> 15)) * 0x2c1b3c6du;
+                        float r0 = (h >> 8 & 1023) / 1023.0f, r1 = (h >> 18 & 1023) / 1023.0f;
+                        if ((int32_t)ps.Decals.size() >= ps.MaxDecals) ps.Decals.erase(ps.Decals.begin());
+                        ps.Decals.push_back({ glm::vec3(items[k * 3]), glm::vec3(items[k * 3 + 1]), items[k * 3 + 2],
+                                              std::max(ps.DecalSize, 0.001f) * glm::mix(0.8f, 1.2f, r0), 0.0f, r1 * glm::two_pi<float>() });
+                    }
+                }
+                st.HitsFrame[hitSlot] = 0;
+                if (dispatching)
+                {
+                    if (!hits.IsValid())
+                    {
+                        hits = Buffer(16 + (VkDeviceSize)kMaxHitsPerFrame * 48,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      MemoryUsage::GpuToCpu, "GpuParticleHits");
+                        VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+                        info.buffer = hits.GetHandle();
+                        st.HitsAddress[hitSlot] = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                    }
+                    st.HitsFrame[hitSlot] = frame;
+                    clearHits = true;
+                    glm::uvec2 a = SplitAddress(st.HitsAddress[hitSlot]);
+                    p.DecalBuffer = glm::uvec4(a, kMaxHitsPerFrame, 1u);
+                }
+            }
             TransientAllocation params = device.AllocateTransient(sizeof(p), 16);
             if (!params) return;
             std::memcpy(params.Data, &p, sizeof(p));
@@ -2952,6 +3004,12 @@ namespace Dimension
                 {
                     // Zero = every slot dead (age 0 is not below lifetime 0).
                     vkCmdFillBuffer(cmd, st.Particles.GetHandle(), 0, VK_WHOLE_SIZE, 0);
+                    Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                      VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+                }
+                if (clearHits)
+                {
+                    vkCmdFillBuffer(cmd, st.Hits[hitSlot].GetHandle(), 0, 16, 0);
                     Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                       VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
                 }
@@ -3887,6 +3945,22 @@ namespace Dimension
                 DrawLine(a - side, b - side, color * glm::vec4(1, 1, 1, 0.5f));
             }
             for (const glm::vec3& p : path->Points) DrawWireCircle(t.World, p, 0.3f, color, 1);
+        }
+        if (auto* placer = reg.TryGet<PathPlacerComponent>(sel))
+        {
+            // The curve, and a tick where each copy goes (pointing the way it faces).
+            std::vector<glm::vec3> points = placer->Points;
+            if (placer->Closed && points.size() > 2) points.push_back(points.front());
+            std::vector<glm::vec3> curve = Terrain::PathCurve(points);
+            glm::vec4 color(0.5f, 0.95f, 0.6f, 1.0f);
+            for (size_t k = 0; k + 1 < curve.size(); ++k)
+                DrawLine(glm::vec3(t.World * glm::vec4(curve[k], 1.0f)), glm::vec3(t.World * glm::vec4(curve[k + 1], 1.0f)), color);
+            for (const glm::vec3& p : placer->Points) DrawWireCircle(t.World, p, 0.3f, color, 1);
+            for (const PathPlacer::Spot& s : PathPlacer::Spots(scene, sel))
+            {
+                DrawLine(s.Position, s.Position + glm::vec3(0.0f, 0.6f, 0.0f), color * glm::vec4(1, 1, 1, 0.7f));
+                DrawLine(s.Position + glm::vec3(0.0f, 0.3f, 0.0f), s.Position + glm::vec3(0.0f, 0.3f, 0.0f) + s.Direction * 0.5f, color * glm::vec4(1, 1, 1, 0.7f));
+            }
         }
         if (auto* water = reg.TryGet<WaterVolumeComponent>(sel))
         {

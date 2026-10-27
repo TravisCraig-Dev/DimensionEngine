@@ -78,11 +78,15 @@ namespace Dimension
         void CreateBodiesRecursive(Entity e);
         void CreateJointsRecursive(Entity e);
         void CreateBody(Entity e);
+        // Rebuilds a body's shape from its colliders now (e.g. after its mesh collider's mesh was dented), keeping its
+        // motion and joints.
+        void RefreshShape(Entity e);
         void CreateJoint(Entity e);
         void CreateCharacter(Entity e);
         void CreateVehicle(Entity e);
         void CreateCloth(Entity e);
         void UpdateBoats(float dt);
+        void UpdateHitches(float dt);
         void CreateRope(Entity e);
         void UpdateRopes(float dt, bool afterStep);
         void CreateSoftBody(Entity e);

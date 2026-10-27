@@ -104,7 +104,7 @@ namespace Dimension
         float CollisionDampen = 0.1f;      // fraction of the tangential velocity lost
         float LifetimeLoss = 0.0f;         // fraction of the lifetime lost per collision
         float CollisionRadius = 0.05f;
-        // Collision decals (CPU systems): each particle's first impact leaves a mark on what it hit (paint, blood, scorch,
+        // Collision decals: each particle's first impact leaves a mark on what it hit (paint, blood, scorch,
         // footprints of rain), Decal Size across, in the particle's color, fading out over the last part of Decal
         // Lifetime; at most Max Decals at once (the oldest go first). Blend: 0 alpha, 1 multiply, 2 additive.
         bool CollisionDecals = false;

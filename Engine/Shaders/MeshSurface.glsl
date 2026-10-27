@@ -107,6 +107,34 @@ vec3 EnvBRDFApprox(vec3 F0, float roughness, float NdotV)
     return F0 * AB.x + AB.y;
 }
 
+// A rain-spattered puddle's surface normal: in a grid of half-meter cells, a drop lands somewhere in each now and then
+// and a ring spreads out from it and fades; neighbouring cells' rings overlap. `rain` sets how often drops land.
+vec3 PuddleNormal(vec2 p, float rain)
+{
+    vec2 slope = vec2(0.0);
+    if (rain > 0.0)
+    {
+        const float cell = 0.5;
+        vec2 base = floor(p / cell);
+        float time = uScene.Wind.w;
+        for (int y = -1; y <= 1; ++y)
+            for (int x = -1; x <= 1; ++x)
+            {
+                vec2 c = base + vec2(x, y);
+                float h = Hash3(vec3(c, 3.7));
+                float period = mix(1.6, 0.6, rain) * (0.7 + 0.6 * h);
+                float t = fract(time / period + h * 13.1);
+                vec2 center = (c + vec2(Hash3(vec3(c, 9.1)), Hash3(vec3(c, 1.3)))) * cell;
+                vec2 d = p - center;
+                float dist = length(d);
+                float r = t * cell * 0.9;
+                float ring = sin((dist - r) * 60.0) * exp(-abs(dist - r) * 40.0) * (1.0 - t);
+                if (dist > 1e-4) slope += d / dist * ring;
+            }
+    }
+    return normalize(vec3(-slope.x * 0.25, 1.0, -slope.y * 0.25));
+}
+
 // Light intensities are scaled by PI so a white light at intensity 1 lights a white diffuse surface to 1.
 vec3 DirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, float metallic, float roughness)
 {
@@ -196,6 +224,18 @@ void main()
         {
             albedo *= mix(1.0, 0.5, wet * (1.0 - metallic));
             roughness = mix(roughness, 0.06, wet);
+        }
+        // Puddles: very wet, flat ground collects water in patches (more as it gets wetter): dark, mirror-smooth and,
+        // while it rains, rippling.
+        float puddle = uScene.Weather.x > 0.3 && cover <= 0.0
+                     ? smoothstep(0.5, 0.56, ValueNoise(vWorldPos * 0.3 + 7.0) * 0.7 + ValueNoise(vWorldPos * 1.3) * 0.3 + (uScene.Weather.x - 0.8) * 0.4) *
+                       smoothstep(0.88, 0.97, N.y)
+                     : 0.0;
+        if (puddle > 0.0)
+        {
+            albedo *= mix(1.0, 0.35, puddle);
+            roughness = mix(roughness, 0.02, puddle);
+            N = normalize(mix(N, PuddleNormal(vWorldPos.xz, uScene.Weather.z), puddle));
         }
     }
     vec3 V = normalize(uScene.CameraPosition.xyz - vWorldPos);

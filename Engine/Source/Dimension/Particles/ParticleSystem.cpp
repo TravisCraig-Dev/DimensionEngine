@@ -3,6 +3,7 @@
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Renderer/Mesh.h"
+#include "Dimension/Audio/AudioEngine.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
 #include <cmath>
@@ -469,6 +470,28 @@ namespace Dimension
                 };
                 w.RainWorld = frame(0.1f);
                 w.SnowWorld = frame(0.4f);
+                // Lightning: strikes at random (on average every 60 s at a trace, every 4 s at full), a double flicker
+                // that fades in a few tenths of a second, and its thunder a moment later.
+                if (w.Lightning > 0.0f && dt > 0.0f)
+                {
+                    float rate = glm::mix(1.0f / 60.0f, 1.0f / 4.0f, std::clamp(w.Lightning, 0.0f, 1.0f));
+                    if (w.NextFlash < 0.0f) w.NextFlash = -std::log(std::max(1.0f - Random01(w.LightningSeed), 1e-4f)) / rate;
+                    w.NextFlash -= dt;
+                    if (w.NextFlash <= 0.0f)
+                    {
+                        w.FlashAge = 0.0f;
+                        w.NextFlash = -std::log(std::max(1.0f - Random01(w.LightningSeed), 1e-4f)) / rate;
+                        w.ThunderIn = 0.3f + Random01(w.LightningSeed) * 2.5f; // the strike's distance, as sound travels
+                    }
+                }
+                w.FlashAge += dt;
+                w.Flash = w.FlashAge < 1.0f ? std::exp(-w.FlashAge * 14.0f) + (w.FlashAge > 0.12f ? 0.7f * std::exp(-(w.FlashAge - 0.12f) * 9.0f) : 0.0f) : 0.0f;
+                if (w.ThunderIn >= 0.0f)
+                {
+                    w.ThunderIn -= dt;
+                    if (w.ThunderIn < 0.0f && w.Thunder.IsValid() && scene.IsRunning() && reg.Has<AudioSourceComponent>(e))
+                        AudioWorld::PlayOneShot(scene, e, w.Thunder);
+                }
                 std::vector<SubEmitRequest> none;
                 Simulate(scene, w.RainParticles, w.RainWorld, t.ActiveInHierarchy, dt, none);
                 Simulate(scene, w.SnowParticles, w.SnowWorld, t.ActiveInHierarchy, dt, none);

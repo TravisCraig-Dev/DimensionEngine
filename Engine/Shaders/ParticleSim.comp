@@ -155,6 +155,23 @@ vec3 DepthWorld(GpuParticleParamsRef P, vec2 uv)
     return w.xyz / w.w;
 }
 
+// Collision decals: a particle striking a surface (moving into it) records the spot once; the flipbook start (Misc.w,
+// 0-1) carries the mark as +2, which the flipbook's fract ignores.
+void RecordHit(GpuParticleParamsRef P, inout GpuParticle p, vec3 point, vec3 n, float vn)
+{
+    if (P.DecalBuffer.w == 0u || vn > -0.3 || p.Misc.w >= 2.0) return;
+    p.Misc.w += 2.0;
+    GpuHitsRef hits = GpuHitsRef(P.DecalBuffer.xy);
+    uint i = atomicAdd(hits.Count, 1u);
+    if (i >= P.DecalBuffer.z) return;
+    float life = clamp(p.PosAge.w / max(p.VelLife.w, 1e-4), 0.0, 1.0);
+    vec4 color = p.Color * SampleColorLut(P, life);
+    color.a = p.Color.a;
+    hits.Items[i * 3u] = vec4(point, 0.0);
+    hits.Items[i * 3u + 1u] = vec4(n, 0.0);
+    hits.Items[i * 3u + 2u] = color;
+}
+
 // Collision with what the camera saw last frame: a particle just behind the visible surface bounces off it (along
 // the surface normal rebuilt from the depth around it). Off screen, particles pass freely.
 void DepthCollide(GpuParticleParamsRef P, inout GpuParticle p)
@@ -182,6 +199,7 @@ void DepthCollide(GpuParticleParamsRef P, inout GpuParticle p)
     vec3 v = mat3(P.SimToWorld) * p.VelLife.xyz;
     float vn = dot(v, n);
     if (vn >= 0.0) return;
+    RecordHit(P, p, surface, n, vn);
     vec3 normalPart = n * vn, tangent = v - normalPart;
     v = tangent * (1.0 - P.Collision.w) - normalPart * P.Collision.z;
     p.VelLife.w -= p.VelLife.w * clamp(P.Misc.x, 0.0, 1.0);
@@ -233,6 +251,7 @@ void ColliderCollide(GpuParticleParamsRef P, inout GpuParticle p)
         float vn = dot(v, n);
         if (vn < 0.0)
         {
+            RecordHit(P, p, wp - n * radius, n, vn);
             vec3 normalPart = n * vn;
             v = (v - normalPart) * (1.0 - P.Collision.w) - normalPart * P.Collision.z;
             hit = true;
@@ -282,6 +301,7 @@ void Integrate(GpuParticleParamsRef P, inout GpuParticle p)
     vec3 v = mat3(P.SimToWorld) * p.VelLife.xyz;
     if (v.y < 0.0)
     {
+        RecordHit(P, p, hitPoint, vec3(0.0, 1.0, 0.0), v.y);
         vec3 normalPart = vec3(0.0, v.y, 0.0), tangent = v - normalPart;
         v = tangent * (1.0 - P.Collision.w) - normalPart * P.Collision.z;
     }

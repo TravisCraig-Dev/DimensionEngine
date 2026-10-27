@@ -242,6 +242,9 @@ namespace Dimension
             JPH::Ref<JPH::Constraint> Tether; // a dynamic body on the end: never farther than Length from the start
         };
         std::vector<RopeBody> Ropes;
+        // Tow hitches: the ball joint of each attached trailer.
+        struct Hitch { Entity Trailer; JPH::Ref<JPH::Constraint> Joint; };
+        std::vector<Hitch> Hitches;
         void RemoveRope(size_t i)
         {
             auto& bi = System.GetBodyInterface();
@@ -394,6 +397,8 @@ namespace Dimension
         while (!m_Impl->Vehicles.empty()) m_Impl->RemoveVehicle(m_Impl->Vehicles.size() - 1);
         while (!m_Impl->Cloths.empty()) m_Impl->RemoveCloth(m_Impl->Cloths.size() - 1);
         while (!m_Impl->Ropes.empty()) m_Impl->RemoveRope(m_Impl->Ropes.size() - 1);
+        for (auto& h : m_Impl->Hitches) m_Impl->System.RemoveConstraint(h.Joint);
+        m_Impl->Hitches.clear();
         for (auto [e, r] : m_Scene.GetRegistry().ViewOf<RopeComponent>()) r.SimulatedPoints.clear();
         while (!m_Impl->Ragdolls.empty()) m_Impl->RemoveRagdoll(m_Impl->Ragdolls.size() - 1);
         for (auto [e, r] : m_Scene.GetRegistry().ViewOf<RagdollComponent>())
@@ -1068,8 +1073,16 @@ namespace Dimension
                 d.mEngineTorqueRatio = share;
                 controller->mDifferentials.push_back(d);
             };
-            if (vc.Drive != VehicleDrive::RearWheel) axle(0, 1, vc.Drive == VehicleDrive::AllWheel ? 0.5f : 1.0f);
-            if (vc.Drive != VehicleDrive::FrontWheel) axle(2, 3, vc.Drive == VehicleDrive::AllWheel ? 0.5f : 1.0f);
+            if (vc.Drive == VehicleDrive::FrontWheel || vc.Drive == VehicleDrive::AllWheel) axle(0, 1, vc.Drive == VehicleDrive::AllWheel ? 0.5f : 1.0f);
+            if (vc.Drive == VehicleDrive::RearWheel || vc.Drive == VehicleDrive::Unpowered || vc.Drive == VehicleDrive::AllWheel)
+                axle(2, 3, vc.Drive == VehicleDrive::AllWheel ? 0.5f : 1.0f);
+            if (vc.Drive == VehicleDrive::Unpowered)
+            {
+                // Trailers: Jolt needs a differential, so the rear axle keeps one, but with no engine torque and the
+                // gearbox left in neutral (manual, never shifted) nothing drives or brakes the wheels: they roll freely.
+                controller->mEngine.mMaxTorque = 0.0f;
+                controller->mTransmission.mMode = JPH::ETransmissionMode::Manual;
+            }
             settings.mController = controller;
         }
 
@@ -1084,6 +1097,50 @@ namespace Dimension
         m_Impl->System.AddConstraint(constraint);
         m_Impl->System.AddStepListener(constraint);
         m_Impl->Vehicles.push_back({ e, constraint });
+    }
+
+    void Physics3DWorld::UpdateHitches(float dt)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& bi = m_Impl->System.GetBodyInterface();
+        // Joints that should go: unhitched, torn loose (over Break Force last step), or missing their object.
+        for (auto it = m_Impl->Hitches.begin(); it != m_Impl->Hitches.end();)
+        {
+            auto* hitch = m_Scene.IsValid(it->Trailer) ? reg.TryGet<TowHitchComponent>(it->Trailer) : nullptr;
+            if (hitch && dt > 0.0f)
+            {
+                hitch->CurrentForce = static_cast<JPH::PointConstraint*>(it->Joint.GetPtr())->GetTotalLambdaPosition().Length() / dt;
+                if (hitch->BreakForce > 0.0f && hitch->CurrentForce > hitch->BreakForce) hitch->Attached = false;
+            }
+            if (!hitch || !hitch->Attached || !m_Scene.IsValid(hitch->TowedBy))
+            {
+                m_Impl->System.RemoveConstraint(it->Joint);
+                if (hitch) hitch->CurrentForce = 0.0f;
+                it = m_Impl->Hitches.erase(it);
+            }
+            else
+                ++it;
+        }
+        // Joints that should be: attached hitches without one (at the start of play, or hitched again).
+        for (auto [e, hitch, t] : reg.ViewOf<TowHitchComponent, TransformComponent>())
+        {
+            if (!hitch.Attached || hitch.TowedBy.IsNull() || !m_Scene.IsValid(hitch.TowedBy) || hitch.TowedBy == e) continue;
+            bool exists = false;
+            for (auto& h : m_Impl->Hitches) exists |= h.Trailer == e;
+            if (exists) continue;
+            auto* rbA = reg.TryGet<RigidbodyComponent>(hitch.TowedBy);
+            auto* rbB = reg.TryGet<RigidbodyComponent>(e);
+            if (!rbA || !rbB || rbA->RuntimeBody == 0xFFFFFFFF || rbB->RuntimeBody == 0xFFFFFFFF) continue;
+            JPH::PointConstraintSettings s;
+            s.mSpace = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1 = JPH::RVec3(ToJolt(glm::vec3(reg.Get<TransformComponent>(hitch.TowedBy).World * glm::vec4(hitch.Hitch, 1.0f))));
+            s.mPoint2 = JPH::RVec3(ToJolt(glm::vec3(t.World * glm::vec4(hitch.Coupling, 1.0f))));
+            JPH::Ref<JPH::Constraint> joint = bi.CreateConstraint(&s, JPH::BodyID(rbA->RuntimeBody), JPH::BodyID(rbB->RuntimeBody));
+            if (!joint) continue;
+            m_Impl->System.AddConstraint(joint);
+            bi.ActivateBody(JPH::BodyID(rbB->RuntimeBody));
+            m_Impl->Hitches.push_back({ e, joint });
+        }
     }
 
     void Physics3DWorld::UpdateBoats(float dt)
@@ -1799,6 +1856,167 @@ namespace Dimension
         m_Impl->Characters.push_back(e);
     }
 
+    namespace
+    {
+        // A body's shape from its colliders (and terrain, trees, a vehicle's lowered center of mass), with the friction,
+        // restitution and trigger flag of its colliders. False when it has no collider (or the shape fails).
+        bool BuildBodyShape(Scene& scene, Entity e, JPH::ShapeRefC& shape, float& friction, float& restitution, bool& sensor)
+        {
+            auto& reg = scene.GetRegistry();
+            auto& rb = reg.Get<RigidbodyComponent>(e);
+            auto& t = reg.Get<TransformComponent>(e);
+            glm::vec3 scale = glm::abs(t.Scale);
+            JPH::StaticCompoundShapeSettings compound;
+            friction = 0.6f;
+            restitution = 0.0f;
+            int shapeCount = 0;
+            sensor = false;
+            if (auto* box = reg.TryGet<BoxColliderComponent>(e))
+            {
+                glm::vec3 half = glm::max(box->Size * 0.5f * scale, glm::vec3(0.001f));
+                float convex = std::min(JPH::cDefaultConvexRadius, std::min(half.x, std::min(half.y, half.z)) * 0.5f);
+                compound.AddShape(ToJolt(box->Offset * scale), JPH::Quat::sIdentity(), new JPH::BoxShapeSettings(ToJolt(half), convex));
+                friction = box->Friction;
+                restitution = box->Restitution;
+                sensor |= box->IsTrigger;
+                ++shapeCount;
+            }
+            if (auto* sphere = reg.TryGet<SphereColliderComponent>(e))
+            {
+                float radius = std::max(0.001f, sphere->Radius * std::max(scale.x, std::max(scale.y, scale.z)));
+                compound.AddShape(ToJolt(sphere->Offset * scale), JPH::Quat::sIdentity(), new JPH::SphereShapeSettings(radius));
+                friction = sphere->Friction;
+                restitution = sphere->Restitution;
+                sensor |= sphere->IsTrigger;
+                ++shapeCount;
+            }
+            if (auto* cap = reg.TryGet<CapsuleColliderComponent>(e))
+            {
+                float radius = std::max(0.001f, cap->Radius * std::max(scale.x, scale.z));
+                float halfCylinder = std::max(0.001f, cap->Height * 0.5f * scale.y - radius);
+                compound.AddShape(ToJolt(cap->Offset * scale), JPH::Quat::sIdentity(), new JPH::CapsuleShapeSettings(halfCylinder, radius));
+                friction = cap->Friction;
+                restitution = cap->Restitution;
+                sensor |= cap->IsTrigger;
+                ++shapeCount;
+            }
+            if (auto* terrain = reg.TryGet<TerrainComponent>(e))
+            {
+                // The terrain collides as a height field over the same samples it renders.
+                int n = Terrain::SampleCount(*terrain);
+                std::vector<float> heights = Terrain::BuildHeights(*terrain);
+                glm::vec2 size = glm::max(terrain->Size, glm::vec2(0.01f));
+                JPH::Vec3 offset(-size.x * 0.5f * scale.x, 0.0f, -size.y * 0.5f * scale.z);
+                JPH::Vec3 cell(size.x / (n - 1) * scale.x, scale.y, size.y / (n - 1) * scale.z);
+                // Holes: Jolt drops every triangle touching a sample at cNoCollisionValue, as the mesh does.
+                std::vector<float> samples = heights;
+                std::vector<uint8_t> holes = Terrain::HoleMap(*terrain);
+                for (size_t i = 0; i < holes.size(); ++i)
+                    if (holes[i]) samples[i] = JPH::HeightFieldShapeConstants::cNoCollisionValue;
+                compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::HeightFieldShapeSettings(samples.data(), offset, cell, (JPH::uint32)n));
+                if (rb.Type != BodyType::Static) Log::Warn("Terrain on '{}' only collides as a static body", reg.Get<TagComponent>(e).Name);
+                ++shapeCount;
+                // Trees collide as upright trunk capsules, as tall as their mesh.
+                auto treeData = terrain->TreeColliderRadius > 0.0f ? AssetManager::GetMeshData(terrain->TreeMesh) : nullptr;
+                if (treeData && !treeData->Vertices.empty())
+                {
+                    float top = -1e30f, bottom = 1e30f;
+                    for (const Vertex& v : treeData->Vertices) { top = std::max(top, v.Position.y); bottom = std::min(bottom, v.Position.y); }
+                    for (const glm::mat4& tree : Terrain::BuildDetails(*terrain, heights).Trees)
+                    {
+                        float s = glm::length(glm::vec3(tree[0]));
+                        float radius = std::max(terrain->TreeColliderRadius * s * std::max(scale.x, scale.z), 0.01f);
+                        float height = std::max((top - std::max(bottom, 0.0f)) * s * scale.y, radius * 2.0f + 0.02f);
+                        glm::vec3 base = glm::vec3(tree[3]) * scale + glm::vec3(0.0f, std::max(bottom, 0.0f) * s * scale.y, 0.0f);
+                        compound.AddShape(ToJolt(base + glm::vec3(0.0f, height * 0.5f, 0.0f)), JPH::Quat::sIdentity(),
+                                          new JPH::CapsuleShapeSettings(height * 0.5f - radius, radius));
+                        ++shapeCount;
+                    }
+                }
+            }
+            if (auto* mc = reg.TryGet<MeshColliderComponent>(e))
+            {
+                auto* mr = reg.TryGet<MeshRendererComponent>(e);
+                AssetHandle meshHandle = mc->Mesh.IsValid() ? mc->Mesh : mr ? mr->Mesh : AssetHandle::None();
+                auto data = AssetManager::GetMeshData(meshHandle);
+                if (!data || data->Vertices.empty() || data->Indices.size() < 3)
+                    Log::Warn("Mesh Collider on '{}' has no mesh", reg.Get<TagComponent>(e).Name);
+                else
+                {
+                    // A Deformable's dents reshape its mesh collider too.
+                    auto* dented = reg.TryGet<DeformableComponent>(e);
+                    bool useDents = dented && dented->DentedPositions.size() == data->Vertices.size();
+                    auto position = [&](size_t i) { return useDents ? dented->DentedPositions[i] : data->Vertices[i].Position; };
+                    bool convex = mc->Convex || rb.Type == BodyType::Dynamic;
+                    if (!mc->Convex && !mc->ConvexDecomposition && rb.Type == BodyType::Dynamic)
+                        Log::Warn("Mesh Collider on '{}': dynamic bodies use the convex hull (or Convex Decomposition)", reg.Get<TagComponent>(e).Name);
+                    auto parts = convex && mc->ConvexDecomposition ? ConvexDecomposition::Decompose(data, mc->MaxParts) : nullptr;
+                    if (parts && !parts->empty())
+                    {
+                        for (const ConvexPart& part : *parts)
+                        {
+                            JPH::Array<JPH::Vec3> points;
+                            for (const glm::vec3& p : part.Points) points.push_back(ToJolt(p * scale));
+                            compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::ConvexHullShapeSettings(points));
+                        }
+                    }
+                    else if (convex)
+                    {
+                        // The hull builder only needs a representative point cloud.
+                        JPH::Array<JPH::Vec3> points;
+                        size_t stride = std::max<size_t>(1, data->Vertices.size() / 2000);
+                        for (size_t i = 0; i < data->Vertices.size(); i += stride) points.push_back(ToJolt(position(i) * scale));
+                        compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::ConvexHullShapeSettings(points));
+                    }
+                    else
+                    {
+                        JPH::VertexList vertices;
+                        vertices.reserve(data->Vertices.size());
+                        for (size_t i = 0; i < data->Vertices.size(); ++i)
+                        {
+                            glm::vec3 p = position(i) * scale;
+                            vertices.push_back(JPH::Float3(p.x, p.y, p.z));
+                        }
+                        JPH::IndexedTriangleList triangles;
+                        triangles.reserve(data->Indices.size() / 3);
+                        for (size_t i = 0; i + 2 < data->Indices.size(); i += 3)
+                            triangles.push_back(JPH::IndexedTriangle(data->Indices[i], data->Indices[i + 1], data->Indices[i + 2], 0));
+                        compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::MeshShapeSettings(std::move(vertices), std::move(triangles)));
+                    }
+                    friction = mc->Friction;
+                    restitution = mc->Restitution;
+                    sensor |= mc->IsTrigger;
+                    ++shapeCount;
+                }
+            }
+            if (shapeCount == 0) return false; // rigidbody without collider: nothing to simulate
+
+            auto shapeResult = compound.Create();
+            if (shapeResult.HasError())
+            {
+                Log::Error("Physics shape error: {}", shapeResult.GetError().c_str());
+                return false;
+            }
+            // Vehicles: a lower center of mass keeps them on their wheels.
+            if (auto* vc = reg.TryGet<VehicleComponent>(e); vc && glm::dot(vc->CenterOfMassOffset, vc->CenterOfMassOffset) > 0.0f)
+                if (auto offset = JPH::OffsetCenterOfMassShapeSettings(ToJolt(vc->CenterOfMassOffset), shapeResult.Get()).Create(); !offset.HasError())
+                    shapeResult = offset;
+            shape = shapeResult.Get();
+            return true;
+        }
+    }
+
+    void Physics3DWorld::RefreshShape(Entity e)
+    {
+        auto* rb = m_Scene.IsValid(e) ? m_Scene.GetRegistry().TryGet<RigidbodyComponent>(e) : nullptr;
+        if (!rb || rb->RuntimeBody == 0xFFFFFFFF) return;
+        JPH::ShapeRefC shape;
+        float friction, restitution;
+        bool sensor;
+        if (!BuildBodyShape(m_Scene, e, shape, friction, restitution, sensor)) return;
+        m_Impl->System.GetBodyInterface().SetShape(JPH::BodyID(rb->RuntimeBody), shape, rb->Type == BodyType::Dynamic, JPH::EActivation::Activate);
+    }
+
     void Physics3DWorld::CreateBody(Entity e)
     {
         auto& reg = m_Scene.GetRegistry();
@@ -1814,141 +2032,15 @@ namespace Dimension
         auto& t = reg.Get<TransformComponent>(e);
         glm::vec3 scale = glm::abs(t.Scale);
 
-        JPH::StaticCompoundShapeSettings compound;
-        float friction = 0.6f, restitution = 0.0f;
-        int shapeCount = 0;
-        bool sensor = false;
-        if (auto* box = reg.TryGet<BoxColliderComponent>(e))
-        {
-            glm::vec3 half = glm::max(box->Size * 0.5f * scale, glm::vec3(0.001f));
-            float convex = std::min(JPH::cDefaultConvexRadius, std::min(half.x, std::min(half.y, half.z)) * 0.5f);
-            compound.AddShape(ToJolt(box->Offset * scale), JPH::Quat::sIdentity(), new JPH::BoxShapeSettings(ToJolt(half), convex));
-            friction = box->Friction;
-            restitution = box->Restitution;
-            sensor |= box->IsTrigger;
-            ++shapeCount;
-        }
-        if (auto* sphere = reg.TryGet<SphereColliderComponent>(e))
-        {
-            float radius = std::max(0.001f, sphere->Radius * std::max(scale.x, std::max(scale.y, scale.z)));
-            compound.AddShape(ToJolt(sphere->Offset * scale), JPH::Quat::sIdentity(), new JPH::SphereShapeSettings(radius));
-            friction = sphere->Friction;
-            restitution = sphere->Restitution;
-            sensor |= sphere->IsTrigger;
-            ++shapeCount;
-        }
-        if (auto* cap = reg.TryGet<CapsuleColliderComponent>(e))
-        {
-            float radius = std::max(0.001f, cap->Radius * std::max(scale.x, scale.z));
-            float halfCylinder = std::max(0.001f, cap->Height * 0.5f * scale.y - radius);
-            compound.AddShape(ToJolt(cap->Offset * scale), JPH::Quat::sIdentity(), new JPH::CapsuleShapeSettings(halfCylinder, radius));
-            friction = cap->Friction;
-            restitution = cap->Restitution;
-            sensor |= cap->IsTrigger;
-            ++shapeCount;
-        }
-        if (auto* terrain = reg.TryGet<TerrainComponent>(e))
-        {
-            // The terrain collides as a height field over the same samples it renders.
-            int n = Terrain::SampleCount(*terrain);
-            std::vector<float> heights = Terrain::BuildHeights(*terrain);
-            glm::vec2 size = glm::max(terrain->Size, glm::vec2(0.01f));
-            JPH::Vec3 offset(-size.x * 0.5f * scale.x, 0.0f, -size.y * 0.5f * scale.z);
-            JPH::Vec3 cell(size.x / (n - 1) * scale.x, scale.y, size.y / (n - 1) * scale.z);
-            // Holes: Jolt drops every triangle touching a sample at cNoCollisionValue, as the mesh does.
-            std::vector<float> samples = heights;
-            std::vector<uint8_t> holes = Terrain::HoleMap(*terrain);
-            for (size_t i = 0; i < holes.size(); ++i)
-                if (holes[i]) samples[i] = JPH::HeightFieldShapeConstants::cNoCollisionValue;
-            compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::HeightFieldShapeSettings(samples.data(), offset, cell, (JPH::uint32)n));
-            if (rb.Type != BodyType::Static) Log::Warn("Terrain on '{}' only collides as a static body", reg.Get<TagComponent>(e).Name);
-            ++shapeCount;
-            // Trees collide as upright trunk capsules, as tall as their mesh.
-            auto treeData = terrain->TreeColliderRadius > 0.0f ? AssetManager::GetMeshData(terrain->TreeMesh) : nullptr;
-            if (treeData && !treeData->Vertices.empty())
-            {
-                float top = -1e30f, bottom = 1e30f;
-                for (const Vertex& v : treeData->Vertices) { top = std::max(top, v.Position.y); bottom = std::min(bottom, v.Position.y); }
-                for (const glm::mat4& tree : Terrain::BuildDetails(*terrain, heights).Trees)
-                {
-                    float s = glm::length(glm::vec3(tree[0]));
-                    float radius = std::max(terrain->TreeColliderRadius * s * std::max(scale.x, scale.z), 0.01f);
-                    float height = std::max((top - std::max(bottom, 0.0f)) * s * scale.y, radius * 2.0f + 0.02f);
-                    glm::vec3 base = glm::vec3(tree[3]) * scale + glm::vec3(0.0f, std::max(bottom, 0.0f) * s * scale.y, 0.0f);
-                    compound.AddShape(ToJolt(base + glm::vec3(0.0f, height * 0.5f, 0.0f)), JPH::Quat::sIdentity(),
-                                      new JPH::CapsuleShapeSettings(height * 0.5f - radius, radius));
-                    ++shapeCount;
-                }
-            }
-        }
-        if (auto* mc = reg.TryGet<MeshColliderComponent>(e))
-        {
-            auto* mr = reg.TryGet<MeshRendererComponent>(e);
-            AssetHandle meshHandle = mc->Mesh.IsValid() ? mc->Mesh : mr ? mr->Mesh : AssetHandle::None();
-            auto data = AssetManager::GetMeshData(meshHandle);
-            if (!data || data->Vertices.empty() || data->Indices.size() < 3)
-                Log::Warn("Mesh Collider on '{}' has no mesh", reg.Get<TagComponent>(e).Name);
-            else
-            {
-                bool convex = mc->Convex || rb.Type == BodyType::Dynamic;
-                if (!mc->Convex && !mc->ConvexDecomposition && rb.Type == BodyType::Dynamic)
-                    Log::Warn("Mesh Collider on '{}': dynamic bodies use the convex hull (or Convex Decomposition)", reg.Get<TagComponent>(e).Name);
-                auto parts = convex && mc->ConvexDecomposition ? ConvexDecomposition::Decompose(data, mc->MaxParts) : nullptr;
-                if (parts && !parts->empty())
-                {
-                    for (const ConvexPart& part : *parts)
-                    {
-                        JPH::Array<JPH::Vec3> points;
-                        for (const glm::vec3& p : part.Points) points.push_back(ToJolt(p * scale));
-                        compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::ConvexHullShapeSettings(points));
-                    }
-                }
-                else if (convex)
-                {
-                    // The hull builder only needs a representative point cloud.
-                    JPH::Array<JPH::Vec3> points;
-                    size_t stride = std::max<size_t>(1, data->Vertices.size() / 2000);
-                    for (size_t i = 0; i < data->Vertices.size(); i += stride) points.push_back(ToJolt(data->Vertices[i].Position * scale));
-                    compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::ConvexHullShapeSettings(points));
-                }
-                else
-                {
-                    JPH::VertexList vertices;
-                    vertices.reserve(data->Vertices.size());
-                    for (auto& v : data->Vertices)
-                    {
-                        glm::vec3 p = v.Position * scale;
-                        vertices.push_back(JPH::Float3(p.x, p.y, p.z));
-                    }
-                    JPH::IndexedTriangleList triangles;
-                    triangles.reserve(data->Indices.size() / 3);
-                    for (size_t i = 0; i + 2 < data->Indices.size(); i += 3)
-                        triangles.push_back(JPH::IndexedTriangle(data->Indices[i], data->Indices[i + 1], data->Indices[i + 2], 0));
-                    compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::MeshShapeSettings(std::move(vertices), std::move(triangles)));
-                }
-                friction = mc->Friction;
-                restitution = mc->Restitution;
-                sensor |= mc->IsTrigger;
-                ++shapeCount;
-            }
-        }
-        if (shapeCount == 0) return; // rigidbody without collider: nothing to simulate
-
-        auto shapeResult = compound.Create();
-        if (shapeResult.HasError())
-        {
-            Log::Error("Physics shape error: {}", shapeResult.GetError().c_str());
-            return;
-        }
-        // Vehicles: a lower center of mass keeps them on their wheels.
-        if (auto* vc = reg.TryGet<VehicleComponent>(e); vc && glm::dot(vc->CenterOfMassOffset, vc->CenterOfMassOffset) > 0.0f)
-            if (auto offset = JPH::OffsetCenterOfMassShapeSettings(ToJolt(vc->CenterOfMassOffset), shapeResult.Get()).Create(); !offset.HasError())
-                shapeResult = offset;
+        JPH::ShapeRefC shape;
+        float friction, restitution;
+        bool sensor;
+        if (!BuildBodyShape(m_Scene, e, shape, friction, restitution, sensor)) return;
 
         JPH::EMotionType motion = rb.Type == BodyType::Dynamic ? JPH::EMotionType::Dynamic
                                 : rb.Type == BodyType::Kinematic ? JPH::EMotionType::Kinematic
                                                                  : JPH::EMotionType::Static;
-        JPH::BodyCreationSettings settings(shapeResult.Get(), JPH::RVec3(ToJolt(t.GetWorldPosition())), ToJolt(t.GetRotationQuat()),
+        JPH::BodyCreationSettings settings(shape, JPH::RVec3(ToJolt(t.GetWorldPosition())), ToJolt(t.GetRotationQuat()),
                                            motion, Layers::Make(reg.Get<TagComponent>(e).Layer, motion != JPH::EMotionType::Static));
         settings.mIsSensor = sensor;
         settings.mCollideKinematicVsNonDynamic = sensor; // triggers also see kinematic bodies (e.g. Character Controllers)
@@ -1981,6 +2073,19 @@ namespace Dimension
 
     void Physics3DWorld::OnEntityDestroyed(Entity e)
     {
+        // Hitches on or to this object go before its body.
+        auto& reg0 = m_Scene.GetRegistry();
+        for (auto it = m_Impl->Hitches.begin(); it != m_Impl->Hitches.end();)
+        {
+            auto* hitch = m_Scene.IsValid(it->Trailer) ? reg0.TryGet<TowHitchComponent>(it->Trailer) : nullptr;
+            if (it->Trailer == e || (hitch && hitch->TowedBy == e))
+            {
+                m_Impl->System.RemoveConstraint(it->Joint);
+                it = m_Impl->Hitches.erase(it);
+            }
+            else
+                ++it;
+        }
         m_Impl->RemoveGlues(e); // before the piece's body goes
         for (size_t i = 0; i < m_Impl->Ropes.size(); ++i)
             if (m_Impl->Ropes[i].E == e)
@@ -2114,6 +2219,7 @@ namespace Dimension
         UpdateRopes(dt, false);
         UpdateWater(dt);
         UpdateBoats(dt);
+        UpdateHitches(dt);
         UpdateRagdolls(dt, false);
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
         UpdateCloths(dt, true);
@@ -2296,6 +2402,9 @@ namespace Dimension
             float len = glm::length(normals[i]);
             dent->DentedNormals[i] = len > 1e-12f ? normals[i] / len : data->Vertices[i].Normal;
         }
+        // A mesh collider follows the dents.
+        if (moved > 0 && reg.Has<MeshColliderComponent>(e))
+            if (Physics3DWorld* world = scene.GetPhysics3D()) world->RefreshShape(e);
         return moved;
     }
 

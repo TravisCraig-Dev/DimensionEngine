@@ -124,6 +124,29 @@ namespace Dimension
         Entity Terrain = Entity::Null();
     };
 
+    // Places copies of a prefab (or of a Source object in the scene) along a smooth curve through Points (the object's
+    // space), like Unity's Spline Instantiate: fence posts, rows of trees, lamp posts along a road. One every Spacing
+    // meters along the curve (the first Start Offset in), Side Offset meters to its right, facing along it (Align To
+    // Path; forward is -Z) and turned by Rotation degrees, then scattered by up to Random Rotation degrees and Random
+    // Scale (a fraction) from Seed; Snap To Ground drops each onto the terrain under it. Inspector > Place Along Path
+    // (PathPlacer::Place) makes the copies the object's children, replacing those placed before.
+    struct PathPlacerComponent
+    {
+        std::vector<glm::vec3> Points{ { -10.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 5.0f }, { 10.0f, 0.0f, 0.0f } };
+        bool Closed = false;
+        AssetHandle Prefab = AssetHandle::None();
+        Entity Source = Entity::Null(); // used instead of Prefab when set
+        float Spacing = 2.0f;
+        float StartOffset = 0.0f;
+        float SideOffset = 0.0f;
+        bool AlignToPath = true;
+        float Rotation = 0.0f;       // degrees about Y
+        float RandomRotation = 0.0f; // degrees, either way
+        float RandomScale = 0.0f;    // fraction, either way
+        int32_t Seed = 1;
+        bool SnapToGround = true;
+    };
+
     // Projects a texture onto whatever surfaces lie inside its box (Size, centered on the object), along the object's
     // -Z axis, like Unity's Decal Projector: dirt, scorch marks, puddles, signs. Multiply darkens what is under it,
     // Alpha paints over it and Additive makes it glow. Surfaces turned away from the projector fade out.
@@ -213,9 +236,16 @@ namespace Dimension
         float SnowCover = 0.0f; // snow on the ground, 0-1
         float Area = 40.0f;     // meters around the camera
         float Height = 18.0f;   // meters above the camera where it starts
-        // Runtime: the precipitation's GPU particle systems and where they emit from (set every update; +Y down).
+        // Lightning: random flashes lighting the sky and the scene (0 = none, 1 = every few seconds), each followed by
+        // Thunder (played through the object's Audio Source, later the farther the strike).
+        float Lightning = 0.0f;
+        AssetHandle Thunder = AssetHandle::None();
+        // Runtime: the precipitation's GPU particle systems and where they emit from (set every update; +Y down), and
+        // the lightning: the flash's brightness now, seconds since it struck, until the next one and until its thunder.
         ParticleSystemComponent RainParticles, SnowParticles;
         glm::mat4 EmitterWorld{ 1.0f }, RainWorld{ 1.0f }, SnowWorld{ 1.0f };
+        float Flash = 0.0f, FlashAge = 1e9f, NextFlash = -1.0f, ThunderIn = -1.0f;
+        uint32_t LightningSeed = 0x6d2b79f5u;
     };
 
     enum class DecalBlend : int32_t { Alpha = 0, Multiply = 1, Additive = 2 };
@@ -851,8 +881,8 @@ namespace Dimension
 
     // Dents (car bodies, crates, cans): a hit faster than Min Speed pushes the Mesh Renderer's surface in around the
     // contact point, Strength centimeters per m/s over Min Speed, spread over Radius and never deeper than Max Dent in
-    // all. The shading follows the dents; the collider keeps its shape. Scripts can Repair it (Physics3DWorld::Dent
-    // dents it by hand).
+    // all. The shading follows the dents, and so does a Mesh Collider (other colliders keep their shape). Scripts can
+    // Repair it (Physics3DWorld::Dent dents it by hand).
     struct DeformableComponent
     {
         float MinSpeed = 3.0f;  // m/s
@@ -984,7 +1014,7 @@ namespace Dimension
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
     };
 
-    enum class VehicleDrive : int32_t { RearWheel = 0, FrontWheel = 1, AllWheel = 2 };
+    enum class VehicleDrive : int32_t { RearWheel = 0, FrontWheel = 1, AllWheel = 2, Unpowered = 3 }; // Unpowered: trailers
     // Car: four wheels. Motorcycle: two on the center line that lean into turns. Tank: tracks (Track Wheels per side)
     // steered by driving the sides at different speeds, turning on the spot when standing.
     enum class VehicleType : int32_t { Car = 0, Motorcycle = 1, Tank = 2 };
@@ -1023,6 +1053,21 @@ namespace Dimension
         float EngineRPM = 0.0f;
         int32_t Gear = 0;      // 0 = neutral, negative = reverse
         bool WheelGrounded[4] = { false, false, false, false };
+    };
+
+    // Towing: this object (a trailer, a caravan, a broken-down car) hangs on Towed By by a ball joint between the Hitch
+    // (a point on the tower, its space; a car's rear is +Z) and the Coupling (a point on this object, its space), so it
+    // follows and swings behind. Clearing Attached unhitches it (setting it again hitches it where it stands, snapping
+    // the two points together); a pull or push over Break Force (newtons, 0 = never) unhitches it on its own. A trailer
+    // is typically a Vehicle with Drive set to Unpowered, its wheels rolling freely.
+    struct TowHitchComponent
+    {
+        Entity TowedBy = Entity::Null();
+        glm::vec3 Hitch{ 0.0f, -0.2f, 2.3f };
+        glm::vec3 Coupling{ 0.0f, -0.2f, -2.0f };
+        bool Attached = true;
+        float BreakForce = 0.0f;
+        float CurrentForce = 0.0f; // runtime: the joint's load, newtons
     };
 
     struct BoxColliderComponent

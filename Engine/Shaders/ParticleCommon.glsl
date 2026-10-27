@@ -57,7 +57,10 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Gp
     uvec4 ColliderCount; // x count
     vec4 Colliders[PARTICLE_COLLIDERS * 4];
     uvec4 MeshSamples;   // Mesh shape: xy address of (position, normal) vec4 pairs, z count
+    uvec4 DecalBuffer;   // collision decals: xy GpuHitsRef address, z capacity, w 1 = on
 };
+// Collision decals: the frame's first impacts (count, then position, normal and color per hit), read back by the CPU.
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuHitsRef { uint Count; uint Pad0, Pad1, Pad2; vec4 Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MeshSamplesRef { vec4 Items[]; };
 
 vec4 SampleColorLut(GpuParticleParamsRef p, float t)

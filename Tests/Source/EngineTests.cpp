@@ -10,6 +10,7 @@
 #include <Dimension/Renderer/Environment.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
@@ -780,6 +781,77 @@ namespace
         AssetManager::Shutdown();
     }
 
+    void TestTowing()
+    {
+        // A car pulling a free-rolling trailer by a tow hitch: the trailer follows with the hitch points together, it
+        // stays behind once unhitched, and a low Break Force tears it loose on its own.
+        auto build = [&](Scene& scene, float breakForce) {
+            auto& reg = scene.GetRegistry();
+            Entity ground = scene.CreateEntity("Ground");
+            reg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            reg.Get<TransformComponent>(ground).Scale = { 400, 1, 400 };
+            reg.Emplace<BoxColliderComponent>(ground).Friction = 1.0f;
+            Entity car = scene.CreateEntity("Car");
+            reg.Get<TransformComponent>(car).Position = { 0, 1.0f, 0 };
+            reg.Emplace<RigidbodyComponent>(car).Mass = 1200.0f;
+            reg.Emplace<BoxColliderComponent>(car).Size = { 1.8f, 0.5f, 4.2f };
+            reg.Emplace<VehicleComponent>(car);
+            Entity trailer = scene.CreateEntity("Trailer");
+            reg.Get<TransformComponent>(trailer).Position = { 0, 1.0f, 4.6f }; // its coupling (-2 z) meets the hitch (+2.6 z)
+            reg.Emplace<RigidbodyComponent>(trailer).Mass = 400.0f;
+            reg.Emplace<BoxColliderComponent>(trailer).Size = { 1.6f, 0.5f, 3.0f };
+            auto& tv = reg.Emplace<VehicleComponent>(trailer);
+            tv.Drive = VehicleDrive::Unpowered;
+            tv.WheelBase = 1.6f;
+            tv.MaxSteerAngle = 0.0f;
+            auto& hitch = reg.Emplace<TowHitchComponent>(trailer);
+            hitch.TowedBy = car;
+            hitch.Hitch = { 0.0f, 0.0f, 2.6f };
+            hitch.Coupling = { 0.0f, 0.0f, -2.0f };
+            hitch.BreakForce = breakForce;
+            scene.UpdateTransforms();
+            return std::make_pair(car, trailer);
+        };
+        Scene scene("Towing");
+        auto [car, trailer] = build(scene, 0.0f);
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto run = [&](Scene& s, float seconds) { for (int i = 0; i < (int)(seconds * 60.0f); ++i) s.OnUpdateRuntime(1.0f / 60.0f); };
+        auto gap = [&] {
+            glm::vec3 a = glm::vec3(rr.Get<TransformComponent>(car).World * glm::vec4(0.0f, 0.0f, 2.6f, 1.0f));
+            glm::vec3 b = glm::vec3(rr.Get<TransformComponent>(trailer).World * glm::vec4(0.0f, 0.0f, -2.0f, 1.0f));
+            return glm::distance(a, b);
+        };
+        run(*rt, 1.0f);
+        rr.Get<VehicleComponent>(car).Throttle = 1.0f;
+        run(*rt, 4.0f);
+        float carZ = rr.Get<TransformComponent>(car).Position.z, trailerZ = rr.Get<TransformComponent>(trailer).Position.z;
+        CHECK(carZ < -10.0f && trailerZ < carZ + 6.0f && trailerZ > carZ + 3.0f && gap() < 0.1f);
+        CHECK(rr.Get<TowHitchComponent>(trailer).CurrentForce > 0.0f);
+        // Steering: the trailer swings to follow, still hitched.
+        rr.Get<VehicleComponent>(car).Steering = 1.0f;
+        run(*rt, 1.5f);
+        CHECK(gap() < 0.1f && rr.Get<TransformComponent>(trailer).Position.x > 0.5f);
+        // Unhitched: the car pulls away and the trailer rolls to a stop behind.
+        rr.Get<VehicleComponent>(car).Steering = 0.0f;
+        rr.Get<TowHitchComponent>(trailer).Attached = false;
+        run(*rt, 3.0f);
+        CHECK(gap() > 3.0f);
+        rt->OnRuntimeStop();
+
+        // Torn loose by a pull over its Break Force.
+        Scene weak("WeakHitch");
+        auto [car2, trailer2] = build(weak, 500.0f);
+        auto rt2 = weak.Clone();
+        rt2->OnRuntimeStart();
+        run(*rt2, 1.0f);
+        rt2->GetRegistry().Get<VehicleComponent>(car2).Throttle = 1.0f;
+        run(*rt2, 2.0f);
+        CHECK(!rt2->GetRegistry().Get<TowHitchComponent>(trailer2).Attached);
+        rt2->OnRuntimeStop();
+    }
+
     void TestVehicles()
     {
         Scene scene("Vehicle");
@@ -1372,6 +1444,25 @@ namespace
             if (moved > 1e-4f) inward &= b.y < a.y;
         }
         CHECK(deepest > 0.05f && deepest <= 0.15f + 1e-4f && farUntouched && inward);
+        // A Mesh Collider follows the dents: a ray down onto a dented dome lands in the dent.
+        {
+            Scene scene("Collider");
+            Entity dome = scene.CreateEntity("Dome");
+            scene.GetRegistry().Get<TransformComponent>(dome).Scale = { 4.0f, 4.0f, 4.0f };
+            scene.GetRegistry().Emplace<MeshRendererComponent>(dome).Mesh = AssetManager::kSphere;
+            scene.GetRegistry().Emplace<MeshColliderComponent>(dome);
+            auto& dd = scene.GetRegistry().Emplace<DeformableComponent>(dome);
+            dd.Radius = 1.0f;
+            dd.MaxDent = 0.5f;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            RaycastHit before = Physics3DWorld::Raycast(*rt, { 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 20.0f);
+            CHECK(Physics3DWorld::Dent(*rt, dome, { 0.0f, 2.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 0.3f) > 0);
+            RaycastHit after = Physics3DWorld::Raycast(*rt, { 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 20.0f);
+            CHECK(before && after && Near(before.Point.y, 2.0f, 0.02f) && Near(after.Point.y, 1.7f, 0.03f));
+            rt->OnRuntimeStop();
+        }
         // By hand, then repaired.
         Scene scene("Manual");
         Entity can = scene.CreateEntity("Can");
@@ -1953,6 +2044,108 @@ namespace
         CHECK(at(14.0f, 20.0f) > base + 4.5f && at(26.0f, 20.0f) < base + 1.5f);
         Terrain::CommitEdit(t);
         CHECK(Near(Terrain::HeightAt(t, Terrain::BuildHeights(t), 0, 0), peak, 0.01f));
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestPathPlacer()
+    {
+        // Copies of a source object every Spacing meters along a straight path, facing along it, offset to its right;
+        // placing again replaces them; snapped onto a terrain; and from a prefab.
+        Scene scene("Fence");
+        auto& reg = scene.GetRegistry();
+        Entity post = scene.CreateEntity("Post");
+        reg.Emplace<MeshRendererComponent>(post);
+        reg.Get<TransformComponent>(post).Scale = { 0.2f, 1.0f, 0.2f };
+        Entity fence = scene.CreateEntity("Fence");
+        reg.Get<TransformComponent>(fence).Position = { 0.0f, 0.0f, 5.0f };
+        auto& pp = reg.Emplace<PathPlacerComponent>(fence);
+        pp.Points = { { 0, 0, 0 }, { 10, 0, 0 } };
+        pp.Source = post;
+        pp.Spacing = 2.0f;
+        pp.SideOffset = 1.0f;
+        pp.SnapToGround = false;
+        scene.UpdateTransforms();
+        CHECK(PathPlacer::Place(scene, fence) == 6);
+        const auto& kids = scene.GetChildren(fence);
+        CHECK(kids.size() == 6);
+        bool ok = kids.size() == 6;
+        for (size_t i = 0; i < kids.size() && ok; ++i)
+        {
+            const auto& t = reg.Get<TransformComponent>(kids[i]);
+            glm::vec3 w = t.GetWorldPosition();
+            glm::vec3 forward = -glm::vec3(t.World[2]) / glm::length(glm::vec3(t.World[2]));
+            // Heading +X, its right is +Z.
+            ok = std::abs(w.x - 2.0f * i) < 0.05f && std::abs(w.z - 6.0f) < 0.05f && forward.x > 0.99f &&
+                 std::abs(glm::length(glm::vec3(t.World[0])) - 0.2f) < 1e-3f && reg.Has<MeshRendererComponent>(kids[i]);
+        }
+        CHECK(ok);
+        CHECK(scene.IsValid(post) && scene.GetParent(post).IsNull()); // the source stays where it was
+        // Again, closer together: replaced, not added.
+        reg.Get<PathPlacerComponent>(fence).Spacing = 1.0f;
+        CHECK(PathPlacer::Place(scene, fence) == 11 && scene.GetChildren(fence).size() == 11);
+        PathPlacer::Clear(scene, fence);
+        CHECK(scene.GetChildren(fence).empty());
+
+        // Onto a terrain: each copy stands on the ground under it.
+        Entity land = scene.CreateEntity("Land");
+        auto& tc = reg.Emplace<TerrainComponent>(land);
+        tc.Size = { 40.0f, 40.0f };
+        tc.Resolution = 64;
+        reg.Emplace<MeshRendererComponent>(land);
+        reg.Get<TransformComponent>(land).Position = { 0.0f, -3.0f, 0.0f };
+        reg.Get<PathPlacerComponent>(fence).SnapToGround = true;
+        reg.Get<PathPlacerComponent>(fence).Spacing = 2.5f;
+        scene.UpdateTransforms();
+        CHECK(PathPlacer::Place(scene, fence) == 5);
+        std::vector<float> heights = Terrain::BuildHeights(reg.Get<TerrainComponent>(land));
+        ok = true;
+        for (Entity k : scene.GetChildren(fence))
+        {
+            glm::vec3 w = reg.Get<TransformComponent>(k).GetWorldPosition();
+            ok &= std::abs(w.y - (Terrain::HeightAt(reg.Get<TerrainComponent>(land), heights, w.x, w.z) - 3.0f)) < 0.01f;
+        }
+        CHECK(ok);
+
+        // A prefab, scattered: random turns and sizes within the limits, the same for the same seed.
+        fs::path assets = fs::temp_directory_path() / "dimension_path_placer" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        AssetHandle prefab = Prefabs::CreateFromEntity(scene, post, assets / "Post.prefab");
+        CHECK(prefab.IsValid());
+        auto& p2 = reg.Get<PathPlacerComponent>(fence);
+        p2.Source = Entity::Null();
+        p2.Prefab = prefab;
+        p2.SnapToGround = false;
+        p2.AlignToPath = false;
+        p2.RandomRotation = 30.0f;
+        p2.RandomScale = 0.5f;
+        auto snapshot = [&] {
+            std::vector<glm::vec3> out;
+            for (Entity k : scene.GetChildren(fence))
+            {
+                const auto& t = reg.Get<TransformComponent>(k);
+                out.push_back({ t.Rotation.y, t.Scale.x, t.Scale.y });
+            }
+            return out;
+        };
+        CHECK(PathPlacer::Place(scene, fence) == 5);
+        auto first = snapshot();
+        ok = first.size() == 5;
+        bool varied = false;
+        for (const glm::vec3& s : first)
+        {
+            ok &= std::abs(s.x) <= glm::radians(30.0f) + 1e-4f && s.y >= 0.1f - 1e-4f && s.y <= 0.3f + 1e-4f && s.z >= 0.5f - 1e-4f;
+            varied |= std::abs(s.x - first[0].x) > 1e-3f;
+        }
+        CHECK(ok && varied && reg.Has<PrefabLinkComponent>(scene.GetChildren(fence)[0]));
+        PathPlacer::Place(scene, fence);
+        auto second = snapshot();
+        ok = second.size() == first.size();
+        for (size_t i = 0; ok && i < first.size(); ++i) ok = glm::distance(first[i], second[i]) < 1e-5f;
+        CHECK(ok);
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path(), ec);
     }
@@ -6967,6 +7160,7 @@ int main(int argc, char** argv)
     Run("Terrain stamp", TestTerrainStamp);
     Run("Terrain erosion", TestTerrainErosion);
     Run("Terrain path", TestTerrainPath);
+    Run("Path placer", TestPathPlacer);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);
@@ -6978,6 +7172,7 @@ int main(int argc, char** argv)
     Run("Rope", TestRope);
     Run("Destructible", TestDestructible);
     Run("Boat", TestBoat);
+    Run("Towing", TestTowing);
     Run("Dents", TestDents);
     Run("Microphone", TestMicrophone);
     Run("Nested prefabs", TestNestedPrefabs);

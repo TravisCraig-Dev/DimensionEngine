@@ -9,6 +9,7 @@
 #include <Dimension/Renderer/Material.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Audio/AudioEngine.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Audio/AudioMixer.h>
@@ -496,6 +497,35 @@ namespace Editor
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         ImGui::TextDisabled(target.IsNull() ? "(no terrain in the scene)" : "into '%s'", reg.Get<TagComponent>(target.IsNull() ? e : target).Name.c_str());
+                    }
+                    if (info.TypeId == GetComponentTypeId<PathPlacerComponent>())
+                    {
+                        // Lay the copies along the path (one undo step), or take them away.
+                        auto& placer = *static_cast<PathPlacerComponent*>(info.Get(scene, e));
+                        bool ready = placer.Prefab.IsValid() || (!placer.Source.IsNull() && scene.IsValid(placer.Source));
+                        size_t spots = PathPlacer::Spots(scene, e).size();
+                        ImGui::BeginDisabled(!ready);
+                        if (ImGui::Button("Place Along Path"))
+                        {
+                            m_Ctx.RecordUndo();
+                            PathPlacer::Place(scene, e);
+                            m_Ctx.MarkDirty();
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(scene.GetChildren(e).empty());
+                        if (ImGui::Button("Clear"))
+                        {
+                            m_Ctx.RecordUndo();
+                            PathPlacer::Clear(scene, e);
+                            m_Ctx.MarkDirty();
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        if (ready)
+                            ImGui::TextDisabled("%zu copies", spots);
+                        else
+                            ImGui::TextDisabled("(set a Prefab or Source)");
                     }
                     if (info.TypeId == GetComponentTypeId<LightProbeVolumeComponent>())
                     {

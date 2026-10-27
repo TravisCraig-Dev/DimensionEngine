@@ -66,6 +66,8 @@ void main()
         }
     }
     vec4 clouds = Clouds(dir);
-    outColor = vec4(sky * clouds.a + clouds.rgb, 1.0);
+    vec3 color = sky * clouds.a + clouds.rgb;
+    color += vec3(0.7, 0.75, 1.0) * uScene.Weather.w * (0.6 + 2.0 * (1.0 - clouds.a)); // lightning: the clouds light up most
+    outColor = vec4(color, 1.0);
     outEntity = 0u;
 }
