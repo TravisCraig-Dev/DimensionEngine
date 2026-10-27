@@ -4,6 +4,7 @@
 //        [--no-instancing] [--no-vsync]           draw every mesh separately / uncapped frame rate (for comparisons)
 //        [--no-clusters]                          shade every light at every pixel (for comparisons)
 //        [--cpu-light-culling]                    build the light clusters on the CPU instead of in a compute shader
+//        [--no-occlusion]                         draw meshes hidden behind others too (for comparisons)
 //        [--wait-for-debugger]                    wait up to 60 s for a C# debugger to attach
 // A built game ships as DimensionPlayer.exe next to a "Project" folder.
 #include <Dimension/Dimension.h>
@@ -64,9 +65,9 @@ namespace
                 const auto& st = m_Renderer.GetStats();
                 float avg = m_TimedFrames ? m_TimedSeconds / m_TimedFrames * 1000.0f : 0.0f;
                 float n = (float)std::max(1, m_TimedFrames);
-                Log::Info("Stats: {} draw calls, {} meshes ({} instanced), {} triangles, {} shadow casters; {:.2f} ms/frame over {} frames "
+                Log::Info("Stats: {} draw calls, {} meshes ({} instanced, {} occluded), {} triangles, {} shadow casters; {:.2f} ms/frame over {} frames "
                           "(CPU: update {:.2f} ms, render recording {:.2f} ms, of which render list {:.2f} ms)",
-                          st.DrawCalls, st.Meshes, st.InstancedMeshes, st.Triangles, st.ShadowCasters, avg, m_TimedFrames,
+                          st.DrawCalls, st.Meshes, st.InstancedMeshes, st.Occluded, st.Triangles, st.ShadowCasters, avg, m_TimedFrames,
                           m_UpdateMs / n, m_RenderMs / n, m_ListMs / n);
             }
             m_Scene->OnRuntimeStop();
@@ -170,6 +171,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--no-instancing")) SceneRenderer::SetInstancingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-clusters")) SceneRenderer::SetLightClusteringEnabled(false);
         else if (!std::strcmp(argv[i], "--cpu-light-culling")) SceneRenderer::SetGpuLightCullingEnabled(false);
+        else if (!std::strcmp(argv[i], "--no-occlusion")) SceneRenderer::SetOcclusionCullingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-vsync")) noVSync = true;
         else if (!std::strcmp(argv[i], "--wait-for-debugger")) waitForDebugger = true;
         else if ((!std::strcmp(argv[i], "--click") || !std::strcmp(argv[i], "--move")) && i + 1 < argc)

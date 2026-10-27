@@ -1,0 +1,35 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Occlusion culling: the depth buffer reduced to a grid of cells, each the farthest depth drawn in it (written to a
+// buffer the CPU reads back; see OccluderDepth).
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uTextures[];
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer CellsOut { float Cells[]; };
+
+layout(push_constant) uniform Push
+{
+    uvec2 Out;      // CellsOut address
+    uint Depth;     // bindless depth texture
+    uint CellSize;  // pixels per cell side
+    uvec2 Grid;     // cells across and down
+    uvec2 Size;     // depth texture size
+} pc;
+
+void main()
+{
+    uvec2 cell = gl_GlobalInvocationID.xy;
+    if (cell.x >= pc.Grid.x || cell.y >= pc.Grid.y) return;
+    uvec2 start = cell * pc.CellSize;
+    float farthest = 0.0;
+    for (uint y = 0u; y < pc.CellSize; ++y)
+        for (uint x = 0u; x < pc.CellSize; ++x)
+        {
+            uvec2 p = min(start + uvec2(x, y), pc.Size - 1u);
+            farthest = max(farthest, texelFetch(uTextures[nonuniformEXT(pc.Depth)], ivec2(p), 0).r);
+        }
+    CellsOut(pc.Out).Cells[cell.y * pc.Grid.x + cell.x] = farthest;
+}

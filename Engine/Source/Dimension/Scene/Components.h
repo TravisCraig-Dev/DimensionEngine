@@ -829,14 +829,15 @@ namespace Dimension
 
     // A NavMesh Modifier Volume (like Unity's): the navigation mesh inside its box (Center, Size, in the object's
     // space) is of an Area: Not Walkable takes it out (agents keep Agent Radius from it), the others make walking
-    // there count Cost times on paths (a road below 1, mud above) and can be left out by agents' Area Mask.
+    // there count Cost times on paths (a road below 1, mud above; 0 = the area's cost in the project) and can be left
+    // out by agents' Area Mask.
     enum class NavArea : int32_t { Walkable = 0, NotWalkable = 1, Road = 2, Grass = 3, Mud = 4, Water = 5, Area6 = 6, Area7 = 7 };
     struct NavMeshModifierVolumeComponent
     {
         glm::vec3 Center{ 0.0f };
         glm::vec3 Size{ 4.0f, 2.0f, 4.0f };
         NavArea Area = NavArea::Mud;
-        float Cost = 3.0f;
+        float Cost = 0.0f; // 0 = the area's cost in the project (Window > Navigation)
     };
 
     // An Off-Mesh Link (like Unity's): a way between two points of the navigation mesh that is not walked on it (a

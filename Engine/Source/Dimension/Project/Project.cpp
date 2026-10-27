@@ -78,6 +78,13 @@ namespace Dimension
                 if (j.contains("physicsLayers") && j["physicsLayers"].is_array())
                     for (size_t i = 0; i < j["physicsLayers"].size() && i < ProjectConfig::kMaxLayers; ++i)
                         s_Config.PhysicsLayers[i] = j["physicsLayers"][i].get<std::string>();
+                if (j.contains("navAreas") && j["navAreas"].is_array())
+                    for (size_t i = 0; i < j["navAreas"].size() && i < ProjectConfig::kNavAreas; ++i)
+                    {
+                        s_Config.NavAreaNames[i] = j["navAreas"][i].value("name", s_Config.NavAreaNames[i]);
+                        s_Config.NavAreaCosts[i] = j["navAreas"][i].value("cost", s_Config.NavAreaCosts[i]);
+                    }
+                s_Config.NavPathBudget = j.value("navPathBudget", s_Config.NavPathBudget);
                 if (j.contains("layerCollisionMatrix") && j["layerCollisionMatrix"].is_array())
                     for (size_t i = 0; i < j["layerCollisionMatrix"].size() && i < ProjectConfig::kMaxLayers; ++i)
                         s_Config.LayerCollisionMatrix[i] = j["layerCollisionMatrix"][i].get<uint32_t>();
@@ -116,6 +123,8 @@ namespace Dimension
             for (auto& v : snap.Values) values.push_back({ { "group", v.Group }, { "volumeDb", v.VolumeDb }, { "lowPassHz", v.LowPassHz } });
             snapshots.push_back({ { "name", snap.Name }, { "values", values } });
         }
+        nlohmann::json navAreas = nlohmann::json::array();
+        for (int i = 0; i < ProjectConfig::kNavAreas; ++i) navAreas.push_back({ { "name", s_Config.NavAreaNames[i] }, { "cost", s_Config.NavAreaCosts[i] } });
         nlohmann::json j{ { "name", s_Config.Name },
                           { "buildScenes", buildScenes },
                           { "audioMixer", mixer },
@@ -131,6 +140,8 @@ namespace Dimension
                           { "stripUnusedAssets", s_Config.StripUnusedAssets },
                           { "physicsLayers", s_Config.PhysicsLayers },
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
+                          { "navAreas", navAreas },
+                          { "navPathBudget", s_Config.NavPathBudget },
                           { "engineVersion", "0.1.0" } };
         std::ofstream out(s_Directory / kFileName);
         out << j.dump(2);

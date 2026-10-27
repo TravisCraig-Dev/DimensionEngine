@@ -26,6 +26,13 @@ namespace Dimension
         return nullptr;
     }
 
+    ComponentInfo* ComponentRegistry::FindMutable(const std::string& name)
+    {
+        for (auto& i : Infos())
+            if (i.Name == name) return &i;
+        return nullptr;
+    }
+
     std::vector<const ComponentInfo*> ComponentRegistry::GetDisplayOrder(Scene& scene, Entity entity)
     {
         std::vector<const ComponentInfo*> list;
@@ -683,7 +690,7 @@ namespace Dimension
             .Field("Center", &NavMeshModifierVolumeComponent::Center).Speed(0.01f)
             .Field("Size", &NavMeshModifierVolumeComponent::Size).Speed(0.05f)
             .Field("Area", &NavMeshModifierVolumeComponent::Area).Enum({ "Walkable", "Not Walkable", "Road", "Grass", "Mud", "Water", "Area 6", "Area 7" })
-            .Field("Cost", &NavMeshModifierVolumeComponent::Cost).Range(0.05f, 100.0f).Speed(0.05f).Tooltip("Walking here counts this many times (below 1: preferred)");
+            .Field("Cost", &NavMeshModifierVolumeComponent::Cost).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Walking here counts this many times (below 1: preferred; 0 = the area's cost, Window > Navigation)");
         Register<NavMeshObstacleComponent>("NavMesh Obstacle", "Navigation")
             .Field("Shape", &NavMeshObstacleComponent::Shape).Enum({ "Box", "Capsule" })
             .Field("Center", &NavMeshObstacleComponent::Center).Speed(0.01f)

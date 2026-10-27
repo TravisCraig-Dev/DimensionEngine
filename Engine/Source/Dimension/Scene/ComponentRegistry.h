@@ -43,6 +43,8 @@ namespace Dimension
 
         static const std::deque<ComponentInfo>& All() { return Infos(); }
         static const ComponentInfo* Find(const std::string& name);
+        // For changing a registered component's field presentation (e.g. enum names from project settings).
+        static ComponentInfo* FindMutable(const std::string& name);
         template <class T> static const ComponentInfo* Find()
         {
             for (auto& i : Infos())

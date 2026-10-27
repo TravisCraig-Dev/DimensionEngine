@@ -116,6 +116,7 @@ namespace Editor
         Scope<SceneSettingsPanel> m_SceneSettings;
         Scope<AnimatorPanel> m_Animator;
         Scope<TimelinePanel> m_Timeline;
+        Scope<NavigationPanel> m_Navigation;
 
         Scope<SceneRenderTarget> m_SceneTarget, m_GameTarget;
         SceneRenderer m_SceneRenderer, m_GameRenderer;
@@ -155,6 +156,7 @@ namespace Editor
         bool m_ShowHierarchy = true, m_ShowInspector = true, m_ShowContent = true, m_ShowConsole = true;
         bool m_ShowAnimator = true;
         bool m_ShowTimeline = false;
+        bool m_ShowNavigation = false;
         bool m_ShowStats = true, m_ShowSceneSettings = true, m_ShowProjectSettings = false, m_ShowAbout = false;
         bool m_ShowBuildSettings = false, m_ShowPreferences = false, m_ShowAudioMixer = true, m_ShowTilePalette = false;
         int m_TileBrush = 0;

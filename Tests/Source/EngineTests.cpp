@@ -16,6 +16,7 @@
 #include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Scene/LODGroup.h>
 #include <Dimension/Renderer/MeshSimplify.h>
+#include <Dimension/Renderer/Occlusion.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
@@ -1932,6 +1933,13 @@ namespace
         door = Navigation::Nearest(*mesh, { 0.0f, 0.0f, 0.0f }, 0.2f);
         CHECK(door >= 0 && mesh->Areas[door] == (uint8_t)NavArea::Mud && mesh->Costs[door] == 10.0f);
         CHECK(Navigation::FindPath(*mesh, from, to, corners, {}, nullptr, small) == NavPathStatus::Complete && maxX(corners) > 10.0f);
+        // Cost 0: the area's cost from the project (Window > Navigation).
+        volume.Cost = 0.0f;
+        float projectMud = Project::GetConfig().NavAreaCosts[(int)NavArea::Mud];
+        Project::GetConfig().NavAreaCosts[(int)NavArea::Mud] = 7.0f;
+        mesh = Navigation::Bake(scene, surface);
+        CHECK(mesh->Costs[Navigation::Nearest(*mesh, { 0.0f, 0.0f, 0.0f }, 0.2f)] == 7.0f);
+        Project::GetConfig().NavAreaCosts[(int)NavArea::Mud] = projectMud;
         volume.Cost = 1.0f;
         mesh = Navigation::Bake(scene, surface);
         CHECK(Navigation::FindPath(*mesh, from, to, corners, {}, nullptr, small) == NavPathStatus::Complete && maxX(corners) < 2.0f);
@@ -1968,6 +1976,65 @@ namespace
         }
         CHECK(Near(rr.Get<TransformComponent>(mouse).Position, { -3.0f, 0.0f, 5.0f }, 0.1f));
         CHECK(!bearInDoor && Near(rr.Get<TransformComponent>(bear).Position, { -6.0f, 0.0f, 5.0f }, 0.1f));
+        rt->OnRuntimeStop();
+    }
+
+    void TestNavCrowd()
+    {
+        // Two groups of 100 agents swap sides of an open field, walking through each other: all arrive, they barely
+        // touch, and a frame's update stays quick (neighbours from a grid, the nearest few each).
+        Scene scene("Field");
+        auto& reg = scene.GetRegistry();
+        Entity ground = scene.CreateEntity("Ground");
+        reg.Get<TransformComponent>(ground).Position = { 0.0f, -0.5f, 0.0f };
+        reg.Emplace<BoxColliderComponent>(ground).Size = { 60.0f, 1.0f, 60.0f };
+        Entity surface = scene.CreateEntity("Navigation");
+        auto& s = reg.Emplace<NavMeshSurfaceComponent>(surface);
+        s.Size = { 60.0f, 10.0f, 60.0f };
+        s.CellSize = 0.5f;
+        s.AgentRadius = 0.4f;
+        std::vector<std::pair<Entity, glm::vec3>> crowd;
+        for (int side = 0; side < 2; ++side)
+            for (int i = 0; i < 100; ++i)
+            {
+                float x = (i % 10) * 1.6f - 7.2f + side * 0.8f, z = (i / 10) * 1.6f + 6.0f;
+                glm::vec3 start(x, 0.0f, side ? z : -z), goal(x, 0.0f, side ? -z : z);
+                Entity e = scene.CreateEntity("Walker");
+                reg.Get<TransformComponent>(e).Position = start;
+                auto& a = reg.Emplace<NavMeshAgentComponent>(e);
+                a.Radius = 0.4f;
+                a.Speed = 3.0f;
+                a.Acceleration = 10.0f;
+                a.StoppingDistance = 0.3f;
+                crowd.push_back({ e, goal });
+            }
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        for (auto& [e, goal] : crowd) Navigation::SetDestination(*rt, e, goal);
+        double navMs = 0.0;
+        int frames = 0;
+        float closest = 100.0f;
+        for (int i = 0; i < 1500; ++i)
+        {
+            auto t0 = std::chrono::steady_clock::now();
+            Navigation::Update(*rt, 1.0f / 60.0f);
+            navMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            ++frames;
+            if (i % 10 == 0)
+                for (size_t a = 0; a < crowd.size(); ++a)
+                    for (size_t b = a + 1; b < crowd.size(); ++b)
+                    {
+                        glm::vec3 pa = rr.Get<TransformComponent>(crowd[a].first).Position, pb = rr.Get<TransformComponent>(crowd[b].first).Position;
+                        closest = std::min(closest, glm::distance(glm::vec2(pa.x, pa.z), glm::vec2(pb.x, pb.z)));
+                    }
+        }
+        int arrived = 0;
+        for (auto& [e, goal] : crowd) arrived += glm::distance(rr.Get<TransformComponent>(e).Position, goal) < 1.0f;
+        printf("  crowd: %d of %zu arrived, closest %.2f m, %.2f ms per update\n", arrived, crowd.size(), closest, navMs / frames);
+        CHECK(arrived >= 196 && closest > 0.45f);
+        CHECK(navMs / frames < 25.0); // a Debug build
         rt->OnRuntimeStop();
     }
 
@@ -2179,6 +2246,36 @@ namespace
         CHECK(Navigation::SamplePosition(*rt, { 3.0f, 2.0f, 3.0f }, 3.0f, sample) && Near(sample, { 3.0f, 0.0f, 3.0f }, 0.01f));
         CHECK(!Navigation::SamplePosition(*rt, { 3.0f, 8.0f, 3.0f }, 3.0f, sample));
         rt->OnRuntimeStop();
+    }
+
+    void TestOcclusionTest()
+    {
+        // A camera at the origin looking down -Z; the depth grid as if a wall 5 m away filled the left half of the
+        // view (sky, depth 1, elsewhere).
+        glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        glm::mat4 view = glm::lookAt(glm::vec3(0.0f), glm::vec3(0, 0, -1), glm::vec3(0, 1, 0));
+        OccluderDepth occ;
+        occ.Width = 64;
+        occ.Height = 36;
+        occ.ViewProj = proj * view;
+        glm::vec4 wall = proj * glm::vec4(0, 0, -5, 1);
+        float wallDepth = wall.z / wall.w;
+        occ.Farthest.assign((size_t)occ.Width * occ.Height, 1.0f);
+        for (uint32_t y = 0; y < occ.Height; ++y)
+            for (uint32_t x = 0; x < occ.Width / 2; ++x) occ.Farthest[y * occ.Width + x] = wallDepth;
+        CHECK(occ.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));  // behind the wall
+        CHECK(!occ.Hides({ -1.0f, 0.0f, -3.0f }, glm::vec3(0.5f))); // in front of it
+        CHECK(!occ.Hides({ 6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));  // beside it: open sky
+        CHECK(!occ.Hides({ -0.6f, 0.0f, -20.0f }, glm::vec3(0.5f))); // reaching past its edge (with the ring around)
+        CHECK(!occ.Hides({ 0.0f, 0.0f, 1.0f }, glm::vec3(0.5f)));    // behind the camera
+        CHECK(!occ.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(30.0f))); // too big to judge
+        // A low wall: the bottom half of the view (the top rows of the grid are the top of the view).
+        occ.Farthest.assign((size_t)occ.Width * occ.Height, 1.0f);
+        for (uint32_t y = occ.Height / 2; y < occ.Height; ++y)
+            for (uint32_t x = 0; x < occ.Width; ++x) occ.Farthest[y * occ.Width + x] = wallDepth;
+        CHECK(occ.Hides({ 0.0f, -6.0f, -20.0f }, glm::vec3(0.5f)) && !occ.Hides({ 0.0f, 6.0f, -20.0f }, glm::vec3(0.5f)));
+        OccluderDepth none;
+        CHECK(!none.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));
     }
 
     void TestMeshSimplify()
@@ -8039,11 +8136,13 @@ int main(int argc, char** argv)
     Run("NavMesh agents", TestNavMeshAgents);
     Run("LOD groups", TestLODGroups);
     Run("Mesh simplify", TestMeshSimplify);
+    Run("Occlusion test", TestOcclusionTest);
     Run("LOD fade and generated", TestLODFadeAndGenerated);
     Run("NavMesh obstacles", TestNavMeshObstacles);
     Run("Off-mesh links", TestOffMeshLinks);
     Run("NavMesh agent sizes and areas", TestNavAgentSizesAndAreas);
     Run("NavMesh generated links", TestNavGeneratedLinks);
+    Run("NavMesh crowd", TestNavCrowd);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

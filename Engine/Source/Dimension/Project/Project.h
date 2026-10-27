@@ -31,6 +31,13 @@ namespace Dimension
         std::array<std::string, kMaxLayers> PhysicsLayers = MakeDefaultLayers();
         std::array<uint32_t, kMaxLayers> LayerCollisionMatrix = MakeDefaultMatrix(); // bit j of row i: i collides with j
 
+        // Navigation (Window > Navigation): area names and the cost walking each counts by default (a NavMesh Modifier
+        // Volume with Cost 0 takes its area's), and how many new paths agents may find a frame.
+        static constexpr int kNavAreas = 8;
+        std::array<std::string, kNavAreas> NavAreaNames{ "Walkable", "Not Walkable", "Road", "Grass", "Mud", "Water", "Area 6", "Area 7" };
+        std::array<float, kNavAreas> NavAreaCosts{ 1.0f, 1.0f, 0.5f, 1.5f, 4.0f, 6.0f, 1.0f, 1.0f };
+        int NavPathBudget = 16;
+
         bool LayersCollide(int a, int b) const
         {
             return a >= 0 && b >= 0 && a < kMaxLayers && b < kMaxLayers && ((LayerCollisionMatrix[a] >> b) & 1u);

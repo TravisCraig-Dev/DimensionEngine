@@ -1,6 +1,8 @@
 #include "Dimension/Navigation/NavMesh.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Project/Project.h"
+#include "Dimension/Scene/ComponentRegistry.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -248,7 +250,12 @@ namespace Dimension
                 std::vector<Volume> volumes;
                 for (auto [e, v, t] : reg.ViewOf<NavMeshModifierVolumeComponent, TransformComponent>())
                     if (t.ActiveInHierarchy)
-                        volumes.push_back({ glm::inverse(t.World), v.Center, glm::abs(v.Size) * 0.5f, std::clamp((int)v.Area, 0, kAreaCount - 1), std::max(v.Cost, 0.01f) });
+                    {
+                        // Cost 0: the area's own (Project Settings, the Navigation window).
+                        int area = std::clamp((int)v.Area, 0, kAreaCount - 1);
+                        float cost = v.Cost > 0.0f ? v.Cost : Project::GetConfig().NavAreaCosts[area];
+                        volumes.push_back({ glm::inverse(t.World), v.Center, glm::abs(v.Size) * 0.5f, area, std::max(cost, 0.01f) });
+                    }
                 auto notWalkable = [&](const glm::vec3& p) {
                     for (const Volume& v : volumes)
                         if (v.Area == kNotWalkable && v.Contains(p)) return true;
@@ -387,14 +394,53 @@ namespace Dimension
                 // A* over the nodes and the off-mesh links.
                 std::unordered_map<int, std::vector<int>> linksFrom;
                 for (int k = 0; k < (int)links.size(); ++k) linksFrom[links[k].From].push_back(k);
-                std::vector<float> g(n, kInf);
-                std::vector<int> parent(n, -1), parentLink(n, -1);
-                std::vector<uint8_t> closed(n, 0);
+                // Search state per node, kept between searches (a crowd searches many times a second): a node's entries
+                // count only when stamped with this search's number.
+                struct SearchState
+                {
+                    std::vector<float> G;
+                    std::vector<int> Parent, ParentLink;
+                    std::vector<uint32_t> Stamp, Closed;
+                    uint32_t Number = 0;
+                };
+                static thread_local SearchState state;
+                if (state.Stamp.size() < (size_t)n)
+                {
+                    state.G.resize(n);
+                    state.Parent.resize(n);
+                    state.ParentLink.resize(n);
+                    state.Stamp.assign(n, 0);
+                    state.Closed.assign(n, 0);
+                    state.Number = 0;
+                }
+                if (++state.Number == 0)
+                {
+                    std::fill(state.Stamp.begin(), state.Stamp.end(), 0u);
+                    std::fill(state.Closed.begin(), state.Closed.end(), 0u);
+                    state.Number = 1;
+                }
+                const uint32_t search = state.Number;
+                struct GView
+                {
+                    SearchState& S;
+                    uint32_t Search;
+                    float operator[](int i) const { return S.Stamp[i] == Search ? S.G[i] : kInf; }
+                };
+                auto setG = [&](int i, float v, int from, int link) {
+                    state.Stamp[i] = search;
+                    state.G[i] = v;
+                    state.Parent[i] = from;
+                    state.ParentLink[i] = link;
+                };
+                GView g{ state, search };
+                auto isClosed = [&](int i) { return state.Closed[i] == search; };
+                auto parentOf = [&](int i) { return state.Stamp[i] == search ? state.Parent[i] : -1; };
+                auto linkOf = [&](int i) { return state.Stamp[i] == search ? state.ParentLink[i] : -1; };
                 using Item = std::pair<float, int>;
                 std::priority_queue<Item, std::vector<Item>, std::greater<>> open;
                 glm::vec3 goalPos = m.NodePosition(goal);
                 float h = std::min(m.MinCost, 1.0f); // keeps the estimate below the real cost on cheap ground
-                g[start] = 0.0f;
+                setG(start, 0.0f, -1, -1);
                 open.push({ glm::distance(m.NodePosition(start), goalPos) * h, start });
                 // The spot reached nearest the goal, should the goal not be reached (too narrow for the agent, or
                 // only through areas it leaves out).
@@ -404,8 +450,8 @@ namespace Dimension
                 {
                     int a = open.top().second;
                     open.pop();
-                    if (closed[a]) continue;
-                    closed[a] = 1;
+                    if (isClosed(a)) continue;
+                    state.Closed[a] = search;
                     if (a == goal) break;
                     glm::vec3 pa = m.NodePosition(a);
                     if (float d = glm::distance(pa, to); d < nearestD)
@@ -414,13 +460,11 @@ namespace Dimension
                         nearestReached = a;
                     }
                     auto relax = [&](int b, float edge, int link) {
-                        if (b < 0 || closed[b] || !filter.Passes(m, b)) return;
+                        if (b < 0 || isClosed(b) || !filter.Passes(m, b)) return;
                         float nd = g[a] + edge;
                         if (nd < g[b])
                         {
-                            g[b] = nd;
-                            parent[b] = a;
-                            parentLink[b] = link;
+                            setG(b, nd, a, link);
                             open.push({ nd + glm::distance(m.NodePosition(b), goalPos) * h, b });
                         }
                     };
@@ -429,16 +473,16 @@ namespace Dimension
                     if (auto it = linksFrom.find(a); it != linksFrom.end())
                         for (int k : it->second) relax(links[k].To, links[k].Cost, k);
                 }
-                if (!closed[goal])
+                if (!isClosed(goal))
                 {
                     status = NavPathStatus::Partial;
                     goal = nearestReached;
                 }
                 std::vector<int> nodes, arrivedBy; // arrivedBy: the link that led to the node (-1 = walked)
-                for (int a = goal; a >= 0; a = parent[a])
+                for (int a = goal; a >= 0; a = parentOf(a))
                 {
                     nodes.push_back(a);
-                    arrivedBy.push_back(parentLink[a]);
+                    arrivedBy.push_back(linkOf(a));
                 }
                 std::reverse(nodes.begin(), nodes.end());
                 std::reverse(arrivedBy.begin(), arrivedBy.end());
@@ -898,6 +942,17 @@ namespace Dimension
             return true;
         }
 
+        void SetPathBudget(int pathsPerFrame) { Project::GetConfig().NavPathBudget = std::max(pathsPerFrame, 1); }
+        int GetPathBudget() { return std::max(Project::GetConfig().NavPathBudget, 1); }
+
+        void ApplyAreaNames()
+        {
+            // The Area dropdown shows the project's names.
+            if (ComponentInfo* info = ComponentRegistry::FindMutable("NavMesh Modifier Volume"))
+                for (FieldInfo& f : info->Fields)
+                    if (f.Name == "Area") f.EnumNames.assign(Project::GetConfig().NavAreaNames.begin(), Project::GetConfig().NavAreaNames.end());
+        }
+
         void Update(Scene& scene, float dt)
         {
             if (dt <= 0.0f) return;
@@ -980,6 +1035,8 @@ namespace Dimension
             std::vector<Mover> movers;
             for (auto [e, agent, t] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
                 if (t.ActiveInHierarchy) movers.push_back({ e, &agent, glm::vec3(0.0f) });
+            int pathsThisFrame = 0;
+            const int pathBudget = GetPathBudget();
 
             for (Mover& mv : movers)
             {
@@ -1016,8 +1073,28 @@ namespace Dimension
                     agent.PathDirty = true;
                     agent.RepathTimer = 0.2f;
                 }
-                if (agent.PathDirty) Repath(scene, mv.E, agent);
+                // New paths (for following targets, after obstacles moved, or when pushed off the way) at most Path
+                // Budget a frame: the rest keep to their old path until their turn.
+                if (agent.PathDirty && pathsThisFrame < pathBudget)
+                {
+                    Repath(scene, mv.E, agent);
+                    ++pathsThisFrame;
+                }
                 mv.Ground = GroundOf(scene, mv.E, agent);
+            }
+
+            // Agents by where they stand, in cells of a few meters, for finding the neighbours to steer around.
+            constexpr float kCell = 4.0f;
+            auto cellKey = [](int x, int z) { return ((int64_t)x << 32) ^ (int64_t)(uint32_t)z; };
+            std::unordered_map<int64_t, std::vector<int>> cells;
+            float maxRadius = 0.0f, maxSpeed = 0.0f;
+            for (int i = 0; i < (int)movers.size(); ++i)
+            {
+                const Mover& o = movers[i];
+                if (!o.Agent->Mesh) continue;
+                cells[cellKey((int)std::floor(o.Ground.x / kCell), (int)std::floor(o.Ground.z / kCell))].push_back(i);
+                maxRadius = std::max(maxRadius, o.Agent->Radius);
+                maxSpeed = std::max({ maxSpeed, o.Agent->Speed, glm::length(o.Agent->Velocity) });
             }
 
             for (Mover& mv : movers)
@@ -1100,18 +1177,40 @@ namespace Dimension
                     {
                         glm::vec2 P, V;
                         float R;
+                        bool Shared = false; // an agent of the same priority: each of the two dodges half (reciprocal)
+                        bool Idle = false;   // standing (arrived, stopped, nowhere to go): gets pushed aside rather than kept clear of
                     };
                     std::vector<Other> others;
                     float reach = agent.Radius + agent.Speed * 2.0f;
-                    for (const Mover& o : movers)
-                    {
-                        if (o.E == mv.E || o.Agent->AvoidancePriority > agent.AvoidancePriority || !o.Agent->Mesh) continue;
-                        glm::vec2 op(o.Ground.x, o.Ground.z);
-                        glm::vec2 ov(o.Agent->Velocity.x, o.Agent->Velocity.z);
-                        if (std::abs(o.Ground.y - mv.Ground.y) > agent.Height) continue;
-                        if (glm::distance(op, p) > reach + o.Agent->Radius + glm::length(ov) * 2.0f) continue;
-                        others.push_back({ op, ov, agent.Radius + o.Agent->Radius });
-                    }
+                    // The nearest few agents in the cells around (a crowd steers by its neighbours, not by everyone).
+                    float search = reach + maxRadius + maxSpeed * 2.0f;
+                    int cx0 = (int)std::floor((p.x - search) / kCell), cx1 = (int)std::floor((p.x + search) / kCell);
+                    int cz0 = (int)std::floor((p.y - search) / kCell), cz1 = (int)std::floor((p.y + search) / kCell);
+                    std::vector<std::pair<float, Other>> near;
+                    for (int cz = cz0; cz <= cz1; ++cz)
+                        for (int cx = cx0; cx <= cx1; ++cx)
+                        {
+                            auto it = cells.find(cellKey(cx, cz));
+                            if (it == cells.end()) continue;
+                            for (int i : it->second)
+                            {
+                                const Mover& o = movers[i];
+                                if (o.E == mv.E || o.Agent->AvoidancePriority > agent.AvoidancePriority) continue;
+                                glm::vec2 op(o.Ground.x, o.Ground.z);
+                                glm::vec2 ov(o.Agent->Velocity.x, o.Agent->Velocity.z);
+                                if (std::abs(o.Ground.y - mv.Ground.y) > agent.Height) continue;
+                                float d = glm::distance(op, p);
+                                if (d > reach + o.Agent->Radius + glm::length(ov) * 2.0f) continue;
+                                const NavMeshAgentComponent& oa = *o.Agent;
+                                bool idle = !oa.HasDestination || oa.IsStopped || oa.PathStatus == NavPathStatus::Invalid ||
+                                            oa.RemainingDistance <= oa.StoppingDistance + 0.05f;
+                                near.push_back({ d, { op, ov, agent.Radius + oa.Radius, oa.AvoidancePriority == agent.AvoidancePriority, idle } });
+                            }
+                        }
+                    constexpr size_t kMaxNeighbours = 10;
+                    if (near.size() > kMaxNeighbours)
+                        std::partial_sort(near.begin(), near.begin() + kMaxNeighbours, near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+                    for (size_t i = 0; i < near.size() && i < kMaxNeighbours; ++i) others.push_back(near[i].second);
                     for (const Blocker& b : blockers)
                         if (std::abs(b.Y - mv.Ground.y - agent.Height * 0.5f) < b.HalfHeight + agent.Height * 0.5f &&
                             glm::distance(b.P, p) < reach + b.R + glm::length(b.V) * 2.0f)
@@ -1119,23 +1218,24 @@ namespace Dimension
                     if (!others.empty())
                     {
                         const float horizon = 2.0f;
+                        glm::vec2 ownVelocity(agent.Velocity.x, agent.Velocity.z);
                         auto cost = [&](glm::vec2 v) {
                             float c = glm::length(v - desired) / std::max(agent.Speed, 0.1f);
                             for (const Other& o : others)
                             {
-                                glm::vec2 rp = o.P - p, rv = v - o.V;
+                                glm::vec2 rp = o.P - p, rv = o.Shared ? 2.0f * v - ownVelocity - o.V : v - o.V;
                                 float c2 = glm::dot(rp, rp) - o.R * o.R;
                                 float b = glm::dot(rp, rv);
                                 if (c2 < 0.0f)
                                 {
-                                    if (b > 0.0f) c += 3.0f + b; // overlapping and closing in
+                                    if (b > 0.0f) c += o.Idle ? 0.3f + 0.2f * b : 3.0f + b; // overlapping and closing in
                                     continue;
                                 }
                                 float a = glm::dot(rv, rv);
                                 float disc = b * b - a * c2;
                                 if (b <= 0.0f || a < 1e-8f || disc <= 0.0f) continue;
                                 float t = (b - std::sqrt(disc)) / a;
-                                if (t < horizon) c += 2.5f * (horizon - t) / horizon;
+                                if (t < horizon) c += (o.Idle ? 0.4f : 2.5f) * (horizon - t) / horizon;
                             }
                             return c;
                         };
@@ -1197,6 +1297,47 @@ namespace Dimension
                 PlaceObject(scene, mv.E, mv.Ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
                 face({ agent.Velocity.x, agent.Velocity.z });
             }
+
+            // Collisions: agents still overlapping are pushed apart, each by half (the less important one, by its
+            // Avoidance Priority, all the way), along the mesh.
+            auto push = [&](Mover& mv, glm::vec2 delta) {
+                NavMeshAgentComponent& agent = *mv.Agent;
+                const NavMeshData& mesh = *agent.Mesh;
+                glm::vec2 p(mv.Ground.x, mv.Ground.z), reached = p + delta;
+                int node = agent.Node;
+                if (!Walk(mesh, agent.Node, p, p + delta, &node, &reached, FilterOf(agent))) {}
+                agent.Node = node;
+                mv.Ground = glm::vec3(reached.x, HeightAt(mesh, node, reached.x, reached.y), reached.y);
+                PlaceObject(scene, mv.E, mv.Ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
+            };
+            for (int pass = 0; pass < 2; ++pass)
+                for (int i = 0; i < (int)movers.size(); ++i)
+                {
+                    Mover& a = movers[i];
+                    if (!a.Agent->Mesh || a.Agent->Node < 0 || a.Agent->Traversing) continue;
+                    int cx = (int)std::floor(a.Ground.x / kCell), cz = (int)std::floor(a.Ground.z / kCell);
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dx = -1; dx <= 1; ++dx)
+                        {
+                            auto it = cells.find(cellKey(cx + dx, cz + dz));
+                            if (it == cells.end()) continue;
+                            for (int j : it->second)
+                            {
+                                if (j <= i) continue;
+                                Mover& b = movers[j];
+                                if (!b.Agent->Mesh || b.Agent->Node < 0 || b.Agent->Traversing || b.Agent->Mesh != a.Agent->Mesh) continue;
+                                if (std::abs(a.Ground.y - b.Ground.y) > std::max(a.Agent->Height, b.Agent->Height)) continue;
+                                glm::vec2 d(b.Ground.x - a.Ground.x, b.Ground.z - a.Ground.z);
+                                float dist = glm::length(d), overlap = a.Agent->Radius + b.Agent->Radius - dist;
+                                if (overlap <= 0.0f) continue;
+                                glm::vec2 dir = dist > 1e-4f ? d / dist : glm::vec2(1.0f, 0.0f);
+                                float shareA = a.Agent->AvoidancePriority > b.Agent->AvoidancePriority ? 1.0f
+                                             : a.Agent->AvoidancePriority < b.Agent->AvoidancePriority ? 0.0f : 0.5f;
+                                if (shareA > 0.0f) push(a, -dir * overlap * shareA);
+                                if (shareA < 1.0f) push(b, dir * overlap * (1.0f - shareA));
+                            }
+                        }
+                }
         }
     }
 }

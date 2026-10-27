@@ -70,6 +70,9 @@ namespace Dimension
         // Order-independent transparency: transparent meshes blend by a weighted average instead of being sorted
         // per object, so intersecting and nested see-through objects look right in any order.
         bool OIT = false;
+        // Occlusion culling: meshes hidden behind others (in the depth an earlier frame drew) are not drawn while the
+        // camera holds nearly still.
+        bool OcclusionCulling = true;
         bool UIKeyboardNavigation = true; // arrows/Enter/Space move and press the UI selection (off when gameplay uses them)
         // Depth of field: objects nearer or farther than the focus distance blur (perspective cameras).
         bool DepthOfField = false;

@@ -3,6 +3,7 @@
 #include "Dimension/Renderer/Pipeline.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Renderer/Image.h"
+#include "Dimension/Renderer/Occlusion.h"
 #include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
 #include <array>
@@ -11,6 +12,7 @@ namespace Dimension
 {
     class Scene;
     class Texture2D;
+    struct NavMeshData;
     struct SceneSettings;
 
     struct CameraData
@@ -39,6 +41,7 @@ namespace Dimension
         // Scene view search: while Highlighting, meshes of objects not in Highlight are drawn dimmed.
         bool Highlighting = false;
         std::vector<Entity> Highlight;
+        bool ShowNavMeshes = false; // every baked navigation mesh (the Navigation window is open)
     };
 
     // Directional shadow cascades for one frame.
@@ -98,6 +101,7 @@ namespace Dimension
         uint32_t Meshes = 0;
         uint32_t Sprites = 0;
         uint32_t Culled = 0;
+        uint32_t Occluded = 0;        // meshes skipped as hidden behind others (occlusion culling, main pass)
         uint32_t ShadowCasters = 0;
         uint32_t InstancedMeshes = 0; // meshes drawn as part of an instanced draw (main pass)
         uint32_t RenderListItems = 0; // mesh renderers resolved this frame (once, shared by all passes)
@@ -139,6 +143,7 @@ namespace Dimension
         // Slider joint: its axis through the anchor, the travel range between the limits with end ticks.
         void DrawSliderGizmo(const glm::vec3& anchor, glm::vec3 axis, bool limits, float min, float max);
         void DrawWireSphere(const glm::mat4& transform, const glm::vec3& center, float radius, const glm::vec4& color);
+        void DrawNavMeshOverlay(const NavMeshData& mesh);
 
         const RenderStats& GetStats() const { return m_Stats; }
 
@@ -148,6 +153,8 @@ namespace Dimension
         static void SetLightClusteringEnabled(bool enabled); // false: every light in every cluster (comparisons)
         // Light culling runs in a compute shader by default; false builds the clusters on the CPU (comparisons).
         static void SetGpuLightCullingEnabled(bool enabled);
+        // Occlusion culling (also per scene: Scene Settings); false draws everything in view (comparisons).
+        static void SetOcclusionCullingEnabled(bool enabled);
         static bool IsGpuLightCullingEnabled();
         static bool IsInstancingEnabled();
         // Re-captures every reflection probe on the next frame (all renderers).
@@ -227,6 +234,23 @@ namespace Dimension
         VkDeviceAddress m_GpuClusterCellsAddress = 0, m_GpuClusterIndicesAddress = 0;
         bool CullLightsOnGpu(VkCommandBuffer cmd, const void* uniforms, size_t size);
         std::vector<uint32_t> m_VisibleParts, m_SortedParts;
+        // Occlusion culling: a depth grid per frame (written on the GPU, read once its frame is done), and which render
+        // items this frame's grid hides.
+        struct OcclusionSlot
+        {
+            Buffer Data;
+            VkDeviceAddress Address = 0;
+            uint64_t Frame = 0;
+            bool Used = false;
+            glm::mat4 ViewProj{ 1.0f }, Projection{ 1.0f };
+            glm::vec3 Position{ 0.0f }, Forward{ 0.0f };
+            uint32_t Width = 0, Height = 0;
+        };
+        OcclusionSlot m_OcclusionSlots[3];
+        OccluderDepth m_Occluder;
+        std::vector<uint8_t> m_ItemOccluded;
+        void ChooseOccluder(const CameraData& camera);
+        void ReduceDepth(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera);
         void BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options);
 
         // Reflection probes: GPU images per probe entity, captured on demand and listed for this frame's uniforms.

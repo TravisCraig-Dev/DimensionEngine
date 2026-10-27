@@ -109,8 +109,14 @@ namespace Dimension
         bool SamplePosition(Scene& scene, const glm::vec3& point, float maxDistance, glm::vec3& result);
         NavPathStatus CalculatePath(Scene& scene, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners);
 
-        // Agents: steer along their paths and around each other (a playing scene, every frame).
+        // Agents: steer along their paths and around their nearest neighbours (a playing scene, every frame). New paths
+        // the agents need (following targets, around moved obstacles) are found at most Path Budget a frame; scripts'
+        // SetDestination always at once.
         void Update(Scene& scene, float dt);
+        void SetPathBudget(int pathsPerFrame); // the project's (Project Settings)
+        int GetPathBudget();
+        // Gives NavMesh Modifier Volume's Area dropdown the project's area names (after they change).
+        void ApplyAreaNames();
         // Sends an agent to a point: false when there is no way at all (no mesh near it or the point).
         bool SetDestination(Scene& scene, Entity agent, const glm::vec3& destination);
         void ResetPath(Scene& scene, Entity agent);

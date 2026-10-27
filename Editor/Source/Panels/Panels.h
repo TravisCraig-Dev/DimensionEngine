@@ -107,6 +107,16 @@ namespace Editor
     };
 
     // Tracks and keys of the selected object's Timeline (like Unity's Timeline/Animation window), with preview.
+    class NavigationPanel
+    {
+    public:
+        explicit NavigationPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open);
+
+    private:
+        EditorContext& m_Ctx;
+    };
+
     class TimelinePanel
     {
     public:

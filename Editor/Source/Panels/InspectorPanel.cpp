@@ -1332,6 +1332,8 @@ namespace Editor
             ImGui::Unindent();
         }
         track(ImGui::Checkbox("Order-Independent Transparency", &s.OIT));
+        track(ImGui::Checkbox("Occlusion Culling", &s.OcclusionCulling));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Skip meshes hidden behind others (from the depth of a frame before) while the camera holds still");
         ImGui::SetItemTooltip("Transparent meshes blend by a weighted average instead of being sorted per object, so\n"
                               "overlapping and intersecting glass looks right from every angle (Game view and Player).");
         track(ImGui::Checkbox("Depth of Field", &s.DepthOfField));

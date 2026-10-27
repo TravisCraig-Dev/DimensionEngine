@@ -54,6 +54,7 @@
 #include "shaders/ProbeEquirect.frag.h"
 #include "shaders/ProbePrefilter.frag.h"
 #include "shaders/LightCull.comp.h"
+#include "shaders/DepthReduce.comp.h"
 #include "shaders/ParticleSim.comp.h"
 #include "shaders/ParticleSortKeys.comp.h"
 #include "shaders/ParticleSort.comp.h"
@@ -158,6 +159,7 @@ namespace Dimension
         bool s_InstancingEnabled = true;
         bool s_ClusterCulling = true;
         bool s_GpuLightCulling = true;
+        bool s_OcclusionCulling = true;
         uint64_t s_ProbeBakeGeneration = 0;
         constexpr uint32_t kMaxInstancesPerDraw = 16384;
 
@@ -355,7 +357,7 @@ namespace Dimension
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
-        Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort; // compute
+        Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort, DepthReduce; // compute
         Pipeline GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive;
         // GPU particle systems' simulation buffers, per (scene, entity); dropped when unused for a while.
         struct GpuParticleState
@@ -613,6 +615,7 @@ namespace Dimension
             }
         }
         r.LightCull = Pipeline::Compute(kLightCull_comp, "LightCullPipeline");
+        r.DepthReduce = Pipeline::Compute(kDepthReduce_comp, "DepthReducePipeline");
         r.ParticleSim = Pipeline::Compute(kParticleSim_comp, "ParticleSimPipeline");
         r.ParticleSortKeys = Pipeline::Compute(kParticleSortKeys_comp, "ParticleSortKeysPipeline");
         r.ParticleSort = Pipeline::Compute(kParticleSort_comp, "ParticleSortPipeline");
@@ -1057,6 +1060,16 @@ namespace Dimension
         CollectParticles(scene, camera);
         CollectLines(scene, camera);
         BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
+        // Occlusion culling: render items hidden behind what an earlier frame drew.
+        bool occlusion = s_OcclusionCulling && scene.GetSettings().OcclusionCulling && !options.ProbeCapture;
+        m_ItemOccluded.assign(m_RenderItems.size(), 0);
+        if (occlusion)
+        {
+            ChooseOccluder(camera);
+            if (m_Occluder.IsValid())
+                for (size_t i = 0; i < m_RenderItems.size(); ++i)
+                    if (!m_RenderItems[i].AlwaysVisible) m_ItemOccluded[i] = m_Occluder.Hides(m_RenderItems[i].Center, m_RenderItems[i].Extents);
+        }
         if (options.EditorOverlays)
         {
             CollectEditorIcons(scene, camera);
@@ -1150,7 +1163,7 @@ namespace Dimension
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
         // Passes after this one read the depth: depth of field, SSR, decals, fog and TAA (and next frame's GPU particle
         // collision).
-        bool readDepth = dof || surface || fog || underwaterFog || taa || !m_Decals.empty() || m_ParticleDepthWanted;
+        bool readDepth = dof || surface || fog || underwaterFog || taa || !m_Decals.empty() || m_ParticleDepthWanted || occlusion;
         m_ParticleDepthKept = readDepth && !camera.Orthographic;
         m_ParticleDepthViewProj = camera.Projection * camera.View;
         m_ParticleDepthSize = glm::uvec2(target.GetWidth(), target.GetHeight());
@@ -1229,6 +1242,11 @@ namespace Dimension
         {
             Vk::TransitionImage(cmd, target.GetDepth().GetHandle(), VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                 VK_IMAGE_ASPECT_DEPTH_BIT);
+            if (occlusion)
+            {
+                ReduceDepth(cmd, target, camera);
+                device.BindBindless(cmd);
+            }
             device.BindUniforms(cmd, &u, sizeof(u));
         }
         // HDR effects that need the finished opaque image: decals onto surfaces, reflections, fog, then TAA over all.
@@ -1463,6 +1481,67 @@ namespace Dimension
     void SceneRenderer::SetInstancingEnabled(bool enabled) { s_InstancingEnabled = enabled; }
     void SceneRenderer::SetLightClusteringEnabled(bool enabled) { s_ClusterCulling = enabled; }
     void SceneRenderer::SetGpuLightCullingEnabled(bool enabled) { s_GpuLightCulling = enabled; }
+    void SceneRenderer::SetOcclusionCullingEnabled(bool enabled) { s_OcclusionCulling = enabled; }
+
+    void SceneRenderer::ChooseOccluder(const CameraData& camera)
+    {
+        // The newest finished grid, if the camera is still nearly where it was (else nothing is culled this frame:
+        // what the grid hid may show now).
+        m_Occluder.Width = m_Occluder.Height = 0;
+        uint64_t completed = RenderDevice::Get().GetCompletedFrameNumber();
+        const OcclusionSlot* best = nullptr;
+        for (const OcclusionSlot& s : m_OcclusionSlots)
+            if (s.Used && s.Frame <= completed && (!best || s.Frame > best->Frame)) best = &s;
+        if (!best) return;
+        glm::vec3 forward = -glm::vec3(glm::inverse(camera.View)[2]);
+        if (glm::distance(camera.Position, best->Position) > 0.25f || glm::dot(glm::normalize(forward), best->Forward) < std::cos(glm::radians(2.0f)) ||
+            std::abs(camera.Projection[0][0] - best->Projection[0][0]) > 1e-3f || std::abs(camera.Projection[1][1] - best->Projection[1][1]) > 1e-3f)
+            return;
+        m_Occluder.Width = best->Width;
+        m_Occluder.Height = best->Height;
+        m_Occluder.ViewProj = best->ViewProj;
+        const auto* cells = static_cast<const float*>(best->Data.GetMapped());
+        m_Occluder.Farthest.assign(cells, cells + (size_t)best->Width * best->Height);
+    }
+
+    void SceneRenderer::ReduceDepth(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera)
+    {
+        auto& device = RenderDevice::Get();
+        uint64_t frame = device.Frame().FrameNumber;
+        OcclusionSlot& slot = m_OcclusionSlots[frame % 3];
+        uint32_t width = target.GetWidth(), height = target.GetHeight();
+        uint32_t cell = std::max(8u, (width + 191) / 192);
+        uint32_t gw = (width + cell - 1) / cell, gh = (height + cell - 1) / cell;
+        if (!slot.Data.IsValid() || slot.Width * slot.Height < gw * gh)
+        {
+            slot.Data = Buffer((VkDeviceSize)gw * gh * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                               MemoryUsage::GpuToCpu, "OcclusionDepth");
+            VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+            info.buffer = slot.Data.GetHandle();
+            slot.Address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+        }
+        slot.Width = gw;
+        slot.Height = gh;
+        slot.Frame = frame;
+        slot.Used = true;
+        slot.ViewProj = camera.Projection * camera.View;
+        slot.Projection = camera.Projection;
+        slot.Position = camera.Position;
+        slot.Forward = glm::normalize(-glm::vec3(glm::inverse(camera.View)[2]));
+        struct
+        {
+            glm::uvec2 Out;
+            uint32_t Depth, CellSize;
+            glm::uvec2 Grid, Size;
+        } push{ { (uint32_t)slot.Address, (uint32_t)(slot.Address >> 32) }, target.GetDepthBindless(), cell, { gw, gh }, { width, height } };
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        Renderer::Get().DepthReduce.Bind(cmd);
+        device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+        vkCmdDispatch(cmd, (gw + 7) / 8, (gh + 7) / 8, 1);
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+    }
     bool SceneRenderer::IsGpuLightCullingEnabled() { return s_GpuLightCulling; }
 
     bool SceneRenderer::CullLightsOnGpu(VkCommandBuffer cmd, const void* uniforms, size_t size)
@@ -2163,6 +2242,12 @@ namespace Dimension
         for (const RenderItem& item : m_RenderItems)
         {
             if (shadowPass && !item.CastShadows) continue;
+            // Hidden behind others (occlusion culling): not drawn in the view, but it still casts its shadow.
+            if (!shadowPass && m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[&item - m_RenderItems.data()])
+            {
+                if (pass == MeshPass::Main) m_Stats.Occluded++;
+                continue;
+            }
             if (!item.AlwaysVisible && !frustum.IntersectsWorld(item.Center, item.Extents))
             {
                 if (pass == MeshPass::Main) m_Stats.Culled++;
@@ -3855,8 +3940,60 @@ namespace Dimension
         }
     }
 
+    namespace
+    {
+        // Navigation area colors (Walkable, Not Walkable, Road, Grass, Mud, Water, Area 6, Area 7).
+        const glm::vec4 kAreaColors[8] = { { 0.35f, 0.7f, 1.0f, 0.3f }, { 1.0f, 0.3f, 0.3f, 0.4f }, { 0.75f, 0.75f, 0.8f, 0.5f }, { 0.4f, 0.9f, 0.35f, 0.45f },
+                                           { 0.7f, 0.45f, 0.2f, 0.55f }, { 0.2f, 0.85f, 0.95f, 0.45f }, { 0.9f, 0.5f, 0.9f, 0.45f }, { 0.95f, 0.85f, 0.3f, 0.45f } };
+    }
+
+    // A baked navigation mesh: links between its spots (colored by area), its edges brighter, the bake's own links.
+    void SceneRenderer::DrawNavMeshOverlay(const NavMeshData& m)
+    {
+        const glm::vec4 edge(0.45f, 0.85f, 1.0f, 0.95f);
+        const glm::vec3 lift(0.0f, 0.04f, 0.0f);
+        int n = m.NodeCount();
+        bool interior = n <= 40000; // big meshes: only their edges
+        float h = m.CellSize * 0.5f;
+        for (int a = 0; a < n; ++a)
+        {
+            if (m.IsBlocked(a)) continue; // carved out: the edges around the hole show it
+            glm::vec3 p = m.NodePosition(a) + lift;
+            for (int d = 0; d < 4; ++d)
+            {
+                int b = m.Links[(size_t)a * 8 + d];
+                if (b >= 0)
+                {
+                    if (interior && d < 2) DrawLine(p, m.NodePosition(b) + lift, kAreaColors[m.Areas.empty() ? 0 : m.Areas[a] & 7]);
+                    continue;
+                }
+                glm::vec3 out(Navigation::kDirX[d] * h, 0.0f, Navigation::kDirZ[d] * h), side(Navigation::kDirZ[d] * h, 0.0f, Navigation::kDirX[d] * h);
+                DrawLine(p + out - side, p + out + side, edge);
+            }
+        }
+        // Generated links: small arcs, an arrow head where they land.
+        for (const NavMeshData::AutoLink& l : m.AutoLinks)
+        {
+            if (m.IsBlocked(l.From) || m.IsBlocked(l.To)) continue;
+            glm::vec3 a = m.NodePosition(l.From) + lift, b = m.NodePosition(l.To) + lift, prev = a;
+            const glm::vec4 color(1.0f, 0.7f, 0.3f, 0.9f);
+            for (int i = 1; i <= 8; ++i)
+            {
+                float s = i / 8.0f;
+                glm::vec3 q = glm::mix(a, b, s) + glm::vec3(0.0f, l.Arc * 4.0f * s * (1.0f - s), 0.0f);
+                DrawLine(prev, q, color);
+                prev = q;
+            }
+            DrawLine(b, b + glm::vec3(0.0f, 0.15f, 0.0f), color);
+        }
+    }
+
     void SceneRenderer::BuildEditorOverlays(Scene& scene, const SceneRenderOptions& options)
     {
+        // The Navigation window open: every baked surface.
+        if (options.ShowNavMeshes)
+            for (auto [e, s, t] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent, TransformComponent>())
+                if (s.Data && t.ActiveInHierarchy) DrawNavMeshOverlay(*s.Data);
         for (Entity e : options.Selection)
             if (scene.IsValid(e) && e != options.Selected) BuildEntityOverlay(scene, e);
         if (scene.IsValid(options.Selected)) BuildEntityOverlay(scene, options.Selected);
@@ -4115,47 +4252,6 @@ namespace Dimension
             }
         }
         // Navigation: the baked mesh (links between its spots, its edges brighter), an agent's room and path.
-        // Area colors (Walkable, Not Walkable, Road, Grass, Mud, Water, Area 6, Area 7).
-        static const glm::vec4 kAreaColors[8] = { { 0.35f, 0.7f, 1.0f, 0.3f }, { 1.0f, 0.3f, 0.3f, 0.4f }, { 0.75f, 0.75f, 0.8f, 0.5f }, { 0.4f, 0.9f, 0.35f, 0.45f },
-                                                  { 0.7f, 0.45f, 0.2f, 0.55f }, { 0.2f, 0.85f, 0.95f, 0.45f }, { 0.9f, 0.5f, 0.9f, 0.45f }, { 0.95f, 0.85f, 0.3f, 0.45f } };
-        auto drawNavMesh = [&](const NavMeshData& m) {
-            const glm::vec4 edge(0.45f, 0.85f, 1.0f, 0.95f);
-            const glm::vec3 lift(0.0f, 0.04f, 0.0f);
-            int n = m.NodeCount();
-            bool interior = n <= 40000; // big meshes: only their edges
-            float h = m.CellSize * 0.5f;
-            for (int a = 0; a < n; ++a)
-            {
-                if (m.IsBlocked(a)) continue; // carved out: the edges around the hole show it
-                glm::vec3 p = m.NodePosition(a) + lift;
-                for (int d = 0; d < 4; ++d)
-                {
-                    int b = m.Links[(size_t)a * 8 + d];
-                    if (b >= 0)
-                    {
-                        if (interior && d < 2) DrawLine(p, m.NodePosition(b) + lift, kAreaColors[m.Areas.empty() ? 0 : m.Areas[a] & 7]);
-                        continue;
-                    }
-                    glm::vec3 out(Navigation::kDirX[d] * h, 0.0f, Navigation::kDirZ[d] * h), side(Navigation::kDirZ[d] * h, 0.0f, Navigation::kDirX[d] * h);
-                    DrawLine(p + out - side, p + out + side, edge);
-                }
-            }
-            // Generated links: small arcs, an arrow head where they land.
-            for (const NavMeshData::AutoLink& l : m.AutoLinks)
-            {
-                if (m.IsBlocked(l.From) || m.IsBlocked(l.To)) continue;
-                glm::vec3 a = m.NodePosition(l.From) + lift, b = m.NodePosition(l.To) + lift, prev = a;
-                const glm::vec4 color(1.0f, 0.7f, 0.3f, 0.9f);
-                for (int i = 1; i <= 8; ++i)
-                {
-                    float s = i / 8.0f;
-                    glm::vec3 q = glm::mix(a, b, s) + glm::vec3(0.0f, l.Arc * 4.0f * s * (1.0f - s), 0.0f);
-                    DrawLine(prev, q, color);
-                    prev = q;
-                }
-                DrawLine(b, b + glm::vec3(0.0f, 0.15f, 0.0f), color);
-            }
-        };
         if (auto* volume = reg.TryGet<NavMeshModifierVolumeComponent>(sel))
         {
             glm::vec4 color = kAreaColors[(int)volume->Area & 7];
@@ -4211,7 +4307,7 @@ namespace Dimension
             DrawWireBox(glm::translate(glm::mat4(1.0f), t.GetWorldPosition()), glm::vec3(0.0f), surface->Size * 0.5f, { 0.45f, 0.85f, 1.0f, 0.5f });
             if (surface->ShowNavMesh && surface->Data)
             {
-                drawNavMesh(*surface->Data);
+                DrawNavMeshOverlay(*surface->Data);
                 for (auto [e, link] : reg.ViewOf<OffMeshLinkComponent>()) drawLink(e, link);
             }
         }
@@ -4232,7 +4328,7 @@ namespace Dimension
                 for (size_t k = agent->Corner; k + 1 < agent->Path.size(); ++k) DrawLine(agent->Path[k] + lift, agent->Path[k + 1] + lift, path);
                 DrawWireCircle(glm::translate(glm::mat4(1.0f), agent->Path.back() + lift), glm::vec3(0.0f), 0.25f, path, 1);
             }
-            if (agent->Mesh && !reg.Has<NavMeshSurfaceComponent>(sel)) drawNavMesh(*agent->Mesh);
+            if (agent->Mesh && !reg.Has<NavMeshSurfaceComponent>(sel)) DrawNavMeshOverlay(*agent->Mesh);
         }
         if (reg.Has<LODGroupComponent>(sel))
         {
