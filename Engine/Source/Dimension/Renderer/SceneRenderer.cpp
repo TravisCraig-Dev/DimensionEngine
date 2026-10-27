@@ -143,7 +143,7 @@ namespace Dimension
             VkDeviceAddress Joints;
             VkDeviceAddress Instances;
             uint32_t EntityId;
-            uint32_t Flags;  // bit 0: skinned, bit 1: instanced
+            uint32_t Flags;  // bit 0: skinned, bit 1: instanced, bits 8-15: LOD cross-fade coverage, bit 16: its side
             uint32_t Motion; // grass tufts: half floats (sway, bending); 0 = rigid
         };
 
@@ -1756,13 +1756,25 @@ namespace Dimension
         };
         auto uploadMaterial = [&](const Material& m, bool dark) { return uploadMaterialGPU(dark ? dim(BuildMaterialGPU(m)) : BuildMaterialGPU(m)); };
         // LOD groups pick their child for this camera (so every pass, shadows too, draws the same one).
-        std::vector<uint8_t> lodHidden;
-        LODGroups::Hidden(scene, camera.Position, camera.Projection, camera.Orthographic, lodHidden);
+        LODGroups::Frame lods;
+        LODGroups::Evaluate(scene, camera.Position, camera.Projection, camera.Orthographic, lods);
+        std::vector<uint32_t> partSubMesh; // per part of the current item: its sub-mesh
 
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
-            if (!t.ActiveInHierarchy || (e.Index < lodHidden.size() && lodHidden[e.Index])) continue;
+            if (!t.ActiveInHierarchy || (e.Index < lods.Hidden.size() && lods.Hidden[e.Index])) continue;
             bool dark = dimmed(e);
+            // LOD groups: a fading level is dithered; a group with generated levels draws its own mesh simplified.
+            uint32_t lodFade = 0;
+            if (auto it = lods.Fade.find(e.Index); it != lods.Fade.end()) lodFade = it->second;
+            const LODGroups::Frame::Own* own = nullptr;
+            float reduction = 0.5f;
+            if (auto it = lods.Generated.find(e.Index); it != lods.Generated.end())
+            {
+                own = &it->second;
+                lodFade = own->Fade;
+                reduction = reg.Get<LODGroupComponent>(e).Reduction;
+            }
             // Cloth draws its own grid, with this frame's simulated vertices when playing.
             const ClothComponent* cloth = reg.TryGet<ClothComponent>(e);
             const SoftBodyComponent* soft = cloth ? nullptr : reg.TryGet<SoftBodyComponent>(e);
@@ -1772,7 +1784,8 @@ namespace Dimension
             const WaterVolumeComponent* water = cloth || soft ? nullptr : reg.TryGet<WaterVolumeComponent>(e);
             // A rope draws a tube along its points (simulated, or its starting shape in the editor).
             const RopeComponent* rope = cloth || soft || water ? nullptr : reg.TryGet<RopeComponent>(e);
-            Ref<Mesh> mesh = rope ? Rope::TubeMesh(*rope) : cloth ? Cloth::GridMesh(*cloth) : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface : AssetManager::GetMesh(mr.Mesh);
+            Ref<Mesh> mesh = rope ? Rope::TubeMesh(*rope) : cloth ? Cloth::GridMesh(*cloth) : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface
+                                                                                                                   : AssetManager::GetMesh(own ? LODGroups::GeneratedMesh(mr.Mesh, own->Level, reduction) : mr.Mesh);
             if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
@@ -1847,6 +1860,8 @@ namespace Dimension
             item.Extents = glm::abs(m[0]) * ext.x + glm::abs(m[1]) * ext.y + glm::abs(m[2]) * ext.z;
             item.EntityId = e.Index + 1;
             item.CastShadows = mr.CastShadows;
+            item.Fade = lodFade;
+            partSubMesh.clear();
             // Reflection probes are chosen and blended per pixel in the shader (item.Probe stays 0).
 
             // Skinned meshes use the Animator's matrices (uploaded once, shared by every pass); without an
@@ -1929,7 +1944,8 @@ namespace Dimension
                 bool doubleSided = mat.DoubleSided || cloth; // cloth is seen from both sides
                 // Every part can batch: skinned instances carry their own skinning matrices, and transparent parts
                 // merge with same-batch neighbours in the back-to-front order. Parts with their own vertices cannot.
-                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, doubleSided, item.Probe }, !item.Vertices);
+                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, doubleSided, item.Probe }, !item.Vertices && !item.Fade);
+                partSubMesh.push_back((uint32_t)si);
                 if (item.Indices) // its own triangles: one part over all of them
                     m_RenderParts.push_back({ 0u, item.IndexCount, address, transparent, doubleSided, mat.CastShadows, (uint32_t)m_RenderItems.size(), batch });
                 else
@@ -1940,6 +1956,7 @@ namespace Dimension
             item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
             item.MeshRef = std::move(mesh);
             m_RenderItems.push_back(std::move(item));
+            size_t mainItem = m_RenderItems.size() - 1;
             if (fur && furMaterials.size() == m_RenderItems.back().PartCount)
             {
                 // The shells: copies of the item, each pushed out to its height (they batch into instanced draws).
@@ -1962,6 +1979,28 @@ namespace Dimension
                     m_RenderItems.push_back(std::move(shell));
                 }
             }
+            // The next generated level, sharing the pixels while they cross-fade (dithered the other way).
+            if (own && own->Next >= 0 && !m_RenderItems[mainItem].Vertices && !m_RenderItems[mainItem].Indices)
+                if (Ref<Mesh> nextMesh = AssetManager::GetMesh(LODGroups::GeneratedMesh(mr.Mesh, own->Next, reduction)))
+                {
+                    RenderItem next = m_RenderItems[mainItem];
+                    next.Fade = own->NextFade;
+                    next.FirstPart = (uint32_t)m_RenderParts.size();
+                    const auto& nextSubs = nextMesh->GetSubMeshes();
+                    for (uint32_t p = 0; p < next.PartCount && p < partSubMesh.size(); ++p)
+                    {
+                        if (partSubMesh[p] >= nextSubs.size()) continue;
+                        RenderPart part = m_RenderParts[m_RenderItems[mainItem].FirstPart + p];
+                        part.FirstIndex = nextSubs[partSubMesh[p]].IndexOffset;
+                        part.IndexCount = nextSubs[partSubMesh[p]].IndexCount;
+                        part.Item = (uint32_t)m_RenderItems.size();
+                        part.Batch = batchOf({ nextMesh.get(), part.FirstIndex, part.IndexCount, part.Material, part.DoubleSided, next.Probe }, false);
+                        m_RenderParts.push_back(part);
+                    }
+                    next.PartCount = (uint32_t)m_RenderParts.size() - next.FirstPart;
+                    next.MeshRef = std::move(nextMesh);
+                    m_RenderItems.push_back(std::move(next));
+                }
         }
 
         // Terrain details: an instance of the tree or grass mesh wherever one was scattered (they batch into
@@ -2104,7 +2143,7 @@ namespace Dimension
             d.Push.Skin = item.Joints ? item.Skin : 0;
             d.Push.Joints = item.Joints;
             d.Push.Instances = 0;
-            d.Push.Flags = item.Joints ? 1u : 0u;
+            d.Push.Flags = (item.Joints ? 1u : 0u) | (item.Fade << 8);
             d.Push.Motion = item.Motion;
             d.Vertices = item.Vertices;
             d.VertexOffset = item.VertexOffset;
@@ -4084,6 +4123,7 @@ namespace Dimension
             float h = m.CellSize * 0.5f;
             for (int a = 0; a < n; ++a)
             {
+                if (m.IsBlocked(a)) continue; // carved out: the edges around the hole show it
                 glm::vec3 p = m.NodePosition(a) + lift;
                 for (int d = 0; d < 4; ++d)
                 {
@@ -4098,10 +4138,58 @@ namespace Dimension
                 }
             }
         };
+        // Off-mesh links: an arc from start to end (arrow heads at the ends it can be crossed to).
+        auto drawLink = [&](Entity e, const OffMeshLinkComponent& link) {
+            const glm::mat4& w = reg.Get<TransformComponent>(e).World;
+            glm::vec3 a = glm::vec3(w * glm::vec4(link.Start, 1.0f)), b = glm::vec3(w * glm::vec4(link.End, 1.0f));
+            glm::vec4 color = link.Activated ? glm::vec4(1.0f, 0.55f, 0.2f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 0.8f);
+            glm::vec3 prev = a;
+            for (int i = 1; i <= 16; ++i)
+            {
+                float s = i / 16.0f;
+                glm::vec3 q = glm::mix(a, b, s) + glm::vec3(0.0f, std::max(link.ArcHeight, 0.0f) * 4.0f * s * (1.0f - s), 0.0f);
+                DrawLine(prev, q, color);
+                prev = q;
+            }
+            glm::mat4 at = glm::translate(glm::mat4(1.0f), a), bt = glm::translate(glm::mat4(1.0f), b);
+            DrawWireCircle(at, glm::vec3(0.0f), 0.3f, color, 1);
+            DrawWireCircle(bt, glm::vec3(0.0f), 0.3f, color, 1);
+            glm::vec3 dir = b - a;
+            dir.y = 0.0f;
+            if (glm::length(dir) > 1e-4f)
+            {
+                dir = glm::normalize(dir) * 0.35f;
+                glm::vec3 side(-dir.z, 0.0f, dir.x);
+                DrawLine(b, b - dir + side, color);
+                DrawLine(b, b - dir - side, color);
+                if (link.Bidirectional)
+                {
+                    DrawLine(a, a + dir + side, color);
+                    DrawLine(a, a + dir - side, color);
+                }
+            }
+        };
+        if (auto* link = reg.TryGet<OffMeshLinkComponent>(sel)) drawLink(sel, *link);
+        if (auto* obstacle = reg.TryGet<NavMeshObstacleComponent>(sel))
+        {
+            const glm::vec4 color(0.95f, 0.45f, 0.35f, 1.0f);
+            if (obstacle->Shape == NavObstacleShape::Box)
+                DrawWireBox(t.World, obstacle->Center, obstacle->Size * 0.5f, color);
+            else
+                for (float y : { -0.5f, 0.0f, 0.5f })
+                {
+                    glm::vec3 c = obstacle->Center + glm::vec3(0.0f, y * obstacle->Height, 0.0f);
+                    DrawWireCircle(t.World, c, obstacle->Radius, color, 1);
+                }
+        }
         if (auto* surface = reg.TryGet<NavMeshSurfaceComponent>(sel))
         {
             DrawWireBox(glm::translate(glm::mat4(1.0f), t.GetWorldPosition()), glm::vec3(0.0f), surface->Size * 0.5f, { 0.45f, 0.85f, 1.0f, 0.5f });
-            if (surface->ShowNavMesh && surface->Data) drawNavMesh(*surface->Data);
+            if (surface->ShowNavMesh && surface->Data)
+            {
+                drawNavMesh(*surface->Data);
+                for (auto [e, link] : reg.ViewOf<OffMeshLinkComponent>()) drawLink(e, link);
+            }
         }
         if (auto* agent = reg.TryGet<NavMeshAgentComponent>(sel))
         {

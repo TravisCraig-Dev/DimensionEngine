@@ -214,6 +214,7 @@ namespace Dimension
             bool AlwaysVisible;        // skinned: animated bounds are unknown
             bool CastShadows;          // the renderer's flag
             uint32_t Motion = 0;       // grass tufts: half floats (sway, bending), 0 = rigid
+            uint32_t Fade = 0;         // LOD cross-fade: coverage (1-254) | side << 8, 0 = none (see LODGroups::Frame)
             uint32_t FirstPart, PartCount;
         };
         std::vector<RenderItem> m_RenderItems;

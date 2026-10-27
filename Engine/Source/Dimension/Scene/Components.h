@@ -794,7 +794,46 @@ namespace Dimension
         float MaxSlope = 45.0f; // degrees
         float StepHeight = 0.4f;
         bool ShowNavMesh = true; // the baked mesh in the Scene view while the object is selected
-        std::shared_ptr<const NavMeshData> Data; // runtime: the baked mesh
+        std::shared_ptr<const NavMeshData> Data;  // runtime: the mesh agents walk (the baked one with obstacles' holes)
+        std::shared_ptr<const NavMeshData> Baked; // runtime: as baked
+        uint64_t CarveKey = 0;                    // runtime: which obstacles cut Data, and where
+    };
+
+    // A NavMesh Obstacle (like Unity's): a box or an upright capsule (Center, Size or Radius and Height, in the
+    // object's space) agents keep out of. Moving, agents steer around it; with Carve it cuts a hole in the navigation
+    // mesh (Agent Radius wider) that paths go around, renewed when it has moved Move Threshold since, or with Carve
+    // Only Stationary only once it has stood still Time To Stationary seconds (until then it is steered around).
+    enum class NavObstacleShape : int32_t { Box = 0, Capsule = 1 };
+    struct NavMeshObstacleComponent
+    {
+        NavObstacleShape Shape = NavObstacleShape::Box;
+        glm::vec3 Center{ 0.0f };
+        glm::vec3 Size{ 1.0f };
+        float Radius = 0.5f;
+        float Height = 2.0f;
+        bool Carve = false;
+        float MoveThreshold = 0.1f;
+        bool CarveOnlyStationary = true;
+        float TimeToStationary = 0.5f;
+        // Runtime
+        glm::vec3 LastPosition{ 0.0f }, Velocity{ 0.0f };
+        float StillTime = 0.0f;
+        bool Seen = false, Carving = false;
+        glm::mat4 CarvedAt{ 0.0f }; // its transform when it last cut the mesh
+    };
+
+    // An Off-Mesh Link (like Unity's): a way between two points of the navigation mesh that is not walked on it (a
+    // jump across a gap or down a ledge, a ladder). Start and End are in the object's space; agents route through it
+    // and cross it in a jump Arc Height high (0 = straight, as on a ladder). Its length counts Cost Modifier times
+    // when paths are compared. One way unless Bidirectional; off while not Activated.
+    struct OffMeshLinkComponent
+    {
+        glm::vec3 Start{ 0.0f };
+        glm::vec3 End{ 0.0f, 0.0f, 3.0f };
+        bool Bidirectional = true;
+        bool Activated = true;
+        float ArcHeight = 0.5f;
+        float CostModifier = 1.0f;
     };
 
     // A NavMesh Agent (like Unity's): walks the baked navigation mesh to its destination along the shortest path,
@@ -820,7 +859,11 @@ namespace Dimension
         glm::vec3 Destination{ 0.0f };
         bool HasDestination = false, PathDirty = false, IsStopped = false;
         std::vector<glm::vec3> Path; // corners: from where the path was found to the destination
+        std::vector<float> PathLinks; // per corner: -1, or the arc height of the off-mesh link from it to the next
         size_t Corner = 0;           // the corner it is heading for
+        bool Traversing = false;     // crossing an off-mesh link
+        glm::vec3 TraverseFrom{ 0.0f }, TraverseTo{ 0.0f };
+        float TraverseTime = 0.0f, TraverseDuration = 0.0f, TraverseArc = 0.0f;
         NavPathStatus PathStatus = NavPathStatus::Invalid;
         glm::vec3 Velocity{ 0.0f };
         float RemainingDistance = 0.0f;
@@ -915,7 +958,9 @@ namespace Dimension
     // A LOD Group (like Unity's): its children are levels of detail of one object, child 0 the most detailed. It
     // shows the one that fits how tall the object looks on screen (its Size over its distance, as a fraction of the
     // view's height, times Bias): LOD 0 above LOD 1 Below, LOD 1 above LOD 2 Below, LOD 2 above LOD 3 Below, LOD 3
-    // above Cull Below, and nothing below that. Size 0 measures the children's meshes.
+    // above Cull Below, and nothing below that. Size 0 measures the children's meshes. Within Fade Width (a fraction
+    // of a threshold) above it, the two levels cross-fade (dithered). With Generated Levels, the group's own Mesh
+    // Renderer is LOD 0 and levels 1 to 3 are made from its mesh, each keeping Reduction of the triangles before it.
     struct LODGroupComponent
     {
         float LOD1Below = 0.5f;
@@ -924,6 +969,9 @@ namespace Dimension
         float CullBelow = 0.01f;
         float Size = 0.0f;
         float Bias = 1.0f;
+        float FadeWidth = 0.1f;
+        int32_t GeneratedLevels = 0;
+        float Reduction = 0.5f;
     };
 
     struct RigidbodyComponent

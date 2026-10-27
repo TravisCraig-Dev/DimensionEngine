@@ -15,6 +15,7 @@
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Scene/LODGroup.h>
+#include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
@@ -1876,6 +1877,106 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    void TestNavMeshObstacles()
+    {
+        // A carving obstacle filling the gap past the wall's end cuts the mesh there: the far side is out of reach
+        // (Partial) and the agent stops short of the wall; moved away, the way is open again and the agent arrives.
+        // A plain obstacle in another agent's way is walked around.
+        Scene scene("Yard");
+        BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        Entity gate = scene.CreateEntity("Gate");
+        reg.Get<TransformComponent>(gate).Position = { 10.5f, 1.0f, 0.0f };
+        auto& ob = reg.Emplace<NavMeshObstacleComponent>(gate);
+        ob.Size = { 9.0f, 2.0f, 1.0f };
+        ob.Carve = true;
+        ob.CarveOnlyStationary = false;
+        Entity post = scene.CreateEntity("Post");
+        reg.Get<TransformComponent>(post).Position = { 0.0f, 1.0f, -8.0f };
+        reg.Emplace<NavMeshObstacleComponent>(post).Size = { 1.0f, 2.0f, 1.0f };
+        auto agent = [&](const char* name, glm::vec3 at) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = at;
+            reg.Emplace<NavMeshAgentComponent>(e).Speed = 5.0f;
+            return e;
+        };
+        Entity walker = agent("Walker", { -5.0f, 0.0f, -4.0f });
+        Entity runner = agent("Runner", { -9.0f, 0.0f, -8.0f });
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        Entity surface = rt->FindEntityByName("Navigation");
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        auto& s = rr.Get<NavMeshSurfaceComponent>(surface);
+        CHECK(s.Data && s.Baked && s.Data != s.Baked);
+        int inGap = Navigation::Nearest(*s.Baked, { 10.0f, 0.0f, 0.0f }, 0.2f);
+        CHECK(inGap >= 0 && s.Data->IsBlocked(inGap) && Navigation::Nearest(*s.Data, { 10.0f, 0.0f, 0.0f }, 0.2f) < 0);
+        CHECK(!Navigation::SetDestination(*rt, walker, { -5.0f, 0.0f, 5.0f }) || rr.Get<NavMeshAgentComponent>(walker).PathStatus == NavPathStatus::Partial);
+        CHECK(Navigation::SetDestination(*rt, runner, { 9.0f, 0.0f, -8.0f }));
+        float nearPost = 100.0f, maxZ = -100.0f;
+        for (int i = 0; i < 300; ++i)
+        {
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            glm::vec3 r = rr.Get<TransformComponent>(runner).Position;
+            nearPost = std::min(nearPost, glm::length(glm::vec2(r.x, r.z + 8.0f)));
+            maxZ = std::max(maxZ, rr.Get<TransformComponent>(walker).Position.z);
+        }
+        CHECK(rr.Get<NavMeshAgentComponent>(walker).PathStatus == NavPathStatus::Partial && maxZ < -0.4f);
+        CHECK(nearPost > 0.95f && Near(rr.Get<TransformComponent>(runner).Position, { 9.0f, 0.0f, -8.0f }, 0.1f));
+        // The gate opens (moves away): the mesh is whole again and the walker finds its way.
+        rr.Get<TransformComponent>(gate).Position = { 10.5f, 1.0f, 40.0f };
+        for (int i = 0; i < 600; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(!rr.Get<NavMeshSurfaceComponent>(surface).Data->IsBlocked(inGap));
+        CHECK(Near(rr.Get<TransformComponent>(walker).Position, { -5.0f, 0.0f, 5.0f }, 0.1f));
+        rt->OnRuntimeStop();
+    }
+
+    void TestOffMeshLinks()
+    {
+        // The platform (top at 1 m, no way up) joins the ground by a link: paths up use it, the agent jumps across
+        // in an arc and ends on the platform. One way only, the way down is gone.
+        Scene scene("Yard");
+        BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        Entity jump = scene.CreateEntity("Jump");
+        auto& link = reg.Emplace<OffMeshLinkComponent>(jump);
+        link.Start = { 6.5f, 0.0f, 10.0f };
+        link.End = { 9.0f, 1.0f, 10.0f };
+        link.ArcHeight = 1.0f;
+        Entity hopper = scene.CreateEntity("Hopper");
+        reg.Get<TransformComponent>(hopper).Position = { 0.0f, 0.0f, 10.0f };
+        reg.Emplace<NavMeshAgentComponent>(hopper).Speed = 4.0f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto& mesh = *rr.Get<NavMeshSurfaceComponent>(rt->FindEntityByName("Navigation")).Data;
+        auto links = Navigation::LinksOn(*rt, mesh);
+        CHECK(links.size() == 2);
+        std::vector<glm::vec3> corners;
+        std::vector<float> arcs;
+        CHECK(Navigation::FindPath(mesh, { 0.0f, 0.0f, 10.0f }, { 10.0f, 1.0f, 10.5f }, corners, links, &arcs) == NavPathStatus::Complete);
+        int crossings = 0;
+        for (float a : arcs) crossings += a >= 0.0f;
+        CHECK(crossings == 1 && arcs.size() == corners.size() && Near(corners.back(), { 10.0f, 1.0f, 10.5f }, 0.01f));
+        CHECK(Navigation::FindPath(mesh, { 0.0f, 0.0f, 10.0f }, { 10.0f, 1.0f, 10.5f }, corners) == NavPathStatus::Partial); // without links
+        CHECK(Navigation::SetDestination(*rt, hopper, { 10.0f, 1.0f, 10.5f }));
+        float peak = 0.0f;
+        bool crossed = false;
+        for (int i = 0; i < 360; ++i)
+        {
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            peak = std::max(peak, rr.Get<TransformComponent>(hopper).Position.y);
+            crossed |= rr.Get<NavMeshAgentComponent>(hopper).Traversing;
+        }
+        CHECK(crossed && peak > 1.3f && Near(rr.Get<TransformComponent>(hopper).Position, { 10.0f, 1.0f, 10.5f }, 0.1f));
+        // One way: from the platform there is no way back down.
+        rr.Get<OffMeshLinkComponent>(jump).Bidirectional = false;
+        CHECK(Navigation::FindPath(mesh, { 10.0f, 1.0f, 10.0f }, { 0.0f, 0.0f, 10.0f }, corners, Navigation::LinksOn(*rt, mesh)) == NavPathStatus::Partial);
+        rt->OnRuntimeStop();
+    }
+
     void TestNavMeshAgents()
     {
         // Playing (baked as play starts): an agent sent to the far side of the wall walks around its end and arrives;
@@ -1932,6 +2033,150 @@ namespace
         CHECK(Navigation::SamplePosition(*rt, { 3.0f, 2.0f, 3.0f }, 3.0f, sample) && Near(sample, { 3.0f, 0.0f, 3.0f }, 0.01f));
         CHECK(!Navigation::SamplePosition(*rt, { 3.0f, 8.0f, 3.0f }, 3.0f, sample));
         rt->OnRuntimeStop();
+    }
+
+    void TestMeshSimplify()
+    {
+        // A flat 32 x 32 grid (two materials, left and right half): flat ground collapses to few triangles, its
+        // outline and the line between the materials stay, and the area is kept.
+        std::vector<Vertex> verts;
+        std::vector<uint32_t> left, right;
+        const int n = 32;
+        for (int z = 0; z <= n; ++z)
+            for (int x = 0; x <= n; ++x)
+                verts.push_back({ { x / (float)n, 0.0f, z / (float)n }, { 0, 1, 0 }, { x / (float)n, z / (float)n } });
+        for (int z = 0; z < n; ++z)
+            for (int x = 0; x < n; ++x)
+            {
+                uint32_t a = z * (n + 1) + x, b = a + 1, c = a + n + 1, d = c + 1;
+                auto& out = x < n / 2 ? left : right;
+                out.insert(out.end(), { a, c, b, b, c, d });
+            }
+        MeshData grid;
+        grid.Vertices = verts;
+        grid.Indices = left;
+        grid.Indices.insert(grid.Indices.end(), right.begin(), right.end());
+        grid.SubMeshes = { { 0, (uint32_t)left.size(), 0 }, { (uint32_t)left.size(), (uint32_t)right.size(), 1 } };
+        auto area = [](const MeshData& m, int sub) {
+            float sum = 0.0f;
+            const SubMesh& s = m.SubMeshes[sub];
+            for (uint32_t i = s.IndexOffset; i < s.IndexOffset + s.IndexCount; i += 3)
+            {
+                glm::vec3 a = m.Vertices[m.Indices[i]].Position, b = m.Vertices[m.Indices[i + 1]].Position, c = m.Vertices[m.Indices[i + 2]].Position;
+                sum += 0.5f * glm::length(glm::cross(b - a, c - a));
+            }
+            return sum;
+        };
+        MeshData simple = MeshSimplify::Simplify(grid, 0.1f);
+        CHECK(MeshSimplify::TriangleCount(grid) == 2048 && MeshSimplify::TriangleCount(simple) <= 205);
+        CHECK(simple.SubMeshes.size() == 2 && simple.SubMeshes[0].IndexCount > 0 && simple.SubMeshes[1].IndexCount > 0);
+        CHECK(Near(area(simple, 0), 0.5f, 1e-3f) && Near(area(simple, 1), 0.5f, 1e-3f)); // nothing lost, halves still meet at x = 0.5
+        CHECK(simple.Vertices.size() == grid.Vertices.size()); // the vertices stay; only triangles change
+        // Every triangle still faces up.
+        bool up = true;
+        for (size_t i = 0; i < simple.Indices.size(); i += 3)
+        {
+            glm::vec3 a = simple.Vertices[simple.Indices[i]].Position, b = simple.Vertices[simple.Indices[i + 1]].Position, c = simple.Vertices[simple.Indices[i + 2]].Position;
+            up &= glm::cross(b - a, c - a).y > 0.0f;
+        }
+        CHECK(up);
+
+        // A sphere: a quarter of the triangles, still closed (every edge between two triangles) and round; with a
+        // small error limit it stops early.
+        fs::path assets = fs::temp_directory_path() / "dimension_simplify" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        auto sphere = AssetManager::GetMeshData(AssetManager::kSphere);
+        CHECK(sphere != nullptr);
+        if (sphere)
+        {
+            size_t full = MeshSimplify::TriangleCount(*sphere);
+            MeshData quarter = MeshSimplify::Simplify(*sphere, 0.25f, 0.2f);
+            size_t count = MeshSimplify::TriangleCount(quarter);
+            CHECK(count <= full / 4 + 2 && count > full / 8);
+            std::map<std::pair<glm::vec3, glm::vec3>, int, bool (*)(const std::pair<glm::vec3, glm::vec3>&, const std::pair<glm::vec3, glm::vec3>&)> edges(
+                [](const std::pair<glm::vec3, glm::vec3>& a, const std::pair<glm::vec3, glm::vec3>& b) {
+                    auto key = [](const std::pair<glm::vec3, glm::vec3>& e) { return std::make_tuple(e.first.x, e.first.y, e.first.z, e.second.x, e.second.y, e.second.z); };
+                    return key(a) < key(b);
+                });
+            float minRadius = 1.0f;
+            for (size_t i = 0; i < quarter.Indices.size(); i += 3)
+                for (int k = 0; k < 3; ++k)
+                {
+                    // (to a ten-thousandth: the generated sphere's seam and poles are a rounding error apart)
+                    glm::vec3 a = glm::round(quarter.Vertices[quarter.Indices[i + k]].Position * 1e4f), b = glm::round(quarter.Vertices[quarter.Indices[i + (k + 1) % 3]].Position * 1e4f);
+                    auto less = [](glm::vec3 u, glm::vec3 v) { return std::tie(u.x, u.y, u.z) < std::tie(v.x, v.y, v.z); };
+                    edges[less(a, b) ? std::make_pair(a, b) : std::make_pair(b, a)]++;
+                    // The middle of each triangle stays near the surface (a quarter of the triangles is still round).
+                    glm::vec3 c = (quarter.Vertices[quarter.Indices[i]].Position + quarter.Vertices[quarter.Indices[i + 1]].Position +
+                                   quarter.Vertices[quarter.Indices[i + 2]].Position) / 3.0f;
+                    minRadius = std::min(minRadius, glm::length(c));
+                }
+            bool closed = true;
+            for (auto& [e, uses] : edges) closed &= uses == 2;
+            CHECK(closed && minRadius > 0.4f);
+            CHECK(MeshSimplify::TriangleCount(MeshSimplify::Simplify(*sphere, 0.01f, 0.002f)) > full / 2);
+        }
+        AssetManager::Shutdown();
+    }
+
+    void TestLODFadeAndGenerated()
+    {
+        // Within Fade Width above a threshold the level shares the pixels with the next: at 0.52 of the screen (LOD 1
+        // Below 0.5, Fade Width 0.1) LOD 0 keeps 40% of them and LOD 1 the rest; LOD 2 stays hidden.
+        Scene scene("Rocks");
+        auto& reg = scene.GetRegistry();
+        Entity rock = scene.CreateEntity("Rock");
+        auto& lod = reg.Emplace<LODGroupComponent>(rock);
+        lod.Size = 2.0f;
+        Entity l0 = scene.CreateEntity("LOD0", rock), l1 = scene.CreateEntity("LOD1", rock), l2 = scene.CreateEntity("LOD2", rock);
+        scene.UpdateTransforms();
+        glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+        float d = 2.0f * (1.0f / std::tan(glm::radians(30.0f))) * 0.5f / 0.52f;
+        LODGroups::Pick pick = LODGroups::Evaluate(scene, rock, { 0.0f, 0.0f, d }, proj, false);
+        CHECK(pick.Level == 0 && pick.Next == 1 && Near(pick.Coverage, 0.4f, 0.01f));
+        LODGroups::Frame frame;
+        LODGroups::Evaluate(scene, { 0.0f, 0.0f, d }, proj, false, frame);
+        CHECK(frame.Fade.count(l0.Index) && frame.Fade[l0.Index] == 102u && frame.Fade.count(l1.Index) && frame.Fade[l1.Index] == (102u | 256u));
+        CHECK(l2.Index < frame.Hidden.size() && frame.Hidden[l2.Index]);
+        // Well inside a level: no fade. Fade Width 0: switching at once.
+        CHECK(LODGroups::Evaluate(scene, rock, { 0.0f, 0.0f, 2.0f }, proj, false).Next == -1);
+        lod.FadeWidth = 0.0f;
+        CHECK(LODGroups::Evaluate(scene, rock, { 0.0f, 0.0f, d }, proj, false).Coverage == 1.0f);
+        lod.FadeWidth = 0.1f;
+        // The last level fades out to nothing before culling (Cull Below 0.01).
+        float dc = 2.0f * (1.0f / std::tan(glm::radians(30.0f))) * 0.5f / 0.0105f;
+        pick = LODGroups::Evaluate(scene, rock, { 0.0f, 0.0f, dc }, proj, false);
+        CHECK(pick.Level == 2 && pick.Next == -1 && Near(pick.Coverage, 0.5f, 0.02f));
+
+        // Generated levels: the group's own mesh is LOD 0 and LODs 1-2 are made from it, half the triangles each.
+        fs::path assets = fs::temp_directory_path() / "dimension_lodgen" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        Entity statue = scene.CreateEntity("Statue");
+        reg.Emplace<MeshRendererComponent>(statue).Mesh = AssetManager::kSphere;
+        auto& gen = reg.Emplace<LODGroupComponent>(statue);
+        gen.GeneratedLevels = 2;
+        gen.Size = 2.0f;
+        scene.UpdateTransforms();
+        CHECK(LODGroups::LevelCount(scene, statue) == 3);
+        LODGroups::Frame distant;
+        LODGroups::Evaluate(scene, { 0.0f, 0.0f, 5.0f }, proj, false, distant); // 0.35 of the screen: LOD 1
+        CHECK(distant.Generated.count(statue.Index) && distant.Generated[statue.Index].Level == 1);
+        AssetHandle level1 = LODGroups::GeneratedMesh(AssetManager::kSphere, 1, 0.5f), level2 = LODGroups::GeneratedMesh(AssetManager::kSphere, 2, 0.5f);
+        auto full = AssetManager::GetMeshData(AssetManager::kSphere);
+        auto half = AssetManager::GetMeshData(level1), quarter = AssetManager::GetMeshData(level2);
+        CHECK(full && half && quarter && level1 != AssetManager::kSphere && LODGroups::GeneratedMesh(AssetManager::kSphere, 1, 0.5f) == level1);
+        if (full && half && quarter)
+        {
+            size_t f = MeshSimplify::TriangleCount(*full), h = MeshSimplify::TriangleCount(*half), q = MeshSimplify::TriangleCount(*quarter);
+            CHECK(h <= f / 2 + 2 && h > f / 3 && q <= f / 4 + 2 && q > f / 8);
+        }
+        AssetManager::Shutdown();
     }
 
     void TestLODGroups()
@@ -7647,6 +7892,10 @@ int main(int argc, char** argv)
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("LOD groups", TestLODGroups);
+    Run("Mesh simplify", TestMeshSimplify);
+    Run("LOD fade and generated", TestLODFadeAndGenerated);
+    Run("NavMesh obstacles", TestNavMeshObstacles);
+    Run("Off-mesh links", TestOffMeshLinks);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

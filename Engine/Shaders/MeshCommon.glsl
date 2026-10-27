@@ -39,9 +39,21 @@ layout(push_constant) uniform Push
     JointsRef Joints;   // skinning matrices (mesh space)
     InstancesRef Instances; // valid when Flags & 2 (Model and EntityId then come from here)
     uint EntityId;
-    uint Flags;         // bit 0: skinned, bit 1: instanced
+    uint Flags;         // bit 0: skinned, bit 1: instanced, bits 8-15: LOD cross-fade coverage (0 = none), bit 16: its side
     uint Motion;        // grass tufts: half floats (sway, bending); fur shells: (length, -height 0-1); 0 = neither
 } pc;
+
+// LOD cross-fade: two levels share the pixels by a 4x4 ordered dither, one keeping those under the coverage, the
+// other the rest (called with gl_FragCoord.xy).
+bool LodFadeDiscard(vec2 fragCoord)
+{
+    uint coverage = (pc.Flags >> 8) & 255u;
+    if (coverage == 0u) return false;
+    const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    ivec2 p = ivec2(fragCoord) & 3;
+    bool under = (bayer[p.y * 4 + p.x] + 0.5) / 16.0 < float(coverage) / 255.0;
+    return ((pc.Flags >> 16) & 1u) == 0u ? !under : under;
+}
 
 // Fur: whether a shell at `shell` (0 root - 1 tip) has no strand at this UV. Strands stand on a grid of Density cells
 // per UV unit, each jittered, of a random height, tapering from Thickness at the root to nothing at its tip.

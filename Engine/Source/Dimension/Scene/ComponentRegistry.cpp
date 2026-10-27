@@ -676,6 +676,23 @@ namespace Dimension
             .Field("Max Slope", &NavMeshSurfaceComponent::MaxSlope).Range(0.0f, 89.0f).Speed(0.5f).Tooltip("Steepest walkable ground, degrees")
             .Field("Step Height", &NavMeshSurfaceComponent::StepHeight).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("Highest step walked up")
             .Field("Show NavMesh", &NavMeshSurfaceComponent::ShowNavMesh);
+        Register<NavMeshObstacleComponent>("NavMesh Obstacle", "Navigation")
+            .Field("Shape", &NavMeshObstacleComponent::Shape).Enum({ "Box", "Capsule" })
+            .Field("Center", &NavMeshObstacleComponent::Center).Speed(0.01f)
+            .Field("Size", &NavMeshObstacleComponent::Size).Speed(0.01f).Tooltip("Box")
+            .Field("Radius", &NavMeshObstacleComponent::Radius).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Capsule")
+            .Field("Height", &NavMeshObstacleComponent::Height).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Capsule")
+            .Field("Carve", &NavMeshObstacleComponent::Carve).Tooltip("Cut a hole in the navigation mesh (paths go around it)")
+            .Field("Move Threshold", &NavMeshObstacleComponent::MoveThreshold).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Carving: cut again after moving this far")
+            .Field("Carve Only Stationary", &NavMeshObstacleComponent::CarveOnlyStationary).Tooltip("Carving: only once it stands still (steered around while moving)")
+            .Field("Time To Stationary", &NavMeshObstacleComponent::TimeToStationary).Range(0.0f, 10.0f).Speed(0.01f);
+        Register<OffMeshLinkComponent>("Off Mesh Link", "Navigation")
+            .Field("Start", &OffMeshLinkComponent::Start).Speed(0.01f).Tooltip("In the object's space")
+            .Field("End", &OffMeshLinkComponent::End).Speed(0.01f)
+            .Field("Bidirectional", &OffMeshLinkComponent::Bidirectional)
+            .Field("Activated", &OffMeshLinkComponent::Activated)
+            .Field("Arc Height", &OffMeshLinkComponent::ArcHeight).Range(0.0f, 20.0f).Speed(0.01f).Tooltip("How high agents jump crossing it (0 = straight, a ladder)")
+            .Field("Cost Modifier", &OffMeshLinkComponent::CostModifier).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Its length counts this many times when choosing paths");
         Register<NavMeshAgentComponent>("NavMesh Agent", "Navigation")
             .Field("Speed", &NavMeshAgentComponent::Speed).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Top speed, m/s")
             .Field("Angular Speed", &NavMeshAgentComponent::AngularSpeed).Range(0.0f, 3600.0f).Speed(1.0f).Tooltip("Turning, degrees per second")
@@ -772,7 +789,10 @@ namespace Dimension
             .Field("LOD 3 Below", &LODGroupComponent::LOD3Below).Range(0.0f, 1.0f).Speed(0.005f)
             .Field("Cull Below", &LODGroupComponent::CullBelow).Range(0.0f, 1.0f).Speed(0.001f).Tooltip("Screen height below which nothing shows")
             .Field("Size", &LODGroupComponent::Size).Range(0.0f, 10000.0f).Speed(0.05f).Tooltip("World size measured against the screen (0 = the children's bounds)")
-            .Field("Bias", &LODGroupComponent::Bias).Range(0.01f, 10.0f).Speed(0.01f).Tooltip("Above 1 keeps detail farther away");
+            .Field("Bias", &LODGroupComponent::Bias).Range(0.01f, 10.0f).Speed(0.01f).Tooltip("Above 1 keeps detail farther away")
+            .Field("Fade Width", &LODGroupComponent::FadeWidth).Range(0.0f, 1.0f).Speed(0.005f).Tooltip("Cross-fade between levels over this fraction above each threshold (0 = switch at once)")
+            .Field("Generated Levels", &LODGroupComponent::GeneratedLevels).Range(0.0f, 3.0f).Tooltip("Levels made from this object's own mesh (instead of children)")
+            .Field("Reduction", &LODGroupComponent::Reduction).Range(0.05f, 0.95f).Speed(0.01f).Tooltip("Generated levels: the share of triangles each keeps of the one before");
         Register<RigidbodyComponent>("Rigidbody", "Physics")
             .Field("Body Type", &RigidbodyComponent::Type).Enum({ "Static", "Dynamic", "Kinematic" })
             .Field("Mass", &RigidbodyComponent::Mass).Range(0.001f, 100000.0f).Speed(0.05f)

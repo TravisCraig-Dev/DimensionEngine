@@ -128,7 +128,7 @@ namespace Dimension
             void (*RagdollSetPartial)(void*, uint64_t, const char*);           // bone name ("" = whole body)
             int (*TerrainCrater)(void*, const float*, float, float, int);      // world point, radius, depth, paint layer
             // NavMesh Agent: 0 set destination (v), 1 velocity (out v), 2 remaining distance, 3 has path, 4 path status,
-            // 5 is stopped, 6 set stopped (v[0]), 7 reset path, 8 warp (v), 9 destination (out v)
+            // 5 is stopped, 6 set stopped (v[0]), 7 reset path, 8 warp (v), 9 destination (out v), 10 on an off-mesh link
             float (*NavAgent)(void*, uint64_t, int, float*);
             // 0 sample position (a within maxDistance -> out), 1 path a -> b (corners into out, up to maxOut; returns the
             // count, negative when partial), 2 bake every surface again
@@ -624,6 +624,7 @@ namespace Dimension
                 case 7: Navigation::ResetPath(scene, Unpack(e)); return 1.0f;
                 case 8: return Navigation::Warp(scene, Unpack(e), { v[0], v[1], v[2] }) ? 1.0f : 0.0f;
                 case 9: std::memcpy(v, &agent->Destination, 12); return 1.0f;
+                case 10: return agent->Traversing ? 1.0f : 0.0f;
                 default: return 0.0f;
                 }
             };

@@ -11,6 +11,7 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Navigation/NavMesh.h>
+#include <Dimension/Scene/LODGroup.h>
 #include <Dimension/Audio/AudioEngine.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Audio/AudioMixer.h>
@@ -144,6 +145,59 @@ namespace Editor
             ImGui::PopID();
             return open;
         }
+    }
+
+    // Unity-style LOD bar: a segment per level from full screen height (left) to nothing (right), on a square-root
+    // scale so the small thresholds get room; dragging a divider moves that threshold (one undo step per drag).
+    void InspectorPanel::DrawLODBar(Scene& scene, Entity e, LODGroupComponent& lod)
+    {
+        int levels = std::max(LODGroups::LevelCount(scene, e), 1);
+        float* thresholds[4] = { &lod.LOD1Below, &lod.LOD2Below, &lod.LOD3Below, &lod.CullBelow };
+        // Dividers: one under each level but the last, which ends at Cull Below.
+        std::vector<float*> dividers;
+        for (int i = 0; i + 1 < levels; ++i) dividers.push_back(thresholds[i]);
+        dividers.push_back(&lod.CullBelow);
+        const ImU32 colors[5] = { IM_COL32(96, 160, 72, 255), IM_COL32(64, 128, 168, 255), IM_COL32(56, 144, 140, 255),
+                                  IM_COL32(120, 96, 160, 255), IM_COL32(150, 52, 48, 255) };
+        float width = ImGui::GetContentRegionAvail().x, height = 34.0f;
+        ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        auto toX = [&](float h) { return origin.x + (1.0f - std::sqrt(std::clamp(h, 0.0f, 1.0f))) * width; };
+        auto fromX = [&](float x) { float t = 1.0f - std::clamp((x - origin.x) / width, 0.0f, 1.0f); return t * t; };
+        float left = origin.x;
+        for (int i = 0; i <= (int)dividers.size(); ++i)
+        {
+            float right = i < (int)dividers.size() ? toX(*dividers[i]) : origin.x + width;
+            bool culled = i == (int)dividers.size();
+            draw->AddRectFilled({ left, origin.y }, { std::max(right, left), origin.y + height }, colors[culled ? 4 : std::min(i, 3)]);
+            char label[32];
+            float top = i == 0 ? 1.0f : *dividers[i - 1];
+            if (culled) std::snprintf(label, sizeof(label), "Culled");
+            else std::snprintf(label, sizeof(label), "LOD %d\n%.0f%%", i, top * 100.0f);
+            if (right - left > 34.0f) draw->AddText({ left + 4.0f, origin.y + 2.0f }, IM_COL32(255, 255, 255, 230), label);
+            left = right;
+        }
+        // The dividers, each between its neighbours.
+        for (size_t i = 0; i < dividers.size(); ++i)
+        {
+            float x = toX(*dividers[i]);
+            ImGui::SetCursorScreenPos({ x - 4.0f, origin.y });
+            ImGui::PushID((int)i);
+            ImGui::InvisibleButton("##divider", { 8.0f, height });
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            if (ImGui::IsItemActivated()) m_Ctx.RecordUndo();
+            if (ImGui::IsItemActive())
+            {
+                float upper = i == 0 ? 1.0f : *dividers[i - 1] - 0.001f, lower = i + 1 < dividers.size() ? *dividers[i + 1] + 0.001f : 0.0f;
+                *dividers[i] = std::clamp(fromX(ImGui::GetIO().MousePos.x), lower, upper);
+                m_Ctx.MarkDirty();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%.1f%% of the screen's height", *dividers[i] * 100.0f);
+            ImGui::PopID();
+            draw->AddLine({ x, origin.y }, { x, origin.y + height }, IM_COL32(20, 20, 20, 255), 2.0f);
+        }
+        ImGui::SetCursorScreenPos({ origin.x, origin.y + height + 4.0f });
+        ImGui::Dummy({ 0.0f, 0.0f });
     }
 
     void InspectorPanel::OnImGui(bool* open)
@@ -520,11 +574,18 @@ namespace Editor
                     }
                     if (info.TypeId == GetComponentTypeId<LODGroupComponent>())
                     {
+                        auto& lod = *static_cast<LODGroupComponent*>(info.Get(scene, e));
+                        DrawLODBar(scene, e, lod);
                         // Which child is which level.
                         const auto& children = scene.GetChildren(e);
-                        if (children.empty()) ImGui::TextDisabled("Add the levels as children: the first is LOD 0 (most detailed).");
-                        for (size_t i = 0; i < children.size(); ++i)
-                            ImGui::TextDisabled(i < 4 ? "LOD %zu: %s" : "(unused) %zu: %s", i, reg.Get<TagComponent>(children[i]).Name.c_str());
+                        if (lod.GeneratedLevels > 0 && reg.Has<MeshRendererComponent>(e))
+                            ImGui::TextDisabled("LOD 0 is this object's mesh; %d simpler level%s made from it.", lod.GeneratedLevels, lod.GeneratedLevels == 1 ? " is" : "s are");
+                        else
+                        {
+                            if (children.empty()) ImGui::TextDisabled("Add the levels as children: the first is LOD 0 (most detailed).");
+                            for (size_t i = 0; i < children.size(); ++i)
+                                ImGui::TextDisabled(i < 4 ? "LOD %zu: %s" : "(unused) %zu: %s", i, reg.Get<TagComponent>(children[i]).Name.c_str());
+                        }
                     }
                     if (info.TypeId == GetComponentTypeId<PathPlacerComponent>())
                     {

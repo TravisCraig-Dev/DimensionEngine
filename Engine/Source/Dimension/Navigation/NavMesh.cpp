@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cstring>
 #include <queue>
+#include <unordered_map>
 
 namespace Dimension
 {
@@ -26,7 +28,7 @@ namespace Dimension
             bool Ignored(Registry& reg, Entity e)
             {
                 if (auto* rb = reg.TryGet<RigidbodyComponent>(e); rb && rb->Type == BodyType::Dynamic) return true;
-                if (reg.Has<NavMeshAgentComponent>(e) || reg.Has<CharacterControllerComponent>(e) || reg.Has<ClothComponent>(e) ||
+                if (reg.Has<NavMeshAgentComponent>(e) || reg.Has<NavMeshObstacleComponent>(e) || reg.Has<CharacterControllerComponent>(e) || reg.Has<ClothComponent>(e) ||
                     reg.Has<SoftBodyComponent>(e) || reg.Has<RopeComponent>(e) || reg.Has<RagdollComponent>(e))
                     return true;
                 if (auto* c = reg.TryGet<BoxColliderComponent>(e); c && c->IsTrigger) return true;
@@ -242,19 +244,33 @@ namespace Dimension
                 return { p.x, HeightAt(m, node, p.x, p.y), p.y };
             }
 
-            NavPathStatus PathFrom(const NavMeshData& m, int start, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners)
+            NavPathStatus PathFrom(const NavMeshData& m, int start, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners,
+                                   const std::vector<Link>& links, std::vector<float>* linkArcs)
             {
                 corners.clear();
-                if (start < 0 || start >= m.NodeCount()) return NavPathStatus::Invalid;
+                if (linkArcs) linkArcs->clear();
+                if (start < 0 || start >= m.NodeCount() || m.IsBlocked(start)) return NavPathStatus::Invalid;
+                int n = m.NodeCount();
+                // The areas reachable from the start's, across off-mesh links.
+                int islandCount = 0;
+                for (int id : m.Islands) islandCount = std::max(islandCount, id + 1);
+                std::vector<uint8_t> reachable(islandCount + 1, 0);
+                reachable[m.Islands[start]] = 1;
+                for (bool grew = true; grew;)
+                {
+                    grew = false;
+                    for (const Link& l : links)
+                        if (reachable[m.Islands[l.From]] && !reachable[m.Islands[l.To]]) reachable[m.Islands[l.To]] = grew = true;
+                }
                 NavPathStatus status = NavPathStatus::Complete;
                 int goal = Nearest(m, to, std::max(10.0f, m.AgentHeight * 2.0f));
-                if (goal < 0 || m.Islands[goal] != m.Islands[start])
+                if (goal < 0 || !reachable[m.Islands[goal]])
                 {
-                    // Out of reach: as near to it as this island gets.
+                    // Out of reach: as near to it as the reachable areas get.
                     status = NavPathStatus::Partial;
                     float best = kInf;
-                    for (int a = 0; a < m.NodeCount(); ++a)
-                        if (m.Islands[a] == m.Islands[start])
+                    for (int a = 0; a < n; ++a)
+                        if (reachable[m.Islands[a]] && !m.IsBlocked(a))
                         {
                             glm::vec3 d = m.NodePosition(a) - to;
                             float d2 = glm::dot(d, d);
@@ -266,10 +282,11 @@ namespace Dimension
                         }
                 }
 
-                // A* over the nodes.
-                int n = m.NodeCount();
+                // A* over the nodes and the off-mesh links.
+                std::unordered_map<int, std::vector<int>> linksFrom;
+                for (int k = 0; k < (int)links.size(); ++k) linksFrom[links[k].From].push_back(k);
                 std::vector<float> g(n, kInf);
-                std::vector<int> parent(n, -1);
+                std::vector<int> parent(n, -1), parentLink(n, -1);
                 std::vector<uint8_t> closed(n, 0);
                 using Item = std::pair<float, int>;
                 std::priority_queue<Item, std::vector<Item>, std::greater<>> open;
@@ -284,48 +301,83 @@ namespace Dimension
                     closed[a] = 1;
                     if (a == goal) break;
                     glm::vec3 pa = m.NodePosition(a);
-                    for (int d = 0; d < 8; ++d)
-                    {
-                        int b = m.Links[(size_t)a * 8 + d];
-                        if (b < 0 || closed[b]) continue;
-                        glm::vec3 pb = m.NodePosition(b);
-                        float nd = g[a] + glm::distance(pa, pb);
+                    auto relax = [&](int b, float cost, int link) {
+                        if (b < 0 || closed[b]) return;
+                        float nd = g[a] + cost;
                         if (nd < g[b])
                         {
                             g[b] = nd;
                             parent[b] = a;
-                            open.push({ nd + glm::distance(pb, goalPos), b });
+                            parentLink[b] = link;
+                            open.push({ nd + glm::distance(m.NodePosition(b), goalPos), b });
                         }
-                    }
+                    };
+                    for (int d = 0; d < 8; ++d)
+                        if (int b = m.Links[(size_t)a * 8 + d]; b >= 0) relax(b, glm::distance(pa, m.NodePosition(b)), -1);
+                    if (auto it = linksFrom.find(a); it != linksFrom.end())
+                        for (int k : it->second) relax(links[k].To, links[k].Cost, k);
                 }
                 if (!closed[goal]) return NavPathStatus::Invalid;
-                std::vector<int> nodes;
-                for (int a = goal; a >= 0; a = parent[a]) nodes.push_back(a);
+                std::vector<int> nodes, arrivedBy; // arrivedBy: the link that led to the node (-1 = walked)
+                for (int a = goal; a >= 0; a = parent[a])
+                {
+                    nodes.push_back(a);
+                    arrivedBy.push_back(parentLink[a]);
+                }
                 std::reverse(nodes.begin(), nodes.end());
+                std::reverse(arrivedBy.begin(), arrivedBy.end());
 
-                // String pulling: from each corner, straight on to the farthest node of the path in sight.
+                // String pulling, between the links: from each corner, straight on to the farthest node in sight.
                 glm::vec3 begin = OnMesh(m, start, { from.x, from.z });
                 glm::vec3 end = status == NavPathStatus::Complete ? OnMesh(m, goal, { to.x, to.z }) : m.NodePosition(goal);
-                size_t last = nodes.size() - 1;
-                auto point = [&](size_t k) { return k == last ? end : m.NodePosition(nodes[k]); };
                 corners.push_back(begin);
-                size_t i = 0;
-                glm::vec2 cur(begin.x, begin.z);
-                while (i < last)
+                std::vector<float> arcs{ -1.0f };
+                size_t runStart = 0;
+                glm::vec3 runBegin = begin;
+                while (true)
                 {
-                    size_t far = i + 1;
-                    for (size_t k = i + 2; k <= last; ++k)
+                    size_t runEnd = runStart;
+                    while (runEnd + 1 < nodes.size() && arrivedBy[runEnd + 1] < 0) ++runEnd;
+                    bool lastRun = runEnd + 1 >= nodes.size();
+                    const Link* link = lastRun ? nullptr : &links[arrivedBy[runEnd + 1]];
+                    glm::vec3 runFinish = lastRun ? end : OnMesh(m, nodes[runEnd], { link->FromPoint.x, link->FromPoint.z });
+                    auto point = [&](size_t k) { return k == runEnd ? runFinish : m.NodePosition(nodes[k]); };
+                    size_t i = runStart;
+                    glm::vec2 cur(runBegin.x, runBegin.z);
+                    while (i < runEnd)
                     {
-                        glm::vec3 pk = point(k);
-                        int endNode = -1;
-                        if (!Walk(m, nodes[i], cur, { pk.x, pk.z }, &endNode) || endNode != nodes[k]) break;
-                        far = k;
+                        size_t far = i + 1;
+                        for (size_t k = i + 2; k <= runEnd; ++k)
+                        {
+                            glm::vec3 pk = point(k);
+                            int endNode = -1;
+                            if (!Walk(m, nodes[i], cur, { pk.x, pk.z }, &endNode) || endNode != nodes[k]) break;
+                            far = k;
+                        }
+                        corners.push_back(point(far));
+                        arcs.push_back(-1.0f);
+                        i = far;
+                        cur = { corners.back().x, corners.back().z };
                     }
-                    corners.push_back(point(far));
-                    i = far;
-                    cur = { corners.back().x, corners.back().z };
+                    if (glm::distance(corners.back(), runFinish) > 1e-4f)
+                    {
+                        corners.push_back(runFinish);
+                        arcs.push_back(-1.0f);
+                    }
+                    if (lastRun) break;
+                    // Across the link: the corner before it starts the crossing.
+                    arcs.back() = link->Arc;
+                    runStart = runEnd + 1;
+                    runBegin = OnMesh(m, nodes[runStart], { link->ToPoint.x, link->ToPoint.z });
+                    corners.push_back(runBegin);
+                    arcs.push_back(-1.0f);
                 }
-                if (corners.size() == 1) corners.push_back(end);
+                if (corners.size() == 1)
+                {
+                    corners.push_back(end);
+                    arcs.push_back(-1.0f);
+                }
+                if (linkArcs) *linkArcs = std::move(arcs);
                 return status;
             }
 
@@ -351,7 +403,7 @@ namespace Dimension
             {
                 glm::ivec2 cell;
                 glm::vec3 ground = GroundOf(scene, e, agent);
-                if (agent.Mesh && agent.Node >= 0 && agent.Node < agent.Mesh->NodeCount())
+                if (agent.Mesh && agent.Node >= 0 && agent.Node < agent.Mesh->NodeCount() && !agent.Mesh->IsBlocked(agent.Node))
                 {
                     // Still in (or next to) its node's column? Otherwise it was moved: look again.
                     cell = CellOf(*agent.Mesh, { ground.x, ground.z });
@@ -377,7 +429,8 @@ namespace Dimension
                     agent.PathStatus = NavPathStatus::Invalid;
                     return;
                 }
-                agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, GroundOf(scene, e, agent), agent.Destination, agent.Path);
+                agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, GroundOf(scene, e, agent), agent.Destination, agent.Path,
+                                            LinksOn(scene, *agent.Mesh), &agent.PathLinks);
             }
 
             float Horizontal(const glm::vec3& a, const glm::vec3& b) { return glm::length(glm::vec2(a.x - b.x, a.z - b.z)); }
@@ -408,7 +461,7 @@ namespace Dimension
                 {
                     float dy = m.Heights[a] - p.y;
                     float d2 = dx * dx + dz * dz + dy * dy;
-                    if (d2 < bestD2)
+                    if (d2 < bestD2 && !m.IsBlocked((int)a))
                     {
                         bestD2 = d2;
                         best = (int)a;
@@ -513,9 +566,89 @@ namespace Dimension
             return true;
         }
 
-        NavPathStatus FindPath(const NavMeshData& mesh, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners)
+        NavPathStatus FindPath(const NavMeshData& mesh, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners,
+                               const std::vector<Link>& links, std::vector<float>* linkArcs)
         {
-            return PathFrom(mesh, Nearest(mesh, from, std::max(mesh.AgentHeight, 2.0f)), from, to, corners);
+            return PathFrom(mesh, Nearest(mesh, from, std::max(mesh.AgentHeight, 2.0f)), from, to, corners, links, linkArcs);
+        }
+
+        std::vector<Link> LinksOn(Scene& scene, const NavMeshData& mesh)
+        {
+            std::vector<Link> out;
+            for (auto [e, link, t] : scene.GetRegistry().ViewOf<OffMeshLinkComponent, TransformComponent>())
+            {
+                if (!link.Activated || !t.ActiveInHierarchy) continue;
+                glm::vec3 a = glm::vec3(t.World * glm::vec4(link.Start, 1.0f)), b = glm::vec3(t.World * glm::vec4(link.End, 1.0f));
+                // Each end joins the mesh within a meter (or the agent's radius past the edge it was baked back from).
+                float reach = std::max(1.0f, mesh.AgentRadius + mesh.CellSize * 2.0f);
+                int na = Nearest(mesh, a, reach), nb = Nearest(mesh, b, reach);
+                if (na < 0 || nb < 0 || na == nb) continue;
+                float cost = glm::distance(a, b) * std::max(link.CostModifier, 0.0f);
+                out.push_back({ na, nb, a, b, cost, std::max(link.ArcHeight, 0.0f) });
+                if (link.Bidirectional) out.push_back({ nb, na, b, a, cost, std::max(link.ArcHeight, 0.0f) });
+            }
+            return out;
+        }
+
+        std::shared_ptr<NavMeshData> Carve(const NavMeshData& baked, const std::vector<CarveShape>& obstacles)
+        {
+            auto m = std::make_shared<NavMeshData>(baked);
+            int n = m->NodeCount();
+            m->Blocked.assign(n, 0);
+            float c = m->CellSize, radius = m->AgentRadius, height = m->AgentHeight;
+            for (const CarveShape& o : obstacles)
+            {
+                // The shape in the world: a box's center and half axes, or a capsule's axis and radius.
+                glm::vec3 center = glm::vec3(o.World * glm::vec4(o.Center, 1.0f));
+                glm::vec3 axes[3];
+                for (int k = 0; k < 3; ++k) axes[k] = glm::vec3(o.World[k]);
+                glm::vec3 half = o.Size * 0.5f;
+                float capRadius = o.Radius * std::max(glm::length(axes[0]), glm::length(axes[2]));
+                float capHalf = 0.5f * o.Height * glm::length(axes[1]);
+                glm::vec3 reachOut = o.Shape == NavObstacleShape::Box
+                                         ? glm::abs(axes[0] * half.x) + glm::abs(axes[1] * half.y) + glm::abs(axes[2] * half.z)
+                                         : glm::vec3(capRadius, capHalf, capRadius);
+                reachOut += glm::vec3(radius + c);
+                glm::ivec2 lo = CellOf(*m, { center.x - reachOut.x, center.z - reachOut.z }), hi = CellOf(*m, { center.x + reachOut.x, center.z + reachOut.z });
+                for (int z = std::max(lo.y, 0); z <= std::min(hi.y, m->Depth - 1); ++z)
+                    for (int x = std::max(lo.x, 0); x <= std::min(hi.x, m->Width - 1); ++x)
+                    {
+                        int col = m->Column(x, z);
+                        for (uint32_t a = m->ColumnStart[col]; a < m->ColumnStart[col + 1]; ++a)
+                        {
+                            glm::vec3 p = m->NodePosition((int)a);
+                            bool inside;
+                            if (o.Shape == NavObstacleShape::Box)
+                            {
+                                // The agent's column point nearest the box's middle height, against the box.
+                                glm::vec3 q = p + glm::vec3(0.0f, std::clamp(center.y - p.y, 0.0f, height), 0.0f);
+                                glm::vec3 d = q - center, closest = center;
+                                for (int k = 0; k < 3; ++k)
+                                {
+                                    float len = glm::length(axes[k]);
+                                    if (len < 1e-6f) continue;
+                                    glm::vec3 u = axes[k] / len;
+                                    float e = half[k] * len;
+                                    closest += u * std::clamp(glm::dot(d, u), -e, e);
+                                }
+                                inside = glm::distance(q, closest) < radius;
+                            }
+                            else
+                                inside = glm::length(glm::vec2(p.x - center.x, p.z - center.z)) < capRadius + radius &&
+                                         p.y + height > center.y - capHalf && p.y < center.y + capHalf;
+                            if (inside) m->Blocked[a] = 1;
+                        }
+                    }
+            }
+            // Cut every link into or out of a blocked spot.
+            for (int a = 0; a < n; ++a)
+                for (int d = 0; d < 8; ++d)
+                {
+                    int& l = m->Links[(size_t)a * 8 + d];
+                    if (l >= 0 && (m->Blocked[a] || m->Blocked[l])) l = -1;
+                }
+            BuildIslands(*m);
+            return m;
         }
 
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity e)
@@ -535,7 +668,8 @@ namespace Dimension
                 copy->StartQueryPhysics();
                 data = BakeIn(*copy, *surface, center);
             }
-            surface->Data = data;
+            surface->Data = surface->Baked = data;
+            surface->CarveKey = 0;
             for (auto [a, agent] : reg.ViewOf<NavMeshAgentComponent>())
             {
                 agent.Mesh.reset();
@@ -590,7 +724,7 @@ namespace Dimension
             int node = -1;
             corners.clear();
             auto mesh = MeshNear(scene, from, 2.0f, &node);
-            return mesh ? PathFrom(*mesh, node, from, to, corners) : NavPathStatus::Invalid;
+            return mesh ? PathFrom(*mesh, node, from, to, corners, LinksOn(scene, *mesh), nullptr) : NavPathStatus::Invalid;
         }
 
         bool SetDestination(Scene& scene, Entity e, const glm::vec3& destination)
@@ -633,6 +767,75 @@ namespace Dimension
         {
             if (dt <= 0.0f) return;
             auto& reg = scene.GetRegistry();
+
+            // Obstacles: how they move, and whether (and where) they cut the meshes. Those not cutting are steered
+            // around.
+            struct Blocker
+            {
+                glm::vec2 P, V;
+                float R, Y, HalfHeight;
+            };
+            std::vector<Blocker> blockers;
+            std::vector<CarveShape> carving;
+            uint64_t carveKey = 1469598103934665603ull;
+            auto hashIn = [&](const void* data, size_t bytes) {
+                const auto* words = (const uint32_t*)data;
+                for (size_t i = 0; i < bytes / 4; ++i) carveKey = (carveKey ^ words[i]) * 1099511628211ull;
+            };
+            for (auto [e, ob, t] : reg.ViewOf<NavMeshObstacleComponent, TransformComponent>())
+            {
+                if (!t.ActiveInHierarchy) continue;
+                glm::vec3 at = glm::vec3(t.World * glm::vec4(ob.Center, 1.0f));
+                ob.Velocity = ob.Seen ? (at - ob.LastPosition) / dt : glm::vec3(0.0f);
+                ob.Seen = true;
+                ob.LastPosition = at;
+                ob.StillTime = glm::length(ob.Velocity) > 0.02f ? 0.0f : ob.StillTime + dt;
+                bool carve = ob.Carve && (!ob.CarveOnlyStationary || ob.StillTime >= ob.TimeToStationary);
+                if (carve)
+                {
+                    // Cut again only once it has moved Move Threshold (or turned) since it last did.
+                    float turned = glm::length(glm::vec3(ob.CarvedAt[0]) - glm::vec3(t.World[0])) + glm::length(glm::vec3(ob.CarvedAt[2]) - glm::vec3(t.World[2]));
+                    if (!ob.Carving || glm::distance(glm::vec3(ob.CarvedAt[3]), glm::vec3(t.World[3])) > ob.MoveThreshold || turned > 0.05f)
+                        ob.CarvedAt = t.World;
+                    carving.push_back({ ob.CarvedAt, ob.Shape, ob.Center, ob.Size, ob.Radius, ob.Height });
+                    hashIn(&e.Index, 4);
+                    hashIn(&ob.CarvedAt, sizeof(glm::mat4));
+                    float shape[6] = { (float)ob.Shape, ob.Size.x, ob.Size.y, ob.Size.z, ob.Radius, ob.Height };
+                    hashIn(shape, sizeof(shape));
+                }
+                ob.Carving = carve;
+                if (carve) continue;
+                glm::vec3 ext;
+                float halfHeight;
+                if (ob.Shape == NavObstacleShape::Box)
+                {
+                    ext = glm::abs(glm::vec3(t.World[0]) * ob.Size.x * 0.5f) + glm::abs(glm::vec3(t.World[1]) * ob.Size.y * 0.5f) + glm::abs(glm::vec3(t.World[2]) * ob.Size.z * 0.5f);
+                    halfHeight = ext.y;
+                }
+                else
+                {
+                    float r = ob.Radius * std::max(glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[2])));
+                    ext = glm::vec3(r, 0.0f, r);
+                    halfHeight = 0.5f * ob.Height * glm::length(glm::vec3(t.World[1]));
+                }
+                blockers.push_back({ { at.x, at.z }, { ob.Velocity.x, ob.Velocity.z }, ob.Shape == NavObstacleShape::Box ? glm::length(glm::vec2(ext.x, ext.z)) : ext.x, at.y, halfHeight });
+            }
+            if (carving.empty()) carveKey = 0;
+            for (auto [e, s] : reg.ViewOf<NavMeshSurfaceComponent>())
+            {
+                if (!s.Baked || s.CarveKey == carveKey) continue;
+                std::shared_ptr<const NavMeshData> old = s.Data;
+                s.Data = carving.empty() ? s.Baked : std::shared_ptr<const NavMeshData>(Carve(*s.Baked, carving));
+                s.CarveKey = carveKey;
+                // Same node numbers: agents keep their place, with paths found again around the holes.
+                for (auto [a, agent] : reg.ViewOf<NavMeshAgentComponent>())
+                    if (agent.Mesh && agent.Mesh == old)
+                    {
+                        agent.Mesh = s.Data;
+                        if (agent.HasDestination) agent.PathDirty = true;
+                    }
+            }
+
             struct Mover
             {
                 Entity E;
@@ -658,6 +861,11 @@ namespace Dimension
                         agent.RepathTimer = 0.25f;
                     }
                 }
+                if (agent.Traversing)
+                {
+                    mv.Ground = GroundOf(scene, mv.E, agent);
+                    continue;
+                }
                 if (!Place(scene, mv.E, agent))
                 {
                     agent.Velocity = glm::vec3(0.0f);
@@ -665,8 +873,9 @@ namespace Dimension
                 }
                 mv.Ground = GroundOf(scene, mv.E, agent);
                 // Pushed off its line (by others, or cutting a corner) so the next corner is out of sight: a new path
-                // from where it stands.
-                if (!agent.PathDirty && agent.HasDestination && agent.RepathTimer <= 0.0f && agent.Corner < agent.Path.size() &&
+                // from where it stands (not across an off-mesh link, which is not walked).
+                bool onLink = agent.Corner >= 1 && agent.Corner - 1 < agent.PathLinks.size() && agent.PathLinks[agent.Corner - 1] >= 0.0f;
+                if (!onLink && !agent.PathDirty && agent.HasDestination && agent.RepathTimer <= 0.0f && agent.Corner < agent.Path.size() &&
                     !Walk(*agent.Mesh, agent.Node, { mv.Ground.x, mv.Ground.z }, { agent.Path[agent.Corner].x, agent.Path[agent.Corner].z }))
                 {
                     agent.PathDirty = true;
@@ -679,7 +888,34 @@ namespace Dimension
             for (Mover& mv : movers)
             {
                 NavMeshAgentComponent& agent = *mv.Agent;
-                if (!agent.Mesh || agent.Node < 0) continue;
+                if (!agent.Mesh) continue;
+                auto& transform = reg.Get<TransformComponent>(mv.E);
+                // Face the way it goes.
+                auto face = [&](glm::vec2 v2) {
+                    if (glm::length(v2) <= 0.05f) return;
+                    float want = std::atan2(-v2.x, -v2.y);
+                    float turn = WrapAngle(want - transform.Rotation.y);
+                    float maxTurn = glm::radians(agent.AngularSpeed) * dt;
+                    transform.Rotation.y = WrapAngle(transform.Rotation.y + std::clamp(turn, -maxTurn, maxTurn));
+                };
+                if (agent.Traversing)
+                {
+                    // Crossing an off-mesh link: straight from end to end, Arc Height up in the middle.
+                    agent.TraverseTime += dt;
+                    float t = std::clamp(agent.TraverseTime / std::max(agent.TraverseDuration, 1e-3f), 0.0f, 1.0f);
+                    mv.Ground = glm::mix(agent.TraverseFrom, agent.TraverseTo, t) + glm::vec3(0.0f, agent.TraverseArc * 4.0f * t * (1.0f - t), 0.0f);
+                    glm::vec3 across = (agent.TraverseTo - agent.TraverseFrom) / std::max(agent.TraverseDuration, 1e-3f);
+                    agent.Velocity = glm::vec3(across.x, 0.0f, across.z);
+                    PlaceObject(scene, mv.E, mv.Ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
+                    face({ across.x, across.z });
+                    if (t >= 1.0f)
+                    {
+                        agent.Traversing = false;
+                        agent.Node = Nearest(*agent.Mesh, agent.TraverseTo, 1.0f);
+                    }
+                    continue;
+                }
+                if (agent.Node < 0) continue;
                 const NavMeshData& mesh = *agent.Mesh;
                 glm::vec2 p(mv.Ground.x, mv.Ground.z);
 
@@ -698,6 +934,18 @@ namespace Dimension
                     for (size_t k = agent.Corner; k < last; ++k) remaining += Horizontal(agent.Path[k], agent.Path[k + 1]);
                     agent.RemainingDistance = remaining;
                     brakeDistance = remaining - agent.StoppingDistance;
+                    if (!agent.IsStopped && agent.Corner - 1 < agent.PathLinks.size() && agent.PathLinks[agent.Corner - 1] >= 0.0f)
+                    {
+                        // At an off-mesh link's start: across it, at walking speed.
+                        agent.Traversing = true;
+                        agent.TraverseFrom = mv.Ground;
+                        agent.TraverseTo = agent.Path[agent.Corner];
+                        agent.TraverseArc = agent.PathLinks[agent.Corner - 1];
+                        agent.TraverseTime = 0.0f;
+                        agent.TraverseDuration = std::max(glm::distance(agent.TraverseFrom, agent.TraverseTo) / std::max(agent.Speed, 0.1f), 0.25f);
+                        agent.PathLinks[agent.Corner - 1] = -1.0f;
+                        continue;
+                    }
                     if (!agent.IsStopped && brakeDistance > 0.03f)
                     {
                         glm::vec2 to = glm::vec2(agent.Path[agent.Corner].x, agent.Path[agent.Corner].z) - p;
@@ -729,6 +977,10 @@ namespace Dimension
                         if (glm::distance(op, p) > reach + o.Agent->Radius + glm::length(ov) * 2.0f) continue;
                         others.push_back({ op, ov, agent.Radius + o.Agent->Radius });
                     }
+                    for (const Blocker& b : blockers)
+                        if (std::abs(b.Y - mv.Ground.y - agent.Height * 0.5f) < b.HalfHeight + agent.Height * 0.5f &&
+                            glm::distance(b.P, p) < reach + b.R + glm::length(b.V) * 2.0f)
+                            others.push_back({ b.P, b.V, agent.Radius + b.R });
                     if (!others.empty())
                     {
                         const float horizon = 2.0f;
@@ -807,17 +1059,7 @@ namespace Dimension
                 agent.Velocity = glm::vec3(moved.x, 0.0f, moved.y);
                 mv.Ground = glm::vec3(reached.x, HeightAt(mesh, node, reached.x, reached.y), reached.y);
                 PlaceObject(scene, mv.E, mv.Ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
-
-                // Face the way it goes.
-                glm::vec2 v2(agent.Velocity.x, agent.Velocity.z);
-                if (glm::length(v2) > 0.05f)
-                {
-                    auto& t = reg.Get<TransformComponent>(mv.E);
-                    float want = std::atan2(-v2.x, -v2.y);
-                    float turn = WrapAngle(want - t.Rotation.y);
-                    float maxTurn = glm::radians(agent.AngularSpeed) * dt;
-                    t.Rotation.y = WrapAngle(t.Rotation.y + std::clamp(turn, -maxTurn, maxTurn));
-                }
+                face({ agent.Velocity.x, agent.Velocity.z });
             }
         }
     }

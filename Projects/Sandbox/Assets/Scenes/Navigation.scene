@@ -2556,6 +2556,289 @@
    "parent": 0,
    "components": {
     "Tag": {
+     "Name": "Barrier",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      10.5,
+      0.6,
+      -4
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      11,
+      1.2,
+      0.8
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 100025,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "NavMesh Obstacle": {
+     "Shape": 0,
+     "Center": [
+      0,
+      0,
+      0
+     ],
+     "Size": [
+      1,
+      1,
+      1
+     ],
+     "Carve": true,
+     "Move Threshold": 0.1,
+     "Carve Only Stationary": true,
+     "Time To Stationary": 0.5
+    }
+   }
+  },
+  {
+   "guid": 6000054,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Jump",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Off Mesh Link": {
+     "Start": [
+      -6.7,
+      0,
+      14
+     ],
+     "End": [
+      -9.2,
+      1,
+      14
+     ],
+     "Bidirectional": true,
+     "Activated": true,
+     "Arc Height": 0.8,
+     "Cost Modifier": 1.0
+    }
+   }
+  },
+  {
+   "guid": 6000055,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Boulder 1",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -24,
+      1,
+      18
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      2,
+      2,
+      2
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100022,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "LOD Group": {
+     "LOD 1 Below": 0.045,
+     "LOD 2 Below": 0.038,
+     "LOD 3 Below": 0.03,
+     "Cull Below": 0.005,
+     "Size": 0,
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 3,
+     "Reduction": 0.3
+    }
+   }
+  },
+  {
+   "guid": 6000056,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Boulder 2",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -24,
+      1,
+      4
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      2,
+      2,
+      2
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100022,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "LOD Group": {
+     "LOD 1 Below": 0.045,
+     "LOD 2 Below": 0.038,
+     "LOD 3 Below": 0.03,
+     "Cull Below": 0.005,
+     "Size": 0,
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 3,
+     "Reduction": 0.3
+    }
+   }
+  },
+  {
+   "guid": 6000057,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Boulder 3",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -24,
+      1,
+      -12
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      2,
+      2,
+      2
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 100022,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.5,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "LOD Group": {
+     "LOD 1 Below": 0.045,
+     "LOD 2 Below": 0.038,
+     "LOD 3 Below": 0.03,
+     "Cull Below": 0.005,
+     "Size": 0,
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 3,
+     "Reduction": 0.3
+    }
+   }
+  },
+  {
+   "guid": 6000058,
+   "parent": 0,
+   "components": {
+    "Tag": {
      "Name": "Statue 1",
      "Tag": "Untagged",
      "Active": true,
@@ -2584,13 +2867,16 @@
      "LOD 3 Below": 0.03,
      "Cull Below": 0.005,
      "Size": 0,
-     "Bias": 1.0
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 0,
+     "Reduction": 0.5
     }
    }
   },
   {
-   "guid": 6000054,
-   "parent": 6000053,
+   "guid": 6000059,
+   "parent": 6000058,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -2618,8 +2904,8 @@
    }
   },
   {
-   "guid": 6000055,
-   "parent": 6000054,
+   "guid": 6000060,
+   "parent": 6000059,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -2665,8 +2951,8 @@
    }
   },
   {
-   "guid": 6000056,
-   "parent": 6000054,
+   "guid": 6000061,
+   "parent": 6000059,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -2712,8 +2998,8 @@
    }
   },
   {
-   "guid": 6000057,
-   "parent": 6000053,
+   "guid": 6000062,
+   "parent": 6000058,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -2759,8 +3045,8 @@
    }
   },
   {
-   "guid": 6000058,
-   "parent": 6000053,
+   "guid": 6000063,
+   "parent": 6000058,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -2806,7 +3092,7 @@
    }
   },
   {
-   "guid": 6000059,
+   "guid": 6000064,
    "parent": 0,
    "components": {
     "Tag": {
@@ -2838,13 +3124,16 @@
      "LOD 3 Below": 0.03,
      "Cull Below": 0.005,
      "Size": 0,
-     "Bias": 1.0
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 0,
+     "Reduction": 0.5
     }
    }
   },
   {
-   "guid": 6000060,
-   "parent": 6000059,
+   "guid": 6000065,
+   "parent": 6000064,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -2872,8 +3161,8 @@
    }
   },
   {
-   "guid": 6000061,
-   "parent": 6000060,
+   "guid": 6000066,
+   "parent": 6000065,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -2919,8 +3208,8 @@
    }
   },
   {
-   "guid": 6000062,
-   "parent": 6000060,
+   "guid": 6000067,
+   "parent": 6000065,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -2966,8 +3255,8 @@
    }
   },
   {
-   "guid": 6000063,
-   "parent": 6000059,
+   "guid": 6000068,
+   "parent": 6000064,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3013,8 +3302,8 @@
    }
   },
   {
-   "guid": 6000064,
-   "parent": 6000059,
+   "guid": 6000069,
+   "parent": 6000064,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3060,7 +3349,7 @@
    }
   },
   {
-   "guid": 6000065,
+   "guid": 6000070,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3092,13 +3381,16 @@
      "LOD 3 Below": 0.03,
      "Cull Below": 0.005,
      "Size": 0,
-     "Bias": 1.0
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 0,
+     "Reduction": 0.5
     }
    }
   },
   {
-   "guid": 6000066,
-   "parent": 6000065,
+   "guid": 6000071,
+   "parent": 6000070,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3126,8 +3418,8 @@
    }
   },
   {
-   "guid": 6000067,
-   "parent": 6000066,
+   "guid": 6000072,
+   "parent": 6000071,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3173,8 +3465,8 @@
    }
   },
   {
-   "guid": 6000068,
-   "parent": 6000066,
+   "guid": 6000073,
+   "parent": 6000071,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -3220,8 +3512,8 @@
    }
   },
   {
-   "guid": 6000069,
-   "parent": 6000065,
+   "guid": 6000074,
+   "parent": 6000070,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3267,8 +3559,8 @@
    }
   },
   {
-   "guid": 6000070,
-   "parent": 6000065,
+   "guid": 6000075,
+   "parent": 6000070,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3314,7 +3606,7 @@
    }
   },
   {
-   "guid": 6000071,
+   "guid": 6000076,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3346,13 +3638,16 @@
      "LOD 3 Below": 0.03,
      "Cull Below": 0.005,
      "Size": 0,
-     "Bias": 1.0
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 0,
+     "Reduction": 0.5
     }
    }
   },
   {
-   "guid": 6000072,
-   "parent": 6000071,
+   "guid": 6000077,
+   "parent": 6000076,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3380,8 +3675,8 @@
    }
   },
   {
-   "guid": 6000073,
-   "parent": 6000072,
+   "guid": 6000078,
+   "parent": 6000077,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3427,8 +3722,8 @@
    }
   },
   {
-   "guid": 6000074,
-   "parent": 6000072,
+   "guid": 6000079,
+   "parent": 6000077,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -3474,8 +3769,8 @@
    }
   },
   {
-   "guid": 6000075,
-   "parent": 6000071,
+   "guid": 6000080,
+   "parent": 6000076,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3521,8 +3816,8 @@
    }
   },
   {
-   "guid": 6000076,
-   "parent": 6000071,
+   "guid": 6000081,
+   "parent": 6000076,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3568,7 +3863,7 @@
    }
   },
   {
-   "guid": 6000077,
+   "guid": 6000082,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3600,13 +3895,16 @@
      "LOD 3 Below": 0.03,
      "Cull Below": 0.005,
      "Size": 0,
-     "Bias": 1.0
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 0,
+     "Reduction": 0.5
     }
    }
   },
   {
-   "guid": 6000078,
-   "parent": 6000077,
+   "guid": 6000083,
+   "parent": 6000082,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3634,8 +3932,8 @@
    }
   },
   {
-   "guid": 6000079,
-   "parent": 6000078,
+   "guid": 6000084,
+   "parent": 6000083,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3681,8 +3979,8 @@
    }
   },
   {
-   "guid": 6000080,
-   "parent": 6000078,
+   "guid": 6000085,
+   "parent": 6000083,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -3728,8 +4026,8 @@
    }
   },
   {
-   "guid": 6000081,
-   "parent": 6000077,
+   "guid": 6000086,
+   "parent": 6000082,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -3775,8 +4073,8 @@
    }
   },
   {
-   "guid": 6000082,
-   "parent": 6000077,
+   "guid": 6000087,
+   "parent": 6000082,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -3822,7 +4120,7 @@
    }
   },
   {
-   "guid": 6000083,
+   "guid": 6000088,
    "parent": 0,
    "components": {
     "Tag": {
@@ -3854,13 +4152,16 @@
      "LOD 3 Below": 0.03,
      "Cull Below": 0.005,
      "Size": 0,
-     "Bias": 1.0
+     "Bias": 1.0,
+     "Fade Width": 0.1,
+     "Generated Levels": 0,
+     "Reduction": 0.5
     }
    }
   },
   {
-   "guid": 6000084,
-   "parent": 6000083,
+   "guid": 6000089,
+   "parent": 6000088,
    "components": {
     "Tag": {
      "Name": "Statue_LOD0",
@@ -3888,8 +4189,8 @@
    }
   },
   {
-   "guid": 6000085,
-   "parent": 6000084,
+   "guid": 6000090,
+   "parent": 6000089,
    "components": {
     "Tag": {
      "Name": "Plinth",
@@ -3935,8 +4236,8 @@
    }
   },
   {
-   "guid": 6000086,
-   "parent": 6000084,
+   "guid": 6000091,
+   "parent": 6000089,
    "components": {
     "Tag": {
      "Name": "Head",
@@ -3982,8 +4283,8 @@
    }
   },
   {
-   "guid": 6000087,
-   "parent": 6000083,
+   "guid": 6000092,
+   "parent": 6000088,
    "components": {
     "Tag": {
      "Name": "Statue_LOD1",
@@ -4029,8 +4330,8 @@
    }
   },
   {
-   "guid": 6000088,
-   "parent": 6000083,
+   "guid": 6000093,
+   "parent": 6000088,
    "components": {
     "Tag": {
      "Name": "Statue_LOD2",
@@ -4076,7 +4377,7 @@
    }
   },
   {
-   "guid": 6000089,
+   "guid": 6000094,
    "parent": 0,
    "components": {
     "Tag": {
@@ -4120,7 +4421,7 @@
    }
   },
   {
-   "guid": 6000090,
+   "guid": 6000095,
    "parent": 0,
    "components": {
     "Tag": {
@@ -4157,8 +4458,8 @@
    }
   },
   {
-   "guid": 6000091,
-   "parent": 6000090,
+   "guid": 6000096,
+   "parent": 6000095,
    "components": {
     "Tag": {
      "Name": "Title",
@@ -4206,7 +4507,7 @@
      ]
     },
     "UI Text": {
-     "Text": "<b>Navigation</b>  (NavMesh Surface, NavMesh Agents, LOD Groups)",
+     "Text": "<b>Navigation</b>  (NavMesh Surface, Agents, Obstacles and Off-Mesh Links; LOD Groups)",
      "Font": 0,
      "Font Size": 44,
      "Color": [
@@ -4222,8 +4523,8 @@
    }
   },
   {
-   "guid": 6000092,
-   "parent": 6000090,
+   "guid": 6000097,
+   "parent": 6000095,
    "components": {
     "Tag": {
      "Name": "Info",
@@ -4271,7 +4572,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and up the ramp, steering around the others. The statues on the right switch to simpler versions with distance.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance.",
      "Font": 0,
      "Font Size": 26,
      "Color": [

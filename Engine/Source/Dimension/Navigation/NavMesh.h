@@ -23,8 +23,10 @@ namespace Dimension
         std::vector<int32_t> Columns;      // per node: its column
         std::vector<int32_t> Links;        // per node, 8 each (Navigation::kDirX/kDirZ order): the linked node, -1 = none
         std::vector<int32_t> Islands;      // per node
+        std::vector<uint8_t> Blocked;      // per node (empty = none): inside a carving obstacle (its links are cut)
 
         int NodeCount() const { return (int)Heights.size(); }
+        bool IsBlocked(int node) const { return !Blocked.empty() && Blocked[node]; }
         int Column(int x, int z) const { return x >= 0 && z >= 0 && x < Width && z < Depth ? z * Width + x : -1; }
         // The node's spot: its column's center at its height.
         glm::vec3 NodePosition(int node) const;
@@ -53,7 +55,26 @@ namespace Dimension
         bool Walk(const NavMeshData& mesh, int startNode, glm::vec2 from, glm::vec2 to, int* endNode = nullptr, glm::vec2* reached = nullptr);
         // The shortest way from one point to another: its corners, from `from` (on the mesh) to `to` (or, when `to`
         // cannot be reached, to the nearest reachable spot: Partial).
-        NavPathStatus FindPath(const NavMeshData& mesh, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners);
+        // Off-mesh links on a mesh: the nodes they join (one entry per direction), their points and the arc height.
+        struct Link
+        {
+            int From, To;
+            glm::vec3 FromPoint, ToPoint;
+            float Cost, Arc;
+        };
+        std::vector<Link> LinksOn(Scene& scene, const NavMeshData& mesh);
+        // `linkArcs` (optional) gets, per corner, -1 or the arc height of the off-mesh link from it to the next corner.
+        NavPathStatus FindPath(const NavMeshData& mesh, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners,
+                               const std::vector<Link>& links = {}, std::vector<float>* linkArcs = nullptr);
+        // The baked mesh with holes cut by carving obstacles (Agent Radius wider), as a copy: node numbers stay.
+        struct CarveShape
+        {
+            glm::mat4 World;
+            NavObstacleShape Shape;
+            glm::vec3 Center, Size;
+            float Radius, Height;
+        };
+        std::shared_ptr<NavMeshData> Carve(const NavMeshData& baked, const std::vector<CarveShape>& obstacles);
         // The nearest point on any surface's mesh to `point` within maxDistance.
         bool SamplePosition(Scene& scene, const glm::vec3& point, float maxDistance, glm::vec3& result);
         NavPathStatus CalculatePath(Scene& scene, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners);

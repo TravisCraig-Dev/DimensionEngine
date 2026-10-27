@@ -558,6 +558,8 @@ namespace Dimension
         /// <summary>True once it has a path and is within Stopping Distance of its end.</summary>
         public bool HasArrived => HasPath && RemainingDistance <= GetFloat("Stopping Distance") + 0.05f;
         public void ResetPath() => Op(7);
+        /// <summary>True while it crosses an off-mesh link (a jump, a ladder).</summary>
+        public bool IsOnOffMeshLink => Op(10) != 0.0f;
         /// <summary>Moves it straight to the nearest point on the mesh to `position`.</summary>
         public bool Warp(Vector3 position) => Op(8, position) != 0.0f;
         public float Speed { get => GetFloat("Speed"); set => SetFloat("Speed", value); }

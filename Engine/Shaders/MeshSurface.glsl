@@ -194,6 +194,7 @@ vec3 DirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, float metal
 
 void main()
 {
+    if (LodFadeDiscard(gl_FragCoord.xy)) discard;
     MaterialRef m = pc.Material;
     vec2 uv = vUV * m.TilingOffset.xy + m.TilingOffset.zw;
     vec4 base;

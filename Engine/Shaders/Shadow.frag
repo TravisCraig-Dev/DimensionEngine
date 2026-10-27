@@ -10,6 +10,7 @@ layout(location = 5) in float vShell;      // fur shells
 
 void main()
 {
+    if (LodFadeDiscard(gl_FragCoord.xy)) discard;
     MaterialRef m = pc.Material;
     if (m.Flags.x == 1u)
     {

@@ -37,6 +37,7 @@ namespace Editor
         void DrawPrefabHeader(Scene& scene, Entity e);
         void DrawAsset(AssetHandle handle);
         void DrawAddComponent(Scene& scene, Entity e);
+        void DrawLODBar(Scene& scene, Entity e, LODGroupComponent& lod);
         EditorContext& m_Ctx;
         std::string m_ComponentFilter;
     };
