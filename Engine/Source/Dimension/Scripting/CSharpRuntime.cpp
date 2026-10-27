@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Audio/Microphone.h"
+#include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
@@ -124,6 +125,7 @@ namespace Dimension
             float (*RagdollQuery)(void*, uint64_t, int);                       // 0 face up (1/0), 1 get-up progress
             int (*BreakableBreak)(void*, uint64_t, const float*);              // world point; returns the piece count
             void (*RagdollSetPartial)(void*, uint64_t, const char*);           // bone name ("" = whole body)
+            int (*TerrainCrater)(void*, const float*, float, float, int);      // world point, radius, depth, paint layer
         };
 
         // Background scene loads started from C#, by id.
@@ -598,6 +600,9 @@ namespace Dimension
             };
             a.RagdollSetPartial = [](void* s, uint64_t e, const char* bone) {
                 if (auto* r = Comp<RagdollComponent>(s, e)) r->PartialRoot = bone ? bone : "";
+            };
+            a.TerrainCrater = [](void* s, const float* p, float radius, float depth, int layer) -> int {
+                return Terrain::DigCrater(S(s), { p[0], p[1], p[2] }, radius, depth, layer);
             };
             a.BreakableBreak = [](void* s, uint64_t e, const float* p) -> int {
                 return (int)Physics3DWorld::Break(S(s), Unpack(e), { p[0], p[1], p[2] }).size();

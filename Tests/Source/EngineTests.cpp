@@ -11,6 +11,8 @@
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/PathPlacer.h>
+#include <Dimension/Scene/SceneSearch.h>
+#include <Dimension/Physics/Wind.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
@@ -1665,6 +1667,152 @@ namespace
         CHECK(!ps.CarriesLight(particles[0]) && !ps.CarriesLight(particles[1]));
         ps.LightRatio = 1.0f;
         CHECK(ps.CarriesLight(particles[0]) && ps.CarriesLight(particles[1]));
+    }
+
+    void TestSceneSearch()
+    {
+        // Words must all match: names (any case), t:Type (components without spaces, script classes), tag:.
+        Scene scene("Search");
+        auto& reg = scene.GetRegistry();
+        Entity player = scene.CreateEntity("Player");
+        reg.Get<TagComponent>(player).Tag = "Player";
+        reg.Emplace<RigidbodyComponent>(player);
+        reg.Emplace<ScriptComponent>(player).Add("CarDriver");
+        Entity lamp = scene.CreateEntity("Street Lamp");
+        Entity bulb = scene.CreateEntity("Bulb", lamp);
+        reg.Emplace<PointLightComponent>(bulb);
+        reg.Emplace<MeshRendererComponent>(lamp);
+        Entity crate = scene.CreateEntity("Crate");
+        reg.Emplace<MeshRendererComponent>(crate);
+        reg.Emplace<RigidbodyComponent>(crate);
+        auto names = [&](const std::string& q) {
+            std::string out;
+            for (Entity e : SceneSearch::Find(scene, q)) out += reg.Get<TagComponent>(e).Name + ";";
+            return out;
+        };
+        CHECK(names("lamp") == "Street Lamp;");
+        CHECK(names("t:Rigidbody") == "Player;Crate;");
+        CHECK(names("t:meshrenderer") == "Street Lamp;Crate;");
+        CHECK(names("t:PointLight") == "Bulb;");
+        CHECK(names("t:CarDriver") == "Player;");
+        CHECK(names("tag:player") == "Player;");
+        CHECK(names("t:Rigidbody cr") == "Crate;");
+        CHECK(names("t:Nothing").empty() && names("   ").empty());
+    }
+
+    void TestWindZones()
+    {
+        // The field: Directional blows along the zone's forward (-Z) with its gusts; Spherical outward, fading to its
+        // edge; zones add up.
+        Scene scene("Windy");
+        auto& reg = scene.GetRegistry();
+        Entity gale = scene.CreateEntity("Gale");
+        reg.Get<TransformComponent>(gale).Rotation = { 0.0f, glm::half_pi<float>(), 0.0f }; // forward -Z turned to -X
+        auto& z = reg.Emplace<WindZoneComponent>(gale);
+        z.Main = 10.0f;
+        z.Turbulence = 0.0f;
+        z.PulseMagnitude = 0.0f;
+        scene.UpdateTransforms();
+        Wind::Field field = Wind::Gather(scene, 0.0f);
+        glm::vec3 w = field.At({ 3.0f, 1.0f, -7.0f });
+        CHECK(Near(w, { -10.0f, 0.0f, 0.0f }, 1e-3f));
+        z.PulseMagnitude = 0.5f;
+        z.PulseFrequency = 0.25f; // a gust peaks at 1 s
+        CHECK(Near(Wind::Gather(scene, 1.0f).At({ 0, 0, 0 }).x, -15.0f, 1e-3f));
+        z.PulseMagnitude = 0.0f;
+        Entity blast = scene.CreateEntity("Blast");
+        reg.Get<TransformComponent>(blast).Position = { 20.0f, 0.0f, 0.0f };
+        auto& s = reg.Emplace<WindZoneComponent>(blast);
+        s.Mode = WindZoneMode::Spherical;
+        s.Radius = 10.0f;
+        s.Main = 8.0f;
+        s.Turbulence = 0.0f;
+        s.PulseMagnitude = 0.0f;
+        scene.UpdateTransforms();
+        field = Wind::Gather(scene, 0.0f);
+        CHECK(Near(field.At({ 25.0f, 0.0f, 0.0f }), { -10.0f + 4.0f, 0.0f, 0.0f }, 1e-3f)); // half way out: half of Main, plus the gale
+        CHECK(Near(field.At({ 20.0f, 0.0f, 12.0f }), { -10.0f, 0.0f, 0.0f }, 1e-3f));         // outside its radius
+
+        // Playing: a light, large ball is blown along; a heavy crate stays put; particles with External Forces drift
+        // with the wind (and without, they do not).
+        reg.Get<WindZoneComponent>(blast).Main = 0.0f;
+        Entity ground = scene.CreateEntity("Ground");
+        reg.Get<TransformComponent>(ground).Position = { 0.0f, -0.5f, 0.0f };
+        reg.Emplace<BoxColliderComponent>(ground).Size = { 200.0f, 1.0f, 200.0f };
+        Entity ball = scene.CreateEntity("Beach Ball");
+        reg.Get<TransformComponent>(ball).Position = { 0.0f, 0.5f, 0.0f };
+        reg.Emplace<SphereColliderComponent>(ball).Radius = 0.5f;
+        reg.Emplace<RigidbodyComponent>(ball).Mass = 0.5f;
+        Entity crate = scene.CreateEntity("Crate");
+        reg.Get<TransformComponent>(crate).Position = { 0.0f, 0.5f, 6.0f };
+        reg.Emplace<BoxColliderComponent>(crate).Friction = 0.8f;
+        reg.Emplace<RigidbodyComponent>(crate).Mass = 300.0f;
+        Entity smoke = scene.CreateEntity("Smoke");
+        reg.Get<TransformComponent>(smoke).Position = { 0.0f, 3.0f, -6.0f };
+        auto& ps = reg.Emplace<ParticleSystemComponent>(smoke);
+        ps.StartSpeed = { 0.0f, 0.0f };
+        ps.StartLifetime = { 5.0f, 5.0f };
+        ps.RateOverTime = 20.0f;
+        ps.ExternalForces = 2.0f;
+        Entity still = scene.CreateEntity("Still Smoke");
+        reg.Get<TransformComponent>(still).Position = { 0.0f, 3.0f, -10.0f };
+        auto& ps2 = reg.Emplace<ParticleSystemComponent>(still);
+        ps2 = ps;
+        ps2.ExternalForces = 0.0f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        auto& rr = rt->GetRegistry();
+        CHECK(rr.Get<TransformComponent>(ball).Position.x < -3.0f);
+        CHECK(std::abs(rr.Get<TransformComponent>(crate).Position.x) < 0.05f);
+        auto meanX = [&](Entity e) {
+            const auto& parts = rr.Get<ParticleSystemComponent>(e).Particles;
+            float sum = 0.0f;
+            for (const auto& q : parts) sum += q.Position.x;
+            return parts.empty() ? 0.0f : sum / parts.size();
+        };
+        CHECK(!rr.Get<ParticleSystemComponent>(smoke).Particles.empty() && meanX(smoke) < -2.0f && std::abs(meanX(still)) < 0.05f);
+        rt->OnRuntimeStop();
+    }
+
+    void TestTerrainCrater()
+    {
+        // A crater sinks the ground in the middle by about Depth, throws up a rim around it, leaves the ground far off
+        // alone, paints it dirt, and (while playing) the collider follows.
+        Scene scene("Battlefield");
+        auto& reg = scene.GetRegistry();
+        Entity land = scene.CreateEntity("Land");
+        auto& tc = reg.Emplace<TerrainComponent>(land);
+        tc.Size = { 64.0f, 64.0f };
+        tc.Resolution = 64;
+        tc.FlatCenter = 1.0f; // flat everywhere, at Flat Height
+        reg.Emplace<MeshRendererComponent>(land);
+        scene.UpdateTransforms();
+        auto heightAt = [&](Scene& s, float x, float z) {
+            auto& t = s.GetRegistry().Get<TerrainComponent>(land);
+            return Terrain::HeightAt(t, Terrain::BuildHeights(t), x, z);
+        };
+        float before = heightAt(scene, 0.0f, 0.0f), far0 = heightAt(scene, 25.0f, 25.0f);
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        auto ray = [&] { return Physics3DWorld::Raycast(*rt, { 0.0f, 50.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 100.0f); };
+        RaycastHit hit0 = ray();
+        CHECK(hit0 && Near(hit0.Point.y, before, 0.05f));
+        CHECK(Terrain::DigCrater(*rt, { 0.0f, before, 0.0f }, 6.0f, 2.0f) > 0);
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        float center = heightAt(*rt, 0.0f, 0.0f), rim = heightAt(*rt, 6.0f, 0.0f), far1 = heightAt(*rt, 25.0f, 25.0f);
+        CHECK(Near(center, before - 2.0f, 0.1f) && rim > before + 0.2f && Near(far1, far0, 1e-3f));
+        RaycastHit hit1 = ray();
+        CHECK(hit1 && Near(hit1.Point.y, center, 0.1f));
+        auto& rtc = rt->GetRegistry().Get<TerrainComponent>(land);
+        Terrain::BeginEdit(rtc); // the committed edits, decoded again
+        int n = Terrain::SampleCount(rtc);
+        uint32_t s1 = rtc.EditLayers[(size_t)n * n + (size_t)(n / 2) * n + n / 2];
+        CHECK((s1 & 255) > 200); // dirt (the first paint-only layer) at the center
+        rt->OnRuntimeStop();
+        CHECK(Near(heightAt(scene, 0.0f, 0.0f), before, 1e-4f)); // the edited scene is untouched
     }
 
     void TestSoftBuoyancy()
@@ -7332,6 +7480,9 @@ int main(int argc, char** argv)
     Run("Rope snap", TestRopeSnap);
     Run("Particle lights", TestParticleLights);
     Run("Soft buoyancy", TestSoftBuoyancy);
+    Run("Scene search", TestSceneSearch);
+    Run("Wind zones", TestWindZones);
+    Run("Terrain crater", TestTerrainCrater);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

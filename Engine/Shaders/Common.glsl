@@ -74,6 +74,7 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 WaterMax;       // xyz box max (y: the surface), w caustics strength
     vec4 WaterFog;       // rgb underwater color (linear), a extinction per meter
     vec4 WaterParams;    // x caustics cell size (m)
+    vec4 Refraction;     // x opaque scene color texture + 1 while transparent meshes draw (0 = none), yz 1 / framebuffer size
 } uScene;
 
 // Procedural sky gradient, also used as a cheap environment for reflections.

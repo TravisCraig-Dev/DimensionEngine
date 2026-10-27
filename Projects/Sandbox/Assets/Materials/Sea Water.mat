@@ -29,5 +29,6 @@
   "Blend Mode": 2,
   "Alpha Cutoff": 0.5,
   "Double Sided": true,
-  "Cast Shadows": false
+  "Cast Shadows": false,
+  "Refraction": 0.6
 }

@@ -761,6 +761,22 @@ namespace Dimension
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
     };
 
+    // A Wind Zone (like Unity's): Directional blows along the object's forward (-Z) everywhere; Spherical blows out
+    // from the object, strongest at its center and fading to nothing at Radius. Main is the wind speed (m/s), stirred by
+    // Turbulence (drifting swirls, a fraction of Main) and swelling into gusts by Pulse Magnitude, Pulse Frequency times
+    // a second. Zones add up. The air drags rigidbodies by their size (a beach ball blows away, a crate barely moves),
+    // cloth, soft bodies and ropes, and particles of CPU systems with External Forces above 0.
+    enum class WindZoneMode : int32_t { Directional = 0, Spherical = 1 };
+    struct WindZoneComponent
+    {
+        WindZoneMode Mode = WindZoneMode::Directional;
+        float Radius = 20.0f;
+        float Main = 5.0f;
+        float Turbulence = 0.3f;
+        float PulseMagnitude = 0.5f;
+        float PulseFrequency = 0.2f;
+    };
+
     struct AudioReverbZoneComponent
     {
         float MinDistance = 4.0f;

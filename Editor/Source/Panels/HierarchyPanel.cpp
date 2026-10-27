@@ -3,6 +3,7 @@
 #include "../EditorUI.h"
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Scene/SceneSearch.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <algorithm>
@@ -17,6 +18,20 @@ namespace Editor
             return;
         }
         Scene& scene = m_Ctx.ActiveScene();
+
+        // Search: a flat list of the matching objects instead of the tree.
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##search", "Search (name, t:Type, tag:Tag)", &m_Search);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Words must all match: a plain word is part of the name, t:Rigidbody (or t:MeshRenderer,\n"
+                              "or a script class) a component the object has, tag:Player its tag. Esc clears.");
+        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_Search.clear();
+        if (!m_Search.empty())
+        {
+            DrawSearchResults(scene);
+            ImGui::End();
+            return;
+        }
 
         // Scene header
         std::string title = scene.GetName() + (m_Ctx.Dirty ? "*" : "");
@@ -101,6 +116,46 @@ namespace Editor
             if (ImGui::IsKeyPressed(ImGuiKey_F)) m_Ctx.RequestFocusSelected = true;
         }
         ImGui::End();
+    }
+
+    void HierarchyPanel::DrawSearchResults(Scene& scene)
+    {
+        auto& reg = scene.GetRegistry();
+        std::vector<Entity> found = SceneSearch::Find(scene, m_Search);
+        ImGui::TextDisabled("%zu found", found.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Select All"))
+        {
+            m_Ctx.Select(Entity::Null());
+            for (Entity e : found) m_Ctx.AddToSelection(e);
+        }
+        ImGui::Separator();
+        ImGui::BeginChild("##results");
+        for (Entity e : found)
+        {
+            ImGui::PushID((int)e.Index);
+            bool active = reg.Get<TransformComponent>(e).ActiveInHierarchy;
+            if (!active) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            if (ImGui::Selectable(reg.Get<TagComponent>(e).Name.c_str(), m_Ctx.IsSelected(e), ImGuiSelectableFlags_AllowDoubleClick))
+            {
+                if (ImGui::GetIO().KeyCtrl) m_Ctx.ToggleSelect(e);
+                else m_Ctx.Select(e);
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) m_Ctx.RequestFocusSelected = true;
+            }
+            if (!active) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+            {
+                // Where it is: its parents' names.
+                std::string path = reg.Get<TagComponent>(e).Name;
+                for (Entity p = scene.GetParent(e); !p.IsNull(); p = scene.GetParent(p)) path = reg.Get<TagComponent>(p).Name + " / " + path;
+                ImGui::SetTooltip("%s", path.c_str());
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && m_Ctx.HasValidSelection() && ImGui::IsKeyPressed(ImGuiKey_F) &&
+            !ImGui::GetIO().WantTextInput)
+            m_Ctx.RequestFocusSelected = true;
     }
 
     void HierarchyPanel::DrawNode(Scene& scene, Entity e)

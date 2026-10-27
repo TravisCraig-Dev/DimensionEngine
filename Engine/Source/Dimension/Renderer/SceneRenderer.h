@@ -186,6 +186,7 @@ namespace Dimension
 
         // Mesh renderers resolved once per frame (mesh, world bounds, uploaded materials, skinning) and then only
         // culled and batched by each pass (main, depth prepass, every shadow map).
+        bool m_FrameRefracts = false; // a transparent material this frame refracts
         struct RenderPart
         {
             uint32_t FirstIndex, IndexCount;

@@ -342,6 +342,8 @@ namespace Dimension
             .Field("Trails", &PS::Trails)
             .Field("Trail Lifetime", &PS::TrailLifetime).Range(0.01f, 10.0f).Speed(0.01f)
             .Field("Trail Width", &PS::TrailWidth).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Multiplier of the particle size")
+            .Field("External Forces", &PS::ExternalForces).Range(0.0f, 100.0f).Speed(0.01f)
+                .Tooltip("Wind Zones: how fast particles take up the wind, per second (0 = not at all; CPU systems)")
             .Field("Lights", &PS::Lights).Tooltip("Some particles light the scene (CPU systems)")
             .Field("Light Ratio", &PS::LightRatio).Range(0.0f, 1.0f).Speed(0.005f).Tooltip("The fraction of particles carrying a light")
             .Field("Max Lights", &PS::MaxLights).Range(0, 256).Tooltip("At most this many at once (per system)")
@@ -658,6 +660,14 @@ namespace Dimension
             .Field("Underwater Fog", &WaterVolumeComponent::UnderwaterFog).Range(0.0f, 10.0f).Speed(0.005f).Tooltip("How thick the murk is, per meter (0 = clear)")
             .Field("Caustics", &WaterVolumeComponent::Caustics).Range(0.0f, 4.0f).Speed(0.01f).Tooltip("Rippling sunlight on surfaces under water (0 = none)")
             .Field("Caustics Scale", &WaterVolumeComponent::CausticsScale).Range(0.1f, 50.0f).Speed(0.01f).Tooltip("Meters across the caustic pattern's cells");
+        Register<WindZoneComponent>("Wind Zone", "Physics")
+            .Field("Mode", &WindZoneComponent::Mode).Enum({ "Directional", "Spherical" })
+                .Tooltip("Directional: along the object's forward (-Z) everywhere; Spherical: out from the object, within Radius")
+            .Field("Radius", &WindZoneComponent::Radius).Range(0.01f, 10000.0f).Speed(0.1f).Tooltip("Spherical: where it fades to nothing")
+            .Field("Main", &WindZoneComponent::Main).Range(-200.0f, 200.0f).Speed(0.05f).Tooltip("Wind speed, m/s")
+            .Field("Turbulence", &WindZoneComponent::Turbulence).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("Swirls, as a fraction of Main")
+            .Field("Pulse Magnitude", &WindZoneComponent::PulseMagnitude).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("How much the gusts swell it")
+            .Field("Pulse Frequency", &WindZoneComponent::PulseFrequency).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Gusts per second");
         Register<AudioReverbZoneComponent>("Audio Reverb Zone", "Audio")
             .Field("Min Distance", &AudioReverbZoneComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.05f)
                 .Tooltip("Full reverb while the listener is this close")

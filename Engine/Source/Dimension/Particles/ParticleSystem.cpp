@@ -4,6 +4,7 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Audio/AudioEngine.h"
+#include "Dimension/Physics/Wind.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
 #include <cstring>
@@ -101,7 +102,7 @@ namespace Dimension
 
         // Moves a particle and resolves collisions. Works in world space; local-space particles are converted.
         void Integrate(Scene& scene, ParticleSystemComponent& ps, Particle& p, const glm::mat4& world, const glm::mat4& invWorld,
-                       const glm::vec3& gravity, float damping, float dt, std::vector<SubEmitRequest>& subEmits)
+                       const glm::vec3& gravity, float damping, float dt, std::vector<SubEmitRequest>& subEmits, const Wind::Field* wind = nullptr)
         {
             bool local = ps.SimulationSpace == ParticleSpace::Local;
             // A module's vector given in `space`, expressed in the simulation space.
@@ -114,6 +115,13 @@ namespace Dimension
             glm::vec3 accel = gravity;
             if (ps.ForceOverLifetime) accel += toSim(ps.Force * ps.ForceCurve.Evaluate(life), ps.ForceSpace);
             p.Velocity = (p.Velocity + accel * dt) * damping;
+            // External Forces: the particle takes up the wind of the Wind Zones around it.
+            if (wind && !wind->Empty())
+            {
+                glm::vec3 at = local ? glm::vec3(world * glm::vec4(p.Position, 1.0f)) : p.Position;
+                glm::vec3 air = toSim(wind->At(at), ParticleSpace::World);
+                p.Velocity += (air - p.Velocity) * std::min(ps.ExternalForces * dt, 1.0f);
+            }
             float speedScale = ps.SpeedOverLifetime.Evaluate(life);
             glm::vec3 previous = p.Position;
             p.Position += p.Velocity * speedScale * dt;
@@ -275,6 +283,8 @@ namespace Dimension
             if (ps.SimulationSpace == ParticleSpace::Local) gravity = glm::vec3(invWorld * glm::vec4(gravity, 0.0f));
             float damping = std::max(0.0f, 1.0f - ps.Drag * dt);
             float trailInterval = std::max(ps.TrailLifetime, 1e-3f) / Particle::kTrailPoints;
+            Wind::Field wind;
+            if (ps.ExternalForces > 0.0f) wind = Wind::Gather(scene, scene.GetDisplayTime());
             for (auto& p : ps.Particles)
             {
                 if (ps.Trails)
@@ -288,7 +298,7 @@ namespace Dimension
                         p.TrailCount = (uint8_t)std::min<int>(p.TrailCount + 1, Particle::kTrailPoints);
                     }
                 }
-                Integrate(scene, ps, p, world, invWorld, gravity, damping, dt, subEmits);
+                Integrate(scene, ps, p, world, invWorld, gravity, damping, dt, subEmits, &wind);
             }
             bool deathEmits = ps.SubEmitterTrigger == ParticleSubEmitTrigger::Death && !ps.SubEmitter.IsNull();
             std::erase_if(ps.Particles, [&](const Particle& p) {

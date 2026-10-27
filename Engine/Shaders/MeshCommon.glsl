@@ -5,7 +5,7 @@
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MaterialRef
 {
     vec4 BaseColor;     // linear rgb, alpha
-    vec4 Emission;      // linear rgb * strength
+    vec4 Emission;      // linear rgb * strength, w refraction (transparent)
     vec4 Params;        // x metallic, y roughness, z alpha cutoff, w normal strength
     vec4 TilingOffset;  // xy tiling, zw offset
     uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission (terrain: splat, grass, rock, snow)

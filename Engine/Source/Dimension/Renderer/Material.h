@@ -28,6 +28,9 @@ namespace Dimension
         float AlphaCutoff = 0.5f;
         bool DoubleSided = false;
         bool CastShadows = true;
+        // Transparent materials (game views): what lies behind is seen bent by the surface's normals (water, glass,
+        // ice), this much (0 = straight through, as plain blending).
+        float Refraction = 0.0f;
 
         static const std::vector<FieldInfo>& Fields();
 

@@ -284,6 +284,16 @@ namespace Dimension
         public float Distance;
     }
 
+    /// <summary>Changing terrains while playing.</summary>
+    public static unsafe class TerrainTools
+    {
+        /// <summary>Digs a crater (an explosion's) into the terrain under `point`: a bowl `radius` across and `depth`
+        /// deep, with a rim of thrown-up earth, painted with `paintLayer` (3 = dirt; -1 = none) and cleared of trees and
+        /// grass. The terrain redraws and collides with its new shape. Returns how many height samples changed.</summary>
+        public static int DigCrater(Vector3 point, float radius, float depth, int paintLayer = 3) =>
+            Native.Api.TerrainCrater(Native.CurrentScene, (float*)&point, radius, depth, paintLayer);
+    }
+
     public static unsafe class Physics
     {
         /// <summary>Layer mask with every layer except "Ignore Raycast" (the default for queries).</summary>

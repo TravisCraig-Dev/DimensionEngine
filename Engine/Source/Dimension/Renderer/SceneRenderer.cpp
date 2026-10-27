@@ -127,6 +127,7 @@ namespace Dimension
             glm::vec4 CloudParams2; // x feature size, y steps, z 1 = on, w 1 = shadows
             glm::vec4 Weather;      // x wetness, y snow cover, z rain, w lightning flash
             glm::vec4 WaterMin, WaterMax, WaterFog, WaterParams;
+            glm::vec4 Refraction; // x: opaque scene color texture + 1 while transparent meshes draw (0 = none), yz: 1 / size
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
@@ -1152,7 +1153,8 @@ namespace Dimension
         m_ParticleDepthViewProj = camera.Projection * camera.View;
         m_ParticleDepthSize = glm::uvec2(target.GetWidth(), target.GetHeight());
         // Order-independent transparency (game views): transparent meshes leave the main pass for their own.
-        m_Oit = settings.OIT && !options.ProbeCapture && !options.EditorOverlays &&
+        // Refracting materials need it (they read the opaque image while the transparent meshes draw on their own).
+        m_Oit = (settings.OIT || m_FrameRefracts) && !options.ProbeCapture && !options.EditorOverlays &&
                 std::any_of(m_RenderParts.begin(), m_RenderParts.end(), [](const RenderPart& p) { return p.Transparent; });
         depth.storeOp = readDepth || m_Oit ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depth.clearValue.depthStencil = { 1.0f, 0 };
@@ -1269,7 +1271,10 @@ namespace Dimension
             vkCmdSetViewport(cmd, 0, 1, &viewport);
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             device.BindBindless(cmd);
-            device.BindUniforms(cmd, &u, sizeof(u));
+            // Refracting materials look up the finished opaque image behind them.
+            SceneUniforms transparentU = u;
+            transparentU.Refraction = glm::vec4((float)target.GetHdrBindless() + 1.0f, 1.0f / (float)extent.width, 1.0f / (float)extent.height, 0.0f);
+            device.BindUniforms(cmd, &transparentU, sizeof(transparentU));
             DrawMeshes(cmd, u.ViewProj, MeshPass::Transparent);
             vkCmdEndRendering(cmd);
             Vk::TransitionImage(cmd, target.GetOitAccum().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -1442,7 +1447,7 @@ namespace Dimension
             MaterialGPU gpu{};
             auto* g = &gpu;
             g->BaseColor = ToLinear(m.BaseColor);
-            g->Emission = glm::vec4(ToLinear(m.EmissionColor) * m.EmissionStrength, 0.0f);
+            g->Emission = glm::vec4(ToLinear(m.EmissionColor) * m.EmissionStrength, m.BlendMode == MaterialBlendMode::Transparent ? std::max(m.Refraction, 0.0f) : 0.0f);
             g->Params = glm::vec4(m.Metallic, m.Roughness, m.AlphaCutoff, m.NormalStrength);
             g->TilingOffset = glm::vec4(m.Tiling, m.Offset);
             uint32_t normal = TextureIndex(m.NormalMap, white);
@@ -1684,6 +1689,7 @@ namespace Dimension
         auto& reg = scene.GetRegistry();
         m_RenderItems.clear();
         m_RenderParts.clear();
+        m_FrameRefracts = false;
         Material scratch;
 
         // Materials are uploaded once per distinct content, so objects sharing a material (or the same simple
@@ -1896,6 +1902,7 @@ namespace Dimension
                     furMaterials.push_back(uploadMaterialGPU(shell));
                 }
                 bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
+                m_FrameRefracts |= transparent && mat.Refraction > 0.0f;
                 bool doubleSided = mat.DoubleSided || cloth; // cloth is seen from both sides
                 // Every part can batch: skinned instances carry their own skinning matrices, and transparent parts
                 // merge with same-batch neighbours in the back-to-front order. Parts with their own vertices cannot.
@@ -1971,6 +1978,7 @@ namespace Dimension
                         mat = slotMat.get();
                     }
                     if (!mat) mat = &kDefaultMaterial;
+                    m_FrameRefracts |= mat->BlendMode == MaterialBlendMode::Transparent && mat->Refraction > 0.0f;
                     VkDeviceAddress address = uploadMaterial(*mat);
                     if (!address) continue;
                     uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, mat->DoubleSided, 0u }, true);
@@ -4021,6 +4029,26 @@ namespace Dimension
             {
                 DrawLine(s.Position, s.Position + glm::vec3(0.0f, 0.6f, 0.0f), color * glm::vec4(1, 1, 1, 0.7f));
                 DrawLine(s.Position + glm::vec3(0.0f, 0.3f, 0.0f), s.Position + glm::vec3(0.0f, 0.3f, 0.0f) + s.Direction * 0.5f, color * glm::vec4(1, 1, 1, 0.7f));
+            }
+        }
+        if (auto* wind = reg.TryGet<WindZoneComponent>(sel))
+        {
+            // Spherical: its reach; Directional: arrows the way it blows.
+            glm::vec4 color(0.75f, 0.9f, 1.0f, 0.9f);
+            glm::vec3 center = t.GetWorldPosition();
+            if (wind->Mode == WindZoneMode::Spherical)
+                DrawWireSphere(glm::translate(glm::mat4(1.0f), center), glm::vec3(0.0f), wind->Radius, color);
+            else
+            {
+                glm::vec3 f = glm::normalize(-glm::vec3(t.World[2])), r = glm::normalize(glm::vec3(t.World[0])), u = glm::normalize(glm::vec3(t.World[1]));
+                for (float s : { -0.6f, 0.0f, 0.6f })
+                {
+                    glm::vec3 a = center + r * s - f * 1.0f, b = center + r * s + f * 1.0f;
+                    DrawLine(a, b, color);
+                    DrawLine(b, b - f * 0.35f + r * 0.2f, color);
+                    DrawLine(b, b - f * 0.35f - r * 0.2f, color);
+                    DrawLine(b, b - f * 0.35f + u * 0.2f, color);
+                }
             }
         }
         if (auto* water = reg.TryGet<WaterVolumeComponent>(sel))

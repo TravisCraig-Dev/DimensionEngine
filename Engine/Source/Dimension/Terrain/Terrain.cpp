@@ -4,6 +4,8 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Core/Log.h"
+#include "Dimension/Scene/Scene.h"
+#include "Dimension/Physics/Physics3D.h"
 #include <stb_image.h>
 #include <algorithm>
 #include <cmath>
@@ -809,6 +811,79 @@ namespace Dimension::Terrain
                 ++changed;
             }
         ++terrain.EditRevision;
+        return changed;
+    }
+
+    int Crater(TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& point, float radius, float depth, int paintLayer)
+    {
+        int n = SampleCount(terrain);
+        if (terrain.EditHeights.size() != (size_t)n * n || terrain.EditLayers.size() != (size_t)n * n * 2 || radius <= 0.0f) return 0;
+        // In the terrain's space (meters along its axes).
+        glm::vec3 local = glm::vec3(glm::inverse(world) * glm::vec4(point, 1.0f));
+        glm::vec3 scale(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])));
+        float r = radius / std::max(0.5f * (scale.x + scale.z), 1e-4f), d = depth / std::max(scale.y, 1e-4f);
+        float reach = r * 1.8f;
+        glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+        glm::vec2 cell = size / (float)(n - 1);
+        int c0 = std::max(0, (int)std::floor((local.x - reach) / cell.x + (n - 1) * 0.5f)), c1 = std::min(n - 1, (int)std::ceil((local.x + reach) / cell.x + (n - 1) * 0.5f));
+        int r0 = std::max(0, (int)std::floor((local.z - reach) / cell.y + (n - 1) * 0.5f)), r1 = std::min(n - 1, (int)std::ceil((local.z + reach) / cell.y + (n - 1) * 0.5f));
+        int changed = 0;
+        for (int row = r0; row <= r1; ++row)
+            for (int col = c0; col <= c1; ++col)
+            {
+                glm::vec2 p(-size.x * 0.5f + col * cell.x, -size.y * 0.5f + row * cell.y);
+                float dist = glm::distance(p, glm::vec2(local.x, local.z));
+                if (dist >= reach) continue;
+                size_t i = (size_t)row * n + col;
+                // A bowl (deepest in the middle, level with the ground at Radius) and a rim of thrown-up earth
+                // around it.
+                float bowl = dist < r ? -d * (1.0f - (dist / r) * (dist / r)) : 0.0f;
+                float rimT = (dist - r) / (0.3f * r);
+                float rim = 0.25f * d * std::exp(-rimT * rimT);
+                float& h = terrain.EditHeights[i];
+                h = std::clamp(h + bowl + rim, 0.0f, terrain.Height);
+                // Scorched ground, and no grass or trees left in it.
+                if (paintLayer >= 0 && paintLayer < kLayerCount)
+                {
+                    float paint = 1.0f - Smooth(0.6f * r, 1.3f * r, dist);
+                    uint32_t& s0 = terrain.EditLayers[i];
+                    uint32_t& s1 = terrain.EditLayers[(size_t)n * n + i];
+                    float wl[kLayerCount];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        wl[k] = (s0 >> (k * 8) & 255) / 255.0f;
+                        wl[k + 3] = (s1 >> (k * 8) & 255) / 255.0f;
+                    }
+                    for (int k = 0; k < kLayerCount; ++k) wl[k] += ((k == paintLayer ? 1.0f : 0.0f) - wl[k]) * paint;
+                    s0 = PackWeights(wl);
+                    s1 = PackWeights(wl + 3);
+                }
+                if (dist < r * 1.1f && terrain.EditDetails.size() == (size_t)n * n * 2) terrain.EditDetails[i * 2] = terrain.EditDetails[i * 2 + 1] = 0;
+                ++changed;
+            }
+        ++terrain.EditRevision;
+        return changed;
+    }
+
+    int DigCrater(Scene& scene, const glm::vec3& point, float radius, float depth, int paintLayer)
+    {
+        int changed = 0;
+        std::vector<Entity> dug;
+        for (auto [e, terrain, t] : scene.GetRegistry().ViewOf<TerrainComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy) continue;
+            glm::vec3 local = glm::vec3(glm::inverse(t.World) * glm::vec4(point, 1.0f));
+            glm::vec2 half = glm::max(terrain.Size, glm::vec2(0.01f)) * 0.5f + radius * 2.0f;
+            if (std::abs(local.x) > half.x || std::abs(local.z) > half.y) continue;
+            BeginEdit(terrain);
+            int n = Crater(terrain, t.World, point, radius, depth, paintLayer);
+            CommitEdit(terrain);
+            if (n > 0) dug.push_back(e);
+            changed += n;
+        }
+        // The collider follows the new ground (the mesh redraws by itself: its settings changed).
+        if (Physics3DWorld* physics = scene.GetPhysics3D())
+            for (Entity e : dug) physics->RefreshShape(e);
         return changed;
     }
 

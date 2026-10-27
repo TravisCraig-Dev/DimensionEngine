@@ -2,6 +2,7 @@
 #include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Physics/Cloth.h"
 #include "Dimension/Physics/Water.h"
+#include "Dimension/Physics/Wind.h"
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
@@ -1216,6 +1217,52 @@ namespace Dimension
         m_Impl->Vehicles.push_back({ e, constraint });
     }
 
+    void Physics3DWorld::UpdateWind(float dt)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        if (dt <= 0.0f) return;
+        Wind::Field field = Wind::Gather(m_Scene, m_Scene.GetTime());
+        if (field.Empty()) return;
+        auto& lockInterface = m_Impl->System.GetBodyLockInterface();
+        // Rigidbodies: air drag by their cross-section (a quarter of their bounding box's surface).
+        for (auto [e, rb, t] : reg.ViewOf<RigidbodyComponent, TransformComponent>())
+        {
+            if (rb.RuntimeBody == 0xFFFFFFFF || rb.Type != BodyType::Dynamic || !t.ActiveInHierarchy) continue;
+            JPH::BodyLockWrite lock(lockInterface, JPH::BodyID(rb.RuntimeBody));
+            if (!lock.Succeeded()) continue;
+            JPH::Body& body = lock.GetBody();
+            JPH::AABox box = body.GetWorldSpaceBounds();
+            glm::vec3 size = FromJolt(box.mMax - box.mMin), center = FromJolt(JPH::Vec3(box.GetCenter()));
+            float area = 0.5f * (size.x * size.y + size.y * size.z + size.z * size.x);
+            glm::vec3 force = Wind::DragForce(field.At(center), FromJolt(body.GetLinearVelocity()), area);
+            if (glm::dot(force, force) < 1e-6f) continue;
+            body.AddForce(ToJolt(force));
+            // Wake it only for a push that could move it (over a twentieth of its weight).
+            float invMass = body.GetMotionProperties()->GetInverseMass();
+            float weight = invMass > 0.0f ? 9.81f / invMass : 0.0f;
+            if (!body.IsActive() && glm::length(force) > 0.05f * weight) m_Impl->System.GetBodyInterfaceNoLock().ActivateBody(body.GetID());
+        }
+        // Cloth, soft bodies and ropes: each free point drawn toward the wind's velocity (cloth, being thin and
+        // light, the most).
+        auto blow = [&](JPH::BodyID id, float response) {
+            JPH::BodyLockWrite lock(lockInterface, id);
+            if (!lock.Succeeded()) return;
+            JPH::Body& body = lock.GetBody();
+            auto* mp = static_cast<JPH::SoftBodyMotionProperties*>(body.GetMotionProperties());
+            glm::vec3 origin = FromJolt(JPH::Vec3(body.GetCenterOfMassPosition()));
+            float k = std::min(response * dt, 1.0f);
+            for (auto& v : mp->GetVertices())
+                if (v.mInvMass > 0.0f)
+                {
+                    glm::vec3 velocity = FromJolt(v.mVelocity);
+                    v.mVelocity = ToJolt(velocity + (field.At(origin + FromJolt(v.mPosition)) - velocity) * k);
+                }
+            if (!body.IsActive()) m_Impl->System.GetBodyInterfaceNoLock().ActivateBody(body.GetID());
+        };
+        for (auto& c : m_Impl->Cloths) blow(c.Body, c.IsSoftBody ? 0.3f : 1.5f);
+        for (auto& r : m_Impl->Ropes) blow(r.Body, 0.8f);
+    }
+
     void Physics3DWorld::UpdateHitches(float dt)
     {
         auto& reg = m_Scene.GetRegistry();
@@ -2375,6 +2422,7 @@ namespace Dimension
         UpdateVehicles(false);
         UpdateCloths(dt, false);
         UpdateRopes(dt, false);
+        UpdateWind(dt);
         UpdateWater(dt);
         UpdateBoats(dt);
         UpdateHitches(dt);

@@ -54,6 +54,7 @@ namespace Dimension
         glm::vec4 StartColorA{ 1.0f };
         glm::vec4 StartColorB{ 1.0f };
         float GravityModifier = 0.0f;               // multiples of 9.81 m/s^2 downward
+        float ExternalForces = 0.0f;                // Wind Zones: how fast particles take up the wind (per second; 0 = not at all; CPU systems)
         float Drag = 0.0f;                          // velocity damping per second
         int32_t MaxParticles = 1000;
         ParticleSpace SimulationSpace = ParticleSpace::World;

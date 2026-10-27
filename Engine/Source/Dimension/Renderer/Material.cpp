@@ -26,7 +26,9 @@ namespace Dimension
                 .Field("Blend Mode", &Material::BlendMode).Enum({ "Opaque", "Cutout", "Transparent" })
                 .Field("Alpha Cutoff", &Material::AlphaCutoff).Range(0.0f, 1.0f).Speed(0.01f)
                 .Field("Double Sided", &Material::DoubleSided)
-                .Field("Cast Shadows", &Material::CastShadows);
+                .Field("Cast Shadows", &Material::CastShadows)
+                .Field("Refraction", &Material::Refraction).Range(0.0f, 2.0f).Speed(0.01f)
+                    .Tooltip("Transparent: bends what is seen through it by the surface's normals (water, glass; game views)");
             return f;
         }();
         return fields;

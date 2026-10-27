@@ -369,6 +369,19 @@ void main()
     outColor = vec4(color, m.Flags.x == 2u ? base.a : 1.0);
     outEntity = vEntity;
 #ifdef DIM_OIT
+    // Refraction: the opaque scene behind, looked up where the surface's normal bends the view (more up close), tinted
+    // by the surface's color and covered by it as much as it is opaque. The result hides what is behind.
+    if (m.Emission.w > 0.0 && uScene.Refraction.x > 0.5)
+    {
+        vec3 viewN = mat3(uScene.View) * N;
+        float depth = abs((uScene.View * vec4(vWorldPos, 1.0)).z);
+        vec2 bend = vec2(viewN.x, -viewN.y) * m.Emission.w * 0.06 / max(depth * 0.15, 1.0);
+        vec2 suv = clamp(gl_FragCoord.xy * uScene.Refraction.yz - bend, vec2(0.001), vec2(0.999));
+        vec3 behind = textureLod(uTextures[nonuniformEXT(uint(uScene.Refraction.x) - 1u)], suv, 0.0).rgb;
+        behind *= mix(vec3(1.0), albedo, 0.5);
+        outColor = vec4(mix(behind, color, clamp(base.a, 0.0, 1.0)), 1.0);
+        color = outColor.rgb;
+    }
     float alpha = clamp(outColor.a, 0.0, 1.0);
     float z = abs((uScene.View * vec4(vWorldPos, 1.0)).z);
     float weight = clamp(10.0 / (1e-5 + pow(z / 5.0, 2.0) + pow(z / 200.0, 6.0)), 1e-2, 300.0); // fits half floats

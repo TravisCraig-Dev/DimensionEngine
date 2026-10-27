@@ -7,6 +7,7 @@ namespace Dimension
 {
     struct TerrainComponent;
     struct TerrainPathComponent;
+    class Scene;
     class Texture2D;
 
     // Terrain (with a Mesh Renderer for its smoothness and the like): a height field of Resolution x Resolution
@@ -73,6 +74,14 @@ namespace Dimension
         // object's transform): levels a road or carves a river, and paints its layer. Works on the edit arrays (BeginEdit
         // first, CommitEdit after). Returns how many samples changed.
         int ApplyPath(TerrainComponent& terrain, const glm::mat4& terrainWorld, const TerrainPathComponent& path, const glm::mat4& pathWorld);
+        // A crater (an explosion's, a meteor's) at a world point (`world` is the terrain object's transform): a bowl Radius
+        // across and Depth deep in the middle, a rim of thrown-up earth around it, its ground painted with `paintLayer`
+        // (0 grass ... 3 dirt ... 5 moss; -1 = none) and cleared of trees and grass. Works on the edit arrays (BeginEdit
+        // first, CommitEdit after). Returns how many samples changed.
+        int Crater(TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& point, float radius, float depth, int paintLayer = 3);
+        // Digs a crater into every terrain under the point, at any time (also while playing: the terrain redraws and its
+        // collider is rebuilt). Returns how many samples changed.
+        int DigCrater(Scene& scene, const glm::vec3& point, float radius, float depth, int paintLayer = 3);
         // Hydraulic erosion (the Erode brush): `droplets` raindrops start at random inside the circle (the same `seed`
         // gives the same drops) and run downhill over the heights, picking up sediment where they speed up and the
         // ground falls away, and dropping it where they slow down or climb, which carves gullies and fills basins.

@@ -97,6 +97,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, float> RagdollQuery; // 0 face up (1/0), 1 get-up progress
         public delegate* unmanaged<IntPtr, ulong, float*, int> BreakableBreak; // world point; returns the piece count
         public delegate* unmanaged<IntPtr, ulong, byte*, void> RagdollSetPartial; // bone name ("" = whole body)
+        public delegate* unmanaged<IntPtr, float*, float, float, int, int> TerrainCrater; // world point, radius, depth, paint layer
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

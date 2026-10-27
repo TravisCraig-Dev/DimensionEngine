@@ -14,7 +14,9 @@ namespace Editor
 
     private:
         void DrawNode(Scene& scene, Entity e);
+        void DrawSearchResults(Scene& scene);
         EditorContext& m_Ctx;
+        std::string m_Search;
         Entity m_Renaming = Entity::Null();
         bool m_RenameFocus = false;
         std::string m_RenameBuffer;

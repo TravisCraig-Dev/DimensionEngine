@@ -52,6 +52,8 @@ namespace Dimension
         static int Dent(Scene& scene, Entity e, const glm::vec3& point, const glm::vec3& direction, float depth);
         // Snaps a rope in two between point `segment` and the next (as Break Force and Break Stretch do); once only.
         void SnapRope(Entity e, int segment);
+        // Rebuilds a body's collider from its components (after its mesh, dents or terrain changed).
+        void RefreshShape(Entity e);
         // Breaks a Breakable object into its pieces now, flying apart from `point` (world space). Returns the pieces.
         static std::vector<Entity> Break(Scene& scene, Entity e, const glm::vec3& point);
         // Closest hit along a ray (direction need not be normalized). Triggers are hit too.
@@ -82,13 +84,13 @@ namespace Dimension
         void CreateBody(Entity e);
         // Rebuilds a body's shape from its colliders now (e.g. after its mesh collider's mesh was dented), keeping its
         // motion and joints.
-        void RefreshShape(Entity e);
         void CreateJoint(Entity e);
         void CreateCharacter(Entity e);
         void CreateVehicle(Entity e);
         void CreateCloth(Entity e);
         void UpdateBoats(float dt);
         void UpdateHitches(float dt);
+        void UpdateWind(float dt);
         uint32_t AddRopeBody(Entity e, const glm::vec3& origin, const std::vector<glm::vec3>& points, bool pinStart, bool pinEnd, int brokenAt);
         void CreateRope(Entity e);
         void UpdateRopes(float dt, bool afterStep);
