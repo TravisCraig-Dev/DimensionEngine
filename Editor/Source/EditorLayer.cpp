@@ -14,6 +14,7 @@
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Scene/SceneManager.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/CSharpProject.h>
@@ -148,6 +149,7 @@ namespace Editor
             if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
             if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenPrefabMode(h);
         }
+        m_Ctx.HierarchySearch = m_Options.Search;
         if (!m_Options.SelectEntity.empty())
         {
             // Comma-separated names select several entities; the last one is primary.
@@ -557,6 +559,8 @@ namespace Editor
             options.Selected = m_Ctx.Selected;
             options.Selection = m_Ctx.Selection;
             options.DefaultLight = m_Ctx.InPrefabMode();
+            options.Highlighting = m_Ctx.HierarchySearch.find_first_not_of(' ') != std::string::npos;
+            if (options.Highlighting) options.Highlight = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
             m_SceneRenderer.Render(cmd, scene, cam, *m_SceneTarget, options);
         }
         if (m_GameViewVisible)

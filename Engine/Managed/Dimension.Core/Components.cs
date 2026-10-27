@@ -537,6 +537,60 @@ namespace Dimension
         public Vector3 Velocity { get { Vector3 v; float vs; Native.Api.CharacterState(Entity.Scene, Entity.Id, (float*)&v, &vs); return v; } }
     }
 
+    public enum NavMeshPathStatus { Complete = 0, Partial = 1, Invalid = 2 }
+
+    /// <summary>Walks the baked navigation mesh (NavMesh Surface) to a destination, steering around other agents.
+    /// Its other settings (Acceleration, Angular Speed, ...) are read and set with GetFloat/SetFloat.</summary>
+    public unsafe class NavMeshAgent : Component
+    {
+        internal override string NativeName => "NavMesh Agent";
+        private float Op(int op, Vector3 v = default) => Native.Api.NavAgent(Entity.Scene, Entity.Id, op, (float*)&v);
+        /// <summary>Finds a path there and starts walking. False when there is no way at all.</summary>
+        public bool SetDestination(Vector3 target) => Op(0, target) != 0.0f;
+        public Vector3 Destination { get { Vector3 v; Native.Api.NavAgent(Entity.Scene, Entity.Id, 9, (float*)&v); return v; } set => SetDestination(value); }
+        public Vector3 Velocity { get { Vector3 v; Native.Api.NavAgent(Entity.Scene, Entity.Id, 1, (float*)&v); return v; } }
+        /// <summary>Distance left along the path.</summary>
+        public float RemainingDistance => Op(2);
+        public bool HasPath => Op(3) != 0.0f;
+        public NavMeshPathStatus PathStatus => (NavMeshPathStatus)(int)Op(4);
+        /// <summary>Holds it where it is (keeping its path) while true.</summary>
+        public bool IsStopped { get => Op(5) != 0.0f; set => Op(6, new Vector3(value ? 1 : 0, 0, 0)); }
+        /// <summary>True once it has a path and is within Stopping Distance of its end.</summary>
+        public bool HasArrived => HasPath && RemainingDistance <= GetFloat("Stopping Distance") + 0.05f;
+        public void ResetPath() => Op(7);
+        /// <summary>Moves it straight to the nearest point on the mesh to `position`.</summary>
+        public bool Warp(Vector3 position) => Op(8, position) != 0.0f;
+        public float Speed { get => GetFloat("Speed"); set => SetFloat("Speed", value); }
+        public float StoppingDistance { get => GetFloat("Stopping Distance"); set => SetFloat("Stopping Distance", value); }
+    }
+
+    /// <summary>Queries on the baked navigation meshes.</summary>
+    public static unsafe class NavMesh
+    {
+        /// <summary>The nearest point on a navigation mesh within maxDistance.</summary>
+        public static bool SamplePosition(Vector3 position, out Vector3 hit, float maxDistance)
+        {
+            Vector3 h;
+            int ok = Native.Api.NavQuery(Native.CurrentScene, 0, (float*)&position, null, maxDistance, (float*)&h, 1);
+            hit = h;
+            return ok != 0;
+        }
+        /// <summary>The corners of the shortest path (from a point on the mesh). Empty when there is none; `partial`
+        /// when it ends as near as it gets to an unreachable `to`.</summary>
+        public static Vector3[] CalculatePath(Vector3 from, Vector3 to, out bool partial)
+        {
+            Vector3* buffer = stackalloc Vector3[256];
+            int n = Native.Api.NavQuery(Native.CurrentScene, 1, (float*)&from, (float*)&to, 0.0f, (float*)buffer, 256);
+            partial = n < 0;
+            var corners = new Vector3[Math.Abs(n)];
+            for (int i = 0; i < corners.Length; ++i) corners[i] = buffer[i];
+            return corners;
+        }
+        public static Vector3[] CalculatePath(Vector3 from, Vector3 to) => CalculatePath(from, to, out _);
+        /// <summary>Bakes every NavMesh Surface again from the colliders as they are now (after the level changed).</summary>
+        public static void Build() => Native.Api.NavQuery(Native.CurrentScene, 2, null, null, 0.0f, null, 0);
+    }
+
     /// <summary>The project's audio mixer groups (Window > Audio Mixer).</summary>
     public static unsafe class AudioMixer
     {

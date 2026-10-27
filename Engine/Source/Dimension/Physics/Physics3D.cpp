@@ -2883,7 +2883,7 @@ namespace Dimension
     }
 
     std::vector<RaycastHit> Physics3DWorld::RaycastAll(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                                                       uint32_t layerMask)
+                                                       uint32_t layerMask, bool everySurface)
     {
         std::vector<RaycastHit> out;
         Physics3DWorld* world = scene.GetPhysics3D();
@@ -2899,7 +2899,7 @@ namespace Dimension
         {
             RaycastHit r;
             r.Hit = world->GetImpl()->Lookup(hit.mBodyID);
-            if (r.Hit.IsNull() || (!out.empty() && out.back().Hit == r.Hit)) continue;
+            if (r.Hit.IsNull() || (!everySurface && !out.empty() && out.back().Hit == r.Hit)) continue;
             r.Distance = hit.mFraction * maxDistance;
             r.Point = origin + dir * hit.mFraction;
             JPH::BodyLockRead lock(system.GetBodyLockInterface(), hit.mBodyID);

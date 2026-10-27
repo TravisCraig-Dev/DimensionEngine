@@ -1,6 +1,8 @@
 #include "Dimension/Renderer/SceneRenderer.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/Material.h"
+#include "Dimension/Scene/LODGroup.h"
+#include "Dimension/Navigation/NavMesh.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Physics/Cloth.h"
@@ -1054,7 +1056,7 @@ namespace Dimension
         CollectText(scene, camera);
         CollectParticles(scene, camera);
         CollectLines(scene, camera);
-        BuildRenderList(scene); // shared by the shadow, depth and main passes below
+        BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
         if (options.EditorOverlays)
         {
             CollectEditorIcons(scene, camera);
@@ -1683,7 +1685,7 @@ namespace Dimension
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 
-    void SceneRenderer::BuildRenderList(Scene& scene)
+    void SceneRenderer::BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options)
     {
         auto& device = RenderDevice::Get();
         auto& reg = scene.GetRegistry();
@@ -1735,11 +1737,32 @@ namespace Dimension
             materialCache.emplace(key, a.Address);
             return a.Address;
         };
-        auto uploadMaterial = [&](const Material& m) { return uploadMaterialGPU(BuildMaterialGPU(m)); };
+        // Scene view search: everything but the matches drawn dark (their colors, emission and terrain layers).
+        std::vector<uint8_t> lit;
+        bool dimming = options.EditorOverlays && options.Highlighting;
+        if (dimming)
+            for (Entity h : options.Highlight)
+            {
+                if (lit.size() <= h.Index) lit.resize(h.Index + 1, 0);
+                lit[h.Index] = 1;
+            }
+        auto dimmed = [&](Entity e) { return dimming && (e.Index >= lit.size() || !lit[e.Index]); };
+        auto dim = [](MaterialGPU g) {
+            g.BaseColor = glm::vec4(glm::vec3(g.BaseColor) * 0.15f + glm::vec3(0.02f), g.BaseColor.a);
+            g.Emission = glm::vec4(0.0f, 0.0f, 0.0f, g.Emission.w);
+            if (g.Flags.z == 1u)
+                for (auto& layer : g.Layers) layer = glm::vec4(glm::vec3(layer) * 0.15f, layer.w);
+            return g;
+        };
+        auto uploadMaterial = [&](const Material& m, bool dark) { return uploadMaterialGPU(dark ? dim(BuildMaterialGPU(m)) : BuildMaterialGPU(m)); };
+        // LOD groups pick their child for this camera (so every pass, shadows too, draws the same one).
+        std::vector<uint8_t> lodHidden;
+        LODGroups::Hidden(scene, camera.Position, camera.Projection, camera.Orthographic, lodHidden);
 
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
-            if (!t.ActiveInHierarchy) continue;
+            if (!t.ActiveInHierarchy || (e.Index < lodHidden.size() && lodHidden[e.Index])) continue;
+            bool dark = dimmed(e);
             // Cloth draws its own grid, with this frame's simulated vertices when playing.
             const ClothComponent* cloth = reg.TryGet<ClothComponent>(e);
             const SoftBodyComponent* soft = cloth ? nullptr : reg.TryGet<SoftBodyComponent>(e);
@@ -1888,10 +1911,10 @@ namespace Dimension
                     const glm::vec4* colors[] = { &terrain->GrassColor, &terrain->RockColor, &terrain->SnowColor,
                                                   &terrain->DirtColor, &terrain->SandColor, &terrain->MossColor };
                     for (int k = 0; k < Terrain::kLayerCount; ++k) gpu.Layers[k] = glm::vec4(glm::vec3(ToLinear(*colors[k])), tiling);
-                    address = uploadMaterialGPU(gpu);
+                    address = uploadMaterialGPU(dark ? dim(gpu) : gpu);
                 }
                 else
-                    address = uploadMaterial(mat);
+                    address = uploadMaterial(mat, dark);
                 if (!address) continue;
                 if (fur)
                 {
@@ -1899,7 +1922,7 @@ namespace Dimension
                     shell.Flags.w = 1u;
                     shell.Layers[0] = glm::vec4(std::max(fur->Density, 1.0f), std::clamp(fur->Thickness, 0.01f, 1.0f), std::max(fur->Droop, 0.0f), fur->WindResponse);
                     shell.Layers[1] = glm::vec4(glm::vec3(fur->TipColor), std::clamp(fur->RootShade, 0.0f, 1.0f));
-                    furMaterials.push_back(uploadMaterialGPU(shell));
+                    furMaterials.push_back(uploadMaterialGPU(dark ? dim(shell) : shell));
                 }
                 bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
                 m_FrameRefracts |= transparent && mat.Refraction > 0.0f;
@@ -1946,6 +1969,7 @@ namespace Dimension
         for (auto [e, terrain, t] : reg.ViewOf<TerrainComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
+            bool dark = dimmed(e);
             const Terrain::DetailInstances& details = Terrain::GetDetails(terrain);
             const auto* terrainRenderer = reg.TryGet<MeshRendererComponent>(e);
             for (int kind = 0; kind < 2; ++kind)
@@ -1979,7 +2003,7 @@ namespace Dimension
                     }
                     if (!mat) mat = &kDefaultMaterial;
                     m_FrameRefracts |= mat->BlendMode == MaterialBlendMode::Transparent && mat->Refraction > 0.0f;
-                    VkDeviceAddress address = uploadMaterial(*mat);
+                    VkDeviceAddress address = uploadMaterial(*mat, dark);
                     if (!address) continue;
                     uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, mat->DoubleSided, 0u }, true);
                     parts.push_back({ sub.IndexOffset, sub.IndexCount, address, mat->BlendMode == MaterialBlendMode::Transparent, mat->DoubleSided,
@@ -4050,6 +4074,60 @@ namespace Dimension
                     DrawLine(b, b - f * 0.35f + u * 0.2f, color);
                 }
             }
+        }
+        // Navigation: the baked mesh (links between its spots, its edges brighter), an agent's room and path.
+        auto drawNavMesh = [&](const NavMeshData& m) {
+            const glm::vec4 fill(0.35f, 0.7f, 1.0f, 0.3f), edge(0.45f, 0.85f, 1.0f, 0.95f);
+            const glm::vec3 lift(0.0f, 0.04f, 0.0f);
+            int n = m.NodeCount();
+            bool interior = n <= 40000; // big meshes: only their edges
+            float h = m.CellSize * 0.5f;
+            for (int a = 0; a < n; ++a)
+            {
+                glm::vec3 p = m.NodePosition(a) + lift;
+                for (int d = 0; d < 4; ++d)
+                {
+                    int b = m.Links[(size_t)a * 8 + d];
+                    if (b >= 0)
+                    {
+                        if (interior && d < 2) DrawLine(p, m.NodePosition(b) + lift, fill);
+                        continue;
+                    }
+                    glm::vec3 out(Navigation::kDirX[d] * h, 0.0f, Navigation::kDirZ[d] * h), side(Navigation::kDirZ[d] * h, 0.0f, Navigation::kDirX[d] * h);
+                    DrawLine(p + out - side, p + out + side, edge);
+                }
+            }
+        };
+        if (auto* surface = reg.TryGet<NavMeshSurfaceComponent>(sel))
+        {
+            DrawWireBox(glm::translate(glm::mat4(1.0f), t.GetWorldPosition()), glm::vec3(0.0f), surface->Size * 0.5f, { 0.45f, 0.85f, 1.0f, 0.5f });
+            if (surface->ShowNavMesh && surface->Data) drawNavMesh(*surface->Data);
+        }
+        if (auto* agent = reg.TryGet<NavMeshAgentComponent>(sel))
+        {
+            const glm::vec4 color(0.45f, 1.0f, 0.6f, 1.0f);
+            glm::vec3 foot = t.GetWorldPosition() - glm::vec3(0.0f, agent->BaseOffset, 0.0f);
+            glm::mat4 at = glm::translate(glm::mat4(1.0f), foot);
+            DrawWireCircle(at, glm::vec3(0.0f), agent->Radius, color, 1);
+            DrawWireCircle(at, glm::vec3(0.0f, agent->Height, 0.0f), agent->Radius, color, 1);
+            for (glm::vec3 d : { glm::vec3(agent->Radius, 0, 0), glm::vec3(-agent->Radius, 0, 0), glm::vec3(0, 0, agent->Radius), glm::vec3(0, 0, -agent->Radius) })
+                DrawLine(foot + d, foot + d + glm::vec3(0.0f, agent->Height, 0.0f), color * glm::vec4(1, 1, 1, 0.5f));
+            if (agent->HasDestination && agent->Corner < agent->Path.size())
+            {
+                const glm::vec4 path(1.0f, 0.85f, 0.3f, 1.0f);
+                const glm::vec3 lift(0.0f, 0.08f, 0.0f);
+                DrawLine(foot + lift, agent->Path[agent->Corner] + lift, path);
+                for (size_t k = agent->Corner; k + 1 < agent->Path.size(); ++k) DrawLine(agent->Path[k] + lift, agent->Path[k + 1] + lift, path);
+                DrawWireCircle(glm::translate(glm::mat4(1.0f), agent->Path.back() + lift), glm::vec3(0.0f), 0.25f, path, 1);
+            }
+            if (agent->Mesh && !reg.Has<NavMeshSurfaceComponent>(sel)) drawNavMesh(*agent->Mesh);
+        }
+        if (reg.Has<LODGroupComponent>(sel))
+        {
+            // The size the group measures against the screen, as a sphere around its children.
+            glm::vec3 center;
+            float size = LODGroups::WorldSize(scene, sel, &center);
+            DrawWireSphere(glm::translate(glm::mat4(1.0f), center), glm::vec3(0.0f), size * 0.5f, { 1.0f, 0.75f, 0.35f, 0.6f });
         }
         if (auto* water = reg.TryGet<WaterVolumeComponent>(sel))
         {

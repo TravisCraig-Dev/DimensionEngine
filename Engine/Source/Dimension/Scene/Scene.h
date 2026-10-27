@@ -141,6 +141,9 @@ namespace Dimension
 
         void UpdateTransforms();
         Entity GetPrimaryCamera();
+        // A 3D physics world for queries only (raycasts against the colliders; nothing is simulated), on a scene that
+        // is not playing: the navigation bake uses one on a copy of the scene being edited.
+        void StartQueryPhysics();
 
         Registry& GetRegistry() { return m_Registry; }
         const Registry& GetRegistry() const { return m_Registry; }

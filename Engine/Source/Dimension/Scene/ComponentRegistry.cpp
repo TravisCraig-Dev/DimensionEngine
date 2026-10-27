@@ -668,6 +668,26 @@ namespace Dimension
             .Field("Turbulence", &WindZoneComponent::Turbulence).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("Swirls, as a fraction of Main")
             .Field("Pulse Magnitude", &WindZoneComponent::PulseMagnitude).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("How much the gusts swell it")
             .Field("Pulse Frequency", &WindZoneComponent::PulseFrequency).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Gusts per second");
+        Register<NavMeshSurfaceComponent>("NavMesh Surface", "Navigation")
+            .Field("Size", &NavMeshSurfaceComponent::Size).Speed(0.1f).Tooltip("The box baked, around the object (meters; not rotated)")
+            .Field("Cell Size", &NavMeshSurfaceComponent::CellSize).Range(0.05f, 4.0f).Speed(0.01f).Tooltip("Meters per sample: smaller follows walls closer but bakes slower")
+            .Field("Agent Radius", &NavMeshSurfaceComponent::AgentRadius).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Agents keep this far from walls and edges")
+            .Field("Agent Height", &NavMeshSurfaceComponent::AgentHeight).Range(0.1f, 20.0f).Speed(0.01f).Tooltip("Headroom needed to walk under things")
+            .Field("Max Slope", &NavMeshSurfaceComponent::MaxSlope).Range(0.0f, 89.0f).Speed(0.5f).Tooltip("Steepest walkable ground, degrees")
+            .Field("Step Height", &NavMeshSurfaceComponent::StepHeight).Range(0.0f, 5.0f).Speed(0.01f).Tooltip("Highest step walked up")
+            .Field("Show NavMesh", &NavMeshSurfaceComponent::ShowNavMesh);
+        Register<NavMeshAgentComponent>("NavMesh Agent", "Navigation")
+            .Field("Speed", &NavMeshAgentComponent::Speed).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Top speed, m/s")
+            .Field("Angular Speed", &NavMeshAgentComponent::AngularSpeed).Range(0.0f, 3600.0f).Speed(1.0f).Tooltip("Turning, degrees per second")
+            .Field("Acceleration", &NavMeshAgentComponent::Acceleration).Range(0.0f, 1000.0f).Speed(0.1f)
+            .Field("Stopping Distance", &NavMeshAgentComponent::StoppingDistance).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Stops this far from the destination")
+            .Field("Auto Braking", &NavMeshAgentComponent::AutoBraking).Tooltip("Slows down to arrive instead of overshooting")
+            .Field("Radius", &NavMeshAgentComponent::Radius).Range(0.01f, 10.0f).Speed(0.01f).Tooltip("Room it takes among other agents")
+            .Field("Height", &NavMeshAgentComponent::Height).Range(0.01f, 20.0f).Speed(0.01f)
+            .Field("Base Offset", &NavMeshAgentComponent::BaseOffset).Speed(0.01f).Tooltip("How far its object stands above the ground")
+            .Field("Obstacle Avoidance", &NavMeshAgentComponent::ObstacleAvoidance).Tooltip("Steers around other agents")
+            .Field("Avoidance Priority", &NavMeshAgentComponent::AvoidancePriority).Range(0.0f, 99.0f).Tooltip("Gives way to agents with a lower number")
+            .Field("Target", &NavMeshAgentComponent::Target).Tooltip("Keeps walking to this object (optional; scripts can set destinations instead)");
         Register<AudioReverbZoneComponent>("Audio Reverb Zone", "Audio")
             .Field("Min Distance", &AudioReverbZoneComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.05f)
                 .Tooltip("Full reverb while the listener is this close")
@@ -746,6 +766,13 @@ namespace Dimension
             .Field("Bounciness", &CircleCollider2DComponent::Restitution).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Is Trigger", &CircleCollider2DComponent::IsTrigger);
 
+        Register<LODGroupComponent>("LOD Group", "Rendering")
+            .Field("LOD 1 Below", &LODGroupComponent::LOD1Below).Range(0.0f, 1.0f).Speed(0.005f).Tooltip("Screen height (fraction) below which child 1 shows instead of child 0")
+            .Field("LOD 2 Below", &LODGroupComponent::LOD2Below).Range(0.0f, 1.0f).Speed(0.005f)
+            .Field("LOD 3 Below", &LODGroupComponent::LOD3Below).Range(0.0f, 1.0f).Speed(0.005f)
+            .Field("Cull Below", &LODGroupComponent::CullBelow).Range(0.0f, 1.0f).Speed(0.001f).Tooltip("Screen height below which nothing shows")
+            .Field("Size", &LODGroupComponent::Size).Range(0.0f, 10000.0f).Speed(0.05f).Tooltip("World size measured against the screen (0 = the children's bounds)")
+            .Field("Bias", &LODGroupComponent::Bias).Range(0.01f, 10.0f).Speed(0.01f).Tooltip("Above 1 keeps detail farther away");
         Register<RigidbodyComponent>("Rigidbody", "Physics")
             .Field("Body Type", &RigidbodyComponent::Type).Enum({ "Static", "Dynamic", "Kinematic" })
             .Field("Mass", &RigidbodyComponent::Mass).Range(0.001f, 100000.0f).Speed(0.05f)

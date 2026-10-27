@@ -20,6 +20,7 @@
 namespace Dimension
 {
     class ScriptableEntity;
+    struct NavMeshData;
 
     // ---- Core (every entity has these) -------------------------------------
 
@@ -777,6 +778,57 @@ namespace Dimension
         float PulseFrequency = 0.2f;
     };
 
+    // ---- Navigation ------------------------------------------------------------
+
+    // A NavMesh Surface (like Unity's): bakes where agents can walk inside a box Size meters across around the object
+    // (not turned with it) from the colliders there. Only static geometry counts (no dynamic rigidbodies, triggers or
+    // characters). A spot is walkable when its ground is no steeper than Max Slope, Agent Height of headroom is above
+    // it, and it is at least Agent Radius from any edge or wall; neighbouring spots up to Step Height apart join up.
+    // Baked when play starts (and with the Inspector's Bake to preview it, or NavMesh.Build from scripts).
+    struct NavMeshSurfaceComponent
+    {
+        glm::vec3 Size{ 50.0f, 20.0f, 50.0f };
+        float CellSize = 0.25f; // meters per sample
+        float AgentRadius = 0.5f;
+        float AgentHeight = 2.0f;
+        float MaxSlope = 45.0f; // degrees
+        float StepHeight = 0.4f;
+        bool ShowNavMesh = true; // the baked mesh in the Scene view while the object is selected
+        std::shared_ptr<const NavMeshData> Data; // runtime: the baked mesh
+    };
+
+    // A NavMesh Agent (like Unity's): walks the baked navigation mesh to its destination along the shortest path,
+    // at up to Speed (m/s) speeding up and slowing by Acceleration, turning by Angular Speed (degrees/s) to face the
+    // way it goes, slowing to arrive (Auto Braking) Stopping Distance short. Agents steer around each other (Obstacle
+    // Avoidance), giving way to ones of a lower Avoidance Priority number. With a Target it keeps following that
+    // object. It moves its object (keep agents as hierarchy roots), Base Offset above the ground.
+    enum class NavPathStatus : int32_t { Complete = 0, Partial = 1, Invalid = 2 };
+    struct NavMeshAgentComponent
+    {
+        float Speed = 3.5f;
+        float AngularSpeed = 360.0f;
+        float Acceleration = 8.0f;
+        float StoppingDistance = 0.0f;
+        bool AutoBraking = true;
+        float Radius = 0.5f;
+        float Height = 2.0f;
+        float BaseOffset = 0.0f;
+        bool ObstacleAvoidance = true;
+        int32_t AvoidancePriority = 50; // 0 most important - 99 least
+        Entity Target = Entity::Null();
+        // Runtime
+        glm::vec3 Destination{ 0.0f };
+        bool HasDestination = false, PathDirty = false, IsStopped = false;
+        std::vector<glm::vec3> Path; // corners: from where the path was found to the destination
+        size_t Corner = 0;           // the corner it is heading for
+        NavPathStatus PathStatus = NavPathStatus::Invalid;
+        glm::vec3 Velocity{ 0.0f };
+        float RemainingDistance = 0.0f;
+        float RepathTimer = 0.0f;
+        int32_t Node = -1; // where it stands on Mesh (-1 = not placed yet)
+        std::shared_ptr<const NavMeshData> Mesh;
+    };
+
     struct AudioReverbZoneComponent
     {
         float MinDistance = 4.0f;
@@ -859,6 +911,20 @@ namespace Dimension
     };
 
     // ---- Physics 3D ------------------------------------------------------------
+
+    // A LOD Group (like Unity's): its children are levels of detail of one object, child 0 the most detailed. It
+    // shows the one that fits how tall the object looks on screen (its Size over its distance, as a fraction of the
+    // view's height, times Bias): LOD 0 above LOD 1 Below, LOD 1 above LOD 2 Below, LOD 2 above LOD 3 Below, LOD 3
+    // above Cull Below, and nothing below that. Size 0 measures the children's meshes.
+    struct LODGroupComponent
+    {
+        float LOD1Below = 0.5f;
+        float LOD2Below = 0.25f;
+        float LOD3Below = 0.12f;
+        float CullBelow = 0.01f;
+        float Size = 0.0f;
+        float Bias = 1.0f;
+    };
 
     struct RigidbodyComponent
     {

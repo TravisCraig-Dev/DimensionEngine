@@ -25,6 +25,8 @@ namespace Editor
         // `Selected` is the primary (last clicked) entity; `Selection` holds all selected entities.
         Entity Selected = Entity::Null();
         std::vector<Entity> Selection;
+        // The Hierarchy's search (the Scene view dims everything it does not match).
+        std::string HierarchySearch;
         AssetHandle SelectedAsset = AssetHandle::None();
         void Select(Entity e)
         {

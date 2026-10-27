@@ -98,6 +98,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, float*, int> BreakableBreak; // world point; returns the piece count
         public delegate* unmanaged<IntPtr, ulong, byte*, void> RagdollSetPartial; // bone name ("" = whole body)
         public delegate* unmanaged<IntPtr, float*, float, float, int, int> TerrainCrater; // world point, radius, depth, paint layer
+        public delegate* unmanaged<IntPtr, ulong, int, float*, float> NavAgent; // see NavMeshAgent
+        public delegate* unmanaged<IntPtr, int, float*, float*, float, float*, int, int> NavQuery; // see NavMesh
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

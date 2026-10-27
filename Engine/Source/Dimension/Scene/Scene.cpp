@@ -5,6 +5,7 @@
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Physics/Water.h"
+#include "Dimension/Navigation/NavMesh.h"
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/UI/UI.h"
@@ -386,9 +387,24 @@ namespace Dimension
                 anim.FadeDuration = 0.0f;
             }
         for (auto& entry : SystemRegistry::All()) m_Systems.push_back(entry.Create());
+        // Navigation meshes from the colliders as they start (before scripts send agents anywhere).
+        for (auto [e, s] : m_Registry.ViewOf<NavMeshSurfaceComponent>()) s.Data.reset();
+        for (auto [e, a] : m_Registry.ViewOf<NavMeshAgentComponent>())
+        {
+            a.Mesh.reset();
+            a.Node = -1;
+        }
+        Navigation::BakeAll(*this);
         InstantiateScripts();
         for (auto& sys : m_Systems) sys->OnStart(*this);
         m_Audio->Start();
+    }
+
+    void Scene::StartQueryPhysics()
+    {
+        if (m_Running) return;
+        UpdateTransforms();
+        m_Physics3D = MakeScope<Physics3DWorld>(*this);
     }
 
     // ---- Several scenes at runtime -----------------------------------------------------
@@ -437,6 +453,7 @@ namespace Dimension
                 if (m_Physics3D) m_Physics3D->CreateBodiesFor(r);
                 if (m_Audio) m_Audio->CreateSourcesFor(r);
             }
+            Navigation::BakeAll(*this, true); // surfaces the new scene brought
             InstantiateScripts();
         }
         // The active (single-mode) scene comes first, after any persistent objects' entry.
@@ -550,6 +567,7 @@ namespace Dimension
             }
         });
         for (auto& sys : m_Systems) sys->OnUpdate(*this, dt);
+        Navigation::Update(*this, dt);
         UpdateSpriteAnimators(dt);
 
         m_FixedAccumulator += dt;

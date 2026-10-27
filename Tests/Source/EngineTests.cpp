@@ -13,6 +13,8 @@
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Physics/Wind.h>
+#include <Dimension/Navigation/NavMesh.h>
+#include <Dimension/Scene/LODGroup.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
@@ -1813,6 +1815,165 @@ namespace
         CHECK((s1 & 255) > 200); // dirt (the first paint-only layer) at the center
         rt->OnRuntimeStop();
         CHECK(Near(heightAt(scene, 0.0f, 0.0f), before, 1e-4f)); // the edited scene is untouched
+    }
+
+    // A yard for navigation tests: 30 x 30 m of ground, a wall across the middle (z = 0) from x = -15 to 6 with a gap
+    // beyond it, a raised platform at (10, 10) with no way up, and a dynamic crate (not baked in) at (-5, 0, -10).
+    Entity BuildNavYard(Scene& scene)
+    {
+        auto& reg = scene.GetRegistry();
+        auto box = [&](const char* name, glm::vec3 at, glm::vec3 size) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = at;
+            reg.Emplace<BoxColliderComponent>(e).Size = size;
+            return e;
+        };
+        box("Ground", { 0.0f, -0.5f, 0.0f }, { 30.0f, 1.0f, 30.0f });
+        box("Wall", { -4.5f, 1.5f, 0.0f }, { 21.0f, 3.0f, 0.6f });
+        box("Platform", { 10.0f, 0.5f, 10.0f }, { 4.0f, 1.0f, 4.0f });
+        Entity crate = box("Crate", { -5.0f, 0.5f, -10.0f }, { 1.0f, 1.0f, 1.0f });
+        reg.Emplace<RigidbodyComponent>(crate).Mass = 20.0f;
+        Entity surface = scene.CreateEntity("Navigation");
+        auto& s = reg.Emplace<NavMeshSurfaceComponent>(surface);
+        s.Size = { 30.0f, 10.0f, 30.0f };
+        scene.UpdateTransforms();
+        return surface;
+    }
+
+    void TestNavMeshBake()
+    {
+        // Baked while editing (a temporary physics world): open ground walkable, the wall and Agent Radius around it
+        // not, the platform a separate area, the dynamic crate ignored.
+        Scene scene("Yard");
+        Entity surface = BuildNavYard(scene);
+        auto mesh = Navigation::Bake(scene, surface);
+        CHECK(mesh && mesh->NodeCount() > 10000);
+        CHECK(scene.GetPhysics3D() == nullptr); // the edited scene keeps no physics
+        if (!mesh) return;
+        const NavMeshData& m = *mesh;
+        int open = Navigation::Nearest(m, { -5.0f, 0.0f, -5.0f }, 0.2f);
+        CHECK(open >= 0 && Near(m.Heights[open], 0.0f, 0.01f));
+        CHECK(Navigation::Nearest(m, { 0.0f, 0.0f, 0.0f }, 0.5f) < 0);   // in the wall
+        CHECK(Navigation::Nearest(m, { 0.0f, 0.0f, 0.55f }, 0.05f) < 0);  // closer than Agent Radius to it
+        CHECK(Navigation::Nearest(m, { 0.0f, 0.0f, 1.0f }, 0.2f) >= 0);
+        CHECK(Navigation::Nearest(m, { 0.0f, 3.0f, 0.0f }, 0.2f) < 0);   // its top: too narrow
+        int crate = Navigation::Nearest(m, { -5.0f, 0.0f, -10.0f }, 0.2f);
+        CHECK(crate >= 0 && m.Islands[crate] == m.Islands[open]);
+        int platform = Navigation::Nearest(m, { 10.0f, 1.0f, 10.0f }, 0.2f);
+        CHECK(platform >= 0 && Near(m.Heights[platform], 1.0f, 0.01f) && m.Islands[platform] != m.Islands[open]);
+        CHECK(Navigation::Walk(m, open, { -5.0f, -5.0f }, { -5.0f, -3.0f }) && !Navigation::Walk(m, open, { -5.0f, -5.0f }, { -5.0f, 5.0f }));
+
+        // Paths: around the wall's end (Complete), and toward the platform as near as it gets (Partial).
+        std::vector<glm::vec3> corners;
+        CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -5.0f, 0.0f, 5.0f }, corners) == NavPathStatus::Complete);
+        float length = 0.0f, farthestX = -100.0f;
+        for (size_t i = 0; i + 1 < corners.size(); ++i) length += glm::distance(corners[i], corners[i + 1]);
+        for (const glm::vec3& c : corners) farthestX = std::max(farthestX, c.x);
+        CHECK(corners.size() >= 3 && corners.size() < 12 && Near(corners.back(), { -5.0f, 0.0f, 5.0f }, 0.01f));
+        CHECK(farthestX > 6.0f && length > 2.0f * glm::length(glm::vec2(11.5f, 5.0f)) - 0.5f && length < 30.0f);
+        CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { 10.0f, 1.0f, 10.0f }, corners) == NavPathStatus::Partial);
+        CHECK(glm::distance(glm::vec2(corners.back().x, corners.back().z), glm::vec2(10.0f, 10.0f)) < 3.0f && Near(corners.back().y, 0.0f, 0.01f));
+        CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
+    }
+
+    void TestNavMeshAgents()
+    {
+        // Playing (baked as play starts): an agent sent to the far side of the wall walks around its end and arrives;
+        // two agents walking at each other pass without bumping; one with a Target follows it.
+        Scene scene("Yard");
+        BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        auto agent = [&](const char* name, glm::vec3 at) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = at;
+            auto& a = reg.Emplace<NavMeshAgentComponent>(e);
+            a.Speed = 6.0f;
+            a.Acceleration = 20.0f;
+            return e;
+        };
+        Entity walker = agent("Walker", { -5.0f, 0.0f, -5.0f });
+        Entity left = agent("Left", { -9.0f, 0.0f, -8.0f });
+        Entity right = agent("Right", { 9.0f, 0.0f, -8.0f });
+        reg.Get<NavMeshAgentComponent>(left).Speed = reg.Get<NavMeshAgentComponent>(right).Speed = 3.0f;
+        Entity flag = scene.CreateEntity("Flag");
+        reg.Get<TransformComponent>(flag).Position = { 8.0f, 0.0f, -13.0f };
+        Entity follower = agent("Follower", { 0.0f, 0.0f, -12.0f });
+        reg.Get<NavMeshAgentComponent>(follower).Target = flag;
+        reg.Get<NavMeshAgentComponent>(follower).StoppingDistance = 1.0f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        CHECK(Navigation::SetDestination(*rt, walker, { -5.0f, 0.0f, 5.0f }));
+        CHECK(Navigation::SetDestination(*rt, left, { 9.0f, 0.0f, -8.0f }) && Navigation::SetDestination(*rt, right, { -9.0f, 0.0f, -8.0f }));
+        bool throughWall = false;
+        float closest = 100.0f;
+        for (int i = 0; i < 600; ++i)
+        {
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            glm::vec3 p = rr.Get<TransformComponent>(walker).Position;
+            throughWall |= std::abs(p.z) < 0.5f && p.x < 6.0f;
+            closest = std::min(closest, glm::distance(rr.Get<TransformComponent>(left).Position, rr.Get<TransformComponent>(right).Position));
+        }
+        auto& w = rr.Get<NavMeshAgentComponent>(walker);
+        CHECK(!throughWall && Near(rr.Get<TransformComponent>(walker).Position, { -5.0f, 0.0f, 5.0f }, 0.1f) && w.RemainingDistance < 0.1f);
+        CHECK(glm::length(w.Velocity) < 0.2f);
+        CHECK(closest > 0.85f);
+        CHECK(Near(rr.Get<TransformComponent>(left).Position, { 9.0f, 0.0f, -8.0f }, 0.2f) && Near(rr.Get<TransformComponent>(right).Position, { -9.0f, 0.0f, -8.0f }, 0.2f));
+        float toFlag = glm::distance(rr.Get<TransformComponent>(follower).Position, { 8.0f, 0.0f, -13.0f });
+        CHECK(toFlag > 0.9f && toFlag < 1.2f);
+        // The flag moves: the follower goes after it.
+        rr.Get<TransformComponent>(flag).Position = { -10.0f, 0.0f, -13.0f };
+        for (int i = 0; i < 360; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(glm::distance(rr.Get<TransformComponent>(follower).Position, { -10.0f, 0.0f, -13.0f }) < 1.2f);
+        // Facing the way it walked (forward -Z turned toward -X: yaw +90 degrees).
+        CHECK(Near(rr.Get<TransformComponent>(follower).Rotation.y, glm::half_pi<float>(), 0.2f));
+        glm::vec3 sample;
+        CHECK(Navigation::SamplePosition(*rt, { 3.0f, 2.0f, 3.0f }, 3.0f, sample) && Near(sample, { 3.0f, 0.0f, 3.0f }, 0.01f));
+        CHECK(!Navigation::SamplePosition(*rt, { 3.0f, 8.0f, 3.0f }, 3.0f, sample));
+        rt->OnRuntimeStop();
+    }
+
+    void TestLODGroups()
+    {
+        // A 2 m object seen by a 60 degree camera covers 1.73 / distance of the view's height: LOD 0 near, LOD 1 from
+        // 3.5 m (below 0.5), LOD 2 from 6.9 m (below 0.25), culled from 173 m (below 0.01; its last child).
+        Scene scene("Rocks");
+        auto& reg = scene.GetRegistry();
+        Entity rock = scene.CreateEntity("Rock");
+        auto& lod = reg.Emplace<LODGroupComponent>(rock);
+        lod.Size = 2.0f;
+        Entity l0 = scene.CreateEntity("Rock_LOD0", rock), l1 = scene.CreateEntity("Rock_LOD1", rock), l2 = scene.CreateEntity("Rock_LOD2", rock);
+        Entity moss = scene.CreateEntity("Moss", l0);
+        scene.UpdateTransforms();
+        glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+        auto at = [&](float d) { return LODGroups::Choose(scene, rock, { 0.0f, 0.0f, d }, proj, false); };
+        float h = 0.0f;
+        CHECK(LODGroups::Choose(scene, rock, { 0.0f, 0.0f, 2.0f }, proj, false, &h) == 0 && Near(h, 0.866f, 0.01f));
+        CHECK(at(3.0f) == 0 && at(4.0f) == 1 && at(6.5f) == 1 && at(7.5f) == 2 && at(150.0f) == 2 && at(200.0f) == -1);
+        lod.Bias = 2.0f; // keeps detail twice as far
+        CHECK(at(6.5f) == 0 && at(7.5f) == 1);
+        lod.Bias = 1.0f;
+        std::vector<uint8_t> hidden;
+        LODGroups::Hidden(scene, { 0.0f, 0.0f, 5.0f }, proj, false, hidden);
+        auto isHidden = [&](Entity e) { return e.Index < hidden.size() && hidden[e.Index]; };
+        CHECK(isHidden(l0) && isHidden(moss) && !isHidden(l1) && isHidden(l2) && !isHidden(rock));
+        // Orthographic: by the view's height alone (a 10 m tall view: 2 m is 0.2 of it).
+        glm::mat4 ortho = glm::ortho(-8.9f, 8.9f, -5.0f, 5.0f, 0.1f, 100.0f);
+        CHECK(LODGroups::Choose(scene, rock, { 0.0f, 0.0f, 50.0f }, ortho, true, &h) == 2 && Near(h, 0.2f, 1e-3f));
+        // Size 0: the children's meshes (unit cubes, one of them 3 m tall).
+        fs::path assets = fs::temp_directory_path() / "dimension_lod" / "Assets";
+        std::error_code ec;
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        lod.Size = 0.0f;
+        reg.Emplace<MeshRendererComponent>(l0).Mesh = AssetManager::kCube;
+        reg.Emplace<MeshRendererComponent>(l1).Mesh = AssetManager::kCube;
+        reg.Get<TransformComponent>(l1).Scale = { 1.0f, 3.0f, 1.0f };
+        scene.UpdateTransforms();
+        CHECK(Near(LODGroups::WorldSize(scene, rock), 3.0f, 1e-3f));
+        AssetManager::Shutdown();
     }
 
     void TestSoftBuoyancy()
@@ -7483,6 +7644,9 @@ int main(int argc, char** argv)
     Run("Scene search", TestSceneSearch);
     Run("Wind zones", TestWindZones);
     Run("Terrain crater", TestTerrainCrater);
+    Run("NavMesh bake", TestNavMeshBake);
+    Run("NavMesh agents", TestNavMeshAgents);
+    Run("LOD groups", TestLODGroups);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

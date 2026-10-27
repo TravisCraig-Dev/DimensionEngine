@@ -21,12 +21,12 @@ namespace Editor
 
         // Search: a flat list of the matching objects instead of the tree.
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##search", "Search (name, t:Type, tag:Tag)", &m_Search);
+        ImGui::InputTextWithHint("##search", "Search (name, t:Type, tag:Tag)", &m_Ctx.HierarchySearch);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Words must all match: a plain word is part of the name, t:Rigidbody (or t:MeshRenderer,\n"
                               "or a script class) a component the object has, tag:Player its tag. Esc clears.");
-        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_Search.clear();
-        if (!m_Search.empty())
+        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_Ctx.HierarchySearch.clear();
+        if (!m_Ctx.HierarchySearch.empty())
         {
             DrawSearchResults(scene);
             ImGui::End();
@@ -121,7 +121,7 @@ namespace Editor
     void HierarchyPanel::DrawSearchResults(Scene& scene)
     {
         auto& reg = scene.GetRegistry();
-        std::vector<Entity> found = SceneSearch::Find(scene, m_Search);
+        std::vector<Entity> found = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
         ImGui::TextDisabled("%zu found", found.size());
         ImGui::SameLine();
         if (ImGui::SmallButton("Select All"))

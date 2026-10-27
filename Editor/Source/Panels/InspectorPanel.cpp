@@ -10,6 +10,7 @@
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/PathPlacer.h>
+#include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Audio/AudioEngine.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Audio/AudioMixer.h>
@@ -497,6 +498,33 @@ namespace Editor
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         ImGui::TextDisabled(target.IsNull() ? "(no terrain in the scene)" : "into '%s'", reg.Get<TagComponent>(target.IsNull() ? e : target).Name.c_str());
+                    }
+                    if (info.TypeId == GetComponentTypeId<NavMeshSurfaceComponent>())
+                    {
+                        // Preview the bake (play bakes again from the colliders as they start).
+                        auto& surface = *static_cast<NavMeshSurfaceComponent*>(info.Get(scene, e));
+                        if (ImGui::Button("Bake")) Navigation::Bake(scene, e);
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(!surface.Data);
+                        if (ImGui::Button("Clear##navmesh")) surface.Data.reset();
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        if (surface.Data)
+                        {
+                            int islands = 0;
+                            for (int id : surface.Data->Islands) islands = std::max(islands, id + 1);
+                            ImGui::TextDisabled("%d spots, %d area%s", surface.Data->NodeCount(), islands, islands == 1 ? "" : "s");
+                        }
+                        else
+                            ImGui::TextDisabled("(not baked; play bakes it)");
+                    }
+                    if (info.TypeId == GetComponentTypeId<LODGroupComponent>())
+                    {
+                        // Which child is which level.
+                        const auto& children = scene.GetChildren(e);
+                        if (children.empty()) ImGui::TextDisabled("Add the levels as children: the first is LOD 0 (most detailed).");
+                        for (size_t i = 0; i < children.size(); ++i)
+                            ImGui::TextDisabled(i < 4 ? "LOD %zu: %s" : "(unused) %zu: %s", i, reg.Get<TagComponent>(children[i]).Name.c_str());
                     }
                     if (info.TypeId == GetComponentTypeId<PathPlacerComponent>())
                     {

@@ -60,8 +60,9 @@ namespace Dimension
         static RaycastHit Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                                   uint32_t layerMask = Physics::kDefaultQueryMask);
         // Every body along a ray, nearest first (one hit per body; a ray starting inside a body hits it at distance 0).
+        // everySurface: each surface crossed instead (a mesh's floors one above the other each give a hit).
         static std::vector<RaycastHit> RaycastAll(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                                                  uint32_t layerMask = Physics::kDefaultQueryMask);
+                                                  uint32_t layerMask = Physics::kDefaultQueryMask, bool everySurface = false);
         // Entities whose colliders overlap a sphere / an oriented box.
         static std::vector<Entity> OverlapSphere(Scene& scene, const glm::vec3& center, float radius,
                                                  uint32_t layerMask = Physics::kDefaultQueryMask);

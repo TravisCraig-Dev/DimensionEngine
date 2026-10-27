@@ -36,6 +36,9 @@ namespace Dimension
         bool ProbeCapture = false;   // internal: HDR scene only, no post or probes (reflection probe faces)
         Entity Selected = Entity::Null();          // primary selection (camera frustum, light gizmos)
         std::vector<Entity> Selection;             // all selected entities (outlines)
+        // Scene view search: while Highlighting, meshes of objects not in Highlight are drawn dimmed.
+        bool Highlighting = false;
+        std::vector<Entity> Highlight;
     };
 
     // Directional shadow cascades for one frame.
@@ -223,7 +226,7 @@ namespace Dimension
         VkDeviceAddress m_GpuClusterCellsAddress = 0, m_GpuClusterIndicesAddress = 0;
         bool CullLightsOnGpu(VkCommandBuffer cmd, const void* uniforms, size_t size);
         std::vector<uint32_t> m_VisibleParts, m_SortedParts;
-        void BuildRenderList(Scene& scene);
+        void BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options);
 
         // Reflection probes: GPU images per probe entity, captured on demand and listed for this frame's uniforms.
         struct ProbeResources

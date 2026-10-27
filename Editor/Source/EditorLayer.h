@@ -24,6 +24,7 @@ namespace Editor
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
         int Theme = -1;           // --theme dark|light|midnight: this session only (preferences stay unchanged)
         int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
+        std::string Search;       // --search "query": start with this Hierarchy search
         bool VisualizeNavigation = false; // Game view overlay of UI navigation links (--visualize-nav starts with it on)
         bool WaitForDebugger = false;     // --wait-for-debugger: wait up to 60 s for a C# debugger before loading scripts
         bool BuildSucceeded = false; // result of the batch build

@@ -9,6 +9,7 @@
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Audio/Microphone.h"
 #include "Dimension/Terrain/Terrain.h"
+#include "Dimension/Navigation/NavMesh.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
@@ -126,6 +127,12 @@ namespace Dimension
             int (*BreakableBreak)(void*, uint64_t, const float*);              // world point; returns the piece count
             void (*RagdollSetPartial)(void*, uint64_t, const char*);           // bone name ("" = whole body)
             int (*TerrainCrater)(void*, const float*, float, float, int);      // world point, radius, depth, paint layer
+            // NavMesh Agent: 0 set destination (v), 1 velocity (out v), 2 remaining distance, 3 has path, 4 path status,
+            // 5 is stopped, 6 set stopped (v[0]), 7 reset path, 8 warp (v), 9 destination (out v)
+            float (*NavAgent)(void*, uint64_t, int, float*);
+            // 0 sample position (a within maxDistance -> out), 1 path a -> b (corners into out, up to maxOut; returns the
+            // count, negative when partial), 2 bake every surface again
+            int (*NavQuery)(void*, int, const float*, const float*, float, float*, int);
         };
 
         // Background scene loads started from C#, by id.
@@ -600,6 +607,47 @@ namespace Dimension
             };
             a.RagdollSetPartial = [](void* s, uint64_t e, const char* bone) {
                 if (auto* r = Comp<RagdollComponent>(s, e)) r->PartialRoot = bone ? bone : "";
+            };
+            a.NavAgent = [](void* s, uint64_t e, int op, float* v) -> float {
+                auto* agent = Comp<NavMeshAgentComponent>(s, e);
+                if (!agent) return 0.0f;
+                Scene& scene = S(s);
+                switch (op)
+                {
+                case 0: return Navigation::SetDestination(scene, Unpack(e), { v[0], v[1], v[2] }) ? 1.0f : 0.0f;
+                case 1: std::memcpy(v, &agent->Velocity, 12); return 1.0f;
+                case 2: return agent->RemainingDistance;
+                case 3: return agent->HasDestination && !agent->Path.empty() ? 1.0f : 0.0f;
+                case 4: return (float)agent->PathStatus;
+                case 5: return agent->IsStopped ? 1.0f : 0.0f;
+                case 6: agent->IsStopped = v[0] != 0.0f; return 1.0f;
+                case 7: Navigation::ResetPath(scene, Unpack(e)); return 1.0f;
+                case 8: return Navigation::Warp(scene, Unpack(e), { v[0], v[1], v[2] }) ? 1.0f : 0.0f;
+                case 9: std::memcpy(v, &agent->Destination, 12); return 1.0f;
+                default: return 0.0f;
+                }
+            };
+            a.NavQuery = [](void* s, int op, const float* pa, const float* pb, float maxDistance, float* out, int maxOut) -> int {
+                if (!s) return 0;
+                Scene& scene = S(s);
+                if (op == 0)
+                {
+                    glm::vec3 hit;
+                    if (!Navigation::SamplePosition(scene, { pa[0], pa[1], pa[2] }, maxDistance, hit)) return 0;
+                    std::memcpy(out, &hit, 12);
+                    return 1;
+                }
+                if (op == 1)
+                {
+                    std::vector<glm::vec3> corners;
+                    NavPathStatus status = Navigation::CalculatePath(scene, { pa[0], pa[1], pa[2] }, { pb[0], pb[1], pb[2] }, corners);
+                    if (status == NavPathStatus::Invalid) return 0;
+                    int n = std::min((int)corners.size(), std::max(maxOut, 0));
+                    if (out && n > 0) std::memcpy(out, corners.data(), (size_t)n * 12);
+                    return status == NavPathStatus::Partial ? -n : n;
+                }
+                if (op == 2) Navigation::BakeAll(scene);
+                return 0;
             };
             a.TerrainCrater = [](void* s, const float* p, float radius, float depth, int layer) -> int {
                 return Terrain::DigCrater(S(s), { p[0], p[1], p[2] }, radius, depth, layer);
