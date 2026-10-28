@@ -662,6 +662,7 @@ namespace Dimension
             .Field("Wave Direction", &WaterVolumeComponent::WaveDirection).Range(-360.0f, 360.0f).Speed(0.5f).Tooltip("Degrees around Y from +X")
             .Field("Steepness", &WaterVolumeComponent::Steepness).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("0 = round waves, 1 = sharp crests")
             .Field("Surface Resolution", &WaterVolumeComponent::SurfaceResolution).Range(2, 256)
+            .Field("Ocean", &WaterVolumeComponent::Ocean).Tooltip("Reaches the horizon all round: no sides, the surface drawn out to the camera's far plane")
                 .Tooltip("Quads per side of the drawn surface (with a Mesh Renderer for its material)")
             .Field("Underwater Color", &WaterVolumeComponent::UnderwaterColor).As(FieldType::Color4).Tooltip("The murk seen through the water")
             .Field("Underwater Fog", &WaterVolumeComponent::UnderwaterFog).Range(0.0f, 10.0f).Speed(0.005f).Tooltip("How thick the murk is, per meter (0 = clear)")

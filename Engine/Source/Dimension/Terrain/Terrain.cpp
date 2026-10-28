@@ -6,6 +6,7 @@
 #include "Dimension/Core/Log.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Navigation/NavMesh.h"
 #include <stb_image.h>
 #include <algorithm>
 #include <cmath>
@@ -884,6 +885,12 @@ namespace Dimension::Terrain
         // The collider follows the new ground (the mesh redraws by itself: its settings changed).
         if (Physics3DWorld* physics = scene.GetPhysics3D())
             for (Entity e : dug) physics->RefreshShape(e);
+        // Navigation meshes over it: the ground there sampled again (a bowl too steep to walk out of becomes a hole).
+        if (!dug.empty())
+        {
+            glm::vec3 reach(radius * 2.0f, std::max(depth, radius) * 2.0f, radius * 2.0f);
+            Navigation::UpdateArea(scene, point - reach, point + reach);
+        }
         return changed;
     }
 

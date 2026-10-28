@@ -1317,6 +1317,7 @@ namespace Dimension
             {
                 if (!wt.ActiveInHierarchy) continue;
                 glm::vec3 center = wt.GetWorldPosition(), scale = glm::max(glm::abs(wt.Scale), glm::vec3(1e-4f)), half = water.Size * scale * 0.5f;
+                if (water.Ocean) half.x = half.z = 1e7f;
                 if (std::abs(p.x - center.x) > half.x || std::abs(p.z - center.z) > half.z || p.y < center.y - half.y) continue;
                 float surface = center.y + half.y;
                 if (Water::HasWaves(water))
@@ -1373,7 +1374,8 @@ namespace Dimension
         {
             if (!wt.ActiveInHierarchy) continue;
             glm::vec3 center = wt.GetWorldPosition(), scale = glm::max(glm::abs(wt.Scale), glm::vec3(1e-4f)), half = water.Size * scale * 0.5f;
-            glm::vec3 lo = center - half, hi = center + half;
+            glm::vec3 lo, hi;
+            Water::Bounds(water, center, scale, lo, hi);
             bool waves = Water::HasWaves(water);
             float waveRoom = waves ? water.WaveHeight * scale.y : 0.0f; // crests rise above the box
             // Dynamic rigidbodies, and the capsules of limp ragdolls.

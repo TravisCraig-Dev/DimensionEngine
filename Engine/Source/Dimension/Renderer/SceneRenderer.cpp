@@ -2,6 +2,7 @@
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Scene/LODGroup.h"
+#include "Dimension/Core/Profiler.h"
 #include "Dimension/Navigation/NavMesh.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Physics/ConvexDecomposition.h"
@@ -984,8 +985,9 @@ namespace Dimension
             for (auto [we, water, wt] : reg.ViewOf<WaterVolumeComponent, TransformComponent>())
             {
                 if (!wt.ActiveInHierarchy) continue;
-                glm::vec3 center = wt.GetWorldPosition(), scale = glm::max(glm::abs(wt.Scale), glm::vec3(1e-4f)), half = water.Size * scale * 0.5f;
-                glm::vec3 lo = center - half, hi = center + half;
+                glm::vec3 center = wt.GetWorldPosition(), scale = glm::max(glm::abs(wt.Scale), glm::vec3(1e-4f));
+                glm::vec3 lo, hi;
+                Water::Bounds(water, center, scale, lo, hi);
                 glm::vec3 nearest = glm::clamp(camera.Position, lo, hi);
                 bool over = camera.Position.x >= lo.x && camera.Position.x <= hi.x && camera.Position.z >= lo.z && camera.Position.z <= hi.z;
                 float score = over ? 0.0f : glm::distance(nearest, camera.Position) + 1.0f;
@@ -1059,7 +1061,10 @@ namespace Dimension
         CollectText(scene, camera);
         CollectParticles(scene, camera);
         CollectLines(scene, camera);
-        BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
+        {
+            DIM_PROFILE_SCOPE("Render List");
+            BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
+        }
         // Occlusion culling: render items hidden behind what an earlier frame drew.
         bool occlusion = s_OcclusionCulling && scene.GetSettings().OcclusionCulling && !options.ProbeCapture;
         m_ItemOccluded.assign(m_RenderItems.size(), 0);
@@ -1863,12 +1868,33 @@ namespace Dimension
             const WaterVolumeComponent* water = cloth || soft ? nullptr : reg.TryGet<WaterVolumeComponent>(e);
             // A rope draws a tube along its points (simulated, or its starting shape in the editor).
             const RopeComponent* rope = cloth || soft || water ? nullptr : reg.TryGet<RopeComponent>(e);
-            Ref<Mesh> mesh = rope ? Rope::TubeMesh(*rope) : cloth ? Cloth::GridMesh(*cloth) : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface
+            const WaterVolumeComponent* ocean = water && water->Ocean ? water : nullptr;
+            Ref<Mesh> mesh = rope ? Rope::TubeMesh(*rope) : cloth ? Cloth::GridMesh(*cloth) : ocean ? Water::OceanMesh() : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface
                                                                                                                    : AssetManager::GetMesh(own ? LODGroups::GeneratedMesh(mr.Mesh, own->Level, reduction) : mr.Mesh);
             if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
             AABB bounds = mesh->GetBounds();
+            if (ocean)
+            {
+                // The ocean's rings around the camera (in the volume's space), out to the camera's far plane.
+                glm::mat4 toLocal = glm::inverse(t.World);
+                glm::vec3 eye = glm::vec3(toLocal * glm::vec4(camera.Position, 1.0f));
+                float farPlane = camera.Orthographic ? 2000.0f : camera.Projection[3][2] / (camera.Projection[2][2] + 1.0f);
+                float scale = std::max(glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[2])));
+                glm::vec2 center = glm::floor(glm::vec2(eye.x, eye.z) * 0.5f) * 2.0f; // in steps, so the rings do not slide along
+                Water::OceanVertices(*ocean, center, std::max(farPlane, 1.0f) * 0.98f / std::max(scale, 1e-4f), scene.GetDisplayTime(), m_OceanVertices);
+                if (TransientAllocation block = device.AllocateTransient(m_OceanVertices.size() * sizeof(Vertex), 16))
+                {
+                    std::memcpy(block.Data, m_OceanVertices.data(), m_OceanVertices.size() * sizeof(Vertex));
+                    item.Vertices = block.Buffer;
+                    item.VertexOffset = block.Offset;
+                }
+                else
+                    continue;
+                bounds.Min = glm::vec3(center.x - 1e6f, -1e3f, center.y - 1e6f);
+                bounds.Max = glm::vec3(center.x + 1e6f, 1e3f, center.y + 1e6f);
+            }
             if (rope)
             {
                 std::vector<glm::vec3> points = rope->SimulatedPoints;
@@ -1897,7 +1923,7 @@ namespace Dimension
             // Simulated vertices (cloth, soft bodies, dents) replace the mesh's, on top of its UVs and tangents.
             const DeformableComponent* dented = cloth || soft || water || rope || terrainRt ? nullptr : reg.TryGet<DeformableComponent>(e);
             if (dented && dented->DentedPositions.empty()) dented = nullptr;
-            const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : water ? &water->SimulatedPositions
+            const std::vector<glm::vec3>* simPositions = cloth ? &cloth->SimulatedPositions : soft ? &soft->SimulatedPositions : water && !ocean ? &water->SimulatedPositions
                                                        : dented ? &dented->DentedPositions : nullptr;
             const std::vector<glm::vec3>* simNormals = cloth ? &cloth->SimulatedNormals : soft ? &soft->SimulatedNormals : water ? &water->SimulatedNormals
                                                      : dented ? &dented->DentedNormals : nullptr;
@@ -1947,7 +1973,7 @@ namespace Dimension
             // Animator they render in bind pose.
             const AnimatorComponent* animator = mesh->IsSkinned() ? reg.TryGet<AnimatorComponent>(e) : nullptr;
             bool skinned = animator && animator->SkinMatrices.size() == mesh->GetSkeleton()->Joints.size() && mesh->GetSkinAddress();
-            item.AlwaysVisible = skinned;
+            item.AlwaysVisible = skinned || ocean;
             if (skinned)
             {
                 size_t bytes = animator->SkinMatrices.size() * sizeof(glm::mat4);

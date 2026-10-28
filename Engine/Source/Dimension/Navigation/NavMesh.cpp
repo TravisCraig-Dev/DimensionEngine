@@ -217,16 +217,27 @@ namespace Dimension
                     }
             }
 
-            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& s, const glm::vec3& center)
+            // A surface's grid (cell size, columns, corner) for where it stands now.
+            void GridOf(const NavMeshSurfaceComponent& s, const glm::vec3& center, NavMeshData& m)
+            {
+                float c = std::max(s.CellSize, 0.05f);
+                glm::vec3 size = glm::max(s.Size, glm::vec3(0.1f));
+                m.CellSize = c;
+                m.Width = std::clamp((int)std::ceil(size.x / c), 1, 4096);
+                m.Depth = std::clamp((int)std::ceil(size.z / c), 1, 4096);
+                m.Origin = { center.x - m.Width * c * 0.5f, center.z - m.Depth * c * 0.5f };
+            }
+
+            // Bakes a surface. With `previous` (the same grid), only the columns in `region` (x0, z0, x1, z1) are sampled
+            // again; the others keep previous's surfaces.
+            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& s, const glm::vec3& center,
+                                                const NavMeshData* previous = nullptr, glm::ivec4 region = glm::ivec4(0))
             {
                 auto& reg = scene.GetRegistry();
                 auto m = std::make_shared<NavMeshData>();
-                float c = std::max(s.CellSize, 0.05f);
+                GridOf(s, center, *m);
+                float c = m->CellSize;
                 glm::vec3 size = glm::max(s.Size, glm::vec3(0.1f));
-                m->CellSize = c;
-                m->Width = std::clamp((int)std::ceil(size.x / c), 1, 4096);
-                m->Depth = std::clamp((int)std::ceil(size.z / c), 1, 4096);
-                m->Origin = { center.x - m->Width * c * 0.5f, center.z - m->Depth * c * 0.5f };
                 m->AgentRadius = std::max(s.AgentRadius, 0.0f);
                 m->AgentHeight = std::max(s.AgentHeight, 0.1f);
                 m->StepHeight = std::max(s.StepHeight, 0.0f);
@@ -264,11 +275,19 @@ namespace Dimension
 
                 // Every column: the surfaces under its center, top down. A surface is walkable when it is flat enough,
                 // nothing seen above it is within Agent Height, and a ray up finds no underside (or solid) that close.
-                m->ColumnStart.reserve((size_t)m->Width * m->Depth + 1);
+                m->RawStart.reserve((size_t)m->Width * m->Depth + 1);
+                if (previous && previous->RawStart.size() != (size_t)m->Width * m->Depth + 1) previous = nullptr;
                 for (int z = 0; z < m->Depth; ++z)
                     for (int x = 0; x < m->Width; ++x)
                     {
-                        m->ColumnStart.push_back((uint32_t)m->Heights.size());
+                        m->RawStart.push_back((uint32_t)m->RawHeights.size());
+                        if (previous && (x < region.x || z < region.y || x > region.z || z > region.w))
+                        {
+                            int col = z * m->Width + x;
+                            m->RawHeights.insert(m->RawHeights.end(), previous->RawHeights.begin() + previous->RawStart[col],
+                                                 previous->RawHeights.begin() + previous->RawStart[col + 1]);
+                            continue;
+                        }
                         glm::vec3 p(m->Origin.x + (x + 0.5f) * c, top, m->Origin.y + (z + 0.5f) * c);
                         float above = kInf;
                         for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, p, down, size.y, Physics::kDefaultQueryMask, true))
@@ -287,11 +306,16 @@ namespace Dimension
                                     break;
                                 }
                             if (blocked || notWalkable(h.Point)) continue;
-                            m->Heights.push_back(y);
-                            m->Columns.push_back(z * m->Width + x);
+                            m->RawHeights.push_back(y);
                         }
                     }
-                m->ColumnStart.push_back((uint32_t)m->Heights.size());
+                m->RawStart.push_back((uint32_t)m->RawHeights.size());
+                // The spots: every surface found.
+                m->ColumnStart = m->RawStart;
+                m->Heights = m->RawHeights;
+                m->Columns.resize(m->Heights.size());
+                for (size_t col = 0; col + 1 < m->RawStart.size(); ++col)
+                    for (uint32_t a = m->RawStart[col]; a < m->RawStart[col + 1]; ++a) m->Columns[a] = (int32_t)col;
                 BuildLinks(*m);
 
                 // Each spot's clearance: how far it is from an edge along the mesh (a node missing a side is half a cell
@@ -830,6 +854,64 @@ namespace Dimension
             return m;
         }
 
+        namespace
+        {
+            // A surface's new mesh; agents find their place on it again.
+            void Install(Scene& scene, NavMeshSurfaceComponent& surface, std::shared_ptr<NavMeshData> data)
+            {
+                surface.Data = surface.Baked = data;
+                surface.CarveKey = 0;
+                for (auto [a, agent] : scene.GetRegistry().ViewOf<NavMeshAgentComponent>())
+                {
+                    agent.Mesh.reset();
+                    agent.Node = -1;
+                    if (agent.HasDestination) agent.PathDirty = true;
+                }
+            }
+        }
+
+        int UpdateArea(Scene& scene, const glm::vec3& lo, const glm::vec3& hi)
+        {
+            auto& reg = scene.GetRegistry();
+            scene.UpdateTransforms();
+            Ref<Scene> copy; // editing: the colliders in a physics world of a copy
+            int updated = 0;
+            std::vector<Entity> surfaces;
+            for (auto [e, s] : reg.ViewOf<NavMeshSurfaceComponent>()) surfaces.push_back(e);
+            for (Entity e : surfaces)
+            {
+                auto& s = reg.Get<NavMeshSurfaceComponent>(e);
+                glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
+                glm::vec3 half = glm::max(s.Size, glm::vec3(0.1f)) * 0.5f;
+                if (hi.x < center.x - half.x || lo.x > center.x + half.x || hi.z < center.z - half.z || lo.z > center.z + half.z ||
+                    hi.y < center.y - half.y || lo.y > center.y + half.y)
+                    continue;
+                NavMeshData grid;
+                GridOf(s, center, grid);
+                const NavMeshData* previous = s.Baked.get();
+                // Moved or resized since its bake: all of it again.
+                if (previous && (previous->Width != grid.Width || previous->Depth != grid.Depth || previous->CellSize != grid.CellSize ||
+                                 glm::distance(previous->Origin, grid.Origin) > 1e-4f))
+                    previous = nullptr;
+                // The columns over the box, one more all round (their spots' links and room change too).
+                glm::ivec2 a = CellOf(grid, { lo.x, lo.z }) - glm::ivec2(1), b = CellOf(grid, { hi.x, hi.z }) + glm::ivec2(1);
+                glm::ivec4 region(std::max(a.x, 0), std::max(a.y, 0), std::min(b.x, grid.Width - 1), std::min(b.y, grid.Depth - 1));
+                Scene* sampled = &scene;
+                if (!scene.GetPhysics3D())
+                {
+                    if (!copy)
+                    {
+                        copy = scene.Clone();
+                        copy->StartQueryPhysics();
+                    }
+                    sampled = copy.get();
+                }
+                Install(scene, s, BakeIn(*sampled, s, center, previous, region));
+                ++updated;
+            }
+            return updated;
+        }
+
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity e)
         {
             auto& reg = scene.GetRegistry();
@@ -847,14 +929,7 @@ namespace Dimension
                 copy->StartQueryPhysics();
                 data = BakeIn(*copy, *surface, center);
             }
-            surface->Data = surface->Baked = data;
-            surface->CarveKey = 0;
-            for (auto [a, agent] : reg.ViewOf<NavMeshAgentComponent>())
-            {
-                agent.Mesh.reset();
-                agent.Node = -1;
-                if (agent.HasDestination) agent.PathDirty = true;
-            }
+            Install(scene, *surface, data);
             return data;
         }
 

@@ -131,7 +131,7 @@ namespace Dimension
             // 5 is stopped, 6 set stopped (v[0]), 7 reset path, 8 warp (v), 9 destination (out v), 10 on an off-mesh link
             float (*NavAgent)(void*, uint64_t, int, float*);
             // 0 sample position (a within maxDistance -> out), 1 path a -> b (corners into out, up to maxOut; returns the
-            // count, negative when partial), 2 bake every surface again
+            // count, negative when partial), 2 bake every surface again, 3 update the area of box a (center) by b (size)
             int (*NavQuery)(void*, int, const float*, const float*, float, float*, int);
         };
 
@@ -648,6 +648,8 @@ namespace Dimension
                     return status == NavPathStatus::Partial ? -n : n;
                 }
                 if (op == 2) Navigation::BakeAll(scene);
+                if (op == 3) return Navigation::UpdateArea(scene, glm::vec3(pa[0], pa[1], pa[2]) - glm::vec3(pb[0], pb[1], pb[2]) * 0.5f,
+                                                           glm::vec3(pa[0], pa[1], pa[2]) + glm::vec3(pb[0], pb[1], pb[2]) * 0.5f);
                 return 0;
             };
             a.TerrainCrater = [](void* s, const float* p, float radius, float depth, int layer) -> int {

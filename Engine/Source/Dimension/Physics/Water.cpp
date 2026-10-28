@@ -106,6 +106,7 @@ namespace Dimension::Water
         };
         std::mutex s_Mutex;
         std::map<std::tuple<float, float, float, int>, Grid> s_Grids;
+        Ref<Mesh> s_OceanMesh; // released with the grids (before the GPU goes away)
 
         MeshData BuildGrid(const WaterVolumeComponent& water)
         {
@@ -141,6 +142,87 @@ namespace Dimension::Water
         }
     }
 
+    void Bounds(const WaterVolumeComponent& water, const glm::vec3& center, const glm::vec3& scale, glm::vec3& lo, glm::vec3& hi)
+    {
+        glm::vec3 half = water.Size * glm::max(glm::abs(scale), glm::vec3(1e-4f)) * 0.5f;
+        if (water.Ocean) half.x = half.z = 1e7f;
+        lo = center - half;
+        hi = center + half;
+    }
+
+    namespace
+    {
+        constexpr int kOceanRings = 96, kOceanSegments = 192;
+        constexpr float kOceanSpread = 2.4f; // ring k sits at radius * (k / rings)^spread
+
+        // Ring k's vertices, around: index 1 + (k - 1) * segments + s (vertex 0 is the center).
+        uint32_t OceanIndex(int ring, int segment) { return ring == 0 ? 0u : (uint32_t)(1 + (ring - 1) * kOceanSegments + segment % kOceanSegments); }
+    }
+
+    Ref<Mesh> OceanMesh()
+    {
+        std::lock_guard lock(s_Mutex);
+        Ref<Mesh>& mesh = s_OceanMesh;
+        if (mesh) return mesh;
+        std::vector<Vertex> vertices(1 + (size_t)kOceanRings * kOceanSegments);
+        auto place = [](int ring, int segment) {
+            float r = std::pow((float)ring / kOceanRings, kOceanSpread), a = glm::two_pi<float>() * segment / kOceanSegments;
+            return glm::vec3(r * std::cos(a), 0.0f, r * std::sin(a));
+        };
+        vertices[0] = { glm::vec3(0.0f), { 0, 1, 0 }, { 0, 0 }, { 1, 0, 0, 1 } };
+        for (int k = 1; k <= kOceanRings; ++k)
+            for (int s = 0; s < kOceanSegments; ++s) vertices[OceanIndex(k, s)] = { place(k, s), { 0, 1, 0 }, { 0, 0 }, { 1, 0, 0, 1 } };
+        std::vector<uint32_t> indices;
+        // Triangles facing up (+Y), whatever order the corners come in.
+        auto tri = [&](uint32_t a, uint32_t b, uint32_t c) {
+            glm::vec3 n = glm::cross(vertices[b].Position - vertices[a].Position, vertices[c].Position - vertices[a].Position);
+            if (n.y < 0.0f) std::swap(b, c);
+            indices.insert(indices.end(), { a, b, c });
+        };
+        for (int s = 0; s < kOceanSegments; ++s) tri(0, OceanIndex(1, s), OceanIndex(1, s + 1));
+        for (int k = 1; k < kOceanRings; ++k)
+            for (int s = 0; s < kOceanSegments; ++s)
+            {
+                tri(OceanIndex(k, s), OceanIndex(k, s + 1), OceanIndex(k + 1, s));
+                tri(OceanIndex(k, s + 1), OceanIndex(k + 1, s + 1), OceanIndex(k + 1, s));
+            }
+        mesh = MakeRef<Mesh>(MeshData::FromArrays(std::move(vertices), std::move(indices), "Ocean"));
+        return mesh;
+    }
+
+    void OceanVertices(const WaterVolumeComponent& water, glm::vec2 center, float radius, float time, std::vector<Vertex>& out)
+    {
+        Wave waves[kWaves];
+        MakeWaves(water, waves);
+        bool moving = HasWaves(water);
+        float top = TopOf(water);
+        // The waves die down between 6 and 18 wave lengths away.
+        float fadeStart = std::max(water.WaveLength, 0.1f) * 6.0f, fadeEnd = std::max(water.WaveLength, 0.1f) * 18.0f;
+        out.resize(1 + (size_t)kOceanRings * kOceanSegments);
+        for (int k = 0; k <= kOceanRings; ++k)
+        {
+            float r = radius * std::pow((float)k / kOceanRings, kOceanSpread);
+            float strength = moving ? std::clamp((fadeEnd - r) / (fadeEnd - fadeStart), 0.0f, 1.0f) : 0.0f;
+            for (int s = 0; s < (k == 0 ? 1 : kOceanSegments); ++s)
+            {
+                float a = glm::two_pi<float>() * s / kOceanSegments;
+                glm::vec2 rest = center + glm::vec2(std::cos(a), std::sin(a)) * r;
+                Vertex& v = out[OceanIndex(k, s)];
+                v.Position = glm::vec3(rest.x, top, rest.y);
+                v.Normal = { 0.0f, 1.0f, 0.0f };
+                if (strength > 0.0f)
+                {
+                    glm::vec3 n;
+                    glm::vec3 p = DisplaceWith(waves, rest, time, &n, nullptr);
+                    v.Position = glm::vec3(rest.x, top, rest.y) + (p - glm::vec3(rest.x, 0.0f, rest.y)) * strength;
+                    v.Normal = glm::normalize(glm::mix(glm::vec3(0.0f, 1.0f, 0.0f), n, strength));
+                }
+                v.UV = rest * 0.1f; // a texture tiles every 10 m
+                v.Tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
+            }
+        }
+    }
+
     Ref<Mesh> SurfaceMesh(const WaterVolumeComponent& water)
     {
         std::lock_guard lock(s_Mutex);
@@ -157,7 +239,7 @@ namespace Dimension::Water
     {
         for (auto [e, water] : scene.GetRegistry().ViewOf<WaterVolumeComponent>())
         {
-            if (!HasWaves(water))
+            if (!HasWaves(water) || water.Ocean)
             {
                 water.SimulatedPositions.clear();
                 water.SimulatedNormals.clear();
@@ -182,5 +264,6 @@ namespace Dimension::Water
     {
         std::lock_guard lock(s_Mutex);
         s_Grids.clear();
+        s_OceanMesh.reset();
     }
 }

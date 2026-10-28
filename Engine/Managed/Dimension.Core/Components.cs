@@ -594,6 +594,10 @@ namespace Dimension
         public static Vector3[] CalculatePath(Vector3 from, Vector3 to) => CalculatePath(from, to, out _);
         /// <summary>Bakes every NavMesh Surface again from the colliders as they are now (after the level changed).</summary>
         public static void Build() => Native.Api.NavQuery(Native.CurrentScene, 2, null, null, 0.0f, null, 0);
+        /// <summary>After the level changed inside a box (a wall knocked down, a bridge built): the meshes over it sample
+        /// the ground there again, keeping the rest. Returns how many surfaces changed.</summary>
+        public static int UpdateArea(Vector3 center, Vector3 size) =>
+            Native.Api.NavQuery(Native.CurrentScene, 3, (float*)&center, (float*)&size, 0.0f, null, 0);
     }
 
     /// <summary>The project's audio mixer groups (Window > Audio Mixer).</summary>

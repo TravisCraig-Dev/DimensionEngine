@@ -134,7 +134,8 @@
      "Wave Length": 14,
      "Wave Direction": 30,
      "Steepness": 0.45,
-     "Surface Resolution": 256
+     "Surface Resolution": 256,
+     "Ocean": true
     },
     "Mesh Renderer": {
      "Mesh": 1,

@@ -37,6 +37,10 @@ namespace Dimension
             float Arc;
         };
         std::vector<AutoLink> AutoLinks;
+        // Per column, the walkable surfaces found before agent room was taken off (RawStart: Width * Depth + 1): an
+        // update re-samples only the columns that changed and keeps the rest.
+        std::vector<uint32_t> RawStart;
+        std::vector<float> RawHeights;
 
         int NodeCount() const { return (int)Heights.size(); }
         bool IsBlocked(int node) const { return !Blocked.empty() && Blocked[node]; }
@@ -71,6 +75,9 @@ namespace Dimension
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity surface);
         // Bakes every surface (all, or only those not baked yet). Agents find their mesh again.
         void BakeAll(Scene& scene, bool onlyMissing = false);
+        // After the level changed inside a box (a crater, a wall knocked down): every surface over it samples the ground
+        // again there only, keeping the rest, and finishes its mesh anew. Returns how many surfaces changed.
+        int UpdateArea(Scene& scene, const glm::vec3& min, const glm::vec3& max);
 
         // The surface mesh nearest a point within maxDistance (nullptr = none).
         std::shared_ptr<const NavMeshData> MeshNear(Scene& scene, const glm::vec3& point, float maxDistance, int* node = nullptr, const Filter& filter = {});

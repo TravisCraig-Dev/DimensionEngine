@@ -27,7 +27,14 @@ namespace Dimension
         // The surface grid (Surface Resolution quads per side over Size.x by Size.z, facing +Y) and its CPU vertices.
         Ref<Mesh> SurfaceMesh(const WaterVolumeComponent& water);
         const std::vector<Vertex>& SurfaceVertices(const WaterVolumeComponent& water);
-        // Fills every Water Volume's SimulatedPositions/Normals for `time` (flat water leaves them empty).
+        // The water's box in the world: the volume's Size around the object, or for an Ocean as wide as can be.
+        void Bounds(const WaterVolumeComponent& water, const glm::vec3& center, const glm::vec3& scale, glm::vec3& lo, glm::vec3& hi);
+        // An Ocean's surface: rings of vertices around a center (x, z in the volume's space) out to `radius`, closer
+        // together near the middle. OceanMesh is its triangles; OceanVertices puts the vertices where the waves are at
+        // `time`, the waves fading out far away (where they would only flicker).
+        Ref<Mesh> OceanMesh();
+        void OceanVertices(const WaterVolumeComponent& water, glm::vec2 center, float radius, float time, std::vector<Vertex>& out);
+        // Fills every Water Volume's SimulatedPositions/Normals for `time` (flat water and oceans leave them empty).
         void Update(Scene& scene, float time);
         void ReleaseMeshes();
     }

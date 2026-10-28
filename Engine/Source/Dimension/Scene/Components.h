@@ -751,6 +751,9 @@ namespace Dimension
         float WaveDirection = 0.0f;  // degrees around Y from +X
         float Steepness = 0.5f;      // 0 = round sine waves, 1 = sharp crests
         int32_t SurfaceResolution = 64;
+        // Ocean: the water reaches out to any distance across (Size.y deep under the top face), and its surface draws
+        // as rings around the camera out to the camera's far plane, the waves fading into calm water in the distance.
+        bool Ocean = false;
         // Under water: surfaces below the surface catch rippling caustics (the sunlight focused by the waves, Caustics
         // strength, Caustics Scale meters across), and with the camera below the surface (or looking down into the
         // water) everything is seen through Underwater Color murk, thicker by Underwater Fog per meter.

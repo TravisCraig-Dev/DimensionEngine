@@ -6,6 +6,7 @@
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Physics/Water.h"
 #include "Dimension/Navigation/NavMesh.h"
+#include "Dimension/Core/Profiler.h"
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/UI/UI.h"
@@ -557,41 +558,63 @@ namespace Dimension
             m_UIWasDown = m_UIDown;
         }
 
-        m_Registry.ViewOf<ScriptComponent>().Each([&](Entity e, ScriptComponent& sc) {
-            if (!m_Registry.Get<TransformComponent>(e).ActiveInHierarchy) return;
-            for (auto& inst : sc.LiveInstances(true))
-            {
-                inst->OnUpdate(dt);
-                inst->TickTimers(dt);
-                inst->TickCoroutines(dt);
-            }
-        });
-        for (auto& sys : m_Systems) sys->OnUpdate(*this, dt);
-        Navigation::Update(*this, dt);
+        {
+            DIM_PROFILE_SCOPE("Scripts");
+            m_Registry.ViewOf<ScriptComponent>().Each([&](Entity e, ScriptComponent& sc) {
+                if (!m_Registry.Get<TransformComponent>(e).ActiveInHierarchy) return;
+                for (auto& inst : sc.LiveInstances(true))
+                {
+                    inst->OnUpdate(dt);
+                    inst->TickTimers(dt);
+                    inst->TickCoroutines(dt);
+                }
+            });
+        }
+        {
+            DIM_PROFILE_SCOPE("Systems");
+            for (auto& sys : m_Systems) sys->OnUpdate(*this, dt);
+        }
+        {
+            DIM_PROFILE_SCOPE("Navigation");
+            Navigation::Update(*this, dt);
+        }
         UpdateSpriteAnimators(dt);
 
         m_FixedAccumulator += dt;
         while (m_FixedAccumulator >= kFixedTimestep)
         {
+            DIM_PROFILE_SCOPE("Fixed Update");
             m_Registry.ViewOf<ScriptComponent>().Each([&](Entity e, ScriptComponent& sc) {
                 if (!m_Registry.Get<TransformComponent>(e).ActiveInHierarchy) return;
                 for (auto& inst : sc.LiveInstances(true)) inst->OnFixedUpdate(kFixedTimestep);
             });
             for (auto& sys : m_Systems) sys->OnFixedUpdate(*this, kFixedTimestep);
             UpdateTransforms();
-            m_Physics2D->Step(kFixedTimestep);
-            m_Physics3D->Step(kFixedTimestep);
+            {
+                DIM_PROFILE_SCOPE("Physics");
+                m_Physics2D->Step(kFixedTimestep);
+                m_Physics3D->Step(kFixedTimestep);
+            }
             m_FixedAccumulator -= kFixedTimestep;
         }
 
         Timeline::Update(*this, dt);
         UpdateTransforms();
-        UpdateAnimators(dt);
+        {
+            DIM_PROFILE_SCOPE("Animation");
+            UpdateAnimators(dt);
+        }
         Water::Update(*this, m_Time);
-        ParticleSystems::Update(*this, dt);
-        TrailRenderers::Update(*this, m_Time);
-        AudioMixer::Update(dt);
-        m_Audio->Update(dt);
+        {
+            DIM_PROFILE_SCOPE("Particles");
+            ParticleSystems::Update(*this, dt);
+            TrailRenderers::Update(*this, m_Time);
+        }
+        {
+            DIM_PROFILE_SCOPE("Audio");
+            AudioMixer::Update(dt);
+            m_Audio->Update(dt);
+        }
         FlushDeferredDestroys();
     }
 

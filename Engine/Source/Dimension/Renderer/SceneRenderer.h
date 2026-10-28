@@ -249,6 +249,7 @@ namespace Dimension
         OcclusionSlot m_OcclusionSlots[3];
         OccluderDepth m_Occluder;
         std::vector<uint8_t> m_ItemOccluded;
+        std::vector<Vertex> m_OceanVertices; // this frame's ocean surface (reused)
         void ChooseOccluder(const CameraData& camera);
         void ReduceDepth(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera);
         void BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options);

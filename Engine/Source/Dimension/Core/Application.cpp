@@ -1,4 +1,5 @@
 #include "Dimension/Core/Application.h"
+#include "Dimension/Core/Profiler.h"
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
 #include "Dimension/ImGui/ImGuiLayer.h"
@@ -104,19 +105,32 @@ namespace Dimension
             m_FrameTime = std::chrono::duration<float>(now - last).count();
             last = now;
             Input::NewFrame();
+            Profiler::BeginFrame();
 
-            if (!m_Device->BeginFrame()) continue;
+            bool begun;
+            {
+                DIM_PROFILE_SCOPE("Wait for GPU");
+                begun = m_Device->BeginFrame();
+            }
+            if (!begun) continue;
             const FrameContext& frame = m_Device->Frame();
             VkCommandBuffer cmd = frame.Cmd;
 
-            for (auto& l : m_Layers) l->OnUpdate(m_FrameTime);
+            {
+                DIM_PROFILE_SCOPE("Update");
+                for (auto& l : m_Layers) l->OnUpdate(m_FrameTime);
+            }
             if (m_ImGui)
             {
+                DIM_PROFILE_SCOPE("Editor UI");
                 m_ImGui->BeginFrame();
                 for (auto& l : m_Layers) l->OnImGui();
                 m_ImGui->EndFrame();
             }
-            for (auto& l : m_Layers) l->OnRender(cmd);
+            {
+                DIM_PROFILE_SCOPE("Render");
+                for (auto& l : m_Layers) l->OnRender(cmd);
+            }
 
             // Compose into the swapchain image, then draw ImGui on top.
             Vk::TransitionImage(cmd, frame.SwapchainImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -156,7 +170,10 @@ namespace Dimension
             }
             else
                 Vk::TransitionImage(cmd, frame.SwapchainImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-            m_Device->EndFrame();
+            {
+                DIM_PROFILE_SCOPE("Submit");
+                m_Device->EndFrame();
+            }
 
             if (lastFrame)
             {

@@ -17,6 +17,7 @@
 #include <Dimension/Scene/LODGroup.h>
 #include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Renderer/Occlusion.h>
+#include <Dimension/Core/Profiler.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
@@ -1979,6 +1980,115 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestOcean()
+    {
+        // The ring surface: centered where asked, out to the radius, waves near and calm far away.
+        WaterVolumeComponent sea;
+        sea.Size = { 20.0f, 4.0f, 20.0f };
+        sea.WaveHeight = 1.0f;
+        sea.WaveLength = 10.0f;
+        sea.Ocean = true;
+        std::vector<Vertex> rings;
+        Water::OceanVertices(sea, { 50.0f, -30.0f }, 2000.0f, 1.3f, rings);
+        float farthest = 0.0f, nearMove = 0.0f, farMove = 0.0f;
+        for (const Vertex& v : rings)
+        {
+            float r = glm::distance(glm::vec2(v.Position.x, v.Position.z), glm::vec2(50.0f, -30.0f));
+            farthest = std::max(farthest, r);
+            float lift = std::abs(v.Position.y - 2.0f);
+            if (r < 30.0f) nearMove = std::max(nearMove, lift);
+            if (r > 200.0f) farMove = std::max(farMove, lift);
+        }
+        CHECK(rings.size() > 10000 && Near(glm::vec2(rings[0].Position.x, rings[0].Position.z), { 50.0f, -30.0f }, 1.0f) && farthest > 1990.0f && farthest < 2050.0f);
+        CHECK(nearMove > 0.2f && farMove == 0.0f);
+
+        // Buoyancy reaches anywhere across: a crate 200 m past the box's side floats (and sinks without Ocean).
+        auto drop = [&](bool ocean) {
+            Scene scene("Sea");
+            auto& reg = scene.GetRegistry();
+            Entity water = scene.CreateEntity("Sea");
+            reg.Get<TransformComponent>(water).Position = { 0.0f, -2.0f, 0.0f };
+            auto& w = reg.Emplace<WaterVolumeComponent>(water);
+            w.Size = { 20.0f, 4.0f, 20.0f };
+            w.Buoyancy = 2.0f;
+            w.LinearDrag = 1.0f;
+            w.Ocean = ocean;
+            Entity crate = scene.CreateEntity("Crate");
+            reg.Get<TransformComponent>(crate).Position = { 200.0f, 1.0f, 0.0f };
+            reg.Emplace<BoxColliderComponent>(crate);
+            reg.Emplace<RigidbodyComponent>(crate).Mass = 50.0f;
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 240; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            float y = rt->GetRegistry().Get<TransformComponent>(crate).Position.y;
+            rt->OnRuntimeStop();
+            return y;
+        };
+        float floating = drop(true), falling = drop(false);
+        CHECK(floating > -0.8f && floating < 0.6f && falling < -10.0f);
+    }
+
+    void TestNavUpdateArea()
+    {
+        // The wall knocked down while playing: updating its area alone opens the way straight through (and the rest of
+        // the mesh stays as it was).
+        Scene scene("Yard");
+        BuildNavYard(scene);
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        Entity surface = rt->FindEntityByName("Navigation");
+        auto before = rr.Get<NavMeshSurfaceComponent>(surface).Baked;
+        std::vector<glm::vec3> corners;
+        CHECK(Navigation::FindPath(*before, { -5.0f, 0.0f, -5.0f }, { -5.0f, 0.0f, 5.0f }, corners) == NavPathStatus::Complete && corners.size() > 2);
+        rt->DestroyEntity(rt->FindEntityByName("Wall"));
+        auto t0 = std::chrono::steady_clock::now();
+        CHECK(Navigation::UpdateArea(*rt, { -15.0f, 0.0f, -0.3f }, { 6.0f, 3.0f, 0.3f }) == 1);
+        double updateMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        t0 = std::chrono::steady_clock::now();
+        Navigation::Bake(*rt, surface);
+        double bakeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        Navigation::UpdateArea(*rt, { -15.0f, 0.0f, -0.3f }, { 6.0f, 3.0f, 0.3f }); // (the bake above was a full one, for timing)
+        auto after = rr.Get<NavMeshSurfaceComponent>(surface).Baked;
+        printf("  navigation: area update %.1f ms, full bake %.1f ms\n", updateMs, bakeMs);
+        CHECK(after && after != before && Navigation::FindPath(*after, { -5.0f, 0.0f, -5.0f }, { -5.0f, 0.0f, 5.0f }, corners) == NavPathStatus::Complete &&
+              corners.size() == 2);
+        CHECK(after->RawStart == before->RawStart || after->RawHeights.size() > before->RawHeights.size()); // spots added where the wall stood
+        int platform = Navigation::Nearest(*after, { 10.0f, 1.0f, 10.0f }, 0.2f);
+        CHECK(platform >= 0 && Near(after->Heights[platform], 1.0f, 0.01f)); // untouched parts stay
+        CHECK(updateMs < bakeMs);
+        rt->OnRuntimeStop();
+
+        // A crater dug into a terrain updates the mesh over it by itself: its bottom is walkable, 2 m down.
+        Scene field("Field");
+        auto& reg = field.GetRegistry();
+        Entity land = field.CreateEntity("Land");
+        auto& tc = reg.Emplace<TerrainComponent>(land);
+        tc.Size = { 40.0f, 40.0f };
+        tc.Resolution = 64;
+        tc.FlatCenter = 1.0f;
+        reg.Emplace<MeshRendererComponent>(land);
+        Entity nav = field.CreateEntity("Navigation");
+        auto& ns = reg.Emplace<NavMeshSurfaceComponent>(nav);
+        ns.Size = { 36.0f, 30.0f, 36.0f };
+        ns.CellSize = 0.5f;
+        field.UpdateTransforms();
+        auto ft = field.Clone();
+        ft->OnRuntimeStart();
+        auto& fr = ft->GetRegistry();
+        auto flat = fr.Get<NavMeshSurfaceComponent>(nav).Baked;
+        int middle = Navigation::Nearest(*flat, { 0.0f, 0.0f, 0.0f }, 20.0f);
+        CHECK(middle >= 0);
+        if (middle < 0) return;
+        float ground = flat->Heights[middle];
+        CHECK(Terrain::DigCrater(*ft, { 0.0f, ground, 0.0f }, 8.0f, 2.0f) > 0);
+        auto dug = fr.Get<NavMeshSurfaceComponent>(nav).Baked;
+        int bottom = Navigation::Nearest(*dug, { 0.0f, ground - 2.0f, 0.0f }, 0.5f);
+        CHECK(dug != flat && bottom >= 0 && Near(dug->Heights[bottom], ground - 2.0f, 0.25f));
+        ft->OnRuntimeStop();
+    }
+
     void TestNavCrowd()
     {
         // Two groups of 100 agents swap sides of an open field, walking through each other: all arrive, they barely
@@ -2246,6 +2356,49 @@ namespace
         CHECK(Navigation::SamplePosition(*rt, { 3.0f, 2.0f, 3.0f }, 3.0f, sample) && Near(sample, { 3.0f, 0.0f, 3.0f }, 0.01f));
         CHECK(!Navigation::SamplePosition(*rt, { 3.0f, 8.0f, 3.0f }, 3.0f, sample));
         rt->OnRuntimeStop();
+    }
+
+    void TestProfiler()
+    {
+        // Sections nest, repeated ones add up (calls counted), counters keep their last value, and a frame is recorded
+        // when the next one begins.
+        Profiler::Clear();
+        Profiler::SetPaused(false);
+        Profiler::BeginFrame();
+        {
+            DIM_PROFILE_SCOPE("Update");
+            for (int i = 0; i < 3; ++i)
+            {
+                DIM_PROFILE_SCOPE("Physics");
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            DIM_PROFILE_SCOPE("Scripts");
+        }
+        {
+            DIM_PROFILE_SCOPE("Render");
+        }
+        Profiler::SetCounter("Draw Calls", 10.0f);
+        Profiler::SetCounter("Draw Calls", 12.0f);
+        Profiler::BeginFrame();
+        const auto& history = Profiler::History();
+        CHECK(history.size() == 1);
+        if (history.size() != 1) return;
+        const auto& f = history.back();
+        CHECK(f.Sections.size() == 4);
+        if (f.Sections.size() != 4) return;
+        CHECK(std::string(f.Sections[0].Name) == "Update" && f.Sections[0].Depth == 0 && f.Sections[0].Calls == 1);
+        CHECK(std::string(f.Sections[1].Name) == "Physics" && f.Sections[1].Depth == 1 && f.Sections[1].Calls == 3 && f.Sections[1].Ms >= 5.0f);
+        CHECK(std::string(f.Sections[2].Name) == "Scripts" && f.Sections[2].Depth == 1);
+        CHECK(std::string(f.Sections[3].Name) == "Render" && f.Sections[3].Depth == 0);
+        CHECK(f.Sections[0].Ms >= f.Sections[1].Ms && f.FrameMs >= f.Sections[0].Ms);
+        CHECK(f.Counters.size() == 1 && f.Counters[0].second == 12.0f);
+        // Paused: nothing more is recorded.
+        Profiler::SetPaused(true);
+        Profiler::BeginFrame();
+        Profiler::BeginFrame();
+        CHECK(Profiler::History().size() == 1);
+        Profiler::SetPaused(false);
+        Profiler::Clear();
     }
 
     void TestOcclusionTest()
@@ -8137,12 +8290,15 @@ int main(int argc, char** argv)
     Run("LOD groups", TestLODGroups);
     Run("Mesh simplify", TestMeshSimplify);
     Run("Occlusion test", TestOcclusionTest);
+    Run("Profiler", TestProfiler);
     Run("LOD fade and generated", TestLODFadeAndGenerated);
     Run("NavMesh obstacles", TestNavMeshObstacles);
     Run("Off-mesh links", TestOffMeshLinks);
     Run("NavMesh agent sizes and areas", TestNavAgentSizesAndAreas);
     Run("NavMesh generated links", TestNavGeneratedLinks);
     Run("NavMesh crowd", TestNavCrowd);
+    Run("NavMesh update area", TestNavUpdateArea);
+    Run("Ocean", TestOcean);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

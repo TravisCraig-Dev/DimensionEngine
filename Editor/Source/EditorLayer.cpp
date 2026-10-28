@@ -16,6 +16,7 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Navigation/NavMesh.h>
+#include <Dimension/Core/Profiler.h>
 #include <Dimension/Scene/SceneManager.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/CSharpProject.h>
@@ -114,6 +115,7 @@ namespace Editor
         m_Animator = MakeScope<AnimatorPanel>(m_Ctx);
         m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
         m_Navigation = MakeScope<NavigationPanel>(m_Ctx);
+        m_Profiler = MakeScope<ProfilerPanel>();
         Navigation::ApplyAreaNames(); // the project's area names in the Area dropdowns
 
         // Per-project editor layout (like Unity's Library/ folder, not meant for version control).
@@ -134,6 +136,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Audio Mixer") m_ShowAudioMixer = true;
         else if (m_Options.OpenWindow == "Timeline") m_ShowTimeline = true;
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
+        else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Tile Palette") m_ShowTilePalette = true;
 
         LoadGameModule();
@@ -572,6 +575,7 @@ namespace Editor
             options.Selected = m_Ctx.Selected;
             options.Selection = m_Ctx.Selection;
             options.DefaultLight = m_Ctx.InPrefabMode();
+            DIM_PROFILE_SCOPE("Scene View");
             options.ShowNavMeshes = m_ShowNavigation;
             options.Highlighting = m_Ctx.HierarchySearch.find_first_not_of(' ') != std::string::npos;
             if (options.Highlighting) options.Highlight = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
@@ -585,7 +589,15 @@ namespace Editor
             if (!camera.IsNull()) cam = CameraData::FromEntity(scene, camera, m_GameTarget->GetAspect());
             SceneRenderOptions gameOptions;
             gameOptions.RenderUI = true;
-            m_GameRenderer.Render(cmd, scene, cam, *m_GameTarget, gameOptions);
+            {
+                DIM_PROFILE_SCOPE("Game View");
+                m_GameRenderer.Render(cmd, scene, cam, *m_GameTarget, gameOptions);
+            }
+            const RenderStats& st = m_GameRenderer.GetStats();
+            Profiler::SetCounter("Draw Calls", (float)st.DrawCalls);
+            Profiler::SetCounter("Triangles", (float)st.Triangles);
+            Profiler::SetCounter("Meshes", (float)st.Meshes);
+            Profiler::SetCounter("Occluded", (float)st.Occluded);
         }
     }
 
@@ -868,6 +880,7 @@ namespace Editor
         if (m_ShowAnimator) m_Animator->OnImGui(&m_ShowAnimator);
         if (m_ShowTimeline) m_Timeline->OnImGui(&m_ShowTimeline);
         if (m_ShowNavigation) m_Navigation->OnImGui(&m_ShowNavigation);
+        if (m_ShowProfiler) m_Profiler->OnImGui(&m_ShowProfiler);
         if (m_ShowStats) DrawStats();
         DrawGameView();
         DrawSceneView();
@@ -915,6 +928,7 @@ namespace Editor
         ImGui::DockBuilderDockWindow("Animator", bottom);
         ImGui::DockBuilderDockWindow("Audio Mixer", bottom);
         ImGui::DockBuilderDockWindow("Timeline", bottom);
+        ImGui::DockBuilderDockWindow("Profiler", bottom);
         ImGui::DockBuilderFinish(id);
     }
 
@@ -1025,6 +1039,7 @@ namespace Editor
             ImGui::MenuItem("Animator", nullptr, &m_ShowAnimator);
             ImGui::MenuItem("Timeline", nullptr, &m_ShowTimeline);
             ImGui::MenuItem("Navigation", nullptr, &m_ShowNavigation);
+            ImGui::MenuItem("Profiler", nullptr, &m_ShowProfiler);
             ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
             ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);

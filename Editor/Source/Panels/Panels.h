@@ -107,6 +107,15 @@ namespace Editor
     };
 
     // Tracks and keys of the selected object's Timeline (like Unity's Timeline/Animation window), with preview.
+    class ProfilerPanel
+    {
+    public:
+        void OnImGui(bool* open);
+
+    private:
+        int m_Picked = -1; // frame index in the history while paused
+    };
+
     class NavigationPanel
     {
     public:

@@ -11,6 +11,7 @@
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Renderer/SceneRenderer.h>
+#include <Dimension/Core/Profiler.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
@@ -122,6 +123,9 @@ namespace
             SceneRenderOptions options;
             options.RenderUI = true;
             m_Renderer.Render(cmd, *m_Scene, data, *m_Target, options);
+            const RenderStats& st = m_Renderer.GetStats();
+            Profiler::SetCounter("Draw Calls", (float)st.DrawCalls);
+            Profiler::SetCounter("Triangles", (float)st.Triangles);
             if (m_Frame > 30) { m_RenderMs += m_Renderer.GetStats().CpuMs; m_ListMs += m_Renderer.GetStats().ListMs; }
         }
 
