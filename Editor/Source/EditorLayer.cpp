@@ -2835,6 +2835,33 @@ namespace Editor
                 if (grid) s_SameRow = true;
                 else ImGui::SameLine();
                 return 0;
+            case 11:
+            {
+                // A dropdown: the label then its options, separated by \x1f; the chosen index in and out.
+                std::vector<std::string> parts;
+                for (const char* s = label;;)
+                {
+                    const char* end = std::strchr(s, '\x1f');
+                    parts.emplace_back(s, end ? end : s + std::strlen(s));
+                    if (!end) break;
+                    s = end + 1;
+                }
+                int current = n > 0 ? (int)v[0] : -1;
+                bool changed = false;
+                const char* preview = current >= 0 && current + 1 < (int)parts.size() ? parts[current + 1].c_str() : "";
+                if (ImGui::BeginCombo(row(parts[0].c_str()).c_str(), preview))
+                {
+                    for (int i = 0; i + 1 < (int)parts.size(); ++i)
+                        if (ImGui::Selectable(parts[i + 1].c_str(), i == current) && i != current)
+                        {
+                            current = i;
+                            changed = true;
+                        }
+                    ImGui::EndCombo();
+                }
+                if (n > 0) v[0] = (float)current;
+                return changed ? 1 : 0;
+            }
             case 10:
                 if (grid)
                 {

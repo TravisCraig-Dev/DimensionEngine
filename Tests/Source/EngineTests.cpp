@@ -7435,7 +7435,8 @@ namespace
                       std::find(controls.begin(), controls.end(), "text:Name") != controls.end() &&
                       std::find(controls.begin(), controls.end(), "1:Line Up Selected") != controls.end());
                 CHECK(std::find(controls.begin(), controls.end(), "entity:Object") != controls.end() &&
-                      std::find(controls.begin(), controls.end(), "asset1:Marker Prefab") != controls.end()); // the pickers
+                      std::find(controls.begin(), controls.end(), "asset1:Marker Prefab") != controls.end() && // the pickers
+                      std::find(controls.begin(), controls.end(), "11:AxisXYZ") != controls.end());   // an enum's dropdown
                 CSharpRuntime::CallEditorItem(marker->Id, false, edited);
                 CHECK(selection.size() == 1 && edited.IsValid(selection[0]) && edited.GetRegistry().Get<TagComponent>(selection[0]).Name == "Marker");
                 // Picking an object in the window's entity field selects it.
@@ -7512,6 +7513,53 @@ namespace
                 CHECK(!CSharpRuntime::DrawScriptField(*instance, 0, edited, host)); // no drawer: nothing drawn or changed
             }
             CSharpRuntime::SetEditorHooks({});
+        }
+        {
+            // Lists, arrays and enums (Patrol.cs): List<Vector3> and string[] register as lists of plain values (saved as
+            // arrays, reorderable), the enum as a dropdown storing its values (Once = 5). Defaults come from the class;
+            // values saved with the scene reach the running script, which walks the points and stops (Once).
+            const ScriptInfo* patrol = ScriptRegistry::Find("Game.Patrol");
+            CHECK(patrol != nullptr);
+            if (patrol)
+            {
+                const FieldInfo* points = fieldOf(patrol, "Points");
+                const FieldInfo* mode = fieldOf(patrol, "Mode");
+                const FieldInfo* calls = fieldOf(patrol, "Calls");
+                const FieldInfo* speed = fieldOf(patrol, "Speed");
+                CHECK(points && IsValueList(*points) && points->Elements[0].Type == FieldType::Vec3 && points->Tooltip == "Stops, relative to where the object starts");
+                CHECK(calls && IsValueList(*calls) && calls->Elements[0].Type == FieldType::String);
+                CHECK(mode && mode->Type == FieldType::Enum && (mode->EnumNames == std::vector<std::string>{ "Loop", "PingPong", "Once" }) &&
+                      (mode->EnumValues == std::vector<int32_t>{ 0, 1, 5 }));
+                CHECK(speed && Near(speed->Min, 0.1f) && Near(speed->Max, 20.0f));
+                if (points && mode && calls)
+                {
+                    auto instance = patrol->Create();
+                    void* obj = patrol->ToObject(instance.get());
+                    CHECK(FieldToJson(*points, obj, nullptr) == nlohmann::json::parse("[[0,0,0],[4,0,0],[4,0,4]]"));
+                    CHECK(FieldToJson(*mode, obj, nullptr) == 1 && (FieldToJson(*calls, obj, nullptr) == nlohmann::json({ "Clear", "All quiet" })));
+                    points->ListMove(points->Access(obj), 2, 0); // reordered in the Inspector
+                    CHECK(FieldToJson(*points, obj, nullptr) == nlohmann::json::parse("[[4,0,4],[0,0,0],[4,0,0]]"));
+                    FieldFromJson(*calls, obj, nlohmann::json({ "A", "B", "C" }), nullptr);
+                    CHECK(calls->ListSize(calls->Access(obj)) == 3);
+                }
+                Scene walk("Walk");
+                Entity guard = walk.CreateEntity("Guard");
+                walk.GetRegistry().Get<TransformComponent>(guard).Position = { 1.0f, 0.0f, 1.0f };
+                auto& script = walk.GetRegistry().Emplace<ScriptComponent>(guard).Add("Game.Patrol");
+                script.Fields["Points"] = nlohmann::json::parse("[[0,0,0],[2,0,0],[2,0,2]]");
+                script.Fields["Mode"] = 5; // Once
+                script.Fields["Speed"] = 4.0f;
+                script.Fields["Calls"] = nlohmann::json::array();
+                walk.UpdateTransforms();
+                auto rt = walk.Clone();
+                rt->OnRuntimeStart();
+                Entity runner = rt->FindEntityByName("Guard");
+                for (int i = 0; i < 15; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); // 0.25 s: 1 m toward the second stop
+                CHECK(Near(rt->GetRegistry().Get<TransformComponent>(runner).Position, { 2.0f, 0.0f, 1.0f }));
+                for (int i = 0; i < 105; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); // at the last stop, and staying (Once)
+                CHECK(Near(rt->GetRegistry().Get<TransformComponent>(runner).Position, { 3.0f, 0.0f, 3.0f }));
+                rt->OnRuntimeStop();
+            }
         }
         {
             // A Prefab field at play time: the dropper instantiates the Ball prefab picked for it, every Interval.

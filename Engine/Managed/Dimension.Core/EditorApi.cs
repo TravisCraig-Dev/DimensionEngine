@@ -119,6 +119,24 @@ namespace Dimension
             Op(7, label, (float*)&value, 4);
             return value;
         }
+        // A dropdown of `options`; returns the chosen index.
+        public static int Popup(string label, int index, string[] options)
+        {
+            float v = index;
+            Op(11, label + "\x1f" + string.Join("\x1f", options), &v, 1);
+            return (int)v;
+        }
+        // A dropdown of an enum's names.
+        public static T EnumField<T>(string label, T value) where T : struct, Enum => (T)EnumField(label, (Enum)value);
+
+        internal static Enum EnumField(string label, Enum value)
+        {
+            Type t = value.GetType();
+            Array values = Enum.GetValues(t);
+            int index = Popup(label, Array.IndexOf(values, value), Enum.GetNames(t));
+            return index >= 0 && index < values.Length ? (Enum)values.GetValue(index) : value;
+        }
+
         // A heading line (empty: a plain separator).
         public static void Separator(string text = "") => Op(8, text);
         // The next control on the same line.

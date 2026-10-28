@@ -200,17 +200,60 @@ namespace Dimension
         template <class T> T* Comp(void* scene, uint64_t e) { return scene ? S(scene).GetRegistry().TryGet<T>(Unpack(e)) : nullptr; }
 
         // ---- Managed class proxies ------------------------------------------------------------------
-        enum class Slot : uint8_t { Float, Int, Bool, String, Vec2, Vec3, Vec4, Color4, Entity, Asset };
+        // Enums are stored as Int slots; a List slot holds a ManagedList.
+        enum class Slot : uint8_t { Float, Int, Bool, String, Vec2, Vec3, Vec4, Color4, Entity, Asset, List };
         constexpr size_t kSlotSize = 64;
+
+        // An element of a C# list or array field: its value in the member its type uses.
+        struct ListElement
+        {
+            alignas(16) uint8_t Bytes[16] = {}; // numbers, vectors, colors, enums, asset GUIDs
+            std::string Text;
+            Entity Ref = Entity::Null();
+        };
+        using ManagedList = std::vector<ListElement>;
 
         struct ManagedClass
         {
             std::string Name;
             std::vector<Slot> Slots;
+            std::vector<Slot> ElementSlots; // per field: a List's element type
             std::vector<FieldInfo> Fields;
             std::vector<nlohmann::json> Defaults;
             std::vector<bool> Drawn; // per field: a C# property drawer draws it
         };
+
+        // A field's (or list element's) slot and Inspector type from its registration ("type", and for enums
+        // "enumNames" and "enumValues").
+        Slot ParseFieldType(const nlohmann::json& f, FieldInfo& info)
+        {
+            std::string type = f.at("type").get<std::string>();
+            // Asset references (Prefab, Texture, ...) are stored as their GUID and picked like built-in ones.
+            const std::pair<const char*, FieldType> assets[] = { { "Prefab", FieldType::Prefab }, { "Texture", FieldType::Texture },
+                                                                 { "Material", FieldType::Material }, { "Mesh", FieldType::Mesh },
+                                                                 { "Audio", FieldType::Audio } };
+            for (auto& a : assets)
+                if (type == a.first)
+                {
+                    info.Type = a.second;
+                    return Slot::Asset;
+                }
+            if (type == "Enum")
+            {
+                info.Type = FieldType::Enum;
+                for (auto& n : f.value("enumNames", nlohmann::json::array())) info.EnumNames.push_back(n.get<std::string>());
+                for (auto& v : f.value("enumValues", nlohmann::json::array())) info.EnumValues.push_back(v.get<int32_t>());
+                return Slot::Int;
+            }
+            Slot slot = type == "Float" ? Slot::Float : type == "Int" ? Slot::Int : type == "Bool" ? Slot::Bool
+                      : type == "String" ? Slot::String : type == "Vec2" ? Slot::Vec2 : type == "Vec3" ? Slot::Vec3
+                      : type == "Vec4" ? Slot::Vec4 : type == "Color4" ? Slot::Color4 : Slot::Entity;
+            info.Type = slot == Slot::Float ? FieldType::Float : slot == Slot::Int ? FieldType::Int : slot == Slot::Bool ? FieldType::Bool
+                      : slot == Slot::String ? FieldType::String : slot == Slot::Vec2 ? FieldType::Vec2 : slot == Slot::Vec3 ? FieldType::Vec3
+                      : slot == Slot::Vec4 ? FieldType::Vec4 : slot == Slot::Color4 ? FieldType::Color4 : FieldType::EntityRef;
+            info.Speed = slot == Slot::Int ? 1.0f : 0.05f;
+            return slot;
+        }
         std::deque<ManagedClass> s_Classes; // stable addresses (captured by ScriptInfo lambdas)
 
         // Script instance whose behaviour lives in C#. Inspector-visible field values are stored
@@ -227,6 +270,7 @@ namespace Dimension
                 {
                     if (cls->Slots[i] == Slot::String) new (Slot_(i)) std::string();
                     if (cls->Slots[i] == Slot::Entity) new (Slot_(i)) Entity();
+                    if (cls->Slots[i] == Slot::List) new (Slot_(i)) ManagedList();
                     FieldFromJson(cls->Fields[i], m_Storage, cls->Defaults[i], nullptr);
                 }
             }
@@ -235,7 +279,10 @@ namespace Dimension
             {
                 if (m_Handle && s_Available) s_Managed.DestroyInstance(m_Handle);
                 for (size_t i = 0; i < m_Class->Slots.size(); ++i)
+                {
                     if (m_Class->Slots[i] == Slot::String) static_cast<std::string*>(Slot_(i))->~basic_string();
+                    if (m_Class->Slots[i] == Slot::List) static_cast<ManagedList*>(Slot_(i))->~ManagedList();
+                }
                 ::operator delete(m_Storage, std::align_val_t(16));
             }
 
@@ -275,9 +322,38 @@ namespace Dimension
                 for (size_t i = 0; i < m_Class->Slots.size(); ++i)
                 {
                     if (m_Class->Slots[i] == Slot::Entity) values.push_back(Pack(*static_cast<Entity*>(Slot_(i))));
+                    else if (m_Class->Slots[i] == Slot::List) values.push_back(ListJson(i));
                     else values.push_back(FieldToJson(m_Class->Fields[i], m_Storage, nullptr));
                 }
                 return values;
+            }
+
+            // A list field's values (entities packed, null for none).
+            nlohmann::json ListJson(size_t i) const
+            {
+                nlohmann::json values = nlohmann::json::array();
+                const FieldInfo& element = m_Class->Fields[i].Elements[0];
+                for (const ListElement& item : *static_cast<const ManagedList*>(Slot_(i)))
+                {
+                    if (m_Class->ElementSlots[i] == Slot::Entity) values.push_back(item.Ref.IsNull() ? nlohmann::json() : nlohmann::json(Pack(item.Ref)));
+                    else values.push_back(FieldToJson(element, const_cast<ListElement*>(&item), nullptr));
+                }
+                return values;
+            }
+
+            void ReadList(size_t i, const nlohmann::json& values)
+            {
+                if (!values.is_array()) return;
+                auto& list = *static_cast<ManagedList*>(Slot_(i));
+                list.assign(values.size(), ListElement());
+                const FieldInfo& element = m_Class->Fields[i].Elements[0];
+                for (size_t k = 0; k < values.size(); ++k)
+                {
+                    if (m_Class->ElementSlots[i] == Slot::Entity)
+                        list[k].Ref = values[k].is_number_unsigned() ? Unpack(values[k].get<uint64_t>()) : Entity::Null();
+                    else
+                        FieldFromJson(element, &list[k], values[k], nullptr);
+                }
             }
 
             void ReadSlots(const char* text)
@@ -289,6 +365,8 @@ namespace Dimension
                     {
                         if (m_Class->Slots[i] == Slot::Entity)
                             *static_cast<Entity*>(Slot_(i)) = values[i].is_number_unsigned() ? Unpack(values[i].get<uint64_t>()) : Entity::Null();
+                        else if (m_Class->Slots[i] == Slot::List)
+                            ReadList(i, values[i]);
                         else if (values[i].is_null())
                             continue;
                         else
@@ -312,6 +390,7 @@ namespace Dimension
                     switch (m_Class->Slots[i])
                     {
                     case Slot::String: s_Managed.SetField(m_Handle, (int)i, static_cast<std::string*>(Slot_(i))->c_str()); break;
+                    case Slot::List: s_Managed.SetField(m_Handle, (int)i, ListJson(i).dump().c_str()); break; // JSON text
                     case Slot::Entity:
                     {
                         uint64_t packed = Pack(*static_cast<Entity*>(Slot_(i)));
@@ -353,29 +432,46 @@ namespace Dimension
                 cls.Name = j.at("name").get<std::string>();
                 for (auto& f : j.at("fields"))
                 {
-                    std::string type = f.at("type").get<std::string>();
-                    // Asset references (Prefab, Texture, ...) are stored as their GUID and picked like built-in ones.
-                    const std::pair<const char*, FieldType> assets[] = { { "Prefab", FieldType::Prefab }, { "Texture", FieldType::Texture },
-                                                                         { "Material", FieldType::Material }, { "Mesh", FieldType::Mesh },
-                                                                         { "Audio", FieldType::Audio } };
-                    const FieldType* asset = nullptr;
-                    for (auto& a : assets)
-                        if (type == a.first) asset = &a.second;
-                    Slot slot = asset ? Slot::Asset : type == "Float" ? Slot::Float : type == "Int" ? Slot::Int : type == "Bool" ? Slot::Bool
-                              : type == "String" ? Slot::String : type == "Vec2" ? Slot::Vec2 : type == "Vec3" ? Slot::Vec3
-                              : type == "Vec4" ? Slot::Vec4 : type == "Color4" ? Slot::Color4 : Slot::Entity;
                     FieldInfo info;
                     info.Name = f.at("name").get<std::string>();
-                    info.Type = asset ? *asset : slot == Slot::Float ? FieldType::Float : slot == Slot::Int ? FieldType::Int : slot == Slot::Bool ? FieldType::Bool
-                              : slot == Slot::String ? FieldType::String : slot == Slot::Vec2 ? FieldType::Vec2 : slot == Slot::Vec3 ? FieldType::Vec3
-                              : slot == Slot::Vec4 ? FieldType::Vec4 : slot == Slot::Color4 ? FieldType::Color4 : FieldType::EntityRef;
-                    info.Speed = slot == Slot::Int ? 1.0f : 0.05f;
+                    Slot slot, elementSlot = Slot::Float;
+                    if (f.at("type").get<std::string>() == "List")
+                    {
+                        // A list or array: a list of plain values (one unnamed element field) over a ManagedList.
+                        slot = Slot::List;
+                        FieldInfo element;
+                        elementSlot = ParseFieldType(f.at("element"), element);
+                        element.Access = [elementSlot](void* item) -> void* {
+                            auto* e = static_cast<ListElement*>(item);
+                            return elementSlot == Slot::String ? (void*)&e->Text : elementSlot == Slot::Entity ? (void*)&e->Ref : (void*)e->Bytes;
+                        };
+                        info.Type = FieldType::StructList;
+                        info.Elements.push_back(std::move(element));
+                        info.ListSize = [](const void* list) { return static_cast<const ManagedList*>(list)->size(); };
+                        info.ListAt = [](void* list, size_t i) -> void* { return &(*static_cast<ManagedList*>(list))[i]; };
+                        info.ListResize = [](void* list, size_t n) { static_cast<ManagedList*>(list)->resize(n); };
+                        info.ListErase = [](void* list, size_t i) {
+                            auto& v = *static_cast<ManagedList*>(list);
+                            if (i < v.size()) v.erase(v.begin() + i);
+                        };
+                        info.ListMove = [](void* list, size_t from, size_t to) {
+                            auto& v = *static_cast<ManagedList*>(list);
+                            if (from >= v.size() || to >= v.size() || from == to) return;
+                            ListElement e = std::move(v[from]);
+                            v.erase(v.begin() + from);
+                            v.insert(v.begin() + to, std::move(e));
+                        };
+                    }
+                    else
+                        slot = ParseFieldType(f, info);
                     // Inspector attributes: [Range], [Tooltip], [Header], [HideInInspector].
                     if (f.contains("min") && f.contains("max"))
                     {
-                        info.Min = f["min"].get<float>();
-                        info.Max = f["max"].get<float>();
-                        if (slot == Slot::Float && info.Max > info.Min) info.Speed = (info.Max - info.Min) / 200.0f;
+                        // On a list, the range applies to its elements.
+                        FieldInfo& ranged = slot == Slot::List ? info.Elements[0] : info;
+                        ranged.Min = f["min"].get<float>();
+                        ranged.Max = f["max"].get<float>();
+                        if ((slot == Slot::List ? elementSlot : slot) == Slot::Float && ranged.Max > ranged.Min) ranged.Speed = (ranged.Max - ranged.Min) / 200.0f;
                     }
                     info.Tooltip = f.value("tooltip", std::string());
                     info.Header = f.value("header", std::string());
@@ -383,6 +479,7 @@ namespace Dimension
                     size_t offset = cls.Slots.size() * kSlotSize;
                     info.Access = [offset](void* storage) -> void* { return static_cast<uint8_t*>(storage) + offset; };
                     cls.Slots.push_back(slot);
+                    cls.ElementSlots.push_back(elementSlot);
                     cls.Fields.push_back(std::move(info));
                     cls.Defaults.push_back(f.value("default", nlohmann::json()));
                     cls.Drawn.push_back(f.value("drawer", false));

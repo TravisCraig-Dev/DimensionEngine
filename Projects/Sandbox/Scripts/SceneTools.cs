@@ -3,14 +3,17 @@ using Dimension;
 
 namespace Game
 {
+    public enum Axis { X, Y, Z }
+
     // Editor extensions (they run in the editor only): two menu commands and a window.
     public static class SceneTools
     {
         public static float Spacing = 2.0f;
+        public static Axis LineUpAxis = Axis.X;
         // What Add Marker places (none: an empty object).
         public static Prefab MarkerPrefab;
 
-        // Puts the selected objects in a row along X, Spacing apart, starting where the first one stands.
+        // Puts the selected objects in a row along LineUpAxis, Spacing apart, starting where the first one stands.
         [MenuItem("Tools/Line Up Selected")]
         public static void LineUpSelected()
         {
@@ -18,8 +21,9 @@ namespace Game
             if (selected.Length < 2) return;
             Undo.Record("Line Up Selected");
             Vector3 start = selected[0].Transform.Position;
+            Vector3 along = LineUpAxis == Axis.X ? Vector3.UnitX : LineUpAxis == Axis.Y ? Vector3.UnitY : Vector3.UnitZ;
             for (int i = 1; i < selected.Length; ++i)
-                selected[i].Transform.Position = start + new Vector3(Spacing * i, 0.0f, 0.0f);
+                selected[i].Transform.Position = start + along * (Spacing * i);
         }
 
         // A new object named Marker (an instance of MarkerPrefab, or empty), selected.
@@ -64,6 +68,7 @@ namespace Game
             }
             EditorGUI.Separator("Line Up");
             SceneTools.Spacing = EditorGUI.Slider("Spacing", SceneTools.Spacing, 0.5f, 10.0f);
+            SceneTools.LineUpAxis = EditorGUI.EnumField("Axis", SceneTools.LineUpAxis);
             SceneTools.MarkerPrefab = EditorGUI.AssetField("Marker Prefab", SceneTools.MarkerPrefab);
             if (EditorGUI.Button("Line Up Selected")) SceneTools.LineUpSelected();
             EditorGUI.SameLine();

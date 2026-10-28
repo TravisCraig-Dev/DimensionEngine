@@ -17,8 +17,19 @@ namespace Editor::UI
 
     void EndProperties() { ImGui::EndTable(); }
 
+    // Set when a row and its label are drawn already (a list's element): the next PropertyLabel only moves to the value
+    // column.
+    static bool s_InlineRow = false;
+
     void PropertyLabel(const char* label, const char* tooltip)
     {
+        if (s_InlineRow)
+        {
+            s_InlineRow = false;
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            return;
+        }
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::AlignTextToFramePadding();
@@ -654,15 +665,21 @@ namespace Editor::UI
         case FieldType::Enum:
         {
             PropertyLabel(label, f.Tooltip.c_str());
+            // The stored value is the name's index, or its entry in EnumValues when given.
             int32_t* value = (int32_t*)p;
-            const char* preview = mixed ? kMixedText : (*value >= 0 && *value < (int)f.EnumNames.size()) ? f.EnumNames[*value].c_str() : "?";
+            auto valueOf = [&](int i) { return i < (int)f.EnumValues.size() ? f.EnumValues[i] : i; };
+            int current = -1;
+            for (int i = 0; i < (int)f.EnumNames.size(); ++i)
+                if (valueOf(i) == *value) current = i;
+            std::string unnamed = std::to_string(*value);
+            const char* preview = mixed ? kMixedText : current >= 0 ? f.EnumNames[current].c_str() : unnamed.c_str();
             if (ImGui::BeginCombo("##v", preview))
             {
                 for (int i = 0; i < (int)f.EnumNames.size(); ++i)
-                    if (ImGui::Selectable(f.EnumNames[i].c_str(), i == *value) && i != *value)
+                    if (ImGui::Selectable(f.EnumNames[i].c_str(), i == current) && i != current)
                     {
                         r.Activated = r.Changed = true;
-                        *value = i;
+                        *value = valueOf(i);
                     }
                 ImGui::EndCombo();
             }
@@ -765,6 +782,32 @@ namespace Editor::UI
             {
                 void* element = f.ListAt(p, i);
                 ImGui::PushID((int)i);
+                if (IsValueList(f))
+                {
+                    // One row per value: its index and buttons on the left, the value on the right.
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    float button = ImGui::GetFrameHeight();
+                    ImGui::Dummy(ImVec2(ImGui::GetStyle().IndentSpacing * 0.5f, 0.0f));
+                    ImGui::SameLine(0.0f, 0.0f);
+                    ImGui::TextDisabled("%2zu", i);
+                    ImGui::SameLine();
+                    ImGui::BeginDisabled(i == 0);
+                    if (ImGui::ArrowButton("##up", ImGuiDir_Up)) moveFrom = (int)i, moveTo = (int)i - 1;
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::BeginDisabled(i + 1 >= f.ListSize(p));
+                    if (ImGui::ArrowButton("##down", ImGuiDir_Down)) moveFrom = (int)i, moveTo = (int)i + 1;
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    if (ImGui::Button("x", ImVec2(button, 0.0f))) remove = (int)i;
+                    s_InlineRow = true;
+                    r |= Field(f.Elements[0], element, scene);
+                    s_InlineRow = false;
+                    ImGui::PopID();
+                    continue;
+                }
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 std::string title = titleField ? *(const std::string*)titleField->Access(element) : std::string();

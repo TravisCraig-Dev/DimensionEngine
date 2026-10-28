@@ -198,26 +198,52 @@ namespace Dimension
         {
             using var doc = JsonDocument.Parse(json);
             var values = doc.RootElement;
-            float F(JsonElement e, int i) => e.GetArrayLength() > i ? e[i].GetSingle() : 0.0f;
             for (int i = 0; i < cls.Fields.Count && i < values.GetArrayLength(); ++i)
             {
                 FieldInfo f = cls.Fields[i];
-                JsonElement v = values[i];
-                Type t = f.FieldType;
-                if (v.ValueKind == JsonValueKind.Null) continue;
-                object value =
-                    t == typeof(float) ? v.GetSingle() :
-                    t == typeof(int) ? v.GetInt32() :
-                    t == typeof(bool) ? v.GetBoolean() :
-                    t == typeof(string) ? v.GetString() :
-                    t == typeof(Vector2) ? new Vector2(F(v, 0), F(v, 1)) :
-                    t == typeof(Vector3) ? new Vector3(F(v, 0), F(v, 1), F(v, 2)) :
-                    t == typeof(Vector4) ? new Vector4(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
-                    t == typeof(Color) ? new Color(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
-                    typeof(IAssetReference).IsAssignableFrom(t) ? Activator.CreateInstance(t, v.GetUInt64()) :
-                    (object)new Entity(b.Entity.Scene, v.GetUInt64());
-                f.SetValue(b, value);
+                if (values[i].ValueKind == JsonValueKind.Null && f.FieldType != typeof(Entity)) continue;
+                f.SetValue(b, ReadValue(f.FieldType, values[i], b.Entity.Scene));
             }
+        }
+
+        private static object ReadValue(Type t, string json, IntPtr scene)
+        {
+            using var doc = JsonDocument.Parse(json);
+            return ReadValue(t, doc.RootElement, scene);
+        }
+
+        // A field's value from what the engine writes (see WriteValue).
+        private static object ReadValue(Type t, JsonElement v, IntPtr scene)
+        {
+            static float F(JsonElement e, int i) => e.ValueKind == JsonValueKind.Array && e.GetArrayLength() > i ? e[i].GetSingle() : 0.0f;
+            if (ElementType(t) is { } element)
+            {
+                var items = new List<object>();
+                if (v.ValueKind == JsonValueKind.Array)
+                    foreach (JsonElement item in v.EnumerateArray()) items.Add(ReadValue(element, item, scene));
+                if (t.IsArray)
+                {
+                    Array array = Array.CreateInstance(element, items.Count);
+                    for (int i = 0; i < items.Count; ++i) array.SetValue(items[i], i);
+                    return array;
+                }
+                var list = (System.Collections.IList)Activator.CreateInstance(t);
+                foreach (object item in items) list.Add(item);
+                return list;
+            }
+            if (t == typeof(Entity)) return v.ValueKind == JsonValueKind.Number ? new Entity(scene, v.GetUInt64()) : Entity.Null;
+            if (v.ValueKind == JsonValueKind.Null) return t == typeof(string) ? "" : Activator.CreateInstance(t);
+            return
+                t.IsEnum ? Enum.ToObject(t, v.GetInt32()) :
+                t == typeof(float) ? v.GetSingle() :
+                t == typeof(int) ? v.GetInt32() :
+                t == typeof(bool) ? v.GetBoolean() :
+                t == typeof(string) ? v.GetString() :
+                t == typeof(Vector2) ? new Vector2(F(v, 0), F(v, 1)) :
+                t == typeof(Vector3) ? new Vector3(F(v, 0), F(v, 1), F(v, 2)) :
+                t == typeof(Vector4) ? new Vector4(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
+                t == typeof(Color) ? new Color(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
+                Activator.CreateInstance(t, v.GetUInt64()); // an asset reference
         }
 
         // A script's fields with the controls the Inspector uses for them (and their property drawers).
@@ -230,24 +256,57 @@ namespace Dimension
                 if (f.GetCustomAttribute<HeaderAttribute>() is { } header) EditorGUI.Separator(header.Text);
                 object v = f.GetValue(b);
                 var range = f.GetCustomAttribute<RangeAttribute>();
-                object edited = DrawerFor(f) is { } drawer ? drawer.OnGUI(f.Name, v) : v switch
-                {
-                    float x when range != null => EditorGUI.Slider(f.Name, x, range.Min, range.Max),
-                    float x => EditorGUI.FloatField(f.Name, x),
-                    int x => EditorGUI.IntField(f.Name, x),
-                    bool x => EditorGUI.Toggle(f.Name, x),
-                    string x => EditorGUI.TextField(f.Name, x),
-                    Vector2 x => ToVector2(EditorGUI.Vector3Field(f.Name, new Vector3(x, 0.0f))),
-                    Vector3 x => EditorGUI.Vector3Field(f.Name, x),
-                    Vector4 x => ToVector4(EditorGUI.ColorField(f.Name, new Color(x.X, x.Y, x.Z, x.W))),
-                    Color x => EditorGUI.ColorField(f.Name, x),
-                    Entity x => EditorGUI.EntityField(f.Name, x),
-                    IAssetReference x => EditorGUI.AssetField(f.Name, x),
-                    _ => v,
-                };
+                object edited = DrawerFor(f) is { } drawer ? drawer.OnGUI(f.Name, v) : DrawValue(f.Name, v, f.FieldType, range);
                 if (edited != null && edited.GetType() == f.FieldType && !Equals(edited, v)) f.SetValue(b, edited);
             }
         }
+        // A value with the control for its type: a list as its size and then each element (a changed list comes back
+        // as a new one).
+        private static object DrawValue(string label, object v, Type t, RangeAttribute range)
+        {
+            if (ElementType(t) is { } element)
+            {
+                var items = new List<object>();
+                if (v is System.Collections.IEnumerable current)
+                    foreach (object item in current) items.Add(item);
+                bool changed = false;
+                int size = Math.Max(0, EditorGUI.IntField(label + " Size", items.Count));
+                while (items.Count > size) { items.RemoveAt(items.Count - 1); changed = true; }
+                while (items.Count < size) { items.Add(element == typeof(string) ? "" : Activator.CreateInstance(element)); changed = true; }
+                for (int i = 0; i < items.Count; ++i)
+                {
+                    object item = DrawValue($"{label} {i}", items[i], element, range);
+                    if (!Equals(item, items[i])) { items[i] = item; changed = true; }
+                }
+                if (!changed) return v;
+                if (t.IsArray)
+                {
+                    Array array = Array.CreateInstance(element, items.Count);
+                    for (int i = 0; i < items.Count; ++i) array.SetValue(items[i], i);
+                    return array;
+                }
+                var list = (System.Collections.IList)Activator.CreateInstance(t);
+                foreach (object item in items) list.Add(item);
+                return list;
+            }
+            return v switch
+            {
+                float x when range != null => EditorGUI.Slider(label, x, range.Min, range.Max),
+                float x => EditorGUI.FloatField(label, x),
+                int x => EditorGUI.IntField(label, x),
+                bool x => EditorGUI.Toggle(label, x),
+                string x => EditorGUI.TextField(label, x),
+                Vector2 x => ToVector2(EditorGUI.Vector3Field(label, new Vector3(x, 0.0f))),
+                Vector3 x => EditorGUI.Vector3Field(label, x),
+                Vector4 x => ToVector4(EditorGUI.ColorField(label, new Color(x.X, x.Y, x.Z, x.W))),
+                Color x => EditorGUI.ColorField(label, x),
+                Entity x => EditorGUI.EntityField(label, x),
+                IAssetReference x => EditorGUI.AssetField(label, x),
+                Enum x => EditorGUI.EnumField(label, x),
+                _ => v,
+            };
+        }
+
         private static Vector2 ToVector2(Vector3 v) => new(v.X, v.Y);
         private static Vector4 ToVector4(Color c) => new(c.R, c.G, c.B, c.A);
 
@@ -257,16 +316,61 @@ namespace Dimension
             typeof(Prefab), typeof(Texture), typeof(Material), typeof(Mesh), typeof(AudioClip),
         };
 
+        // Serialized field types: the ones above, enums (stored as their int value), and lists and arrays of either.
+        private static bool IsScalar(Type t) =>
+            s_Supported.Contains(t) ||
+            (t.IsEnum && Type.GetTypeCode(Enum.GetUnderlyingType(t)) is TypeCode.Int32 or TypeCode.Int16 or TypeCode.UInt16 or TypeCode.Byte or TypeCode.SByte);
+        private static Type ElementType(Type t) =>
+            t.IsArray && t.GetArrayRank() == 1 ? t.GetElementType() :
+            t.IsGenericType && t.GetGenericTypeDefinition() == typeof(List<>) ? t.GetGenericArguments()[0] : null;
+        private static bool IsSupported(Type t) => IsScalar(t) || (ElementType(t) is { } e && IsScalar(e));
+
+        // A field's type for the engine: "type", with an enum's names and values, or a list's "element" type.
+        private static void WriteType(Utf8JsonWriter w, Type t)
+        {
+            if (ElementType(t) is { } element)
+            {
+                w.WriteString("type", "List");
+                w.WriteStartObject("element");
+                WriteType(w, element);
+                w.WriteEndObject();
+                return;
+            }
+            if (t.IsEnum)
+            {
+                w.WriteString("type", "Enum");
+                w.WriteStartArray("enumNames");
+                foreach (string name in Enum.GetNames(t)) w.WriteStringValue(name);
+                w.WriteEndArray();
+                w.WriteStartArray("enumValues");
+                foreach (object v in Enum.GetValues(t)) w.WriteNumberValue(Convert.ToInt32(v));
+                w.WriteEndArray();
+                return;
+            }
+            w.WriteString("type", TypeName(t));
+        }
+
         private static string TypeName(Type t) =>
             t == typeof(float) ? "Float" : t == typeof(int) ? "Int" : t == typeof(bool) ? "Bool" : t == typeof(string) ? "String" :
             t == typeof(Vector2) ? "Vec2" : t == typeof(Vector3) ? "Vec3" : t == typeof(Vector4) ? "Vec4" : t == typeof(Color) ? "Color4" :
             t == typeof(Prefab) ? "Prefab" : t == typeof(Texture) ? "Texture" : t == typeof(Material) ? "Material" : t == typeof(Mesh) ? "Mesh" :
             t == typeof(AudioClip) ? "Audio" : "Entity";
 
-        private static void WriteDefault(Utf8JsonWriter w, object v)
+        // A field's value as the engine reads it (entities as packed ids, null for none; lists as arrays).
+        private static void WriteValue(Utf8JsonWriter w, object v)
         {
             switch (v)
             {
+                case Entity e:
+                    if (e.Scene == IntPtr.Zero) w.WriteNullValue();
+                    else w.WriteNumberValue(e.Id);
+                    break;
+                case Enum e: w.WriteNumberValue(Convert.ToInt32(e)); break;
+                case System.Collections.IList list:
+                    w.WriteStartArray();
+                    foreach (object item in list) WriteValue(w, item);
+                    w.WriteEndArray();
+                    break;
                 case float f: w.WriteNumberValue(f); break;
                 case int i: w.WriteNumberValue(i); break;
                 case bool b: w.WriteBooleanValue(b); break;
@@ -287,7 +391,7 @@ namespace Dimension
             foreach (Type t in chain)
                 foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    if (!s_Supported.Contains(f.FieldType) || f.IsInitOnly || f.IsNotSerialized) continue;
+                    if (!IsSupported(f.FieldType) || f.IsInitOnly || f.IsNotSerialized) continue;
                     if (!f.IsPublic && f.GetCustomAttribute<SerializeFieldAttribute>() == null) continue;
                     yield return f;
                 }
@@ -334,9 +438,9 @@ namespace Dimension
                             cls.Fields.Add(f);
                             w.WriteStartObject();
                             w.WriteString("name", f.Name);
-                            w.WriteString("type", TypeName(f.FieldType));
+                            WriteType(w, f.FieldType);
                             w.WritePropertyName("default");
-                            WriteDefault(w, defaults != null ? f.GetValue(defaults) : null);
+                            WriteValue(w, defaults != null ? f.GetValue(defaults) : null);
                             if (f.GetCustomAttribute<RangeAttribute>() is { } range) { w.WriteNumber("min", range.Min); w.WriteNumber("max", range.Max); }
                             if (f.GetCustomAttribute<TooltipAttribute>() is { } tip) w.WriteString("tooltip", tip.Text);
                             if (f.GetCustomAttribute<HeaderAttribute>() is { } header) w.WriteString("header", header.Text);
@@ -426,6 +530,8 @@ namespace Dimension
                 FieldInfo f = cls.Fields[index];
                 Type t = f.FieldType;
                 object v =
+                    ElementType(t) != null ? ReadValue(t, Native.FromUtf8((byte*)value), b.Entity.Scene) : // lists come as JSON
+                    t.IsEnum ? Enum.ToObject(t, *(int*)value) :
                     t == typeof(float) ? *(float*)value :
                     t == typeof(int) ? *(int*)value :
                     t == typeof(bool) ? *(byte*)value != 0 :
@@ -532,9 +638,7 @@ namespace Dimension
                 w.WriteStartArray();
                 foreach (FieldInfo f in cls.Fields)
                 {
-                    object v = f.GetValue(b);
-                    if (v is Entity e) w.WriteNumberValue(e.Id);
-                    else WriteDefault(w, v);
+                    WriteValue(w, f.GetValue(b));
                 }
                 w.WriteEndArray();
             }

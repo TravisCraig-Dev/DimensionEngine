@@ -37,11 +37,14 @@ namespace Dimension
         float Speed = 0.05f;
         float Min = 0.0f, Max = 0.0f; // Min == Max means unbounded
         std::vector<std::string> EnumNames;
+        std::vector<int32_t> EnumValues; // the stored value of each name (empty: its index)
         std::string Tooltip;
         std::string Header;  // heading drawn above the field in the Inspector
         bool Hidden = false; // serialized but not shown in the Inspector
         // StructList: the element struct's fields (relative to an element), the list's operations, and the element
         // field whose text titles each element in the Inspector ("" = numbered). Max (when above 0) caps the length.
+        // A single unnamed element field makes a list of plain values: saved as an array of them, each drawn in one
+        // row (see IsValueList).
         std::vector<FieldInfo> Elements;
         std::function<size_t(const void*)> ListSize;
         std::function<void*(void*, size_t)> ListAt;
@@ -50,6 +53,8 @@ namespace Dimension
         std::function<void(void*, size_t, size_t)> ListMove; // an element from one place to another
         std::string ElementTitle;
     };
+
+    inline bool IsValueList(const FieldInfo& f) { return f.Type == FieldType::StructList && f.Elements.size() == 1 && f.Elements[0].Name.empty(); }
 
     template <class M> constexpr FieldType DeduceFieldType()
     {

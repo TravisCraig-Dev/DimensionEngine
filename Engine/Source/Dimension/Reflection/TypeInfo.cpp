@@ -87,6 +87,11 @@ namespace Dimension
             void* items = const_cast<void*>(p);
             for (size_t i = 0; i < field.ListSize(items); ++i)
             {
+                if (IsValueList(field))
+                {
+                    list.push_back(FieldToJson(field.Elements[0], field.ListAt(items, i), resolver));
+                    continue;
+                }
                 json element = json::object();
                 for (const FieldInfo& sub : field.Elements) element[sub.Name] = FieldToJson(sub, field.ListAt(items, i), resolver);
                 list.push_back(std::move(element));
@@ -198,6 +203,11 @@ namespace Dimension
                 field.ListResize(p, count);
                 for (size_t i = 0; i < count; ++i)
                 {
+                    if (IsValueList(field))
+                    {
+                        FieldFromJson(field.Elements[0], field.ListAt(p, i), v[i], resolver);
+                        continue;
+                    }
                     if (!v[i].is_object()) continue;
                     void* element = field.ListAt(p, i);
                     for (const FieldInfo& sub : field.Elements)
