@@ -1080,6 +1080,41 @@ namespace Editor
         ImGui::TextDisabled("%s  |  %s", AssetTypeToString(meta->Type), meta->Path.generic_string().c_str());
         ImGui::TextDisabled("GUID %llu", (unsigned long long)(uint64_t)handle);
         ImGui::Separator();
+        // Labels (searched with l:Label in the Project window): chips to remove, and a field to add one (or pick a used one).
+        {
+            std::vector<std::string> labels = AssetManager::GetLabels(handle);
+            bool changed = false;
+            for (size_t i = 0; i < labels.size(); ++i)
+            {
+                ImGui::PushID((int)i);
+                if (i > 0) ImGui::SameLine();
+                if (ImGui::SmallButton((labels[i] + "  x").c_str()))
+                {
+                    labels.erase(labels.begin() + i);
+                    changed = true;
+                    ImGui::PopID();
+                    break;
+                }
+                ImGui::PopID();
+            }
+            static std::string adding;
+            ImGui::SetNextItemWidth(140.0f);
+            bool enter = ImGui::InputTextWithHint("##label", "Add label", &adding, ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::SameLine();
+            if (ImGui::BeginCombo("##labels", nullptr, ImGuiComboFlags_NoPreview))
+            {
+                for (const std::string& l : AssetManager::GetAllLabels())
+                    if (ImGui::Selectable(l.c_str())) adding = l, enter = true;
+                ImGui::EndCombo();
+            }
+            if (enter && adding.find_first_not_of(' ') != std::string::npos)
+            {
+                labels.push_back(adding.substr(adding.find_first_not_of(' ')));
+                adding.clear();
+                changed = true;
+            }
+            if (changed) AssetManager::SetLabels(handle, labels);
+        }
         // Materials, models and prefabs: their picture (drawn again a frame after they change).
         if (uint64_t preview = m_Ctx.Previews && AssetPreviews::HasPreview(meta->Type) ? m_Ctx.Previews->Get(handle) : 0)
         {

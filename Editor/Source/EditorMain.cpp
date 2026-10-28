@@ -32,6 +32,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--open") && i + 1 < argc) options.OpenWindow = argv[++i];
         else if (!std::strcmp(argv[i], "--line-point") && i + 1 < argc) options.LinePoint = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--frame-event") && i + 1 < argc) options.FrameEvent = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--menu") && i + 1 < argc) options.MenuCommand = argv[++i];
         else if (!std::strcmp(argv[i], "--search") && i + 1 < argc) options.Search = argv[++i];
         else if (!std::strcmp(argv[i], "--visualize-nav")) options.VisualizeNavigation = true;
         else if (!std::strcmp(argv[i], "--wait-for-debugger")) options.WaitForDebugger = true;

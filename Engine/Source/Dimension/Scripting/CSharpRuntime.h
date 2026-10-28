@@ -1,5 +1,9 @@
 #pragma once
 #include "Dimension/Core/Base.h"
+#include "Dimension/ECS/Entity.h"
+#include <functional>
+#include <string>
+#include <vector>
 
 namespace Dimension
 {
@@ -9,9 +13,34 @@ namespace Dimension
     // loaded into a collectible AssemblyLoadContext, so it can be rebuilt and reloaded while the
     // editor runs. C# classes register into ScriptRegistry under their full type name (module
     // "csharp"), so the Inspector, serialization, prefabs and play mode treat them like C++ scripts.
+    class Scene;
+
     class CSharpRuntime
     {
     public:
+        // Editor extensions in the scripts (EditorApi.cs): menu items ([MenuItem]) and windows (EditorWindow), each
+        // under a menu path, registered when the scripts load.
+        struct EditorItem
+        {
+            int Id = -1;
+            bool Window = false;
+            std::string MenuPath, Title;
+        };
+        static const std::vector<EditorItem>& GetEditorItems();
+        // Runs a menu item, or draws a window's contents (inside the caller's window), with `scene` as the scene.
+        static void CallEditorItem(int id, bool window, Scene& scene);
+        // What the extensions reach in the editor: controls (op, label, values, count; see EditorGUI in EditorApi.cs:
+        // returns 1 when clicked/changed), a text field, the selection (0 get, 1 set, 2 create an entity named `text`,
+        // 3 count (in Index), 4 the n-th (n in the entity's Index)), and an undo step.
+        struct EditorHooks
+        {
+            std::function<int(int, const char*, float*, int)> Gui;
+            std::function<std::string(const char*, const std::string&)> Text;
+            std::function<Entity(int, Entity, const char*)> Selection;
+            std::function<void(const char*)> Undo;
+        };
+        static void SetEditorHooks(const EditorHooks& hooks);
+
         // `managedDir` contains Dimension.Core.dll and its runtimeconfig.json.
         static bool Init(const fs::path& managedDir);
         static bool IsAvailable();

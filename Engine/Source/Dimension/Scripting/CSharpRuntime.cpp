@@ -133,6 +133,12 @@ namespace Dimension
             // 0 sample position (a within maxDistance -> out), 1 path a -> b (corners into out, up to maxOut; returns the
             // count, negative when partial), 2 bake every surface again, 3 update the area of box a (center) by b (size)
             int (*NavQuery)(void*, int, const float*, const float*, float, float*, int);
+            // Editor extensions: through the hooks the editor sets (CSharpRuntime::SetEditorHooks).
+            int (*EditorGui)(int, const char*, float*, int);
+            const char* (*EditorGuiText)(const char*, const char*);
+            uint64_t (*EditorSelection)(int, uint64_t, const char*);
+            void (*EditorUndo)(const char*);
+            void (*RegisterEditorItem)(const char*);
         };
 
         // Background scene loads started from C#, by id.
@@ -152,7 +158,10 @@ namespace Dimension
             void (*RaiseEvent)(void*, uint64_t, int, float, uint64_t, const char*);
             const char* (*GetFields)(intptr_t); // JSON array of the field values (entities as packed ids)
             int (*Debugger)(int);                // 0 attached?, 1 launch, 2 break
+            void (*EditorCall)(int, int, void*); // 0 run menu item, 1 window OnGUI; id; scene
         };
+        CSharpRuntime::EditorHooks s_EditorHooks;
+        std::vector<CSharpRuntime::EditorItem> s_EditorItems;
 
         bool s_Available = false;
         ManagedApi s_Managed{};
@@ -437,6 +446,39 @@ namespace Dimension
                 if (auto* sr = Comp<SpriteRendererComponent>(s, e)) std::memcpy(&sr->Color, c, 16);
             };
             a.RegisterScriptClass = &RegisterScriptClass;
+            a.EditorGui = [](int op, const char* label, float* v, int n) -> int {
+                return s_EditorHooks.Gui ? s_EditorHooks.Gui(op, label ? label : "", v, n) : 0;
+            };
+            a.EditorGuiText = [](const char* label, const char* text) -> const char* {
+                s_StringReturn = text ? text : "";
+                if (s_EditorHooks.Text) s_StringReturn = s_EditorHooks.Text(label ? label : "", s_StringReturn);
+                return s_StringReturn.c_str();
+            };
+            a.EditorSelection = [](int op, uint64_t value, const char* text) -> uint64_t {
+                if (!s_EditorHooks.Selection) return 0;
+                // Entities go both ways packed; the count (3) and an index (4) are plain numbers.
+                bool entityIn = op == 1;
+                Entity in = entityIn ? Unpack(value) : Entity{ (uint32_t)value, 0 };
+                Entity out = s_EditorHooks.Selection(op, in, text ? text : "");
+                return op == 3 ? (uint64_t)out.Index : Pack(out);
+            };
+            a.EditorUndo = [](const char* name) { if (s_EditorHooks.Undo) s_EditorHooks.Undo(name ? name : ""); };
+            a.RegisterEditorItem = [](const char* json) {
+                try
+                {
+                    auto j = nlohmann::json::parse(json);
+                    CSharpRuntime::EditorItem item;
+                    item.Id = j.value("id", -1);
+                    item.Window = j.value("kind", std::string()) == "window";
+                    item.MenuPath = j.value("path", std::string());
+                    item.Title = j.value("title", std::string());
+                    s_EditorItems.push_back(std::move(item));
+                }
+                catch (const std::exception& e)
+                {
+                    Log::Error("Bad editor extension registration: {}", e.what());
+                }
+            };
             a.GetDeltaTime = [] { return s_DeltaTime; };
             a.AnimatorSetParameter = [](void* s, uint64_t e, const char* name, float value, int kind) {
                 auto* an = Comp<AnimatorComponent>(s, e);
@@ -812,9 +854,17 @@ namespace Dimension
         return count >= 0;
     }
 
+    void CSharpRuntime::SetEditorHooks(const EditorHooks& hooks) { s_EditorHooks = hooks; }
+    const std::vector<CSharpRuntime::EditorItem>& CSharpRuntime::GetEditorItems() { return s_EditorItems; }
+    void CSharpRuntime::CallEditorItem(int id, bool window, Scene& scene)
+    {
+        if (s_Available && s_Managed.EditorCall) s_Managed.EditorCall(window ? 1 : 0, id, &scene);
+    }
+
     void CSharpRuntime::UnloadScripts()
     {
         if (!s_Available) return;
+        s_EditorItems.clear();
         ScriptRegistry::ClearModule("csharp");
         s_Classes.clear();
         s_Managed.UnloadScripts();
@@ -851,6 +901,9 @@ namespace Dimension
         return true;
     }
 #else
+    void CSharpRuntime::SetEditorHooks(const EditorHooks&) {}
+    const std::vector<CSharpRuntime::EditorItem>& CSharpRuntime::GetEditorItems() { static std::vector<EditorItem> none; return none; }
+    void CSharpRuntime::CallEditorItem(int, bool, Scene&) {}
     bool CSharpRuntime::IsDebuggerAttached() { return false; }
     bool CSharpRuntime::LaunchDebugger() { return false; }
     bool CSharpRuntime::WaitForDebugger(float) { return false; }

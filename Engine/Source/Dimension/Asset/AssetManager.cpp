@@ -806,6 +806,86 @@ namespace Dimension
         return Import(absolutePath);
     }
 
+    std::vector<std::string> AssetManager::GetLabels(AssetHandle handle)
+    {
+        std::vector<std::string> out;
+        const AssetMetadata* meta = GetMetadata(handle);
+        if (!meta) return out;
+        for (const auto& l : meta->ImportSettings.value("labels", json::array()))
+            if (l.is_string() && !l.get<std::string>().empty()) out.push_back(l.get<std::string>());
+        return out;
+    }
+
+    void AssetManager::SetLabels(AssetHandle handle, const std::vector<std::string>& labels)
+    {
+        auto it = s->Assets.find(handle);
+        if (it == s->Assets.end()) return;
+        std::vector<std::string> unique;
+        for (const std::string& l : labels)
+            if (!l.empty() && std::find(unique.begin(), unique.end(), l) == unique.end()) unique.push_back(l);
+        if (unique.empty()) it->second.ImportSettings.erase("labels");
+        else it->second.ImportSettings["labels"] = unique;
+        WriteMeta(it->second); // the asset itself is unchanged: nothing to import again
+    }
+
+    std::vector<std::string> AssetManager::GetAllLabels()
+    {
+        std::vector<std::string> all;
+        for (auto& [h, meta] : s->Assets)
+            for (const std::string& l : GetLabels(h))
+                if (std::find(all.begin(), all.end(), l) == all.end()) all.push_back(l);
+        std::sort(all.begin(), all.end());
+        return all;
+    }
+
+    bool AssetManager::Matches(const AssetMetadata& meta, const std::string& query)
+    {
+        auto lower = [](std::string t) {
+            std::string out;
+            for (char c : t)
+                if (c != ' ') out += (char)std::tolower((unsigned char)c);
+            return out;
+        };
+        std::string name = lower(meta.Path.filename().string());
+        std::string type = lower(AssetTypeToString(meta.Type));
+        std::vector<std::string> labels;
+        for (const auto& l : meta.ImportSettings.value("labels", json::array()))
+            if (l.is_string()) labels.push_back(lower(l.get<std::string>()));
+        size_t start = 0;
+        bool any = false;
+        while (start < query.size())
+        {
+            size_t end = query.find(' ', start);
+            if (end == std::string::npos) end = query.size();
+            std::string term = lower(query.substr(start, end - start));
+            start = end + 1;
+            if (term.empty()) continue;
+            any = true;
+            if (term.rfind("t:", 0) == 0)
+            {
+                if (type.rfind(term.substr(2), 0) != 0) return false;
+            }
+            else if (term.rfind("l:", 0) == 0)
+            {
+                if (std::find(labels.begin(), labels.end(), term.substr(2)) == labels.end()) return false;
+            }
+            else if (name.find(term) == std::string::npos)
+                return false;
+        }
+        return any;
+    }
+
+    std::vector<AssetHandle> AssetManager::Search(const std::string& query)
+    {
+        std::vector<std::pair<std::string, AssetHandle>> found;
+        for (auto& [h, meta] : s->Assets)
+            if (!s->SubAssetNames.contains(h) && Matches(meta, query)) found.push_back({ meta.Path.generic_string(), h });
+        std::sort(found.begin(), found.end());
+        std::vector<AssetHandle> out;
+        for (auto& f : found) out.push_back(f.second);
+        return out;
+    }
+
     const std::vector<SpriteRect>& AssetManager::GetSprites(AssetHandle texture)
     {
         static const std::vector<SpriteRect> none;

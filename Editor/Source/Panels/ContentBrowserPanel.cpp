@@ -114,7 +114,7 @@ namespace Editor
             }
             ImGui::SameLine(ImGui::GetContentRegionMax().x - 330);
             ImGui::SetNextItemWidth(180);
-            ImGui::InputTextWithHint("##search", "Search", &m_Search);
+            ImGui::InputTextWithHint("##search", "Search (t:Type l:Label)", &m_Search);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120);
             ImGui::SliderFloat("##size", &m_ThumbnailSize, 48.0f, 160.0f, "%.0f px");
@@ -126,9 +126,9 @@ namespace Editor
             std::string search = Lower(m_Search);
             if (!search.empty())
             {
-                for (auto& e : fs::recursive_directory_iterator(root, ec))
-                    if (e.is_regular_file() && e.path().extension() != ".meta" && Lower(e.path().filename().string()).find(search) != std::string::npos)
-                        entries.push_back(e);
+                // Across the project: names, and t:Type and l:Label terms.
+                for (AssetHandle h : AssetManager::Search(m_Search))
+                    if (const AssetMetadata* m = AssetManager::GetMetadata(h)) entries.emplace_back(AssetManager::GetAssetsDirectory() / m->Path, ec);
             }
             else
                 for (auto& e : fs::directory_iterator(m_Current, ec))

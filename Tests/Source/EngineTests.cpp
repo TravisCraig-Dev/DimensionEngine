@@ -7366,8 +7366,102 @@ namespace
             CHECK(glm::length(wind) > 1.0f);
             rt->OnRuntimeStop();
         }
+        // Editor extensions (the Sandbox's SceneTools.cs): its menu items and window are registered; through stand-in
+        // editor hooks, Line Up Selected puts the selection in a row (one undo step), Add Marker creates and selects an
+        // entity, and the window draws its controls (a value it returns is kept).
+        {
+            const auto& items = CSharpRuntime::GetEditorItems();
+            auto find = [&](const std::string& path) -> const CSharpRuntime::EditorItem* {
+                for (const auto& i : items)
+                    if (i.MenuPath == path) return &i;
+                return nullptr;
+            };
+            const auto* lineUp = find("Tools/Line Up Selected");
+            const auto* marker = find("Tools/Add Marker");
+            const auto* window = find("Window/Scene Tools");
+            CHECK(lineUp && !lineUp->Window && marker && window && window->Window && window->Title == "Scene Tools");
+            Scene edited("Edited");
+            std::vector<Entity> selection;
+            for (int i = 0; i < 3; ++i)
+            {
+                Entity e = edited.CreateEntity("Box " + std::to_string(i));
+                edited.GetRegistry().Get<TransformComponent>(e).Position = { (float)i * 7.0f, (float)i, 1.0f };
+                selection.push_back(e);
+            }
+            int undos = 0;
+            std::vector<std::string> controls;
+            CSharpRuntime::EditorHooks hooks;
+            hooks.Selection = [&](int op, Entity e, const char* text) -> Entity {
+                switch (op)
+                {
+                case 0: return selection.empty() ? Entity::Null() : selection.back();
+                case 1: selection = { e }; return e;
+                case 2: return edited.CreateEntity(text);
+                case 3: return Entity{ (uint32_t)selection.size(), 0 };
+                case 4: return selection[e.Index];
+                }
+                return Entity::Null();
+            };
+            hooks.Undo = [&](const char*) { ++undos; };
+            hooks.Gui = [&](int op, const char* label, float* v, int n) -> int {
+                controls.push_back(std::to_string(op) + ":" + label);
+                if (op == 5 && n >= 3) v[0] = 3.0f; // the Spacing slider moved to 3
+                return 0;
+            };
+            hooks.Text = [&](const char* label, const std::string& text) {
+                controls.push_back(std::string("text:") + label);
+                return text;
+            };
+            CSharpRuntime::SetEditorHooks(hooks);
+            if (lineUp && marker && window)
+            {
+                CSharpRuntime::CallEditorItem(window->Id, true, edited); // Spacing becomes 3
+                CSharpRuntime::CallEditorItem(lineUp->Id, false, edited);
+                auto& reg = edited.GetRegistry();
+                CHECK(undos == 1 && Near(reg.Get<TransformComponent>(selection[1]).Position, { 3.0f, 0.0f, 1.0f }) &&
+                      Near(reg.Get<TransformComponent>(selection[2]).Position, { 6.0f, 0.0f, 1.0f }));
+                CHECK(std::find(controls.begin(), controls.end(), "5:Spacing") != controls.end() &&
+                      std::find(controls.begin(), controls.end(), "text:Name") != controls.end() &&
+                      std::find(controls.begin(), controls.end(), "1:Line Up Selected") != controls.end());
+                CSharpRuntime::CallEditorItem(marker->Id, false, edited);
+                CHECK(selection.size() == 1 && edited.IsValid(selection[0]) && edited.GetRegistry().Get<TagComponent>(selection[0]).Name == "Marker");
+            }
+            CSharpRuntime::SetEditorHooks({});
+        }
         CSharpRuntime::UnloadScripts();
-        CHECK(ScriptRegistry::Find("Game.Spinner") == nullptr);
+        CHECK(ScriptRegistry::Find("Game.Spinner") == nullptr && CSharpRuntime::GetEditorItems().empty());
+    }
+
+    void TestAssetLabels()
+    {
+        // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
+        fs::path root = fs::temp_directory_path() / "dimension_labels";
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::create_directories(root / "Things", ec);
+        fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Sprites/Box.png", root / "Things/Crate.png", ec);
+        fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Materials/Wood.mat", root / "Things/Crate Wood.mat", ec);
+        fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Materials/Gold.mat", root / "Gold.mat", ec);
+        AssetManager::Init(root);
+        AssetHandle crate = AssetManager::GetHandle("Things/Crate.png"), wood = AssetManager::GetHandle("Things/Crate Wood.mat"),
+                    gold = AssetManager::GetHandle("Gold.mat");
+        CHECK(crate.IsValid() && wood.IsValid() && gold.IsValid());
+        AssetManager::SetLabels(crate, { "Props", "Level1", "Props" });
+        AssetManager::SetLabels(wood, { "Props" });
+        CHECK(AssetManager::GetLabels(crate) == std::vector<std::string>({ "Props", "Level1" }));
+        CHECK(AssetManager::GetAllLabels() == std::vector<std::string>({ "Level1", "Props" }));
+        CHECK(AssetManager::Search("crate") == std::vector<AssetHandle>({ wood, crate })); // by name, sorted by path
+        CHECK(AssetManager::Search("l:props t:mat") == std::vector<AssetHandle>({ wood }));
+        CHECK(AssetManager::Search("t:Texture") == std::vector<AssetHandle>({ crate }));
+        CHECK(AssetManager::Search("l:level1 crate") == std::vector<AssetHandle>({ crate }) && AssetManager::Search("l:nothing").empty());
+        AssetManager::Shutdown();
+        // Kept in the .meta file: there after loading the project again.
+        AssetManager::Init(root);
+        CHECK(AssetManager::GetLabels(AssetManager::GetHandle("Things/Crate.png")).size() == 2 && AssetManager::GetLabels(gold).empty());
+        AssetManager::SetLabels(crate, {});
+        CHECK(AssetManager::GetAllLabels() == std::vector<std::string>({ "Props" }));
+        AssetManager::Shutdown();
+        fs::remove_all(root, ec);
     }
 
     void TestAnimatorStateMachine()
@@ -8846,6 +8940,7 @@ int main(int argc, char** argv)
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);
+    Run("Asset labels", TestAssetLabels);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

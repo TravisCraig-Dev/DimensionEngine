@@ -104,6 +104,16 @@ namespace Dimension
         static Ref<SpriteAtlas> GetSpriteAtlas(AssetHandle handle);
         static void SaveSpriteAtlas(AssetHandle handle);
         static AssetHandle CreateSpriteAtlas(const fs::path& absolutePath, const std::vector<AssetHandle>& sprites);
+        // Asset labels (like Unity's), kept in the .meta file: set without importing the asset again.
+        static std::vector<std::string> GetLabels(AssetHandle handle);
+        static void SetLabels(AssetHandle handle, const std::vector<std::string>& labels);
+        // Every label used in the project, sorted.
+        static std::vector<std::string> GetAllLabels();
+        // Assets matching a search: words match the file name; "t:Type" its type (Texture, Mesh, Material, Prefab,
+        // Scene, Audio, Font, AnimatorController, Timeline, SpriteAtlas; spaces and case ignored, a prefix will do) and
+        // "l:Label" one of its labels (case ignored). Every term must match. Sorted by path.
+        static std::vector<AssetHandle> Search(const std::string& query);
+        static bool Matches(const AssetMetadata& meta, const std::string& query);
         // The sprites sliced from a texture (Sprite Editor; its import settings' "sprites"), and one by name (null when
         // none).
         static const std::vector<SpriteRect>& GetSprites(AssetHandle texture);

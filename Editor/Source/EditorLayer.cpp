@@ -142,6 +142,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
+        else if (!m_Options.OpenWindow.empty()) m_ScriptWindows[m_Options.OpenWindow] = true; // a C# extension's window, by title
         else if (m_Options.OpenWindow == "Frame Debugger")
         {
             m_ShowFrameDebugger = true;
@@ -911,6 +912,7 @@ namespace Editor
             m_Ctx.OpenSpriteEditor = false;
         }
         if (m_ShowSpriteEditor) m_SpriteEditor->OnImGui(&m_ShowSpriteEditor);
+        DrawScriptWindows();
         if (m_ShowFrameDebugger)
         {
             SceneRenderer& debugged = m_FrameDebugger->View() == 0 ? m_SceneRenderer : m_GameRenderer;
@@ -1085,6 +1087,7 @@ namespace Editor
             ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowImGuiDemo);
             ImGui::EndMenu();
         }
+        DrawScriptMenus();
         if (ImGui::BeginMenu("Help"))
         {
             if (ImGui::MenuItem("About Dimension")) m_ShowAbout = true;
@@ -2594,6 +2597,7 @@ namespace Editor
     void EditorLayer::InitCSharp()
     {
         if (!CSharpRuntime::Init(ExecutableDirectory() / "managed")) return;
+        InstallScriptHooks();
         if (m_Options.WaitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);
         fs::path project = Project::GetDirectory();
         CSharpProject::Scaffold(project, ExecutableDirectory() / "managed");
@@ -2603,6 +2607,126 @@ namespace Editor
         bool upToDate = fs::exists(dll) && fs::last_write_time(dll, ec) >= m_CSharpBuiltSources;
         if (upToDate) CSharpRuntime::LoadScripts(dll);
         else if (CSharpProject::HasSources(project)) BuildCSharp();
+    }
+
+    void EditorLayer::InstallScriptHooks()
+    {
+        // What C# editor extensions reach (EditorApi.cs): the editor's controls, its selection and undo.
+        CSharpRuntime::EditorHooks hooks;
+        hooks.Gui = [](int op, const char* label, float* v, int n) -> int {
+            switch (op)
+            {
+            case 0: ImGui::TextUnformatted(label); return 0;
+            case 1: return ImGui::Button(label) ? 1 : 0;
+            case 2:
+            {
+                bool b = n > 0 && v[0] != 0.0f;
+                bool changed = ImGui::Checkbox(label, &b);
+                if (n > 0) v[0] = b ? 1.0f : 0.0f;
+                return changed ? 1 : 0;
+            }
+            case 3: return n > 0 && ImGui::DragFloat(label, v, 0.05f) ? 1 : 0;
+            case 4:
+            {
+                int i = n > 0 ? (int)v[0] : 0;
+                bool changed = ImGui::DragInt(label, &i);
+                if (n > 0) v[0] = (float)i;
+                return changed ? 1 : 0;
+            }
+            case 5: return n >= 3 && ImGui::SliderFloat(label, v, v[1], v[2]) ? 1 : 0;
+            case 6: return n >= 3 && ImGui::DragFloat3(label, v, 0.05f) ? 1 : 0;
+            case 7: return n >= 4 && ImGui::ColorEdit4(label, v) ? 1 : 0;
+            case 8:
+                if (*label) ImGui::SeparatorText(label);
+                else ImGui::Separator();
+                return 0;
+            case 9: ImGui::SameLine(); return 0;
+            case 10: ImGui::Spacing(); return 0;
+            }
+            return 0;
+        };
+        hooks.Text = [](const char* label, const std::string& text) {
+            std::string edited = text;
+            ImGui::InputText(label, &edited);
+            return edited;
+        };
+        hooks.Selection = [this](int op, Entity e, const char* text) -> Entity {
+            Scene& scene = m_Ctx.ActiveScene();
+            switch (op)
+            {
+            case 0: return m_Ctx.HasValidSelection() ? m_Ctx.Selected : Entity::Null();
+            case 1: m_Ctx.Select(scene.IsValid(e) ? e : Entity::Null()); return e;
+            case 2:
+            {
+                Entity created = scene.CreateEntity(*text ? text : "GameObject");
+                m_Ctx.MarkDirty();
+                return created;
+            }
+            case 3: return Entity{ (uint32_t)m_Ctx.Selection.size(), 0 };
+            case 4: return e.Index < m_Ctx.Selection.size() ? m_Ctx.Selection[e.Index] : Entity::Null();
+            }
+            return Entity::Null();
+        };
+        hooks.Undo = [this](const char*) {
+            m_Ctx.RecordUndo();
+            m_Ctx.MarkDirty();
+        };
+        CSharpRuntime::SetEditorHooks(hooks);
+    }
+
+    void EditorLayer::DrawScriptMenus()
+    {
+        // Each extension under its menu path: the first part is the menu (an existing one gains the item), the parts
+        // between are submenus. Windows show a check while open.
+        for (const auto& item : CSharpRuntime::GetEditorItems())
+        {
+            std::vector<std::string> parts;
+            for (size_t start = 0; start <= item.MenuPath.size();)
+            {
+                size_t slash = item.MenuPath.find('/', start);
+                if (slash == std::string::npos) slash = item.MenuPath.size();
+                if (slash > start) parts.push_back(item.MenuPath.substr(start, slash - start));
+                start = slash + 1;
+            }
+            if (parts.size() < 2) parts.insert(parts.begin(), "Tools");
+            size_t opened = 0;
+            while (opened + 1 < parts.size() && ImGui::BeginMenu(parts[opened].c_str())) ++opened;
+            if (opened + 1 == parts.size())
+            {
+                bool* open = item.Window ? &m_ScriptWindows[item.Title] : nullptr;
+                if (ImGui::MenuItem(parts.back().c_str(), nullptr, open && *open))
+                {
+                    if (open) *open = !*open;
+                    else CSharpRuntime::CallEditorItem(item.Id, false, m_Ctx.ActiveScene());
+                }
+            }
+            for (size_t i = 0; i < opened; ++i) ImGui::EndMenu();
+        }
+    }
+
+    void EditorLayer::DrawScriptWindows()
+    {
+        // A command from the command line runs once the scripts are in.
+        if (!m_Options.MenuCommand.empty())
+            for (const auto& item : CSharpRuntime::GetEditorItems())
+                if (!item.Window && item.MenuPath == m_Options.MenuCommand)
+                {
+                    CSharpRuntime::CallEditorItem(item.Id, false, m_Ctx.ActiveScene());
+                    m_Options.MenuCommand.clear();
+                    break;
+                }
+        for (const auto& item : CSharpRuntime::GetEditorItems())
+        {
+            if (!item.Window) continue;
+            auto it = m_ScriptWindows.find(item.Title);
+            if (it == m_ScriptWindows.end() || !it->second) continue;
+            ImGui::SetNextWindowSize(ImVec2(360.0f, 300.0f), ImGuiCond_FirstUseEver);
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                                    ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+            if (ImGui::Begin(item.Title.c_str(), &it->second)) CSharpRuntime::CallEditorItem(item.Id, true, m_Ctx.ActiveScene());
+            ImGui::End();
+        }
     }
 
     void EditorLayer::BuildCSharp()

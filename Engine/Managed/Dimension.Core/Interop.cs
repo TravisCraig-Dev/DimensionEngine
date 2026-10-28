@@ -100,6 +100,13 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, float*, float, float, int, int> TerrainCrater; // world point, radius, depth, paint layer
         public delegate* unmanaged<IntPtr, ulong, int, float*, float> NavAgent; // see NavMeshAgent
         public delegate* unmanaged<IntPtr, int, float*, float*, float, float*, int, int> NavQuery; // see NavMesh
+        // Editor extensions (EditorApi.cs): a control (see EditorGUI), a text field, selection (0 get, 1 set, 2 create
+        // an entity named, 3 count, 4 the n-th), an undo step, and registering a menu item or window (JSON).
+        public delegate* unmanaged<int, byte*, float*, int, int> EditorGui;
+        public delegate* unmanaged<byte*, byte*, byte*> EditorGuiText;
+        public delegate* unmanaged<int, ulong, byte*, ulong> EditorSelection;
+        public delegate* unmanaged<byte*, void> EditorUndo;
+        public delegate* unmanaged<byte*, void> RegisterEditorItem;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
@@ -117,6 +124,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, float, ulong, byte*, void> RaiseEvent;
         public delegate* unmanaged<IntPtr, byte*> GetFields;
         public delegate* unmanaged<int, int> Debugger; // 0 = is attached?, 1 = launch (JIT debugger prompt), 2 = break
+        public delegate* unmanaged<int, int, IntPtr, void> EditorCall; // 0 run menu item, 1 window OnGUI; its id; the scene
     }
 
     internal static unsafe class Native
@@ -169,6 +177,7 @@ namespace Dimension.Interop
                 api->RaiseEvent = &ScriptHost.RaiseEvent;
                 api->GetFields = &ScriptHost.GetFields;
                 api->Debugger = &ScriptHost.DebuggerControl;
+                api->EditorCall = &ScriptHost.EditorCall;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

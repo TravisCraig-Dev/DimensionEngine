@@ -37,6 +37,69 @@ namespace Dimension
 
         private static ScriptLoadContext s_Context;
         private static readonly Dictionary<string, ScriptClass> s_Classes = new();
+        // Editor extensions by id: [MenuItem] methods and EditorWindow classes (with their instance once drawn).
+        private sealed class EditorItem
+        {
+            public MethodInfo Method;
+            public Type WindowType;
+            public EditorWindow Window;
+        }
+        private static readonly List<EditorItem> s_EditorItems = new();
+
+        private static void RegisterEditorItems(Assembly assembly)
+        {
+            foreach (Type type in assembly.GetTypes().OrderBy(t => t.FullName))
+            {
+                foreach (MethodInfo m in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                    if (m.GetCustomAttribute<MenuItemAttribute>() is { } item && m.GetParameters().Length == 0)
+                    {
+                        s_EditorItems.Add(new EditorItem { Method = m });
+                        RegisterEditorItem("menu", item.Path, null);
+                    }
+                if (!type.IsAbstract && type.IsSubclassOf(typeof(EditorWindow)))
+                {
+                    var window = type.GetCustomAttribute<EditorWindowAttribute>() ?? new EditorWindowAttribute(type.Name);
+                    s_EditorItems.Add(new EditorItem { WindowType = type });
+                    RegisterEditorItem("window", window.MenuPath, window.Title);
+                }
+            }
+        }
+
+        private static void RegisterEditorItem(string kind, string path, string title)
+        {
+            using var stream = new MemoryStream();
+            using (var w = new Utf8JsonWriter(stream))
+            {
+                w.WriteStartObject();
+                w.WriteString("kind", kind);
+                w.WriteNumber("id", s_EditorItems.Count - 1);
+                w.WriteString("path", path ?? "");
+                if (title != null) w.WriteString("title", title);
+                w.WriteEndObject();
+            }
+            byte[] json = stream.ToArray();
+            var withNul = new byte[json.Length + 1];
+            Array.Copy(json, withNul, json.Length);
+            fixed (byte* q = withNul) Native.Api.RegisterEditorItem(q);
+        }
+
+        [UnmanagedCallersOnly]
+        internal static void EditorCall(int kind, int id, IntPtr scene)
+        {
+            try
+            {
+                if (id < 0 || id >= s_EditorItems.Count) return;
+                Native.CurrentScene = scene;
+                EditorItem item = s_EditorItems[id];
+                if (kind == 0 && item.Method != null) item.Method.Invoke(null, null);
+                else if (kind == 1 && item.WindowType != null)
+                {
+                    item.Window ??= (EditorWindow)Activator.CreateInstance(item.WindowType);
+                    item.Window.OnGUI();
+                }
+            }
+            catch (Exception e) { Debug.LogError($"Editor extension failed: {(e as TargetInvocationException)?.InnerException ?? e}"); }
+        }
 
         private static readonly Type[] s_Supported =
             { typeof(float), typeof(int), typeof(bool), typeof(string), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Color), typeof(Entity) };
@@ -132,6 +195,7 @@ namespace Dimension
                     Array.Copy(json, withNul, json.Length);
                     fixed (byte* q = withNul) Native.Api.RegisterScriptClass(q);
                 }
+                RegisterEditorItems(assembly);
                 return s_Classes.Count;
             }
             catch (Exception e)
@@ -147,6 +211,7 @@ namespace Dimension
         private static WeakReference BeginUnload()
         {
             s_Classes.Clear();
+            s_EditorItems.Clear();
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);
