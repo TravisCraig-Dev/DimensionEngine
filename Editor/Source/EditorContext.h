@@ -120,6 +120,7 @@ namespace Editor
         // Terrain brush (Inspector picks it, the Scene view paints with it): 0 = off, else Terrain::BrushMode + 1.
         int TerrainTool = 0;
         float TerrainBrushSize = 6.0f, TerrainBrushStrength = 0.5f;
+        int TerrainPaintLayer = 0; // the Paint tool's layer (its place in the terrain's Layers)
         Terrain::StampSettings TerrainStamp; // the Stamp tool's image, height and turn
 
         // Deferred requests handled by the EditorLayer at a safe point in the frame.

@@ -201,19 +201,23 @@ void main()
     vec4 base;
     if (m.Flags.z == 1u)
     {
-        // Terrain: two splat maps' weights blend six layers, tiled in world space (layers without weight are skipped).
-        vec3 w = SampleTexture(m.Maps.x, vUV).rgb, w2 = SampleTexture(m.Maps2.x, vUV).rgb;
-        float total = max(w.r + w.g + w.b + w2.r + w2.g + w2.b, 1e-4);
-        w /= total;
-        w2 /= total;
+        // Terrain: its layers blended by their splat map weights (4 a map), tiled in world space (layers without
+        // weight are skipped).
+        TerrainLayersRef layers = TerrainLayersRef(m.Maps2.xy);
         vec2 world = vWorldPos.xz;
-        vec3 c = SampleTexture(m.Maps.y, world * m.Layers[0].w).rgb * m.Layers[0].rgb * w.r +
-                 SampleTexture(m.Maps.z, world * m.Layers[1].w).rgb * m.Layers[1].rgb * w.g +
-                 SampleTexture(m.Maps.w, world * m.Layers[2].w).rgb * m.Layers[2].rgb * w.b;
-        if (w2.r > 0.0) c += SampleTexture(m.Maps2.y, world * m.Layers[3].w).rgb * m.Layers[3].rgb * w2.r;
-        if (w2.g > 0.0) c += SampleTexture(m.Maps2.z, world * m.Layers[4].w).rgb * m.Layers[4].rgb * w2.g;
-        if (w2.b > 0.0) c += SampleTexture(m.Maps2.w, world * m.Layers[5].w).rgb * m.Layers[5].rgb * w2.b;
-        base = vec4(c, 1.0) * m.BaseColor;
+        vec3 c = vec3(0.0);
+        vec4 w = vec4(0.0);
+        float total = 0.0;
+        for (uint k = 0u; k < m.Maps2.z; ++k)
+        {
+            TerrainLayer layer = layers.Layers[k];
+            if (layer.Maps.z == 0u) w = SampleTexture(layer.Maps.y, vUV);
+            float weight = w[layer.Maps.z];
+            if (weight <= 0.0) continue;
+            c += SampleTexture(layer.Maps.x, world * layer.Color.w).rgb * layer.Color.rgb * weight;
+            total += weight;
+        }
+        base = vec4(c / max(total, 1e-4), 1.0) * m.BaseColor;
     }
     else
         base = SampleTexture(m.Maps.x, uv) * m.BaseColor;

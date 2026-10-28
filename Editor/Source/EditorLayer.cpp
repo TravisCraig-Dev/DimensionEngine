@@ -2122,7 +2122,7 @@ namespace Editor
                 Terrain::StampSettings stamp = m_Ctx.TerrainStamp;
                 stamp.Carve = ImGui::GetIO().KeyShift;
                 Terrain::ApplyBrush(*terrain, mode, glm::vec2(local.x, local.z), radius, m_Ctx.TerrainBrushStrength,
-                                    std::min(ImGui::GetIO().DeltaTime, 0.05f), m_TerrainFlatten, &stamp);
+                                    std::min(ImGui::GetIO().DeltaTime, 0.05f), m_TerrainFlatten, &stamp, m_Ctx.TerrainPaintLayer);
             }
         }
         if (m_TerrainStroke && !ImGui::IsMouseDown(ImGuiMouseButton_Left))

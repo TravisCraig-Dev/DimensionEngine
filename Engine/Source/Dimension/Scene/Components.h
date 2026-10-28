@@ -122,7 +122,7 @@ namespace Dimension
         float Width = 4.0f;
         float Falloff = 3.0f;
         float Depth = 1.5f;        // River
-        int32_t PaintLayer = 3;    // 0 grass, 1 rock, 2 snow, 3 dirt, 4 sand, 5 moss; -1 = none
+        int32_t PaintLayer = 3;    // the terrain layer painted along it (its place in the Layers list); -1 = none
         Entity Terrain = Entity::Null();
     };
 
@@ -153,6 +153,21 @@ namespace Dimension
     // -Z axis, like Unity's Decal Projector: dirt, scorch marks, puddles, signs. Multiply darkens what is under it,
     // Alpha paints over it and Additive makes it glow. Surfaces turned away from the projector fade out.
     // A landscape (see Dimension/Terrain/Terrain.h): needs a Mesh Renderer, whose own mesh it replaces.
+    // A terrain surface layer: Texture (None = plain) repeating Tiling times per meter, times Color.
+    struct TerrainLayer
+    {
+        std::string Name = "Layer";
+        AssetHandle Texture = AssetHandle::None();
+        glm::vec4 Color{ 1.0f };
+        float Tiling = 0.25f;
+    };
+    inline std::vector<TerrainLayer> DefaultTerrainLayers()
+    {
+        return { { "Grass", AssetHandle::None(), { 0.36f, 0.55f, 0.24f, 1.0f }, 0.25f }, { "Rock", AssetHandle::None(), { 0.46f, 0.43f, 0.40f, 1.0f }, 0.25f },
+                 { "Snow", AssetHandle::None(), { 0.95f, 0.96f, 1.0f, 1.0f }, 0.25f },   { "Dirt", AssetHandle::None(), { 0.40f, 0.30f, 0.21f, 1.0f }, 0.25f },
+                 { "Sand", AssetHandle::None(), { 0.78f, 0.71f, 0.52f, 1.0f }, 0.25f },  { "Moss", AssetHandle::None(), { 0.22f, 0.31f, 0.14f, 1.0f }, 0.25f } };
+    }
+
     struct TerrainComponent
     {
         glm::vec2 Size{ 100.0f, 100.0f }; // meters along X and Z, centered on the object
@@ -166,21 +181,15 @@ namespace Dimension
         float Roughness = 0.5f;   // how much each finer octave adds
         float FlatCenter = 0.0f;  // radius (fraction of the half size) kept at Flat Height, e.g. for a play area
         float FlatHeight = 0.2f;  // 0-1 of Height
-        // Surface layers, blended by slope and height: grass on gentle ground, rock on steep slopes, snow up high.
-        AssetHandle GrassTexture = AssetHandle::None(), RockTexture = AssetHandle::None(), SnowTexture = AssetHandle::None();
-        glm::vec4 GrassColor{ 0.36f, 0.55f, 0.24f, 1.0f };
-        glm::vec4 RockColor{ 0.46f, 0.43f, 0.40f, 1.0f };
-        glm::vec4 SnowColor{ 0.95f, 0.96f, 1.0f, 1.0f };
-        float TextureTiling = 0.25f; // layer texture repeats per meter
-        float RockSlope = 35.0f;     // degrees where rock takes over
-        float SnowHeight = 0.72f;    // 0-1 of Height where snow starts
-        // Paint-only layers (the automatic blend uses the first three): dirt paths, sand, moss.
-        AssetHandle DirtTexture = AssetHandle::None(), SandTexture = AssetHandle::None(), MossTexture = AssetHandle::None();
-        glm::vec4 DirtColor{ 0.40f, 0.30f, 0.21f, 1.0f };
-        glm::vec4 SandColor{ 0.78f, 0.71f, 0.52f, 1.0f };
-        glm::vec4 MossColor{ 0.22f, 0.31f, 0.14f, 1.0f };
+        // Surface layers, 1 to 16 of them, each its Texture (repeating Tiling times per meter) times Color. The first
+        // three also lay themselves out by slope and height: the first on gentle ground, the second where it is
+        // steeper than Rock Slope (degrees), the third above Snow Height (0-1 of Height); any can be painted.
+        std::vector<TerrainLayer> Layers = DefaultTerrainLayers();
+        float RockSlope = 35.0f;
+        float SnowHeight = 0.72f;
         // Sculpted and painted terrain (the editor's brushes): the heights (0-1 of Height, 16-bit) and layer weights
-        // (3 or 6 bytes) per sample, base64, replacing the heightmap/noise and the automatic layers. Empty = not edited.
+        // (a byte per layer per sample, at least the first three) base64, replacing the heightmap/noise and the
+        // automatic layers. Empty = not edited.
         std::string SculptedHeights, PaintedLayers;
         // Holes (caves, tunnels, a well): one bit per sample, base64; triangles touching a hole sample neither render
         // nor collide. Empty = none.
@@ -204,7 +213,7 @@ namespace Dimension
         std::string PaintedDetails; // tree and grass density per sample (2 bytes each), base64. Empty = none
         // Runtime: decoded edits while brushing (encoded back when a stroke ends), and a counter that changes with them.
         std::vector<float> EditHeights;
-        std::vector<uint32_t> EditLayers; // two RGBA8 splat maps one after the other (grass/rock/snow, dirt/sand/moss)
+        std::vector<uint32_t> EditLayers; // RGBA8 splat maps one after the other, 4 layers each
         std::vector<uint8_t> EditDetails;
         std::vector<uint8_t> EditHoles;   // 1 per hole sample
         uint64_t EditRevision = 0;

@@ -123,6 +123,7 @@ namespace Dimension
                     void* comp = info->Get(scene, e);
                     for (auto& f : info->Fields)
                         if (data.contains(f.Name)) FieldFromJson(f, comp, data[f.Name], &resolver);
+                    if (info->Upgrade) info->Upgrade(comp, data);
                     if (info->TypeId == GetComponentTypeId<ScriptComponent>())
                     {
                         auto* sc = static_cast<ScriptComponent*>(comp);

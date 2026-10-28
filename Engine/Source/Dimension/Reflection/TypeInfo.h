@@ -26,6 +26,7 @@ namespace Dimension
         Vec3List,         // std::vector<glm::vec3>
         StringList,       // std::vector<std::string>
         MaterialList,     // std::vector<AssetHandle> of materials (per-slot overrides)
+        StructList,       // std::vector of a struct whose fields are Elements (FieldListBuilder::List)
     };
 
     struct FieldInfo
@@ -39,6 +40,15 @@ namespace Dimension
         std::string Tooltip;
         std::string Header;  // heading drawn above the field in the Inspector
         bool Hidden = false; // serialized but not shown in the Inspector
+        // StructList: the element struct's fields (relative to an element), the list's operations, and the element
+        // field whose text titles each element in the Inspector ("" = numbered). Max (when above 0) caps the length.
+        std::vector<FieldInfo> Elements;
+        std::function<size_t(const void*)> ListSize;
+        std::function<void*(void*, size_t)> ListAt;
+        std::function<void(void*, size_t)> ListResize;
+        std::function<void(void*, size_t)> ListErase;
+        std::function<void(void*, size_t, size_t)> ListMove; // an element from one place to another
+        std::string ElementTitle;
     };
 
     template <class M> constexpr FieldType DeduceFieldType()
@@ -81,6 +91,35 @@ namespace Dimension
             m_Fields.push_back(std::move(f));
             return *this;
         }
+
+        // A list of structs: `elements` declares the element type's fields (as for a component).
+        template <class E>
+        FieldListBuilder& List(std::string name, std::vector<E> T::*member, const std::type_identity_t<std::function<void(FieldListBuilder<E>&)>>& elements)
+        {
+            FieldInfo f;
+            f.Name = std::move(name);
+            f.Type = FieldType::StructList;
+            f.Access = [member](void* obj) -> void* { return &(static_cast<T*>(obj)->*member); };
+            FieldListBuilder<E> inner(f.Elements);
+            elements(inner);
+            f.ListSize = [](const void* list) { return static_cast<const std::vector<E>*>(list)->size(); };
+            f.ListAt = [](void* list, size_t i) -> void* { return &(*static_cast<std::vector<E>*>(list))[i]; };
+            f.ListResize = [](void* list, size_t n) { static_cast<std::vector<E>*>(list)->resize(n); };
+            f.ListErase = [](void* list, size_t i) {
+                auto& v = *static_cast<std::vector<E>*>(list);
+                if (i < v.size()) v.erase(v.begin() + i);
+            };
+            f.ListMove = [](void* list, size_t from, size_t to) {
+                auto& v = *static_cast<std::vector<E>*>(list);
+                if (from >= v.size() || to >= v.size() || from == to) return;
+                E e = std::move(v[from]);
+                v.erase(v.begin() + from);
+                v.insert(v.begin() + to, std::move(e));
+            };
+            m_Fields.push_back(std::move(f));
+            return *this;
+        }
+        FieldListBuilder& ElementTitle(std::string field) { m_Fields.back().ElementTitle = std::move(field); return *this; }
 
         FieldListBuilder& As(FieldType type) { m_Fields.back().Type = type; return *this; }
         FieldListBuilder& Range(float min, float max) { m_Fields.back().Min = min; m_Fields.back().Max = max; return *this; }

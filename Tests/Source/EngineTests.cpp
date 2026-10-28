@@ -1814,8 +1814,7 @@ namespace
         auto& rtc = rt->GetRegistry().Get<TerrainComponent>(land);
         Terrain::BeginEdit(rtc); // the committed edits, decoded again
         int n = Terrain::SampleCount(rtc);
-        uint32_t s1 = rtc.EditLayers[(size_t)n * n + (size_t)(n / 2) * n + n / 2];
-        CHECK((s1 & 255) > 200); // dirt (the first paint-only layer) at the center
+        CHECK(Terrain::LayerWeight(rtc, (size_t)(n / 2) * n + n / 2, 3) > 0.8f); // dirt (the fourth layer) at the center
         rt->OnRuntimeStop();
         CHECK(Near(heightAt(scene, 0.0f, 0.0f), before, 1e-4f)); // the edited scene is untouched
     }
@@ -3459,8 +3458,8 @@ namespace
         CHECK(Near(at(0, 15), 3.0f, 0.1f) && at(0, 16.5f) > 3.0f && at(0, 16.5f) < 5.0f); // the river bed and its slope
         int n = Terrain::SampleCount(t);
         auto sampleAt = [&](float x, float z) { return (size_t)std::lround((z / 80.0f + 0.5f) * (n - 1)) * n + (size_t)std::lround((x / 80.0f + 0.5f) * (n - 1)); };
-        CHECK((t.EditLayers[(size_t)n * n + sampleAt(0, -10)] & 255) > 240);       // dirt on the road
-        CHECK((t.EditLayers[(size_t)n * n + sampleAt(0, 15)] >> 8 & 255) > 240);   // sand in the river
+        CHECK(Terrain::LayerWeight(t, sampleAt(0, -10), 3) > 0.94f); // dirt on the road
+        CHECK(Terrain::LayerWeight(t, sampleAt(0, 15), 4) > 0.94f);  // sand in the river
         Terrain::CommitEdit(t);
         CHECK(Near(Terrain::HeightAt(t, Terrain::BuildHeights(t), 0, -10), 7.0f, 0.05f));
     }
@@ -3685,7 +3684,7 @@ namespace
         {
             uint32_t s = splat[i];
             weighted &= std::abs((int)((s & 255) + (s >> 8 & 255) + (s >> 16 & 255)) - 255) <= 3;
-            paintOnlyEmpty &= (splat[mesh.Vertices.size() + i] & 0xFFFFFFu) == 0; // dirt, sand and moss are painted only
+            paintOnlyEmpty &= (s >> 24) == 0 && splat[mesh.Vertices.size() + i] == 0; // dirt, sand and moss are painted only
         }
         CHECK(weighted && paintOnlyEmpty);
         // A flat center stays at Flat Height; a different seed gives different hills.
@@ -3707,7 +3706,7 @@ namespace
             std::vector<float> raised = Terrain::BuildHeights(s);
             CHECK(Terrain::HeightAt(s, raised, 0.0f, 0.0f) > center0 + 5.0f && Near(Terrain::HeightAt(s, raised, 35.0f, 25.0f), far0));
             CHECK(Terrain::SettingsKey(s) != Terrain::SettingsKey(t));
-            Terrain::ApplyBrush(s, Terrain::BrushMode::PaintRock, { 20.0f, 0.0f }, 4.0f, 1.0f, 1.0f, 0.0f);
+            Terrain::ApplyBrush(s, Terrain::BrushMode::Paint, { 20.0f, 0.0f }, 4.0f, 1.0f, 1.0f, 0.0f, nullptr, 1);
             Terrain::CommitEdit(s);
             CHECK(!s.SculptedHeights.empty() && !s.PaintedLayers.empty() && s.EditHeights.empty());
             TerrainComponent copy = t;
@@ -3730,23 +3729,78 @@ namespace
             CHECK(Terrain::BuildHeights(copy) == heights);
         }
 
-        // Paint-only layers: painting sand fills the second splat map there; an edit without them still saves the
-        // older 3 bytes per sample, and with them 6.
+        // Painting a later layer: sand (the fifth) fills the second splat map there; an edit of the first three alone
+        // still saves the older 3 bytes per sample, and with sand 5.
         {
             TerrainComponent s = t;
-            Terrain::ApplyBrush(s, Terrain::BrushMode::PaintRock, { 0.0f, 0.0f }, 4.0f, 1.0f, 1.0f, 0.0f);
+            Terrain::ApplyBrush(s, Terrain::BrushMode::Paint, { 0.0f, 0.0f }, 4.0f, 1.0f, 1.0f, 0.0f, nullptr, 1);
             Terrain::CommitEdit(s);
             int n = Terrain::SampleCount(s);
             size_t count = (size_t)n * n;
             std::string threeBytes = s.PaintedLayers;
-            for (int i = 0; i < 10; ++i) Terrain::ApplyBrush(s, Terrain::BrushMode::PaintSand, { -20.0f, 10.0f }, 5.0f, 1.0f, 0.1f, 0.0f);
+            for (int i = 0; i < 10; ++i) Terrain::ApplyBrush(s, Terrain::BrushMode::Paint, { -20.0f, 10.0f }, 5.0f, 1.0f, 0.1f, 0.0f, nullptr, 4);
             Terrain::CommitEdit(s);
-            CHECK(s.PaintedLayers.size() > threeBytes.size() * 3 / 2); // 6 bytes per sample now
+            CHECK(s.PaintedLayers.size() > threeBytes.size() * 3 / 2); // 5 bytes per sample now
             std::vector<uint32_t> layers = Terrain::BuildSplat(s, Terrain::BuildMesh(s, Terrain::BuildHeights(s)));
             size_t at = (size_t)((10.0f / 60.0f + 0.5f) * (n - 1) + 0.5f) * n + (size_t)((-20.0f / 80.0f + 0.5f) * (n - 1) + 0.5f);
             uint32_t first = layers[at], second = layers[count + at];
-            CHECK((second >> 8 & 255) > 200 && (first & 0xFFFFFFu) != 0xFFFFFFu && (first & 255) + (first >> 8 & 255) + (first >> 16 & 255) < 40);
-            CHECK((layers[count + (size_t)(n / 2) * n + n / 2] & 0xFFFFFFu) == 0); // the rock patch has no sand
+            CHECK((second & 255) > 200 && (first & 255) + (first >> 8 & 255) + (first >> 16 & 255) + (first >> 24) < 40);
+            CHECK((layers[count + (size_t)(n / 2) * n + n / 2] & 255) == 0); // the rock patch has no sand
+        }
+
+        // Any number of layers: 8 make two full splat maps, and painting the last one survives saving and loading;
+        // a single layer covers everything.
+        {
+            TerrainComponent s = t;
+            s.Layers.resize(8);
+            CHECK(Terrain::LayerCount(s) == 8 && Terrain::SplatMapCount(s) == 2);
+            for (int i = 0; i < 10; ++i) Terrain::ApplyBrush(s, Terrain::BrushMode::Paint, { 0.0f, 0.0f }, 5.0f, 1.0f, 0.1f, 0.0f, nullptr, 7);
+            int n = Terrain::SampleCount(s);
+            size_t center = (size_t)(n / 2) * n + n / 2;
+            CHECK(s.EditLayers.size() == (size_t)n * n * 2 && Terrain::LayerWeight(s, center, 7) > 0.8f);
+            Terrain::CommitEdit(s);
+            TerrainComponent copy = t;
+            copy.Layers.resize(8);
+            copy.PaintedLayers = s.PaintedLayers;
+            Terrain::BeginEdit(copy);
+            CHECK(Terrain::LayerWeight(copy, center, 7) > 0.8f && Terrain::LayerWeight(copy, center, 0) < 0.2f);
+            TerrainComponent one = t;
+            one.Layers.resize(1);
+            std::vector<uint32_t> single = Terrain::BuildSplat(one, Terrain::BuildMesh(one, Terrain::BuildHeights(one)));
+            bool all = single.size() == (size_t)n * n;
+            for (uint32_t w : single) all &= w == 255u;
+            CHECK(all);
+            one.Layers.clear(); // still one layer
+            CHECK(Terrain::LayerCount(one) == 1);
+        }
+
+        // The layer list saves as an array of objects, and a terrain saved with the older six fixed layers loads them
+        // into the list.
+        {
+            const ComponentInfo* info = ComponentRegistry::Find("Terrain");
+            CHECK(info && info->Upgrade);
+            TerrainComponent s = t;
+            s.Layers = { { "Mud", AssetHandle(42), { 0.5f, 0.4f, 0.3f, 1.0f }, 0.5f }, { "Ice", AssetHandle::None(), { 0.8f, 0.9f, 1.0f, 1.0f }, 2.0f } };
+            nlohmann::json data = nlohmann::json::object();
+            for (const FieldInfo& f : info->Fields) data[f.Name] = FieldToJson(f, &s, nullptr);
+            CHECK(data["Layers"].is_array() && data["Layers"].size() == 2 && data["Layers"][1]["Name"] == "Ice");
+            TerrainComponent back;
+            for (const FieldInfo& f : info->Fields)
+                if (data.contains(f.Name)) FieldFromJson(f, &back, data[f.Name], nullptr);
+            info->Upgrade(&back, data);
+            CHECK(back.Layers.size() == 2 && back.Layers[0].Name == "Mud" && back.Layers[0].Texture == AssetHandle(42) && Near(back.Layers[1].Tiling, 2.0f));
+            nlohmann::json old = { { "Grass Color", { 0.1, 0.2, 0.3, 1.0 } }, { "Sand Texture", 77 }, { "Texture Tiling", 0.5 } };
+            TerrainComponent upgraded;
+            upgraded.Layers.clear();
+            info->Upgrade(&upgraded, old);
+            CHECK(upgraded.Layers.size() == 6 && upgraded.Layers[4].Name == "Sand" && upgraded.Layers[4].Texture == AssetHandle(77));
+            CHECK(Near(upgraded.Layers[0].Color.g, 0.2f) && Near(upgraded.Layers[5].Tiling, 0.5f));
+            // A list longer than its most (16) is cut there.
+            nlohmann::json many = nlohmann::json::array();
+            for (int i = 0; i < 20; ++i) many.push_back({ { "Name", "L" + std::to_string(i) } });
+            for (const FieldInfo& f : info->Fields)
+                if (f.Name == "Layers") FieldFromJson(f, &back, many, nullptr);
+            CHECK(back.Layers.size() == 16 && back.Layers[15].Name == "L15");
         }
 
         // Holes: digging removes the triangles around the samples from the mesh and the collider (rays and bodies

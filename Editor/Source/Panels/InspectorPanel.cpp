@@ -477,14 +477,14 @@ namespace Editor
                     {
                         // Brushes: pick a tool, then drag on the terrain in the Scene view.
                         auto& terrain = *static_cast<TerrainComponent*>(info.Get(scene, e));
-                        static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Grass", "Rock", "Snow", "Dirt", "Sand", "Moss",
-                                                       "Trees", "Grass Tufts", "Erase Details", "Dig Hole", "Fill Hole", "Stamp", "Erode" };
+                        static const char* tools[] = { "Raise", "Lower", "Smooth", "Flatten", "Paint", "Trees", "Grass Tufts", "Erase Details",
+                                                       "Dig Hole", "Fill Hole", "Stamp", "Erode" };
                         static_assert(IM_ARRAYSIZE(tools) == (int)Terrain::BrushMode::Count);
                         ImGui::SeparatorText("Sculpt and Paint");
                         for (int i = 0; i < IM_ARRAYSIZE(tools); ++i)
                         {
                             // Rows: sculpt, paint, details, holes.
-                            if (i > 0 && i != (int)Terrain::BrushMode::PaintGrass && i != (int)Terrain::BrushMode::PlaceTrees && i != (int)Terrain::BrushMode::DigHole)
+                            if (i > 0 && i != (int)Terrain::BrushMode::Paint && i != (int)Terrain::BrushMode::PlaceTrees && i != (int)Terrain::BrushMode::DigHole)
                                 ImGui::SameLine();
                             bool active = m_Ctx.TerrainTool == i + 1;
                             if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
@@ -495,6 +495,21 @@ namespace Editor
                         ImGui::SliderFloat("Brush Size", &m_Ctx.TerrainBrushSize, 0.5f, 60.0f, "%.1f m");
                         ImGui::SetNextItemWidth(160);
                         ImGui::SliderFloat("Strength", &m_Ctx.TerrainBrushStrength, 0.01f, 1.0f);
+                        if (m_Ctx.TerrainTool - 1 == (int)Terrain::BrushMode::Paint)
+                        {
+                            // The layer to paint: a button per layer, named.
+                            int layers = Terrain::LayerCount(terrain);
+                            m_Ctx.TerrainPaintLayer = std::clamp(m_Ctx.TerrainPaintLayer, 0, layers - 1);
+                            for (int k = 0; k < layers; ++k)
+                            {
+                                if (k % 4 != 0) ImGui::SameLine();
+                                std::string name = k < (int)terrain.Layers.size() ? terrain.Layers[k].Name : std::string("Layer");
+                                bool chosen = m_Ctx.TerrainPaintLayer == k;
+                                if (chosen) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                                if (ImGui::Button((std::to_string(k) + " " + name + "##paintlayer" + std::to_string(k)).c_str())) m_Ctx.TerrainPaintLayer = k;
+                                if (chosen) ImGui::PopStyleColor();
+                            }
+                        }
                         if (m_Ctx.TerrainTool - 1 == (int)Terrain::BrushMode::Stamp)
                         {
                             if (UI::BeginProperties("##stamp"))

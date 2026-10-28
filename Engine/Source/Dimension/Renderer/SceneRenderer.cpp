@@ -175,8 +175,14 @@ namespace Dimension
             glm::vec4 TilingOffset;
             glm::uvec4 Maps;
             glm::uvec4 Flags;
-            glm::vec4 Layers[Terrain::kLayerCount]; // terrain layers
-            glm::uvec4 Maps2;                       // terrain: second splat map, dirt, sand, moss
+            glm::vec4 Layers[2]; // fur shell values
+            glm::uvec4 Maps2;    // terrain: xy its layers' address (TerrainLayerGPU), z their count
+        };
+        // std430 mirror of TerrainLayer in MeshCommon.glsl: a terrain layer for the shader.
+        struct TerrainLayerGPU
+        {
+            glm::vec4 Color; // linear rgb, w texture repeats per meter
+            glm::uvec4 Maps; // bindless: x texture, y splat map; z its channel there
         };
         static_assert(sizeof(MeshPush) <= kPushConstantSize);
 
@@ -2029,8 +2035,6 @@ namespace Dimension
         auto dim = [](MaterialGPU g) {
             g.BaseColor = glm::vec4(glm::vec3(g.BaseColor) * 0.15f + glm::vec3(0.02f), g.BaseColor.a);
             g.Emission = glm::vec4(0.0f, 0.0f, 0.0f, g.Emission.w);
-            if (g.Flags.z == 1u)
-                for (auto& layer : g.Layers) layer = glm::vec4(glm::vec3(layer) * 0.15f, layer.w);
             return g;
         };
         auto uploadMaterial = [&](const Material& m, bool dark) { return uploadMaterialGPU(dark ? dim(BuildMaterialGPU(m)) : BuildMaterialGPU(m)); };
@@ -2249,19 +2253,25 @@ namespace Dimension
                 VkDeviceAddress address;
                 if (terrainRt)
                 {
-                    // Terrain: its splat map and layers in place of the material's maps (the material's other values stay).
+                    // Terrain: its layers (each its texture, color and splat map channel) in place of the material's maps
+                    // (the material's other values stay).
                     MaterialGPU gpu = BuildMaterialGPU(mat);
                     uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
                     gpu.BaseColor = glm::vec4(1.0f);
-                    gpu.Maps = glm::uvec4(terrainRt->Splat->GetBindlessIndex(), TextureIndex(terrain->GrassTexture, white),
-                                          TextureIndex(terrain->RockTexture, white), TextureIndex(terrain->SnowTexture, white));
                     gpu.Flags = glm::uvec4(0u, 0u, 1u, 0u);
-                    float tiling = std::max(terrain->TextureTiling, 1e-4f);
-                    gpu.Maps2 = glm::uvec4(terrainRt->Splat2->GetBindlessIndex(), TextureIndex(terrain->DirtTexture, white),
-                                           TextureIndex(terrain->SandTexture, white), TextureIndex(terrain->MossTexture, white));
-                    const glm::vec4* colors[] = { &terrain->GrassColor, &terrain->RockColor, &terrain->SnowColor,
-                                                  &terrain->DirtColor, &terrain->SandColor, &terrain->MossColor };
-                    for (int k = 0; k < Terrain::kLayerCount; ++k) gpu.Layers[k] = glm::vec4(glm::vec3(ToLinear(*colors[k])), tiling);
+                    int layers = std::min(Terrain::LayerCount(*terrain), (int)terrainRt->Splats.size() * 4);
+                    TransientAllocation la = device.AllocateTransient(sizeof(TerrainLayerGPU) * (size_t)std::max(layers, 1), 16);
+                    if (!la) continue;
+                    auto* out = static_cast<TerrainLayerGPU*>(la.Data);
+                    for (int k = 0; k < layers; ++k)
+                    {
+                        TerrainLayer fallback;
+                        const TerrainLayer& layer = k < (int)terrain->Layers.size() ? terrain->Layers[k] : fallback;
+                        glm::vec3 color = glm::vec3(ToLinear(layer.Color)) * (dark ? 0.15f : 1.0f);
+                        out[k].Color = glm::vec4(color, std::max(layer.Tiling, 1e-4f));
+                        out[k].Maps = glm::uvec4(TextureIndex(layer.Texture, white), terrainRt->Splats[k / 4]->GetBindlessIndex(), (uint32_t)(k % 4), 0u);
+                    }
+                    gpu.Maps2 = glm::uvec4((uint32_t)la.Address, (uint32_t)(la.Address >> 32), (uint32_t)layers, 0u);
                     address = uploadMaterialGPU(dark ? dim(gpu) : gpu);
                 }
                 else if (water)

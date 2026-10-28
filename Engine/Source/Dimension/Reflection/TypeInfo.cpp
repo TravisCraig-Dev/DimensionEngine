@@ -80,6 +80,19 @@ namespace Dimension
             for (const Guid& g : *(const std::vector<Guid>*)p) list.push_back((uint64_t)g);
             return list;
         }
+        case FieldType::StructList:
+        {
+            // An array of objects, each the element's fields by name.
+            json list = json::array();
+            void* items = const_cast<void*>(p);
+            for (size_t i = 0; i < field.ListSize(items); ++i)
+            {
+                json element = json::object();
+                for (const FieldInfo& sub : field.Elements) element[sub.Name] = FieldToJson(sub, field.ListAt(items, i), resolver);
+                list.push_back(std::move(element));
+            }
+            return list;
+        }
         }
         return nullptr;
     }
@@ -173,6 +186,23 @@ namespace Dimension
                 auto& list = *(std::vector<Guid>*)p;
                 list.clear();
                 for (auto& k : v) list.push_back(k.is_number() ? Guid(k.get<uint64_t>()) : Guid::None());
+                break;
+            }
+            case FieldType::StructList:
+            {
+                // New elements start from the struct's defaults; fields missing from an element keep them.
+                if (!v.is_array()) break;
+                size_t count = v.size();
+                if (field.Max > 0.0f) count = std::min(count, (size_t)field.Max);
+                field.ListResize(p, 0);
+                field.ListResize(p, count);
+                for (size_t i = 0; i < count; ++i)
+                {
+                    if (!v[i].is_object()) continue;
+                    void* element = field.ListAt(p, i);
+                    for (const FieldInfo& sub : field.Elements)
+                        if (v[i].contains(sub.Name)) FieldFromJson(sub, element, v[i][sub.Name], resolver);
+                }
                 break;
             }
             }

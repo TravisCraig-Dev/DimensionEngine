@@ -735,6 +735,70 @@ namespace Editor::UI
             }
             break;
         }
+        case FieldType::StructList:
+        {
+            // A row per element (titled by its title field, or numbered) that opens to its fields, with buttons to
+            // move it up or down and remove it.
+            PropertyLabel(label, f.Tooltip.c_str());
+            mixedNote();
+            size_t count = f.ListSize(p);
+            bool full = f.Max > 0.0f && count >= (size_t)f.Max;
+            ImGui::BeginDisabled(full);
+            if (ImGui::Button("+ Add"))
+            {
+                f.ListResize(p, count + 1);
+                r.Activated = r.Changed = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (full) ImGui::TextDisabled("%zu (the most)", count);
+            else ImGui::TextDisabled("%zu", count);
+            const FieldInfo* titleField = nullptr;
+            for (const FieldInfo& sub : f.Elements)
+                if (sub.Name == f.ElementTitle && sub.Type == FieldType::String) titleField = &sub;
+            int remove = -1, moveFrom = -1, moveTo = -1;
+            uint32_t savedMixed = s_Mixed;
+            s_Mixed = 0;
+            for (size_t i = 0; i < f.ListSize(p); ++i)
+            {
+                void* element = f.ListAt(p, i);
+                ImGui::PushID((int)i);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                std::string title = titleField ? *(const std::string*)titleField->Access(element) : std::string();
+                bool open = ImGui::TreeNodeEx("##element", ImGuiTreeNodeFlags_SpanAvailWidth, "%zu  %s", i, title.c_str());
+                ImGui::TableSetColumnIndex(1);
+                float button = ImGui::GetFrameHeight();
+                ImGui::BeginDisabled(i == 0);
+                if (ImGui::ArrowButton("##up", ImGuiDir_Up)) moveFrom = (int)i, moveTo = (int)i - 1;
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(i + 1 >= f.ListSize(p));
+                if (ImGui::ArrowButton("##down", ImGuiDir_Down)) moveFrom = (int)i, moveTo = (int)i + 1;
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("x", ImVec2(button, 0.0f))) remove = (int)i;
+                if (open)
+                {
+                    for (const FieldInfo& sub : f.Elements)
+                        if (!sub.Hidden) r |= Field(sub, element, scene);
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            s_Mixed = savedMixed;
+            if (remove >= 0)
+            {
+                f.ListErase(p, (size_t)remove);
+                r.Activated = r.Changed = true;
+            }
+            else if (moveFrom >= 0)
+            {
+                f.ListMove(p, (size_t)moveFrom, (size_t)moveTo);
+                r.Activated = r.Changed = true;
+            }
+            break;
+        }
         case FieldType::MaterialList:
         {
             auto& list = *(std::vector<AssetHandle>*)p;

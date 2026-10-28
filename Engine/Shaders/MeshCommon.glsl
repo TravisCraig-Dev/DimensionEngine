@@ -8,12 +8,19 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Ma
     vec4 Emission;      // linear rgb * strength, w refraction (transparent)
     vec4 Params;        // x metallic, y roughness, z alpha cutoff, w normal strength
     vec4 TilingOffset;  // xy tiling, zw offset
-    uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission (terrain: splat, grass, rock, snow)
+    uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission
     uvec4 Flags;        // x blend mode (0 opaque, 1 cutout, 2 transparent), y has normal map, z 1 = terrain, w 1 = fur shell
-    vec4 Layers[6];     // terrain: grass, rock, snow, dirt, sand and moss tint (linear rgb), w texture repeats per meter
-                        // fur: [0] density, thickness, droop, wind response; [1] tip color (rgb), root shade
-    uvec4 Maps2;        // terrain: second splat map, dirt, sand, moss
+    vec4 Layers[2];     // fur: [0] density, thickness, droop, wind response; [1] tip color (rgb), root shade
+    uvec4 Maps2;        // terrain: xy its layers' address (TerrainLayersRef), z their count
 };
+
+// A terrain's surface layers (TerrainLayerGPU in SceneRenderer.cpp).
+struct TerrainLayer
+{
+    vec4 Color; // linear rgb, w texture repeats per meter
+    uvec4 Maps; // bindless: x texture, y splat map; z its channel there
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer TerrainLayersRef { TerrainLayer Layers[]; };
 
 struct SkinVertex
 {

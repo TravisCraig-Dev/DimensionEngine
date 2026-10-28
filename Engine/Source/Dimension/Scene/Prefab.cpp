@@ -788,6 +788,7 @@ namespace Dimension::Prefabs
                     if (!data.contains(f.Name) || IsInstanceOwned(isRoot, name, f.Name) || link.HasOverride(name + "." + f.Name)) continue;
                     FieldFromJson(f, comp, data[f.Name], &resolver);
                 }
+                if (info->Upgrade) info->Upgrade(comp, data);
                 if (info->TypeId == GetComponentTypeId<ScriptComponent>() && data.contains("Scripts") && !link.HasOverride("Script.Scripts"))
                 {
                     auto* sc = static_cast<ScriptComponent*>(comp);

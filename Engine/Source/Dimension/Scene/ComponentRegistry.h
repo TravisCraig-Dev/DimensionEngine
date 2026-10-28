@@ -20,6 +20,8 @@ namespace Dimension
         std::function<void(Scene&, Entity)> Add;
         std::function<void(Scene&, Entity)> Remove;
         std::function<void*(Scene&, Entity)> Get;
+        // Optional: after the fields are read from a component's JSON, turns an older format into the current one.
+        std::function<void(void*, const nlohmann::json&)> Upgrade;
     };
 
     class ComponentRegistry

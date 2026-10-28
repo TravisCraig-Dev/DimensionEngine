@@ -124,29 +124,50 @@ namespace Dimension::Terrain
             return h;
         }
 
-        // Both splat maps (2 * count) from the edits: 3 bytes per sample (the first three layers) or 6 (all of them).
-        std::vector<uint32_t> EditedLayers(const TerrainComponent& t, size_t count)
-        {
-            if (t.EditLayers.size() == count * 2) return t.EditLayers;
-            if (t.PaintedLayers.empty()) return {};
-            std::vector<uint8_t> bytes = Decode(t.PaintedLayers);
-            size_t stride = bytes.size() == count * 3 ? 3 : bytes.size() == count * 6 ? 6 : 0;
-            if (!stride) return {};
-            std::vector<uint32_t> s(count * 2, 0xFF000000u);
-            for (size_t i = 0; i < count; ++i)
-            {
-                const uint8_t* b = &bytes[i * stride];
-                s[i] = b[0] | b[1] << 8 | b[2] << 16 | 0xFF000000u;
-                if (stride == 6) s[count + i] = b[3] | b[4] << 8 | b[5] << 16 | 0xFF000000u;
-            }
-            return s;
-        }
-
+        // A sample's weights as RGBA8 (4 layers).
         uint32_t PackWeights(const float* w)
         {
             auto byte = [](float x) { return (uint32_t)std::clamp((int)std::lround(x * 255.0f), 0, 255); };
-            return byte(w[0]) | byte(w[1]) << 8 | byte(w[2]) << 16 | 0xFF000000u;
+            return byte(w[0]) | byte(w[1]) << 8 | byte(w[2]) << 16 | byte(w[3]) << 24;
         }
+
+        // The splat maps (SplatMapCount * count) from the edits: a byte per layer per sample (older scenes stored 3 or
+        // 6: their first layers).
+        std::vector<uint32_t> EditedLayers(const TerrainComponent& t, size_t count)
+        {
+            size_t maps = (size_t)SplatMapCount(t);
+            if (t.EditLayers.size() == count * maps) return t.EditLayers;
+            if (t.PaintedLayers.empty() || count == 0) return {};
+            std::vector<uint8_t> bytes = Decode(t.PaintedLayers);
+            size_t stride = bytes.size() / count;
+            if (stride == 0 || stride > (size_t)kMaxLayers || bytes.size() != count * stride) return {};
+            std::vector<uint32_t> s(count * maps, 0u);
+            int layers = LayerCount(t);
+            for (size_t i = 0; i < count; ++i)
+                for (size_t k = 0; k < stride && (int)k < layers; ++k) s[(k / 4) * count + i] |= (uint32_t)bytes[i * stride + k] << (k % 4 * 8);
+            return s;
+        }
+    }
+
+    int LayerCount(const TerrainComponent& terrain) { return std::clamp((int)terrain.Layers.size(), 1, kMaxLayers); }
+    int SplatMapCount(const TerrainComponent& terrain) { return (LayerCount(terrain) + 3) / 4; }
+
+    float LayerWeight(const TerrainComponent& terrain, size_t sample, int layer)
+    {
+        size_t count = terrain.EditLayers.size() / (size_t)SplatMapCount(terrain);
+        if (layer < 0 || layer >= LayerCount(terrain) || sample >= count) return 0.0f;
+        return (terrain.EditLayers[(size_t)(layer / 4) * count + sample] >> (layer % 4 * 8) & 255) / 255.0f;
+    }
+
+    void PaintSample(TerrainComponent& terrain, size_t sample, int layer, float amount)
+    {
+        int layers = LayerCount(terrain), maps = SplatMapCount(terrain);
+        size_t count = terrain.EditLayers.size() / (size_t)maps;
+        if (layer < 0 || layer >= layers || sample >= count) return;
+        float w[kMaxLayers] = {};
+        for (int k = 0; k < layers; ++k) w[k] = LayerWeight(terrain, sample, k);
+        for (int k = 0; k < layers; ++k) w[k] += ((k == layer ? 1.0f : 0.0f) - w[k]) * amount;
+        for (int m = 0; m < maps; ++m) terrain.EditLayers[(size_t)m * count + sample] = PackWeights(w + m * 4);
     }
 
     std::vector<uint8_t> HoleMap(const TerrainComponent& terrain)
@@ -273,18 +294,21 @@ namespace Dimension::Terrain
     std::vector<uint32_t> BuildSplat(const TerrainComponent& terrain, const MeshData& mesh)
     {
         if (std::vector<uint32_t> painted = EditedLayers(terrain, mesh.Vertices.size()); !painted.empty()) return painted;
-        std::vector<uint32_t> splat(mesh.Vertices.size() * 2, 0xFF000000u);
+        size_t count = mesh.Vertices.size();
+        int layers = LayerCount(terrain);
+        std::vector<uint32_t> splat(count * (size_t)SplatMapCount(terrain), 0u);
         float slopeAt = std::cos(glm::radians(std::clamp(terrain.RockSlope, 1.0f, 89.0f)));
-        for (size_t i = 0; i < mesh.Vertices.size(); ++i)
+        for (size_t i = 0; i < count; ++i)
         {
+            // The first three layers by slope and height (with fewer, the missing ones fall to the first).
             const Vertex& v = mesh.Vertices[i];
             float up = v.Normal.y;
-            float rock = Smooth(slopeAt + 0.06f, slopeAt - 0.06f, up);
+            float rock = layers > 1 ? Smooth(slopeAt + 0.06f, slopeAt - 0.06f, up) : 0.0f;
             float height = terrain.Height > 0.0f ? v.Position.y / terrain.Height : 0.0f;
-            float snow = Smooth(terrain.SnowHeight - 0.04f, terrain.SnowHeight + 0.04f, height) * (1.0f - rock * 0.7f);
+            float snow = layers > 2 ? Smooth(terrain.SnowHeight - 0.04f, terrain.SnowHeight + 0.04f, height) * (1.0f - rock * 0.7f) : 0.0f;
             float grass = std::max(0.0f, 1.0f - rock - snow);
             float sum = std::max(grass + rock + snow, 1e-4f);
-            float w[3] = { grass / sum, rock / sum, snow / sum };
+            float w[4] = { grass / sum, rock / sum, snow / sum, 0.0f };
             splat[i] = PackWeights(w);
         }
         return splat;
@@ -310,6 +334,8 @@ namespace Dimension::Terrain
         mix(&t.FlatHeight, sizeof(t.FlatHeight));
         mix(&t.RockSlope, sizeof(t.RockSlope));
         mix(&t.SnowHeight, sizeof(t.SnowHeight));
+        int layers = LayerCount(t);
+        mix(&layers, sizeof(layers));
         auto mixString = [&](const std::string& s) {
             size_t size = s.size();
             mix(&size, sizeof(size));
@@ -353,8 +379,8 @@ namespace Dimension::Terrain
         TextureSettings settings;
         settings.SRGB = false;
         settings.GenerateMips = true;
-        rt.Splat = MakeRef<Texture2D>(splat.data(), (uint32_t)n, (uint32_t)n, settings, "TerrainSplat");
-        rt.Splat2 = MakeRef<Texture2D>(splat.data() + (size_t)n * n, (uint32_t)n, (uint32_t)n, settings, "TerrainSplat2");
+        for (int m = 0; m < SplatMapCount(terrain); ++m)
+            rt.Splats.push_back(MakeRef<Texture2D>(splat.data() + (size_t)m * n * n, (uint32_t)n, (uint32_t)n, settings, "TerrainSplat"));
         return &(runtimes[key] = std::move(rt));
     }
 
@@ -380,7 +406,7 @@ namespace Dimension::Terrain
             terrain.EditDetails = DetailMap(terrain);
             terrain.EditDetails.resize((size_t)n * n * 2, 0);
         }
-        if (terrain.EditLayers.size() != (size_t)n * n * 2)
+        if (terrain.EditLayers.size() != (size_t)n * n * SplatMapCount(terrain))
         {
             MeshData mesh = BuildMesh(terrain, terrain.EditHeights);
             terrain.EditLayers = BuildSplat(terrain, mesh);
@@ -405,7 +431,7 @@ namespace Dimension::Terrain
     }
 
     bool ApplyBrush(TerrainComponent& terrain, BrushMode mode, const glm::vec2& at, float radius, float strength, float dt, float flattenHeight,
-                    const StampSettings* stamp)
+                    const StampSettings* stamp, int paintLayer)
     {
         if (mode == BrushMode::Erode)
         {
@@ -492,23 +518,9 @@ namespace Dimension::Terrain
                     break;
                 }
                 default:
-                {
-                    // Painting: move this sample's weights (both splat maps) toward the layer.
-                    int layer = (int)mode - (int)BrushMode::PaintGrass;
-                    uint32_t& s0 = terrain.EditLayers[i];
-                    uint32_t& s1 = terrain.EditLayers[(size_t)n * n + i];
-                    float w[kLayerCount];
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        w[k] = (s0 >> (k * 8) & 255) / 255.0f;
-                        w[k + 3] = (s1 >> (k * 8) & 255) / 255.0f;
-                    }
-                    float amount = std::min(rate * 4.0f * falloff, 1.0f);
-                    for (int k = 0; k < kLayerCount; ++k) w[k] += ((k == layer ? 1.0f : 0.0f) - w[k]) * amount;
-                    s0 = PackWeights(w);
-                    s1 = PackWeights(w + 3);
+                    // Painting: move this sample's weights toward the layer.
+                    PaintSample(terrain, i, paintLayer, std::min(rate * 4.0f * falloff, 1.0f));
                     break;
-                }
                 }
                 h = std::clamp(h, 0.0f, terrain.Height);
             }
@@ -531,15 +543,20 @@ namespace Dimension::Terrain
             terrain.SculptedHeights = Encode(bytes.data(), bytes.size());
         }
         size_t count = (size_t)n * n;
-        if (terrain.EditLayers.size() == count * 2)
+        if (terrain.EditLayers.size() == count * (size_t)SplatMapCount(terrain))
         {
-            // 3 bytes per sample while the paint-only layers are unused (older scenes read the same), else 6.
-            bool extra = std::any_of(terrain.EditLayers.begin() + count, terrain.EditLayers.end(), [](uint32_t s) { return (s & 0xFFFFFFu) != 0; });
-            size_t stride = extra ? 6 : 3;
-            std::vector<uint8_t> bytes(count * stride);
+            // A byte per layer per sample, up to the last layer painted anywhere (at least three).
+            int layers = LayerCount(terrain), stride = std::min(3, layers);
+            for (int k = layers - 1; k >= 3 && stride == std::min(3, layers); --k)
+                for (size_t i = 0; i < count; ++i)
+                    if (terrain.EditLayers[(size_t)(k / 4) * count + i] >> (k % 4 * 8) & 255)
+                    {
+                        stride = k + 1;
+                        break;
+                    }
+            std::vector<uint8_t> bytes(count * (size_t)stride);
             for (size_t i = 0; i < count; ++i)
-                for (size_t k = 0; k < stride; ++k)
-                    bytes[i * stride + k] = (uint8_t)(terrain.EditLayers[i + (k / 3) * count] >> (k % 3 * 8) & 255);
+                for (int k = 0; k < stride; ++k) bytes[i * stride + k] = (uint8_t)(terrain.EditLayers[(size_t)(k / 4) * count + i] >> (k % 4 * 8) & 255);
             terrain.PaintedLayers = Encode(bytes.data(), bytes.size());
         }
         if (terrain.EditHoles.size() == count)
@@ -746,7 +763,7 @@ namespace Dimension::Terrain
     int ApplyPath(TerrainComponent& terrain, const glm::mat4& terrainWorld, const TerrainPathComponent& path, const glm::mat4& pathWorld)
     {
         int n = SampleCount(terrain);
-        if (terrain.EditHeights.size() != (size_t)n * n || terrain.EditLayers.size() != (size_t)n * n * 2) return 0;
+        if (terrain.EditHeights.size() != (size_t)n * n || terrain.EditLayers.size() != (size_t)n * n * SplatMapCount(terrain)) return 0;
         // The curve in the terrain's space.
         glm::mat4 toTerrain = glm::inverse(terrainWorld) * pathWorld;
         std::vector<glm::vec3> curve = PathCurve(path.Points);
@@ -794,21 +811,8 @@ namespace Dimension::Terrain
                     h = glm::mix(h, std::min(h, target), w);
                 }
                 h = std::clamp(h, 0.0f, terrain.Height);
-                if (path.PaintLayer >= 0 && path.PaintLayer < kLayerCount)
-                {
-                    float paint = best <= half ? 1.0f : 1.0f - Smooth(half, half + falloff * 0.5f, best);
-                    uint32_t& s0 = terrain.EditLayers[i];
-                    uint32_t& s1 = terrain.EditLayers[(size_t)n * n + i];
-                    float wl[kLayerCount];
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        wl[k] = (s0 >> (k * 8) & 255) / 255.0f;
-                        wl[k + 3] = (s1 >> (k * 8) & 255) / 255.0f;
-                    }
-                    for (int k = 0; k < kLayerCount; ++k) wl[k] += ((k == path.PaintLayer ? 1.0f : 0.0f) - wl[k]) * paint;
-                    s0 = PackWeights(wl);
-                    s1 = PackWeights(wl + 3);
-                }
+                if (path.PaintLayer >= 0 && path.PaintLayer < LayerCount(terrain))
+                    PaintSample(terrain, i, path.PaintLayer, best <= half ? 1.0f : 1.0f - Smooth(half, half + falloff * 0.5f, best));
                 ++changed;
             }
         ++terrain.EditRevision;
@@ -818,7 +822,7 @@ namespace Dimension::Terrain
     int Crater(TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& point, float radius, float depth, int paintLayer)
     {
         int n = SampleCount(terrain);
-        if (terrain.EditHeights.size() != (size_t)n * n || terrain.EditLayers.size() != (size_t)n * n * 2 || radius <= 0.0f) return 0;
+        if (terrain.EditHeights.size() != (size_t)n * n || terrain.EditLayers.size() != (size_t)n * n * SplatMapCount(terrain) || radius <= 0.0f) return 0;
         // In the terrain's space (meters along its axes).
         glm::vec3 local = glm::vec3(glm::inverse(world) * glm::vec4(point, 1.0f));
         glm::vec3 scale(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])));
@@ -844,21 +848,7 @@ namespace Dimension::Terrain
                 float& h = terrain.EditHeights[i];
                 h = std::clamp(h + bowl + rim, 0.0f, terrain.Height);
                 // Scorched ground, and no grass or trees left in it.
-                if (paintLayer >= 0 && paintLayer < kLayerCount)
-                {
-                    float paint = 1.0f - Smooth(0.6f * r, 1.3f * r, dist);
-                    uint32_t& s0 = terrain.EditLayers[i];
-                    uint32_t& s1 = terrain.EditLayers[(size_t)n * n + i];
-                    float wl[kLayerCount];
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        wl[k] = (s0 >> (k * 8) & 255) / 255.0f;
-                        wl[k + 3] = (s1 >> (k * 8) & 255) / 255.0f;
-                    }
-                    for (int k = 0; k < kLayerCount; ++k) wl[k] += ((k == paintLayer ? 1.0f : 0.0f) - wl[k]) * paint;
-                    s0 = PackWeights(wl);
-                    s1 = PackWeights(wl + 3);
-                }
+                if (paintLayer >= 0 && paintLayer < LayerCount(terrain)) PaintSample(terrain, i, paintLayer, 1.0f - Smooth(0.6f * r, 1.3f * r, dist));
                 if (dist < r * 1.1f && terrain.EditDetails.size() == (size_t)n * n * 2) terrain.EditDetails[i * 2] = terrain.EditDetails[i * 2 + 1] = 0;
                 ++changed;
             }

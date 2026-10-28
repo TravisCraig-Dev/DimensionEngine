@@ -116,21 +116,16 @@ namespace Dimension
             .Field("Roughness", &TerrainComponent::Roughness).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Flat Center", &TerrainComponent::FlatCenter).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Radius kept flat (fraction of the half size)")
             .Field("Flat Height", &TerrainComponent::FlatHeight).Range(0.0f, 1.0f).Speed(0.01f)
-            .Field("Grass Texture", &TerrainComponent::GrassTexture).As(FieldType::Texture).Header("Layers")
-            .Field("Grass Color", &TerrainComponent::GrassColor).As(FieldType::Color4)
-            .Field("Rock Texture", &TerrainComponent::RockTexture).As(FieldType::Texture)
-            .Field("Rock Color", &TerrainComponent::RockColor).As(FieldType::Color4)
-            .Field("Snow Texture", &TerrainComponent::SnowTexture).As(FieldType::Texture)
-            .Field("Snow Color", &TerrainComponent::SnowColor).As(FieldType::Color4)
-            .Field("Texture Tiling", &TerrainComponent::TextureTiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Layer texture repeats per meter")
-            .Field("Rock Slope", &TerrainComponent::RockSlope).Range(1.0f, 89.0f).Speed(0.5f).Tooltip("Degrees where rock takes over")
-            .Field("Snow Height", &TerrainComponent::SnowHeight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of Height where snow starts")
-            .Field("Dirt Texture", &TerrainComponent::DirtTexture).As(FieldType::Texture).Header("Painted Layers")
-            .Field("Dirt Color", &TerrainComponent::DirtColor).As(FieldType::Color4)
-            .Field("Sand Texture", &TerrainComponent::SandTexture).As(FieldType::Texture)
-            .Field("Sand Color", &TerrainComponent::SandColor).As(FieldType::Color4)
-            .Field("Moss Texture", &TerrainComponent::MossTexture).As(FieldType::Texture)
-            .Field("Moss Color", &TerrainComponent::MossColor).As(FieldType::Color4)
+            .List<TerrainLayer>("Layers", &TerrainComponent::Layers, [](FieldListBuilder<TerrainLayer>& layer) {
+                layer.Field("Name", &TerrainLayer::Name)
+                    .Field("Texture", &TerrainLayer::Texture).As(FieldType::Texture)
+                    .Field("Color", &TerrainLayer::Color).As(FieldType::Color4)
+                    .Field("Tiling", &TerrainLayer::Tiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Texture repeats per meter");
+            })
+            .ElementTitle("Name").Range(1.0f, 16.0f).Header("Layers")
+            .Tooltip("Up to 16; the first three lay themselves out by slope and height (gentle ground, steep slopes, up high)")
+            .Field("Rock Slope", &TerrainComponent::RockSlope).Range(1.0f, 89.0f).Speed(0.5f).Tooltip("Degrees where the second layer takes over")
+            .Field("Snow Height", &TerrainComponent::SnowHeight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of Height where the third layer starts")
             .Field("Tree Mesh", &TerrainComponent::TreeMesh).As(FieldType::Mesh).Header("Details")
                 .Tooltip("Placed where the Trees brush paints (trees, bushes, rocks)")
             .Field("Tree Material", &TerrainComponent::TreeMaterial).As(FieldType::Material).Tooltip("None = the model's own materials")
@@ -151,6 +146,25 @@ namespace Dimension
             .Field("Painted Layers", &TerrainComponent::PaintedLayers).HideInInspector()
             .Field("Painted Holes", &TerrainComponent::PaintedHoles).HideInInspector()
             .Field("Painted Details", &TerrainComponent::PaintedDetails).HideInInspector();
+
+        // Terrains saved before the layer list: six fixed layers (Grass, Rock, Snow, Dirt, Sand and Moss Texture and
+        // Color, one Texture Tiling) become its first six entries.
+        FindMutable("Terrain")->Upgrade = [](void* component, const nlohmann::json& data) {
+            if (data.contains("Layers")) return;
+            auto& terrain = *static_cast<TerrainComponent*>(component);
+            static const char* names[] = { "Grass", "Rock", "Snow", "Dirt", "Sand", "Moss" };
+            terrain.Layers = DefaultTerrainLayers();
+            float tiling = data.contains("Texture Tiling") && data["Texture Tiling"].is_number() ? data["Texture Tiling"].get<float>() : 0.25f;
+            for (int k = 0; k < 6; ++k)
+            {
+                TerrainLayer& layer = terrain.Layers[k];
+                std::string texture = std::string(names[k]) + " Texture", color = std::string(names[k]) + " Color";
+                if (data.contains(texture) && data[texture].is_number()) layer.Texture = AssetHandle(data[texture].get<uint64_t>());
+                if (data.contains(color) && data[color].is_array() && data[color].size() >= 3)
+                    for (size_t c = 0; c < std::min<size_t>(data[color].size(), 4); ++c) layer.Color[(int)c] = data[color][c].get<float>();
+                layer.Tiling = tiling;
+            }
+        };
 
         Register<WeatherComponent>("Weather", "Rendering")
             .Field("Rain", &WeatherComponent::Rain).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Falling rain around the camera, 0-1")
@@ -176,7 +190,7 @@ namespace Dimension
             .Field("Width", &TerrainPathComponent::Width).Range(0.1f, 500.0f).Speed(0.05f)
             .Field("Falloff", &TerrainPathComponent::Falloff).Range(0.0f, 500.0f).Speed(0.05f).Tooltip("Blend into the land on each side, meters")
             .Field("Depth", &TerrainPathComponent::Depth).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("River: the channel's depth below the curve")
-            .Field("Paint Layer", &TerrainPathComponent::PaintLayer).Range(-1, 5).Tooltip("0 grass, 1 rock, 2 snow, 3 dirt, 4 sand, 5 moss; -1 = none")
+            .Field("Paint Layer", &TerrainPathComponent::PaintLayer).Range(-1, 15).Tooltip("The terrain layer painted along it (its number in the Layers list); -1 = none")
             .Field("Terrain", &TerrainPathComponent::Terrain).Tooltip("The terrain it shapes (None = the scene's first)");
         Register<PathPlacerComponent>("Path Placer", "Rendering")
             .Field("Points", &PathPlacerComponent::Points).Tooltip("The curve passes through these (the object's space)")
