@@ -156,6 +156,9 @@ namespace Dimension
     // A terrain surface layer: Texture (None = plain) repeating Tiling times per meter, times Color, with an optional
     // Normal Map (tiled the same) bent by Normal Strength. Triplanar projects it from the sides as well as from above,
     // blended by which way the ground faces, so it is not stretched down cliffs (three times the texture reads).
+    // With Rule it is laid out by itself where the ground's height (0-1 of the terrain's Height) and slope (degrees)
+    // fall in their ranges, fading out over Height Fade and Slope Fade past them and broken into patches by Noise
+    // (0-1; about Noise Scale meters across). Later layers cover earlier ones, the first is the ground under them all.
     struct TerrainLayer
     {
         std::string Name = "Layer";
@@ -165,6 +168,13 @@ namespace Dimension
         AssetHandle NormalMap = AssetHandle::None();
         float NormalStrength = 1.0f;
         bool Triplanar = false;
+        bool Rule = false;
+        glm::vec2 HeightRange{ 0.0f, 1.0f };
+        glm::vec2 SlopeRange{ 0.0f, 90.0f };
+        float HeightFade = 0.03f;
+        float SlopeFade = 4.0f;
+        float Noise = 0.0f;
+        float NoiseScale = 8.0f;
     };
     inline std::vector<TerrainLayer> DefaultTerrainLayers()
     {
@@ -186,9 +196,9 @@ namespace Dimension
         float Roughness = 0.5f;   // how much each finer octave adds
         float FlatCenter = 0.0f;  // radius (fraction of the half size) kept at Flat Height, e.g. for a play area
         float FlatHeight = 0.2f;  // 0-1 of Height
-        // Surface layers, 1 to 16 of them, each its Texture (repeating Tiling times per meter) times Color. The first
-        // three also lay themselves out by slope and height: the first on gentle ground, the second where it is
-        // steeper than Rock Slope (degrees), the third above Snow Height (0-1 of Height); any can be painted.
+        // Surface layers, 1 to 16 of them, each its Texture (repeating Tiling times per meter) times Color. Layers with
+        // a Rule lay themselves out; with none, the first three do: the first on gentle ground, the second where it is
+        // steeper than Rock Slope (degrees), the third above Snow Height (0-1 of Height). Any can be painted.
         std::vector<TerrainLayer> Layers = DefaultTerrainLayers();
         float RockSlope = 35.0f;
         float SnowHeight = 0.72f;

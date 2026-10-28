@@ -758,6 +758,13 @@ namespace Dimension
             UpdateLightProbes(cmd, scene);
             PrepareImpostors(cmd, scene); // (also nested Render calls)
         }
+        // Frame debugger: this view's draws from here (the nested captures above are not part of its frame).
+        m_FrameCapturing = !options.ProbeCapture && options.FrameDebugStop > -2;
+        if (m_FrameCapturing)
+        {
+            m_FrameEvents.clear();
+            m_FrameStop = options.FrameDebugStop;
+        }
         // Temporal anti-aliasing renders the game view with a sub-pixel offset that cycles through a Halton sequence;
         // the Scene view and probe faces are never jittered.
         CameraData camera = view;
@@ -1221,7 +1228,7 @@ namespace Dimension
         device.BindBindless(cmd);
         device.BindUniforms(cmd, &u, sizeof(u));
 
-        if (camera.Skybox)
+        if (camera.Skybox && DebugDraw("Opaque", "HDR Color", "Sky", 0, 1, 1))
         {
             MainPipeline(MainPipelines::Sky).Bind(cmd);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2480,6 +2487,14 @@ namespace Dimension
         m_Stats.ListMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - listStart).count();
     }
 
+    bool SceneRenderer::DebugDraw(const char* pass, const char* target, const std::string& what, uint32_t entity, uint32_t instances, uint32_t triangles)
+    {
+        if (!m_FrameCapturing) return true;
+        int index = (int)m_FrameEvents.size();
+        m_FrameEvents.push_back({ pass, target, what, entity, instances, triangles });
+        return m_FrameStop < 0 || index <= m_FrameStop;
+    }
+
     void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass)
     {
         bool shadowPass = pass == MeshPass::Shadow, depthPass = pass == MeshPass::Depth, oitPass = pass == MeshPass::Transparent;
@@ -2503,7 +2518,10 @@ namespace Dimension
         std::vector<Draw> transparent;
         const Pipeline* bound = nullptr;
         Mesh* boundMesh = nullptr;
+        const char* passName = shadowPass ? "Shadows" : depthPass ? "Depth Prepass" : oitPass ? "Transparent (OIT)" : "Opaque";
+        const char* targetName = shadowPass ? "Shadow Map" : depthPass ? "Depth" : oitPass ? "OIT Accumulation" : "HDR Color";
         auto submit = [&](const Draw& d, uint32_t instances) {
+            if (!DebugDraw(passName, targetName, d.MeshPtr->GetName(), d.Push.EntityId, instances, d.IndexCount / 3 * instances)) return;
             if (d.Pipe != bound)
             {
                 d.Pipe->Bind(cmd);
@@ -3228,6 +3246,11 @@ namespace Dimension
             size_t runEnd = runStart;
             while (runEnd < count && m_Sprites[runEnd].Additive == additive && runEnd - runStart < kMaxQuadsPerDraw) ++runEnd;
             const Pipeline* pipeline = &MainPipeline(additive ? MainPipelines::SpriteAdditive : MainPipelines::Sprite);
+            if (!DebugDraw("Opaque", "HDR Color", "Sprites", m_Sprites[runStart].Entity, 1, (uint32_t)(runEnd - runStart) * 2))
+            {
+                runStart = runEnd;
+                continue;
+            }
             if (pipeline != bound)
             {
                 pipeline->Bind(cmd);
@@ -3269,6 +3292,7 @@ namespace Dimension
         for (size_t first = 0; first < count; first += kMaxQuadsPerDraw)
         {
             uint32_t n = (uint32_t)std::min<size_t>(kMaxQuadsPerDraw, count - first);
+            if (!DebugDraw("UI", "Screen", "UI", 0, 1, n * 2)) continue;
             vkCmdDrawIndexed(cmd, n * 6, 1, 0, (int32_t)(first * 4), 0);
             m_Stats.DrawCalls++;
         }
@@ -3628,6 +3652,7 @@ namespace Dimension
         vkCmdBindIndexBuffer(cmd, res.QuadIndices.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
         for (const GpuParticleDraw& d : m_GpuParticleDraws)
         {
+            if (!DebugDraw("Opaque", "HDR Color", d.Trails ? "Particles and Trails" : "Particles", d.Entity, d.Capacity, d.Capacity * 2)) continue;
             if (d.Trails)
             {
                 // The ribbons first, under the particles: TRAIL_POINTS segments per slot.
@@ -3756,6 +3781,7 @@ namespace Dimension
         cube->Bind(cmd);
         for (const DecalDraw& d : m_Decals)
         {
+            if (!DebugDraw("Decals", "HDR Color", "Decal", 0, 1, cube->GetIndexCount() / 3)) continue;
             res.Decals[d.Blend].Bind(cmd);
             struct { glm::mat4 Model; glm::vec4 Color; uint32_t Texture, Depth, Blend; float AngleFade; } push{
                 d.Model, d.Color, d.Texture, target.GetDepthBindless(), d.Blend, d.AngleFade };

@@ -244,7 +244,13 @@
               "Tiling": 0.14,
               "Normal Map": 100067,
               "Normal Strength": 1.2,
-              "Triplanar": true
+              "Triplanar": true,
+              "Rule": true,
+              "Slope Range": [
+                32,
+                90
+              ],
+              "Slope Fade": 4
             },
             {
               "Name": "Snow",
@@ -257,7 +263,13 @@
               ],
               "Tiling": 0.3,
               "Normal Map": 0,
-              "Normal Strength": 1.0
+              "Normal Strength": 1.0,
+              "Rule": true,
+              "Height Range": [
+                0.7,
+                1
+              ],
+              "Height Fade": 0.03
             },
             {
               "Name": "Dirt",
@@ -287,16 +299,27 @@
             },
             {
               "Name": "Moss",
-              "Texture": 0,
+              "Texture": 100065,
               "Color": [
-                0.22,
-                0.31,
-                0.14,
+                0.62,
+                0.7,
+                0.42,
                 1
               ],
               "Tiling": 0.3,
               "Normal Map": 0,
-              "Normal Strength": 1.0
+              "Normal Strength": 1.0,
+              "Rule": true,
+              "Height Range": [
+                0,
+                0.4
+              ],
+              "Slope Range": [
+                0,
+                22
+              ],
+              "Noise": 0.6,
+              "Noise Scale": 10
             }
           ],
           "Rock Slope": 32,
@@ -1028,7 +1051,7 @@
           ]
         },
         "UI Text": {
-          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: textured grass, rock and snow by slope and height, height-blended, rock normal-mapped and triplanar; volumetric fog; TAA)</color>",
+          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: layer rules lay out grass, rock, snow and patchy moss by height, slope and noise, height-blended, rock normal-mapped and triplanar; volumetric fog; TAA)</color>",
           "Font": 0,
           "Font Size": 36,
           "Color": [

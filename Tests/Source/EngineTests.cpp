@@ -3944,6 +3944,59 @@ namespace
             CHECK(Terrain::LayerCount(one) == 1);
         }
 
+        // Layer rules: rock on slopes over 30 degrees, snow above 70%, sand low and flat (over the others, being later),
+        // grass (the first) everywhere else; noise breaks a layer into patches.
+        {
+            TerrainComponent s = t;
+            s.Layers.resize(4);
+            s.Layers[1].Rule = true;
+            s.Layers[1].SlopeRange = { 30.0f, 90.0f };
+            s.Layers[2].Rule = true;
+            s.Layers[2].HeightRange = { 0.7f, 1.0f };
+            s.Layers[3].Rule = true;
+            s.Layers[3].HeightRange = { 0.0f, 0.15f };
+            s.Layers[3].SlopeRange = { 0.0f, 20.0f };
+            MeshData m;
+            auto vertex = [&](float y, float tilt) {
+                Vertex v{};
+                v.Position = { (float)m.Vertices.size() * 3.0f, y, 0.0f };
+                v.Normal = { std::sin(glm::radians(tilt)), std::cos(glm::radians(tilt)), 0.0f };
+                m.Vertices.push_back(v);
+            };
+            vertex(1.0f, 0.0f);   // low, flat: sand
+            vertex(10.0f, 50.0f); // steep: rock
+            vertex(18.0f, 0.0f);  // high: snow
+            vertex(8.0f, 5.0f);   // in between: grass
+            vertex(1.0f, 50.0f);  // low but steep: rock
+            std::vector<uint32_t> splat = Terrain::BuildSplat(s, m);
+            auto weight = [&](size_t i, int layer) { return (splat[i] >> (layer * 8) & 255) / 255.0f; };
+            CHECK(splat.size() == 5 && weight(0, 3) > 0.95f && weight(1, 1) > 0.95f && weight(2, 2) > 0.95f && weight(3, 0) > 0.95f && weight(4, 1) > 0.95f);
+            bool sums = true;
+            for (size_t i = 0; i < 5; ++i) sums &= std::abs(weight(i, 0) + weight(i, 1) + weight(i, 2) + weight(i, 3) - 1.0f) < 0.02f;
+            CHECK(sums);
+            CHECK(Terrain::SettingsKey(s) != Terrain::SettingsKey(t));
+            // Sand with noise over a field of low flat ground: patches, some bare, some full.
+            s.Layers[3].Noise = 1.0f;
+            s.Layers[3].NoiseScale = 4.0f;
+            MeshData field;
+            for (int z = 0; z < 20; ++z)
+                for (int x = 0; x < 20; ++x)
+                {
+                    Vertex v{};
+                    v.Position = { x * 1.5f, 1.0f, z * 1.5f };
+                    v.Normal = { 0.0f, 1.0f, 0.0f };
+                    field.Vertices.push_back(v);
+                }
+            std::vector<uint32_t> patchy = Terrain::BuildSplat(s, field);
+            int bare = 0, full = 0;
+            for (uint32_t w : patchy)
+            {
+                bare += (w >> 24) < 40;
+                full += (w >> 24) > 215;
+            }
+            CHECK(bare > 20 && full > 20);
+        }
+
         // The layer list saves as an array of objects, and a terrain saved with the older six fixed layers loads them
         // into the list.
         {

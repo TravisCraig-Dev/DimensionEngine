@@ -43,6 +43,18 @@ namespace Dimension
         bool Highlighting = false;
         std::vector<Entity> Highlight;
         bool ShowNavMeshes = false; // every baked navigation mesh (the Navigation window is open)
+        // Frame debugger: -2 off; -1 records the frame's draws (GetFrameEvents) and draws them all; n >= 0 records them
+        // and draws only events 0 to n (the frame as it stood after that draw; effects and post processing still run).
+        int FrameDebugStop = -2;
+    };
+
+    // A draw the frame debugger recorded: the pass, the target it drew into, what it drew (a mesh's name, or "Sky",
+    // "Sprites", ...) and for whom (EntityId: the entity's index + 1, 0 = none), and how much.
+    struct FrameDebugEvent
+    {
+        std::string Pass, Target, What;
+        uint32_t EntityId = 0;
+        uint32_t Instances = 1, Triangles = 0;
     };
 
     // Directional shadow cascades for one frame.
@@ -147,6 +159,8 @@ namespace Dimension
         void DrawNavMeshOverlay(const NavMeshData& mesh, const glm::mat4& frame = glm::mat4(1.0f));
 
         const RenderStats& GetStats() const { return m_Stats; }
+        // The draws of the last frame rendered with SceneRenderOptions::FrameDebugStop above -2, in order.
+        const std::vector<FrameDebugEvent>& GetFrameEvents() const { return m_FrameEvents; }
 
         // GPU instancing: identical opaque meshes (same mesh, sub-mesh, material and pipeline) are drawn with one
         // instanced call. On by default; turning it off is useful for comparisons.
@@ -322,6 +336,12 @@ namespace Dimension
         };
         std::vector<Readback> m_LightProbeReadbacks;
         std::unique_ptr<ProbeResources> m_LightProbeCapture;
+        // Frame debugger: recording this frame's draws, and the last one drawn (-1 all).
+        bool m_FrameCapturing = false;
+        int m_FrameStop = -1;
+        std::vector<FrameDebugEvent> m_FrameEvents;
+        // Records a draw (while capturing); false when it falls after the stop and is to be skipped.
+        bool DebugDraw(const char* pass, const char* target, const std::string& what, uint32_t entity, uint32_t instances, uint32_t triangles);
         void BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t resolution);
 
         // GGX-prefiltered copy of the HDR sky texture for reflections (mip m = roughness m / (mips - 1)), rebuilt

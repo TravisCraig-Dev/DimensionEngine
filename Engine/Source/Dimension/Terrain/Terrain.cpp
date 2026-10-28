@@ -297,6 +297,45 @@ namespace Dimension::Terrain
         size_t count = mesh.Vertices.size();
         int layers = LayerCount(terrain);
         std::vector<uint32_t> splat(count * (size_t)SplatMapCount(terrain), 0u);
+        bool rules = false;
+        for (int k = 1; k < layers && k < (int)terrain.Layers.size(); ++k) rules |= terrain.Layers[k].Rule;
+        if (rules)
+        {
+            // Layer rules: the first layer everywhere, then each layer with a rule over those before it, as much as the
+            // ground's height and slope sit in its ranges (fading past them), broken up by its noise.
+            auto within = [](float x, float lo, float hi, float fade, float bottom, float top) {
+                float a = lo <= bottom ? 1.0f : Smooth(lo - fade, lo + fade, x);
+                float b = hi >= top ? 1.0f : 1.0f - Smooth(hi - fade, hi + fade, x);
+                return a * b;
+            };
+            float w[kMaxLayers];
+            for (size_t i = 0; i < count; ++i)
+            {
+                const Vertex& v = mesh.Vertices[i];
+                float height = terrain.Height > 0.0f ? v.Position.y / terrain.Height : 0.0f;
+                float slope = glm::degrees(std::acos(std::clamp(v.Normal.y, -1.0f, 1.0f)));
+                std::fill(w, w + kMaxLayers, 0.0f);
+                w[0] = 1.0f;
+                for (int k = 1; k < layers && k < (int)terrain.Layers.size(); ++k)
+                {
+                    const TerrainLayer& rule = terrain.Layers[k];
+                    if (!rule.Rule) continue;
+                    float cover = within(height, rule.HeightRange.x, rule.HeightRange.y, std::max(rule.HeightFade, 1e-4f), 0.0f, 1.0f) *
+                                  within(slope, rule.SlopeRange.x, rule.SlopeRange.y, std::max(rule.SlopeFade, 1e-3f), 0.0f, 90.0f);
+                    if (cover > 0.0f && rule.Noise > 0.0f)
+                    {
+                        float scale = std::max(rule.NoiseScale, 0.1f);
+                        float n = 0.5f + 0.5f * ParticleSystems::GradientNoise({ v.Position.x / scale, (float)k * 17.31f + (float)terrain.Seed * 0.37f, v.Position.z / scale });
+                        cover = std::clamp(cover * (1.0f + (n * 2.0f - 1.0f) * 2.0f * rule.Noise), 0.0f, 1.0f);
+                    }
+                    if (cover <= 0.0f) continue;
+                    for (int j = 0; j < k; ++j) w[j] *= 1.0f - cover;
+                    w[k] = cover;
+                }
+                for (int m = 0; m < SplatMapCount(terrain); ++m) splat[(size_t)m * count + i] = PackWeights(w + m * 4);
+            }
+            return splat;
+        }
         float slopeAt = std::cos(glm::radians(std::clamp(terrain.RockSlope, 1.0f, 89.0f)));
         for (size_t i = 0; i < count; ++i)
         {
@@ -336,6 +375,14 @@ namespace Dimension::Terrain
         mix(&t.SnowHeight, sizeof(t.SnowHeight));
         int layers = LayerCount(t);
         mix(&layers, sizeof(layers));
+        for (const TerrainLayer& l : t.Layers)
+            if (l.Rule)
+            {
+                float rule[8] = { l.HeightRange.x, l.HeightRange.y, l.SlopeRange.x, l.SlopeRange.y, l.HeightFade, l.SlopeFade, l.Noise, l.NoiseScale };
+                mix(rule, sizeof(rule));
+            }
+            else
+                mix("-", 1);
         auto mixString = [&](const std::string& s) {
             size_t size = s.size();
             mix(&size, sizeof(size));

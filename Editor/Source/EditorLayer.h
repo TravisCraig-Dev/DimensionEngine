@@ -24,6 +24,7 @@ namespace Editor
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
         int Theme = -1;           // --theme dark|light|midnight: this session only (preferences stay unchanged)
         int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
+        int FrameEvent = -1;      // --frame-event N: with --open "Frame Debugger", step the Scene view to draw N (0-based)
         std::string Search;       // --search "query": start with this Hierarchy search
         bool VisualizeNavigation = false; // Game view overlay of UI navigation links (--visualize-nav starts with it on)
         bool WaitForDebugger = false;     // --wait-for-debugger: wait up to 60 s for a C# debugger before loading scripts
@@ -158,6 +159,8 @@ namespace Editor
         bool m_ShowAnimator = true;
         bool m_ShowTimeline = false;
         bool m_ShowNavigation = false;
+        bool m_ShowFrameDebugger = false;
+        Scope<FrameDebuggerPanel> m_FrameDebugger;
         bool m_ShowProfiler = false;
         bool m_ShowStats = true, m_ShowSceneSettings = true, m_ShowProjectSettings = false, m_ShowAbout = false;
         bool m_ShowBuildSettings = false, m_ShowPreferences = false, m_ShowAudioMixer = true, m_ShowTilePalette = false;

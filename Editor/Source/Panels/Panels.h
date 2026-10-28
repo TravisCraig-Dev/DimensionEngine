@@ -1,6 +1,7 @@
 #pragma once
 #include "../EditorContext.h"
 #include <Dimension/Core/Log.h>
+#include <Dimension/Renderer/SceneRenderer.h>
 #include <mutex>
 
 namespace Editor
@@ -115,6 +116,30 @@ namespace Editor
     private:
         int m_Picked = -1; // frame index in the history while paused
         bool m_ShowMemory = true;
+    };
+
+    class FrameDebuggerPanel
+    {
+    public:
+        explicit FrameDebuggerPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open, const std::vector<FrameDebugEvent>& events);
+        // SceneRenderOptions::FrameDebugStop for a view (0 Scene, 1 Game): -2 unless it is the one being debugged.
+        int StopFor(int view) const;
+        int View() const { return m_View; }
+        // Automation (--open "Frame Debugger" --frame-event N): enabled on the Scene view, stopped at a draw.
+        void Start(int event)
+        {
+            m_Enabled = true;
+            m_Event = event;
+            m_ScrollTo = true;
+        }
+
+    private:
+        EditorContext& m_Ctx;
+        bool m_Enabled = false;
+        int m_View = 0;
+        int m_Event = -1; // the last draw shown (-1 all)
+        bool m_ScrollTo = false;
     };
 
     class NavigationPanel
