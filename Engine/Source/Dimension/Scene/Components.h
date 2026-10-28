@@ -153,13 +153,16 @@ namespace Dimension
     // -Z axis, like Unity's Decal Projector: dirt, scorch marks, puddles, signs. Multiply darkens what is under it,
     // Alpha paints over it and Additive makes it glow. Surfaces turned away from the projector fade out.
     // A landscape (see Dimension/Terrain/Terrain.h): needs a Mesh Renderer, whose own mesh it replaces.
-    // A terrain surface layer: Texture (None = plain) repeating Tiling times per meter, times Color.
+    // A terrain surface layer: Texture (None = plain) repeating Tiling times per meter, times Color, with an optional
+    // Normal Map (tiled the same) bent by Normal Strength.
     struct TerrainLayer
     {
         std::string Name = "Layer";
         AssetHandle Texture = AssetHandle::None();
         glm::vec4 Color{ 1.0f };
         float Tiling = 0.25f;
+        AssetHandle NormalMap = AssetHandle::None();
+        float NormalStrength = 1.0f;
     };
     inline std::vector<TerrainLayer> DefaultTerrainLayers()
     {
@@ -187,6 +190,9 @@ namespace Dimension
         std::vector<TerrainLayer> Layers = DefaultTerrainLayers();
         float RockSlope = 35.0f;
         float SnowHeight = 0.72f;
+        // Height Blend (0-1): where layers meet, the higher parts of each texture (its brightness) win, so stones
+        // show through sand in clumps instead of fading evenly; 0 = plain blending by weight.
+        float HeightBlend = 0.0f;
         // Sculpted and painted terrain (the editor's brushes): the heights (0-1 of Height, 16-bit) and layer weights
         // (a byte per layer per sample, at least the first three) base64, replacing the heightmap/noise and the
         // automatic layers. Empty = not edited.
@@ -808,7 +814,10 @@ namespace Dimension
     // (not turned with it) from the colliders there. Only static geometry counts (no dynamic rigidbodies, triggers or
     // characters). A spot is walkable when its ground is no steeper than Max Slope, Agent Height of headroom is above
     // it, and it is at least Agent Radius from any edge or wall; neighbouring spots up to Step Height apart join up.
-    // Baked when play starts (and with the Inspector's Bake to preview it, or NavMesh.Build from scripts).
+    // Baked when play starts (and with the Inspector's Bake to preview it, or NavMesh.Build from scripts). A Moving
+    // surface rides on its object (a boat's deck, a lift): it is baked from that object's own colliders and its
+    // children's only (moving bodies too), in the pose it has then, and goes wherever the object goes; agents on it are
+    // carried along (turning with it) and walk it as if it stood still. Other surfaces leave Moving surfaces' objects out.
     struct NavMeshSurfaceComponent
     {
         glm::vec3 Size{ 50.0f, 20.0f, 50.0f };
@@ -823,9 +832,12 @@ namespace Dimension
         bool GenerateLinks = false;
         float DropHeight = 2.0f;
         float JumpDistance = 1.5f;
+        bool Moving = false;
         std::shared_ptr<const NavMeshData> Data;  // runtime: the mesh agents walk (the baked one with obstacles' holes)
         std::shared_ptr<const NavMeshData> Baked; // runtime: as baked
         uint64_t CarveKey = 0;                    // runtime: which obstacles cut Data, and where
+        // Runtime (Moving): its object's transform when baked, and from the mesh as baked to the world now (and back).
+        glm::mat4 BakedAt{ 1.0f }, Frame{ 1.0f }, FrameInverse{ 1.0f };
     };
 
     // A NavMesh Obstacle (like Unity's): a box or an upright capsule (Center, Size or Radius and Height, in the
@@ -928,6 +940,10 @@ namespace Dimension
         int32_t Node = -1; // where it stands on Mesh (-1 = not placed yet)
         glm::vec3 LastGround{ 0.0f }; // where it stood after the last update
         bool Placed = false;          // LastGround is set (Warp clears it)
+        // On a Moving surface the agent works in the surface's space as baked (Path, LastGround, Velocity, ...):
+        // MeshDestination is Destination there, taken when its path was first found (so it rides along too).
+        glm::vec3 MeshDestination{ 0.0f };
+        bool HasMeshDestination = false;
         std::shared_ptr<const NavMeshData> Mesh;
     };
 

@@ -218,9 +218,89 @@
           "Roughness": 0.5,
           "Flat Center": 0.18,
           "Flat Height": 0.12,
+          "Layers": [
+            {
+              "Name": "Grass",
+              "Texture": 100065,
+              "Color": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "Tiling": 0.18,
+              "Normal Map": 0,
+              "Normal Strength": 1.0
+            },
+            {
+              "Name": "Rock",
+              "Texture": 100066,
+              "Color": [
+                0.92,
+                0.88,
+                0.82,
+                1
+              ],
+              "Tiling": 0.14,
+              "Normal Map": 100067,
+              "Normal Strength": 1.2
+            },
+            {
+              "Name": "Snow",
+              "Texture": 0,
+              "Color": [
+                0.95,
+                0.96,
+                1.0,
+                1
+              ],
+              "Tiling": 0.3,
+              "Normal Map": 0,
+              "Normal Strength": 1.0
+            },
+            {
+              "Name": "Dirt",
+              "Texture": 0,
+              "Color": [
+                0.4,
+                0.3,
+                0.21,
+                1
+              ],
+              "Tiling": 0.3,
+              "Normal Map": 0,
+              "Normal Strength": 1.0
+            },
+            {
+              "Name": "Sand",
+              "Texture": 0,
+              "Color": [
+                0.78,
+                0.71,
+                0.52,
+                1
+              ],
+              "Tiling": 0.3,
+              "Normal Map": 0,
+              "Normal Strength": 1.0
+            },
+            {
+              "Name": "Moss",
+              "Texture": 0,
+              "Color": [
+                0.22,
+                0.31,
+                0.14,
+                1
+              ],
+              "Tiling": 0.3,
+              "Normal Map": 0,
+              "Normal Strength": 1.0
+            }
+          ],
           "Rock Slope": 32,
           "Snow Height": 0.7,
-          "Texture Tiling": 0.3
+          "Height Blend": 0.6
         }
       }
     },
@@ -947,7 +1027,7 @@
           ]
         },
         "UI Text": {
-          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: grass, rock and snow by slope and height; volumetric fog; TAA)</color>",
+          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: textured grass, rock and snow by slope and height, height-blended, rock normal-mapped; volumetric fog; TAA)</color>",
           "Font": 0,
           "Font Size": 36,
           "Color": [

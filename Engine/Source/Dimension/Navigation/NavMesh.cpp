@@ -28,10 +28,34 @@ namespace Dimension
 
             int Opposite(int d) { return d < 4 ? (d + 2) % 4 : 4 + (d - 4 + 2) % 4; }
 
-            // Only fixed geometry is walked on: not moving bodies, sensors, agents or characters.
-            bool Ignored(Registry& reg, Entity e)
+            // What a bake walks on: a Moving surface its own object's colliders and its children's (moving bodies too);
+            // the others fixed geometry, leaving Moving surfaces' objects out. Never sensors, agents or characters.
+            struct BakeScope
             {
-                if (auto* rb = reg.TryGet<RigidbodyComponent>(e); rb && rb->Type == BodyType::Dynamic) return true;
+                Entity Own = Entity::Null();
+                std::vector<Entity> Moving;
+            };
+
+            bool Under(Scene& scene, Entity e, Entity root)
+            {
+                for (Entity x = e; !x.IsNull() && scene.IsValid(x); x = scene.GetParent(x))
+                    if (x == root) return true;
+                return false;
+            }
+
+            bool Ignored(Scene& scene, Entity e, const BakeScope& scope)
+            {
+                auto& reg = scene.GetRegistry();
+                if (!scope.Own.IsNull())
+                {
+                    if (!Under(scene, e, scope.Own)) return true;
+                }
+                else
+                {
+                    if (auto* rb = reg.TryGet<RigidbodyComponent>(e); rb && rb->Type == BodyType::Dynamic) return true;
+                    for (Entity m : scope.Moving)
+                        if (Under(scene, e, m)) return true;
+                }
                 if (reg.Has<NavMeshAgentComponent>(e) || reg.Has<NavMeshObstacleComponent>(e) || reg.Has<CharacterControllerComponent>(e) || reg.Has<ClothComponent>(e) ||
                     reg.Has<SoftBodyComponent>(e) || reg.Has<RopeComponent>(e) || reg.Has<RagdollComponent>(e))
                     return true;
@@ -167,9 +191,8 @@ namespace Dimension
             // Links of the mesh's own: from each spot at an edge, looking straight out past it for the first ground to land
             // on: lower by more than a step and at most Drop Height (a drop, one way), or level across a gap up to Jump
             // Distance (both ways), with nothing in between. At most one per meter of edge and area landed in.
-            void GenerateLinks(Scene& scene, NavMeshData& m, float dropHeight, float jumpDistance)
+            void GenerateLinks(Scene& scene, NavMeshData& m, float dropHeight, float jumpDistance, const BakeScope& scope)
             {
-                auto& reg = scene.GetRegistry();
                 float c = m.CellSize;
                 int reach = (int)std::ceil((jumpDistance + 2.0f * m.AgentRadius + c) / c);
                 std::set<std::tuple<int, int, int, int>> taken;
@@ -204,7 +227,7 @@ namespace Dimension
                             bool clear = true;
                             glm::vec3 dir = pb - pa;
                             for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, pa + lift, dir, glm::length(dir)))
-                                if (!Ignored(reg, h.Hit))
+                                if (!Ignored(scene, h.Hit, scope))
                                 {
                                     clear = false;
                                     break;
@@ -231,7 +254,7 @@ namespace Dimension
 
             // Bakes a surface. With `previous` (the same grid), only the columns in `region` (x0, z0, x1, z1) are sampled
             // again; the others keep previous's surfaces.
-            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& s, const glm::vec3& center,
+            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& s, const glm::vec3& center, const BakeScope& scope,
                                                 const NavMeshData* previous = nullptr, glm::ivec4 region = glm::ivec4(0))
             {
                 auto& reg = scene.GetRegistry();
@@ -293,7 +316,7 @@ namespace Dimension
                         float above = kInf;
                         for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, p, down, size.y, Physics::kDefaultQueryMask, true))
                         {
-                            if (Ignored(reg, h.Hit)) continue;
+                            if (Ignored(scene, h.Hit, scope)) continue;
                             float y = h.Point.y;
                             if (above - y < 0.02f) continue; // the same surface again (on a shared triangle edge)
                             bool walkable = h.Normal.y >= cosSlope && above - y >= m->AgentHeight;
@@ -301,7 +324,7 @@ namespace Dimension
                             if (!walkable) continue;
                             bool blocked = false;
                             for (const RaycastHit& u : Physics3DWorld::RaycastAll(scene, h.Point + up * 0.02f, up, m->AgentHeight - 0.02f))
-                                if (!Ignored(reg, u.Hit))
+                                if (!Ignored(scene, u.Hit, scope))
                                 {
                                     blocked = true;
                                     break;
@@ -351,7 +374,7 @@ namespace Dimension
                 m->MinCost = 1.0f;
                 for (float cost : m->Costs) m->MinCost = std::min(m->MinCost, cost);
                 BuildIslands(*m);
-                if (s.GenerateLinks) GenerateLinks(scene, *m, std::max(s.DropHeight, 0.0f), std::max(s.JumpDistance, 0.0f));
+                if (s.GenerateLinks) GenerateLinks(scene, *m, std::max(s.DropHeight, 0.0f), std::max(s.JumpDistance, 0.0f), scope);
                 return m;
             }
 
@@ -579,9 +602,33 @@ namespace Dimension
 
             NavMeshAgentComponent* AgentOf(Scene& scene, Entity e) { return scene.IsValid(e) ? scene.GetRegistry().TryGet<NavMeshAgentComponent>(e) : nullptr; }
 
+            // The Moving surface whose mesh this is (null: a fixed one, or none).
+            const NavMeshSurfaceComponent* MovingSurfaceOf(Scene& scene, const NavMeshData* mesh)
+            {
+                if (!mesh) return nullptr;
+                for (auto [e, s] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent>())
+                    if (s.Moving && (s.Data.get() == mesh || s.Baked.get() == mesh)) return &s;
+                return nullptr;
+            }
+
+            // A point between the world and a mesh's space (as baked; the same for fixed surfaces).
+            glm::vec3 ToMesh(Scene& scene, const NavMeshData* mesh, const glm::vec3& world)
+            {
+                const NavMeshSurfaceComponent* s = MovingSurfaceOf(scene, mesh);
+                return s ? glm::vec3(s->FrameInverse * glm::vec4(world, 1.0f)) : world;
+            }
+            glm::vec3 ToWorld(Scene& scene, const NavMeshData* mesh, const glm::vec3& local)
+            {
+                const NavMeshSurfaceComponent* s = MovingSurfaceOf(scene, mesh);
+                return s ? glm::vec3(s->Frame * glm::vec4(local, 1.0f)) : local;
+            }
+            // How far a mesh's space is turned about the vertical from the world's.
+            float YawOf(const glm::mat4& frame) { return std::atan2(frame[2].x, frame[2].z); }
+
+            // Where the agent stands, in its mesh's space.
             glm::vec3 GroundOf(Scene& scene, Entity e, const NavMeshAgentComponent& agent)
             {
-                return scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition() - glm::vec3(0.0f, agent.BaseOffset, 0.0f);
+                return ToMesh(scene, agent.Mesh.get(), scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition()) - glm::vec3(0.0f, agent.BaseOffset, 0.0f);
             }
 
             // Moves the object to a world position (agents are roots; under a parent it is converted).
@@ -592,6 +639,12 @@ namespace Dimension
                 Entity parent = scene.GetParent(e);
                 t.Position = parent.IsNull() ? world : glm::vec3(glm::inverse(reg.Get<TransformComponent>(parent).World) * glm::vec4(world, 1.0f));
                 t.World[3] = glm::vec4(world, 1.0f);
+            }
+
+            // Stands the agent's object at a ground spot of its mesh (Base Offset above it).
+            void PlaceAgent(Scene& scene, Entity e, const NavMeshAgentComponent& agent, const glm::vec3& ground)
+            {
+                PlaceObject(scene, e, ToWorld(scene, agent.Mesh.get(), ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f)));
             }
 
             // Finds the agent's mesh and the node it stands on (keeping it where it is when that is on the mesh).
@@ -607,12 +660,19 @@ namespace Dimension
                     if (std::abs(cell.x - col % agent.Mesh->Width) <= 1 && std::abs(cell.y - col / agent.Mesh->Width) <= 1) return true;
                 }
                 int node = -1;
-                agent.Mesh = MeshNear(scene, ground, std::max(agent.Height, 2.0f), &node, FilterOf(agent));
-                if (!agent.Mesh) agent.Mesh = MeshNear(scene, ground, std::max(agent.Height, 2.0f), &node); // nowhere roomy enough: anywhere
+                glm::vec3 world = ToWorld(scene, agent.Mesh.get(), ground);
+                auto previous = agent.Mesh;
+                agent.Mesh = MeshNear(scene, world, std::max(agent.Height, 2.0f), &node, FilterOf(agent));
+                if (!agent.Mesh) agent.Mesh = MeshNear(scene, world, std::max(agent.Height, 2.0f), &node); // nowhere roomy enough: anywhere
                 agent.Node = agent.Mesh ? node : -1;
+                if (agent.Mesh != previous)
+                {
+                    agent.HasMeshDestination = false; // another space
+                    agent.Placed = false;
+                }
                 if (agent.Node < 0) return false;
-                glm::vec3 on = OnMesh(*agent.Mesh, agent.Node, { ground.x, ground.z });
-                PlaceObject(scene, e, on + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
+                glm::vec3 local = ToMesh(scene, agent.Mesh.get(), world);
+                PlaceAgent(scene, e, agent, OnMesh(*agent.Mesh, agent.Node, { local.x, local.z }));
                 return true;
             }
 
@@ -626,7 +686,12 @@ namespace Dimension
                     agent.PathStatus = NavPathStatus::Invalid;
                     return;
                 }
-                agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, GroundOf(scene, e, agent), agent.Destination, agent.Path,
+                if (!agent.HasMeshDestination)
+                {
+                    agent.MeshDestination = ToMesh(scene, agent.Mesh.get(), agent.Destination);
+                    agent.HasMeshDestination = true;
+                }
+                agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, GroundOf(scene, e, agent), agent.MeshDestination, agent.Path,
                                             LinksOn(scene, *agent.Mesh), &agent.PathLinks, FilterOf(agent), &agent.PathLinkOwners);
                 agent.Waiting = false;
             }
@@ -773,11 +838,13 @@ namespace Dimension
         std::vector<Link> LinksOn(Scene& scene, const NavMeshData& mesh)
         {
             std::vector<Link> out;
+            const NavMeshSurfaceComponent* moving = MovingSurfaceOf(scene, &mesh);
+            glm::mat4 toMesh = moving ? moving->FrameInverse : glm::mat4(1.0f);
             for (auto [e, link, t] : scene.GetRegistry().ViewOf<OffMeshLinkComponent, TransformComponent>())
             {
                 // Closed (not Activated): gone, unless agents wait at it (a door) - then paths still go through.
                 if ((!link.Activated && !link.AgentsWait) || !t.ActiveInHierarchy) continue;
-                glm::vec3 a = glm::vec3(t.World * glm::vec4(link.Start, 1.0f)), b = glm::vec3(t.World * glm::vec4(link.End, 1.0f));
+                glm::vec3 a = glm::vec3(toMesh * t.World * glm::vec4(link.Start, 1.0f)), b = glm::vec3(toMesh * t.World * glm::vec4(link.End, 1.0f));
                 // Each end joins the mesh within a meter (or the agent's radius past the edge it was baked back from).
                 float reach = std::max(1.0f, mesh.AgentRadius + mesh.CellSize * 2.0f);
                 int na = Nearest(mesh, a, reach), nb = Nearest(mesh, b, reach);
@@ -869,6 +936,18 @@ namespace Dimension
         namespace
         {
             // A surface's new mesh; agents find their place on it again.
+            BakeScope ScopeOf(Scene& scene, Entity surface)
+            {
+                BakeScope scope;
+                auto& reg = scene.GetRegistry();
+                if (reg.Get<NavMeshSurfaceComponent>(surface).Moving)
+                    scope.Own = surface;
+                else
+                    for (auto [e, s] : reg.ViewOf<NavMeshSurfaceComponent>())
+                        if (s.Moving) scope.Moving.push_back(e);
+                return scope;
+            }
+
             void Install(Scene& scene, NavMeshSurfaceComponent& surface, std::shared_ptr<NavMeshData> data)
             {
                 surface.Data = surface.Baked = data;
@@ -893,6 +972,7 @@ namespace Dimension
             for (Entity e : surfaces)
             {
                 auto& s = reg.Get<NavMeshSurfaceComponent>(e);
+                if (s.Moving) continue; // the level around changed, not the platform
                 glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
                 glm::vec3 half = glm::max(s.Size, glm::vec3(0.1f)) * 0.5f;
                 if (hi.x < center.x - half.x || lo.x > center.x + half.x || hi.z < center.z - half.z || lo.z > center.z + half.z ||
@@ -918,7 +998,7 @@ namespace Dimension
                     }
                     sampled = copy.get();
                 }
-                Install(scene, s, BakeIn(*sampled, s, center, previous, region));
+                Install(scene, s, BakeIn(*sampled, s, center, ScopeOf(scene, e), previous, region));
                 ++updated;
             }
             return updated;
@@ -932,16 +1012,20 @@ namespace Dimension
             scene.UpdateTransforms();
             glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
             std::shared_ptr<NavMeshData> data;
+            BakeScope scope = ScopeOf(scene, e);
             if (scene.GetPhysics3D())
-                data = BakeIn(scene, *surface, center);
+                data = BakeIn(scene, *surface, center, scope);
             else
             {
                 // Editing: the colliders in a physics world of a copy (the scene itself is left alone).
                 Ref<Scene> copy = scene.Clone();
                 copy->StartQueryPhysics();
-                data = BakeIn(*copy, *surface, center);
+                data = BakeIn(*copy, *surface, center, scope);
             }
             Install(scene, *surface, data);
+            // A Moving surface: its mesh in the pose its object has now.
+            surface->BakedAt = reg.Get<TransformComponent>(e).World;
+            surface->Frame = surface->FrameInverse = glm::mat4(1.0f);
             return data;
         }
 
@@ -961,10 +1045,11 @@ namespace Dimension
             for (auto [e, s, t] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent, TransformComponent>())
             {
                 if (!s.Data || !t.ActiveInHierarchy) continue;
-                int a = Nearest(*s.Data, point, maxDistance, filter);
+                glm::vec3 local = s.Moving ? glm::vec3(s.FrameInverse * glm::vec4(point, 1.0f)) : point;
+                int a = Nearest(*s.Data, local, maxDistance, filter);
                 if (a < 0) continue;
-                glm::vec3 on = OnMesh(*s.Data, a, { point.x, point.z });
-                float d = glm::distance(on, point);
+                glm::vec3 on = OnMesh(*s.Data, a, { local.x, local.z });
+                float d = glm::distance(on, local);
                 if (d < bestD)
                 {
                     bestD = d;
@@ -981,7 +1066,8 @@ namespace Dimension
             int node = -1;
             auto mesh = MeshNear(scene, point, maxDistance, &node);
             if (!mesh) return false;
-            result = OnMesh(*mesh, node, { point.x, point.z });
+            glm::vec3 local = ToMesh(scene, mesh.get(), point);
+            result = ToWorld(scene, mesh.get(), OnMesh(*mesh, node, { local.x, local.z }));
             return true;
         }
 
@@ -990,7 +1076,10 @@ namespace Dimension
             int node = -1;
             corners.clear();
             auto mesh = MeshNear(scene, from, 2.0f, &node);
-            return mesh ? PathFrom(*mesh, node, from, to, corners, LinksOn(scene, *mesh), nullptr, {}) : NavPathStatus::Invalid;
+            if (!mesh) return NavPathStatus::Invalid;
+            NavPathStatus status = PathFrom(*mesh, node, ToMesh(scene, mesh.get(), from), ToMesh(scene, mesh.get(), to), corners, LinksOn(scene, *mesh), nullptr, {});
+            for (glm::vec3& c : corners) c = ToWorld(scene, mesh.get(), c);
+            return status;
         }
 
         bool SetDestination(Scene& scene, Entity e, const glm::vec3& destination)
@@ -999,6 +1088,7 @@ namespace Dimension
             if (!agent) return false;
             agent->Destination = destination;
             agent->HasDestination = true;
+            agent->HasMeshDestination = false;
             Repath(scene, e, *agent);
             return agent->PathStatus != NavPathStatus::Invalid;
         }
@@ -1024,8 +1114,9 @@ namespace Dimension
             agent->Mesh = mesh;
             agent->Node = node;
             agent->Velocity = agent->DesiredVelocity = glm::vec3(0.0f);
-            agent->Placed = false;
-            PlaceObject(scene, e, OnMesh(*mesh, node, { position.x, position.z }) + glm::vec3(0.0f, agent->BaseOffset, 0.0f));
+            agent->Placed = agent->HasMeshDestination = false;
+            glm::vec3 local = ToMesh(scene, mesh.get(), position);
+            PlaceAgent(scene, e, *agent, OnMesh(*mesh, node, { local.x, local.z }));
             if (agent->HasDestination) agent->PathDirty = true;
             return true;
         }
@@ -1041,10 +1132,41 @@ namespace Dimension
                     if (f.Name == "Area") f.EnumNames.assign(Project::GetConfig().NavAreaNames.begin(), Project::GetConfig().NavAreaNames.end());
         }
 
+        glm::mat4 MeshFrame(Scene& scene, const NavMeshData* mesh)
+        {
+            const NavMeshSurfaceComponent* s = MovingSurfaceOf(scene, mesh);
+            return s ? s->Frame : glm::mat4(1.0f);
+        }
+
+        void FollowPlatforms(Scene& scene)
+        {
+            // Each Moving surface's frame now; the agents on it go (and turn) with it as it moved since.
+            auto& reg = scene.GetRegistry();
+            for (auto [e, s, t] : reg.ViewOf<NavMeshSurfaceComponent, TransformComponent>())
+            {
+                if (!s.Moving || !s.Baked) continue;
+                glm::mat4 frame = t.World * glm::inverse(s.BakedAt);
+                glm::mat4 moved = frame * s.FrameInverse;
+                s.Frame = frame;
+                s.FrameInverse = glm::inverse(frame);
+                float turned = YawOf(moved);
+                bool still = true;
+                for (int c = 0; c < 4 && still; ++c) still = glm::all(glm::lessThan(glm::abs(moved[c] - glm::mat4(1.0f)[c]), glm::vec4(1e-6f)));
+                if (still) continue;
+                for (auto [a, agent, at] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
+                {
+                    if (!agent.Mesh || (agent.Mesh != s.Data && agent.Mesh != s.Baked)) continue;
+                    PlaceObject(scene, a, glm::vec3(moved * glm::vec4(at.GetWorldPosition(), 1.0f)));
+                    at.Rotation.y += turned;
+                }
+            }
+        }
+
         void Update(Scene& scene, float dt)
         {
             if (dt <= 0.0f) return;
             auto& reg = scene.GetRegistry();
+            FollowPlatforms(scene);
 
             // Obstacles: how they move, and whether (and where) they cut the meshes. Those not cutting are steered
             // around.
@@ -1101,7 +1223,7 @@ namespace Dimension
             if (carving.empty()) carveKey = 0;
             for (auto [e, s] : reg.ViewOf<NavMeshSurfaceComponent>())
             {
-                if (!s.Baked || s.CarveKey == carveKey) continue;
+                if (!s.Baked || s.CarveKey == carveKey || s.Moving) continue; // obstacles do not cut Moving surfaces
                 std::shared_ptr<const NavMeshData> old = s.Data;
                 s.Data = carving.empty() ? s.Baked : std::shared_ptr<const NavMeshData>(Carve(*s.Baked, carving));
                 s.CarveKey = carveKey;
@@ -1141,6 +1263,7 @@ namespace Dimension
                 NavMeshAgentComponent* Agent;
                 glm::vec3 Ground;
                 bool Driven; // moved by its Animator's root motion
+                const NavMeshSurfaceComponent* Platform = nullptr; // on a Moving surface (Ground and the rest in its space)
             };
             std::vector<Mover> movers;
             for (auto [e, agent, t] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
@@ -1160,9 +1283,10 @@ namespace Dimension
                 if (!agent.Target.IsNull() && scene.IsValid(agent.Target) && agent.RepathTimer <= 0.0f)
                 {
                     glm::vec3 goal = reg.Get<TransformComponent>(agent.Target).GetWorldPosition();
-                    if (!agent.HasDestination || glm::distance(goal, agent.Destination) > 0.3f)
+                    if (!agent.HasDestination || glm::distance(goal, agent.Destination) > 0.3f || MovingSurfaceOf(scene, agent.Mesh.get()))
                     {
                         agent.Destination = goal;
+                        agent.HasMeshDestination = false;
                         agent.HasDestination = agent.PathDirty = true;
                         agent.RepathTimer = 0.25f;
                     }
@@ -1185,7 +1309,7 @@ namespace Dimension
                         agent.Node = node;
                         glm::vec2 moved = (reached - from) / dt;
                         agent.Velocity = glm::vec3(moved.x, 0.0f, moved.y);
-                        PlaceObject(scene, mv.E, glm::vec3(reached.x, HeightAt(*agent.Mesh, node, reached.x, reached.y) + agent.BaseOffset, reached.y));
+                        PlaceAgent(scene, mv.E, agent, glm::vec3(reached.x, HeightAt(*agent.Mesh, node, reached.x, reached.y), reached.y));
                     }
                 }
                 if (!Place(scene, mv.E, agent))
@@ -1212,6 +1336,8 @@ namespace Dimension
                 }
                 mv.Ground = GroundOf(scene, mv.E, agent);
             }
+
+            for (Mover& mv : movers) mv.Platform = MovingSurfaceOf(scene, mv.Agent->Mesh.get());
 
             // Doors: the agents whose way goes next through a closed door (Agents Wait), within a few meters of it, line up
             // before it, nearest first, each about an agent's width behind the one ahead, rather than crowding it.
@@ -1292,7 +1418,7 @@ namespace Dimension
                 // Face the way it goes.
                 auto face = [&](glm::vec2 v2) {
                     if (glm::length(v2) <= 0.05f) return;
-                    float want = std::atan2(-v2.x, -v2.y);
+                    float want = std::atan2(-v2.x, -v2.y) + (mv.Platform ? YawOf(mv.Platform->Frame) : 0.0f);
                     float turn = WrapAngle(want - transform.Rotation.y);
                     float maxTurn = glm::radians(agent.AngularSpeed) * dt;
                     transform.Rotation.y = WrapAngle(transform.Rotation.y + std::clamp(turn, -maxTurn, maxTurn));
@@ -1305,7 +1431,7 @@ namespace Dimension
                     mv.Ground = glm::mix(agent.TraverseFrom, agent.TraverseTo, t) + glm::vec3(0.0f, agent.TraverseArc * 4.0f * t * (1.0f - t), 0.0f);
                     glm::vec3 across = (agent.TraverseTo - agent.TraverseFrom) / std::max(agent.TraverseDuration, 1e-3f);
                     agent.Velocity = glm::vec3(across.x, 0.0f, across.z);
-                    PlaceObject(scene, mv.E, mv.Ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
+                    PlaceAgent(scene, mv.E, agent, mv.Ground);
                     face({ across.x, across.z });
                     if (t >= 1.0f)
                     {
@@ -1410,6 +1536,7 @@ namespace Dimension
                             {
                                 const Mover& o = movers[i];
                                 if (o.E == mv.E || o.Agent->AvoidancePriority > agent.AvoidancePriority) continue;
+                                if ((o.Platform || mv.Platform) && o.Agent->Mesh != agent.Mesh) continue; // another space
                                 glm::vec2 op(o.Ground.x, o.Ground.z);
                                 glm::vec2 ov(o.Agent->Velocity.x, o.Agent->Velocity.z);
                                 if (std::abs(o.Ground.y - mv.Ground.y) > agent.Height) continue;
@@ -1425,10 +1552,21 @@ namespace Dimension
                     if (near.size() > kMaxNeighbours)
                         std::partial_sort(near.begin(), near.begin() + kMaxNeighbours, near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
                     for (size_t i = 0; i < near.size() && i < kMaxNeighbours; ++i) others.push_back(near[i].second);
-                    for (const Blocker& b : blockers)
+                    for (Blocker b : blockers)
+                    {
+                        if (mv.Platform)
+                        {
+                            // Into the platform's space.
+                            glm::vec3 at = glm::vec3(mv.Platform->FrameInverse * glm::vec4(b.P.x, b.Y, b.P.y, 1.0f));
+                            glm::vec3 v = glm::mat3(mv.Platform->FrameInverse) * glm::vec3(b.V.x, 0.0f, b.V.y);
+                            b.P = { at.x, at.z };
+                            b.Y = at.y;
+                            b.V = { v.x, v.z };
+                        }
                         if (std::abs(b.Y - mv.Ground.y - agent.Height * 0.5f) < b.HalfHeight + agent.Height * 0.5f &&
                             glm::distance(b.P, p) < reach + b.R + glm::length(b.V) * 2.0f)
                             others.push_back({ b.P, b.V, agent.Radius + b.R });
+                    }
                     if (!others.empty())
                     {
                         const float horizon = 2.0f;
@@ -1503,7 +1641,7 @@ namespace Dimension
                 glm::vec2 moved = (reached - p) / dt;
                 agent.Velocity = glm::vec3(moved.x, 0.0f, moved.y);
                 mv.Ground = glm::vec3(reached.x, HeightAt(mesh, node, reached.x, reached.y), reached.y);
-                PlaceObject(scene, mv.E, mv.Ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
+                PlaceAgent(scene, mv.E, agent, mv.Ground);
                 face({ agent.Velocity.x, agent.Velocity.z });
             }
 
@@ -1517,7 +1655,7 @@ namespace Dimension
                 if (!Walk(mesh, agent.Node, p, p + delta, &node, &reached, FilterOf(agent))) {}
                 agent.Node = node;
                 mv.Ground = glm::vec3(reached.x, HeightAt(mesh, node, reached.x, reached.y), reached.y);
-                PlaceObject(scene, mv.E, mv.Ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
+                PlaceAgent(scene, mv.E, agent, mv.Ground);
             };
             for (int pass = 0; pass < 2; ++pass)
                 for (int i = 0; i < (int)movers.size(); ++i)

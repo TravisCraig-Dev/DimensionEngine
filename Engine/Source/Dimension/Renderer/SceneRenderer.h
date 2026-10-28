@@ -144,7 +144,7 @@ namespace Dimension
         // Slider joint: its axis through the anchor, the travel range between the limits with end ticks.
         void DrawSliderGizmo(const glm::vec3& anchor, glm::vec3 axis, bool limits, float min, float max);
         void DrawWireSphere(const glm::mat4& transform, const glm::vec3& center, float radius, const glm::vec4& color);
-        void DrawNavMeshOverlay(const NavMeshData& mesh);
+        void DrawNavMeshOverlay(const NavMeshData& mesh, const glm::mat4& frame = glm::mat4(1.0f));
 
         const RenderStats& GetStats() const { return m_Stats; }
 

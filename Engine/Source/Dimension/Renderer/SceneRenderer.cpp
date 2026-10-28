@@ -181,8 +181,9 @@ namespace Dimension
         // std430 mirror of TerrainLayer in MeshCommon.glsl: a terrain layer for the shader.
         struct TerrainLayerGPU
         {
-            glm::vec4 Color; // linear rgb, w texture repeats per meter
-            glm::uvec4 Maps; // bindless: x texture, y splat map; z its channel there
+            glm::vec4 Color;  // linear rgb, w texture repeats per meter
+            glm::uvec4 Maps;  // bindless: x texture, y splat map, w normal map (~0 = none); z its channel in the splat map
+            glm::vec4 Params; // x normal strength
         };
         static_assert(sizeof(MeshPush) <= kPushConstantSize);
 
@@ -2269,9 +2270,14 @@ namespace Dimension
                         const TerrainLayer& layer = k < (int)terrain->Layers.size() ? terrain->Layers[k] : fallback;
                         glm::vec3 color = glm::vec3(ToLinear(layer.Color)) * (dark ? 0.15f : 1.0f);
                         out[k].Color = glm::vec4(color, std::max(layer.Tiling, 1e-4f));
-                        out[k].Maps = glm::uvec4(TextureIndex(layer.Texture, white), terrainRt->Splats[k / 4]->GetBindlessIndex(), (uint32_t)(k % 4), 0u);
+                        out[k].Maps = glm::uvec4(TextureIndex(layer.Texture, white), terrainRt->Splats[k / 4]->GetBindlessIndex(), (uint32_t)(k % 4),
+                                                 TextureIndex(layer.NormalMap, ~0u));
+                        out[k].Params = glm::vec4(layer.NormalStrength, 0.0f, 0.0f, 0.0f);
                     }
-                    gpu.Maps2 = glm::uvec4((uint32_t)la.Address, (uint32_t)(la.Address >> 32), (uint32_t)layers, 0u);
+                    float heightBlend = std::clamp(terrain->HeightBlend, 0.0f, 1.0f);
+                    uint32_t blendBits;
+                    std::memcpy(&blendBits, &heightBlend, 4);
+                    gpu.Maps2 = glm::uvec4((uint32_t)la.Address, (uint32_t)(la.Address >> 32), (uint32_t)layers, blendBits);
                     address = uploadMaterialGPU(dark ? dim(gpu) : gpu);
                 }
                 else if (water)
@@ -4268,8 +4274,12 @@ namespace Dimension
     }
 
     // A baked navigation mesh: links between its spots (colored by area), its edges brighter, the bake's own links.
-    void SceneRenderer::DrawNavMeshOverlay(const NavMeshData& m)
+    void SceneRenderer::DrawNavMeshOverlay(const NavMeshData& m, const glm::mat4& frame)
     {
+        // Moving surfaces: from where the mesh was baked to where its object is now.
+        auto DrawLine = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec4& color) {
+            this->DrawLine(glm::vec3(frame * glm::vec4(a, 1.0f)), glm::vec3(frame * glm::vec4(b, 1.0f)), color);
+        };
         const glm::vec4 edge(0.45f, 0.85f, 1.0f, 0.95f);
         const glm::vec3 lift(0.0f, 0.04f, 0.0f);
         int n = m.NodeCount();
@@ -4313,7 +4323,7 @@ namespace Dimension
         // The Navigation window open: every baked surface.
         if (options.ShowNavMeshes)
             for (auto [e, s, t] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent, TransformComponent>())
-                if (s.Data && t.ActiveInHierarchy) DrawNavMeshOverlay(*s.Data);
+                if (s.Data && t.ActiveInHierarchy) DrawNavMeshOverlay(*s.Data, s.Moving ? s.Frame : glm::mat4(1.0f));
         for (Entity e : options.Selection)
             if (scene.IsValid(e) && e != options.Selected) BuildEntityOverlay(scene, e);
         if (scene.IsValid(options.Selected)) BuildEntityOverlay(scene, options.Selected);
@@ -4627,7 +4637,7 @@ namespace Dimension
             DrawWireBox(glm::translate(glm::mat4(1.0f), t.GetWorldPosition()), glm::vec3(0.0f), surface->Size * 0.5f, { 0.45f, 0.85f, 1.0f, 0.5f });
             if (surface->ShowNavMesh && surface->Data)
             {
-                DrawNavMeshOverlay(*surface->Data);
+                DrawNavMeshOverlay(*surface->Data, surface->Moving ? surface->Frame : glm::mat4(1.0f));
                 for (auto [e, link] : reg.ViewOf<OffMeshLinkComponent>()) drawLink(e, link);
             }
         }
@@ -4640,15 +4650,17 @@ namespace Dimension
             DrawWireCircle(at, glm::vec3(0.0f, agent->Height, 0.0f), agent->Radius, color, 1);
             for (glm::vec3 d : { glm::vec3(agent->Radius, 0, 0), glm::vec3(-agent->Radius, 0, 0), glm::vec3(0, 0, agent->Radius), glm::vec3(0, 0, -agent->Radius) })
                 DrawLine(foot + d, foot + d + glm::vec3(0.0f, agent->Height, 0.0f), color * glm::vec4(1, 1, 1, 0.5f));
+            glm::mat4 frame = Navigation::MeshFrame(scene, agent->Mesh.get()); // its path is in its mesh's space
+            auto onMesh = [&](const glm::vec3& p) { return glm::vec3(frame * glm::vec4(p, 1.0f)); };
             if (agent->HasDestination && agent->Corner < agent->Path.size())
             {
                 const glm::vec4 path(1.0f, 0.85f, 0.3f, 1.0f);
                 const glm::vec3 lift(0.0f, 0.08f, 0.0f);
-                DrawLine(foot + lift, agent->Path[agent->Corner] + lift, path);
-                for (size_t k = agent->Corner; k + 1 < agent->Path.size(); ++k) DrawLine(agent->Path[k] + lift, agent->Path[k + 1] + lift, path);
-                DrawWireCircle(glm::translate(glm::mat4(1.0f), agent->Path.back() + lift), glm::vec3(0.0f), 0.25f, path, 1);
+                DrawLine(foot + lift, onMesh(agent->Path[agent->Corner]) + lift, path);
+                for (size_t k = agent->Corner; k + 1 < agent->Path.size(); ++k) DrawLine(onMesh(agent->Path[k]) + lift, onMesh(agent->Path[k + 1]) + lift, path);
+                DrawWireCircle(glm::translate(glm::mat4(1.0f), onMesh(agent->Path.back()) + lift), glm::vec3(0.0f), 0.25f, path, 1);
             }
-            if (agent->Mesh && !reg.Has<NavMeshSurfaceComponent>(sel)) DrawNavMeshOverlay(*agent->Mesh);
+            if (agent->Mesh && !reg.Has<NavMeshSurfaceComponent>(sel)) DrawNavMeshOverlay(*agent->Mesh, frame);
         }
         if (reg.Has<LODGroupComponent>(sel))
         {

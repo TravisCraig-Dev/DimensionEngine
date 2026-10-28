@@ -199,25 +199,57 @@ void main()
     MaterialRef m = pc.Material;
     vec2 uv = vUV * m.TilingOffset.xy + m.TilingOffset.zw;
     vec4 base;
+    vec3 terrainNormal = vec3(0.0, 0.0, 1.0); // terrain: its layers' normal maps blended (tangent space: x east, y north)
     if (m.Flags.z == 1u)
     {
         // Terrain: its layers blended by their splat map weights (4 a map), tiled in world space (layers without
-        // weight are skipped).
+        // weight are skipped). With Height Blend, each layer's texture brightness is its height, and where layers
+        // meet the highest wins: weights become how far each stands above the top less a band that narrows as
+        // Height Blend grows.
         TerrainLayersRef layers = TerrainLayersRef(m.Maps2.xy);
         vec2 world = vWorldPos.xz;
-        vec3 c = vec3(0.0);
+        uint count = min(m.Maps2.z, 16u);
+        float heightBlend = uintBitsToFloat(m.Maps2.w);
+        float weights[16];
+        vec3 colors[16];
+        float heights[16];
         vec4 w = vec4(0.0);
-        float total = 0.0;
-        for (uint k = 0u; k < m.Maps2.z; ++k)
+        float top = -1e9, plainTotal = 0.0;
+        for (uint k = 0u; k < count; ++k)
         {
             TerrainLayer layer = layers.Layers[k];
             if (layer.Maps.z == 0u) w = SampleTexture(layer.Maps.y, vUV);
-            float weight = w[layer.Maps.z];
+            weights[k] = w[layer.Maps.z];
+            colors[k] = vec3(0.0);
+            heights[k] = -1e9;
+            if (weights[k] <= 0.0) continue;
+            vec3 texel = SampleTexture(layer.Maps.x, world * layer.Color.w).rgb;
+            colors[k] = texel * layer.Color.rgb;
+            heights[k] = weights[k] + dot(texel, vec3(0.299, 0.587, 0.114)) * heightBlend;
+            top = max(top, heights[k]);
+            plainTotal += weights[k];
+        }
+        float band = mix(0.6, 0.05, heightBlend), total = 0.0;
+        vec3 c = vec3(0.0), n = vec3(0.0);
+        for (uint k = 0u; k < count; ++k)
+        {
+            if (weights[k] <= 0.0) continue;
+            float byHeight = max(heights[k] - (top - band), 0.0);
+            float weight = mix(weights[k] / max(plainTotal, 1e-4), byHeight, heightBlend > 0.0 ? 1.0 : 0.0);
             if (weight <= 0.0) continue;
-            c += SampleTexture(layer.Maps.x, world * layer.Color.w).rgb * layer.Color.rgb * weight;
+            c += colors[k] * weight;
+            TerrainLayer layer = layers.Layers[k];
+            vec3 t = vec3(0.0, 0.0, 1.0);
+            if (layer.Maps.w != 0xFFFFFFFFu)
+            {
+                t = SampleTexture(layer.Maps.w, world * layer.Color.w).xyz * 2.0 - 1.0;
+                t.xy *= layer.Params.x;
+            }
+            n += t * weight;
             total += weight;
         }
         base = vec4(c / max(total, 1e-4), 1.0) * m.BaseColor;
+        terrainNormal = n / max(total, 1e-4);
     }
     else
         base = SampleTexture(m.Maps.x, uv) * m.BaseColor;
@@ -231,6 +263,12 @@ void main()
 
     vec3 N = normalize(vNormal);
     if (!gl_FrontFacing) N = -N;
+    if (m.Flags.z == 1u && dot(terrainNormal.xy, terrainNormal.xy) > 1e-8)
+    {
+        // Terrain normal maps: tiled in world space, so the frame is east (+X) and up the image (-Z) laid on the surface.
+        vec3 T = normalize(vec3(1.0, 0.0, 0.0) - N * N.x);
+        N = normalize(mat3(T, cross(N, T), N) * terrainNormal);
+    }
     if (m.Flags.y != 0u)
     {
         vec3 t = SampleTexture(m.Maps.y, uv).xyz * 2.0 - 1.0; // glTF/OpenGL normal maps: +Y points up the image

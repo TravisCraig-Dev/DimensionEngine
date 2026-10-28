@@ -600,6 +600,7 @@ namespace Dimension
 
         Timeline::Update(*this, dt);
         UpdateTransforms();
+        Navigation::FollowPlatforms(*this); // agents on Moving surfaces, where physics took them
         {
             DIM_PROFILE_SCOPE("Animation");
             UpdateAnimators(dt);

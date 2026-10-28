@@ -11,14 +11,15 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Ma
     uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission
     uvec4 Flags;        // x blend mode (0 opaque, 1 cutout, 2 transparent), y has normal map, z 1 = terrain, w 1 = fur shell
     vec4 Layers[2];     // fur: [0] density, thickness, droop, wind response; [1] tip color (rgb), root shade
-    uvec4 Maps2;        // terrain: xy its layers' address (TerrainLayersRef), z their count
+    uvec4 Maps2;        // terrain: xy its layers' address (TerrainLayersRef), z their count, w height blend (float bits)
 };
 
 // A terrain's surface layers (TerrainLayerGPU in SceneRenderer.cpp).
 struct TerrainLayer
 {
-    vec4 Color; // linear rgb, w texture repeats per meter
-    uvec4 Maps; // bindless: x texture, y splat map; z its channel there
+    vec4 Color;  // linear rgb, w texture repeats per meter
+    uvec4 Maps;  // bindless: x texture, y splat map, w normal map (~0 = none); z its channel in the splat map
+    vec4 Params; // x normal strength
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer TerrainLayersRef { TerrainLayer Layers[]; };
 

@@ -120,12 +120,16 @@ namespace Dimension
                 layer.Field("Name", &TerrainLayer::Name)
                     .Field("Texture", &TerrainLayer::Texture).As(FieldType::Texture)
                     .Field("Color", &TerrainLayer::Color).As(FieldType::Color4)
-                    .Field("Tiling", &TerrainLayer::Tiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Texture repeats per meter");
+                    .Field("Tiling", &TerrainLayer::Tiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Texture repeats per meter")
+                    .Field("Normal Map", &TerrainLayer::NormalMap).As(FieldType::Texture).Tooltip("Optional; tiled like the texture")
+                    .Field("Normal Strength", &TerrainLayer::NormalStrength).Range(0.0f, 4.0f).Speed(0.01f);
             })
             .ElementTitle("Name").Range(1.0f, 16.0f).Header("Layers")
             .Tooltip("Up to 16; the first three lay themselves out by slope and height (gentle ground, steep slopes, up high)")
             .Field("Rock Slope", &TerrainComponent::RockSlope).Range(1.0f, 89.0f).Speed(0.5f).Tooltip("Degrees where the second layer takes over")
             .Field("Snow Height", &TerrainComponent::SnowHeight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("Fraction of Height where the third layer starts")
+            .Field("Height Blend", &TerrainComponent::HeightBlend).Range(0.0f, 1.0f).Speed(0.01f)
+                .Tooltip("Where layers meet, the higher (brighter) parts of each texture win; 0 = plain blending")
             .Field("Tree Mesh", &TerrainComponent::TreeMesh).As(FieldType::Mesh).Header("Details")
                 .Tooltip("Placed where the Trees brush paints (trees, bushes, rocks)")
             .Field("Tree Material", &TerrainComponent::TreeMaterial).As(FieldType::Material).Tooltip("None = the model's own materials")
@@ -702,7 +706,9 @@ namespace Dimension
             .Field("Show NavMesh", &NavMeshSurfaceComponent::ShowNavMesh)
             .Field("Generate Links", &NavMeshSurfaceComponent::GenerateLinks).Tooltip("Off-mesh links down ledges and across gaps")
             .Field("Drop Height", &NavMeshSurfaceComponent::DropHeight).Range(0.0f, 50.0f).Speed(0.05f).Tooltip("Highest ledge agents drop down (one way)")
-            .Field("Jump Distance", &NavMeshSurfaceComponent::JumpDistance).Range(0.0f, 20.0f).Speed(0.05f).Tooltip("Widest gap agents jump across");
+            .Field("Jump Distance", &NavMeshSurfaceComponent::JumpDistance).Range(0.0f, 20.0f).Speed(0.05f).Tooltip("Widest gap agents jump across")
+            .Field("Moving", &NavMeshSurfaceComponent::Moving)
+                .Tooltip("Rides on its object (a boat, a lift): baked from its own colliders, carrying agents on it along");
         Register<NavMeshModifierVolumeComponent>("NavMesh Modifier Volume", "Navigation")
             .Field("Center", &NavMeshModifierVolumeComponent::Center).Speed(0.01f)
             .Field("Size", &NavMeshModifierVolumeComponent::Size).Speed(0.05f)

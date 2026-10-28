@@ -2489,6 +2489,58 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestNavMovingPlatforms()
+    {
+        // A barge (a deck 6 x 10 m, 3 m up) with a Moving surface sails off and turns while an agent walks from its
+        // stern to its bow: the yard's own surface leaves the barge out, the agent is carried along, keeps to the deck
+        // and arrives at the bow wherever the barge has got to, and turns with it afterwards.
+        Scene scene("Yard");
+        Entity yard = BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        Entity barge = scene.CreateEntity("Barge");
+        reg.Get<TransformComponent>(barge).Position = { 0.0f, 3.0f, 6.0f };
+        reg.Emplace<BoxColliderComponent>(barge).Size = { 6.0f, 0.5f, 10.0f };
+        auto& deck = reg.Emplace<NavMeshSurfaceComponent>(barge);
+        deck.Size = { 8.0f, 3.0f, 12.0f };
+        deck.Moving = true;
+        Entity sailor = scene.CreateEntity("Sailor");
+        reg.Get<TransformComponent>(sailor).Position = { 0.0f, 3.25f, 9.5f };
+        reg.Emplace<NavMeshAgentComponent>(sailor).Speed = 1.5f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        glm::vec3 onDeck;
+        CHECK(Navigation::SamplePosition(*rt, { 0.0f, 3.5f, 6.0f }, 1.0f, onDeck) && Near(onDeck.y, 3.25f, 0.05f));
+        CHECK(Navigation::Nearest(*rr.Get<NavMeshSurfaceComponent>(yard).Data, { 0.0f, 3.25f, 6.0f }, 0.5f) < 0); // not in the yard's mesh
+        CHECK(Navigation::SetDestination(*rt, sailor, { 0.0f, 3.25f, 2.5f }));
+        const float dt = 1.0f / 60.0f;
+        auto local = [&] {
+            return glm::vec3(glm::inverse(rr.Get<TransformComponent>(barge).World) * glm::vec4(rr.Get<TransformComponent>(sailor).GetWorldPosition(), 1.0f));
+        };
+        bool kept = true;
+        for (int i = 0; i < 360; ++i)
+        {
+            auto& bt = rr.Get<TransformComponent>(barge);
+            bt.Position.x += 1.5f * dt; // sailing along +X, turning
+            bt.Rotation.y += 0.25f * dt;
+            rt->OnUpdateRuntime(dt);
+            glm::vec3 l = local();
+            kept &= std::abs(l.x) < 3.0f && std::abs(l.z) < 5.0f && Near(l.y, 0.25f, 0.1f);
+        }
+        glm::vec3 l = local();
+        CHECK(kept && Near(l, { 0.0f, 0.25f, -3.5f }, 0.3f)); // at the bow, as set when the barge stood at the start
+        CHECK(rr.Get<TransformComponent>(sailor).GetWorldPosition().x > 4.0f); // carried along
+        float yaw0 = rr.Get<TransformComponent>(sailor).Rotation.y;
+        for (int i = 0; i < 60; ++i)
+        {
+            rr.Get<TransformComponent>(barge).Rotation.y += 0.5f * dt;
+            rt->OnUpdateRuntime(dt);
+        }
+        CHECK(Near(rr.Get<TransformComponent>(sailor).Rotation.y - yaw0, 0.5f, 0.05f) && Near(local(), { 0.0f, 0.25f, -3.5f }, 0.3f));
+        rt->OnRuntimeStop();
+    }
+
     void TestNavMeshAgents()
     {
         // Playing (baked as play starts): an agent sent to the far side of the wall walks around its end and arrives;
@@ -3848,7 +3900,8 @@ namespace
             const ComponentInfo* info = ComponentRegistry::Find("Terrain");
             CHECK(info && info->Upgrade);
             TerrainComponent s = t;
-            s.Layers = { { "Mud", AssetHandle(42), { 0.5f, 0.4f, 0.3f, 1.0f }, 0.5f }, { "Ice", AssetHandle::None(), { 0.8f, 0.9f, 1.0f, 1.0f }, 2.0f } };
+            s.Layers = { { "Mud", AssetHandle(42), { 0.5f, 0.4f, 0.3f, 1.0f }, 0.5f, AssetHandle(43), 1.5f }, { "Ice", AssetHandle::None(), { 0.8f, 0.9f, 1.0f, 1.0f }, 2.0f } };
+            s.HeightBlend = 0.4f;
             nlohmann::json data = nlohmann::json::object();
             for (const FieldInfo& f : info->Fields) data[f.Name] = FieldToJson(f, &s, nullptr);
             CHECK(data["Layers"].is_array() && data["Layers"].size() == 2 && data["Layers"][1]["Name"] == "Ice");
@@ -3857,6 +3910,7 @@ namespace
                 if (data.contains(f.Name)) FieldFromJson(f, &back, data[f.Name], nullptr);
             info->Upgrade(&back, data);
             CHECK(back.Layers.size() == 2 && back.Layers[0].Name == "Mud" && back.Layers[0].Texture == AssetHandle(42) && Near(back.Layers[1].Tiling, 2.0f));
+            CHECK(back.Layers[0].NormalMap == AssetHandle(43) && Near(back.Layers[0].NormalStrength, 1.5f) && !back.Layers[1].NormalMap.IsValid() && Near(back.HeightBlend, 0.4f));
             nlohmann::json old = { { "Grass Color", { 0.1, 0.2, 0.3, 1.0 } }, { "Sand Texture", 77 }, { "Texture Tiling", 0.5 } };
             TerrainComponent upgraded;
             upgraded.Layers.clear();
@@ -8562,6 +8616,7 @@ int main(int argc, char** argv)
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("NavMesh root motion", TestNavRootMotion);
+    Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("LOD groups", TestLODGroups);
     Run("LOD impostor", TestLODImpostor);
     Run("Mesh simplify", TestMeshSimplify);

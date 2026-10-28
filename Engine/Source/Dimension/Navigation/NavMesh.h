@@ -79,7 +79,13 @@ namespace Dimension
         // again there only, keeping the rest, and finishes its mesh anew. Returns how many surfaces changed.
         int UpdateArea(Scene& scene, const glm::vec3& min, const glm::vec3& max);
 
-        // The surface mesh nearest a point within maxDistance (nullptr = none).
+        // Moving surfaces: their frames now, carrying the agents on them along (and turning them) as they moved since.
+        // Update does it first; the scene again after physics moved things, so agents keep up with their platform.
+        void FollowPlatforms(Scene& scene);
+        // From a mesh's space to the world now (identity but for Moving surfaces' meshes).
+        glm::mat4 MeshFrame(Scene& scene, const NavMeshData* mesh);
+        // The surface mesh nearest a point within maxDistance (nullptr = none; node is in the mesh's own space, which
+        // for a Moving surface is where it was baked).
         std::shared_ptr<const NavMeshData> MeshNear(Scene& scene, const glm::vec3& point, float maxDistance, int* node = nullptr, const Filter& filter = {});
         // The node nearest a point (-1 = none within maxDistance).
         int Nearest(const NavMeshData& mesh, const glm::vec3& point, float maxDistance, const Filter& filter = {});
