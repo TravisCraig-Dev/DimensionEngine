@@ -19,7 +19,7 @@ struct TerrainLayer
 {
     vec4 Color;  // linear rgb, w texture repeats per meter
     uvec4 Maps;  // bindless: x texture, y splat map, w normal map (~0 = none); z its channel in the splat map
-    vec4 Params; // x normal strength
+    vec4 Params; // x normal strength, y 1 = triplanar
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer TerrainLayersRef { TerrainLayer Layers[]; };
 

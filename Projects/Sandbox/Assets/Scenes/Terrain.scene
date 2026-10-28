@@ -243,7 +243,8 @@
               ],
               "Tiling": 0.14,
               "Normal Map": 100067,
-              "Normal Strength": 1.2
+              "Normal Strength": 1.2,
+              "Triplanar": true
             },
             {
               "Name": "Snow",
@@ -1027,7 +1028,7 @@
           ]
         },
         "UI Text": {
-          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: textured grass, rock and snow by slope and height, height-blended, rock normal-mapped; volumetric fog; TAA)</color>",
+          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: textured grass, rock and snow by slope and height, height-blended, rock normal-mapped and triplanar; volumetric fog; TAA)</color>",
           "Font": 0,
           "Font Size": 36,
           "Color": [

@@ -154,7 +154,8 @@ namespace Dimension
     // Alpha paints over it and Additive makes it glow. Surfaces turned away from the projector fade out.
     // A landscape (see Dimension/Terrain/Terrain.h): needs a Mesh Renderer, whose own mesh it replaces.
     // A terrain surface layer: Texture (None = plain) repeating Tiling times per meter, times Color, with an optional
-    // Normal Map (tiled the same) bent by Normal Strength.
+    // Normal Map (tiled the same) bent by Normal Strength. Triplanar projects it from the sides as well as from above,
+    // blended by which way the ground faces, so it is not stretched down cliffs (three times the texture reads).
     struct TerrainLayer
     {
         std::string Name = "Layer";
@@ -163,6 +164,7 @@ namespace Dimension
         float Tiling = 0.25f;
         AssetHandle NormalMap = AssetHandle::None();
         float NormalStrength = 1.0f;
+        bool Triplanar = false;
     };
     inline std::vector<TerrainLayer> DefaultTerrainLayers()
     {
@@ -879,7 +881,8 @@ namespace Dimension
     // An Off-Mesh Link (like Unity's): a way between two points of the navigation mesh that is not walked on it (a
     // jump across a gap or down a ledge, a ladder). Start and End are in the object's space; agents route through it
     // and cross it in a jump Arc Height high (0 = straight, as on a ladder). Its length counts Cost Modifier times
-    // when paths are compared. One way unless Bidirectional; off while not Activated.
+    // when paths are compared. One way unless Bidirectional; off while not Activated. Its ends may lie on two
+    // surfaces' meshes (a gangway from a pier onto a boat's deck): agents bound for the other surface cross by it.
     struct OffMeshLinkComponent
     {
         glm::vec3 Start{ 0.0f };
@@ -941,9 +944,16 @@ namespace Dimension
         glm::vec3 LastGround{ 0.0f }; // where it stood after the last update
         bool Placed = false;          // LastGround is set (Warp clears it)
         // On a Moving surface the agent works in the surface's space as baked (Path, LastGround, Velocity, ...):
-        // MeshDestination is Destination there, taken when its path was first found (so it rides along too).
+        // MeshDestination is Destination in the space of the mesh it lies on (DestinationMesh), taken when its path was
+        // first found (so it rides along with a Moving surface too).
         glm::vec3 MeshDestination{ 0.0f };
         bool HasMeshDestination = false;
+        std::shared_ptr<const NavMeshData> DestinationMesh;
+        // Bound for another surface: the path ends across an off-mesh link onto CrossMesh, at CrossEnd (in the link
+        // object's space).
+        std::shared_ptr<const NavMeshData> CrossMesh;
+        Entity CrossLink = Entity::Null();
+        glm::vec3 CrossEnd{ 0.0f };
         std::shared_ptr<const NavMeshData> Mesh;
     };
 

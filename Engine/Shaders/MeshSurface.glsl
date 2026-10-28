@@ -43,6 +43,40 @@ float ProbeVolumeIrradiance(vec3 pos, vec3 n, out vec3 irradiance)
     return 0.0;
 }
 
+// A terrain layer's texel, read from above (world x/z) or, triplanar, from the three axes weighted by the normal.
+vec4 TerrainSample(uint map, vec3 world, float tiling, bool triplanar, vec3 weights)
+{
+    vec4 top = SampleTexture(map, world.xz * tiling);
+    if (!triplanar) return top;
+    vec4 c = top * weights.y;
+    if (weights.x > 0.01) c += SampleTexture(map, world.zy * tiling) * weights.x;
+    if (weights.z > 0.01) c += SampleTexture(map, world.xy * tiling) * weights.z;
+    return c;
+}
+
+// A terrain layer's normal map bent onto the surface (world space). From above: east along the image, north (-Z) up it.
+// Triplanar: each axis's reading added to the surface normal in that plane (Golus's UDN blend), weighted.
+vec3 TerrainNormal(uint map, vec3 world, float tiling, float strength, bool triplanar, vec3 weights, vec3 N)
+{
+    vec3 tY = SampleTexture(map, world.xz * tiling).xyz * 2.0 - 1.0;
+    tY.xy *= strength;
+    vec3 T = normalize(vec3(1.0, 0.0, 0.0) - N * N.x);
+    vec3 fromTop = mat3(T, cross(N, T), N) * tY;
+    if (!triplanar) return fromTop;
+    vec3 n = fromTop * weights.y;
+    if (weights.x > 0.01)
+    {
+        vec2 t = (SampleTexture(map, world.zy * tiling).xy * 2.0 - 1.0) * strength;
+        n += normalize(vec3(N.x, t.y + N.y, t.x + N.z)) * weights.x;
+    }
+    if (weights.z > 0.01)
+    {
+        vec2 t = (SampleTexture(map, world.xy * tiling).xy * 2.0 - 1.0) * strength;
+        n += normalize(vec3(t.x + N.x, t.y + N.y, N.z)) * weights.z;
+    }
+    return n;
+}
+
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vUV;
@@ -199,7 +233,7 @@ void main()
     MaterialRef m = pc.Material;
     vec2 uv = vUV * m.TilingOffset.xy + m.TilingOffset.zw;
     vec4 base;
-    vec3 terrainNormal = vec3(0.0, 0.0, 1.0); // terrain: its layers' normal maps blended (tangent space: x east, y north)
+    vec3 terrainNormal = vec3(0.0); // terrain: its layers' normals blended (world space)
     if (m.Flags.z == 1u)
     {
         // Terrain: its layers blended by their splat map weights (4 a map), tiled in world space (layers without
@@ -207,7 +241,10 @@ void main()
         // meet the highest wins: weights become how far each stands above the top less a band that narrows as
         // Height Blend grows.
         TerrainLayersRef layers = TerrainLayersRef(m.Maps2.xy);
-        vec2 world = vWorldPos.xz;
+        vec3 world = vWorldPos;
+        vec3 surfaceN = normalize(vNormal);
+        vec3 axes = pow(abs(surfaceN), vec3(4.0));
+        axes /= max(axes.x + axes.y + axes.z, 1e-4);
         uint count = min(m.Maps2.z, 16u);
         float heightBlend = uintBitsToFloat(m.Maps2.w);
         float weights[16];
@@ -223,7 +260,7 @@ void main()
             colors[k] = vec3(0.0);
             heights[k] = -1e9;
             if (weights[k] <= 0.0) continue;
-            vec3 texel = SampleTexture(layer.Maps.x, world * layer.Color.w).rgb;
+            vec3 texel = TerrainSample(layer.Maps.x, world, layer.Color.w, layer.Params.y > 0.5, axes).rgb;
             colors[k] = texel * layer.Color.rgb;
             heights[k] = weights[k] + dot(texel, vec3(0.299, 0.587, 0.114)) * heightBlend;
             top = max(top, heights[k]);
@@ -239,13 +276,8 @@ void main()
             if (weight <= 0.0) continue;
             c += colors[k] * weight;
             TerrainLayer layer = layers.Layers[k];
-            vec3 t = vec3(0.0, 0.0, 1.0);
-            if (layer.Maps.w != 0xFFFFFFFFu)
-            {
-                t = SampleTexture(layer.Maps.w, world * layer.Color.w).xyz * 2.0 - 1.0;
-                t.xy *= layer.Params.x;
-            }
-            n += t * weight;
+            vec3 t = layer.Maps.w != 0xFFFFFFFFu ? TerrainNormal(layer.Maps.w, world, layer.Color.w, layer.Params.x, layer.Params.y > 0.5, axes, surfaceN) : surfaceN;
+            n += normalize(t) * weight;
             total += weight;
         }
         base = vec4(c / max(total, 1e-4), 1.0) * m.BaseColor;
@@ -263,12 +295,7 @@ void main()
 
     vec3 N = normalize(vNormal);
     if (!gl_FrontFacing) N = -N;
-    if (m.Flags.z == 1u && dot(terrainNormal.xy, terrainNormal.xy) > 1e-8)
-    {
-        // Terrain normal maps: tiled in world space, so the frame is east (+X) and up the image (-Z) laid on the surface.
-        vec3 T = normalize(vec3(1.0, 0.0, 0.0) - N * N.x);
-        N = normalize(mat3(T, cross(N, T), N) * terrainNormal);
-    }
+    if (m.Flags.z == 1u && dot(terrainNormal, terrainNormal) > 1e-8) N = normalize(terrainNormal); // terrains are seen from above
     if (m.Flags.y != 0u)
     {
         vec3 t = SampleTexture(m.Maps.y, uv).xyz * 2.0 - 1.0; // glTF/OpenGL normal maps: +Y points up the image

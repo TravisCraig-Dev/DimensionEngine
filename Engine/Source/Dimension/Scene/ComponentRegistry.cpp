@@ -122,7 +122,8 @@ namespace Dimension
                     .Field("Color", &TerrainLayer::Color).As(FieldType::Color4)
                     .Field("Tiling", &TerrainLayer::Tiling).Range(0.001f, 100.0f).Speed(0.01f).Tooltip("Texture repeats per meter")
                     .Field("Normal Map", &TerrainLayer::NormalMap).As(FieldType::Texture).Tooltip("Optional; tiled like the texture")
-                    .Field("Normal Strength", &TerrainLayer::NormalStrength).Range(0.0f, 4.0f).Speed(0.01f);
+                    .Field("Normal Strength", &TerrainLayer::NormalStrength).Range(0.0f, 4.0f).Speed(0.01f)
+                    .Field("Triplanar", &TerrainLayer::Triplanar).Tooltip("Projected from the sides too, so it is not stretched on cliffs (costs three texture reads)");
             })
             .ElementTitle("Name").Range(1.0f, 16.0f).Header("Layers")
             .Tooltip("Up to 16; the first three lay themselves out by slope and height (gentle ground, steep slopes, up high)")

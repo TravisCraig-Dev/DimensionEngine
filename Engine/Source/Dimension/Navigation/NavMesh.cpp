@@ -688,12 +688,77 @@ namespace Dimension
                 }
                 if (!agent.HasMeshDestination)
                 {
-                    agent.MeshDestination = ToMesh(scene, agent.Mesh.get(), agent.Destination);
+                    // The mesh the destination lies on (its own when it lies on none near).
+                    agent.DestinationMesh = MeshNear(scene, agent.Destination, 2.0f, nullptr, FilterOf(agent));
+                    if (!agent.DestinationMesh) agent.DestinationMesh = agent.Mesh;
+                    agent.MeshDestination = ToMesh(scene, agent.DestinationMesh.get(), agent.Destination);
                     agent.HasMeshDestination = true;
                 }
-                agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, GroundOf(scene, e, agent), agent.MeshDestination, agent.Path,
-                                            LinksOn(scene, *agent.Mesh), &agent.PathLinks, FilterOf(agent), &agent.PathLinkOwners);
+                agent.CrossMesh.reset();
+                agent.CrossLink = Entity::Null();
                 agent.Waiting = false;
+                glm::vec3 ground = GroundOf(scene, e, agent);
+                std::vector<Link> links = LinksOn(scene, *agent.Mesh);
+                if (agent.DestinationMesh == agent.Mesh)
+                {
+                    agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, ground, agent.MeshDestination, agent.Path, links, &agent.PathLinks, FilterOf(agent),
+                                                &agent.PathLinkOwners);
+                    return;
+                }
+                // On another surface: to the start of the off-mesh link over to it that makes the shortest way (to the
+                // link, across, and straight on to the destination), then across.
+                glm::vec3 goal = ToWorld(scene, agent.DestinationMesh.get(), agent.MeshDestination);
+                float best = kInf;
+                std::vector<glm::vec3> corners;
+                std::vector<float> arcs;
+                std::vector<Entity> owners;
+                for (auto [l, link, t] : scene.GetRegistry().ViewOf<OffMeshLinkComponent, TransformComponent>())
+                {
+                    if ((!link.Activated && !link.AgentsWait) || !t.ActiveInHierarchy) continue;
+                    for (int way = 0; way < (link.Bidirectional ? 2 : 1); ++way)
+                    {
+                        glm::vec3 fromLocal = way == 0 ? link.Start : link.End, toLocal = way == 0 ? link.End : link.Start;
+                        glm::vec3 a = glm::vec3(t.World * glm::vec4(fromLocal, 1.0f)), b = glm::vec3(t.World * glm::vec4(toLocal, 1.0f));
+                        float reach = std::max(1.0f, agent.Mesh->AgentRadius + agent.Mesh->CellSize * 2.0f);
+                        glm::vec3 aMesh = ToMesh(scene, agent.Mesh.get(), a);
+                        if (Nearest(*agent.Mesh, aMesh, reach, FilterOf(agent)) < 0 ||
+                            Nearest(*agent.DestinationMesh, ToMesh(scene, agent.DestinationMesh.get(), b), reach, FilterOf(agent)) < 0)
+                            continue;
+                        std::vector<glm::vec3> c;
+                        std::vector<float> arc;
+                        std::vector<Entity> own;
+                        if (PathFrom(*agent.Mesh, agent.Node, ground, aMesh, c, links, &arc, FilterOf(agent), &own) != NavPathStatus::Complete) continue;
+                        float length = 0.0f;
+                        for (size_t k = 0; k + 1 < c.size(); ++k) length += glm::distance(c[k], c[k + 1]);
+                        length += glm::distance(a, b) * std::max(link.CostModifier, 0.0f) + glm::distance(b, goal);
+                        if (length >= best) continue;
+                        best = length;
+                        // The link's far end, in this mesh's space (where it is now; taken again as it is crossed).
+                        c.push_back(ToMesh(scene, agent.Mesh.get(), b));
+                        arc.back() = std::max(link.ArcHeight, 0.0f);
+                        own.back() = l;
+                        arc.push_back(-1.0f);
+                        own.push_back(Entity::Null());
+                        corners = std::move(c);
+                        arcs = std::move(arc);
+                        owners = std::move(own);
+                        agent.CrossLink = l;
+                        agent.CrossEnd = toLocal;
+                    }
+                }
+                if (corners.empty())
+                {
+                    // No way over: as near as it gets on its own surface.
+                    PathFrom(*agent.Mesh, agent.Node, ground, ToMesh(scene, agent.Mesh.get(), goal), agent.Path, links, &agent.PathLinks, FilterOf(agent),
+                             &agent.PathLinkOwners);
+                    agent.PathStatus = agent.Path.empty() ? NavPathStatus::Invalid : NavPathStatus::Partial;
+                    return;
+                }
+                agent.Path = std::move(corners);
+                agent.PathLinks = std::move(arcs);
+                agent.PathLinkOwners = std::move(owners);
+                agent.CrossMesh = agent.DestinationMesh;
+                agent.PathStatus = NavPathStatus::Complete;
             }
 
             float Horizontal(const glm::vec3& a, const glm::vec3& b) { return glm::length(glm::vec2(a.x - b.x, a.z - b.z)); }
@@ -955,6 +1020,9 @@ namespace Dimension
                 for (auto [a, agent] : scene.GetRegistry().ViewOf<NavMeshAgentComponent>())
                 {
                     agent.Mesh.reset();
+                    agent.DestinationMesh.reset();
+                    agent.CrossMesh.reset();
+                    agent.HasMeshDestination = false;
                     agent.Node = -1;
                     if (agent.HasDestination) agent.PathDirty = true;
                 }
@@ -1436,7 +1504,21 @@ namespace Dimension
                     if (t >= 1.0f)
                     {
                         agent.Traversing = false;
-                        agent.Node = Nearest(*agent.Mesh, agent.TraverseTo, 1.0f, FilterOf(agent));
+                        if (agent.CrossMesh && agent.Corner + 1 >= agent.Path.size())
+                        {
+                            // Over onto the other surface: on its mesh from here, and a path there.
+                            glm::vec3 world = ToWorld(scene, agent.Mesh.get(), agent.TraverseTo);
+                            agent.Mesh = agent.CrossMesh;
+                            agent.CrossMesh.reset();
+                            agent.CrossLink = Entity::Null();
+                            mv.Ground = ToMesh(scene, agent.Mesh.get(), world);
+                            agent.Node = Nearest(*agent.Mesh, mv.Ground, 1.0f, FilterOf(agent));
+                            agent.Path.clear();
+                            agent.PathDirty = true;
+                            agent.Placed = false;
+                        }
+                        else
+                            agent.Node = Nearest(*agent.Mesh, agent.TraverseTo, 1.0f, FilterOf(agent));
                     }
                     continue;
                 }
@@ -1484,6 +1566,12 @@ namespace Dimension
                         agent.Traversing = true;
                         agent.TraverseFrom = mv.Ground;
                         agent.TraverseTo = agent.Path[agent.Corner];
+                        if (agent.CrossMesh && agent.Corner + 1 == agent.Path.size() && scene.IsValid(agent.CrossLink))
+                        {
+                            // Over to another surface: its far end where the link is now.
+                            const auto& lt = reg.Get<TransformComponent>(agent.CrossLink);
+                            agent.TraverseTo = ToMesh(scene, agent.Mesh.get(), glm::vec3(lt.World * glm::vec4(agent.CrossEnd, 1.0f)));
+                        }
                         agent.TraverseArc = agent.PathLinks[agent.Corner - 1];
                         agent.TraverseTime = 0.0f;
                         agent.TraverseDuration = std::max(glm::distance(agent.TraverseFrom, agent.TraverseTo) / std::max(agent.Speed, 0.1f), 0.25f);

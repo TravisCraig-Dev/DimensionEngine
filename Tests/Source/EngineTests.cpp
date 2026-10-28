@@ -2541,6 +2541,56 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestNavCrossSurfaces()
+    {
+        // A barge (Moving surface) drifting by the yard with a gangway (an off-mesh link on it) down to the ground: an
+        // agent in the yard sent onto the deck walks to the gangway, crosses over and walks the deck to the spot; sent
+        // back into the yard it crosses back. Without the gangway there is no way over (a partial path).
+        Scene scene("Yard");
+        Entity yard = BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        Entity barge = scene.CreateEntity("Barge");
+        reg.Get<TransformComponent>(barge).Position = { 0.0f, 3.0f, 6.0f };
+        reg.Emplace<BoxColliderComponent>(barge).Size = { 6.0f, 0.5f, 10.0f };
+        auto& deck = reg.Emplace<NavMeshSurfaceComponent>(barge);
+        deck.Size = { 8.0f, 3.0f, 12.0f };
+        deck.Moving = true;
+        Entity gangway = scene.CreateEntity("Gangway", barge);
+        auto& link = reg.Emplace<OffMeshLinkComponent>(gangway);
+        link.Start = { 0.0f, -3.0f, 6.5f }; // the ground beside the barge
+        link.End = { 0.0f, 0.25f, 4.0f };   // its deck
+        link.ArcHeight = 0.0f;
+        Entity walker = scene.CreateEntity("Walker");
+        reg.Get<TransformComponent>(walker).Position = { -8.0f, 0.0f, 14.0f };
+        reg.Emplace<NavMeshAgentComponent>(walker).Speed = 3.5f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        const float dt = 1.0f / 60.0f;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i)
+            {
+                rr.Get<TransformComponent>(barge).Position.x += 0.15f * dt; // drifting
+                rt->OnUpdateRuntime(dt);
+            }
+        };
+        auto onDeck = [&] {
+            return glm::vec3(glm::inverse(rr.Get<TransformComponent>(barge).World) * glm::vec4(rr.Get<TransformComponent>(walker).GetWorldPosition(), 1.0f));
+        };
+        auto& a = rr.Get<NavMeshAgentComponent>(walker);
+        CHECK(Navigation::SetDestination(*rt, walker, { 1.0f, 3.25f, 4.0f }) && a.PathStatus == NavPathStatus::Complete && a.CrossMesh);
+        run(600);
+        CHECK(a.Mesh == rr.Get<NavMeshSurfaceComponent>(barge).Data && Near(onDeck(), { 1.0f, 0.25f, -2.0f }, 0.3f));
+        CHECK(Navigation::SetDestination(*rt, walker, { 8.0f, 0.0f, 14.0f }));
+        run(600);
+        CHECK(a.Mesh == rr.Get<NavMeshSurfaceComponent>(yard).Data && Near(rr.Get<TransformComponent>(walker).Position, { 8.0f, 0.0f, 14.0f }, 0.3f));
+        rr.Get<OffMeshLinkComponent>(gangway).Activated = false;
+        Navigation::SetDestination(*rt, walker, { 1.0f, 3.25f, 4.0f });
+        CHECK(a.PathStatus == NavPathStatus::Partial && !a.CrossMesh);
+        rt->OnRuntimeStop();
+    }
+
     void TestNavMeshAgents()
     {
         // Playing (baked as play starts): an agent sent to the far side of the wall walks around its end and arrives;
@@ -8617,6 +8667,7 @@ int main(int argc, char** argv)
     Run("NavMesh agents", TestNavMeshAgents);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
+    Run("NavMesh across surfaces", TestNavCrossSurfaces);
     Run("LOD groups", TestLODGroups);
     Run("LOD impostor", TestLODImpostor);
     Run("Mesh simplify", TestMeshSimplify);

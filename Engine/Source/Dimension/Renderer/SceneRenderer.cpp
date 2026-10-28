@@ -183,7 +183,7 @@ namespace Dimension
         {
             glm::vec4 Color;  // linear rgb, w texture repeats per meter
             glm::uvec4 Maps;  // bindless: x texture, y splat map, w normal map (~0 = none); z its channel in the splat map
-            glm::vec4 Params; // x normal strength
+            glm::vec4 Params; // x normal strength, y 1 = triplanar
         };
         static_assert(sizeof(MeshPush) <= kPushConstantSize);
 
@@ -2272,7 +2272,7 @@ namespace Dimension
                         out[k].Color = glm::vec4(color, std::max(layer.Tiling, 1e-4f));
                         out[k].Maps = glm::uvec4(TextureIndex(layer.Texture, white), terrainRt->Splats[k / 4]->GetBindlessIndex(), (uint32_t)(k % 4),
                                                  TextureIndex(layer.NormalMap, ~0u));
-                        out[k].Params = glm::vec4(layer.NormalStrength, 0.0f, 0.0f, 0.0f);
+                        out[k].Params = glm::vec4(layer.NormalStrength, layer.Triplanar ? 1.0f : 0.0f, 0.0f, 0.0f);
                     }
                     float heightBlend = std::clamp(terrain->HeightBlend, 0.0f, 1.0f);
                     uint32_t blendBits;
