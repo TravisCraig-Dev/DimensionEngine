@@ -1,4 +1,4 @@
-#include "../MaterialPreviews.h"
+#include "../AssetPreviews.h"
 #include <Dimension/Renderer/SpriteAtlas.h>
 #include "Panels.h"
 #include "../EditorUI.h"
@@ -170,10 +170,10 @@ namespace Editor
                     if (type == AssetType::SpriteAtlas)
                         if (auto atlas = AssetManager::GetSpriteAtlas(handle)) tex = atlas->Texture; // its page
                     Ref<Material> mat = type == AssetType::Material ? AssetManager::GetMaterial(handle) : nullptr;
-                    uint64_t preview = mat && m_Ctx.Previews ? m_Ctx.Previews->Get(handle) : 0;
+                    uint64_t preview = m_Ctx.Previews && AssetPreviews::HasPreview(type) ? m_Ctx.Previews->Get(handle) : 0;
                     if (preview)
                     {
-                        // The material on a lit sphere.
+                        // The material on a lit sphere, the model or the prefab, rendered.
                         dl->AddImage(ImTextureRef((ImTextureID)preview), cursor, max);
                     }
                     else if (mat)

@@ -304,6 +304,9 @@ namespace Dimension
         int32_t SheetColumns = 1;
         int32_t SheetRows = 1;
         int32_t Frame = 0;
+        // A sprite sliced from the texture (the Sprite Editor), by name: only that part is drawn (sized to it, the
+        // sheet ignored). Empty = the whole texture.
+        std::string SpriteName;
     };
 
     // Tilemap: see Tilemap.h.

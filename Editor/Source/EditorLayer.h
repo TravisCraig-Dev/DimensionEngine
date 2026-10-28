@@ -5,7 +5,7 @@
 #include "Panels/Panels.h"
 #include <Dimension/Core/Application.h>
 #include <Dimension/Renderer/SceneRenderer.h>
-#include "MaterialPreviews.h"
+#include "AssetPreviews.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <atomic>
 #include <memory>
@@ -162,7 +162,9 @@ namespace Editor
         bool m_ShowTimeline = false;
         bool m_ShowNavigation = false;
         bool m_ShowFrameDebugger = false;
-        Scope<MaterialPreviews> m_MaterialPreviews;
+        bool m_ShowSpriteEditor = false;
+        Scope<SpriteEditorPanel> m_SpriteEditor;
+        Scope<AssetPreviews> m_AssetPreviews;
         Scope<FrameDebuggerPanel> m_FrameDebugger;
         bool m_ShowProfiler = false;
         bool m_ShowStats = true, m_ShowSceneSettings = true, m_ShowProjectSettings = false, m_ShowAbout = false;

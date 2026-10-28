@@ -117,8 +117,9 @@ namespace Editor
         m_Navigation = MakeScope<NavigationPanel>(m_Ctx);
         m_Profiler = MakeScope<ProfilerPanel>();
         m_FrameDebugger = MakeScope<FrameDebuggerPanel>(m_Ctx);
-        m_MaterialPreviews = MakeScope<MaterialPreviews>();
-        m_Ctx.Previews = m_MaterialPreviews.get();
+        m_SpriteEditor = MakeScope<SpriteEditorPanel>(m_Ctx);
+        m_AssetPreviews = MakeScope<AssetPreviews>();
+        m_Ctx.Previews = m_AssetPreviews.get();
         Navigation::ApplyAreaNames(); // the project's area names in the Area dropdowns
 
         // Per-project editor layout (like Unity's Library/ folder, not meant for version control).
@@ -140,6 +141,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Timeline") m_ShowTimeline = true;
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
+        else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
         else if (m_Options.OpenWindow == "Frame Debugger")
         {
             m_ShowFrameDebugger = true;
@@ -562,7 +564,7 @@ namespace Editor
 
     void EditorLayer::OnRender(VkCommandBuffer cmd)
     {
-        m_MaterialPreviews->Render(cmd);
+        m_AssetPreviews->Render(cmd);
         Scene& scene = m_Ctx.ActiveScene();
         if (m_SceneViewVisible)
         {
@@ -902,6 +904,13 @@ namespace Editor
         if (m_ShowTimeline) m_Timeline->OnImGui(&m_ShowTimeline);
         if (m_ShowNavigation) m_Navigation->OnImGui(&m_ShowNavigation);
         if (m_ShowProfiler) m_Profiler->OnImGui(&m_ShowProfiler);
+        if (m_Ctx.OpenSpriteEditor)
+        {
+            m_ShowSpriteEditor = true;
+            m_SpriteEditor->Open(m_Ctx.SelectedAsset);
+            m_Ctx.OpenSpriteEditor = false;
+        }
+        if (m_ShowSpriteEditor) m_SpriteEditor->OnImGui(&m_ShowSpriteEditor);
         if (m_ShowFrameDebugger)
         {
             SceneRenderer& debugged = m_FrameDebugger->View() == 0 ? m_SceneRenderer : m_GameRenderer;
@@ -1067,6 +1076,7 @@ namespace Editor
             ImGui::MenuItem("Navigation", nullptr, &m_ShowNavigation);
             ImGui::MenuItem("Profiler", nullptr, &m_ShowProfiler);
             ImGui::MenuItem("Frame Debugger", nullptr, &m_ShowFrameDebugger);
+            ImGui::MenuItem("Sprite Editor", nullptr, &m_ShowSpriteEditor);
             ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
             ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);

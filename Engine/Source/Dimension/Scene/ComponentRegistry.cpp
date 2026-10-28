@@ -239,7 +239,8 @@ namespace Dimension
             .Field("Flip Y", &SpriteRendererComponent::FlipY)
             .Field("Sheet Columns", &SpriteRendererComponent::SheetColumns).Range(1, 256)
             .Field("Sheet Rows", &SpriteRendererComponent::SheetRows).Range(1, 256)
-            .Field("Frame", &SpriteRendererComponent::Frame).Range(0, 65535);
+            .Field("Frame", &SpriteRendererComponent::Frame).Range(0, 65535)
+            .Field("Sprite Name", &SpriteRendererComponent::SpriteName).HideInInspector(); // picked from the texture's sprites (Inspector)
 
         Register<SpriteAnimatorComponent>("Sprite Animator", "Rendering")
             .Field("Frames Per Second", &SpriteAnimatorComponent::FramesPerSecond).Range(0.0f, 240.0f).Speed(0.1f)

@@ -3,6 +3,7 @@
 #include <Dimension/Scene/ComponentRegistry.h>
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Renderer/SpriteAtlas.h>
+#include <Dimension/Renderer/SpriteSlicing.h>
 #include <Dimension/Renderer/Material.h>
 #include <Dimension/UI/UI.h>
 #include <Dimension/Animation/Animation.h>
@@ -8430,6 +8431,43 @@ namespace
         CHECK(Near(min4, min3 + glm::vec2(8)) && Near(max4, max3 + glm::vec2(8)));
     }
 
+    void TestSpriteSlicing()
+    {
+        // A 20 x 10 image: an opaque 4 x 3 block at (1, 1), an L of touching pixels at (12, 2), a lone pixel at (18, 8)
+        // and one at (8, 1) (the top row's second, by its x).
+        int w = 20, h = 10;
+        std::vector<uint32_t> px((size_t)w * h, 0u);
+        auto set = [&](int x, int y) { px[(size_t)y * w + x] = 0xFF00FF00u; };
+        for (int y = 1; y < 4; ++y)
+            for (int x = 1; x < 5; ++x) set(x, y);
+        for (int y = 2; y < 7; ++y) set(12, y);
+        for (int x = 12; x < 15; ++x) set(x, 7);
+        set(18, 8);
+        set(8, 1);
+        set(9, 2); // touching (8, 1) diagonally
+        auto islands = SpriteSlicing::Islands(px, w, h, 8, 2);
+        CHECK(islands.size() == 3);
+        if (islands.size() == 3)
+            CHECK(islands[0] == glm::ivec4(1, 1, 4, 3) && islands[1] == glm::ivec4(8, 1, 2, 2) && islands[2] == glm::ivec4(12, 2, 3, 6));
+        CHECK(SpriteSlicing::Islands(px, w, h, 8, 1).size() == 4); // the lone pixel too
+        // Grids: equal cells covering the image; empty ones left out when asked.
+        auto grid = SpriteSlicing::Grid(w, h, 4, 2);
+        CHECK(grid.size() == 8 && grid[0] == glm::ivec4(0, 0, 5, 5) && grid[7] == glm::ivec4(15, 5, 5, 5));
+        auto filled = SpriteSlicing::Grid(w, h, 4, 2, &px);
+        CHECK(filled.size() == 5); // the top row's last cell and the bottom row's first two are empty
+        auto sized = SpriteSlicing::GridBySize(w, h, { 8, 8 }, { 1, 0 }, { 2, 0 });
+        CHECK(sized.size() == 4 && sized[1] == glm::ivec4(11, 0, 8, 8) && sized[3] == glm::ivec4(11, 8, 8, 2));
+        // Saved with the texture: the Sandbox's tiles are named.
+        std::vector<SpriteRect> named = { { "A", { 0, 0, 4, 4 } }, { "B", { 4, 0, 2, 9 } } };
+        auto back = SpriteSlicing::FromJson(SpriteSlicing::ToJson(named));
+        CHECK(back.size() == 2 && back[1].Name == "B" && back[1].Rect == glm::ivec4(4, 0, 2, 9));
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        AssetHandle tiles = AssetManager::GetHandle("Sprites/Tiles.png");
+        const SpriteRect* bush = AssetManager::FindSprite(tiles, "Bush");
+        CHECK(AssetManager::GetSprites(tiles).size() == 8 && bush && bush->Rect == glm::ivec4(32, 16, 16, 16) && !AssetManager::FindSprite(tiles, "Tree"));
+        AssetManager::Shutdown();
+    }
+
     void TestSpriteAtlas()
     {
         // Packing: nothing overlaps or leaves the page, padding kept; the page grows (powers of two) as needed, and
@@ -8807,6 +8845,7 @@ int main(int argc, char** argv)
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
+    Run("Sprite slicing", TestSpriteSlicing);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

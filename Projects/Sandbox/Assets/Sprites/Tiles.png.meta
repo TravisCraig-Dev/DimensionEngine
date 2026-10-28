@@ -4,6 +4,80 @@
   "settings": {
     "filter": 1,
     "srgb": true,
-    "mips": false
+    "mips": false,
+    "sprites": [
+      {
+        "name": "Grass",
+        "rect": [
+          0,
+          0,
+          16,
+          16
+        ]
+      },
+      {
+        "name": "Dirt",
+        "rect": [
+          16,
+          0,
+          16,
+          16
+        ]
+      },
+      {
+        "name": "Stone",
+        "rect": [
+          32,
+          0,
+          16,
+          16
+        ]
+      },
+      {
+        "name": "Planks",
+        "rect": [
+          48,
+          0,
+          16,
+          16
+        ]
+      },
+      {
+        "name": "Ice",
+        "rect": [
+          0,
+          16,
+          16,
+          16
+        ]
+      },
+      {
+        "name": "Metal",
+        "rect": [
+          16,
+          16,
+          16,
+          16
+        ]
+      },
+      {
+        "name": "Bush",
+        "rect": [
+          32,
+          16,
+          16,
+          16
+        ]
+      },
+      {
+        "name": "Crate",
+        "rect": [
+          48,
+          16,
+          16,
+          16
+        ]
+      }
+    ]
   }
 }

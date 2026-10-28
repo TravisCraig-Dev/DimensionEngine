@@ -49,6 +49,7 @@
 #include "shaders/Composite.frag.h"
 #include "shaders/FramePreview.frag.h"
 #include "Dimension/ImGui/ImGuiLayer.h"
+#include "Dimension/Renderer/SpriteSlicing.h"
 #include "shaders/BloomDown.frag.h"
 #include "shaders/BloomUp.frag.h"
 #include "shaders/Fxaa.frag.h"
@@ -3019,14 +3020,24 @@ namespace Dimension
             SpriteDraw d;
             d.Transform = t.World;
             int cols = std::max(1, sr.SheetColumns), rows = std::max(1, sr.SheetRows);
-            if (tex && tex->GetHeight() > 0) // keep the (cell) aspect ratio, 1 unit tall
+            // A named sprite (sliced in the Sprite Editor): just its rectangle, sized to it.
+            const SpriteRect* named = tex && !sr.SpriteName.empty() ? AssetManager::FindSprite(sr.Texture, sr.SpriteName) : nullptr;
+            if (named && tex->GetWidth() > 0 && tex->GetHeight() > 0)
+                d.Transform = d.Transform * glm::scale(glm::mat4(1.0f), glm::vec3((float)named->Rect.z / (float)named->Rect.w, 1.0f, 1.0f));
+            else if (tex && tex->GetHeight() > 0) // keep the (cell) aspect ratio, 1 unit tall
             {
                 float aspect = ((float)tex->GetWidth() / cols) / ((float)tex->GetHeight() / rows);
                 d.Transform = d.Transform * glm::scale(glm::mat4(1.0f), glm::vec3(aspect, 1.0f, 1.0f));
             }
             d.Color = ToLinear(sr.Color);
             glm::vec2 cellMin(0.0f), cellMax(sr.Tiling);
-            if (cols > 1 || rows > 1)
+            if (named && tex->GetWidth() > 0 && tex->GetHeight() > 0)
+            {
+                glm::vec2 size((float)tex->GetWidth(), (float)tex->GetHeight());
+                cellMin = glm::vec2(named->Rect.x, named->Rect.y) / size;
+                cellMax = glm::vec2(named->Rect.x + named->Rect.z, named->Rect.y + named->Rect.w) / size;
+            }
+            else if (cols > 1 || rows > 1)
             {
                 int frame = std::clamp(sr.Frame, 0, cols * rows - 1);
                 glm::vec2 cell(1.0f / cols, 1.0f / rows);
@@ -3040,7 +3051,7 @@ namespace Dimension
             // Packed into a sprite atlas: drawn from its page, the UVs moved into the sprite's region (not when it
             // repeats: Tiling beyond 1 needs the texture of its own).
             glm::vec4 region;
-            if (sr.Tiling.x <= 1.0f && sr.Tiling.y <= 1.0f)
+            if ((sr.Tiling.x <= 1.0f && sr.Tiling.y <= 1.0f) || named)
                 if (Ref<Texture2D> page = AssetManager::FindInAtlas(sr.Texture, region))
                 {
                     glm::vec2 lo(region.x, region.y), hi(region.z, region.w);

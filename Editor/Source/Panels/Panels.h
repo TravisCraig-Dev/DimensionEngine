@@ -2,6 +2,7 @@
 #include "../EditorContext.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Renderer/SceneRenderer.h>
+#include <Dimension/Renderer/SpriteSlicing.h>
 #include <mutex>
 
 namespace Editor
@@ -117,6 +118,28 @@ namespace Editor
     private:
         int m_Picked = -1; // frame index in the history while paused
         bool m_ShowMemory = true;
+    };
+
+    class SpriteEditorPanel
+    {
+    public:
+        explicit SpriteEditorPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open);
+        // Starts editing a texture's sprites (as saved).
+        void Open(AssetHandle texture);
+
+    private:
+        EditorContext& m_Ctx;
+        AssetHandle m_Texture = AssetHandle::None();
+        std::vector<SpriteRect> m_Sprites; // being edited (Apply saves them)
+        std::vector<uint32_t> m_Pixels;    // the image, for slicing by what is opaque
+        int m_Width = 0, m_Height = 0;
+        int m_Selected = -1;
+        bool m_Dirty = false;
+        int m_Mode = 0; // grid by count, grid by size, automatic
+        glm::ivec2 m_Cells{ 4, 4 }, m_CellSize{ 32, 32 }, m_Offset{ 0 }, m_Gap{ 0 };
+        bool m_SkipEmpty = true;
+        int m_AlphaThreshold = 8, m_MinSize = 2;
     };
 
     class FrameDebuggerPanel

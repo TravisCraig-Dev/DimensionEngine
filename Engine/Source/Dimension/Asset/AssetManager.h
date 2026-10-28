@@ -15,6 +15,7 @@ namespace Dimension
     struct AnimatorController;
     struct TimelineAsset;
     struct SpriteAtlas;
+    struct SpriteRect;
 
     enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas };
 
@@ -103,6 +104,10 @@ namespace Dimension
         static Ref<SpriteAtlas> GetSpriteAtlas(AssetHandle handle);
         static void SaveSpriteAtlas(AssetHandle handle);
         static AssetHandle CreateSpriteAtlas(const fs::path& absolutePath, const std::vector<AssetHandle>& sprites);
+        // The sprites sliced from a texture (Sprite Editor; its import settings' "sprites"), and one by name (null when
+        // none).
+        static const std::vector<SpriteRect>& GetSprites(AssetHandle texture);
+        static const SpriteRect* FindSprite(AssetHandle texture, const std::string& name);
         // The atlas page a sprite texture is packed into, and its region there (UVs: xy min, zw max); null when none.
         static Ref<Texture2D> FindInAtlas(AssetHandle texture, glm::vec4& region);
         static Ref<Font> GetDefaultFont();

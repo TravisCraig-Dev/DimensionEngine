@@ -12,6 +12,7 @@
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Animation/Timeline.h"
 #include "Dimension/Renderer/SpriteAtlas.h"
+#include "Dimension/Renderer/SpriteSlicing.h"
 #include "embedded/kDefaultFontData.h"
 #include <algorithm>
 #include <cmath>
@@ -39,6 +40,7 @@ namespace Dimension
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
             std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
             std::unordered_map<AssetHandle, Ref<SpriteAtlas>> SpriteAtlases;
+            std::unordered_map<AssetHandle, std::vector<SpriteRect>> SpriteRects; // parsed from textures' import settings
             // Sprite texture -> (atlas, region), rebuilt when assets or atlases change.
             std::unordered_map<AssetHandle, std::pair<AssetHandle, glm::vec4>> AtlasIndex;
             bool AtlasIndexDirty = true;
@@ -93,6 +95,7 @@ namespace Dimension
             // An atlas, or a sprite packed into atlases: packed again when next asked for.
             s->AtlasIndexDirty = true;
             s->SpriteAtlases.erase(h);
+            s->SpriteRects.erase(h);
             for (auto it = s->SpriteAtlases.begin(); it != s->SpriteAtlases.end();)
                 if (it->second && std::find(it->second->Sprites.begin(), it->second->Sprites.end(), h) != it->second->Sprites.end())
                     it = s->SpriteAtlases.erase(it);
@@ -801,6 +804,23 @@ namespace Dimension
         atlas.Sprites = sprites;
         if (!atlas.Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
+    }
+
+    const std::vector<SpriteRect>& AssetManager::GetSprites(AssetHandle texture)
+    {
+        static const std::vector<SpriteRect> none;
+        if (!s || !texture.IsValid()) return none;
+        if (auto it = s->SpriteRects.find(texture); it != s->SpriteRects.end()) return it->second;
+        const AssetMetadata* meta = GetMetadata(texture);
+        if (!meta || meta->Type != AssetType::Texture) return none;
+        return s->SpriteRects[texture] = SpriteSlicing::FromJson(meta->ImportSettings.value("sprites", json::array()));
+    }
+
+    const SpriteRect* AssetManager::FindSprite(AssetHandle texture, const std::string& name)
+    {
+        for (const SpriteRect& r : GetSprites(texture))
+            if (r.Name == name) return &r;
+        return nullptr;
     }
 
     Ref<Texture2D> AssetManager::FindInAtlas(AssetHandle texture, glm::vec4& region)

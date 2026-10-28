@@ -1,6 +1,6 @@
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Renderer/SpriteAtlas.h>
-#include "../MaterialPreviews.h"
+#include "../AssetPreviews.h"
 #include "Panels.h"
 #include "../EditorUI.h"
 #include <Dimension/Scene/ComponentRegistry.h>
@@ -475,6 +475,31 @@ namespace Editor
                         }
                     }
                     UI::EndProperties();
+                    if (info.TypeId == GetComponentTypeId<SpriteRendererComponent>())
+                    {
+                        // Its texture's sliced sprites (the Sprite Editor): draw one of them, or all of it.
+                        auto& sr = *static_cast<SpriteRendererComponent*>(info.Get(scene, e));
+                        const auto& sprites = AssetManager::GetSprites(sr.Texture);
+                        if (!sprites.empty() || !sr.SpriteName.empty())
+                        {
+                            const char* shown = sr.SpriteName.empty() ? "(whole texture)" : sr.SpriteName.c_str();
+                            ImGui::SetNextItemWidth(-1.0f);
+                            if (ImGui::BeginCombo("##sprite", shown))
+                            {
+                                auto pick = [&](const std::string& name) {
+                                    m_Ctx.RecordUndo();
+                                    sr.SpriteName = name;
+                                    m_Ctx.MarkDirty();
+                                };
+                                if (ImGui::Selectable("(whole texture)", sr.SpriteName.empty())) pick(std::string());
+                                for (const SpriteRect& s : sprites)
+                                    if (ImGui::Selectable(s.Name.c_str(), s.Name == sr.SpriteName)) pick(s.Name);
+                                ImGui::EndCombo();
+                            }
+                            if (!sr.SpriteName.empty() && !AssetManager::FindSprite(sr.Texture, sr.SpriteName))
+                                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "The texture has no sprite '%s'", sr.SpriteName.c_str());
+                        }
+                    }
                     if (info.TypeId == GetComponentTypeId<TerrainComponent>())
                     {
                         // Brushes: pick a tool, then drag on the terrain in the Scene view.
@@ -1055,6 +1080,13 @@ namespace Editor
         ImGui::TextDisabled("%s  |  %s", AssetTypeToString(meta->Type), meta->Path.generic_string().c_str());
         ImGui::TextDisabled("GUID %llu", (unsigned long long)(uint64_t)handle);
         ImGui::Separator();
+        // Materials, models and prefabs: their picture (drawn again a frame after they change).
+        if (uint64_t preview = m_Ctx.Previews && AssetPreviews::HasPreview(meta->Type) ? m_Ctx.Previews->Get(handle) : 0)
+        {
+            float size = std::min(ImGui::GetContentRegionAvail().x, 160.0f);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - size) * 0.5f);
+            ImGui::Image(ImTextureRef((ImTextureID)preview), ImVec2(size, size));
+        }
 
         if (meta->Type == AssetType::Audio)
         {
@@ -1081,6 +1113,10 @@ namespace Editor
             if (ImGui::Checkbox("Generate Mip Maps", &mips)) { settings["mips"] = mips; changed = true; }
             if (changed) AssetManager::SetImportSettings(handle, settings);
 
+            size_t sprites = AssetManager::GetSprites(handle).size();
+            if (ImGui::Button("Sprite Editor...")) m_Ctx.OpenSpriteEditor = true;
+            ImGui::SameLine();
+            ImGui::TextDisabled(sprites ? "%zu sprite(s) sliced" : "not sliced", sprites);
             if (auto tex = AssetManager::GetTexture(handle))
             {
                 ImGui::SeparatorText("Preview");
@@ -1190,13 +1226,6 @@ namespace Editor
         {
             auto material = AssetManager::GetMaterial(handle);
             if (!material) return;
-            // The material on a lit sphere (drawn again a frame after it changes).
-            if (uint64_t preview = m_Ctx.Previews ? m_Ctx.Previews->Get(handle) : 0)
-            {
-                float size = std::min(ImGui::GetContentRegionAvail().x, 160.0f);
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - size) * 0.5f);
-                ImGui::Image(ImTextureRef((ImTextureID)preview), ImVec2(size, size));
-            }
             bool save = false;
             if (UI::BeginProperties("MaterialProps"))
             {
