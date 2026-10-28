@@ -16,6 +16,7 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Scene/SceneSnapping.h>
+#include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Scene/SceneManager.h>
@@ -161,6 +162,12 @@ namespace Editor
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
         else if (m_Options.OpenWindow == "Snap Settings") m_ShowSnapSettings = true;
+        else if (m_Options.OpenWindow == "Lighting") m_ShowLighting = true;
+        else if (m_Options.OpenWindow == "Search")
+        {
+            OpenSearch(true);
+            m_SearchQuery = m_Options.SearchQuery;
+        }
         else if (!m_Options.OpenWindow.empty()) m_ScriptWindows[m_Options.OpenWindow] = true; // a C# extension's window, by title
         else if (m_Options.OpenWindow == "Frame Debugger")
         {
@@ -797,6 +804,343 @@ namespace Editor
         }
     }
 
+    void EditorLayer::OpenSearch(bool open)
+    {
+        m_ShowSearch = open;
+        if (open)
+        {
+            m_SearchFocus = true;
+            m_SearchIndex = 0;
+        }
+    }
+
+    std::vector<EditorLayer::EditorCommand> EditorLayer::EditorCommands()
+    {
+        // What the Search window offers to run: the menus' commands, the windows (shown or hidden), the Scene view's
+        // modes, and the scripts' [MenuItem]s and windows.
+        std::vector<EditorCommand> out;
+        auto add = [&](std::string name, std::function<void()> run) { out.push_back({ std::move(name), std::move(run) }); };
+        add("File/New Scene", [this] { if (ConfirmDiscardChanges()) NewScene(); });
+        add("File/Open Scene...", [this] { OpenSceneWithDialog(); });
+        add("File/Save Scene", [this] { SaveScene(); });
+        add("File/Save Scene As...", [this] { SaveSceneAs(); });
+        add("File/Build Settings...", [this] { m_ShowBuildSettings = true; });
+        add("File/Project Settings...", [this] { m_ShowProjectSettings = true; });
+        add("Edit/Undo", [this] { m_Ctx.Undo(); });
+        add("Edit/Redo", [this] { m_Ctx.Redo(); });
+        add("Edit/Preferences...", [this] { m_ShowPreferences = true; });
+        add(m_Ctx.IsPlaying() ? "Play/Stop" : "Play/Play", [this] { m_Ctx.IsPlaying() ? Stop() : Play(); });
+        add("Play/Pause", [this] { TogglePause(); });
+        const std::pair<const char*, bool*> windows[] = {
+            { "Hierarchy", &m_ShowHierarchy }, { "Inspector", &m_ShowInspector }, { "Project", &m_ShowContent }, { "Console", &m_ShowConsole },
+            { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator },
+            { "Timeline", &m_ShowTimeline }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
+            { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings },
+            { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
+        };
+        for (auto& [name, flag] : windows) add(std::string("Window/") + name, [flag] { *flag = true; });
+        const char* modes[] = { "Shaded", "Wireframe", "Shaded Wireframe", "Unlit", "Overdraw" };
+        for (int m = 0; m < 5; ++m) add(std::string("Scene View/Draw Mode: ") + modes[m], [this, m] { m_DrawMode = (SceneDrawMode)m; });
+        add("Scene View/Frame Selected", [this] { FocusSelected(); });
+        add("Scene View/Toggle Grid", [this] { m_ShowGrid = !m_ShowGrid; });
+        add("Scene View/Toggle Gizmos", [this] { m_ShowGizmos = !m_ShowGizmos; });
+        add("Scene View/Isolate Selection", [this] { if (m_Ctx.HasValidSelection()) m_Ctx.Visibility.Isolate(m_Ctx.ActiveScene(), m_Ctx.Selection); });
+        add("Scene View/Exit Isolation", [this] { m_Ctx.Visibility.EndIsolation(); });
+        add("Lighting/Bake All Probes", [this] { BakeAllProbes(); });
+        for (const auto& item : CSharpRuntime::GetEditorItems())
+        {
+            if (!item.Inspects.empty()) continue;
+            if (item.Window) add(item.MenuPath, [this, title = item.Title] { m_ScriptWindows[title] = true; });
+            else add(item.MenuPath, [this, id = item.Id] { CSharpRuntime::CallEditorItem(id, false, m_Ctx.ActiveScene()); });
+        }
+        return out;
+    }
+
+    void EditorLayer::DrawSearchWindow()
+    {
+        // One list for the open scene's objects, the editor's commands, the project's assets and the objects of the
+        // other scenes (Ctrl+K). Up/Down and Enter pick, as does a click; Escape closes.
+        ImGui::SetNextWindowSize(ImVec2(620.0f, 480.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.3f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.3f));
+        if (m_SearchFocus) ImGui::SetNextWindowFocus();
+        if (!ImGui::Begin("Search", &m_ShowSearch))
+        {
+            ImGui::End();
+            return;
+        }
+        if (m_SearchFocus)
+        {
+            ImGui::SetKeyboardFocusHere();
+            m_SearchFocus = false;
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::InputTextWithHint("##query", "Objects, scenes, assets and commands  (t:Type  l:Label  tag:Tag)", &m_SearchQuery)) m_SearchIndex = 0;
+
+        struct Result
+        {
+            const char* Group;
+            std::string Label, Detail;
+            std::function<void()> Pick;
+        };
+        std::vector<Result> results;
+        std::string query = m_SearchQuery;
+        bool anyWord = query.find_first_not_of(' ') != std::string::npos;
+        if (anyWord)
+        {
+            Scene& scene = m_Ctx.ActiveScene();
+            int shown = 0;
+            for (Entity e : SceneSearch::Find(scene, query))
+            {
+                if (++shown > 30) break;
+                uint64_t guid = (uint64_t)scene.GetGuid(e);
+                results.push_back({ "In This Scene", scene.GetRegistry().Get<TagComponent>(e).Name, scene.GetName(), [this, guid] {
+                                        Entity found = m_Ctx.ActiveScene().FindEntityByGuid(Guid(guid));
+                                        if (found.IsNull()) return;
+                                        m_Ctx.Select(found);
+                                        FocusSelected();
+                                    } });
+            }
+            // Commands: every word in the name (type and label terms are for objects and assets).
+            bool plain = query.find(':') == std::string::npos;
+            if (plain)
+            {
+                std::string lowered;
+                for (char c : query) lowered += (char)std::tolower((unsigned char)c);
+                for (auto& command : EditorCommands())
+                {
+                    std::string name;
+                    for (char c : command.Name) name += (char)std::tolower((unsigned char)c);
+                    bool all = true;
+                    for (size_t start = 0; start < lowered.size() && all;)
+                    {
+                        size_t end = lowered.find(' ', start);
+                        if (end == std::string::npos) end = lowered.size();
+                        if (end > start && name.find(lowered.substr(start, end - start)) == std::string::npos) all = false;
+                        start = end + 1;
+                    }
+                    if (all) results.push_back({ "Commands", command.Name, "", command.Run });
+                }
+            }
+            shown = 0;
+            for (AssetHandle h : AssetManager::Search(query))
+            {
+                if (++shown > 30) break;
+                const AssetMetadata* meta = AssetManager::GetMetadata(h);
+                if (!meta) continue;
+                results.push_back({ "Assets", meta->Path.filename().string(), meta->Path.parent_path().generic_string(), [this, h] {
+                                        m_Ctx.SelectAsset(h);
+                                        if (const AssetMetadata* m = AssetManager::GetMetadata(h))
+                                            m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m->Path).parent_path());
+                                        m_ShowContent = m_ShowInspector = true;
+                                    } });
+            }
+            AssetHandle open = m_Ctx.ScenePath.empty() ? AssetHandle::None() : AssetManager::GetHandle(m_Ctx.ScenePath);
+            for (const auto& hit : ProjectSearch::FindInScenes(query, open, 30))
+            {
+                const AssetMetadata* meta = AssetManager::GetMetadata(hit.Scene);
+                if (!meta) continue;
+                results.push_back({ "In Other Scenes", hit.Name, meta->Path.generic_string(), [this, hit] {
+                                        if (m_Ctx.IsPlaying() || !ConfirmDiscardChanges()) return;
+                                        OpenScene(AssetManager::GetAbsolutePath(hit.Scene));
+                                        Entity found = m_Ctx.EditorScene->FindEntityByGuid(Guid(hit.Object));
+                                        if (found.IsNull()) return;
+                                        m_Ctx.Select(found);
+                                        FocusSelected();
+                                    } });
+            }
+        }
+
+        if (!results.empty())
+        {
+            m_SearchIndex = std::clamp(m_SearchIndex, 0, (int)results.size() - 1);
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) m_SearchIndex = std::min(m_SearchIndex + 1, (int)results.size() - 1);
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) m_SearchIndex = std::max(m_SearchIndex - 1, 0);
+        }
+        int picked = ImGui::IsKeyPressed(ImGuiKey_Enter, false) && !results.empty() ? m_SearchIndex : -1;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) m_ShowSearch = false;
+
+        ImGui::BeginChild("##results");
+        const char* group = nullptr;
+        for (int i = 0; i < (int)results.size(); ++i)
+        {
+            const Result& r = results[i];
+            if (!group || std::strcmp(group, r.Group) != 0)
+            {
+                group = r.Group;
+                ImGui::SeparatorText(group);
+            }
+            ImGui::PushID(i);
+            bool selected = i == m_SearchIndex;
+            if (ImGui::Selectable(r.Label.c_str(), selected, ImGuiSelectableFlags_AllowOverlap)) picked = i;
+            if (selected && (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow))) ImGui::SetScrollHereY();
+            if (!r.Detail.empty())
+            {
+                ImGui::SameLine(std::max(ImGui::GetContentRegionAvail().x * 0.55f, ImGui::CalcTextSize(r.Label.c_str()).x + 24.0f));
+                ImGui::TextDisabled("%s", r.Detail.c_str());
+            }
+            ImGui::PopID();
+        }
+        if (anyWord && results.empty()) ImGui::TextDisabled("Nothing found.");
+        if (!anyWord) ImGui::TextDisabled("Type to search this scene's objects, the editor's commands, assets and the other scenes' objects.");
+        ImGui::EndChild();
+        ImGui::End();
+        if (picked >= 0 && picked < (int)results.size())
+        {
+            m_ShowSearch = false;
+            results[picked].Pick();
+        }
+    }
+
+    void EditorLayer::BakeAllProbes()
+    {
+        SceneRenderer::RequestProbeBake(); // every reflection probe
+        Scene& scene = m_Ctx.ActiveScene();
+        for (auto [e, lpv] : scene.GetRegistry().ViewOf<LightProbeVolumeComponent>()) lpv.RequestBake();
+    }
+
+    void EditorLayer::DrawLightingWindow()
+    {
+        // The scene's lighting in one place: its environment, every light (edited in the list, like Unity's Light
+        // Explorer) and every probe, with baking for all of them.
+        ImGui::SetNextWindowSize(ImVec2(640.0f, 520.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.45f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Lighting", &m_ShowLighting))
+        {
+            ImGui::End();
+            return;
+        }
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        // One undo step per edit: the value before it goes into the step (drags start one when they begin).
+        auto commit = [&](auto& value, const auto& before, bool changed) {
+            if (ImGui::IsItemActivated() || (changed && !ImGui::IsItemActive()))
+            {
+                auto after = value;
+                value = before;
+                m_Ctx.RecordUndo();
+                value = after;
+            }
+            if (changed) m_Ctx.MarkDirty();
+        };
+
+        ImGui::SeparatorText("Environment");
+        {
+            auto& s = scene.GetSettings();
+            SceneSettings before = s;
+            ImGui::SetNextItemWidth(220.0f);
+            bool changed = ImGui::ColorEdit3("Ambient Color", &s.AmbientColor.x, ImGuiColorEditFlags_Float);
+            commit(s, before, changed);
+            ImGui::SetNextItemWidth(220.0f);
+            changed = ImGui::DragFloat("Ambient Intensity", &s.AmbientIntensity, 0.01f, 0.0f, 10.0f);
+            commit(s, before, changed);
+            ImGui::TextDisabled("Sky: %s   Fog: %s   Clouds: %s", s.SkyMode == 1 ? "texture" : "procedural", s.Fog ? "on" : "off", s.Clouds ? "on" : "off");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Scene Settings...")) m_ShowSceneSettings = true;
+        }
+
+        ImGui::SeparatorText("Lights");
+        int shadowCasters = 0;
+        if (ImGui::BeginTable("##lights", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Active", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.4f);
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 74.0f);
+            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+            ImGui::TableSetupColumn("Intensity", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("Range", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("Shadows", ImGuiTableColumnFlags_WidthFixed, 56.0f);
+            ImGui::TableHeadersRow();
+            auto row = [&](Entity e, const char* type, glm::vec3& color, float& intensity, float* range, bool& shadows) {
+                ImGui::PushID((int)e.Index);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                auto& tag = reg.Get<TagComponent>(e);
+                TagComponent tagBefore = tag;
+                bool changed = ImGui::Checkbox("##active", &tag.Active);
+                commit(tag, tagBefore, changed);
+                if (changed) scene.UpdateTransforms();
+                ImGui::TableSetColumnIndex(1);
+                if (ImGui::Selectable(tag.Name.c_str(), m_Ctx.IsSelected(e), ImGuiSelectableFlags_AllowOverlap)) m_Ctx.Select(e);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(type);
+                ImGui::TableSetColumnIndex(3);
+                glm::vec3 colorBefore = color;
+                changed = ImGui::ColorEdit3("##color", &color.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_Float);
+                commit(color, colorBefore, changed);
+                ImGui::TableSetColumnIndex(4);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                float intensityBefore = intensity;
+                changed = ImGui::DragFloat("##intensity", &intensity, 0.02f, 0.0f, 1000.0f, "%.2f");
+                commit(intensity, intensityBefore, changed);
+                ImGui::TableSetColumnIndex(5);
+                if (range)
+                {
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    float rangeBefore = *range;
+                    changed = ImGui::DragFloat("##range", range, 0.1f, 0.01f, 1000.0f, "%.1f m");
+                    commit(*range, rangeBefore, changed);
+                }
+                else
+                    ImGui::TextDisabled("-");
+                ImGui::TableSetColumnIndex(6);
+                bool shadowsBefore = shadows;
+                changed = ImGui::Checkbox("##shadows", &shadows);
+                commit(shadows, shadowsBefore, changed);
+                ImGui::PopID();
+            };
+            for (auto [e, l] : reg.ViewOf<DirectionalLightComponent>()) row(e, "Directional", l.Color, l.Intensity, nullptr, l.CastShadows);
+            for (auto [e, l] : reg.ViewOf<PointLightComponent>())
+            {
+                row(e, "Point", l.Color, l.Intensity, &l.Range, l.CastShadows);
+                shadowCasters += l.CastShadows;
+            }
+            for (auto [e, l] : reg.ViewOf<SpotLightComponent>())
+            {
+                row(e, "Spot", l.Color, l.Intensity, &l.Range, l.CastShadows);
+                shadowCasters += l.CastShadows;
+            }
+            ImGui::EndTable();
+        }
+        if (shadowCasters > 4)
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%d point and spot lights cast shadows: only 4 at a time do (the nearest).", shadowCasters);
+
+        ImGui::SeparatorText("Probes");
+        int reflection = 0;
+        for (auto [e, p] : reg.ViewOf<ReflectionProbeComponent>())
+        {
+            ++reflection;
+            ImGui::PushID((int)e.Index);
+            if (ImGui::Selectable(reg.Get<TagComponent>(e).Name.c_str(), m_Ctx.IsSelected(e))) m_Ctx.Select(e);
+            ImGui::SameLine(260.0f);
+            ImGui::TextDisabled("Reflection probe, %d px%s", 64 << std::clamp(p.Resolution, 0, 3), p.Realtime ? ", realtime" : "");
+            ImGui::PopID();
+        }
+        int volumes = 0;
+        for (auto [e, v] : reg.ViewOf<LightProbeVolumeComponent>())
+        {
+            ++volumes;
+            ImGui::PushID((int)e.Index);
+            if (ImGui::Selectable(reg.Get<TagComponent>(e).Name.c_str(), m_Ctx.IsSelected(e))) m_Ctx.Select(e);
+            ImGui::SameLine(260.0f);
+            bool baking = !v.Realtime && (v.BakeNext >= 0 || v.BakePending > 0);
+            std::string state = v.Realtime ? "realtime" : baking ? "baking " + std::to_string(std::max(v.BakeNext, 0) - v.BakePending) + " / " + std::to_string(v.ProbeCount())
+                              : (int)v.Baked.size() >= v.ProbeCount() * 9 ? "baked" : "not baked";
+            ImGui::TextDisabled("Light probe volume, %d probes, %s", v.ProbeCount(), state.c_str());
+            ImGui::PopID();
+        }
+        if (reflection + volumes == 0) ImGui::TextDisabled("No reflection probes or light probe volumes in this scene.");
+        ImGui::BeginDisabled(reflection + volumes == 0);
+        if (ImGui::Button("Bake All Probes")) BakeAllProbes();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("Reflection probes capture the scene again; light probe volumes bake in the background.");
+        ImGui::End();
+    }
+
     void EditorLayer::DrawSnapSettings()
     {
         // The steps snapping uses (the toolbar's Snap), and how to snap to vertices and surfaces.
@@ -1101,6 +1445,8 @@ namespace Editor
         }
         if (m_ShowSpriteEditor) m_SpriteEditor->OnImGui(&m_ShowSpriteEditor);
         if (m_ShowSnapSettings) DrawSnapSettings();
+        if (m_ShowSearch) DrawSearchWindow();
+        if (m_ShowLighting) DrawLightingWindow();
         DrawScriptWindows();
         if (m_ShowFrameDebugger)
         {
@@ -1269,6 +1615,8 @@ namespace Editor
             ImGui::MenuItem("Frame Debugger", nullptr, &m_ShowFrameDebugger);
             ImGui::MenuItem("Sprite Editor", nullptr, &m_ShowSpriteEditor);
             ImGui::MenuItem("Snap Settings", nullptr, &m_ShowSnapSettings);
+            ImGui::MenuItem("Lighting", nullptr, &m_ShowLighting);
+            if (ImGui::MenuItem("Search", "Ctrl+K", m_ShowSearch)) OpenSearch(!m_ShowSearch);
             ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
             ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);
@@ -1931,6 +2279,7 @@ namespace Editor
             else if (!m_Ctx.IsPlaying()) BuildGame(true, Project::GetConfig().BuildFolder);
         }
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) OpenSceneWithDialog();
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_K, false)) OpenSearch(true);
         if (m_GameViewFocused && m_Ctx.IsPlaying()) return; // the game owns the keyboard
 
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) m_Ctx.Undo();

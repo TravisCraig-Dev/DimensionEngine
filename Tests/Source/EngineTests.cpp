@@ -17,6 +17,7 @@
 #include <Dimension/Scene/SceneSnapping.h>
 #include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Asset/Preset.h>
+#include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -7999,6 +8000,29 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
+    // class and tag, skipping the open scene.
+    void TestProjectSearch()
+    {
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        AssetHandle navigation = AssetManager::GetHandle("Scenes/Navigation.scene");
+        AssetHandle demo = AssetManager::GetHandle("Scenes/Demo3D.scene");
+        CHECK(navigation.IsValid() && demo.IsValid());
+        auto in = [](const std::vector<ProjectSearch::SceneObject>& hits, AssetHandle scene, const std::string& name) {
+            return std::any_of(hits.begin(), hits.end(), [&](const auto& h) { return h.Scene == scene && h.Name == name; });
+        };
+        auto walls = ProjectSearch::FindInScenes("wall c"); // every word in the name
+        CHECK(in(walls, navigation, "Wall C") && !in(walls, navigation, "Wall B"));
+        CHECK(std::all_of(walls.begin(), walls.end(), [](const auto& h) { return h.Object != 0; }));
+        auto agents = ProjectSearch::FindInScenes("t:navmeshagent");
+        CHECK(in(agents, navigation, "Agent 1") && !in(agents, navigation, "Ground"));
+        CHECK(in(ProjectSearch::FindInScenes("t:spinner"), demo, "C# Spinner")); // a C# script class
+        CHECK(in(ProjectSearch::FindInScenes("ground tag:untagged"), navigation, "Ground"));
+        CHECK(!in(ProjectSearch::FindInScenes("wall c", navigation), navigation, "Wall C")); // the open scene is skipped
+        CHECK(ProjectSearch::FindInScenes("   ").empty() && ProjectSearch::FindInScenes("t:Camera", {}, 2).size() == 2);
+        AssetManager::Shutdown();
+    }
+
     void TestAssetLabels()
     {
         // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
@@ -9511,6 +9535,7 @@ int main(int argc, char** argv)
     Run("Scene snapping", TestSceneSnapping);
     Run("Scene visibility", TestSceneVisibility);
     Run("Presets", TestPresets);
+    Run("Project search", TestProjectSearch);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

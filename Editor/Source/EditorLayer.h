@@ -29,6 +29,7 @@ namespace Editor
         int FrameEvent = -1;      // --frame-event N: with --open "Frame Debugger", step the Scene view to draw N (0-based)
         std::string MenuCommand;  // --menu "Tools/Item": run a C# extension's menu item once the scripts have loaded
         std::string Search;       // --search "query": start with this Hierarchy search
+        std::string SearchQuery;  // --find "query": with --open "Search", the Search window's query
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
         std::string HideEntities;         // --hide "A,B": hidden in the Scene view for the session
@@ -166,6 +167,20 @@ namespace Editor
         bool UpdateVertexSnap(const ImVec2& origin, const ImVec2& size);
         bool m_VertexDrag = false;
         bool m_ShowSnapSettings = false;
+        // Window > Lighting, and the Search window (Ctrl+K).
+        bool m_ShowLighting = false, m_ShowSearch = false, m_SearchFocus = false;
+        std::string m_SearchQuery;
+        int m_SearchIndex = 0;
+        struct EditorCommand
+        {
+            std::string Name;
+            std::function<void()> Run;
+        };
+        std::vector<EditorCommand> EditorCommands();
+        void OpenSearch(bool open);
+        void DrawSearchWindow();
+        void DrawLightingWindow();
+        void BakeAllProbes();
         void DrawSnapSettings();
         glm::vec3 m_VertexOffset{ 0.0f }; // the dragged vertex from the selected object's pivot
         // Moves the selection's top-level objects by a world-space offset.
