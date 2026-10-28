@@ -421,6 +421,21 @@ namespace Editor
                 m_VisibilityScene = key;
                 m_Ctx.Visibility.Load(file, key);
             }
+            if (!m_Options.IsolateEntities.empty())
+            {
+                // --isolate "A,B" (automation).
+                std::vector<Entity> isolated;
+                std::string names = m_Options.IsolateEntities;
+                for (size_t start = 0; start <= names.size();)
+                {
+                    size_t comma = names.find(',', start);
+                    if (comma == std::string::npos) comma = names.size();
+                    isolated.push_back(m_Ctx.ActiveScene().FindEntityByName(names.substr(start, comma - start)));
+                    start = comma + 1;
+                }
+                m_Ctx.Visibility.Isolate(m_Ctx.ActiveScene(), isolated);
+                m_Options.IsolateEntities.clear();
+            }
             if (!m_Options.HideEntities.empty())
             {
                 // --hide "A,B" (automation): for this session only.
@@ -1306,6 +1321,15 @@ namespace Editor
             int mode = (int)m_DrawMode;
             if (ImGui::Combo("##drawmode", &mode, modes, IM_ARRAYSIZE(modes))) m_DrawMode = (SceneDrawMode)mode;
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scene view draw mode");
+            // Isolation (Shift+H): a button to leave it.
+            if (m_Ctx.Visibility.Isolating())
+            {
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                if (ImGui::Button("Exit Isolation")) m_Ctx.Visibility.EndIsolation();
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only the isolated objects show in the Scene view (Shift+H)");
+            }
             // Scene visibility: with objects hidden or unpickable, a toggle to show and pick everything.
             if (!m_Ctx.Visibility.Empty())
             {
@@ -1915,8 +1939,14 @@ namespace Editor
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) CopySelected(m_Ctx);
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) PasteClipboard(m_Ctx);
         if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
+        // Shift+H: isolate the selection (only it shows), or leave isolation.
+        if (!ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_H, false) && !ImGui::GetIO().WantTextInput)
+        {
+            if (m_Ctx.Visibility.Isolating()) m_Ctx.Visibility.EndIsolation();
+            else if (m_Ctx.HasValidSelection()) m_Ctx.Visibility.Isolate(m_Ctx.ActiveScene(), m_Ctx.Selection);
+        }
         // H: hide or show the selection in the Scene view (all hidden: show them, else hide them).
-        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_H, false) && !ImGui::GetIO().WantTextInput && m_Ctx.HasValidSelection())
+        else if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_H, false) && !ImGui::GetIO().WantTextInput && m_Ctx.HasValidSelection())
         {
             Scene& scene = m_Ctx.ActiveScene();
             bool allHidden = std::all_of(m_Ctx.Selection.begin(), m_Ctx.Selection.end(), [&](Entity s) { return m_Ctx.Visibility.IsHiddenSelf(scene, s); });

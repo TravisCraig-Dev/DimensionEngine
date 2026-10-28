@@ -7,6 +7,7 @@
 #include <Dimension/Scripting/ScriptRegistry.h>
 #include <Dimension/Scripting/ScriptableEntity.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
+#include <Dimension/Asset/Preset.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Renderer/Mesh.h>
 #include <Dimension/Renderer/Material.h>
@@ -38,6 +39,7 @@ namespace Editor
                 if (const ComponentInfo* info = ComponentRegistry::Find(name); info && !info->Has(scene, e))
                 {
                     info->Add(scene, e);
+                    Presets::ApplyDefault(scene, e, info->Name);
                     Prefabs::RecordComponentAdded(scene, e, info->Name);
                 }
         }
@@ -97,7 +99,21 @@ namespace Editor
             return resolver;
         }
 
-        enum class ComponentAction { None, Reset, Remove, Copy, PasteValues, PasteNew, MoveUp, MoveDown };
+        enum class ComponentAction { None, Reset, Remove, Copy, PasteValues, PasteNew, MoveUp, MoveDown, SavePreset, ApplyPreset };
+        AssetHandle s_ChosenPreset; // ComponentAction::ApplyPreset: which
+
+        // A preset onto objects (one undo step; prefab instances record the fields as overrides).
+        void ApplyPresetTo(EditorContext& ctx, Scene& scene, const Preset& preset, const std::vector<Entity>& targets)
+        {
+            const ComponentInfo* info = ComponentRegistry::Find(preset.Component);
+            if (!info) return;
+            ctx.RecordUndo();
+            for (Entity t : targets)
+                if (preset.ApplyTo(scene, t))
+                    for (auto& f : info->Fields)
+                        if (preset.Fields.contains(f.Name)) Prefabs::RecordFieldOverride(scene, t, info->Name, f.Name);
+            ctx.MarkDirty();
+        }
 
         // Component values travel through the OS clipboard as JSON, so they can be pasted into
         // another object, scene, or editor instance (Unity's Copy Component / Paste Component Values).
@@ -141,6 +157,25 @@ namespace Editor
                 if (ImGui::MenuItem(pasteValues.c_str(), nullptr, false, hasClip && clipName == info.Name)) action = ComponentAction::PasteValues;
                 std::string pasteNew = hasClip ? "Paste Component As New (" + clipName + ")" : "Paste Component As New";
                 if (ImGui::MenuItem(pasteNew.c_str(), nullptr, false, hasClip && clipName != info.Name)) action = ComponentAction::PasteNew;
+                ImGui::Separator();
+                // Presets of this component type (assets): save these settings as one, or apply one.
+                if (ImGui::MenuItem("Save as Preset", nullptr, false, copyable)) action = ComponentAction::SavePreset;
+                if (ImGui::BeginMenu("Apply Preset", copyable))
+                {
+                    auto presets = Presets::For(info.Name);
+                    for (AssetHandle h : presets)
+                    {
+                        std::string label = AssetManager::GetDisplayName(h);
+                        if (Presets::DefaultFor(info.Name) == h) label += "  (default)";
+                        if (ImGui::MenuItem(label.c_str()))
+                        {
+                            action = ComponentAction::ApplyPreset;
+                            s_ChosenPreset = h;
+                        }
+                    }
+                    if (presets.empty()) ImGui::TextDisabled("No %s presets yet", name);
+                    ImGui::EndMenu();
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Remove Component", nullptr, false, info.Removable)) action = ComponentAction::Remove;
                 ImGui::Separator();
@@ -385,6 +420,30 @@ namespace Editor
                 Log::Info("Copied component '{}'", info.Name);
             }
             if (action == ComponentAction::PasteValues) pasteValuesInto = info.Name;
+            if (action == ComponentAction::SavePreset)
+                if (auto preset = Preset::Capture(scene, e, info.Name))
+                {
+                    // Assets/Presets/<Component>.preset (numbered when taken), selected in the Project window.
+                    fs::path dir = AssetManager::GetAssetsDirectory() / "Presets";
+                    std::error_code ec;
+                    fs::create_directories(dir, ec);
+                    fs::path path = dir / (info.Name + ".preset");
+                    for (int n = 2; fs::exists(path); ++n) path = dir / (info.Name + " " + std::to_string(n) + ".preset");
+                    if (preset->Save(path))
+                    {
+                        AssetHandle h = AssetManager::Import(path);
+                        Log::Info("Saved preset '{}'", path.filename().string());
+                        if (h.IsValid()) m_Ctx.SelectAsset(h);
+                    }
+                }
+            if (action == ComponentAction::ApplyPreset)
+                if (auto preset = Presets::Get(s_ChosenPreset))
+                {
+                    std::vector<Entity> withIt;
+                    for (Entity t : targets)
+                        if (info.Has(scene, t)) withIt.push_back(t);
+                    ApplyPresetTo(m_Ctx, scene, *preset, withIt);
+                }
             if (action == ComponentAction::PasteNew) pasteNew = true;
             if (open)
             {
@@ -1267,6 +1326,7 @@ namespace Editor
                     {
                         m_Ctx.RecordUndo();
                         item.Component->Add(scene, e);
+                        Presets::ApplyDefault(scene, e, item.Component->Name); // its type's default preset, if any
                         Prefabs::RecordComponentAdded(scene, e, item.Component->Name);
                         ImGui::CloseCurrentPopup();
                     }
@@ -1494,6 +1554,56 @@ namespace Editor
             }
             if (save) AssetManager::SaveMaterial(handle);
             ImGui::TextDisabled("Changes are saved to the .mat file immediately.");
+        }
+        else if (meta->Type == AssetType::Preset)
+        {
+            // A component's saved settings: edited here (saved at once), applied to the selected objects, or made the
+            // default for new components of its type.
+            auto preset = Presets::Get(handle);
+            const ComponentInfo* info = preset ? ComponentRegistry::Find(preset->Component) : nullptr;
+            if (!preset || !info)
+            {
+                ImGui::TextDisabled("Not a preset of a known component.");
+                return;
+            }
+            ImGui::Text("Preset for %s", info->Name.c_str());
+            // Its values on a stand-in object (in a scene of its own), so the component's own fields edit them.
+            if (!m_PresetScene) m_PresetScene = MakeScope<Scene>("Preset");
+            Scene& stage = *m_PresetScene;
+            if (m_PresetShown != handle || !stage.IsValid(m_PresetEntity))
+            {
+                if (stage.IsValid(m_PresetEntity)) stage.DestroyEntity(m_PresetEntity);
+                m_PresetEntity = stage.CreateEntity("Preset");
+                m_PresetShown = handle;
+            }
+            if (!info->Has(stage, m_PresetEntity)) info->Add(stage, m_PresetEntity);
+            preset->ApplyTo(stage, m_PresetEntity);
+            void* data = info->Get(stage, m_PresetEntity);
+            bool changed = false;
+            if (UI::BeginProperties("PresetFields"))
+            {
+                for (const FieldInfo& f : info->Fields)
+                    if (!f.Hidden && f.Type != FieldType::EntityRef && preset->Fields.contains(f.Name)) changed |= UI::Field(f, data, &stage).Changed;
+                UI::EndProperties();
+            }
+            if (changed)
+                if (auto updated = Preset::Capture(stage, m_PresetEntity, info->Name)) updated->Save(AssetManager::GetAbsolutePath(handle));
+            ImGui::Spacing();
+            bool isDefault = Presets::DefaultFor(info->Name) == handle;
+            if (ImGui::Checkbox(("Default for new " + info->Name + " components").c_str(), &isDefault))
+            {
+                Presets::SetDefault(info->Name, isDefault ? handle : AssetHandle::None());
+                Project::Save();
+            }
+            UI::HelpMarker("Added with Add Component, a component of this type starts with these settings (kept in the project settings).");
+            Scene& scene = m_Ctx.ActiveScene();
+            std::vector<Entity> withIt;
+            for (Entity s : m_Ctx.Selection)
+                if (scene.IsValid(s) && info->Has(scene, s)) withIt.push_back(s);
+            ImGui::BeginDisabled(withIt.empty());
+            if (ImGui::Button(("Apply to Selection (" + std::to_string(withIt.size()) + ")").c_str())) ApplyPresetTo(m_Ctx, scene, *preset, withIt);
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("Changes are saved to the .preset file immediately.");
         }
         else if (meta->Type == AssetType::SpriteAtlas)
         {

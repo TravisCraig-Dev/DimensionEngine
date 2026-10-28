@@ -23,7 +23,19 @@ namespace Dimension
 
     bool SceneVisibility::IsHiddenSelf(Scene& scene, Entity e) const { return scene.IsValid(e) && m_Hidden.contains((uint64_t)scene.GetGuid(e)); }
     bool SceneVisibility::IsUnpickableSelf(Scene& scene, Entity e) const { return scene.IsValid(e) && m_Unpickable.contains((uint64_t)scene.GetGuid(e)); }
-    bool SceneVisibility::IsHidden(Scene& scene, Entity e) const { return Applies(scene, e, m_Hidden); }
+    bool SceneVisibility::IsHidden(Scene& scene, Entity e) const
+    {
+        return Applies(scene, e, m_Hidden) || (Isolating() && !Isolated(scene, e));
+    }
+
+    bool SceneVisibility::Isolated(Scene& scene, Entity e) const { return Applies(scene, e, m_Isolated); }
+
+    void SceneVisibility::Isolate(Scene& scene, const std::vector<Entity>& objects)
+    {
+        m_Isolated.clear();
+        for (Entity e : objects)
+            if (scene.IsValid(e)) m_Isolated.insert((uint64_t)scene.GetGuid(e));
+    }
     bool SceneVisibility::IsUnpickable(Scene& scene, Entity e) const { return Applies(scene, e, m_Unpickable); }
 
     bool SceneVisibility::Applies(Scene& scene, Entity e, const std::unordered_set<uint64_t>& set) const
@@ -54,7 +66,15 @@ namespace Dimension
         return out;
     }
 
-    std::vector<Entity> SceneVisibility::Hidden(Scene& scene) const { return Expand(scene, m_Hidden); }
+    std::vector<Entity> SceneVisibility::Hidden(Scene& scene) const
+    {
+        std::vector<Entity> out = Expand(scene, m_Hidden);
+        if (Enabled && Isolating())
+            scene.GetRegistry().EachEntity([&](Entity e) {
+                if (!Isolated(scene, e) && std::find(out.begin(), out.end(), e) == out.end()) out.push_back(e);
+            });
+        return out;
+    }
     std::vector<Entity> SceneVisibility::Unpickable(Scene& scene) const { return Expand(scene, m_Unpickable); }
 
     void SceneVisibility::Clear()

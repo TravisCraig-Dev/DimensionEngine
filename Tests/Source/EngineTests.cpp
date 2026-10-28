@@ -16,6 +16,7 @@
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Scene/SceneSnapping.h>
 #include <Dimension/Scene/SceneVisibility.h>
+#include <Dimension/Asset/Preset.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -7925,10 +7926,77 @@ namespace
         vis.SetHidden(scene, parent, false);
         vis.SetPickable(scene, other, true);
         CHECK(vis.Empty());
+        // Isolation: only the isolated object and its children show; ending it brings the rest back.
+        vis.Isolate(scene, { parent });
+        CHECK(vis.Isolating() && vis.IsHidden(scene, other) && !vis.IsHidden(scene, child));
+        hidden = vis.Hidden(scene);
+        CHECK(hidden.size() == 1 && hidden[0] == other);
+        vis.Enabled = false;
+        CHECK(vis.Hidden(scene).empty());
+        vis.Enabled = true;
+        vis.EndIsolation();
+        CHECK(!vis.Isolating() && vis.Hidden(scene).empty());
         vis.Save(file, "Scenes/A.scene"); // cleared: its entry goes
         loaded.Load(file, "Scenes/A.scene");
         CHECK(loaded.Empty());
         fs::remove_all(file.parent_path(), ec);
+    }
+
+    // Presets: a component's settings captured into a .preset asset, listed per component type, applied to another
+    // object (only the fields the preset has), re-read when the file changes, and a project default per component type
+    // that is kept in the project file.
+    void TestPresets()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_presets";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        AssetManager::Init(dir / "Assets");
+        Scene scene("Presets");
+        auto& reg = scene.GetRegistry();
+        Entity warm = scene.CreateEntity("Warm"), plain = scene.CreateEntity("Plain"), empty = scene.CreateEntity("Empty");
+        auto& light = reg.Emplace<PointLightComponent>(warm);
+        light.Intensity = 3.0f;
+        light.Range = 20.0f;
+        light.Color = { 1.0f, 0.5f, 0.2f };
+        reg.Emplace<PointLightComponent>(plain);
+        CHECK(!Preset::Capture(scene, empty, "Point Light"));
+        auto captured = Preset::Capture(scene, warm, "Point Light");
+        CHECK(captured && captured->Component == "Point Light" && captured->Fields["Intensity"] == 3.0f && !captured->Fields.contains("Nope"));
+        fs::create_directories(dir / "Assets/Presets", ec);
+        fs::path file = dir / "Assets/Presets/Warm Light.preset";
+        CHECK(captured && captured->Save(file));
+        AssetHandle h = AssetManager::Import(file);
+        CHECK(h.IsValid() && AssetManager::GetMetadata(h) && AssetManager::GetMetadata(h)->Type == AssetType::Preset);
+        CHECK(Presets::For("Point Light") == std::vector<AssetHandle>{ h } && Presets::For("Rigidbody").empty());
+
+        auto preset = Presets::Get(h);
+        CHECK(preset && preset->ApplyTo(scene, plain) && !preset->ApplyTo(scene, empty));
+        CHECK(Near(reg.Get<PointLightComponent>(plain).Intensity, 3.0f) && Near(reg.Get<PointLightComponent>(plain).Range, 20.0f) &&
+              Near(reg.Get<PointLightComponent>(plain).Color, { 1.0f, 0.5f, 0.2f }));
+        Preset rangeOnly{ "Point Light", { { "Range", 7.0f } } };
+        CHECK(rangeOnly.ApplyTo(scene, plain) && Near(reg.Get<PointLightComponent>(plain).Range, 7.0f) &&
+              Near(reg.Get<PointLightComponent>(plain).Intensity, 3.0f)); // the rest kept
+
+        // Edited on disk: read again.
+        Preset brighter = *preset;
+        brighter.Fields["Intensity"] = 5.0f;
+        brighter.Save(file);
+        fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(2));
+        CHECK(Presets::Get(h) && Presets::Get(h)->Fields["Intensity"] == 5.0f);
+
+        // The project default for new Point Lights, kept in the project file.
+        CHECK(!Presets::DefaultFor("Point Light").IsValid());
+        Presets::SetDefault("Point Light", h);
+        CHECK(Project::Save() && Project::Open(dir) && Presets::DefaultFor("Point Light") == h);
+        Entity added = scene.CreateEntity("Added");
+        reg.Emplace<PointLightComponent>(added);
+        CHECK(Presets::ApplyDefault(scene, added, "Point Light") && Near(reg.Get<PointLightComponent>(added).Intensity, 5.0f));
+        CHECK(!Presets::ApplyDefault(scene, added, "Spot Light"));
+        Presets::SetDefault("Point Light", AssetHandle::None());
+        CHECK(!Presets::ApplyDefault(scene, added, "Point Light"));
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
     }
 
     void TestAssetLabels()
@@ -9442,6 +9510,7 @@ int main(int argc, char** argv)
     Run("Asset labels", TestAssetLabels);
     Run("Scene snapping", TestSceneSnapping);
     Run("Scene visibility", TestSceneVisibility);
+    Run("Presets", TestPresets);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

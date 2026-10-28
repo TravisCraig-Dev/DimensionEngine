@@ -85,6 +85,9 @@ namespace Dimension
                         s_Config.NavAreaCosts[i] = j["navAreas"][i].value("cost", s_Config.NavAreaCosts[i]);
                     }
                 s_Config.NavPathBudget = j.value("navPathBudget", s_Config.NavPathBudget);
+                s_Config.DefaultPresets.clear();
+                for (auto& [component, preset] : j.value("defaultPresets", nlohmann::json::object()).items())
+                    if (preset.is_number_unsigned()) s_Config.DefaultPresets[component] = AssetHandle(preset.get<uint64_t>());
                 if (j.contains("layerCollisionMatrix") && j["layerCollisionMatrix"].is_array())
                     for (size_t i = 0; i < j["layerCollisionMatrix"].size() && i < ProjectConfig::kMaxLayers; ++i)
                         s_Config.LayerCollisionMatrix[i] = j["layerCollisionMatrix"][i].get<uint32_t>();
@@ -125,6 +128,8 @@ namespace Dimension
         }
         nlohmann::json navAreas = nlohmann::json::array();
         for (int i = 0; i < ProjectConfig::kNavAreas; ++i) navAreas.push_back({ { "name", s_Config.NavAreaNames[i] }, { "cost", s_Config.NavAreaCosts[i] } });
+        nlohmann::json defaultPresets = nlohmann::json::object();
+        for (auto& [component, preset] : s_Config.DefaultPresets) defaultPresets[component] = (uint64_t)preset;
         nlohmann::json j{ { "name", s_Config.Name },
                           { "buildScenes", buildScenes },
                           { "audioMixer", mixer },
@@ -142,6 +147,7 @@ namespace Dimension
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "navAreas", navAreas },
                           { "navPathBudget", s_Config.NavPathBudget },
+                          { "defaultPresets", defaultPresets },
                           { "engineVersion", "0.1.0" } };
         std::ofstream out(s_Directory / kFileName);
         out << j.dump(2);

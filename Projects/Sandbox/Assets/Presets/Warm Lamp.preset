@@ -1,0 +1,15 @@
+{
+  "component": "Point Light",
+  "fields": {
+    "Cast Shadows": true,
+    "Color": [
+      1.0,
+      0.72,
+      0.45
+    ],
+    "Cookie": 0,
+    "Intensity": 4.0,
+    "Range": 8.0,
+    "Shadow Bias": 0.05
+  }
+}

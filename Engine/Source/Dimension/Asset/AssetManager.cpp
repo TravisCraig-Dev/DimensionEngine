@@ -137,6 +137,7 @@ namespace Dimension
         case AssetType::AnimatorController: return "Animator Controller";
         case AssetType::Timeline: return "Timeline";
         case AssetType::SpriteAtlas: return "Sprite Atlas";
+        case AssetType::Preset: return "Preset";
         default: return "None";
         }
     }
@@ -261,6 +262,7 @@ namespace Dimension
         if (ext == ".controller") return AssetType::AnimatorController;
         if (ext == ".timeline") return AssetType::Timeline;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
+        if (ext == ".preset") return AssetType::Preset;
         if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" || ext == ".opus") return AssetType::Audio;
         return AssetType::None;
     }

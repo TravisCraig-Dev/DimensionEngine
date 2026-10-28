@@ -29,6 +29,12 @@ namespace Dimension
         bool Empty() const { return m_Hidden.empty() && m_Unpickable.empty(); }
         void Clear();
 
+        // Isolation (Shift+H): only these objects and their children show (everything else is hidden too) until it
+        // ends. Not saved.
+        void Isolate(Scene& scene, const std::vector<Entity>& objects);
+        void EndIsolation() { m_Isolated.clear(); }
+        bool Isolating() const { return !m_Isolated.empty(); }
+
         nlohmann::json ToJson() const;
         void FromJson(const nlohmann::json& j);
         // The settings of one scene (`key`: its path) in a file of every scene's.
@@ -38,6 +44,7 @@ namespace Dimension
     private:
         bool Applies(Scene& scene, Entity e, const std::unordered_set<uint64_t>& set) const;
         std::vector<Entity> Expand(Scene& scene, const std::unordered_set<uint64_t>& set) const;
-        std::unordered_set<uint64_t> m_Hidden, m_Unpickable; // object GUIDs
+        bool Isolated(Scene& scene, Entity e) const; // in an isolated object's subtree
+        std::unordered_set<uint64_t> m_Hidden, m_Unpickable, m_Isolated; // object GUIDs
     };
 }

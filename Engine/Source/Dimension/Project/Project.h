@@ -2,6 +2,8 @@
 #include "Dimension/Core/Base.h"
 #include "Dimension/Core/Guid.h"
 #include <array>
+#include <map>
+#include <string>
 #include "Dimension/Audio/AudioMixer.h"
 #include <vector>
 
@@ -37,6 +39,9 @@ namespace Dimension
         std::array<std::string, kNavAreas> NavAreaNames{ "Walkable", "Not Walkable", "Road", "Grass", "Mud", "Water", "Area 6", "Area 7" };
         std::array<float, kNavAreas> NavAreaCosts{ 1.0f, 1.0f, 0.5f, 1.5f, 4.0f, 6.0f, 1.0f, 1.0f };
         int NavPathBudget = 16;
+
+        // Presets: per component type (registry name), the preset applied to it when added in the editor.
+        std::map<std::string, AssetHandle> DefaultPresets;
 
         bool LayersCollide(int a, int b) const
         {

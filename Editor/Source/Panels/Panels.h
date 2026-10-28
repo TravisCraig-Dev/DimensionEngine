@@ -48,6 +48,10 @@ namespace Editor
         void DrawHiddenFields(const std::vector<FieldInfo>& fields, void* object, Scene& scene);
         EditorContext& m_Ctx;
         std::string m_ComponentFilter;
+        // A preset asset's values on a stand-in object (its Inspector).
+        Scope<Scene> m_PresetScene;
+        Entity m_PresetEntity = Entity::Null();
+        AssetHandle m_PresetShown = AssetHandle::None();
     };
 
     class ContentBrowserPanel

@@ -38,6 +38,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--inspector-debug")) options.InspectorDebug = true;
         else if (!std::strcmp(argv[i], "--draw-mode") && i + 1 < argc) options.DrawMode = argv[++i];
         else if (!std::strcmp(argv[i], "--hide") && i + 1 < argc) options.HideEntities = argv[++i];
+        else if (!std::strcmp(argv[i], "--isolate") && i + 1 < argc) options.IsolateEntities = argv[++i];
         else if (!std::strcmp(argv[i], "--wait-for-debugger")) options.WaitForDebugger = true;
         else if (!std::strcmp(argv[i], "--theme") && i + 1 < argc)
         {
