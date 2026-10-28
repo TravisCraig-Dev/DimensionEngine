@@ -126,12 +126,22 @@ namespace Dimension
             Op(11, label + "\x1f" + string.Join("\x1f", options), &v, 1);
             return (int)v;
         }
-        // A dropdown of an enum's names.
+        // A dropdown of an enum's names; for a [Flags] enum, one that toggles each flag.
         public static T EnumField<T>(string label, T value) where T : struct, Enum => (T)EnumField(label, (Enum)value);
 
         internal static Enum EnumField(string label, Enum value)
         {
             Type t = value.GetType();
+            if (t.IsDefined(typeof(FlagsAttribute), false))
+            {
+                // The mask and each name's value (as floats: flags up to bit 23).
+                Array all = Enum.GetValues(t);
+                float* v = stackalloc float[all.Length + 1];
+                v[0] = Convert.ToInt32(value);
+                for (int i = 0; i < all.Length; ++i) v[i + 1] = Convert.ToInt32(all.GetValue(i));
+                Op(12, label + "\x1f" + string.Join("\x1f", Enum.GetNames(t)), v, all.Length + 1);
+                return (Enum)Enum.ToObject(t, (int)v[0]);
+            }
             Array values = Enum.GetValues(t);
             int index = Popup(label, Array.IndexOf(values, value), Enum.GetNames(t));
             return index >= 0 && index < values.Length ? (Enum)values.GetValue(index) : value;

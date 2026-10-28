@@ -27,6 +27,7 @@ namespace Dimension
         StringList,       // std::vector<std::string>
         MaterialList,     // std::vector<AssetHandle> of materials (per-slot overrides)
         StructList,       // std::vector of a struct whose fields are Elements (FieldListBuilder::List)
+        Struct,           // a nested struct: Elements are its fields (Access relative to the field's address)
     };
 
     struct FieldInfo
@@ -38,6 +39,7 @@ namespace Dimension
         float Min = 0.0f, Max = 0.0f; // Min == Max means unbounded
         std::vector<std::string> EnumNames;
         std::vector<int32_t> EnumValues; // the stored value of each name (empty: its index)
+        bool EnumFlags = false;          // the value combines names' bit values ([Flags]): a multi-select dropdown
         std::string Tooltip;
         std::string Header;  // heading drawn above the field in the Inspector
         bool Hidden = false; // serialized but not shown in the Inspector

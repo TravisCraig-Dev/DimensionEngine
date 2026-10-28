@@ -80,6 +80,12 @@ namespace Dimension
             for (const Guid& g : *(const std::vector<Guid>*)p) list.push_back((uint64_t)g);
             return list;
         }
+        case FieldType::Struct:
+        {
+            json object = json::object();
+            for (const FieldInfo& sub : field.Elements) object[sub.Name] = FieldToJson(sub, const_cast<void*>(p), resolver);
+            return object;
+        }
         case FieldType::StructList:
         {
             // An array of objects, each the element's fields by name.
@@ -193,6 +199,12 @@ namespace Dimension
                 for (auto& k : v) list.push_back(k.is_number() ? Guid(k.get<uint64_t>()) : Guid::None());
                 break;
             }
+            case FieldType::Struct:
+                // Fields missing from the object keep their values.
+                if (!v.is_object()) break;
+                for (const FieldInfo& sub : field.Elements)
+                    if (v.contains(sub.Name)) FieldFromJson(sub, p, v[sub.Name], resolver);
+                break;
             case FieldType::StructList:
             {
                 // New elements start from the struct's defaults; fields missing from an element keep them.

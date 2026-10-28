@@ -2862,6 +2862,44 @@ namespace Editor
                 if (n > 0) v[0] = (float)current;
                 return changed ? 1 : 0;
             }
+            case 12:
+            {
+                // Flags: the label then the names (separated by \x1f); the mask in v[0], each name's value after it.
+                std::vector<std::string> parts;
+                for (const char* s = label;;)
+                {
+                    const char* end = std::strchr(s, '\x1f');
+                    parts.emplace_back(s, end ? end : s + std::strlen(s));
+                    if (!end) break;
+                    s = end + 1;
+                }
+                int mask = n > 0 ? (int)v[0] : 0;
+                int count = std::min((int)parts.size() - 1, n - 1);
+                std::string shown;
+                for (int i = 0; i < count; ++i)
+                {
+                    int bits = (int)v[i + 1];
+                    if (bits != 0 && (mask & bits) == bits) shown += (shown.empty() ? "" : ", ") + parts[i + 1];
+                }
+                if (shown.empty()) shown = mask == 0 ? "Nothing" : std::to_string(mask);
+                bool changed = false;
+                if (ImGui::BeginCombo(row(parts[0].c_str()).c_str(), shown.c_str()))
+                {
+                    for (int i = 0; i < count; ++i)
+                    {
+                        int bits = (int)v[i + 1];
+                        bool on = bits == 0 ? mask == 0 : (mask & bits) == bits;
+                        if (ImGui::Selectable(parts[i + 1].c_str(), on, ImGuiSelectableFlags_DontClosePopups))
+                        {
+                            mask = bits == 0 ? 0 : on ? (mask & ~bits) : (mask | bits);
+                            changed = true;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                if (n > 0) v[0] = (float)mask;
+                return changed ? 1 : 0;
+            }
             case 10:
                 if (grid)
                 {

@@ -7562,6 +7562,75 @@ namespace
             }
         }
         {
+            // [Serializable] types and [Flags] enums (WaveSpawner.cs): a class field registers as a struct of its
+            // fields, a List of structs as a list of them (new elements start from the struct's defaults), the flags
+            // enum as a multi-select. Defaults come from the class; values saved with the scene reach the running
+            // script (each wave spawning at its sides), and its values come back unchanged.
+            const ScriptInfo* spawner = ScriptRegistry::Find("Game.WaveSpawner");
+            CHECK(spawner != nullptr);
+            const FieldInfo* area = spawner ? fieldOf(spawner, "Area") : nullptr;
+            const FieldInfo* waves = spawner ? fieldOf(spawner, "Waves") : nullptr;
+            CHECK(area && area->Type == FieldType::Struct && area->Elements.size() == 2 && area->Elements[0].Type == FieldType::Vec3 &&
+                  area->Elements[1].Tooltip == "How far out the sides are");
+            CHECK(waves && waves->Type == FieldType::StructList && !IsValueList(*waves) && waves->Elements.size() == 4);
+            if (spawner && area && waves && waves->Elements.size() == 4)
+            {
+                const FieldInfo& count = waves->Elements[1];
+                const FieldInfo& sides = waves->Elements[3];
+                CHECK(waves->Elements[0].Type == FieldType::Prefab && count.Type == FieldType::Int && Near(count.Min, 1.0f) && Near(count.Max, 20.0f));
+                CHECK(sides.Type == FieldType::Enum && sides.EnumFlags && (sides.EnumValues == std::vector<int32_t>{ 0, 1, 2, 4, 8 }));
+                auto instance = spawner->Create();
+                void* obj = spawner->ToObject(instance.get());
+                CHECK(FieldToJson(*area, obj, nullptr) == nlohmann::json::parse(R"({"Center":[0,0,0],"Radius":5})"));
+                CHECK(FieldToJson(*waves, obj, nullptr) == nlohmann::json::parse(R"([{"Prefab":0,"Count":3,"Delay":1,"Sides":5}])"));
+                void* list = waves->Access(obj);
+                waves->ListResize(list, 2); // + Add
+                waves->ListMove(list, 1, 0);
+                CHECK(FieldToJson(*waves, obj, nullptr) ==
+                      nlohmann::json::parse(R"([{"Prefab":0,"Count":0,"Delay":0,"Sides":0},{"Prefab":0,"Count":3,"Delay":1,"Sides":5}])"));
+                FieldFromJson(*area, obj, nlohmann::json::parse(R"({"Radius":2})"), nullptr); // the rest kept
+                CHECK(FieldToJson(*area, obj, nullptr) == nlohmann::json::parse(R"({"Center":[0,0,0],"Radius":2})"));
+            }
+            AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+            AssetHandle ball = AssetManager::GetHandle(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Prefabs/Ball.prefab");
+            if (spawner && waves)
+            {
+                Scene field("Field");
+                Entity host = field.CreateEntity("Spawner");
+                auto& script = field.GetRegistry().Emplace<ScriptComponent>(host).Add("Game.WaveSpawner");
+                script.Fields["Area"] = nlohmann::json::parse(R"({"Center":[0,0,0],"Radius":4})");
+                nlohmann::json saved = nlohmann::json::parse(R"([{"Count":2,"Delay":0.25,"Sides":3},{"Count":1,"Delay":0.25,"Sides":8}])");
+                for (auto& w : saved) w["Prefab"] = (uint64_t)ball;
+                script.Fields["Waves"] = saved;
+                field.UpdateTransforms();
+                auto rt = field.Clone();
+                rt->OnRuntimeStart();
+                for (int i = 0; i < 36; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); // 0.6 s: both waves
+                int north = 0, east = 0, west = 0, total = 0;
+                rt->GetRegistry().EachEntity([&](Entity e) {
+                    auto* link = rt->GetRegistry().TryGet<PrefabLinkComponent>(e);
+                    if (!link || link->Prefab != ball || !link->IsRoot) return;
+                    glm::vec3 p = rt->GetRegistry().Get<TransformComponent>(e).Position;
+                    ++total;
+                    north += p.z < -3.0f;
+                    east += p.x > 3.0f;
+                    west += p.x < -3.0f;
+                });
+                CHECK(total == 5 && north == 2 && east == 2 && west == 1);
+                // The live script's values back into the native fields (as before a save while playing).
+                auto& live = rt->GetRegistry().Get<ScriptComponent>(rt->FindEntityByName("Spawner")).Scripts[0];
+                if (live.Instance)
+                {
+                    live.Instance->OnBeforeSerialize();
+                    void* obj = spawner->ToObject(live.Instance.get());
+                    CHECK(FieldToJson(*waves, obj, nullptr) == saved);
+                    CHECK(FieldToJson(*area, obj, nullptr) == script.Fields["Area"]);
+                }
+                rt->OnRuntimeStop();
+            }
+            AssetManager::Shutdown();
+        }
+        {
             // A Prefab field at play time: the dropper instantiates the Ball prefab picked for it, every Interval.
             AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
             AssetHandle ball = AssetManager::GetHandle(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Prefabs/Ball.prefab");

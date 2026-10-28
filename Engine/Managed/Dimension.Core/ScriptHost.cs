@@ -233,6 +233,15 @@ namespace Dimension
             }
             if (t == typeof(Entity)) return v.ValueKind == JsonValueKind.Number ? new Entity(scene, v.GetUInt64()) : Entity.Null;
             if (v.ValueKind == JsonValueKind.Null) return t == typeof(string) ? "" : Activator.CreateInstance(t);
+            if (IsSerializable(t))
+            {
+                // A new instance (classes too, as Unity makes them), with the fields the object has.
+                object o = Activator.CreateInstance(t);
+                if (v.ValueKind == JsonValueKind.Object)
+                    foreach (FieldInfo f in SerializedFields(t))
+                        if (v.TryGetProperty(f.Name, out JsonElement field)) f.SetValue(o, ReadValue(f.FieldType, field, scene));
+                return o;
+            }
             return
                 t.IsEnum ? Enum.ToObject(t, v.GetInt32()) :
                 t == typeof(float) ? v.GetSingle() :
@@ -289,6 +298,31 @@ namespace Dimension
                 foreach (object item in items) list.Add(item);
                 return list;
             }
+            if (IsSerializable(t))
+            {
+                // Its fields under a heading: a struct comes back as a changed copy, a class is changed in place.
+                object target = v ?? Activator.CreateInstance(t);
+                if (t.IsValueType)
+                {
+                    object copy = Activator.CreateInstance(t);
+                    foreach (FieldInfo f in SerializedFields(t)) f.SetValue(copy, f.GetValue(target));
+                    target = copy;
+                }
+                EditorGUI.Separator(label);
+                bool changed = false;
+                foreach (FieldInfo f in SerializedFields(t))
+                {
+                    if (f.GetCustomAttribute<HideInInspectorAttribute>() != null) continue;
+                    object before = f.GetValue(target);
+                    object after = DrawValue(f.Name, before, f.FieldType, f.GetCustomAttribute<RangeAttribute>());
+                    if (after != null && !Equals(after, before))
+                    {
+                        f.SetValue(target, after);
+                        changed = true;
+                    }
+                }
+                return changed || v == null ? target : v;
+            }
             return v switch
             {
                 float x when range != null => EditorGUI.Slider(label, x, range.Min, range.Max),
@@ -323,21 +357,44 @@ namespace Dimension
         private static Type ElementType(Type t) =>
             t.IsArray && t.GetArrayRank() == 1 ? t.GetElementType() :
             t.IsGenericType && t.GetGenericTypeDefinition() == typeof(List<>) ? t.GetGenericArguments()[0] : null;
-        private static bool IsSupported(Type t) => IsScalar(t) || (ElementType(t) is { } e && IsScalar(e));
+        // [Serializable] structs and classes of the scripts (not the engine's or .NET's own), with their serialized
+        // fields, nested up to kMaxDepth deep.
+        private const int kMaxDepth = 4;
+        private static bool IsSerializable(Type t) =>
+            !t.IsPrimitive && !t.IsEnum && !t.IsGenericType && !t.IsArray && t != typeof(string) && !s_Supported.Contains(t) &&
+            t.IsDefined(typeof(SerializableAttribute), false) && !typeof(Behaviour).IsAssignableFrom(t) &&
+            t.Assembly != typeof(object).Assembly && t.Assembly != typeof(Behaviour).Assembly &&
+            (t.IsValueType || (!t.IsAbstract && t.GetConstructor(Type.EmptyTypes) != null));
+        private static bool IsSupported(Type t, int depth = 0)
+        {
+            bool Single(Type s) => IsScalar(s) || (depth < kMaxDepth && IsSerializable(s));
+            return Single(t) || (ElementType(t) is { } e && Single(e));
+        }
 
-        // A field's type for the engine: "type", with an enum's names and values, or a list's "element" type.
-        private static void WriteType(Utf8JsonWriter w, Type t)
+        // A field's type for the engine: "type", with an enum's names and values, a list's "element" type, or a
+        // [Serializable] type's "fields".
+        private static void WriteType(Utf8JsonWriter w, Type t, int depth = 0)
         {
             if (ElementType(t) is { } element)
             {
                 w.WriteString("type", "List");
                 w.WriteStartObject("element");
-                WriteType(w, element);
+                WriteType(w, element, depth);
                 w.WriteEndObject();
+                return;
+            }
+            if (IsSerializable(t))
+            {
+                w.WriteString("type", "Struct");
+                object defaults = Activator.CreateInstance(t);
+                w.WriteStartArray("fields");
+                foreach (FieldInfo f in SerializedFields(t, depth + 1)) WriteField(w, f, defaults, depth + 1);
+                w.WriteEndArray();
                 return;
             }
             if (t.IsEnum)
             {
+                if (t.IsDefined(typeof(FlagsAttribute), false)) w.WriteBoolean("flags", true);
                 w.WriteString("type", "Enum");
                 w.WriteStartArray("enumNames");
                 foreach (string name in Enum.GetNames(t)) w.WriteStringValue(name);
@@ -371,6 +428,16 @@ namespace Dimension
                     foreach (object item in list) WriteValue(w, item);
                     w.WriteEndArray();
                     break;
+                case object o when IsSerializable(o.GetType()):
+                    // A [Serializable] value: its fields by name.
+                    w.WriteStartObject();
+                    foreach (FieldInfo f in SerializedFields(o.GetType()))
+                    {
+                        w.WritePropertyName(f.Name);
+                        WriteValue(w, f.GetValue(o));
+                    }
+                    w.WriteEndObject();
+                    break;
                 case float f: w.WriteNumberValue(f); break;
                 case int i: w.WriteNumberValue(i); break;
                 case bool b: w.WriteBooleanValue(b); break;
@@ -384,14 +451,30 @@ namespace Dimension
             }
         }
 
-        private static IEnumerable<FieldInfo> SerializedFields(Type type)
+        // A field's registration: its name, type, default (from `defaults`, an instance of its owner) and attributes.
+        private static void WriteField(Utf8JsonWriter w, FieldInfo f, object defaults, int depth)
+        {
+            w.WriteStartObject();
+            w.WriteString("name", f.Name);
+            WriteType(w, f.FieldType, depth);
+            w.WritePropertyName("default");
+            WriteValue(w, defaults != null ? f.GetValue(defaults) : null);
+            if (f.GetCustomAttribute<RangeAttribute>() is { } range) { w.WriteNumber("min", range.Min); w.WriteNumber("max", range.Max); }
+            if (f.GetCustomAttribute<TooltipAttribute>() is { } tip) w.WriteString("tooltip", tip.Text);
+            if (f.GetCustomAttribute<HeaderAttribute>() is { } header) w.WriteString("header", header.Text);
+            if (f.GetCustomAttribute<HideInInspectorAttribute>() != null) w.WriteBoolean("hidden", true);
+            if (DrawerFor(f) != null) w.WriteBoolean("drawer", true);
+            w.WriteEndObject();
+        }
+
+        private static IEnumerable<FieldInfo> SerializedFields(Type type, int depth = 0)
         {
             var chain = new List<Type>();
             for (Type t = type; t != null && t != typeof(Behaviour); t = t.BaseType) chain.Insert(0, t);
             foreach (Type t in chain)
                 foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    if (!IsSupported(f.FieldType) || f.IsInitOnly || f.IsNotSerialized) continue;
+                    if (!IsSupported(f.FieldType, depth) || f.IsInitOnly || f.IsNotSerialized) continue;
                     if (!f.IsPublic && f.GetCustomAttribute<SerializeFieldAttribute>() == null) continue;
                     yield return f;
                 }
@@ -436,17 +519,7 @@ namespace Dimension
                         foreach (FieldInfo f in SerializedFields(type))
                         {
                             cls.Fields.Add(f);
-                            w.WriteStartObject();
-                            w.WriteString("name", f.Name);
-                            WriteType(w, f.FieldType);
-                            w.WritePropertyName("default");
-                            WriteValue(w, defaults != null ? f.GetValue(defaults) : null);
-                            if (f.GetCustomAttribute<RangeAttribute>() is { } range) { w.WriteNumber("min", range.Min); w.WriteNumber("max", range.Max); }
-                            if (f.GetCustomAttribute<TooltipAttribute>() is { } tip) w.WriteString("tooltip", tip.Text);
-                            if (f.GetCustomAttribute<HeaderAttribute>() is { } header) w.WriteString("header", header.Text);
-                            if (f.GetCustomAttribute<HideInInspectorAttribute>() != null) w.WriteBoolean("hidden", true);
-                            if (DrawerFor(f) != null) w.WriteBoolean("drawer", true);
-                            w.WriteEndObject();
+                            WriteField(w, f, defaults, 0);
                         }
                         w.WriteEndArray();
                         w.WriteEndObject();
@@ -530,7 +603,7 @@ namespace Dimension
                 FieldInfo f = cls.Fields[index];
                 Type t = f.FieldType;
                 object v =
-                    ElementType(t) != null ? ReadValue(t, Native.FromUtf8((byte*)value), b.Entity.Scene) : // lists come as JSON
+                    ElementType(t) != null || IsSerializable(t) ? ReadValue(t, Native.FromUtf8((byte*)value), b.Entity.Scene) : // as JSON
                     t.IsEnum ? Enum.ToObject(t, *(int*)value) :
                     t == typeof(float) ? *(float*)value :
                     t == typeof(int) ? *(int*)value :

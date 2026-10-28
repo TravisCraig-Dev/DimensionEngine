@@ -200,9 +200,49 @@ namespace Dimension
         template <class T> T* Comp(void* scene, uint64_t e) { return scene ? S(scene).GetRegistry().TryGet<T>(Unpack(e)) : nullptr; }
 
         // ---- Managed class proxies ------------------------------------------------------------------
-        // Enums are stored as Int slots; a List slot holds a ManagedList.
-        enum class Slot : uint8_t { Float, Int, Bool, String, Vec2, Vec3, Vec4, Color4, Entity, Asset, List };
+        // Field values live natively, one kSlotSize slot per field. Enums are stored as Int slots; a List slot holds a
+        // ManagedList; a Struct slot (a [Serializable] struct or class) holds a Block of its own fields.
+        enum class Slot : uint8_t { Float, Int, Bool, String, Vec2, Vec3, Vec4, Color4, Entity, Asset, List, Struct };
         constexpr size_t kSlotSize = 64;
+
+        struct Layout;
+
+        // The values of a Layout's fields (heap storage, copied deeply). A default one holds nothing.
+        class Block
+        {
+        public:
+            Block() = default;
+            explicit Block(const Layout* layout) { Init(layout); }
+            Block(const Block& o) : Block(o.m_Layout) { CopyFrom(o); }
+            Block(Block&& o) noexcept : m_Layout(o.m_Layout), m_Data(o.m_Data) { o.m_Layout = nullptr, o.m_Data = nullptr; }
+            Block& operator=(const Block& o)
+            {
+                if (this != &o)
+                {
+                    Reset();
+                    Init(o.m_Layout);
+                    CopyFrom(o);
+                }
+                return *this;
+            }
+            Block& operator=(Block&& o) noexcept
+            {
+                std::swap(m_Layout, o.m_Layout);
+                std::swap(m_Data, o.m_Data);
+                return *this;
+            }
+            ~Block() { Reset(); }
+
+            uint8_t* Data() const { return m_Data; }
+            void* Slot(size_t i) const { return m_Data + i * kSlotSize; }
+
+        private:
+            void Init(const Layout* layout);
+            void Reset();
+            void CopyFrom(const Block& o);
+            const Layout* m_Layout = nullptr;
+            uint8_t* m_Data = nullptr;
+        };
 
         // An element of a C# list or array field: its value in the member its type uses.
         struct ListElement
@@ -210,21 +250,85 @@ namespace Dimension
             alignas(16) uint8_t Bytes[16] = {}; // numbers, vectors, colors, enums, asset GUIDs
             std::string Text;
             Entity Ref = Entity::Null();
+            Block Nested; // a [Serializable] type's fields
         };
         using ManagedList = std::vector<ListElement>;
+
+        // The fields of a script class, or of a [Serializable] type in one.
+        struct Layout
+        {
+            std::vector<Slot> Slots;
+            std::vector<Slot> ElementSlots;      // per field: a List's element type
+            std::vector<const Layout*> Nested;   // per field: a Struct's fields, or a List's element type's
+            std::vector<FieldInfo> Fields;
+            std::vector<nlohmann::json> Defaults;
+        };
+
+        void Block::Init(const Layout* layout)
+        {
+            m_Layout = layout;
+            if (!layout) return;
+            size_t size = std::max<size_t>(1, layout->Slots.size()) * kSlotSize;
+            m_Data = static_cast<uint8_t*>(::operator new(size, std::align_val_t(16)));
+            std::memset(m_Data, 0, size);
+            for (size_t i = 0; i < layout->Slots.size(); ++i)
+            {
+                switch (layout->Slots[i])
+                {
+                case Slot::String: new (Slot(i)) std::string(); break;
+                case Slot::Entity: new (Slot(i)) Entity(); break;
+                case Slot::List: new (Slot(i)) ManagedList(); break;
+                case Slot::Struct: new (Slot(i)) Block(layout->Nested[i]); break;
+                default: break;
+                }
+                FieldFromJson(layout->Fields[i], m_Data, layout->Defaults[i], nullptr);
+            }
+        }
+
+        void Block::Reset()
+        {
+            if (m_Layout && m_Data)
+                for (size_t i = 0; i < m_Layout->Slots.size(); ++i)
+                {
+                    switch (m_Layout->Slots[i])
+                    {
+                    case Slot::String: static_cast<std::string*>(Slot(i))->~basic_string(); break;
+                    case Slot::List: static_cast<ManagedList*>(Slot(i))->~ManagedList(); break;
+                    case Slot::Struct: static_cast<Block*>(Slot(i))->~Block(); break;
+                    default: break;
+                    }
+                }
+            if (m_Data) ::operator delete(m_Data, std::align_val_t(16));
+            m_Layout = nullptr;
+            m_Data = nullptr;
+        }
+
+        void Block::CopyFrom(const Block& o)
+        {
+            if (!m_Layout || !o.m_Data) return;
+            for (size_t i = 0; i < m_Layout->Slots.size(); ++i)
+            {
+                switch (m_Layout->Slots[i])
+                {
+                case Slot::String: *static_cast<std::string*>(Slot(i)) = *static_cast<const std::string*>(o.Slot(i)); break;
+                case Slot::Entity: *static_cast<Entity*>(Slot(i)) = *static_cast<const Entity*>(o.Slot(i)); break;
+                case Slot::List: *static_cast<ManagedList*>(Slot(i)) = *static_cast<const ManagedList*>(o.Slot(i)); break;
+                case Slot::Struct: *static_cast<Block*>(Slot(i)) = *static_cast<const Block*>(o.Slot(i)); break;
+                default: std::memcpy(Slot(i), o.Slot(i), kSlotSize); break;
+                }
+            }
+        }
 
         struct ManagedClass
         {
             std::string Name;
-            std::vector<Slot> Slots;
-            std::vector<Slot> ElementSlots; // per field: a List's element type
-            std::vector<FieldInfo> Fields;
-            std::vector<nlohmann::json> Defaults;
-            std::vector<bool> Drawn; // per field: a C# property drawer draws it
+            Layout Values;
+            std::deque<Layout> NestedLayouts; // the [Serializable] types' (stable addresses)
+            std::vector<bool> Drawn;          // per field: a C# property drawer draws it
         };
 
         // A field's (or list element's) slot and Inspector type from its registration ("type", and for enums
-        // "enumNames" and "enumValues").
+        // "enumNames", "enumValues" and "flags").
         Slot ParseFieldType(const nlohmann::json& f, FieldInfo& info)
         {
             std::string type = f.at("type").get<std::string>();
@@ -243,6 +347,7 @@ namespace Dimension
                 info.Type = FieldType::Enum;
                 for (auto& n : f.value("enumNames", nlohmann::json::array())) info.EnumNames.push_back(n.get<std::string>());
                 for (auto& v : f.value("enumValues", nlohmann::json::array())) info.EnumValues.push_back(v.get<int32_t>());
+                info.EnumFlags = f.value("flags", false);
                 return Slot::Int;
             }
             Slot slot = type == "Float" ? Slot::Float : type == "Int" ? Slot::Int : type == "Bool" ? Slot::Bool
@@ -254,6 +359,173 @@ namespace Dimension
             info.Speed = slot == Slot::Int ? 1.0f : 0.05f;
             return slot;
         }
+
+        // The layout of registered fields (a class's, or a [Serializable] type's "fields"); nested types' layouts go
+        // to `cls`.
+        void BuildLayout(const nlohmann::json& fields, Layout& layout, ManagedClass& cls)
+        {
+            for (auto& f : fields)
+            {
+                FieldInfo info;
+                info.Name = f.at("name").get<std::string>();
+                Slot slot, elementSlot = Slot::Float;
+                const Layout* nested = nullptr;
+                std::string type = f.at("type").get<std::string>();
+                if (type == "List")
+                {
+                    slot = Slot::List;
+                    const nlohmann::json& element = f.at("element");
+                    if (element.at("type").get<std::string>() == "Struct")
+                    {
+                        // A list of [Serializable] values: a list of structs, each element its own Block.
+                        elementSlot = Slot::Struct;
+                        Layout& inner = cls.NestedLayouts.emplace_back();
+                        BuildLayout(element.at("fields"), inner, cls);
+                        nested = &inner;
+                        info.Elements = inner.Fields;
+                        info.ListAt = [](void* list, size_t i) -> void* { return (*static_cast<ManagedList*>(list))[i].Nested.Data(); };
+                        info.ListResize = [nested](void* list, size_t n) {
+                            auto& v = *static_cast<ManagedList*>(list);
+                            size_t old = v.size();
+                            v.resize(n);
+                            for (size_t i = old; i < n; ++i) v[i].Nested = Block(nested);
+                        };
+                    }
+                    else
+                    {
+                        // A list of plain values (one unnamed element field).
+                        FieldInfo value;
+                        elementSlot = ParseFieldType(element, value);
+                        value.Access = [elementSlot](void* item) -> void* {
+                            auto* e = static_cast<ListElement*>(item);
+                            return elementSlot == Slot::String ? (void*)&e->Text : elementSlot == Slot::Entity ? (void*)&e->Ref : (void*)e->Bytes;
+                        };
+                        info.Elements.push_back(std::move(value));
+                        info.ListAt = [](void* list, size_t i) -> void* { return &(*static_cast<ManagedList*>(list))[i]; };
+                        info.ListResize = [](void* list, size_t n) { static_cast<ManagedList*>(list)->resize(n); };
+                    }
+                    info.Type = FieldType::StructList;
+                    info.ListSize = [](const void* list) { return static_cast<const ManagedList*>(list)->size(); };
+                    info.ListErase = [](void* list, size_t i) {
+                        auto& v = *static_cast<ManagedList*>(list);
+                        if (i < v.size()) v.erase(v.begin() + i);
+                    };
+                    info.ListMove = [](void* list, size_t from, size_t to) {
+                        auto& v = *static_cast<ManagedList*>(list);
+                        if (from >= v.size() || to >= v.size() || from == to) return;
+                        ListElement e = std::move(v[from]);
+                        v.erase(v.begin() + from);
+                        v.insert(v.begin() + to, std::move(e));
+                    };
+                }
+                else if (type == "Struct")
+                {
+                    // A [Serializable] struct or class: its fields, opened under the field in the Inspector.
+                    slot = Slot::Struct;
+                    Layout& inner = cls.NestedLayouts.emplace_back();
+                    BuildLayout(f.at("fields"), inner, cls);
+                    nested = &inner;
+                    info.Type = FieldType::Struct;
+                    info.Elements = inner.Fields;
+                }
+                else
+                    slot = ParseFieldType(f, info);
+                // Inspector attributes: [Range], [Tooltip], [Header], [HideInInspector].
+                if (f.contains("min") && f.contains("max") && slot != Slot::Struct && elementSlot != Slot::Struct)
+                {
+                    // On a list, the range applies to its elements.
+                    FieldInfo& ranged = slot == Slot::List ? info.Elements[0] : info;
+                    ranged.Min = f["min"].get<float>();
+                    ranged.Max = f["max"].get<float>();
+                    if ((slot == Slot::List ? elementSlot : slot) == Slot::Float && ranged.Max > ranged.Min) ranged.Speed = (ranged.Max - ranged.Min) / 200.0f;
+                }
+                info.Tooltip = f.value("tooltip", std::string());
+                info.Header = f.value("header", std::string());
+                info.Hidden = f.value("hidden", false);
+                size_t offset = layout.Slots.size() * kSlotSize;
+                if (slot == Slot::Struct)
+                    info.Access = [offset](void* data) -> void* { return reinterpret_cast<Block*>(static_cast<uint8_t*>(data) + offset)->Data(); };
+                else
+                    info.Access = [offset](void* data) -> void* { return static_cast<uint8_t*>(data) + offset; };
+                layout.Slots.push_back(slot);
+                layout.ElementSlots.push_back(elementSlot);
+                layout.Nested.push_back(nested);
+                layout.Fields.push_back(std::move(info));
+                layout.Defaults.push_back(f.value("default", nlohmann::json()));
+            }
+        }
+
+        // Values as the scripts exchange them: a class's fields as an array in order (`array`) and a nested type's as
+        // an object by name; entities as packed ids (null for none), lists as arrays.
+        nlohmann::json ValuesJson(const Layout& layout, const Block& block, bool array)
+        {
+            nlohmann::json out = array ? nlohmann::json::array() : nlohmann::json::object();
+            for (size_t i = 0; i < layout.Slots.size(); ++i)
+            {
+                nlohmann::json v;
+                switch (layout.Slots[i])
+                {
+                case Slot::Entity:
+                {
+                    Entity e = *static_cast<const Entity*>(block.Slot(i));
+                    if (!e.IsNull()) v = Pack(e);
+                    break;
+                }
+                case Slot::Struct: v = ValuesJson(*layout.Nested[i], *static_cast<const Block*>(block.Slot(i)), false); break;
+                case Slot::List:
+                {
+                    v = nlohmann::json::array();
+                    for (const ListElement& item : *static_cast<const ManagedList*>(block.Slot(i)))
+                    {
+                        if (layout.ElementSlots[i] == Slot::Entity) v.push_back(item.Ref.IsNull() ? nlohmann::json() : nlohmann::json(Pack(item.Ref)));
+                        else if (layout.ElementSlots[i] == Slot::Struct) v.push_back(ValuesJson(*layout.Nested[i], item.Nested, false));
+                        else v.push_back(FieldToJson(layout.Fields[i].Elements[0], const_cast<ListElement*>(&item), nullptr));
+                    }
+                    break;
+                }
+                default: v = FieldToJson(layout.Fields[i], block.Data(), nullptr); break;
+                }
+                if (array) out.push_back(std::move(v));
+                else out[layout.Fields[i].Name] = std::move(v);
+            }
+            return out;
+        }
+
+        void ReadValues(const Layout& layout, Block& block, const nlohmann::json& values)
+        {
+            for (size_t i = 0; i < layout.Slots.size(); ++i)
+            {
+                const nlohmann::json* v = nullptr;
+                if (values.is_array() && i < values.size()) v = &values[i];
+                if (values.is_object() && values.contains(layout.Fields[i].Name)) v = &values[layout.Fields[i].Name];
+                if (!v) continue;
+                switch (layout.Slots[i])
+                {
+                case Slot::Entity: *static_cast<Entity*>(block.Slot(i)) = v->is_number_unsigned() ? Unpack(v->get<uint64_t>()) : Entity::Null(); break;
+                case Slot::Struct: ReadValues(*layout.Nested[i], *static_cast<Block*>(block.Slot(i)), *v); break;
+                case Slot::List:
+                {
+                    if (!v->is_array()) break;
+                    const FieldInfo& field = layout.Fields[i];
+                    field.ListResize(block.Slot(i), 0);
+                    field.ListResize(block.Slot(i), v->size());
+                    auto& list = *static_cast<ManagedList*>(block.Slot(i));
+                    for (size_t k = 0; k < v->size(); ++k)
+                    {
+                        const nlohmann::json& item = (*v)[k];
+                        if (layout.ElementSlots[i] == Slot::Entity) list[k].Ref = item.is_number_unsigned() ? Unpack(item.get<uint64_t>()) : Entity::Null();
+                        else if (layout.ElementSlots[i] == Slot::Struct) ReadValues(*layout.Nested[i], list[k].Nested, item);
+                        else FieldFromJson(field.Elements[0], &list[k], item, nullptr);
+                    }
+                    break;
+                }
+                default:
+                    if (!v->is_null()) FieldFromJson(layout.Fields[i], block.Data(), *v, nullptr);
+                    break;
+                }
+            }
+        }
+
         std::deque<ManagedClass> s_Classes; // stable addresses (captured by ScriptInfo lambdas)
 
         // Script instance whose behaviour lives in C#. Inspector-visible field values are stored
@@ -261,32 +533,14 @@ namespace Dimension
         class ManagedScript final : public ScriptableEntity
         {
         public:
-            explicit ManagedScript(const ManagedClass* cls) : m_Class(cls)
-            {
-                size_t size = std::max<size_t>(1, cls->Slots.size()) * kSlotSize;
-                m_Storage = static_cast<uint8_t*>(::operator new(size, std::align_val_t(16)));
-                std::memset(m_Storage, 0, size);
-                for (size_t i = 0; i < cls->Slots.size(); ++i)
-                {
-                    if (cls->Slots[i] == Slot::String) new (Slot_(i)) std::string();
-                    if (cls->Slots[i] == Slot::Entity) new (Slot_(i)) Entity();
-                    if (cls->Slots[i] == Slot::List) new (Slot_(i)) ManagedList();
-                    FieldFromJson(cls->Fields[i], m_Storage, cls->Defaults[i], nullptr);
-                }
-            }
+            explicit ManagedScript(const ManagedClass* cls) : m_Class(cls), m_Values(&cls->Values) {}
 
             ~ManagedScript() override
             {
                 if (m_Handle && s_Available) s_Managed.DestroyInstance(m_Handle);
-                for (size_t i = 0; i < m_Class->Slots.size(); ++i)
-                {
-                    if (m_Class->Slots[i] == Slot::String) static_cast<std::string*>(Slot_(i))->~basic_string();
-                    if (m_Class->Slots[i] == Slot::List) static_cast<ManagedList*>(Slot_(i))->~ManagedList();
-                }
-                ::operator delete(m_Storage, std::align_val_t(16));
             }
 
-            void* Storage() { return m_Storage; }
+            void* Storage() { return m_Values.Data(); }
 
             // Draws custom Inspector `id` for this script (its live object while playing, else one made from the slots)
             // and takes the values it leaves; true when they changed.
@@ -315,63 +569,14 @@ namespace Dimension
                 if (const char* text = s_Managed.GetFields(m_Handle)) ReadSlots(text);
             }
 
-            // The slots as GetFields writes the managed values: a JSON array in field order, entities as packed ids.
-            nlohmann::json SlotsJson() const
-            {
-                nlohmann::json values = nlohmann::json::array();
-                for (size_t i = 0; i < m_Class->Slots.size(); ++i)
-                {
-                    if (m_Class->Slots[i] == Slot::Entity) values.push_back(Pack(*static_cast<Entity*>(Slot_(i))));
-                    else if (m_Class->Slots[i] == Slot::List) values.push_back(ListJson(i));
-                    else values.push_back(FieldToJson(m_Class->Fields[i], m_Storage, nullptr));
-                }
-                return values;
-            }
-
-            // A list field's values (entities packed, null for none).
-            nlohmann::json ListJson(size_t i) const
-            {
-                nlohmann::json values = nlohmann::json::array();
-                const FieldInfo& element = m_Class->Fields[i].Elements[0];
-                for (const ListElement& item : *static_cast<const ManagedList*>(Slot_(i)))
-                {
-                    if (m_Class->ElementSlots[i] == Slot::Entity) values.push_back(item.Ref.IsNull() ? nlohmann::json() : nlohmann::json(Pack(item.Ref)));
-                    else values.push_back(FieldToJson(element, const_cast<ListElement*>(&item), nullptr));
-                }
-                return values;
-            }
-
-            void ReadList(size_t i, const nlohmann::json& values)
-            {
-                if (!values.is_array()) return;
-                auto& list = *static_cast<ManagedList*>(Slot_(i));
-                list.assign(values.size(), ListElement());
-                const FieldInfo& element = m_Class->Fields[i].Elements[0];
-                for (size_t k = 0; k < values.size(); ++k)
-                {
-                    if (m_Class->ElementSlots[i] == Slot::Entity)
-                        list[k].Ref = values[k].is_number_unsigned() ? Unpack(values[k].get<uint64_t>()) : Entity::Null();
-                    else
-                        FieldFromJson(element, &list[k], values[k], nullptr);
-                }
-            }
+            // The slots as GetFields writes the managed values (see ValuesJson).
+            nlohmann::json SlotsJson() const { return ValuesJson(m_Class->Values, m_Values, true); }
 
             void ReadSlots(const char* text)
             {
                 try
                 {
-                    auto values = nlohmann::json::parse(text);
-                    for (size_t i = 0; i < m_Class->Slots.size() && i < values.size(); ++i)
-                    {
-                        if (m_Class->Slots[i] == Slot::Entity)
-                            *static_cast<Entity*>(Slot_(i)) = values[i].is_number_unsigned() ? Unpack(values[i].get<uint64_t>()) : Entity::Null();
-                        else if (m_Class->Slots[i] == Slot::List)
-                            ReadList(i, values[i]);
-                        else if (values[i].is_null())
-                            continue;
-                        else
-                            FieldFromJson(m_Class->Fields[i], m_Storage, values[i], nullptr);
-                    }
+                    ReadValues(m_Class->Values, m_Values, nlohmann::json::parse(text));
                 }
                 catch (const std::exception& e)
                 {
@@ -385,19 +590,28 @@ namespace Dimension
             {
                 m_Handle = s_Managed.CreateInstance(m_Class->Name.c_str(), &GetScene(), Pack(Self()));
                 if (!m_Handle) return;
-                for (size_t i = 0; i < m_Class->Slots.size(); ++i)
+                const Layout& layout = m_Class->Values;
+                nlohmann::json values;
+                for (size_t i = 0; i < layout.Slots.size(); ++i)
                 {
-                    switch (m_Class->Slots[i])
+                    switch (layout.Slots[i])
                     {
-                    case Slot::String: s_Managed.SetField(m_Handle, (int)i, static_cast<std::string*>(Slot_(i))->c_str()); break;
-                    case Slot::List: s_Managed.SetField(m_Handle, (int)i, ListJson(i).dump().c_str()); break; // JSON text
+                    case Slot::String: s_Managed.SetField(m_Handle, (int)i, static_cast<std::string*>(m_Values.Slot(i))->c_str()); break;
+                    case Slot::List:
+                    case Slot::Struct:
+                    {
+                        // As JSON text.
+                        if (values.is_null()) values = SlotsJson();
+                        s_Managed.SetField(m_Handle, (int)i, values[i].dump().c_str());
+                        break;
+                    }
                     case Slot::Entity:
                     {
-                        uint64_t packed = Pack(*static_cast<Entity*>(Slot_(i)));
+                        uint64_t packed = Pack(*static_cast<Entity*>(m_Values.Slot(i)));
                         s_Managed.SetField(m_Handle, (int)i, &packed);
                         break;
                     }
-                    default: s_Managed.SetField(m_Handle, (int)i, Slot_(i)); break;
+                    default: s_Managed.SetField(m_Handle, (int)i, m_Values.Slot(i)); break;
                     }
                 }
                 s_Managed.Invoke(m_Handle, method, 0.0f);
@@ -417,9 +631,8 @@ namespace Dimension
             void OnTriggerExit(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 3, Pack(o)); }
 
         private:
-            void* Slot_(size_t i) const { return m_Storage + i * kSlotSize; }
             const ManagedClass* m_Class;
-            uint8_t* m_Storage = nullptr;
+            Block m_Values;
             intptr_t m_Handle = 0;
         };
 
@@ -430,66 +643,14 @@ namespace Dimension
                 auto j = nlohmann::json::parse(jsonText);
                 ManagedClass& cls = s_Classes.emplace_back();
                 cls.Name = j.at("name").get<std::string>();
-                for (auto& f : j.at("fields"))
-                {
-                    FieldInfo info;
-                    info.Name = f.at("name").get<std::string>();
-                    Slot slot, elementSlot = Slot::Float;
-                    if (f.at("type").get<std::string>() == "List")
-                    {
-                        // A list or array: a list of plain values (one unnamed element field) over a ManagedList.
-                        slot = Slot::List;
-                        FieldInfo element;
-                        elementSlot = ParseFieldType(f.at("element"), element);
-                        element.Access = [elementSlot](void* item) -> void* {
-                            auto* e = static_cast<ListElement*>(item);
-                            return elementSlot == Slot::String ? (void*)&e->Text : elementSlot == Slot::Entity ? (void*)&e->Ref : (void*)e->Bytes;
-                        };
-                        info.Type = FieldType::StructList;
-                        info.Elements.push_back(std::move(element));
-                        info.ListSize = [](const void* list) { return static_cast<const ManagedList*>(list)->size(); };
-                        info.ListAt = [](void* list, size_t i) -> void* { return &(*static_cast<ManagedList*>(list))[i]; };
-                        info.ListResize = [](void* list, size_t n) { static_cast<ManagedList*>(list)->resize(n); };
-                        info.ListErase = [](void* list, size_t i) {
-                            auto& v = *static_cast<ManagedList*>(list);
-                            if (i < v.size()) v.erase(v.begin() + i);
-                        };
-                        info.ListMove = [](void* list, size_t from, size_t to) {
-                            auto& v = *static_cast<ManagedList*>(list);
-                            if (from >= v.size() || to >= v.size() || from == to) return;
-                            ListElement e = std::move(v[from]);
-                            v.erase(v.begin() + from);
-                            v.insert(v.begin() + to, std::move(e));
-                        };
-                    }
-                    else
-                        slot = ParseFieldType(f, info);
-                    // Inspector attributes: [Range], [Tooltip], [Header], [HideInInspector].
-                    if (f.contains("min") && f.contains("max"))
-                    {
-                        // On a list, the range applies to its elements.
-                        FieldInfo& ranged = slot == Slot::List ? info.Elements[0] : info;
-                        ranged.Min = f["min"].get<float>();
-                        ranged.Max = f["max"].get<float>();
-                        if ((slot == Slot::List ? elementSlot : slot) == Slot::Float && ranged.Max > ranged.Min) ranged.Speed = (ranged.Max - ranged.Min) / 200.0f;
-                    }
-                    info.Tooltip = f.value("tooltip", std::string());
-                    info.Header = f.value("header", std::string());
-                    info.Hidden = f.value("hidden", false);
-                    size_t offset = cls.Slots.size() * kSlotSize;
-                    info.Access = [offset](void* storage) -> void* { return static_cast<uint8_t*>(storage) + offset; };
-                    cls.Slots.push_back(slot);
-                    cls.ElementSlots.push_back(elementSlot);
-                    cls.Fields.push_back(std::move(info));
-                    cls.Defaults.push_back(f.value("default", nlohmann::json()));
-                    cls.Drawn.push_back(f.value("drawer", false));
-                }
+                BuildLayout(j.at("fields"), cls.Values, cls);
+                for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
 
                 ScriptInfo& info = ScriptRegistry::RegisterDynamic(cls.Name, "csharp");
                 const ManagedClass* ptr = &cls;
                 info.Create = [ptr] { return std::make_shared<ManagedScript>(ptr); };
                 info.ToObject = [](ScriptableEntity* base) -> void* { return static_cast<ManagedScript*>(base)->Storage(); };
-                info.Fields = cls.Fields;
+                info.Fields = cls.Values.Fields;
                 info.Menu = j.value("menu", std::string());
                 for (auto& r : j.value("requires", nlohmann::json::array()))
                     if (r.is_string()) info.Requires.push_back(r.get<std::string>());

@@ -668,6 +668,29 @@ namespace Editor::UI
             // The stored value is the name's index, or its entry in EnumValues when given.
             int32_t* value = (int32_t*)p;
             auto valueOf = [&](int i) { return i < (int)f.EnumValues.size() ? f.EnumValues[i] : i; };
+            if (f.EnumFlags)
+            {
+                // Flags: the names set, and a toggle per name (names worth 0 clear them all).
+                std::string shown;
+                for (int i = 0; i < (int)f.EnumNames.size(); ++i)
+                    if (valueOf(i) != 0 && (*value & valueOf(i)) == valueOf(i)) shown += (shown.empty() ? "" : ", ") + f.EnumNames[i];
+                if (shown.empty()) shown = *value == 0 ? "Nothing" : std::to_string(*value);
+                if (ImGui::BeginCombo("##v", mixed ? kMixedText : shown.c_str()))
+                {
+                    for (int i = 0; i < (int)f.EnumNames.size(); ++i)
+                    {
+                        int32_t bits = valueOf(i);
+                        bool on = bits == 0 ? *value == 0 : (*value & bits) == bits;
+                        if (ImGui::Selectable(f.EnumNames[i].c_str(), on, ImGuiSelectableFlags_DontClosePopups))
+                        {
+                            r.Activated = r.Changed = true;
+                            *value = bits == 0 ? 0 : on ? (*value & ~bits) : (*value | bits);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                break;
+            }
             int current = -1;
             for (int i = 0; i < (int)f.EnumNames.size(); ++i)
                 if (valueOf(i) == *value) current = i;
@@ -751,6 +774,21 @@ namespace Editor::UI
             {
                 list.erase(list.begin() + remove);
                 r.Activated = r.Changed = true;
+            }
+            break;
+        }
+        case FieldType::Struct:
+        {
+            // A row that opens to the struct's fields.
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            bool open = ImGui::TreeNodeEx("##struct", ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_DefaultOpen, "%s", label);
+            if (!f.Tooltip.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", f.Tooltip.c_str());
+            if (open)
+            {
+                for (const FieldInfo& sub : f.Elements)
+                    if (!sub.Hidden) r |= Field(sub, p, scene);
+                ImGui::TreePop();
             }
             break;
         }
