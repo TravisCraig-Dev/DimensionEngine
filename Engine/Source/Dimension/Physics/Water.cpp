@@ -1,8 +1,10 @@
 #include "Dimension/Physics/Water.h"
 #include "Dimension/Scene/Scene.h"
+#include "Dimension/Physics/Physics3D.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <tuple>
@@ -36,6 +38,42 @@ namespace Dimension::Water
                 // Q * k * a summed over the waves stays below 1, so crests sharpen without looping over.
                 w.Q = w.K * w.Amplitude > 1e-6f ? steep / (w.K * w.Amplitude * kWaves) : 0.0f;
             }
+        }
+
+        // How much the waves bunch the surface together at a rest point (the Jacobian of the horizontal motion: 1 =
+        // undisturbed, smaller where crests squeeze it), as foam 0-1.
+        float CrestFoamWith(const Wave waves[kWaves], glm::vec2 rest, float time)
+        {
+            float jxx = 1.0f, jzz = 1.0f, jxz = 0.0f;
+            for (int i = 0; i < kWaves; ++i)
+            {
+                const Wave& w = waves[i];
+                if (w.Amplitude <= 0.0f) continue;
+                float s = std::sin(w.K * glm::dot(w.Direction, rest) - w.Omega * time), qak = w.Q * w.Amplitude * w.K;
+                jxx -= qak * w.Direction.x * w.Direction.x * s;
+                jzz -= qak * w.Direction.y * w.Direction.y * s;
+                jxz -= qak * w.Direction.x * w.Direction.y * s;
+            }
+            float det = jxx * jzz - jxz * jxz;
+            return std::clamp((0.88f - det) / 0.35f, 0.0f, 1.0f);
+        }
+
+        float ShoreFoamFromDepth(const WaterVolumeComponent& water, float depth)
+        {
+            return water.ShoreFoam > 0.0f ? std::clamp(1.0f - depth / water.ShoreFoam, 0.0f, 1.0f) : 0.0f;
+        }
+
+        // The ground's depth under a world point on the surface: a ray down to the first thing not floating.
+        float DepthBelow(Scene& scene, const glm::vec3& p, float reach)
+        {
+            auto& reg = scene.GetRegistry();
+            for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, p + glm::vec3(0.0f, 0.05f, 0.0f), { 0.0f, -1.0f, 0.0f }, reach + 0.05f))
+            {
+                const auto* rb = reg.TryGet<RigidbodyComponent>(h.Hit);
+                if (rb && rb->Type == BodyType::Dynamic) continue;
+                return std::max(h.Distance - 0.05f, 0.0f);
+            }
+            return reach;
         }
 
         glm::vec3 DisplaceWith(const Wave waves[kWaves], glm::vec2 rest, float time, glm::vec3* normal, glm::vec3* velocity)
@@ -190,6 +228,41 @@ namespace Dimension::Water
         return mesh;
     }
 
+    float CrestFoam(const WaterVolumeComponent& water, glm::vec2 rest, float time)
+    {
+        Wave waves[kWaves];
+        MakeWaves(water, waves);
+        return HasWaves(water) ? CrestFoamWith(waves, rest, time) : 0.0f;
+    }
+
+    bool ShoreFoamAt(Scene& scene, Entity e, const glm::vec3& p, int& budget, float& foam)
+    {
+        foam = 0.0f;
+        auto* water = scene.GetRegistry().TryGet<WaterVolumeComponent>(e);
+        if (!water || water->ShoreFoam <= 0.0f || !scene.GetPhysics3D()) return true;
+        // Cells in tiles of 32 x 32, the last tile looked up kept (neighbouring points share it).
+        int cx = (int)std::floor(p.x), cz = (int)std::floor(p.z);
+        int tx = cx >> 5, tz = cz >> 5;
+        int64_t key = ((int64_t)tx << 32) ^ (int64_t)(uint32_t)tz;
+        if (water->ShoreLastOwner != water || water->ShoreLastKey != key || !water->ShoreLastTile)
+        {
+            auto it = water->ShoreTiles.find(key);
+            if (it == water->ShoreTiles.end()) it = water->ShoreTiles.emplace(key, std::vector<float>(1024, std::numeric_limits<float>::quiet_NaN())).first;
+            water->ShoreLastOwner = water;
+            water->ShoreLastKey = key;
+            water->ShoreLastTile = &it->second; // map nodes do not move
+        }
+        float& depth = (*water->ShoreLastTile)[(size_t)(cz & 31) * 32 + (cx & 31)];
+        if (std::isnan(depth))
+        {
+            if (budget <= 0) return false;
+            --budget;
+            depth = DepthBelow(scene, glm::vec3(cx + 0.5f, p.y, cz + 0.5f), water->ShoreFoam * 2.0f);
+        }
+        foam = ShoreFoamFromDepth(*water, depth);
+        return true;
+    }
+
     void OceanVertices(const WaterVolumeComponent& water, glm::vec2 center, float radius, float time, std::vector<Vertex>& out)
     {
         Wave waves[kWaves];
@@ -210,13 +283,16 @@ namespace Dimension::Water
                 Vertex& v = out[OceanIndex(k, s)];
                 v.Position = glm::vec3(rest.x, top, rest.y);
                 v.Normal = { 0.0f, 1.0f, 0.0f };
+                float foam = 0.0f;
                 if (strength > 0.0f)
                 {
                     glm::vec3 n;
                     glm::vec3 p = DisplaceWith(waves, rest, time, &n, nullptr);
                     v.Position = glm::vec3(rest.x, top, rest.y) + (p - glm::vec3(rest.x, 0.0f, rest.y)) * strength;
                     v.Normal = glm::normalize(glm::mix(glm::vec3(0.0f, 1.0f, 0.0f), n, strength));
+                    foam = CrestFoamWith(waves, rest, time) * std::max(water.Foam, 0.0f) * strength;
                 }
+                v.Normal *= 1.0f + std::min(foam, 1.0f); // the length carries the foam to the shader
                 v.UV = rest * 0.1f; // a texture tiles every 10 m
                 v.Tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
             }
@@ -239,7 +315,18 @@ namespace Dimension::Water
     {
         for (auto [e, water] : scene.GetRegistry().ViewOf<WaterVolumeComponent>())
         {
-            if (!HasWaves(water) || water.Ocean)
+            if (!scene.GetPhysics3D()) water.ShoreDepths.clear(); // editing: the ground may move; measured again in play
+            // Shore depths under the grid's points, once while playing (the ground does not move).
+            bool shore = water.ShoreFoam > 0.0f && scene.GetPhysics3D() && !water.Ocean;
+            if (shore && water.ShoreDepths.empty())
+            {
+                const std::vector<Vertex>& rest = SurfaceVertices(water);
+                const glm::mat4& world = scene.GetRegistry().Get<TransformComponent>(e).World;
+                water.ShoreDepths.resize(rest.size());
+                for (size_t i = 0; i < rest.size(); ++i)
+                    water.ShoreDepths[i] = DepthBelow(scene, glm::vec3(world * glm::vec4(rest[i].Position, 1.0f)), water.ShoreFoam * 2.0f);
+            }
+            if ((!HasWaves(water) && !shore) || water.Ocean)
             {
                 water.SimulatedPositions.clear();
                 water.SimulatedNormals.clear();
@@ -251,11 +338,16 @@ namespace Dimension::Water
             water.SimulatedPositions.resize(rest.size());
             water.SimulatedNormals.resize(rest.size());
             float top = TopOf(water);
+            bool crests = HasWaves(water) && water.Foam > 0.0f;
             for (size_t i = 0; i < rest.size(); ++i)
             {
-                glm::vec3 p = DisplaceWith(waves, glm::vec2(rest[i].Position.x, rest[i].Position.z), time, &water.SimulatedNormals[i], nullptr);
+                glm::vec2 r(rest[i].Position.x, rest[i].Position.z);
+                glm::vec3 p = DisplaceWith(waves, r, time, &water.SimulatedNormals[i], nullptr);
                 p.y += top;
                 water.SimulatedPositions[i] = p;
+                float foam = crests ? CrestFoamWith(waves, r, time) * water.Foam : 0.0f;
+                if (shore && i < water.ShoreDepths.size()) foam = std::max(foam, ShoreFoamFromDepth(water, water.ShoreDepths[i]));
+                water.SimulatedNormals[i] *= 1.0f + std::min(foam, 1.0f); // the length carries the foam to the shader
             }
         }
     }

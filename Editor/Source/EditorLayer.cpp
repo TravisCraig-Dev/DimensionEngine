@@ -579,7 +579,9 @@ namespace Editor
             options.ShowNavMeshes = m_ShowNavigation;
             options.Highlighting = m_Ctx.HierarchySearch.find_first_not_of(' ') != std::string::npos;
             if (options.Highlighting) options.Highlight = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
+            int timer = RenderDevice::Get().BeginGpuTimer(cmd, "Scene View");
             m_SceneRenderer.Render(cmd, scene, cam, *m_SceneTarget, options);
+            RenderDevice::Get().EndGpuTimer(cmd, timer);
         }
         if (m_GameViewVisible)
         {
@@ -591,7 +593,9 @@ namespace Editor
             gameOptions.RenderUI = true;
             {
                 DIM_PROFILE_SCOPE("Game View");
+                int timer = RenderDevice::Get().BeginGpuTimer(cmd, "Game View");
                 m_GameRenderer.Render(cmd, scene, cam, *m_GameTarget, gameOptions);
+                RenderDevice::Get().EndGpuTimer(cmd, timer);
             }
             const RenderStats& st = m_GameRenderer.GetStats();
             Profiler::SetCounter("Draw Calls", (float)st.DrawCalls);

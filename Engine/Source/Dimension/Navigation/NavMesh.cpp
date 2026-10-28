@@ -377,10 +377,12 @@ namespace Dimension
             }
 
             NavPathStatus PathFrom(const NavMeshData& m, int start, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners,
-                                   const std::vector<Link>& links, std::vector<float>* linkArcs, const Filter& filter)
+                                   const std::vector<Link>& links, std::vector<float>* linkArcs, const Filter& filter,
+                                   std::vector<Entity>* linkOwners = nullptr)
             {
                 corners.clear();
                 if (linkArcs) linkArcs->clear();
+                if (linkOwners) linkOwners->clear();
                 if (start < 0 || start >= m.NodeCount() || m.IsBlocked(start)) return NavPathStatus::Invalid;
                 auto cost = [&](int node) { return m.Costs.empty() ? 1.0f : m.Costs[node]; };
                 int n = m.NodeCount();
@@ -516,6 +518,7 @@ namespace Dimension
                 glm::vec3 end = status == NavPathStatus::Complete ? OnMesh(m, goal, { to.x, to.z }) : m.NodePosition(goal);
                 corners.push_back(begin);
                 std::vector<float> arcs{ -1.0f };
+                std::vector<Entity> owners{ Entity::Null() }; // per corner: the Off Mesh Link crossed from it (Null = none)
                 size_t runStart = 0;
                 glm::vec3 runBegin = begin;
                 while (true)
@@ -540,6 +543,7 @@ namespace Dimension
                         }
                         corners.push_back(point(far));
                         arcs.push_back(-1.0f);
+                        owners.push_back(Entity::Null());
                         i = far;
                         cur = { corners.back().x, corners.back().z };
                     }
@@ -547,21 +551,26 @@ namespace Dimension
                     {
                         corners.push_back(runFinish);
                         arcs.push_back(-1.0f);
+                        owners.push_back(Entity::Null());
                     }
                     if (lastRun) break;
                     // Across the link: the corner before it starts the crossing.
                     arcs.back() = link->Arc;
+                    owners.back() = link->Owner;
                     runStart = runEnd + 1;
                     runBegin = OnMesh(m, nodes[runStart], { link->ToPoint.x, link->ToPoint.z });
                     corners.push_back(runBegin);
                     arcs.push_back(-1.0f);
+                        owners.push_back(Entity::Null());
                 }
                 if (corners.size() == 1)
                 {
                     corners.push_back(end);
                     arcs.push_back(-1.0f);
+                        owners.push_back(Entity::Null());
                 }
                 if (linkArcs) *linkArcs = std::move(arcs);
+                if (linkOwners) *linkOwners = std::move(owners);
                 return status;
             }
 
@@ -617,7 +626,8 @@ namespace Dimension
                     return;
                 }
                 agent.PathStatus = PathFrom(*agent.Mesh, agent.Node, GroundOf(scene, e, agent), agent.Destination, agent.Path,
-                                            LinksOn(scene, *agent.Mesh), &agent.PathLinks, FilterOf(agent));
+                                            LinksOn(scene, *agent.Mesh), &agent.PathLinks, FilterOf(agent), &agent.PathLinkOwners);
+                agent.Waiting = false;
             }
 
             float Horizontal(const glm::vec3& a, const glm::vec3& b) { return glm::length(glm::vec2(a.x - b.x, a.z - b.z)); }
@@ -764,15 +774,16 @@ namespace Dimension
             std::vector<Link> out;
             for (auto [e, link, t] : scene.GetRegistry().ViewOf<OffMeshLinkComponent, TransformComponent>())
             {
-                if (!link.Activated || !t.ActiveInHierarchy) continue;
+                // Closed (not Activated): gone, unless agents wait at it (a door) - then paths still go through.
+                if ((!link.Activated && !link.AgentsWait) || !t.ActiveInHierarchy) continue;
                 glm::vec3 a = glm::vec3(t.World * glm::vec4(link.Start, 1.0f)), b = glm::vec3(t.World * glm::vec4(link.End, 1.0f));
                 // Each end joins the mesh within a meter (or the agent's radius past the edge it was baked back from).
                 float reach = std::max(1.0f, mesh.AgentRadius + mesh.CellSize * 2.0f);
                 int na = Nearest(mesh, a, reach), nb = Nearest(mesh, b, reach);
                 if (na < 0 || nb < 0 || na == nb) continue;
                 float cost = glm::distance(a, b) * std::max(link.CostModifier, 0.0f);
-                out.push_back({ na, nb, a, b, cost, std::max(link.ArcHeight, 0.0f) });
-                if (link.Bidirectional) out.push_back({ nb, na, b, a, cost, std::max(link.ArcHeight, 0.0f) });
+                out.push_back({ na, nb, a, b, cost, std::max(link.ArcHeight, 0.0f), e, !link.Activated });
+                if (link.Bidirectional) out.push_back({ nb, na, b, a, cost, std::max(link.ArcHeight, 0.0f), e, !link.Activated });
             }
             // The bake's own (a little dearer than walking the same length, so they are used where they save a way round).
             for (const NavMeshData::AutoLink& l : mesh.AutoLinks)
@@ -1223,6 +1234,19 @@ namespace Dimension
                     brakeDistance = remaining - agent.StoppingDistance;
                     if (!agent.IsStopped && agent.Corner - 1 < agent.PathLinks.size() && agent.PathLinks[agent.Corner - 1] >= 0.0f)
                     {
+                        // A closed door: wait at it while agents wait there, else find another way.
+                        Entity owner = agent.Corner - 1 < agent.PathLinkOwners.size() ? agent.PathLinkOwners[agent.Corner - 1] : Entity::Null();
+                        const auto* door = !owner.IsNull() && scene.IsValid(owner) ? reg.TryGet<OffMeshLinkComponent>(owner) : nullptr;
+                        if (!owner.IsNull() && (!door || !door->Activated))
+                        {
+                            if (door && door->AgentsWait)
+                                agent.Waiting = true;
+                            else
+                                agent.PathDirty = true;
+                            agent.Velocity = glm::vec3(0.0f);
+                            continue;
+                        }
+                        agent.Waiting = false;
                         // At an off-mesh link's start: across it, at walking speed.
                         agent.Traversing = true;
                         agent.TraverseFrom = mv.Ground;
@@ -1277,7 +1301,7 @@ namespace Dimension
                                 float d = glm::distance(op, p);
                                 if (d > reach + o.Agent->Radius + glm::length(ov) * 2.0f) continue;
                                 const NavMeshAgentComponent& oa = *o.Agent;
-                                bool idle = !oa.HasDestination || oa.IsStopped || oa.PathStatus == NavPathStatus::Invalid ||
+                                bool idle = !oa.HasDestination || oa.IsStopped || oa.Waiting || oa.PathStatus == NavPathStatus::Invalid ||
                                             oa.RemainingDistance <= oa.StoppingDistance + 0.05f;
                                 near.push_back({ d, { op, ov, agent.Radius + oa.Radius, oa.AvoidancePriority == agent.AvoidancePriority, idle } });
                             }

@@ -76,6 +76,7 @@ namespace Dimension
             vkDestroyCommandPool(m_Device, f.Pool, nullptr);
             vkDestroyFence(m_Device, f.Fence, nullptr);
             vkDestroySemaphore(m_Device, f.ImageAvailable, nullptr);
+            if (f.Timers) vkDestroyQueryPool(m_Device, f.Timers, nullptr);
         }
         FlushReleases(UINT64_MAX);
         vkDestroyCommandPool(m_Device, m_ImmediatePool, nullptr);
@@ -349,6 +350,13 @@ namespace Dimension
             VK_CHECK(vkCreateFence(m_Device, &fence, nullptr, &f.Fence));
             VkSemaphoreCreateInfo sem{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
             VK_CHECK(vkCreateSemaphore(m_Device, &sem, nullptr, &f.ImageAvailable));
+            if (m_Properties.limits.timestampComputeAndGraphics)
+            {
+                VkQueryPoolCreateInfo timers{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+                timers.queryType = VK_QUERY_TYPE_TIMESTAMP;
+                timers.queryCount = kMaxTimerQueries;
+                VK_CHECK(vkCreateQueryPool(m_Device, &timers, nullptr, &f.Timers));
+            }
 
             f.Transient = Buffer(kTransientSize,
                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
@@ -489,12 +497,34 @@ namespace Dimension
         else if (acquire != VK_SUCCESS) VK_CHECK(acquire);
 
         m_FrameNumber = next;
+        // That frame's GPU timers are done: their spans become the newest timings.
+        if (f.Timers && f.TimerQueries > 0)
+        {
+            std::vector<uint64_t> stamps(f.TimerQueries);
+            if (vkGetQueryPoolResults(m_Device, f.Timers, 0, f.TimerQueries, stamps.size() * sizeof(uint64_t), stamps.data(), sizeof(uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            {
+                m_GpuTimings.clear();
+                float period = m_Properties.limits.timestampPeriod; // ns per tick
+                for (const auto& t : f.TimerRecords)
+                    if (t.End != UINT32_MAX && stamps[t.End] >= stamps[t.Begin])
+                        m_GpuTimings.push_back({ t.Name, t.Depth, (float)((double)(stamps[t.End] - stamps[t.Begin]) * period / 1e6) });
+            }
+        }
+        f.TimerRecords.clear();
+        f.TimerQueries = 0;
+        f.OpenTimers = 0;
         VK_CHECK(vkResetFences(m_Device, 1, &f.Fence));
         VK_CHECK(vkResetCommandPool(m_Device, f.Pool, 0));
         VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK(vkBeginCommandBuffer(f.Cmd, &begin));
         f.TransientHead = 0;
+        if (f.Timers)
+        {
+            vkCmdResetQueryPool(f.Cmd, f.Timers, 0, kMaxTimerQueries);
+            f.FrameTimer = BeginGpuTimer(f.Cmd, "Frame");
+        }
 
         m_Frame.Cmd = f.Cmd;
         m_Frame.FrameIndex = uint32_t(m_FrameNumber % kFramesInFlight);
@@ -505,9 +535,34 @@ namespace Dimension
         return true;
     }
 
+    int RenderDevice::BeginGpuTimer(VkCommandBuffer cmd, const char* name)
+    {
+        PerFrame& f = m_Frames[m_FrameNumber % kFramesInFlight];
+        if (!f.Timers || cmd != f.Cmd || f.TimerQueries + 2 > kMaxTimerQueries) return -1;
+        uint32_t q = f.TimerQueries;
+        f.TimerQueries += 2;
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f.Timers, q);
+        f.TimerRecords.push_back({ name, f.OpenTimers, q, UINT32_MAX });
+        ++f.OpenTimers;
+        return (int)f.TimerRecords.size() - 1;
+    }
+
+    void RenderDevice::EndGpuTimer(VkCommandBuffer cmd, int timer)
+    {
+        PerFrame& f = m_Frames[m_FrameNumber % kFramesInFlight];
+        if (timer < 0 || timer >= (int)f.TimerRecords.size() || cmd != f.Cmd) return;
+        auto& t = f.TimerRecords[timer];
+        if (t.End != UINT32_MAX) return;
+        t.End = t.Begin + 1;
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f.Timers, t.End);
+        f.OpenTimers = std::max(f.OpenTimers - 1, 0);
+    }
+
     void RenderDevice::EndFrame()
     {
         PerFrame& f = m_Frames[m_FrameNumber % kFramesInFlight];
+        if (f.FrameTimer >= 0) EndGpuTimer(f.Cmd, f.FrameTimer);
+        f.FrameTimer = -1;
         VK_CHECK(vkEndCommandBuffer(f.Cmd));
 
         VkSemaphoreSubmitInfo wait{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };

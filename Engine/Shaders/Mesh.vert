@@ -14,6 +14,7 @@ layout(location = 2) out vec2 vUV;
 layout(location = 3) flat out uint vEntity;
 layout(location = 4) out vec4 vTangent;
 layout(location = 5) out float vShell; // fur shells: height 0-1 (0 for everything else)
+layout(location = 6) out float vFoam;  // water: foam 0-1, carried as the normal's length above 1
 
 invariant gl_Position; // the depth prepass and the main pass must produce identical depths
 
@@ -58,6 +59,7 @@ void main()
 {
     vec3 position = aPosition;
     vec3 normal = aNormal;
+    vFoam = clamp(length(aNormal) - 1.0, 0.0, 1.0);
     vec3 tangent = aTangent.xyz;
     if ((pc.Flags & 1u) != 0u)
     {

@@ -250,6 +250,11 @@ namespace Dimension
         OccluderDepth m_Occluder;
         std::vector<uint8_t> m_ItemOccluded;
         std::vector<Vertex> m_OceanVertices; // this frame's ocean surface (reused)
+        // Shore foam per ocean vertex, kept while the rings stay put (their center, the ocean, all cells measured).
+        std::vector<float> m_OceanShore;
+        std::vector<uint32_t> m_OceanShorePending; // vertices whose cell waits for its ray
+        glm::vec2 m_OceanShoreCenter{ 1e30f };
+        uint32_t m_OceanShoreEntity = UINT32_MAX;
         void ChooseOccluder(const CameraData& camera);
         void ReduceDepth(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera);
         void BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options);

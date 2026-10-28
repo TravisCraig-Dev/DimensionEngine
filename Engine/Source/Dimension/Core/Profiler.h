@@ -22,12 +22,16 @@ namespace Dimension
             float FrameMs = 0.0f; // from this frame's start to the next's
             std::vector<Section> Sections;
             std::vector<std::pair<std::string, float>> Counters;
+            // GPU spans (render passes) of the newest frame the GPU had finished when this one began (a frame or two
+            // before it): "Frame" first, the passes inside it.
+            std::vector<Section> Gpu;
         };
         static constexpr size_t kHistory = 300;
 
         void BeginFrame();
         void EndFrame();
         void SetCounter(const char* name, float value);
+        void SetGpuSections(std::vector<Section> sections);
         // Recording stops while paused (the history stays to look at).
         void SetPaused(bool paused);
         bool IsPaused();

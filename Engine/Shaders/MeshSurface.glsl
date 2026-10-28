@@ -49,6 +49,7 @@ layout(location = 2) in vec2 vUV;
 layout(location = 3) flat in uint vEntity;
 layout(location = 4) in vec4 vTangent;
 layout(location = 5) in float vShell; // fur shells: height 0-1
+layout(location = 6) in float vFoam;  // water (Flags.w = 2): foam 0-1
 
 #ifdef DIM_OIT
 // Weighted blended order-independent transparency (McGuire and Bavoil 2013): the shaded color, weighted by its alpha
@@ -248,6 +249,17 @@ void main()
     float roughness = clamp(m.Params.y * mr.g, 0.02, 1.0);
     float metallic = clamp(m.Params.x * mr.b, 0.0, 1.0);
     vec3 albedo = base.rgb;
+    if (m.Flags.w == 2u && vFoam > 0.002)
+    {
+        // Water foam: white froth broken into drifting patches, opaque and rough where it is thick.
+        vec2 drift = uScene.Wind.xz * uScene.Wind.w * 0.05;
+        float pattern = ValueNoise(vec3((vWorldPos.xz + drift) * 0.9, uScene.Wind.w * 0.15)) * 0.65 +
+                        ValueNoise(vec3((vWorldPos.xz - drift) * 3.1, uScene.Wind.w * 0.4)) * 0.35;
+        float froth = smoothstep(0.25, 0.75, vFoam * (0.55 + pattern));
+        albedo = mix(albedo, vec3(0.92, 0.95, 0.97), froth);
+        base.a = mix(base.a, 1.0, froth);
+        roughness = mix(roughness, 0.8, froth);
+    }
     // Weather: snow settles on upward-facing surfaces (patchy at its edge), and wet surfaces darken and turn glossy,
     // the more so the flatter they are (water pools there).
     if (m.Flags.x != 2u)

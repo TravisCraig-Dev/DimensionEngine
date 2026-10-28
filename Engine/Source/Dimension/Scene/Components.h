@@ -14,6 +14,7 @@
 #include <glm/gtx/quaternion.hpp>
 #include <nlohmann/json.hpp>
 #include <memory>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -754,6 +755,10 @@ namespace Dimension
         // Ocean: the water reaches out to any distance across (Size.y deep under the top face), and its surface draws
         // as rings around the camera out to the camera's far plane, the waves fading into calm water in the distance.
         bool Ocean = false;
+        // Foam: white froth where the waves crest (Foam: how much; steeper waves make more) and, while playing, along
+        // shores and anything standing in the water: where the ground is less than Shore Foam meters below the surface.
+        float Foam = 0.6f;
+        float ShoreFoam = 1.0f;
         // Under water: surfaces below the surface catch rippling caustics (the sunlight focused by the waves, Caustics
         // strength, Caustics Scale meters across), and with the camera below the surface (or looking down into the
         // water) everything is seen through Underwater Color murk, thicker by Underwater Fog per meter.
@@ -761,8 +766,15 @@ namespace Dimension
         float UnderwaterFog = 0.12f;
         float Caustics = 1.0f;
         float CausticsScale = 1.5f;
-        // Runtime: the surface grid's displaced vertices and normals (object space) this frame.
+        // Runtime: the surface grid's displaced vertices and normals (object space) this frame; the normals' length is
+        // 1 + foam. Depths to the ground under the grid's points (and, for an ocean, under 1 m cells as they are seen).
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
+        std::vector<float> ShoreDepths;
+        std::unordered_map<int64_t, std::vector<float>> ShoreTiles; // 32 x 32 cells of 1 m each (NaN = not measured yet)
+        // The last tile looked up (valid only for the component that set it: a copy looks again).
+        const void* ShoreLastOwner = nullptr;
+        int64_t ShoreLastKey = 0;
+        std::vector<float>* ShoreLastTile = nullptr;
     };
 
     // A Wind Zone (like Unity's): Directional blows along the object's forward (-Z) everywhere; Spherical blows out
@@ -855,6 +867,9 @@ namespace Dimension
         bool Activated = true;
         float ArcHeight = 0.5f;
         float CostModifier = 1.0f;
+        // A door: while not Activated, agents still take paths through it and wait at its start until it is
+        // (without Agents Wait a closed link is no way at all).
+        bool AgentsWait = false;
     };
 
     // A NavMesh Agent (like Unity's): walks the baked navigation mesh to its destination along the shortest path,
@@ -883,6 +898,8 @@ namespace Dimension
         bool HasDestination = false, PathDirty = false, IsStopped = false;
         std::vector<glm::vec3> Path; // corners: from where the path was found to the destination
         std::vector<float> PathLinks; // per corner: -1, or the arc height of the off-mesh link from it to the next
+        std::vector<Entity> PathLinkOwners; // per corner: the Off Mesh Link crossed from it (Null = walked, or the bake's)
+        bool Waiting = false;               // at a closed door (Agents Wait), until it opens
         size_t Corner = 0;           // the corner it is heading for
         bool Traversing = false;     // crossing an off-mesh link
         glm::vec3 TraverseFrom{ 0.0f }, TraverseTo{ 0.0f };

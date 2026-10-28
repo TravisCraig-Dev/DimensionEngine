@@ -58,6 +58,12 @@ namespace Dimension::Profiler
         s.Current.Counters.push_back({ name, value });
     }
 
+    void SetGpuSections(std::vector<Section> sections)
+    {
+        State& s = S();
+        if (s.Recording) s.Current.Gpu = std::move(sections);
+    }
+
     void SetPaused(bool paused) { S().Paused = paused; }
     bool IsPaused() { return S().Paused; }
     void Clear() { S().History.clear(); }

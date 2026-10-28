@@ -117,6 +117,10 @@ namespace Editor
             ImGui::SameLine();
             ImGui::TextDisabled("  %s %.0f", name.c_str(), value);
         }
+        // CPU sections on the left, GPU spans (render passes) on the right.
+        float half = ImGui::GetContentRegionAvail().x * 0.5f - 4.0f;
+        ImGui::BeginChild("##cpu", ImVec2(half, 0.0f));
+        ImGui::TextDisabled("CPU");
         if (ImGui::BeginTable("##sections", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
@@ -143,6 +147,34 @@ namespace Editor
             }
             ImGui::EndTable();
         }
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("##gpu", ImVec2(0.0f, 0.0f));
+        float gpuFrame = f.Gpu.empty() ? 0.0f : f.Gpu.front().Ms;
+        ImGui::TextDisabled("GPU %.2f ms (a frame or two earlier: it runs behind)", gpuFrame);
+        if (f.Gpu.empty()) ImGui::TextDisabled("No GPU timings (timestamps not supported, or not yet back).");
+        else if (ImGui::BeginTable("##gpuSections", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+            ImGui::TableSetupColumn("ms");
+            ImGui::TableSetupColumn("% of GPU frame");
+            ImGui::TableHeadersRow();
+            for (const auto& s : f.Gpu)
+            {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                if (s.Depth > 0) ImGui::Indent(s.Depth * 14.0f);
+                ImGui::TextUnformatted(s.Name);
+                if (s.Depth > 0) ImGui::Unindent(s.Depth * 14.0f);
+                ImGui::TableNextColumn();
+                ImGui::Text("%.3f", s.Ms);
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f%%", gpuFrame > 0.0f ? s.Ms / gpuFrame * 100.0f : 0.0f);
+            }
+            ImGui::EndTable();
+        }
+        ImGui::EndChild();
         ImGui::End();
     }
 }

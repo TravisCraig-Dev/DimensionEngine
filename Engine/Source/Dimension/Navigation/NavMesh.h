@@ -96,6 +96,8 @@ namespace Dimension
             int From, To;
             glm::vec3 FromPoint, ToPoint;
             float Cost, Arc;
+            Entity Owner = Entity::Null(); // the Off Mesh Link (Null: the bake's own)
+            bool Closed = false;           // not Activated (agents wait at it)
         };
         std::vector<Link> LinksOn(Scene& scene, const NavMeshData& mesh);
         // The shortest way from one point to another (lengths times the areas' costs): its corners, from `from` (on

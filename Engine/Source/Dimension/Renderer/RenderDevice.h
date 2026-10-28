@@ -58,6 +58,18 @@ namespace Dimension
         bool BeginFrame();
         void EndFrame();
         const FrameContext& Frame() const { return m_Frame; }
+        // GPU timing (the Profiler's GPU sections): spans of this frame's commands timed by timestamp queries, read
+        // back once the frame is done. Begin returns a timer to end (-1: no timers left or none supported).
+        int BeginGpuTimer(VkCommandBuffer cmd, const char* name);
+        void EndGpuTimer(VkCommandBuffer cmd, int timer);
+        struct GpuTiming
+        {
+            const char* Name;
+            int Depth;
+            float Ms;
+        };
+        // The newest finished frame's spans, in the order they began ("Frame" first: all of it).
+        const std::vector<GpuTiming>& GetGpuTimings() const { return m_GpuTimings; }
         uint64_t GetCompletedFrameNumber() const { return m_CompletedFrame; }
 
         void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& record);
@@ -135,7 +147,20 @@ namespace Dimension
             VkDeviceSize TransientHead = 0;
             VkDescriptorSet UniformSet = VK_NULL_HANDLE;
             uint64_t SubmittedFrame = 0;
+            VkQueryPool Timers = VK_NULL_HANDLE;
+            struct Timer
+            {
+                const char* Name;
+                int Depth;
+                uint32_t Begin, End;
+            };
+            std::vector<Timer> TimerRecords;
+            uint32_t TimerQueries = 0;
+            int OpenTimers = 0;
+            int FrameTimer = -1;
         };
+        static constexpr uint32_t kMaxTimerQueries = 256;
+        std::vector<GpuTiming> m_GpuTimings;
         PerFrame m_Frames[kFramesInFlight];
         FrameContext m_Frame;
         uint32_t m_ImageIndex = 0;

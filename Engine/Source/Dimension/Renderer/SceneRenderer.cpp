@@ -1082,6 +1082,7 @@ namespace Dimension
             if (options.Grid) BuildGrid(camera, options.Grid2D, m_GridLines);
         }
 
+        int shadowTimer = device.BeginGpuTimer(cmd, "Shadows");
         if (pointShadows > 0)
         {
             RenderPointShadows(cmd, scene, u.PointShadowViewProj, shadowFaces, pointShadows, &u, sizeof(u));
@@ -1135,13 +1136,17 @@ namespace Dimension
                                 glm::vec4(p.BoxProjection ? 1.0f : 0.0f, p.BlendDistance, 0.0f, 0.0f) };
                 u.Counts.y = (int)i + 1;
             }
+        device.EndGpuTimer(cmd, shadowTimer);
         if (ssao)
         {
             u.AOParams = glm::vec4(settings.SSAODebug ? 2.0f : 1.0f, (float)target.GetAOBindless(1), 1.0f / extent.width, 1.0f / extent.height);
             device.BindBindless(cmd);
             device.BindUniforms(cmd, &u, sizeof(u));
+            int aoTimer = device.BeginGpuTimer(cmd, "Depth Prepass and SSAO");
             RenderAmbientOcclusion(cmd, scene, target, u.ViewProj, settings);
+            device.EndGpuTimer(cmd, aoTimer);
         }
+        int opaqueTimer = device.BeginGpuTimer(cmd, "Opaque");
 
         glm::vec4 clear = ToLinear(camera.ClearColor);
         VkRenderingAttachmentInfo colors[3]{};
@@ -1227,6 +1232,7 @@ namespace Dimension
         DrawGpuParticles(cmd);
 
         vkCmdEndRendering(cmd);
+        device.EndGpuTimer(cmd, opaqueTimer);
         target.RecordPickCopy(cmd);
         if (options.ProbeCapture)
         {
@@ -1261,8 +1267,10 @@ namespace Dimension
         if (ssgi) RenderIndirect(cmd, target, settings, u.ViewProj);
         else target.Gi.Valid = false;
         if (ssr) RenderReflections(cmd, target, settings);
+        int postTimer = device.BeginGpuTimer(cmd, "Effects and Post Processing");
         if (m_Oit)
         {
+            int oitTimer = device.BeginGpuTimer(cmd, "Transparent (OIT)");
             // Transparent meshes sum into the OIT targets, tested against the opaque depth, then resolve over the scene.
             VkImage depthImage = target.GetDepth().GetHandle();
             VkImageLayout depthLayout = readDepth ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -1308,6 +1316,7 @@ namespace Dimension
                 Vk::TransitionImage(cmd, depthImage, depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
             struct { uint32_t Accum, Reveal; } push{ target.GetOitAccumBindless(), target.GetOitRevealBindless() };
             FullscreenPass(cmd, target.GetHdr(), true, res.OitComposite, &push, sizeof(push));
+            device.EndGpuTimer(cmd, oitTimer);
         }
         if (fog)
         {
@@ -1416,6 +1425,7 @@ namespace Dimension
         }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, target.GetOutput().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        device.EndGpuTimer(cmd, postTimer);
         m_Stats.DrawCalls++;
 
         m_Sprites.clear();
@@ -1884,6 +1894,42 @@ namespace Dimension
                 float scale = std::max(glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[2])));
                 glm::vec2 center = glm::floor(glm::vec2(eye.x, eye.z) * 0.5f) * 2.0f; // in steps, so the rings do not slide along
                 Water::OceanVertices(*ocean, center, std::max(farPlane, 1.0f) * 0.98f / std::max(scale, 1e-4f), scene.GetDisplayTime(), m_OceanVertices);
+                // Shore foam from the ground's depth under the water near the camera, measured per vertex while the
+                // rings stay put (a hundred new rays a frame at most: the cells fill in over a few frames, and are kept).
+                if (ocean->ShoreFoam > 0.0f && scene.GetPhysics3D())
+                {
+                    if (center != m_OceanShoreCenter || e.Index != m_OceanShoreEntity || m_OceanShore.size() != m_OceanVertices.size())
+                    {
+                        // The rings moved: every vertex near the camera looks its cell up again.
+                        m_OceanShore.assign(m_OceanVertices.size(), 0.0f);
+                        m_OceanShorePending.clear();
+                        float reach = 120.0f / std::max(scale, 1e-4f);
+                        for (size_t i = 0; i < m_OceanVertices.size(); ++i)
+                            if (glm::distance(glm::vec2(m_OceanVertices[i].Position.x, m_OceanVertices[i].Position.z), center) <= reach)
+                                m_OceanShorePending.push_back((uint32_t)i);
+                        m_OceanShoreCenter = center;
+                        m_OceanShoreEntity = e.Index;
+                    }
+                    if (!m_OceanShorePending.empty())
+                    {
+                        int rays = 100;
+                        size_t kept = 0;
+                        for (uint32_t i : m_OceanShorePending)
+                        {
+                            glm::vec3 p = m_OceanVertices[i].Position;
+                            if (!Water::ShoreFoamAt(scene, e, glm::vec3(t.World * glm::vec4(p.x, ocean->Size.y * 0.5f, p.z, 1.0f)), rays, m_OceanShore[i]))
+                                m_OceanShorePending[kept++] = i; // its ray next frame
+                        }
+                        m_OceanShorePending.resize(kept);
+                    }
+                    for (size_t i = 0; i < m_OceanVertices.size(); ++i)
+                        if (m_OceanShore[i] > 0.0f)
+                        {
+                            glm::vec3& n = m_OceanVertices[i].Normal;
+                            float crest = glm::length(n) - 1.0f;
+                            n = glm::normalize(n) * (1.0f + std::max(crest, m_OceanShore[i]));
+                        }
+                }
                 if (TransientAllocation block = device.AllocateTransient(m_OceanVertices.size() * sizeof(Vertex), 16))
                 {
                     std::memcpy(block.Data, m_OceanVertices.data(), m_OceanVertices.size() * sizeof(Vertex));
@@ -2031,6 +2077,13 @@ namespace Dimension
                     const glm::vec4* colors[] = { &terrain->GrassColor, &terrain->RockColor, &terrain->SnowColor,
                                                   &terrain->DirtColor, &terrain->SandColor, &terrain->MossColor };
                     for (int k = 0; k < Terrain::kLayerCount; ++k) gpu.Layers[k] = glm::vec4(glm::vec3(ToLinear(*colors[k])), tiling);
+                    address = uploadMaterialGPU(dark ? dim(gpu) : gpu);
+                }
+                else if (water)
+                {
+                    // Water: the shader draws foam where the vertex normals say (Flags.w = 2).
+                    MaterialGPU gpu = BuildMaterialGPU(mat);
+                    gpu.Flags.w = 2u;
                     address = uploadMaterialGPU(dark ? dim(gpu) : gpu);
                 }
                 else

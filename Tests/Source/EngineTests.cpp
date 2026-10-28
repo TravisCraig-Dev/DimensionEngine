@@ -2089,6 +2089,57 @@ namespace
         ft->OnRuntimeStop();
     }
 
+    void TestWaterFoam()
+    {
+        // Crest foam: none on flat water, some on steep waves' crests, more the steeper they are.
+        WaterVolumeComponent sea;
+        sea.WaveHeight = 1.2f;
+        sea.WaveLength = 10.0f;
+        auto most = [&](float steepness) {
+            sea.Steepness = steepness;
+            float m = 0.0f;
+            for (float x = 0.0f; x < 20.0f; x += 0.25f) m = std::max(m, Water::CrestFoam(sea, { x, 0.0f }, 0.7f));
+            return m;
+        };
+        float steep = most(0.9f), gentle = most(0.1f);
+        sea.WaveHeight = 0.0f;
+        CHECK(steep > 0.5f && gentle < steep && most(0.9f) == 0.0f);
+
+        // Shore foam while playing: around an islet standing in a calm pond, not out in the open (the normals' length
+        // carries it to the shader).
+        Scene scene("Pond");
+        auto& reg = scene.GetRegistry();
+        Entity pond = scene.CreateEntity("Pond");
+        reg.Get<TransformComponent>(pond).Position = { 0.0f, -2.0f, 0.0f };
+        auto& w = reg.Emplace<WaterVolumeComponent>(pond);
+        w.Size = { 20.0f, 4.0f, 20.0f };
+        w.SurfaceResolution = 40;
+        w.ShoreFoam = 1.0f;
+        Entity bed = scene.CreateEntity("Bed");
+        reg.Get<TransformComponent>(bed).Position = { 0.0f, -4.5f, 0.0f };
+        reg.Emplace<BoxColliderComponent>(bed).Size = { 30.0f, 1.0f, 30.0f };
+        Entity islet = scene.CreateEntity("Islet");
+        reg.Get<TransformComponent>(islet).Position = { 4.0f, -1.0f, 0.0f };
+        reg.Emplace<BoxColliderComponent>(islet).Size = { 3.0f, 3.0f, 3.0f }; // its top 0.5 above the surface
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        auto& rw = rt->GetRegistry().Get<WaterVolumeComponent>(pond);
+        const auto& rest = Water::SurfaceVertices(rw);
+        CHECK(rw.SimulatedNormals.size() == rest.size() && !rest.empty());
+        float nearIslet = 0.0f, open = 0.0f;
+        for (size_t i = 0; i < rw.SimulatedNormals.size() && i < rest.size(); ++i)
+        {
+            float foam = glm::length(rw.SimulatedNormals[i]) - 1.0f;
+            glm::vec2 at(rest[i].Position.x, rest[i].Position.z);
+            if (glm::distance(at, glm::vec2(4.0f, 0.0f)) < 2.0f) nearIslet = std::max(nearIslet, foam);
+            if (glm::distance(at, glm::vec2(-5.0f, 0.0f)) < 2.0f) open = std::max(open, foam);
+        }
+        CHECK(nearIslet > 0.9f && open < 0.01f);
+        rt->OnRuntimeStop();
+    }
+
     void TestNavCrowd()
     {
         // Two groups of 100 agents swap sides of an open field, walking through each other: all arrive, they barely
@@ -2297,6 +2348,42 @@ namespace
         // One way: from the platform there is no way back down.
         rr.Get<OffMeshLinkComponent>(jump).Bidirectional = false;
         CHECK(Navigation::FindPath(mesh, { 10.0f, 1.0f, 10.0f }, { 0.0f, 0.0f, 10.0f }, corners, Navigation::LinksOn(*rt, mesh)) == NavPathStatus::Partial);
+        rt->OnRuntimeStop();
+    }
+
+    void TestOffMeshDoors()
+    {
+        // A door onto the platform (a link with Agents Wait), closed: paths still go through it; the agent walks up to
+        // it and waits; opened, it goes on. Closed without Agents Wait it is no way at all (Partial).
+        Scene scene("Yard");
+        BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        Entity door = scene.CreateEntity("Door");
+        auto& link = reg.Emplace<OffMeshLinkComponent>(door);
+        link.Start = { 6.5f, 0.0f, 10.0f };
+        link.End = { 9.0f, 1.0f, 10.0f };
+        link.Activated = false;
+        link.AgentsWait = true;
+        Entity guest = scene.CreateEntity("Guest");
+        reg.Get<TransformComponent>(guest).Position = { 0.0f, 0.0f, 10.0f };
+        reg.Emplace<NavMeshAgentComponent>(guest).Speed = 4.0f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        CHECK(Navigation::SetDestination(*rt, guest, { 10.0f, 1.0f, 10.5f }) && rr.Get<NavMeshAgentComponent>(guest).PathStatus == NavPathStatus::Complete);
+        for (int i = 0; i < 240; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        glm::vec3 waitingAt = rr.Get<TransformComponent>(guest).Position;
+        CHECK(rr.Get<NavMeshAgentComponent>(guest).Waiting && glm::distance(glm::vec2(waitingAt.x, waitingAt.z), glm::vec2(6.5f, 10.0f)) < 0.6f && waitingAt.y < 0.1f);
+        rr.Get<OffMeshLinkComponent>(door).Activated = true; // open
+        for (int i = 0; i < 180; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(!rr.Get<NavMeshAgentComponent>(guest).Waiting && Near(rr.Get<TransformComponent>(guest).Position, { 10.0f, 1.0f, 10.5f }, 0.1f));
+        // A plain link, closed: no way up.
+        rr.Get<OffMeshLinkComponent>(door).Activated = false;
+        rr.Get<OffMeshLinkComponent>(door).AgentsWait = false;
+        auto& mesh = *rr.Get<NavMeshSurfaceComponent>(rt->FindEntityByName("Navigation")).Data;
+        std::vector<glm::vec3> corners;
+        CHECK(Navigation::FindPath(mesh, { 0.0f, 0.0f, 10.0f }, { 10.0f, 1.0f, 10.5f }, corners, Navigation::LinksOn(*rt, mesh)) == NavPathStatus::Partial);
         rt->OnRuntimeStop();
     }
 
@@ -8294,11 +8381,13 @@ int main(int argc, char** argv)
     Run("LOD fade and generated", TestLODFadeAndGenerated);
     Run("NavMesh obstacles", TestNavMeshObstacles);
     Run("Off-mesh links", TestOffMeshLinks);
+    Run("Off-mesh doors", TestOffMeshDoors);
     Run("NavMesh agent sizes and areas", TestNavAgentSizesAndAreas);
     Run("NavMesh generated links", TestNavGeneratedLinks);
     Run("NavMesh crowd", TestNavCrowd);
     Run("NavMesh update area", TestNavUpdateArea);
     Run("Ocean", TestOcean);
+    Run("Water foam", TestWaterFoam);
     Run("OBJ materials", TestObjMaterials);
     Run("Buoyancy", TestBuoyancy);
     Run("Water waves", TestWaves);

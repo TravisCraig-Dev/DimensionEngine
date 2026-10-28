@@ -663,6 +663,8 @@ namespace Dimension
             .Field("Steepness", &WaterVolumeComponent::Steepness).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("0 = round waves, 1 = sharp crests")
             .Field("Surface Resolution", &WaterVolumeComponent::SurfaceResolution).Range(2, 256)
             .Field("Ocean", &WaterVolumeComponent::Ocean).Tooltip("Reaches the horizon all round: no sides, the surface drawn out to the camera's far plane")
+            .Field("Foam", &WaterVolumeComponent::Foam).Range(0.0f, 2.0f).Speed(0.01f).Tooltip("Froth on the wave crests (steeper waves make more)")
+            .Field("Shore Foam", &WaterVolumeComponent::ShoreFoam).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Froth where the ground is less than this many meters under the surface (while playing)")
                 .Tooltip("Quads per side of the drawn surface (with a Mesh Renderer for its material)")
             .Field("Underwater Color", &WaterVolumeComponent::UnderwaterColor).As(FieldType::Color4).Tooltip("The murk seen through the water")
             .Field("Underwater Fog", &WaterVolumeComponent::UnderwaterFog).Range(0.0f, 10.0f).Speed(0.005f).Tooltip("How thick the murk is, per meter (0 = clear)")
@@ -708,7 +710,8 @@ namespace Dimension
             .Field("Bidirectional", &OffMeshLinkComponent::Bidirectional)
             .Field("Activated", &OffMeshLinkComponent::Activated)
             .Field("Arc Height", &OffMeshLinkComponent::ArcHeight).Range(0.0f, 20.0f).Speed(0.01f).Tooltip("How high agents jump crossing it (0 = straight, a ladder)")
-            .Field("Cost Modifier", &OffMeshLinkComponent::CostModifier).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Its length counts this many times when choosing paths");
+            .Field("Cost Modifier", &OffMeshLinkComponent::CostModifier).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Its length counts this many times when choosing paths")
+            .Field("Agents Wait", &OffMeshLinkComponent::AgentsWait).Tooltip("A door: while not Activated, agents still go this way and wait at it until it is");
         Register<NavMeshAgentComponent>("NavMesh Agent", "Navigation")
             .Field("Speed", &NavMeshAgentComponent::Speed).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Top speed, m/s")
             .Field("Angular Speed", &NavMeshAgentComponent::AngularSpeed).Range(0.0f, 3600.0f).Speed(1.0f).Tooltip("Turning, degrees per second")

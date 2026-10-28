@@ -113,6 +113,11 @@ namespace Dimension
                 begun = m_Device->BeginFrame();
             }
             if (!begun) continue;
+            {
+                std::vector<Profiler::Section> gpu;
+                for (const auto& t : m_Device->GetGpuTimings()) gpu.push_back({ t.Name, t.Depth, t.Ms, 1 });
+                Profiler::SetGpuSections(std::move(gpu));
+            }
             const FrameContext& frame = m_Device->Frame();
             VkCommandBuffer cmd = frame.Cmd;
 
@@ -142,6 +147,7 @@ namespace Dimension
 
             if (m_ImGui)
             {
+                int uiTimer = m_Device->BeginGpuTimer(cmd, "Editor UI");
                 VkRenderingAttachmentInfo color{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
                 color.imageView = frame.SwapchainView;
                 color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -155,6 +161,7 @@ namespace Dimension
                 vkCmdBeginRendering(cmd, &info);
                 m_ImGui->Render(cmd);
                 vkCmdEndRendering(cmd);
+                m_Device->EndGpuTimer(cmd, uiTimer);
             }
             bool lastFrame = m_Spec.MaxFrames > 0 && frames + 1 >= m_Spec.MaxFrames;
             if (lastFrame && !m_Spec.ScreenshotPath.empty())
