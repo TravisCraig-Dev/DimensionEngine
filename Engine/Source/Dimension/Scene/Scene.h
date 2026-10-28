@@ -228,6 +228,11 @@ namespace Dimension
         void DetachFromParent(Entity e);
         void InstantiateScripts();
         std::shared_ptr<ScriptableEntity> CreateScriptInstance(Entity e, ScriptInstance& script, const struct ScriptInfo& info, const struct EntityRefResolver& resolver);
+    public:
+        // A script instance on `e` with the script's saved values, not attached to it (edit-mode scripts).
+        std::shared_ptr<ScriptableEntity> CreateDetachedScriptInstance(Entity e, const ScriptInstance& script, const struct ScriptInfo& info,
+                                                                       const struct EntityRefResolver& resolver);
+    private:
         void FlushDeferredDestroys();
         std::vector<Entity>& SiblingList(Entity e);
 

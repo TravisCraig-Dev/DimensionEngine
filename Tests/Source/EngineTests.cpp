@@ -15,6 +15,7 @@
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Scene/SceneSnapping.h>
+#include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Scene/LODGroup.h>
@@ -7727,7 +7728,93 @@ namespace
             rt->OnRuntimeStop();
             AssetManager::Shutdown();
         }
+        {
+            // [ExecuteInEditMode] (LookAt.cs): in the edited scene the script runs on its own instance, created on the
+            // first update and turning the object toward its target; edited values reach it; it ends when its script
+            // goes; play mode never runs it (nor the copy of the scene).
+            Scene edit("Edit Mode");
+            auto& reg = edit.GetRegistry();
+            Entity viewer = edit.CreateEntity("Viewer");
+            Entity east = edit.CreateEntity("East"), west = edit.CreateEntity("West");
+            reg.Get<TransformComponent>(east).Position = { 5.0f, 0.0f, 0.0f };
+            reg.Get<TransformComponent>(west).Position = { -5.0f, 0.0f, 0.0f };
+            reg.Emplace<ScriptComponent>(viewer).Add("Game.LookAt").Fields["Target"] = (uint64_t)edit.GetGuid(east);
+            edit.UpdateTransforms();
+            CHECK(ScriptRegistry::Find("Game.LookAt") && ScriptRegistry::Find("Game.LookAt")->ExecuteInEditMode &&
+                  !ScriptRegistry::Find("Game.Patrol")->ExecuteInEditMode);
+            CHECK(EditModeScripts::Count(&edit) == 0);
+            EditModeScripts::Update(edit, 1.0f / 60.0f);
+            CHECK(EditModeScripts::Count(&edit) == 1 && reg.Get<ScriptComponent>(viewer).Scripts[0].Instance == nullptr);
+            CHECK(Near(reg.Get<TransformComponent>(viewer).Rotation.y, -glm::half_pi<float>())); // facing +X
+            reg.Get<TransformComponent>(east).Position = { 0.0f, 0.0f, 5.0f };
+            edit.UpdateTransforms();
+            EditModeScripts::Update(edit, 1.0f / 60.0f);
+            CHECK(Near(std::abs(reg.Get<TransformComponent>(viewer).Rotation.y), glm::pi<float>())); // follows it (+Z)
+            reg.Get<ScriptComponent>(viewer).Scripts[0].Fields["Target"] = (uint64_t)edit.GetGuid(west); // edited
+            EditModeScripts::Update(edit, 1.0f / 60.0f);
+            CHECK(EditModeScripts::Count(&edit) == 1 && Near(reg.Get<TransformComponent>(viewer).Rotation.y, glm::half_pi<float>()));
+            {
+                auto rt = edit.Clone();
+                rt->OnRuntimeStart();
+                EditModeScripts::Update(*rt, 1.0f / 60.0f);
+                CHECK(EditModeScripts::Count(rt.get()) == 0 && rt->GetRegistry().Get<ScriptComponent>(rt->FindEntityByName("Viewer")).Scripts[0].Instance);
+                rt->OnRuntimeStop();
+            }
+            reg.Get<ScriptComponent>(viewer).Scripts[0].Enabled = false;
+            EditModeScripts::Update(edit, 1.0f / 60.0f);
+            CHECK(EditModeScripts::Count(&edit) == 0);
+            reg.Get<ScriptComponent>(viewer).Scripts[0].Enabled = true;
+            EditModeScripts::Update(edit, 1.0f / 60.0f);
+            CHECK(EditModeScripts::Count(&edit) == 1);
+            EditModeScripts::Clear(&edit);
+            CHECK(EditModeScripts::Count() == 0);
+            EditModeScripts::Update(edit, 1.0f / 60.0f);
+            CHECK(EditModeScripts::Count() == 1);
+        }
+        CHECK(EditModeScripts::Count() == 0); // the scene went, and its edit-mode scripts with it
+        {
+            // Handles (RouteInspectors.cs): Inspectors with OnSceneGUI only keep the script's fields; through stand-in
+            // hooks, dragging a stop's dot moves that stop, and the radius handle sets the area's radius.
+            const CSharpRuntime::EditorItem* patrolHandles = CSharpRuntime::FindInspector("Game.Patrol");
+            const CSharpRuntime::EditorItem* spawnerHandles = CSharpRuntime::FindInspector("Game.WaveSpawner");
+            const CSharpRuntime::EditorItem* spinnerInspector = CSharpRuntime::FindInspector("Game.Spinner");
+            CHECK(patrolHandles && patrolHandles->SceneGUI && !patrolHandles->InspectorGUI && spawnerHandles && spawnerHandles->SceneGUI);
+            CHECK(spinnerInspector && spinnerInspector->InspectorGUI && !spinnerInspector->SceneGUI);
+            const ScriptInfo* patrol = ScriptRegistry::Find("Game.Patrol");
+            const ScriptInfo* spawner = ScriptRegistry::Find("Game.WaveSpawner");
+            if (patrolHandles && spawnerHandles && patrol && spawner)
+            {
+                Scene handles("Handles");
+                Entity guard = handles.CreateEntity("Guard");
+                handles.GetRegistry().Get<TransformComponent>(guard).Position = { 1.0f, 0.0f, 1.0f };
+                handles.UpdateTransforms();
+                std::vector<std::string> drawn;
+                CSharpRuntime::EditorHooks hooks;
+                hooks.Handle = [&](int kind, float* v, int n, const char* text) {
+                    drawn.push_back(std::to_string(kind) + (*text ? std::string(":") + text : std::string()));
+                    if (kind == 1 && n >= 3 && Near(glm::vec3(v[0], v[1], v[2]), { 5.0f, 0.0f, 1.0f })) v[2] = 3.0f; // stop 1 dragged
+                    if (kind == 2 && n >= 4) v[3] = 7.0f;
+                    return 0;
+                };
+                CSharpRuntime::SetEditorHooks(hooks);
+                auto route = patrol->Create();
+                const FieldInfo* points = fieldOf(patrol, "Points");
+                CHECK(CSharpRuntime::SceneGUIScript(patrolHandles->Id, *route, handles, guard));
+                CHECK(points && FieldToJson(*points, patrol->ToObject(route.get()), nullptr) == nlohmann::json::parse("[[0,0,0],[4,0,2],[4,0,4]]"));
+                CHECK((drawn == std::vector<std::string>{ "1", "3:Stop 0", "1", "3:Stop 1", "1", "3:Stop 2" }));
+                auto area = spawner->Create();
+                const FieldInfo* areaField = fieldOf(spawner, "Area");
+                CHECK(CSharpRuntime::SceneGUIScript(spawnerHandles->Id, *area, handles, guard));
+                CHECK(areaField && FieldToJson(*areaField, spawner->ToObject(area.get()), nullptr) == nlohmann::json::parse(R"({"Center":[0,0,0],"Radius":7})"));
+                CSharpRuntime::SetEditorHooks({});
+            }
+        }
+        Scene kept("Kept"); // an edit-mode script still running when the scripts unload
+        kept.GetRegistry().Emplace<ScriptComponent>(kept.CreateEntity("Looker")).Add("Game.LookAt");
+        EditModeScripts::Update(kept, 1.0f / 60.0f);
+        CHECK(EditModeScripts::Count() == 1);
         CSharpRuntime::UnloadScripts();
+        CHECK(EditModeScripts::Count() == 0); // ended before their classes went
         CHECK(ScriptRegistry::Find("Game.Spinner") == nullptr && CSharpRuntime::GetEditorItems().empty());
     }
 

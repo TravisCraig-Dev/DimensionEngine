@@ -142,6 +142,8 @@ namespace Dimension
             void (*RegisterEditorItem)(const char*);
             uint64_t (*EditorGuiRef)(int, const char*, uint64_t); // 0 an entity (packed), else an asset kind (1 Prefab ... 5 Audio)
             void (*Gizmo)(int, const float*); // 0 line, 1 wire sphere, 2 wire cube (see Gizmos in EditorApi.cs)
+            int (*SceneRunning)(void*);
+            int (*EditorHandle)(int, float*, int, const char*); // see Handles in EditorApi.cs
         };
 
         // Background scene loads started from C#, by id.
@@ -171,6 +173,7 @@ namespace Dimension
             // OnDrawGizmos (1: and OnDrawGizmosSelected); [ContextMenu] item n (the values after). As DrawField's.
             const char* (*DrawGizmos)(int, intptr_t, const char*, const char*, void*, uint64_t);
             const char* (*RunContextMenu)(int, intptr_t, const char*, const char*, void*, uint64_t);
+            const char* (*SceneGUI)(int, intptr_t, const char*, const char*, void*, uint64_t); // as Inspect
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -611,6 +614,7 @@ namespace Dimension
             }
 
             bool RunContextMenu(size_t item, Scene& scene, Entity e) { return Draw(s_Managed.RunContextMenu, (int)item, scene, e); }
+            bool SceneGUI(int id, Scene& scene, Entity e) { return Draw(s_Managed.SceneGUI, id, scene, e); }
 
             std::vector<CSharpRuntime::DebugField> DebugFields(Scene& scene, Entity e) const
             {
@@ -671,6 +675,16 @@ namespace Dimension
             {
                 m_Handle = s_Managed.CreateInstance(m_Class->Name.c_str(), &GetScene(), Pack(Self()));
                 if (!m_Handle) return;
+                PushFields();
+                s_Managed.Invoke(m_Handle, method, 0.0f);
+            }
+
+            void OnFieldsChanged() override { PushFields(); }
+
+            // The native field values onto the managed object.
+            void PushFields()
+            {
+                if (!m_Handle) return;
                 const Layout& layout = m_Class->Values;
                 nlohmann::json values;
                 for (size_t i = 0; i < layout.Slots.size(); ++i)
@@ -695,7 +709,6 @@ namespace Dimension
                     default: s_Managed.SetField(m_Handle, (int)i, m_Values.Slot(i)); break;
                     }
                 }
-                s_Managed.Invoke(m_Handle, method, 0.0f);
             }
             void OnUpdate(float dt) override { s_DeltaTime = dt; if (m_Handle) s_Managed.Invoke(m_Handle, 1, dt); }
             void OnFixedUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 2, dt); }
@@ -735,6 +748,7 @@ namespace Dimension
                 info.ToObject = [](ScriptableEntity* base) -> void* { return static_cast<ManagedScript*>(base)->Storage(); };
                 info.Fields = cls.Values.Fields;
                 info.Menu = j.value("menu", std::string());
+                info.ExecuteInEditMode = j.value("executeInEditMode", false);
                 for (auto& r : j.value("requires", nlohmann::json::array()))
                     if (r.is_string()) info.Requires.push_back(r.get<std::string>());
             }
@@ -853,6 +867,10 @@ namespace Dimension
             };
             a.EditorUndo = [](const char* name) { if (s_EditorHooks.Undo) s_EditorHooks.Undo(name ? name : ""); };
             a.Gizmo = [](int kind, const float* data) { AddGizmo(kind, data); };
+            a.SceneRunning = [](void* scene) -> int { return scene && S(scene).IsRunning() ? 1 : 0; };
+            a.EditorHandle = [](int kind, float* v, int n, const char* text) -> int {
+                return s_EditorHooks.Handle ? s_EditorHooks.Handle(kind, v, n, text ? text : "") : 0;
+            };
             a.EditorGuiRef = [](int kind, const char* label, uint64_t value) -> uint64_t {
                 if (kind == 0) return s_EditorHooks.EntityField ? Pack(s_EditorHooks.EntityField(label ? label : "", Unpack(value))) : value;
                 return s_EditorHooks.AssetField ? s_EditorHooks.AssetField(kind, label ? label : "", value) : value;
@@ -867,6 +885,8 @@ namespace Dimension
                     item.MenuPath = j.value("path", std::string());
                     item.Title = j.value("title", std::string());
                     item.Inspects = j.value("inspects", std::string());
+                    item.SceneGUI = j.value("sceneGUI", false);
+                    item.InspectorGUI = j.value("inspectorGUI", false);
                     s_EditorItems.push_back(std::move(item));
                 }
                 catch (const std::exception& e)
@@ -1324,6 +1344,12 @@ namespace Dimension
         return none;
     }
 
+    bool CSharpRuntime::SceneGUIScript(int id, ScriptableEntity& script, Scene& scene, Entity e)
+    {
+        auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
+        return managed && managed->SceneGUI(id, scene, e);
+    }
+
     bool CSharpRuntime::RunContextMenu(ScriptableEntity& script, size_t item, Scene& scene, Entity e)
     {
         auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
@@ -1394,6 +1420,7 @@ namespace Dimension
     std::vector<CSharpRuntime::GizmoLine> CSharpRuntime::CollectGizmos(Scene&, const std::vector<Entity>&) { return {}; }
     const std::vector<std::string>& CSharpRuntime::GetContextMenu(const std::string&) { static const std::vector<std::string> none; return none; }
     bool CSharpRuntime::RunContextMenu(ScriptableEntity&, size_t, Scene&, Entity) { return false; }
+    bool CSharpRuntime::SceneGUIScript(int, ScriptableEntity&, Scene&, Entity) { return false; }
     bool CSharpRuntime::IsDebuggerAttached() { return false; }
     bool CSharpRuntime::LaunchDebugger() { return false; }
     bool CSharpRuntime::WaitForDebugger(float) { return false; }

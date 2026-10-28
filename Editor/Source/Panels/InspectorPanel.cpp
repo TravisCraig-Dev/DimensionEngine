@@ -495,7 +495,7 @@ namespace Editor
                     if (DebugMode) DrawHiddenFields(info.Fields, info.Get(scene, e), scene);
                     UI::EndProperties();
                     // A C# custom Inspector for the component ([CustomInspector("Name")]) draws below its fields.
-                    if (const auto* custom = CSharpRuntime::FindInspector(info.Name); custom && UI::BeginProperties("##custom"))
+                    if (const auto* custom = CSharpRuntime::FindInspector(info.Name); custom && custom->InspectorGUI && UI::BeginProperties("##custom"))
                     {
                         CSharpRuntime::InspectComponent(custom->Id, scene, e);
                         UI::EndProperties();
@@ -978,6 +978,7 @@ namespace Editor
             {
                 // A C# custom Inspector ([CustomInspector(typeof(Class))]) draws in place of the fields, below the class.
                 const CSharpRuntime::EditorItem* custom = info ? CSharpRuntime::FindInspector(script.ClassName) : nullptr;
+                if (custom && !custom->InspectorGUI) custom = nullptr; // only Scene view handles: the fields as usual
                 std::shared_ptr<ScriptableEntity> temp;
                 ScriptableEntity* target = nullptr;
                 if (UI::BeginProperties("ScriptProps"))

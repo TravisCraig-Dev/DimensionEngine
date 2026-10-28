@@ -112,6 +112,9 @@ namespace Dimension.Interop
         // A gizmo while OnDrawGizmos runs: 0 a line (from, to, color), 1 a wire sphere (matrix, center, radius,
         // color), 2 a wire cube (matrix, center, size, color).
         public delegate* unmanaged<int, float*, void> Gizmo;
+        public delegate* unmanaged<IntPtr, int> SceneRunning; // is the scene playing?
+        // A Scene view handle from Inspector.OnSceneGUI (see Handles): kind, values in and out, their count, text.
+        public delegate* unmanaged<int, float*, int, byte*, int> EditorHandle;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
@@ -140,6 +143,8 @@ namespace Dimension.Interop
         // values after); the rest as DrawField's
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> DrawGizmos;
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> RunContextMenu;
+        // A custom Inspector's OnSceneGUI (arguments and result as Inspect's)
+        public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> SceneGUI;
     }
 
     internal static unsafe class Native
@@ -198,6 +203,7 @@ namespace Dimension.Interop
                 api->DebugFields = &ScriptHost.DebugFields;
                 api->DrawGizmos = &ScriptHost.DrawGizmos;
                 api->RunContextMenu = &ScriptHost.RunContextMenu;
+                api->SceneGUI = &ScriptHost.SceneGUI;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

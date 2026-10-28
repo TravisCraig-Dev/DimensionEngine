@@ -28,6 +28,8 @@ namespace Dimension
             int Id = -1;
             bool Window = false;
             std::string MenuPath, Title, Inspects;
+            bool SceneGUI = false;     // an Inspector overriding OnSceneGUI
+            bool InspectorGUI = false; // ... and OnInspectorGUI (else the script's fields show as usual)
         };
         static const std::vector<EditorItem>& GetEditorItems();
         // Runs a menu item, or draws a window's contents (inside the caller's window), with `scene` as the scene.
@@ -62,6 +64,9 @@ namespace Dimension
         // A C# script's [ContextMenu] items, and running one (as InspectScript: true when its values changed).
         static const std::vector<std::string>& GetContextMenu(const std::string& className);
         static bool RunContextMenu(ScriptableEntity& script, size_t item, Scene& scene, Entity e);
+        // A custom Inspector's OnSceneGUI for a C# script (its handles go through EditorHooks::Handle); true when the
+        // script's values changed, as InspectScript.
+        static bool SceneGUIScript(int id, ScriptableEntity& script, Scene& scene, Entity e);
         // What the extensions reach in the editor: controls (op, label, values, count; see EditorGUI in EditorApi.cs:
         // returns 1 when clicked/changed), a text field, the selection (0 get, 1 set, 2 create an entity named `text`,
         // 3 count (in Index), 4 the n-th (n in the entity's Index)), an undo step, and pickers for an entity and for
@@ -74,6 +79,9 @@ namespace Dimension
             std::function<void(const char*)> Undo;
             std::function<Entity(const char*, Entity)> EntityField;
             std::function<uint64_t(int, const char*, uint64_t)> AssetField;
+            // A Scene view handle (kind as Handles in EditorApi.cs: 0 position, 1 free move, 2 radius, 3 label, 4 line;
+            // values in and out, their count, text): returns 1 while it is hovered or dragged.
+            std::function<int(int, float*, int, const char*)> Handle;
         };
         static void SetEditorHooks(const EditorHooks& hooks);
 

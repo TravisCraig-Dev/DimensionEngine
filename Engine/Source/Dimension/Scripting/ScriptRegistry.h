@@ -1,4 +1,5 @@
 #pragma once
+#include "Dimension/Scripting/EditModeScripts.h"
 #include "Dimension/Reflection/TypeInfo.h"
 #include <deque>
 #include <memory>
@@ -16,6 +17,7 @@ namespace Dimension
         std::string Module = "native"; // "native" (C++ game module) or "csharp"
         std::string Menu;                  // Add Component menu path ("Category/Name"); empty = the Scripts section
         std::vector<std::string> Requires; // components (registry names) added with the script in the editor
+        bool ExecuteInEditMode = false;    // also runs in the editor outside play mode (see EditModeScripts)
     };
 
     // Editor options of a C++ script (what C# scripts say with [AddComponentMenu] and [RequireComponent]).
@@ -23,6 +25,7 @@ namespace Dimension
     {
         std::string Menu;                  // "Category/Name" in the Add Component menu
         std::vector<std::string> Requires; // component names added with the script, e.g. { "Rigidbody" }
+        bool ExecuteInEditMode = false;    // C#'s [ExecuteInEditMode]
     };
 
     // Registry of native script classes, filled by game code at startup.
@@ -36,6 +39,7 @@ namespace Dimension
             info.Name = name;
             info.Menu = std::move(options.Menu);
             info.Requires = std::move(options.Requires);
+            info.ExecuteInEditMode = options.ExecuteInEditMode;
             info.Create = [] { return std::make_shared<T>(); };
             info.ToObject = [](ScriptableEntity* base) -> void* { return static_cast<T*>(base); };
             return FieldListBuilder<T>(info.Fields);
@@ -54,6 +58,7 @@ namespace Dimension
         // Removes the scripts of one module (game module or C# assembly unload).
         static void ClearModule(const std::string& module)
         {
+            EditModeScripts::Clear(); // their instances may be of these classes
             std::erase_if(Scripts(), [&](const ScriptInfo& s) { return s.Module == module; });
         }
         // Registration for scripts whose classes are only known at runtime (C#).

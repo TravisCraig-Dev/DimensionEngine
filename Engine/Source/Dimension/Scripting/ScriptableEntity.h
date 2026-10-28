@@ -41,6 +41,9 @@ namespace Dimension
         // instead of OnCreate.
         virtual void OnBeforeSerialize() {}
         virtual void OnScriptsReloaded() {}
+        // Engine-internal: the fields the engine reads were given new values (an edit-mode script edited in the
+        // Inspector); C# pushes them to the managed object.
+        virtual void OnFieldsChanged() {}
 
         Entity Self() const { return m_Entity; }
         Scene& GetScene() const { return *m_Scene; }

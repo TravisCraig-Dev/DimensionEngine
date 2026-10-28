@@ -328,6 +328,13 @@ namespace Dimension
     }
 
     /// <summary>Runtime scene switching (scenes come from File > Build Settings). Loads happen at the end of the frame.</summary>
+    public static unsafe class Application
+    {
+        /// <summary>Whether the running script's scene is playing (false for [ExecuteInEditMode] scripts in the editor,
+        /// and in editor code).</summary>
+        public static bool IsPlaying => Native.CurrentScene != IntPtr.Zero && Native.Api.SceneRunning(Native.CurrentScene) != 0;
+    }
+
     public enum LoadSceneMode { Single = 0, Additive = 1 }
 
     /// <summary>A background scene load (SceneManager.LoadSceneAsync).</summary>

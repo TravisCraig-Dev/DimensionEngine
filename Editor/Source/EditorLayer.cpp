@@ -20,6 +20,7 @@
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Scene/SceneManager.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
+#include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
 #include <Dimension/UI/UI.h>
@@ -331,6 +332,7 @@ namespace Editor
         if (EditorPreferences::Get().SaveSceneBeforePlay && m_Ctx.Dirty && !m_Ctx.ScenePath.empty()) SaveScene();
         if (m_Console->ClearOnPlay) m_Console->Clear();
         SceneManager::CancelPendingLoad();
+        EditModeScripts::Clear(); // edit-mode scripts end as play starts (and start again after Stop)
         m_Ctx.RuntimeScene = m_Ctx.EditorScene->Clone();
         m_MixerBeforePlay = AudioMixer::Groups();
         m_Ctx.RuntimeScene->OnRuntimeStart();
@@ -438,7 +440,12 @@ namespace Editor
             }
         }
         else
+        {
             m_Ctx.EditorScene->OnUpdateEditor(dt);
+            // [ExecuteInEditMode] scripts of the scene being edited.
+            EditModeScripts::Update(m_Ctx.ActiveScene(), dt);
+            if (EditModeScripts::Count(&m_Ctx.ActiveScene()) > 0) m_Ctx.ActiveScene().UpdateTransforms();
+        }
 
         if (auto pick = m_SceneTarget->PollPick())
         {
@@ -1380,10 +1387,12 @@ namespace Editor
         bool tilePainting = UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail);
         bool lineEditing = UpdateLinePointEditing(origin, avail);
         bool vertexSnapping = !tilePainting && !lineEditing && m_LinePoint < 0 && UpdateVertexSnap(origin, avail);
+        bool handles = !tilePainting && !lineEditing && !vertexSnapping && UpdateScriptHandles(origin, avail);
 
         // Transform gizmo
-        bool gizmoHovered = lineEditing || vertexSnapping;
-        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping)
+        bool gizmoHovered = lineEditing || vertexSnapping || handles;
+        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
+            m_HandleDrag == 0)
         {
             auto& reg = scene.GetRegistry();
             auto& t = reg.Get<TransformComponent>(m_Ctx.Selected);
@@ -2965,7 +2974,175 @@ namespace Editor
             m_Ctx.RecordUndo();
             m_Ctx.MarkDirty();
         };
+        hooks.Handle = [this](int kind, float* v, int n, const char* text) { return DoHandle(kind, v, n, text); };
         CSharpRuntime::SetEditorHooks(hooks);
+    }
+
+    bool EditorLayer::UpdateScriptHandles(const ImVec2& origin, const ImVec2& size)
+    {
+        // The selected object's C# scripts whose custom Inspectors have OnSceneGUI: their handles, edits saved like the
+        // Inspector's (one undo step per drag).
+        if (!m_Ctx.HasValidSelection() || m_Ctx.Selection.size() > 1 || m_Camera.IsControlling()) return false;
+        Scene& scene = m_Ctx.ActiveScene();
+        Entity e = m_Ctx.Selected;
+        auto& reg = scene.GetRegistry();
+        if (!reg.Has<ScriptComponent>(e)) return false;
+        EntityRefResolver resolver;
+        resolver.ToGuid = [&scene](Entity x) { return scene.IsValid(x) ? (uint64_t)scene.GetGuid(x) : uint64_t(0); };
+        resolver.FromGuid = [&scene](uint64_t g) { return scene.FindEntityByGuid(Guid(g)); };
+        glm::mat4 view = m_Camera.GetView(), proj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y));
+        m_HandleView = { true, origin, size, view, proj, 0, false };
+        ImGuizmo::SetOrthographic(m_Camera.Is2D());
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);
+        bool changedAny = false;
+        for (size_t i = 0; i < reg.Get<ScriptComponent>(e).Scripts.size(); ++i)
+        {
+            ScriptInstance& script = reg.Get<ScriptComponent>(e).Scripts[i];
+            const ScriptInfo* info = ScriptRegistry::Find(script.ClassName);
+            const CSharpRuntime::EditorItem* custom = info ? CSharpRuntime::FindInspector(script.ClassName) : nullptr;
+            if (!custom || !custom->SceneGUI || !script.Enabled) continue;
+            std::shared_ptr<ScriptableEntity> temp;
+            ScriptableEntity* target = script.Instance.get();
+            if (!target)
+            {
+                temp = info->Create();
+                target = temp.get();
+                for (auto& f : info->Fields)
+                    if (script.Fields.is_object() && script.Fields.contains(f.Name)) FieldFromJson(f, info->ToObject(target), script.Fields[f.Name], &resolver);
+            }
+            m_HandleView.Counter = (int)i << 16;
+            if (!CSharpRuntime::SceneGUIScript(custom->Id, *target, scene, e)) continue;
+            auto& fields = reg.Get<ScriptComponent>(e).Scripts[i].Fields;
+            nlohmann::json before = fields.is_object() ? fields : nlohmann::json::object(), after = before;
+            for (auto& f : info->Fields) after[f.Name] = FieldToJson(f, info->ToObject(target), &resolver);
+            if (!m_HandleEditActive)
+            {
+                fields = before;
+                m_Ctx.RecordUndo();
+            }
+            fields = after;
+            Prefabs::RecordFieldOverride(scene, e, "Script", "Scripts");
+            m_Ctx.MarkDirty();
+            changedAny = true;
+        }
+        m_HandleEditActive = changedAny ? (m_HandleDrag != 0 || ImGuizmo::IsUsing() || ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                                        : m_HandleEditActive && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        bool hot = m_HandleView.Hot || m_HandleDrag != 0;
+        m_HandleView.Active = false;
+        return hot;
+    }
+
+    int EditorLayer::DoHandle(int kind, float* v, int n, const char* text)
+    {
+        // Handles of Inspector.OnSceneGUI (see UpdateScriptHandles); outside it (tests, other windows) nothing is drawn.
+        HandleView& hv = m_HandleView;
+        if (!hv.Active) return 0;
+        int id = ++hv.Counter;
+        glm::mat4 viewProj = hv.Proj * hv.View;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 mouse = ImGui::GetMousePos();
+        auto project = [&](const glm::vec3& p, ImVec2& out) {
+            glm::vec4 clip = viewProj * glm::vec4(p, 1.0f);
+            if (clip.w <= 1e-5f) return false;
+            out = ImVec2(hv.Origin.x + (clip.x / clip.w * 0.5f + 0.5f) * hv.Size.x, hv.Origin.y + (0.5f - clip.y / clip.w * 0.5f) * hv.Size.y);
+            return true;
+        };
+        auto colorOf = [](const float* c, float boost) {
+            return ImGui::ColorConvertFloat4ToU32(ImVec4(std::min(c[0] * boost, 1.0f), std::min(c[1] * boost, 1.0f), std::min(c[2] * boost, 1.0f), c[3]));
+        };
+        // A dot dragged on a plane (through `point`, facing `normal`): true while hovered or dragged; `point` follows.
+        auto dragDot = [&](int dotId, glm::vec3& point, const glm::vec3& normal, float radius, const float* color) {
+            ImVec2 s;
+            if (!project(point, s)) return false;
+            float dx = mouse.x - s.x, dy = mouse.y - s.y;
+            bool hovered = m_SceneViewHovered && dx * dx + dy * dy <= (radius + 3.0f) * (radius + 3.0f);
+            if (hovered && m_HandleDrag == 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) m_HandleDrag = dotId;
+            bool dragging = m_HandleDrag == dotId;
+            if (dragging)
+            {
+                if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_HandleDrag = 0;
+                else
+                {
+                    glm::vec3 from, dir;
+                    MouseRay(viewProj, hv.Origin, hv.Size, from, dir);
+                    float denom = glm::dot(dir, normal);
+                    if (std::abs(denom) > 1e-5f) point = from + dir * (glm::dot(point - from, normal) / denom);
+                }
+            }
+            dl->AddCircleFilled(s, radius, colorOf(color, hovered || dragging ? 1.35f : 1.0f));
+            dl->AddCircle(s, radius, IM_COL32(0, 0, 0, 160), 0, 1.5f);
+            return hovered || dragging;
+        };
+        bool hot = false;
+        switch (kind)
+        {
+        case 0: // the Move tool's arrows
+        {
+            if (n < 3) return 0;
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(v[0], v[1], v[2]));
+            ImGuizmo::PushID(id);
+            if (ImGuizmo::Manipulate(glm::value_ptr(hv.View), glm::value_ptr(hv.Proj), ImGuizmo::TRANSLATE, ImGuizmo::WORLD, glm::value_ptr(m)))
+                v[0] = m[3].x, v[1] = m[3].y, v[2] = m[3].z;
+            hot = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
+            ImGuizmo::PopID();
+            break;
+        }
+        case 1: // a dot across the view
+        {
+            if (n < 8) return 0;
+            glm::vec3 p(v[0], v[1], v[2]);
+            glm::vec3 forward = glm::normalize(glm::vec3(glm::inverse(hv.View)[2]));
+            hot = dragDot(id, p, forward, std::max(v[3] * 0.5f, 3.0f), v + 4);
+            v[0] = p.x, v[1] = p.y, v[2] = p.z;
+            break;
+        }
+        case 2: // a horizontal ring with four dots for its radius
+        {
+            if (n < 8) return 0;
+            glm::vec3 center(v[0], v[1], v[2]);
+            float radius = v[3];
+            ImVec2 a, b;
+            constexpr int kSegments = 64;
+            for (int s = 0; s < kSegments; ++s)
+            {
+                float t0 = glm::two_pi<float>() * s / kSegments, t1 = glm::two_pi<float>() * (s + 1) / kSegments;
+                if (project(center + glm::vec3(std::cos(t0), 0.0f, std::sin(t0)) * radius, a) &&
+                    project(center + glm::vec3(std::cos(t1), 0.0f, std::sin(t1)) * radius, b))
+                    dl->AddLine(a, b, colorOf(v + 4, 1.0f), 2.0f);
+            }
+            const glm::vec3 directions[] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+            for (int k = 0; k < 4; ++k)
+            {
+                glm::vec3 dot = center + directions[k] * radius;
+                if (dragDot(id * 4 + k + (1 << 30), dot, glm::vec3(0, 1, 0), 5.0f, v + 4))
+                {
+                    hot = true;
+                    if (m_HandleDrag == id * 4 + k + (1 << 30)) radius = glm::length(glm::vec2(dot.x - center.x, dot.z - center.z));
+                }
+            }
+            v[3] = radius;
+            break;
+        }
+        case 3: // a label
+        {
+            ImVec2 s;
+            if (n >= 3 && project({ v[0], v[1], v[2] }, s))
+            {
+                dl->AddText(ImVec2(s.x + 7.0f, s.y - 8.0f), IM_COL32(0, 0, 0, 200), text);
+                dl->AddText(ImVec2(s.x + 6.0f, s.y - 9.0f), IM_COL32(255, 255, 255, 255), text);
+            }
+            break;
+        }
+        case 4: // a line
+        {
+            ImVec2 a, b;
+            if (n >= 10 && project({ v[0], v[1], v[2] }, a) && project({ v[3], v[4], v[5] }, b)) dl->AddLine(a, b, colorOf(v + 6, 1.0f), 2.0f);
+            break;
+        }
+        }
+        hv.Hot |= hot;
+        return hot ? 1 : 0;
     }
 
     void EditorLayer::DrawScriptMenus()

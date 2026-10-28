@@ -94,12 +94,15 @@ namespace Dimension
                 if (!type.IsAbstract && type.IsSubclassOf(typeof(Inspector)) && type.GetCustomAttribute<CustomInspectorAttribute>() is { } inspector)
                 {
                     s_EditorItems.Add(new EditorItem { InspectorType = type });
-                    RegisterEditorItem("inspector", "", null, inspector.Target);
+                    bool sceneGUI = type.GetMethod(nameof(Inspector.OnSceneGUI), Type.EmptyTypes)?.DeclaringType != typeof(Inspector);
+                    bool inspectorGUI = type.GetMethod(nameof(Inspector.OnInspectorGUI), Type.EmptyTypes)?.DeclaringType != typeof(Inspector);
+                    RegisterEditorItem("inspector", "", null, inspector.Target, sceneGUI, inspectorGUI);
                 }
             }
         }
 
-        private static void RegisterEditorItem(string kind, string path, string title, string inspects = null)
+        private static void RegisterEditorItem(string kind, string path, string title, string inspects = null, bool sceneGUI = false,
+                                               bool inspectorGUI = false)
         {
             using var stream = new MemoryStream();
             using (var w = new Utf8JsonWriter(stream))
@@ -110,6 +113,8 @@ namespace Dimension
                 w.WriteString("path", path ?? "");
                 if (title != null) w.WriteString("title", title);
                 if (inspects != null) w.WriteString("inspects", inspects);
+                if (sceneGUI) w.WriteBoolean("sceneGUI", true);
+                if (inspectorGUI) w.WriteBoolean("inspectorGUI", true);
                 w.WriteEndObject();
             }
             byte[] json = stream.ToArray();
@@ -304,6 +309,30 @@ namespace Dimension
             target.Entity = new Entity(scene, entity);
             if (fieldsUtf8 != null) ApplyFields(target, cls, Native.FromUtf8(fieldsUtf8));
             return target;
+        }
+
+        // A custom Inspector's OnSceneGUI for a script (as Inspect finds it); returns its values after.
+        [UnmanagedCallersOnly]
+        internal static byte* SceneGUI(int id, IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
+        {
+            try
+            {
+                if (id < 0 || id >= s_EditorItems.Count || s_EditorItems[id].InspectorType == null) return null;
+                Native.CurrentScene = scene;
+                EditorItem item = s_EditorItems[id];
+                item.Inspector ??= (Inspector)Activator.CreateInstance(item.InspectorType);
+                Behaviour target = TargetFor(handle, classUtf8, fieldsUtf8, scene, entity);
+                item.Inspector.Target = target;
+                item.Inspector.Entity = new Entity(scene, entity);
+                Handles.Reset();
+                item.Inspector.OnSceneGUI();
+                return target != null ? FieldsJson(target) : null;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"OnSceneGUI failed: {(e as TargetInvocationException)?.InnerException ?? e}");
+                return null;
+            }
         }
 
         // Field values (a JSON array in registration order, entities as packed ids) into a script.
@@ -621,6 +650,7 @@ namespace Dimension
                         w.WriteStartObject();
                         w.WriteString("name", type.FullName);
                         if (type.GetCustomAttribute<AddComponentMenuAttribute>() is { } menu) w.WriteString("menu", menu.Path);
+                        if (type.IsDefined(typeof(ExecuteInEditModeAttribute), true)) w.WriteBoolean("executeInEditMode", true);
                         // Gizmos (an OnDrawGizmos or OnDrawGizmosSelected of its own) and [ContextMenu] methods.
                         bool Overrides(string name) => type.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)?.DeclaringType != typeof(Behaviour);
                         if (Overrides(nameof(Behaviour.OnDrawGizmos)) || Overrides(nameof(Behaviour.OnDrawGizmosSelected))) w.WriteBoolean("gizmos", true);

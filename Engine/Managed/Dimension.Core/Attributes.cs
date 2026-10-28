@@ -38,6 +38,12 @@ namespace Dimension
         public ContextMenuAttribute(string name) { Name = name; }
     }
 
+    /// <summary>Runs the script in the editor outside play mode too: it is created (OnCreate) when it appears in the
+    /// edited scene, updated (OnUpdate) every editor frame, given the saved values again when they are edited, and
+    /// ended (OnDestroy) when it goes or play mode starts. Application.IsPlaying tells the two apart.</summary>
+    [AttributeUsage(AttributeTargets.Class)]
+    public sealed class ExecuteInEditModeAttribute : Attribute { }
+
     /// <summary>Keeps a public field saved with the scene but out of the Inspector.</summary>
     [AttributeUsage(AttributeTargets.Field)]
     public sealed class HideInInspectorAttribute : Attribute { }

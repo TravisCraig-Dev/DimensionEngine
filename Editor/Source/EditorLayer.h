@@ -110,6 +110,20 @@ namespace Editor
         void InstallScriptHooks();
         void DrawScriptMenus();
         void DrawScriptWindows();
+        // Handles of the selected object's custom Inspectors (OnSceneGUI) in the Scene view: true while one is hovered
+        // or dragged. DoHandle draws one (EditorHooks::Handle).
+        bool UpdateScriptHandles(const ImVec2& origin, const ImVec2& size);
+        int DoHandle(int kind, float* v, int n, const char* text);
+        struct HandleView
+        {
+            bool Active = false;
+            ImVec2 Origin, Size;
+            glm::mat4 View{ 1.0f }, Proj{ 1.0f };
+            int Counter = 0; // the handle drawn last (ids: per script, in drawing order)
+            bool Hot = false;
+        } m_HandleView;
+        int m_HandleDrag = 0;            // the dot being dragged (0: none)
+        bool m_HandleEditActive = false; // a handle drag is under way (its edits share one undo step)
         std::map<std::string, bool> m_ScriptWindows;
         void BuildCSharp();
         void PollCSharp(float dt);

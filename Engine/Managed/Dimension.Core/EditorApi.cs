@@ -47,7 +47,12 @@ namespace Dimension
         public Behaviour Target { get; internal set; }
         // The object being inspected.
         public Entity Entity { get; internal set; }
-        public abstract void OnInspectorGUI();
+        // Draws the Inspector in place of the script's fields; an Inspector that does not override it keeps them (and
+        // may only add handles with OnSceneGUI).
+        public virtual void OnInspectorGUI() { }
+        // While the object is selected: handles in the Scene view (Handles.PositionHandle, ...). What they change on
+        // Target is saved like the Inspector's edits.
+        public virtual void OnSceneGUI() { }
         // The script's fields as the Inspector draws them without a custom one.
         public void DrawDefaultInspector() => ScriptHost.DrawDefaultFields(Target);
     }
@@ -213,6 +218,51 @@ namespace Dimension
             data[at] = c.R; data[at + 1] = c.G; data[at + 2] = c.B; data[at + 3] = c.A;
             Native.Api.Gizmo(kind, data);
         }
+    }
+
+    // Scene view handles for Inspector.OnSceneGUI: each returns the value as dragged this frame (or as given).
+    public static unsafe class Handles
+    {
+        public static Color Color { get; set; } = new(1.0f, 0.8f, 0.2f);
+
+        private static int Call(int kind, float* v, int n, string text = null) =>
+            Native.WithUtf8(text ?? "", p => Native.Api.EditorHandle(kind, v, n, (byte*)p));
+
+        // The Move tool's arrows at a point.
+        public static Vector3 PositionHandle(Vector3 position)
+        {
+            Call(0, (float*)&position, 3);
+            return position;
+        }
+
+        // A dot (`size` pixels across) dragged freely across the view.
+        public static Vector3 FreeMoveHandle(Vector3 position, float size = 12.0f)
+        {
+            Color c = Color;
+            float* v = stackalloc float[8] { position.X, position.Y, position.Z, size, c.R, c.G, c.B, c.A };
+            Call(1, v, 8);
+            return new Vector3(v[0], v[1], v[2]);
+        }
+
+        // A horizontal ring around a center with four dots to drag its radius.
+        public static float RadiusHandle(Vector3 center, float radius)
+        {
+            Color c = Color;
+            float* v = stackalloc float[8] { center.X, center.Y, center.Z, radius, c.R, c.G, c.B, c.A };
+            Call(2, v, 8);
+            return v[3];
+        }
+
+        public static void Label(Vector3 position, string text) => Call(3, (float*)&position, 3, text);
+
+        public static void DrawLine(Vector3 from, Vector3 to)
+        {
+            Color c = Color;
+            float* v = stackalloc float[10] { from.X, from.Y, from.Z, to.X, to.Y, to.Z, c.R, c.G, c.B, c.A };
+            Call(4, v, 10);
+        }
+
+        internal static void Reset() => Color = new Color(1.0f, 0.8f, 0.2f);
     }
 
     // The editor's selection in the scene being edited.

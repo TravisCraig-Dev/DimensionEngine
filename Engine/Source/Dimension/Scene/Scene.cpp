@@ -49,6 +49,7 @@ namespace Dimension
 
     Scene::~Scene()
     {
+        EditModeScripts::Clear(this, true);
         if (m_Running) OnRuntimeStop();
     }
 
@@ -329,13 +330,20 @@ namespace Dimension
 
     std::shared_ptr<ScriptableEntity> Scene::CreateScriptInstance(Entity e, ScriptInstance& script, const ScriptInfo& info, const EntityRefResolver& resolver)
     {
+        auto instance = CreateDetachedScriptInstance(e, script, info, resolver);
+        script.Instance = instance;
+        return instance;
+    }
+
+    std::shared_ptr<ScriptableEntity> Scene::CreateDetachedScriptInstance(Entity e, const ScriptInstance& script, const ScriptInfo& info,
+                                                                          const EntityRefResolver& resolver)
+    {
         auto instance = info.Create();
         instance->m_Entity = e;
         instance->m_Scene = this;
         void* obj = info.ToObject(instance.get());
         for (auto& f : info.Fields)
-            if (script.Fields.contains(f.Name)) FieldFromJson(f, obj, script.Fields[f.Name], &resolver);
-        script.Instance = instance;
+            if (script.Fields.is_object() && script.Fields.contains(f.Name)) FieldFromJson(f, obj, script.Fields[f.Name], &resolver);
         return instance;
     }
 
