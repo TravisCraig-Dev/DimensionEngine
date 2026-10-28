@@ -172,6 +172,49 @@ namespace Dimension
             t == typeof(Prefab) ? 1 : t == typeof(Texture) ? 2 : t == typeof(Material) ? 3 : t == typeof(Mesh) ? 4 : t == typeof(AudioClip) ? 5 : 0;
     }
 
+    // Scene view drawing from OnDrawGizmos / OnDrawGizmosSelected (ignored anywhere else). Color and Matrix (applied to
+    // every shape) start over for each call.
+    public static unsafe class Gizmos
+    {
+        public static Color Color { get; set; } = Color.White;
+        public static Matrix4x4 Matrix { get; set; } = Matrix4x4.Identity;
+
+        internal static void Reset()
+        {
+            Color = Color.White;
+            Matrix = Matrix4x4.Identity;
+        }
+
+        public static void DrawLine(Vector3 from, Vector3 to)
+        {
+            Vector3 a = Vector3.Transform(from, Matrix), b = Vector3.Transform(to, Matrix);
+            Color c = Color;
+            float* data = stackalloc float[10] { a.X, a.Y, a.Z, b.X, b.Y, b.Z, c.R, c.G, c.B, c.A };
+            Native.Api.Gizmo(0, data);
+        }
+
+        public static void DrawRay(Vector3 from, Vector3 direction) => DrawLine(from, from + direction);
+
+        // Three circles around the center (through Matrix).
+        public static void DrawWireSphere(Vector3 center, float radius) => Shape(1, center, new Vector3(radius, 0, 0), 1);
+
+        public static void DrawWireCube(Vector3 center, Vector3 size) => Shape(2, center, size, 3);
+
+        private static void Shape(int kind, Vector3 center, Vector3 size, int sizeCount)
+        {
+            float* data = stackalloc float[26];
+            Matrix4x4 m = Matrix; // its memory is a column-major matrix with the translation in the last column
+            float* source = (float*)&m;
+            for (int i = 0; i < 16; ++i) data[i] = source[i];
+            data[16] = center.X; data[17] = center.Y; data[18] = center.Z;
+            data[19] = size.X; data[20] = size.Y; data[21] = size.Z;
+            Color c = Color;
+            int at = 19 + sizeCount;
+            data[at] = c.R; data[at + 1] = c.G; data[at + 2] = c.B; data[at + 3] = c.A;
+            Native.Api.Gizmo(kind, data);
+        }
+    }
+
     // The editor's selection in the scene being edited.
     public static unsafe class Selection
     {

@@ -161,6 +161,7 @@ namespace Editor
         glm::vec2 m_UIRectDragStart{ 0.0f }, m_UIRectStartPosition{ 0.0f }, m_UIRectStartSize{ 0.0f };
         bool DeleteLinePoint(); // removes the picked point; false when no point is picked
         bool m_ShowGrid = true;
+        bool m_ShowGizmos = true; // C# scripts' OnDrawGizmos in the Scene view
         bool m_WasWindowFocused = true;
         bool m_PickAdditive = false; // Ctrl+click toggles instead of replacing the selection
         // Game module hot reload

@@ -938,6 +938,41 @@ namespace Editor
             ImGui::EndDisabled();
             ImGui::SameLine();
             if (ImGui::SmallButton("x")) removeIndex = i;
+            // A C# script's [ContextMenu] items: run on the live script while playing, else on one holding the saved
+            // values (what they change in the fields is saved; the step is undoable).
+            if (const auto& items = CSharpRuntime::GetContextMenu(script.ClassName); info && !items.empty())
+            {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("...")) ImGui::OpenPopup("ContextMenu");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("The script's [ContextMenu] commands");
+                if (ImGui::BeginPopup("ContextMenu"))
+                {
+                    for (size_t k = 0; k < items.size(); ++k)
+                        if (ImGui::MenuItem(items[k].c_str()))
+                        {
+                            std::shared_ptr<ScriptableEntity> temp;
+                            ScriptableEntity* target = script.Instance.get();
+                            if (!target)
+                            {
+                                temp = info->Create();
+                                target = temp.get();
+                                for (auto& f : info->Fields)
+                                    if (script.Fields.is_object() && script.Fields.contains(f.Name))
+                                        FieldFromJson(f, info->ToObject(target), script.Fields[f.Name], &resolver);
+                            }
+                            m_Ctx.RecordUndo();
+                            if (CSharpRuntime::RunContextMenu(*target, k, scene, e))
+                            {
+                                auto& fields = reg.Get<ScriptComponent>(e).Scripts[i].Fields;
+                                if (!fields.is_object()) fields = nlohmann::json::object();
+                                for (auto& f : info->Fields) fields[f.Name] = FieldToJson(f, info->ToObject(target), &resolver);
+                                Prefabs::RecordFieldOverride(scene, e, "Script", "Scripts");
+                            }
+                            m_Ctx.MarkDirty();
+                        }
+                    ImGui::EndPopup();
+                }
+            }
 
             if (open)
             {

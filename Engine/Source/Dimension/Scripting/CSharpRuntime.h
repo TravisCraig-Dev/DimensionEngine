@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/Core/Base.h"
 #include "Dimension/ECS/Entity.h"
+#include <glm/glm.hpp>
 #include <functional>
 #include <string>
 #include <vector>
@@ -49,6 +50,18 @@ namespace Dimension
             std::string Name, Type, Value;
         };
         static std::vector<DebugField> GetDebugFields(ScriptableEntity& script, Scene& scene, Entity e);
+        // Scene view gizmos of the scene's C# scripts (world-space lines): every enabled script overriding
+        // OnDrawGizmos draws (the live script while playing, else a stand-in holding its saved values), and those of
+        // `selected` objects draw OnDrawGizmosSelected too.
+        struct GizmoLine
+        {
+            glm::vec3 A, B;
+            glm::vec4 Color;
+        };
+        static std::vector<GizmoLine> CollectGizmos(Scene& scene, const std::vector<Entity>& selected);
+        // A C# script's [ContextMenu] items, and running one (as InspectScript: true when its values changed).
+        static const std::vector<std::string>& GetContextMenu(const std::string& className);
+        static bool RunContextMenu(ScriptableEntity& script, size_t item, Scene& scene, Entity e);
         // What the extensions reach in the editor: controls (op, label, values, count; see EditorGUI in EditorApi.cs:
         // returns 1 when clicked/changed), a text field, the selection (0 get, 1 set, 2 create an entity named `text`,
         // 3 count (in Index), 4 the n-th (n in the entity's Index)), an undo step, and pickers for an entity and for

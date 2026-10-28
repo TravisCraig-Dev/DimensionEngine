@@ -28,6 +28,16 @@ namespace Dimension
         public HeaderAttribute(string text) { Text = text; }
     }
 
+    /// <summary>Lists a parameterless method in the script's Inspector menu ("..." on its header): choosing it runs the
+    /// method in the editor (on the script holding its saved values, or the live one while playing), and changes it
+    /// makes to the fields are saved as one undo step.</summary>
+    [AttributeUsage(AttributeTargets.Method)]
+    public sealed class ContextMenuAttribute : Attribute
+    {
+        public readonly string Name;
+        public ContextMenuAttribute(string name) { Name = name; }
+    }
+
     /// <summary>Keeps a public field saved with the scene but out of the Inspector.</summary>
     [AttributeUsage(AttributeTargets.Field)]
     public sealed class HideInInspectorAttribute : Attribute { }

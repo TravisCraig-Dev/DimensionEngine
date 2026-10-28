@@ -612,6 +612,9 @@ namespace Editor
             options.FrameDebugStop = m_ShowFrameDebugger ? m_FrameDebugger->StopFor(0) : -2;
             options.Highlighting = m_Ctx.HierarchySearch.find_first_not_of(' ') != std::string::npos;
             if (options.Highlighting) options.Highlight = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
+            // C# scripts' gizmos (OnDrawGizmos, and OnDrawGizmosSelected for the selection).
+            if (m_ShowGizmos)
+                for (const auto& g : CSharpRuntime::CollectGizmos(scene, m_Ctx.Selection)) m_SceneRenderer.DrawLine(g.A, g.B, g.Color);
             int timer = RenderDevice::Get().BeginGpuTimer(cmd, "Scene View");
             m_SceneRenderer.Render(cmd, scene, cam, *m_SceneTarget, options);
             RenderDevice::Get().EndGpuTimer(cmd, timer);
@@ -1244,6 +1247,9 @@ namespace Editor
             if (is2D) ImGui::PopStyleColor();
             ImGui::SameLine();
             ImGui::Checkbox("Grid", &m_ShowGrid);
+            ImGui::SameLine();
+            ImGui::Checkbox("Gizmos", &m_ShowGizmos);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scripts' gizmos (C# OnDrawGizmos) in the Scene view");
             ImGui::SameLine();
             // Snapping: the toggle, and its steps in the menu beside it.
             auto& prefs = EditorPreferences::Get();

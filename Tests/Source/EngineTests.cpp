@@ -7549,8 +7549,15 @@ namespace
                             if (d.Name == name) return d.Type + " " + d.Value;
                         return "(missing)";
                     };
-                    CHECK(debug.size() == 5 && debugValue(debug, "m_Origin") == "Vector3 (0, 0, 0)" && debugValue(debug, "m_Step") == "Int32 1" &&
+                    CHECK(debug.size() == 6 && debugValue(debug, "m_Origin") == "Vector3 (0, 0, 0)" && debugValue(debug, "m_Step") == "Int32 1" &&
                           debugValue(debug, "m_Finished") == "Boolean False" && debugValue(debug, "Points") == "(missing)");
+                    // [ContextMenu] commands, run on the script: their changes land in its fields.
+                    CHECK((CSharpRuntime::GetContextMenu("Game.Patrol") == std::vector<std::string>{ "Reverse Points", "Add Stop Ahead" }));
+                    CHECK(CSharpRuntime::RunContextMenu(*instance, 0, empty, empty.CreateEntity("Guard 2")));
+                    CHECK(FieldToJson(*points, obj, nullptr) == nlohmann::json::parse("[[4,0,0],[0,0,0],[4,0,4]]"));
+                    CHECK(CSharpRuntime::RunContextMenu(*instance, 1, empty, empty.CreateEntity("Guard 3")));
+                    CHECK(FieldToJson(*points, obj, nullptr) == nlohmann::json::parse("[[4,0,0],[0,0,0],[4,0,4],[4,0,2]]"));
+                    CHECK(!CSharpRuntime::RunContextMenu(*instance, 7, empty, empty.CreateEntity("Guard 4"))); // no such item
                 }
                 Scene walk("Walk");
                 Entity guard = walk.CreateEntity("Guard");
@@ -7561,6 +7568,18 @@ namespace
                 script.Fields["Speed"] = 4.0f;
                 script.Fields["Calls"] = nlohmann::json::array();
                 walk.UpdateTransforms();
+                // Gizmos in the Scene view: the route from the saved values (two lines from where the guard stands),
+                // and with it selected, a sphere (three 32-segment circles) at each stop.
+                auto gizmos = CSharpRuntime::CollectGizmos(walk, {});
+                CHECK(gizmos.size() == 2);
+                if (gizmos.size() == 2)
+                    CHECK(Near(gizmos[0].A, { 1, 0, 1 }) && Near(gizmos[0].B, { 3, 0, 1 }) && Near(gizmos[1].B, { 3, 0, 3 }) &&
+                          Near(glm::vec3(gizmos[0].Color), { 1.0f, 0.8f, 0.2f }) && Near(gizmos[0].Color.a, 1.0f));
+                gizmos = CSharpRuntime::CollectGizmos(walk, { guard });
+                CHECK(gizmos.size() == 2 + 3 * 96);
+                bool onSphere = gizmos.size() > 2;
+                for (size_t g = 2; g < gizmos.size() && g < 2 + 96; ++g) onSphere &= Near(glm::length(gizmos[g].A - glm::vec3(1, 0, 1)), 0.3f);
+                CHECK(onSphere);
                 auto rt = walk.Clone();
                 rt->OnRuntimeStart();
                 Entity runner = rt->FindEntityByName("Guard");
@@ -7568,6 +7587,9 @@ namespace
                 CHECK(Near(rt->GetRegistry().Get<TransformComponent>(runner).Position, { 2.0f, 0.0f, 1.0f }));
                 for (int i = 0; i < 105; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); // at the last stop, and staying (Once)
                 CHECK(Near(rt->GetRegistry().Get<TransformComponent>(runner).Position, { 3.0f, 0.0f, 3.0f }));
+                // While playing, the live script draws (the route stays where it started, not where the guard is).
+                auto liveGizmos = CSharpRuntime::CollectGizmos(*rt, {});
+                CHECK(liveGizmos.size() == 2 && Near(liveGizmos[0].A, { 1, 0, 1 }));
                 // Debug mode while playing: the live script's state.
                 if (auto& live = rt->GetRegistry().Get<ScriptComponent>(runner).Scripts[0].Instance)
                 {
@@ -7612,6 +7634,28 @@ namespace
                       nlohmann::json::parse(R"([{"Prefab":0,"Count":0,"Delay":0,"Sides":0},{"Prefab":0,"Count":3,"Delay":1,"Sides":5}])"));
                 FieldFromJson(*area, obj, nlohmann::json::parse(R"({"Radius":2})"), nullptr); // the rest kept
                 CHECK(FieldToJson(*area, obj, nullptr) == nlohmann::json::parse(R"({"Center":[0,0,0],"Radius":2})"));
+                // Its gizmos (only when selected), drawn through Gizmos.Matrix: a ring of the area's radius around it,
+                // and a box at each side its waves use (north and south by default).
+                Scene arena("Arena");
+                Entity spot = arena.CreateEntity("Spawner");
+                arena.GetRegistry().Get<TransformComponent>(spot).Position = { 10.0f, 0.0f, 0.0f };
+                arena.GetRegistry().Emplace<ScriptComponent>(spot).Add("Game.WaveSpawner");
+                arena.UpdateTransforms();
+                CHECK(CSharpRuntime::CollectGizmos(arena, {}).empty());
+                auto lines = CSharpRuntime::CollectGizmos(arena, { spot });
+                CHECK(lines.size() == 48 + 2 * 12);
+                bool flat = true, north = false, south = false;
+                for (size_t g = 0; g < lines.size(); ++g)
+                {
+                    const auto& line = lines[g];
+                    if (g < 48) flat &= Near(line.A.y, 0.0f) && Near(glm::length(glm::vec2(line.A.x - 10.0f, line.A.z)), 5.0f);
+                    else
+                    {
+                        north |= Near(line.A.z, -5.5f) && line.A.x >= 9.4f && line.A.x <= 10.6f;
+                        south |= Near(line.A.z, 4.5f) && line.A.x >= 9.4f && line.A.x <= 10.6f;
+                    }
+                }
+                CHECK(flat && north && south);
             }
             AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
             AssetHandle ball = AssetManager::GetHandle(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Prefabs/Ball.prefab");

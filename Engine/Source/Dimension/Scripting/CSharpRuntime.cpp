@@ -14,6 +14,7 @@
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
 #include <nlohmann/json.hpp>
+#include <glm/gtc/constants.hpp>
 #include <algorithm>
 #include <cstring>
 #include <deque>
@@ -140,6 +141,7 @@ namespace Dimension
             void (*EditorUndo)(const char*);
             void (*RegisterEditorItem)(const char*);
             uint64_t (*EditorGuiRef)(int, const char*, uint64_t); // 0 an entity (packed), else an asset kind (1 Prefab ... 5 Audio)
+            void (*Gizmo)(int, const float*); // 0 line, 1 wire sphere, 2 wire cube (see Gizmos in EditorApi.cs)
         };
 
         // Background scene loads started from C#, by id.
@@ -166,7 +168,55 @@ namespace Dimension
             const char* (*DrawField)(int, intptr_t, const char*, const char*, void*, uint64_t);
             // The Inspector's Debug mode: unsaved fields as text, JSON [{name, type, value}] (arguments as DrawField's)
             const char* (*DebugFields)(int, intptr_t, const char*, const char*, void*, uint64_t);
+            // OnDrawGizmos (1: and OnDrawGizmosSelected); [ContextMenu] item n (the values after). As DrawField's.
+            const char* (*DrawGizmos)(int, intptr_t, const char*, const char*, void*, uint64_t);
+            const char* (*RunContextMenu)(int, intptr_t, const char*, const char*, void*, uint64_t);
         };
+        // Where gizmos go while a script draws them (null: they are dropped).
+        std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
+
+        // A gizmo shape as lines into the sink: 1 three circles (center, radius), 2 a box's twelve edges (center, size);
+        // `data` as Gizmos.Shape writes it (a matrix, then the shape, then the color).
+        void AddGizmo(int kind, const float* data)
+        {
+            if (!s_GizmoSink) return;
+            if (kind == 0)
+            {
+                s_GizmoSink->push_back({ { data[0], data[1], data[2] }, { data[3], data[4], data[5] }, { data[6], data[7], data[8], data[9] } });
+                return;
+            }
+            glm::mat4 m;
+            std::memcpy(&m, data, sizeof(m));
+            glm::vec3 center(data[16], data[17], data[18]);
+            auto at = [&](const glm::vec3& p) { return glm::vec3(m * glm::vec4(p, 1.0f)); };
+            if (kind == 1)
+            {
+                float radius = data[19];
+                glm::vec4 color(data[20], data[21], data[22], data[23]);
+                constexpr int kSegments = 32;
+                for (int axis = 0; axis < 3; ++axis)
+                    for (int s = 0; s < kSegments; ++s)
+                    {
+                        auto point = [&](int k) {
+                            float t = glm::two_pi<float>() * (float)k / kSegments;
+                            glm::vec3 p(0.0f);
+                            p[(axis + 1) % 3] = std::cos(t) * radius;
+                            p[(axis + 2) % 3] = std::sin(t) * radius;
+                            return at(center + p);
+                        };
+                        s_GizmoSink->push_back({ point(s), point(s + 1), color });
+                    }
+            }
+            else if (kind == 2)
+            {
+                glm::vec3 half = glm::vec3(data[19], data[20], data[21]) * 0.5f;
+                glm::vec4 color(data[22], data[23], data[24], data[25]);
+                auto corner = [&](int i) { return at(center + half * glm::vec3(i & 1 ? 1.0f : -1.0f, i & 2 ? 1.0f : -1.0f, i & 4 ? 1.0f : -1.0f)); };
+                for (int i = 0; i < 8; ++i)
+                    for (int bit = 1; bit < 8; bit <<= 1)
+                        if (!(i & bit)) s_GizmoSink->push_back({ corner(i), corner(i | bit), color });
+            }
+        }
         CSharpRuntime::EditorHooks s_EditorHooks;
         std::vector<CSharpRuntime::EditorItem> s_EditorItems;
 
@@ -327,6 +377,8 @@ namespace Dimension
             Layout Values;
             std::deque<Layout> NestedLayouts; // the [Serializable] types' (stable addresses)
             std::vector<bool> Drawn;          // per field: a C# property drawer draws it
+            bool HasGizmos = false;           // overrides OnDrawGizmos or OnDrawGizmosSelected
+            std::vector<std::string> ContextMenu;
         };
 
         // A field's (or list element's) slot and Inspector type from its registration ("type", and for enums
@@ -551,6 +603,15 @@ namespace Dimension
             bool DrawField(size_t index, Scene& scene, Entity e) { return Draw(s_Managed.DrawField, (int)index, scene, e); }
             const ManagedClass& Class() const { return *m_Class; }
 
+            void DrawGizmos(bool selected, Scene& scene, Entity e) const
+            {
+                if (!s_Managed.DrawGizmos || !m_Class->HasGizmos) return;
+                std::string values = SlotsJson().dump();
+                s_Managed.DrawGizmos(selected ? 1 : 0, m_Handle, m_Class->Name.c_str(), values.c_str(), &scene, Pack(e));
+            }
+
+            bool RunContextMenu(size_t item, Scene& scene, Entity e) { return Draw(s_Managed.RunContextMenu, (int)item, scene, e); }
+
             std::vector<CSharpRuntime::DebugField> DebugFields(Scene& scene, Entity e) const
             {
                 std::vector<CSharpRuntime::DebugField> out;
@@ -664,6 +725,8 @@ namespace Dimension
                 ManagedClass& cls = s_Classes.emplace_back();
                 cls.Name = j.at("name").get<std::string>();
                 BuildLayout(j.at("fields"), cls.Values, cls);
+                cls.HasGizmos = j.value("gizmos", false);
+                for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
                 for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
 
                 ScriptInfo& info = ScriptRegistry::RegisterDynamic(cls.Name, "csharp");
@@ -789,6 +852,7 @@ namespace Dimension
                 return op == 3 ? (uint64_t)out.Index : Pack(out);
             };
             a.EditorUndo = [](const char* name) { if (s_EditorHooks.Undo) s_EditorHooks.Undo(name ? name : ""); };
+            a.Gizmo = [](int kind, const float* data) { AddGizmo(kind, data); };
             a.EditorGuiRef = [](int kind, const char* label, uint64_t value) -> uint64_t {
                 if (kind == 0) return s_EditorHooks.EntityField ? Pack(s_EditorHooks.EntityField(label ? label : "", Unpack(value))) : value;
                 return s_EditorHooks.AssetField ? s_EditorHooks.AssetField(kind, label ? label : "", value) : value;
@@ -1217,6 +1281,55 @@ namespace Dimension
         return managed && field < managed->Class().Drawn.size() && managed->Class().Drawn[field];
     }
 
+    std::vector<CSharpRuntime::GizmoLine> CSharpRuntime::CollectGizmos(Scene& scene, const std::vector<Entity>& selected)
+    {
+        std::vector<GizmoLine> lines;
+        if (!s_Available || !s_Managed.DrawGizmos) return lines;
+        EntityRefResolver resolver;
+        resolver.FromGuid = [&scene](uint64_t g) { return scene.FindEntityByGuid(Guid(g)); };
+        s_GizmoSink = &lines;
+        auto& reg = scene.GetRegistry();
+        for (auto [e, sc] : reg.ViewOf<ScriptComponent>())
+        {
+            if (auto* t = reg.TryGet<TransformComponent>(e); t && !t->ActiveInHierarchy) continue;
+            bool isSelected = std::find(selected.begin(), selected.end(), e) != selected.end();
+            for (ScriptInstance& script : sc.Scripts)
+            {
+                if (!script.Enabled) continue;
+                const ScriptInfo* info = ScriptRegistry::Find(script.ClassName);
+                if (!info || info->Module != "csharp") continue;
+                // The live script while playing, else a stand-in holding the saved values.
+                std::shared_ptr<ScriptableEntity> temp;
+                ScriptableEntity* target = script.Instance.get();
+                if (!target)
+                {
+                    temp = info->Create();
+                    target = temp.get();
+                    void* obj = info->ToObject(target);
+                    for (auto& f : info->Fields)
+                        if (script.Fields.is_object() && script.Fields.contains(f.Name)) FieldFromJson(f, obj, script.Fields[f.Name], &resolver);
+                }
+                if (auto* managed = dynamic_cast<ManagedScript*>(target)) managed->DrawGizmos(isSelected, scene, e);
+            }
+        }
+        s_GizmoSink = nullptr;
+        return lines;
+    }
+
+    const std::vector<std::string>& CSharpRuntime::GetContextMenu(const std::string& className)
+    {
+        static const std::vector<std::string> none;
+        for (const ManagedClass& cls : s_Classes)
+            if (cls.Name == className) return cls.ContextMenu;
+        return none;
+    }
+
+    bool CSharpRuntime::RunContextMenu(ScriptableEntity& script, size_t item, Scene& scene, Entity e)
+    {
+        auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
+        return managed && managed->RunContextMenu(item, scene, e);
+    }
+
     std::vector<CSharpRuntime::DebugField> CSharpRuntime::GetDebugFields(ScriptableEntity& script, Scene& scene, Entity e)
     {
         auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
@@ -1278,6 +1391,9 @@ namespace Dimension
     bool CSharpRuntime::HasFieldDrawer(ScriptableEntity&, size_t) { return false; }
     bool CSharpRuntime::DrawScriptField(ScriptableEntity&, size_t, Scene&, Entity) { return false; }
     std::vector<CSharpRuntime::DebugField> CSharpRuntime::GetDebugFields(ScriptableEntity&, Scene&, Entity) { return {}; }
+    std::vector<CSharpRuntime::GizmoLine> CSharpRuntime::CollectGizmos(Scene&, const std::vector<Entity>&) { return {}; }
+    const std::vector<std::string>& CSharpRuntime::GetContextMenu(const std::string&) { static const std::vector<std::string> none; return none; }
+    bool CSharpRuntime::RunContextMenu(ScriptableEntity&, size_t, Scene&, Entity) { return false; }
     bool CSharpRuntime::IsDebuggerAttached() { return false; }
     bool CSharpRuntime::LaunchDebugger() { return false; }
     bool CSharpRuntime::WaitForDebugger(float) { return false; }

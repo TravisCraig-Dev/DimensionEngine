@@ -33,6 +33,7 @@ namespace Dimension
         {
             public Type Type;
             public List<FieldInfo> Fields = new();
+            public List<MethodInfo> ContextMenu = new(); // [ContextMenu] methods, in order
         }
 
         private static ScriptLoadContext s_Context;
@@ -245,6 +246,53 @@ namespace Dimension
             Marshal.Copy(json, 0, s_FieldsBuffer, json.Length);
             ((byte*)s_FieldsBuffer)[json.Length] = 0;
             return (byte*)s_FieldsBuffer;
+        }
+
+        private static readonly HashSet<Type> s_GizmoFailures = new(); // logged once each
+
+        // The Scene view's gizmos of a script (the script as Inspect finds it): OnDrawGizmos, and OnDrawGizmosSelected
+        // when `selected` is 1. What they draw reaches the engine through Gizmos.
+        [UnmanagedCallersOnly]
+        internal static byte* DrawGizmos(int selected, IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
+        {
+            Behaviour target = null;
+            try
+            {
+                Native.CurrentScene = scene;
+                target = TargetFor(handle, classUtf8, fieldsUtf8, scene, entity);
+                if (target == null) return null;
+                Gizmos.Reset();
+                target.OnDrawGizmos();
+                if (selected != 0)
+                {
+                    Gizmos.Reset();
+                    target.OnDrawGizmosSelected();
+                }
+            }
+            catch (Exception e)
+            {
+                if (target != null && s_GizmoFailures.Add(target.GetType())) Debug.LogError($"{target.GetType().Name}.OnDrawGizmos failed: {e}");
+            }
+            return null;
+        }
+
+        // Runs [ContextMenu] item `index` of a script (as Inspect finds it); returns its values after.
+        [UnmanagedCallersOnly]
+        internal static byte* RunContextMenu(int index, IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
+        {
+            try
+            {
+                Native.CurrentScene = scene;
+                Behaviour target = TargetFor(handle, classUtf8, fieldsUtf8, scene, entity);
+                if (target == null || !s_Classes.TryGetValue(target.GetType().FullName, out var cls) || index < 0 || index >= cls.ContextMenu.Count) return null;
+                cls.ContextMenu[index].Invoke(target, null);
+                return FieldsJson(target);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Context menu item failed: {(e as TargetInvocationException)?.InnerException ?? e}");
+                return null;
+            }
         }
 
         // The live script (`handle`), or one made from its class and saved values.
@@ -573,6 +621,18 @@ namespace Dimension
                         w.WriteStartObject();
                         w.WriteString("name", type.FullName);
                         if (type.GetCustomAttribute<AddComponentMenuAttribute>() is { } menu) w.WriteString("menu", menu.Path);
+                        // Gizmos (an OnDrawGizmos or OnDrawGizmosSelected of its own) and [ContextMenu] methods.
+                        bool Overrides(string name) => type.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)?.DeclaringType != typeof(Behaviour);
+                        if (Overrides(nameof(Behaviour.OnDrawGizmos)) || Overrides(nameof(Behaviour.OnDrawGizmosSelected))) w.WriteBoolean("gizmos", true);
+                        w.WriteStartArray("contextMenu");
+                        for (Type t = type; t != null && t != typeof(Behaviour); t = t.BaseType)
+                            foreach (MethodInfo m in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                                if (m.GetCustomAttribute<ContextMenuAttribute>() is { } item && m.GetParameters().Length == 0)
+                                {
+                                    cls.ContextMenu.Add(m);
+                                    w.WriteStringValue(item.Name);
+                                }
+                        w.WriteEndArray();
                         w.WriteStartArray("requires");
                         foreach (var require in type.GetCustomAttributes<RequireComponentAttribute>(true))
                             foreach (Type t in require.Types)
@@ -613,6 +673,7 @@ namespace Dimension
             s_Classes.Clear();
             s_EditorItems.Clear();
             s_Drawers.Clear();
+            s_GizmoFailures.Clear();
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);

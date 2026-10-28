@@ -36,6 +36,11 @@ namespace Dimension
         /// <summary>Called instead of OnCreate when the scripts were recompiled and reloaded while playing. Serialized
         /// fields (public and [SerializeField]) keep their values; other state, coroutines and event listeners start over.</summary>
         public virtual void OnReloaded() { }
+        /// <summary>Called in the editor to draw the script's gizmos (Gizmos.DrawLine, ...) in the Scene view: while
+        /// playing on the live script, otherwise on one holding its saved values (OnCreate has not run).</summary>
+        public virtual void OnDrawGizmos() { }
+        /// <summary>As OnDrawGizmos, for scripts of the selected objects only.</summary>
+        public virtual void OnDrawGizmosSelected() { }
 
         // ---- Coroutines and delayed calls (like MonoBehaviour) ---------------------------------
         internal CoroutineRunner Coroutines;

@@ -37,6 +37,26 @@ namespace Game
         private int m_Next;
         private float m_Timer;
 
+        // Selected: the area's ring, and a box at each side some wave uses (drawn through a matrix at the center).
+        public override void OnDrawGizmosSelected()
+        {
+            Vector3 center = Transform.Position + Area.Center;
+            Gizmos.Color = new Color(0.3f, 0.8f, 1.0f);
+            Gizmos.Matrix = Matrix4x4.CreateTranslation(center);
+            const int segments = 48;
+            for (int i = 0; i < segments; ++i)
+            {
+                float a = MathF.Tau * i / segments, b = MathF.Tau * (i + 1) / segments;
+                Gizmos.DrawLine(new Vector3(MathF.Cos(a), 0, MathF.Sin(a)) * Area.Radius, new Vector3(MathF.Cos(b), 0, MathF.Sin(b)) * Area.Radius);
+            }
+            SpawnSides used = SpawnSides.None;
+            foreach (Wave wave in Waves) used |= wave.Sides;
+            if ((used & SpawnSides.North) != 0) Gizmos.DrawWireCube(new Vector3(0, 0.5f, -Area.Radius), Vector3.One);
+            if ((used & SpawnSides.East) != 0) Gizmos.DrawWireCube(new Vector3(Area.Radius, 0.5f, 0), Vector3.One);
+            if ((used & SpawnSides.South) != 0) Gizmos.DrawWireCube(new Vector3(0, 0.5f, Area.Radius), Vector3.One);
+            if ((used & SpawnSides.West) != 0) Gizmos.DrawWireCube(new Vector3(-Area.Radius, 0.5f, 0), Vector3.One);
+        }
+
         public override void OnUpdate(float dt)
         {
             if (m_Next >= Waves.Count) return;

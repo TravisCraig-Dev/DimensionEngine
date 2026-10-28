@@ -19,10 +19,34 @@ namespace Game
 
         private Vector3 m_Origin;
         private int m_Target, m_Step = 1, m_Calls;
-        private bool m_Finished;
+        private bool m_Finished, m_Started;
+
+        // In the Scene view: the route (from where the object stands until it plays), and when selected, each stop.
+        private Vector3 RouteOrigin => m_Started ? m_Origin : Transform.Position;
+
+        public override void OnDrawGizmos()
+        {
+            Gizmos.Color = new Color(1.0f, 0.8f, 0.2f);
+            for (int i = 0; i + 1 < Points.Count; ++i) Gizmos.DrawLine(RouteOrigin + Points[i], RouteOrigin + Points[i + 1]);
+            if (Mode == PatrolMode.Loop && Points.Count > 2) Gizmos.DrawLine(RouteOrigin + Points[^1], RouteOrigin + Points[0]);
+        }
+
+        public override void OnDrawGizmosSelected()
+        {
+            Gizmos.Color = new Color(1.0f, 0.5f, 0.1f);
+            foreach (Vector3 point in Points) Gizmos.DrawWireSphere(RouteOrigin + point, 0.3f);
+        }
+
+        // The script's Inspector menu ("..."): commands on the saved values.
+        [ContextMenu("Reverse Points")]
+        private void ReversePoints() => Points.Reverse();
+
+        [ContextMenu("Add Stop Ahead")]
+        private void AddStopAhead() => Points.Add((Points.Count > 0 ? Points[^1] : Vector3.Zero) + new Vector3(0, 0, -2));
 
         public override void OnCreate()
         {
+            m_Started = true;
             m_Origin = Transform.Position;
             m_Target = Points.Count > 1 ? 1 : 0;
         }

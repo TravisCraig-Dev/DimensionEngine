@@ -109,6 +109,9 @@ namespace Dimension.Interop
         public delegate* unmanaged<byte*, void> RegisterEditorItem;
         // A picker: kind 0 an entity (packed id), else an asset GUID of that kind (see EditorGUI.AssetKind).
         public delegate* unmanaged<int, byte*, ulong, ulong> EditorGuiRef;
+        // A gizmo while OnDrawGizmos runs: 0 a line (from, to, color), 1 a wire sphere (matrix, center, radius,
+        // color), 2 a wire cube (matrix, center, size, color).
+        public delegate* unmanaged<int, float*, void> Gizmo;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
@@ -133,6 +136,10 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> DrawField;
         // The Inspector's Debug mode: a script's unsaved fields as text (arguments as DrawField's)
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> DebugFields;
+        // OnDrawGizmos (and OnDrawGizmosSelected when the first argument is 1), and [ContextMenu] item n (returns the
+        // values after); the rest as DrawField's
+        public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> DrawGizmos;
+        public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> RunContextMenu;
     }
 
     internal static unsafe class Native
@@ -189,6 +196,8 @@ namespace Dimension.Interop
                 api->Inspect = &ScriptHost.Inspect;
                 api->DrawField = &ScriptHost.DrawField;
                 api->DebugFields = &ScriptHost.DebugFields;
+                api->DrawGizmos = &ScriptHost.DrawGizmos;
+                api->RunContextMenu = &ScriptHost.RunContextMenu;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }
