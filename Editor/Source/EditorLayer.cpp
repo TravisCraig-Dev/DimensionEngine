@@ -117,6 +117,8 @@ namespace Editor
         m_Navigation = MakeScope<NavigationPanel>(m_Ctx);
         m_Profiler = MakeScope<ProfilerPanel>();
         m_FrameDebugger = MakeScope<FrameDebuggerPanel>(m_Ctx);
+        m_MaterialPreviews = MakeScope<MaterialPreviews>();
+        m_Ctx.Previews = m_MaterialPreviews.get();
         Navigation::ApplyAreaNames(); // the project's area names in the Area dropdowns
 
         // Per-project editor layout (like Unity's Library/ folder, not meant for version control).
@@ -179,6 +181,12 @@ namespace Editor
             }
             FocusSelected();
         }
+        if (!m_Options.SelectAsset.empty())
+            if (AssetHandle h = AssetManager::GetHandle(m_Options.SelectAsset); h.IsValid())
+            {
+                m_Ctx.SelectAsset(h);
+                m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m_Options.SelectAsset).parent_path());
+            }
         if (m_Options.StartInPlayMode) Play();
     }
 
@@ -554,6 +562,7 @@ namespace Editor
 
     void EditorLayer::OnRender(VkCommandBuffer cmd)
     {
+        m_MaterialPreviews->Render(cmd);
         Scene& scene = m_Ctx.ActiveScene();
         if (m_SceneViewVisible)
         {

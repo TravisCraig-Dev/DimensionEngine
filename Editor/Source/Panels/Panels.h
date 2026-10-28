@@ -49,6 +49,7 @@ namespace Editor
         explicit ContentBrowserPanel(EditorContext& ctx) : m_Ctx(ctx) {}
         void OnImGui(bool* open);
         const fs::path& GetCurrentDirectory() const { return m_Current; }
+        void ShowDirectory(const fs::path& dir) { m_Current = dir; }
         void ImportFiles(const std::vector<fs::path>& files);
 
     private:

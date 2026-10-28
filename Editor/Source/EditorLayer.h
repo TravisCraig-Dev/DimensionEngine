@@ -5,6 +5,7 @@
 #include "Panels/Panels.h"
 #include <Dimension/Core/Application.h>
 #include <Dimension/Renderer/SceneRenderer.h>
+#include "MaterialPreviews.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <atomic>
 #include <memory>
@@ -15,6 +16,7 @@ namespace Editor
     {
         bool StartInPlayMode = false;
         std::string SelectEntity; // select by name on startup (automation/testing)
+        std::string SelectAsset;  // --select-asset path: select this asset (Assets-relative) and show its folder in the Project window
         std::string FocusWindow;  // bring a panel to front on startup (automation/testing)
         std::string BuildFolder;  // batch build: build the project here and exit (CI)
         std::string ScenePath;    // open this scene instead of the project's start scene
@@ -160,6 +162,7 @@ namespace Editor
         bool m_ShowTimeline = false;
         bool m_ShowNavigation = false;
         bool m_ShowFrameDebugger = false;
+        Scope<MaterialPreviews> m_MaterialPreviews;
         Scope<FrameDebuggerPanel> m_FrameDebugger;
         bool m_ShowProfiler = false;
         bool m_ShowStats = true, m_ShowSceneSettings = true, m_ShowProjectSettings = false, m_ShowAbout = false;

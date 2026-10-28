@@ -11,6 +11,7 @@
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Animation/Timeline.h"
+#include "Dimension/Renderer/SpriteAtlas.h"
 #include "embedded/kDefaultFontData.h"
 #include <algorithm>
 #include <cmath>
@@ -37,6 +38,10 @@ namespace Dimension
             std::unordered_map<AssetHandle, Ref<Font>> Fonts;
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
             std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
+            std::unordered_map<AssetHandle, Ref<SpriteAtlas>> SpriteAtlases;
+            // Sprite texture -> (atlas, region), rebuilt when assets or atlases change.
+            std::unordered_map<AssetHandle, std::pair<AssetHandle, glm::vec4>> AtlasIndex;
+            bool AtlasIndexDirty = true;
             // Model sub-assets (embedded materials/textures), keyed by the model.
             std::unordered_map<AssetHandle, std::vector<AssetHandle>> MeshMaterials;
             std::unordered_map<AssetHandle, std::vector<std::string>> MeshMaterialNames;
@@ -78,12 +83,21 @@ namespace Dimension
 
         void Register(AssetMetadata m)
         {
+            s->AtlasIndexDirty = true;
             s->PathToHandle[Key(m.Path)] = m.Handle;
             s->Assets[m.Handle] = std::move(m);
         }
 
         void Unload(AssetHandle h)
         {
+            // An atlas, or a sprite packed into atlases: packed again when next asked for.
+            s->AtlasIndexDirty = true;
+            s->SpriteAtlases.erase(h);
+            for (auto it = s->SpriteAtlases.begin(); it != s->SpriteAtlases.end();)
+                if (it->second && std::find(it->second->Sprites.begin(), it->second->Sprites.end(), h) != it->second->Sprites.end())
+                    it = s->SpriteAtlases.erase(it);
+                else
+                    ++it;
             if (auto it = s->SubAssets.find(h); it != s->SubAssets.end())
             {
                 for (AssetHandle sub : it->second)
@@ -119,6 +133,7 @@ namespace Dimension
         case AssetType::Font: return "Font";
         case AssetType::AnimatorController: return "Animator Controller";
         case AssetType::Timeline: return "Timeline";
+        case AssetType::SpriteAtlas: return "Sprite Atlas";
         default: return "None";
         }
     }
@@ -242,6 +257,7 @@ namespace Dimension
         if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
         if (ext == ".controller") return AssetType::AnimatorController;
         if (ext == ".timeline") return AssetType::Timeline;
+        if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" || ext == ".opus") return AssetType::Audio;
         return AssetType::None;
     }
@@ -749,6 +765,70 @@ namespace Dimension
         TimelineAsset timeline;
         if (!timeline.Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
+    }
+
+    Ref<SpriteAtlas> AssetManager::GetSpriteAtlas(AssetHandle handle)
+    {
+        if (!handle.IsValid() || !s) return nullptr;
+        if (auto it = s->SpriteAtlases.find(handle); it != s->SpriteAtlases.end()) return it->second;
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::SpriteAtlas) return nullptr;
+        auto atlas = SpriteAtlas::Load(s->AssetsDir / meta->Path);
+        atlas->Pack();
+        atlas->CreateTexture();
+        s->SpriteAtlases[handle] = atlas;
+        s->AtlasIndexDirty = true;
+        return atlas;
+    }
+
+    void AssetManager::SaveSpriteAtlas(AssetHandle handle)
+    {
+        auto it = s->SpriteAtlases.find(handle);
+        auto* meta = GetMetadata(handle);
+        if (it == s->SpriteAtlases.end() || !it->second || !meta) return;
+        fs::path path = s->AssetsDir / meta->Path;
+        it->second->Save(path);
+        std::error_code ec;
+        s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
+        it->second->Pack();
+        it->second->CreateTexture();
+        s->AtlasIndexDirty = true;
+    }
+
+    AssetHandle AssetManager::CreateSpriteAtlas(const fs::path& absolutePath, const std::vector<AssetHandle>& sprites)
+    {
+        SpriteAtlas atlas;
+        atlas.Sprites = sprites;
+        if (!atlas.Save(absolutePath)) return AssetHandle::None();
+        return Import(absolutePath);
+    }
+
+    Ref<Texture2D> AssetManager::FindInAtlas(AssetHandle texture, glm::vec4& region)
+    {
+        if (!s || !texture.IsValid()) return nullptr;
+        if (s->AtlasIndexDirty)
+        {
+            s->AtlasIndexDirty = false;
+            s->AtlasIndex.clear();
+            for (auto& [h, meta] : s->Assets)
+            {
+                if (meta.Type != AssetType::SpriteAtlas) continue;
+                auto atlas = GetSpriteAtlas(h);
+                if (!atlas) continue;
+                for (auto& [sprite, rect] : atlas->Regions) s->AtlasIndex.emplace(sprite, std::make_pair(h, rect));
+            }
+            s->AtlasIndexDirty = false; // (packing above marked it again)
+        }
+        auto it = s->AtlasIndex.find(texture);
+        if (it == s->AtlasIndex.end()) return nullptr;
+        auto atlas = s->SpriteAtlases.find(it->second.first);
+        if (atlas == s->SpriteAtlases.end() || !atlas->second || !atlas->second->Texture)
+        {
+            s->AtlasIndexDirty = true; // unloaded since
+            return nullptr;
+        }
+        region = it->second.second;
+        return atlas->second->Texture;
     }
 
     Ref<Texture2D> AssetManager::GetCircleTexture()

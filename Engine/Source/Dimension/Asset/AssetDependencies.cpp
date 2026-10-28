@@ -33,7 +33,7 @@ namespace Dimension::AssetDependencies
         bool IsJsonAsset(const fs::path& path)
         {
             std::string ext = LowerExtension(path);
-            return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller";
+            return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller" || ext == ".spriteatlas";
         }
 
         // Relative URIs inside a .gltf (buffers and images), resolved against the model's folder (Assets-relative).
@@ -88,7 +88,7 @@ namespace Dimension::AssetDependencies
         std::vector<AssetHandle> pending(roots.begin(), roots.end());
 
         // Everything under Assets/Resources ships, like Unity's Resources folders.
-        for (int type = (int)AssetType::Texture; type <= (int)AssetType::Timeline; ++type)
+        for (int type = (int)AssetType::Texture; type <= (int)AssetType::SpriteAtlas; ++type)
             for (AssetHandle h : AssetManager::GetAssetsOfType((AssetType)type))
                 if (const AssetMetadata* m = AssetManager::GetMetadata(h))
                 {
@@ -128,6 +128,21 @@ namespace Dimension::AssetDependencies
             }
             for (AssetHandle dep : found)
                 if (!set.Assets.contains(dep)) pending.push_back(dep);
+            // Sprite atlases holding a shipped texture ship too (sprites draw from them).
+            if (pending.empty())
+                for (AssetHandle atlas : AssetManager::GetAssetsOfType(AssetType::SpriteAtlas))
+                {
+                    if (set.Assets.contains(atlas)) continue;
+                    std::vector<AssetHandle> sprites;
+                    try
+                    {
+                        ScanJson(json::parse(std::ifstream(assets / AssetManager::GetMetadata(atlas)->Path)), sprites);
+                    }
+                    catch (const std::exception&)
+                    {
+                    }
+                    if (std::any_of(sprites.begin(), sprites.end(), [&](AssetHandle h) { return set.Assets.contains(h); })) pending.push_back(atlas);
+                }
         }
         return set;
     }

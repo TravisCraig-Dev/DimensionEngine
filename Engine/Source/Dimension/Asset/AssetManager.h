@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/Core/Base.h"
 #include "Dimension/Core/Guid.h"
+#include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
 namespace Dimension
@@ -13,8 +14,9 @@ namespace Dimension
     class Font;
     struct AnimatorController;
     struct TimelineAsset;
+    struct SpriteAtlas;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -96,6 +98,13 @@ namespace Dimension
         static Ref<TimelineAsset> GetTimeline(AssetHandle handle);
         static void SaveTimeline(AssetHandle handle);
         static AssetHandle CreateTimeline(const fs::path& absolutePath);
+        // Sprite atlases (.spriteatlas): packed when first asked for (and again after a sprite or the atlas changes);
+        // SaveSpriteAtlas writes changes and packs again. CreateSpriteAtlas packs the given textures.
+        static Ref<SpriteAtlas> GetSpriteAtlas(AssetHandle handle);
+        static void SaveSpriteAtlas(AssetHandle handle);
+        static AssetHandle CreateSpriteAtlas(const fs::path& absolutePath, const std::vector<AssetHandle>& sprites);
+        // The atlas page a sprite texture is packed into, and its region there (UVs: xy min, zw max); null when none.
+        static Ref<Texture2D> FindInAtlas(AssetHandle texture, glm::vec4& region);
         static Ref<Font> GetDefaultFont();
         static Ref<Texture2D> GetWhiteTexture();
         static Ref<Texture2D> GetCheckerTexture();

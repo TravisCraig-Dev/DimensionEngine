@@ -2,6 +2,7 @@
 #include <Dimension/Dimension.h>
 #include <Dimension/Scene/ComponentRegistry.h>
 #include <Dimension/Scene/SceneSerializer.h>
+#include <Dimension/Renderer/SpriteAtlas.h>
 #include <Dimension/Renderer/Material.h>
 #include <Dimension/UI/UI.h>
 #include <Dimension/Animation/Animation.h>
@@ -8429,6 +8430,65 @@ namespace
         CHECK(Near(min4, min3 + glm::vec2(8)) && Near(max4, max3 + glm::vec2(8)));
     }
 
+    void TestSpriteAtlas()
+    {
+        // Packing: nothing overlaps or leaves the page, padding kept; the page grows (powers of two) as needed, and
+        // what cannot fit Max Size is left out.
+        std::vector<glm::ivec2> sizes = { { 64, 64 }, { 32, 16 }, { 100, 20 }, { 16, 64 }, { 8, 8 }, { 50, 50 } };
+        RectPacking p = PackRects(sizes, 2, 1024);
+        bool inside = true, apart = true;
+        for (size_t i = 0; i < sizes.size(); ++i)
+        {
+            inside &= p.Placed[i] && p.Positions[i].x >= 2 && p.Positions[i].y >= 2 && p.Positions[i].x + sizes[i].x <= (int)p.Width - 2 &&
+                      p.Positions[i].y + sizes[i].y <= (int)p.Height - 2;
+            for (size_t j = 0; j < i; ++j)
+            {
+                glm::ivec2 a = p.Positions[i], b = p.Positions[j];
+                bool separate = a.x + sizes[i].x + 2 <= b.x || b.x + sizes[j].x + 2 <= a.x || a.y + sizes[i].y + 2 <= b.y || b.y + sizes[j].y + 2 <= a.y;
+                apart &= separate;
+            }
+        }
+        CHECK(inside && apart && p.Width <= 256 && p.Height <= 256 && (p.Width & (p.Width - 1)) == 0);
+        RectPacking tight = PackRects({ { 300, 300 }, { 10, 10 } }, 2, 256);
+        CHECK(!tight.Placed[0] && tight.Placed[1]);
+
+        // The Sandbox's atlas: its sprites packed, each region holding that sprite's pixels (and its edge repeated into
+        // the padding); it saves and loads.
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        AssetHandle handle = AssetManager::GetHandle("Sprites/Sprites.spriteatlas");
+        CHECK(handle.IsValid() && AssetManager::GetMetadata(handle)->Type == AssetType::SpriteAtlas);
+        auto atlas = SpriteAtlas::Load(AssetManager::GetAbsolutePath(handle));
+        atlas->Pack();
+        CHECK(atlas->Sprites.size() == 4 && atlas->Regions.size() == 4 && atlas->Left.empty() && atlas->Pixels.size() == (size_t)atlas->Width * atlas->Height);
+        // The box alone without padding: a page that is just its image, to compare with.
+        AssetHandle box = AssetManager::GetHandle("Sprites/Box.png");
+        SpriteAtlas alone;
+        alone.Sprites = { box };
+        alone.Padding = 0;
+        alone.Pack();
+        glm::vec4 whole = alone.Regions.contains(box) ? alone.Regions[box] : glm::vec4(0.0f);
+        int w = (int)std::lround(whole.z * alone.Width), h = (int)std::lround(whole.w * alone.Height);
+        CHECK(w > 0 && h > 0 && atlas->Regions.contains(box));
+        if (w > 0 && atlas->Regions.contains(box))
+        {
+            glm::vec4 r = atlas->Regions[box];
+            int x0 = (int)std::lround(r.x * atlas->Width), y0 = (int)std::lround(r.y * atlas->Height);
+            CHECK(Near((r.z - r.x) * atlas->Width, (float)w, 0.01f) && Near((r.w - r.y) * atlas->Height, (float)h, 0.01f));
+            bool same = true;
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) same &= atlas->Pixels[(size_t)(y0 + y) * atlas->Width + x0 + x] == alone.Pixels[(size_t)y * alone.Width + x];
+            CHECK(same);
+            CHECK(atlas->Pixels[(size_t)y0 * atlas->Width + x0 - 1] == alone.Pixels[0]); // the edge, repeated into the padding
+        }
+        fs::path copy = fs::temp_directory_path() / "dimension_atlas_test.spriteatlas";
+        atlas->Padding = 4;
+        CHECK(atlas->Save(copy));
+        auto back = SpriteAtlas::Load(copy);
+        CHECK(back->Sprites == atlas->Sprites && back->Padding == 4 && back->MaxSize == 2048);
+        fs::remove(copy);
+        AssetManager::Shutdown();
+    }
+
     void TestBuildDependencies()
     {
         AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
@@ -8441,6 +8501,7 @@ namespace
         auto d2 = names(AssetDependencies::Collect({ AssetManager::GetHandle("Scenes/Demo2D.scene") }));
         CHECK(d2.contains("Scenes/Demo2D.scene") && d2.contains("Sprites/Tiles.png") && d2.contains("Sprites/Player.png"));
         CHECK(!d2.contains("Models/Showcase.glb") && !d2.contains("Audio/Music.ogg") && !d2.contains("Textures/ClearSky.hdr"));
+        CHECK(d2.contains("Sprites/Sprites.spriteatlas")); // its sprites ship, so the atlas they draw from does
         auto deps3 = AssetDependencies::Collect({ AssetManager::GetHandle("Scenes/Demo3D.scene") });
         auto d3 = names(deps3);
         // Through components (models, music), scene settings (sky), materials (textures), prefabs and controllers.
@@ -8745,6 +8806,7 @@ int main(int argc, char** argv)
     Run("Terrain crater", TestTerrainCrater);
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh agents", TestNavMeshAgents);
+    Run("Sprite atlas", TestSpriteAtlas);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

@@ -3037,6 +3037,17 @@ namespace Dimension
             d.UVMin = { sr.FlipX ? cellMax.x : cellMin.x, sr.FlipY ? cellMin.y : cellMax.y };
             d.UVMax = { sr.FlipX ? cellMin.x : cellMax.x, sr.FlipY ? cellMax.y : cellMin.y };
             d.Texture = tex ? tex->GetBindlessIndex() : white;
+            // Packed into a sprite atlas: drawn from its page, the UVs moved into the sprite's region (not when it
+            // repeats: Tiling beyond 1 needs the texture of its own).
+            glm::vec4 region;
+            if (sr.Tiling.x <= 1.0f && sr.Tiling.y <= 1.0f)
+                if (Ref<Texture2D> page = AssetManager::FindInAtlas(sr.Texture, region))
+                {
+                    glm::vec2 lo(region.x, region.y), hi(region.z, region.w);
+                    d.UVMin = lo + d.UVMin * (hi - lo);
+                    d.UVMax = lo + d.UVMax * (hi - lo);
+                    d.Texture = page->GetBindlessIndex();
+                }
             d.Entity = e.Index + 1;
             d.Order = sr.SortingOrder;
             d.Depth = (camera.View * t.World[3]).z; // more negative = farther

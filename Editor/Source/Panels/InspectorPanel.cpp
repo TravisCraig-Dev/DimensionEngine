@@ -1,4 +1,6 @@
 #include <Dimension/Terrain/Terrain.h>
+#include <Dimension/Renderer/SpriteAtlas.h>
+#include "../MaterialPreviews.h"
 #include "Panels.h"
 #include "../EditorUI.h"
 #include <Dimension/Scene/ComponentRegistry.h>
@@ -1188,6 +1190,13 @@ namespace Editor
         {
             auto material = AssetManager::GetMaterial(handle);
             if (!material) return;
+            // The material on a lit sphere (drawn again a frame after it changes).
+            if (uint64_t preview = m_Ctx.Previews ? m_Ctx.Previews->Get(handle) : 0)
+            {
+                float size = std::min(ImGui::GetContentRegionAvail().x, 160.0f);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - size) * 0.5f);
+                ImGui::Image(ImTextureRef((ImTextureID)preview), ImVec2(size, size));
+            }
             bool save = false;
             if (UI::BeginProperties("MaterialProps"))
             {
@@ -1212,6 +1221,74 @@ namespace Editor
             }
             if (save) AssetManager::SaveMaterial(handle);
             ImGui::TextDisabled("Changes are saved to the .mat file immediately.");
+        }
+        else if (meta->Type == AssetType::SpriteAtlas)
+        {
+            // The sprites it packs (Sprite Renderers showing them draw from the atlas), its padding and largest size,
+            // and the packed page.
+            auto atlas = AssetManager::GetSpriteAtlas(handle);
+            if (!atlas) return;
+            bool save = false;
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragInt("Padding", &atlas->Padding, 0.1f, 0, 64, "%d px");
+            if (ImGui::IsItemDeactivatedAfterEdit()) save = true; // packed again once the drag ends
+            static const int sizes[] = { 256, 512, 1024, 2048, 4096, 8192 };
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::BeginCombo("Max Size", std::to_string(atlas->MaxSize).c_str()))
+            {
+                for (int s : sizes)
+                    if (ImGui::Selectable(std::to_string(s).c_str(), s == atlas->MaxSize))
+                    {
+                        atlas->MaxSize = s;
+                        save = true;
+                    }
+                ImGui::EndCombo();
+            }
+            ImGui::SeparatorText("Sprites");
+            int remove = -1;
+            for (size_t i = 0; i < atlas->Sprites.size(); ++i)
+            {
+                ImGui::PushID((int)i);
+                const AssetMetadata* sm = AssetManager::GetMetadata(atlas->Sprites[i]);
+                bool left = std::find(atlas->Left.begin(), atlas->Left.end(), atlas->Sprites[i]) != atlas->Left.end();
+                if (ImGui::SmallButton("x")) remove = (int)i;
+                ImGui::SameLine();
+                if (left) ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s (not packed)", sm ? sm->Path.filename().string().c_str() : "(missing)");
+                else ImGui::TextUnformatted(sm ? sm->Path.filename().string().c_str() : "(missing)");
+                ImGui::PopID();
+            }
+            if (remove >= 0)
+            {
+                atlas->Sprites.erase(atlas->Sprites.begin() + remove);
+                save = true;
+            }
+            AssetHandle add = AssetHandle::None();
+            if (UI::BeginProperties("AtlasAdd"))
+            {
+                UI::AssetField("Add Sprite", add, AssetType::Texture);
+                UI::EndProperties();
+            }
+            if (add.IsValid() && std::find(atlas->Sprites.begin(), atlas->Sprites.end(), add) == atlas->Sprites.end())
+            {
+                atlas->Sprites.push_back(add);
+                save = true;
+            }
+            if (save) AssetManager::SaveSpriteAtlas(handle);
+            ImGui::SeparatorText("Packed");
+            ImGui::TextDisabled("%u x %u, %zu sprite(s) packed", atlas->Width, atlas->Height, atlas->Regions.size());
+            if (atlas->Texture && atlas->Width > 0)
+            {
+                float w = std::min(ImGui::GetContentRegionAvail().x, 256.0f), h = w * (float)atlas->Height / (float)atlas->Width;
+                ImVec2 at = ImGui::GetCursorScreenPos();
+                // A checkerboard behind, so transparency shows.
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                for (int y = 0; y < (int)(h / 8.0f) + 1; ++y)
+                    for (int x = 0; x < (int)(w / 8.0f) + 1; ++x)
+                        dl->AddRectFilled(ImVec2(at.x + x * 8.0f, at.y + y * 8.0f), ImVec2(std::min(at.x + x * 8.0f + 8.0f, at.x + w), std::min(at.y + y * 8.0f + 8.0f, at.y + h)),
+                                          (x + y) % 2 ? IM_COL32(70, 70, 70, 255) : IM_COL32(100, 100, 100, 255));
+                ImGui::Image(ImTextureRef((ImTextureID)atlas->Texture->GetImGuiId()), ImVec2(w, h));
+            }
+            ImGui::TextDisabled("Sprite Renderers showing these textures draw them from the atlas.");
         }
         else if (meta->Type == AssetType::AnimatorController)
         {

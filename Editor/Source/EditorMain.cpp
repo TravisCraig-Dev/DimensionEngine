@@ -26,6 +26,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) spec.ScreenshotPath = argv[++i];
         else if (!std::strcmp(argv[i], "--windowed")) spec.Window.Maximized = false;
         else if (!std::strcmp(argv[i], "--select") && i + 1 < argc) options.SelectEntity = argv[++i];
+        else if (!std::strcmp(argv[i], "--select-asset") && i + 1 < argc) options.SelectAsset = argv[++i];
         else if (!std::strcmp(argv[i], "--focus") && i + 1 < argc) options.FocusWindow = argv[++i];
         else if (!std::strcmp(argv[i], "--build") && i + 1 < argc) options.BuildFolder = argv[++i];
         else if (!std::strcmp(argv[i], "--open") && i + 1 < argc) options.OpenWindow = argv[++i];

@@ -1,3 +1,5 @@
+#include "../MaterialPreviews.h"
+#include <Dimension/Renderer/SpriteAtlas.h>
 #include "Panels.h"
 #include "../EditorUI.h"
 #include <Dimension/Renderer/Texture.h>
@@ -165,10 +167,18 @@ namespace Editor
                                           ImGui::GetColorU32(selected ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered), 4.0f);
 
                     Ref<Texture2D> tex = type == AssetType::Texture ? AssetManager::GetTexture(handle) : nullptr;
+                    if (type == AssetType::SpriteAtlas)
+                        if (auto atlas = AssetManager::GetSpriteAtlas(handle)) tex = atlas->Texture; // its page
                     Ref<Material> mat = type == AssetType::Material ? AssetManager::GetMaterial(handle) : nullptr;
-                    if (mat)
+                    uint64_t preview = mat && m_Ctx.Previews ? m_Ctx.Previews->Get(handle) : 0;
+                    if (preview)
                     {
-                        // Swatch: base map (if any) tinted by the base color, drawn as a circle.
+                        // The material on a lit sphere.
+                        dl->AddImage(ImTextureRef((ImTextureID)preview), cursor, max);
+                    }
+                    else if (mat)
+                    {
+                        // Until its preview is drawn, a swatch: base map (if any) tinted by the base color, as a circle.
                         ImVec2 c(cursor.x + size.x * 0.5f, cursor.y + size.y * 0.5f);
                         float r = size.x * 0.42f;
                         ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(mat->BaseColor.r, mat->BaseColor.g, mat->BaseColor.b, 1.0f));
@@ -341,6 +351,16 @@ namespace Editor
                 if (ImGui::MenuItem("New Timeline"))
                 {
                     AssetHandle h = AssetManager::CreateTimeline(UniquePath(m_Current / "New Timeline.timeline"));
+                    if (h.IsValid()) m_Ctx.SelectAsset(h);
+                }
+                if (ImGui::MenuItem("New Sprite Atlas"))
+                {
+                    // Packs the textures in this folder to begin with.
+                    std::vector<AssetHandle> sprites;
+                    for (const auto& entry : fs::directory_iterator(m_Current, ec))
+                        if (AssetHandle t = AssetManager::GetHandle(entry.path()); t.IsValid())
+                            if (const AssetMetadata* m = AssetManager::GetMetadata(t); m && m->Type == AssetType::Texture) sprites.push_back(t);
+                    AssetHandle h = AssetManager::CreateSpriteAtlas(UniquePath(m_Current / "New Sprite Atlas.spriteatlas"), sprites);
                     if (h.IsValid()) m_Ctx.SelectAsset(h);
                 }
                 if (ImGui::MenuItem("New Scene"))

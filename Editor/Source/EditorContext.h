@@ -10,6 +10,7 @@
 namespace Editor
 {
     using namespace Dimension;
+    class MaterialPreviews;
 
     enum class PlayState { Edit, Play, Paused };
 
@@ -19,6 +20,8 @@ namespace Editor
     public:
         // Scene currently shown/edited: the runtime copy while playing.
         Scene& ActiveScene() { return RuntimeScene ? *RuntimeScene : *EditorScene; }
+        // Material pictures for the Inspector and the Project window (owned by the editor layer).
+        MaterialPreviews* Previews = nullptr;
         bool IsPlaying() const { return State != PlayState::Edit; }
 
         // Selection (by entity handle; survives play mode because clones keep handles).

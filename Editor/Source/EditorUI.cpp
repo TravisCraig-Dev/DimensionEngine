@@ -124,6 +124,7 @@ namespace Editor::UI
         case AssetType::Font: return { 0.75f, 0.75f, 0.95f, 1 };
         case AssetType::AnimatorController: return { 0.55f, 0.9f, 0.7f, 1 };
         case AssetType::Timeline: return { 0.95f, 0.75f, 0.45f, 1 };
+        case AssetType::SpriteAtlas: return { 0.95f, 0.6f, 0.55f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -141,6 +142,7 @@ namespace Editor::UI
         case AssetType::Font: return "FONT";
         case AssetType::AnimatorController: return "ANIM";
         case AssetType::Timeline: return "TIME";
+        case AssetType::SpriteAtlas: return "ATLAS";
         default: return "FILE";
         }
     }
