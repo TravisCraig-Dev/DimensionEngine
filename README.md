@@ -19,6 +19,8 @@ Projects/  Sandbox sample project (Demo3D and Demo2D scenes)
 - Reflection for components and script fields. The inspector, serializer and prefabs are all driven by one field declaration.
 - An ECS `System` interface with a registry. Gameplay scripts can be written in C++ (`ScriptableEntity`) or **C#** (`Behaviour`), and both hot-reload in the editor.
 - **C# editor extensions** (like Unity's `UnityEditor`): in the scripts assembly, a static method with `[MenuItem("Tools/Do Something")]` becomes a menu command (its first path part is the menu, an existing one such as Window gains the item), and a class deriving from `EditorWindow` with `[EditorWindow("Title", "Window/Title")]` a dockable window drawn by its `OnGUI` with `EditorGUI` (labels, buttons, toggles, number, slider, vector, color and text fields, separators). `Selection` (the active and all selected objects), `Undo.Record` (one undo step, the scene marked changed) and `EditorScene.CreateEntity` reach the scene being edited; they register when the scripts load and reload with them, and never run in a built game. The Sandbox's `SceneTools.cs` adds Tools > Line Up Selected and Add Marker, and Window > Scene Tools. `--menu "Tools/..."` runs one on startup, `--open "Title"` opens a window.
+- **C# custom Inspectors** (like Unity's `CustomEditor`): a class deriving from `Inspector` with `[CustomInspector(typeof(MyScript))]` draws that script's Inspector in its `OnInspectorGUI` (with `EditorGUI`), in place of the fields; `Target` is the script holding its saved values (the live one while playing), and what the Inspector changes on it is saved, one undo step per edit, prefab overrides recorded. `DrawDefaultInspector()` draws the usual fields (ranges as sliders, headers, hidden ones left out). `[CustomInspector("Point Light")]` adds to a built-in component's Inspector, below its fields, changing the object through the C# API. The Sandbox's `SpinnerInspector.cs` puts presets above Spinner's fields and a Raise button under every Point Light.
+- **Scene view snapping**: the toolbar's **Snap** (Ctrl inverts it while held) puts moved objects on the world grid (only the axes being dragged), and turns rotation and scale in steps; **Window > Snap Settings** (or the arrow beside Snap) sets the steps, kept with the editor preferences. Hold **V** with the Move tool to mark the selection's vertex nearest the mouse and drag it onto another object's vertex (with none near, it moves across the view). **Ctrl+Shift** while moving puts the selection on the surface under the mouse (mesh triangles and terrains, objects without colliders too), resting on it by its own bounds.
 
 **Rendering (Vulkan 1.3)**
 - Dynamic rendering, synchronization2 and a bindless texture table. There are no render-pass objects and no per-material descriptor sets.
@@ -276,7 +278,7 @@ With no arguments, both open `Projects/Sandbox`. A built game is `<Name>.exe` ne
 | Look / fly | Hold RMB and move the mouse. Add WASD to move, Q/E to go down/up, Shift to go faster, and the wheel to change speed |
 | Orbit, pan, zoom | Alt+LMB, MMB, mouse wheel |
 | Frame selection | F, or double-click in the Hierarchy |
-| Tools | Q view, W move, E rotate, R scale. Hold Ctrl to snap |
+| Tools | Q view, W move, E rotate, R scale. Ctrl inverts Snap; hold V to snap a vertex onto another's; Ctrl+Shift while moving to put it on a surface |
 | Select | Click in the Scene view; click empty space to deselect. Hold Ctrl to add or remove, Shift for a range in the Hierarchy |
 | Play, Pause | Ctrl+P, Ctrl+Shift+P |
 | Undo, Redo, Duplicate, Delete | Ctrl+Z, Ctrl+Y, Ctrl+D, Del |
@@ -344,7 +346,7 @@ ComponentRegistry::Register<HealthComponent>("Health", "Gameplay")
 Done in this milestone: everything listed under Features. These are the largest remaining areas, in a suggested order:
 
 1. **Rendering:** occlusion culling that also holds while the camera moves (testing last frame's visible objects first, the rest against their depth), screen-space shore foam that also works in the editor and against moving objects, and impostors relit live (normal and depth atlases).
-2. **Editor:** snapping in the Scene view (to the grid, to other objects' vertices and surfaces), and custom Inspectors in C# (a class drawing a component's Inspector).
+2. **Editor:** C# property drawers (a class drawing every field of a type or attribute), and object and asset pickers in `EditorGUI` (fields that take a scene object, a texture, a material).
 3. **Animation:** humanoid avatars (retargeting across differently built rigs), and keyframe editing of skeletal animation clips.
 4. **UI system:** UI shown and edited in the Scene view.
 5. **Scripting:** C# scripts in the built player without the .NET SDK (ahead-of-time compiled).

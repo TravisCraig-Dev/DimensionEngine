@@ -14,6 +14,7 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Scene/SceneSearch.h>
+#include <Dimension/Scene/SceneSnapping.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Scene/LODGroup.h>
@@ -7403,10 +7404,11 @@ namespace
                 return Entity::Null();
             };
             hooks.Undo = [&](const char*) { ++undos; };
+            std::string click; // the button "clicked"
             hooks.Gui = [&](int op, const char* label, float* v, int n) -> int {
                 controls.push_back(std::to_string(op) + ":" + label);
-                if (op == 5 && n >= 3) v[0] = 3.0f; // the Spacing slider moved to 3
-                return 0;
+                if (op == 5 && n >= 3 && std::string(label) == "Spacing") v[0] = 3.0f; // the Spacing slider moved to 3
+                return op == 1 && click == label ? 1 : 0;
             };
             hooks.Text = [&](const char* label, const std::string& text) {
                 controls.push_back(std::string("text:") + label);
@@ -7426,10 +7428,113 @@ namespace
                 CSharpRuntime::CallEditorItem(marker->Id, false, edited);
                 CHECK(selection.size() == 1 && edited.IsValid(selection[0]) && edited.GetRegistry().Get<TagComponent>(selection[0]).Name == "Marker");
             }
+            // Custom Inspectors (SpinnerInspector.cs): Spinner's draws its presets and then the usual fields (not the
+            // hidden ones) from the saved values; a clicked preset comes back into them. The Point Light's draws below
+            // the component and moves the object through the C# API.
+            const auto* spinnerInspector = CSharpRuntime::FindInspector("Game.Spinner");
+            const auto* lightInspector = CSharpRuntime::FindInspector("Point Light");
+            const ScriptInfo* spinner = ScriptRegistry::Find("Game.Spinner");
+            CHECK(spinnerInspector && lightInspector && spinner && CSharpRuntime::FindInspector("Game.Rainbow") == nullptr);
+            if (spinnerInspector && lightInspector && spinner)
+            {
+                Entity host = edited.CreateEntity("Spinning");
+                auto instance = spinner->Create();
+                auto field = [&](const char* name) -> void* {
+                    for (auto& f : spinner->Fields)
+                        if (f.Name == name) return f.Access(spinner->ToObject(instance.get()));
+                    return nullptr;
+                };
+                *static_cast<float*>(field("BobHeight")) = 1.5f;
+                controls.clear();
+                click.clear();
+                CHECK(!CSharpRuntime::InspectScript(spinnerInspector->Id, *instance, edited, host)); // nothing changed
+                CHECK(std::find(controls.begin(), controls.end(), "0:Turns 90 deg/s, bobs 1.5 m") != controls.end() &&
+                      std::find(controls.begin(), controls.end(), "5:BobHeight") != controls.end() &&
+                      std::find(controls.begin(), controls.end(), "6:DegreesPerSecond") != controls.end() &&
+                      std::none_of(controls.begin(), controls.end(), [](const std::string& c) { return c.find("m_Time") != std::string::npos; }));
+                click = "Fast";
+                CHECK(CSharpRuntime::InspectScript(spinnerInspector->Id, *instance, edited, host));
+                CHECK(Near(*static_cast<glm::vec3*>(field("DegreesPerSecond")), { 0.0f, 360.0f, 0.0f }) &&
+                      Near(*static_cast<float*>(field("BobHeight")), 1.5f));
+
+                edited.GetRegistry().Get<TransformComponent>(host).Position = { 0.0f, 2.0f, 0.0f };
+                int undosBefore = undos;
+                click = "Raise 1 m";
+                CSharpRuntime::InspectComponent(lightInspector->Id, edited, host);
+                CHECK(undos == undosBefore + 1 && Near(edited.GetRegistry().Get<TransformComponent>(host).Position.y, 3.0f));
+            }
             CSharpRuntime::SetEditorHooks({});
         }
         CSharpRuntime::UnloadScripts();
         CHECK(ScriptRegistry::Find("Game.Spinner") == nullptr && CSharpRuntime::GetEditorItems().empty());
+    }
+
+    // Scene view snapping: grid rounding (only the axes asked), rays onto mesh surfaces (skipping the objects being
+    // moved), how far an object reaches below its pivot (to rest it on a surface, children and rotation included),
+    // and the vertex nearest a point on screen.
+    void TestSceneSnapping()
+    {
+        CHECK(Near(SceneSnapping::ToGrid({ 0.26f, 1.74f, -0.3f }, 0.5f), { 0.5f, 1.5f, -0.5f }));
+        CHECK(Near(SceneSnapping::ToGrid({ 0.26f, 1.74f, -0.3f }, 0.5f, { true, false, true }), { 0.5f, 1.74f, -0.5f }));
+        CHECK(Near(SceneSnapping::ToGrid({ 0.26f, 1.74f, -0.3f }, 0.0f), { 0.26f, 1.74f, -0.3f }));
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets"); // CPU mesh data only
+
+        Scene scene("Snapping");
+        auto& reg = scene.GetRegistry();
+        auto cube = [&](const char* name, glm::vec3 position, glm::vec3 scale) {
+            Entity e = scene.CreateEntity(name);
+            auto& t = reg.Get<TransformComponent>(e);
+            t.Position = position;
+            t.Scale = scale;
+            reg.Emplace<MeshRendererComponent>(e).Mesh = AssetManager::kCube;
+            return e;
+        };
+        Entity ground = cube("Ground", { 0.0f, -0.5f, 0.0f }, { 10.0f, 1.0f, 10.0f }); // its top at y = 0
+        Entity box = cube("Box", { 0.0f, 5.0f, 0.0f }, glm::vec3(1.0f));
+        scene.UpdateTransforms();
+
+        auto hit = SceneSnapping::Raycast(scene, { 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f });
+        CHECK(hit.Hit && hit.Object == box && Near(hit.Point, { 0.0f, 5.5f, 0.0f }) && Near(hit.Distance, 4.5f));
+        hit = SceneSnapping::Raycast(scene, { 2.0f, 10.0f, 1.0f }, { 0.0f, -2.0f, 0.0f }, { box });
+        CHECK(hit.Hit && hit.Object == ground && Near(hit.Point, { 2.0f, 0.0f, 1.0f }) && Near(hit.Normal, { 0.0f, 1.0f, 0.0f }));
+        hit = SceneSnapping::Raycast(scene, { 20.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f });
+        CHECK(!hit.Hit);
+        // From the side: the ground's face toward the ray.
+        hit = SceneSnapping::Raycast(scene, { 20.0f, -0.5f, 0.0f }, { -1.0f, 0.0f, 0.0f });
+        CHECK(hit.Hit && hit.Object == ground && Near(hit.Point, { 5.0f, -0.5f, 0.0f }) && Near(hit.Normal, { 1.0f, 0.0f, 0.0f }));
+
+        CHECK(Near(SceneSnapping::RestOffset(scene, box, { 0.0f, 1.0f, 0.0f }), 0.5f));
+        reg.Get<TransformComponent>(box).Rotation = { 0.0f, 0.0f, glm::radians(45.0f) };
+        scene.UpdateTransforms();
+        CHECK(Near(SceneSnapping::RestOffset(scene, box, { 0.0f, 1.0f, 0.0f }), std::sqrt(0.5f)));
+        reg.Get<TransformComponent>(box).Rotation = glm::vec3(0.0f);
+        Entity parent = scene.CreateEntity("Parent");
+        Entity child = cube("Child", { 0.0f, -1.0f, 0.0f }, glm::vec3(1.0f));
+        scene.SetParent(child, parent);
+        reg.Get<TransformComponent>(parent).Position = { 3.0f, 4.0f, 0.0f };
+        scene.UpdateTransforms();
+        CHECK(Near(SceneSnapping::RestOffset(scene, parent, { 0.0f, 1.0f, 0.0f }), 1.5f));
+        CHECK(Near(SceneSnapping::RestOffset(scene, scene.CreateEntity("Empty"), { 0.0f, 1.0f, 0.0f }), 0.0f));
+
+        // Looking down -Z at the box (moved to the origin): its corner (0.5, 0.5, 0.5) on screen.
+        reg.Get<TransformComponent>(box).Position = glm::vec3(0.0f);
+        reg.Get<TransformComponent>(ground).Position = { 0.0f, -50.0f, 0.0f };
+        reg.Get<TransformComponent>(parent).Position = { 0.0f, 50.0f, 0.0f };
+        scene.UpdateTransforms();
+        glm::mat4 viewProj = glm::perspective(glm::radians(60.0f), 1.0f, 0.1f, 100.0f) *
+                             glm::lookAt(glm::vec3(0.0f, 0.0f, 10.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::vec2 viewport(800.0f, 800.0f);
+        glm::vec4 clip = viewProj * glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+        glm::vec2 corner((clip.x / clip.w * 0.5f + 0.5f) * viewport.x, (0.5f - clip.y / clip.w * 0.5f) * viewport.y);
+        CHECK(corner.x > 400.0f && corner.y < 400.0f); // right of and above the middle
+        auto vertex = SceneSnapping::NearestVertex(scene, viewProj, viewport, corner + glm::vec2(3.0f, -2.0f), 20.0f);
+        CHECK(vertex.Hit && vertex.Object == box && Near(vertex.Position, { 0.5f, 0.5f, 0.5f }) && Near(vertex.Pixels, std::sqrt(13.0f)));
+        CHECK(!SceneSnapping::NearestVertex(scene, viewProj, viewport, corner + glm::vec2(3.0f, -2.0f), 2.0f).Hit);
+        CHECK(!SceneSnapping::NearestVertex(scene, viewProj, viewport, corner, 20.0f, {}, { box }).Hit);
+        CHECK(!SceneSnapping::NearestVertex(scene, viewProj, viewport, corner, 20.0f, { parent }).Hit);
+        vertex = SceneSnapping::NearestVertex(scene, viewProj, viewport, corner, 20.0f, { box });
+        CHECK(vertex.Hit && Near(vertex.Position, { 0.5f, 0.5f, 0.5f }));
+        AssetManager::Shutdown();
     }
 
     void TestAssetLabels()
@@ -8941,6 +9046,7 @@ int main(int argc, char** argv)
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);
     Run("Asset labels", TestAssetLabels);
+    Run("Scene snapping", TestSceneSnapping);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

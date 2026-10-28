@@ -159,6 +159,8 @@ namespace Dimension
             const char* (*GetFields)(intptr_t); // JSON array of the field values (entities as packed ids)
             int (*Debugger)(int);                // 0 attached?, 1 launch, 2 break
             void (*EditorCall)(int, int, void*); // 0 run menu item, 1 window OnGUI; id; scene
+            // A custom Inspector: id, live instance (or 0), class, saved values (JSON array), scene, entity -> values after
+            const char* (*Inspect)(int, intptr_t, const char*, const char*, void*, uint64_t);
         };
         CSharpRuntime::EditorHooks s_EditorHooks;
         std::vector<CSharpRuntime::EditorItem> s_EditorItems;
@@ -235,6 +237,18 @@ namespace Dimension
 
             void* Storage() { return m_Storage; }
 
+            // Draws custom Inspector `id` for this script (its live object while playing, else one made from the slots)
+            // and takes the values it leaves; true when they changed.
+            bool Inspect(int id, Scene& scene, Entity e)
+            {
+                if (!s_Managed.Inspect) return false;
+                std::string before = SlotsJson().dump();
+                const char* after = s_Managed.Inspect(id, m_Handle, m_Class->Name.c_str(), before.c_str(), &scene, Pack(e));
+                if (!after) return false;
+                ReadSlots(after);
+                return SlotsJson().dump() != before;
+            }
+
             void OnCreate() override { CreateManaged(0); }
             void OnScriptsReloaded() override { CreateManaged(7); }
 
@@ -242,8 +256,23 @@ namespace Dimension
             void OnBeforeSerialize() override
             {
                 if (!m_Handle || !s_Managed.GetFields) return;
-                const char* text = s_Managed.GetFields(m_Handle);
-                if (!text) return;
+                if (const char* text = s_Managed.GetFields(m_Handle)) ReadSlots(text);
+            }
+
+            // The slots as GetFields writes the managed values: a JSON array in field order, entities as packed ids.
+            nlohmann::json SlotsJson() const
+            {
+                nlohmann::json values = nlohmann::json::array();
+                for (size_t i = 0; i < m_Class->Slots.size(); ++i)
+                {
+                    if (m_Class->Slots[i] == Slot::Entity) values.push_back(Pack(*static_cast<Entity*>(Slot_(i))));
+                    else values.push_back(FieldToJson(m_Class->Fields[i], m_Storage, nullptr));
+                }
+                return values;
+            }
+
+            void ReadSlots(const char* text)
+            {
                 try
                 {
                     auto values = nlohmann::json::parse(text);
@@ -251,6 +280,8 @@ namespace Dimension
                     {
                         if (m_Class->Slots[i] == Slot::Entity)
                             *static_cast<Entity*>(Slot_(i)) = values[i].is_number_unsigned() ? Unpack(values[i].get<uint64_t>()) : Entity::Null();
+                        else if (values[i].is_null())
+                            continue;
                         else
                             FieldFromJson(m_Class->Fields[i], m_Storage, values[i], nullptr);
                     }
@@ -472,6 +503,7 @@ namespace Dimension
                     item.Window = j.value("kind", std::string()) == "window";
                     item.MenuPath = j.value("path", std::string());
                     item.Title = j.value("title", std::string());
+                    item.Inspects = j.value("inspects", std::string());
                     s_EditorItems.push_back(std::move(item));
                 }
                 catch (const std::exception& e)
@@ -861,6 +893,25 @@ namespace Dimension
         if (s_Available && s_Managed.EditorCall) s_Managed.EditorCall(window ? 1 : 0, id, &scene);
     }
 
+    const CSharpRuntime::EditorItem* CSharpRuntime::FindInspector(const std::string& inspected)
+    {
+        if (inspected.empty()) return nullptr;
+        for (const auto& item : s_EditorItems)
+            if (item.Inspects == inspected) return &item;
+        return nullptr;
+    }
+
+    bool CSharpRuntime::InspectScript(int id, ScriptableEntity& script, Scene& scene, Entity e)
+    {
+        auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
+        return managed && managed->Inspect(id, scene, e);
+    }
+
+    void CSharpRuntime::InspectComponent(int id, Scene& scene, Entity e)
+    {
+        if (s_Available && s_Managed.Inspect) s_Managed.Inspect(id, 0, nullptr, nullptr, &scene, Pack(e));
+    }
+
     void CSharpRuntime::UnloadScripts()
     {
         if (!s_Available) return;
@@ -904,6 +955,9 @@ namespace Dimension
     void CSharpRuntime::SetEditorHooks(const EditorHooks&) {}
     const std::vector<CSharpRuntime::EditorItem>& CSharpRuntime::GetEditorItems() { static std::vector<EditorItem> none; return none; }
     void CSharpRuntime::CallEditorItem(int, bool, Scene&) {}
+    const CSharpRuntime::EditorItem* CSharpRuntime::FindInspector(const std::string&) { return nullptr; }
+    bool CSharpRuntime::InspectScript(int, ScriptableEntity&, Scene&, Entity) { return false; }
+    void CSharpRuntime::InspectComponent(int, Scene&, Entity) {}
     bool CSharpRuntime::IsDebuggerAttached() { return false; }
     bool CSharpRuntime::LaunchDebugger() { return false; }
     bool CSharpRuntime::WaitForDebugger(float) { return false; }

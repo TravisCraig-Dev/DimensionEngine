@@ -15,6 +15,10 @@ namespace Editor
         bool SaveSceneBeforePlay = false;
         int Theme = 0;                 // Dimension::ImGuiLayer::Theme: Dark, Light, Midnight
         uint32_t Accent = 0x3A79BB;    // 0xRRGGBB
+        // Scene view snapping (the toolbar's Snap; Ctrl inverts it while held): moves land on the world grid, rotation
+        // and scale go in steps.
+        bool Snap = false;
+        float SnapMove = 0.5f, SnapRotate = 15.0f, SnapScale = 0.1f;
 
         static EditorPreferences& Get();
         static Dimension::fs::path FilePath();

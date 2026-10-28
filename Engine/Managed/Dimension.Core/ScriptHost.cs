@@ -37,12 +37,15 @@ namespace Dimension
 
         private static ScriptLoadContext s_Context;
         private static readonly Dictionary<string, ScriptClass> s_Classes = new();
-        // Editor extensions by id: [MenuItem] methods and EditorWindow classes (with their instance once drawn).
+        // Editor extensions by id: [MenuItem] methods, EditorWindow classes and Inspector classes (with their instance
+        // once drawn).
         private sealed class EditorItem
         {
             public MethodInfo Method;
             public Type WindowType;
             public EditorWindow Window;
+            public Type InspectorType;
+            public Inspector Inspector;
         }
         private static readonly List<EditorItem> s_EditorItems = new();
 
@@ -62,10 +65,15 @@ namespace Dimension
                     s_EditorItems.Add(new EditorItem { WindowType = type });
                     RegisterEditorItem("window", window.MenuPath, window.Title);
                 }
+                if (!type.IsAbstract && type.IsSubclassOf(typeof(Inspector)) && type.GetCustomAttribute<CustomInspectorAttribute>() is { } inspector)
+                {
+                    s_EditorItems.Add(new EditorItem { InspectorType = type });
+                    RegisterEditorItem("inspector", "", null, inspector.Target);
+                }
             }
         }
 
-        private static void RegisterEditorItem(string kind, string path, string title)
+        private static void RegisterEditorItem(string kind, string path, string title, string inspects = null)
         {
             using var stream = new MemoryStream();
             using (var w = new Utf8JsonWriter(stream))
@@ -75,6 +83,7 @@ namespace Dimension
                 w.WriteNumber("id", s_EditorItems.Count - 1);
                 w.WriteString("path", path ?? "");
                 if (title != null) w.WriteString("title", title);
+                if (inspects != null) w.WriteString("inspects", inspects);
                 w.WriteEndObject();
             }
             byte[] json = stream.ToArray();
@@ -100,6 +109,93 @@ namespace Dimension
             }
             catch (Exception e) { Debug.LogError($"Editor extension failed: {(e as TargetInvocationException)?.InnerException ?? e}"); }
         }
+
+        // Draws a custom Inspector: for a script, its live instance (`handle`) or one made from its saved values
+        // (`fieldsUtf8`, as GetFields writes them); returns the values after drawing (null for a built-in component).
+        [UnmanagedCallersOnly]
+        internal static byte* Inspect(int id, IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
+        {
+            try
+            {
+                if (id < 0 || id >= s_EditorItems.Count || s_EditorItems[id].InspectorType == null) return null;
+                Native.CurrentScene = scene;
+                EditorItem item = s_EditorItems[id];
+                item.Inspector ??= (Inspector)Activator.CreateInstance(item.InspectorType);
+                Behaviour target = null;
+                if (handle != IntPtr.Zero) target = (Behaviour)GCHandle.FromIntPtr(handle).Target;
+                else if (classUtf8 != null && s_Classes.TryGetValue(Native.FromUtf8(classUtf8), out var cls))
+                {
+                    target = (Behaviour)Activator.CreateInstance(cls.Type);
+                    target.Entity = new Entity(scene, entity);
+                    if (fieldsUtf8 != null) ApplyFields(target, cls, Native.FromUtf8(fieldsUtf8));
+                }
+                item.Inspector.Target = target;
+                item.Inspector.Entity = new Entity(scene, entity);
+                item.Inspector.OnInspectorGUI();
+                return target != null ? FieldsJson(target) : null;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Custom Inspector failed: {(e as TargetInvocationException)?.InnerException ?? e}");
+                return null;
+            }
+        }
+
+        // Field values (a JSON array in registration order, entities as packed ids) into a script.
+        private static void ApplyFields(Behaviour b, ScriptClass cls, string json)
+        {
+            using var doc = JsonDocument.Parse(json);
+            var values = doc.RootElement;
+            float F(JsonElement e, int i) => e.GetArrayLength() > i ? e[i].GetSingle() : 0.0f;
+            for (int i = 0; i < cls.Fields.Count && i < values.GetArrayLength(); ++i)
+            {
+                FieldInfo f = cls.Fields[i];
+                JsonElement v = values[i];
+                Type t = f.FieldType;
+                if (v.ValueKind == JsonValueKind.Null) continue;
+                object value =
+                    t == typeof(float) ? v.GetSingle() :
+                    t == typeof(int) ? v.GetInt32() :
+                    t == typeof(bool) ? v.GetBoolean() :
+                    t == typeof(string) ? v.GetString() :
+                    t == typeof(Vector2) ? new Vector2(F(v, 0), F(v, 1)) :
+                    t == typeof(Vector3) ? new Vector3(F(v, 0), F(v, 1), F(v, 2)) :
+                    t == typeof(Vector4) ? new Vector4(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
+                    t == typeof(Color) ? new Color(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
+                    (object)new Entity(b.Entity.Scene, v.GetUInt64());
+                f.SetValue(b, value);
+            }
+        }
+
+        // A script's fields with the controls the Inspector uses for them (entities shown, not edited).
+        internal static void DrawDefaultFields(Behaviour b)
+        {
+            if (b == null || !s_Classes.TryGetValue(b.GetType().FullName, out var cls)) return;
+            foreach (FieldInfo f in cls.Fields)
+            {
+                if (f.GetCustomAttribute<HideInInspectorAttribute>() != null) continue;
+                if (f.GetCustomAttribute<HeaderAttribute>() is { } header) EditorGUI.Separator(header.Text);
+                object v = f.GetValue(b);
+                var range = f.GetCustomAttribute<RangeAttribute>();
+                object edited = v switch
+                {
+                    float x when range != null => EditorGUI.Slider(f.Name, x, range.Min, range.Max),
+                    float x => EditorGUI.FloatField(f.Name, x),
+                    int x => EditorGUI.IntField(f.Name, x),
+                    bool x => EditorGUI.Toggle(f.Name, x),
+                    string x => EditorGUI.TextField(f.Name, x),
+                    Vector2 x => ToVector2(EditorGUI.Vector3Field(f.Name, new Vector3(x, 0.0f))),
+                    Vector3 x => EditorGUI.Vector3Field(f.Name, x),
+                    Vector4 x => ToVector4(EditorGUI.ColorField(f.Name, new Color(x.X, x.Y, x.Z, x.W))),
+                    Color x => EditorGUI.ColorField(f.Name, x),
+                    _ => v,
+                };
+                if (v is Entity e) EditorGUI.Label($"{f.Name}: {(e.IsValid ? e.Name : "None")}");
+                else if (!Equals(edited, v)) f.SetValue(b, edited);
+            }
+        }
+        private static Vector2 ToVector2(Vector3 v) => new(v.X, v.Y);
+        private static Vector4 ToVector4(Color c) => new(c.R, c.G, c.B, c.A);
 
         private static readonly Type[] s_Supported =
             { typeof(float), typeof(int), typeof(bool), typeof(string), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Color), typeof(Entity) };
@@ -354,32 +450,36 @@ namespace Dimension
         {
             try
             {
-                var b = (Behaviour)GCHandle.FromIntPtr(handle).Target;
-                var cls = s_Classes[b.GetType().FullName];
-                using var stream = new MemoryStream();
-                using (var w = new Utf8JsonWriter(stream))
-                {
-                    w.WriteStartArray();
-                    foreach (FieldInfo f in cls.Fields)
-                    {
-                        object v = f.GetValue(b);
-                        if (v is Entity e) w.WriteNumberValue(e.Id);
-                        else WriteDefault(w, v);
-                    }
-                    w.WriteEndArray();
-                }
-                byte[] json = stream.ToArray();
-                if (s_FieldsBuffer != IntPtr.Zero) Marshal.FreeHGlobal(s_FieldsBuffer);
-                s_FieldsBuffer = Marshal.AllocHGlobal(json.Length + 1);
-                Marshal.Copy(json, 0, s_FieldsBuffer, json.Length);
-                ((byte*)s_FieldsBuffer)[json.Length] = 0;
-                return (byte*)s_FieldsBuffer;
+                return FieldsJson((Behaviour)GCHandle.FromIntPtr(handle).Target);
             }
             catch (Exception e)
             {
                 Debug.LogError($"Reading C# fields failed: {e.Message}");
                 return null;
             }
+        }
+
+        private static byte* FieldsJson(Behaviour b)
+        {
+            var cls = s_Classes[b.GetType().FullName];
+            using var stream = new MemoryStream();
+            using (var w = new Utf8JsonWriter(stream))
+            {
+                w.WriteStartArray();
+                foreach (FieldInfo f in cls.Fields)
+                {
+                    object v = f.GetValue(b);
+                    if (v is Entity e) w.WriteNumberValue(e.Id);
+                    else WriteDefault(w, v);
+                }
+                w.WriteEndArray();
+            }
+            byte[] json = stream.ToArray();
+            if (s_FieldsBuffer != IntPtr.Zero) Marshal.FreeHGlobal(s_FieldsBuffer);
+            s_FieldsBuffer = Marshal.AllocHGlobal(json.Length + 1);
+            Marshal.Copy(json, 0, s_FieldsBuffer, json.Length);
+            ((byte*)s_FieldsBuffer)[json.Length] = 0;
+            return (byte*)s_FieldsBuffer;
         }
 
         // Debugger support for the engine: 0 asks whether a managed debugger is attached, 1 offers to attach one (the

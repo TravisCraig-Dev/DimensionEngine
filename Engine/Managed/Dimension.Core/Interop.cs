@@ -125,6 +125,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, byte*> GetFields;
         public delegate* unmanaged<int, int> Debugger; // 0 = is attached?, 1 = launch (JIT debugger prompt), 2 = break
         public delegate* unmanaged<int, int, IntPtr, void> EditorCall; // 0 run menu item, 1 window OnGUI; its id; the scene
+        // A custom Inspector: id, live script (or 0), class, saved values (JSON), scene, entity -> values after (JSON)
+        public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> Inspect;
     }
 
     internal static unsafe class Native
@@ -178,6 +180,7 @@ namespace Dimension.Interop
                 api->GetFields = &ScriptHost.GetFields;
                 api->Debugger = &ScriptHost.DebuggerControl;
                 api->EditorCall = &ScriptHost.EditorCall;
+                api->Inspect = &ScriptHost.Inspect;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

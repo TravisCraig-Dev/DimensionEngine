@@ -143,6 +143,15 @@ namespace Editor
         int m_LinePoint = -1;
         Dimension::Entity m_LinePointOwner;
         bool UpdateLinePointEditing(ImVec2 origin, ImVec2 size);
+        // Vertex snapping: hold V over the Scene view to pick the selection's vertex nearest the mouse, and drag it
+        // onto another object's vertex (true while it owns the mouse).
+        bool UpdateVertexSnap(const ImVec2& origin, const ImVec2& size);
+        bool m_VertexDrag = false;
+        bool m_ShowSnapSettings = false;
+        void DrawSnapSettings();
+        glm::vec3 m_VertexOffset{ 0.0f }; // the dragged vertex from the selected object's pivot
+        // Moves the selection's top-level objects by a world-space offset.
+        void MoveSelection(const glm::vec3& delta);
         void DrawNavigationOverlay(ImVec2 origin, ImVec2 size);
         // Edit mode: drag the selected UI Rect (move, or resize by its edges and corners) in the Game view, and click a
         // widget there to select it.

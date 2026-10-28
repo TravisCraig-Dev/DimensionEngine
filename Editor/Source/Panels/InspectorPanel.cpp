@@ -6,6 +6,7 @@
 #include <Dimension/Scene/ComponentRegistry.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
 #include <Dimension/Scripting/ScriptableEntity.h>
+#include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Renderer/Mesh.h>
 #include <Dimension/Renderer/Material.h>
@@ -47,6 +48,9 @@ namespace Editor
             std::string name = s.Menu.empty() ? s.Name : s.Menu.substr(s.Menu.find_last_of('/') == std::string::npos ? 0 : s.Menu.find_last_of('/') + 1);
             return name + (s.Module == "csharp" ? "   (C#)" : "   (C++)");
         }
+        // Whether a control of a C# custom Inspector was active last frame (its edits then continue one undo step).
+        bool s_CustomEditActive = false;
+
         // Undo/dirty bookkeeping for a property edit. Widgets such as checkboxes change
         // their value on the same frame they activate, so the pre-edit value is restored
         // briefly while the undo snapshot is captured.
@@ -475,6 +479,8 @@ namespace Editor
                         }
                     }
                     UI::EndProperties();
+                    // A C# custom Inspector for the component ([CustomInspector("Name")]) draws below its fields.
+                    if (const auto* custom = CSharpRuntime::FindInspector(info.Name)) CSharpRuntime::InspectComponent(custom->Id, scene, e);
                     if (info.TypeId == GetComponentTypeId<SpriteRendererComponent>())
                     {
                         // Its texture's sliced sprites (the Sprite Editor): draw one of them, or all of it.
@@ -902,6 +908,10 @@ namespace Editor
 
             if (open)
             {
+                // A C# custom Inspector ([CustomInspector(typeof(Class))]) draws in place of the fields, below the class.
+                const CSharpRuntime::EditorItem* custom = info ? CSharpRuntime::FindInspector(script.ClassName) : nullptr;
+                std::shared_ptr<ScriptableEntity> temp;
+                ScriptableEntity* target = nullptr;
                 if (UI::BeginProperties("ScriptProps"))
                 {
                     UI::PropertyLabel("Class");
@@ -922,8 +932,7 @@ namespace Editor
                     {
                         // Edit through a temporary instance so defaults come from the class; while
                         // playing, edit the live instance (changes are discarded on Stop).
-                        std::shared_ptr<ScriptableEntity> temp;
-                        ScriptableEntity* target = script.Instance.get();
+                        target = script.Instance.get();
                         if (!target)
                         {
                             temp = info->Create();
@@ -934,6 +943,7 @@ namespace Editor
                         void* obj = info->ToObject(target);
                         for (auto& f : info->Fields)
                         {
+                            if (custom) break;
                             auto& fields = reg.Get<ScriptComponent>(e).Scripts[i].Fields;
                             nlohmann::json before = fields;
                             bool overridden = Prefabs::IsOverridden(scene, e, "Script", "Scripts");
@@ -946,13 +956,32 @@ namespace Editor
                             ApplyEdit(m_Ctx, r, fields, before);
                             if (r.Changed) Prefabs::RecordFieldOverride(scene, e, "Script", "Scripts");
                         }
-                        if (info->Fields.empty())
+                        if (info->Fields.empty() && !custom)
                         {
                             UI::PropertyLabel("");
                             ImGui::TextDisabled("No public fields");
                         }
                     }
                     UI::EndProperties();
+                }
+                if (custom && target)
+                {
+                    // Its edits go into the saved values like the fields' own: one undo step per drag or edit.
+                    auto& fields = reg.Get<ScriptComponent>(e).Scripts[i].Fields;
+                    nlohmann::json before = fields;
+                    if (CSharpRuntime::InspectScript(custom->Id, *target, scene, e))
+                    {
+                        void* obj = info->ToObject(target);
+                        nlohmann::json after = before.is_object() ? before : nlohmann::json::object();
+                        for (auto& f : info->Fields) after[f.Name] = FieldToJson(f, obj, &resolver);
+                        UI::EditResult r;
+                        r.Changed = true;
+                        r.Activated = !s_CustomEditActive;
+                        fields = after;
+                        ApplyEdit(m_Ctx, r, fields, before);
+                        Prefabs::RecordFieldOverride(scene, e, "Script", "Scripts");
+                    }
+                    s_CustomEditActive = ImGui::IsAnyItemActive();
                 }
                 ImGui::TreePop();
             }

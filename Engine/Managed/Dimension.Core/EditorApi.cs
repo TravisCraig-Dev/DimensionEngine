@@ -29,6 +29,29 @@ namespace Dimension
         }
     }
 
+    // A custom Inspector (like Unity's CustomEditor): a class deriving from Inspector with
+    // [CustomInspector(typeof(MyScript))] draws that script's Inspector in place of its fields (DrawDefaultInspector
+    // draws them as usual); with [CustomInspector("Point Light")] it draws below a built-in component's fields.
+    [AttributeUsage(AttributeTargets.Class)]
+    public sealed class CustomInspectorAttribute : Attribute
+    {
+        public string Target { get; }
+        public CustomInspectorAttribute(Type script) => Target = script?.FullName ?? "";
+        public CustomInspectorAttribute(string component) => Target = component ?? "";
+    }
+
+    public abstract class Inspector
+    {
+        // The script being inspected, holding its saved values (changes made to it are saved, as one undo step per
+        // edit); while playing, the live script. Null for a built-in component.
+        public Behaviour Target { get; internal set; }
+        // The object being inspected.
+        public Entity Entity { get; internal set; }
+        public abstract void OnInspectorGUI();
+        // The script's fields as the Inspector draws them without a custom one.
+        public void DrawDefaultInspector() => ScriptHost.DrawDefaultFields(Target);
+    }
+
     // A dockable editor window; one instance per class, kept while the scripts stay loaded.
     public abstract class EditorWindow
     {

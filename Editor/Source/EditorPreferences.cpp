@@ -37,6 +37,10 @@ namespace Editor
             SaveSceneBeforePlay = j.value("saveSceneBeforePlay", SaveSceneBeforePlay);
             Theme = j.value("theme", Theme);
             Accent = j.value("accent", Accent);
+            Snap = j.value("snap", Snap);
+            SnapMove = j.value("snapMove", SnapMove);
+            SnapRotate = j.value("snapRotate", SnapRotate);
+            SnapScale = j.value("snapScale", SnapScale);
         }
         catch (const std::exception& e)
         {
@@ -56,7 +60,11 @@ namespace Editor
                           { "autosaveMinutes", AutosaveMinutes },
                           { "saveSceneBeforePlay", SaveSceneBeforePlay },
                           { "theme", Theme },
-                          { "accent", Accent } };
+                          { "accent", Accent },
+                          { "snap", Snap },
+                          { "snapMove", SnapMove },
+                          { "snapRotate", SnapRotate },
+                          { "snapScale", SnapScale } };
         std::ofstream(FilePath()) << j.dump(2);
     }
 }

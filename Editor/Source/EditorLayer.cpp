@@ -15,6 +15,7 @@
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/SceneSearch.h>
+#include <Dimension/Scene/SceneSnapping.h>
 #include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Scene/SceneManager.h>
@@ -42,6 +43,17 @@ namespace Editor
 {
     namespace
     {
+        // The world-space ray under the mouse in a view `size` pixels big at `origin` (from the near plane outward).
+        void MouseRay(const glm::mat4& viewProj, const ImVec2& origin, const ImVec2& size, glm::vec3& from, glm::vec3& direction)
+        {
+            glm::mat4 inv = glm::inverse(viewProj);
+            ImVec2 mouse = ImGui::GetMousePos();
+            glm::vec2 ndc((mouse.x - origin.x) / size.x * 2.0f - 1.0f, 1.0f - (mouse.y - origin.y) / size.y * 2.0f);
+            glm::vec4 a = inv * glm::vec4(ndc, 0.0f, 1.0f), b = inv * glm::vec4(ndc, 1.0f, 1.0f);
+            from = glm::vec3(a) / a.w;
+            direction = glm::normalize(glm::vec3(b) / b.w - from);
+        }
+
         fs::path ExecutableDirectory()
         {
 #ifdef _WIN32
@@ -142,6 +154,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
+        else if (m_Options.OpenWindow == "Snap Settings") m_ShowSnapSettings = true;
         else if (!m_Options.OpenWindow.empty()) m_ScriptWindows[m_Options.OpenWindow] = true; // a C# extension's window, by title
         else if (m_Options.OpenWindow == "Frame Debugger")
         {
@@ -716,6 +729,113 @@ namespace Editor
         }
     }
 
+    void EditorLayer::DrawSnapSettings()
+    {
+        // The steps snapping uses (the toolbar's Snap), and how to snap to vertices and surfaces.
+        ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 340.0f, viewport->WorkPos.y + 60.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Snap Settings", &m_ShowSnapSettings, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            auto& prefs = EditorPreferences::Get();
+            bool edited = false;
+            if (ImGui::Checkbox("Snap", &prefs.Snap)) edited = true;
+            ImGui::SameLine();
+            ImGui::TextDisabled("(Ctrl inverts it while held)");
+            auto step = [&](const char* label, float* v, float speed, float lo, float hi, const char* format) {
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::DragFloat(label, v, speed, lo, hi, format, ImGuiSliderFlags_AlwaysClamp);
+                edited |= ImGui::IsItemDeactivatedAfterEdit();
+            };
+            step("Move", &prefs.SnapMove, 0.01f, 0.01f, 100.0f, "%.2f m");
+            step("Rotate", &prefs.SnapRotate, 0.5f, 0.5f, 180.0f, "%.1f deg");
+            step("Scale", &prefs.SnapScale, 0.01f, 0.01f, 10.0f, "%.2f");
+            if (edited) prefs.Save();
+            ImGui::SeparatorText("While moving");
+            ImGui::TextDisabled("Hold V: drag a vertex onto another object's vertex");
+            ImGui::TextDisabled("Ctrl+Shift: rest the object on the surface under the mouse");
+        }
+        ImGui::End();
+    }
+
+    void EditorLayer::MoveSelection(const glm::vec3& delta)
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        for (Entity e : m_Ctx.SelectedRoots())
+        {
+            auto& t = reg.Get<TransformComponent>(e);
+            Entity parent = scene.GetParent(e);
+            glm::mat4 parentWorld = parent.IsNull() ? glm::mat4(1.0f) : reg.Get<TransformComponent>(parent).World;
+            t.Position = glm::vec3(glm::inverse(parentWorld) * glm::vec4(t.GetWorldPosition() + delta, 1.0f));
+        }
+        scene.UpdateTransforms();
+        m_Ctx.MarkDirty();
+    }
+
+    // Vertex snapping (like Unity's V): while V is held with the Move tool, the selection's vertex nearest the mouse is
+    // marked; dragging it puts it on the nearest vertex of another object under the mouse (or, with none near, moves it
+    // across the view at its depth). One undo step per drag.
+    bool EditorLayer::UpdateVertexSnap(const ImVec2& origin, const ImVec2& size)
+    {
+        bool held = ImGui::IsKeyDown(ImGuiKey_V) && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput;
+        if (m_VertexDrag && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_VertexDrag = false;
+        if (!m_VertexDrag && (!held || !m_SceneViewHovered || !m_Ctx.HasValidSelection() || m_GizmoOperation != ImGuizmo::TRANSLATE ||
+                              m_Camera.IsControlling()))
+            return false;
+        Scene& scene = m_Ctx.ActiveScene();
+        glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
+        ImVec2 mouse = ImGui::GetMousePos();
+        glm::vec2 screen(mouse.x - origin.x, mouse.y - origin.y), viewport(size.x, size.y);
+        std::vector<Entity> selected = m_Ctx.SelectedRoots();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        auto toScreen = [&](const glm::vec3& p, ImVec2& out) {
+            glm::vec4 clip = viewProj * glm::vec4(p, 1.0f);
+            if (clip.w <= 1e-5f) return false;
+            out = ImVec2(origin.x + (clip.x / clip.w * 0.5f + 0.5f) * size.x, origin.y + (0.5f - clip.y / clip.w * 0.5f) * size.y);
+            return true;
+        };
+        auto marker = [&](const glm::vec3& p, ImU32 color) {
+            ImVec2 s;
+            if (!toScreen(p, s)) return;
+            draw->AddRect(ImVec2(s.x - 5, s.y - 5), ImVec2(s.x + 5, s.y + 5), color, 0.0f, 0, 2.0f);
+        };
+        glm::vec3 pivot = scene.GetRegistry().Get<TransformComponent>(m_Ctx.Selected).GetWorldPosition();
+        if (!m_VertexDrag)
+        {
+            auto own = SceneSnapping::NearestVertex(scene, viewProj, viewport, screen, 1e6f, { m_Ctx.Selected });
+            glm::vec3 grab = own.Hit ? own.Position : pivot; // no mesh: the pivot itself
+            marker(grab, IM_COL32(255, 210, 60, 255));
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                m_Ctx.RecordUndo();
+                m_VertexDrag = true;
+                m_VertexOffset = grab - pivot;
+            }
+            return true;
+        }
+        glm::vec3 grab = pivot + m_VertexOffset, target;
+        auto onto = SceneSnapping::NearestVertex(scene, viewProj, viewport, screen, 40.0f, {}, selected);
+        if (onto.Hit)
+        {
+            target = onto.Position;
+            marker(target, IM_COL32(90, 220, 120, 255));
+        }
+        else
+        {
+            // Across the view: the plane through the grabbed vertex facing the camera.
+            glm::vec3 from, dir;
+            MouseRay(viewProj, origin, size, from, dir);
+            glm::vec3 normal = glm::normalize(glm::vec3(glm::inverse(m_Camera.GetView())[2]));
+            float denom = glm::dot(dir, normal);
+            if (std::abs(denom) < 1e-5f) return true;
+            target = from + dir * (glm::dot(grab - from, normal) / denom);
+        }
+        if (glm::length(target - grab) > 1e-6f) MoveSelection(target - grab);
+        marker(target, IM_COL32(255, 210, 60, 255));
+        return true;
+    }
+
     // Line Renderer, Terrain Path and Path Placer points (and Off Mesh Link ends, NavMesh Obstacle shapes): with one
     // selected, its points show as handles in the Scene
     // view. Clicking one picks it and a move gizmo edits that point (undoable); clicking elsewhere returns to the
@@ -912,6 +1032,7 @@ namespace Editor
             m_Ctx.OpenSpriteEditor = false;
         }
         if (m_ShowSpriteEditor) m_SpriteEditor->OnImGui(&m_ShowSpriteEditor);
+        if (m_ShowSnapSettings) DrawSnapSettings();
         DrawScriptWindows();
         if (m_ShowFrameDebugger)
         {
@@ -1079,6 +1200,7 @@ namespace Editor
             ImGui::MenuItem("Profiler", nullptr, &m_ShowProfiler);
             ImGui::MenuItem("Frame Debugger", nullptr, &m_ShowFrameDebugger);
             ImGui::MenuItem("Sprite Editor", nullptr, &m_ShowSpriteEditor);
+            ImGui::MenuItem("Snap Settings", nullptr, &m_ShowSnapSettings);
             ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
             ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);
@@ -1121,6 +1243,24 @@ namespace Editor
             if (is2D) ImGui::PopStyleColor();
             ImGui::SameLine();
             ImGui::Checkbox("Grid", &m_ShowGrid);
+            ImGui::SameLine();
+            // Snapping: the toggle, and its steps in the menu beside it.
+            auto& prefs = EditorPreferences::Get();
+            bool snapOn = prefs.Snap;
+            if (snapOn) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::Button("Snap", ImVec2(44, 0)))
+            {
+                prefs.Snap = !prefs.Snap;
+                prefs.Save();
+            }
+            if (snapOn) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Moves land on the grid, rotation and scale go in steps (Ctrl inverts this while held).\n"
+                                  "Hold V to drag a vertex onto another object's vertex; Ctrl+Shift while moving puts the "
+                                  "object on the surface under the mouse.");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::ArrowButton("##snapsettings", ImGuiDir_Down)) m_ShowSnapSettings = !m_ShowSnapSettings;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Snap Settings");
 
             // Play controls (center)
             float w = ImGui::GetFrameHeight() * 1.25f * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
@@ -1232,10 +1372,11 @@ namespace Editor
 
         bool tilePainting = UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail);
         bool lineEditing = UpdateLinePointEditing(origin, avail);
+        bool vertexSnapping = !tilePainting && !lineEditing && m_LinePoint < 0 && UpdateVertexSnap(origin, avail);
 
         // Transform gizmo
-        bool gizmoHovered = lineEditing;
-        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0)
+        bool gizmoHovered = lineEditing || vertexSnapping;
+        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping)
         {
             auto& reg = scene.GetRegistry();
             auto& t = reg.Get<TransformComponent>(m_Ctx.Selected);
@@ -1247,14 +1388,41 @@ namespace Editor
             glm::mat4 world = t.World;
             glm::mat4 worldBefore = world;
 
-            bool snap = ImGui::GetIO().KeyCtrl;
-            float snapValue = m_GizmoOperation == ImGuizmo::ROTATE ? 15.0f : 0.5f;
+            // Snapping (the toolbar's Snap, inverted while Ctrl is held): moves land on the world grid (the axes being
+            // moved), rotation and scale go in steps. Ctrl+Shift while moving puts the selection on the surface under
+            // the mouse, resting on it.
+            const auto& prefs = EditorPreferences::Get();
+            const ImGuiIO& io = ImGui::GetIO();
+            bool translate = m_GizmoOperation == ImGuizmo::TRANSLATE;
+            bool onSurface = translate && io.KeyCtrl && io.KeyShift;
+            bool snap = !onSurface && prefs.Snap != io.KeyCtrl;
+            float snapValue = m_GizmoOperation == ImGuizmo::ROTATE ? prefs.SnapRotate : prefs.SnapScale;
             float snaps[3] = { snapValue, snapValue, snapValue };
 
             gizmoHovered = ImGuizmo::IsOver();
             if (gizmoHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) m_Ctx.RecordUndo();
-            if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), (ImGuizmo::OPERATION)m_GizmoOperation,
-                                     m_GizmoLocal ? ImGuizmo::LOCAL : ImGuizmo::WORLD, glm::value_ptr(world), nullptr, snap ? snaps : nullptr))
+            bool changed = ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), (ImGuizmo::OPERATION)m_GizmoOperation,
+                                                m_GizmoLocal ? ImGuizmo::LOCAL : ImGuizmo::WORLD, glm::value_ptr(world), nullptr,
+                                                snap && !translate ? snaps : nullptr);
+            if (onSurface && ImGuizmo::IsUsing())
+            {
+                glm::vec3 from, dir;
+                MouseRay(proj * view, origin, avail, from, dir);
+                auto hit = SceneSnapping::Raycast(scene, from, dir, m_Ctx.SelectedRoots());
+                if (hit.Hit)
+                {
+                    glm::vec3 p = hit.Point + hit.Normal * SceneSnapping::RestOffset(scene, m_Ctx.Selected, hit.Normal);
+                    world[3] = glm::vec4(p, 1.0f);
+                    changed = glm::vec3(world[3]) != glm::vec3(worldBefore[3]);
+                }
+            }
+            else if (changed && snap && translate)
+            {
+                glm::vec3 before = glm::vec3(worldBefore[3]), now = glm::vec3(world[3]);
+                glm::bvec3 moved = glm::greaterThan(glm::abs(now - before), glm::vec3(1e-6f));
+                world[3] = glm::vec4(SceneSnapping::ToGrid(now, prefs.SnapMove, moved), 1.0f);
+            }
+            if (changed)
             {
                 Entity parent = scene.GetParent(m_Ctx.Selected);
                 glm::mat4 parentWorld = parent.IsNull() ? glm::mat4(1.0f) : reg.Get<TransformComponent>(parent).World;
@@ -2680,6 +2848,7 @@ namespace Editor
         // between are submenus. Windows show a check while open.
         for (const auto& item : CSharpRuntime::GetEditorItems())
         {
+            if (!item.Inspects.empty()) continue;
             std::vector<std::string> parts;
             for (size_t start = 0; start <= item.MenuPath.size();)
             {

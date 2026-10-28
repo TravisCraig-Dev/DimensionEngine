@@ -14,21 +14,30 @@ namespace Dimension
     // editor runs. C# classes register into ScriptRegistry under their full type name (module
     // "csharp"), so the Inspector, serialization, prefabs and play mode treat them like C++ scripts.
     class Scene;
+    class ScriptableEntity;
 
     class CSharpRuntime
     {
     public:
         // Editor extensions in the scripts (EditorApi.cs): menu items ([MenuItem]) and windows (EditorWindow), each
-        // under a menu path, registered when the scripts load.
+        // under a menu path, and custom Inspectors ([CustomInspector]: Inspects names the script class or built-in
+        // component), registered when the scripts load.
         struct EditorItem
         {
             int Id = -1;
             bool Window = false;
-            std::string MenuPath, Title;
+            std::string MenuPath, Title, Inspects;
         };
         static const std::vector<EditorItem>& GetEditorItems();
         // Runs a menu item, or draws a window's contents (inside the caller's window), with `scene` as the scene.
         static void CallEditorItem(int id, bool window, Scene& scene);
+        // The custom Inspector for a script class or component name (null: none).
+        static const EditorItem* FindInspector(const std::string& inspected);
+        // Draws a custom Inspector for a C# script instance (live, or a stand-in holding the saved values) and takes
+        // the values it leaves into the instance's fields; true when they changed.
+        static bool InspectScript(int id, ScriptableEntity& script, Scene& scene, Entity e);
+        // Draws a custom Inspector for a built-in component of `e` (it changes the scene through the C# API).
+        static void InspectComponent(int id, Scene& scene, Entity e);
         // What the extensions reach in the editor: controls (op, label, values, count; see EditorGUI in EditorApi.cs:
         // returns 1 when clicked/changed), a text field, the selection (0 get, 1 set, 2 create an entity named `text`,
         // 3 count (in Index), 4 the n-th (n in the entity's Index)), and an undo step.
