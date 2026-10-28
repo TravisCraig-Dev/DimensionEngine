@@ -42,6 +42,13 @@ namespace Dimension
         // (true when the script's values changed, as InspectScript).
         static bool HasFieldDrawer(ScriptableEntity& script, size_t field);
         static bool DrawScriptField(ScriptableEntity& script, size_t field, Scene& scene, Entity e);
+        // The Inspector's Debug mode: a C# script's fields that are not saved (private state), with their values as
+        // text: the live script's while playing, else a new one's holding the saved values.
+        struct DebugField
+        {
+            std::string Name, Type, Value;
+        };
+        static std::vector<DebugField> GetDebugFields(ScriptableEntity& script, Scene& scene, Entity e);
         // What the extensions reach in the editor: controls (op, label, values, count; see EditorGUI in EditorApi.cs:
         // returns 1 when clicked/changed), a text field, the selection (0 get, 1 set, 2 create an entity named `text`,
         // 3 count (in Index), 4 the n-th (n in the entity's Index)), an undo step, and pickers for an entity and for

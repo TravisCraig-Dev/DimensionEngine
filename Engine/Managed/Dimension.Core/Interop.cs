@@ -131,6 +131,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> Inspect;
         // A field's property drawer: field index, then as Inspect
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> DrawField;
+        // The Inspector's Debug mode: a script's unsaved fields as text (arguments as DrawField's)
+        public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> DebugFields;
     }
 
     internal static unsafe class Native
@@ -186,6 +188,7 @@ namespace Dimension.Interop
                 api->EditorCall = &ScriptHost.EditorCall;
                 api->Inspect = &ScriptHost.Inspect;
                 api->DrawField = &ScriptHost.DrawField;
+                api->DebugFields = &ScriptHost.DebugFields;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

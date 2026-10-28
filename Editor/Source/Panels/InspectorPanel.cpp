@@ -315,6 +315,20 @@ namespace Editor
                 }
             }
             ImGui::TextDisabled("ID %llu", (unsigned long long)(uint64_t)scene.GetGuid(e));
+            if (DebugMode)
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("  index %u, generation %u", e.Index, e.Generation);
+            }
+            // Normal / Debug, at the right of the line.
+            const char* mode = DebugMode ? "Debug" : "Normal";
+            float modeWidth = ImGui::CalcTextSize("Normal").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - modeWidth));
+            if (DebugMode) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::SmallButton(mode)) DebugMode = !DebugMode;
+            if (DebugMode) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Debug mode: hidden fields and C# scripts' private state, read-only");
             ApplyEdit(m_Ctx, r, tag, before);
             if (r.Changed)
             {
@@ -478,6 +492,7 @@ namespace Editor
                             scene.UpdateTransforms();
                         }
                     }
+                    if (DebugMode) DrawHiddenFields(info.Fields, info.Get(scene, e), scene);
                     UI::EndProperties();
                     // A C# custom Inspector for the component ([CustomInspector("Name")]) draws below its fields.
                     if (const auto* custom = CSharpRuntime::FindInspector(info.Name); custom && UI::BeginProperties("##custom"))
@@ -867,6 +882,20 @@ namespace Editor
         ImGui::PopStyleColor();
     }
 
+    void InspectorPanel::DrawHiddenFields(const std::vector<FieldInfo>& fields, void* object, Scene& scene)
+    {
+        ImGui::BeginDisabled();
+        for (const FieldInfo& f : fields)
+            if (f.Hidden)
+            {
+                FieldInfo shown = f;
+                shown.Hidden = false;
+                shown.Header.clear();
+                UI::Field(shown, object, &scene);
+            }
+        ImGui::EndDisabled();
+    }
+
     void InspectorPanel::DrawScript(Scene& scene, Entity e)
     {
         auto& reg = scene.GetRegistry();
@@ -945,6 +974,37 @@ namespace Editor
                                 if (script.Fields.contains(f.Name)) FieldFromJson(f, info->ToObject(target), script.Fields[f.Name], &resolver);
                         }
                         void* obj = info->ToObject(target);
+                        // Multi-selection: the same script (its class, and its place among scripts of that class) on the
+                        // other selected objects. Values that differ show as --, and edits apply to all of them.
+                        std::vector<std::pair<Entity, size_t>> peers;
+                        {
+                            int occurrence = 0;
+                            for (int k = 0; k < i; ++k) occurrence += sc.Scripts[k].ClassName == script.ClassName;
+                            for (Entity other : m_Ctx.Selection)
+                                if (other != e && scene.IsValid(other))
+                                    if (auto* osc = reg.TryGet<ScriptComponent>(other))
+                                    {
+                                        int seen = 0;
+                                        for (size_t k = 0; k < osc->Scripts.size(); ++k)
+                                            if (osc->Scripts[k].ClassName == script.ClassName && seen++ == occurrence)
+                                            {
+                                                peers.push_back({ other, k });
+                                                break;
+                                            }
+                                    }
+                        }
+                        nlohmann::json defaults; // the class's own values, made when a peer first needs one
+                        auto peerValue = [&](const ScriptInstance& s, const FieldInfo& f) -> nlohmann::json {
+                            if (s.Instance) return FieldToJson(f, info->ToObject(s.Instance.get()), &resolver);
+                            if (s.Fields.is_object() && s.Fields.contains(f.Name)) return s.Fields[f.Name];
+                            if (defaults.is_null())
+                            {
+                                auto fresh = info->Create();
+                                defaults = nlohmann::json::object();
+                                for (auto& d : info->Fields) defaults[d.Name] = FieldToJson(d, info->ToObject(fresh.get()), &resolver);
+                            }
+                            return defaults[f.Name];
+                        };
                         for (size_t fi = 0; fi < info->Fields.size() && !custom; ++fi)
                         {
                             const FieldInfo& f = info->Fields[fi];
@@ -973,14 +1033,66 @@ namespace Editor
                                 s_CustomEditActive = ImGui::IsAnyItemActive();
                                 ImGui::PopID();
                             }
-                            else
+                            nlohmann::json mine = FieldToJson(f, obj, &resolver);
+                            if (!drawn)
+                            {
+                                uint32_t mixed = 0;
+                                for (auto& [pe, k] : peers) mixed |= UI::MixedMask(f.Type, mine, peerValue(reg.Get<ScriptComponent>(pe).Scripts[k], f));
+                                UI::SetMixedValue(mixed);
                                 r = UI::Field(f, obj, &scene);
+                            }
                             if (overridden) ImGui::PopStyleColor();
                             nlohmann::json after = fields;
                             if (r.Changed) after[f.Name] = FieldToJson(f, obj, &resolver);
                             fields = after;
                             ApplyEdit(m_Ctx, r, fields, before);
                             if (r.Changed) Prefabs::RecordFieldOverride(scene, e, "Script", "Scripts");
+                            if (r.Changed && !drawn)
+                            {
+                                // The new value onto the peers (after the undo step above). Vectors copy only the
+                                // components that changed, so dragging X keeps each object's own Y and Z.
+                                nlohmann::json value = after[f.Name];
+                                bool perComponent = UI::IsVectorField(f.Type) && mine.is_array() && value.is_array() && mine.size() == value.size();
+                                for (auto& [pe, k] : peers)
+                                {
+                                    auto& peer = reg.Get<ScriptComponent>(pe).Scripts[k];
+                                    nlohmann::json merged = value;
+                                    if (perComponent)
+                                    {
+                                        nlohmann::json own = peerValue(peer, f);
+                                        if (own.is_array() && own.size() == value.size())
+                                        {
+                                            merged = own;
+                                            for (size_t c = 0; c < value.size(); ++c)
+                                                if (mine[c] != value[c]) merged[c] = value[c];
+                                        }
+                                    }
+                                    if (!peer.Fields.is_object()) peer.Fields = nlohmann::json::object();
+                                    peer.Fields[f.Name] = merged;
+                                    if (peer.Instance) FieldFromJson(f, info->ToObject(peer.Instance.get()), merged, &resolver);
+                                    Prefabs::RecordFieldOverride(scene, pe, "Script", "Scripts");
+                                }
+                            }
+                        }
+                        if (DebugMode && !custom)
+                        {
+                            DrawHiddenFields(info->Fields, obj, scene);
+                            // C# scripts' private state (the live values while playing).
+                            auto debug = CSharpRuntime::GetDebugFields(*target, scene, e);
+                            if (!debug.empty())
+                            {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Dummy(ImVec2(0.0f, 2.0f));
+                                ImGui::PushStyleColor(ImGuiCol_Text, UI::AccentText());
+                                ImGui::TextUnformatted("Private");
+                                ImGui::PopStyleColor();
+                            }
+                            for (const auto& d : debug)
+                            {
+                                UI::PropertyLabel(d.Name.c_str(), d.Type.c_str());
+                                ImGui::TextDisabled("%s", d.Value.c_str());
+                            }
                         }
                         if (info->Fields.empty() && !custom)
                         {

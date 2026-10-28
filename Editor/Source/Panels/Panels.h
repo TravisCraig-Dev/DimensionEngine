@@ -32,6 +32,8 @@ namespace Editor
     public:
         explicit InspectorPanel(EditorContext& ctx) : m_Ctx(ctx) {}
         void OnImGui(bool* open);
+        // Debug mode (like Unity's): hidden fields, and C# scripts' private state, shown read-only.
+        bool DebugMode = false;
 
     private:
         void DrawEntity(Scene& scene, Entity e);
@@ -40,6 +42,8 @@ namespace Editor
         void DrawAsset(AssetHandle handle);
         void DrawAddComponent(Scene& scene, Entity e);
         void DrawLODBar(Scene& scene, Entity e, LODGroupComponent& lod);
+        // Debug mode: the hidden fields of an object's data, read-only rows of the property grid.
+        void DrawHiddenFields(const std::vector<FieldInfo>& fields, void* object, Scene& scene);
         EditorContext& m_Ctx;
         std::string m_ComponentFilter;
     };

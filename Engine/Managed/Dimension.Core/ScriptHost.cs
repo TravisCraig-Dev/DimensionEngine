@@ -182,6 +182,71 @@ namespace Dimension
             }
         }
 
+        // The Inspector's Debug mode: a script's fields that are not saved (private state; auto-properties under their
+        // property's name), with their values as text: [{"name", "type", "value"}]. The script as Inspect finds it (while
+        // playing, the live one).
+        [UnmanagedCallersOnly]
+        internal static byte* DebugFields(int unused, IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
+        {
+            try
+            {
+                Native.CurrentScene = scene;
+                Behaviour target = TargetFor(handle, classUtf8, fieldsUtf8, scene, entity);
+                if (target == null || !s_Classes.TryGetValue(target.GetType().FullName, out var cls)) return null;
+                using var stream = new MemoryStream();
+                using (var w = new Utf8JsonWriter(stream))
+                {
+                    w.WriteStartArray();
+                    var chain = new List<Type>();
+                    for (Type t = target.GetType(); t != null && t != typeof(Behaviour); t = t.BaseType) chain.Insert(0, t);
+                    foreach (Type t in chain)
+                        foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                        {
+                            if (cls.Fields.Contains(f)) continue;
+                            string name = f.Name.StartsWith("<") && f.Name.Contains(">k__BackingField") ? f.Name[1..f.Name.IndexOf('>')] : f.Name;
+                            w.WriteStartObject();
+                            w.WriteString("name", name);
+                            w.WriteString("type", TypeLabel(f.FieldType));
+                            w.WriteString("value", DebugText(f.GetValue(target)));
+                            w.WriteEndObject();
+                        }
+                    w.WriteEndArray();
+                }
+                return Utf8Result(stream.ToArray());
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Reading debug fields failed: {e.Message}");
+                return null;
+            }
+        }
+
+        private static string TypeLabel(Type t) =>
+            t.IsGenericType ? $"{t.Name[..t.Name.IndexOf('`')]}<{string.Join(", ", t.GetGenericArguments().Select(TypeLabel))}>" : t.Name;
+
+        private static string DebugText(object v) => v switch
+        {
+            null => "null",
+            float f => f.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
+            double d => d.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
+            Vector2 a => $"({DebugText(a.X)}, {DebugText(a.Y)})",
+            Vector3 a => $"({DebugText(a.X)}, {DebugText(a.Y)}, {DebugText(a.Z)})",
+            Entity e => e.IsValid ? e.Name : "None",
+            string s => $"\"{s}\"",
+            System.Collections.ICollection c => $"{c.Count} item{(c.Count == 1 ? "" : "s")}",
+            _ => v.ToString(),
+        };
+
+        // A result native code reads before the next call (the buffer is reused).
+        private static byte* Utf8Result(byte[] json)
+        {
+            if (s_FieldsBuffer != IntPtr.Zero) Marshal.FreeHGlobal(s_FieldsBuffer);
+            s_FieldsBuffer = Marshal.AllocHGlobal(json.Length + 1);
+            Marshal.Copy(json, 0, s_FieldsBuffer, json.Length);
+            ((byte*)s_FieldsBuffer)[json.Length] = 0;
+            return (byte*)s_FieldsBuffer;
+        }
+
         // The live script (`handle`), or one made from its class and saved values.
         private static Behaviour TargetFor(IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
         {
@@ -715,12 +780,7 @@ namespace Dimension
                 }
                 w.WriteEndArray();
             }
-            byte[] json = stream.ToArray();
-            if (s_FieldsBuffer != IntPtr.Zero) Marshal.FreeHGlobal(s_FieldsBuffer);
-            s_FieldsBuffer = Marshal.AllocHGlobal(json.Length + 1);
-            Marshal.Copy(json, 0, s_FieldsBuffer, json.Length);
-            ((byte*)s_FieldsBuffer)[json.Length] = 0;
-            return (byte*)s_FieldsBuffer;
+            return Utf8Result(stream.ToArray());
         }
 
         // Debugger support for the engine: 0 asks whether a managed debugger is attached, 1 offers to attach one (the

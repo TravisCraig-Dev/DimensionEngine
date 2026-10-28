@@ -164,6 +164,8 @@ namespace Dimension
             const char* (*Inspect)(int, intptr_t, const char*, const char*, void*, uint64_t);
             // A field's property drawer: field index, then as Inspect
             const char* (*DrawField)(int, intptr_t, const char*, const char*, void*, uint64_t);
+            // The Inspector's Debug mode: unsaved fields as text, JSON [{name, type, value}] (arguments as DrawField's)
+            const char* (*DebugFields)(int, intptr_t, const char*, const char*, void*, uint64_t);
         };
         CSharpRuntime::EditorHooks s_EditorHooks;
         std::vector<CSharpRuntime::EditorItem> s_EditorItems;
@@ -548,6 +550,24 @@ namespace Dimension
             // Draws field `index` with its property drawer; true when the values changed.
             bool DrawField(size_t index, Scene& scene, Entity e) { return Draw(s_Managed.DrawField, (int)index, scene, e); }
             const ManagedClass& Class() const { return *m_Class; }
+
+            std::vector<CSharpRuntime::DebugField> DebugFields(Scene& scene, Entity e) const
+            {
+                std::vector<CSharpRuntime::DebugField> out;
+                if (!s_Managed.DebugFields) return out;
+                std::string values = SlotsJson().dump();
+                const char* text = s_Managed.DebugFields(0, m_Handle, m_Class->Name.c_str(), values.c_str(), &scene, Pack(e));
+                if (!text) return out;
+                try
+                {
+                    for (auto& f : nlohmann::json::parse(text))
+                        out.push_back({ f.value("name", std::string()), f.value("type", std::string()), f.value("value", std::string()) });
+                }
+                catch (const std::exception&)
+                {
+                }
+                return out;
+            }
 
             bool Draw(const char* (*call)(int, intptr_t, const char*, const char*, void*, uint64_t), int id, Scene& scene, Entity e)
             {
@@ -1197,6 +1217,12 @@ namespace Dimension
         return managed && field < managed->Class().Drawn.size() && managed->Class().Drawn[field];
     }
 
+    std::vector<CSharpRuntime::DebugField> CSharpRuntime::GetDebugFields(ScriptableEntity& script, Scene& scene, Entity e)
+    {
+        auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
+        return managed ? managed->DebugFields(scene, e) : std::vector<DebugField>{};
+    }
+
     bool CSharpRuntime::DrawScriptField(ScriptableEntity& script, size_t field, Scene& scene, Entity e)
     {
         auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
@@ -1251,6 +1277,7 @@ namespace Dimension
     void CSharpRuntime::InspectComponent(int, Scene&, Entity) {}
     bool CSharpRuntime::HasFieldDrawer(ScriptableEntity&, size_t) { return false; }
     bool CSharpRuntime::DrawScriptField(ScriptableEntity&, size_t, Scene&, Entity) { return false; }
+    std::vector<CSharpRuntime::DebugField> CSharpRuntime::GetDebugFields(ScriptableEntity&, Scene&, Entity) { return {}; }
     bool CSharpRuntime::IsDebuggerAttached() { return false; }
     bool CSharpRuntime::LaunchDebugger() { return false; }
     bool CSharpRuntime::WaitForDebugger(float) { return false; }

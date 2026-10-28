@@ -7541,6 +7541,16 @@ namespace
                     CHECK(FieldToJson(*points, obj, nullptr) == nlohmann::json::parse("[[4,0,4],[0,0,0],[4,0,0]]"));
                     FieldFromJson(*calls, obj, nlohmann::json({ "A", "B", "C" }), nullptr);
                     CHECK(calls->ListSize(calls->Access(obj)) == 3);
+                    // The Inspector's Debug mode: the private fields, from a new script (no OnCreate yet).
+                    Scene empty("Debug");
+                    auto debug = CSharpRuntime::GetDebugFields(*instance, empty, empty.CreateEntity("Guard"));
+                    auto debugValue = [](const std::vector<CSharpRuntime::DebugField>& fields, const char* name) -> std::string {
+                        for (const auto& d : fields)
+                            if (d.Name == name) return d.Type + " " + d.Value;
+                        return "(missing)";
+                    };
+                    CHECK(debug.size() == 5 && debugValue(debug, "m_Origin") == "Vector3 (0, 0, 0)" && debugValue(debug, "m_Step") == "Int32 1" &&
+                          debugValue(debug, "m_Finished") == "Boolean False" && debugValue(debug, "Points") == "(missing)");
                 }
                 Scene walk("Walk");
                 Entity guard = walk.CreateEntity("Guard");
@@ -7558,6 +7568,18 @@ namespace
                 CHECK(Near(rt->GetRegistry().Get<TransformComponent>(runner).Position, { 2.0f, 0.0f, 1.0f }));
                 for (int i = 0; i < 105; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); // at the last stop, and staying (Once)
                 CHECK(Near(rt->GetRegistry().Get<TransformComponent>(runner).Position, { 3.0f, 0.0f, 3.0f }));
+                // Debug mode while playing: the live script's state.
+                if (auto& live = rt->GetRegistry().Get<ScriptComponent>(runner).Scripts[0].Instance)
+                {
+                    auto debug = CSharpRuntime::GetDebugFields(*live, *rt, runner);
+                    bool finished = false, origin = false;
+                    for (const auto& d : debug)
+                    {
+                        finished |= d.Name == "m_Finished" && d.Value == "True";
+                        origin |= d.Name == "m_Origin" && d.Value == "(1, 0, 1)";
+                    }
+                    CHECK(finished && origin);
+                }
                 rt->OnRuntimeStop();
             }
         }

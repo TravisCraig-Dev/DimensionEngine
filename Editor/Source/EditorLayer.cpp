@@ -121,6 +121,7 @@ namespace Editor
     {
         m_Hierarchy = MakeScope<HierarchyPanel>(m_Ctx);
         m_Inspector = MakeScope<InspectorPanel>(m_Ctx);
+        m_Inspector->DebugMode = m_Options.InspectorDebug;
         m_Content = MakeScope<ContentBrowserPanel>(m_Ctx);
         m_Console = MakeScope<ConsolePanel>();
         m_SceneSettings = MakeScope<SceneSettingsPanel>(m_Ctx);

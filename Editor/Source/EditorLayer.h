@@ -29,6 +29,7 @@ namespace Editor
         int FrameEvent = -1;      // --frame-event N: with --open "Frame Debugger", step the Scene view to draw N (0-based)
         std::string MenuCommand;  // --menu "Tools/Item": run a C# extension's menu item once the scripts have loaded
         std::string Search;       // --search "query": start with this Hierarchy search
+        bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         bool VisualizeNavigation = false; // Game view overlay of UI navigation links (--visualize-nav starts with it on)
         bool WaitForDebugger = false;     // --wait-for-debugger: wait up to 60 s for a C# debugger before loading scripts
         bool BuildSucceeded = false; // result of the batch build
