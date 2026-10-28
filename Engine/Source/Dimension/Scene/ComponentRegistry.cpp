@@ -738,7 +738,11 @@ namespace Dimension
             .Field("Obstacle Avoidance", &NavMeshAgentComponent::ObstacleAvoidance).Tooltip("Steers around other agents")
             .Field("Avoidance Priority", &NavMeshAgentComponent::AvoidancePriority).Range(0.0f, 99.0f).Tooltip("Gives way to agents with a lower number")
             .Field("Target", &NavMeshAgentComponent::Target).Tooltip("Keeps walking to this object (optional; scripts can set destinations instead)")
-            .Field("Area Mask", &NavMeshAgentComponent::AreaMask).Tooltip("A bit per area it may walk: 1 Walkable, 4 Road, 8 Grass, 16 Mud, 32 Water, ... (-1 = all)");
+            .Field("Area Mask", &NavMeshAgentComponent::AreaMask).Tooltip("A bit per area it may walk: 1 Walkable, 4 Road, 8 Grass, 16 Mud, 32 Water, ... (-1 = all)")
+            .Field("Speed Parameter", &NavMeshAgentComponent::SpeedParameter).Header("Animation")
+                .Tooltip("An Animator float parameter set to its speed each frame (empty = none)")
+            .Field("Root Motion", &NavMeshAgentComponent::RootMotion)
+                .Tooltip("Its Animator's root motion (Apply Root Motion) moves it: the agent turns it and asks for a speed through Speed Parameter");
         Register<AudioReverbZoneComponent>("Audio Reverb Zone", "Audio")
             .Field("Min Distance", &AudioReverbZoneComponent::MinDistance).Range(0.0f, 10000.0f).Speed(0.05f)
                 .Tooltip("Full reverb while the listener is this close")

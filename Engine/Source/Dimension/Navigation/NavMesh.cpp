@@ -1023,7 +1023,8 @@ namespace Dimension
             if (!mesh) return false;
             agent->Mesh = mesh;
             agent->Node = node;
-            agent->Velocity = glm::vec3(0.0f);
+            agent->Velocity = agent->DesiredVelocity = glm::vec3(0.0f);
+            agent->Placed = false;
             PlaceObject(scene, e, OnMesh(*mesh, node, { position.x, position.z }) + glm::vec3(0.0f, agent->BaseOffset, 0.0f));
             if (agent->HasDestination) agent->PathDirty = true;
             return true;
@@ -1113,15 +1114,41 @@ namespace Dimension
                     }
             }
 
+            // Moves on the mesh from p toward target, sliding along its edges where it is blocked; `node` follows.
+            auto slide = [](const NavMeshData& mesh, int& node, glm::vec2 p, glm::vec2 target, const Filter& filter) {
+                glm::vec2 reached = p;
+                int end = node;
+                if (glm::length(target - p) <= 1e-7f) return p;
+                if (Walk(mesh, node, p, target, &end, &reached, filter))
+                {
+                    node = end;
+                    return target;
+                }
+                int along = node;
+                glm::vec2 slid;
+                if (Walk(mesh, node, p, { target.x, p.y }, &along, &slid, filter) || Walk(mesh, node, p, { p.x, target.y }, &along, &slid, filter))
+                {
+                    node = along;
+                    return slid;
+                }
+                node = end;
+                return reached;
+            };
+
             struct Mover
             {
                 Entity E;
                 NavMeshAgentComponent* Agent;
                 glm::vec3 Ground;
+                bool Driven; // moved by its Animator's root motion
             };
             std::vector<Mover> movers;
             for (auto [e, agent, t] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
-                if (t.ActiveInHierarchy) movers.push_back({ e, &agent, glm::vec3(0.0f) });
+                if (t.ActiveInHierarchy)
+                {
+                    const auto* animator = reg.TryGet<AnimatorComponent>(e);
+                    movers.push_back({ e, &agent, glm::vec3(0.0f), agent.RootMotion && animator && animator->ApplyRootMotion });
+                }
             int pathsThisFrame = 0;
             const int pathBudget = GetPathBudget();
 
@@ -1144,6 +1171,22 @@ namespace Dimension
                 {
                     mv.Ground = GroundOf(scene, mv.E, agent);
                     continue;
+                }
+                if (mv.Driven && agent.Placed && agent.Mesh && agent.Node >= 0 && agent.Node < agent.Mesh->NodeCount())
+                {
+                    // The animation moved it since the last update: that step, kept on the mesh (a jump of meters was
+                    // some other move, and is found again below).
+                    glm::vec3 now = GroundOf(scene, mv.E, agent);
+                    glm::vec2 from(agent.LastGround.x, agent.LastGround.z), to(now.x, now.z);
+                    if (glm::distance(from, to) < 2.0f)
+                    {
+                        int node = agent.Node;
+                        glm::vec2 reached = slide(*agent.Mesh, node, from, to, FilterOf(agent));
+                        agent.Node = node;
+                        glm::vec2 moved = (reached - from) / dt;
+                        agent.Velocity = glm::vec3(moved.x, 0.0f, moved.y);
+                        PlaceObject(scene, mv.E, glm::vec3(reached.x, HeightAt(*agent.Mesh, node, reached.x, reached.y) + agent.BaseOffset, reached.y));
+                    }
                 }
                 if (!Place(scene, mv.E, agent))
                 {
@@ -1286,6 +1329,12 @@ namespace Dimension
                     agent.Corner = std::clamp<size_t>(agent.Corner, 1, last);
                     while (agent.Corner < last && Horizontal(mv.Ground, agent.Path[agent.Corner]) < std::max(0.1f, glm::length(agent.Velocity) * dt * 1.5f))
                         ++agent.Corner;
+                    // Moved by its animation it cannot hit corners exactly: on to the next one as soon as it is in
+                    // straight sight (not past an off-mesh link).
+                    while (mv.Driven && agent.Corner < last && !(agent.Corner < agent.PathLinks.size() && agent.PathLinks[agent.Corner] >= 0.0f) &&
+                           !(agent.Corner - 1 < agent.PathLinks.size() && agent.PathLinks[agent.Corner - 1] >= 0.0f) &&
+                           Walk(mesh, agent.Node, p, { agent.Path[agent.Corner + 1].x, agent.Path[agent.Corner + 1].z }, nullptr, nullptr, FilterOf(agent)))
+                        ++agent.Corner;
                     float remaining = Horizontal(mv.Ground, agent.Path[agent.Corner]);
                     for (size_t k = agent.Corner; k < last; ++k) remaining += Horizontal(agent.Path[k], agent.Path[k + 1]);
                     agent.RemainingDistance = remaining;
@@ -1301,7 +1350,7 @@ namespace Dimension
                                 agent.Waiting = true;
                             else
                                 agent.PathDirty = true;
-                            agent.Velocity = glm::vec3(0.0f);
+                            agent.Velocity = agent.DesiredVelocity = glm::vec3(0.0f);
                             continue;
                         }
                         agent.Waiting = false;
@@ -1313,6 +1362,7 @@ namespace Dimension
                         agent.TraverseTime = 0.0f;
                         agent.TraverseDuration = std::max(glm::distance(agent.TraverseFrom, agent.TraverseTo) / std::max(agent.Speed, 0.1f), 0.25f);
                         agent.PathLinks[agent.Corner - 1] = -1.0f;
+                        agent.DesiredVelocity = glm::vec3(0.0f);
                         continue;
                     }
                     if (!agent.IsStopped && brakeDistance > 0.03f)
@@ -1430,30 +1480,25 @@ namespace Dimension
                     }
                 }
 
-                // Accelerate toward it, then move on the mesh (sliding along its edges).
-                glm::vec2 vel(agent.Velocity.x, agent.Velocity.z);
+                // Accelerate toward it (from how fast it goes; driven by its animation, from what it asked for last),
+                // then move on the mesh (sliding along its edges).
+                glm::vec2 vel = mv.Driven ? glm::vec2(agent.DesiredVelocity.x, agent.DesiredVelocity.z) : glm::vec2(agent.Velocity.x, agent.Velocity.z);
                 glm::vec2 change = chosen - vel;
                 float maxChange = agent.Acceleration > 0.0f ? agent.Acceleration * dt : kInf;
                 if (glm::length(change) > maxChange) change = glm::normalize(change) * maxChange;
                 vel += change;
+                agent.DesiredVelocity = glm::vec3(vel.x, 0.0f, vel.y);
+                if (mv.Driven)
+                {
+                    // Its animation takes the steps (next update keeps them on the mesh): it only turns it.
+                    face(vel);
+                    continue;
+                }
                 glm::vec2 step = vel * dt;
                 if (moving && agent.Corner + 1 == agent.Path.size() && glm::length(step) > brakeDistance && brakeDistance > 0.0f)
                     step = glm::normalize(step) * brakeDistance; // no overshooting the end
-                glm::vec2 target = p + step, reached = p;
                 int node = agent.Node;
-                Filter filter = FilterOf(agent);
-                if (glm::length(step) > 1e-7f && !Walk(mesh, agent.Node, p, target, &node, &reached, filter))
-                {
-                    int along = node;
-                    glm::vec2 slid;
-                    if (Walk(mesh, agent.Node, p, { target.x, p.y }, &along, &slid, filter) || Walk(mesh, agent.Node, p, { p.x, target.y }, &along, &slid, filter))
-                    {
-                        node = along;
-                        reached = slid;
-                    }
-                }
-                else if (glm::length(step) > 1e-7f)
-                    reached = target;
+                glm::vec2 reached = slide(mesh, node, p, p + step, FilterOf(agent));
                 agent.Node = node;
                 glm::vec2 moved = (reached - p) / dt;
                 agent.Velocity = glm::vec3(moved.x, 0.0f, moved.y);
@@ -1502,6 +1547,28 @@ namespace Dimension
                             }
                         }
                 }
+
+            // Where each stands now (the next update finds how far its animation took it), and its Animator's speed.
+            for (Mover& mv : movers)
+            {
+                NavMeshAgentComponent& agent = *mv.Agent;
+                agent.LastGround = mv.Ground;
+                agent.Placed = agent.Mesh && agent.Node >= 0;
+                if (agent.SpeedParameter.empty()) continue;
+                if (auto* animator = reg.TryGet<AnimatorComponent>(mv.E))
+                {
+                    glm::vec2 v = mv.Driven && !agent.Traversing ? glm::vec2(agent.DesiredVelocity.x, agent.DesiredVelocity.z) : glm::vec2(agent.Velocity.x, agent.Velocity.z);
+                    float speed = glm::length(v);
+                    if (mv.Driven && !agent.Traversing && speed > 1e-4f)
+                    {
+                        // Slower while it still turns toward the way (stopping to turn round), so the animation's
+                        // steps follow the path rather than run wide.
+                        float yaw = reg.Get<TransformComponent>(mv.E).Rotation.y;
+                        speed *= std::clamp(glm::dot(v / speed, glm::vec2(-std::sin(yaw), -std::cos(yaw))), 0.0f, 1.0f);
+                    }
+                    animator->SetFloat(agent.SpeedParameter, speed);
+                }
+            }
         }
     }
 }

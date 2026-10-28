@@ -953,6 +953,7 @@ namespace Dimension
                             Entity parent = GetParent(e);
                             glm::mat3 toParent = parent.IsNull() ? glm::mat3(1.0f) : glm::inverse(glm::mat3(m_Registry.Get<TransformComponent>(parent).World));
                             t.Position += toParent * worldDelta;
+                            t.World[3] += glm::vec4(worldDelta, 0.0f); // read before transforms update next (NavMesh Agents with Root Motion)
                         }
                     }
                 }

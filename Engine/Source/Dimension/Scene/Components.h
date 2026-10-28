@@ -887,6 +887,9 @@ namespace Dimension
     // Avoidance), giving way to ones of a lower Avoidance Priority number. With a Target it keeps following that
     // object. It moves its object (keep agents as hierarchy roots), Base Offset above the ground. Agents of any Radius
     // share a surface: they go only where it has room for them (bake with the smallest agent's radius).
+    // Animation: each frame it sets its Animator's float Speed Parameter (if named) to its speed. With Root Motion (and
+    // its Animator's Apply Root Motion) the animation moves it instead: the agent turns it toward the way, sets the
+    // parameter to the speed it wants there, and keeps it on the mesh wherever the animation's steps take it.
     enum class NavPathStatus : int32_t { Complete = 0, Partial = 1, Invalid = 2 };
     struct NavMeshAgentComponent
     {
@@ -902,6 +905,8 @@ namespace Dimension
         int32_t AvoidancePriority = 50; // 0 most important - 99 least
         Entity Target = Entity::Null();
         int32_t AreaMask = -1; // a bit per area it may walk (NavMesh Modifier Volume areas); -1 = all
+        std::string SpeedParameter;
+        bool RootMotion = false;
         // Runtime
         glm::vec3 Destination{ 0.0f };
         bool HasDestination = false, PathDirty = false, IsStopped = false;
@@ -917,9 +922,12 @@ namespace Dimension
         float TraverseTime = 0.0f, TraverseDuration = 0.0f, TraverseArc = 0.0f;
         NavPathStatus PathStatus = NavPathStatus::Invalid;
         glm::vec3 Velocity{ 0.0f };
+        glm::vec3 DesiredVelocity{ 0.0f }; // the velocity it steers for (with Root Motion, what the animation is asked for)
         float RemainingDistance = 0.0f;
         float RepathTimer = 0.0f;
         int32_t Node = -1; // where it stands on Mesh (-1 = not placed yet)
+        glm::vec3 LastGround{ 0.0f }; // where it stood after the last update
+        bool Placed = false;          // LastGround is set (Warp clears it)
         std::shared_ptr<const NavMeshData> Mesh;
     };
 

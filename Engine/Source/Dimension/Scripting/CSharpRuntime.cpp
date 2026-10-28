@@ -626,6 +626,7 @@ namespace Dimension
                 case 9: std::memcpy(v, &agent->Destination, 12); return 1.0f;
                 case 10: return agent->Traversing ? 1.0f : 0.0f;
                 case 11: return agent->Waiting ? 1.0f : 0.0f;
+                case 12: std::memcpy(v, &agent->DesiredVelocity, 12); return 1.0f;
                 default: return 0.0f;
                 }
             };

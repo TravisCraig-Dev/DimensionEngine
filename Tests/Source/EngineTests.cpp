@@ -2421,6 +2421,74 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestNavRootMotion()
+    {
+        // An agent moved by its animation: here the "animation" steps it forward (the way it faces) at the Speed
+        // parameter the agent sets, up to 2.5 m/s like a walk clip. It turns toward its path, goes around the wall
+        // and arrives, the parameter falling to 0; steps that would go through the wall are kept on the mesh. An agent
+        // moving itself sets the parameter to its speed.
+        Scene scene("Yard");
+        BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        Entity walker = scene.CreateEntity("Walker");
+        reg.Get<TransformComponent>(walker).Position = { -5.0f, 0.0f, -5.0f };
+        auto& a = reg.Emplace<NavMeshAgentComponent>(walker);
+        a.Speed = 4.0f;
+        a.Acceleration = 8.0f;
+        a.StoppingDistance = 0.3f;
+        a.SpeedParameter = "Speed";
+        a.RootMotion = true;
+        reg.Emplace<AnimatorComponent>(walker).ApplyRootMotion = true;
+        Entity runner = scene.CreateEntity("Runner");
+        reg.Get<TransformComponent>(runner).Position = { 10.0f, 0.0f, -10.0f };
+        reg.Emplace<NavMeshAgentComponent>(runner).SpeedParameter = "Speed";
+        reg.Emplace<AnimatorComponent>(runner);
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto param = [&](Entity e) {
+            auto& p = rr.Get<AnimatorComponent>(e).Runtime.Parameters;
+            auto it = p.find("Speed");
+            return it == p.end() ? -1.0f : it->second;
+        };
+        const float dt = 1.0f / 60.0f;
+        auto animate = [&](float speed) {
+            auto& t = rr.Get<TransformComponent>(walker);
+            float yaw = t.Rotation.y;
+            glm::vec3 step = glm::vec3(-std::sin(yaw), 0.0f, -std::cos(yaw)) * std::min(speed, 2.5f) * dt;
+            t.Position += step; // as root motion does
+            t.World[3] += glm::vec4(step, 0.0f);
+        };
+        CHECK(Navigation::SetDestination(*rt, walker, { -5.0f, 0.0f, 5.0f }) && Navigation::SetDestination(*rt, runner, { 10.0f, 0.0f, 0.0f }));
+        bool throughWall = false;
+        float most = 0.0f, runnerMost = 0.0f;
+        for (int i = 0; i < 900; ++i)
+        {
+            rt->OnUpdateRuntime(dt);
+            most = std::max(most, param(walker));
+            runnerMost = std::max(runnerMost, param(runner));
+            animate(param(walker));
+            glm::vec3 p = rr.Get<TransformComponent>(walker).Position;
+            throughWall |= std::abs(p.z) < 0.5f && p.x < 6.0f;
+        }
+        rt->OnUpdateRuntime(dt);
+        glm::vec3 at = rr.Get<TransformComponent>(walker).Position;
+        CHECK(!throughWall && glm::distance(glm::vec2(at.x, at.z), glm::vec2(-5.0f, 5.0f)) < 0.6f);
+        CHECK(most > 2.5f && param(walker) < 0.3f);
+        CHECK(runnerMost > 3.0f && param(runner) < 0.1f);
+        // Animation stepping straight at the wall: it stops at the wall's edge on the mesh.
+        Navigation::ResetPath(*rt, walker);
+        rr.Get<TransformComponent>(walker).Rotation.y = 0.0f; // facing -Z, toward the wall
+        for (int i = 0; i < 120; ++i)
+        {
+            animate(2.5f);
+            rt->OnUpdateRuntime(dt);
+        }
+        CHECK(rr.Get<TransformComponent>(walker).Position.z > 0.5f);
+        rt->OnRuntimeStop();
+    }
+
     void TestNavMeshAgents()
     {
         // Playing (baked as play starts): an agent sent to the far side of the wall walks around its end and arrives;
@@ -8493,6 +8561,7 @@ int main(int argc, char** argv)
     Run("Terrain crater", TestTerrainCrater);
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh agents", TestNavMeshAgents);
+    Run("NavMesh root motion", TestNavRootMotion);
     Run("LOD groups", TestLODGroups);
     Run("LOD impostor", TestLODImpostor);
     Run("Mesh simplify", TestMeshSimplify);

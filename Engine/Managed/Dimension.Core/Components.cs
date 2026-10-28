@@ -549,6 +549,8 @@ namespace Dimension
         public bool SetDestination(Vector3 target) => Op(0, target) != 0.0f;
         public Vector3 Destination { get { Vector3 v; Native.Api.NavAgent(Entity.Scene, Entity.Id, 9, (float*)&v); return v; } set => SetDestination(value); }
         public Vector3 Velocity { get { Vector3 v; Native.Api.NavAgent(Entity.Scene, Entity.Id, 1, (float*)&v); return v; } }
+        /// <summary>The velocity it steers for (with Root Motion, what it asks its animation for).</summary>
+        public Vector3 DesiredVelocity { get { Vector3 v; Native.Api.NavAgent(Entity.Scene, Entity.Id, 12, (float*)&v); return v; } }
         /// <summary>Distance left along the path.</summary>
         public float RemainingDistance => Op(2);
         public bool HasPath => Op(3) != 0.0f;
