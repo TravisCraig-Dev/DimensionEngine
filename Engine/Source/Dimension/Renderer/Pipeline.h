@@ -34,7 +34,8 @@ namespace Dimension
         bool DepthTest = false;
         bool DepthWrite = false;
         VkCompareOp DepthCompare = VK_COMPARE_OP_LESS_OR_EQUAL;
-        bool DepthBias = false; // constant/slope bias for shadow maps
+        bool DepthBias = false; // constant/slope bias (shadow maps push away; negative values pull toward the camera)
+        float DepthBiasConstant = 1.25f, DepthBiasSlope = 1.75f;
         std::vector<ColorAttachmentDesc> ColorAttachments;
         VkFormat DepthFormat = VK_FORMAT_UNDEFINED;
         const char* DebugName = nullptr;

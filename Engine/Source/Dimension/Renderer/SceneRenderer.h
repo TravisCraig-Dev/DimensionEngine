@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 #include <array>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Dimension
 {
@@ -29,6 +30,11 @@ namespace Dimension
         static CameraData FromEntity(Scene& scene, Entity camera, float aspect);
     };
 
+    // The Scene view's draw modes: Wireframe draws every mesh's edges in place of its shading (through other surfaces),
+    // ShadedWireframe the edges over the shaded meshes, Unlit the surfaces in their own colors (no lights or shadows),
+    // Overdraw every mesh as a faint additive layer (bright where many overlap).
+    enum class SceneDrawMode : int { Shaded, Wireframe, ShadedWireframe, Unlit, Overdraw };
+
     struct SceneRenderOptions
     {
         bool EditorOverlays = false; // grid, icons, selection outlines, collider wireframes
@@ -43,6 +49,10 @@ namespace Dimension
         bool Highlighting = false;
         std::vector<Entity> Highlight;
         bool ShowNavMeshes = false; // every baked navigation mesh (the Navigation window is open)
+        SceneDrawMode DrawMode = SceneDrawMode::Shaded;
+        // Scene visibility (the editor's): objects not drawn at all (meshes, sprites, icons), and objects drawn without
+        // their id (clicks there pick nothing; selected ones keep theirs for the outline).
+        std::vector<Entity> Hidden, Unpickable;
         // Frame debugger: -2 off; -1 records the frame's draws (GetFrameEvents) and draws them all; n >= 0 records them
         // and draws only events 0 to n (the frame as it stood after that draw; effects and post processing still run).
         int FrameDebugStop = -2;
@@ -328,6 +338,8 @@ namespace Dimension
         Scope<SceneRenderTarget> m_ProbeTarget;
         bool m_Capturing = false;
         bool m_Oit = false; // this frame draws transparent meshes order-independently
+        SceneDrawMode m_DrawMode = SceneDrawMode::Shaded;
+        std::unordered_set<uint32_t> m_HiddenIds, m_UnpickableIds; // entity ids (index + 1) of SceneRenderOptions::Hidden, Unpickable
         uint32_t m_Samples = 1; // MSAA samples of the view being rendered
         // A main-pass pipeline (MainPipelines::Kind) for m_Samples.
         const Pipeline& MainPipeline(int kind) const;

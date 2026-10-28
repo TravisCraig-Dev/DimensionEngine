@@ -158,6 +158,49 @@ namespace Editor
             m_Ctx.RequestFocusSelected = true;
     }
 
+    void HierarchyPanel::DrawVisibilityToggles(Scene& scene, Entity e, ImVec2 rowMin, ImVec2 rowMax, bool rowHovered)
+    {
+        // Scene visibility at the row's right: an eye (shown / hidden in the Scene view) and a pointer (picked by clicks
+        // there or not). Shown while the row is hovered or something is set; dim when it comes from a parent.
+        SceneVisibility& vis = m_Ctx.Visibility;
+        bool hiddenSelf = vis.IsHiddenSelf(scene, e), hidden = hiddenSelf || vis.IsHidden(scene, e);
+        bool unpickableSelf = vis.IsUnpickableSelf(scene, e), unpickable = unpickableSelf || vis.IsUnpickable(scene, e);
+        if (!rowHovered && !hidden && !unpickable) return;
+        float size = rowMax.y - rowMin.y;
+        ImVec2 restore = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImU32 text = ImGui::GetColorU32(ImGuiCol_Text), dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        auto toggle = [&](int slot, const char* id, bool on, bool self, const char* tip, auto&& drawIcon) {
+            ImVec2 at(rowMax.x - size * (float)(slot + 1) - 4.0f, rowMin.y);
+            ImGui::SetCursorScreenPos(at);
+            bool clicked = ImGui::InvisibleButton(id, ImVec2(size, size));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            ImU32 color = on && !self ? dim : ImGui::IsItemHovered() ? ImGui::GetColorU32(ImGuiCol_ButtonHovered) : (on ? text : dim);
+            ImVec2 c(at.x + size * 0.5f, at.y + size * 0.5f);
+            drawIcon(c, size * 0.32f, color);
+            if (on) dl->AddLine(ImVec2(c.x - size * 0.32f, c.y + size * 0.32f), ImVec2(c.x + size * 0.32f, c.y - size * 0.32f), color, 1.5f);
+            return clicked;
+        };
+        auto eye = [&](ImVec2 c, float r, ImU32 color) {
+            dl->AddEllipse(c, ImVec2(r, r * 0.6f), color, 0.0f, 0, 1.5f);
+            dl->AddCircleFilled(c, r * 0.3f, color);
+        };
+        auto pointer = [&](ImVec2 c, float r, ImU32 color) {
+            dl->AddTriangleFilled(ImVec2(c.x - r * 0.6f, c.y - r), ImVec2(c.x - r * 0.6f, c.y + r * 0.6f), ImVec2(c.x + r * 0.7f, c.y + r * 0.1f), color);
+        };
+        if (toggle(1, "##hide", hidden, hiddenSelf, hidden ? "Hidden in the Scene view (click to show; H)" : "Hide in the Scene view (H)", eye))
+        {
+            vis.SetHidden(scene, e, !hiddenSelf);
+            m_Ctx.VisibilityChanged = true;
+        }
+        if (toggle(0, "##pick", unpickable, unpickableSelf, unpickable ? "Not picked in the Scene view (click to allow)" : "Disable picking in the Scene view", pointer))
+        {
+            vis.SetPickable(scene, e, unpickableSelf);
+            m_Ctx.VisibilityChanged = true;
+        }
+        ImGui::SetCursorScreenPos(restore);
+    }
+
     void HierarchyPanel::DrawNode(Scene& scene, Entity e)
     {
         auto& reg = scene.GetRegistry();
@@ -212,8 +255,10 @@ namespace Editor
             else if (ImGui::IsItemDeactivated()) m_Renaming = Entity::Null();
         }
         else
-            opened = ImGui::TreeNodeEx("##node", flags, "%s", tag.Name.c_str());
+            opened = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap, "%s", tag.Name.c_str());
         ImGui::PopStyleColor(pushedColors);
+        ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
+        bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
         {
@@ -316,6 +361,7 @@ namespace Editor
             if (ImGui::BeginMenu("Create Child")) { DrawCreateMenuItems(m_Ctx, e); ImGui::EndMenu(); }
             ImGui::EndPopup();
         }
+        DrawVisibilityToggles(scene, e, rowMin, rowMax, rowHovered);
 
         if (opened)
         {

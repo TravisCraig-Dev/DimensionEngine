@@ -30,6 +30,9 @@
 
 #include "shaders/Mesh.vert.h"
 #include "shaders/Mesh.frag.h"
+#include "shaders/MeshWire.frag.h"
+#include "shaders/MeshWireOverlay.frag.h"
+#include "shaders/MeshOverdraw.frag.h"
 #include "shaders/MeshOit.frag.h"
 #include "shaders/OitComposite.frag.h"
 #include "shaders/Sprite.vert.h"
@@ -358,7 +361,7 @@ namespace Dimension
     struct MainPipelines
     {
         enum Kind { Mesh, MeshDoubleSided, MeshTransparent, DepthPrepass, DepthPrepassDoubleSided, Sky, Sprite, SpriteAdditive, Line,
-                    GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive, Count };
+                    GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive, MeshWire, MeshWireOverlay, MeshOverdraw, Count };
         Pipeline Pipelines[Count];
         const Pipeline& operator[](Kind k) const { return Pipelines[k]; }
     };
@@ -366,6 +369,7 @@ namespace Dimension
     struct Renderer::Resources
     {
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
+        Pipeline MeshWire, MeshWireOverlay, MeshOverdraw; // Scene view draw modes
         // Descriptions of the main-pass pipelines (single-sampled above) and their multisampled builds, made on demand.
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
@@ -435,6 +439,30 @@ namespace Dimension
         meshTransparent.DebugName = "MeshTransparentPipeline";
         r.MeshTransparent = Pipeline(meshTransparent);
         r.MainDescs[MainPipelines::MeshTransparent] = meshTransparent;
+        // Scene view draw modes: edges without depth testing (Wireframe), edges pulled toward the camera over the shaded
+        // surfaces (Shaded Wireframe), and an additive layer per mesh without depth (Overdraw).
+        GraphicsPipelineDesc wire = meshTwoSided;
+        wire.FragmentSpirv = kMeshWire_frag;
+        wire.PolygonMode = VK_POLYGON_MODE_LINE;
+        wire.DepthTest = wire.DepthWrite = false;
+        wire.DebugName = "MeshWirePipeline";
+        r.MeshWire = Pipeline(wire);
+        r.MainDescs[MainPipelines::MeshWire] = wire;
+        GraphicsPipelineDesc wireOverlay = wire;
+        wireOverlay.FragmentSpirv = kMeshWireOverlay_frag;
+        wireOverlay.DepthTest = true; // its shader pulls the edges' depth a little toward the camera
+        wireOverlay.ColorAttachments = { { F::kHdrFormat }, { F::kIdFormat, BlendMode::Opaque, false }, { F::kSurfaceFormat, BlendMode::Opaque, false } };
+        wireOverlay.DebugName = "MeshWireOverlayPipeline";
+        r.MeshWireOverlay = Pipeline(wireOverlay);
+        r.MainDescs[MainPipelines::MeshWireOverlay] = wireOverlay;
+        GraphicsPipelineDesc overdraw = meshTwoSided;
+        overdraw.FragmentSpirv = kMeshOverdraw_frag;
+        overdraw.DepthTest = overdraw.DepthWrite = false;
+        overdraw.ColorAttachments = { { F::kHdrFormat, BlendMode::Additive }, { F::kIdFormat, BlendMode::Opaque, false },
+                                      { F::kSurfaceFormat, BlendMode::Opaque, false } };
+        overdraw.DebugName = "MeshOverdrawPipeline";
+        r.MeshOverdraw = Pipeline(overdraw);
+        r.MainDescs[MainPipelines::MeshOverdraw] = overdraw;
         GraphicsPipelineDesc meshOit = meshTransparent;
         meshOit.FragmentSpirv = kMeshOit_frag;
         meshOit.ColorAttachments = { { F::kOitAccumFormat, BlendMode::Accumulate }, { F::kOitRevealFormat, BlendMode::Revealage } };
@@ -765,6 +793,16 @@ namespace Dimension
             UpdateReflectionProbes(cmd, scene);
             UpdateLightProbes(cmd, scene);
             PrepareImpostors(cmd, scene); // (also nested Render calls)
+        }
+        // The Scene view's draw mode and visibility (probe captures always see the scene as it is).
+        m_DrawMode = options.ProbeCapture ? SceneDrawMode::Shaded : options.DrawMode;
+        m_HiddenIds.clear();
+        m_UnpickableIds.clear();
+        if (!options.ProbeCapture)
+        {
+            for (Entity e : options.Hidden) m_HiddenIds.insert(e.Index + 1);
+            for (Entity e : options.Unpickable)
+                if (std::find(options.Selection.begin(), options.Selection.end(), e) == options.Selection.end()) m_UnpickableIds.insert(e.Index + 1);
         }
         // Frame debugger: this view's draws from here (the nested captures above are not part of its frame).
         m_FrameCapturing = !options.ProbeCapture && options.FrameDebugStop > -2;
@@ -1235,9 +1273,11 @@ namespace Dimension
         vkCmdSetLineWidth(cmd, 1.0f);
 
         device.BindBindless(cmd);
+        u.CascadeParams.w = m_DrawMode == SceneDrawMode::Unlit ? 1.0f : 0.0f; // Unlit: the surfaces' own colors
         device.BindUniforms(cmd, &u, sizeof(u));
 
-        if (camera.Skybox && DebugDraw("Opaque", "HDR Color", "Sky", 0, 1, 1))
+        bool flatModes = m_DrawMode == SceneDrawMode::Wireframe || m_DrawMode == SceneDrawMode::Overdraw; // no sky behind them
+        if (camera.Skybox && !flatModes && DebugDraw("Opaque", "HDR Color", "Sky", 0, 1, 1))
         {
             MainPipeline(MainPipelines::Sky).Bind(cmd);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2633,9 +2673,19 @@ namespace Dimension
             }
         };
 
-        auto InstanceOf = [](const RenderItem& item) {
-            return InstanceGPU{ item.World, glm::uvec4(item.EntityId, (uint32_t)item.Joints, (uint32_t)(item.Joints >> 32), item.Motion) };
+        // Unpickable objects (Scene visibility) draw without their id.
+        auto idOf = [&](const RenderItem& item) { return m_UnpickableIds.empty() || !m_UnpickableIds.contains(item.EntityId) ? item.EntityId : 0u; };
+        auto InstanceOf = [&](const RenderItem& item) {
+            return InstanceGPU{ item.World, glm::uvec4(idOf(item), (uint32_t)item.Joints, (uint32_t)(item.Joints >> 32), item.Motion) };
         };
+        // The Scene view's draw modes swap the main pass's mesh pipelines.
+        bool mainPass = pass == MeshPass::Main || pass == MeshPass::Transparent;
+        const Pipeline* modePipe = !mainPass ? nullptr
+                                 : m_DrawMode == SceneDrawMode::Wireframe ? &MainPipeline(MainPipelines::MeshWire)
+                                 : m_DrawMode == SceneDrawMode::Overdraw  ? &MainPipeline(MainPipelines::MeshOverdraw)
+                                                                          : nullptr;
+        std::vector<std::pair<Draw, uint32_t>> wireOverlay; // Shaded Wireframe: the opaque draws again, as edges
+        bool overlayEdges = pass == MeshPass::Main && m_DrawMode == SceneDrawMode::ShadedWireframe;
         glm::vec3 camPos = glm::vec3(glm::inverse(viewProj) * glm::vec4(0, 0, 0, 1)); // only used for sorting
         auto makeDraw = [&](const RenderPart& part) {
             const RenderItem& item = m_RenderItems[part.Item];
@@ -2645,7 +2695,7 @@ namespace Dimension
             d.IndexCount = part.IndexCount;
             d.Push.Model = item.World;
             d.Push.Material = part.Material;
-            d.Push.EntityId = item.EntityId;
+            d.Push.EntityId = idOf(item);
             d.Push.Skin = item.Joints ? item.Skin : 0;
             d.Push.Joints = item.Joints;
             d.Push.Instances = 0;
@@ -2658,6 +2708,7 @@ namespace Dimension
             d.Pipe = shadowPass  ? &res.Shadow
                    : oitPass     ? &res.MeshOit
                    : depthPass   ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
+                   : modePipe    ? modePipe
                    : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
             return d;
         };
@@ -2668,6 +2719,7 @@ namespace Dimension
         m_BatchStart.assign(batchCount + 1, 0);
         for (const RenderItem& item : m_RenderItems)
         {
+            if (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId)) continue; // hidden in the Scene view
             if (shadowPass && !item.CastShadows) continue;
             // Hidden behind others (occlusion culling): not drawn in the view, but it still casts its shadow.
             if (!shadowPass && m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[&item - m_RenderItems.data()])
@@ -2727,12 +2779,41 @@ namespace Dimension
                     batch.Push.Instances = instanceBlock.Address + instanceCursor * sizeof(InstanceGPU);
                     batch.Push.Flags |= 2u;
                     submit(batch, n);
+                    if (overlayEdges) wireOverlay.push_back({ batch, n });
                     instanceCursor += n;
                     done += n;
                 }
             }
             else
-                for (uint32_t k = 0; k < count; ++k) submit(makeDraw(m_RenderParts[m_SortedParts[first + k]]), 1);
+                for (uint32_t k = 0; k < count; ++k)
+                {
+                    Draw d = makeDraw(m_RenderParts[m_SortedParts[first + k]]);
+                    submit(d, 1);
+                    if (overlayEdges) wireOverlay.push_back({ d, 1u });
+                }
+        }
+        // Shaded Wireframe: the opaque meshes' edges over them (not counted in the stats).
+        if (!wireOverlay.empty())
+        {
+            const Pipeline& edges = MainPipeline(MainPipelines::MeshWireOverlay);
+            edges.Bind(cmd);
+            bound = &edges;
+            for (auto& [d, instances] : wireOverlay)
+            {
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(MeshPush), &d.Push);
+                if (d.MeshPtr != boundMesh)
+                {
+                    d.MeshPtr->Bind(cmd);
+                    boundMesh = d.MeshPtr;
+                }
+                if (d.Vertices)
+                {
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &d.Vertices, &d.VertexOffset);
+                    boundMesh = nullptr;
+                }
+                if (d.Indices) vkCmdBindIndexBuffer(cmd, d.Indices, d.IndexOffset, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, d.IndexCount, instances, d.FirstIndex, 0, 0);
+            }
         }
 
         // Transparent meshes after opaque ones, far to near. Runs of neighbours from the same batch become one
@@ -2779,6 +2860,9 @@ namespace Dimension
             case MainPipelines::GpuParticlesAdditive: return r.GpuParticlesAdditive;
             case MainPipelines::GpuTrails: return r.GpuTrails;
             case MainPipelines::GpuTrailsAdditive: return r.GpuTrailsAdditive;
+            case MainPipelines::MeshWire: return r.MeshWire;
+            case MainPipelines::MeshWireOverlay: return r.MeshWireOverlay;
+            case MainPipelines::MeshOverdraw: return r.MeshOverdraw;
             default: return r.Line;
             }
         auto& set = r.Multisampled[m_Samples];
@@ -3315,6 +3399,11 @@ namespace Dimension
 
     void SceneRenderer::DrawSprites(VkCommandBuffer cmd)
     {
+        // Scene visibility: hidden objects' sprites and icons go; unpickable ones draw without their id.
+        if (!m_HiddenIds.empty()) std::erase_if(m_Sprites, [&](const SpriteDraw& d) { return m_HiddenIds.contains(d.Entity); });
+        if (!m_UnpickableIds.empty())
+            for (SpriteDraw& d : m_Sprites)
+                if (m_UnpickableIds.contains(d.Entity)) d.Entity = 0;
         if (m_Sprites.empty()) return;
         auto& res = Renderer::Get();
         std::stable_sort(m_Sprites.begin(), m_Sprites.end(), [](const SpriteDraw& a, const SpriteDraw& b) {

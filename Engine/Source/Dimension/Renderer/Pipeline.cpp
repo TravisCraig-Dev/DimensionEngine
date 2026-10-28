@@ -50,8 +50,8 @@ namespace Dimension
         if (desc.DepthBias)
         {
             raster.depthBiasEnable = VK_TRUE;
-            raster.depthBiasConstantFactor = 1.25f;
-            raster.depthBiasSlopeFactor = 1.75f;
+            raster.depthBiasConstantFactor = desc.DepthBiasConstant;
+            raster.depthBiasSlopeFactor = desc.DepthBiasSlope;
         }
 
         VkPipelineMultisampleStateCreateInfo ms{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };

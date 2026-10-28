@@ -367,6 +367,18 @@ void main()
     // Ambient: flat diffuse term plus sky reflections (rougher = blurrier, approximated by blending to the horizon tone).
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 R = reflect(-V, N);
+#ifndef DIM_OIT
+    // The Scene view's Unlit draw mode: the surface's own color (and emission), no lights.
+    if (uScene.CascadeParams.w > 0.5)
+    {
+        vec3 own = albedo;
+        if (m.Flags.z != 1u) own += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
+        outColor = vec4(own, m.Flags.x == 2u ? base.a : 1.0);
+        outEntity = vEntity;
+        outSurface = uvec4(0u);
+        return;
+    }
+#endif
     // Image-based lighting: the environment for specular, SH irradiance of a sky texture for diffuse.
     vec3 env = EnvironmentReflection(vWorldPos, R, roughness);
     vec3 ambient = uScene.Ambient.rgb;

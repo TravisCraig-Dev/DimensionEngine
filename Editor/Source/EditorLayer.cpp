@@ -123,6 +123,10 @@ namespace Editor
         m_Hierarchy = MakeScope<HierarchyPanel>(m_Ctx);
         m_Inspector = MakeScope<InspectorPanel>(m_Ctx);
         m_Inspector->DebugMode = m_Options.InspectorDebug;
+        if (m_Options.DrawMode == "wireframe") m_DrawMode = SceneDrawMode::Wireframe;
+        else if (m_Options.DrawMode == "shaded-wireframe") m_DrawMode = SceneDrawMode::ShadedWireframe;
+        else if (m_Options.DrawMode == "unlit") m_DrawMode = SceneDrawMode::Unlit;
+        else if (m_Options.DrawMode == "overdraw") m_DrawMode = SceneDrawMode::Overdraw;
         m_Content = MakeScope<ContentBrowserPanel>(m_Ctx);
         m_Console = MakeScope<ConsolePanel>();
         m_SceneSettings = MakeScope<SceneSettingsPanel>(m_Ctx);
@@ -407,6 +411,35 @@ namespace Editor
         PollGameModule(dt);
         PollCSharp(dt);
         Autosave(dt);
+        // Scene visibility follows the scene file: loaded when another opens, saved when it changes.
+        {
+            fs::path file = Project::GetDirectory() / ".dimension" / "SceneVisibility.json";
+            std::string key = m_Ctx.ScenePath.generic_string();
+            if (m_Ctx.InPrefabMode()) key = m_VisibilityScene; // the prefab is edited inside the scene's settings
+            if (key != m_VisibilityScene)
+            {
+                m_VisibilityScene = key;
+                m_Ctx.Visibility.Load(file, key);
+            }
+            if (!m_Options.HideEntities.empty())
+            {
+                // --hide "A,B" (automation): for this session only.
+                std::string names = m_Options.HideEntities;
+                for (size_t start = 0; start <= names.size();)
+                {
+                    size_t comma = names.find(',', start);
+                    if (comma == std::string::npos) comma = names.size();
+                    m_Ctx.Visibility.SetHidden(m_Ctx.ActiveScene(), m_Ctx.ActiveScene().FindEntityByName(names.substr(start, comma - start)), true);
+                    start = comma + 1;
+                }
+                m_Options.HideEntities.clear();
+            }
+            if (m_Ctx.VisibilityChanged)
+            {
+                m_Ctx.VisibilityChanged = false;
+                if (!key.empty()) m_Ctx.Visibility.Save(file, key);
+            }
+        }
         m_SceneTarget->Resize(m_SceneViewSize.x, m_SceneViewSize.y);
         m_GameTarget->Resize(m_GameViewSize.x, m_GameViewSize.y);
 
@@ -606,6 +639,12 @@ namespace Editor
             }
             else
                 cam.Skybox = !m_Camera.Is2D();
+            // Wireframe and Overdraw show on a plain dark background.
+            if (m_DrawMode == SceneDrawMode::Wireframe || m_DrawMode == SceneDrawMode::Overdraw)
+            {
+                cam.ClearColor = m_DrawMode == SceneDrawMode::Overdraw ? glm::vec4(0.0f, 0.0f, 0.0f, 1.0f) : glm::vec4(0.11f, 0.11f, 0.12f, 1.0f);
+                cam.Skybox = false;
+            }
 
             SceneRenderOptions options;
             options.EditorOverlays = true;
@@ -616,6 +655,9 @@ namespace Editor
             options.DefaultLight = m_Ctx.InPrefabMode();
             DIM_PROFILE_SCOPE("Scene View");
             options.ShowNavMeshes = m_ShowNavigation;
+            options.DrawMode = m_DrawMode;
+            options.Hidden = m_Ctx.Visibility.Hidden(scene);
+            options.Unpickable = m_Ctx.Visibility.Unpickable(scene);
             options.FrameDebugStop = m_ShowFrameDebugger ? m_FrameDebugger->StopFor(0) : -2;
             options.Highlighting = m_Ctx.HierarchySearch.find_first_not_of(' ') != std::string::npos;
             if (options.Highlighting) options.Highlight = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
@@ -1257,6 +1299,25 @@ namespace Editor
             ImGui::SameLine();
             ImGui::Checkbox("Gizmos", &m_ShowGizmos);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scripts' gizmos (C# OnDrawGizmos) in the Scene view");
+            // The Scene view's draw mode.
+            ImGui::SameLine();
+            const char* modes[] = { "Shaded", "Wireframe", "Shaded Wireframe", "Unlit", "Overdraw" };
+            ImGui::SetNextItemWidth(130.0f);
+            int mode = (int)m_DrawMode;
+            if (ImGui::Combo("##drawmode", &mode, modes, IM_ARRAYSIZE(modes))) m_DrawMode = (SceneDrawMode)mode;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scene view draw mode");
+            // Scene visibility: with objects hidden or unpickable, a toggle to show and pick everything.
+            if (!m_Ctx.Visibility.Empty())
+            {
+                ImGui::SameLine();
+                bool on = m_Ctx.Visibility.Enabled;
+                if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                if (ImGui::Button("Visibility")) m_Ctx.Visibility.Enabled = !on;
+                if (on) ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(on ? "Objects hidden or made unpickable in the Hierarchy apply (click to show and pick everything)"
+                                         : "Showing and picking everything (click to apply the Hierarchy's visibility again)");
+            }
             ImGui::SameLine();
             // Snapping: the toggle, and its steps in the menu beside it.
             auto& prefs = EditorPreferences::Get();
@@ -1854,6 +1915,14 @@ namespace Editor
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) CopySelected(m_Ctx);
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) PasteClipboard(m_Ctx);
         if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
+        // H: hide or show the selection in the Scene view (all hidden: show them, else hide them).
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_H, false) && !ImGui::GetIO().WantTextInput && m_Ctx.HasValidSelection())
+        {
+            Scene& scene = m_Ctx.ActiveScene();
+            bool allHidden = std::all_of(m_Ctx.Selection.begin(), m_Ctx.Selection.end(), [&](Entity s) { return m_Ctx.Visibility.IsHiddenSelf(scene, s); });
+            for (Entity s : m_Ctx.Selection) m_Ctx.Visibility.SetHidden(scene, s, !allHidden);
+            m_Ctx.VisibilityChanged = true;
+        }
 
         bool viewActive = m_SceneViewHovered || m_SceneViewFocused;
         if (viewActive && !ctrl && !m_Camera.IsControlling())

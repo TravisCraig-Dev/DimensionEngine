@@ -30,6 +30,8 @@ namespace Editor
         std::string MenuCommand;  // --menu "Tools/Item": run a C# extension's menu item once the scripts have loaded
         std::string Search;       // --search "query": start with this Hierarchy search
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
+        std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
+        std::string HideEntities;         // --hide "A,B": hidden in the Scene view for the session
         bool VisualizeNavigation = false; // Game view overlay of UI navigation links (--visualize-nav starts with it on)
         bool WaitForDebugger = false;     // --wait-for-debugger: wait up to 60 s for a C# debugger before loading scripts
         bool BuildSucceeded = false; // result of the batch build
@@ -176,6 +178,8 @@ namespace Editor
         bool DeleteLinePoint(); // removes the picked point; false when no point is picked
         bool m_ShowGrid = true;
         bool m_ShowGizmos = true; // C# scripts' OnDrawGizmos in the Scene view
+        Dimension::SceneDrawMode m_DrawMode = Dimension::SceneDrawMode::Shaded;
+        std::string m_VisibilityScene = "\x01"; // the scene whose visibility is loaded (none yet)
         bool m_WasWindowFocused = true;
         bool m_PickAdditive = false; // Ctrl+click toggles instead of replacing the selection
         // Game module hot reload

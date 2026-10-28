@@ -1,5 +1,6 @@
 #pragma once
 #include <Dimension/Scene/Scene.h>
+#include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Asset/AssetManager.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <nlohmann/json.hpp>
@@ -111,6 +112,10 @@ namespace Editor
         PlayState State = PlayState::Edit;
         fs::path ScenePath; // empty until saved
         bool Dirty = false;
+        // Scene visibility (the Hierarchy's eye and hand, H): saved per scene in .dimension/SceneVisibility.json when
+        // VisibilityChanged is set.
+        SceneVisibility Visibility;
+        bool VisibilityChanged = false;
 
         // Prefab Mode: EditorScene is the prefab alone; the scene being edited (with its path, dirty flag,
         // undo history and selection) waits in the stage and comes back on exit.

@@ -44,7 +44,7 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 ShadowParams;   // x: cascade count (0 = no shadows), y: atlas texture index, z: depth bias
     vec4 CascadeSplits;  // far view depth of each cascade
     vec4 CascadeTexel;   // world size of a shadow texel per cascade
-    vec4 CascadeParams;  // y: blend fraction between cascades, z: 1 = debug colors
+    vec4 CascadeParams;  // y: blend fraction between cascades, z: 1 = debug colors, w: 1 = unlit (Scene view draw mode)
     vec4 SkyTop;         // rgb zenith color (linear)
     vec4 SkyHorizon;
     vec4 SkyGround;

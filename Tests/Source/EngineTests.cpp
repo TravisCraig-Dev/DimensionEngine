@@ -15,6 +15,7 @@
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Scene/SceneSnapping.h>
+#include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -7886,6 +7887,50 @@ namespace
         AssetManager::Shutdown();
     }
 
+    // Scene visibility: hiding an object hides its children (its own setting stays its own), the toggle shows
+    // everything without losing the settings, settings are saved per scene, and they follow the objects into a copy of
+    // the scene (play mode) by GUID.
+    void TestSceneVisibility()
+    {
+        Scene scene("Visibility");
+        Entity parent = scene.CreateEntity("Parent"), child = scene.CreateEntity("Child"), other = scene.CreateEntity("Other");
+        scene.SetParent(child, parent);
+        SceneVisibility vis;
+        CHECK(vis.Empty() && vis.Hidden(scene).empty());
+        vis.SetHidden(scene, parent, true);
+        CHECK(vis.IsHiddenSelf(scene, parent) && vis.IsHidden(scene, child) && !vis.IsHiddenSelf(scene, child) && !vis.IsHidden(scene, other));
+        auto hidden = vis.Hidden(scene);
+        CHECK(hidden.size() == 2 && std::find(hidden.begin(), hidden.end(), child) != hidden.end());
+        vis.SetPickable(scene, other, false);
+        CHECK(vis.IsUnpickable(scene, other) && !vis.IsUnpickable(scene, child) && vis.Unpickable(scene) == std::vector<Entity>{ other });
+        vis.Enabled = false;
+        CHECK(vis.Hidden(scene).empty() && vis.Unpickable(scene).empty() && vis.IsHiddenSelf(scene, parent));
+        vis.Enabled = true;
+
+        auto copy = scene.Clone();
+        auto copied = vis.Hidden(*copy);
+        CHECK(copied.size() == 2 && std::find(copied.begin(), copied.end(), copy->FindEntityByName("Child")) != copied.end());
+
+        fs::path file = fs::temp_directory_path() / "dimension_visibility" / "SceneVisibility.json";
+        std::error_code ec;
+        fs::remove_all(file.parent_path(), ec);
+        vis.Save(file, "Scenes/A.scene");
+        SceneVisibility other2;
+        other2.Save(file, "Scenes/B.scene"); // nothing set: no entry, A's kept
+        SceneVisibility loaded;
+        loaded.Load(file, "Scenes/A.scene");
+        CHECK(loaded.IsHidden(scene, child) && loaded.IsUnpickable(scene, other) && loaded.ToJson() == vis.ToJson());
+        loaded.Load(file, "Scenes/B.scene");
+        CHECK(loaded.Empty());
+        vis.SetHidden(scene, parent, false);
+        vis.SetPickable(scene, other, true);
+        CHECK(vis.Empty());
+        vis.Save(file, "Scenes/A.scene"); // cleared: its entry goes
+        loaded.Load(file, "Scenes/A.scene");
+        CHECK(loaded.Empty());
+        fs::remove_all(file.parent_path(), ec);
+    }
+
     void TestAssetLabels()
     {
         // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
@@ -9396,6 +9441,7 @@ int main(int argc, char** argv)
     Run("Sprite slicing", TestSpriteSlicing);
     Run("Asset labels", TestAssetLabels);
     Run("Scene snapping", TestSceneSnapping);
+    Run("Scene visibility", TestSceneVisibility);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

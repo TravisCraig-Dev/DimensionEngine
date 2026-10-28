@@ -3,6 +3,7 @@
 #include <Dimension/Core/Log.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/SpriteSlicing.h>
+#include <imgui.h>
 #include <mutex>
 
 namespace Editor
@@ -16,6 +17,7 @@ namespace Editor
 
     private:
         void DrawNode(Scene& scene, Entity e);
+        void DrawVisibilityToggles(Scene& scene, Entity e, ImVec2 rowMin, ImVec2 rowMax, bool rowHovered);
         void DrawSearchResults(Scene& scene);
         EditorContext& m_Ctx;
         Entity m_Renaming = Entity::Null();
