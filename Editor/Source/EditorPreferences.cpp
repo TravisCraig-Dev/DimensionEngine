@@ -41,6 +41,7 @@ namespace Editor
             SnapMove = j.value("snapMove", SnapMove);
             SnapRotate = j.value("snapRotate", SnapRotate);
             SnapScale = j.value("snapScale", SnapScale);
+            Shortcuts = j.value("shortcuts", nlohmann::json::object());
         }
         catch (const std::exception& e)
         {
@@ -64,7 +65,8 @@ namespace Editor
                           { "snap", Snap },
                           { "snapMove", SnapMove },
                           { "snapRotate", SnapRotate },
-                          { "snapScale", SnapScale } };
+                          { "snapScale", SnapScale },
+                          { "shortcuts", Shortcuts } };
         std::ofstream(FilePath()) << j.dump(2);
     }
 }

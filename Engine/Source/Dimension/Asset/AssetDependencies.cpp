@@ -81,14 +81,14 @@ namespace Dimension::AssetDependencies
         }
     }
 
-    AssetDependencySet Collect(const std::vector<AssetHandle>& roots)
+    AssetDependencySet Collect(const std::vector<AssetHandle>& roots, bool resources)
     {
         AssetDependencySet set;
         const fs::path& assets = AssetManager::GetAssetsDirectory();
         std::vector<AssetHandle> pending(roots.begin(), roots.end());
 
         // Everything under Assets/Resources ships, like Unity's Resources folders.
-        for (int type = (int)AssetType::Texture; type <= (int)AssetType::SpriteAtlas; ++type)
+        for (int type = (int)AssetType::Texture; resources && type <= (int)AssetType::SpriteAtlas; ++type)
             for (AssetHandle h : AssetManager::GetAssetsOfType((AssetType)type))
                 if (const AssetMetadata* m = AssetManager::GetMetadata(h))
                 {

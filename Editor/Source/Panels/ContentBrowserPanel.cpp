@@ -277,6 +277,7 @@ namespace Editor
                             AssetHandle variant = Prefabs::CreateVariant(base, UniquePath(path.parent_path() / (path.stem().string() + " Variant.prefab")));
                             if (variant.IsValid()) m_Ctx.SelectedAsset = variant;
                         }
+                        if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
                         if (ImGui::MenuItem("Show in Explorer")) FileDialogs::RevealInExplorer(path);
                         if (ImGui::MenuItem("Delete")) toDelete = path;
                         ImGui::EndPopup();
@@ -371,6 +372,8 @@ namespace Editor
                     AssetManager::Refresh();
                 }
                 ImGui::Separator();
+                if (ImGui::MenuItem("Import Package...")) m_Ctx.RequestImportPackage = true;
+                if (ImGui::MenuItem("Export Folder as Package...")) m_Ctx.RequestExportPackage = m_Current;
                 if (ImGui::MenuItem("Show in Explorer")) FileDialogs::OpenWithDefaultApp(m_Current);
                 if (ImGui::MenuItem("Refresh")) AssetManager::Refresh();
                 ImGui::EndPopup();

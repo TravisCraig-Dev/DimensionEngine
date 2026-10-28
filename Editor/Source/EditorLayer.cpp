@@ -17,6 +17,8 @@
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Scene/SceneSnapping.h>
 #include <Dimension/Scene/ProjectSearch.h>
+#include <Dimension/Asset/AssetPackage.h>
+#include "Shortcuts.h"
 #include <Dimension/Navigation/NavMesh.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Scene/SceneManager.h>
@@ -149,6 +151,7 @@ namespace Editor
         m_ResetLayout = !fs::exists(m_IniPath);
 
         EditorPreferences::Get().Load();
+        Shortcuts::Load(EditorPreferences::Get().Shortcuts);
         if (m_Options.Theme >= 0) EditorPreferences::Get().Theme = m_Options.Theme; // not saved unless Preferences change
         ApplyPreferences();
         m_Camera.SetFlySpeed(EditorPreferences::Get().CameraFlySpeed);
@@ -163,6 +166,10 @@ namespace Editor
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
         else if (m_Options.OpenWindow == "Snap Settings") m_ShowSnapSettings = true;
         else if (m_Options.OpenWindow == "Lighting") m_ShowLighting = true;
+        else if (m_Options.OpenWindow == "Shortcuts") m_ShowShortcuts = true;
+        else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
+            OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
+        else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
         else if (m_Options.OpenWindow == "Search")
         {
             OpenSearch(true);
@@ -802,6 +809,229 @@ namespace Editor
             radius = std::max(glm::length(hi - lo) * 0.5f, 1.0f);
             return true;
         }
+    }
+
+    void EditorLayer::DrawShortcutsWindow()
+    {
+        // Every shortcut by category: its key, a button to bind a new one (the next key pressed, with its modifiers;
+        // Escape cancels) and one to restore the default. Keys used twice show in orange.
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 560.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Shortcuts", &m_ShowShortcuts))
+        {
+            ImGui::End();
+            return;
+        }
+        auto& all = Shortcuts::All();
+        bool changed = false;
+        if (m_RebindingShortcut >= 0 && m_RebindingShortcut < (int)all.size())
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) m_RebindingShortcut = -1;
+            else
+                for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
+                {
+                    ImGuiKey key = (ImGuiKey)k;
+                    bool modifier = key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl || key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift ||
+                                    key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt || key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper ||
+                                    (key >= ImGuiKey_ReservedForModCtrl && key <= ImGuiKey_ReservedForModSuper);
+                    bool mouse = key >= ImGuiKey_MouseLeft && key <= ImGuiKey_MouseWheelY;
+                    if (modifier || mouse || !ImGui::IsKeyPressed(key, false)) continue;
+                    all[m_RebindingShortcut].Key = key | ImGui::GetIO().KeyMods;
+                    m_RebindingShortcut = -1;
+                    changed = true;
+                    break;
+                }
+        }
+        if (ImGui::BeginTable("##shortcuts", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY))
+        {
+            ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+            ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("##bind", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("##reset", ImGuiTableColumnFlags_WidthFixed, 54.0f);
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableHeadersRow();
+            const char* category = nullptr;
+            for (int i = 0; i < (int)all.size(); ++i)
+            {
+                Shortcut& s = all[i];
+                ImGui::PushID(i);
+                if (!category || std::strcmp(category, s.Category) != 0)
+                {
+                    category = s.Category;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, UI::AccentText());
+                    ImGui::TextUnformatted(category);
+                    ImGui::PopStyleColor();
+                }
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(s.Name);
+                ImGui::TableSetColumnIndex(1);
+                auto conflicts = Shortcuts::Conflicts(s);
+                std::string key = m_RebindingShortcut == i ? "Press a key...  (Esc cancels)" : s.Key ? Shortcuts::ChordName(s.Key) : "None";
+                if (!conflicts.empty()) ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "%s", key.c_str());
+                else ImGui::TextUnformatted(key.c_str());
+                if (!conflicts.empty() && ImGui::IsItemHovered())
+                {
+                    std::string also;
+                    for (const Shortcut* c : conflicts) also += std::string(also.empty() ? "" : ", ") + c->Name;
+                    ImGui::SetTooltip("Also bound to: %s", also.c_str());
+                }
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::SmallButton(m_RebindingShortcut == i ? "Cancel" : "Bind")) m_RebindingShortcut = m_RebindingShortcut == i ? -1 : i;
+                ImGui::TableSetColumnIndex(3);
+                ImGui::BeginDisabled(s.Key == s.Default);
+                if (ImGui::SmallButton("Reset"))
+                {
+                    s.Key = s.Default;
+                    changed = true;
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (changed)
+        {
+            EditorPreferences::Get().Shortcuts = Shortcuts::Save();
+            EditorPreferences::Get().Save();
+        }
+        ImGui::End();
+    }
+
+    void EditorLayer::OpenExportPackage(const std::vector<AssetHandle>& assets)
+    {
+        m_ExportRoots = assets;
+        std::erase_if(m_ExportRoots, [](AssetHandle h) { return !h.IsValid(); });
+        m_ExportExcluded.clear();
+        m_ShowExportPackage = !m_ExportRoots.empty();
+    }
+
+    void EditorLayer::DrawExportPackage()
+    {
+        // The chosen assets (with what they reference) as a .dimensionpackage: every file listed, each can be left out.
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 460.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Export Package", &m_ShowExportPackage))
+        {
+            ImGui::End();
+            return;
+        }
+        ImGui::Checkbox("Include dependencies", &m_ExportDependencies);
+        ImGui::SetItemTooltip("Also the assets these reference (a material's textures, a prefab's meshes and materials, ...)");
+        auto files = AssetPackage::FilesFor(m_ExportRoots, m_ExportDependencies);
+        int included = 0;
+        ImGui::BeginChild("##files", ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing() * 1.4f), ImGuiChildFlags_Borders);
+        for (const fs::path& f : files)
+        {
+            std::string name = f.generic_string();
+            bool on = !m_ExportExcluded.contains(name);
+            if (ImGui::Checkbox(name.c_str(), &on))
+            {
+                if (on) m_ExportExcluded.erase(name);
+                else m_ExportExcluded.insert(name);
+            }
+            included += on;
+        }
+        ImGui::EndChild();
+        ImGui::BeginDisabled(included == 0);
+        if (ImGui::Button(("Export " + std::to_string(included) + " File" + (included == 1 ? "" : "s") + "...").c_str()))
+        {
+            std::vector<fs::path> chosen;
+            for (const fs::path& f : files)
+                if (!m_ExportExcluded.contains(f.generic_string())) chosen.push_back(f);
+            if (auto out = FileDialogs::SaveFile({ { L"Dimension Package", L"*.dimensionpackage" } }, L"dimensionpackage"))
+            {
+                if (AssetPackage::Export(chosen, *out)) Log::Info("Exported {} files to '{}'", chosen.size(), out->filename().string());
+                else Log::Error("Could not write '{}'", out->string());
+                m_ShowExportPackage = false;
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::End();
+    }
+
+    void EditorLayer::ChooseImportPackage()
+    {
+        if (auto path = FileDialogs::OpenFile({ { L"Dimension Package", L"*.dimensionpackage" } })) OpenImportPackage(*path);
+    }
+
+    void EditorLayer::OpenImportPackage(const fs::path& package)
+    {
+        auto contents = AssetPackage::Read(package);
+        if (!contents)
+        {
+            Log::Error("'{}' is not a Dimension package", package.filename().string());
+            return;
+        }
+        m_ImportContents = std::move(*contents);
+        m_ImportName = package.filename().string();
+        // Everything that would change the project starts chosen.
+        m_ImportChosen.clear();
+        for (const auto& f : m_ImportContents.Files) m_ImportChosen.push_back(AssetPackage::Check(f) != AssetPackage::Status::Same);
+        m_ShowImportPackage = true;
+    }
+
+    void EditorLayer::DrawImportPackage()
+    {
+        // A package's files with what importing each does (New, Same, Changed: replaces the project's, New GUID: its GUID
+        // is taken here), each can be left out.
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 460.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Import Package", &m_ShowImportPackage))
+        {
+            ImGui::End();
+            return;
+        }
+        ImGui::Text("%s", m_ImportName.c_str());
+        int chosen = 0;
+        ImGui::BeginChild("##files", ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing() * 1.4f), ImGuiChildFlags_Borders);
+        if (ImGui::BeginTable("##import", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            for (size_t i = 0; i < m_ImportContents.Files.size(); ++i)
+            {
+                const auto& f = m_ImportContents.Files[i];
+                auto status = AssetPackage::Check(f);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                bool on = m_ImportChosen[i];
+                ImGui::PushID((int)i);
+                if (ImGui::Checkbox(f.Path.generic_string().c_str(), &on)) m_ImportChosen[i] = on;
+                ImGui::PopID();
+                chosen += on;
+                ImGui::TableSetColumnIndex(1);
+                switch (status)
+                {
+                case AssetPackage::Status::New: ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "New"); break;
+                case AssetPackage::Status::Same: ImGui::TextDisabled("Same"); break;
+                case AssetPackage::Status::Changed: ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f), "Changed"); break;
+                case AssetPackage::Status::GuidTaken: ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "New GUID"); break;
+                }
+                if (status == AssetPackage::Status::Changed && ImGui::IsItemHovered()) ImGui::SetTooltip("Replaces the project's file (its GUID kept)");
+                if (status == AssetPackage::Status::GuidTaken && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Another asset of this project has its GUID: it gets a new one, and the package's references to it\n"
+                                      "reach the project's asset instead");
+            }
+            ImGui::EndTable();
+        }
+        ImGui::EndChild();
+        ImGui::BeginDisabled(chosen == 0 || m_Ctx.IsPlaying());
+        if (ImGui::Button(("Import " + std::to_string(chosen) + " File" + (chosen == 1 ? "" : "s")).c_str()))
+        {
+            int written = AssetPackage::Import(m_ImportContents, m_ImportChosen);
+            Log::Info("Imported {} files from '{}'", written, m_ImportName);
+            m_ShowImportPackage = false;
+        }
+        ImGui::EndDisabled();
+        ImGui::End();
     }
 
     void EditorLayer::OpenSearch(bool open)
@@ -1447,6 +1677,24 @@ namespace Editor
         if (m_ShowSnapSettings) DrawSnapSettings();
         if (m_ShowSearch) DrawSearchWindow();
         if (m_ShowLighting) DrawLightingWindow();
+        if (m_ShowShortcuts) DrawShortcutsWindow();
+        else m_RebindingShortcut = -1;
+        if (m_ShowExportPackage) DrawExportPackage();
+        if (m_ShowImportPackage) DrawImportPackage();
+        // The Project window's Export Package... and Import Package...
+        if (m_Ctx.RequestExportPackage)
+        {
+            fs::path path = *m_Ctx.RequestExportPackage;
+            m_Ctx.RequestExportPackage.reset();
+            fs::path relative = path.lexically_relative(AssetManager::GetAssetsDirectory());
+            if (fs::is_directory(path)) OpenExportPackage(AssetPackage::AssetsIn(relative == "." ? fs::path() : relative));
+            else if (AssetHandle h = AssetManager::GetHandle(relative); h.IsValid()) OpenExportPackage({ h });
+        }
+        if (m_Ctx.RequestImportPackage)
+        {
+            m_Ctx.RequestImportPackage = false;
+            ChooseImportPackage();
+        }
         DrawScriptWindows();
         if (m_ShowFrameDebugger)
         {
@@ -1522,10 +1770,10 @@ namespace Editor
         if (!ImGui::BeginMainMenuBar()) return;
         if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::MenuItem("New Scene", "Ctrl+N") && ConfirmDiscardChanges()) NewScene();
-            if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) OpenSceneWithDialog();
-            if (ImGui::MenuItem("Save", "Ctrl+S", false, !m_Ctx.IsPlaying())) SaveScene();
-            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, !m_Ctx.IsPlaying())) SaveSceneAs();
+            if (ImGui::MenuItem("New Scene", Shortcuts::Label("file.new").c_str()) && ConfirmDiscardChanges()) NewScene();
+            if (ImGui::MenuItem("Open Scene...", Shortcuts::Label("file.open").c_str())) OpenSceneWithDialog();
+            if (ImGui::MenuItem("Save", Shortcuts::Label("file.save").c_str(), false, !m_Ctx.IsPlaying())) SaveScene();
+            if (ImGui::MenuItem("Save As...", Shortcuts::Label("file.saveAs").c_str(), false, !m_Ctx.IsPlaying())) SaveSceneAs();
             ImGui::Separator();
             if (ImGui::MenuItem("Open Project..."))
             {
@@ -1549,33 +1797,38 @@ namespace Editor
                 }
             }
             if (ImGui::MenuItem("Project Settings...")) m_ShowProjectSettings = true;
-            if (ImGui::MenuItem("Build Settings...", "Ctrl+Shift+B")) m_ShowBuildSettings = true;
-            if (ImGui::MenuItem("Build And Run", "Ctrl+B", false, !m_Ctx.IsPlaying())) BuildGame(true, Project::GetConfig().BuildFolder);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Import Package...")) ChooseImportPackage();
+            if (ImGui::MenuItem("Export Package...", nullptr, false, m_Ctx.SelectedAsset.IsValid()))
+                OpenExportPackage({ m_Ctx.SelectedAsset });
+            ImGui::Separator();
+            if (ImGui::MenuItem("Build Settings...", Shortcuts::Label("file.buildSettings").c_str())) m_ShowBuildSettings = true;
+            if (ImGui::MenuItem("Build And Run", Shortcuts::Label("file.buildAndRun").c_str(), false, !m_Ctx.IsPlaying())) BuildGame(true, Project::GetConfig().BuildFolder);
             ImGui::Separator();
             if (ImGui::MenuItem("Exit")) Application::Get().GetWindow().SetShouldClose(OnCloseRequested());
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit"))
         {
-            if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_Ctx.CanUndo() && !m_Ctx.IsPlaying())) m_Ctx.Undo();
-            if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_Ctx.CanRedo() && !m_Ctx.IsPlaying())) m_Ctx.Redo();
+            if (ImGui::MenuItem("Undo", Shortcuts::Label("edit.undo").c_str(), false, m_Ctx.CanUndo() && !m_Ctx.IsPlaying())) m_Ctx.Undo();
+            if (ImGui::MenuItem("Redo", Shortcuts::Label("edit.redo").c_str(), false, m_Ctx.CanRedo() && !m_Ctx.IsPlaying())) m_Ctx.Redo();
             ImGui::Separator();
-            if (ImGui::MenuItem("Copy", "Ctrl+C", false, m_Ctx.HasValidSelection())) CopySelected(m_Ctx);
-            if (ImGui::MenuItem("Paste", "Ctrl+V", false, !m_Ctx.IsPlaying())) PasteClipboard(m_Ctx);
-            if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_Ctx.HasValidSelection())) DuplicateSelected(m_Ctx);
+            if (ImGui::MenuItem("Copy", Shortcuts::Label("edit.copy").c_str(), false, m_Ctx.HasValidSelection())) CopySelected(m_Ctx);
+            if (ImGui::MenuItem("Paste", Shortcuts::Label("edit.paste").c_str(), false, !m_Ctx.IsPlaying())) PasteClipboard(m_Ctx);
+            if (ImGui::MenuItem("Duplicate", Shortcuts::Label("edit.duplicate").c_str(), false, m_Ctx.HasValidSelection())) DuplicateSelected(m_Ctx);
             ImGui::Separator();
             if (ImGui::MenuItem("Preferences...")) m_ShowPreferences = true;
-            if (ImGui::MenuItem("Delete", "Del", false, m_Ctx.HasValidSelection())) DeleteSelected(m_Ctx);
-            if (ImGui::MenuItem("Frame Selected", "F", false, m_Ctx.HasValidSelection())) FocusSelected();
+            if (ImGui::MenuItem("Delete", Shortcuts::Label("edit.delete").c_str(), false, m_Ctx.HasValidSelection())) DeleteSelected(m_Ctx);
+            if (ImGui::MenuItem("Frame Selected", Shortcuts::Label("scene.frame").c_str(), false, m_Ctx.HasValidSelection())) FocusSelected();
             ImGui::Separator();
-            if (ImGui::MenuItem(m_Ctx.IsPlaying() ? "Stop" : "Play", "Ctrl+P")) m_Ctx.IsPlaying() ? Stop() : Play();
-            if (ImGui::MenuItem("Pause", "Ctrl+Shift+P", m_Ctx.State == PlayState::Paused, m_Ctx.IsPlaying())) TogglePause();
+            if (ImGui::MenuItem(m_Ctx.IsPlaying() ? "Stop" : "Play", Shortcuts::Label("play.play").c_str())) m_Ctx.IsPlaying() ? Stop() : Play();
+            if (ImGui::MenuItem("Pause", Shortcuts::Label("play.pause").c_str(), m_Ctx.State == PlayState::Paused, m_Ctx.IsPlaying())) TogglePause();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Scripts"))
         {
             bool building = m_BuildState && m_BuildState->load() == 1;
-            if (ImGui::MenuItem("Build && Reload Game Module", "Ctrl+R", false, !building)) BuildGameModule();
+            if (ImGui::MenuItem("Build && Reload Game Module", Shortcuts::Label("file.buildModule").c_str(), false, !building)) BuildGameModule();
             if (ImGui::MenuItem("Reload Game Module", nullptr, false, !building)) ReloadGameModule();
             ImGui::Separator();
             bool csBuilding = m_CSharpBuild && m_CSharpBuild->load() == 1;
@@ -1616,7 +1869,8 @@ namespace Editor
             ImGui::MenuItem("Sprite Editor", nullptr, &m_ShowSpriteEditor);
             ImGui::MenuItem("Snap Settings", nullptr, &m_ShowSnapSettings);
             ImGui::MenuItem("Lighting", nullptr, &m_ShowLighting);
-            if (ImGui::MenuItem("Search", "Ctrl+K", m_ShowSearch)) OpenSearch(!m_ShowSearch);
+            ImGui::MenuItem("Shortcuts", nullptr, &m_ShowShortcuts);
+            if (ImGui::MenuItem("Search", Shortcuts::Label("edit.search").c_str(), m_ShowSearch)) OpenSearch(!m_ShowSearch);
             ImGui::MenuItem("Audio Mixer", nullptr, &m_ShowAudioMixer);
             ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);
@@ -2269,33 +2523,35 @@ namespace Editor
         if (io.WantTextInput) return;
         bool ctrl = io.KeyCtrl, shift = io.KeyShift;
 
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P, false)) shift ? TogglePause() : (m_Ctx.IsPlaying() ? Stop() : Play());
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) shift ? SaveSceneAs() : SaveScene();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false) && ConfirmDiscardChanges()) NewScene();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_R, false)) BuildGameModule();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_B, false))
-        {
-            if (shift) m_ShowBuildSettings = true;
-            else if (!m_Ctx.IsPlaying()) BuildGame(true, Project::GetConfig().BuildFolder);
-        }
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) OpenSceneWithDialog();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_K, false)) OpenSearch(true);
+        // The keys are the Shortcuts window's (Shortcuts::Pressed).
+        if (m_RebindingShortcut >= 0) return; // the Shortcuts window is listening for a new key
+        using Shortcuts::Pressed;
+        if (Pressed("play.play")) m_Ctx.IsPlaying() ? Stop() : Play();
+        if (Pressed("play.pause")) TogglePause();
+        if (Pressed("file.save")) SaveScene();
+        if (Pressed("file.saveAs")) SaveSceneAs();
+        if (Pressed("file.new") && ConfirmDiscardChanges()) NewScene();
+        if (Pressed("file.buildModule")) BuildGameModule();
+        if (Pressed("file.buildSettings")) m_ShowBuildSettings = true;
+        if (Pressed("file.buildAndRun") && !m_Ctx.IsPlaying()) BuildGame(true, Project::GetConfig().BuildFolder);
+        if (Pressed("file.open")) OpenSceneWithDialog();
+        if (Pressed("edit.search")) OpenSearch(true);
         if (m_GameViewFocused && m_Ctx.IsPlaying()) return; // the game owns the keyboard
 
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) m_Ctx.Undo();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) m_Ctx.Redo();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false)) DuplicateSelected(m_Ctx);
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) CopySelected(m_Ctx);
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) PasteClipboard(m_Ctx);
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
-        // Shift+H: isolate the selection (only it shows), or leave isolation.
-        if (!ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_H, false) && !ImGui::GetIO().WantTextInput)
+        if (Pressed("edit.undo")) m_Ctx.Undo();
+        if (Pressed("edit.redo")) m_Ctx.Redo();
+        if (Pressed("edit.duplicate")) DuplicateSelected(m_Ctx);
+        if (Pressed("edit.copy")) CopySelected(m_Ctx);
+        if (Pressed("edit.paste")) PasteClipboard(m_Ctx);
+        if (Pressed("edit.delete") && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
+        // Isolate the selection (only it shows), or leave isolation.
+        if (Pressed("scene.isolate"))
         {
             if (m_Ctx.Visibility.Isolating()) m_Ctx.Visibility.EndIsolation();
             else if (m_Ctx.HasValidSelection()) m_Ctx.Visibility.Isolate(m_Ctx.ActiveScene(), m_Ctx.Selection);
         }
-        // H: hide or show the selection in the Scene view (all hidden: show them, else hide them).
-        else if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_H, false) && !ImGui::GetIO().WantTextInput && m_Ctx.HasValidSelection())
+        // Hide or show the selection in the Scene view (all hidden: show them, else hide them).
+        else if (Pressed("scene.hide") && m_Ctx.HasValidSelection())
         {
             Scene& scene = m_Ctx.ActiveScene();
             bool allHidden = std::all_of(m_Ctx.Selection.begin(), m_Ctx.Selection.end(), [&](Entity s) { return m_Ctx.Visibility.IsHiddenSelf(scene, s); });
@@ -2304,13 +2560,13 @@ namespace Editor
         }
 
         bool viewActive = m_SceneViewHovered || m_SceneViewFocused;
-        if (viewActive && !ctrl && !m_Camera.IsControlling())
+        if (viewActive && !m_Camera.IsControlling())
         {
-            if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) m_GizmoOperation = 0;
-            if (ImGui::IsKeyPressed(ImGuiKey_W, false)) m_GizmoOperation = ImGuizmo::TRANSLATE;
-            if (ImGui::IsKeyPressed(ImGuiKey_E, false)) m_GizmoOperation = ImGuizmo::ROTATE;
-            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) m_GizmoOperation = ImGuizmo::SCALE;
-            if (ImGui::IsKeyPressed(ImGuiKey_F, false)) FocusSelected();
+            if (Pressed("tool.view")) m_GizmoOperation = 0;
+            if (Pressed("tool.move")) m_GizmoOperation = ImGuizmo::TRANSLATE;
+            if (Pressed("tool.rotate")) m_GizmoOperation = ImGuizmo::ROTATE;
+            if (Pressed("tool.scale")) m_GizmoOperation = ImGuizmo::SCALE;
+            if (Pressed("scene.frame")) FocusSelected();
         }
     }
 

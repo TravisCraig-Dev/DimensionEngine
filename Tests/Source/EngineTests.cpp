@@ -18,6 +18,7 @@
 #include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Asset/Preset.h>
 #include <Dimension/Scene/ProjectSearch.h>
+#include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -8023,6 +8024,84 @@ namespace
         AssetManager::Shutdown();
     }
 
+    // Asset packages: a material exported with what it references, imported into an empty project with the same
+    // GUIDs (so the reference holds); importing again finds the same files; a changed file is replaced keeping the
+    // project's GUID; a GUID the project already uses elsewhere gives the import a new one; broken packages and paths
+    // leaving the Assets folder are refused.
+    void TestAssetPackages()
+    {
+        fs::path temp = fs::temp_directory_path() / "dimension_packages";
+        std::error_code ec;
+        fs::remove_all(temp, ec);
+        fs::create_directories(temp / "Empty", ec);
+        fs::path package = temp / "Wood.dimensionpackage";
+
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        AssetHandle wood = AssetManager::GetHandle("Materials/Wood.mat");
+        AssetHandle texture(uint64_t(100002)); // its Base Map
+        const AssetMetadata* textureMeta = AssetManager::GetMetadata(texture);
+        CHECK(wood.IsValid() && textureMeta);
+        fs::path texturePath = textureMeta ? textureMeta->Path : fs::path();
+        auto alone = AssetPackage::FilesFor({ wood }, false);
+        auto withDeps = AssetPackage::FilesFor({ wood }, true);
+        CHECK(alone == std::vector<fs::path>{ fs::path("Materials/Wood.mat") });
+        CHECK(withDeps.size() == 2 && std::find(withDeps.begin(), withDeps.end(), texturePath) != withDeps.end());
+        auto inMaterials = AssetPackage::AssetsIn("Materials");
+        CHECK(std::find(inMaterials.begin(), inMaterials.end(), wood) != inMaterials.end() &&
+              std::find(inMaterials.begin(), inMaterials.end(), texture) == inMaterials.end());
+        CHECK(AssetPackage::Export(withDeps, package));
+        AssetManager::Shutdown();
+
+        AssetManager::Init(temp / "Empty");
+        auto contents = AssetPackage::Read(package);
+        CHECK(contents && contents->Files.size() == 2);
+        if (contents && contents->Files.size() == 2)
+        {
+            CHECK(std::all_of(contents->Files.begin(), contents->Files.end(),
+                              [](const auto& f) { return f.Guid != 0 && AssetPackage::Check(f) == AssetPackage::Status::New; }));
+            CHECK(AssetPackage::Import(*contents) == 2);
+            CHECK(AssetManager::GetHandle("Materials/Wood.mat") == wood && AssetManager::GetMetadata(texture) &&
+                  AssetManager::GetMetadata(texture)->Path == texturePath); // the material's Base Map reference holds
+            CHECK(std::all_of(contents->Files.begin(), contents->Files.end(),
+                              [](const auto& f) { return AssetPackage::Check(f) == AssetPackage::Status::Same; }));
+
+            // Changed in the project: replaced, keeping its GUID.
+            std::ofstream(temp / "Empty/Materials/Wood.mat") << "{}";
+            size_t woodIndex = contents->Files[0].Path == fs::path("Materials/Wood.mat") ? 0 : 1;
+            CHECK(AssetPackage::Check(contents->Files[woodIndex]) == AssetPackage::Status::Changed);
+            std::vector<bool> onlyWood(2, false);
+            onlyWood[woodIndex] = true;
+            CHECK(AssetPackage::Import(*contents, onlyWood) == 1);
+            CHECK(AssetPackage::Check(contents->Files[woodIndex]) == AssetPackage::Status::Same && AssetManager::GetHandle("Materials/Wood.mat") == wood);
+
+            // Its GUID now held by another file: imported under a new one.
+            fs::rename(temp / "Empty/Materials/Wood.mat", temp / "Empty/Materials/Oak.mat", ec);
+            fs::rename(temp / "Empty/Materials/Wood.mat.meta", temp / "Empty/Materials/Oak.mat.meta", ec);
+            AssetManager::Shutdown(); // the project opened again with the rename
+            AssetManager::Init(temp / "Empty");
+            CHECK(AssetManager::GetHandle("Materials/Oak.mat") == wood);
+            CHECK(AssetPackage::Check(contents->Files[woodIndex]) == AssetPackage::Status::GuidTaken);
+            CHECK(AssetPackage::Import(*contents, onlyWood) == 1);
+            AssetHandle copy = AssetManager::GetHandle("Materials/Wood.mat");
+            CHECK(copy.IsValid() && copy != wood && AssetManager::GetHandle("Materials/Oak.mat") == wood);
+        }
+        AssetManager::Shutdown();
+
+        // Not a package, or one reaching outside the Assets folder.
+        std::ofstream(temp / "junk.dimensionpackage") << "not a package";
+        CHECK(!AssetPackage::Read(temp / "junk.dimensionpackage"));
+        {
+            std::string head = R"({"version":1,"files":[{"path":"../escape.txt","size":2,"meta":""}]})";
+            uint64_t length = head.size();
+            std::ofstream out(temp / "escape.dimensionpackage", std::ios::binary);
+            out.write("DIMPKG ", 8);
+            out.write(reinterpret_cast<const char*>(&length), 8);
+            out << head << "hi";
+        }
+        CHECK(!AssetPackage::Read(temp / "escape.dimensionpackage"));
+        fs::remove_all(temp, ec);
+    }
+
     void TestAssetLabels()
     {
         // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
@@ -9536,6 +9615,7 @@ int main(int argc, char** argv)
     Run("Scene visibility", TestSceneVisibility);
     Run("Presets", TestPresets);
     Run("Project search", TestProjectSearch);
+    Run("Asset packages", TestAssetPackages);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

@@ -7,7 +7,9 @@
 #include <Dimension/Renderer/SceneRenderer.h>
 #include "AssetPreviews.h"
 #include <Dimension/Audio/AudioMixer.h>
+#include <Dimension/Asset/AssetPackage.h>
 #include <atomic>
+#include <unordered_set>
 #include <memory>
 
 namespace Editor
@@ -30,6 +32,7 @@ namespace Editor
         std::string MenuCommand;  // --menu "Tools/Item": run a C# extension's menu item once the scripts have loaded
         std::string Search;       // --search "query": start with this Hierarchy search
         std::string SearchQuery;  // --find "query": with --open "Search", the Search window's query
+        std::string PackagePath;  // --package file: with --open "Import Package", the package shown
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
         std::string HideEntities;         // --hide "A,B": hidden in the Scene view for the session
@@ -181,6 +184,22 @@ namespace Editor
         void DrawSearchWindow();
         void DrawLightingWindow();
         void BakeAllProbes();
+        // Window > Shortcuts (rebinding: the shortcut listening for its new key, -1 none).
+        bool m_ShowShortcuts = false;
+        int m_RebindingShortcut = -1;
+        void DrawShortcutsWindow();
+        // Asset packages: File > Export Package... (the chosen assets, files left out by path) and Import Package...
+        bool m_ShowExportPackage = false, m_ExportDependencies = true, m_ShowImportPackage = false;
+        std::vector<Dimension::AssetHandle> m_ExportRoots;
+        std::unordered_set<std::string> m_ExportExcluded;
+        Dimension::AssetPackage::Contents m_ImportContents;
+        std::vector<bool> m_ImportChosen;
+        std::string m_ImportName;
+        void OpenExportPackage(const std::vector<Dimension::AssetHandle>& assets);
+        void DrawExportPackage();
+        void ChooseImportPackage();
+        void OpenImportPackage(const fs::path& package);
+        void DrawImportPackage();
         void DrawSnapSettings();
         glm::vec3 m_VertexOffset{ 0.0f }; // the dragged vertex from the selected object's pivot
         // Moves the selection's top-level objects by a world-space offset.

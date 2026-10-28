@@ -35,6 +35,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--menu") && i + 1 < argc) options.MenuCommand = argv[++i];
         else if (!std::strcmp(argv[i], "--search") && i + 1 < argc) options.Search = argv[++i];
         else if (!std::strcmp(argv[i], "--find") && i + 1 < argc) options.SearchQuery = argv[++i];
+        else if (!std::strcmp(argv[i], "--package") && i + 1 < argc) options.PackagePath = argv[++i];
         else if (!std::strcmp(argv[i], "--visualize-nav")) options.VisualizeNavigation = true;
         else if (!std::strcmp(argv[i], "--inspector-debug")) options.InspectorDebug = true;
         else if (!std::strcmp(argv[i], "--draw-mode") && i + 1 < argc) options.DrawMode = argv[++i];

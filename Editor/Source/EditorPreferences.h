@@ -1,5 +1,6 @@
 #pragma once
 #include <Dimension/Core/Base.h>
+#include <nlohmann/json.hpp>
 
 namespace Editor
 {
@@ -19,6 +20,8 @@ namespace Editor
         // and scale go in steps.
         bool Snap = false;
         float SnapMove = 0.5f, SnapRotate = 15.0f, SnapScale = 0.1f;
+        // Shortcuts changed in Window > Shortcuts (id -> key chord).
+        nlohmann::json Shortcuts = nlohmann::json::object();
 
         static EditorPreferences& Get();
         static Dimension::fs::path FilePath();

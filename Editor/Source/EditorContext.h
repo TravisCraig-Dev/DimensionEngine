@@ -137,6 +137,9 @@ namespace Editor
         std::optional<fs::path> RequestOpenScene;
         std::optional<glm::vec3> RequestFocus; // frame point in scene view
         bool RequestFocusSelected = false;
+        // The Project window's Export Package... (an asset or folder, absolute) and Import Package...
+        std::optional<fs::path> RequestExportPackage;
+        bool RequestImportPackage = false;
 
     private:
         struct Snapshot

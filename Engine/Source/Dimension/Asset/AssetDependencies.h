@@ -17,7 +17,7 @@ namespace Dimension
     {
         // Everything reachable from `roots`: JSON assets (scenes, prefabs, materials, animator controllers) and every
         // asset's import settings are scanned for asset GUIDs; .gltf and .obj models add the files they reference.
-        // Assets under Assets/Resources are always included (scripts may load them by path).
-        AssetDependencySet Collect(const std::vector<AssetHandle>& roots);
+        // Assets under Assets/Resources are included too (scripts may load them by path) unless `resources` is false.
+        AssetDependencySet Collect(const std::vector<AssetHandle>& roots, bool resources = true);
     }
 }
