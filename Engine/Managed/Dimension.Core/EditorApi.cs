@@ -52,6 +52,25 @@ namespace Dimension
         public void DrawDefaultInspector() => ScriptHost.DrawDefaultFields(Target);
     }
 
+    // A property drawer (like Unity's PropertyDrawer): a class deriving from PropertyDrawer with
+    // [CustomPropertyDrawer(typeof(MyAttribute))] draws every script field marked with that attribute; with a field type
+    // (typeof(Vector3)) it draws every field of that type that no attribute's drawer claims. OnGUI draws the field with
+    // EditorGUI and returns its value; in the Inspector each control takes a row like the built-in fields.
+    [AttributeUsage(AttributeTargets.Class)]
+    public sealed class CustomPropertyDrawerAttribute : Attribute
+    {
+        public Type Target { get; }
+        public CustomPropertyDrawerAttribute(Type target) => Target = target;
+    }
+
+    public abstract class PropertyDrawer
+    {
+        // The field being drawn, and the attribute that chose this drawer (null when chosen by the field's type).
+        public System.Reflection.FieldInfo Field { get; internal set; }
+        public Attribute Attribute { get; internal set; }
+        public abstract object OnGUI(string label, object value);
+    }
+
     // A dockable editor window; one instance per class, kept while the scripts stay loaded.
     public abstract class EditorWindow
     {
@@ -107,6 +126,22 @@ namespace Dimension
         public static void Space() => Op(10, "");
         public static string TextField(string label, string value) =>
             Native.WithUtf8(label, l => Native.WithUtf8(value, t => Native.FromUtf8(Native.Api.EditorGuiText((byte*)l, (byte*)t))));
+        // An object of the scene being edited (pick from a list, or drop one from the Hierarchy).
+        public static Entity EntityField(string label, Entity value) =>
+            new Entity(Native.CurrentScene, Native.WithUtf8(label, p => Native.Api.EditorGuiRef(0, (byte*)p, value.Id)));
+        // An asset of the reference's type (pick from the project's, or drop one from the Project window).
+        public static T AssetField<T>(string label, T value) where T : struct, IAssetReference => (T)AssetField(label, (IAssetReference)value);
+
+        internal static IAssetReference AssetField(string label, IAssetReference value)
+        {
+            Type t = value.GetType();
+            ulong guid = Native.WithUtf8(label, p => Native.Api.EditorGuiRef(AssetKind(t), (byte*)p, value.Guid));
+            return (IAssetReference)Activator.CreateInstance(t, guid);
+        }
+
+        // Shared with the engine: 1 Prefab, 2 Texture, 3 Material, 4 Mesh, 5 Audio.
+        internal static int AssetKind(Type t) =>
+            t == typeof(Prefab) ? 1 : t == typeof(Texture) ? 2 : t == typeof(Material) ? 3 : t == typeof(Mesh) ? 4 : t == typeof(AudioClip) ? 5 : 0;
     }
 
     // The editor's selection in the scene being edited.

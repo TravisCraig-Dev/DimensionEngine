@@ -139,6 +139,7 @@ namespace Dimension
             uint64_t (*EditorSelection)(int, uint64_t, const char*);
             void (*EditorUndo)(const char*);
             void (*RegisterEditorItem)(const char*);
+            uint64_t (*EditorGuiRef)(int, const char*, uint64_t); // 0 an entity (packed), else an asset kind (1 Prefab ... 5 Audio)
         };
 
         // Background scene loads started from C#, by id.
@@ -161,6 +162,8 @@ namespace Dimension
             void (*EditorCall)(int, int, void*); // 0 run menu item, 1 window OnGUI; id; scene
             // A custom Inspector: id, live instance (or 0), class, saved values (JSON array), scene, entity -> values after
             const char* (*Inspect)(int, intptr_t, const char*, const char*, void*, uint64_t);
+            // A field's property drawer: field index, then as Inspect
+            const char* (*DrawField)(int, intptr_t, const char*, const char*, void*, uint64_t);
         };
         CSharpRuntime::EditorHooks s_EditorHooks;
         std::vector<CSharpRuntime::EditorItem> s_EditorItems;
@@ -197,7 +200,7 @@ namespace Dimension
         template <class T> T* Comp(void* scene, uint64_t e) { return scene ? S(scene).GetRegistry().TryGet<T>(Unpack(e)) : nullptr; }
 
         // ---- Managed class proxies ------------------------------------------------------------------
-        enum class Slot : uint8_t { Float, Int, Bool, String, Vec2, Vec3, Vec4, Color4, Entity };
+        enum class Slot : uint8_t { Float, Int, Bool, String, Vec2, Vec3, Vec4, Color4, Entity, Asset };
         constexpr size_t kSlotSize = 64;
 
         struct ManagedClass
@@ -206,6 +209,7 @@ namespace Dimension
             std::vector<Slot> Slots;
             std::vector<FieldInfo> Fields;
             std::vector<nlohmann::json> Defaults;
+            std::vector<bool> Drawn; // per field: a C# property drawer draws it
         };
         std::deque<ManagedClass> s_Classes; // stable addresses (captured by ScriptInfo lambdas)
 
@@ -239,11 +243,16 @@ namespace Dimension
 
             // Draws custom Inspector `id` for this script (its live object while playing, else one made from the slots)
             // and takes the values it leaves; true when they changed.
-            bool Inspect(int id, Scene& scene, Entity e)
+            bool Inspect(int id, Scene& scene, Entity e) { return Draw(s_Managed.Inspect, id, scene, e); }
+            // Draws field `index` with its property drawer; true when the values changed.
+            bool DrawField(size_t index, Scene& scene, Entity e) { return Draw(s_Managed.DrawField, (int)index, scene, e); }
+            const ManagedClass& Class() const { return *m_Class; }
+
+            bool Draw(const char* (*call)(int, intptr_t, const char*, const char*, void*, uint64_t), int id, Scene& scene, Entity e)
             {
-                if (!s_Managed.Inspect) return false;
+                if (!call) return false;
                 std::string before = SlotsJson().dump();
-                const char* after = s_Managed.Inspect(id, m_Handle, m_Class->Name.c_str(), before.c_str(), &scene, Pack(e));
+                const char* after = call(id, m_Handle, m_Class->Name.c_str(), before.c_str(), &scene, Pack(e));
                 if (!after) return false;
                 ReadSlots(after);
                 return SlotsJson().dump() != before;
@@ -345,12 +354,19 @@ namespace Dimension
                 for (auto& f : j.at("fields"))
                 {
                     std::string type = f.at("type").get<std::string>();
-                    Slot slot = type == "Float" ? Slot::Float : type == "Int" ? Slot::Int : type == "Bool" ? Slot::Bool
+                    // Asset references (Prefab, Texture, ...) are stored as their GUID and picked like built-in ones.
+                    const std::pair<const char*, FieldType> assets[] = { { "Prefab", FieldType::Prefab }, { "Texture", FieldType::Texture },
+                                                                         { "Material", FieldType::Material }, { "Mesh", FieldType::Mesh },
+                                                                         { "Audio", FieldType::Audio } };
+                    const FieldType* asset = nullptr;
+                    for (auto& a : assets)
+                        if (type == a.first) asset = &a.second;
+                    Slot slot = asset ? Slot::Asset : type == "Float" ? Slot::Float : type == "Int" ? Slot::Int : type == "Bool" ? Slot::Bool
                               : type == "String" ? Slot::String : type == "Vec2" ? Slot::Vec2 : type == "Vec3" ? Slot::Vec3
                               : type == "Vec4" ? Slot::Vec4 : type == "Color4" ? Slot::Color4 : Slot::Entity;
                     FieldInfo info;
                     info.Name = f.at("name").get<std::string>();
-                    info.Type = slot == Slot::Float ? FieldType::Float : slot == Slot::Int ? FieldType::Int : slot == Slot::Bool ? FieldType::Bool
+                    info.Type = asset ? *asset : slot == Slot::Float ? FieldType::Float : slot == Slot::Int ? FieldType::Int : slot == Slot::Bool ? FieldType::Bool
                               : slot == Slot::String ? FieldType::String : slot == Slot::Vec2 ? FieldType::Vec2 : slot == Slot::Vec3 ? FieldType::Vec3
                               : slot == Slot::Vec4 ? FieldType::Vec4 : slot == Slot::Color4 ? FieldType::Color4 : FieldType::EntityRef;
                     info.Speed = slot == Slot::Int ? 1.0f : 0.05f;
@@ -369,6 +385,7 @@ namespace Dimension
                     cls.Slots.push_back(slot);
                     cls.Fields.push_back(std::move(info));
                     cls.Defaults.push_back(f.value("default", nlohmann::json()));
+                    cls.Drawn.push_back(f.value("drawer", false));
                 }
 
                 ScriptInfo& info = ScriptRegistry::RegisterDynamic(cls.Name, "csharp");
@@ -494,6 +511,10 @@ namespace Dimension
                 return op == 3 ? (uint64_t)out.Index : Pack(out);
             };
             a.EditorUndo = [](const char* name) { if (s_EditorHooks.Undo) s_EditorHooks.Undo(name ? name : ""); };
+            a.EditorGuiRef = [](int kind, const char* label, uint64_t value) -> uint64_t {
+                if (kind == 0) return s_EditorHooks.EntityField ? Pack(s_EditorHooks.EntityField(label ? label : "", Unpack(value))) : value;
+                return s_EditorHooks.AssetField ? s_EditorHooks.AssetField(kind, label ? label : "", value) : value;
+            };
             a.RegisterEditorItem = [](const char* json) {
                 try
                 {
@@ -912,6 +933,18 @@ namespace Dimension
         if (s_Available && s_Managed.Inspect) s_Managed.Inspect(id, 0, nullptr, nullptr, &scene, Pack(e));
     }
 
+    bool CSharpRuntime::HasFieldDrawer(ScriptableEntity& script, size_t field)
+    {
+        auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
+        return managed && field < managed->Class().Drawn.size() && managed->Class().Drawn[field];
+    }
+
+    bool CSharpRuntime::DrawScriptField(ScriptableEntity& script, size_t field, Scene& scene, Entity e)
+    {
+        auto* managed = s_Available ? dynamic_cast<ManagedScript*>(&script) : nullptr;
+        return managed && managed->DrawField(field, scene, e);
+    }
+
     void CSharpRuntime::UnloadScripts()
     {
         if (!s_Available) return;
@@ -958,6 +991,8 @@ namespace Dimension
     const CSharpRuntime::EditorItem* CSharpRuntime::FindInspector(const std::string&) { return nullptr; }
     bool CSharpRuntime::InspectScript(int, ScriptableEntity&, Scene&, Entity) { return false; }
     void CSharpRuntime::InspectComponent(int, Scene&, Entity) {}
+    bool CSharpRuntime::HasFieldDrawer(ScriptableEntity&, size_t) { return false; }
+    bool CSharpRuntime::DrawScriptField(ScriptableEntity&, size_t, Scene&, Entity) { return false; }
     bool CSharpRuntime::IsDebuggerAttached() { return false; }
     bool CSharpRuntime::LaunchDebugger() { return false; }
     bool CSharpRuntime::WaitForDebugger(float) { return false; }

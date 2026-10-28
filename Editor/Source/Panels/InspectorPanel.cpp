@@ -480,7 +480,11 @@ namespace Editor
                     }
                     UI::EndProperties();
                     // A C# custom Inspector for the component ([CustomInspector("Name")]) draws below its fields.
-                    if (const auto* custom = CSharpRuntime::FindInspector(info.Name)) CSharpRuntime::InspectComponent(custom->Id, scene, e);
+                    if (const auto* custom = CSharpRuntime::FindInspector(info.Name); custom && UI::BeginProperties("##custom"))
+                    {
+                        CSharpRuntime::InspectComponent(custom->Id, scene, e);
+                        UI::EndProperties();
+                    }
                     if (info.TypeId == GetComponentTypeId<SpriteRendererComponent>())
                     {
                         // Its texture's sliced sprites (the Sprite Editor): draw one of them, or all of it.
@@ -941,14 +945,36 @@ namespace Editor
                                 if (script.Fields.contains(f.Name)) FieldFromJson(f, info->ToObject(target), script.Fields[f.Name], &resolver);
                         }
                         void* obj = info->ToObject(target);
-                        for (auto& f : info->Fields)
+                        for (size_t fi = 0; fi < info->Fields.size() && !custom; ++fi)
                         {
-                            if (custom) break;
+                            const FieldInfo& f = info->Fields[fi];
+                            if (f.Hidden) continue; // [HideInInspector]: saved, not shown
+                            bool drawn = CSharpRuntime::HasFieldDrawer(*target, fi);
                             auto& fields = reg.Get<ScriptComponent>(e).Scripts[i].Fields;
                             nlohmann::json before = fields;
                             bool overridden = Prefabs::IsOverridden(scene, e, "Script", "Scripts");
                             if (overridden) ImGui::PushStyleColor(ImGuiCol_Text, UI::AccentText());
-                            auto r = UI::Field(f, obj, &scene);
+                            UI::EditResult r;
+                            if (drawn)
+                            {
+                                // A C# property drawer ([CustomPropertyDrawer]): its controls take rows of the grid.
+                                if (!f.Header.empty())
+                                {
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+                                    ImGui::PushStyleColor(ImGuiCol_Text, UI::AccentText());
+                                    ImGui::TextUnformatted(f.Header.c_str());
+                                    ImGui::PopStyleColor();
+                                }
+                                ImGui::PushID(f.Name.c_str());
+                                r.Changed = CSharpRuntime::DrawScriptField(*target, fi, scene, e);
+                                r.Activated = r.Changed && !s_CustomEditActive;
+                                s_CustomEditActive = ImGui::IsAnyItemActive();
+                                ImGui::PopID();
+                            }
+                            else
+                                r = UI::Field(f, obj, &scene);
                             if (overridden) ImGui::PopStyleColor();
                             nlohmann::json after = fields;
                             if (r.Changed) after[f.Name] = FieldToJson(f, obj, &resolver);
@@ -969,7 +995,13 @@ namespace Editor
                     // Its edits go into the saved values like the fields' own: one undo step per drag or edit.
                     auto& fields = reg.Get<ScriptComponent>(e).Scripts[i].Fields;
                     nlohmann::json before = fields;
-                    if (CSharpRuntime::InspectScript(custom->Id, *target, scene, e))
+                    bool changed = false;
+                    if (UI::BeginProperties("##custom"))
+                    {
+                        changed = CSharpRuntime::InspectScript(custom->Id, *target, scene, e);
+                        UI::EndProperties();
+                    }
+                    if (changed)
                     {
                         void* obj = info->ToObject(target);
                         nlohmann::json after = before.is_object() ? before : nlohmann::json::object();

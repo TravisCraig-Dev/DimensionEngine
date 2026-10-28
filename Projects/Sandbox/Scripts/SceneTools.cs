@@ -7,6 +7,8 @@ namespace Game
     public static class SceneTools
     {
         public static float Spacing = 2.0f;
+        // What Add Marker places (none: an empty object).
+        public static Prefab MarkerPrefab;
 
         // Puts the selected objects in a row along X, Spacing apart, starting where the first one stands.
         [MenuItem("Tools/Line Up Selected")]
@@ -20,12 +22,12 @@ namespace Game
                 selected[i].Transform.Position = start + new Vector3(Spacing * i, 0.0f, 0.0f);
         }
 
-        // A new empty object named Marker, selected.
+        // A new object named Marker (an instance of MarkerPrefab, or empty), selected.
         [MenuItem("Tools/Add Marker")]
         public static void AddMarker()
         {
             Undo.Record("Add Marker");
-            Selection.Active = EditorScene.CreateEntity("Marker");
+            Selection.Active = MarkerPrefab.IsValid ? MarkerPrefab.Instantiate(Vector3.Zero) : EditorScene.CreateEntity("Marker");
         }
     }
 
@@ -35,8 +37,11 @@ namespace Game
     {
         public override void OnGUI()
         {
-            Entity active = Selection.Active;
             EditorGUI.Separator("Selected");
+            // Picking an object here selects it.
+            Entity picked = EditorGUI.EntityField("Object", Selection.Active);
+            if (picked != Selection.Active) Selection.Active = picked;
+            Entity active = Selection.Active;
             if (!active.IsValid)
                 EditorGUI.Label("Nothing selected.");
             else
@@ -59,6 +64,7 @@ namespace Game
             }
             EditorGUI.Separator("Line Up");
             SceneTools.Spacing = EditorGUI.Slider("Spacing", SceneTools.Spacing, 0.5f, 10.0f);
+            SceneTools.MarkerPrefab = EditorGUI.AssetField("Marker Prefab", SceneTools.MarkerPrefab);
             if (EditorGUI.Button("Line Up Selected")) SceneTools.LineUpSelected();
             EditorGUI.SameLine();
             if (EditorGUI.Button("Add Marker")) SceneTools.AddMarker();

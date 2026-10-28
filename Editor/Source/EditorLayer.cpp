@@ -2780,43 +2780,97 @@ namespace Editor
     void EditorLayer::InstallScriptHooks()
     {
         // What C# editor extensions reach (EditorApi.cs): the editor's controls, its selection and undo.
+        // In the Inspector's property grid (custom Inspectors, property drawers) each control takes a row like the
+        // built-in fields: its label on the left, the control filling the value column (SameLine keeps the next
+        // control in the row). In windows they are plain controls with their label beside them.
         CSharpRuntime::EditorHooks hooks;
-        hooks.Gui = [](int op, const char* label, float* v, int n) -> int {
+        static bool s_SameRow = false;
+        auto row = [](const char* label, bool labelled = true) -> std::string {
+            if (!ImGui::GetCurrentTable()) return label;
+            if (s_SameRow) ImGui::SameLine();
+            else UI::PropertyLabel(labelled ? label : "");
+            s_SameRow = false;
+            return labelled ? std::string("##") + label : std::string(label);
+        };
+        hooks.Gui = [row](int op, const char* label, float* v, int n) -> int {
+            bool grid = ImGui::GetCurrentTable() != nullptr;
             switch (op)
             {
-            case 0: ImGui::TextUnformatted(label); return 0;
-            case 1: return ImGui::Button(label) ? 1 : 0;
+            case 0: row("", false); ImGui::TextUnformatted(label); return 0;
+            case 1: return ImGui::Button(row(label, false).c_str()) ? 1 : 0;
             case 2:
             {
                 bool b = n > 0 && v[0] != 0.0f;
-                bool changed = ImGui::Checkbox(label, &b);
+                bool changed = ImGui::Checkbox(row(label).c_str(), &b);
                 if (n > 0) v[0] = b ? 1.0f : 0.0f;
                 return changed ? 1 : 0;
             }
-            case 3: return n > 0 && ImGui::DragFloat(label, v, 0.05f) ? 1 : 0;
+            case 3: return n > 0 && ImGui::DragFloat(row(label).c_str(), v, 0.05f) ? 1 : 0;
             case 4:
             {
                 int i = n > 0 ? (int)v[0] : 0;
-                bool changed = ImGui::DragInt(label, &i);
+                bool changed = ImGui::DragInt(row(label).c_str(), &i);
                 if (n > 0) v[0] = (float)i;
                 return changed ? 1 : 0;
             }
-            case 5: return n >= 3 && ImGui::SliderFloat(label, v, v[1], v[2]) ? 1 : 0;
-            case 6: return n >= 3 && ImGui::DragFloat3(label, v, 0.05f) ? 1 : 0;
-            case 7: return n >= 4 && ImGui::ColorEdit4(label, v) ? 1 : 0;
+            case 5: return n >= 3 && ImGui::SliderFloat(row(label).c_str(), v, v[1], v[2]) ? 1 : 0;
+            case 6: return n >= 3 && ImGui::DragFloat3(row(label).c_str(), v, 0.05f) ? 1 : 0;
+            case 7: return n >= 4 && ImGui::ColorEdit4(row(label).c_str(), v) ? 1 : 0;
             case 8:
-                if (*label) ImGui::SeparatorText(label);
+                if (grid)
+                {
+                    // A heading row, as a field's [Header].
+                    s_SameRow = false;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, UI::AccentText());
+                    ImGui::TextUnformatted(label);
+                    ImGui::PopStyleColor();
+                }
+                else if (*label) ImGui::SeparatorText(label);
                 else ImGui::Separator();
                 return 0;
-            case 9: ImGui::SameLine(); return 0;
-            case 10: ImGui::Spacing(); return 0;
+            case 9:
+                if (grid) s_SameRow = true;
+                else ImGui::SameLine();
+                return 0;
+            case 10:
+                if (grid)
+                {
+                    s_SameRow = false;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                }
+                ImGui::Spacing();
+                return 0;
             }
             return 0;
         };
-        hooks.Text = [](const char* label, const std::string& text) {
+        hooks.Text = [row](const char* label, const std::string& text) {
             std::string edited = text;
-            ImGui::InputText(label, &edited);
+            ImGui::InputText(row(label).c_str(), &edited);
             return edited;
+        };
+        // Pickers: the Inspector's own fields (a row of the grid, or a one-row grid of their own in a window).
+        auto picker = [](const char* label, const std::function<void()>& draw) {
+            s_SameRow = false;
+            if (ImGui::GetCurrentTable()) draw();
+            else if (UI::BeginProperties(label))
+            {
+                draw();
+                UI::EndProperties();
+            }
+        };
+        hooks.EntityField = [this, picker](const char* label, Entity e) {
+            picker(label, [&] { UI::EntityField(label, e, m_Ctx.ActiveScene()); });
+            return e;
+        };
+        hooks.AssetField = [picker](int kind, const char* label, uint64_t guid) {
+            const AssetType types[] = { AssetType::None, AssetType::Prefab, AssetType::Texture, AssetType::Material, AssetType::Mesh, AssetType::Audio };
+            AssetHandle handle(guid);
+            if (kind > 0 && kind < 6) picker(label, [&] { UI::AssetField(label, handle, types[kind]); });
+            return (uint64_t)handle;
         };
         hooks.Selection = [this](int op, Entity e, const char* text) -> Entity {
             Scene& scene = m_Ctx.ActiveScene();

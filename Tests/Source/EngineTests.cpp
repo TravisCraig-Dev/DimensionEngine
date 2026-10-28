@@ -7414,6 +7414,15 @@ namespace
                 controls.push_back(std::string("text:") + label);
                 return text;
             };
+            Entity pickEntity = Entity::Null(); // what the entity picker "picks" (null: leaves the value)
+            hooks.EntityField = [&](const char* label, Entity value) {
+                controls.push_back(std::string("entity:") + label);
+                return pickEntity.IsNull() ? value : pickEntity;
+            };
+            hooks.AssetField = [&](int kind, const char* label, uint64_t value) {
+                controls.push_back("asset" + std::to_string(kind) + ":" + label);
+                return value;
+            };
             CSharpRuntime::SetEditorHooks(hooks);
             if (lineUp && marker && window)
             {
@@ -7425,8 +7434,15 @@ namespace
                 CHECK(std::find(controls.begin(), controls.end(), "5:Spacing") != controls.end() &&
                       std::find(controls.begin(), controls.end(), "text:Name") != controls.end() &&
                       std::find(controls.begin(), controls.end(), "1:Line Up Selected") != controls.end());
+                CHECK(std::find(controls.begin(), controls.end(), "entity:Object") != controls.end() &&
+                      std::find(controls.begin(), controls.end(), "asset1:Marker Prefab") != controls.end()); // the pickers
                 CSharpRuntime::CallEditorItem(marker->Id, false, edited);
                 CHECK(selection.size() == 1 && edited.IsValid(selection[0]) && edited.GetRegistry().Get<TagComponent>(selection[0]).Name == "Marker");
+                // Picking an object in the window's entity field selects it.
+                pickEntity = edited.CreateEntity("Picked");
+                CSharpRuntime::CallEditorItem(window->Id, true, edited);
+                CHECK(selection.size() == 1 && selection[0] == pickEntity);
+                pickEntity = Entity::Null();
             }
             // Custom Inspectors (SpinnerInspector.cs): Spinner's draws its presets and then the usual fields (not the
             // hidden ones) from the saved values; a clicked preset comes back into them. The Point Light's draws below
@@ -7463,7 +7479,70 @@ namespace
                 CSharpRuntime::InspectComponent(lightInspector->Id, edited, host);
                 CHECK(undos == undosBefore + 1 && Near(edited.GetRegistry().Get<TransformComponent>(host).Position.y, 3.0f));
             }
+            // Asset fields and property drawers (PrefabDropper.cs): a Prefab field registers as a prefab picker; the
+            // [Percent] field, and only it, has a drawer, which draws it as a 0-100 slider and stores 0-1.
+            const ScriptInfo* dropper = ScriptRegistry::Find("Game.PrefabDropper");
+            CHECK(dropper != nullptr);
+            if (dropper)
+            {
+                const FieldInfo* prefabField = fieldOf(dropper, "Prefab");
+                CHECK(prefabField && prefabField->Type == FieldType::Prefab && prefabField->Tooltip == "What to drop");
+                auto instance = dropper->Create();
+                size_t chance = 0;
+                for (size_t k = 0; k < dropper->Fields.size(); ++k)
+                {
+                    if (dropper->Fields[k].Name == "Chance") chance = k;
+                    CHECK(CSharpRuntime::HasFieldDrawer(*instance, k) == (dropper->Fields[k].Name == "Chance"));
+                }
+                Entity host = edited.CreateEntity("Dropper");
+                hooks.Gui = [&](int op, const char* label, float* v, int n) -> int {
+                    controls.push_back(std::to_string(op) + ":" + label);
+                    if (op == 5 && n >= 3 && std::string(label) == "Chance %")
+                    {
+                        CHECK(Near(v[0], 75.0f) && Near(v[2], 100.0f)); // shown as a percentage
+                        v[0] = 40.0f;
+                    }
+                    return 0;
+                };
+                CSharpRuntime::SetEditorHooks(hooks);
+                controls.clear();
+                CHECK(CSharpRuntime::DrawScriptField(*instance, chance, edited, host));
+                CHECK(controls.size() == 1 && controls[0] == "5:Chance %");
+                CHECK(Near(*static_cast<float*>(dropper->Fields[chance].Access(dropper->ToObject(instance.get()))), 0.4f));
+                CHECK(!CSharpRuntime::DrawScriptField(*instance, 0, edited, host)); // no drawer: nothing drawn or changed
+            }
             CSharpRuntime::SetEditorHooks({});
+        }
+        {
+            // A Prefab field at play time: the dropper instantiates the Ball prefab picked for it, every Interval.
+            AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+            AssetHandle ball = AssetManager::GetHandle(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Prefabs/Ball.prefab");
+            CHECK(ball.IsValid());
+            Scene drops("Drops");
+            Entity spot = drops.CreateEntity("Spot");
+            drops.GetRegistry().Get<TransformComponent>(spot).Position = { 5.0f, 0.0f, 0.0f };
+            auto& script = drops.GetRegistry().Emplace<ScriptComponent>(spot).Add("Game.PrefabDropper");
+            script.Fields["Prefab"] = (uint64_t)ball;
+            script.Fields["Interval"] = 0.5f;
+            script.Fields["Chance"] = 1.0f;
+            drops.UpdateTransforms();
+            auto rt = drops.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 66; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); // 1.1 s: two drops
+            int balls = 0;
+            glm::vec3 at{ 0.0f };
+            rt->GetRegistry().EachEntity([&](Entity e) {
+                auto* link = rt->GetRegistry().TryGet<PrefabLinkComponent>(e);
+                if (link && link->Prefab == ball && link->IsRoot)
+                {
+                    ++balls;
+                    at = rt->GetRegistry().Get<TransformComponent>(e).Position;
+                }
+            });
+            CHECK(balls == 2);
+            CHECK(Near(at.x, 5.0f)); // above the spot (then falling)
+            rt->OnRuntimeStop();
+            AssetManager::Shutdown();
         }
         CSharpRuntime::UnloadScripts();
         CHECK(ScriptRegistry::Find("Game.Spinner") == nullptr && CSharpRuntime::GetEditorItems().empty());

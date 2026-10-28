@@ -48,6 +48,31 @@ namespace Dimension
             public Inspector Inspector;
         }
         private static readonly List<EditorItem> s_EditorItems = new();
+        // Property drawers by the attribute or field type they draw.
+        private static readonly Dictionary<Type, PropertyDrawer> s_Drawers = new();
+
+        private static void RegisterDrawers(Assembly assembly)
+        {
+            foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(PropertyDrawer))).OrderBy(t => t.FullName))
+                if (type.GetCustomAttribute<CustomPropertyDrawerAttribute>() is { Target: not null } target)
+                    s_Drawers[target.Target] = (PropertyDrawer)Activator.CreateInstance(type);
+        }
+
+        // The drawer for a field: its first attribute with one, else its type's (null: none).
+        private static PropertyDrawer DrawerFor(FieldInfo f)
+        {
+            foreach (Attribute a in f.GetCustomAttributes())
+                if (s_Drawers.TryGetValue(a.GetType(), out var byAttribute))
+                {
+                    byAttribute.Field = f;
+                    byAttribute.Attribute = a;
+                    return byAttribute;
+                }
+            if (!s_Drawers.TryGetValue(f.FieldType, out var byType)) return null;
+            byType.Field = f;
+            byType.Attribute = null;
+            return byType;
+        }
 
         private static void RegisterEditorItems(Assembly assembly)
         {
@@ -121,14 +146,7 @@ namespace Dimension
                 Native.CurrentScene = scene;
                 EditorItem item = s_EditorItems[id];
                 item.Inspector ??= (Inspector)Activator.CreateInstance(item.InspectorType);
-                Behaviour target = null;
-                if (handle != IntPtr.Zero) target = (Behaviour)GCHandle.FromIntPtr(handle).Target;
-                else if (classUtf8 != null && s_Classes.TryGetValue(Native.FromUtf8(classUtf8), out var cls))
-                {
-                    target = (Behaviour)Activator.CreateInstance(cls.Type);
-                    target.Entity = new Entity(scene, entity);
-                    if (fieldsUtf8 != null) ApplyFields(target, cls, Native.FromUtf8(fieldsUtf8));
-                }
+                Behaviour target = TargetFor(handle, classUtf8, fieldsUtf8, scene, entity);
                 item.Inspector.Target = target;
                 item.Inspector.Entity = new Entity(scene, entity);
                 item.Inspector.OnInspectorGUI();
@@ -139,6 +157,40 @@ namespace Dimension
                 Debug.LogError($"Custom Inspector failed: {(e as TargetInvocationException)?.InnerException ?? e}");
                 return null;
             }
+        }
+
+        // Draws field `index` of a script with its property drawer (the script as Inspect finds it); returns the values
+        // after drawing.
+        [UnmanagedCallersOnly]
+        internal static byte* DrawField(int index, IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
+        {
+            try
+            {
+                Native.CurrentScene = scene;
+                Behaviour target = TargetFor(handle, classUtf8, fieldsUtf8, scene, entity);
+                if (target == null || !s_Classes.TryGetValue(target.GetType().FullName, out var cls) || index < 0 || index >= cls.Fields.Count) return null;
+                FieldInfo f = cls.Fields[index];
+                if (DrawerFor(f) is not { } drawer) return null;
+                object value = drawer.OnGUI(f.Name, f.GetValue(target));
+                if (value != null && value.GetType() == f.FieldType) f.SetValue(target, value);
+                return FieldsJson(target);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Property drawer failed: {(e as TargetInvocationException)?.InnerException ?? e}");
+                return null;
+            }
+        }
+
+        // The live script (`handle`), or one made from its class and saved values.
+        private static Behaviour TargetFor(IntPtr handle, byte* classUtf8, byte* fieldsUtf8, IntPtr scene, ulong entity)
+        {
+            if (handle != IntPtr.Zero) return (Behaviour)GCHandle.FromIntPtr(handle).Target;
+            if (classUtf8 == null || !s_Classes.TryGetValue(Native.FromUtf8(classUtf8), out var cls)) return null;
+            var target = (Behaviour)Activator.CreateInstance(cls.Type);
+            target.Entity = new Entity(scene, entity);
+            if (fieldsUtf8 != null) ApplyFields(target, cls, Native.FromUtf8(fieldsUtf8));
+            return target;
         }
 
         // Field values (a JSON array in registration order, entities as packed ids) into a script.
@@ -162,12 +214,13 @@ namespace Dimension
                     t == typeof(Vector3) ? new Vector3(F(v, 0), F(v, 1), F(v, 2)) :
                     t == typeof(Vector4) ? new Vector4(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
                     t == typeof(Color) ? new Color(F(v, 0), F(v, 1), F(v, 2), F(v, 3)) :
+                    typeof(IAssetReference).IsAssignableFrom(t) ? Activator.CreateInstance(t, v.GetUInt64()) :
                     (object)new Entity(b.Entity.Scene, v.GetUInt64());
                 f.SetValue(b, value);
             }
         }
 
-        // A script's fields with the controls the Inspector uses for them (entities shown, not edited).
+        // A script's fields with the controls the Inspector uses for them (and their property drawers).
         internal static void DrawDefaultFields(Behaviour b)
         {
             if (b == null || !s_Classes.TryGetValue(b.GetType().FullName, out var cls)) return;
@@ -177,7 +230,7 @@ namespace Dimension
                 if (f.GetCustomAttribute<HeaderAttribute>() is { } header) EditorGUI.Separator(header.Text);
                 object v = f.GetValue(b);
                 var range = f.GetCustomAttribute<RangeAttribute>();
-                object edited = v switch
+                object edited = DrawerFor(f) is { } drawer ? drawer.OnGUI(f.Name, v) : v switch
                 {
                     float x when range != null => EditorGUI.Slider(f.Name, x, range.Min, range.Max),
                     float x => EditorGUI.FloatField(f.Name, x),
@@ -188,21 +241,27 @@ namespace Dimension
                     Vector3 x => EditorGUI.Vector3Field(f.Name, x),
                     Vector4 x => ToVector4(EditorGUI.ColorField(f.Name, new Color(x.X, x.Y, x.Z, x.W))),
                     Color x => EditorGUI.ColorField(f.Name, x),
+                    Entity x => EditorGUI.EntityField(f.Name, x),
+                    IAssetReference x => EditorGUI.AssetField(f.Name, x),
                     _ => v,
                 };
-                if (v is Entity e) EditorGUI.Label($"{f.Name}: {(e.IsValid ? e.Name : "None")}");
-                else if (!Equals(edited, v)) f.SetValue(b, edited);
+                if (edited != null && edited.GetType() == f.FieldType && !Equals(edited, v)) f.SetValue(b, edited);
             }
         }
         private static Vector2 ToVector2(Vector3 v) => new(v.X, v.Y);
         private static Vector4 ToVector4(Color c) => new(c.R, c.G, c.B, c.A);
 
         private static readonly Type[] s_Supported =
-            { typeof(float), typeof(int), typeof(bool), typeof(string), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Color), typeof(Entity) };
+        {
+            typeof(float), typeof(int), typeof(bool), typeof(string), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Color), typeof(Entity),
+            typeof(Prefab), typeof(Texture), typeof(Material), typeof(Mesh), typeof(AudioClip),
+        };
 
         private static string TypeName(Type t) =>
             t == typeof(float) ? "Float" : t == typeof(int) ? "Int" : t == typeof(bool) ? "Bool" : t == typeof(string) ? "String" :
-            t == typeof(Vector2) ? "Vec2" : t == typeof(Vector3) ? "Vec3" : t == typeof(Vector4) ? "Vec4" : t == typeof(Color) ? "Color4" : "Entity";
+            t == typeof(Vector2) ? "Vec2" : t == typeof(Vector3) ? "Vec3" : t == typeof(Vector4) ? "Vec4" : t == typeof(Color) ? "Color4" :
+            t == typeof(Prefab) ? "Prefab" : t == typeof(Texture) ? "Texture" : t == typeof(Material) ? "Material" : t == typeof(Mesh) ? "Mesh" :
+            t == typeof(AudioClip) ? "Audio" : "Entity";
 
         private static void WriteDefault(Utf8JsonWriter w, object v)
         {
@@ -216,6 +275,7 @@ namespace Dimension
                 case Vector3 a: w.WriteStartArray(); w.WriteNumberValue(a.X); w.WriteNumberValue(a.Y); w.WriteNumberValue(a.Z); w.WriteEndArray(); break;
                 case Vector4 a: w.WriteStartArray(); w.WriteNumberValue(a.X); w.WriteNumberValue(a.Y); w.WriteNumberValue(a.Z); w.WriteNumberValue(a.W); w.WriteEndArray(); break;
                 case Color c: w.WriteStartArray(); w.WriteNumberValue(c.R); w.WriteNumberValue(c.G); w.WriteNumberValue(c.B); w.WriteNumberValue(c.A); w.WriteEndArray(); break;
+                case IAssetReference a: w.WriteNumberValue(a.Guid); break;
                 default: w.WriteNullValue(); break;
             }
         }
@@ -247,6 +307,7 @@ namespace Dimension
                 using var dll = new MemoryStream(File.ReadAllBytes(path));
                 using var symbols = File.Exists(pdb) ? new MemoryStream(File.ReadAllBytes(pdb)) : null;
                 Assembly assembly = s_Context.LoadFromStream(dll, symbols);
+                RegisterDrawers(assembly); // before the classes: their fields say which have one
 
                 foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(Behaviour))).OrderBy(t => t.FullName))
                 {
@@ -280,6 +341,7 @@ namespace Dimension
                             if (f.GetCustomAttribute<TooltipAttribute>() is { } tip) w.WriteString("tooltip", tip.Text);
                             if (f.GetCustomAttribute<HeaderAttribute>() is { } header) w.WriteString("header", header.Text);
                             if (f.GetCustomAttribute<HideInInspectorAttribute>() != null) w.WriteBoolean("hidden", true);
+                            if (DrawerFor(f) != null) w.WriteBoolean("drawer", true);
                             w.WriteEndObject();
                         }
                         w.WriteEndArray();
@@ -308,6 +370,7 @@ namespace Dimension
         {
             s_Classes.Clear();
             s_EditorItems.Clear();
+            s_Drawers.Clear();
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);
@@ -371,6 +434,7 @@ namespace Dimension
                     t == typeof(Vector3) ? *(Vector3*)value :
                     t == typeof(Vector4) ? *(Vector4*)value :
                     t == typeof(Color) ? *(Color*)value :
+                    typeof(IAssetReference).IsAssignableFrom(t) ? Activator.CreateInstance(t, *(ulong*)value) :
                     (object)new Entity(b.Entity.Scene, *(ulong*)value);
                 f.SetValue(b, v);
             }

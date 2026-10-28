@@ -107,6 +107,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, ulong, byte*, ulong> EditorSelection;
         public delegate* unmanaged<byte*, void> EditorUndo;
         public delegate* unmanaged<byte*, void> RegisterEditorItem;
+        // A picker: kind 0 an entity (packed id), else an asset GUID of that kind (see EditorGUI.AssetKind).
+        public delegate* unmanaged<int, byte*, ulong, ulong> EditorGuiRef;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
@@ -127,6 +129,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, int, IntPtr, void> EditorCall; // 0 run menu item, 1 window OnGUI; its id; the scene
         // A custom Inspector: id, live script (or 0), class, saved values (JSON), scene, entity -> values after (JSON)
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> Inspect;
+        // A field's property drawer: field index, then as Inspect
+        public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> DrawField;
     }
 
     internal static unsafe class Native
@@ -181,6 +185,7 @@ namespace Dimension.Interop
                 api->Debugger = &ScriptHost.DebuggerControl;
                 api->EditorCall = &ScriptHost.EditorCall;
                 api->Inspect = &ScriptHost.Inspect;
+                api->DrawField = &ScriptHost.DrawField;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }
