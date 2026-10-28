@@ -13,8 +13,9 @@ namespace Editor
     // Window > Frame Debugger (like Unity's): while enabled, the chosen view's frame as a list of its draws, pass by
     // pass (shadows, depth prepass, opaque meshes, sky, sprites, particles, transparent meshes, decals, UI). Picking a
     // draw (or stepping with the arrows) shows the view as it stood right after it: the later draws are left out
-    // (effects and post processing still run). The draw's object can be selected in the Hierarchy.
-    void FrameDebuggerPanel::OnImGui(bool* open, const std::vector<FrameDebugEvent>& events)
+    // (effects and post processing still run). The draw's object can be selected in the Hierarchy; a mesh draw shows its
+    // material values, and the target it drew into (a shadow map, the HDR image) is pictured as it stood then.
+    void FrameDebuggerPanel::OnImGui(bool* open, const std::vector<FrameDebugEvent>& events, uint64_t preview, glm::uvec2 previewSize)
     {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowSize(ImVec2(620.0f, 560.0f), ImGuiCond_FirstUseEver);
@@ -104,12 +105,63 @@ namespace Editor
             row("Object", at.EntityId ? nameOf(at.EntityId) : std::string("-"));
             row("Triangles", std::to_string(at.Triangles));
             row("Instances", std::to_string(at.Instances));
+            if (at.HasMaterial)
+            {
+                // Material values as drawn (colors linear).
+                char text[96];
+                static const char* blends[] = { "Opaque", "Cutout", "Transparent" };
+                row("Material", std::string(at.Kind) + ", " + blends[std::min<uint32_t>(at.BlendMode, 2)]);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("Base Color");
+                ImGui::TableNextColumn();
+                ImGui::ColorButton("##base", ImVec4(at.BaseColor.r, at.BaseColor.g, at.BaseColor.b, at.BaseColor.a), ImGuiColorEditFlags_AlphaPreview, ImVec2(14, 14));
+                ImGui::SameLine();
+                std::snprintf(text, sizeof(text), "%.3f, %.3f, %.3f, %.3f%s", at.BaseColor.r, at.BaseColor.g, at.BaseColor.b, at.BaseColor.a, at.BaseMap ? "  x texture" : "");
+                ImGui::TextUnformatted(text);
+                std::snprintf(text, sizeof(text), "%.2f / %.2f", at.Metallic, at.Roughness);
+                row("Metallic / Roughness", text);
+                if (glm::length(glm::vec3(at.Emission)) > 0.0f)
+                {
+                    std::snprintf(text, sizeof(text), "%.2f, %.2f, %.2f", at.Emission.r, at.Emission.g, at.Emission.b);
+                    row("Emission", text);
+                }
+                if (at.NormalMap)
+                {
+                    std::snprintf(text, sizeof(text), "strength %.2f", at.NormalStrength);
+                    row("Normal Map", text);
+                }
+                if (at.BlendMode == 1)
+                {
+                    std::snprintf(text, sizeof(text), "%.2f", at.AlphaCutoff);
+                    row("Alpha Cutoff", text);
+                }
+            }
             ImGui::EndTable();
         }
         Entity picked = entityOf(at.EntityId);
         ImGui::BeginDisabled(picked.IsNull());
         if (ImGui::Button("Select Object")) m_Ctx.Select(picked);
         ImGui::EndDisabled();
+        if (preview && previewSize.x > 0 && previewSize.y > 0)
+        {
+            // The target as this draw left it.
+            ImGui::SameLine();
+            ImGui::Checkbox("Show Target", &m_ShowTarget);
+            if (m_ShowTarget)
+            {
+                float w = std::min(ImGui::GetContentRegionAvail().x, 360.0f);
+                float h = w * (float)previewSize.y / (float)previewSize.x;
+                if (h > 240.0f)
+                {
+                    w *= 240.0f / h;
+                    h = 240.0f;
+                }
+                ImGui::Image(ImTextureRef((ImTextureID)preview), ImVec2(w, h));
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s\n%u x %u", at.Target.c_str(), previewSize.x, previewSize.y);
+            }
+        }
 
         // Every draw, under its pass.
         ImGui::SeparatorText("Draws");

@@ -894,7 +894,10 @@ namespace Editor
         if (m_ShowNavigation) m_Navigation->OnImGui(&m_ShowNavigation);
         if (m_ShowProfiler) m_Profiler->OnImGui(&m_ShowProfiler);
         if (m_ShowFrameDebugger)
-            m_FrameDebugger->OnImGui(&m_ShowFrameDebugger, m_FrameDebugger->View() == 0 ? m_SceneRenderer.GetFrameEvents() : m_GameRenderer.GetFrameEvents());
+        {
+            SceneRenderer& debugged = m_FrameDebugger->View() == 0 ? m_SceneRenderer : m_GameRenderer;
+            m_FrameDebugger->OnImGui(&m_ShowFrameDebugger, debugged.GetFrameEvents(), debugged.GetFramePreview(), debugged.GetFramePreviewSourceSize());
+        }
         if (m_ShowStats) DrawStats();
         DrawGameView();
         DrawSceneView();

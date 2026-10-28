@@ -159,6 +159,7 @@ namespace Dimension
     // With Rule it is laid out by itself where the ground's height (0-1 of the terrain's Height) and slope (degrees)
     // fall in their ranges, fading out over Height Fade and Slope Fade past them and broken into patches by Noise
     // (0-1; about Noise Scale meters across). Later layers cover earlier ones, the first is the ground under them all.
+    // Trees and Grass (0-1): how thickly the terrain's tree and grass details grow on it by themselves (painting adds).
     struct TerrainLayer
     {
         std::string Name = "Layer";
@@ -175,6 +176,8 @@ namespace Dimension
         float SlopeFade = 4.0f;
         float Noise = 0.0f;
         float NoiseScale = 8.0f;
+        float Trees = 0.0f;
+        float Grass = 0.0f;
     };
     inline std::vector<TerrainLayer> DefaultTerrainLayers()
     {
@@ -212,9 +215,10 @@ namespace Dimension
         // Holes (caves, tunnels, a well): one bit per sample, base64; triangles touching a hole sample neither render
         // nor collide. Empty = none.
         std::string PaintedHoles;
-        // Details: trees (bushes, rocks) and grass tufts scattered where the detail brushes painted them, as instances
-        // of a mesh: Density per 100 m2 where painted at full strength, each turned at random and sized between the
-        // Min and Max Scale, only on ground flatter than Max Slope. Trees can collide as upright capsules.
+        // Details: trees (bushes, rocks) and grass tufts scattered where the detail brushes painted them, and where the
+        // layers they grow on are (each layer's Trees and Grass), as instances of a mesh: Density per 100 m2 at full
+        // strength, each turned at random and sized between the Min and Max Scale, only on ground flatter than Max
+        // Slope. Trees can collide as upright capsules.
         AssetHandle TreeMesh = AssetHandle::None(), TreeMaterial = AssetHandle::None();
         float TreeDensity = 3.0f;
         glm::vec2 TreeScale{ 0.8f, 1.25f };

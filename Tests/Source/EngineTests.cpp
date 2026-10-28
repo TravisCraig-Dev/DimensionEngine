@@ -3997,6 +3997,33 @@ namespace
             CHECK(bare > 20 && full > 20);
         }
 
+        // Details growing by layer: grass on the first layer (nothing painted), none where a rock rule (slopes over 12
+        // degrees) covers it (well past that); with Grass 0 again, none at all.
+        {
+            TerrainComponent s = t;
+            s.Layers.resize(2);
+            s.Layers[0].Grass = 1.0f;
+            s.Layers[1].Rule = true;
+            s.Layers[1].SlopeRange = { 12.0f, 90.0f };
+            s.Layers[1].SlopeFade = 1.0f;
+            s.GrassDensity = 20.0f;
+            s.GrassMaxSlope = 90.0f;
+            std::vector<float> h = Terrain::BuildHeights(s);
+            Terrain::DetailInstances grown = Terrain::BuildDetails(s, h);
+            CHECK(grown.Grass.size() > 200 && grown.Trees.empty());
+            int onSteep = 0;
+            for (const glm::mat4& g : grown.Grass)
+            {
+                float x = g[3].x, z = g[3].z, d = 0.5f;
+                float dx = (Terrain::HeightAt(s, h, x + d, z) - Terrain::HeightAt(s, h, x - d, z)) / (2.0f * d);
+                float dz = (Terrain::HeightAt(s, h, x, z + d) - Terrain::HeightAt(s, h, x, z - d)) / (2.0f * d);
+                onSteep += glm::degrees(std::atan(std::sqrt(dx * dx + dz * dz))) > 20.0f; // well past the rule (samples blend near it)
+            }
+            CHECK(onSteep <= (int)grown.Grass.size() / 50);
+            s.Layers[0].Grass = 0.0f;
+            CHECK(Terrain::BuildDetails(s, h).Grass.empty());
+        }
+
         // The layer list saves as an array of objects, and a terrain saved with the older six fixed layers loads them
         // into the list.
         {

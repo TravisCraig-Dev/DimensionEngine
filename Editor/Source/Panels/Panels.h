@@ -122,7 +122,8 @@ namespace Editor
     {
     public:
         explicit FrameDebuggerPanel(EditorContext& ctx) : m_Ctx(ctx) {}
-        void OnImGui(bool* open, const std::vector<FrameDebugEvent>& events);
+        // `preview`: the picked draw's target as an ImGui texture (0 = none) and that target's size.
+        void OnImGui(bool* open, const std::vector<FrameDebugEvent>& events, uint64_t preview, glm::uvec2 previewSize);
         // SceneRenderOptions::FrameDebugStop for a view (0 Scene, 1 Game): -2 unless it is the one being debugged.
         int StopFor(int view) const;
         int View() const { return m_View; }
@@ -140,6 +141,7 @@ namespace Editor
         int m_View = 0;
         int m_Event = -1; // the last draw shown (-1 all)
         bool m_ScrollTo = false;
+        bool m_ShowTarget = true;
     };
 
     class NavigationPanel

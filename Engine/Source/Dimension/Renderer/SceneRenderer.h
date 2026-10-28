@@ -55,6 +55,13 @@ namespace Dimension
         std::string Pass, Target, What;
         uint32_t EntityId = 0;
         uint32_t Instances = 1, Triangles = 0;
+        // Meshes: the material values drawn with (linear colors).
+        bool HasMaterial = false;
+        glm::vec4 BaseColor{ 1.0f }, Emission{ 0.0f };
+        float Metallic = 0.0f, Roughness = 1.0f, AlphaCutoff = 0.0f, NormalStrength = 1.0f;
+        uint32_t BlendMode = 0;             // 0 opaque, 1 cutout, 2 transparent
+        bool BaseMap = false, NormalMap = false;
+        const char* Kind = "Mesh";          // Mesh, Terrain, Fur Shell, Water
     };
 
     // Directional shadow cascades for one frame.
@@ -161,6 +168,10 @@ namespace Dimension
         const RenderStats& GetStats() const { return m_Stats; }
         // The draws of the last frame rendered with SceneRenderOptions::FrameDebugStop above -2, in order.
         const std::vector<FrameDebugEvent>& GetFrameEvents() const { return m_FrameEvents; }
+        // That frame's picture of the target its last kept draw went into (shadow maps, the HDR image), as an ImGui
+        // texture (0 = none for that target), and its size.
+        uint64_t GetFramePreview() const { return m_FramePreviewShown ? m_FramePreviewImGui : 0; }
+        glm::uvec2 GetFramePreviewSourceSize() const { return m_FramePreviewSize; }
 
         // GPU instancing: identical opaque meshes (same mesh, sub-mesh, material and pipeline) are drawn with one
         // instanced call. On by default; turning it off is useful for comparisons.
@@ -340,8 +351,18 @@ namespace Dimension
         bool m_FrameCapturing = false;
         int m_FrameStop = -1;
         std::vector<FrameDebugEvent> m_FrameEvents;
-        // Records a draw (while capturing); false when it falls after the stop and is to be skipped.
-        bool DebugDraw(const char* pass, const char* target, const std::string& what, uint32_t entity, uint32_t instances, uint32_t triangles);
+        // Records a draw (while capturing); false when it falls after the stop and is to be skipped. `material` is a
+        // mesh draw's material address (its values were kept when it was uploaded).
+        bool DebugDraw(const char* pass, const char* target, const std::string& what, uint32_t entity, uint32_t instances, uint32_t triangles,
+                       uint64_t material = 0);
+        std::unordered_map<uint64_t, FrameDebugEvent> m_FrameMaterials; // by material address: the values (capturing)
+        const char* m_ShadowTargetName = "Shadow Map";
+        // The preview picture (RGBA8, registered for ImGui) and what it shows.
+        Scope<Image> m_FramePreview;
+        uint64_t m_FramePreviewImGui = 0;
+        bool m_FramePreviewShown = false;
+        glm::uvec2 m_FramePreviewSize{ 0 };
+        void RenderFramePreview(VkCommandBuffer cmd, SceneRenderTarget& target);
         void BakeProbe(VkCommandBuffer cmd, Scene& scene, ProbeResources& gpu, const glm::vec3& position, uint32_t resolution);
 
         // GGX-prefiltered copy of the HDR sky texture for reflections (mip m = roughness m / (mips - 1)), rebuilt

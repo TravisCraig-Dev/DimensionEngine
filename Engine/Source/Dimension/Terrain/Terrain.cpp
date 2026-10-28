@@ -660,9 +660,33 @@ namespace Dimension::Terrain
     {
         DetailInstances out;
         std::vector<uint8_t> map = DetailMap(terrain);
-        if (map.empty()) return out;
-        std::vector<uint8_t> holes = HoleMap(terrain);
+        // Layers that grow details by themselves: per sample, the layers' weights times their Trees and Grass, kept
+        // where more than what was painted.
+        bool grows = false;
+        for (int k = 0; k < LayerCount(terrain) && k < (int)terrain.Layers.size(); ++k) grows |= terrain.Layers[k].Trees > 0.0f || terrain.Layers[k].Grass > 0.0f;
+        if (map.empty() && !grows) return out;
         int n = SampleCount(terrain);
+        if (map.empty()) map.assign((size_t)n * n * 2, 0);
+        if (grows && heights.size() == (size_t)n * n)
+        {
+            MeshData mesh = BuildMesh(terrain, heights);
+            std::vector<uint32_t> splat = BuildSplat(terrain, mesh);
+            size_t count = (size_t)n * n;
+            if (splat.size() == count * (size_t)SplatMapCount(terrain))
+                for (size_t i = 0; i < count; ++i)
+                {
+                    float trees = 0.0f, grass = 0.0f;
+                    for (int k = 0; k < LayerCount(terrain) && k < (int)terrain.Layers.size(); ++k)
+                    {
+                        float w = (splat[(size_t)(k / 4) * count + i] >> (k % 4 * 8) & 255) / 255.0f;
+                        trees += w * terrain.Layers[k].Trees;
+                        grass += w * terrain.Layers[k].Grass;
+                    }
+                    map[i * 2] = std::max(map[i * 2], (uint8_t)std::clamp((int)std::lround(trees * 255.0f), 0, 255));
+                    map[i * 2 + 1] = std::max(map[i * 2 + 1], (uint8_t)std::clamp((int)std::lround(grass * 255.0f), 0, 255));
+                }
+        }
+        std::vector<uint8_t> holes = HoleMap(terrain);
         glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
         glm::vec2 step = size / (float)(n - 1);
         auto densityAt = [&](float x, float z, int kind) {
@@ -717,6 +741,11 @@ namespace Dimension::Terrain
             mix(f, sizeof(float));
         mix(terrain.PaintedDetails.data(), terrain.PaintedDetails.size());
         mix(terrain.EditHoles.data(), terrain.EditHoles.size());
+        for (const TerrainLayer& l : terrain.Layers)
+        {
+            mix(&l.Trees, sizeof(float));
+            mix(&l.Grass, sizeof(float));
+        }
         static std::mutex mutex;
         static std::unordered_map<uint64_t, DetailInstances> cache;
         std::lock_guard lock(mutex);

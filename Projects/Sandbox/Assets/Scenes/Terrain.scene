@@ -319,12 +319,20 @@
                 22
               ],
               "Noise": 0.6,
-              "Noise Scale": 10
+              "Noise Scale": 10,
+              "Trees": 0.8
             }
           ],
           "Rock Slope": 32,
           "Snow Height": 0.7,
-          "Height Blend": 0.6
+          "Height Blend": 0.6,
+          "Tree Mesh": 2,
+          "Tree Material": 100068,
+          "Tree Density": 2.5,
+          "Tree Scale": [
+            0.6,
+            1.4
+          ]
         }
       }
     },
@@ -1051,7 +1059,7 @@
           ]
         },
         "UI Text": {
-          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: layer rules lay out grass, rock, snow and patchy moss by height, slope and noise, height-blended, rock normal-mapped and triplanar; volumetric fog; TAA)</color>",
+          "Text": "<b>Terrain</b>  <color=#3a4654>(generated height field: layer rules lay out grass, rock, snow and patchy moss by height, slope and noise (bushes growing in the moss), height-blended, rock normal-mapped and triplanar; volumetric fog; TAA)</color>",
           "Font": 0,
           "Font Size": 36,
           "Color": [

@@ -47,6 +47,8 @@
 #include "Dimension/Particles/ParticleSystem.h"
 #include "shaders/Composite.vert.h"
 #include "shaders/Composite.frag.h"
+#include "shaders/FramePreview.frag.h"
+#include "Dimension/ImGui/ImGuiLayer.h"
 #include "shaders/BloomDown.frag.h"
 #include "shaders/BloomUp.frag.h"
 #include "shaders/Fxaa.frag.h"
@@ -391,6 +393,7 @@ namespace Dimension
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
         Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater;
         Pipeline MeshOit, OitComposite; // order-independent transparency
+        Pipeline FramePreview;          // the frame debugger's target pictures
         Pipeline Decals[3]; // by DecalBlend
         Buffer QuadIndices;
         Ref<Texture2D> Icons[IconCount];
@@ -609,6 +612,10 @@ namespace Dimension
         post.FragmentSpirv = kOitComposite_frag;
         post.DebugName = "OitCompositePipeline";
         r.OitComposite = Pipeline(post);
+        post.FragmentSpirv = kFramePreview_frag;
+        post.ColorAttachments = { { SceneRenderTarget::kOutputFormat } };
+        post.DebugName = "FramePreviewPipeline";
+        r.FramePreview = Pipeline(post);
         {
             GraphicsPipelineDesc decal;
             decal.VertexSpirv = kDecal_vert;
@@ -763,6 +770,7 @@ namespace Dimension
         if (m_FrameCapturing)
         {
             m_FrameEvents.clear();
+            m_FrameMaterials.clear();
             m_FrameStop = options.FrameDebugStop;
         }
         // Temporal anti-aliasing renders the game view with a sub-pixel offset that cycles through a Halton sequence;
@@ -1444,6 +1452,7 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetOutput().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         device.EndGpuTimer(cmd, postTimer);
         m_Stats.DrawCalls++;
+        if (m_FrameCapturing) RenderFramePreview(cmd, target);
 
         m_Sprites.clear();
         m_Lines.clear();
@@ -1932,6 +1941,12 @@ namespace Dimension
                                            uint32_t lightCount, const void* uniforms, size_t uniformSize)
     {
         auto& device = RenderDevice::Get();
+        m_ShadowTargetName = "Point Shadow Map";
+        struct Restore
+        {
+            const char*& Name;
+            ~Restore() { Name = "Shadow Map"; }
+        } restore{ m_ShadowTargetName };
         const uint32_t width = kPointShadowTile * 6, height = kPointShadowTile * kMaxPointShadows;
         if (!m_PointShadowMap)
         {
@@ -2021,6 +2036,7 @@ namespace Dimension
         };
 
         std::unordered_map<MaterialKey, VkDeviceAddress, MaterialKeyHash> materialCache;
+        uint32_t whiteIndex = AssetManager::GetWhiteTexture()->GetBindlessIndex();
         auto uploadMaterialGPU = [&](const MaterialGPU& gpu) -> VkDeviceAddress {
             MaterialKey key{ gpu };
             if (auto it = materialCache.find(key); it != materialCache.end()) return it->second;
@@ -2028,6 +2044,23 @@ namespace Dimension
             if (!a) return 0;
             std::memcpy(a.Data, &key.Data, sizeof(MaterialGPU));
             materialCache.emplace(key, a.Address);
+            if (m_FrameCapturing)
+            {
+                // The frame debugger shows these values with the draws that use them.
+                FrameDebugEvent& m = m_FrameMaterials[a.Address];
+                m.HasMaterial = true;
+                m.BaseColor = gpu.BaseColor;
+                m.Emission = glm::vec4(glm::vec3(gpu.Emission), 1.0f);
+                m.Metallic = gpu.Params.x;
+                m.Roughness = gpu.Params.y;
+                m.AlphaCutoff = gpu.Params.z;
+                m.NormalStrength = gpu.Params.w;
+                m.BlendMode = gpu.Flags.x;
+                bool terrain = gpu.Flags.z == 1u;
+                m.BaseMap = !terrain && gpu.Maps.x != whiteIndex;
+                m.NormalMap = !terrain && gpu.Flags.y != 0u;
+                m.Kind = terrain ? "Terrain" : gpu.Flags.w == 1u ? "Fur Shell" : gpu.Flags.w == 2u ? "Water" : "Mesh";
+            }
             return a.Address;
         };
         // Scene view search: everything but the matches drawn dark (their colors, emission and terrain layers).
@@ -2487,12 +2520,61 @@ namespace Dimension
         m_Stats.ListMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - listStart).count();
     }
 
-    bool SceneRenderer::DebugDraw(const char* pass, const char* target, const std::string& what, uint32_t entity, uint32_t instances, uint32_t triangles)
+    bool SceneRenderer::DebugDraw(const char* pass, const char* target, const std::string& what, uint32_t entity, uint32_t instances, uint32_t triangles,
+                                  uint64_t material)
     {
         if (!m_FrameCapturing) return true;
         int index = (int)m_FrameEvents.size();
-        m_FrameEvents.push_back({ pass, target, what, entity, instances, triangles });
+        FrameDebugEvent ev;
+        if (auto it = m_FrameMaterials.find(material); material && it != m_FrameMaterials.end()) ev = it->second;
+        ev.Pass = pass;
+        ev.Target = target;
+        ev.What = what;
+        ev.EntityId = entity;
+        ev.Instances = instances;
+        ev.Triangles = triangles;
+        m_FrameEvents.push_back(std::move(ev));
         return m_FrameStop < 0 || index <= m_FrameStop;
+    }
+
+    void SceneRenderer::RenderFramePreview(VkCommandBuffer cmd, SceneRenderTarget& target)
+    {
+        // The target of the last draw kept: a shadow map (depth) or the HDR image (before tonemapping).
+        m_FramePreviewShown = false;
+        if (m_FrameEvents.empty()) return;
+        const FrameDebugEvent& last = m_FrameEvents[m_FrameStop < 0 ? m_FrameEvents.size() - 1 : std::min<size_t>(m_FrameStop, m_FrameEvents.size() - 1)];
+        uint32_t source = 0, mode = 0;
+        glm::uvec2 size{ 0 };
+        if (last.Target == "Shadow Map" && m_ShadowMap)
+        {
+            source = m_ShadowBindless;
+            size = { kShadowMapSize, kShadowMapSize };
+        }
+        else if (last.Target == "Point Shadow Map" && m_PointShadowMap)
+        {
+            source = m_PointShadowBindless;
+            size = { m_PointShadowMap->GetWidth(), m_PointShadowMap->GetHeight() };
+        }
+        else if (last.Target == "HDR Color" || last.Target == "OIT Accumulation")
+        {
+            source = target.GetHdrBindless();
+            mode = 1;
+            size = { target.GetHdr().GetWidth(), target.GetHdr().GetHeight() };
+        }
+        if (!source) return;
+        if (!m_FramePreview)
+        {
+            m_FramePreview = MakeScope<Image>(ImageDesc{ 512, 512, SceneRenderTarget::kOutputFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1,
+                                                         "FramePreview" });
+            Vk::TransitionImage(cmd, m_FramePreview->GetHandle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_FramePreviewImGui = ImGuiLayer::AddTexture(RenderDevice::Get().GetClampSampler(), m_FramePreview->GetView());
+        }
+        struct { uint32_t Source, Mode; } push{ source, mode };
+        RenderDevice::Get().BindBindless(cmd);
+        FullscreenPass(cmd, *m_FramePreview, false, Renderer::Get().FramePreview, &push, sizeof(push));
+        m_Stats.DrawCalls--; // not the scene's
+        m_FramePreviewShown = true;
+        m_FramePreviewSize = size;
     }
 
     void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass)
@@ -2519,9 +2601,9 @@ namespace Dimension
         const Pipeline* bound = nullptr;
         Mesh* boundMesh = nullptr;
         const char* passName = shadowPass ? "Shadows" : depthPass ? "Depth Prepass" : oitPass ? "Transparent (OIT)" : "Opaque";
-        const char* targetName = shadowPass ? "Shadow Map" : depthPass ? "Depth" : oitPass ? "OIT Accumulation" : "HDR Color";
+        const char* targetName = shadowPass ? m_ShadowTargetName : depthPass ? "Depth" : oitPass ? "OIT Accumulation" : "HDR Color";
         auto submit = [&](const Draw& d, uint32_t instances) {
-            if (!DebugDraw(passName, targetName, d.MeshPtr->GetName(), d.Push.EntityId, instances, d.IndexCount / 3 * instances)) return;
+            if (!DebugDraw(passName, targetName, d.MeshPtr->GetName(), d.Push.EntityId, instances, d.IndexCount / 3 * instances, d.Push.Material)) return;
             if (d.Pipe != bound)
             {
                 d.Pipe->Bind(cmd);
