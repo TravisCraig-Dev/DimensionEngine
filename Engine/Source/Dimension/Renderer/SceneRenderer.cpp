@@ -2,6 +2,8 @@
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Scene/LODGroup.h"
+#include "Dimension/Scene/SceneSerializer.h"
+#include <glm/gtx/matrix_decompose.hpp>
 #include "Dimension/Core/Profiler.h"
 #include "Dimension/Navigation/NavMesh.h"
 #include "Dimension/Asset/AssetManager.h"
@@ -747,6 +749,7 @@ namespace Dimension
         {
             UpdateReflectionProbes(cmd, scene);
             UpdateLightProbes(cmd, scene);
+            PrepareImpostors(cmd, scene); // (also nested Render calls)
         }
         // Temporal anti-aliasing renders the game view with a sub-pixel offset that cycles through a Halton sequence;
         // the Scene view and probe faces are never jittered.
@@ -1155,7 +1158,7 @@ namespace Dimension
         colors[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         colors[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colors[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colors[0].clearValue.color = { { clear.r, clear.g, clear.b, 1.0f } };
+        colors[0].clearValue.color = { { clear.r, clear.g, clear.b, options.ProbeCapture ? clear.a : 1.0f } }; // captures: alpha = covered
         colors[1] = colors[0];
         colors[1].imageView = target.GetIds().GetView();
         colors[1].clearValue.color.uint32[0] = 0;
@@ -1686,6 +1689,188 @@ namespace Dimension
     {
         if (m_ShadowMap) RenderDevice::Get().UnregisterTexture(m_ShadowBindless);
         if (m_PointShadowMap) RenderDevice::Get().UnregisterTexture(m_PointShadowBindless);
+        for (auto& [key, impostor] : m_Impostors)
+            if (impostor.Bindless) RenderDevice::Get().UnregisterTexture(impostor.Bindless);
+    }
+
+    namespace
+    {
+        constexpr uint32_t kImpostorTile = 256, kImpostorSides = 8;
+
+        uint64_t ImpostorKey(Entity e) { return ((uint64_t)e.Index << 32) | e.Generation; }
+
+        // What the impostor pictures, as a number: the meshes, materials and places of LOD 0 and the directional lights.
+        uint64_t ImpostorSignature(Scene& scene, Entity group)
+        {
+            auto& reg = scene.GetRegistry();
+            uint64_t h = 1469598103934665603ull;
+            auto mix = [&](const void* data, size_t bytes) {
+                const auto* p = (const uint8_t*)data;
+                for (size_t i = 0; i < bytes; ++i) h = (h ^ p[i]) * 1099511628211ull;
+            };
+            std::function<void(Entity)> walk = [&](Entity e) {
+                const auto& t = reg.Get<TransformComponent>(e);
+                mix(&t.Position, sizeof(glm::vec3));
+                mix(&t.Rotation, sizeof(glm::vec3));
+                mix(&t.Scale, sizeof(glm::vec3));
+                if (const auto* mr = reg.TryGet<MeshRendererComponent>(e))
+                {
+                    mix(&mr->Mesh, sizeof(mr->Mesh));
+                    mix(&mr->Material, sizeof(mr->Material));
+                    mix(&mr->Color, sizeof(mr->Color));
+                    for (const auto& m : mr->Materials) mix(&m, sizeof(m));
+                }
+                for (Entity c : scene.GetChildren(e)) walk(c);
+            };
+            const auto* lod = reg.TryGet<LODGroupComponent>(group);
+            if (lod && lod->GeneratedLevels > 0 && reg.Has<MeshRendererComponent>(group))
+            {
+                const auto& mr = reg.Get<MeshRendererComponent>(group);
+                mix(&mr.Mesh, sizeof(mr.Mesh));
+                mix(&mr.Material, sizeof(mr.Material));
+                mix(&mr.Color, sizeof(mr.Color));
+            }
+            else if (!scene.GetChildren(group).empty())
+                walk(scene.GetChildren(group)[0]);
+            glm::mat3 groupRotation(reg.Get<TransformComponent>(group).World);
+            mix(&groupRotation, sizeof(groupRotation));
+            for (auto [e, light, t] : reg.ViewOf<DirectionalLightComponent, TransformComponent>())
+            {
+                mix(&t.World, sizeof(glm::mat4));
+                mix(&light.Color, sizeof(light.Color));
+                mix(&light.Intensity, sizeof(light.Intensity));
+            }
+            return h;
+        }
+    }
+
+    void SceneRenderer::PrepareImpostors(VkCommandBuffer cmd, Scene& scene)
+    {
+        auto& device = RenderDevice::Get();
+        auto& reg = scene.GetRegistry();
+        uint64_t frame = device.Frame().FrameNumber;
+        bool captured = false; // one capture a frame
+        std::vector<Entity> groups;
+        for (auto [e, lod, t] : reg.ViewOf<LODGroupComponent, TransformComponent>())
+            if (lod.Impostor && t.ActiveInHierarchy) groups.push_back(e);
+        for (Entity g : groups)
+        {
+            Impostor& impostor = m_Impostors[ImpostorKey(g)];
+            impostor.LastUsed = frame;
+            uint64_t signature = ImpostorSignature(scene, g);
+            if (impostor.Owner == &scene && impostor.Signature == signature) continue;
+            if (captured) continue;
+            CaptureImpostor(cmd, scene, g, impostor);
+            impostor.Signature = signature;
+            impostor.Owner = &scene;
+            captured = true;
+        }
+        // Impostors no longer shown for a while go.
+        for (auto it = m_Impostors.begin(); it != m_Impostors.end();)
+            if (frame - it->second.LastUsed > 600)
+            {
+                if (it->second.Bindless) device.UnregisterTexture(it->second.Bindless);
+                it = m_Impostors.erase(it);
+            }
+            else
+                ++it;
+    }
+
+    void SceneRenderer::CaptureImpostor(VkCommandBuffer cmd, Scene& scene, Entity group, Impostor& impostor)
+    {
+        auto& device = RenderDevice::Get();
+        auto& reg = scene.GetRegistry();
+        // A scene of LOD 0 alone (in the group's space) under the scene's directional lights (turned into that space).
+        Scene stage("Impostor");
+        stage.GetSettings() = scene.GetSettings();
+        auto& sreg = stage.GetRegistry();
+        const glm::mat4& groupWorld = reg.Get<TransformComponent>(group).World;
+        glm::quat groupRotation = glm::quat_cast(glm::mat3(glm::normalize(glm::vec3(groupWorld[0])), glm::normalize(glm::vec3(groupWorld[1])),
+                                                           glm::normalize(glm::vec3(groupWorld[2]))));
+        for (auto [e, light, t] : reg.ViewOf<DirectionalLightComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy) continue;
+            glm::vec3 scale, position, skew;
+            glm::quat rotation;
+            glm::vec4 perspective;
+            glm::decompose(t.World, scale, rotation, position, skew, perspective);
+            Entity sun = stage.CreateEntity("Sun");
+            sreg.Get<TransformComponent>(sun).Rotation = glm::eulerAngles(glm::inverse(groupRotation) * rotation);
+            sreg.Emplace<DirectionalLightComponent>(sun) = light;
+        }
+        Entity model;
+        const auto* lod = reg.TryGet<LODGroupComponent>(group);
+        if (lod && lod->GeneratedLevels > 0 && reg.Has<MeshRendererComponent>(group))
+        {
+            model = stage.CreateEntity("Model");
+            sreg.Emplace<MeshRendererComponent>(model) = reg.Get<MeshRendererComponent>(group);
+        }
+        else if (!scene.GetChildren(group).empty())
+            model = SceneSerializer::DeserializeEntityTree(stage, SceneSerializer::SerializeEntityTree(scene, scene.GetChildren(group)[0]), Entity::Null());
+        std::vector<Entity> nested;
+        for (auto [e, l] : sreg.ViewOf<LODGroupComponent>()) nested.push_back(e);
+        for (Entity e : nested) sreg.Remove<LODGroupComponent>(e);
+        stage.UpdateTransforms();
+        glm::vec3 lo, hi;
+        impostor.Radius = 0.0f;
+        if (model.IsNull() || !LODGroups::Bounds(stage, model, lo, hi)) return;
+        impostor.Center = (lo + hi) * 0.5f;
+        impostor.Radius = std::max(glm::length(hi - lo) * 0.5f, 1e-3f);
+
+        // The atlas: a tile per side, then its mips.
+        uint32_t width = kImpostorTile * kImpostorSides, height = kImpostorTile;
+        uint32_t mips = (uint32_t)std::floor(std::log2((float)height)) + 1;
+        if (!impostor.Atlas.IsValid())
+        {
+            impostor.Atlas = Image(ImageDesc{ width, height, SceneRenderTarget::kHdrFormat,
+                                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, mips, "ImpostorAtlas" });
+            impostor.Bindless = device.RegisterTexture(impostor.Atlas.GetView(), device.GetLinearSampler());
+        }
+        if (!m_ImpostorTarget) m_ImpostorTarget = MakeScope<SceneRenderTarget>(kImpostorTile, kImpostorTile);
+        VkImage atlas = impostor.Atlas.GetHandle();
+        Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        RenderStats outer = m_Stats;
+        SceneRenderOptions capture;
+        capture.ProbeCapture = true;
+        float r = impostor.Radius;
+        for (uint32_t side = 0; side < kImpostorSides; ++side)
+        {
+            // Seen a little from above, from all round: side k from the direction yaw = k * 45 degrees (+Z at 0).
+            float yaw = glm::two_pi<float>() * side / kImpostorSides, elevation = glm::radians(15.0f);
+            glm::vec3 from(std::sin(yaw) * std::cos(elevation), std::sin(elevation), std::cos(yaw) * std::cos(elevation));
+            CameraData cam;
+            cam.Position = impostor.Center + from * (r * 3.0f);
+            cam.View = glm::lookAt(cam.Position, impostor.Center, glm::vec3(0.0f, 1.0f, 0.0f));
+            cam.Projection = glm::ortho(-r, r, -r, r, 0.01f, r * 6.0f);
+            cam.Orthographic = true;
+            cam.Skybox = false;
+            cam.ClearColor = glm::vec4(0.0f); // alpha 0 where nothing is
+            Render(cmd, stage, cam, *m_ImpostorTarget, capture);
+            VkImageCopy copy{};
+            copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.dstOffset = { (int32_t)(side * kImpostorTile), 0, 0 };
+            copy.extent = { kImpostorTile, kImpostorTile, 1 };
+            vkCmdCopyImage(cmd, m_ImpostorTarget->GetHdr().GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            Vk::TransitionImage(cmd, m_ImpostorTarget->GetHdr().GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+        m_Stats = outer;
+        int32_t w = (int32_t)width, h = (int32_t)height;
+        for (uint32_t mip = 1; mip < mips; ++mip)
+        {
+            Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+            int32_t nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+            VkImageBlit blit{};
+            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, 1 };
+            blit.srcOffsets[1] = { w, h, 1 };
+            blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1 };
+            blit.dstOffsets[1] = { nw, nh, 1 };
+            vkCmdBlitImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+            w = nw;
+            h = nh;
+        }
+        Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mips - 1, 1);
     }
 
     glm::mat4 PointShadowFaceViewProj(const glm::vec3& position, int face, float nearPlane, float farPlane)
@@ -2160,6 +2345,52 @@ namespace Dimension
                     m_RenderItems.push_back(std::move(next));
                 }
         }
+
+        // Impostors: a quad turned to the camera (about the vertical), showing the atlas tile of the side nearest the
+        // camera's, lit as captured (emissive), cut out where nothing was.
+        if (!lods.Impostors.empty())
+            if (Ref<Mesh> quad = AssetManager::GetMesh(AssetManager::kQuad))
+                for (const auto& [g, fade] : lods.Impostors)
+                {
+                    auto it = m_Impostors.find(ImpostorKey(g));
+                    if (it == m_Impostors.end() || !it->second.Bindless || it->second.Radius <= 0.0f || it->second.Owner != &scene) continue;
+                    const Impostor& impostor = it->second;
+                    const auto& t = reg.Get<TransformComponent>(g);
+                    float s = std::max({ glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[1])), glm::length(glm::vec3(t.World[2])) });
+                    glm::vec3 center = glm::vec3(t.World * glm::vec4(impostor.Center, 1.0f));
+                    float radius = impostor.Radius * s;
+                    glm::vec3 toCamera = camera.Position - center;
+                    float yaw = std::atan2(toCamera.x, toCamera.z);
+                    glm::vec3 forward = glm::vec3(t.World[2]);
+                    float local = yaw - std::atan2(forward.x, forward.z);
+                    int side = ((int)std::lround(local / (glm::two_pi<float>() / kImpostorSides)) % (int)kImpostorSides + (int)kImpostorSides) % (int)kImpostorSides;
+                    RenderItem item;
+                    item.World = glm::translate(glm::mat4(1.0f), center) * glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                 glm::scale(glm::mat4(1.0f), glm::vec3(radius * 2.0f, radius * 2.0f, 1.0f));
+                    item.Center = center;
+                    item.Extents = glm::vec3(radius);
+                    item.EntityId = g.Index + 1;
+                    item.AlwaysVisible = false;
+                    item.CastShadows = false;
+                    item.Fade = fade;
+                    uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
+                    MaterialGPU gpu{};
+                    gpu.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                    gpu.Emission = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+                    gpu.Params = glm::vec4(0.0f, 1.0f, 0.5f, 1.0f);
+                    gpu.TilingOffset = glm::vec4(1.0f / kImpostorSides, 1.0f, (float)side / kImpostorSides, 0.0f);
+                    gpu.Maps = glm::uvec4(impostor.Bindless, white, white, impostor.Bindless);
+                    gpu.Flags = glm::uvec4(1u, 0u, 0u, 0u); // cutout
+                    VkDeviceAddress address = uploadMaterialGPU(dimmed(g) ? dim(gpu) : gpu);
+                    if (!address) continue;
+                    const SubMesh& sub = quad->GetSubMeshes()[0];
+                    item.FirstPart = (uint32_t)m_RenderParts.size();
+                    uint32_t batch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, address, true, 0u }, !fade);
+                    m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, false, true, false, (uint32_t)m_RenderItems.size(), batch });
+                    item.PartCount = 1;
+                    item.MeshRef = quad;
+                    m_RenderItems.push_back(std::move(item));
+                }
 
         // Terrain details: an instance of the tree or grass mesh wherever one was scattered (they batch into
         // instanced draws; picking one selects the terrain).

@@ -1,5 +1,6 @@
 #include "Dimension/Renderer/Image.h"
 #include "Dimension/Renderer/RenderDevice.h"
+#include "Dimension/Renderer/GpuMemory.h"
 
 namespace Dimension
 {
@@ -27,7 +28,12 @@ namespace Dimension
         alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         if (desc.Usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
             alloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-        VK_CHECK(vmaCreateImage(RenderDevice::Get().GetAllocator(), &info, &alloc, &m_Image, &m_Allocation, nullptr));
+        VmaAllocationInfo allocInfo{};
+        VK_CHECK(vmaCreateImage(RenderDevice::Get().GetAllocator(), &info, &alloc, &m_Image, &m_Allocation, &allocInfo));
+        m_MemoryKind = (int)(desc.Usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT)
+                                 ? GpuMemory::Kind::RenderTargets : GpuMemory::Kind::Textures);
+        m_MemoryBytes = (int64_t)allocInfo.size;
+        GpuMemory::Add((GpuMemory::Kind)m_MemoryKind, m_MemoryBytes);
 
         VkImageAspectFlags aspect = IsDepthFormat(desc.Format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
         m_View = Vk::CreateImageView(m_Image, desc.Format, aspect, desc.MipLevels);
@@ -60,6 +66,8 @@ namespace Dimension
             std::swap(m_Width, o.m_Width);
             std::swap(m_Height, o.m_Height);
             std::swap(m_MipLevels, o.m_MipLevels);
+            std::swap(m_MemoryKind, o.m_MemoryKind);
+            std::swap(m_MemoryBytes, o.m_MemoryBytes);
         }
         return *this;
     }
@@ -67,6 +75,7 @@ namespace Dimension
     void Image::Release()
     {
         if (!m_Image) return;
+        GpuMemory::Remove((GpuMemory::Kind)m_MemoryKind, m_MemoryBytes);
         VkImage image = m_Image;
         VkImageView view = m_View;
         VmaAllocation allocation = m_Allocation;

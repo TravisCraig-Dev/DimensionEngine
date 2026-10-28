@@ -900,6 +900,8 @@ namespace Dimension
         std::vector<float> PathLinks; // per corner: -1, or the arc height of the off-mesh link from it to the next
         std::vector<Entity> PathLinkOwners; // per corner: the Off Mesh Link crossed from it (Null = walked, or the bake's)
         bool Waiting = false;               // at a closed door (Agents Wait), until it opens
+        bool Queued = false;                // in line before it, at QueueSpot
+        glm::vec3 QueueSpot{ 0.0f };
         size_t Corner = 0;           // the corner it is heading for
         bool Traversing = false;     // crossing an off-mesh link
         glm::vec3 TraverseFrom{ 0.0f }, TraverseTo{ 0.0f };
@@ -1012,6 +1014,9 @@ namespace Dimension
         float FadeWidth = 0.1f;
         int32_t GeneratedLevels = 0;
         float Reduction = 0.5f;
+        // Impostor: one more level after the meshes, down to Cull Below: a flat picture of LOD 0 turned to face the
+        // camera, from whichever of 8 sides it is seen (rendered once, lit as it stands; again when it changes).
+        bool Impostor = false;
     };
 
     struct RigidbodyComponent

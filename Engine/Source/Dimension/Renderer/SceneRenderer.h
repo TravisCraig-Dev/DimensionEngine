@@ -7,6 +7,7 @@
 #include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
 #include <array>
+#include <unordered_map>
 
 namespace Dimension
 {
@@ -250,6 +251,21 @@ namespace Dimension
         OccluderDepth m_Occluder;
         std::vector<uint8_t> m_ItemOccluded;
         std::vector<Vertex> m_OceanVertices; // this frame's ocean surface (reused)
+        // Impostors (LOD Groups' farthest level): LOD 0 seen from 8 sides around it, rendered once into an atlas (one
+        // tile per side, with mips; alpha = covered) and kept while it stays the same.
+        struct Impostor
+        {
+            Image Atlas;
+            uint32_t Bindless = 0;
+            glm::vec3 Center{ 0.0f }; // in the group's space
+            float Radius = 0.0f;      // 0 = nothing to picture
+            uint64_t Signature = 0, LastUsed = 0;
+            const Scene* Owner = nullptr;
+        };
+        std::unordered_map<uint64_t, Impostor> m_Impostors; // by group entity (index, generation)
+        Scope<SceneRenderTarget> m_ImpostorTarget;
+        void PrepareImpostors(VkCommandBuffer cmd, Scene& scene);
+        void CaptureImpostor(VkCommandBuffer cmd, Scene& scene, Entity group, Impostor& impostor);
         // Shore foam per ocean vertex, kept while the rings stay put (their center, the ocean, all cells measured).
         std::vector<float> m_OceanShore;
         std::vector<uint32_t> m_OceanShorePending; // vertices whose cell waits for its ray

@@ -104,12 +104,36 @@ namespace Dimension
             return std::max({ size.x, size.y, size.z });
         }
 
+        namespace
+        {
+            // The mesh levels (without the impostor).
+            int MeshLevels(Scene& scene, Entity group, const LODGroupComponent& lod)
+            {
+                int levels = Generates(scene, group) ? 1 + std::min(lod.GeneratedLevels, 3) : std::min((int)scene.GetChildren(group).size(), 4);
+                return lod.Impostor ? std::min(levels, 3) : levels;
+            }
+        }
+
         int LevelCount(Scene& scene, Entity group)
         {
             const auto* lod = scene.GetRegistry().TryGet<LODGroupComponent>(group);
             if (!lod) return 0;
-            if (Generates(scene, group)) return 1 + std::min(lod->GeneratedLevels, 3);
-            return std::min((int)scene.GetChildren(group).size(), 4);
+            int levels = MeshLevels(scene, group, *lod);
+            return lod->Impostor && levels > 0 ? levels + 1 : levels;
+        }
+
+        int ImpostorLevel(Scene& scene, Entity group)
+        {
+            const auto* lod = scene.GetRegistry().TryGet<LODGroupComponent>(group);
+            return lod && lod->Impostor && MeshLevels(scene, group, *lod) > 0 ? MeshLevels(scene, group, *lod) : -1;
+        }
+
+        bool Bounds(Scene& scene, Entity e, glm::vec3& lo, glm::vec3& hi)
+        {
+            lo = glm::vec3(1e30f);
+            hi = glm::vec3(-1e30f);
+            GrowBounds(scene, e, lo, hi);
+            return lo.x <= hi.x;
         }
 
         Pick Evaluate(Scene& scene, Entity group, const glm::vec3& cameraPosition, const glm::mat4& projection, bool orthographic, float* screenHeight)
@@ -160,18 +184,24 @@ namespace Dimension
                 Pick pick = Evaluate(scene, g, cameraPosition, projection, orthographic);
                 uint32_t fade, nextFade;
                 FadeBits(pick.Coverage, fade, nextFade);
+                int impostor = ImpostorLevel(scene, g);
+                // The impostor: drawn at its level (fading into nothing) or fading in after the last mesh.
+                if (impostor >= 0 && pick.Level == impostor) frame.Impostors.push_back({ g, fade });
+                else if (impostor >= 0 && pick.Next == impostor) frame.Impostors.push_back({ g, nextFade });
                 if (Generates(scene, g))
                 {
-                    if (pick.Level < 0)
+                    if (pick.Level < 0 || pick.Level == impostor)
                         MarkSubtree(scene, g, frame.Hidden);
                     else
-                        frame.Generated[g.Index] = { pick.Level, pick.Next, fade, nextFade };
+                        frame.Generated[g.Index] = { pick.Level, pick.Next == impostor ? -1 : pick.Next, fade, nextFade };
                     continue;
                 }
                 const auto& children = scene.GetChildren(g);
+                int meshLevels = impostor >= 0 ? impostor : (int)children.size();
                 for (size_t i = 0; i < children.size(); ++i)
                 {
-                    if ((int)i == pick.Level && fade) FadeSubtree(scene, children[i], fade, frame.Fade);
+                    if ((int)i >= meshLevels) MarkSubtree(scene, children[i], frame.Hidden);
+                    else if ((int)i == pick.Level && fade) FadeSubtree(scene, children[i], fade, frame.Fade);
                     else if ((int)i == pick.Next) FadeSubtree(scene, children[i], nextFade, frame.Fade);
                     else if ((int)i != pick.Level) MarkSubtree(scene, children[i], frame.Hidden);
                 }

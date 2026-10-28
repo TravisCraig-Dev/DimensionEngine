@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <cstring>
+#include <map>
 #include <queue>
 #include <set>
 #include <unordered_map>
@@ -1169,6 +1170,63 @@ namespace Dimension
                 mv.Ground = GroundOf(scene, mv.E, agent);
             }
 
+            // Doors: the agents whose way goes next through a closed door (Agents Wait), within a few meters of it, line up
+            // before it, nearest first, each about an agent's width behind the one ahead, rather than crowding it.
+            {
+                struct InLine
+                {
+                    Mover* M;
+                    float Distance;
+                };
+                std::map<std::tuple<uint32_t, int, int>, std::vector<InLine>> queues; // door, its start (to 10 cm)
+                std::map<std::tuple<uint32_t, int, int>, glm::vec3> starts;
+                for (Mover& mv : movers)
+                {
+                    NavMeshAgentComponent& a = *mv.Agent;
+                    a.Queued = false;
+                    if (!a.Mesh || a.Traversing || !a.HasDestination || a.IsStopped || a.Path.size() < 2) continue;
+                    for (size_t k = a.Corner > 0 ? a.Corner - 1 : 0; k + 1 < a.Path.size() && k < a.PathLinks.size(); ++k)
+                    {
+                        if (a.PathLinks[k] < 0.0f) continue;
+                        Entity owner = k < a.PathLinkOwners.size() ? a.PathLinkOwners[k] : Entity::Null();
+                        const auto* door = !owner.IsNull() && scene.IsValid(owner) ? reg.TryGet<OffMeshLinkComponent>(owner) : nullptr;
+                        if (door && door->AgentsWait && !door->Activated)
+                        {
+                            float d = Horizontal(mv.Ground, a.Path[k]);
+                            if (d < 8.0f)
+                            {
+                                auto key = std::make_tuple(owner.Index, (int)std::lround(a.Path[k].x * 10.0f), (int)std::lround(a.Path[k].z * 10.0f));
+                                queues[key].push_back({ &mv, d });
+                                starts[key] = a.Path[k];
+                            }
+                        }
+                        break; // only the next link on the way
+                    }
+                }
+                for (auto& [key, line] : queues)
+                {
+                    std::sort(line.begin(), line.end(), [](const InLine& x, const InLine& y) { return x.Distance < y.Distance; });
+                    glm::vec3 start = starts[key];
+                    // The line runs back from the door the way they come.
+                    glm::vec2 back(0.0f);
+                    float widest = 0.0f;
+                    for (const InLine& q : line)
+                    {
+                        back += glm::vec2(q.M->Ground.x - start.x, q.M->Ground.z - start.z);
+                        widest = std::max(widest, q.M->Agent->Radius);
+                    }
+                    back = glm::length(back) > 1e-3f ? glm::normalize(back) : glm::vec2(0.0f, 1.0f);
+                    float spacing = widest * 2.0f + 0.3f;
+                    for (size_t r = 0; r < line.size(); ++r)
+                    {
+                        NavMeshAgentComponent& a = *line[r].M->Agent;
+                        a.Queued = true;
+                        a.QueueSpot = start + glm::vec3(back.x, 0.0f, back.y) * (spacing * (float)r);
+                    }
+                }
+                for (Mover& mv : movers) mv.Agent->Waiting = mv.Agent->Queued;
+            }
+
             // Agents by where they stand, in cells of a few meters, for finding the neighbours to steer around.
             constexpr float kCell = 4.0f;
             auto cellKey = [](int x, int z) { return ((int64_t)x << 32) ^ (int64_t)(uint32_t)z; };
@@ -1219,7 +1277,7 @@ namespace Dimension
 
                 // Where it wants to go: on to the next corner, slowing to arrive.
                 glm::vec2 desired(0.0f);
-                bool moving = agent.HasDestination && agent.Path.size() >= 2 && agent.PathStatus != NavPathStatus::Invalid;
+                bool moving = agent.HasDestination && agent.Path.size() >= 2 && agent.PathStatus != NavPathStatus::Invalid && !agent.Queued;
                 agent.RemainingDistance = 0.0f;
                 float brakeDistance = kInf;
                 if (moving)
@@ -1265,6 +1323,13 @@ namespace Dimension
                         if (agent.AutoBraking) speed = std::min(speed, std::sqrt(2.0f * std::max(agent.Acceleration, 0.1f) * brakeDistance));
                         if (len > 1e-5f) desired = to / len * speed;
                     }
+                }
+                if (agent.Queued)
+                {
+                    // In line at a door: to its spot, and stand there.
+                    glm::vec2 to = glm::vec2(agent.QueueSpot.x, agent.QueueSpot.z) - p;
+                    float len = glm::length(to);
+                    if (len > 0.05f) desired = to / len * std::min(agent.Speed, std::sqrt(2.0f * std::max(agent.Acceleration, 0.1f) * len));
                 }
 
                 // Avoidance: of a fan of velocities around the wanted one, the one nearest it that does not run into

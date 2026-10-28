@@ -812,7 +812,8 @@ namespace Dimension
             .Field("Bias", &LODGroupComponent::Bias).Range(0.01f, 10.0f).Speed(0.01f).Tooltip("Above 1 keeps detail farther away")
             .Field("Fade Width", &LODGroupComponent::FadeWidth).Range(0.0f, 1.0f).Speed(0.005f).Tooltip("Cross-fade between levels over this fraction above each threshold (0 = switch at once)")
             .Field("Generated Levels", &LODGroupComponent::GeneratedLevels).Range(0.0f, 3.0f).Tooltip("Levels made from this object's own mesh (instead of children)")
-            .Field("Reduction", &LODGroupComponent::Reduction).Range(0.05f, 0.95f).Speed(0.01f).Tooltip("Generated levels: the share of triangles each keeps of the one before");
+            .Field("Reduction", &LODGroupComponent::Reduction).Range(0.05f, 0.95f).Speed(0.01f).Tooltip("Generated levels: the share of triangles each keeps of the one before")
+            .Field("Impostor", &LODGroupComponent::Impostor).Tooltip("The farthest level a camera-facing picture of LOD 0 (from 8 sides), down to Cull Below");
         Register<RigidbodyComponent>("Rigidbody", "Physics")
             .Field("Body Type", &RigidbodyComponent::Type).Enum({ "Static", "Dynamic", "Kinematic" })
             .Field("Mass", &RigidbodyComponent::Mass).Range(0.001f, 100000.0f).Speed(0.05f)

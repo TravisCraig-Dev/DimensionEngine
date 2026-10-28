@@ -3093,13 +3093,14 @@
     "LOD Group": {
      "LOD 1 Below": 0.054,
      "LOD 2 Below": 0.047,
-     "LOD 3 Below": 0.03,
+     "LOD 3 Below": 0.042,
      "Cull Below": 0.005,
      "Size": 0,
      "Bias": 1.0,
      "Fade Width": 0.1,
      "Generated Levels": 0,
-     "Reduction": 0.5
+     "Reduction": 0.5,
+     "Impostor": true
     }
    }
   },
@@ -3350,13 +3351,14 @@
     "LOD Group": {
      "LOD 1 Below": 0.054,
      "LOD 2 Below": 0.047,
-     "LOD 3 Below": 0.03,
+     "LOD 3 Below": 0.042,
      "Cull Below": 0.005,
      "Size": 0,
      "Bias": 1.0,
      "Fade Width": 0.1,
      "Generated Levels": 0,
-     "Reduction": 0.5
+     "Reduction": 0.5,
+     "Impostor": true
     }
    }
   },
@@ -3607,13 +3609,14 @@
     "LOD Group": {
      "LOD 1 Below": 0.054,
      "LOD 2 Below": 0.047,
-     "LOD 3 Below": 0.03,
+     "LOD 3 Below": 0.042,
      "Cull Below": 0.005,
      "Size": 0,
      "Bias": 1.0,
      "Fade Width": 0.1,
      "Generated Levels": 0,
-     "Reduction": 0.5
+     "Reduction": 0.5,
+     "Impostor": true
     }
    }
   },
@@ -3864,13 +3867,14 @@
     "LOD Group": {
      "LOD 1 Below": 0.054,
      "LOD 2 Below": 0.047,
-     "LOD 3 Below": 0.03,
+     "LOD 3 Below": 0.042,
      "Cull Below": 0.005,
      "Size": 0,
      "Bias": 1.0,
      "Fade Width": 0.1,
      "Generated Levels": 0,
-     "Reduction": 0.5
+     "Reduction": 0.5,
+     "Impostor": true
     }
    }
   },
@@ -4121,13 +4125,14 @@
     "LOD Group": {
      "LOD 1 Below": 0.054,
      "LOD 2 Below": 0.047,
-     "LOD 3 Below": 0.03,
+     "LOD 3 Below": 0.042,
      "Cull Below": 0.005,
      "Size": 0,
      "Bias": 1.0,
      "Fade Width": 0.1,
      "Generated Levels": 0,
-     "Reduction": 0.5
+     "Reduction": 0.5,
+     "Impostor": true
     }
    }
   },
@@ -4378,13 +4383,14 @@
     "LOD Group": {
      "LOD 1 Below": 0.054,
      "LOD 2 Below": 0.047,
-     "LOD 3 Below": 0.03,
+     "LOD 3 Below": 0.042,
      "Cull Below": 0.005,
      "Size": 0,
      "Bias": 1.0,
      "Fade Width": 0.1,
      "Generated Levels": 0,
-     "Reduction": 0.5
+     "Reduction": 0.5,
+     "Impostor": true
     }
    }
   },

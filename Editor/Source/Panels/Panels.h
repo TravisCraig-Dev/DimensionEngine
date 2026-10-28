@@ -114,6 +114,7 @@ namespace Editor
 
     private:
         int m_Picked = -1; // frame index in the history while paused
+        bool m_ShowMemory = true;
     };
 
     class NavigationPanel

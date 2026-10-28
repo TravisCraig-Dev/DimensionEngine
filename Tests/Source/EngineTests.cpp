@@ -2378,6 +2378,41 @@ namespace
         rr.Get<OffMeshLinkComponent>(door).Activated = true; // open
         for (int i = 0; i < 180; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
         CHECK(!rr.Get<NavMeshAgentComponent>(guest).Waiting && Near(rr.Get<TransformComponent>(guest).Position, { 10.0f, 1.0f, 10.5f }, 0.1f));
+
+        // Four more come while it is closed: they line up before it (one at it, the others an agent's width apart, back
+        // the way they came), and when it opens they all go up.
+        rr.Get<OffMeshLinkComponent>(door).Activated = false;
+        std::vector<Entity> crowd;
+        std::vector<glm::vec3> spots = { { 9.5f, 1.0f, 9.0f }, { 10.5f, 1.0f, 9.0f }, { 9.5f, 1.0f, 11.0f }, { 10.5f, 1.0f, 11.0f } };
+        for (int i = 0; i < 4; ++i)
+        {
+            Entity e = rt->CreateEntity("Visitor");
+            rr.Get<TransformComponent>(e).Position = { -4.0f - i * 1.5f, 0.0f, 6.0f + i * 1.5f };
+            auto& a = rr.Emplace<NavMeshAgentComponent>(e);
+            a.Speed = 4.0f;
+            a.Radius = 0.4f;
+            crowd.push_back(e);
+        }
+        rt->UpdateTransforms();
+        for (int i = 0; i < 4; ++i) Navigation::SetDestination(*rt, crowd[i], spots[i]);
+        for (int i = 0; i < 360; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        std::vector<float> fromDoor;
+        bool allWaiting = true;
+        for (Entity e : crowd)
+        {
+            glm::vec3 q = rr.Get<TransformComponent>(e).Position;
+            fromDoor.push_back(glm::distance(glm::vec2(q.x, q.z), glm::vec2(6.5f, 10.0f)));
+            allWaiting &= rr.Get<NavMeshAgentComponent>(e).Waiting;
+        }
+        std::sort(fromDoor.begin(), fromDoor.end());
+        CHECK(allWaiting && fromDoor[0] < 0.4f);
+        for (size_t i = 1; i < fromDoor.size(); ++i) CHECK(fromDoor[i] - fromDoor[i - 1] > 0.8f && fromDoor[i] - fromDoor[i - 1] < 1.6f);
+        rr.Get<OffMeshLinkComponent>(door).Activated = true;
+        for (int i = 0; i < 600; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        int arrived = 0;
+        for (int i = 0; i < 4; ++i) arrived += glm::distance(rr.Get<TransformComponent>(crowd[i]).Position, spots[i]) < 0.6f;
+        CHECK(arrived == 4);
+
         // A plain link, closed: no way up.
         rr.Get<OffMeshLinkComponent>(door).Activated = false;
         rr.Get<OffMeshLinkComponent>(door).AgentsWait = false;
@@ -2660,6 +2695,36 @@ namespace
             CHECK(h <= f / 2 + 2 && h > f / 3 && q <= f / 4 + 2 && q > f / 8);
         }
         AssetManager::Shutdown();
+    }
+
+    void TestLODImpostor()
+    {
+        // With Impostor, a group of 3 children has a 4th level: past LOD 3 Below its children all hide and the group
+        // draws its impostor (fading in over the last child within Fade Width), down to Cull Below.
+        Scene scene("Rocks");
+        auto& reg = scene.GetRegistry();
+        Entity rock = scene.CreateEntity("Rock");
+        auto& lod = reg.Emplace<LODGroupComponent>(rock);
+        lod.Size = 2.0f;
+        lod.Impostor = true;
+        Entity l0 = scene.CreateEntity("LOD0", rock), l1 = scene.CreateEntity("LOD1", rock), l2 = scene.CreateEntity("LOD2", rock);
+        scene.UpdateTransforms();
+        CHECK(LODGroups::LevelCount(scene, rock) == 4 && LODGroups::ImpostorLevel(scene, rock) == 3);
+        glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+        auto atHeight = [&](float h) { return glm::vec3(0.0f, 0.0f, 2.0f * (1.0f / std::tan(glm::radians(30.0f))) * 0.5f / h); };
+        LODGroups::Frame distant;
+        LODGroups::Evaluate(scene, atHeight(0.05f), proj, false, distant); // below LOD 3 Below (0.12): the impostor
+        CHECK(distant.Impostors.size() == 1 && distant.Impostors[0].first == rock && distant.Impostors[0].second == 0u);
+        for (Entity c : { l0, l1, l2 }) CHECK(c.Index < distant.Hidden.size() && distant.Hidden[c.Index]);
+        LODGroups::Frame between;
+        LODGroups::Evaluate(scene, atHeight(0.125f), proj, false, between); // just above it: LOD 2 fading into the impostor
+        CHECK(between.Impostors.size() == 1 && (between.Impostors[0].second & 256u) && between.Fade.count(l2.Index));
+        LODGroups::Frame close;
+        LODGroups::Evaluate(scene, atHeight(0.8f), proj, false, close);
+        CHECK(close.Impostors.empty());
+        LODGroups::Frame gone;
+        LODGroups::Evaluate(scene, atHeight(0.005f), proj, false, gone); // below Cull Below: nothing
+        CHECK(gone.Impostors.empty());
     }
 
     void TestLODGroups()
@@ -8375,6 +8440,7 @@ int main(int argc, char** argv)
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("LOD groups", TestLODGroups);
+    Run("LOD impostor", TestLODImpostor);
     Run("Mesh simplify", TestMeshSimplify);
     Run("Occlusion test", TestOcclusionTest);
     Run("Profiler", TestProfiler);

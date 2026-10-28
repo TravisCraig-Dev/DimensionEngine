@@ -1,5 +1,6 @@
 #include "Panels.h"
 #include <Dimension/Core/Profiler.h>
+#include <Dimension/Renderer/GpuMemory.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cstring>
@@ -44,6 +45,49 @@ namespace Editor
         {
             Profiler::Clear();
             m_Picked = -1;
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Memory", &m_ShowMemory);
+        if (m_ShowMemory)
+        {
+            // GPU memory now: what the engine's images and buffers take, and the device's heaps against their budgets.
+            auto mb = [](int64_t bytes) { return (double)bytes / (1024.0 * 1024.0); };
+            if (ImGui::BeginTable("##memory", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
+            {
+                ImGui::TableSetupColumn("GPU memory", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+                ImGui::TableSetupColumn("Count");
+                ImGui::TableSetupColumn("MB");
+                ImGui::TableHeadersRow();
+                int64_t total = 0;
+                for (int k = 0; k < (int)GpuMemory::Kind::Count; ++k)
+                {
+                    GpuMemory::Usage u = GpuMemory::Get((GpuMemory::Kind)k);
+                    total += u.Bytes;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(GpuMemory::Name((GpuMemory::Kind)k));
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", u.Count);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.1f", mb(u.Bytes));
+                }
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted("Total");
+                ImGui::TableNextColumn();
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f", mb(total));
+                ImGui::EndTable();
+            }
+            for (const auto& heap : GpuMemory::Heaps())
+            {
+                if (heap.Budget == 0) continue;
+                char label[96];
+                std::snprintf(label, sizeof(label), "%s heap: %.0f of %.0f MB", heap.DeviceLocal ? "Video memory" : "System memory",
+                              mb((int64_t)heap.Used), mb((int64_t)heap.Budget));
+                ImGui::ProgressBar((float)((double)heap.Used / (double)heap.Budget), ImVec2(-FLT_MIN, 0.0f), label);
+            }
+            ImGui::Separator();
         }
         if (history.empty())
         {

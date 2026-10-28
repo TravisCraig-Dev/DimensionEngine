@@ -32,5 +32,7 @@ namespace Dimension
         VmaAllocation m_Allocation = nullptr;
         VkDeviceSize m_Size = 0;
         void* m_Mapped = nullptr;
+        int m_MemoryKind = 0;      // GpuMemory::Kind
+        int64_t m_MemoryBytes = 0; // the allocation's size, counted in GpuMemory
     };
 }

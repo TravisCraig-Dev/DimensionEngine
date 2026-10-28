@@ -48,5 +48,7 @@ namespace Dimension
         VmaAllocation m_Allocation = nullptr;
         VkFormat m_Format = VK_FORMAT_UNDEFINED;
         uint32_t m_Width = 0, m_Height = 0, m_MipLevels = 1;
+        int m_MemoryKind = 0;      // GpuMemory::Kind
+        int64_t m_MemoryBytes = 0; // the allocation's size, counted in GpuMemory
     };
 }

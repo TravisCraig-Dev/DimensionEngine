@@ -14,8 +14,12 @@ namespace Dimension
     {
         // The size measured against the screen: the group's Size, or the largest side of its meshes' bounds.
         float WorldSize(Scene& scene, Entity group, glm::vec3* center = nullptr);
-        // How many levels the group has: 1 + Generated Levels, or its children (up to 4).
+        // How many levels the group has: 1 + Generated Levels, or its children (up to 4), and the impostor after them.
         int LevelCount(Scene& scene, Entity group);
+        // The impostor's level (-1 = none).
+        int ImpostorLevel(Scene& scene, Entity group);
+        // The world bounds of an object's meshes and all below it (false: none).
+        bool Bounds(Scene& scene, Entity e, glm::vec3& min, glm::vec3& max);
 
         // The level shown (0 = most detailed; -1 = none, culled). Within Fade Width above a threshold it shares the
         // pixels with the next level (or with nothing, before culling): Level covers Coverage of them, Next the rest.
@@ -43,6 +47,7 @@ namespace Dimension
                 uint32_t Fade, NextFade;
             };
             std::unordered_map<uint32_t, Own> Generated;  // by entity index: groups drawing generated levels of their own mesh
+            std::vector<std::pair<Entity, uint32_t>> Impostors; // groups drawing their impostor, with its fade
         };
         void Evaluate(Scene& scene, const glm::vec3& cameraPosition, const glm::mat4& projection, bool orthographic, Frame& frame);
         // Marks (by entity index) every object a LOD group hides for this camera.
