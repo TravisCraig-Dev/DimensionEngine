@@ -36,7 +36,8 @@ namespace Editor
     {
         for (auto& [handle, entry] : m_Entries)
             if (entry.ImGuiId) RenderDevice::Get().DeferRelease([id = entry.ImGuiId] { ImGuiLayer::RemoveTexture(id); });
-        if (m_LiveEntry.ImGuiId) RenderDevice::Get().DeferRelease([id = m_LiveEntry.ImGuiId] { ImGuiLayer::RemoveTexture(id); });
+        for (auto& [slot, live] : m_Live)
+            if (live.Picture.ImGuiId) RenderDevice::Get().DeferRelease([id = live.Picture.ImGuiId] { ImGuiLayer::RemoveTexture(id); });
     }
 
     uint64_t AssetPreviews::KeyOf(AssetHandle asset)
@@ -84,18 +85,19 @@ namespace Editor
         return it != m_Entries.end() && it->second.Drawn ? it->second.ImGuiId : 0;
     }
 
-    uint64_t AssetPreviews::Live(AssetHandle asset, const LiveView& view)
+    uint64_t AssetPreviews::Live(AssetHandle asset, const LiveView& view, int slot)
     {
         const AssetMetadata* meta = AssetManager::GetMetadata(asset);
         if (!meta || (meta->Type != AssetType::Mesh && meta->Type != AssetType::Prefab)) return 0;
-        if (asset != m_LiveAsset)
+        LiveSlot& live = m_Live[slot];
+        if (asset != live.Asset)
         {
-            m_LiveAsset = asset;
-            m_LiveEntry.Drawn = false;
-            m_LiveClips.clear();
+            live.Asset = asset;
+            live.Picture.Drawn = false;
+            live.Clips.clear();
         }
-        m_LiveRequest = view;
-        return m_LiveEntry.Drawn ? m_LiveEntry.ImGuiId : 0;
+        live.Request = view;
+        return live.Picture.Drawn ? live.Picture.ImGuiId : 0;
     }
 
     bool AssetPreviews::Stage(AssetHandle asset, const LiveView* view)
@@ -159,14 +161,14 @@ namespace Editor
             pitch = view->Pitch;
             yaw = view->Yaw;
             // The clips it can play: the model's own, or those of the prefab's animated models.
-            m_LiveClips.clear();
+            m_StagedClips.clear();
             auto addClips = [&](const AnimatorComponent* anim, const MeshRendererComponent& mr) {
                 Ref<Mesh> source = AssetManager::GetMesh(anim && anim->ClipSource.IsValid() ? anim->ClipSource : mr.Mesh);
                 Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
                 if (!source || !mesh || !mesh->GetSkeleton()) return;
                 for (const auto& c : source->GetClips())
-                    if (std::none_of(m_LiveClips.begin(), m_LiveClips.end(), [&](const ClipInfo& o) { return o.Name == c.Name; }))
-                        m_LiveClips.push_back({ c.Name, c.Duration });
+                    if (std::none_of(m_StagedClips.begin(), m_StagedClips.end(), [&](const ClipInfo& o) { return o.Name == c.Name; }))
+                        m_StagedClips.push_back({ c.Name, c.Duration });
             };
             if (meta->Type == AssetType::Mesh)
             {
@@ -212,11 +214,16 @@ namespace Editor
     void AssetPreviews::Render(VkCommandBuffer cmd)
     {
         // The live preview first (asked for this frame), then a couple of the waiting pictures.
-        if (m_LiveRequest)
-        {
-            if (Stage(m_LiveAsset, &*m_LiveRequest)) Draw(cmd, m_LiveEntry, m_LiveAsset);
-            m_LiveRequest.reset();
-        }
+        for (auto& [slot, live] : m_Live)
+            if (live.Request)
+            {
+                if (Stage(live.Asset, &*live.Request))
+                {
+                    live.Clips = m_StagedClips;
+                    Draw(cmd, live.Picture, live.Asset);
+                }
+                live.Request.reset();
+            }
         int drawn = 0;
         while (!m_Queue.empty() && drawn < 2)
         {

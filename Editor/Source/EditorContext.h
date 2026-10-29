@@ -3,6 +3,7 @@
 #include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Scene/SceneSections.h>
 #include <Dimension/Asset/AssetManager.h>
+#include <Dimension/Scene/SelectionHistory.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -126,6 +127,12 @@ namespace Editor
             Selection.clear();
         }
         bool HasValidSelection() { return !Selected.IsNull() && ActiveScene().IsValid(Selected); }
+        // The selection as object GUIDs (or assets), and back: what still exists of it (false when nothing does).
+        // Restore also puts an empty selection back (nothing selected).
+        SelectionSnapshot CaptureSelection();
+        bool CanApplySelection(const SelectionSnapshot& s);
+        bool ApplySelection(const SelectionSnapshot& s);
+        void RestoreSelection(const SelectionSnapshot& s);
 
         // Undo/redo via full scene snapshots. Call RecordUndo() *before* a change.
         // Edits during play mode are not recorded (they are discarded on Stop, like Unity). A step is named after what

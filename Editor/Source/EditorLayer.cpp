@@ -252,6 +252,8 @@ namespace Editor
         if (!m_Options.ProjectSearch.empty()) m_Content->SetSearch(m_Options.ProjectSearch);
         if (!m_Options.AssetPreview.empty()) m_Inspector->SetPreview(m_Options.AssetPreview);
         if (m_Options.ViewGiven) m_Options.View == 0 ? FrameAll() : GoToView(m_Options.View);
+        if (m_Options.NewInspector) NewInspector(true);      // --new-inspector: one locked to the --select selection
+        if (m_Options.LockInspector) m_Inspector->LockToSelection();
         if (m_Options.SelectionSet > 0) RestoreSelection(m_Options.SelectionSet);
         // --grid "plane=1,cell=0.5,opacity=0.6,follow" (automation; for the session, the Preferences file unchanged).
         for (size_t start = 0; start < m_Options.Grid.size();)
@@ -808,51 +810,16 @@ namespace Editor
         m_Camera.Focus(center, radius);
     }
 
-    SelectionSnapshot EditorLayer::CaptureSelection()
-    {
-        // Objects by GUID (the primary one too); without objects, the selected assets.
-        Scene& scene = m_Ctx.ActiveScene();
-        SelectionSnapshot s;
-        for (Entity e : m_Ctx.Selection)
-            if (scene.IsValid(e)) s.Objects.push_back((uint64_t)scene.GetGuid(e));
-        if (m_Ctx.HasValidSelection()) s.Primary = (uint64_t)scene.GetGuid(m_Ctx.Selected);
-        if (s.Objects.empty())
-        {
-            for (AssetHandle a : m_Ctx.SelectedAssetList()) s.Assets.push_back((uint64_t)a);
-            s.PrimaryAsset = s.Assets.empty() ? 0 : (uint64_t)m_Ctx.SelectedAsset;
-        }
-        return s;
-    }
+    SelectionSnapshot EditorLayer::CaptureSelection() { return m_Ctx.CaptureSelection(); }
 
-    bool EditorLayer::CanApplySelection(const SelectionSnapshot& s)
-    {
-        Scene& scene = m_Ctx.ActiveScene();
-        for (uint64_t g : s.Objects)
-            if (!scene.FindEntityByGuid(Guid(g)).IsNull()) return true;
-        for (uint64_t a : s.Assets)
-            if (AssetManager::GetMetadata(Guid(a))) return true;
-        return false;
-    }
+    bool EditorLayer::CanApplySelection(const SelectionSnapshot& s) { return m_Ctx.CanApplySelection(s); }
 
     bool EditorLayer::ApplySelection(const SelectionSnapshot& s)
     {
-        // What still exists of it (objects deleted since are left out).
-        Scene& scene = m_Ctx.ActiveScene();
-        if (!s.Objects.empty())
-        {
-            m_Ctx.Select(Entity::Null());
-            for (uint64_t g : s.Objects)
-                if (Entity e = scene.FindEntityByGuid(Guid(g)); !e.IsNull()) m_Ctx.AddToSelection(e);
-            if (Entity p = scene.FindEntityByGuid(Guid(s.Primary)); !p.IsNull() && m_Ctx.IsSelected(p)) m_Ctx.AddToSelection(p); // primary again
-            return !m_Ctx.Selection.empty();
-        }
-        std::vector<AssetHandle> assets;
-        for (uint64_t a : s.Assets)
-            if (AssetManager::GetMetadata(Guid(a))) assets.push_back(Guid(a));
-        if (assets.empty()) return false;
-        AssetHandle primary = std::find(assets.begin(), assets.end(), Guid(s.PrimaryAsset)) != assets.end() ? AssetHandle(Guid(s.PrimaryAsset)) : assets.back();
-        m_Ctx.SelectAssets(assets, primary);
-        if (const AssetMetadata* m = AssetManager::GetMetadata(primary)) m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m->Path).parent_path());
+        if (!m_Ctx.ApplySelection(s)) return false;
+        // Selected assets: their folder in the Project window.
+        if (s.Objects.empty())
+            if (const AssetMetadata* m = AssetManager::GetMetadata(m_Ctx.SelectedAsset)) m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m->Path).parent_path());
         return true;
     }
 
@@ -948,6 +915,16 @@ namespace Editor
         changed |= ImGui::Checkbox("Follow selection's height", &prefs.GridFollowSelection);
         ImGui::SetItemTooltip("The grid moves along its normal to the selected object (the ground grid to its Y)");
         if (changed) prefs.Save();
+    }
+
+    void EditorLayer::NewInspector(bool lock)
+    {
+        int n = m_NextInspector++;
+        std::string title = "Inspector " + std::to_string(n) + "###Inspector" + std::to_string(n);
+        ExtraInspector extra{ MakeScope<InspectorPanel>(m_Ctx, title, n), true };
+        extra.Panel->DebugMode = m_Inspector->DebugMode;
+        if (lock) extra.Panel->LockToSelection();
+        m_ExtraInspectors.push_back(std::move(extra));
     }
 
     void EditorLayer::MoveSelectionToView()
@@ -2527,6 +2504,8 @@ namespace Editor
 
         if (m_ShowHierarchy) m_Hierarchy->OnImGui(&m_ShowHierarchy);
         if (m_ShowInspector) m_Inspector->OnImGui(&m_ShowInspector);
+        for (auto& extra : m_ExtraInspectors) extra.Panel->OnImGui(&extra.Open);
+        std::erase_if(m_ExtraInspectors, [](const ExtraInspector& x) { return !x.Open; });
         if (m_ShowContent) m_Content->OnImGui(&m_ShowContent);
         if (m_ShowConsole) m_Console->OnImGui(&m_ShowConsole);
         if (m_ShowSceneSettings) m_SceneSettings->OnImGui(&m_ShowSceneSettings);
@@ -2770,6 +2749,8 @@ namespace Editor
         {
             ImGui::MenuItem("Hierarchy", nullptr, &m_ShowHierarchy);
             ImGui::MenuItem("Inspector", nullptr, &m_ShowInspector);
+            if (ImGui::MenuItem("New Inspector")) NewInspector(true);
+            ImGui::SetItemTooltip("Another Inspector window, locked to the selection (unlock it to follow the selection)");
             ImGui::MenuItem("Project", nullptr, &m_ShowContent);
             ImGui::MenuItem("Console", nullptr, &m_ShowConsole);
             ImGui::MenuItem("Scene Settings", nullptr, &m_ShowSceneSettings);
@@ -2912,7 +2893,9 @@ namespace Editor
 
             // Play controls (center)
             float w = ImGui::GetFrameHeight() * 1.25f * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
-            ImGui::SameLine(ImGui::GetWindowWidth() * 0.5f - w * 0.5f);
+            // In the middle, or after the tools when they reach past it (narrow windows).
+            ImGui::SameLine();
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 12.0f, ImGui::GetWindowWidth() * 0.5f - w * 0.5f));
             if (GlyphButton("##play", m_Ctx.IsPlaying() ? Glyph::Stop : Glyph::Play, m_Ctx.IsPlaying(), m_Ctx.IsPlaying() ? "Stop (Ctrl+P)" : "Play (Ctrl+P)"))
                 m_Ctx.IsPlaying() ? Stop() : Play();
             ImGui::SameLine();

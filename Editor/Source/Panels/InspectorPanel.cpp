@@ -244,10 +244,68 @@ namespace Editor
         ImGui::Dummy({ 0.0f, 0.0f });
     }
 
+    void InspectorPanel::LockToSelection()
+    {
+        m_Lock = m_Ctx.CaptureSelection();
+        m_Locked = !m_Lock.Empty();
+    }
+
+    void InspectorPanel::DrawLockBar(bool missing)
+    {
+        // What it is locked to (at the left) and the lock (at the right).
+        if (m_Locked)
+        {
+            Scene& scene = m_Ctx.ActiveScene();
+            std::string what;
+            if (missing) what = "(gone)";
+            else if (!m_Lock.Objects.empty())
+            {
+                Entity p = scene.FindEntityByGuid(Guid(m_Lock.Primary));
+                what = p.IsNull() ? "objects" : scene.GetRegistry().Get<TagComponent>(p).Name;
+                if (m_Lock.Objects.size() > 1) what += " (+" + std::to_string(m_Lock.Objects.size() - 1) + ")";
+            }
+            else if (const AssetMetadata* m = AssetManager::GetMetadata(Guid(m_Lock.PrimaryAsset)))
+                what = m->Path.filename().string() + (m_Lock.Assets.size() > 1 ? " (+" + std::to_string(m_Lock.Assets.size() - 1) + ")" : "");
+            ImGui::TextColored(UI::AccentText(), "Locked to %s", what.c_str());
+            ImGui::SameLine();
+        }
+        float width = ImGui::CalcTextSize("Locked").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width));
+        if (m_Locked) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        bool clicked = ImGui::SmallButton(m_Locked ? "Locked" : "Lock");
+        if (m_Locked) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(m_Locked ? "Unlock: show the selection again" : "Lock: keep showing this while other things are selected");
+        if (clicked)
+        {
+            if (m_Locked) Unlock();
+            else LockToSelection();
+        }
+    }
+
     void InspectorPanel::OnImGui(bool* open)
     {
-        if (!ImGui::Begin("Inspector", open))
+        if (m_Title != "Inspector") ImGui::SetNextWindowSize(ImVec2(380.0f, 560.0f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin(m_Title.c_str(), open))
         {
+            ImGui::End();
+            return;
+        }
+        // Locked: the editor's selection is the locked one while this Inspector draws (so its edits, multi-object
+        // editing and pickers work as usual), then the user's again, unless something here selected something else.
+        SelectionSnapshot user, shown;
+        bool swapped = false, missing = false;
+        if (m_Locked)
+        {
+            user = m_Ctx.CaptureSelection();
+            swapped = m_Ctx.ApplySelection(m_Lock);
+            missing = !swapped;
+            if (swapped) shown = m_Ctx.CaptureSelection();
+        }
+        DrawLockBar(missing);
+        if (missing)
+        {
+            ImGui::TextDisabled("What this Inspector is locked to is gone (deleted, or in another scene).");
             ImGui::End();
             return;
         }
@@ -270,9 +328,13 @@ namespace Editor
         else if (auto assets = m_Ctx.SelectedAssetList(); assets.size() > 1) DrawAssets(assets);
         else if (m_Ctx.SelectedAsset.IsValid()) DrawAsset(m_Ctx.SelectedAsset);
         else ImGui::TextDisabled("Select a GameObject or asset to inspect it.");
-        // A clip preview stops when its asset is no longer shown.
-        if (!AudioEngine::PreviewFile().empty() && (m_Ctx.HasValidSelection() || AssetManager::GetAbsolutePath(m_Ctx.SelectedAsset) != AudioEngine::PreviewFile()))
-            AudioEngine::PreviewStop();
+        // A clip this Inspector plays stops when it no longer shows it.
+        if (!m_PreviewOwnFile.empty() && (m_Ctx.HasValidSelection() || AssetManager::GetAbsolutePath(m_Ctx.SelectedAsset) != m_PreviewOwnFile))
+        {
+            if (AudioEngine::PreviewFile() == m_PreviewOwnFile) AudioEngine::PreviewStop();
+            m_PreviewOwnFile.clear();
+        }
+        if (swapped && m_Ctx.CaptureSelection() == shown) m_Ctx.RestoreSelection(user);
         ImGui::End();
     }
 
@@ -1404,12 +1466,12 @@ namespace Editor
             ImGui::SetTooltip("Drag to turn, scroll to zoom, double-click to reset");
         }
         // Clip time runs while playing (looping).
-        const auto& clips = m_Ctx.Previews->LiveClips();
+        const auto& clips = m_Ctx.Previews->LiveClips(m_PreviewSlot);
         auto clip = std::find_if(clips.begin(), clips.end(), [&](const auto& c) { return c.Name == m_LiveView.Clip; });
         if (clip == clips.end() && !m_LiveView.Clip.empty() && !clips.empty()) m_LiveView.Clip.clear();
         if (m_LivePlaying && clip != clips.end() && clip->Duration > 0.0f)
             m_LiveView.Time = std::fmod(m_LiveView.Time + ImGui::GetIO().DeltaTime, clip->Duration);
-        if (uint64_t picture = m_Ctx.Previews->Live(handle, m_LiveView))
+        if (uint64_t picture = m_Ctx.Previews->Live(handle, m_LiveView, m_PreviewSlot))
             ImGui::GetWindowDrawList()->AddImage(ImTextureRef((ImTextureID)picture), at, ImVec2(at.x + size, at.y + size));
         if (clips.empty()) return;
         ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x * 0.45f));
@@ -1487,6 +1549,7 @@ namespace Editor
         if (ImGui::IsItemClicked() && w.Seconds > 0.0f)
             AudioEngine::PreviewPlay(file, std::clamp((ImGui::GetMousePos().x - at.x) / width, 0.0f, 1.0f) * w.Seconds, m_PreviewLoop);
         ImGui::SetItemTooltip("Click to play from there");
+        if (AudioEngine::PreviewFile() == file) m_PreviewOwnFile = file; // started here
     }
 
     void InspectorPanel::DrawAssetReferences(AssetHandle handle)

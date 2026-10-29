@@ -48,6 +48,8 @@ namespace Editor
         int SelectionSet = 0;         // --selection-set N: select saved selection N
         std::string Press;            // --press "edit.group": that shortcut's command, once, at frame 40
         std::string Grid;             // --grid "plane=1,cell=0.5,opacity=0.6,follow": grid settings for the session
+        bool NewInspector = false;    // --new-inspector: another Inspector, locked to the --select selection
+        bool LockInspector = false;   // --lock-inspector: the Inspector locked to the --select selection
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
@@ -231,6 +233,15 @@ namespace Editor
         // The Scene view grid's settings (Preferences, with the selection's height) and the menu beside the Grid toggle.
         Dimension::GridSettings SceneGridSettings();
         void DrawGridMenu();
+        // Window > New Inspector: more Inspector windows (each with its own lock), closed with their window.
+        struct ExtraInspector
+        {
+            Scope<InspectorPanel> Panel;
+            bool Open = true;
+        };
+        std::vector<ExtraInspector> m_ExtraInspectors;
+        int m_NextInspector = 2;
+        void NewInspector(bool lock);
         bool m_OpenGridMenu = false;
         // Selection history (Alt+Left/Right) and saved selections (Ctrl+Alt+1-9 saves, Alt+1-9 selects).
         Dimension::SelectionSnapshot CaptureSelection();

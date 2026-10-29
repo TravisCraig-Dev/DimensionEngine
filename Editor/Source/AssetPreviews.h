@@ -4,6 +4,7 @@
 #include <Dimension/Renderer/Image.h>
 #include <Dimension/Scene/Scene.h>
 #include <Dimension/Asset/AssetManager.h>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -43,9 +44,10 @@ namespace Editor
         uint64_t Get(AssetHandle asset);
         // Asks for the live preview of a model or prefab this frame, as `view` says; returns its picture as last drawn (0
         // until drawn once). Only one asset at a time has a live preview.
-        uint64_t Live(AssetHandle asset, const LiveView& view);
+        // `slot` tells live previews apart (one per Inspector window).
+        uint64_t Live(AssetHandle asset, const LiveView& view, int slot = 0);
         // The animation clips the live preview's subject can play (known once it has been drawn).
-        const std::vector<ClipInfo>& LiveClips() const { return m_LiveClips; }
+        const std::vector<ClipInfo>& LiveClips(int slot = 0) { return m_Live[slot].Clips; }
         // Draws the waiting ones (call while recording the frame).
         void Render(VkCommandBuffer cmd);
         static bool HasPreview(AssetType type) { return type == AssetType::Material || type == AssetType::Mesh || type == AssetType::Prefab; }
@@ -63,10 +65,15 @@ namespace Editor
         // Builds the subject for an asset and frames it; false when there is nothing to show.
         bool Stage(AssetHandle asset, const LiveView* view = nullptr);
         void Draw(VkCommandBuffer cmd, Entry& entry, AssetHandle asset);
-        Entry m_LiveEntry;
-        AssetHandle m_LiveAsset = AssetHandle::None();
-        std::optional<LiveView> m_LiveRequest;
-        std::vector<ClipInfo> m_LiveClips;
+        struct LiveSlot
+        {
+            Entry Picture;
+            AssetHandle Asset = AssetHandle::None();
+            std::optional<LiveView> Request;
+            std::vector<ClipInfo> Clips;
+        };
+        std::map<int, LiveSlot> m_Live;
+        std::vector<ClipInfo> m_StagedClips; // the clips of the subject Stage built last (with a view)
         Ref<Scene> m_Scene;
         Entity m_Subject, m_Camera;
         SceneRenderer m_Renderer;

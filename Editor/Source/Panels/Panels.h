@@ -41,8 +41,15 @@ namespace Editor
     class InspectorPanel
     {
     public:
-        explicit InspectorPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        // `title` names the window (extra Inspectors: "Inspector 2###Inspector2"); `previewSlot` keeps its asset
+        // previews apart from the other Inspectors'.
+        explicit InspectorPanel(EditorContext& ctx, std::string title = "Inspector", int previewSlot = 0)
+            : m_Ctx(ctx), m_Title(std::move(title)), m_PreviewSlot(previewSlot) {}
         void OnImGui(bool* open);
+        // The lock (like Unity's padlock): a locked Inspector keeps showing what was selected when it was locked.
+        void LockToSelection();
+        void Unlock() { m_Locked = false; }
+        bool IsLocked() const { return m_Locked; }
         // Debug mode (like Unity's): hidden fields, and C# scripts' private state, shown read-only.
         bool DebugMode = false;
         // The next asset preview's view, "yaw=..,pitch=..,zoom=..,clip=..,time=..,play" (automation).
@@ -59,6 +66,12 @@ namespace Editor
         void DrawImportDefault(AssetHandle handle);
         // An asset's Uses / Used By lists and its Find References In Scene button.
         void DrawAssetReferences(AssetHandle handle);
+        void DrawLockBar(bool missing);
+        std::string m_Title;
+        int m_PreviewSlot = 0;
+        bool m_Locked = false;
+        SelectionSnapshot m_Lock;
+        fs::path m_PreviewOwnFile; // the audio clip this Inspector plays
         // A model's or prefab's live preview with its clips; an audio clip's waveform, Play and playhead.
         void DrawLivePreview(AssetHandle handle);
         void DrawAudioPreview(AssetHandle handle);

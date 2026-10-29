@@ -40,6 +40,63 @@ namespace Editor
         return m_SearchMatches;
     }
 
+    SelectionSnapshot EditorContext::CaptureSelection()
+    {
+        // Objects by GUID (the primary one too); without objects, the selected assets.
+        Scene& scene = ActiveScene();
+        SelectionSnapshot s;
+        for (Entity e : Selection)
+            if (scene.IsValid(e)) s.Objects.push_back((uint64_t)scene.GetGuid(e));
+        if (HasValidSelection()) s.Primary = (uint64_t)scene.GetGuid(Selected);
+        if (s.Objects.empty())
+        {
+            for (AssetHandle a : SelectedAssetList()) s.Assets.push_back((uint64_t)a);
+            s.PrimaryAsset = s.Assets.empty() ? 0 : (uint64_t)SelectedAsset;
+        }
+        return s;
+    }
+
+    bool EditorContext::CanApplySelection(const SelectionSnapshot& s)
+    {
+        Scene& scene = ActiveScene();
+        for (uint64_t g : s.Objects)
+            if (!scene.FindEntityByGuid(Guid(g)).IsNull()) return true;
+        for (uint64_t a : s.Assets)
+            if (AssetManager::GetMetadata(Guid(a))) return true;
+        return false;
+    }
+
+    bool EditorContext::ApplySelection(const SelectionSnapshot& s)
+    {
+        // What still exists of it (objects deleted since are left out).
+        Scene& scene = ActiveScene();
+        if (!s.Objects.empty())
+        {
+            std::vector<Entity> found;
+            for (uint64_t g : s.Objects)
+                if (Entity e = scene.FindEntityByGuid(Guid(g)); !e.IsNull()) found.push_back(e);
+            if (found.empty()) return false;
+            Select(Entity::Null());
+            for (Entity e : found) AddToSelection(e);
+            if (Entity p = scene.FindEntityByGuid(Guid(s.Primary)); !p.IsNull() && IsSelected(p)) AddToSelection(p); // primary again
+            return true;
+        }
+        std::vector<AssetHandle> assets;
+        for (uint64_t a : s.Assets)
+            if (AssetManager::GetMetadata(Guid(a))) assets.push_back(Guid(a));
+        if (assets.empty()) return false;
+        AssetHandle primary = std::find(assets.begin(), assets.end(), Guid(s.PrimaryAsset)) != assets.end() ? AssetHandle(Guid(s.PrimaryAsset)) : assets.back();
+        SelectAssets(assets, primary);
+        return true;
+    }
+
+    void EditorContext::RestoreSelection(const SelectionSnapshot& s)
+    {
+        if (ApplySelection(s)) return;
+        Select(Entity::Null());
+        ClearAssetSelection();
+    }
+
     std::vector<EditorContext::HistoryStep> EditorContext::History()
     {
         std::vector<HistoryStep> out;
