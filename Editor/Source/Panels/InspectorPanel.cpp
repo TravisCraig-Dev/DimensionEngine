@@ -102,7 +102,25 @@ namespace Editor
             return resolver;
         }
 
-        enum class ComponentAction { None, Reset, Remove, Copy, PasteValues, PasteNew, MoveUp, MoveDown, SavePreset, ApplyPreset };
+        enum class ComponentAction { None, Reset, Remove, Copy, PasteValues, PasteNew, MoveUp, MoveDown, SavePreset, ApplyPreset, CollapseAll, ExpandAll };
+
+        // Headers folded closed, by component name ("Script:<class>" for scripts), kept with the editor preferences so
+        // a Transform folded on one object is folded on every object.
+        bool IsFolded(const std::string& key)
+        {
+            const auto& folded = EditorPreferences::Get().FoldedComponents;
+            return std::find(folded.begin(), folded.end(), key) != folded.end();
+        }
+
+        void SetFolded(const std::string& key, bool folded, bool save = true)
+        {
+            auto& list = EditorPreferences::Get().FoldedComponents;
+            bool has = std::find(list.begin(), list.end(), key) != list.end();
+            if (folded == has) return;
+            if (folded) list.push_back(key);
+            else std::erase(list, key);
+            if (save) EditorPreferences::Get().Save();
+        }
         AssetHandle s_ChosenPreset; // ComponentAction::ApplyPreset: which
 
         // A preset onto objects (one undo step; prefab instances record the fields as overrides).
@@ -140,7 +158,9 @@ namespace Editor
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_SpanAvailWidth |
                                        ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_FramePadding;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 5));
+            ImGui::SetNextItemOpen(!IsFolded(info.Name), ImGuiCond_Always);
             bool open = ImGui::TreeNodeEx(name, flags, "%s", name);
+            if (ImGui::IsItemToggledOpen()) SetFolded(info.Name, !open);
             ImGui::PopStyleVar();
             bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right); // right-click the header, or use "..."
             float w = ImGui::GetFrameHeight();
@@ -184,6 +204,9 @@ namespace Editor
                 ImGui::Separator();
                 if (ImGui::MenuItem("Move Up", nullptr, false, canMoveUp)) action = ComponentAction::MoveUp;
                 if (ImGui::MenuItem("Move Down", nullptr, false, canMoveDown)) action = ComponentAction::MoveDown;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Collapse All")) action = ComponentAction::CollapseAll;
+                if (ImGui::MenuItem("Expand All")) action = ComponentAction::ExpandAll;
                 ImGui::EndPopup();
             }
             ImGui::PopID();
@@ -477,6 +500,15 @@ namespace Editor
             {
                 moveInfo = &info;
                 moveDelta = action == ComponentAction::MoveUp ? -1 : 1;
+            }
+            if (action == ComponentAction::CollapseAll || action == ComponentAction::ExpandAll)
+            {
+                // Every header on this object: its components and its scripts.
+                bool fold = action == ComponentAction::CollapseAll;
+                for (const ComponentInfo* c : ordered) SetFolded(c->Name, fold, false);
+                if (auto* scripts = reg.TryGet<ScriptComponent>(e))
+                    for (const auto& s : scripts->Scripts) SetFolded("Script:" + s.ClassName, fold, false);
+                EditorPreferences::Get().Save();
             }
             bool remove = action == ComponentAction::Remove, reset = action == ComponentAction::Reset;
             if (action == ComponentAction::Copy)
@@ -1057,8 +1089,11 @@ namespace Editor
             std::string label = script.ClassName.empty() ? std::string("(no class)") : script.ClassName;
             if (info) label += info->Module == "csharp" ? "   C#" : "   C++";
             if (!info && !script.ClassName.empty()) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.4f, 0.4f, 1));
-            bool open = ImGui::TreeNodeEx("##script", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap,
+            std::string foldKey = "Script:" + script.ClassName;
+            ImGui::SetNextItemOpen(!IsFolded(foldKey), ImGuiCond_Always);
+            bool open = ImGui::TreeNodeEx("##script", ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap,
                                           "%s%s", label.c_str(), !info && !script.ClassName.empty() ? "  (missing)" : "");
+            if (ImGui::IsItemToggledOpen()) SetFolded(foldKey, !open);
             if (!info && !script.ClassName.empty()) ImGui::PopStyleColor();
             float w = ImGui::GetFrameHeight();
             ImGui::SameLine(ImGui::GetContentRegionMax().x - w * 3 - 8);

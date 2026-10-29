@@ -17,6 +17,8 @@ namespace Editor
         float GridCellSize = 0.0f;
         float GridOpacity = 1.0f;
         bool GridFollowSelection = false;
+        // Inspector headers folded closed: component names, and "Script:<class>" for scripts (open unless listed).
+        std::vector<std::string> FoldedComponents;
         bool ClearConsoleOnPlay = true;
         float AutosaveMinutes = 5.0f;  // 0 = off; backups go to <project>/.dimension/Autosave
         bool SaveSceneBeforePlay = false;

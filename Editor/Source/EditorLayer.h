@@ -50,6 +50,7 @@ namespace Editor
         std::string Grid;             // --grid "plane=1,cell=0.5,opacity=0.6,follow": grid settings for the session
         bool NewInspector = false;    // --new-inspector: another Inspector, locked to the --select selection
         bool LockInspector = false;   // --lock-inspector: the Inspector locked to the --select selection
+        std::string Fold;             // --fold "Transform,Script:Spinner": Inspector headers folded for the session
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's

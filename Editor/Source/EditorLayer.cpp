@@ -252,6 +252,16 @@ namespace Editor
         if (!m_Options.ProjectSearch.empty()) m_Content->SetSearch(m_Options.ProjectSearch);
         if (!m_Options.AssetPreview.empty()) m_Inspector->SetPreview(m_Options.AssetPreview);
         if (m_Options.ViewGiven) m_Options.View == 0 ? FrameAll() : GoToView(m_Options.View);
+        // --fold "Transform,Script:Spinner" (automation): those headers folded, for the session.
+        for (size_t start = 0; start < m_Options.Fold.size();)
+        {
+            size_t comma = m_Options.Fold.find(',', start);
+            std::string key = m_Options.Fold.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            auto& folded = EditorPreferences::Get().FoldedComponents;
+            if (!key.empty() && std::find(folded.begin(), folded.end(), key) == folded.end()) folded.push_back(key);
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
         if (m_Options.NewInspector) NewInspector(true);      // --new-inspector: one locked to the --select selection
         if (m_Options.LockInspector) m_Inspector->LockToSelection();
         if (m_Options.SelectionSet > 0) RestoreSelection(m_Options.SelectionSet);
