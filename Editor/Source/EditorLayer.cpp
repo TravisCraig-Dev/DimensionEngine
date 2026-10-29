@@ -23,6 +23,7 @@
 #include <Dimension/Scene/SceneBounds.h>
 #include <Dimension/Scene/SceneMeasure.h>
 #include <Dimension/Scene/SelectionHistory.h>
+#include <Dimension/Scene/ViewAlign.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
@@ -889,6 +890,30 @@ namespace Editor
                 ImGui::EndMenu();
             }
         }
+    }
+
+    void EditorLayer::MoveSelectionToView()
+    {
+        // To the point the Scene view orbits (the middle of the view).
+        auto roots = m_Ctx.SelectedRoots();
+        if (roots.empty()) return;
+        m_Ctx.RecordUndo("Move To View");
+        ViewAlign::MoveTo(m_Ctx.ActiveScene(), roots, m_Camera.GetPosition() + m_Camera.GetForward() * m_Camera.GetDistance());
+    }
+
+    void EditorLayer::AlignSelectionWithView()
+    {
+        auto roots = m_Ctx.SelectedRoots();
+        if (roots.empty()) return;
+        m_Ctx.RecordUndo("Align With View");
+        ViewAlign::AlignWithView(m_Ctx.ActiveScene(), roots, glm::inverse(m_Camera.GetView()));
+    }
+
+    void EditorLayer::AlignViewToSelected()
+    {
+        if (!m_Ctx.HasValidSelection()) return;
+        if (m_Camera.Is2D()) m_Camera.Set2D(false); // a 3D view from it
+        m_Camera.SetFromView(ViewAlign::ViewFrom(m_Ctx.ActiveScene(), m_Ctx.Selected));
     }
 
     void EditorLayer::SetMeasuring(bool on)
@@ -2674,6 +2699,12 @@ namespace Editor
         if (ImGui::BeginMenu("GameObject"))
         {
             DrawCreateMenuItems(m_Ctx, Entity::Null());
+            ImGui::Separator();
+            bool selected = m_Ctx.HasValidSelection();
+            if (ImGui::MenuItem("Move To View", Shortcuts::Label("scene.moveToView").c_str(), false, selected && !m_Ctx.IsPlaying())) MoveSelectionToView();
+            if (ImGui::MenuItem("Align With View", Shortcuts::Label("scene.alignWithView").c_str(), false, selected && !m_Ctx.IsPlaying()))
+                AlignSelectionWithView();
+            if (ImGui::MenuItem("Align View to Selected", Shortcuts::Label("scene.alignViewToSelected").c_str(), false, selected)) AlignViewToSelected();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Window"))
@@ -3438,6 +3469,9 @@ namespace Editor
         if (Pressed("edit.paste")) PasteClipboard(m_Ctx);
         if (Pressed("edit.delete") && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
         if (Pressed("edit.group") && !m_Ctx.IsPlaying()) GroupSelected(m_Ctx);
+        if (Pressed("scene.moveToView") && !m_Ctx.IsPlaying()) MoveSelectionToView();
+        if (Pressed("scene.alignWithView") && !m_Ctx.IsPlaying()) AlignSelectionWithView();
+        if (Pressed("scene.alignViewToSelected")) AlignViewToSelected();
         if (Pressed("edit.ungroup") && !m_Ctx.IsPlaying()) UngroupSelected(m_Ctx);
         // Selection history and saved selections.
         if (Pressed("edit.selectBack")) SelectionBack();

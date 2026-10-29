@@ -223,6 +223,10 @@ namespace Editor
         // The measuring tool (toolbar Measure, M): two picked points and the ruler between them.
         bool UpdateMeasure(const ImVec2& origin, const ImVec2& size);
         void SetMeasuring(bool on);
+        // GameObject > Move To View, Align With View, Align View to Selected.
+        void MoveSelectionToView();
+        void AlignSelectionWithView();
+        void AlignViewToSelected();
         // Selection history (Alt+Left/Right) and saved selections (Ctrl+Alt+1-9 saves, Alt+1-9 selects).
         Dimension::SelectionSnapshot CaptureSelection();
         bool CanApplySelection(const Dimension::SelectionSnapshot& s);

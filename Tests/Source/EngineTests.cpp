@@ -24,6 +24,7 @@
 #include <Dimension/Scene/SceneMeasure.h>
 #include <Dimension/Scene/SelectionHistory.h>
 #include <Dimension/Scene/SceneGrouping.h>
+#include <Dimension/Scene/ViewAlign.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -8573,6 +8574,65 @@ namespace
         CHECK(names(scene.GetRootEntities()) == "A,B,Box,C,Group,P,X,Y");
     }
 
+    // Align With View, Move To View and Align View to Selected: objects placed in world space whatever their parents.
+    void TestViewAlign()
+    {
+        Scene scene("Align");
+        auto& reg = scene.GetRegistry();
+        auto worldOf = [&](Entity e) {
+            scene.UpdateTransforms();
+            return reg.Get<TransformComponent>(e).World;
+        };
+        Entity parent = scene.CreateEntity("Parent"), child = scene.CreateEntity("Child", parent);
+        auto& pt = reg.Get<TransformComponent>(parent);
+        pt.Position = { 10.0f, 0.0f, 0.0f };
+        pt.Rotation = { 0.0f, glm::radians(90.0f), 0.0f };
+        pt.Scale = glm::vec3(2.0f);
+        reg.Get<TransformComponent>(child).Position = { 1.0f, 0.0f, 0.0f };
+
+        // A world pose under a rotated, scaled parent: there exactly, its world scale (2) kept.
+        glm::quat tilt = glm::angleAxis(glm::radians(30.0f), glm::vec3(1, 0, 0));
+        ViewAlign::SetWorldPose(scene, child, { 1.0f, 2.0f, 3.0f }, tilt);
+        glm::mat4 w = worldOf(child);
+        glm::mat4 expected = glm::mat4_cast(tilt);
+        CHECK(Near(glm::vec3(w[3]), { 1.0f, 2.0f, 3.0f }, 1e-4f) && Near(glm::length(glm::vec3(w[0])), 2.0f, 1e-4f));
+        CHECK(Near(glm::normalize(glm::vec3(w[1])), glm::vec3(expected[1]), 1e-4f) && Near(glm::normalize(glm::vec3(w[2])), glm::vec3(expected[2]), 1e-4f));
+
+        // Align With View: a camera at (5, 5, 5) looking at the origin; the object stands there facing the same way.
+        glm::vec3 eye(5.0f);
+        glm::mat4 cameraWorld = glm::inverse(glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0, 1, 0)));
+        Entity cam = scene.CreateEntity("Cam");
+        ViewAlign::AlignWithView(scene, { cam, child }, cameraWorld);
+        for (Entity e : { cam, child })
+        {
+            glm::mat4 m = worldOf(e);
+            CHECK(Near(glm::vec3(m[3]), eye, 1e-4f) && Near(-glm::normalize(glm::vec3(m[2])), glm::normalize(-eye), 1e-4f));
+        }
+        CHECK(Near(glm::length(glm::vec3(worldOf(child)[0])), 2.0f, 1e-4f));
+
+        // Move To View: together, spacing kept; a given child moves with its parent once.
+        Entity a = scene.CreateEntity("A"), b = scene.CreateEntity("B"), bChild = scene.CreateEntity("BChild", b);
+        reg.Get<TransformComponent>(b).Position = { 2.0f, 0.0f, 0.0f };
+        reg.Get<TransformComponent>(bChild).Position = { 0.0f, 1.0f, 0.0f };
+        ViewAlign::MoveTo(scene, { a, b, bChild }, { 10.0f, 1.0f, 0.0f });
+        // Center of A (0,0,0), B (2,0,0) and BChild (2,1,0) is (4/3, 1/3, 0): each moves by (8.67, 0.67, 0).
+        glm::vec3 offset = glm::vec3(10.0f, 1.0f, 0.0f) - glm::vec3(4.0f / 3.0f, 1.0f / 3.0f, 0.0f);
+        CHECK(Near(glm::vec3(worldOf(a)[3]), offset, 1e-4f) && Near(glm::vec3(worldOf(b)[3]), glm::vec3(2, 0, 0) + offset, 1e-4f));
+        CHECK(Near(glm::vec3(worldOf(bChild)[3]), glm::vec3(2, 1, 0) + offset, 1e-4f));
+        ViewAlign::MoveTo(scene, {}, glm::vec3(0.0f)); // nothing: no effect
+
+        // Align View to Selected: the view from the object, along its forward.
+        Entity look = scene.CreateEntity("Look");
+        reg.Get<TransformComponent>(look).Position = { 1.0f, 2.0f, 3.0f };
+        reg.Get<TransformComponent>(look).Rotation = { 0.0f, glm::radians(90.0f), 0.0f };
+        glm::mat4 view = glm::inverse(ViewAlign::ViewFrom(scene, look));
+        CHECK(Near(glm::vec3(view[3]), { 1.0f, 2.0f, 3.0f }, 1e-4f) && Near(-glm::vec3(view[2]), { -1.0f, 0.0f, 0.0f }, 1e-4f));
+        // Looking straight down: still a valid view.
+        reg.Get<TransformComponent>(look).Rotation = { glm::radians(-90.0f), 0.0f, 0.0f };
+        glm::mat4 down = glm::inverse(ViewAlign::ViewFrom(scene, look));
+        CHECK(Near(-glm::vec3(down[2]), { 0.0f, -1.0f, 0.0f }, 1e-4f) && !std::isnan(down[0][0]));
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10409,6 +10469,7 @@ int main(int argc, char** argv)
     Run("Scene view measuring tool", TestSceneMeasure);
     Run("Selection history and saved selections", TestSelectionHistory);
     Run("Hierarchy grouping and sorting", TestSceneGrouping);
+    Run("Align With View and Move To View", TestViewAlign);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);
