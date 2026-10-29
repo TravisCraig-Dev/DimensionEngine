@@ -38,7 +38,7 @@ layout(set = 1, binding = 0) uniform SceneData
     vec4 LightColor;     // rgb * intensity
     vec4 Ambient;        // rgb * intensity
     ivec4 Counts;        // x: point light count
-    vec4 GridParams;     // x: fade distance (0 = none)
+    vec4 GridParams;     // x: fade distance (0 = none), y: the grid's plane (0 XZ, 1 XY, 2 YZ)
     mat4 InvViewProj;
     mat4 LightViewProj[4]; // directional shadow cascades (tiles of a 2x2 atlas)
     vec4 ShadowParams;   // x: cascade count (0 = no shadows), y: atlas texture index, z: depth bias

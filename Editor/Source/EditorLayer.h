@@ -47,6 +47,7 @@ namespace Editor
         std::string Measure;          // --measure "x,y,z;x,y,z": the measuring tool on with that measurement
         int SelectionSet = 0;         // --selection-set N: select saved selection N
         std::string Press;            // --press "edit.group": that shortcut's command, once, at frame 40
+        std::string Grid;             // --grid "plane=1,cell=0.5,opacity=0.6,follow": grid settings for the session
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
@@ -227,6 +228,10 @@ namespace Editor
         void MoveSelectionToView();
         void AlignSelectionWithView();
         void AlignViewToSelected();
+        // The Scene view grid's settings (Preferences, with the selection's height) and the menu beside the Grid toggle.
+        Dimension::GridSettings SceneGridSettings();
+        void DrawGridMenu();
+        bool m_OpenGridMenu = false;
         // Selection history (Alt+Left/Right) and saved selections (Ctrl+Alt+1-9 saves, Alt+1-9 selects).
         Dimension::SelectionSnapshot CaptureSelection();
         bool CanApplySelection(const Dimension::SelectionSnapshot& s);

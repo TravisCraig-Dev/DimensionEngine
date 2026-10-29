@@ -14,7 +14,10 @@ void main()
     float fade = uScene.GridParams.x;
     if (fade > 0.0)
     {
-        float d = distance(vWorldPos.xz, uScene.CameraPosition.xz);
+        // In the grid's plane: XZ, XY or YZ (GridParams.y).
+        int plane = int(uScene.GridParams.y + 0.5);
+        vec3 p = vWorldPos, c = uScene.CameraPosition.xyz;
+        float d = plane == 1 ? distance(p.xy, c.xy) : plane == 2 ? distance(p.zy, c.zy) : distance(p.xz, c.xz);
         color.a *= 1.0 - smoothstep(fade * 0.5, fade, d);
     }
     if (color.a <= 0.001) discard;

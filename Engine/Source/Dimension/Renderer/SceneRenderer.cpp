@@ -1143,7 +1143,13 @@ namespace Dimension
         {
             CollectEditorIcons(scene, camera);
             BuildEditorOverlays(scene, options);
-            if (options.Grid) BuildGrid(camera, options.Grid2D, m_GridLines);
+            if (options.Grid)
+            {
+                GridSettings grid = options.GridConfig;
+                if (options.Grid2D) grid.Plane = GridPlane::XY, grid.Offset = 0.0f;
+                m_GridSpacing = BuildGrid(camera, grid, m_GridLines);
+                m_GridPlane = grid.Plane;
+            }
         }
 
         int shadowTimer = device.BeginGpuTimer(cmd, "Shadows");
@@ -1288,7 +1294,9 @@ namespace Dimension
         if (!m_GridLines.empty())
         {
             SceneUniforms gridU = u;
-            gridU.GridParams.x = (options.Grid2D || camera.Orthographic) ? 0.0f : 60.0f;
+            // Fading out with distance in the grid's plane (none in 2D and orthographic views).
+            gridU.GridParams.x = (options.Grid2D || camera.Orthographic) ? 0.0f : 60.0f * m_GridSpacing;
+            gridU.GridParams.y = (float)(int)m_GridPlane;
             device.BindUniforms(cmd, &gridU, sizeof(gridU));
             FlushLines(cmd, m_GridLines, MainPipeline(MainPipelines::Line));
             device.BindUniforms(cmd, &u, sizeof(u));
@@ -4475,31 +4483,17 @@ namespace Dimension
         m_Stats.DrawCalls++;
     }
 
-    void SceneRenderer::BuildGrid(const CameraData& camera, bool grid2D, std::vector<LineVertex>& out)
+    float SceneRenderer::BuildGrid(const CameraData& camera, const GridSettings& settings, std::vector<LineVertex>& out)
     {
-        // Grid spacing adapts to zoom so lines stay readable.
-        float height = grid2D ? 1.0f / camera.Projection[1][1] : std::abs(camera.Position.y);
-        float spacing = std::pow(10.0f, std::floor(std::log10(std::max(height, 1.0f) * 0.5f)));
-        spacing = std::max(spacing, 1.0f);
-        int half = 60;
-        glm::vec2 center = grid2D ? glm::vec2(camera.Position.x, camera.Position.y) : glm::vec2(camera.Position.x, camera.Position.z);
-        center = glm::floor(center / spacing) * spacing;
-        const glm::vec4 minor{ 0.5f, 0.5f, 0.5f, 0.25f }, major{ 0.6f, 0.6f, 0.6f, 0.5f };
-
-        auto point = [&](float a, float b) { return grid2D ? glm::vec3(a, b, 0.0f) : glm::vec3(a, 0.0f, b); };
-        for (int i = -half; i <= half; ++i)
+        // Grid spacing adapts to zoom so lines stay readable (unless the cell size is set).
+        bool ortho = camera.Orthographic;
+        float halfHeight = 1.0f / camera.Projection[1][1];
+        for (const GridLine& l : SceneGrid::Build(settings, camera.Position, ortho, halfHeight))
         {
-            float o = i * spacing;
-            float x = center.x + o, y = center.y + o;
-            bool majorX = std::fmod(std::abs(x), spacing * 10.0f) < 0.001f, majorY = std::fmod(std::abs(y), spacing * 10.0f) < 0.001f;
-            glm::vec4 cx = std::abs(x) < 0.001f ? glm::vec4(0.3f, 0.45f, 0.9f, 0.8f) : majorX ? major : minor; // line along second axis at x
-            glm::vec4 cy = std::abs(y) < 0.001f ? glm::vec4(0.9f, 0.3f, 0.3f, 0.8f) : majorY ? major : minor;
-            if (grid2D) cx = std::abs(x) < 0.001f ? glm::vec4(0.3f, 0.85f, 0.3f, 0.8f) : cx;
-            out.push_back({ point(x, center.y - half * spacing), cx });
-            out.push_back({ point(x, center.y + half * spacing), cx });
-            out.push_back({ point(center.x - half * spacing, y), cy });
-            out.push_back({ point(center.x + half * spacing, y), cy });
+            out.push_back({ l.A, l.Color });
+            out.push_back({ l.B, l.Color });
         }
+        return SceneGrid::Spacing(settings, camera.Position, ortho, halfHeight);
     }
 
     namespace

@@ -182,6 +182,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Project Hub") m_ShowHub = true;
         else if (m_Options.OpenWindow == "Undo History") m_ShowUndoHistory = true;
         else if (m_Options.OpenWindow == "Views") m_OpenViewsMenu = true;
+        else if (m_Options.OpenWindow == "Grid") m_OpenGridMenu = true;
         else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
             OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
         else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
@@ -252,6 +253,22 @@ namespace Editor
         if (!m_Options.AssetPreview.empty()) m_Inspector->SetPreview(m_Options.AssetPreview);
         if (m_Options.ViewGiven) m_Options.View == 0 ? FrameAll() : GoToView(m_Options.View);
         if (m_Options.SelectionSet > 0) RestoreSelection(m_Options.SelectionSet);
+        // --grid "plane=1,cell=0.5,opacity=0.6,follow" (automation; for the session, the Preferences file unchanged).
+        for (size_t start = 0; start < m_Options.Grid.size();)
+        {
+            size_t comma = m_Options.Grid.find(',', start);
+            std::string part = m_Options.Grid.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            size_t eq = part.find('=');
+            std::string key = part.substr(0, eq);
+            float value = eq == std::string::npos ? 1.0f : (float)std::atof(part.c_str() + eq + 1);
+            auto& prefs = EditorPreferences::Get();
+            if (key == "plane") prefs.GridPlane = std::clamp((int)value, 0, 2);
+            else if (key == "cell") prefs.GridCellSize = std::max(0.0f, value);
+            else if (key == "opacity") prefs.GridOpacity = std::clamp(value, 0.0f, 1.0f);
+            else if (key == "follow") prefs.GridFollowSelection = value != 0.0f;
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
         // --measure "x,y,z;x,y,z" (automation): the tool on, with that measurement.
         if (!m_Options.Measure.empty())
         {
@@ -892,6 +909,47 @@ namespace Editor
         }
     }
 
+    GridSettings EditorLayer::SceneGridSettings()
+    {
+        const auto& prefs = EditorPreferences::Get();
+        GridSettings grid;
+        grid.Plane = (GridPlane)std::clamp(prefs.GridPlane, 0, 2);
+        grid.CellSize = prefs.GridCellSize;
+        grid.Opacity = prefs.GridOpacity;
+        // At the selected object's height (its position along the plane's normal).
+        Scene& scene = m_Ctx.ActiveScene();
+        if (prefs.GridFollowSelection && m_Ctx.HasValidSelection())
+            grid.Offset = scene.GetRegistry().Get<TransformComponent>(m_Ctx.Selected).GetWorldPosition()[SceneGrid::NormalAxis(grid.Plane)];
+        return grid;
+    }
+
+    void EditorLayer::DrawGridMenu()
+    {
+        auto& prefs = EditorPreferences::Get();
+        bool changed = false;
+        ImGui::TextDisabled("Plane");
+        const char* planes[] = { "XZ (ground)", "XY", "YZ" };
+        for (int i = 0; i < 3; ++i) changed |= ImGui::RadioButton(planes[i], &prefs.GridPlane, i);
+        if (m_Camera.Is2D()) ImGui::TextDisabled("The 2D view always shows the XY grid");
+        ImGui::Separator();
+        bool automatic = prefs.GridCellSize <= 0.0f;
+        if (ImGui::Checkbox("Cell size adapts to the view", &automatic))
+        {
+            prefs.GridCellSize = automatic ? 0.0f : 1.0f;
+            changed = true;
+        }
+        if (!automatic)
+        {
+            ImGui::SetNextItemWidth(140.0f);
+            if (ImGui::DragFloat("Cell Size", &prefs.GridCellSize, 0.05f, 0.01f, 1000.0f, "%.2f m")) prefs.GridCellSize = std::max(prefs.GridCellSize, 0.01f), changed = true;
+        }
+        ImGui::SetNextItemWidth(140.0f);
+        changed |= ImGui::SliderFloat("Opacity", &prefs.GridOpacity, 0.0f, 1.0f, "%.2f");
+        changed |= ImGui::Checkbox("Follow selection's height", &prefs.GridFollowSelection);
+        ImGui::SetItemTooltip("The grid moves along its normal to the selected object (the ground grid to its Y)");
+        if (changed) prefs.Save();
+    }
+
     void EditorLayer::MoveSelectionToView()
     {
         // To the point the Scene view orbits (the middle of the view).
@@ -1012,6 +1070,7 @@ namespace Editor
             options.EditorOverlays = true;
             options.Grid = m_ShowGrid;
             options.Grid2D = m_Camera.Is2D();
+            options.GridConfig = SceneGridSettings();
             options.Selected = m_Ctx.Selected;
             options.Selection = m_Ctx.Selection;
             options.DefaultLight = m_Ctx.InPrefabMode();
@@ -2767,6 +2826,18 @@ namespace Editor
             if (is2D) ImGui::PopStyleColor();
             ImGui::SameLine();
             ImGui::Checkbox("Grid", &m_ShowGrid);
+            ImGui::SameLine(0.0f, 2.0f);
+            bool openGrid = m_OpenGridMenu && ImGui::GetFrameCount() >= 60; // (--open Grid: after the startup focus changes)
+            if (ImGui::ArrowButton("##gridSettings", ImGuiDir_Down) || openGrid) ImGui::OpenPopup("##gridMenu");
+            if (openGrid) m_OpenGridMenu = false;
+            ImVec2 gridBelow(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 2.0f);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Grid settings");
+            ImGui::SetNextWindowPos(gridBelow, ImGuiCond_Appearing);
+            if (ImGui::BeginPopup("##gridMenu"))
+            {
+                DrawGridMenu();
+                ImGui::EndPopup();
+            }
             ImGui::SameLine();
             ImGui::Checkbox("Gizmos", &m_ShowGizmos);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scripts' gizmos (C# OnDrawGizmos) in the Scene view");

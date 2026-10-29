@@ -25,6 +25,7 @@
 #include <Dimension/Scene/SelectionHistory.h>
 #include <Dimension/Scene/SceneGrouping.h>
 #include <Dimension/Scene/ViewAlign.h>
+#include <Dimension/Renderer/SceneGrid.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -8633,6 +8634,74 @@ namespace
         CHECK(Near(-glm::vec3(down[2]), { 0.0f, -1.0f, 0.0f }, 1e-4f) && !std::isnan(down[0][0]));
     }
 
+    // The Scene view grid: its plane, cell size (fixed or adapting), opacity and offset along its normal.
+    void TestSceneGrid()
+    {
+        CHECK(SceneGrid::NormalAxis(GridPlane::XZ) == 1 && SceneGrid::NormalAxis(GridPlane::XY) == 2 && SceneGrid::NormalAxis(GridPlane::YZ) == 0);
+        GridSettings ground;
+        // Adapting: 1 m up close, 10 m from 20 m away, 100 m from 200 m; measured from the plane (its offset).
+        CHECK(SceneGrid::Spacing(ground, { 0.0f, 5.0f, 0.0f }, false, 0.0f) == 1.0f);
+        CHECK(SceneGrid::Spacing(ground, { 0.0f, 30.0f, 0.0f }, false, 0.0f) == 10.0f);
+        CHECK(SceneGrid::Spacing(ground, { 0.0f, -250.0f, 0.0f }, false, 0.0f) == 100.0f);
+        GridSettings raised = ground;
+        raised.Offset = 28.0f;
+        CHECK(SceneGrid::Spacing(raised, { 0.0f, 30.0f, 0.0f }, false, 0.0f) == 1.0f);
+        CHECK(SceneGrid::Spacing(ground, { 0.0f, 0.0f, 0.0f }, true, 40.0f) == 10.0f); // orthographic: by the view's size
+        GridSettings fixedCells = ground;
+        fixedCells.CellSize = 0.25f;
+        CHECK(SceneGrid::Spacing(fixedCells, { 0.0f, 500.0f, 0.0f }, false, 0.0f) == 0.25f);
+
+        // The ground grid around (3.4, 5, -7.6), 1 m cells: lines on whole meters, at y 0, 121 each way.
+        auto lines = SceneGrid::Build(ground, { 3.4f, 5.0f, -7.6f }, false, 0.0f);
+        CHECK(lines.size() == 242);
+        bool flat = true, whole = true;
+        for (const auto& l : lines)
+        {
+            flat = flat && l.A.y == 0.0f && l.B.y == 0.0f;
+            whole = whole && std::fmod(std::abs(l.A.x), 1.0f) < 1e-4f && std::fmod(std::abs(l.A.z), 1.0f) < 1e-4f;
+        }
+        CHECK(flat && whole);
+        // The line along Z through x = 0 is blue, along X through z = 0 red; every 10th brighter than the rest.
+        auto find = [&](const std::vector<GridLine>& list, auto pred) -> const GridLine* {
+            for (const auto& l : list)
+                if (pred(l)) return &l;
+            return nullptr;
+        };
+        const GridLine* zAxis = find(lines, [](const GridLine& l) { return l.A.x == 0.0f && l.B.x == 0.0f; });
+        const GridLine* xAxis = find(lines, [](const GridLine& l) { return l.A.z == 0.0f && l.B.z == 0.0f; });
+        const GridLine* tenth = find(lines, [](const GridLine& l) { return l.A.x == 10.0f && l.B.x == 10.0f; });
+        const GridLine* plain = find(lines, [](const GridLine& l) { return l.A.x == 4.0f && l.B.x == 4.0f; });
+        CHECK(zAxis && zAxis->Color.b > zAxis->Color.r && xAxis && xAxis->Color.r > xAxis->Color.b);
+        CHECK(tenth && plain && tenth->Color.a > plain->Color.a && Near(plain->Color.a, 0.25f));
+
+        // An XY wall raised to z = 2, half opacity, 0.5 m cells: lines at z 2, on half meters, alpha halved; the line
+        // through y = 0 runs along X (red), through x = 0 along Y (green).
+        GridSettings wall;
+        wall.Plane = GridPlane::XY;
+        wall.CellSize = 0.5f;
+        wall.Opacity = 0.5f;
+        wall.Offset = 2.0f;
+        auto wallLines = SceneGrid::Build(wall, { 1.2f, 0.7f, 9.0f }, false, 0.0f);
+        bool atOffset = true;
+        for (const auto& l : wallLines) atOffset = atOffset && l.A.z == 2.0f && l.B.z == 2.0f;
+        const GridLine* yAxis = find(wallLines, [](const GridLine& l) { return l.A.x == 0.0f && l.B.x == 0.0f; });
+        const GridLine* wallX = find(wallLines, [](const GridLine& l) { return l.A.y == 0.0f && l.B.y == 0.0f; });
+        const GridLine* half = find(wallLines, [](const GridLine& l) { return l.A.x == 1.5f && l.B.x == 1.5f; });
+        CHECK(atOffset && yAxis && yAxis->Color.g > yAxis->Color.r && wallX && wallX->Color.r > wallX->Color.g);
+        CHECK(half && Near(half->Color.a, 0.125f));
+        // YZ: lines in x = offset.
+        GridSettings side;
+        side.Plane = GridPlane::YZ;
+        auto sideLines = SceneGrid::Build(side, { 4.0f, 1.0f, 1.0f }, false, 0.0f);
+        bool inX = !sideLines.empty();
+        for (const auto& l : sideLines) inX = inX && l.A.x == 0.0f && l.B.x == 0.0f;
+        CHECK(inX);
+        // Fully transparent: no lines.
+        GridSettings hidden;
+        hidden.Opacity = 0.0f;
+        CHECK(SceneGrid::Build(hidden, glm::vec3(0.0f), false, 0.0f).empty());
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10470,6 +10539,7 @@ int main(int argc, char** argv)
     Run("Selection history and saved selections", TestSelectionHistory);
     Run("Hierarchy grouping and sorting", TestSceneGrouping);
     Run("Align With View and Move To View", TestViewAlign);
+    Run("Scene view grid settings", TestSceneGrid);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

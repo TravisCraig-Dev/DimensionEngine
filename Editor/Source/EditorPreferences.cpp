@@ -32,6 +32,10 @@ namespace Editor
             CameraFlySpeed = j.value("cameraFlySpeed", CameraFlySpeed);
             CameraFieldOfView = j.value("cameraFieldOfView", CameraFieldOfView);
             ShowGrid = j.value("showGrid", ShowGrid);
+            GridPlane = std::clamp(j.value("gridPlane", GridPlane), 0, 2);
+            GridCellSize = std::max(0.0f, j.value("gridCellSize", GridCellSize));
+            GridOpacity = std::clamp(j.value("gridOpacity", GridOpacity), 0.0f, 1.0f);
+            GridFollowSelection = j.value("gridFollowSelection", GridFollowSelection);
             ClearConsoleOnPlay = j.value("clearConsoleOnPlay", ClearConsoleOnPlay);
             AutosaveMinutes = j.value("autosaveMinutes", AutosaveMinutes);
             SaveSceneBeforePlay = j.value("saveSceneBeforePlay", SaveSceneBeforePlay);
@@ -58,6 +62,10 @@ namespace Editor
                           { "cameraFlySpeed", CameraFlySpeed },
                           { "cameraFieldOfView", CameraFieldOfView },
                           { "showGrid", ShowGrid },
+                          { "gridPlane", GridPlane },
+                          { "gridCellSize", GridCellSize },
+                          { "gridOpacity", GridOpacity },
+                          { "gridFollowSelection", GridFollowSelection },
                           { "clearConsoleOnPlay", ClearConsoleOnPlay },
                           { "autosaveMinutes", AutosaveMinutes },
                           { "saveSceneBeforePlay", SaveSceneBeforePlay },

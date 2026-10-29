@@ -4,6 +4,7 @@
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Renderer/Image.h"
 #include "Dimension/Renderer/Occlusion.h"
+#include "Dimension/Renderer/SceneGrid.h"
 #include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
 #include <array>
@@ -39,7 +40,8 @@ namespace Dimension
     {
         bool EditorOverlays = false; // grid, icons, selection outlines, collider wireframes
         bool Grid = true;
-        bool Grid2D = false;         // XY grid instead of XZ
+        bool Grid2D = false;         // XY grid instead of XZ (the 2D view), whatever GridConfig's plane
+        GridSettings GridConfig;     // the grid's plane, cells, opacity and offset
         bool RenderUI = false;       // draw screen-space canvases (Game view / Player)
         bool DefaultLight = false;   // studio sun when the scene has no directional light (Prefab Mode)
         bool ProbeCapture = false;   // internal: HDR scene only, no post or probes (reflection probe faces)
@@ -439,7 +441,7 @@ namespace Dimension
         void CollectParticles(Scene& scene, const CameraData& camera);
         void CollectLines(Scene& scene, const CameraData& camera);
         void DrawSprites(VkCommandBuffer cmd);
-        void BuildGrid(const CameraData& camera, bool grid2D, std::vector<LineVertex>& out);
+        float BuildGrid(const CameraData& camera, const GridSettings& settings, std::vector<LineVertex>& out); // returns the cell size
         void BuildEditorOverlays(Scene& scene, const SceneRenderOptions& options);
         void BuildEntityOverlay(Scene& scene, Entity e);
         void FlushLines(VkCommandBuffer cmd, std::vector<LineVertex>& lines, const Pipeline& pipeline);
@@ -466,6 +468,8 @@ namespace Dimension
         std::vector<SpriteDraw> m_Sprites;
         std::vector<LineVertex> m_Lines;     // depth-tested overlay lines
         std::vector<LineVertex> m_GridLines;
+        float m_GridSpacing = 1.0f;
+        GridPlane m_GridPlane = GridPlane::XZ;
         RenderStats m_Stats;
     };
 }

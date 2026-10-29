@@ -11,6 +11,12 @@ namespace Editor
         float CameraFlySpeed = 6.0f;   // scene camera speed when the editor starts
         float CameraFieldOfView = 60.0f;
         bool ShowGrid = true;
+        // The Scene view grid: plane (0 XZ, 1 XY, 2 YZ), cell size (0: adapts to the view), opacity, and whether it
+        // moves to the selected object's height.
+        int GridPlane = 0;
+        float GridCellSize = 0.0f;
+        float GridOpacity = 1.0f;
+        bool GridFollowSelection = false;
         bool ClearConsoleOnPlay = true;
         float AutosaveMinutes = 5.0f;  // 0 = off; backups go to <project>/.dimension/Autosave
         bool SaveSceneBeforePlay = false;
