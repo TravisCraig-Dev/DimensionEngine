@@ -226,12 +226,21 @@ namespace Editor
             }
             FocusSelected();
         }
-        if (!m_Options.SelectAsset.empty())
-            if (AssetHandle h = AssetManager::GetHandle(m_Options.SelectAsset); h.IsValid())
+        // --select-asset "A,B": several select them all (the last is the primary).
+        for (size_t start = 0; start < m_Options.SelectAsset.size();)
+        {
+            size_t comma = m_Options.SelectAsset.find(',', start);
+            std::string path = m_Options.SelectAsset.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            if (AssetHandle h = AssetManager::GetHandle(path); h.IsValid())
             {
-                m_Ctx.SelectAsset(h);
-                m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m_Options.SelectAsset).parent_path());
+                auto list = m_Ctx.SelectedAssetList();
+                list.push_back(h);
+                m_Ctx.SelectAssets(list, h);
+                m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / path).parent_path());
             }
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
         // --new-scene "Template", --open-additive and --prefab-instance (automation).
         for (const auto& t : SceneTemplates::All())
             if (!m_Options.NewSceneTemplate.empty() && t.Name == m_Options.NewSceneTemplate) NewSceneFrom(t);
@@ -2318,7 +2327,7 @@ namespace Editor
             ImGui::Separator();
             if (ImGui::MenuItem("Import Package...")) ChooseImportPackage();
             if (ImGui::MenuItem("Export Package...", nullptr, false, m_Ctx.SelectedAsset.IsValid()))
-                OpenExportPackage({ m_Ctx.SelectedAsset });
+                OpenExportPackage(m_Ctx.SelectedAssetList());
             ImGui::Separator();
             if (ImGui::MenuItem("Build Settings...", Shortcuts::Label("file.buildSettings").c_str())) m_ShowBuildSettings = true;
             if (ImGui::MenuItem("Build And Run", Shortcuts::Label("file.buildAndRun").c_str(), false, !m_Ctx.IsPlaying())) BuildGame(true, Project::GetConfig().BuildFolder);
@@ -3028,6 +3037,51 @@ namespace Editor
                 ImGui::EndTable();
             }
             ImGui::TextDisabled("Changes apply the next time play mode starts.");
+        }
+        if (ImGui::CollapsingHeader("Import Defaults", config.ImportRules.empty() ? 0 : ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            // Folder rules: the import settings new textures and models get there (the deepest folder's rule wins).
+            ImGui::TextDisabled("Set from a texture or model's Inspector: Make Default for Folder.");
+            std::optional<size_t> remove;
+            if (config.ImportRules.empty()) ImGui::TextDisabled("No import defaults yet.");
+            else if (ImGui::BeginTable("##importRules", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders))
+            {
+                ImGui::TableSetupColumn("Folder");
+                ImGui::TableSetupColumn("Type");
+                ImGui::TableSetupColumn("Settings");
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableHeadersRow();
+                for (size_t i = 0; i < config.ImportRules.size(); ++i)
+                {
+                    const ImportRule& r = config.ImportRules[i];
+                    ImGui::PushID((int)i);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(r.Folder.empty() ? "Assets" : ("Assets/" + r.Folder).c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(r.Type == AssetType::Texture ? "Texture" : r.Type == AssetType::Mesh ? "Model" : AssetTypeToString(r.Type));
+                    ImGui::TableNextColumn();
+                    std::string summary;
+                    for (auto& [k, v] : r.Settings.items()) summary += (summary.empty() ? "" : ", ") + k + " " + v.dump();
+                    ImGui::TextWrapped("%s", summary.c_str());
+                    ImGui::TableNextColumn();
+                    if (ImGui::SmallButton("Apply to Existing"))
+                    {
+                        int n = ImportDefaults::ApplyToExisting(r.Folder, r.Type);
+                        Log::Info("Applied the import defaults of {} to {} asset(s)", r.Folder.empty() ? "Assets" : r.Folder, n);
+                    }
+                    ImGui::SetItemTooltip("Give the assets already in this folder these settings (not those under a deeper folder's rule)");
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Remove")) remove = i;
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+            if (remove)
+            {
+                config.ImportRules.erase(config.ImportRules.begin() + *remove);
+                changed = true;
+            }
         }
         ImGui::TextDisabled("Project folder: %s", Project::GetDirectory().string().c_str());
         if (changed) Project::Save();

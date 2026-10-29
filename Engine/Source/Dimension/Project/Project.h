@@ -3,6 +3,7 @@
 #include "Dimension/Core/Guid.h"
 #include <array>
 #include <map>
+#include "Dimension/Asset/ImportDefaults.h"
 #include <string>
 #include "Dimension/Audio/AudioMixer.h"
 #include <vector>
@@ -42,6 +43,8 @@ namespace Dimension
 
         // Presets: per component type (registry name), the preset applied to it when added in the editor.
         std::map<std::string, AssetHandle> DefaultPresets;
+        // Import defaults per folder (ImportDefaults): the settings new assets of a type get there.
+        std::vector<ImportRule> ImportRules;
 
         bool LayersCollide(int a, int b) const
         {

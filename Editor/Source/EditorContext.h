@@ -34,6 +34,37 @@ namespace Editor
         // The Hierarchy's search (the Scene view dims everything it does not match).
         std::string HierarchySearch;
         AssetHandle SelectedAsset = AssetHandle::None();
+        // Several assets selected in the Project window (Ctrl/Shift click): SelectedAsset is the last clicked of them.
+        std::vector<AssetHandle> SelectedAssets;
+        void ClearAssetSelection()
+        {
+            SelectedAsset = AssetHandle::None();
+            SelectedAssets.clear();
+        }
+        // The selected assets (empty: none; SelectedAsset alone when it was set without the list).
+        std::vector<AssetHandle> SelectedAssetList() const
+        {
+            if (!SelectedAsset.IsValid()) return {};
+            if (std::find(SelectedAssets.begin(), SelectedAssets.end(), SelectedAsset) == SelectedAssets.end()) return { SelectedAsset };
+            return SelectedAssets;
+        }
+        bool IsAssetSelected(AssetHandle a) const
+        {
+            auto list = SelectedAssetList();
+            return a.IsValid() && std::find(list.begin(), list.end(), a) != list.end();
+        }
+        void ToggleSelectAsset(AssetHandle a)
+        {
+            std::vector<AssetHandle> list = SelectedAssetList();
+            if (auto it = std::find(list.begin(), list.end(), a); it != list.end()) list.erase(it);
+            else list.push_back(a);
+            SelectAssets(list, list.empty() || std::find(list.begin(), list.end(), a) == list.end() ? (list.empty() ? AssetHandle::None() : list.back()) : a);
+        }
+        void SelectAssets(const std::vector<AssetHandle>& list, AssetHandle primary)
+        {
+            SelectAsset(primary);
+            if (primary.IsValid()) SelectedAssets = list;
+        }
         void Select(Entity e)
         {
             Selected = e;
@@ -41,7 +72,7 @@ namespace Editor
             if (!e.IsNull())
             {
                 Selection.push_back(e);
-                SelectedAsset = AssetHandle::None();
+                ClearAssetSelection();
             }
         }
         void ToggleSelect(Entity e)
@@ -57,7 +88,7 @@ namespace Editor
             {
                 Selection.push_back(e);
                 Selected = e;
-                SelectedAsset = AssetHandle::None();
+                ClearAssetSelection();
             }
         }
         void AddToSelection(Entity e)
@@ -65,7 +96,7 @@ namespace Editor
             if (e.IsNull()) return;
             if (std::find(Selection.begin(), Selection.end(), e) == Selection.end()) Selection.push_back(e);
             Selected = e;
-            SelectedAsset = AssetHandle::None();
+            ClearAssetSelection();
         }
         bool IsSelected(Entity e) const { return std::find(Selection.begin(), Selection.end(), e) != Selection.end(); }
         // Valid selected entities, excluding any whose ancestor is also selected (for delete/duplicate/copy).
@@ -86,6 +117,8 @@ namespace Editor
         void SelectAsset(AssetHandle a)
         {
             SelectedAsset = a;
+            SelectedAssets.clear();
+            if (a.IsValid()) SelectedAssets.push_back(a);
             Selected = Entity::Null();
             Selection.clear();
         }

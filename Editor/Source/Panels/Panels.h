@@ -45,6 +45,10 @@ namespace Editor
         void DrawScript(Scene& scene, Entity e);
         void DrawPrefabHeader(Scene& scene, Entity e);
         void DrawAsset(AssetHandle handle);
+        // Several selected assets: their import settings together (textures or models), else their names.
+        void DrawAssets(const std::vector<AssetHandle>& assets);
+        // A texture's or model's folder import default: which applies, and a button to make its settings the default.
+        void DrawImportDefault(AssetHandle handle);
         void DrawAddComponent(Scene& scene, Entity e);
         void DrawLODBar(Scene& scene, Entity e, LODGroupComponent& lod);
         // Debug mode: the hidden fields of an object's data, read-only rows of the property grid.
@@ -73,6 +77,7 @@ namespace Editor
         float m_ThumbnailSize = 76.0f;
         fs::path m_Renaming;
         std::string m_RenameBuffer;
+        AssetHandle m_AssetAnchor = AssetHandle::None(); // where a Shift click's range starts
         bool m_RenameFocus = false;
         std::string m_Search;
     };

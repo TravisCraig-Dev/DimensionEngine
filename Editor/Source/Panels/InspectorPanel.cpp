@@ -8,6 +8,7 @@
 #include <Dimension/Scripting/ScriptableEntity.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Asset/Preset.h>
+#include <Dimension/Asset/ImportDefaults.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Renderer/Mesh.h>
 #include <Dimension/Renderer/Material.h>
@@ -264,6 +265,7 @@ namespace Editor
             }
             DrawEntity(scene, m_Ctx.Selected);
         }
+        else if (auto assets = m_Ctx.SelectedAssetList(); assets.size() > 1) DrawAssets(assets);
         else if (m_Ctx.SelectedAsset.IsValid()) DrawAsset(m_Ctx.SelectedAsset);
         else ImGui::TextDisabled("Select a GameObject or asset to inspect it.");
         ImGui::End();
@@ -1342,6 +1344,94 @@ namespace Editor
         }
     }
 
+    void InspectorPanel::DrawImportDefault(AssetHandle handle)
+    {
+        const AssetMetadata* meta = AssetManager::GetMetadata(handle);
+        if (!meta) return;
+        std::string folder = meta->Path.parent_path().generic_string();
+        const char* kind = meta->Type == AssetType::Texture ? "textures" : "models";
+        const ImportRule* rule = ImportDefaults::For(meta->Path, meta->Type);
+        if (rule) ImGui::TextDisabled("New %s here get the defaults of %s/", kind, rule->Folder.empty() ? "Assets" : ("Assets/" + rule->Folder).c_str());
+        if (ImGui::SmallButton("Make Default for Folder"))
+        {
+            ImportDefaults::Set(folder, meta->Type, meta->ImportSettings);
+            Project::Save();
+            Log::Info("New {} added to Assets/{} now get these import settings", kind, folder);
+        }
+        ImGui::SetItemTooltip("New %s added to Assets/%s (and the folders in it) get these import settings. See Project Settings > Import Defaults.",
+                              kind, folder.c_str());
+    }
+
+    void InspectorPanel::DrawAssets(const std::vector<AssetHandle>& assets)
+    {
+        std::vector<const AssetMetadata*> metas;
+        bool same = true;
+        for (AssetHandle h : assets)
+            if (const AssetMetadata* m = AssetManager::GetMetadata(h))
+            {
+                if (!metas.empty() && m->Type != metas[0]->Type) same = false;
+                metas.push_back(m);
+            }
+        if (metas.empty()) return;
+        AssetType type = metas[0]->Type;
+        bool editable = same && (type == AssetType::Texture || type == AssetType::Mesh);
+        ImGui::TextColored(UI::AccentText(), "%zu %s selected", metas.size(),
+                           editable ? (type == AssetType::Texture ? "textures" : "models") : "assets");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped(editable ? "Values that differ show as --; a change applies to all of them."
+                                    : "Select only textures or only models to change their import settings together.");
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        if (!editable)
+        {
+            for (const AssetMetadata* m : metas) ImGui::BulletText("%s  (%s)", m->Path.filename().string().c_str(), AssetTypeToString(m->Type));
+            return;
+        }
+        // A setting's value on the first asset, and whether the others differ.
+        auto value = [&](const char* key, const nlohmann::json& fallback) { return metas[0]->ImportSettings.value(key, fallback); };
+        auto mixed = [&](const char* key, const nlohmann::json& fallback) {
+            for (const AssetMetadata* m : metas)
+                if (m->ImportSettings.value(key, fallback) != value(key, fallback)) return true;
+            return false;
+        };
+        auto checkbox = [&](const char* label, const char* key, nlohmann::json& changes) {
+            bool on = value(key, true).get<bool>();
+            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, mixed(key, true));
+            if (ImGui::Checkbox(label, &on)) changes[key] = on;
+            ImGui::PopItemFlag();
+        };
+        nlohmann::json changes = nlohmann::json::object();
+        ImGui::SeparatorText("Import Settings");
+        if (type == AssetType::Texture)
+        {
+            const char* filters[] = { "Bilinear", "Point (no filter)" };
+            int filter = std::clamp(value("filter", 0).get<int>(), 0, 1);
+            if (ImGui::BeginCombo("Filter Mode", mixed("filter", 0) ? "--" : filters[filter]))
+            {
+                for (int i = 0; i < 2; ++i)
+                    if (ImGui::Selectable(filters[i], !mixed("filter", 0) && i == filter)) changes["filter"] = i;
+                ImGui::EndCombo();
+            }
+            checkbox("sRGB (Color Texture)", "srgb", changes);
+            checkbox("Generate Mip Maps", "mips", changes);
+        }
+        else
+        {
+            float scale = value("scale", 1.0f).get<float>();
+            ImGui::DragFloat("Scale", &scale, 0.01f, 0.0001f, 10000.0f, mixed("scale", 1.0f) ? "--" : "%.4g");
+            if (ImGui::IsItemDeactivatedAfterEdit()) changes["scale"] = scale;
+            checkbox("Import Animations", "animations", changes);
+            checkbox("Import Materials", "importMaterials", changes);
+        }
+        if (!changes.empty())
+        {
+            int changed = ImportDefaults::ApplySettings(assets, changes);
+            Log::Info("Changed the import settings of {} {}", changed, type == AssetType::Texture ? "textures" : "models");
+        }
+        ImGui::SeparatorText("Selected");
+        for (const AssetMetadata* m : metas) ImGui::BulletText("%s", m->Path.generic_string().c_str());
+    }
+
     void InspectorPanel::DrawAsset(AssetHandle handle)
     {
         const AssetMetadata* meta = AssetManager::GetMetadata(handle);
@@ -1421,6 +1511,7 @@ namespace Editor
             bool mips = settings.value("mips", true);
             if (ImGui::Checkbox("Generate Mip Maps", &mips)) { settings["mips"] = mips; changed = true; }
             if (changed) AssetManager::SetImportSettings(handle, settings);
+            DrawImportDefault(handle);
 
             size_t sprites = AssetManager::GetSprites(handle).size();
             if (ImGui::Button("Sprite Editor...")) m_Ctx.OpenSpriteEditor = true;
@@ -1480,6 +1571,7 @@ namespace Editor
                 }
             }
             if (changed) AssetManager::SetImportSettings(handle, settings);
+            DrawImportDefault(handle);
             if (auto mesh = AssetManager::GetMesh(handle))
             {
                 ImGui::Text("Vertices: %u", mesh->GetVertexCount());

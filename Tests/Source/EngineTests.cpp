@@ -17,6 +17,7 @@
 #include <Dimension/Scene/SceneSnapping.h>
 #include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Asset/Preset.h>
+#include <Dimension/Asset/ImportDefaults.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneSections.h>
@@ -8006,6 +8007,98 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Import defaults per folder (new textures and models there get a rule's import settings; the deepest folder's rule
+    // wins; a .meta's settings are kept), applying a rule to the assets already there, and batch import settings.
+    void TestImportDefaults()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_import_defaults";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        fs::create_directories(dir / "Assets/Textures/Pixel/UI", ec);
+        fs::create_directories(dir / "Assets/Textures/PixelArt", ec);
+        fs::create_directories(dir / "Assets/Models", ec);
+        AssetManager::Init(dir / "Assets");
+        fs::path src = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets";
+        auto add = [&](const char* from, const char* to) {
+            fs::copy_file(src / from, dir / "Assets" / to, fs::copy_options::overwrite_existing, ec);
+            return AssetManager::Import(dir / "Assets" / to);
+        };
+        auto setting = [](AssetHandle h, const char* key) {
+            const AssetMetadata* m = AssetManager::GetMetadata(h);
+            return m && m->ImportSettings.contains(key) ? m->ImportSettings[key] : nlohmann::json();
+        };
+        CHECK(ImportDefaults::Keys(AssetType::Texture).size() == 3 && ImportDefaults::Keys(AssetType::Mesh).size() == 3 &&
+              ImportDefaults::Keys(AssetType::Audio).empty());
+
+        AssetHandle brick = add("Textures/Brick.png", "Textures/Brick.png");
+        CHECK(setting(brick, "filter") == 0 && setting(brick, "mips") == true);
+
+        // Only import keys are kept ("sprites" and "labels" are per asset); the folder is normalized; set again: replaced.
+        ImportDefaults::Set("Textures/Pixel/", AssetType::Texture,
+                            { { "filter", 0 }, { "labels", nlohmann::json::array({ "x" }) }, { "sprites", nlohmann::json::array() } });
+        ImportDefaults::Set("Textures/Pixel", AssetType::Texture, { { "filter", 1 }, { "mips", false } });
+        ImportDefaults::Set("./Textures/Pixel/UI", AssetType::Texture, { { "srgb", false } });
+        auto& rules = Project::GetConfig().ImportRules;
+        CHECK(rules.size() == 2 && rules[0].Folder == "Textures/Pixel" && rules[1].Folder == "Textures/Pixel/UI");
+        CHECK(rules[0].Settings == nlohmann::json({ { "filter", 1 }, { "mips", false } }));
+
+        CHECK(!ImportDefaults::For("Textures/Brick.png", AssetType::Texture));
+        CHECK(!ImportDefaults::For("Textures/PixelArt/A.png", AssetType::Texture)); // a folder name, not a prefix
+        CHECK(!ImportDefaults::For("Textures/Pixel/A.png", AssetType::Mesh));
+        CHECK(ImportDefaults::For("Textures/Pixel/A.png", AssetType::Texture) == &rules[0]);
+        CHECK(ImportDefaults::For("Textures/Pixel/UI/Deep/A.png", AssetType::Texture) == &rules[1]);
+
+        AssetHandle hero = add("Textures/Brick.png", "Textures/Pixel/Hero.png");
+        AssetHandle button = add("Textures/Brick.png", "Textures/Pixel/UI/Button.png");
+        AssetHandle art = add("Textures/Brick.png", "Textures/PixelArt/Art.png");
+        CHECK(setting(hero, "filter") == 1 && setting(hero, "mips") == false && setting(hero, "srgb") == true);
+        CHECK(setting(button, "srgb") == false && setting(button, "filter") == 0); // the deepest rule alone
+        CHECK(setting(art, "filter") == 0);
+
+        // A .meta's settings are the asset's own: a changed rule does not change them on the next import.
+        ImportDefaults::Set("Textures/Pixel", AssetType::Texture, { { "filter", 0 }, { "mips", true } });
+        AssetManager::Shutdown();
+        AssetManager::Init(dir / "Assets");
+        hero = AssetManager::GetHandle("Textures/Pixel/Hero.png");
+        CHECK(setting(hero, "filter") == 1 && setting(hero, "mips") == false);
+
+        // Apply to the assets already in the folder: Hero (Button is under its own rule).
+        CHECK(ImportDefaults::ApplyToExisting("Textures/Pixel", AssetType::Texture) == 1);
+        CHECK(setting(hero, "filter") == 0 && setting(hero, "mips") == true);
+        CHECK(setting(AssetManager::GetHandle("Textures/Pixel/UI/Button.png"), "srgb") == false);
+        CHECK(ImportDefaults::ApplyToExisting("Textures/Pixel", AssetType::Texture) == 0); // already so
+
+        // Batch: one setting on several assets, their other settings kept, written to their .meta files.
+        brick = AssetManager::GetHandle("Textures/Brick.png");
+        button = AssetManager::GetHandle("Textures/Pixel/UI/Button.png");
+        CHECK(ImportDefaults::ApplySettings({ brick, hero, button }, { { "filter", 1 } }) == 3);
+        CHECK(ImportDefaults::ApplySettings({ brick, hero, button }, { { "filter", 1 } }) == 0);
+        CHECK(setting(brick, "filter") == 1 && setting(button, "filter") == 1 && setting(button, "srgb") == false && setting(brick, "srgb") == true);
+        {
+            std::ifstream meta(dir / "Assets/Textures/Pixel/UI/Button.png.meta");
+            nlohmann::json j = nlohmann::json::parse(meta, nullptr, false);
+            CHECK(!j.is_discarded() && j["settings"].value("filter", -1) == 1 && j["settings"].value("srgb", true) == false);
+        }
+        CHECK(ImportDefaults::ApplySettings({ AssetHandle::None() }, { { "filter", 0 } }) == 0);
+
+        // Models: the rule's scale.
+        ImportDefaults::Set("Models", AssetType::Mesh, { { "scale", 0.01f }, { "excludedClips", nlohmann::json::array({ "Idle" }) } });
+        AssetHandle torus = add("Models/Torus.obj", "Models/Torus.obj");
+        CHECK(Near(AssetManager::GetMeshImportSettings(torus).Scale, 0.01f) && !setting(torus, "excludedClips").is_array());
+
+        // Kept in the project file.
+        CHECK(Project::Save() && Project::Open(dir));
+        CHECK(Project::GetConfig().ImportRules.size() == 3);
+        const ImportRule* models = ImportDefaults::For("Models/Sub/A.fbx", AssetType::Mesh);
+        CHECK(models && models->Folder == "Models" && Near(models->Settings.value("scale", 1.0f), 0.01f));
+        ImportDefaults::Remove("Textures/Pixel/UI/", AssetType::Texture);
+        ImportDefaults::Remove("Models", AssetType::Texture); // not a texture rule: kept
+        CHECK(Project::GetConfig().ImportRules.size() == 2 && ImportDefaults::For("Textures/Pixel/UI/A.png", AssetType::Texture)->Folder == "Textures/Pixel");
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -9834,6 +9927,7 @@ int main(int argc, char** argv)
     Run("Scene snapping", TestSceneSnapping);
     Run("Scene visibility", TestSceneVisibility);
     Run("Presets", TestPresets);
+    Run("Import defaults and batch import settings", TestImportDefaults);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

@@ -141,6 +141,8 @@ namespace Editor
             float cell = m_ThumbnailSize + 16.0f;
             int columns = std::max(1, (int)(ImGui::GetContentRegionAvail().x / cell));
             fs::path toDelete, enterDir;
+            std::vector<AssetHandle> shown; // the assets in the grid, in order (for Shift click)
+            AssetHandle rangeTo = AssetHandle::None();
             if (ImGui::BeginTable("Grid", columns))
             {
                 for (auto& entry : entries)
@@ -155,7 +157,8 @@ namespace Editor
                     ImGui::TableNextColumn();
                     ImGui::PushID(path.string().c_str());
                     ImVec2 size(m_ThumbnailSize, m_ThumbnailSize);
-                    bool selected = handle.IsValid() && m_Ctx.SelectedAsset == handle;
+                    bool selected = m_Ctx.IsAssetSelected(handle);
+                    if (handle.IsValid()) shown.push_back(handle);
 
                     ImVec2 cursor = ImGui::GetCursorScreenPos();
                     ImGui::InvisibleButton("thumb", size);
@@ -219,7 +222,13 @@ namespace Editor
                         }
                     }
 
-                    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && handle.IsValid()) m_Ctx.SelectAsset(handle);
+                    // Ctrl click adds or removes an asset; Shift click selects the ones from the last clicked to it.
+                    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && handle.IsValid())
+                    {
+                        if (ImGui::GetIO().KeyCtrl) m_Ctx.ToggleSelectAsset(handle), m_AssetAnchor = handle;
+                        else if (ImGui::GetIO().KeyShift && m_AssetAnchor.IsValid()) rangeTo = handle;
+                        else m_Ctx.SelectAsset(handle), m_AssetAnchor = handle;
+                    }
                     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                     {
                         if (isDir) enterDir = path;
@@ -386,7 +395,7 @@ namespace Editor
             if (!enterDir.empty()) m_Current = enterDir, m_Search.clear();
             if (!toDelete.empty() && FileDialogs::Confirm("Delete Asset", "Delete '" + toDelete.filename().string() + "'? This cannot be undone."))
             {
-                if (m_Ctx.SelectedAsset == AssetManager::GetHandle(toDelete)) m_Ctx.SelectAsset(AssetHandle::None());
+                if (m_Ctx.IsAssetSelected(AssetManager::GetHandle(toDelete))) m_Ctx.SelectAsset(AssetHandle::None());
                 AssetManager::DeleteAsset(toDelete);
             }
         }

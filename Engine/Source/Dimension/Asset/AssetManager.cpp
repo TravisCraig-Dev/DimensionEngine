@@ -12,6 +12,8 @@
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Animation/Timeline.h"
 #include "Dimension/Renderer/SpriteAtlas.h"
+#include "Dimension/Asset/ImportDefaults.h"
+#include "Dimension/Project/Project.h"
 #include "Dimension/Renderer/SpriteSlicing.h"
 #include "embedded/kDefaultFontData.h"
 #include <algorithm>
@@ -282,6 +284,9 @@ namespace Dimension
 
         bool writeMeta = true;
         fs::path meta = MetaPath(absolutePath);
+        // A new asset (no .meta yet) starts from its folder's import defaults.
+        if (!fs::exists(meta) && Project::IsOpen())
+            if (const ImportRule* rule = ImportDefaults::For(rel, type)) m.ImportSettings.update(rule->Settings);
         if (fs::exists(meta))
         {
             try

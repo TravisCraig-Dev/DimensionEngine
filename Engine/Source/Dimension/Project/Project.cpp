@@ -85,6 +85,10 @@ namespace Dimension
                         s_Config.NavAreaCosts[i] = j["navAreas"][i].value("cost", s_Config.NavAreaCosts[i]);
                     }
                 s_Config.NavPathBudget = j.value("navPathBudget", s_Config.NavPathBudget);
+                s_Config.ImportRules.clear();
+                for (auto& r : j.value("importRules", nlohmann::json::array()))
+                    s_Config.ImportRules.push_back({ r.value("folder", std::string()), (AssetType)r.value("type", 0),
+                                                     r.value("settings", nlohmann::json::object()) });
                 s_Config.DefaultPresets.clear();
                 for (auto& [component, preset] : j.value("defaultPresets", nlohmann::json::object()).items())
                     if (preset.is_number_unsigned()) s_Config.DefaultPresets[component] = AssetHandle(preset.get<uint64_t>());
@@ -128,6 +132,9 @@ namespace Dimension
         }
         nlohmann::json navAreas = nlohmann::json::array();
         for (int i = 0; i < ProjectConfig::kNavAreas; ++i) navAreas.push_back({ { "name", s_Config.NavAreaNames[i] }, { "cost", s_Config.NavAreaCosts[i] } });
+        nlohmann::json importRules = nlohmann::json::array();
+        for (const ImportRule& r : s_Config.ImportRules)
+            importRules.push_back({ { "folder", r.Folder }, { "type", (int)r.Type }, { "settings", r.Settings } });
         nlohmann::json defaultPresets = nlohmann::json::object();
         for (auto& [component, preset] : s_Config.DefaultPresets) defaultPresets[component] = (uint64_t)preset;
         nlohmann::json j{ { "name", s_Config.Name },
@@ -148,6 +155,7 @@ namespace Dimension
                           { "navAreas", navAreas },
                           { "navPathBudget", s_Config.NavPathBudget },
                           { "defaultPresets", defaultPresets },
+                          { "importRules", importRules },
                           { "engineVersion", "0.1.0" } };
         std::ofstream out(s_Directory / kFileName);
         out << j.dump(2);
