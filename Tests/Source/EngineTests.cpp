@@ -26,6 +26,7 @@
 #include <Dimension/Scene/SceneGrouping.h>
 #include <Dimension/Scene/ViewAlign.h>
 #include <Dimension/Renderer/SceneGrid.h>
+#include <Dimension/Reflection/FieldSearch.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -8702,6 +8703,44 @@ namespace
         CHECK(SceneGrid::Build(hidden, glm::vec3(0.0f), false, 0.0f).empty());
     }
 
+    // The Inspector's search box: components and fields by name (every word, case and spaces ignored).
+    void TestFieldSearch()
+    {
+        using namespace FieldSearch;
+        CHECK(Matches("light", "Point Light") && Matches("LIGHT point", "Point Light") && Matches("pointlight", "Point Light"));
+        CHECK(!Matches("spot", "Point Light") && Matches("", "Anything") && Matches("   ", "Anything"));
+        CHECK(!Matches("int", "Point Light") && Matches("int", "Intensity") && Matches("speed", "MaxSpeed") && Matches("max sp", "MaxSpeed"));
+        CHECK(Matches("ight", "Point Light") == false && Matches("2", "Layer 2") && Matches("cast", "Cast_Shadows"));
+        const ComponentInfo* light = ComponentRegistry::Find("Point Light");
+        const ComponentInfo* transform = ComponentRegistry::Find("Transform");
+        const ComponentInfo* renderer = ComponentRegistry::Find("Mesh Renderer");
+        CHECK(light && transform && renderer);
+        if (!light || !transform || !renderer) return;
+        auto shownFields = [](const std::string& q, const ComponentInfo& c) {
+            std::vector<std::string> out;
+            for (const auto& f : c.Fields)
+                if (FieldShown(q, c.Name, f)) out.push_back(f.Name);
+            return out;
+        };
+        // A component's name: it shows (with all its fields, in the Inspector).
+        CHECK(ComponentNameMatches("point", light->Name) && ComponentShown("point", light->Name, light->Fields));
+        // A field's name: the component shows with just the fields that match.
+        CHECK(!ComponentNameMatches("intensity", light->Name) && ComponentShown("intensity", light->Name, light->Fields));
+        CHECK(shownFields("intensity", *light) == std::vector<std::string>({ "Intensity" }));
+        // Component and field words together.
+        CHECK(shownFields("light int", *light) == std::vector<std::string>({ "Intensity" }));
+        CHECK(!ComponentShown("light int", transform->Name, transform->Fields));
+        CHECK(shownFields("scale", *transform) == std::vector<std::string>({ "Scale" }) && shownFields("rot", *transform) == std::vector<std::string>({ "Rotation" }));
+        // Nothing matching: hidden.
+        CHECK(!ComponentShown("zzz", renderer->Name, renderer->Fields) && shownFields("zzz", *renderer).empty());
+        // Hidden fields never show.
+        bool hiddenShown = false;
+        for (const ComponentInfo& c : ComponentRegistry::All())
+            for (const auto& f : c.Fields)
+                if (f.Hidden && FieldShown(f.Name, c.Name, f)) hiddenShown = true;
+        CHECK(!hiddenShown);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10540,6 +10579,7 @@ int main(int argc, char** argv)
     Run("Hierarchy grouping and sorting", TestSceneGrouping);
     Run("Align With View and Move To View", TestViewAlign);
     Run("Scene view grid settings", TestSceneGrid);
+    Run("Inspector search", TestFieldSearch);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

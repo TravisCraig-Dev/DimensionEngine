@@ -8,6 +8,7 @@
 #include <Dimension/Scripting/ScriptableEntity.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Asset/Preset.h>
+#include <Dimension/Reflection/FieldSearch.h>
 #include <Dimension/Asset/ImportDefaults.h>
 #include <Dimension/Asset/AssetDependencies.h>
 #include <Dimension/Scene/SceneSearch.h>
@@ -152,15 +153,16 @@ namespace Editor
         }
 
         // Draws a component's header; returns whether it is expanded. `action` reports the menu choice.
-        bool ComponentHeader(const ComponentInfo& info, ComponentAction& action, bool canMoveUp, bool canMoveDown)
+        bool ComponentHeader(const ComponentInfo& info, ComponentAction& action, bool canMoveUp, bool canMoveDown, bool forceOpen = false)
         {
             const char* name = info.Name.c_str();
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_SpanAvailWidth |
                                        ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_FramePadding;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 5));
-            ImGui::SetNextItemOpen(!IsFolded(info.Name), ImGuiCond_Always);
+            // While searching, matches show open (their folding is kept for afterwards).
+            ImGui::SetNextItemOpen(forceOpen || !IsFolded(info.Name), ImGuiCond_Always);
             bool open = ImGui::TreeNodeEx(name, flags, "%s", name);
-            if (ImGui::IsItemToggledOpen()) SetFolded(info.Name, !open);
+            if (ImGui::IsItemToggledOpen() && !forceOpen) SetFolded(info.Name, !open);
             ImGui::PopStyleVar();
             bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right); // right-click the header, or use "..."
             float w = ImGui::GetFrameHeight();
@@ -487,15 +489,34 @@ namespace Editor
         bool pasteNew = false;
         const ComponentInfo* moveInfo = nullptr;
         int moveDelta = 0;
+        // The search box: only the components and fields whose names match show while it holds something.
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##inspectorSearch", "Search components and fields", &m_Search);
+        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_Search.clear();
+        ImGui::SetItemTooltip("Words must all match a component's name, or a component and field name together (\"light int\" finds a Point Light's Intensity). Esc clears.");
+        bool searching = m_Search.find_first_not_of(' ') != std::string::npos;
+        int shownComponents = 0;
         auto ordered = ComponentRegistry::GetDisplayOrder(scene, e);
         for (size_t oi = 0; oi < ordered.size(); ++oi)
         {
             const ComponentInfo& info = *ordered[oi];
             if (!std::all_of(targets.begin(), targets.end(), [&](Entity t) { return info.Has(scene, t); })) continue;
+            bool nameMatch = !searching || FieldSearch::ComponentNameMatches(m_Search, info.Name);
+            if (searching && !nameMatch)
+            {
+                // Scripts match by their class names too.
+                bool scriptMatch = false;
+                if (info.TypeId == GetComponentTypeId<ScriptComponent>())
+                    if (auto* scripts = reg.TryGet<ScriptComponent>(e))
+                        for (const auto& s : scripts->Scripts) scriptMatch = scriptMatch || FieldSearch::Matches(m_Search, s.ClassName);
+                if (scriptMatch) nameMatch = true;
+                else if (!FieldSearch::ComponentShown(m_Search, info.Name, info.Fields)) continue;
+            }
+            ++shownComponents;
             ComponentAction action = ComponentAction::None;
             bool canUp = info.Removable && oi > 0 && ordered[oi - 1]->Removable;
             bool canDown = info.Removable && oi + 1 < ordered.size();
-            bool open = ComponentHeader(info, action, canUp, canDown);
+            bool open = ComponentHeader(info, action, canUp, canDown, searching);
             if (action == ComponentAction::MoveUp || action == ComponentAction::MoveDown)
             {
                 moveInfo = &info;
@@ -556,6 +577,7 @@ namespace Editor
                     for (auto& f : info.Fields)
                     {
                         if (f.Hidden) continue;
+                        if (!nameMatch && !FieldSearch::FieldShown(m_Search, info.Name, f)) continue;
                         nlohmann::json before = FieldToJson(f, data, &resolver);
                         UI::EditResult r;
                         bool handled = false;
@@ -958,6 +980,7 @@ namespace Editor
             }
         }
 
+        if (searching && shownComponents == 0) ImGui::TextDisabled("No component or field matches \"%s\".", m_Search.c_str());
         ImGui::Separator();
         DrawAddComponent(scene, e);
         ImGui::PopID();

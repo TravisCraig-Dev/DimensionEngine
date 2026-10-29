@@ -264,6 +264,7 @@ namespace Editor
         }
         if (m_Options.NewInspector) NewInspector(true);      // --new-inspector: one locked to the --select selection
         if (m_Options.LockInspector) m_Inspector->LockToSelection();
+        if (!m_Options.InspectorSearch.empty()) m_Inspector->SetSearch(m_Options.InspectorSearch);
         if (m_Options.SelectionSet > 0) RestoreSelection(m_Options.SelectionSet);
         // --grid "plane=1,cell=0.5,opacity=0.6,follow" (automation; for the session, the Preferences file unchanged).
         for (size_t start = 0; start < m_Options.Grid.size();)

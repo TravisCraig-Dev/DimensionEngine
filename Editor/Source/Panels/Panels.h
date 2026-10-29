@@ -50,6 +50,8 @@ namespace Editor
         void LockToSelection();
         void Unlock() { m_Locked = false; }
         bool IsLocked() const { return m_Locked; }
+        // The search box's text (automation).
+        void SetSearch(const std::string& query) { m_Search = query; }
         // Debug mode (like Unity's): hidden fields, and C# scripts' private state, shown read-only.
         bool DebugMode = false;
         // The next asset preview's view, "yaw=..,pitch=..,zoom=..,clip=..,time=..,play" (automation).
@@ -72,6 +74,7 @@ namespace Editor
         bool m_Locked = false;
         SelectionSnapshot m_Lock;
         fs::path m_PreviewOwnFile; // the audio clip this Inspector plays
+        std::string m_Search;      // the search box: components and fields shown
         // A model's or prefab's live preview with its clips; an audio clip's waveform, Play and playhead.
         void DrawLivePreview(AssetHandle handle);
         void DrawAudioPreview(AssetHandle handle);
