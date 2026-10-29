@@ -295,6 +295,20 @@ namespace Dimension
 
     public static unsafe class Input
     {
+        private static float Action(int op, string name) => Native.WithUtf8<float>(name ?? "", p => Native.Api.InputAction(op, (byte*)p));
+
+        /// <summary>
+        /// Whether an input action (Project Settings > Input, e.g. "Jump", "Fire") is held: any of its keys, mouse
+        /// buttons or gamepad controls. Unknown names are not pressed (with a warning in the Console).
+        /// </summary>
+        public static bool GetButton(string action) => Action(0, action) != 0.0f;
+        /// <summary>The action was pressed this frame.</summary>
+        public static bool GetButtonDown(string action) => Action(1, action) != 0.0f;
+        /// <summary>The action was released this frame.</summary>
+        public static bool GetButtonUp(string action) => Action(2, action) != 0.0f;
+        /// <summary>An axis action's value, -1..1 (e.g. "Horizontal": A/D, arrows and the left stick added up).</summary>
+        public static float GetAxis(string action) => Action(3, action);
+
         public static bool GetKey(KeyCode key) => Native.Api.IsKeyDown((int)key) != 0;
         public static bool GetKeyDown(KeyCode key) => Native.Api.IsKeyPressed((int)key) != 0;
         /// <summary>0 = left, 1 = right, 2 = middle.</summary>

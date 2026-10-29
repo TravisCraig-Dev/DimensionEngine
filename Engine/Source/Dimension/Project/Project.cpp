@@ -85,6 +85,23 @@ namespace Dimension
                         s_Config.NavAreaCosts[i] = j["navAreas"][i].value("cost", s_Config.NavAreaCosts[i]);
                     }
                 s_Config.NavPathBudget = j.value("navPathBudget", s_Config.NavPathBudget);
+                // Input actions: each binding's kind and control code (with its name, for people reading the file).
+                s_Config.InputActions.clear();
+                s_Config.InputActionsSet = j.contains("inputActions") && j["inputActions"].is_array();
+                for (auto& a : j.value("inputActions", nlohmann::json::array()))
+                {
+                    InputAction action{ a.value("name", std::string()), a.value("axis", false), a.value("deadZone", 0.15f), {} };
+                    for (auto& b : a.value("bindings", nlohmann::json::array()))
+                    {
+                        std::string kind = b.value("kind", std::string("key"));
+                        InputBinding::Kind k = kind == "mouse" ? InputBinding::Kind::MouseButton
+                                             : kind == "button" ? InputBinding::Kind::GamepadButton
+                                             : kind == "axis"   ? InputBinding::Kind::GamepadAxis
+                                                                : InputBinding::Kind::Key;
+                        action.Bindings.push_back({ k, b.value("code", 0), b.value("scale", 1.0f) });
+                    }
+                    s_Config.InputActions.push_back(std::move(action));
+                }
                 s_Config.ImportRules.clear();
                 for (auto& r : j.value("importRules", nlohmann::json::array()))
                     s_Config.ImportRules.push_back({ r.value("folder", std::string()), (AssetType)r.value("type", 0),
@@ -135,6 +152,20 @@ namespace Dimension
         nlohmann::json importRules = nlohmann::json::array();
         for (const ImportRule& r : s_Config.ImportRules)
             importRules.push_back({ { "folder", r.Folder }, { "type", (int)r.Type }, { "settings", r.Settings } });
+        nlohmann::json inputActions = nlohmann::json::array();
+        for (const InputAction& a : s_Config.InputActions)
+        {
+            nlohmann::json bindings = nlohmann::json::array();
+            for (const InputBinding& b : a.Bindings)
+            {
+                const char* kind = b.Type == InputBinding::Kind::MouseButton ? "mouse"
+                                 : b.Type == InputBinding::Kind::GamepadButton ? "button"
+                                 : b.Type == InputBinding::Kind::GamepadAxis ? "axis"
+                                                                              : "key";
+                bindings.push_back({ { "kind", kind }, { "code", b.Code }, { "control", InputActions::ControlName(b.Type, b.Code) }, { "scale", b.Scale } });
+            }
+            inputActions.push_back({ { "name", a.Name }, { "axis", a.Axis }, { "deadZone", a.DeadZone }, { "bindings", bindings } });
+        }
         nlohmann::json defaultPresets = nlohmann::json::object();
         for (auto& [component, preset] : s_Config.DefaultPresets) defaultPresets[component] = (uint64_t)preset;
         nlohmann::json j{ { "name", s_Config.Name },
@@ -157,6 +188,7 @@ namespace Dimension
                           { "defaultPresets", defaultPresets },
                           { "importRules", importRules },
                           { "engineVersion", "0.1.0" } };
+        if (s_Config.InputActionsSet) j["inputActions"] = inputActions;
         std::ofstream out(s_Directory / kFileName);
         out << j.dump(2);
         return (bool)out;

@@ -16,6 +16,7 @@
 #include "Dimension/Core/Profiler.h"
 #include "Dimension/Scene/DebugDraw.h"
 #include "Dimension/Core/PlayerPrefs.h"
+#include "Dimension/Project/InputActions.h"
 #include <climits>
 #include <cmath>
 #include <limits>
@@ -155,6 +156,7 @@ namespace Dimension
             // PlayerPrefs (values as text): 0-2 get int/float/string (null: none of that type), 3-5 set them, 6 has key,
             // 7 delete key, 8 delete all, 9 save, 10 the player data folder.
             const char* (*PlayerPrefs)(int, const char*, const char*);
+            float (*InputAction)(int, const char*); // 0 button held, 1 pressed this frame, 2 released this frame, 3 axis
         };
 
         // Background scene loads started from C#, by id.
@@ -917,6 +919,16 @@ namespace Dimension
                     return result.c_str();
                 }
                 default: return nullptr;
+                }
+            };
+            a.InputAction = [](int op, const char* name) -> float {
+                std::string n = name ? name : "";
+                switch (op)
+                {
+                case 0: return InputActions::GetButton(n) ? 1.0f : 0.0f;
+                case 1: return InputActions::GetButtonDown(n) ? 1.0f : 0.0f;
+                case 2: return InputActions::GetButtonUp(n) ? 1.0f : 0.0f;
+                default: return InputActions::GetAxis(n);
                 }
             };
             a.DebugLine = [](const float* d) {

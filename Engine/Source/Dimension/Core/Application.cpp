@@ -1,3 +1,4 @@
+#include "Dimension/Project/InputActions.h"
 #include "Dimension/Core/Application.h"
 #include "Dimension/Core/Profiler.h"
 #include "Dimension/Core/Input.h"
@@ -105,6 +106,7 @@ namespace Dimension
             m_FrameTime = std::chrono::duration<float>(now - last).count();
             last = now;
             Input::NewFrame();
+            InputActions::Update(); // the named actions from this frame's input
             Profiler::BeginFrame();
 
             bool begun;

@@ -29,6 +29,7 @@
 #include <Dimension/Reflection/FieldSearch.h>
 #include <Dimension/Scene/DebugDraw.h>
 #include <Dimension/Core/PlayerPrefs.h>
+#include <Dimension/Project/InputActions.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
@@ -9009,6 +9010,103 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Input actions: buttons and axes by name from keys, mouse buttons and gamepad controls (fed here from a fake
+    // source), with Down/Up on the frames they change; a project's own actions saved in its file.
+    void TestInputActions()
+    {
+        // A fake input: the keys and buttons held, and the gamepad axes.
+        std::set<std::pair<int, int>> held;
+        float axes[6] = {};
+        InputActions::Source fake;
+        fake.Down = [&](InputBinding::Kind k, int code) { return held.contains({ (int)k, code }); };
+        fake.Axis = [&](int a) { return axes[a]; };
+        auto key = [](Key k) { return std::pair<int, int>{ (int)InputBinding::Kind::Key, (int)k }; };
+
+        auto defaults = InputActions::Defaults();
+        auto find = [&](const char* name) -> const InputAction& {
+            for (const auto& a : defaults)
+                if (a.Name == name) return a;
+            return defaults.front();
+        };
+        const InputAction& horizontal = find("Horizontal");
+        const InputAction& vertical = find("Vertical");
+        const InputAction& fire = find("Fire");
+        CHECK(defaults.size() == 6 && horizontal.Axis && !find("Jump").Axis);
+        // Axes add up their bindings: D +1, A -1, both 0; the stick with its dead zone (0.15) rescaled.
+        held = { key(Key::D) };
+        CHECK(InputActions::Evaluate(horizontal, fake) == 1.0f);
+        held = { key(Key::D), key(Key::A) };
+        CHECK(InputActions::Evaluate(horizontal, fake) == 0.0f);
+        held = { key(Key::A), key(Key::Left) };
+        CHECK(InputActions::Evaluate(horizontal, fake) == -1.0f); // clamped
+        held.clear();
+        axes[(int)GamepadAxis::LeftX] = 0.1f;
+        CHECK(InputActions::Evaluate(horizontal, fake) == 0.0f);   // inside the dead zone
+        axes[(int)GamepadAxis::LeftX] = -0.575f;
+        CHECK(Near(InputActions::Evaluate(horizontal, fake), -0.5f, 1e-4f));
+        axes[(int)GamepadAxis::LeftX] = 0.0f;
+        axes[(int)GamepadAxis::LeftY] = -1.0f; // the stick pushed up (+Y is down): Vertical +1, like W
+        CHECK(Near(InputActions::Evaluate(vertical, fake), 1.0f));
+        axes[(int)GamepadAxis::LeftY] = 0.0f;
+        // A button from a trigger: past half way.
+        axes[(int)GamepadAxis::RightTrigger] = 0.4f;
+        CHECK(InputActions::Evaluate(fire, fake) == 0.0f);
+        axes[(int)GamepadAxis::RightTrigger] = 0.9f;
+        CHECK(InputActions::Evaluate(fire, fake) == 1.0f);
+        axes[(int)GamepadAxis::RightTrigger] = 0.0f;
+        held = { { (int)InputBinding::Kind::MouseButton, 0 } };
+        CHECK(InputActions::Evaluate(fire, fake) == 1.0f);
+
+        // Frames: Down on the first, held, Up on the release (names in any case).
+        held.clear();
+        InputActions::Update(fake);
+        held = { { (int)InputBinding::Kind::GamepadButton, (int)GamepadButton::A } };
+        InputActions::Update(fake);
+        CHECK(InputActions::GetButton("Jump") && InputActions::GetButtonDown("jump") && !InputActions::GetButtonUp("Jump"));
+        CHECK(InputActions::GetButton("Submit")); // A as well
+        InputActions::Update(fake);
+        CHECK(InputActions::GetButton("Jump") && !InputActions::GetButtonDown("Jump"));
+        held.clear();
+        InputActions::Update(fake);
+        CHECK(!InputActions::GetButton("Jump") && InputActions::GetButtonUp("JUMP") && !InputActions::GetButtonDown("Jump"));
+        InputActions::Update(fake);
+        CHECK(!InputActions::GetButtonUp("Jump"));
+        held = { key(Key::W) };
+        InputActions::Update(fake);
+        CHECK(InputActions::GetAxis("Vertical") == 1.0f && InputActions::GetAxis("Horizontal") == 0.0f);
+        CHECK(!InputActions::GetButton("No Such Action") && InputActions::GetAxis("No Such Action") == 0.0f);
+
+        // A project's own actions: saved in its file, used instead of the defaults.
+        fs::path dir = fs::temp_directory_path() / "dimension_input_actions";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        CHECK(InputActions::Current().size() == defaults.size()); // none of its own yet: the defaults
+        auto& config = Project::GetConfig();
+        config.InputActions = { { "Dash", false, 0.15f, { { InputBinding::Kind::Key, (int)Key::LeftShift, 1.0f }, { InputBinding::Kind::GamepadButton, (int)GamepadButton::RightBumper, 1.0f } } },
+                                { "Turn", true, 0.25f, { { InputBinding::Kind::Key, (int)Key::E, 1.0f }, { InputBinding::Kind::Key, (int)Key::Q, -1.0f }, { InputBinding::Kind::GamepadAxis, (int)GamepadAxis::RightX, 0.5f } } } };
+        config.InputActionsSet = true;
+        auto saved = config.InputActions;
+        CHECK(Project::Save() && Project::Open(dir));
+        CHECK(Project::GetConfig().InputActionsSet && Project::GetConfig().InputActions == saved && InputActions::Current().size() == 2);
+        held = { key(Key::Q) };
+        axes[(int)GamepadAxis::RightX] = 1.0f;
+        InputActions::Update(fake);
+        CHECK(Near(InputActions::GetAxis("Turn"), -0.5f) && !InputActions::GetButton("Jump")); // Jump is not one of its actions now
+        {
+            std::ifstream in(dir / "Project.dproj");
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            CHECK(text.find("\"control\": \"Left Shift\"") != std::string::npos); // readable in the file
+        }
+        // Back to the defaults: none saved.
+        Project::GetConfig().InputActions.clear();
+        Project::GetConfig().InputActionsSet = false;
+        CHECK(Project::Save() && Project::Open(dir) && !Project::GetConfig().InputActionsSet && InputActions::Current().size() == 6);
+        held.clear();
+        InputActions::Update(fake);
+        fs::remove_all(dir, ec);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10852,6 +10950,7 @@ int main(int argc, char** argv)
     Run("Profiler recordings and comparison", TestProfilerRecordings);
     Run("Debug lines", TestDebugDraw);
     Run("Player prefs", TestPlayerPrefs);
+    Run("Input actions", TestInputActions);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

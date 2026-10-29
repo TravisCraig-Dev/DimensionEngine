@@ -121,6 +121,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<float*, void> DebugLine;
         // PlayerPrefs: op (see PlayerPrefs in Api.cs), key, value as text -> a value as text, or null.
         public delegate* unmanaged<int, byte*, byte*, byte*> PlayerPrefs;
+        // Input actions by name: 0 button held, 1 pressed this frame, 2 released this frame, 3 axis value.
+        public delegate* unmanaged<int, byte*, float> InputAction;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

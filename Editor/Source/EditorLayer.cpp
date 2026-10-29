@@ -25,6 +25,7 @@
 #include <Dimension/Scene/SelectionHistory.h>
 #include <Dimension/Scene/ViewAlign.h>
 #include <Dimension/Scene/DebugDraw.h>
+#include <Dimension/Project/InputActions.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
@@ -184,6 +185,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Undo History") m_ShowUndoHistory = true;
         else if (m_Options.OpenWindow == "Views") m_OpenViewsMenu = true;
         else if (m_Options.OpenWindow == "Grid") m_OpenGridMenu = true;
+        else if (m_Options.OpenWindow == "Input Settings") m_ShowProjectSettings = m_OpenInputSettings = true;
         else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
             OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
         else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
@@ -3459,6 +3461,7 @@ namespace Editor
             }
             ImGui::TextDisabled("Changes apply the next time play mode starts.");
         }
+        if (ImGui::CollapsingHeader("Input", m_OpenInputSettings ? ImGuiTreeNodeFlags_DefaultOpen : 0)) changed |= DrawInputSettings();
         if (ImGui::CollapsingHeader("Import Defaults", config.ImportRules.empty() ? 0 : ImGuiTreeNodeFlags_DefaultOpen))
         {
             // Folder rules: the import settings new textures and models get there (the deepest folder's rule wins).
@@ -3507,6 +3510,118 @@ namespace Editor
         ImGui::TextDisabled("Project folder: %s", Project::GetDirectory().string().c_str());
         if (changed) Project::Save();
         ImGui::End();
+    }
+
+    bool EditorLayer::DrawInputSettings()
+    {
+        // Named actions scripts read (Input.GetButton("Jump"), Input.GetAxis("Horizontal")), each with its bindings.
+        auto& config = Project::GetConfig();
+        bool changed = false;
+        ImGui::TextDisabled("Scripts read actions by name: Input.GetButton(\"Jump\"), Input.GetAxis(\"Horizontal\").");
+        if (!config.InputActionsSet)
+        {
+            ImGui::TextDisabled("This project uses the built-in actions.");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Customize"))
+            {
+                config.InputActions = InputActions::Defaults();
+                config.InputActionsSet = true;
+                changed = true;
+            }
+        }
+        else if (ImGui::SmallButton("Reset to Defaults"))
+        {
+            config.InputActions.clear();
+            config.InputActionsSet = false;
+            changed = true;
+        }
+        bool editable = config.InputActionsSet;
+        const auto& actions = InputActions::Current();
+        std::optional<size_t> removeAction;
+        static const char* kinds[] = { "Key", "Mouse Button", "Gamepad Button", "Gamepad Axis" };
+        for (size_t i = 0; i < actions.size(); ++i)
+        {
+            ImGui::PushID((int)i);
+            const InputAction& shown = actions[i];
+            // Its value now (while playing, or with the editor's input as it is).
+            char value[48];
+            if (shown.Axis) std::snprintf(value, sizeof(value), "%+.2f", InputActions::GetAxis(shown.Name));
+            else std::snprintf(value, sizeof(value), "%s", InputActions::GetButton(shown.Name) ? "pressed" : "-");
+            // (--open "Input Settings": the first one open, to show its bindings.)
+            ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_SpanAvailWidth | (m_OpenInputSettings && i == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+            bool open = ImGui::TreeNodeEx("##action", nodeFlags, "%s  (%s, %zu binding%s)   %s", shown.Name.c_str(),
+                                          shown.Axis ? "axis" : "button", shown.Bindings.size(), shown.Bindings.size() == 1 ? "" : "s", value);
+            if (open)
+            {
+                ImGui::BeginDisabled(!editable);
+                InputAction a = shown;
+                bool edited = false;
+                ImGui::SetNextItemWidth(160.0f);
+                edited |= ImGui::InputText("Name", &a.Name);
+                ImGui::SameLine();
+                int type = a.Axis ? 1 : 0;
+                ImGui::SetNextItemWidth(90.0f);
+                if (ImGui::Combo("##type", &type, "Button\0Axis\0")) a.Axis = type == 1, edited = true;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(70.0f);
+                edited |= ImGui::DragFloat("Dead Zone", &a.DeadZone, 0.01f, 0.0f, 0.95f, "%.2f");
+                ImGui::SetItemTooltip("Gamepad axes below this count as 0 (the rest rescaled to the full range)");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Remove Action")) removeAction = i;
+                std::optional<size_t> removeBinding;
+                for (size_t b = 0; b < a.Bindings.size(); ++b)
+                {
+                    ImGui::PushID((int)b);
+                    InputBinding& bind = a.Bindings[b];
+                    int kind = (int)bind.Type;
+                    ImGui::SetNextItemWidth(130.0f);
+                    if (ImGui::Combo("##kind", &kind, kinds, 4))
+                    {
+                        bind.Type = (InputBinding::Kind)kind;
+                        bind.Code = InputActions::Controls(bind.Type).front().first;
+                        edited = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(170.0f);
+                    if (ImGui::BeginCombo("##control", InputActions::ControlName(bind.Type, bind.Code)))
+                    {
+                        for (const auto& [code, name] : InputActions::Controls(bind.Type))
+                            if (ImGui::Selectable(name, code == bind.Code)) bind.Code = code, edited = true;
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(70.0f);
+                    edited |= ImGui::DragFloat("##scale", &bind.Scale, 0.05f, -1.0f, 1.0f, "x %.2f");
+                    ImGui::SetItemTooltip("What it adds to the axis (-1 for the other way); buttons: anything but 0");
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("x")) removeBinding = b;
+                    ImGui::PopID();
+                }
+                if (removeBinding) a.Bindings.erase(a.Bindings.begin() + *removeBinding), edited = true;
+                if (ImGui::SmallButton("+ Binding")) a.Bindings.push_back({}), edited = true;
+                ImGui::EndDisabled();
+                if (edited && editable)
+                {
+                    config.InputActions[i] = a;
+                    changed = true;
+                }
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        }
+        if (removeAction && editable)
+        {
+            config.InputActions.erase(config.InputActions.begin() + *removeAction);
+            changed = true;
+        }
+        ImGui::BeginDisabled(!editable);
+        if (ImGui::SmallButton("+ Action"))
+        {
+            config.InputActions.push_back({ "New Action", false, 0.15f, { {} } });
+            changed = true;
+        }
+        ImGui::EndDisabled();
+        return changed;
     }
 
     void EditorLayer::DrawAbout()

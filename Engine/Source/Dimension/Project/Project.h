@@ -4,6 +4,7 @@
 #include <array>
 #include <map>
 #include "Dimension/Asset/ImportDefaults.h"
+#include "Dimension/Project/InputActions.h"
 #include <string>
 #include "Dimension/Audio/AudioMixer.h"
 #include <vector>
@@ -45,6 +46,9 @@ namespace Dimension
         std::map<std::string, AssetHandle> DefaultPresets;
         // Import defaults per folder (ImportDefaults): the settings new assets of a type get there.
         std::vector<ImportRule> ImportRules;
+        // Named input actions (Project Settings > Input); InputActionsSet false: the built-in defaults apply.
+        std::vector<InputAction> InputActions;
+        bool InputActionsSet = false;
 
         bool LayersCollide(int a, int b) const
         {
