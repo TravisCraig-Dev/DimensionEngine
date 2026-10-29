@@ -7282,6 +7282,43 @@ namespace
         CHECK(Near(yaw, 90.0f, 1.0f)); // 90 deg/s for one second, applied by C# through the native API
         glm::vec4 c = runtime->GetRegistry().Get<MeshRendererComponent>(r).Color;
         CHECK(!(Near(c.r, 1.0f) && Near(c.g, 1.0f) && Near(c.b, 1.0f))); // recolored from C#
+        // Profiling from C#: Rainbow's samples (one nested in the other) and counter in the frame's record.
+        {
+            Profiler::SetPaused(false);
+            Profiler::Clear();
+            Profiler::BeginFrame();
+            runtime->OnUpdateRuntime(1.0f / 60.0f);
+            Profiler::BeginSample("Left Open"); // never ended: closed with the frame
+            Profiler::BeginFrame();
+            CHECK(!Profiler::History().empty());
+            if (!Profiler::History().empty())
+            {
+                const auto& f = Profiler::History().back();
+                int rainbow = -1, color = -1, open = -1;
+                for (int i = 0; i < (int)f.Sections.size(); ++i)
+                {
+                    std::string n = f.Sections[i].Name;
+                    if (n == "Rainbow") rainbow = i;
+                    if (n == "Rainbow Color") color = i;
+                    if (n == "Left Open") open = i;
+                }
+                CHECK(rainbow >= 0 && color > rainbow && f.Sections[color].Depth == f.Sections[rainbow].Depth + 1 && f.Sections[rainbow].Calls == 1);
+                CHECK(rainbow >= 0 && f.Sections[rainbow].Ms >= f.Sections[color].Ms && open >= 0 && f.Sections[open].Depth == 0);
+                bool counter = false;
+                for (const auto& [n, v] : f.Counters) counter = counter || (n == "Rainbow Hue" && v >= 0.0f && v < 1.0f);
+                CHECK(counter);
+                // A frame later: nothing of it left open.
+                Profiler::BeginFrame();
+                bool leaked = false;
+                for (const auto& sec : Profiler::History().back().Sections) leaked = leaked || std::string(sec.Name) == "Left Open";
+                CHECK(!leaked);
+            }
+            Profiler::EndSample(); // with none open: nothing
+            Profiler::SetPaused(true);
+            Profiler::BeginFrame();
+            Profiler::Clear();
+            Profiler::SetPaused(false);
+        }
         runtime->OnRuntimeStop();
         runtime.reset();
 

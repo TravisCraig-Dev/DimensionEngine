@@ -315,7 +315,9 @@ namespace Editor
         for (const auto& [name, value] : f.Counters)
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("  %s %.0f", name.c_str(), value);
+            // Counts as whole numbers, other values (game counters) with decimals.
+            if (value == std::floor(value)) ImGui::TextDisabled("  %s %.0f", name.c_str(), value);
+            else ImGui::TextDisabled("  %s %.2f", name.c_str(), value);
         }
         ImGui::SameLine();
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 90.0f));

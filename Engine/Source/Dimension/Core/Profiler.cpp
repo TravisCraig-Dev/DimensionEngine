@@ -20,6 +20,8 @@ namespace Dimension::Profiler
             std::vector<int> Open; // the sections open now, innermost last
             long long FrameStart = 0;
             std::thread::id Main;
+            uint64_t Frame = 0;
+            std::vector<std::unique_ptr<Scope>> Samples; // BeginSample's open sections, innermost last
         };
         State& S()
         {
@@ -33,6 +35,8 @@ namespace Dimension::Profiler
     void BeginFrame()
     {
         State& s = S();
+        // Samples still open: closed with the frame they began in.
+        while (!s.Samples.empty()) s.Samples.pop_back();
         long long now = Now();
         if (s.Recording && !s.Paused)
         {
@@ -42,6 +46,7 @@ namespace Dimension::Profiler
         }
         s.Current = FrameRecord();
         s.Open.clear();
+        ++s.Frame;
         s.FrameStart = now;
         s.Main = std::this_thread::get_id();
         s.Recording = !s.Paused;
@@ -96,6 +101,7 @@ namespace Dimension::Profiler
         sections[m_Section].Calls++;
         s.Open.push_back(m_Section);
         m_Start = Now();
+        m_Frame = s.Frame;
         if (s.Current.Spans.size() < kMaxSpans)
         {
             m_Span = (int)s.Current.Spans.size();
@@ -107,10 +113,24 @@ namespace Dimension::Profiler
     {
         if (m_Section < 0) return;
         State& s = S();
+        if (m_Frame != s.Frame) return; // the frame it was in has ended
         if (!s.Open.empty() && s.Open.back() == m_Section) s.Open.pop_back();
         float ms = (float)((Now() - m_Start) / 1e6);
         if (m_Section < (int)s.Current.Sections.size()) s.Current.Sections[m_Section].Ms += ms;
         if (m_Span >= 0 && m_Span < (int)s.Current.Spans.size()) s.Current.Spans[m_Span].Ms = ms;
+    }
+
+    void BeginSample(const std::string& name)
+    {
+        State& s = S();
+        if (!OnMainThread(s)) return;
+        s.Samples.push_back(std::make_unique<Scope>(Intern(name)));
+    }
+
+    void EndSample()
+    {
+        State& s = S();
+        if (!s.Samples.empty()) s.Samples.pop_back();
     }
 
     const char* Intern(const std::string& name)

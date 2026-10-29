@@ -13,10 +13,17 @@ namespace Game
 
         public override void OnUpdate(float dt)
         {
-            m_Hue += CyclesPerSecond * dt;
-            var color = Color.FromHSV(m_Hue, Saturation, Brightness);
-            if (HasComponent<MeshRenderer>()) GetComponent<MeshRenderer>().Color = color;
-            else if (HasComponent<SpriteRenderer>()) GetComponent<SpriteRenderer>().Color = color;
+            // Shows in the Profiler as "Rainbow" (with "Rainbow Color" inside it) and a "Rainbow Hue" counter.
+            using (Profiler.Sample("Rainbow"))
+            {
+                m_Hue += CyclesPerSecond * dt;
+                Profiler.BeginSample("Rainbow Color");
+                var color = Color.FromHSV(m_Hue, Saturation, Brightness);
+                if (HasComponent<MeshRenderer>()) GetComponent<MeshRenderer>().Color = color;
+                else if (HasComponent<SpriteRenderer>()) GetComponent<SpriteRenderer>().Color = color;
+                Profiler.EndSample();
+                Profiler.SetCounter("Rainbow Hue", m_Hue % 1.0f);
+            }
         }
     }
 }

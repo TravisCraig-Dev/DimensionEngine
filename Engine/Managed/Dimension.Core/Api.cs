@@ -221,6 +221,42 @@ namespace Dimension
         public static void LogError(object message) => Write(3, message?.ToString());
     }
 
+    /// <summary>
+    /// The engine's Profiler (Window > Profiler) from scripts: samples show as sections (nested in the section that
+    /// runs the script, such as Scripts), with their time and calls, in its tables and timeline; counters show beside the
+    /// frame's draw calls.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// using (Profiler.Sample("Pathfinding")) { FindPath(); }
+    /// Profiler.BeginSample("Spawn"); Spawn(); Profiler.EndSample();
+    /// Profiler.SetCounter("Enemies", enemies.Count);
+    /// </code>
+    /// </example>
+    public static unsafe class Profiler
+    {
+        /// <summary>Starts a section named <paramref name="name"/> (until <see cref="EndSample"/>; nest them freely).</summary>
+        public static void BeginSample(string name) => Native.WithUtf8(name ?? "Sample", p => Native.Api.ProfilerSample(0, (byte*)p, 0.0f));
+
+        /// <summary>Ends the innermost section begun with <see cref="BeginSample"/>. One left open ends with the frame.</summary>
+        public static void EndSample() => Native.Api.ProfilerSample(1, null, 0.0f);
+
+        /// <summary>A section for a <c>using</c> block: begun now, ended when the block is left (even by an exception).</summary>
+        public static SampleScope Sample(string name)
+        {
+            BeginSample(name);
+            return new SampleScope();
+        }
+
+        /// <summary>Sets a counter shown with this frame in the Profiler (its last value in the frame).</summary>
+        public static void SetCounter(string name, float value) => Native.WithUtf8(name ?? "Counter", p => Native.Api.ProfilerSample(2, (byte*)p, value));
+
+        public readonly struct SampleScope : System.IDisposable
+        {
+            public void Dispose() => EndSample();
+        }
+    }
+
     public static unsafe class Time
     {
         /// <summary>Seconds since the previous frame.</summary>

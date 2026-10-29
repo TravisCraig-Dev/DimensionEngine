@@ -1,5 +1,7 @@
 #pragma once
+#include <cstdint>
 #include <deque>
+#include <memory>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -64,6 +66,10 @@ namespace Dimension
         void BeginFrame();
         void EndFrame();
         void SetCounter(const char* name, float value);
+        // Sections opened and closed by calls rather than a scope (C#'s Profiler.BeginSample / EndSample): they nest
+        // like scopes; one left open is closed when its frame ends. The name is copied (Intern).
+        void BeginSample(const std::string& name);
+        void EndSample();
         void SetGpuSections(std::vector<Section> sections);
         // Recording stops while paused (the history stays to look at).
         void SetPaused(bool paused);
@@ -82,6 +88,7 @@ namespace Dimension
         private:
             int m_Section = -1, m_Span = -1;
             long long m_Start = 0;
+            uint64_t m_Frame = 0; // the frame it opened in (a sample closed in a later frame records nothing)
         };
     }
 }
