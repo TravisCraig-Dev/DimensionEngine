@@ -19,6 +19,7 @@ namespace Editor
         // Scene view snapping (the toolbar's Snap; Ctrl inverts it while held): moves land on the world grid, rotation
         // and scale go in steps.
         bool Snap = false;
+        bool ProjectListView = false; // the Project window shows a list with columns instead of the grid
         float SnapMove = 0.5f, SnapRotate = 15.0f, SnapScale = 0.1f;
         // Shortcuts changed in Window > Shortcuts (id -> key chord).
         nlohmann::json Shortcuts = nlohmann::json::object();

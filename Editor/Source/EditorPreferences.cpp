@@ -38,6 +38,7 @@ namespace Editor
             Theme = j.value("theme", Theme);
             Accent = j.value("accent", Accent);
             Snap = j.value("snap", Snap);
+            ProjectListView = j.value("projectListView", ProjectListView);
             SnapMove = j.value("snapMove", SnapMove);
             SnapRotate = j.value("snapRotate", SnapRotate);
             SnapScale = j.value("snapScale", SnapScale);
@@ -63,6 +64,7 @@ namespace Editor
                           { "theme", Theme },
                           { "accent", Accent },
                           { "snap", Snap },
+                          { "projectListView", ProjectListView },
                           { "snapMove", SnapMove },
                           { "snapRotate", SnapRotate },
                           { "snapScale", SnapScale },

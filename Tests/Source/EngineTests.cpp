@@ -18,6 +18,8 @@
 #include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Asset/Preset.h>
 #include <Dimension/Asset/ImportDefaults.h>
+#include <Dimension/Asset/AssetListing.h>
+#include <Dimension/Asset/ProjectFavorites.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneSections.h>
@@ -8159,6 +8161,89 @@ namespace
         AssetManager::Shutdown();
     }
 
+    // The Project window's list view (rows described and sorted by name, type, size and date, folders first) and its
+    // Favorites (folders and saved searches, kept in the project's .dimension folder).
+    void TestProjectListAndFavorites()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_project_list";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        fs::path assets = dir / "Assets";
+        fs::create_directories(assets / "Zeta", ec);
+        fs::create_directories(assets / "alpha/Inner", ec);
+        fs::path src = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets";
+        fs::copy_file(src / "Textures/Brick.png", assets / "brick.png", ec);
+        fs::copy_file(src / "Textures/Checker.png", assets / "Checker.png", ec);
+        fs::copy_file(src / "Materials/Gold.mat", assets / "Gold.mat", ec);
+        std::ofstream(assets / "notes.txt") << "hello";
+        AssetManager::Init(assets);
+        auto now = fs::file_time_type::clock::now();
+        fs::last_write_time(assets / "brick.png", now - std::chrono::hours(48));
+        fs::last_write_time(assets / "Checker.png", now - std::chrono::hours(1));
+        fs::last_write_time(assets / "Gold.mat", now - std::chrono::hours(24));
+        fs::last_write_time(assets / "notes.txt", now - std::chrono::hours(72));
+
+        std::vector<AssetListEntry> rows;
+        for (const char* name : { "Gold.mat", "Zeta", "notes.txt", "brick.png", "alpha", "Checker.png" })
+            rows.push_back(AssetListing::Describe(assets / name));
+        const AssetListEntry& brick = rows[3];
+        CHECK(brick.Name == "brick" && !brick.Folder && brick.Type == AssetType::Texture && brick.Handle.IsValid() &&
+              brick.Size == fs::file_size(src / "Textures/Brick.png"));
+        CHECK(rows[1].Folder && rows[1].Size == 0 && AssetListing::TypeName(rows[1]) == "Folder");
+        CHECK(AssetListing::TypeName(rows[2]) == "File" && rows[2].Size == 5 && AssetListing::TypeName(rows[0]) == "Material");
+
+        auto order = [&](AssetSort by, bool ascending) {
+            AssetListing::Sort(rows, by, ascending);
+            std::string out;
+            for (const auto& r : rows) out += (out.empty() ? "" : ",") + r.Name;
+            return out;
+        };
+        CHECK(order(AssetSort::Name, true) == "alpha,Zeta,brick,Checker,Gold,notes"); // case ignored, folders first
+        CHECK(order(AssetSort::Name, false) == "alpha,Zeta,notes,Gold,Checker,brick"); // folders keep their order
+        CHECK(order(AssetSort::Type, true) == "alpha,Zeta,notes,Gold,brick,Checker"); // File, Material, Texture (ties by name)
+        CHECK(order(AssetSort::Type, false) == "alpha,Zeta,brick,Checker,Gold,notes");
+        CHECK(order(AssetSort::Modified, true) == "alpha,Zeta,notes,brick,Gold,Checker");
+        CHECK(order(AssetSort::Modified, false) == "alpha,Zeta,Checker,Gold,brick,notes");
+        AssetSort size = AssetSort::Size;
+        std::string bySize = order(size, false);
+        CHECK(bySize.rfind("alpha,Zeta,", 0) == 0 && bySize.size() > 11 && bySize.substr(bySize.size() - 5) == "notes"); // 5 bytes: smallest
+
+        CHECK(AssetListing::FormatSize(812) == "812 B" && AssetListing::FormatSize(4300) == "4.2 KB" &&
+              AssetListing::FormatSize(13 * 1024 * 1024) == "13.0 MB");
+        std::string when = AssetListing::FormatTime(now);
+        CHECK(when.size() == 16 && when[4] == '-' && when[10] == ' ' && when[13] == ':');
+
+        // Favorites.
+        CHECK(ProjectFavorites::List().empty());
+        CHECK(ProjectFavorites::AddFolder(assets / "alpha/Inner"));
+        CHECK(!ProjectFavorites::AddFolder("alpha/Inner/")); // the same folder
+        CHECK(ProjectFavorites::AddFolder("Zeta") && ProjectFavorites::AddFolder(assets));
+        CHECK(!ProjectFavorites::AddFolder("Nope") && !ProjectFavorites::AddFolder(dir) && !ProjectFavorites::AddFolder("brick.png"));
+        CHECK(ProjectFavorites::AddSearch("  t:Texture  ") && !ProjectFavorites::AddSearch("t:Texture") && !ProjectFavorites::AddSearch("   "));
+        CHECK(ProjectFavorites::AddSearch("l:Wall", "Wall Things"));
+        auto favorites = ProjectFavorites::List();
+        CHECK(favorites.size() == 5);
+        CHECK(favorites[0] == Favorite({ "Inner", "alpha/Inner", "" }) && favorites[1].Name == "Zeta" && favorites[2] == Favorite({ "Assets", "", "" }));
+        CHECK(favorites[3] == Favorite({ "t:Texture", "", "t:Texture" }) && favorites[3].IsSearch() && !favorites[0].IsSearch());
+        CHECK(favorites[4].Name == "Wall Things" && favorites[4].Search == "l:Wall");
+        CHECK(fs::exists(dir / ".dimension/Favorites.json"));
+
+        ProjectFavorites::Rename(favorites[3], "Textures");
+        ProjectFavorites::Rename(favorites[1], "  "); // a blank name: kept
+        ProjectFavorites::Remove(favorites[4]);
+        favorites = ProjectFavorites::List();
+        CHECK(favorites.size() == 4 && favorites[3].Name == "Textures" && favorites[1].Name == "Zeta");
+
+        // A folder that is gone is left out of the list, and back when it returns.
+        fs::rename(assets / "Zeta", assets / "Zeta2", ec);
+        CHECK(ProjectFavorites::List().size() == 3);
+        fs::rename(assets / "Zeta2", assets / "Zeta", ec);
+        CHECK(ProjectFavorites::List().size() == 4);
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -9989,6 +10074,7 @@ int main(int argc, char** argv)
     Run("Presets", TestPresets);
     Run("Import defaults and batch import settings", TestImportDefaults);
     Run("Asset references and Find References In Scene", TestAssetReferences);
+    Run("Project list view and Favorites", TestProjectListAndFavorites);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

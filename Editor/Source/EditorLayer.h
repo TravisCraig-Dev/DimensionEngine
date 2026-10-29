@@ -38,6 +38,8 @@ namespace Editor
         std::string PrefabInstance; // --prefab-instance "Name": that instance's prefab in Prefab Mode, in context
         std::string NewSceneTemplate; // --new-scene "Template": start with a new scene from that template
         std::string Layout;           // --layout "Name": apply a saved layout at startup
+        std::string ProjectView;      // --project-view list|grid: the Project window's view for the session
+        std::string ProjectSearch;    // --project-search "query": the Project window's search
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's

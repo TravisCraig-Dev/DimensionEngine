@@ -241,6 +241,8 @@ namespace Editor
             if (comma == std::string::npos) break;
             start = comma + 1;
         }
+        if (!m_Options.ProjectView.empty()) m_Content->SetListView(m_Options.ProjectView == "list", false);
+        if (!m_Options.ProjectSearch.empty()) m_Content->SetSearch(m_Options.ProjectSearch);
         // --new-scene "Template", --open-additive and --prefab-instance (automation).
         for (const auto& t : SceneTemplates::All())
             if (!m_Options.NewSceneTemplate.empty() && t.Name == m_Options.NewSceneTemplate) NewSceneFrom(t);

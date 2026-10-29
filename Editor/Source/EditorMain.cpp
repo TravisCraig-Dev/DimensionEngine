@@ -34,6 +34,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--frame-event") && i + 1 < argc) options.FrameEvent = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--menu") && i + 1 < argc) options.MenuCommand = argv[++i];
         else if (!std::strcmp(argv[i], "--search") && i + 1 < argc) options.Search = argv[++i];
+        else if (!std::strcmp(argv[i], "--project-view") && i + 1 < argc) options.ProjectView = argv[++i];
+        else if (!std::strcmp(argv[i], "--project-search") && i + 1 < argc) options.ProjectSearch = argv[++i];
         else if (!std::strcmp(argv[i], "--find") && i + 1 < argc) options.SearchQuery = argv[++i];
         else if (!std::strcmp(argv[i], "--package") && i + 1 < argc) options.PackagePath = argv[++i];
         else if (!std::strcmp(argv[i], "--open-additive") && i + 1 < argc) options.AdditiveScenes = argv[++i];

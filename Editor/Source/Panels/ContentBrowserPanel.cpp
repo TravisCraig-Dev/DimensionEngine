@@ -8,6 +8,10 @@
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Asset/AssetDependencies.h>
+#include <Dimension/Asset/AssetListing.h>
+#include <Dimension/Asset/ProjectFavorites.h>
+#include "../EditorPreferences.h"
+#include <optional>
 #include <Dimension/Platform/FileDialogs.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -21,6 +25,15 @@ namespace Editor
         {
             for (auto& c : s) c = (char)std::tolower(c);
             return s;
+        }
+
+        // A button drawn pressed while `on`.
+        bool ToggleButton(const char* label, bool on)
+        {
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            bool clicked = ImGui::Button(label);
+            if (on) ImGui::PopStyleColor();
+            return clicked;
         }
 
         fs::path UniquePath(const fs::path& desired)
@@ -60,7 +73,13 @@ namespace Editor
         if (dir == m_Current) flags |= ImGuiTreeNodeFlags_Selected;
         if (dir == AssetManager::GetAssetsDirectory()) flags |= ImGuiTreeNodeFlags_DefaultOpen;
         bool open = ImGui::TreeNodeEx(dir.string().c_str(), flags, "%s", dir.filename().string().c_str());
-        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) m_Current = dir;
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) m_Current = dir, m_Search.clear();
+        if (ImGui::BeginPopupContextItem("FolderContext"))
+        {
+            if (ImGui::MenuItem("Add to Favorites")) ProjectFavorites::AddFolder(dir), m_FavoritesFrame = -1000;
+            if (ImGui::MenuItem("Show in Explorer")) FileDialogs::OpenWithDefaultApp(dir);
+            ImGui::EndPopup();
+        }
         if (ImGui::BeginDragDropTarget())
         {
             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kPathPayload))
@@ -75,6 +94,257 @@ namespace Editor
             for (auto& d : subdirs) DrawFolderTree(d);
             ImGui::TreePop();
         }
+    }
+
+    void ContentBrowserPanel::ItemBehavior(const fs::path& path, const std::string& name, bool isDir, AssetHandle handle, AssetType type, bool hovered)
+    {
+        // Ctrl click adds or removes an asset; Shift click selects the ones from the last clicked to it.
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && handle.IsValid())
+        {
+            if (ImGui::GetIO().KeyCtrl) m_Ctx.ToggleSelectAsset(handle), m_AssetAnchor = handle;
+            else if (ImGui::GetIO().KeyShift && m_AssetAnchor.IsValid()) m_RangeTo = handle;
+            else m_Ctx.SelectAsset(handle), m_AssetAnchor = handle;
+        }
+        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        {
+            if (isDir) m_EnterDir = path;
+            else if (type == AssetType::Scene) m_Ctx.RequestOpenScene = path;
+            else if (type == AssetType::Prefab && handle.IsValid()) m_Ctx.RequestOpenPrefab = handle;
+            else FileDialogs::OpenWithDefaultApp(path);
+        }
+
+        if (ImGui::BeginDragDropSource())
+        {
+            if (handle.IsValid())
+            {
+                uint64_t h = handle;
+                ImGui::SetDragDropPayload(UI::kAssetPayload, &h, sizeof(h));
+            }
+            else
+            {
+                std::u8string p8 = path.u8string();
+                ImGui::SetDragDropPayload(UI::kPathPayload, p8.data(), p8.size());
+            }
+            ImGui::Text("%s", name.c_str());
+            ImGui::EndDragDropSource();
+        }
+        if (isDir && ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kAssetPayload))
+            {
+                fs::path from = AssetManager::GetAbsolutePath(AssetHandle(*(const uint64_t*)p->Data));
+                if (!from.empty()) AssetManager::MoveAsset(from, path / from.filename());
+            }
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kPathPayload))
+            {
+                fs::path from = fs::path(std::u8string((const char8_t*)p->Data, (const char8_t*)p->Data + p->DataSize));
+                if (from != path) AssetManager::MoveAsset(from, path / from.filename());
+            }
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kEntityPayload))
+            {
+                Entity e = m_Ctx.ActiveScene().FindEntityByGuid(Guid(*(const uint64_t*)p->Data));
+                if (!e.IsNull())
+                {
+                    m_Ctx.RecordUndo();
+                    Prefabs::CreateFromEntity(m_Ctx.ActiveScene(), e, UniquePath(path / (m_Ctx.ActiveScene().GetRegistry().Get<TagComponent>(e).Name + ".prefab")));
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        if (ImGui::BeginPopupContextItem("ItemContext"))
+        {
+            if (isDir && ImGui::MenuItem("Add to Favorites")) ProjectFavorites::AddFolder(path), m_FavoritesFrame = -1000;
+            if (ImGui::MenuItem("Rename")) { m_Renaming = path; m_RenameBuffer = path.filename().string(); m_RenameFocus = true; }
+            if (path.extension() == ".prefab" && ImGui::MenuItem("Create Prefab Variant"))
+            {
+                // A prefab that starts identical to this one and keeps only what it changes.
+                AssetHandle base = AssetManager::GetHandle(path);
+                AssetHandle variant = Prefabs::CreateVariant(base, UniquePath(path.parent_path() / (path.stem().string() + " Variant.prefab")));
+                if (variant.IsValid()) m_Ctx.SelectedAsset = variant;
+            }
+            if (path.extension() == ".scene" && ImGui::MenuItem("Open Additive", nullptr, false, !m_Ctx.IsPlaying()))
+                m_Ctx.RequestOpenAdditive = path;
+            if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
+            if (AssetHandle item = AssetManager::GetHandle(path); item.IsValid())
+            {
+                ImGui::Separator();
+                // The objects in the open scene using it (the Hierarchy's search, dimmed in the Scene view).
+                if (ImGui::MenuItem("Find References In Scene", nullptr, false, type != AssetType::Scene))
+                    m_Ctx.HierarchySearch = SceneSearch::ReferenceQuery(item);
+                // It and everything it uses, in turn.
+                if (ImGui::MenuItem("Select Dependencies"))
+                {
+                    auto deps = AssetDependencies::Collect({ item }, false).Assets;
+                    std::vector<AssetHandle> list(deps.begin(), deps.end());
+                    std::erase(list, item);
+                    std::sort(list.begin(), list.end(), [](AssetHandle a, AssetHandle b) {
+                        return AssetManager::GetMetadata(a)->Path < AssetManager::GetMetadata(b)->Path;
+                    });
+                    list.insert(list.begin(), item);
+                    m_Ctx.SelectAssets(list, item);
+                }
+                // The assets that use it.
+                if (ImGui::MenuItem("Select Used By"))
+                {
+                    auto users = AssetDependencies::UsedBy(item);
+                    if (users.empty()) Log::Info("No asset uses {}", path.filename().string());
+                    else m_Ctx.SelectAssets(users, users.front());
+                }
+                ImGui::Separator();
+            }
+            if (ImGui::MenuItem("Show in Explorer")) FileDialogs::RevealInExplorer(path);
+            if (ImGui::MenuItem("Delete")) m_DeletePath = path;
+            ImGui::EndPopup();
+        }
+    }
+
+    void ContentBrowserPanel::DrawRenameField(const fs::path& path, float width)
+    {
+        ImGui::SetNextItemWidth(width);
+        if (m_RenameFocus)
+        {
+            ImGui::SetKeyboardFocusHere();
+            m_RenameFocus = false;
+        }
+        if (ImGui::InputText("##rename", &m_RenameBuffer, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+        {
+            fs::path dest = path.parent_path() / std::u8string_view((const char8_t*)m_RenameBuffer.c_str());
+            if (dest != path) AssetManager::MoveAsset(path, dest);
+            m_Renaming.clear();
+        }
+        else if (ImGui::IsItemDeactivated()) m_Renaming.clear(); // clicked away or Escape
+    }
+
+    void ContentBrowserPanel::SetListView(bool list, bool remember)
+    {
+        m_ListView = list;
+        if (!remember) return;
+        EditorPreferences::Get().ProjectListView = list;
+        EditorPreferences::Get().Save();
+    }
+
+    void ContentBrowserPanel::DrawFavorites()
+    {
+        // Read again now and then (and at once after a change here).
+        if (ImGui::GetFrameCount() - m_FavoritesFrame > 120)
+        {
+            m_Favorites = ProjectFavorites::List();
+            m_FavoritesFrame = ImGui::GetFrameCount();
+        }
+        const fs::path& root = AssetManager::GetAssetsDirectory();
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+        if (!ImGui::TreeNodeEx("Favorites", flags)) return;
+        std::optional<Favorite> remove;
+        for (size_t i = 0; i < m_Favorites.size(); ++i)
+        {
+            const Favorite& f = m_Favorites[i];
+            ImGui::PushID((int)i);
+            bool current = f.IsSearch() ? m_Search == f.Search : m_Search.empty() && m_Current == (root / f.Folder).lexically_normal();
+            if (m_RenamingFavorite == (int)i)
+            {
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (m_RenameFocus) ImGui::SetKeyboardFocusHere(), m_RenameFocus = false;
+                if (ImGui::InputText("##favorite", &m_RenameBuffer, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+                {
+                    ProjectFavorites::Rename(f, m_RenameBuffer);
+                    m_RenamingFavorite = -1;
+                    m_FavoritesFrame = -1000;
+                }
+                else if (ImGui::IsItemDeactivated()) m_RenamingFavorite = -1;
+            }
+            else
+            {
+                // A magnifier for searches, a folder mark for folders.
+                ImGui::TreeNodeEx("##fav", ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanAvailWidth |
+                                               (current ? ImGuiTreeNodeFlags_Selected : 0),
+                                  "%s %s", f.IsSearch() ? "?" : "*", f.Name.c_str());
+                if (ImGui::IsItemClicked())
+                {
+                    if (f.IsSearch()) m_Search = f.Search;
+                    else m_Current = (root / f.Folder).lexically_normal(), m_Search.clear();
+                }
+                ImGui::SetItemTooltip("%s", f.IsSearch() ? ("Search: " + f.Search).c_str() : ("Assets/" + f.Folder).c_str());
+                if (ImGui::BeginPopupContextItem("FavoriteContext"))
+                {
+                    if (ImGui::MenuItem("Rename")) m_RenamingFavorite = (int)i, m_RenameBuffer = f.Name, m_RenameFocus = true;
+                    if (ImGui::MenuItem("Remove from Favorites")) remove = f;
+                    ImGui::EndPopup();
+                }
+            }
+            ImGui::PopID();
+        }
+        if (m_Favorites.empty()) ImGui::TextDisabled("Folders (right-click) and saved searches");
+        ImGui::TreePop();
+        if (remove)
+        {
+            ProjectFavorites::Remove(*remove);
+            m_FavoritesFrame = -1000;
+        }
+    }
+
+    void ContentBrowserPanel::DrawList(const std::vector<fs::directory_entry>& found, std::vector<AssetHandle>& shown)
+    {
+        // Name, type, size and date modified; a header click sorts by that column (folders stay first).
+        ImGuiTableFlags flags = ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+        if (!ImGui::BeginTable("List", 4, flags, ImVec2(0.0f, std::max(ImGui::GetContentRegionAvail().y - 4.0f, 60.0f)))) return;
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_DefaultSort, 3.0f);
+        ImGui::TableSetupColumn("Type", 0, 1.2f);
+        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_PreferSortDescending, 0.8f);
+        ImGui::TableSetupColumn("Modified", ImGuiTableColumnFlags_PreferSortDescending, 1.4f);
+        ImGui::TableHeadersRow();
+        if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs(); specs && specs->SpecsCount > 0)
+        {
+            m_SortBy = (AssetSort)specs->Specs[0].ColumnIndex;
+            m_SortAscending = specs->Specs[0].SortDirection != ImGuiSortDirection_Descending;
+        }
+        std::vector<AssetListEntry> rows;
+        for (const auto& e : found) rows.push_back(AssetListing::Describe(e.path()));
+        AssetListing::Sort(rows, m_SortBy, m_SortAscending);
+        float iconSize = ImGui::GetTextLineHeight();
+        for (const AssetListEntry& row : rows)
+        {
+            ImGui::PushID(row.Path.string().c_str());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (row.Handle.IsValid()) shown.push_back(row.Handle);
+            bool selected = m_Ctx.IsAssetSelected(row.Handle);
+            // The icon: a folder, or a badge in the asset type's color (the grid's file colors).
+            ImVec2 at = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec4 color = row.Folder ? ImVec4(0.85f, 0.72f, 0.35f, 1) : UI::AssetColor(row.Type);
+            if (row.Folder)
+            {
+                dl->AddRectFilled(ImVec2(at.x + 1, at.y + 2), ImVec2(at.x + iconSize * 0.5f, at.y + 5), ImGui::GetColorU32(color), 1.5f);
+                dl->AddRectFilled(ImVec2(at.x + 1, at.y + 4), ImVec2(at.x + iconSize - 1, at.y + iconSize - 2), ImGui::GetColorU32(color), 2.0f);
+            }
+            else
+            {
+                ImVec2 a(at.x + 2, at.y + 1), b(at.x + iconSize - 2, at.y + iconSize - 1);
+                dl->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(color.x * 0.45f, color.y * 0.45f, color.z * 0.45f, 1)), 2.0f);
+                dl->AddRect(a, b, ImGui::GetColorU32(color), 2.0f, 0, 1.5f);
+            }
+            ImGui::SetCursorScreenPos(ImVec2(at.x + iconSize + 4.0f, at.y));
+            if (m_Renaming == row.Path) DrawRenameField(row.Path, -FLT_MIN);
+            else
+            {
+                // Selected rows in the grid's selection color (the theme's Header is a grey).
+                if (selected) ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+                ImGui::Selectable(row.Name.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
+                if (selected) ImGui::PopStyleColor();
+                ItemBehavior(row.Path, row.Name, row.Folder, row.Handle, row.Type, ImGui::IsItemHovered());
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", AssetListing::TypeName(row).c_str());
+            ImGui::TableNextColumn();
+            if (!row.Folder) ImGui::TextDisabled("%s", AssetListing::FormatSize(row.Size).c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", AssetListing::FormatTime(row.Modified).c_str());
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
     }
 
     void ContentBrowserPanel::OnImGui(bool* open)
@@ -95,11 +365,13 @@ namespace Editor
 
             ImGui::TableSetColumnIndex(0);
             ImGui::BeginChild("FolderTree");
+            DrawFavorites();
             DrawFolderTree(root);
             ImGui::EndChild();
 
             ImGui::TableSetColumnIndex(1);
             // Toolbar: back, breadcrumb, search, size
+            float rowEnd = ImGui::GetContentRegionAvail().x; // this column's width (SameLine positions are from its start)
             ImGui::BeginDisabled(m_Current == root);
             if (ImGui::Button("<")) m_Current = m_Current.parent_path();
             ImGui::EndDisabled();
@@ -114,12 +386,30 @@ namespace Editor
                 first = false;
                 if (ImGui::SmallButton(part.string().c_str())) m_Current = accumulated;
             }
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - 330);
+            // Right-aligned: search, Save, Grid | List, and the thumbnail size in the grid.
+            auto buttonWidth = [](const char* label) { return ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f; };
+            float spacing = ImGui::GetStyle().ItemSpacing.x;
+            float tools = 180.0f + spacing + buttonWidth("Save") + spacing + buttonWidth("Grid") + 2.0f + buttonWidth("List") +
+                          (m_ListView ? 0.0f : spacing + 120.0f);
+            ImGui::SameLine(rowEnd - tools);
             ImGui::SetNextItemWidth(180);
             ImGui::InputTextWithHint("##search", "Search (t:Type l:Label)", &m_Search);
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(120);
-            ImGui::SliderFloat("##size", &m_ThumbnailSize, 48.0f, 160.0f, "%.0f px");
+            ImGui::BeginDisabled(m_Search.find_first_not_of(' ') == std::string::npos);
+            if (ImGui::Button("Save")) ProjectFavorites::AddSearch(m_Search), m_FavoritesFrame = -1000;
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip("Save this search to Favorites (top of the folder tree)");
+            // Grid of thumbnails, or a list with columns (remembered in the Preferences).
+            ImGui::SameLine();
+            if (ToggleButton("Grid", !m_ListView) && m_ListView) SetListView(false);
+            ImGui::SameLine(0, 2);
+            if (ToggleButton("List", m_ListView) && !m_ListView) SetListView(true);
+            if (!m_ListView)
+            {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120);
+                ImGui::SliderFloat("##size", &m_ThumbnailSize, 48.0f, 160.0f, "%.0f px");
+            }
             ImGui::Separator();
 
             ImGui::BeginChild("Files");
@@ -142,10 +432,12 @@ namespace Editor
 
             float cell = m_ThumbnailSize + 16.0f;
             int columns = std::max(1, (int)(ImGui::GetContentRegionAvail().x / cell));
-            fs::path toDelete, enterDir;
-            std::vector<AssetHandle> shown; // the assets in the grid, in order (for Shift click)
-            AssetHandle rangeTo = AssetHandle::None();
-            if (ImGui::BeginTable("Grid", columns))
+            m_DeletePath.clear();
+            m_EnterDir.clear();
+            m_RangeTo = AssetHandle::None();
+            std::vector<AssetHandle> shown; // the assets shown, in order (for Shift click)
+            if (m_ListView) DrawList(entries, shown);
+            else if (ImGui::BeginTable("Grid", columns))
             {
                 for (auto& entry : entries)
                 {
@@ -224,122 +516,10 @@ namespace Editor
                         }
                     }
 
-                    // Ctrl click adds or removes an asset; Shift click selects the ones from the last clicked to it.
-                    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && handle.IsValid())
-                    {
-                        if (ImGui::GetIO().KeyCtrl) m_Ctx.ToggleSelectAsset(handle), m_AssetAnchor = handle;
-                        else if (ImGui::GetIO().KeyShift && m_AssetAnchor.IsValid()) rangeTo = handle;
-                        else m_Ctx.SelectAsset(handle), m_AssetAnchor = handle;
-                    }
-                    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                    {
-                        if (isDir) enterDir = path;
-                        else if (type == AssetType::Scene) m_Ctx.RequestOpenScene = path;
-                        else if (type == AssetType::Prefab && handle.IsValid()) m_Ctx.RequestOpenPrefab = handle;
-                        else FileDialogs::OpenWithDefaultApp(path);
-                    }
-
-                    if (ImGui::BeginDragDropSource())
-                    {
-                        if (handle.IsValid())
-                        {
-                            uint64_t h = handle;
-                            ImGui::SetDragDropPayload(UI::kAssetPayload, &h, sizeof(h));
-                        }
-                        else
-                        {
-                            std::u8string p8 = path.u8string();
-                            ImGui::SetDragDropPayload(UI::kPathPayload, p8.data(), p8.size());
-                        }
-                        ImGui::Text("%s", name.c_str());
-                        ImGui::EndDragDropSource();
-                    }
-                    if (isDir && ImGui::BeginDragDropTarget())
-                    {
-                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kAssetPayload))
-                        {
-                            fs::path from = AssetManager::GetAbsolutePath(AssetHandle(*(const uint64_t*)p->Data));
-                            if (!from.empty()) AssetManager::MoveAsset(from, path / from.filename());
-                        }
-                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kPathPayload))
-                        {
-                            fs::path from = fs::path(std::u8string((const char8_t*)p->Data, (const char8_t*)p->Data + p->DataSize));
-                            if (from != path) AssetManager::MoveAsset(from, path / from.filename());
-                        }
-                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kEntityPayload))
-                        {
-                            Entity e = m_Ctx.ActiveScene().FindEntityByGuid(Guid(*(const uint64_t*)p->Data));
-                            if (!e.IsNull())
-                            {
-                                m_Ctx.RecordUndo();
-                                Prefabs::CreateFromEntity(m_Ctx.ActiveScene(), e, UniquePath(path / (m_Ctx.ActiveScene().GetRegistry().Get<TagComponent>(e).Name + ".prefab")));
-                            }
-                        }
-                        ImGui::EndDragDropTarget();
-                    }
-
-                    if (ImGui::BeginPopupContextItem("ItemContext"))
-                    {
-                        if (ImGui::MenuItem("Rename")) { m_Renaming = path; m_RenameBuffer = path.filename().string(); m_RenameFocus = true; }
-                        if (path.extension() == ".prefab" && ImGui::MenuItem("Create Prefab Variant"))
-                        {
-                            // A prefab that starts identical to this one and keeps only what it changes.
-                            AssetHandle base = AssetManager::GetHandle(path);
-                            AssetHandle variant = Prefabs::CreateVariant(base, UniquePath(path.parent_path() / (path.stem().string() + " Variant.prefab")));
-                            if (variant.IsValid()) m_Ctx.SelectedAsset = variant;
-                        }
-                        if (path.extension() == ".scene" && ImGui::MenuItem("Open Additive", nullptr, false, !m_Ctx.IsPlaying()))
-                            m_Ctx.RequestOpenAdditive = path;
-                        if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
-                        if (AssetHandle item = AssetManager::GetHandle(path); item.IsValid())
-                        {
-                            ImGui::Separator();
-                            // The objects in the open scene using it (the Hierarchy's search, dimmed in the Scene view).
-                            if (ImGui::MenuItem("Find References In Scene", nullptr, false, type != AssetType::Scene))
-                                m_Ctx.HierarchySearch = SceneSearch::ReferenceQuery(item);
-                            // It and everything it uses, in turn.
-                            if (ImGui::MenuItem("Select Dependencies"))
-                            {
-                                auto deps = AssetDependencies::Collect({ item }, false).Assets;
-                                std::vector<AssetHandle> list(deps.begin(), deps.end());
-                                std::erase(list, item);
-                                std::sort(list.begin(), list.end(), [](AssetHandle a, AssetHandle b) {
-                                    return AssetManager::GetMetadata(a)->Path < AssetManager::GetMetadata(b)->Path;
-                                });
-                                list.insert(list.begin(), item);
-                                m_Ctx.SelectAssets(list, item);
-                            }
-                            // The assets that use it.
-                            if (ImGui::MenuItem("Select Used By"))
-                            {
-                                auto users = AssetDependencies::UsedBy(item);
-                                if (users.empty()) Log::Info("No asset uses {}", path.filename().string());
-                                else m_Ctx.SelectAssets(users, users.front());
-                            }
-                            ImGui::Separator();
-                        }
-                        if (ImGui::MenuItem("Show in Explorer")) FileDialogs::RevealInExplorer(path);
-                        if (ImGui::MenuItem("Delete")) toDelete = path;
-                        ImGui::EndPopup();
-                    }
+                    ItemBehavior(path, name, isDir, handle, type, hovered);
 
                     // Label / rename field
-                    if (m_Renaming == path)
-                    {
-                        ImGui::SetNextItemWidth(m_ThumbnailSize);
-                        if (m_RenameFocus)
-                        {
-                            ImGui::SetKeyboardFocusHere();
-                            m_RenameFocus = false;
-                        }
-                        if (ImGui::InputText("##rename", &m_RenameBuffer, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
-                        {
-                            fs::path dest = path.parent_path() / std::u8string_view((const char8_t*)m_RenameBuffer.c_str());
-                            if (dest != path) AssetManager::MoveAsset(path, dest);
-                            m_Renaming.clear();
-                        }
-                        else if (ImGui::IsItemDeactivated()) m_Renaming.clear(); // clicked away or Escape
-                    }
+                    if (m_Renaming == path) DrawRenameField(path, m_ThumbnailSize);
                     else
                     {
                         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + m_ThumbnailSize);
@@ -421,11 +601,20 @@ namespace Editor
             ImGui::EndChild();
             ImGui::EndTable();
 
-            if (!enterDir.empty()) m_Current = enterDir, m_Search.clear();
-            if (!toDelete.empty() && FileDialogs::Confirm("Delete Asset", "Delete '" + toDelete.filename().string() + "'? This cannot be undone."))
+            if (!m_EnterDir.empty()) m_Current = m_EnterDir, m_Search.clear();
+            // Shift click: the assets shown from the last clicked one to this one.
+            if (m_RangeTo.IsValid())
             {
-                if (m_Ctx.IsAssetSelected(AssetManager::GetHandle(toDelete))) m_Ctx.SelectAsset(AssetHandle::None());
-                AssetManager::DeleteAsset(toDelete);
+                auto a = std::find(shown.begin(), shown.end(), m_AssetAnchor), b = std::find(shown.begin(), shown.end(), m_RangeTo);
+                if (a != shown.end() && b != shown.end())
+                    m_Ctx.SelectAssets(std::vector<AssetHandle>(std::min(a, b), std::max(a, b) + 1), m_RangeTo);
+                else
+                    m_Ctx.SelectAsset(m_RangeTo), m_AssetAnchor = m_RangeTo;
+            }
+            if (!m_DeletePath.empty() && FileDialogs::Confirm("Delete Asset", "Delete '" + m_DeletePath.filename().string() + "'? This cannot be undone."))
+            {
+                if (m_Ctx.IsAssetSelected(AssetManager::GetHandle(m_DeletePath))) m_Ctx.SelectAsset(AssetHandle::None());
+                AssetManager::DeleteAsset(m_DeletePath);
             }
         }
         ImGui::End();

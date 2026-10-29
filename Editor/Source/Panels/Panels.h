@@ -3,6 +3,9 @@
 #include <Dimension/Core/Log.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/SpriteSlicing.h>
+#include <Dimension/Asset/AssetListing.h>
+#include <Dimension/Asset/ProjectFavorites.h>
+#include "../EditorPreferences.h"
 #include <imgui.h>
 #include <map>
 #include <mutex>
@@ -73,11 +76,29 @@ namespace Editor
         void OnImGui(bool* open);
         const fs::path& GetCurrentDirectory() const { return m_Current; }
         void ShowDirectory(const fs::path& dir) { m_Current = dir; }
+        // Grid or list (saved in the Preferences); a search shown (automation).
+        void SetListView(bool list, bool remember = true);
+        void SetSearch(const std::string& query) { m_Search = query; }
         void ImportFiles(const std::vector<fs::path>& files);
 
     private:
         void DrawFolderTree(const fs::path& dir);
+        // An item's clicks (selection, Ctrl and Shift), double click, drag and drop and context menu (grid and list).
+        void ItemBehavior(const fs::path& path, const std::string& name, bool isDir, AssetHandle handle, AssetType type, bool hovered);
+        void DrawRenameField(const fs::path& path, float width);
+        void DrawList(const std::vector<fs::directory_entry>& entries, std::vector<AssetHandle>& shown);
+        void DrawFavorites();
         EditorContext& m_Ctx;
+        // What this frame's items asked for, done after drawing them.
+        fs::path m_DeletePath, m_EnterDir;
+        AssetHandle m_RangeTo = AssetHandle::None();
+        // The list view and its sort; Favorites (read again now and then), the one being renamed.
+        bool m_ListView = EditorPreferences::Get().ProjectListView;
+        AssetSort m_SortBy = AssetSort::Name;
+        bool m_SortAscending = true;
+        std::vector<Favorite> m_Favorites;
+        int m_FavoritesFrame = -1000;
+        int m_RenamingFavorite = -1;
         fs::path m_Current;
         float m_ThumbnailSize = 76.0f;
         fs::path m_Renaming;
