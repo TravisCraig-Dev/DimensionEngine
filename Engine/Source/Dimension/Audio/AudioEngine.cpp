@@ -30,6 +30,10 @@ namespace Dimension
         ma_resource_manager* s_ResourceManager = nullptr;
         ma_decoding_backend_vtable* s_CustomBackends[] = { ma_decoding_backend_libopus };
 
+        // The editor's clip preview.
+        ma_sound* s_Preview = nullptr;
+        fs::path s_PreviewFile;
+
         // A source's sound, and with Occlusion the low-pass between it and its mixer group.
         struct SourceVoice
         {
@@ -714,6 +718,7 @@ namespace Dimension
 
     void AudioEngine::Shutdown()
     {
+        PreviewStop();
         AudioMixer::Shutdown();
         if (!s_Engine) return;
         ma_engine_uninit(s_Engine);
@@ -728,6 +733,101 @@ namespace Dimension
     }
 
     bool AudioEngine::IsAvailable() { return s_Engine != nullptr; }
+
+    float AudioWaveform::Peak() const
+    {
+        float peak = 0.0f;
+        for (float v : Min) peak = std::max(peak, -v);
+        for (float v : Max) peak = std::max(peak, v);
+        return std::min(peak, 1.0f);
+    }
+
+    std::optional<AudioWaveform> AudioEngine::GetWaveform(const fs::path& file, size_t buckets)
+    {
+        if (buckets == 0) return std::nullopt;
+        auto info = GetClipInfo(file); // the length (counted for decoders that do not know it)
+        if (!info || info->Channels == 0 || info->Frames == 0) return std::nullopt;
+        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+        cfg.ppCustomBackendVTables = s_CustomBackends;
+        cfg.customBackendCount = 1;
+        ma_decoder decoder;
+        if (ma_decoder_init_file_w(file.wstring().c_str(), &cfg, &decoder) != MA_SUCCESS) return std::nullopt;
+        AudioWaveform w;
+        w.Channels = info->Channels;
+        w.Buckets = buckets;
+        w.Seconds = info->Seconds;
+        w.Min.assign(buckets * w.Channels, 0.0f);
+        w.Max.assign(buckets * w.Channels, 0.0f);
+        std::vector<bool> touched(buckets, false);
+        std::vector<float> chunk(4096 * (size_t)w.Channels);
+        uint64_t frame = 0;
+        ma_uint64 read = 0;
+        while (ma_decoder_read_pcm_frames(&decoder, chunk.data(), 4096, &read) == MA_SUCCESS && read > 0)
+        {
+            for (ma_uint64 f = 0; f < read; ++f, ++frame)
+            {
+                size_t b = std::min<size_t>((size_t)(frame * buckets / info->Frames), buckets - 1);
+                for (uint32_t c = 0; c < w.Channels; ++c)
+                {
+                    float v = std::clamp(chunk[f * w.Channels + c], -1.0f, 1.0f);
+                    float& lo = w.Min[c * buckets + b];
+                    float& hi = w.Max[c * buckets + b];
+                    if (!touched[b]) lo = hi = v;
+                    else lo = std::min(lo, v), hi = std::max(hi, v);
+                }
+                touched[b] = true;
+            }
+        }
+        ma_decoder_uninit(&decoder);
+        return w;
+    }
+
+    bool AudioEngine::PreviewPlay(const fs::path& file, float offsetSeconds, bool loop)
+    {
+        PreviewStop();
+        if (!s_Engine) return false;
+        auto* sound = new ma_sound();
+        if (ma_sound_init_from_file_w(s_Engine, file.wstring().c_str(), MA_SOUND_FLAG_STREAM, nullptr, nullptr, sound) != MA_SUCCESS)
+        {
+            delete sound;
+            return false;
+        }
+        ma_sound_set_spatialization_enabled(sound, MA_FALSE);
+        ma_sound_set_looping(sound, loop ? MA_TRUE : MA_FALSE);
+        if (offsetSeconds > 0.0f)
+        {
+            ma_uint32 rate = 0;
+            ma_sound_get_data_format(sound, nullptr, nullptr, &rate, nullptr, 0);
+            ma_sound_seek_to_pcm_frame(sound, (ma_uint64)((double)offsetSeconds * rate));
+        }
+        ma_sound_start(sound);
+        s_Preview = sound;
+        s_PreviewFile = file;
+        return true;
+    }
+
+    void AudioEngine::PreviewStop()
+    {
+        if (s_Preview)
+        {
+            ma_sound_uninit(s_Preview);
+            delete s_Preview;
+            s_Preview = nullptr;
+        }
+        s_PreviewFile.clear();
+    }
+
+    bool AudioEngine::PreviewIsPlaying() { return s_Preview && ma_sound_is_playing(s_Preview) && !ma_sound_at_end(s_Preview); }
+
+    const fs::path& AudioEngine::PreviewFile() { return s_PreviewFile; }
+
+    float AudioEngine::PreviewPosition()
+    {
+        if (!s_Preview) return 0.0f;
+        float seconds = 0.0f;
+        ma_sound_get_cursor_in_seconds(s_Preview, &seconds);
+        return seconds;
+    }
     void* AudioEngine::GetNative() { return s_Engine; }
     void AudioEngine::SetMasterVolume(float v)
     {

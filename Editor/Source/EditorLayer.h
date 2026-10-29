@@ -40,6 +40,7 @@ namespace Editor
         std::string Layout;           // --layout "Name": apply a saved layout at startup
         std::string ProjectView;      // --project-view list|grid: the Project window's view for the session
         std::string ProjectSearch;    // --project-search "query": the Project window's search
+        std::string AssetPreview;     // --asset-preview "yaw=..,pitch=..,clip=..,time=..,play": the Inspector's preview
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's

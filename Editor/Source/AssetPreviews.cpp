@@ -36,6 +36,7 @@ namespace Editor
     {
         for (auto& [handle, entry] : m_Entries)
             if (entry.ImGuiId) RenderDevice::Get().DeferRelease([id = entry.ImGuiId] { ImGuiLayer::RemoveTexture(id); });
+        if (m_LiveEntry.ImGuiId) RenderDevice::Get().DeferRelease([id = m_LiveEntry.ImGuiId] { ImGuiLayer::RemoveTexture(id); });
     }
 
     uint64_t AssetPreviews::KeyOf(AssetHandle asset)
@@ -83,7 +84,21 @@ namespace Editor
         return it != m_Entries.end() && it->second.Drawn ? it->second.ImGuiId : 0;
     }
 
-    bool AssetPreviews::Stage(AssetHandle asset)
+    uint64_t AssetPreviews::Live(AssetHandle asset, const LiveView& view)
+    {
+        const AssetMetadata* meta = AssetManager::GetMetadata(asset);
+        if (!meta || (meta->Type != AssetType::Mesh && meta->Type != AssetType::Prefab)) return 0;
+        if (asset != m_LiveAsset)
+        {
+            m_LiveAsset = asset;
+            m_LiveEntry.Drawn = false;
+            m_LiveClips.clear();
+        }
+        m_LiveRequest = view;
+        return m_LiveEntry.Drawn ? m_LiveEntry.ImGuiId : 0;
+    }
+
+    bool AssetPreviews::Stage(AssetHandle asset, const LiveView* view)
     {
         auto& reg = m_Scene->GetRegistry();
         if (!m_Subject.IsNull() && m_Scene->IsValid(m_Subject)) m_Scene->DestroyEntity(m_Subject);
@@ -139,6 +154,43 @@ namespace Editor
         }
         else
             return false;
+        if (view && meta->Type != AssetType::Material)
+        {
+            pitch = view->Pitch;
+            yaw = view->Yaw;
+            // The clips it can play: the model's own, or those of the prefab's animated models.
+            m_LiveClips.clear();
+            auto addClips = [&](const AnimatorComponent* anim, const MeshRendererComponent& mr) {
+                Ref<Mesh> source = AssetManager::GetMesh(anim && anim->ClipSource.IsValid() ? anim->ClipSource : mr.Mesh);
+                Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
+                if (!source || !mesh || !mesh->GetSkeleton()) return;
+                for (const auto& c : source->GetClips())
+                    if (std::none_of(m_LiveClips.begin(), m_LiveClips.end(), [&](const ClipInfo& o) { return o.Name == c.Name; }))
+                        m_LiveClips.push_back({ c.Name, c.Duration });
+            };
+            if (meta->Type == AssetType::Mesh)
+            {
+                addClips(nullptr, reg.Get<MeshRendererComponent>(m_Subject));
+                if (!view->Clip.empty())
+                {
+                    auto& anim = reg.Emplace<AnimatorComponent>(m_Subject);
+                    anim.Clip = view->Clip;
+                    anim.Time = view->Time;
+                }
+            }
+            else
+                for (auto [e, anim, mr] : reg.ViewOf<AnimatorComponent, MeshRendererComponent>())
+                {
+                    addClips(&anim, mr);
+                    if (!view->Clip.empty())
+                    {
+                        anim.Controller = AssetHandle::None(); // the chosen clip instead of its state machine
+                        anim.Clip = view->Clip;
+                    }
+                    anim.Time = view->Time;
+                }
+            m_Scene->UpdateAnimators(0.0f); // the pose at that time
+        }
         // The camera looks at the middle of the bounds from far enough to fit their sphere.
         glm::vec3 center = (lo + hi) * 0.5f;
         float radius = std::max(glm::length(hi - lo) * 0.5f, 0.01f);
@@ -148,6 +200,7 @@ namespace Editor
         m_Scene->UpdateTransforms();
         glm::vec3 forward = -glm::normalize(glm::vec3(t.World[2]));
         float distance = meta->Type == AssetType::Material ? 2.35f : radius / std::sin(glm::radians(15.0f)) * 1.05f;
+        if (view) distance *= std::clamp(view->Zoom, 0.2f, 5.0f);
         t.Position = center - forward * distance;
         auto& camera = reg.Get<CameraComponent>(m_Camera);
         camera.NearClip = std::max(distance - radius * 2.0f, distance * 0.01f);
@@ -158,6 +211,12 @@ namespace Editor
 
     void AssetPreviews::Render(VkCommandBuffer cmd)
     {
+        // The live preview first (asked for this frame), then a couple of the waiting pictures.
+        if (m_LiveRequest)
+        {
+            if (Stage(m_LiveAsset, &*m_LiveRequest)) Draw(cmd, m_LiveEntry, m_LiveAsset);
+            m_LiveRequest.reset();
+        }
         int drawn = 0;
         while (!m_Queue.empty() && drawn < 2)
         {
@@ -165,11 +224,18 @@ namespace Editor
             m_Queue.erase(m_Queue.begin());
             m_Queued.erase((uint64_t)asset);
             if (!Stage(asset)) continue;
+            Draw(cmd, m_Entries[(uint64_t)asset], asset);
+            ++drawn;
+        }
+    }
+
+    void AssetPreviews::Draw(VkCommandBuffer cmd, Entry& entry, AssetHandle asset)
+    {
+        {
             CameraData camera = CameraData::FromEntity(*m_Scene, m_Camera, 1.0f);
             SceneRenderOptions options;
             m_Renderer.Render(cmd, *m_Scene, camera, *m_Target, options);
 
-            Entry& entry = m_Entries[(uint64_t)asset];
             VkImageLayout from = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             if (!entry.Picture.IsValid())
             {
@@ -183,7 +249,6 @@ namespace Editor
             Vk::TransitionImage(cmd, entry.Picture.GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             entry.Key = KeyOf(asset);
             entry.Drawn = true;
-            ++drawn;
         }
     }
 }

@@ -8244,6 +8244,76 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // The Inspector's audio preview: a clip's waveform (lowest and highest sample per slice and channel) and its playback
+    // (when there is an audio device).
+    void TestAudioPreview()
+    {
+        // A 1 s mono WAV at 8 kHz: silence, then a square wave of amplitude 0.5.
+        fs::path dir = fs::temp_directory_path() / "dimension_audio_preview";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        fs::path wav = dir / "Half.wav";
+        {
+            const uint32_t rate = 8000, frames = 8000;
+            std::vector<int16_t> pcm(frames, 0);
+            for (uint32_t i = frames / 2; i < frames; ++i) pcm[i] = (int16_t)((i / 8) % 2 ? 16384 : -16384);
+            std::ofstream out(wav, std::ios::binary);
+            auto u32 = [&](uint32_t v) { out.write((const char*)&v, 4); };
+            auto u16 = [&](uint16_t v) { out.write((const char*)&v, 2); };
+            out.write("RIFF", 4); u32(36 + frames * 2); out.write("WAVE", 4);
+            out.write("fmt ", 4); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16);
+            out.write("data", 4); u32(frames * 2);
+            out.write((const char*)pcm.data(), frames * 2);
+        }
+        auto half = AudioEngine::GetWaveform(wav, 100);
+        CHECK(half && half->Channels == 1 && half->Buckets == 100 && half->Min.size() == 100 && half->Max.size() == 100 && Near(half->Seconds, 1.0f, 0.001f));
+        if (half)
+        {
+            bool quiet = true, loud = true;
+            for (size_t b = 0; b < 50; ++b) quiet = quiet && half->Min[b] == 0.0f && half->Max[b] == 0.0f;
+            for (size_t b = 50; b < 100; ++b) loud = loud && Near(half->Max[b], 0.5f, 0.001f) && Near(half->Min[b], -0.5f, 0.001f);
+            CHECK(quiet && loud && Near(half->Peak(), 0.5f, 0.001f));
+        }
+        CHECK(!AudioEngine::GetWaveform(wav, 0) && !AudioEngine::GetWaveform(dir / "Missing.wav", 64));
+
+        // Real clips: a mono WAV and a stereo Opus tone (each slice within -1..1, min <= max).
+        auto chime = AudioEngine::GetWaveform(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Audio/Chime.wav", 256);
+        CHECK(chime && chime->Channels == 1 && Near(chime->Peak(), 0.3988f, 0.002f));
+        auto tone = AudioEngine::GetWaveform(fs::path(DIM_SOURCE_DIR) / "Tests" / "Data" / "Tone.opus", 64);
+        CHECK(tone && tone->Channels == 2 && tone->Min.size() == 128 && Near(tone->Seconds, 1.0f, 0.01f) && tone->Peak() > 0.5f);
+        if (tone)
+        {
+            bool ordered = true;
+            for (size_t i = 0; i < tone->Min.size(); ++i) ordered = ordered && tone->Min[i] <= tone->Max[i] && tone->Min[i] >= -1.0f && tone->Max[i] <= 1.0f;
+            CHECK(ordered && tone->Max[64 + 32] > 0.3f); // the second channel has the tone too
+        }
+
+        // Playback: one clip at a time, from an offset; Stop forgets it.
+        AudioEngine::Init();
+        CHECK(!AudioEngine::PreviewIsPlaying() && AudioEngine::PreviewFile().empty());
+        if (AudioEngine::IsAvailable())
+        {
+            CHECK(AudioEngine::PreviewPlay(wav, 0.25f));
+            CHECK(AudioEngine::PreviewIsPlaying() && AudioEngine::PreviewFile() == wav);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            CHECK(AudioEngine::PreviewPosition() > 0.3f && AudioEngine::PreviewPosition() < 1.0f);
+            CHECK(!AudioEngine::PreviewPlay(dir / "Missing.wav") && AudioEngine::PreviewFile().empty()); // the last one stopped too
+            CHECK(AudioEngine::PreviewPlay(wav, 0.95f) && AudioEngine::PreviewIsPlaying());
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            CHECK(!AudioEngine::PreviewIsPlaying() && AudioEngine::PreviewFile() == wav); // ran to its end
+            CHECK(AudioEngine::PreviewPlay(wav, 0.95f, true));
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            CHECK(AudioEngine::PreviewIsPlaying()); // looping
+            AudioEngine::PreviewStop();
+            CHECK(!AudioEngine::PreviewIsPlaying() && AudioEngine::PreviewFile().empty());
+        }
+        else
+            CHECK(!AudioEngine::PreviewPlay(wav));
+        AudioEngine::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10075,6 +10145,7 @@ int main(int argc, char** argv)
     Run("Import defaults and batch import settings", TestImportDefaults);
     Run("Asset references and Find References In Scene", TestAssetReferences);
     Run("Project list view and Favorites", TestProjectListAndFavorites);
+    Run("Audio preview (waveform and playback)", TestAudioPreview);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

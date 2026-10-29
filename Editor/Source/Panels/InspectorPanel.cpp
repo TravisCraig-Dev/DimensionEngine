@@ -270,6 +270,9 @@ namespace Editor
         else if (auto assets = m_Ctx.SelectedAssetList(); assets.size() > 1) DrawAssets(assets);
         else if (m_Ctx.SelectedAsset.IsValid()) DrawAsset(m_Ctx.SelectedAsset);
         else ImGui::TextDisabled("Select a GameObject or asset to inspect it.");
+        // A clip preview stops when its asset is no longer shown.
+        if (!AudioEngine::PreviewFile().empty() && (m_Ctx.HasValidSelection() || AssetManager::GetAbsolutePath(m_Ctx.SelectedAsset) != AudioEngine::PreviewFile()))
+            AudioEngine::PreviewStop();
         ImGui::End();
     }
 
@@ -1346,6 +1349,146 @@ namespace Editor
         }
     }
 
+    void InspectorPanel::SetPreview(const std::string& spec)
+    {
+        // "yaw=120,pitch=-10,zoom=0.8,clip=Wave,time=0.5,play" (automation).
+        for (size_t start = 0; start <= spec.size();)
+        {
+            size_t comma = spec.find(',', start);
+            std::string part = spec.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            size_t eq = part.find('=');
+            std::string key = part.substr(0, eq), value = eq == std::string::npos ? std::string() : part.substr(eq + 1);
+            try
+            {
+                if (key == "yaw") m_LiveView.Yaw = std::stof(value);
+                else if (key == "pitch") m_LiveView.Pitch = std::stof(value);
+                else if (key == "zoom") m_LiveView.Zoom = std::stof(value);
+                else if (key == "clip") m_LiveView.Clip = value;
+                else if (key == "time") m_LiveView.Time = std::stof(value);
+                else if (key == "play") m_PlayPreviewRequested = true;
+            }
+            catch (...)
+            {
+            }
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        m_LiveKeep = true;
+    }
+
+    void InspectorPanel::DrawLivePreview(AssetHandle handle)
+    {
+        // Drag to turn it, the wheel to zoom, double click to reset; clips play underneath.
+        if (handle != m_LiveShown)
+        {
+            if (!m_LiveKeep) m_LiveView = {};
+            m_LiveKeep = false;
+            m_LiveShown = handle;
+            m_LivePlaying = m_PlayPreviewRequested;
+            m_PlayPreviewRequested = false;
+        }
+        float size = std::min(ImGui::GetContentRegionAvail().x, 240.0f);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - size) * 0.5f);
+        ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##livePreview", ImVec2(size, size));
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f))
+        {
+            ImVec2 d = ImGui::GetIO().MouseDelta;
+            m_LiveView.Yaw += d.x * 0.6f;
+            m_LiveView.Pitch = std::clamp(m_LiveView.Pitch - d.y * 0.6f, -89.0f, 89.0f);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            if (float wheel = ImGui::GetIO().MouseWheel; wheel != 0.0f) m_LiveView.Zoom = std::clamp(m_LiveView.Zoom * (wheel > 0 ? 0.9f : 1.1f), 0.2f, 5.0f);
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) m_LiveView = AssetPreviews::LiveView{ .Clip = m_LiveView.Clip, .Time = m_LiveView.Time };
+            ImGui::SetTooltip("Drag to turn, scroll to zoom, double-click to reset");
+        }
+        // Clip time runs while playing (looping).
+        const auto& clips = m_Ctx.Previews->LiveClips();
+        auto clip = std::find_if(clips.begin(), clips.end(), [&](const auto& c) { return c.Name == m_LiveView.Clip; });
+        if (clip == clips.end() && !m_LiveView.Clip.empty() && !clips.empty()) m_LiveView.Clip.clear();
+        if (m_LivePlaying && clip != clips.end() && clip->Duration > 0.0f)
+            m_LiveView.Time = std::fmod(m_LiveView.Time + ImGui::GetIO().DeltaTime, clip->Duration);
+        if (uint64_t picture = m_Ctx.Previews->Live(handle, m_LiveView))
+            ImGui::GetWindowDrawList()->AddImage(ImTextureRef((ImTextureID)picture), at, ImVec2(at.x + size, at.y + size));
+        if (clips.empty()) return;
+        ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x * 0.45f));
+        if (ImGui::BeginCombo("##clip", m_LiveView.Clip.empty() ? "(at rest)" : m_LiveView.Clip.c_str()))
+        {
+            if (ImGui::Selectable("(at rest)", m_LiveView.Clip.empty())) m_LiveView.Clip.clear(), m_LivePlaying = false;
+            for (const auto& c : clips)
+                if (ImGui::Selectable(c.Name.empty() ? "(unnamed)" : c.Name.c_str(), c.Name == m_LiveView.Clip))
+                    m_LiveView.Clip = c.Name, m_LiveView.Time = 0.0f, m_LivePlaying = true;
+            ImGui::EndCombo();
+        }
+        if (clip == clips.end()) return;
+        ImGui::SameLine();
+        if (ImGui::Button(m_LivePlaying ? "Pause" : "Play")) m_LivePlaying = !m_LivePlaying;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::SliderFloat("##time", &m_LiveView.Time, 0.0f, clip->Duration, "%.2f s")) m_LivePlaying = false;
+    }
+
+    void InspectorPanel::DrawAudioPreview(AssetHandle handle)
+    {
+        // The waveform (a lane per channel, two at most) with the playhead; a click plays from there.
+        fs::path file = AssetManager::GetAbsolutePath(handle);
+        if (handle != m_WaveShown)
+        {
+            m_Wave = AudioEngine::GetWaveform(file, 1024);
+            m_WaveShown = handle;
+            if (m_PlayPreviewRequested) AudioEngine::PreviewPlay(file, 0.0f, m_PreviewLoop);
+            m_PlayPreviewRequested = false;
+        }
+        if (!m_Wave || m_Wave->Buckets == 0) return;
+        const AudioWaveform& w = *m_Wave;
+        bool playing = AudioEngine::PreviewIsPlaying() && AudioEngine::PreviewFile() == file;
+        if (ImGui::Button(playing ? "Stop" : "Play"))
+        {
+            if (playing) AudioEngine::PreviewStop();
+            else if (!AudioEngine::PreviewPlay(file, 0.0f, m_PreviewLoop)) Log::Warn("No audio device to play '{}' on", file.filename().string());
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Loop", &m_PreviewLoop);
+        ImGui::SameLine();
+        float position = playing ? AudioEngine::PreviewPosition() : 0.0f;
+        ImGui::TextDisabled("%d:%05.2f / %d:%05.2f", (int)(position / 60.0f), std::fmod(position, 60.0f), (int)(w.Seconds / 60.0f),
+                            std::fmod(w.Seconds, 60.0f));
+
+        uint32_t lanes = std::min<uint32_t>(w.Channels, 2);
+        float width = ImGui::GetContentRegionAvail().x, laneHeight = 54.0f;
+        ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##waveform", ImVec2(width, laneHeight * lanes));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(at, ImVec2(at.x + width, at.y + laneHeight * lanes), ImGui::GetColorU32(ImGuiCol_FrameBg), 3.0f);
+        ImU32 waveColor = ImGui::GetColorU32(UI::AssetColor(AssetType::Audio));
+        int columns = std::max(1, (int)width);
+        for (uint32_t c = 0; c < lanes; ++c)
+        {
+            float mid = at.y + laneHeight * (c + 0.5f), half = laneHeight * 0.45f;
+            dl->AddLine(ImVec2(at.x, mid), ImVec2(at.x + width, mid), ImGui::GetColorU32(ImGuiCol_Border));
+            for (int x = 0; x < columns; ++x)
+            {
+                size_t b0 = (size_t)x * w.Buckets / columns, b1 = std::max(b0 + 1, (size_t)(x + 1) * w.Buckets / columns);
+                float lo = 0.0f, hi = 0.0f;
+                for (size_t b = b0; b < b1 && b < w.Buckets; ++b)
+                {
+                    lo = std::min(lo, w.Min[c * w.Buckets + b]);
+                    hi = std::max(hi, w.Max[c * w.Buckets + b]);
+                }
+                dl->AddLine(ImVec2(at.x + x + 0.5f, mid - hi * half), ImVec2(at.x + x + 0.5f, mid - lo * half + 1.0f), waveColor);
+            }
+        }
+        if (playing && w.Seconds > 0.0f)
+        {
+            float x = at.x + std::clamp(position / w.Seconds, 0.0f, 1.0f) * width;
+            dl->AddLine(ImVec2(x, at.y), ImVec2(x, at.y + laneHeight * lanes), IM_COL32(255, 255, 255, 230), 2.0f);
+        }
+        if (ImGui::IsItemClicked() && w.Seconds > 0.0f)
+            AudioEngine::PreviewPlay(file, std::clamp((ImGui::GetMousePos().x - at.x) / width, 0.0f, 1.0f) * w.Seconds, m_PreviewLoop);
+        ImGui::SetItemTooltip("Click to play from there");
+    }
+
     void InspectorPanel::DrawAssetReferences(AssetHandle handle)
     {
         // What the asset uses and what uses it (read again now and then: files change), each entry selecting that asset.
@@ -1516,8 +1659,10 @@ namespace Editor
             }
             if (changed) AssetManager::SetLabels(handle, labels);
         }
-        // Materials, models and prefabs: their picture (drawn again a frame after they change).
-        if (uint64_t preview = m_Ctx.Previews && AssetPreviews::HasPreview(meta->Type) ? m_Ctx.Previews->Get(handle) : 0)
+        // Models and prefabs: a live picture to turn and play clips on; materials: their picture (drawn again a frame
+        // after they change).
+        if (m_Ctx.Previews && (meta->Type == AssetType::Mesh || meta->Type == AssetType::Prefab)) DrawLivePreview(handle);
+        else if (uint64_t preview = m_Ctx.Previews && AssetPreviews::HasPreview(meta->Type) ? m_Ctx.Previews->Get(handle) : 0)
         {
             float size = std::min(ImGui::GetContentRegionAvail().x, 160.0f);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - size) * 0.5f);
@@ -1531,6 +1676,7 @@ namespace Editor
                 ImGui::Text("%s, %s, %u Hz", info->Format.c_str(), info->Channels == 1 ? "mono" : info->Channels == 2 ? "stereo" : "multichannel",
                             info->SampleRate);
                 ImGui::Text("Length %d:%05.2f", (int)(info->Seconds / 60.0f), std::fmod(info->Seconds, 60.0f));
+                DrawAudioPreview(handle);
             }
             else
                 ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "This file could not be decoded.");

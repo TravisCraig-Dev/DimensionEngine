@@ -243,6 +243,7 @@ namespace Editor
         }
         if (!m_Options.ProjectView.empty()) m_Content->SetListView(m_Options.ProjectView == "list", false);
         if (!m_Options.ProjectSearch.empty()) m_Content->SetSearch(m_Options.ProjectSearch);
+        if (!m_Options.AssetPreview.empty()) m_Inspector->SetPreview(m_Options.AssetPreview);
         // --new-scene "Template", --open-additive and --prefab-instance (automation).
         for (const auto& t : SceneTemplates::All())
             if (!m_Options.NewSceneTemplate.empty() && t.Name == m_Options.NewSceneTemplate) NewSceneFrom(t);

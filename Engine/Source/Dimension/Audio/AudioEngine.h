@@ -5,6 +5,7 @@
 #include "Dimension/Audio/AudioMixer.h"
 #include <glm/glm.hpp>
 #include <optional>
+#include <vector>
 
 namespace Dimension
 {
@@ -19,6 +20,18 @@ namespace Dimension
         std::string Format; // "WAV", "MP3", "FLAC", "Ogg Vorbis"
     };
 
+    // A clip's waveform for drawing: the lowest and highest sample of each of `Buckets` equal slices of the clip, per
+    // channel (channel c's slice i at c * Buckets + i), in -1..1.
+    struct AudioWaveform
+    {
+        uint32_t Channels = 0;
+        size_t Buckets = 0;
+        float Seconds = 0.0f;
+        std::vector<float> Min, Max;
+        // The loudest sample of the clip (0..1).
+        float Peak() const;
+    };
+
     // Process-wide audio device (miniaudio). Safe to use when no device exists:
     // everything becomes a no-op.
     class AudioEngine
@@ -30,6 +43,17 @@ namespace Dimension
         static void* GetNative(); // ma_engine*
         static void SetMasterVolume(float volume);
         static std::optional<AudioClipInfo> GetClipInfo(const fs::path& file);
+        // Decodes the whole file (no audio device needed).
+        static std::optional<AudioWaveform> GetWaveform(const fs::path& file, size_t buckets);
+
+        // The editor's clip preview (the Inspector's Play): one clip at a time, straight to the output (not through
+        // the mixer). Play returns false without an audio device or when the file cannot be read.
+        static bool PreviewPlay(const fs::path& file, float offsetSeconds = 0.0f, bool loop = false);
+        static void PreviewStop();
+        static bool PreviewIsPlaying();
+        // The clip previewed (playing or stopped at its end; empty after Stop) and where it is, in seconds.
+        static const fs::path& PreviewFile();
+        static float PreviewPosition();
     };
 
     // Per-scene audio playback for AudioSource components while playing.

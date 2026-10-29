@@ -6,6 +6,9 @@
 #include <Dimension/Asset/AssetListing.h>
 #include <Dimension/Asset/ProjectFavorites.h>
 #include "../EditorPreferences.h"
+#include "../AssetPreviews.h"
+#include <Dimension/Audio/AudioEngine.h>
+#include <optional>
 #include <imgui.h>
 #include <map>
 #include <mutex>
@@ -42,6 +45,8 @@ namespace Editor
         void OnImGui(bool* open);
         // Debug mode (like Unity's): hidden fields, and C# scripts' private state, shown read-only.
         bool DebugMode = false;
+        // The next asset preview's view, "yaw=..,pitch=..,zoom=..,clip=..,time=..,play" (automation).
+        void SetPreview(const std::string& spec);
 
     private:
         void DrawEntity(Scene& scene, Entity e);
@@ -54,6 +59,13 @@ namespace Editor
         void DrawImportDefault(AssetHandle handle);
         // An asset's Uses / Used By lists and its Find References In Scene button.
         void DrawAssetReferences(AssetHandle handle);
+        // A model's or prefab's live preview with its clips; an audio clip's waveform, Play and playhead.
+        void DrawLivePreview(AssetHandle handle);
+        void DrawAudioPreview(AssetHandle handle);
+        AssetHandle m_LiveShown = AssetHandle::None(), m_WaveShown = AssetHandle::None();
+        AssetPreviews::LiveView m_LiveView;
+        bool m_LivePlaying = false, m_LiveKeep = false, m_PlayPreviewRequested = false, m_PreviewLoop = false;
+        std::optional<AudioWaveform> m_Wave;
         AssetHandle m_RefsShown = AssetHandle::None();
         int m_RefsFrame = 0;
         std::vector<AssetHandle> m_Uses, m_UsedBy;
