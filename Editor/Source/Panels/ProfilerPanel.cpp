@@ -1,6 +1,9 @@
 #include "Panels.h"
+#include "../EditorUI.h"
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Renderer/GpuMemory.h>
+#include <Dimension/Platform/FileDialogs.h>
+#include <Dimension/Project/Project.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <cmath>
@@ -23,6 +26,24 @@ namespace Editor
             for (const char* c = name; *c; ++c) h = (h ^ (uint8_t)*c) * 16777619u;
             return palette[h % (sizeof(palette) / sizeof(palette[0]))];
         }
+    }
+
+    bool ProfilerPanel::OpenRecording(const fs::path& file)
+    {
+        auto frames = Profiler::LoadRecording(file);
+        if (!frames || frames->empty()) return false;
+        m_Loaded = std::move(*frames);
+        m_LoadedName = file.filename().string();
+        m_Picked = (int)m_Loaded->size() - 1;
+        return true;
+    }
+
+    void ProfilerPanel::PinFrame(int index)
+    {
+        const auto& history = m_Loaded ? *m_Loaded : Profiler::History();
+        if (index < 0 || index >= (int)history.size()) return;
+        m_Pinned = history[index];
+        m_PinnedLabel = (m_Loaded ? m_LoadedName + " frame " : std::string("frame ")) + std::to_string(index - (int)history.size() + 1);
     }
 
     void ProfilerPanel::DrawTimeline(const Profiler::FrameRecord& f)
@@ -136,15 +157,38 @@ namespace Editor
             ImGui::End();
             return;
         }
-        const auto& history = Profiler::History();
-        bool paused = Profiler::IsPaused();
-        if (ImGui::Button(paused ? "Record" : "Pause")) Profiler::SetPaused(!paused);
-        ImGui::SameLine();
-        if (ImGui::Button("Clear"))
+        const auto& history = m_Loaded ? *m_Loaded : Profiler::History();
+        bool paused = Profiler::IsPaused() || m_Loaded.has_value(); // a recording keeps still
+        if (m_Loaded)
         {
-            Profiler::Clear();
-            m_Picked = -1;
+            if (ImGui::Button("Back to Live")) CloseRecording();
+            ImGui::SameLine();
+            ImGui::TextColored(UI::AccentText(), "Recording: %s", m_LoadedName.c_str());
         }
+        else
+        {
+            if (ImGui::Button(Profiler::IsPaused() ? "Record" : "Pause")) Profiler::SetPaused(!Profiler::IsPaused());
+            ImGui::SameLine();
+            if (ImGui::Button("Clear"))
+            {
+                Profiler::Clear();
+                m_Picked = -1;
+            }
+        }
+        // Recordings: what is shown, to a .dprof file; one opened in place of the live frames.
+        ImGui::SameLine();
+        fs::path folder = Project::IsOpen() ? Project::GetDirectory() / ".dimension" : fs::path();
+        if (ImGui::Button("Save...") && !history.empty())
+            if (auto file = FileDialogs::SaveFile({ { L"Profiler recording", L"*.dprof" } }, L"dprof", folder))
+            {
+                if (Profiler::SaveRecording(*file, history)) Log::Info("Saved {} profiled frames to {}", history.size(), file->string());
+                else Log::Error("Could not write {}", file->string());
+            }
+        ImGui::SetItemTooltip("Save these frames to a file, to open again later (and compare with)");
+        ImGui::SameLine();
+        if (ImGui::Button("Open..."))
+            if (auto file = FileDialogs::OpenFile({ { L"Profiler recording", L"*.dprof" } }, folder))
+                if (!OpenRecording(*file)) Log::Error("{} is not a profiler recording", file->string());
         ImGui::SameLine();
         ImGui::Checkbox("Memory", &m_ShowMemory);
         if (m_ShowMemory)
@@ -244,7 +288,7 @@ namespace Editor
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 {
                     m_Picked = hovered;
-                    Profiler::SetPaused(true); // keep it still to look at
+                    if (!m_Loaded) Profiler::SetPaused(true); // keep it still to look at
                 }
             }
         }
@@ -255,6 +299,19 @@ namespace Editor
         // The picked frame.
         const auto& f = history[picked];
         ImGui::Text("Frame %d: %.2f ms", picked - newest, f.FrameMs);
+        // Pinning: this frame kept (a copy) to compare the frames picked after it with.
+        ImGui::SameLine();
+        if (!m_Pinned)
+        {
+            if (ImGui::SmallButton("Pin for Comparison")) PinFrame(picked);
+            ImGui::SetItemTooltip("Keep this frame to compare others with (pick another frame, or open a recording)");
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), " compared with %s (%.2f ms)", m_PinnedLabel.c_str(), m_Pinned->FrameMs);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Unpin")) m_Pinned.reset();
+        }
         for (const auto& [name, value] : f.Counters)
         {
             ImGui::SameLine();
@@ -268,7 +325,48 @@ namespace Editor
         float half = ImGui::GetContentRegionAvail().x * 0.5f - 4.0f;
         ImGui::BeginChild("##cpu", ImVec2(half, 0.0f));
         ImGui::TextDisabled("CPU");
-        if (ImGui::BeginTable("##sections", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
+        if (m_Pinned)
+        {
+            // Side by side: the pinned frame's sections and this one's, and how much slower (red) or faster (green).
+            if (ImGui::BeginTable("##compare", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
+            {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("Section", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+                ImGui::TableSetupColumn("Pinned ms");
+                ImGui::TableSetupColumn("This ms");
+                ImGui::TableSetupColumn("Change");
+                ImGui::TableSetupColumn("Calls");
+                ImGui::TableHeadersRow();
+                auto row = [&](const char* name, int depth, bool inA, bool inB, float a, float b, int callsA, int callsB) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    if (depth > 0) ImGui::Indent(depth * 14.0f);
+                    ImGui::ColorButton("##c", ImGui::ColorConvertU32ToFloat4(SectionColor(name)), ImGuiColorEditFlags_NoTooltip, ImVec2(10.0f, 10.0f));
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(name);
+                    if (depth > 0) ImGui::Unindent(depth * 14.0f);
+                    ImGui::TableNextColumn();
+                    if (inA) ImGui::Text("%.2f", a);
+                    else ImGui::TextDisabled("-");
+                    ImGui::TableNextColumn();
+                    if (inB) ImGui::Text("%.2f", b);
+                    else ImGui::TextDisabled("-");
+                    ImGui::TableNextColumn();
+                    float d = b - a;
+                    bool notable = std::abs(d) >= 0.05f && std::abs(d) >= 0.05f * std::max(a, 0.01f);
+                    if (!notable) ImGui::TextDisabled("%+.2f", d);
+                    else ImGui::TextColored(d > 0.0f ? ImVec4(1.0f, 0.45f, 0.4f, 1.0f) : ImVec4(0.45f, 0.9f, 0.45f, 1.0f), "%+.2f (%+.0f%%)", d,
+                                            a > 0.0f ? d / a * 100.0f : 100.0f);
+                    ImGui::TableNextColumn();
+                    if (callsA == callsB) ImGui::Text("%d", callsB);
+                    else ImGui::Text("%d -> %d", callsA, callsB);
+                };
+                row("Frame", 0, true, true, m_Pinned->FrameMs, f.FrameMs, 1, 1);
+                for (const auto& c : Profiler::Compare(*m_Pinned, f)) row(c.Name, c.Depth + 1, c.InA, c.InB, c.MsA, c.MsB, c.CallsA, c.CallsB);
+                ImGui::EndTable();
+            }
+        }
+        else if (ImGui::BeginTable("##sections", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn("Section", ImGuiTableColumnFlags_WidthStretch, 3.0f);

@@ -189,12 +189,23 @@ namespace Editor
         void OnImGui(bool* open);
         // The timeline's visible stretch of the frame, in ms (automation; ms <= 0: the whole frame).
         void SetView(float startMs, float ms) { m_ViewStart = startMs, m_ViewMs = ms; }
+        // A saved recording shown instead of the live frames (false: not a recording); back to live with Close.
+        bool OpenRecording(const fs::path& file);
+        void CloseRecording() { m_Loaded.reset(), m_Picked = -1; }
+        // Picks a frame (index in what is shown), or pins it for comparison (automation).
+        void PickFrame(int index) { m_Picked = index; }
+        void PinFrame(int index);
 
     private:
         // The picked frame's calls as bars along its time, a row per nesting level, zoomed and panned with the mouse.
         void DrawTimeline(const Profiler::FrameRecord& frame);
         int m_Picked = -1; // frame index in the history while paused
         bool m_ShowMemory = true;
+        // A recording opened from a file (shown instead of the live frames), and a frame pinned to compare others with.
+        std::optional<std::deque<Profiler::FrameRecord>> m_Loaded;
+        std::string m_LoadedName;
+        std::optional<Profiler::FrameRecord> m_Pinned;
+        std::string m_PinnedLabel;
         bool m_ShowTimeline = true;
         float m_ViewStart = 0.0f, m_ViewMs = 0.0f; // 0: the whole frame
     };

@@ -1,5 +1,9 @@
 #include "Dimension/Core/Profiler.h"
+#include <nlohmann/json.hpp>
 #include <chrono>
+#include <fstream>
+#include <map>
+#include <set>
 #include <cstring>
 #include <thread>
 
@@ -107,6 +111,111 @@ namespace Dimension::Profiler
         float ms = (float)((Now() - m_Start) / 1e6);
         if (m_Section < (int)s.Current.Sections.size()) s.Current.Sections[m_Section].Ms += ms;
         if (m_Span >= 0 && m_Span < (int)s.Current.Spans.size()) s.Current.Spans[m_Span].Ms = ms;
+    }
+
+    const char* Intern(const std::string& name)
+    {
+        static std::set<std::string> names; // nodes do not move: the pointers stay good
+        return names.insert(name).first->c_str();
+    }
+
+    bool SaveRecording(const std::filesystem::path& file, const std::deque<FrameRecord>& frames)
+    {
+        using json = nlohmann::json;
+        auto sections = [](const std::vector<Section>& list) {
+            json out = json::array();
+            for (const Section& s : list) out.push_back({ s.Name, s.Depth, s.Ms, s.Calls });
+            return out;
+        };
+        json j{ { "dimensionProfile", 1 }, { "frames", json::array() } };
+        for (const FrameRecord& f : frames)
+        {
+            json frame{ { "ms", f.FrameMs }, { "sections", sections(f.Sections) }, { "gpu", sections(f.Gpu) }, { "counters", json::object() },
+                        { "spans", json::array() } };
+            for (const auto& [name, value] : f.Counters) frame["counters"][name] = value;
+            for (const Span& s : f.Spans) frame["spans"].push_back({ s.Name, s.Depth, s.StartMs, s.Ms });
+            j["frames"].push_back(std::move(frame));
+        }
+        std::ofstream out(file);
+        if (!out) return false;
+        out << j.dump();
+        return (bool)out;
+    }
+
+    std::optional<std::deque<FrameRecord>> LoadRecording(const std::filesystem::path& file)
+    {
+        using json = nlohmann::json;
+        std::ifstream in(file);
+        if (!in) return std::nullopt;
+        json j = json::parse(in, nullptr, false);
+        if (j.is_discarded() || !j.is_object() || !j.contains("dimensionProfile") || !j["frames"].is_array()) return std::nullopt;
+        auto sections = [](const json& list) {
+            std::vector<Section> out;
+            for (const json& s : list)
+                if (s.is_array() && s.size() == 4) out.push_back({ Intern(s[0].get<std::string>()), s[1].get<int>(), s[2].get<float>(), s[3].get<int>() });
+            return out;
+        };
+        std::deque<FrameRecord> frames;
+        try
+        {
+            for (const json& f : j["frames"])
+            {
+                FrameRecord r;
+                r.FrameMs = f.value("ms", 0.0f);
+                r.Sections = sections(f.value("sections", json::array()));
+                r.Gpu = sections(f.value("gpu", json::array()));
+                for (auto& [name, value] : f.value("counters", json::object()).items()) r.Counters.push_back({ name, value.get<float>() });
+                for (const json& s : f.value("spans", json::array()))
+                    if (s.is_array() && s.size() == 4) r.Spans.push_back({ Intern(s[0].get<std::string>()), s[1].get<int>(), s[2].get<float>(), s[3].get<float>() });
+                frames.push_back(std::move(r));
+            }
+        }
+        catch (const std::exception&)
+        {
+            return std::nullopt;
+        }
+        return frames;
+    }
+
+    std::vector<Comparison> Compare(const FrameRecord& a, const FrameRecord& b)
+    {
+        // Each section's path: its name under its parents' ("Update/Physics").
+        auto paths = [](const std::vector<Section>& list) {
+            std::vector<std::string> out, stack;
+            for (const Section& s : list)
+            {
+                stack.resize(std::min<size_t>(stack.size(), (size_t)std::max(s.Depth, 0)));
+                stack.push_back(s.Name);
+                std::string p;
+                for (const auto& part : stack) p += (p.empty() ? "" : "/") + part;
+                out.push_back(p);
+            }
+            return out;
+        };
+        std::vector<std::string> pa = paths(a.Sections), pb = paths(b.Sections);
+        std::map<std::string, size_t> inB;
+        for (size_t i = 0; i < pb.size(); ++i) inB.emplace(pb[i], i);
+        std::vector<Comparison> out;
+        std::set<size_t> used;
+        for (size_t i = 0; i < pa.size(); ++i)
+        {
+            const Section& s = a.Sections[i];
+            Comparison c{ s.Name, s.Depth, s.Ms, 0.0f, s.Calls, 0, true, false };
+            if (auto it = inB.find(pa[i]); it != inB.end())
+            {
+                const Section& t = b.Sections[it->second];
+                c.MsB = t.Ms, c.CallsB = t.Calls, c.InB = true;
+                used.insert(it->second);
+            }
+            out.push_back(c);
+        }
+        for (size_t i = 0; i < pb.size(); ++i)
+            if (!used.contains(i))
+            {
+                const Section& t = b.Sections[i];
+                out.push_back({ t.Name, t.Depth, 0.0f, t.Ms, 0, t.Calls, false, true });
+            }
+        return out;
     }
 
     int SpanAt(const FrameRecord& frame, int depth, float ms)

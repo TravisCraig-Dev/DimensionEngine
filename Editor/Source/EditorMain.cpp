@@ -46,6 +46,9 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--fold") && i + 1 < argc) options.Fold = argv[++i];
         else if (!std::strcmp(argv[i], "--inspector-search") && i + 1 < argc) options.InspectorSearch = argv[++i];
         else if (!std::strcmp(argv[i], "--profiler-view") && i + 1 < argc) options.ProfilerView = argv[++i];
+        else if (!std::strcmp(argv[i], "--profiler-open") && i + 1 < argc) options.ProfilerOpen = argv[++i];
+        else if (!std::strcmp(argv[i], "--profiler-pin") && i + 1 < argc) options.ProfilerPin = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--profiler-pick") && i + 1 < argc) options.ProfilerPick = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--view") && i + 1 < argc)
         {
             std::string v = argv[++i];

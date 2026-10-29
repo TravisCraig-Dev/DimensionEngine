@@ -1,5 +1,7 @@
 #pragma once
 #include <deque>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -40,6 +42,24 @@ namespace Dimension
         static constexpr size_t kMaxSpans = 4096;
         // The call on row `depth` that covers `ms` (the one that started last), -1 if none.
         int SpanAt(const FrameRecord& frame, int depth, float ms);
+
+        // Recordings: frames saved to a .dprof file (JSON) and read back (to compare runs). Names read from a file are
+        // kept for the rest of the session (Intern), as the live ones are string literals.
+        bool SaveRecording(const std::filesystem::path& file, const std::deque<FrameRecord>& frames);
+        std::optional<std::deque<FrameRecord>> LoadRecording(const std::filesystem::path& file);
+        const char* Intern(const std::string& name);
+
+        // Two frames side by side: their sections matched by where they sit ("Update/Physics"), in the first frame's
+        // order with those only the second has after them.
+        struct Comparison
+        {
+            const char* Name;
+            int Depth;
+            float MsA = 0.0f, MsB = 0.0f; // 0 where the frame does not have it
+            int CallsA = 0, CallsB = 0;
+            bool InA = false, InB = false;
+        };
+        std::vector<Comparison> Compare(const FrameRecord& a, const FrameRecord& b);
 
         void BeginFrame();
         void EndFrame();

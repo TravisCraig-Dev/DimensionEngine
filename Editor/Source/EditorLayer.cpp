@@ -267,6 +267,10 @@ namespace Editor
         if (!m_Options.InspectorSearch.empty()) m_Inspector->SetSearch(m_Options.InspectorSearch);
         // --profiler-view "start,ms" (automation): the Profiler timeline zoomed to that stretch of the frame.
         if (float a = 0.0f, b = 0.0f; std::sscanf(m_Options.ProfilerView.c_str(), "%f,%f", &a, &b) == 2) m_Profiler->SetView(a, b);
+        // --profiler-open file [--profiler-pin N] [--profiler-pick N] (automation): a recording, compared.
+        if (!m_Options.ProfilerOpen.empty() && !m_Profiler->OpenRecording(m_Options.ProfilerOpen)) Log::Error("Could not open {}", m_Options.ProfilerOpen);
+        if (m_Options.ProfilerPin >= 0) m_Profiler->PinFrame(m_Options.ProfilerPin);
+        if (m_Options.ProfilerPick >= 0) m_Profiler->PickFrame(m_Options.ProfilerPick);
         if (m_Options.SelectionSet > 0) RestoreSelection(m_Options.SelectionSet);
         // --grid "plane=1,cell=0.5,opacity=0.6,follow" (automation; for the session, the Preferences file unchanged).
         for (size_t start = 0; start < m_Options.Grid.size();)

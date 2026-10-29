@@ -53,6 +53,8 @@ namespace Editor
         std::string Fold;             // --fold "Transform,Script:Spinner": Inspector headers folded for the session
         std::string InspectorSearch;  // --inspector-search "light int": the Inspector's search box
         std::string ProfilerView;     // --profiler-view "start,ms": the Profiler timeline zoomed to that stretch
+        std::string ProfilerOpen;     // --profiler-open file.dprof: that recording in the Profiler
+        int ProfilerPin = -1, ProfilerPick = -1; // --profiler-pin N / --profiler-pick N: frames of it
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's

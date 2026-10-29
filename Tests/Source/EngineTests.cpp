@@ -8804,6 +8804,66 @@ namespace
         Profiler::SetPaused(false);
     }
 
+    // Profiler recordings (saved and opened again) and two frames compared section by section.
+    void TestProfilerRecordings()
+    {
+        using namespace Profiler;
+        FrameRecord a;
+        a.FrameMs = 16.5f;
+        a.Sections = { { "Update", 0, 6.0f, 1 }, { "Physics", 1, 2.5f, 2 }, { "Scripts", 1, 1.0f, 1 }, { "Render", 0, 8.0f, 1 }, { "Draw", 1, 3.0f, 1 } };
+        a.Counters = { { "Draw Calls", 340.0f }, { "Triangles", 51234.0f } };
+        a.Gpu = { { "Frame", 0, 3.4f, 1 }, { "Shadows", 1, 0.6f, 1 } };
+        a.Spans = { { "Update", 0, 0.5f, 6.0f }, { "Physics", 1, 0.7f, 1.2f }, { "Physics", 1, 2.0f, 1.3f } };
+        FrameRecord b = a;
+        b.FrameMs = 21.0f;
+        b.Sections = { { "Update", 0, 9.0f, 1 }, { "Physics", 1, 5.0f, 3 }, { "Navigation", 1, 1.5f, 1 }, { "Render", 0, 8.2f, 1 }, { "Draw", 1, 3.1f, 1 } };
+
+        fs::path file = fs::temp_directory_path() / "dimension_profile_test.dprof";
+        CHECK(SaveRecording(file, { a, b }));
+        auto loaded = LoadRecording(file);
+        CHECK(loaded && loaded->size() == 2);
+        if (loaded && loaded->size() == 2)
+        {
+            const FrameRecord& la = (*loaded)[0];
+            CHECK(Near(la.FrameMs, 16.5f) && la.Sections.size() == 5 && std::string(la.Sections[1].Name) == "Physics" && la.Sections[1].Depth == 1 &&
+                  Near(la.Sections[1].Ms, 2.5f) && la.Sections[1].Calls == 2);
+            CHECK(la.Gpu.size() == 2 && std::string(la.Gpu[1].Name) == "Shadows" && la.Spans.size() == 3 && Near(la.Spans[2].StartMs, 2.0f) &&
+                  Near(la.Spans[2].Ms, 1.3f));
+            bool counters = false;
+            for (const auto& [n, v] : la.Counters)
+                if (n == "Triangles" && v == 51234.0f) counters = true;
+            CHECK(counters && Near((*loaded)[1].FrameMs, 21.0f));
+            // Names read back are kept (interned): the same text, the same pointer.
+            CHECK(la.Sections[1].Name == (*loaded)[1].Sections[1].Name && Intern("Physics") == la.Sections[1].Name);
+        }
+        // Not a recording: nothing.
+        std::ofstream(fs::temp_directory_path() / "dimension_not_profile.dprof") << "{ \"frames\": 3 }";
+        CHECK(!LoadRecording(fs::temp_directory_path() / "dimension_not_profile.dprof") && !LoadRecording(fs::temp_directory_path() / "missing.dprof"));
+        std::error_code ec;
+        fs::remove(file, ec);
+        fs::remove(fs::temp_directory_path() / "dimension_not_profile.dprof", ec);
+
+        // Comparing: matched by path (Render's Draw is not Update's), in the first frame's order, the second's own after.
+        FrameRecord c = b;
+        c.Sections = { { "Update", 0, 9.0f, 1 }, { "Draw", 1, 0.4f, 1 }, { "Physics", 1, 5.0f, 3 }, { "Render", 0, 8.2f, 1 }, { "Draw", 1, 3.1f, 1 } };
+        auto rows = Compare(a, c);
+        std::vector<std::string> order;
+        for (const auto& r : rows) order.push_back(std::string(r.Name) + "@" + std::to_string(r.Depth));
+        CHECK(order == std::vector<std::string>({ "Update@0", "Physics@1", "Scripts@1", "Render@0", "Draw@1", "Draw@1" }));
+        if (rows.size() == 6)
+        {
+            CHECK(rows[0].InA && rows[0].InB && Near(rows[0].MsA, 6.0f) && Near(rows[0].MsB, 9.0f));
+            CHECK(rows[1].CallsA == 2 && rows[1].CallsB == 3 && Near(rows[1].MsB, 5.0f));
+            CHECK(rows[2].InA && !rows[2].InB && rows[2].MsB == 0.0f);                                          // Scripts: only in a
+            CHECK(rows[4].InA && rows[4].InB && Near(rows[4].MsA, 3.0f) && Near(rows[4].MsB, 3.1f));           // Render/Draw
+            CHECK(!rows[5].InA && rows[5].InB && Near(rows[5].MsB, 0.4f) && rows[5].MsA == 0.0f);               // Update/Draw: only in c
+        }
+        auto same = Compare(a, a);
+        bool allSame = same.size() == a.Sections.size();
+        for (const auto& r : same) allSame = allSame && r.InA && r.InB && r.MsA == r.MsB;
+        CHECK(allSame);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10644,6 +10704,7 @@ int main(int argc, char** argv)
     Run("Scene view grid settings", TestSceneGrid);
     Run("Inspector search", TestFieldSearch);
     Run("Profiler timeline", TestProfilerTimeline);
+    Run("Profiler recordings and comparison", TestProfilerRecordings);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);
