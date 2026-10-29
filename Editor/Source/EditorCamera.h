@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <Dimension/Project/SceneBookmarks.h>
 
 namespace Editor
 {
@@ -25,6 +26,17 @@ namespace Editor
         float GetDistance() const { return m_Distance; }
         // Adopts the orientation and position of a view matrix (orientation gizmo), keeping the orbit distance.
         void SetFromView(const glm::mat4& view);
+        // The whole view (pivot, distance, angles, 2D and its size), for camera bookmarks.
+        Dimension::CameraBookmark GetBookmark() const { return { m_Pivot, m_Distance, m_Yaw, m_Pitch, m_2D, m_OrthoSize }; }
+        void SetBookmark(const Dimension::CameraBookmark& b)
+        {
+            m_Pivot = b.Pivot;
+            m_Distance = b.Distance;
+            m_Yaw = b.Yaw;
+            m_Pitch = b.Pitch;
+            m_2D = b.Is2D;
+            m_OrthoSize = b.OrthoSize;
+        }
 
         float FieldOfView = 60.0f;
         float NearClip = 0.05f, FarClip = 2000.0f;

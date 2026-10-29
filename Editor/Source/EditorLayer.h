@@ -41,6 +41,8 @@ namespace Editor
         std::string ProjectView;      // --project-view list|grid: the Project window's view for the session
         std::string ProjectSearch;    // --project-search "query": the Project window's search
         std::string AssetPreview;     // --asset-preview "yaw=..,pitch=..,clip=..,time=..,play": the Inspector's preview
+        int View = 0;                 // --view N: go to Scene view bookmark N (--view all: Frame All)
+        bool ViewGiven = false;
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
@@ -93,6 +95,12 @@ namespace Editor
         int m_HistoryFrame = 0;
         size_t m_HistoryDone = 0, m_HistoryCount = 0;
         void DrawUndoHistory();
+        // Scene view: Frame All, camera bookmarks (Ctrl+1-9; Ctrl+Shift+1-9 saves) and the Views menu.
+        void FrameAll();
+        void GoToView(int slot);
+        void SaveView(int slot);
+        void DrawViewsMenu();
+        bool m_OpenViewsMenu = false;
         void DrawNoteLabels(const ImVec2& origin, const ImVec2& size);
         void OpenScene(const fs::path& path);
         // Another scene's objects alongside the main scene's (a Hierarchy section of its own), and closing it.

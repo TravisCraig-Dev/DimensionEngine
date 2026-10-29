@@ -20,6 +20,8 @@
 #include <Dimension/Asset/ImportDefaults.h>
 #include <Dimension/Asset/AssetListing.h>
 #include <Dimension/Asset/ProjectFavorites.h>
+#include <Dimension/Scene/SceneBounds.h>
+#include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneSections.h>
@@ -8314,6 +8316,74 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Frame All (the box around what a scene draws) and Scene view camera bookmarks (per scene, per user).
+    void TestFrameAllAndBookmarks()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_bookmarks";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        AssetManager::Init(dir / "Assets");
+
+        Scene scene("Bounds");
+        auto& reg = scene.GetRegistry();
+        CHECK(!SceneBounds::World(scene));
+        Entity marker = scene.CreateEntity("Marker"); // nothing drawn: positions count
+        reg.Get<TransformComponent>(marker).Position = { 3.0f, 1.0f, -2.0f };
+        auto onlyMarker = SceneBounds::World(scene);
+        CHECK(onlyMarker && Near(onlyMarker->Min, { 3.0f, 1.0f, -2.0f }) && Near(onlyMarker->Max, { 3.0f, 1.0f, -2.0f }));
+
+        Entity cube = scene.CreateEntity("Cube"), parent = scene.CreateEntity("Parent");
+        Entity sphere = scene.CreateEntity("Sphere", parent), sprite = scene.CreateEntity("Sprite"), off = scene.CreateEntity("Off");
+        reg.Emplace<MeshRendererComponent>(cube).Mesh = AssetManager::kCube;
+        reg.Emplace<MeshRendererComponent>(sphere).Mesh = AssetManager::kSphere;
+        reg.Emplace<SpriteRendererComponent>(sprite);
+        reg.Emplace<MeshRendererComponent>(off).Mesh = AssetManager::kCube;
+        reg.Get<TransformComponent>(cube).Position = { 0.0f, 0.5f, 0.0f };
+        reg.Get<TransformComponent>(parent).Position = { 10.0f, 0.0f, 0.0f };
+        reg.Get<TransformComponent>(sphere).Scale = glm::vec3(2.0f);
+        reg.Get<TransformComponent>(sprite).Position = { 0.0f, 0.0f, -5.0f };
+        reg.Get<TransformComponent>(sprite).Scale = { 4.0f, 2.0f, 1.0f };
+        reg.Get<TransformComponent>(off).Position = { 0.0f, 100.0f, 0.0f };
+        reg.Get<TagComponent>(off).Active = false; // inactive: left out
+        auto box = SceneBounds::World(scene);
+        // Cube -0.5..0.5 raised to 0..1; the sphere (radius 0.5, scaled 2) at x 10: 9..11, -1..1 in y and z; the sprite
+        // 4 x 2 at z -5.
+        CHECK(box && Near(box->Min, { -2.0f, -1.0f, -5.0f }, 1e-3f) && Near(box->Max, { 11.0f, 1.0f, 1.0f }, 1e-3f));
+        // Skipped (hidden in the Scene view): the sphere.
+        auto noSphere = SceneBounds::World(scene, [&](Entity e) { return e == sphere; });
+        CHECK(noSphere && Near(noSphere->Max.x, 2.0f, 1e-3f) && Near(noSphere->Max.y, 1.0f, 1e-3f));
+        // A terrain: its size around the object, its height up.
+        Entity land = scene.CreateEntity("Land");
+        auto& terrain = reg.Emplace<TerrainComponent>(land);
+        terrain.Size = { 40.0f, 20.0f };
+        terrain.Height = 6.0f;
+        auto withLand = SceneBounds::World(scene);
+        CHECK(withLand && Near(withLand->Min, { -20.0f, -1.0f, -10.0f }, 1e-3f) && Near(withLand->Max, { 20.0f, 6.0f, 10.0f }, 1e-3f));
+
+        // Bookmarks.
+        fs::path demo = dir / "Assets/Scenes/Demo.scene";
+        CHECK(!SceneBookmarks::Get(demo, 1) && SceneBookmarks::Slots(demo).empty());
+        CameraBookmark a{ { 1.0f, 2.0f, 3.0f }, 12.5f, 0.75f, -0.4f, false, 6.0f }, b{ { -4.0f, 0.0f, 0.0f }, 3.0f, 0.0f, 0.0f, true, 9.5f };
+        SceneBookmarks::Set(demo, 1, a);
+        SceneBookmarks::Set(demo, 9, b);
+        SceneBookmarks::Set(demo, 0, b);  // slots are 1-9
+        SceneBookmarks::Set(demo, 10, b);
+        CHECK(SceneBookmarks::Get(demo, 1) == a && SceneBookmarks::Get(demo, 9) == b && SceneBookmarks::Slots(demo) == std::vector<int>({ 1, 9 }));
+        CHECK(SceneBookmarks::Get("Scenes/Demo.scene", 1) == a); // the same scene by its Assets path
+        CHECK(!SceneBookmarks::Get(dir / "Assets/Scenes/Other.scene", 1) && !SceneBookmarks::Get(demo, 0));
+        SceneBookmarks::Set({}, 2, b); // an unsaved scene
+        CHECK(SceneBookmarks::Get({}, 2) == b && SceneBookmarks::Slots({}) == std::vector<int>({ 2 }));
+        SceneBookmarks::Set(demo, 1, b); // replaced
+        CHECK(SceneBookmarks::Get(demo, 1) == b);
+        SceneBookmarks::Clear(demo, 9);
+        CHECK(SceneBookmarks::Slots(demo) == std::vector<int>({ 1 }) && fs::exists(dir / ".dimension/SceneBookmarks.json"));
+        SceneBookmarks::Clear(demo, 1);
+        CHECK(SceneBookmarks::Slots(demo).empty() && SceneBookmarks::Get({}, 2) == b);
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10146,6 +10216,7 @@ int main(int argc, char** argv)
     Run("Asset references and Find References In Scene", TestAssetReferences);
     Run("Project list view and Favorites", TestProjectListAndFavorites);
     Run("Audio preview (waveform and playback)", TestAudioPreview);
+    Run("Frame All and camera bookmarks", TestFrameAllAndBookmarks);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

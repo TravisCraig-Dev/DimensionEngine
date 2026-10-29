@@ -19,6 +19,8 @@
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Scene/SceneTemplates.h>
 #include <Dimension/Project/RecentScenes.h>
+#include <Dimension/Project/SceneBookmarks.h>
+#include <Dimension/Scene/SceneBounds.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
@@ -176,6 +178,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "New Scene") m_ShowNewScene = true;
         else if (m_Options.OpenWindow == "Project Hub") m_ShowHub = true;
         else if (m_Options.OpenWindow == "Undo History") m_ShowUndoHistory = true;
+        else if (m_Options.OpenWindow == "Views") m_OpenViewsMenu = true;
         else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
             OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
         else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
@@ -244,6 +247,7 @@ namespace Editor
         if (!m_Options.ProjectView.empty()) m_Content->SetListView(m_Options.ProjectView == "list", false);
         if (!m_Options.ProjectSearch.empty()) m_Content->SetSearch(m_Options.ProjectSearch);
         if (!m_Options.AssetPreview.empty()) m_Inspector->SetPreview(m_Options.AssetPreview);
+        if (m_Options.ViewGiven) m_Options.View == 0 ? FrameAll() : GoToView(m_Options.View);
         // --new-scene "Template", --open-additive and --prefab-instance (automation).
         for (const auto& t : SceneTemplates::All())
             if (!m_Options.NewSceneTemplate.empty() && t.Name == m_Options.NewSceneTemplate) NewSceneFrom(t);
@@ -770,6 +774,61 @@ namespace Editor
         // Objects drawn only by handles (links, paths, obstacles): frame the handles.
         if (!scene.GetRegistry().Has<MeshRendererComponent>(m_Ctx.Selected)) HandleBounds(scene, m_Ctx.Selected, center, radius);
         m_Camera.Focus(center, radius);
+    }
+
+    void EditorLayer::FrameAll()
+    {
+        // What the Scene view shows (hidden and isolated-away objects left out).
+        Scene& scene = m_Ctx.ActiveScene();
+        auto hidden = m_Ctx.Visibility.Hidden(scene); // isolation included; empty while the toggle is off
+        auto skip = [&](Entity e) { return std::find(hidden.begin(), hidden.end(), e) != hidden.end(); };
+        if (auto box = SceneBounds::World(scene, skip)) m_Camera.Focus(box->Center(), std::max(glm::length(box->Extents()), 0.5f));
+    }
+
+    void EditorLayer::GoToView(int slot)
+    {
+        if (auto b = SceneBookmarks::Get(m_Ctx.ScenePath, slot)) m_Camera.SetBookmark(*b);
+        else Log::Info("No Scene view saved as view {} (Ctrl+Shift+{} saves one)", slot, slot);
+    }
+
+    void EditorLayer::SaveView(int slot)
+    {
+        SceneBookmarks::Set(m_Ctx.ScenePath, slot, m_Camera.GetBookmark());
+        Log::Info("Saved the Scene view as view {} (Ctrl+{} goes back to it)", slot, slot);
+    }
+
+    void EditorLayer::DrawViewsMenu()
+    {
+        // Frame All, and the nine view slots: Go (when saved), Save the current view there, Clear.
+        if (ImGui::MenuItem("Frame All", Shortcuts::Label("scene.frameAll").c_str())) FrameAll();
+        ImGui::Separator();
+        auto saved = SceneBookmarks::Slots(m_Ctx.ScenePath);
+        if (ImGui::BeginTable("##views", 4, ImGuiTableFlags_SizingFixedFit))
+        {
+            for (int slot = 1; slot <= SceneBookmarks::kSlots; ++slot)
+            {
+                bool has = std::find(saved.begin(), saved.end(), slot) != saved.end();
+                std::string n = std::to_string(slot);
+                ImGui::PushID(slot);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::BeginDisabled(!has);
+                if (ImGui::Selectable(("View " + n).c_str(), false, ImGuiSelectableFlags_DontClosePopups)) GoToView(slot);
+                ImGui::EndDisabled();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", Shortcuts::Label(("scene.view" + n).c_str()).c_str());
+                ImGui::TableNextColumn();
+                if (ImGui::SmallButton(has ? "Replace" : "Save")) SaveView(slot);
+                ImGui::SetItemTooltip("Save the current view here (%s)", Shortcuts::Label(("scene.saveView" + n).c_str()).c_str());
+                ImGui::TableNextColumn();
+                ImGui::BeginDisabled(!has);
+                if (ImGui::SmallButton("Clear")) SceneBookmarks::Clear(m_Ctx.ScenePath, slot);
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        ImGui::TextDisabled(m_Ctx.ScenePath.empty() ? "Unsaved scene: its views are shared by all unsaved scenes" : "Kept per user for this scene");
     }
 
     void EditorLayer::OnRender(VkCommandBuffer cmd)
@@ -2358,6 +2417,7 @@ namespace Editor
             if (ImGui::MenuItem("Preferences...")) m_ShowPreferences = true;
             if (ImGui::MenuItem("Delete", Shortcuts::Label("edit.delete").c_str(), false, m_Ctx.HasValidSelection())) DeleteSelected(m_Ctx);
             if (ImGui::MenuItem("Frame Selected", Shortcuts::Label("scene.frame").c_str(), false, m_Ctx.HasValidSelection())) FocusSelected();
+            if (ImGui::MenuItem("Frame All", Shortcuts::Label("scene.frameAll").c_str())) FrameAll();
             ImGui::Separator();
             if (ImGui::MenuItem(m_Ctx.IsPlaying() ? "Stop" : "Play", Shortcuts::Label("play.play").c_str())) m_Ctx.IsPlaying() ? Stop() : Play();
             if (ImGui::MenuItem("Pause", Shortcuts::Label("play.pause").c_str(), m_Ctx.State == PlayState::Paused, m_Ctx.IsPlaying())) TogglePause();
@@ -2501,6 +2561,20 @@ namespace Editor
             ImGui::SameLine(0.0f, 2.0f);
             if (ImGui::ArrowButton("##snapsettings", ImGuiDir_Down)) m_ShowSnapSettings = !m_ShowSnapSettings;
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Snap Settings");
+            // Camera bookmarks and Frame All.
+            ImGui::SameLine();
+            // (--open Views: once the startup focus changes are over, which would close it.)
+            bool openViews = m_OpenViewsMenu && ImGui::GetFrameCount() >= 60;
+            if (ImGui::Button("Views") || openViews) ImGui::OpenPopup("##viewsMenu");
+            if (openViews) m_OpenViewsMenu = false;
+            ImVec2 below(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 2.0f);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scene view bookmarks (Ctrl+1-9, Ctrl+Shift+1-9 saves) and Frame All");
+            ImGui::SetNextWindowPos(below, ImGuiCond_Appearing); // a dropdown under the button
+            if (ImGui::BeginPopup("##viewsMenu"))
+            {
+                DrawViewsMenu();
+                ImGui::EndPopup();
+            }
 
             // Play controls (center)
             float w = ImGui::GetFrameHeight() * 1.25f * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
@@ -3153,6 +3227,13 @@ namespace Editor
             if (Pressed("tool.rotate")) m_GizmoOperation = ImGuizmo::ROTATE;
             if (Pressed("tool.scale")) m_GizmoOperation = ImGuizmo::SCALE;
             if (Pressed("scene.frame")) FocusSelected();
+            if (Pressed("scene.frameAll")) FrameAll();
+            for (int slot = 1; slot <= SceneBookmarks::kSlots; ++slot)
+            {
+                std::string n = std::to_string(slot);
+                if (Pressed(("scene.view" + n).c_str())) GoToView(slot);
+                if (Pressed(("scene.saveView" + n).c_str())) SaveView(slot);
+            }
         }
     }
 
