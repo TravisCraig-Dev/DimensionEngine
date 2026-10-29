@@ -52,6 +52,7 @@ namespace Editor
         bool LockInspector = false;   // --lock-inspector: the Inspector locked to the --select selection
         std::string Fold;             // --fold "Transform,Script:Spinner": Inspector headers folded for the session
         std::string InspectorSearch;  // --inspector-search "light int": the Inspector's search box
+        std::string ProfilerView;     // --profiler-view "start,ms": the Profiler timeline zoomed to that stretch
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's

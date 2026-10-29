@@ -17,6 +17,14 @@ namespace Dimension
             float Ms;         // all its calls this frame
             int Calls;
         };
+        // One call of a section, where it falls in the frame (the timeline view).
+        struct Span
+        {
+            const char* Name;
+            int Depth;
+            float StartMs; // from the frame's start
+            float Ms;
+        };
         struct FrameRecord
         {
             float FrameMs = 0.0f; // from this frame's start to the next's
@@ -25,8 +33,13 @@ namespace Dimension
             // GPU spans (render passes) of the newest frame the GPU had finished when this one began (a frame or two
             // before it): "Frame" first, the passes inside it.
             std::vector<Section> Gpu;
+            // Each call, in the order they started (at most kMaxSpans a frame; Sections still add up the rest).
+            std::vector<Span> Spans;
         };
         static constexpr size_t kHistory = 300;
+        static constexpr size_t kMaxSpans = 4096;
+        // The call on row `depth` that covers `ms` (the one that started last), -1 if none.
+        int SpanAt(const FrameRecord& frame, int depth, float ms);
 
         void BeginFrame();
         void EndFrame();
@@ -47,7 +60,7 @@ namespace Dimension
             Scope& operator=(const Scope&) = delete;
 
         private:
-            int m_Section = -1;
+            int m_Section = -1, m_Span = -1;
             long long m_Start = 0;
         };
     }

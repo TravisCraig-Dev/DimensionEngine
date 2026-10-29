@@ -8,6 +8,7 @@
 #include "../EditorPreferences.h"
 #include "../AssetPreviews.h"
 #include <Dimension/Audio/AudioEngine.h>
+#include <Dimension/Core/Profiler.h>
 #include <optional>
 #include <imgui.h>
 #include <map>
@@ -186,10 +187,16 @@ namespace Editor
     {
     public:
         void OnImGui(bool* open);
+        // The timeline's visible stretch of the frame, in ms (automation; ms <= 0: the whole frame).
+        void SetView(float startMs, float ms) { m_ViewStart = startMs, m_ViewMs = ms; }
 
     private:
+        // The picked frame's calls as bars along its time, a row per nesting level, zoomed and panned with the mouse.
+        void DrawTimeline(const Profiler::FrameRecord& frame);
         int m_Picked = -1; // frame index in the history while paused
         bool m_ShowMemory = true;
+        bool m_ShowTimeline = true;
+        float m_ViewStart = 0.0f, m_ViewMs = 0.0f; // 0: the whole frame
     };
 
     class SpriteEditorPanel

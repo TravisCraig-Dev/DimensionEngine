@@ -2,6 +2,8 @@
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Renderer/GpuMemory.h>
 #include <imgui.h>
+#include <imgui_internal.h>
+#include <cmath>
 #include <algorithm>
 #include <cstring>
 #include <map>
@@ -21,6 +23,103 @@ namespace Editor
             for (const char* c = name; *c; ++c) h = (h ^ (uint8_t)*c) * 16777619u;
             return palette[h % (sizeof(palette) / sizeof(palette[0]))];
         }
+    }
+
+    void ProfilerPanel::DrawTimeline(const Profiler::FrameRecord& f)
+    {
+        if (f.Spans.empty())
+        {
+            ImGui::TextDisabled("No timed sections in this frame.");
+            return;
+        }
+        int rows = 1;
+        float frameMs = f.FrameMs;
+        for (const auto& s : f.Spans)
+        {
+            rows = std::max(rows, s.Depth + 1);
+            frameMs = std::max(frameMs, s.StartMs + s.Ms);
+        }
+        const float rulerH = 18.0f, rowH = ImGui::GetTextLineHeight() + 6.0f;
+        float width = ImGui::GetContentRegionAvail().x, height = rulerH + rows * rowH;
+        ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##timeline", ImVec2(width, height));
+        bool hovered = ImGui::IsItemHovered();
+        ImGuiIO& io = ImGui::GetIO();
+        // Until zoomed or panned, the whole frame (whichever frame is shown).
+        if (m_ViewMs <= 0.0f || m_ViewMs > frameMs) m_ViewMs = 0.0f;
+        bool whole = m_ViewMs <= 0.0f;
+        if (whole) m_ViewStart = 0.0f, m_ViewMs = frameMs;
+        // The wheel zooms around the mouse (and does not scroll the window), dragging pans, double-click: all of it.
+        if (hovered)
+        {
+            ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+            float at = m_ViewStart + (io.MousePos.x - origin.x) / width * m_ViewMs;
+            if (io.MouseWheel != 0.0f)
+            {
+                m_ViewMs = std::clamp(m_ViewMs * (io.MouseWheel > 0.0f ? 0.8f : 1.25f), 0.005f, frameMs);
+                m_ViewStart = at - (io.MousePos.x - origin.x) / width * m_ViewMs;
+            }
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) m_ViewStart = 0.0f, m_ViewMs = frameMs, whole = true;
+        }
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) && io.MouseDelta.x != 0.0f)
+            m_ViewStart -= io.MouseDelta.x / width * m_ViewMs, whole = false;
+        if (whole && m_ViewMs < frameMs) whole = false; // zoomed in this frame
+        m_ViewStart = std::clamp(m_ViewStart, 0.0f, std::max(0.0f, frameMs - m_ViewMs));
+        auto xOf = [&](float ms) { return origin.x + (ms - m_ViewStart) / m_ViewMs * width; };
+
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        ImVec2 end(origin.x + width, origin.y + height);
+        draw->AddRectFilled(origin, end, IM_COL32(25, 25, 28, 255));
+        draw->PushClipRect(origin, end, true);
+        // The ruler: ticks a round number of milliseconds apart, about 90 pixels.
+        float step = std::pow(10.0f, std::floor(std::log10(m_ViewMs / std::max(width / 90.0f, 1.0f))));
+        for (float m : { 2.0f, 5.0f, 10.0f })
+            if (m_ViewMs / step > width / 90.0f) step = std::pow(10.0f, std::floor(std::log10(m_ViewMs / std::max(width / 90.0f, 1.0f)))) * m;
+        for (float t = std::ceil(m_ViewStart / step) * step; t <= m_ViewStart + m_ViewMs; t += step)
+        {
+            float x = xOf(t);
+            draw->AddLine({ x, origin.y }, { x, end.y }, IM_COL32(255, 255, 255, 25));
+            char label[32];
+            std::snprintf(label, sizeof(label), step < 0.01f ? "%.3f ms" : step < 0.1f ? "%.2f ms" : step < 1.0f ? "%.1f ms" : "%.0f ms", t);
+            draw->AddText({ x + 3.0f, origin.y + 2.0f }, IM_COL32(255, 255, 255, 140), label);
+        }
+        // Where the frame ends (the next one begins).
+        draw->AddLine({ xOf(f.FrameMs), origin.y }, { xOf(f.FrameMs), end.y }, IM_COL32(255, 255, 255, 120), 1.5f);
+        int hoveredSpan = -1;
+        if (hovered)
+        {
+            int row = (int)std::floor((io.MousePos.y - origin.y - rulerH) / rowH);
+            if (row >= 0 && row < rows) hoveredSpan = Profiler::SpanAt(f, row, m_ViewStart + (io.MousePos.x - origin.x) / width * m_ViewMs);
+        }
+        for (size_t i = 0; i < f.Spans.size(); ++i)
+        {
+            const auto& s = f.Spans[i];
+            float x0 = xOf(s.StartMs), x1 = std::max(xOf(s.StartMs + s.Ms), x0 + 1.0f);
+            if (x1 < origin.x || x0 > end.x) continue;
+            float y0 = origin.y + rulerH + s.Depth * rowH, y1 = y0 + rowH - 2.0f;
+            ImU32 color = SectionColor(s.Name);
+            draw->AddRectFilled({ x0, y0 }, { x1, y1 }, color, 2.0f);
+            if ((int)i == hoveredSpan) draw->AddRect({ x0, y0 }, { x1, y1 }, IM_COL32(255, 255, 255, 255), 2.0f, 0, 2.0f);
+            if (x1 - x0 > 28.0f)
+            {
+                char text[96];
+                std::snprintf(text, sizeof(text), "%s %.2f", s.Name, s.Ms);
+                float left = std::max(x0, origin.x) + 3.0f;
+                draw->PushClipRect({ left, y0 }, { std::min(x1, end.x) - 2.0f, y1 }, true);
+                draw->AddText({ left, y0 + 2.0f }, IM_COL32(20, 20, 20, 255), text);
+                draw->PopClipRect();
+            }
+        }
+        draw->PopClipRect();
+        if (hoveredSpan >= 0)
+        {
+            const auto& s = f.Spans[hoveredSpan];
+            ImGui::SetTooltip("%s\n%.3f ms, from %.3f to %.3f ms (%.1f%% of the frame)", s.Name, s.Ms, s.StartMs, s.StartMs + s.Ms,
+                              f.FrameMs > 0.0f ? s.Ms / f.FrameMs * 100.0f : 0.0f);
+        }
+        ImGui::TextDisabled("Showing %.3f to %.3f ms of %.2f ms: scroll to zoom, drag to pan, double-click for the whole frame%s", m_ViewStart,
+                            m_ViewStart + m_ViewMs, frameMs, f.Spans.size() >= Profiler::kMaxSpans ? " (only the first calls are shown)" : "");
+        if (whole) m_ViewMs = 0.0f; // keeps following the frame shown
     }
 
     // Window > Profiler (like Unity's CPU Profiler): the last few seconds of frames as stacked bars of their top-level
@@ -161,6 +260,10 @@ namespace Editor
             ImGui::SameLine();
             ImGui::TextDisabled("  %s %.0f", name.c_str(), value);
         }
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 90.0f));
+        ImGui::Checkbox("Timeline", &m_ShowTimeline);
+        if (m_ShowTimeline) DrawTimeline(f);
         // CPU sections on the left, GPU spans (render passes) on the right.
         float half = ImGui::GetContentRegionAvail().x * 0.5f - 4.0f;
         ImGui::BeginChild("##cpu", ImVec2(half, 0.0f));

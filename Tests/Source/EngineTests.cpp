@@ -27,6 +27,7 @@
 #include <Dimension/Scene/ViewAlign.h>
 #include <Dimension/Renderer/SceneGrid.h>
 #include <Dimension/Reflection/FieldSearch.h>
+#include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -8741,6 +8742,68 @@ namespace
         CHECK(!hiddenShown);
     }
 
+    // The Profiler's timeline: each call of a section where it falls in the frame, nested by depth, and the call under a
+    // point of the timeline.
+    void TestProfilerTimeline()
+    {
+        auto wait = [](int ms) {
+            auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+            while (std::chrono::steady_clock::now() < until) {}
+        };
+        Profiler::SetPaused(false);
+        Profiler::Clear();
+        Profiler::BeginFrame();
+        wait(1);
+        {
+            Profiler::Scope update("Update");
+            for (int i = 0; i < 2; ++i)
+            {
+                Profiler::Scope step("Fixed Step");
+                wait(2);
+            }
+            {
+                Profiler::Scope scripts("Scripts");
+                wait(1);
+            }
+        }
+        {
+            Profiler::Scope render("Render");
+            wait(1);
+        }
+        Profiler::BeginFrame(); // ends the frame
+        CHECK(!Profiler::History().empty());
+        if (Profiler::History().empty()) return;
+        const auto& f = Profiler::History().back();
+        // Sections add the calls up; spans keep each one, in start order.
+        CHECK(f.Sections.size() == 4 && f.Spans.size() == 5);
+        if (f.Spans.size() != 5) return;
+        const auto& s = f.Spans;
+        CHECK(std::string(s[0].Name) == "Update" && std::string(s[1].Name) == "Fixed Step" && std::string(s[2].Name) == "Fixed Step" &&
+              std::string(s[3].Name) == "Scripts" && std::string(s[4].Name) == "Render");
+        CHECK(s[0].Depth == 0 && s[1].Depth == 1 && s[2].Depth == 1 && s[3].Depth == 1 && s[4].Depth == 0);
+        // Times: Update starts after the first millisecond; its calls inside it, one after another; Render after it.
+        CHECK(s[0].StartMs >= 0.9f && s[1].StartMs >= s[0].StartMs && s[2].StartMs >= s[1].StartMs + s[1].Ms - 1e-3f);
+        CHECK(s[3].StartMs + s[3].Ms <= s[0].StartMs + s[0].Ms + 1e-3f && s[4].StartMs >= s[0].StartMs + s[0].Ms - 1e-3f);
+        CHECK(s[1].Ms >= 1.9f && s[0].Ms >= s[1].Ms + s[2].Ms + s[3].Ms - 1e-3f && f.FrameMs >= s[4].StartMs + s[4].Ms - 1e-3f);
+        for (const auto& sec : f.Sections)
+            if (std::string(sec.Name) == "Fixed Step") CHECK(sec.Calls == 2 && Near(sec.Ms, s[1].Ms + s[2].Ms, 1e-3f));
+        // The call under a point: by row and time.
+        CHECK(Profiler::SpanAt(f, 0, s[0].StartMs + 0.5f) == 0 && Profiler::SpanAt(f, 1, s[2].StartMs + s[2].Ms * 0.5f) == 2);
+        CHECK(Profiler::SpanAt(f, 1, s[4].StartMs + 0.5f) == -1 && Profiler::SpanAt(f, 0, s[4].StartMs + 0.5f) == 4);
+        CHECK(Profiler::SpanAt(f, 2, s[0].StartMs + 0.5f) == -1 && Profiler::SpanAt(f, 0, 0.1f) == -1);
+        // At most kMaxSpans calls a frame (Sections still count them all).
+        Profiler::BeginFrame();
+        for (size_t i = 0; i < Profiler::kMaxSpans + 50; ++i) Profiler::Scope many("Many");
+        Profiler::BeginFrame();
+        const auto& big = Profiler::History().back();
+        CHECK(big.Spans.size() == Profiler::kMaxSpans && big.Sections.size() == 1 && big.Sections[0].Calls == (int)(Profiler::kMaxSpans + 50));
+        // Stop recording (other tests' scopes stay out of it).
+        Profiler::SetPaused(true);
+        Profiler::BeginFrame();
+        Profiler::Clear();
+        Profiler::SetPaused(false);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10580,6 +10643,7 @@ int main(int argc, char** argv)
     Run("Align With View and Move To View", TestViewAlign);
     Run("Scene view grid settings", TestSceneGrid);
     Run("Inspector search", TestFieldSearch);
+    Run("Profiler timeline", TestProfilerTimeline);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

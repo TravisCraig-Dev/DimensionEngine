@@ -92,6 +92,11 @@ namespace Dimension::Profiler
         sections[m_Section].Calls++;
         s.Open.push_back(m_Section);
         m_Start = Now();
+        if (s.Current.Spans.size() < kMaxSpans)
+        {
+            m_Span = (int)s.Current.Spans.size();
+            s.Current.Spans.push_back({ name, depth, (float)((m_Start - s.FrameStart) / 1e6), 0.0f });
+        }
     }
 
     Scope::~Scope()
@@ -99,6 +104,18 @@ namespace Dimension::Profiler
         if (m_Section < 0) return;
         State& s = S();
         if (!s.Open.empty() && s.Open.back() == m_Section) s.Open.pop_back();
-        if (m_Section < (int)s.Current.Sections.size()) s.Current.Sections[m_Section].Ms += (float)((Now() - m_Start) / 1e6);
+        float ms = (float)((Now() - m_Start) / 1e6);
+        if (m_Section < (int)s.Current.Sections.size()) s.Current.Sections[m_Section].Ms += ms;
+        if (m_Span >= 0 && m_Span < (int)s.Current.Spans.size()) s.Current.Spans[m_Span].Ms = ms;
+    }
+
+    int SpanAt(const FrameRecord& frame, int depth, float ms)
+    {
+        for (int i = (int)frame.Spans.size() - 1; i >= 0; --i)
+        {
+            const Span& s = frame.Spans[i];
+            if (s.Depth == depth && ms >= s.StartMs && ms <= s.StartMs + s.Ms) return i;
+        }
+        return -1;
     }
 }
