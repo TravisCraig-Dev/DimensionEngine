@@ -2,6 +2,7 @@
 #include <imgui.h>
 #include "EditorContext.h"
 #include "EditorCamera.h"
+#include <Dimension/Scene/SelectionHistory.h>
 #include "Panels/Panels.h"
 #include <Dimension/Core/Application.h>
 #include <Dimension/Renderer/SceneRenderer.h>
@@ -44,6 +45,7 @@ namespace Editor
         int View = 0;                 // --view N: go to Scene view bookmark N (--view all: Frame All)
         bool ViewGiven = false;
         std::string Measure;          // --measure "x,y,z;x,y,z": the measuring tool on with that measurement
+        int SelectionSet = 0;         // --selection-set N: select saved selection N
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
@@ -220,6 +222,16 @@ namespace Editor
         // The measuring tool (toolbar Measure, M): two picked points and the ruler between them.
         bool UpdateMeasure(const ImVec2& origin, const ImVec2& size);
         void SetMeasuring(bool on);
+        // Selection history (Alt+Left/Right) and saved selections (Ctrl+Alt+1-9 saves, Alt+1-9 selects).
+        Dimension::SelectionSnapshot CaptureSelection();
+        bool CanApplySelection(const Dimension::SelectionSnapshot& s);
+        bool ApplySelection(const Dimension::SelectionSnapshot& s);
+        void SelectionBack();
+        void SelectionForward();
+        void SaveSelection(int slot);
+        void RestoreSelection(int slot);
+        void DrawSelectionMenu();
+        Dimension::SelectionHistory m_SelectionHistory;
         bool m_Measuring = false;
         std::optional<glm::vec3> m_MeasureA, m_MeasureB;
         bool m_VertexDrag = false;

@@ -22,6 +22,7 @@
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/SceneBounds.h>
 #include <Dimension/Scene/SceneMeasure.h>
+#include <Dimension/Scene/SelectionHistory.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
@@ -249,6 +250,7 @@ namespace Editor
         if (!m_Options.ProjectSearch.empty()) m_Content->SetSearch(m_Options.ProjectSearch);
         if (!m_Options.AssetPreview.empty()) m_Inspector->SetPreview(m_Options.AssetPreview);
         if (m_Options.ViewGiven) m_Options.View == 0 ? FrameAll() : GoToView(m_Options.View);
+        if (m_Options.SelectionSet > 0) RestoreSelection(m_Options.SelectionSet);
         // --measure "x,y,z;x,y,z" (automation): the tool on, with that measurement.
         if (!m_Options.Measure.empty())
         {
@@ -786,6 +788,107 @@ namespace Editor
         // Objects drawn only by handles (links, paths, obstacles): frame the handles.
         if (!scene.GetRegistry().Has<MeshRendererComponent>(m_Ctx.Selected)) HandleBounds(scene, m_Ctx.Selected, center, radius);
         m_Camera.Focus(center, radius);
+    }
+
+    SelectionSnapshot EditorLayer::CaptureSelection()
+    {
+        // Objects by GUID (the primary one too); without objects, the selected assets.
+        Scene& scene = m_Ctx.ActiveScene();
+        SelectionSnapshot s;
+        for (Entity e : m_Ctx.Selection)
+            if (scene.IsValid(e)) s.Objects.push_back((uint64_t)scene.GetGuid(e));
+        if (m_Ctx.HasValidSelection()) s.Primary = (uint64_t)scene.GetGuid(m_Ctx.Selected);
+        if (s.Objects.empty())
+        {
+            for (AssetHandle a : m_Ctx.SelectedAssetList()) s.Assets.push_back((uint64_t)a);
+            s.PrimaryAsset = s.Assets.empty() ? 0 : (uint64_t)m_Ctx.SelectedAsset;
+        }
+        return s;
+    }
+
+    bool EditorLayer::CanApplySelection(const SelectionSnapshot& s)
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        for (uint64_t g : s.Objects)
+            if (!scene.FindEntityByGuid(Guid(g)).IsNull()) return true;
+        for (uint64_t a : s.Assets)
+            if (AssetManager::GetMetadata(Guid(a))) return true;
+        return false;
+    }
+
+    bool EditorLayer::ApplySelection(const SelectionSnapshot& s)
+    {
+        // What still exists of it (objects deleted since are left out).
+        Scene& scene = m_Ctx.ActiveScene();
+        if (!s.Objects.empty())
+        {
+            m_Ctx.Select(Entity::Null());
+            for (uint64_t g : s.Objects)
+                if (Entity e = scene.FindEntityByGuid(Guid(g)); !e.IsNull()) m_Ctx.AddToSelection(e);
+            if (Entity p = scene.FindEntityByGuid(Guid(s.Primary)); !p.IsNull() && m_Ctx.IsSelected(p)) m_Ctx.AddToSelection(p); // primary again
+            return !m_Ctx.Selection.empty();
+        }
+        std::vector<AssetHandle> assets;
+        for (uint64_t a : s.Assets)
+            if (AssetManager::GetMetadata(Guid(a))) assets.push_back(Guid(a));
+        if (assets.empty()) return false;
+        AssetHandle primary = std::find(assets.begin(), assets.end(), Guid(s.PrimaryAsset)) != assets.end() ? AssetHandle(Guid(s.PrimaryAsset)) : assets.back();
+        m_Ctx.SelectAssets(assets, primary);
+        if (const AssetMetadata* m = AssetManager::GetMetadata(primary)) m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m->Path).parent_path());
+        return true;
+    }
+
+    void EditorLayer::SelectionBack()
+    {
+        if (auto s = m_SelectionHistory.Back([this](const SelectionSnapshot& o) { return CanApplySelection(o); }); s && ApplySelection(*s))
+            m_SelectionHistory.ReplaceCurrent(CaptureSelection()); // as restored (not a new step)
+    }
+
+    void EditorLayer::SelectionForward()
+    {
+        if (auto s = m_SelectionHistory.Forward([this](const SelectionSnapshot& o) { return CanApplySelection(o); }); s && ApplySelection(*s))
+            m_SelectionHistory.ReplaceCurrent(CaptureSelection());
+    }
+
+    void EditorLayer::SaveSelection(int slot)
+    {
+        SelectionSnapshot s = CaptureSelection();
+        if (s.Empty())
+        {
+            Log::Info("Nothing is selected to save as selection {}", slot);
+            return;
+        }
+        SelectionSets::Set(m_Ctx.ScenePath, slot, s);
+        Log::Info("Saved the selection as selection {} (Alt+{} selects it again)", slot, slot);
+    }
+
+    void EditorLayer::RestoreSelection(int slot)
+    {
+        auto s = SelectionSets::Get(m_Ctx.ScenePath, slot);
+        if (!s) Log::Info("No selection saved as selection {} (Ctrl+Alt+{} saves one)", slot, slot);
+        else if (!ApplySelection(*s)) Log::Info("Nothing of selection {} is left", slot);
+    }
+
+    void EditorLayer::DrawSelectionMenu()
+    {
+        if (ImGui::MenuItem("Back", Shortcuts::Label("edit.selectBack").c_str(), false, m_SelectionHistory.CanGoBack())) SelectionBack();
+        if (ImGui::MenuItem("Forward", Shortcuts::Label("edit.selectForward").c_str(), false, m_SelectionHistory.CanGoForward())) SelectionForward();
+        ImGui::Separator();
+        auto saved = SelectionSets::Slots(m_Ctx.ScenePath);
+        bool any = !CaptureSelection().Empty();
+        for (int slot = 1; slot <= SelectionSets::kSlots; ++slot)
+        {
+            std::string n = std::to_string(slot);
+            bool has = std::find(saved.begin(), saved.end(), slot) != saved.end();
+            if (ImGui::BeginMenu(("Selection " + n + (has ? "" : " (empty)")).c_str()))
+            {
+                if (ImGui::MenuItem("Select", Shortcuts::Label(("edit.selectionSet" + n).c_str()).c_str(), false, has)) RestoreSelection(slot);
+                if (ImGui::MenuItem(has ? "Replace with Selection" : "Save Selection", Shortcuts::Label(("edit.saveSelectionSet" + n).c_str()).c_str(), false, any))
+                    SaveSelection(slot);
+                if (ImGui::MenuItem("Clear", nullptr, false, has)) SelectionSets::Clear(m_Ctx.ScenePath, slot);
+                ImGui::EndMenu();
+            }
+        }
     }
 
     void EditorLayer::SetMeasuring(bool on)
@@ -2411,6 +2514,7 @@ namespace Editor
         if (m_ShowTilePalette) DrawTilePalette();
         if (m_ShowAbout) DrawAbout();
         if (m_ShowImGuiDemo) ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
+        m_SelectionHistory.Record(CaptureSelection()); // each new selection (Back and Forward step through them)
         HandleShortcuts();
         if (!m_Options.BuildFolder.empty() && !m_BatchBuildDone)
         {
@@ -2524,6 +2628,11 @@ namespace Editor
             if (ImGui::MenuItem("Copy", Shortcuts::Label("edit.copy").c_str(), false, m_Ctx.HasValidSelection())) CopySelected(m_Ctx);
             if (ImGui::MenuItem("Paste", Shortcuts::Label("edit.paste").c_str(), false, !m_Ctx.IsPlaying())) PasteClipboard(m_Ctx);
             if (ImGui::MenuItem("Duplicate", Shortcuts::Label("edit.duplicate").c_str(), false, m_Ctx.HasValidSelection())) DuplicateSelected(m_Ctx);
+            if (ImGui::BeginMenu("Selection"))
+            {
+                DrawSelectionMenu();
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Preferences...")) m_ShowPreferences = true;
             if (ImGui::MenuItem("Delete", Shortcuts::Label("edit.delete").c_str(), false, m_Ctx.HasValidSelection())) DeleteSelected(m_Ctx);
@@ -3324,6 +3433,15 @@ namespace Editor
         if (Pressed("edit.copy")) CopySelected(m_Ctx);
         if (Pressed("edit.paste")) PasteClipboard(m_Ctx);
         if (Pressed("edit.delete") && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
+        // Selection history and saved selections.
+        if (Pressed("edit.selectBack")) SelectionBack();
+        if (Pressed("edit.selectForward")) SelectionForward();
+        for (int slot = 1; slot <= SelectionSets::kSlots; ++slot)
+        {
+            std::string n = std::to_string(slot);
+            if (Pressed(("edit.selectionSet" + n).c_str())) RestoreSelection(slot);
+            if (Pressed(("edit.saveSelectionSet" + n).c_str())) SaveSelection(slot);
+        }
         // Isolate the selection (only it shows), or leave isolation.
         if (Pressed("scene.isolate"))
         {

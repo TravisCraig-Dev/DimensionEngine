@@ -22,6 +22,7 @@
 #include <Dimension/Asset/ProjectFavorites.h>
 #include <Dimension/Scene/SceneBounds.h>
 #include <Dimension/Scene/SceneMeasure.h>
+#include <Dimension/Scene/SelectionHistory.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -8435,6 +8436,73 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Selection history (Back and Forward through what was selected) and saved selections per scene.
+    void TestSelectionHistory()
+    {
+        auto objects = [](std::vector<uint64_t> ids) {
+            SelectionSnapshot s;
+            s.Objects = ids;
+            s.Primary = ids.empty() ? 0 : ids.back();
+            return s;
+        };
+        SelectionSnapshot a = objects({ 1 }), b = objects({ 2, 3 }), c = objects({ 4 }), d = objects({ 5 });
+        SelectionSnapshot asset;
+        asset.Assets = { 100020 };
+        asset.PrimaryAsset = 100020;
+
+        SelectionHistory h;
+        CHECK(!h.CanGoBack() && !h.CanGoForward() && !h.Back() && !h.Forward());
+        h.Record(a);
+        h.Record(a); // the current one: not again
+        h.Record(SelectionSnapshot{}); // nothing selected: not recorded
+        h.Record(b);
+        h.Record(asset);
+        h.Record(c);
+        CHECK(h.Size() == 4 && h.CanGoBack() && !h.CanGoForward());
+        CHECK(h.Back() == asset && h.Back() == b && h.CanGoForward());
+        CHECK(h.Forward() == asset && h.Back() == b && h.Back() == a && !h.Back() && !h.CanGoBack());
+        CHECK(h.Forward() == b);
+        // A new selection after going back drops what was ahead.
+        h.Record(d);
+        CHECK(h.Size() == 3 && !h.CanGoForward() && h.Back() == b && h.Forward() == d);
+        // Skipping selections that are no longer usable (their objects deleted).
+        h.Record(c);
+        auto usable = [&](const SelectionSnapshot& s) { return s != d && s != b; };
+        CHECK(h.Back(usable) == a && h.Forward(usable) == c);
+        // Restored partly: the current entry updated in place, nothing dropped ahead.
+        h.Back(usable);
+        h.ReplaceCurrent(objects({ 1, 9 }));
+        CHECK(h.Forward() == b && h.Back() == objects({ 1, 9 }));
+        // At most kMax entries (the oldest go).
+        SelectionHistory many;
+        for (uint64_t i = 1; i <= SelectionHistory::kMax + 10; ++i) many.Record(objects({ i }));
+        size_t steps = 0;
+        std::optional<SelectionSnapshot> last;
+        while (auto s = many.Back()) last = s, ++steps;
+        CHECK(many.Size() == SelectionHistory::kMax && steps == SelectionHistory::kMax - 1 && last == objects({ 11 }));
+
+        // Saved selections, per scene, per user.
+        fs::path dir = fs::temp_directory_path() / "dimension_selection_sets";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        fs::path scene = dir / "Assets/Scenes/Level.scene";
+        CHECK(!SelectionSets::Get(scene, 1) && SelectionSets::Slots(scene).empty());
+        SelectionSets::Set(scene, 1, b);
+        SelectionSets::Set(scene, 4, asset);
+        SelectionSets::Set(scene, 10, a); // slots 1-9
+        SelectionSets::Set(scene, 2, SelectionSnapshot{}); // empty: nothing saved
+        CHECK(SelectionSets::Get(scene, 1) == b && SelectionSets::Get(scene, 4) == asset && SelectionSets::Slots(scene) == std::vector<int>({ 1, 4 }));
+        CHECK(SelectionSets::Get("Scenes/Level.scene", 1) == b && !SelectionSets::Get(dir / "Assets/Scenes/Other.scene", 1));
+        SelectionSets::Set({}, 3, c); // an unsaved scene
+        CHECK(SelectionSets::Get({}, 3) == c && SelectionSets::Slots({}) == std::vector<int>({ 3 }));
+        SelectionSets::Set(scene, 4, SelectionSnapshot{}); // saving nothing clears it
+        CHECK(SelectionSets::Slots(scene) == std::vector<int>({ 1 }));
+        SelectionSets::Clear(scene, 1);
+        CHECK(SelectionSets::Slots(scene).empty() && fs::exists(dir / ".dimension/SelectionSets.json"));
+        fs::remove_all(dir, ec);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10269,6 +10337,7 @@ int main(int argc, char** argv)
     Run("Audio preview (waveform and playback)", TestAudioPreview);
     Run("Frame All and camera bookmarks", TestFrameAllAndBookmarks);
     Run("Scene view measuring tool", TestSceneMeasure);
+    Run("Selection history and saved selections", TestSelectionHistory);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);
