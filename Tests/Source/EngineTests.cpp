@@ -22,6 +22,7 @@
 #include <Dimension/Scene/SceneSections.h>
 #include <Dimension/Scene/SceneTemplates.h>
 #include <Dimension/Project/RecentScenes.h>
+#include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -8228,6 +8229,44 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // The Project Hub: a new project gets its name and a first scene from the chosen template as its start scene (and
+    // cannot be made over an existing one); the recent list keeps the newest first with names from the project files,
+    // and marks projects that are gone.
+    void TestProjectHub()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_hub";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        ProjectHub::SetRecentFile(dir / "RecentProjects.json");
+        fs::path game = dir / "My Game";
+        CHECK(!ProjectHub::IsProject(game) && ProjectHub::Create(game, "My Game", "Outdoor") && ProjectHub::IsProject(game));
+        CHECK(Project::GetConfig().Name == "My Game" && Project::GetConfig().StartScene.IsValid());
+        fs::path start = AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
+        CHECK(start.filename() == "Main.scene");
+        auto scene = SceneSerializer::LoadFromFile(start);
+        CHECK(scene && scene->GetName() == "Main" && !scene->FindEntityByName("Ground").IsNull() && scene->GetSettings().Fog);
+        CHECK(!ProjectHub::Create(game, "Again", "Empty"));
+        AssetManager::Shutdown();
+
+        fs::path other = dir / "Other";
+        CHECK(ProjectHub::Create(other, "Other Game", "Empty"));
+        AssetManager::Shutdown();
+        ProjectHub::Remember(game);
+        ProjectHub::Remember(other);
+        auto recent = ProjectHub::Recent();
+        CHECK(recent.size() == 2 && recent[0].Name == "Other Game" && recent[1].Name == "My Game" && recent[0].LastOpened > 0);
+        ProjectHub::Remember(game);
+        recent = ProjectHub::Recent();
+        CHECK(recent.size() == 2 && recent[0].Name == "My Game");
+        fs::remove_all(other, ec);
+        recent = ProjectHub::Recent();
+        CHECK(recent.size() == 2 && recent[0].Exists && !recent[1].Exists && recent[1].Name == "Other Game");
+        ProjectHub::Forget(other);
+        CHECK(ProjectHub::Recent().size() == 1);
+        ProjectHub::SetRecentFile({});
+        fs::remove_all(dir, ec);
+    }
+
     void TestAssetLabels()
     {
         // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
@@ -9744,6 +9783,7 @@ int main(int argc, char** argv)
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);
     Run("Scene templates", TestSceneTemplates);
+    Run("Project hub", TestProjectHub);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

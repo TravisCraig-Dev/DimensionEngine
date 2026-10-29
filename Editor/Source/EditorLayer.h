@@ -37,6 +37,8 @@ namespace Editor
         std::string AdditiveScenes; // --open-additive "a.scene,b.scene": opened alongside the scene
         std::string PrefabInstance; // --prefab-instance "Name": that instance's prefab in Prefab Mode, in context
         std::string NewSceneTemplate; // --new-scene "Template": start with a new scene from that template
+        std::string Layout;           // --layout "Name": apply a saved layout at startup
+        bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
         std::string HideEntities;         // --hide "A,B": hidden in the Scene view for the session
@@ -68,6 +70,20 @@ namespace Editor
         int m_NewSceneTemplate = 0;
         std::string m_TemplateName, m_TemplateDescription;
         void DrawNewSceneWindow();
+        // File > Project Hub... (recent projects, a new one, another folder) and switching the open project.
+        bool m_ShowHub = false;
+        std::string m_HubName, m_HubLocation;
+        int m_HubStarter = 0;
+        bool SwitchProject(const fs::path& dir);
+        void DrawProjectHub();
+        // Window > Layouts: named window arrangements of the project (applied between frames).
+        std::string m_PendingLayout, m_LayoutName;
+        std::vector<std::pair<const char*, bool*>> WindowToggles();
+        fs::path LayoutsFolder() const;
+        std::vector<std::string> LayoutNames() const;
+        void SaveLayout(const std::string& name);
+        void ApplyPendingLayout();
+        void DrawLayoutsMenu();
         void OpenScene(const fs::path& path);
         // Another scene's objects alongside the main scene's (a Hierarchy section of its own), and closing it.
         void OpenSceneAdditive(const fs::path& path);

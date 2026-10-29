@@ -19,6 +19,7 @@
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Scene/SceneTemplates.h>
 #include <Dimension/Project/RecentScenes.h>
+#include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
 #include <Dimension/Navigation/NavMesh.h>
@@ -129,6 +130,8 @@ namespace Editor
         m_Hierarchy = MakeScope<HierarchyPanel>(m_Ctx);
         m_Inspector = MakeScope<InspectorPanel>(m_Ctx);
         m_Inspector->DebugMode = m_Options.InspectorDebug;
+        if (!m_Options.Layout.empty()) m_PendingLayout = m_Options.Layout;
+        if (m_Options.RememberProject) ProjectHub::Remember(Project::GetDirectory());
         if (m_Options.DrawMode == "wireframe") m_DrawMode = SceneDrawMode::Wireframe;
         else if (m_Options.DrawMode == "shaded-wireframe") m_DrawMode = SceneDrawMode::ShadedWireframe;
         else if (m_Options.DrawMode == "unlit") m_DrawMode = SceneDrawMode::Unlit;
@@ -171,6 +174,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Lighting") m_ShowLighting = true;
         else if (m_Options.OpenWindow == "Shortcuts") m_ShowShortcuts = true;
         else if (m_Options.OpenWindow == "New Scene") m_ShowNewScene = true;
+        else if (m_Options.OpenWindow == "Project Hub") m_ShowHub = true;
         else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
             OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
         else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
@@ -497,6 +501,7 @@ namespace Editor
             !ImGui::IsMouseDown(ImGuiMouseButton_Left))
             SavePrefabStage();
 
+        ApplyPendingLayout();
         PollGameModule(dt);
         PollCSharp(dt);
         Autosave(dt);
@@ -929,6 +934,234 @@ namespace Editor
         }
     }
 
+    bool EditorLayer::SwitchProject(const fs::path& dir)
+    {
+        if (!ConfirmDiscardChanges()) return false;
+        if (m_Ctx.IsPlaying()) Stop();
+        ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
+        m_Ctx.EditorScene.reset();
+        m_Ctx.Sections.Clear();
+        if (!Project::Open(dir))
+        {
+            Log::Error("Could not open the project '{}'", dir.string());
+            return false;
+        }
+        fs::path settingsDir = Project::GetDirectory() / ".dimension";
+        fs::create_directories(settingsDir);
+        m_IniPath = (settingsDir / "EditorLayout.ini").string();
+        ImGui::GetIO().IniFilename = m_IniPath.c_str();
+        if (fs::exists(m_IniPath)) ImGui::LoadIniSettingsFromDisk(m_IniPath.c_str());
+        m_Content = MakeScope<ContentBrowserPanel>(m_Ctx);
+        fs::path start = AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
+        if (!start.empty() && fs::exists(start)) OpenScene(start);
+        else NewScene();
+        ProjectHub::Remember(Project::GetDirectory());
+        UpdateWindowTitle();
+        return true;
+    }
+
+    void EditorLayer::DrawProjectHub()
+    {
+        // The projects opened before (newest first; open one, or take it off the list), a new project from a starter
+        // scene, and any other project folder.
+        ImGui::SetNextWindowSize(ImVec2(820.0f, 480.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Project Hub", &m_ShowHub))
+        {
+            ImGui::End();
+            return;
+        }
+        std::optional<fs::path> open;
+        ImGui::BeginChild("##recent", ImVec2(ImGui::GetContentRegionAvail().x * 0.6f, 0.0f), ImGuiChildFlags_Borders);
+        ImGui::SeparatorText("Recent Projects");
+        auto recent = ProjectHub::Recent();
+        if (ImGui::BeginTable("##projects", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Project", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("Opened", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("##remove", ImGuiTableColumnFlags_WidthFixed, 24.0f);
+            int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            for (size_t i = 0; i < recent.size(); ++i)
+            {
+                const auto& p = recent[i];
+                ImGui::PushID((int)i);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                bool current = p.Exists && fs::equivalent(p.Path, Project::GetDirectory());
+                ImGui::BeginDisabled(!p.Exists);
+                std::string label = p.Name + (current ? "  (open)" : "") + (p.Exists ? "" : "  (missing)");
+                if (ImGui::Selectable(label.c_str(), current, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) && !current &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                    open = p.Path;
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("%s", p.Path.string().c_str());
+                ImGui::TableSetColumnIndex(1);
+                int64_t ago = std::max<int64_t>(now - p.LastOpened, 0);
+                std::string when = ago < 3600 ? "just now" : ago < 86400 ? std::to_string(ago / 3600) + " h ago" : std::to_string(ago / 86400) + " days ago";
+                ImGui::TextDisabled("%s", when.c_str());
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::SmallButton("x")) ProjectHub::Forget(p.Path);
+                ImGui::SetItemTooltip("Take it off the list (the project stays on disk)");
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (recent.empty()) ImGui::TextDisabled("Projects you open show here.");
+        ImGui::TextDisabled("Double-click a project to open it.");
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("##new", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
+        ImGui::SeparatorText("New Project");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##name", "Name", &m_HubName);
+        if (m_HubLocation.empty()) m_HubLocation = Project::GetDirectory().parent_path().string();
+        ImGui::SetNextItemWidth(-ImGui::GetFrameHeight() * 1.6f);
+        ImGui::InputTextWithHint("##location", "Location", &m_HubLocation);
+        ImGui::SameLine();
+        if (ImGui::Button("..."))
+            if (auto dir = FileDialogs::PickFolder(m_HubLocation)) m_HubLocation = dir->string();
+        auto templates = SceneTemplates::All();
+        std::vector<std::string> builtins;
+        for (const auto& t : templates)
+            if (!t.Scene.IsValid()) builtins.push_back(t.Name);
+        m_HubStarter = std::clamp(m_HubStarter, 0, (int)builtins.size() - 1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##starter", ("Start with: " + builtins[m_HubStarter]).c_str()))
+        {
+            for (int i = 0; i < (int)builtins.size(); ++i)
+                if (ImGui::Selectable(builtins[i].c_str(), i == m_HubStarter)) m_HubStarter = i;
+            ImGui::EndCombo();
+        }
+        fs::path target = fs::path(m_HubLocation) / m_HubName;
+        bool named = m_HubName.find_first_not_of(' ') != std::string::npos;
+        bool taken = named && ProjectHub::IsProject(target);
+        if (named) ImGui::TextDisabled("%s", target.string().c_str());
+        if (taken) ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "A project is already there.");
+        ImGui::BeginDisabled(!named || taken || m_Ctx.IsPlaying());
+        if (ImGui::Button("Create and Open", ImVec2(-FLT_MIN, 0.0f)) && ConfirmDiscardChanges())
+        {
+            if (ProjectHub::Create(target, m_HubName, builtins[m_HubStarter]))
+            {
+                Log::Info("Created project '{}'", m_HubName);
+                open = target;
+                m_HubName.clear();
+            }
+            else Log::Error("Could not create a project in '{}'", target.string());
+        }
+        ImGui::EndDisabled();
+        ImGui::Spacing();
+        ImGui::SeparatorText("Other");
+        if (ImGui::Button("Open Project Folder...", ImVec2(-FLT_MIN, 0.0f)))
+            if (auto dir = FileDialogs::PickFolder(Project::GetDirectory()))
+            {
+                if (ProjectHub::IsProject(*dir) || FileDialogs::Confirm("Open Project", "'" + dir->string() + "' has no project yet. Make it one?"))
+                    open = *dir;
+            }
+        ImGui::EndChild();
+        ImGui::End();
+        if (open && SwitchProject(*open)) m_ShowHub = false;
+    }
+
+    std::vector<std::pair<const char*, bool*>> EditorLayer::WindowToggles()
+    {
+        return { { "Hierarchy", &m_ShowHierarchy }, { "Inspector", &m_ShowInspector }, { "Project", &m_ShowContent }, { "Console", &m_ShowConsole },
+                 { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator },
+                 { "Timeline", &m_ShowTimeline }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
+                 { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings },
+                 { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
+                 { "Shortcuts", &m_ShowShortcuts } };
+    }
+
+    // Named layouts: the window arrangement (ImGui's settings) and which windows are open, in .dimension/Layouts.
+    fs::path EditorLayer::LayoutsFolder() const { return Project::GetDirectory() / ".dimension" / "Layouts"; }
+
+    std::vector<std::string> EditorLayer::LayoutNames() const
+    {
+        std::vector<std::string> names;
+        std::error_code ec;
+        for (auto& e : fs::directory_iterator(LayoutsFolder(), ec))
+            if (e.path().extension() == ".ini") names.push_back(e.path().stem().string());
+        std::sort(names.begin(), names.end());
+        return names;
+    }
+
+    void EditorLayer::SaveLayout(const std::string& name)
+    {
+        std::error_code ec;
+        fs::create_directories(LayoutsFolder(), ec);
+        std::ofstream(LayoutsFolder() / (name + ".ini")) << ImGui::SaveIniSettingsToMemory();
+        nlohmann::json open = nlohmann::json::object();
+        for (auto& [window, flag] : WindowToggles()) open[window] = *flag;
+        std::ofstream(LayoutsFolder() / (name + ".json")) << open.dump(2);
+        Log::Info("Saved layout '{}'", name);
+    }
+
+    void EditorLayer::ApplyPendingLayout()
+    {
+        // Between frames (ImGui takes new settings only then): "Default" is the built-in arrangement.
+        if (m_PendingLayout.empty()) return;
+        std::string name = std::move(m_PendingLayout);
+        m_PendingLayout.clear();
+        if (name == "Default")
+        {
+            m_ResetLayout = true;
+            return;
+        }
+        std::ifstream ini(LayoutsFolder() / (name + ".ini"));
+        if (!ini) return;
+        std::stringstream text;
+        text << ini.rdbuf();
+        std::string settings = text.str();
+        ImGui::LoadIniSettingsFromMemory(settings.c_str(), settings.size());
+        std::ifstream flags(LayoutsFolder() / (name + ".json"));
+        if (flags)
+            try
+            {
+                auto open = nlohmann::json::parse(flags);
+                for (auto& [window, flag] : WindowToggles())
+                    if (open.contains(window)) *flag = open[window].get<bool>();
+            }
+            catch (const std::exception&)
+            {
+            }
+        Log::Info("Layout '{}'", name);
+    }
+
+    void EditorLayer::DrawLayoutsMenu()
+    {
+        if (!ImGui::BeginMenu("Layouts")) return;
+        if (ImGui::MenuItem("Default")) m_PendingLayout = "Default";
+        auto names = LayoutNames();
+        for (const auto& n : names)
+            if (ImGui::MenuItem(n.c_str())) m_PendingLayout = n;
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(160.0f);
+        ImGui::InputTextWithHint("##layoutName", "Name", &m_LayoutName);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_LayoutName.find_first_not_of(' ') == std::string::npos || m_LayoutName == "Default");
+        if (ImGui::Button("Save Layout"))
+        {
+            SaveLayout(m_LayoutName);
+            m_LayoutName.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        if (!names.empty() && ImGui::BeginMenu("Delete Layout"))
+        {
+            for (const auto& n : names)
+                if (ImGui::MenuItem(n.c_str()))
+                {
+                    std::error_code ec;
+                    fs::remove(LayoutsFolder() / (n + ".ini"), ec);
+                    fs::remove(LayoutsFolder() / (n + ".json"), ec);
+                }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenu();
+    }
+
     void EditorLayer::DrawNewSceneWindow()
     {
         // The templates a new scene starts from (the built-in ones, then the project's: scenes labelled Template), and
@@ -1256,14 +1489,10 @@ namespace Editor
         add("Edit/Preferences...", [this] { m_ShowPreferences = true; });
         add(m_Ctx.IsPlaying() ? "Play/Stop" : "Play/Play", [this] { m_Ctx.IsPlaying() ? Stop() : Play(); });
         add("Play/Pause", [this] { TogglePause(); });
-        const std::pair<const char*, bool*> windows[] = {
-            { "Hierarchy", &m_ShowHierarchy }, { "Inspector", &m_ShowInspector }, { "Project", &m_ShowContent }, { "Console", &m_ShowConsole },
-            { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator },
-            { "Timeline", &m_ShowTimeline }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
-            { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings },
-            { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
-        };
-        for (auto& [name, flag] : windows) add(std::string("Window/") + name, [flag] { *flag = true; });
+        for (auto& [name, flag] : WindowToggles()) add(std::string("Window/") + name, [flag] { *flag = true; });
+        add("Window/Layouts/Default", [this] { m_PendingLayout = "Default"; });
+        for (const auto& n : LayoutNames()) add("Window/Layouts/" + n, [this, n] { m_PendingLayout = n; });
+        add("File/Project Hub...", [this] { m_ShowHub = true; });
         const char* modes[] = { "Shaded", "Wireframe", "Shaded Wireframe", "Unlit", "Overdraw" };
         for (int m = 0; m < 5; ++m) add(std::string("Scene View/Draw Mode: ") + modes[m], [this, m] { m_DrawMode = (SceneDrawMode)m; });
         add("Scene View/Frame Selected", [this] { FocusSelected(); });
@@ -1874,6 +2103,7 @@ namespace Editor
         if (m_ShowLighting) DrawLightingWindow();
         if (m_ShowShortcuts) DrawShortcutsWindow();
         if (m_ShowNewScene) DrawNewSceneWindow();
+        if (m_ShowHub) DrawProjectHub();
         else m_RebindingShortcut = -1;
         if (m_ShowExportPackage) DrawExportPackage();
         if (m_ShowImportPackage) DrawImportPackage();
@@ -2006,27 +2236,9 @@ namespace Editor
             if (ImGui::MenuItem("Save", Shortcuts::Label("file.save").c_str(), false, !m_Ctx.IsPlaying())) SaveScene();
             if (ImGui::MenuItem("Save As...", Shortcuts::Label("file.saveAs").c_str(), false, !m_Ctx.IsPlaying())) SaveSceneAs();
             ImGui::Separator();
+            if (ImGui::MenuItem("Project Hub...")) m_ShowHub = true;
             if (ImGui::MenuItem("Open Project..."))
-            {
-                if (auto dir = FileDialogs::PickFolder(Project::GetDirectory()); dir && ConfirmDiscardChanges())
-                {
-                    if (m_Ctx.IsPlaying()) Stop();
-                    ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
-                    m_Ctx.EditorScene.reset();
-                    if (Project::Open(*dir))
-                    {
-                        fs::path settingsDir = Project::GetDirectory() / ".dimension";
-                        fs::create_directories(settingsDir);
-                        m_IniPath = (settingsDir / "EditorLayout.ini").string();
-                        ImGui::GetIO().IniFilename = m_IniPath.c_str();
-                        if (fs::exists(m_IniPath)) ImGui::LoadIniSettingsFromDisk(m_IniPath.c_str());
-                        m_Content = MakeScope<ContentBrowserPanel>(m_Ctx);
-                        fs::path start = AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
-                        if (!start.empty() && fs::exists(start)) OpenScene(start);
-                        else NewScene();
-                    }
-                }
-            }
+                if (auto dir = FileDialogs::PickFolder(Project::GetDirectory())) SwitchProject(*dir);
             if (ImGui::MenuItem("Project Settings...")) m_ShowProjectSettings = true;
             ImGui::Separator();
             if (ImGui::MenuItem("Import Package...")) ChooseImportPackage();
@@ -2106,6 +2318,7 @@ namespace Editor
             ImGui::MenuItem("Tile Palette", nullptr, &m_ShowTilePalette);
             ImGui::MenuItem("Stats", nullptr, &m_ShowStats);
             ImGui::Separator();
+            DrawLayoutsMenu();
             if (ImGui::MenuItem("Reset Layout")) m_ResetLayout = true;
             ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowImGuiDemo);
             ImGui::EndMenu();

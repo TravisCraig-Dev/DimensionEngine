@@ -39,6 +39,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--open-additive") && i + 1 < argc) options.AdditiveScenes = argv[++i];
         else if (!std::strcmp(argv[i], "--prefab-instance") && i + 1 < argc) options.PrefabInstance = argv[++i];
         else if (!std::strcmp(argv[i], "--new-scene") && i + 1 < argc) options.NewSceneTemplate = argv[++i];
+        else if (!std::strcmp(argv[i], "--layout") && i + 1 < argc) options.Layout = argv[++i];
+        else if (!std::strcmp(argv[i], "--no-recent")) options.RememberProject = false;
         else if (!std::strcmp(argv[i], "--visualize-nav")) options.VisualizeNavigation = true;
         else if (!std::strcmp(argv[i], "--inspector-debug")) options.InspectorDebug = true;
         else if (!std::strcmp(argv[i], "--draw-mode") && i + 1 < argc) options.DrawMode = argv[++i];
