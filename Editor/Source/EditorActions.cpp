@@ -1,6 +1,7 @@
 #include "EditorActions.h"
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Scene/SceneGrouping.h>
 #include <Dimension/Core/Log.h>
 #include <imgui.h>
 
@@ -254,6 +255,63 @@ namespace Editor
         ctx.Select(Entity::Null());
         for (Entity c : copies) ctx.AddToSelection(c);
         if (!primaryCopy.IsNull()) ctx.AddToSelection(primaryCopy); // keep it primary
+    }
+
+    namespace
+    {
+        // Inside a prefab instance (not its root): its structure belongs to the prefab.
+        bool InsidePrefabInstance(Scene& scene, Entity e)
+        {
+            Entity root = Prefabs::FindInstanceRoot(scene, e);
+            return !root.IsNull() && root != e;
+        }
+    }
+
+    void GroupSelected(EditorContext& ctx)
+    {
+        Scene& scene = ctx.ActiveScene();
+        auto roots = ctx.SelectedRoots();
+        if (roots.empty()) return;
+        for (Entity e : roots)
+            if (InsidePrefabInstance(scene, e))
+            {
+                Log::Warn("Objects inside a prefab instance cannot be grouped (open the prefab to change it)");
+                return;
+            }
+        ctx.RecordUndo("Group");
+        Entity group = SceneGrouping::Group(scene, roots);
+        if (!group.IsNull()) ctx.Select(group);
+    }
+
+    void UngroupSelected(EditorContext& ctx)
+    {
+        Scene& scene = ctx.ActiveScene();
+        std::vector<Entity> groups;
+        for (Entity e : ctx.SelectedRoots())
+            if (!scene.GetChildren(e).empty() && Prefabs::FindInstanceRoot(scene, e).IsNull()) groups.push_back(e);
+        if (groups.empty())
+        {
+            Log::Info("Select an object with children (not part of a prefab instance) to ungroup it");
+            return;
+        }
+        ctx.RecordUndo("Ungroup");
+        std::vector<Entity> freed;
+        for (Entity g : groups)
+            for (Entity c : SceneGrouping::Ungroup(scene, g)) freed.push_back(c);
+        ctx.Select(Entity::Null());
+        for (Entity c : freed) ctx.AddToSelection(c);
+    }
+
+    void SortChildren(EditorContext& ctx, Entity parent, bool recursive)
+    {
+        Scene& scene = ctx.ActiveScene();
+        if (!parent.IsNull() && !Prefabs::FindInstanceRoot(scene, parent).IsNull())
+        {
+            Log::Warn("A prefab instance's children keep the prefab's order (open the prefab to sort them)");
+            return;
+        }
+        ctx.RecordUndo(recursive ? "Sort Children (All Levels)" : "Sort Children");
+        SceneGrouping::SortChildren(scene, parent, recursive);
     }
 
     void CopySelected(EditorContext& ctx)

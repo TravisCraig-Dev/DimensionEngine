@@ -46,6 +46,7 @@ namespace Editor
         bool ViewGiven = false;
         std::string Measure;          // --measure "x,y,z;x,y,z": the measuring tool on with that measurement
         int SelectionSet = 0;         // --selection-set N: select saved selection N
+        std::string Press;            // --press "edit.group": that shortcut's command, once, at frame 40
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's

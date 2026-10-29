@@ -2515,6 +2515,7 @@ namespace Editor
         if (m_ShowAbout) DrawAbout();
         if (m_ShowImGuiDemo) ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
         m_SelectionHistory.Record(CaptureSelection()); // each new selection (Back and Forward step through them)
+        if (!m_Options.Press.empty() && ImGui::GetFrameCount() == 40) Shortcuts::Press(m_Options.Press); // --press (automation)
         HandleShortcuts();
         if (!m_Options.BuildFolder.empty() && !m_BatchBuildDone)
         {
@@ -2628,6 +2629,9 @@ namespace Editor
             if (ImGui::MenuItem("Copy", Shortcuts::Label("edit.copy").c_str(), false, m_Ctx.HasValidSelection())) CopySelected(m_Ctx);
             if (ImGui::MenuItem("Paste", Shortcuts::Label("edit.paste").c_str(), false, !m_Ctx.IsPlaying())) PasteClipboard(m_Ctx);
             if (ImGui::MenuItem("Duplicate", Shortcuts::Label("edit.duplicate").c_str(), false, m_Ctx.HasValidSelection())) DuplicateSelected(m_Ctx);
+            if (ImGui::MenuItem("Group", Shortcuts::Label("edit.group").c_str(), false, m_Ctx.HasValidSelection() && !m_Ctx.IsPlaying())) GroupSelected(m_Ctx);
+            if (ImGui::MenuItem("Ungroup", Shortcuts::Label("edit.ungroup").c_str(), false, m_Ctx.HasValidSelection() && !m_Ctx.IsPlaying()))
+                UngroupSelected(m_Ctx);
             if (ImGui::BeginMenu("Selection"))
             {
                 DrawSelectionMenu();
@@ -3433,6 +3437,8 @@ namespace Editor
         if (Pressed("edit.copy")) CopySelected(m_Ctx);
         if (Pressed("edit.paste")) PasteClipboard(m_Ctx);
         if (Pressed("edit.delete") && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
+        if (Pressed("edit.group") && !m_Ctx.IsPlaying()) GroupSelected(m_Ctx);
+        if (Pressed("edit.ungroup") && !m_Ctx.IsPlaying()) UngroupSelected(m_Ctx);
         // Selection history and saved selections.
         if (Pressed("edit.selectBack")) SelectionBack();
         if (Pressed("edit.selectForward")) SelectionForward();

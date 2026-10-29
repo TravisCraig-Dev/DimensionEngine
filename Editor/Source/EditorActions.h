@@ -18,6 +18,12 @@ namespace Editor
 
     void DeleteSelected(EditorContext& ctx);
     void DuplicateSelected(EditorContext& ctx);
+    // Ctrl+G: the selection under a new empty object at its center (selected, to rename); Ctrl+Shift+G: the selected
+    // groups' children moved up (empty groups deleted). Objects inside prefab instances are left alone.
+    void GroupSelected(EditorContext& ctx);
+    void UngroupSelected(EditorContext& ctx);
+    // Orders a parent's children by name (the root objects for Null); with `recursive`, all the way down.
+    void SortChildren(EditorContext& ctx, Entity parent, bool recursive);
     // Copies the selected GameObject (with children) to the OS clipboard as JSON.
     void CopySelected(EditorContext& ctx);
     // Pastes GameObjects from the clipboard next to the selection (edit mode only).

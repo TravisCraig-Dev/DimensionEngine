@@ -1,6 +1,7 @@
 #include "Panels.h"
 #include "../EditorActions.h"
 #include "../EditorUI.h"
+#include "../Shortcuts.h"
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/SceneSearch.h>
@@ -121,6 +122,8 @@ namespace Editor
         if (ImGui::BeginPopupContextWindow("HierarchyContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
         {
             DrawCreateMenuItems(m_Ctx, Entity::Null());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Sort Root Objects", nullptr, false, scene.GetRootEntities().size() > 1)) SortChildren(m_Ctx, Entity::Null(), false);
             ImGui::EndPopup();
         }
 
@@ -406,6 +409,11 @@ namespace Editor
             if (ImGui::MenuItem("Paste", "Ctrl+V")) PasteClipboard(m_Ctx);
             if (ImGui::MenuItem("Duplicate", "Ctrl+D")) DuplicateSelected(m_Ctx);
             if (ImGui::MenuItem("Delete", "Del")) DeleteSelected(m_Ctx);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Group", Shortcuts::Label("edit.group").c_str())) GroupSelected(m_Ctx);
+            if (ImGui::MenuItem("Ungroup", Shortcuts::Label("edit.ungroup").c_str(), false, !scene.GetChildren(e).empty())) UngroupSelected(m_Ctx);
+            if (ImGui::MenuItem("Sort Children", nullptr, false, scene.GetChildren(e).size() > 1)) SortChildren(m_Ctx, e, false);
+            if (ImGui::MenuItem("Sort Children (All Levels)", nullptr, false, !scene.GetChildren(e).empty())) SortChildren(m_Ctx, e, true);
             ImGui::Separator();
             if (ImGui::MenuItem("Create Prefab")) CreatePrefab(m_Ctx, e, AssetManager::GetAssetsDirectory());
             Entity instanceRoot = Prefabs::FindInstanceRoot(scene, e);

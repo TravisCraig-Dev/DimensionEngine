@@ -23,6 +23,7 @@
 #include <Dimension/Scene/SceneBounds.h>
 #include <Dimension/Scene/SceneMeasure.h>
 #include <Dimension/Scene/SelectionHistory.h>
+#include <Dimension/Scene/SceneGrouping.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -8503,6 +8504,75 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Hierarchy grouping (Ctrl+G / Ctrl+Shift+G) and Sort Children: objects keep their place in the world.
+    void TestSceneGrouping()
+    {
+        using SceneGrouping::NameBefore;
+        CHECK(NameBefore("Crate 2", "Crate 10") && !NameBefore("Crate 10", "Crate 2"));
+        CHECK(NameBefore("apple", "Banana") && NameBefore("Apple", "banana") && NameBefore("a", "a1") && !NameBefore("a1", "a"));
+        CHECK(NameBefore("Wall 9b", "Wall 10a") && NameBefore("x007", "x8") && !NameBefore("Same", "Same"));
+
+        Scene scene("Grouping");
+        auto& reg = scene.GetRegistry();
+        auto names = [&](const std::vector<Entity>& list) {
+            std::string out;
+            for (Entity e : list) out += (out.empty() ? "" : ",") + reg.Get<TagComponent>(e).Name;
+            return out;
+        };
+        auto world = [&](Entity e) {
+            scene.UpdateTransforms();
+            return reg.Get<TransformComponent>(e).GetWorldPosition();
+        };
+        Entity x = scene.CreateEntity("X"), a = scene.CreateEntity("A"), y = scene.CreateEntity("Y"), b = scene.CreateEntity("B");
+        Entity p = scene.CreateEntity("P"), c = scene.CreateEntity("C", p), d = scene.CreateEntity("D", a);
+        reg.Get<TransformComponent>(a).Position = { 0.0f, 0.0f, 0.0f };
+        reg.Get<TransformComponent>(b).Position = { 4.0f, 0.0f, 0.0f };
+        reg.Get<TransformComponent>(d).Position = { 0.0f, 1.0f, 0.0f };
+        auto& pt = reg.Get<TransformComponent>(p);
+        pt.Position = { 10.0f, 0.0f, 0.0f };
+        pt.Rotation = { 0.0f, glm::radians(90.0f), 0.0f };
+        pt.Scale = glm::vec3(2.0f);
+        reg.Get<TransformComponent>(c).Position = { 1.0f, 0.0f, 0.0f };
+        glm::vec3 cWorld = world(c), dWorld = world(d);
+
+        // Two root objects (and A's child D, given too, counts with A): a group at their center where A was.
+        Entity g = SceneGrouping::Group(scene, { b, d, a });
+        CHECK(!g.IsNull() && reg.Get<TagComponent>(g).Name == "Group" && Near(world(g), { 2.0f, 0.0f, 0.0f }));
+        CHECK(names(scene.GetRootEntities()) == "X,Group,Y,P" && names(scene.GetChildren(g)) == "A,B");
+        CHECK(names(scene.GetChildren(a)) == "D" && Near(world(a), { 0.0f, 0.0f, 0.0f }) && Near(world(b), { 4.0f, 0.0f, 0.0f }) && Near(world(d), dWorld));
+        CHECK(SceneGrouping::IsEmptyObject(scene, g));
+
+        // Ungrouping: the children back where the group was, in their order, at the same places; the empty group gone.
+        auto freed = SceneGrouping::Ungroup(scene, g);
+        CHECK(freed == std::vector<Entity>({ a, b }) && !scene.IsValid(g) && names(scene.GetRootEntities()) == "X,A,B,Y,P");
+        CHECK(Near(world(a), { 0.0f, 0.0f, 0.0f }) && Near(world(b), { 4.0f, 0.0f, 0.0f }));
+
+        // Objects with different parents: the group at the root, where the first one's top object is; the child of a
+        // rotated, scaled parent stays put in the world.
+        Entity g2 = SceneGrouping::Group(scene, { c, y });
+        CHECK(!g2.IsNull() && scene.GetParent(g2).IsNull() && names(scene.GetRootEntities()) == "X,A,B,Group,P" && names(scene.GetChildren(g2)) == "Y,C");
+        CHECK(Near(world(c), cWorld, 1e-4f) && Near(world(g2), (cWorld + world(y)) * 0.5f, 1e-4f));
+        // A group with a component of its own is kept when ungrouped.
+        reg.Emplace<PointLightComponent>(g2);
+        CHECK(!SceneGrouping::IsEmptyObject(scene, g2));
+        CHECK(SceneGrouping::Ungroup(scene, g2).size() == 2 && scene.IsValid(g2) && scene.GetChildren(g2).empty());
+        CHECK(names(scene.GetRootEntities()) == "X,A,B,Group,Y,C,P" && Near(world(c), cWorld, 1e-4f));
+        CHECK(SceneGrouping::Ungroup(scene, g2).empty() && SceneGrouping::Group(scene, {}).IsNull());
+
+        // Sorting: names in number order, ignoring case; the roots, then all levels.
+        Entity box = scene.CreateEntity("Box");
+        for (const char* n : { "Crate 10", "crate 2", "Apple", "Crate 1" }) scene.CreateEntity(n, box);
+        Entity inner = scene.GetChildren(box)[2]; // Apple
+        scene.CreateEntity("Zed", inner);
+        scene.CreateEntity("Ant", inner);
+        SceneGrouping::SortChildren(scene, box);
+        CHECK(names(scene.GetChildren(box)) == "Apple,Crate 1,crate 2,Crate 10" && names(scene.GetChildren(inner)) == "Zed,Ant");
+        SceneGrouping::SortChildren(scene, box, true);
+        CHECK(names(scene.GetChildren(inner)) == "Ant,Zed");
+        SceneGrouping::SortChildren(scene, Entity::Null());
+        CHECK(names(scene.GetRootEntities()) == "A,B,Box,C,Group,P,X,Y");
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10338,6 +10408,7 @@ int main(int argc, char** argv)
     Run("Frame All and camera bookmarks", TestFrameAllAndBookmarks);
     Run("Scene view measuring tool", TestSceneMeasure);
     Run("Selection history and saved selections", TestSelectionHistory);
+    Run("Hierarchy grouping and sorting", TestSceneGrouping);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

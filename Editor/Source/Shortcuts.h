@@ -24,6 +24,8 @@ namespace Editor
         Shortcut* Find(const std::string& id);
         // Pressed this frame with exactly its modifiers (Ctrl+Shift+S does not count as Ctrl+S).
         bool Pressed(const char* id);
+        // Makes the next Pressed(id) true once, as if its keys were pressed (automation: --press).
+        void Press(const std::string& id);
         // "Ctrl+Shift+S" ("" for none), for menus and the Shortcuts window.
         std::string Label(const char* id);
         std::string ChordName(ImGuiKeyChord chord);

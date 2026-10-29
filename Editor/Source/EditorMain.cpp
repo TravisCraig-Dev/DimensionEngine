@@ -39,6 +39,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--asset-preview") && i + 1 < argc) options.AssetPreview = argv[++i];
         else if (!std::strcmp(argv[i], "--measure") && i + 1 < argc) options.Measure = argv[++i];
         else if (!std::strcmp(argv[i], "--selection-set") && i + 1 < argc) options.SelectionSet = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--press") && i + 1 < argc) options.Press = argv[++i];
         else if (!std::strcmp(argv[i], "--view") && i + 1 < argc)
         {
             std::string v = argv[++i];

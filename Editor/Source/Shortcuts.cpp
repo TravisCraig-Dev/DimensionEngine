@@ -4,6 +4,13 @@
 
 namespace Editor::Shortcuts
 {
+    namespace
+    {
+        std::string s_Injected; // Press (automation): reads as pressed once
+    }
+
+    void Press(const std::string& id) { s_Injected = id; }
+
     std::vector<Shortcut>& All()
     {
         static std::vector<Shortcut> shortcuts = [] {
@@ -21,6 +28,8 @@ namespace Editor::Shortcuts
                 { "edit.copy", "Edit", "Copy", ImGuiMod_Ctrl | ImGuiKey_C },
                 { "edit.paste", "Edit", "Paste", ImGuiMod_Ctrl | ImGuiKey_V },
                 { "edit.delete", "Edit", "Delete", ImGuiKey_Delete },
+                { "edit.group", "Edit", "Group", ImGuiMod_Ctrl | ImGuiKey_G },
+                { "edit.ungroup", "Edit", "Ungroup", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_G },
                 { "edit.search", "Edit", "Search", ImGuiMod_Ctrl | ImGuiKey_K },
                 { "edit.selectBack", "Edit", "Previous Selection", ImGuiMod_Alt | ImGuiKey_LeftArrow },
                 { "edit.selectForward", "Edit", "Next Selection", ImGuiMod_Alt | ImGuiKey_RightArrow },
@@ -87,6 +96,11 @@ namespace Editor::Shortcuts
 
     bool Pressed(const char* id)
     {
+        if (!s_Injected.empty() && s_Injected == id)
+        {
+            s_Injected.clear();
+            return true;
+        }
         const Shortcut* s = Find(id);
         if (!s || s->Key == 0) return false;
         ImGuiKey key = (ImGuiKey)(s->Key & ~ImGuiMod_Mask_);
