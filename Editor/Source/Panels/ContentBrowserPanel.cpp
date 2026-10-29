@@ -277,6 +277,8 @@ namespace Editor
                             AssetHandle variant = Prefabs::CreateVariant(base, UniquePath(path.parent_path() / (path.stem().string() + " Variant.prefab")));
                             if (variant.IsValid()) m_Ctx.SelectedAsset = variant;
                         }
+                        if (path.extension() == ".scene" && ImGui::MenuItem("Open Additive", nullptr, false, !m_Ctx.IsPlaying()))
+                            m_Ctx.RequestOpenAdditive = path;
                         if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
                         if (ImGui::MenuItem("Show in Explorer")) FileDialogs::RevealInExplorer(path);
                         if (ImGui::MenuItem("Delete")) toDelete = path;

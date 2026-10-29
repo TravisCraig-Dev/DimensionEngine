@@ -1,6 +1,7 @@
 #pragma once
 #include <Dimension/Scene/Scene.h>
 #include <Dimension/Scene/SceneVisibility.h>
+#include <Dimension/Scene/SceneSections.h>
 #include <Dimension/Asset/AssetManager.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <nlohmann/json.hpp>
@@ -116,6 +117,16 @@ namespace Editor
         // VisibilityChanged is set.
         SceneVisibility Visibility;
         bool VisibilityChanged = false;
+        // Scenes open alongside the main one (File > Open Scene Additive...): a Hierarchy section each, saved to their
+        // own files with the main scene.
+        SceneSections Sections;
+        std::optional<fs::path> RequestOpenAdditive;
+        int RequestCloseSection = 0, RequestSaveSection = 0; // 1-based (0: none)
+        // Prefab Mode in context: the scene around the instance it was opened from, a hidden container in the stage
+        // (drawn greyed and not picked; never saved with the prefab).
+        Entity PrefabContext = Entity::Null();
+        bool PrefabContextShown = true;
+        std::optional<uint64_t> RequestOpenPrefabFrom; // with RequestOpenPrefab: the instance's GUID in the scene
 
         // Prefab Mode: EditorScene is the prefab alone; the scene being edited (with its path, dirty flag,
         // undo history and selection) waits in the stage and comes back on exit.

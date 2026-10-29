@@ -913,7 +913,12 @@ namespace Editor
         ImGui::BeginDisabled(missing);
         if (ImGui::SmallButton("Select")) m_Ctx.SelectAsset(prefab);
         ImGui::SameLine();
-        if (ImGui::SmallButton("Open")) m_Ctx.RequestOpenPrefab = prefab;
+        if (ImGui::SmallButton("Open"))
+        {
+            // In context: the scene around this instance shows (greyed) while the prefab is edited.
+            m_Ctx.RequestOpenPrefab = prefab;
+            m_Ctx.RequestOpenPrefabFrom = (uint64_t)scene.GetGuid(root);
+        }
         ImGui::SameLine();
         ImGui::BeginDisabled(m_Ctx.IsPlaying());
         if (ImGui::SmallButton("Revert"))

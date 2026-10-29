@@ -176,6 +176,9 @@ namespace Dimension
         void LoadSceneData(const nlohmann::json& data, bool additive);
         // Destroys the root objects a loaded scene contributed. False if no loaded scene has that name.
         bool UnloadScene(const std::string& name);
+        // Records objects already in the scene as a loaded scene's (the editor's added scenes when play starts); they
+        // leave the other loaded scenes' lists.
+        void RegisterLoadedScene(std::string name, std::vector<Entity> roots);
 
         // UI input for the current frame (pointer in render-target pixels). Applied in OnUpdateRuntime.
         void SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid = true, float scroll = 0.0f);

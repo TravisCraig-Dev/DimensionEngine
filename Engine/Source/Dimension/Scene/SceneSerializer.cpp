@@ -153,7 +153,9 @@ namespace Dimension
         }
     }
 
-    json SceneSerializer::Serialize(Scene& scene)
+    json SceneSerializer::Serialize(Scene& scene) { return Serialize(scene, scene.GetRootEntities()); }
+
+    json SceneSerializer::Serialize(Scene& scene, const std::vector<Entity>& roots)
     {
         json j;
         j["version"] = 1;
@@ -231,7 +233,8 @@ namespace Dimension
         resolver.ToGuid = [&](Entity e) { return scene.IsValid(e) ? (uint64_t)scene.GetGuid(e) : uint64_t(0); };
 
         std::vector<Entity> ordered;
-        for (Entity root : scene.GetRootEntities()) CollectDepthFirst(scene, root, ordered);
+        for (Entity root : roots)
+            if (scene.IsValid(root)) CollectDepthFirst(scene, root, ordered);
         json& entities = j["entities"] = json::array();
         for (Entity e : ordered) entities.push_back(SerializeEntity(scene, e, resolver, Entity::Null()));
         return j;

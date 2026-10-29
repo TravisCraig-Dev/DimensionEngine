@@ -19,6 +19,7 @@
 #include <Dimension/Asset/Preset.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
+#include <Dimension/Scene/SceneSections.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -8102,6 +8103,64 @@ namespace
         fs::remove_all(temp, ec);
     }
 
+    // Several scenes open at once: an added scene's objects join the main scene but stay its own (children follow
+    // their root), each section serializes and saves only its objects with its own name and settings, roots move
+    // between sections, closing removes them, and in a playing copy an added scene unloads like a loaded one.
+    void TestSceneSections()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_sections";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        {
+            Scene a("Arena");
+            a.CreateEntity("A1");
+            a.CreateEntity("A2");
+            CHECK(SceneSerializer::SaveToFile(a, dir / "Arena.scene"));
+            Scene b("Props");
+            b.GetSettings().Exposure = 2.0f;
+            Entity b1 = b.CreateEntity("B1");
+            b.SetParent(b.CreateEntity("B1 Child"), b1);
+            CHECK(SceneSerializer::SaveToFile(b, dir / "Props.scene"));
+        }
+        auto main = SceneSerializer::LoadFromFile(dir / "Arena.scene");
+        CHECK(main != nullptr);
+        if (!main) return;
+        Scene& scene = *main;
+        SceneSections sections;
+        CHECK(sections.Open(scene, dir / "Props.scene") && !sections.Open(scene, dir / "Props.scene") && sections.Count() == 2);
+        Entity b1 = scene.FindEntityByName("B1"), child = scene.FindEntityByName("B1 Child"), a1 = scene.FindEntityByName("A1"),
+               a2 = scene.FindEntityByName("A2");
+        CHECK(sections.SectionOf(scene, b1) == 1 && sections.SectionOf(scene, child) == 1 && sections.SectionOf(scene, a1) == 0);
+        CHECK(sections.Roots(scene, 1) == std::vector<Entity>{ b1 } && sections.Roots(scene, 0).size() == 2);
+        CHECK(!sections.IsDirty(scene, 1));
+        auto mainJson = sections.Serialize(scene, 0);
+        CHECK(mainJson["entities"].size() == 2 && mainJson["name"] == "Arena");
+
+        scene.GetRegistry().Get<TransformComponent>(b1).Position.x = 4.0f;
+        CHECK(sections.IsDirty(scene, 1) && sections.Save(scene, 1) && !sections.IsDirty(scene, 1));
+        auto saved = SceneSerializer::LoadFromFile(dir / "Props.scene");
+        CHECK(saved && saved->GetName() == "Props" && Near(saved->GetSettings().Exposure, 2.0f) &&
+              saved->GetRegistry().AliveCount() == 2 && !saved->FindEntityByName("B1 Child").IsNull() &&
+              Near(saved->GetRegistry().Get<TransformComponent>(saved->FindEntityByName("B1")).Position.x, 4.0f));
+
+        sections.MoveRoot(scene, a2, 1);
+        Entity added = scene.CreateEntity("New");
+        CHECK(sections.SectionOf(scene, a2) == 1 && sections.SectionOf(scene, added) == 0 && sections.IsDirty(scene, 1));
+        CHECK(sections.Serialize(scene, 0)["entities"].size() == 2); // A1 and New
+        sections.MoveRoot(scene, a2, 0);
+        CHECK(sections.SectionOf(scene, a2) == 0 && !sections.IsDirty(scene, 1));
+
+        // In a copy that plays, the added scene unloads like a scene loaded additively.
+        auto playing = scene.Clone();
+        sections.RegisterLoaded(*playing);
+        CHECK(playing->UnloadScene("Props") && playing->FindEntityByName("B1").IsNull() && !playing->FindEntityByName("A1").IsNull());
+
+        sections.Close(scene, 1);
+        CHECK(sections.Count() == 1 && !scene.IsValid(b1) && !scene.IsValid(child) && scene.IsValid(a1) && scene.IsValid(a2));
+        fs::remove_all(dir, ec);
+    }
+
     void TestAssetLabels()
     {
         // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
@@ -9616,6 +9675,7 @@ int main(int argc, char** argv)
     Run("Presets", TestPresets);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
+    Run("Scene sections", TestSceneSections);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

@@ -33,6 +33,8 @@ namespace Editor
         std::string Search;       // --search "query": start with this Hierarchy search
         std::string SearchQuery;  // --find "query": with --open "Search", the Search window's query
         std::string PackagePath;  // --package file: with --open "Import Package", the package shown
+        std::string AdditiveScenes; // --open-additive "a.scene,b.scene": opened alongside the scene
+        std::string PrefabInstance; // --prefab-instance "Name": that instance's prefab in Prefab Mode, in context
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
         std::string HideEntities;         // --hide "A,B": hidden in the Scene view for the session
@@ -59,13 +61,17 @@ namespace Editor
         // Scene management
         void NewScene();
         void OpenScene(const fs::path& path);
+        // Another scene's objects alongside the main scene's (a Hierarchy section of its own), and closing it.
+        void OpenSceneAdditive(const fs::path& path);
+        void CloseAddedScene(size_t section);
         bool SaveScene();
         bool SaveSceneAs();
         bool ConfirmDiscardChanges(); // false = user cancelled
         void OpenSceneWithDialog();   // File > Open Scene...
 
         // Prefab Mode
-        void OpenPrefabMode(AssetHandle prefab);
+        // Opened from an instance (`from`: its GUID in the scene), the scene around it shows greyed (in context).
+        void OpenPrefabMode(AssetHandle prefab, std::optional<uint64_t> from = std::nullopt);
         bool LeavePrefabMode(); // saves or asks first; false = user cancelled
         bool SavePrefabStage();
         void DrawPrefabModeBar();

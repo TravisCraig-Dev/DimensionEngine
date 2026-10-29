@@ -42,6 +42,7 @@ namespace Editor
         if (!m_Stage) return;
         PrefabStage stage = std::move(*m_Stage);
         m_Stage.reset();
+        PrefabContext = Entity::Null();
         EditorScene = stage.Scene;
         ScenePath = stage.ScenePath;
         Dirty = stage.Dirty;

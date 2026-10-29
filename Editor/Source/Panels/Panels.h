@@ -4,6 +4,7 @@
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/SpriteSlicing.h>
 #include <imgui.h>
+#include <map>
 #include <mutex>
 
 namespace Editor
@@ -27,6 +28,8 @@ namespace Editor
         std::vector<Entity> m_VisibleOrder, m_LastVisibleOrder; // for Shift+click range selection
         Entity m_Anchor = Entity::Null();
         int m_PendingMode = -1; // 0 child, 1 before, 2 after, 3 root
+        int m_PendingSection = -1; // with 3: into this added scene (1-based)
+        std::map<size_t, bool> m_SectionDirty; // added scenes' unsaved changes (checked now and then)
     };
 
     class InspectorPanel

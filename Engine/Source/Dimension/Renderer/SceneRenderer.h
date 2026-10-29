@@ -53,6 +53,8 @@ namespace Dimension
         // Scene visibility (the editor's): objects not drawn at all (meshes, sprites, icons), and objects drawn without
         // their id (clicks there pick nothing; selected ones keep theirs for the outline).
         std::vector<Entity> Hidden, Unpickable;
+        // Drawn pale and colorless (Prefab Mode's context: the scene around the prefab being edited).
+        std::vector<Entity> Greyed;
         // Frame debugger: -2 off; -1 records the frame's draws (GetFrameEvents) and draws them all; n >= 0 records them
         // and draws only events 0 to n (the frame as it stood after that draw; effects and post processing still run).
         int FrameDebugStop = -2;

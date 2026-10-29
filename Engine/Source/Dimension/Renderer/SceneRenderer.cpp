@@ -2104,8 +2104,9 @@ namespace Dimension
             }
             return a.Address;
         };
-        // Scene view search: everything but the matches drawn dark (their colors, emission and terrain layers).
-        std::vector<uint8_t> lit;
+        // Scene view search: everything but the matches drawn dark (their colors, emission and terrain layers). Greyed
+        // objects (Prefab Mode's context) are drawn pale and colorless.
+        std::vector<uint8_t> lit, greyed;
         bool dimming = options.EditorOverlays && options.Highlighting;
         if (dimming)
             for (Entity h : options.Highlight)
@@ -2113,13 +2114,29 @@ namespace Dimension
                 if (lit.size() <= h.Index) lit.resize(h.Index + 1, 0);
                 lit[h.Index] = 1;
             }
-        auto dimmed = [&](Entity e) { return dimming && (e.Index >= lit.size() || !lit[e.Index]); };
-        auto dim = [](MaterialGPU g) {
-            g.BaseColor = glm::vec4(glm::vec3(g.BaseColor) * 0.15f + glm::vec3(0.02f), g.BaseColor.a);
-            g.Emission = glm::vec4(0.0f, 0.0f, 0.0f, g.Emission.w);
+        for (Entity g : options.Greyed)
+        {
+            if (greyed.size() <= g.Index) greyed.resize(g.Index + 1, 0);
+            greyed[g.Index] = 1;
+        }
+        // 0: as it is, 1: dark (search), 2: greyed.
+        auto dimmed = [&](Entity e) -> int {
+            if (e.Index < greyed.size() && greyed[e.Index]) return 2;
+            return dimming && (e.Index >= lit.size() || !lit[e.Index]) ? 1 : 0;
+        };
+        auto dim = [whiteIndex](MaterialGPU g, int mode) {
+            if (mode == 1) g.BaseColor = glm::vec4(glm::vec3(g.BaseColor) * 0.15f + glm::vec3(0.02f), g.BaseColor.a);
+            if (mode == 2)
+            {
+                // Flat grey: the color map goes too (terrains keep their layer maps, greyed by their colors).
+                float luma = glm::dot(glm::vec3(g.BaseColor), glm::vec3(0.3f, 0.59f, 0.11f));
+                g.BaseColor = glm::vec4(glm::vec3(luma * 0.25f + 0.35f), g.BaseColor.a);
+                if (g.Flags.z != 1u) g.Maps.x = whiteIndex;
+            }
+            if (mode != 0) g.Emission = glm::vec4(0.0f, 0.0f, 0.0f, g.Emission.w);
             return g;
         };
-        auto uploadMaterial = [&](const Material& m, bool dark) { return uploadMaterialGPU(dark ? dim(BuildMaterialGPU(m)) : BuildMaterialGPU(m)); };
+        auto uploadMaterial = [&](const Material& m, int dark) { return uploadMaterialGPU(dim(BuildMaterialGPU(m), dark)); };
         // LOD groups pick their child for this camera (so every pass, shadows too, draws the same one).
         LODGroups::Frame lods;
         LODGroups::Evaluate(scene, camera.Position, camera.Projection, camera.Orthographic, lods);
@@ -2128,7 +2145,7 @@ namespace Dimension
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || (e.Index < lods.Hidden.size() && lods.Hidden[e.Index])) continue;
-            bool dark = dimmed(e);
+            int dark = dimmed(e);
             // LOD groups: a fading level is dithered; a group with generated levels draws its own mesh simplified.
             uint32_t lodFade = 0;
             if (auto it = lods.Fade.find(e.Index); it != lods.Fade.end()) lodFade = it->second;
@@ -2349,7 +2366,7 @@ namespace Dimension
                     {
                         TerrainLayer fallback;
                         const TerrainLayer& layer = k < (int)terrain->Layers.size() ? terrain->Layers[k] : fallback;
-                        glm::vec3 color = glm::vec3(ToLinear(layer.Color)) * (dark ? 0.15f : 1.0f);
+                        glm::vec3 color = glm::vec3(ToLinear(layer.Color)) * (dark == 1 ? 0.15f : dark == 2 ? 0.4f : 1.0f);
                         out[k].Color = glm::vec4(color, std::max(layer.Tiling, 1e-4f));
                         out[k].Maps = glm::uvec4(TextureIndex(layer.Texture, white), terrainRt->Splats[k / 4]->GetBindlessIndex(), (uint32_t)(k % 4),
                                                  TextureIndex(layer.NormalMap, ~0u));
@@ -2359,14 +2376,14 @@ namespace Dimension
                     uint32_t blendBits;
                     std::memcpy(&blendBits, &heightBlend, 4);
                     gpu.Maps2 = glm::uvec4((uint32_t)la.Address, (uint32_t)(la.Address >> 32), (uint32_t)layers, blendBits);
-                    address = uploadMaterialGPU(dark ? dim(gpu) : gpu);
+                    address = uploadMaterialGPU(dim(gpu, dark));
                 }
                 else if (water)
                 {
                     // Water: the shader draws foam where the vertex normals say (Flags.w = 2).
                     MaterialGPU gpu = BuildMaterialGPU(mat);
                     gpu.Flags.w = 2u;
-                    address = uploadMaterialGPU(dark ? dim(gpu) : gpu);
+                    address = uploadMaterialGPU(dim(gpu, dark));
                 }
                 else
                     address = uploadMaterial(mat, dark);
@@ -2377,7 +2394,7 @@ namespace Dimension
                     shell.Flags.w = 1u;
                     shell.Layers[0] = glm::vec4(std::max(fur->Density, 1.0f), std::clamp(fur->Thickness, 0.01f, 1.0f), std::max(fur->Droop, 0.0f), fur->WindResponse);
                     shell.Layers[1] = glm::vec4(glm::vec3(fur->TipColor), std::clamp(fur->RootShade, 0.0f, 1.0f));
-                    furMaterials.push_back(uploadMaterialGPU(dark ? dim(shell) : shell));
+                    furMaterials.push_back(uploadMaterialGPU(dim(shell, dark)));
                 }
                 bool transparent = mat.BlendMode == MaterialBlendMode::Transparent;
                 m_FrameRefracts |= transparent && mat.Refraction > 0.0f;
@@ -2478,7 +2495,7 @@ namespace Dimension
                     gpu.TilingOffset = glm::vec4(1.0f / kImpostorSides, 1.0f, (float)side / kImpostorSides, 0.0f);
                     gpu.Maps = glm::uvec4(impostor.Bindless, white, white, impostor.Bindless);
                     gpu.Flags = glm::uvec4(1u, 0u, 0u, 0u); // cutout
-                    VkDeviceAddress address = uploadMaterialGPU(dimmed(g) ? dim(gpu) : gpu);
+                    VkDeviceAddress address = uploadMaterialGPU(dim(gpu, dimmed(g)));
                     if (!address) continue;
                     const SubMesh& sub = quad->GetSubMeshes()[0];
                     item.FirstPart = (uint32_t)m_RenderParts.size();
@@ -2494,7 +2511,7 @@ namespace Dimension
         for (auto [e, terrain, t] : reg.ViewOf<TerrainComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
-            bool dark = dimmed(e);
+            int dark = dimmed(e);
             const Terrain::DetailInstances& details = Terrain::GetDetails(terrain);
             const auto* terrainRenderer = reg.TryGet<MeshRendererComponent>(e);
             for (int kind = 0; kind < 2; ++kind)

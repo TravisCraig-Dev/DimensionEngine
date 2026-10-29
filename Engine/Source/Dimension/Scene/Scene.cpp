@@ -471,6 +471,13 @@ namespace Dimension
         else m_LoadedScenes.insert(m_LoadedScenes.begin(), std::move(entry));
     }
 
+    void Scene::RegisterLoadedScene(std::string name, std::vector<Entity> roots)
+    {
+        for (LoadedScene& l : m_LoadedScenes)
+            std::erase_if(l.Roots, [&](Entity e) { return std::find(roots.begin(), roots.end(), e) != roots.end(); });
+        m_LoadedScenes.push_back({ std::move(name), std::move(roots) });
+    }
+
     bool Scene::UnloadScene(const std::string& name)
     {
         auto it = std::find_if(m_LoadedScenes.begin(), m_LoadedScenes.end(), [&](auto& l) { return l.Name == name; });

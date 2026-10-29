@@ -11,6 +11,8 @@ namespace Dimension
     {
     public:
         static nlohmann::json Serialize(Scene& scene);
+        // Only these root objects (with their children), in this order: one scene file of several open together.
+        static nlohmann::json Serialize(Scene& scene, const std::vector<Entity>& roots);
         static Ref<Scene> Deserialize(const nlohmann::json& data);
 
         static bool SaveToFile(Scene& scene, const fs::path& path);

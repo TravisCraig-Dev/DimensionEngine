@@ -38,6 +38,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <functional>
+#include <fstream>
 #include <optional>
 #ifdef _WIN32
 #include <windows.h>
@@ -223,6 +224,18 @@ namespace Editor
                 m_Ctx.SelectAsset(h);
                 m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m_Options.SelectAsset).parent_path());
             }
+        // --open-additive and --prefab-instance (automation).
+        for (size_t start = 0; start < m_Options.AdditiveScenes.size();)
+        {
+            size_t comma = m_Options.AdditiveScenes.find(',', start);
+            if (comma == std::string::npos) comma = m_Options.AdditiveScenes.size();
+            OpenSceneAdditive(fs::path(m_Options.AdditiveScenes.substr(start, comma - start)));
+            start = comma + 1;
+        }
+        if (!m_Options.PrefabInstance.empty())
+            if (Entity e = m_Ctx.EditorScene->FindEntityByName(m_Options.PrefabInstance); !e.IsNull())
+                if (Entity root = Prefabs::FindInstanceRoot(*m_Ctx.EditorScene, e); !root.IsNull())
+                    OpenPrefabMode(m_Ctx.EditorScene->GetRegistry().Get<PrefabLinkComponent>(root).Prefab, (uint64_t)m_Ctx.EditorScene->GetGuid(root));
         if (m_Options.StartInPlayMode) Play();
     }
 
@@ -263,6 +276,7 @@ namespace Editor
         scene->UpdateTransforms();
 
         m_Ctx.EditorScene = scene;
+        m_Ctx.Sections.Clear();
         m_Ctx.ScenePath.clear();
         m_Ctx.Dirty = false;
         m_Ctx.Select(Entity::Null());
@@ -277,6 +291,7 @@ namespace Editor
         if (!scene) return;
         Prefabs::SyncAll(*scene); // pick up prefab edits made since the scene was saved
         m_Ctx.EditorScene = scene;
+        m_Ctx.Sections.Clear();
         m_Ctx.ScenePath = path;
         m_Ctx.Dirty = false;
         m_Ctx.Select(Entity::Null());
@@ -294,7 +309,17 @@ namespace Editor
         }
         if (m_Ctx.InPrefabMode()) return SavePrefabStage();
         if (m_Ctx.ScenePath.empty()) return SaveSceneAs();
-        if (!SceneSerializer::SaveToFile(*m_Ctx.EditorScene, m_Ctx.ScenePath)) return false;
+        // With scenes open alongside it, only the main scene's objects go into its file; the others save to theirs.
+        if (m_Ctx.Sections.Count() > 1)
+        {
+            std::ofstream out(m_Ctx.ScenePath);
+            out << m_Ctx.Sections.Serialize(*m_Ctx.EditorScene, 0).dump(2);
+            if (!out) return false;
+            for (size_t i = 1; i < m_Ctx.Sections.Count(); ++i)
+                if (m_Ctx.Sections.IsDirty(*m_Ctx.EditorScene, i) && m_Ctx.Sections.Save(*m_Ctx.EditorScene, i))
+                    Log::Info("Saved scene '{}'", m_Ctx.Sections.Added()[i - 1].Path.filename().string());
+        }
+        else if (!SceneSerializer::SaveToFile(*m_Ctx.EditorScene, m_Ctx.ScenePath)) return false;
         AssetHandle h = AssetManager::Import(m_Ctx.ScenePath);
         if (!Project::GetConfig().StartScene.IsValid() && h.IsValid())
         {
@@ -326,10 +351,54 @@ namespace Editor
     bool EditorLayer::ConfirmDiscardChanges()
     {
         if (m_Ctx.InPrefabMode() && !LeavePrefabMode()) return false;
+        // The scenes open alongside the main one, each asked about on its own.
+        for (size_t i = 1; i < m_Ctx.Sections.Count(); ++i)
+            if (m_Ctx.Sections.IsDirty(*m_Ctx.EditorScene, i))
+            {
+                int choice = FileDialogs::YesNoCancel("Unsaved Changes", "The scene '" + m_Ctx.Sections.Added()[i - 1].Name + "' has unsaved changes. Save them?");
+                if (choice == 2) return false;
+                if (choice == 0 && !m_Ctx.Sections.Save(*m_Ctx.EditorScene, i)) return false;
+            }
         if (!m_Ctx.Dirty) return true;
         int choice = FileDialogs::YesNoCancel("Unsaved Changes", "The scene '" + m_Ctx.EditorScene->GetName() + "' has unsaved changes. Save them?");
         if (choice == 0) return SaveScene();
         return choice == 1;
+    }
+
+    void EditorLayer::OpenSceneAdditive(const fs::path& path)
+    {
+        if (m_Ctx.IsPlaying() || m_Ctx.InPrefabMode())
+        {
+            Log::Warn("Open scenes additively outside play mode and Prefab Mode");
+            return;
+        }
+        if (!m_Ctx.ScenePath.empty() && fs::equivalent(path, m_Ctx.ScenePath))
+        {
+            Log::Warn("'{}' is the main scene", path.filename().string());
+            return;
+        }
+        if (!m_Ctx.Sections.Open(*m_Ctx.EditorScene, path))
+        {
+            Log::Warn("'{}' is already open or cannot be read", path.filename().string());
+            return;
+        }
+        m_Ctx.ClearHistory(); // earlier undo steps do not know its objects
+        Log::Info("Opened scene '{}' additively", path.filename().string());
+    }
+
+    void EditorLayer::CloseAddedScene(size_t section)
+    {
+        if (section == 0 || section >= m_Ctx.Sections.Count() || m_Ctx.IsPlaying()) return;
+        if (m_Ctx.Sections.IsDirty(*m_Ctx.EditorScene, section))
+        {
+            int choice = FileDialogs::YesNoCancel("Unsaved Changes",
+                                                  "The scene '" + m_Ctx.Sections.Added()[section - 1].Name + "' has unsaved changes. Save them?");
+            if (choice == 2) return;
+            if (choice == 0 && !m_Ctx.Sections.Save(*m_Ctx.EditorScene, section)) return;
+        }
+        m_Ctx.Select(Entity::Null());
+        m_Ctx.Sections.Close(*m_Ctx.EditorScene, section);
+        m_Ctx.ClearHistory();
     }
 
     void EditorLayer::UpdateWindowTitle()
@@ -352,6 +421,7 @@ namespace Editor
         SceneManager::CancelPendingLoad();
         EditModeScripts::Clear(); // edit-mode scripts end as play starts (and start again after Stop)
         m_Ctx.RuntimeScene = m_Ctx.EditorScene->Clone();
+        m_Ctx.Sections.RegisterLoaded(*m_Ctx.RuntimeScene); // scenes open alongside play as loaded additively
         m_MixerBeforePlay = AudioMixer::Groups();
         m_Ctx.RuntimeScene->OnRuntimeStart();
         m_Ctx.State = PlayState::Play;
@@ -409,8 +479,10 @@ namespace Editor
         if (m_Ctx.RequestOpenPrefab)
         {
             AssetHandle h = *m_Ctx.RequestOpenPrefab;
+            std::optional<uint64_t> from = m_Ctx.RequestOpenPrefabFrom;
             m_Ctx.RequestOpenPrefab.reset();
-            OpenPrefabMode(h);
+            m_Ctx.RequestOpenPrefabFrom.reset();
+            OpenPrefabMode(h, from);
         }
         if (m_LeavePrefabRequested)
         {
@@ -538,7 +610,7 @@ namespace Editor
 
     // ---- Prefab Mode ----------------------------------------------------------------------------
 
-    void EditorLayer::OpenPrefabMode(AssetHandle prefab)
+    void EditorLayer::OpenPrefabMode(AssetHandle prefab, std::optional<uint64_t> from)
     {
         if (m_Ctx.IsPlaying()) Stop();
         if (m_Ctx.InPrefabMode())
@@ -551,6 +623,33 @@ namespace Editor
         {
             Log::Error("Could not open the prefab for editing");
             return;
+        }
+        // In context: opened from an instance, the scene around it comes along (copied into a container placed so the
+        // prefab stands where the instance does), shown greyed behind the prefab.
+        m_Ctx.PrefabContext = Entity::Null();
+        Entity instance = from ? m_Ctx.EditorScene->FindEntityByGuid(Guid(*from)) : Entity::Null();
+        if (!instance.IsNull())
+        {
+            Scene& outer = *m_Ctx.EditorScene;
+            glm::mat4 placed = outer.GetRegistry().Get<TransformComponent>(instance).World;
+            Entity container = stage->CreateEntity("Scene Context");
+            std::vector<std::pair<uint64_t, Entity>> mapping;
+            for (Entity root : outer.GetRootEntities())
+                SceneSerializer::DeserializeEntityTree(*stage, SceneSerializer::SerializeEntityTree(outer, root), container, true, &mapping);
+            for (auto& [guid, copy] : mapping)
+                if (guid == *from && stage->IsValid(copy)) stage->DestroyEntity(copy); // the prefab itself takes its place
+            glm::vec3 scale, translation, skew;
+            glm::vec4 perspective;
+            glm::quat rotation;
+            if (glm::decompose(glm::inverse(placed), scale, rotation, translation, skew, perspective))
+            {
+                auto& t = stage->GetRegistry().Get<TransformComponent>(container);
+                t.Position = translation;
+                t.Rotation = glm::eulerAngles(rotation);
+                t.Scale = scale;
+            }
+            stage->UpdateTransforms();
+            m_Ctx.PrefabContext = container;
         }
         m_SceneCamera = m_Camera;
         m_Ctx.EnterPrefabMode(prefab, stage);
@@ -616,6 +715,12 @@ namespace Editor
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::Checkbox("Auto Save", &m_Ctx.PrefabAutoSave);
+            if (m_Ctx.EditorScene->IsValid(m_Ctx.PrefabContext))
+            {
+                ImGui::SameLine(ImGui::GetWindowWidth() - right - ImGui::CalcTextSize("Context").x - ImGui::GetFrameHeight() - 24.0f);
+                ImGui::Checkbox("Context", &m_Ctx.PrefabContextShown);
+                ImGui::SetItemTooltip("The scene around the instance the prefab was opened from, greyed");
+            }
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -687,6 +792,16 @@ namespace Editor
             options.DrawMode = m_DrawMode;
             options.Hidden = m_Ctx.Visibility.Hidden(scene);
             options.Unpickable = m_Ctx.Visibility.Unpickable(scene);
+            // Prefab Mode in context: the scene around the prefab, greyed and not picked (or hidden).
+            if (m_Ctx.InPrefabMode() && scene.IsValid(m_Ctx.PrefabContext))
+            {
+                std::vector<Entity> context{ m_Ctx.PrefabContext };
+                for (size_t i = 0; i < context.size(); ++i)
+                    for (Entity c : scene.GetChildren(context[i])) context.push_back(c);
+                auto& into = m_Ctx.PrefabContextShown ? options.Greyed : options.Hidden;
+                into.insert(into.end(), context.begin(), context.end());
+                if (m_Ctx.PrefabContextShown) options.Unpickable.insert(options.Unpickable.end(), context.begin(), context.end());
+            }
             options.FrameDebugStop = m_ShowFrameDebugger ? m_FrameDebugger->StopFor(0) : -2;
             options.Highlighting = m_Ctx.HierarchySearch.find_first_not_of(' ') != std::string::npos;
             if (options.Highlighting) options.Highlight = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
@@ -1690,6 +1805,23 @@ namespace Editor
             if (fs::is_directory(path)) OpenExportPackage(AssetPackage::AssetsIn(relative == "." ? fs::path() : relative));
             else if (AssetHandle h = AssetManager::GetHandle(relative); h.IsValid()) OpenExportPackage({ h });
         }
+        if (m_Ctx.RequestOpenAdditive)
+        {
+            fs::path path = *m_Ctx.RequestOpenAdditive;
+            m_Ctx.RequestOpenAdditive.reset();
+            OpenSceneAdditive(path);
+        }
+        if (m_Ctx.RequestCloseSection > 0)
+        {
+            CloseAddedScene((size_t)m_Ctx.RequestCloseSection);
+            m_Ctx.RequestCloseSection = 0;
+        }
+        if (m_Ctx.RequestSaveSection > 0)
+        {
+            if (!m_Ctx.IsPlaying() && m_Ctx.Sections.Save(*m_Ctx.EditorScene, (size_t)m_Ctx.RequestSaveSection))
+                Log::Info("Saved scene '{}'", m_Ctx.Sections.Added()[m_Ctx.RequestSaveSection - 1].Path.filename().string());
+            m_Ctx.RequestSaveSection = 0;
+        }
         if (m_Ctx.RequestImportPackage)
         {
             m_Ctx.RequestImportPackage = false;
@@ -1772,6 +1904,8 @@ namespace Editor
         {
             if (ImGui::MenuItem("New Scene", Shortcuts::Label("file.new").c_str()) && ConfirmDiscardChanges()) NewScene();
             if (ImGui::MenuItem("Open Scene...", Shortcuts::Label("file.open").c_str())) OpenSceneWithDialog();
+            if (ImGui::MenuItem("Open Scene Additive...", nullptr, false, !m_Ctx.IsPlaying() && !m_Ctx.InPrefabMode()))
+                if (auto p = FileDialogs::OpenFile({ { L"Scene", L"*.scene" } }, AssetManager::GetAssetsDirectory())) OpenSceneAdditive(*p);
             if (ImGui::MenuItem("Save", Shortcuts::Label("file.save").c_str(), false, !m_Ctx.IsPlaying())) SaveScene();
             if (ImGui::MenuItem("Save As...", Shortcuts::Label("file.saveAs").c_str(), false, !m_Ctx.IsPlaying())) SaveSceneAs();
             ImGui::Separator();

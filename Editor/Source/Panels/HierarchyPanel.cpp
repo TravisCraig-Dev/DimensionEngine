@@ -48,12 +48,52 @@ namespace Editor
         }
         m_LastVisibleOrder = std::move(m_VisibleOrder);
         m_VisibleOrder.clear();
+        SceneSections& sections = m_Ctx.Sections;
         if (sceneOpen)
         {
-            // Copy: nodes may be reordered by drag-drop during iteration (applied after the loop anyway).
-            auto roots = scene.GetRootEntities();
-            for (Entity e : roots) DrawNode(scene, e);
+            // The main scene's objects (with scenes open alongside, theirs come in their own sections below; Prefab
+            // Mode's context is not listed). Copy: nodes may be reordered by drag-drop during iteration.
+            bool sectioned = sections.Count() > 1 && !m_Ctx.InPrefabMode(); // Prefab Mode shows the prefab alone
+            auto roots = sectioned ? sections.Roots(scene, 0) : scene.GetRootEntities();
+            for (Entity e : roots)
+                if (e != m_Ctx.PrefabContext) DrawNode(scene, e);
             ImGui::TreePop();
+        }
+        // Scenes open alongside: a section each (drop an object on it to move it there; its menu saves or closes it).
+        for (size_t i = 1; i < sections.Count() && !m_Ctx.InPrefabMode(); ++i)
+        {
+            const auto& added = sections.Added()[i - 1];
+            ImGui::PushID((int)i);
+            bool dirty = !m_Ctx.IsPlaying() && ImGui::GetFrameCount() % 15 == (int)i % 15 ? (m_SectionDirty[i] = sections.IsDirty(scene, i))
+                                                                                       : m_SectionDirty[i];
+            std::string header = added.Name + (dirty ? "*" : "");
+            ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+            bool open = ImGui::TreeNodeEx("##section", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", header.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", added.Path.filename().string().c_str());
+            if (ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(UI::kEntityPayload))
+                {
+                    m_PendingChild = scene.FindEntityByGuid(Guid(*(const uint64_t*)p->Data));
+                    m_PendingMode = 3;
+                    m_PendingSection = (int)i;
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if (ImGui::BeginPopupContextItem("SectionMenu"))
+            {
+                ImGui::BeginDisabled(m_Ctx.IsPlaying());
+                if (ImGui::MenuItem("Save Scene", nullptr, false, dirty)) m_Ctx.RequestSaveSection = (int)i;
+                if (ImGui::MenuItem("Close Scene")) m_Ctx.RequestCloseSection = (int)i;
+                ImGui::EndDisabled();
+                ImGui::EndPopup();
+            }
+            if (open)
+            {
+                for (Entity e : sections.Roots(scene, i)) DrawNode(scene, e);
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
         }
 
         // Empty area: deselect, context menu, drop to root.
@@ -90,7 +130,10 @@ namespace Editor
             switch (m_PendingMode)
             {
             case 0: scene.SetParent(m_PendingChild, m_PendingParent); break;
-            case 3: scene.SetParent(m_PendingChild, Entity::Null()); break;
+            case 3:
+                scene.SetParent(m_PendingChild, Entity::Null());
+                m_Ctx.Sections.MoveRoot(scene, m_PendingChild, m_PendingSection > 0 ? (size_t)m_PendingSection : 0);
+                break;
             case 1:
             case 2:
             {
@@ -103,11 +146,13 @@ namespace Editor
                 size_t childIndex = (size_t)(std::find(siblings.begin(), siblings.end(), m_PendingChild) - siblings.begin());
                 if (childIndex < index) --index;
                 scene.SetSiblingIndex(m_PendingChild, m_PendingMode == 1 ? index : index + 1);
+                if (newParent.IsNull()) m_Ctx.Sections.MoveRoot(scene, m_PendingChild, m_Ctx.Sections.SectionOf(scene, target)); // its scene
                 break;
             }
             }
         }
         m_PendingMode = -1;
+        m_PendingSection = -1;
 
         // Keyboard shortcuts while the panel is focused.
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && m_Renaming.IsNull() && m_Ctx.HasValidSelection())
@@ -357,6 +402,22 @@ namespace Editor
                 }
             }
             if (ImGui::MenuItem("Frame Selected", "F")) m_Ctx.RequestFocusSelected = true;
+            // With scenes open alongside: which scene a root object belongs to.
+            if (m_Ctx.Sections.Count() > 1 && !m_Ctx.InPrefabMode() && scene.GetParent(e).IsNull() && ImGui::BeginMenu("Move to Scene"))
+            {
+                size_t current = m_Ctx.Sections.SectionOf(scene, e);
+                for (size_t i = 0; i < m_Ctx.Sections.Count(); ++i)
+                {
+                    const std::string& name = i == 0 ? scene.GetName() : m_Ctx.Sections.Added()[i - 1].Name;
+                    if (ImGui::MenuItem(name.c_str(), nullptr, i == current) && i != current)
+                    {
+                        m_Ctx.RecordUndo();
+                        m_Ctx.Sections.MoveRoot(scene, e, i);
+                        m_Ctx.MarkDirty();
+                    }
+                }
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             if (ImGui::BeginMenu("Create Child")) { DrawCreateMenuItems(m_Ctx, e); ImGui::EndMenu(); }
             ImGui::EndPopup();
