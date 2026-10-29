@@ -822,7 +822,7 @@ namespace Editor
             }
             options.FrameDebugStop = m_ShowFrameDebugger ? m_FrameDebugger->StopFor(0) : -2;
             options.Highlighting = m_Ctx.HierarchySearch.find_first_not_of(' ') != std::string::npos;
-            if (options.Highlighting) options.Highlight = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
+            if (options.Highlighting) options.Highlight = m_Ctx.SearchMatches();
             // C# scripts' gizmos (OnDrawGizmos, and OnDrawGizmosSelected for the selection).
             if (m_ShowGizmos)
                 for (const auto& g : CSharpRuntime::CollectGizmos(scene, m_Ctx.Selection)) m_SceneRenderer.DrawLine(g.A, g.B, g.Color);

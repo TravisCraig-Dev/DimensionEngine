@@ -6,6 +6,8 @@
 #include <Dimension/Renderer/Material.h>
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Scene/SceneSearch.h>
+#include <Dimension/Asset/AssetDependencies.h>
 #include <Dimension/Platform/FileDialogs.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -289,6 +291,33 @@ namespace Editor
                         if (path.extension() == ".scene" && ImGui::MenuItem("Open Additive", nullptr, false, !m_Ctx.IsPlaying()))
                             m_Ctx.RequestOpenAdditive = path;
                         if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
+                        if (AssetHandle item = AssetManager::GetHandle(path); item.IsValid())
+                        {
+                            ImGui::Separator();
+                            // The objects in the open scene using it (the Hierarchy's search, dimmed in the Scene view).
+                            if (ImGui::MenuItem("Find References In Scene", nullptr, false, type != AssetType::Scene))
+                                m_Ctx.HierarchySearch = SceneSearch::ReferenceQuery(item);
+                            // It and everything it uses, in turn.
+                            if (ImGui::MenuItem("Select Dependencies"))
+                            {
+                                auto deps = AssetDependencies::Collect({ item }, false).Assets;
+                                std::vector<AssetHandle> list(deps.begin(), deps.end());
+                                std::erase(list, item);
+                                std::sort(list.begin(), list.end(), [](AssetHandle a, AssetHandle b) {
+                                    return AssetManager::GetMetadata(a)->Path < AssetManager::GetMetadata(b)->Path;
+                                });
+                                list.insert(list.begin(), item);
+                                m_Ctx.SelectAssets(list, item);
+                            }
+                            // The assets that use it.
+                            if (ImGui::MenuItem("Select Used By"))
+                            {
+                                auto users = AssetDependencies::UsedBy(item);
+                                if (users.empty()) Log::Info("No asset uses {}", path.filename().string());
+                                else m_Ctx.SelectAssets(users, users.front());
+                            }
+                            ImGui::Separator();
+                        }
                         if (ImGui::MenuItem("Show in Explorer")) FileDialogs::RevealInExplorer(path);
                         if (ImGui::MenuItem("Delete")) toDelete = path;
                         ImGui::EndPopup();

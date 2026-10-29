@@ -8099,6 +8099,66 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Asset references: what an asset uses and what uses it, and Find References In Scene (the Hierarchy's ref: search:
+    // objects using an asset directly or through a material; a prefab instance's link alone does not count).
+    void TestAssetReferences()
+    {
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        AssetHandle brickTex = AssetManager::GetHandle("Textures/Brick.png");
+        AssetHandle brickNormal = AssetManager::GetHandle("Textures/Brick_Normal.png");
+        AssetHandle checker = AssetManager::GetHandle("Textures/Checker.png");
+        AssetHandle brickMat = AssetManager::GetHandle("Materials/Brick.mat");
+        AssetHandle gold = AssetManager::GetHandle("Materials/Gold.mat");
+        AssetHandle ball = AssetManager::GetHandle("Prefabs/Ball.prefab");
+        CHECK(brickTex.IsValid() && brickNormal.IsValid() && checker.IsValid() && brickMat.IsValid() && gold.IsValid() && ball.IsValid());
+
+        auto has = [](const std::vector<AssetHandle>& list, AssetHandle h) { return std::find(list.begin(), list.end(), h) != list.end(); };
+        auto uses = AssetDependencies::Direct(brickMat);
+        CHECK(has(uses, brickTex) && has(uses, brickNormal) && !has(uses, brickMat) && !has(uses, checker));
+        CHECK(AssetDependencies::Direct(brickTex).empty() && AssetDependencies::Direct(AssetHandle::None()).empty());
+        auto users = AssetDependencies::UsedBy(brickTex);
+        CHECK(has(users, brickMat) && !has(users, gold) && !has(users, brickTex));
+        CHECK(AssetDependencies::UsedBy(AssetHandle::None()).empty());
+        CHECK(AssetDependencies::References({ { "a", (uint64_t)brickTex }, { "b", { (uint64_t)brickTex, (uint64_t)gold, 7, "x" } } }) ==
+              std::vector<AssetHandle>({ brickTex, gold }));
+
+        Scene scene("References");
+        auto& reg = scene.GetRegistry();
+        Entity wall = scene.CreateEntity("Wall"), shiny = scene.CreateEntity("Shiny"), floor = scene.CreateEntity("Floor");
+        Entity empty = scene.CreateEntity("Empty"), instance = scene.CreateEntity("Ball Instance");
+        Entity slot = scene.CreateEntity("Slots", wall);
+        reg.Emplace<MeshRendererComponent>(wall).Material = brickMat;
+        reg.Emplace<MeshRendererComponent>(shiny).Material = gold;
+        reg.Emplace<MeshRendererComponent>(floor).Texture = checker;
+        reg.Emplace<MeshRendererComponent>(slot).Materials = { AssetHandle::None(), brickMat };
+        auto& link = reg.Emplace<PrefabLinkComponent>(instance);
+        link.Prefab = ball;
+        link.IsRoot = true;
+
+        auto names = [&](const std::string& query) {
+            std::vector<std::string> out;
+            for (Entity e : SceneSearch::Find(scene, query)) out.push_back(reg.Get<TagComponent>(e).Name);
+            return out;
+        };
+        using Names = std::vector<std::string>;
+        std::string brickQuery = SceneSearch::ReferenceQuery(brickTex);
+        CHECK(brickQuery == "ref:" + std::to_string((uint64_t)brickTex) + ":Brick.png");
+        CHECK(names(brickQuery) == Names({ "Wall", "Slots" })); // through Brick.mat (a material slot too)
+        CHECK(names(SceneSearch::ReferenceQuery(brickNormal)) == Names({ "Wall", "Slots" }));
+        CHECK(names(SceneSearch::ReferenceQuery(brickMat)) == Names({ "Wall", "Slots" }));
+        CHECK(names(SceneSearch::ReferenceQuery(gold)) == Names({ "Shiny" }));
+        CHECK(names(SceneSearch::ReferenceQuery(checker)) == Names({ "Floor" }));
+        CHECK(names(SceneSearch::ReferenceQuery(ball)) == Names({ "Ball Instance" }));
+        CHECK(names(brickQuery + " slot") == Names({ "Slots" })); // with other words
+        CHECK(names("ref:" + std::to_string((uint64_t)brickTex)) == Names({ "Wall", "Slots" })); // the name is optional
+        CHECK(names("ref:nope").empty() && names("ref:12345").empty());
+        CHECK(SceneSearch::Matches(scene, wall, brickQuery) && !SceneSearch::Matches(scene, empty, brickQuery));
+        // A name with spaces stays one search word.
+        std::string hull = SceneSearch::ReferenceQuery(AssetManager::GetHandle("Materials/Boat Hull.mat"));
+        CHECK(hull.find(' ') == std::string::npos && hull.find("Boat_Hull.mat") != std::string::npos);
+        AssetManager::Shutdown();
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -9928,6 +9988,7 @@ int main(int argc, char** argv)
     Run("Scene visibility", TestSceneVisibility);
     Run("Presets", TestPresets);
     Run("Import defaults and batch import settings", TestImportDefaults);
+    Run("Asset references and Find References In Scene", TestAssetReferences);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

@@ -33,7 +33,8 @@ namespace Dimension::AssetDependencies
         bool IsJsonAsset(const fs::path& path)
         {
             std::string ext = LowerExtension(path);
-            return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller" || ext == ".spriteatlas";
+            return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller" || ext == ".spriteatlas" ||
+                   ext == ".timeline" || ext == ".preset";
         }
 
         // Relative URIs inside a .gltf (buffers and images), resolved against the model's folder (Assets-relative).
@@ -79,6 +80,48 @@ namespace Dimension::AssetDependencies
                     }
             }
         }
+    }
+
+    std::vector<AssetHandle> References(const json& value)
+    {
+        std::vector<AssetHandle> found, out;
+        ScanJson(value, found);
+        for (AssetHandle h : found)
+            if (std::find(out.begin(), out.end(), h) == out.end()) out.push_back(h);
+        return out;
+    }
+
+    std::vector<AssetHandle> Direct(AssetHandle asset)
+    {
+        const AssetMetadata* meta = AssetManager::GetMetadata(asset);
+        if (!meta) return {};
+        json all = json::array({ meta->ImportSettings });
+        if (IsJsonAsset(meta->Path))
+        {
+            std::ifstream in(AssetManager::GetAssetsDirectory() / meta->Path);
+            json j = json::parse(in, nullptr, false);
+            if (!j.is_discarded()) all.push_back(std::move(j));
+        }
+        std::vector<AssetHandle> out = References(all);
+        std::erase(out, asset);
+        return out;
+    }
+
+    std::vector<AssetHandle> UsedBy(AssetHandle asset)
+    {
+        std::vector<AssetHandle> out;
+        if (!AssetManager::GetMetadata(asset)) return out;
+        for (int type = (int)AssetType::Texture; type <= (int)AssetType::Preset; ++type)
+            for (AssetHandle h : AssetManager::GetAssetsOfType((AssetType)type))
+            {
+                if (h == asset) continue;
+                auto refs = Direct(h);
+                if (std::find(refs.begin(), refs.end(), asset) != refs.end()) out.push_back(h);
+            }
+        std::sort(out.begin(), out.end(), [](AssetHandle a, AssetHandle b) {
+            return AssetManager::GetMetadata(a)->Path < AssetManager::GetMetadata(b)->Path;
+        });
+        return out;
     }
 
     AssetDependencySet Collect(const std::vector<AssetHandle>& roots, bool resources)

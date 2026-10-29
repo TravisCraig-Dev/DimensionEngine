@@ -33,6 +33,9 @@ namespace Editor
         std::vector<Entity> Selection;
         // The Hierarchy's search (the Scene view dims everything it does not match).
         std::string HierarchySearch;
+        // The search's matches in the active scene, found once a frame (the Hierarchy and the Scene view both use them;
+        // a ref: search reads the whole scene).
+        const std::vector<Entity>& SearchMatches();
         AssetHandle SelectedAsset = AssetHandle::None();
         // Several assets selected in the Project window (Ctrl/Shift click): SelectedAsset is the last clicked of them.
         std::vector<AssetHandle> SelectedAssets;
@@ -197,6 +200,10 @@ namespace Editor
         bool RequestImportPackage = false;
 
     private:
+        std::vector<Entity> m_SearchMatches;
+        std::string m_SearchMatchesQuery;
+        Scene* m_SearchMatchesScene = nullptr;
+        int m_SearchMatchesFrame = -1;
         struct Snapshot
         {
             nlohmann::json Scene;

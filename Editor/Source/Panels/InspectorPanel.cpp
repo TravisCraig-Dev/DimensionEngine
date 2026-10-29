@@ -9,6 +9,8 @@
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Asset/Preset.h>
 #include <Dimension/Asset/ImportDefaults.h>
+#include <Dimension/Asset/AssetDependencies.h>
+#include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Renderer/Mesh.h>
 #include <Dimension/Renderer/Material.h>
@@ -1344,6 +1346,40 @@ namespace Editor
         }
     }
 
+    void InspectorPanel::DrawAssetReferences(AssetHandle handle)
+    {
+        // What the asset uses and what uses it (read again now and then: files change), each entry selecting that asset.
+        if (handle != m_RefsShown || ImGui::GetFrameCount() - m_RefsFrame > 120)
+        {
+            m_Uses = AssetDependencies::Direct(handle);
+            m_UsedBy = AssetDependencies::UsedBy(handle);
+            m_RefsShown = handle;
+            m_RefsFrame = ImGui::GetFrameCount();
+        }
+        AssetHandle select = AssetHandle::None();
+        auto list = [&](const char* label, const std::vector<AssetHandle>& assets) {
+            ImGuiTreeNodeFlags flags = assets.empty() ? ImGuiTreeNodeFlags_Leaf : 0;
+            if (!ImGui::TreeNodeEx(label, flags, "%s (%zu)", label, assets.size())) return;
+            for (AssetHandle a : assets)
+                if (const AssetMetadata* m = AssetManager::GetMetadata(a))
+                {
+                    ImGui::PushID((int)(uint64_t)a);
+                    ImGui::TextColored(UI::AssetColor(m->Type), "%s", UI::AssetLetter(m->Type));
+                    ImGui::SameLine();
+                    if (ImGui::Selectable(m->Path.filename().string().c_str())) select = a;
+                    ImGui::SetItemTooltip("%s (%s)", m->Path.generic_string().c_str(), AssetTypeToString(m->Type));
+                    ImGui::PopID();
+                }
+            ImGui::TreePop();
+        };
+        list("Uses", m_Uses);
+        list("Used By", m_UsedBy);
+        const AssetMetadata* meta = AssetManager::GetMetadata(handle);
+        if (meta && meta->Type != AssetType::Scene && ImGui::SmallButton("Find References In Scene"))
+            m_Ctx.HierarchySearch = SceneSearch::ReferenceQuery(handle);
+        if (select.IsValid()) m_Ctx.SelectAsset(select);
+    }
+
     void InspectorPanel::DrawImportDefault(AssetHandle handle)
     {
         const AssetMetadata* meta = AssetManager::GetMetadata(handle);
@@ -1444,6 +1480,7 @@ namespace Editor
         ImGui::TextDisabled("%s  |  %s", AssetTypeToString(meta->Type), meta->Path.generic_string().c_str());
         ImGui::TextDisabled("GUID %llu", (unsigned long long)(uint64_t)handle);
         ImGui::Separator();
+        DrawAssetReferences(handle);
         // Labels (searched with l:Label in the Project window): chips to remove, and a field to add one (or pick a used one).
         {
             std::vector<std::string> labels = AssetManager::GetLabels(handle);

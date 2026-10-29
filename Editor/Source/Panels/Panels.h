@@ -49,6 +49,11 @@ namespace Editor
         void DrawAssets(const std::vector<AssetHandle>& assets);
         // A texture's or model's folder import default: which applies, and a button to make its settings the default.
         void DrawImportDefault(AssetHandle handle);
+        // An asset's Uses / Used By lists and its Find References In Scene button.
+        void DrawAssetReferences(AssetHandle handle);
+        AssetHandle m_RefsShown = AssetHandle::None();
+        int m_RefsFrame = 0;
+        std::vector<AssetHandle> m_Uses, m_UsedBy;
         void DrawAddComponent(Scene& scene, Entity e);
         void DrawLODBar(Scene& scene, Entity e, LODGroupComponent& lod);
         // Debug mode: the hidden fields of an object's data, read-only rows of the property grid.

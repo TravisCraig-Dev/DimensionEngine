@@ -24,7 +24,8 @@ namespace Editor
         ImGui::InputTextWithHint("##search", "Search (name, t:Type, tag:Tag)", &m_Ctx.HierarchySearch);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Words must all match: a plain word is part of the name, t:Rigidbody (or t:MeshRenderer,\n"
-                              "or a script class) a component the object has, tag:Player its tag. Esc clears.");
+                              "or a script class) a component the object has, tag:Player its tag, ref:<asset GUID> the objects\n"
+                              "using an asset (Find References In Scene in the Project window). Esc clears.");
         if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) m_Ctx.HierarchySearch.clear();
         if (!m_Ctx.HierarchySearch.empty())
         {
@@ -166,7 +167,17 @@ namespace Editor
     void HierarchyPanel::DrawSearchResults(Scene& scene)
     {
         auto& reg = scene.GetRegistry();
-        std::vector<Entity> found = SceneSearch::Find(scene, m_Ctx.HierarchySearch);
+        std::vector<Entity> found = m_Ctx.SearchMatches();
+        // Find References In Scene: say which asset.
+        if (m_Ctx.HierarchySearch.rfind("ref:", 0) == 0)
+        {
+            std::string id = m_Ctx.HierarchySearch.substr(4);
+            id = id.substr(0, id.find_first_of(": "));
+            uint64_t guid = 0;
+            try { guid = std::stoull(id); } catch (...) {}
+            if (const AssetMetadata* meta = guid ? AssetManager::GetMetadata(Guid(guid)) : nullptr)
+                ImGui::TextColored(UI::AccentText(), "Using %s", meta->Path.filename().string().c_str());
+        }
         ImGui::TextDisabled("%zu found", found.size());
         ImGui::SameLine();
         if (ImGui::SmallButton("Select All"))

@@ -1,6 +1,8 @@
 #include "EditorContext.h"
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/SceneDiff.h>
+#include <Dimension/Scene/SceneSearch.h>
+#include <imgui.h>
 
 namespace Editor
 {
@@ -22,6 +24,20 @@ namespace Editor
             if (Entity e = EditorScene->FindEntityByGuid(Guid(g)); !e.IsNull()) Selection.push_back(e);
         if (!Selected.IsNull() && !IsSelected(Selected)) Selection.push_back(Selected);
         Dirty = true;
+    }
+
+    const std::vector<Entity>& EditorContext::SearchMatches()
+    {
+        Scene& scene = ActiveScene();
+        int frame = ImGui::GetCurrentContext() ? ImGui::GetFrameCount() : -2;
+        if (frame != m_SearchMatchesFrame || frame == -2 || &scene != m_SearchMatchesScene || HierarchySearch != m_SearchMatchesQuery)
+        {
+            m_SearchMatches = SceneSearch::Find(scene, HierarchySearch);
+            m_SearchMatchesFrame = frame;
+            m_SearchMatchesScene = &scene;
+            m_SearchMatchesQuery = HierarchySearch;
+        }
+        return m_SearchMatches;
     }
 
     std::vector<EditorContext::HistoryStep> EditorContext::History()
