@@ -15,6 +15,10 @@
 #include "Dimension/Core/Log.h"
 #include "Dimension/Core/Profiler.h"
 #include "Dimension/Scene/DebugDraw.h"
+#include "Dimension/Core/PlayerPrefs.h"
+#include <climits>
+#include <cmath>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
@@ -148,6 +152,9 @@ namespace Dimension
             int (*EditorHandle)(int, float*, int, const char*); // see Handles in EditorApi.cs
             void (*ProfilerSample)(int, const char*, float);     // 0 begin (name), 1 end, 2 set counter (name, value)
             void (*DebugLine)(const float*);                     // from, to, color (rgba), duration: 11 floats
+            // PlayerPrefs (values as text): 0-2 get int/float/string (null: none of that type), 3-5 set them, 6 has key,
+            // 7 delete key, 8 delete all, 9 save, 10 the player data folder.
+            const char* (*PlayerPrefs)(int, const char*, const char*);
         };
 
         // Background scene loads started from C#, by id.
@@ -872,6 +879,46 @@ namespace Dimension
             a.EditorUndo = [](const char* name) { if (s_EditorHooks.Undo) s_EditorHooks.Undo(name ? name : ""); };
             a.Gizmo = [](int kind, const float* data) { AddGizmo(kind, data); };
             a.SceneRunning = [](void* scene) -> int { return scene && S(scene).IsRunning() ? 1 : 0; };
+            a.PlayerPrefs = [](int op, const char* key, const char* value) -> const char* {
+                thread_local std::string result;
+                std::string k = key ? key : "", v = value ? value : "";
+                switch (op)
+                {
+                case 0:
+                    if (!PlayerPrefs::HasKey(k) || PlayerPrefs::GetInt(k, INT_MIN) == INT_MIN && PlayerPrefs::GetInt(k, 0) == 0) return nullptr;
+                    result = std::to_string(PlayerPrefs::GetInt(k));
+                    return result.c_str();
+                case 1:
+                {
+                    float f = PlayerPrefs::GetFloat(k, std::numeric_limits<float>::quiet_NaN());
+                    if (std::isnan(f)) return nullptr;
+                    char buf[48];
+                    std::snprintf(buf, sizeof(buf), "%.9g", f);
+                    result = buf;
+                    return result.c_str();
+                }
+                case 2:
+                {
+                    const std::string none = "\x01none";
+                    result = PlayerPrefs::GetString(k, none);
+                    return result == none ? nullptr : result.c_str();
+                }
+                case 3: PlayerPrefs::SetInt(k, std::atoi(v.c_str())); return nullptr;
+                case 4: PlayerPrefs::SetFloat(k, (float)std::strtod(v.c_str(), nullptr)); return nullptr;
+                case 5: PlayerPrefs::SetString(k, v); return nullptr;
+                case 6: return PlayerPrefs::HasKey(k) ? "1" : nullptr;
+                case 7: PlayerPrefs::DeleteKey(k); return nullptr;
+                case 8: PlayerPrefs::DeleteAll(); return nullptr;
+                case 9: PlayerPrefs::Save(); return nullptr;
+                case 10:
+                {
+                    std::u8string folder = PlayerData::Folder().u8string();
+                    result.assign(folder.begin(), folder.end());
+                    return result.c_str();
+                }
+                default: return nullptr;
+                }
+            };
             a.DebugLine = [](const float* d) {
                 DebugDraw::Line({ d[0], d[1], d[2] }, { d[3], d[4], d[5] }, { d[6], d[7], d[8], d[9] }, d[10]);
             };

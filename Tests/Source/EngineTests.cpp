@@ -28,6 +28,7 @@
 #include <Dimension/Renderer/SceneGrid.h>
 #include <Dimension/Reflection/FieldSearch.h>
 #include <Dimension/Scene/DebugDraw.h>
+#include <Dimension/Core/PlayerPrefs.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
@@ -7271,6 +7272,11 @@ namespace
         reg.Emplace<ScriptComponent>(field).Add("Game.Greeter");
         scene.UpdateTransforms();
 
+        // The Greeter keeps the name in PlayerPrefs and a visit count in a save file: in a folder of the test's own.
+        fs::path playerData = fs::temp_directory_path() / "dimension_csharp_player_data";
+        std::error_code pdError;
+        fs::remove_all(playerData, pdError);
+        PlayerData::SetFolder(playerData);
         auto runtime = scene.Clone();
         runtime->OnRuntimeStart();
         runtime->SetUIInput({ 50, 25 }, true, { 800, 600 });
@@ -7279,6 +7285,12 @@ namespace
         runtime->InjectUIKeyboard("Ada", false, true);
         for (int i = 0; i < 59; ++i) runtime->OnUpdateRuntime(1.0f / 60.0f);
         CHECK(runtime->GetRegistry().Get<UITextComponent>(greeting).Text == "Hello, Ada!");
+        CHECK(PlayerPrefs::GetString("Greeter Name") == "Ada");
+        {
+            std::ifstream save(playerData / "greeter.json");
+            nlohmann::json visits = nlohmann::json::parse(save, nullptr, false);
+            CHECK(!visits.is_discarded() && visits.value("LastName", std::string()) == "Ada" && visits.value("Count", 0) == 1);
+        }
         float yaw = glm::degrees(runtime->GetRegistry().Get<TransformComponent>(e).Rotation.y);
         CHECK(Near(yaw, 90.0f, 1.0f)); // 90 deg/s for one second, applied by C# through the native API
         glm::vec4 c = runtime->GetRegistry().Get<MeshRendererComponent>(r).Color;
@@ -7327,6 +7339,16 @@ namespace
         }
         runtime->OnRuntimeStop();
         runtime.reset();
+        {
+            // The next run: welcomed back, from the prefs and the save.
+            auto again = scene.Clone();
+            again->OnRuntimeStart();
+            again->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(again->GetRegistry().Get<UITextComponent>(greeting).Text == "Welcome back, Ada! (1 visits)");
+            again->OnRuntimeStop();
+        }
+        PlayerData::SetFolder({});
+        fs::remove_all(playerData, pdError);
 
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
@@ -8937,6 +8959,54 @@ namespace
         CHECK(DebugDraw::Lines().size() == 1 && DebugDraw::Lines()[0].Remaining > 9.9f);
         runtime->OnRuntimeStop();
         CHECK(DebugDraw::Lines().empty());
+    }
+
+    // PlayerPrefs: typed values by key kept in the player data folder between runs; a folder per game.
+    void TestPlayerPrefs()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_player_prefs";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        PlayerData::SetFolder(dir / "Game A");
+        CHECK(PlayerData::Folder() == dir / "Game A" && !PlayerPrefs::HasKey("Score"));
+        PlayerPrefs::SetInt("Score", 42);
+        PlayerPrefs::SetFloat("Volume", 0.75f);
+        PlayerPrefs::SetString("Name", "Ada Lovelace");
+        CHECK(PlayerPrefs::GetInt("Score") == 42 && Near(PlayerPrefs::GetFloat("Volume"), 0.75f) && PlayerPrefs::GetString("Name") == "Ada Lovelace");
+        // Another type, or not set: the default.
+        CHECK(PlayerPrefs::GetFloat("Score", -1.0f) == -1.0f && PlayerPrefs::GetInt("Name", 7) == 7 && PlayerPrefs::GetString("Volume", "x") == "x");
+        CHECK(PlayerPrefs::GetInt("Missing", 3) == 3 && PlayerPrefs::HasKey("Volume") && !PlayerPrefs::HasKey("Missing"));
+        // Written already: read back from the file.
+        CHECK(fs::exists(dir / "Game A/PlayerPrefs.json") && !fs::exists(dir / "Game A/PlayerPrefs.json.tmp"));
+        PlayerPrefs::Reload();
+        CHECK(PlayerPrefs::GetInt("Score") == 42 && PlayerPrefs::GetString("Name") == "Ada Lovelace");
+        PlayerPrefs::SetInt("Score", 43); // replaced
+        PlayerPrefs::DeleteKey("Volume");
+        PlayerPrefs::Reload();
+        CHECK(PlayerPrefs::GetInt("Score") == 43 && !PlayerPrefs::HasKey("Volume"));
+        // Another game's folder: its own prefs; back again, the first's.
+        PlayerData::SetFolder(dir / "Game B");
+        CHECK(!PlayerPrefs::HasKey("Score"));
+        PlayerPrefs::SetInt("Score", 1);
+        PlayerData::SetFolder(dir / "Game A");
+        CHECK(PlayerPrefs::GetInt("Score") == 43);
+        PlayerPrefs::DeleteAll();
+        CHECK(!PlayerPrefs::HasKey("Score") && !PlayerPrefs::HasKey("Name"));
+        PlayerData::SetFolder(dir / "Game B");
+        CHECK(PlayerPrefs::GetInt("Score") == 1);
+        // A damaged file: starts empty (and is written over on the next change).
+        fs::create_directories(dir / "Game C", ec);
+        std::ofstream(dir / "Game C/PlayerPrefs.json") << "{ broken";
+        PlayerData::SetFolder(dir / "Game C");
+        CHECK(!PlayerPrefs::HasKey("Score") && PlayerPrefs::GetString("Any", "fine") == "fine");
+        PlayerPrefs::SetInt("Recovered", 1);
+        PlayerPrefs::Reload();
+        CHECK(PlayerPrefs::GetInt("Recovered") == 1);
+        // Product names as folder names.
+        CHECK(PlayerData::FolderName("My Game: Deluxe") == "My Game Deluxe" && PlayerData::FolderName("A/B\\C?") == "ABC" &&
+              PlayerData::FolderName("???") == "Game" && PlayerData::FolderName("Trailing. ") == "Trailing");
+        PlayerData::SetFolder({});
+        fs::remove_all(dir, ec);
     }
 
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
@@ -10781,6 +10851,7 @@ int main(int argc, char** argv)
     Run("Profiler timeline", TestProfilerTimeline);
     Run("Profiler recordings and comparison", TestProfilerRecordings);
     Run("Debug lines", TestDebugDraw);
+    Run("Player prefs", TestPlayerPrefs);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

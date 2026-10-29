@@ -384,6 +384,82 @@ namespace Dimension
         /// <summary>Whether the running script's scene is playing (false for [ExecuteInEditMode] scripts in the editor,
         /// and in editor code).</summary>
         public static bool IsPlaying => Native.CurrentScene != IntPtr.Zero && Native.Api.SceneRunning(Native.CurrentScene) != 0;
+
+        /// <summary>
+        /// The folder for the player's data (save games, settings): <c>%APPDATA%\&lt;product name&gt;</c> in a build, the
+        /// project's <c>.dimension\PlayerData</c> in the editor (so trying the game never touches a build's saves).
+        /// </summary>
+        public static string PersistentDataPath => Native.FromUtf8(Native.Api.PlayerPrefs(10, null, null)) ?? "";
+    }
+
+    /// <summary>
+    /// Small settings kept between runs (like Unity's PlayerPrefs): ints, floats and strings by key, saved in
+    /// <see cref="Application.PersistentDataPath"/> whenever one changes. A key of another type, or not set, reads as
+    /// the default.
+    /// </summary>
+    public static unsafe class PlayerPrefs
+    {
+        private static string Call(int op, string key, string value) =>
+            Native.WithUtf8<string>(key ?? "", k => Native.WithUtf8<string>(value ?? "", v => Native.FromUtf8(Native.Api.PlayerPrefs(op, (byte*)k, (byte*)v))));
+
+        private static readonly System.Globalization.CultureInfo Invariant = System.Globalization.CultureInfo.InvariantCulture;
+
+        public static int GetInt(string key, int defaultValue = 0) =>
+            Call(0, key, null) is { } s && int.TryParse(s, System.Globalization.NumberStyles.Integer, Invariant, out int v) ? v : defaultValue;
+        public static float GetFloat(string key, float defaultValue = 0.0f) =>
+            Call(1, key, null) is { } s && float.TryParse(s, System.Globalization.NumberStyles.Float, Invariant, out float v) ? v : defaultValue;
+        public static string GetString(string key, string defaultValue = "") => Call(2, key, null) ?? defaultValue;
+        public static void SetInt(string key, int value) => Call(3, key, value.ToString(Invariant));
+        public static void SetFloat(string key, float value) => Call(4, key, value.ToString("R", Invariant));
+        public static void SetString(string key, string value) => Call(5, key, value ?? "");
+        public static bool HasKey(string key) => Call(6, key, null) != null;
+        public static void DeleteKey(string key) => Call(7, key, null);
+        public static void DeleteAll() => Call(8, null, null);
+        /// <summary>Changes are written as they are made; this writes again.</summary>
+        public static void Save() => Call(9, null, null);
+    }
+
+    /// <summary>
+    /// Game state saved as JSON files in <see cref="Application.PersistentDataPath"/> (public fields and properties,
+    /// nested objects, lists, dictionaries and vectors).
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// SaveFile.Write("slot1", new SaveGame { Level = 3, Coins = 120 });
+    /// SaveGame game = SaveFile.Read("slot1", new SaveGame());
+    /// </code>
+    /// </example>
+    public static class SaveFile
+    {
+        private static readonly System.Text.Json.JsonSerializerOptions Options = new() { IncludeFields = true, WriteIndented = true };
+
+        /// <summary>Where a save named <paramref name="name"/> is (<c>name.json</c> in the persistent data folder).</summary>
+        public static string PathOf(string name) => System.IO.Path.Combine(Application.PersistentDataPath, name + ".json");
+
+        /// <summary>Writes <paramref name="value"/> (replacing that save whole, so a crash keeps the old one).</summary>
+        public static void Write<T>(string name, T value)
+        {
+            string path = PathOf(name), temp = path + ".tmp";
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            System.IO.File.WriteAllText(temp, System.Text.Json.JsonSerializer.Serialize(value, Options));
+            System.IO.File.Move(temp, path, true);
+        }
+
+        /// <summary>The save, or <paramref name="fallback"/> when there is none or it cannot be read (a warning logged).</summary>
+        public static T Read<T>(string name, T fallback = default)
+        {
+            string path = PathOf(name);
+            if (!System.IO.File.Exists(path)) return fallback;
+            try { return System.Text.Json.JsonSerializer.Deserialize<T>(System.IO.File.ReadAllText(path), Options) ?? fallback; }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Save '{name}' could not be read: {e.Message}");
+                return fallback;
+            }
+        }
+
+        public static bool Exists(string name) => System.IO.File.Exists(PathOf(name));
+        public static void Delete(string name) { if (Exists(name)) System.IO.File.Delete(PathOf(name)); }
     }
 
     public enum LoadSceneMode { Single = 0, Additive = 1 }

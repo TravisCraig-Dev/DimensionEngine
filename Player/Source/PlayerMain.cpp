@@ -9,6 +9,7 @@
 // A built game ships as DimensionPlayer.exe next to a "Project" folder.
 #include <Dimension/Dimension.h>
 #include <Dimension/Project/Project.h>
+#include <Dimension/Core/PlayerPrefs.h>
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Core/Profiler.h>
@@ -204,6 +205,8 @@ int main(int argc, char** argv)
     // The project is opened first so its window settings apply.
     if (!Project::Open(projectDir)) return 1;
     auto& config = Project::GetConfig();
+    // The player's data (PlayerPrefs, save files) beside other programs' in %APPDATA%, under the product's name.
+    if (const char* appData = std::getenv("APPDATA")) PlayerData::SetFolder(fs::path(appData) / PlayerData::FolderName(config.Name));
     ApplicationSpec spec;
     spec.Name = config.Name;
     spec.EnableImGui = false;
