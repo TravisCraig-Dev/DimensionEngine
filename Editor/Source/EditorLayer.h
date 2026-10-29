@@ -43,6 +43,7 @@ namespace Editor
         std::string AssetPreview;     // --asset-preview "yaw=..,pitch=..,clip=..,time=..,play": the Inspector's preview
         int View = 0;                 // --view N: go to Scene view bookmark N (--view all: Frame All)
         bool ViewGiven = false;
+        std::string Measure;          // --measure "x,y,z;x,y,z": the measuring tool on with that measurement
         bool RememberProject = true;  // add the project to the Hub's recent list (--no-recent: automation)
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
@@ -216,6 +217,11 @@ namespace Editor
         // Vertex snapping: hold V over the Scene view to pick the selection's vertex nearest the mouse, and drag it
         // onto another object's vertex (true while it owns the mouse).
         bool UpdateVertexSnap(const ImVec2& origin, const ImVec2& size);
+        // The measuring tool (toolbar Measure, M): two picked points and the ruler between them.
+        bool UpdateMeasure(const ImVec2& origin, const ImVec2& size);
+        void SetMeasuring(bool on);
+        bool m_Measuring = false;
+        std::optional<glm::vec3> m_MeasureA, m_MeasureB;
         bool m_VertexDrag = false;
         bool m_ShowSnapSettings = false;
         // Window > Lighting, and the Search window (Ctrl+K).

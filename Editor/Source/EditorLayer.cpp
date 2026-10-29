@@ -21,6 +21,7 @@
 #include <Dimension/Project/RecentScenes.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/SceneBounds.h>
+#include <Dimension/Scene/SceneMeasure.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
@@ -248,6 +249,17 @@ namespace Editor
         if (!m_Options.ProjectSearch.empty()) m_Content->SetSearch(m_Options.ProjectSearch);
         if (!m_Options.AssetPreview.empty()) m_Inspector->SetPreview(m_Options.AssetPreview);
         if (m_Options.ViewGiven) m_Options.View == 0 ? FrameAll() : GoToView(m_Options.View);
+        // --measure "x,y,z;x,y,z" (automation): the tool on, with that measurement.
+        if (!m_Options.Measure.empty())
+        {
+            SetMeasuring(true);
+            float v[6] = {};
+            if (std::sscanf(m_Options.Measure.c_str(), "%f,%f,%f;%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6)
+            {
+                m_MeasureA = glm::vec3(v[0], v[1], v[2]);
+                m_MeasureB = glm::vec3(v[3], v[4], v[5]);
+            }
+        }
         // --new-scene "Template", --open-additive and --prefab-instance (automation).
         for (const auto& t : SceneTemplates::All())
             if (!m_Options.NewSceneTemplate.empty() && t.Name == m_Options.NewSceneTemplate) NewSceneFrom(t);
@@ -774,6 +786,14 @@ namespace Editor
         // Objects drawn only by handles (links, paths, obstacles): frame the handles.
         if (!scene.GetRegistry().Has<MeshRendererComponent>(m_Ctx.Selected)) HandleBounds(scene, m_Ctx.Selected, center, radius);
         m_Camera.Focus(center, radius);
+    }
+
+    void EditorLayer::SetMeasuring(bool on)
+    {
+        m_Measuring = on;
+        m_MeasureA.reset();
+        m_MeasureB.reset();
+        if (on) m_FocusSceneView = 2; // its clicks are in the Scene view
     }
 
     void EditorLayer::FrameAll()
@@ -1987,6 +2007,97 @@ namespace Editor
     // Vertex snapping (like Unity's V): while V is held with the Move tool, the selection's vertex nearest the mouse is
     // marked; dragging it puts it on the nearest vertex of another object under the mouse (or, with none near, moves it
     // across the view at its depth). One undo step per drag.
+    bool EditorLayer::UpdateMeasure(const ImVec2& origin, const ImVec2& size)
+    {
+        // Click two points (vertices within a few pixels snap; Shift: surfaces only); a third click starts again. Esc
+        // clears the measurement, then leaves the tool.
+        if (!m_Measuring) return false;
+        Scene& scene = m_Ctx.ActiveScene();
+        glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        auto toScreen = [&](const glm::vec3& p, ImVec2& out) {
+            glm::vec4 clip = viewProj * glm::vec4(p, 1.0f);
+            if (clip.w <= 1e-4f) return false;
+            out = ImVec2(origin.x + (clip.x / clip.w * 0.5f + 0.5f) * size.x, origin.y + (0.5f - clip.y / clip.w * 0.5f) * size.y);
+            return true;
+        };
+        std::optional<SceneMeasure::Pick> hover;
+        if (m_SceneViewHovered && !m_Camera.IsControlling())
+        {
+            glm::vec3 from, dir;
+            MouseRay(viewProj, origin, size, from, dir);
+            ImVec2 mouse = ImGui::GetMousePos();
+            auto pick = SceneMeasure::PickPoint(scene, viewProj, glm::vec2(size.x, size.y), glm::vec2(mouse.x - origin.x, mouse.y - origin.y), from, dir,
+                                                ImGui::GetIO().KeyShift ? 0.0f : 12.0f);
+            if (pick.Hit()) hover = pick;
+            if (hover && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
+            {
+                if (!m_MeasureA || m_MeasureB) m_MeasureA = hover->Point, m_MeasureB.reset();
+                else m_MeasureB = hover->Point;
+            }
+        }
+        if (m_SceneViewFocused && ImGui::IsKeyPressed(ImGuiKey_Escape))
+        {
+            if (m_MeasureA) m_MeasureA.reset(), m_MeasureB.reset();
+            else m_Measuring = false;
+        }
+
+        // The ruler: the straight line with its length, and its X, Y and Z legs (red, green, blue) with theirs.
+        std::optional<glm::vec3> end = m_MeasureB ? m_MeasureB : (m_MeasureA && hover ? std::optional<glm::vec3>(hover->Point) : std::nullopt);
+        auto label = [&](const ImVec2& at, const std::string& text, ImU32 bg, ImU32 fg) {
+            ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+            ImVec2 a(at.x - ts.x * 0.5f - 4.0f, at.y - ts.y * 0.5f - 2.0f), b(at.x + ts.x * 0.5f + 4.0f, at.y + ts.y * 0.5f + 2.0f);
+            draw->AddRectFilled(a, b, bg, 3.0f);
+            draw->AddText(ImVec2(a.x + 4.0f, a.y + 2.0f), fg, text.c_str());
+        };
+        auto segment = [&](const glm::vec3& p, const glm::vec3& q, ImU32 color, float thickness, ImVec2* mid) {
+            ImVec2 a, b;
+            if (!toScreen(p, a) || !toScreen(q, b)) return false;
+            draw->AddLine(a, b, color, thickness);
+            if (mid) *mid = ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+            return true;
+        };
+        std::string summary;
+        if (m_MeasureA && end)
+        {
+            glm::vec3 a = *m_MeasureA, b = *end, d = b - a;
+            glm::vec3 corners[4] = { a, { b.x, a.y, a.z }, { b.x, b.y, a.z }, b };
+            const ImU32 axisColors[3] = { IM_COL32(230, 80, 70, 230), IM_COL32(110, 210, 90, 230), IM_COL32(80, 140, 240, 230) };
+            const char* axisNames[3] = { "X", "Y", "Z" };
+            for (int i = 0; i < 3; ++i)
+            {
+                ImVec2 mid;
+                if (std::abs(d[i]) > 1e-4f && segment(corners[i], corners[i + 1], axisColors[i], 1.5f, &mid))
+                    label(mid, std::string(axisNames[i]) + " " + SceneMeasure::FormatLength(d[i]), IM_COL32(20, 20, 24, 190), axisColors[i]);
+            }
+            ImVec2 mid;
+            if (segment(a, b, IM_COL32(255, 215, 70, 255), 2.5f, &mid))
+                label(mid, SceneMeasure::FormatLength(glm::length(d)), IM_COL32(255, 215, 70, 235), IM_COL32(25, 25, 25, 255));
+            for (const glm::vec3& p : { a, b })
+                if (ImVec2 s; toScreen(p, s)) draw->AddCircleFilled(s, 4.0f, IM_COL32(255, 215, 70, 255));
+            summary = "Distance " + SceneMeasure::FormatLength(glm::length(d)) + "   X " + SceneMeasure::FormatLength(d.x) + "   Y " +
+                      SceneMeasure::FormatLength(d.y) + "   Z " + SceneMeasure::FormatLength(d.z);
+        }
+        else if (m_MeasureA)
+            if (ImVec2 s; toScreen(*m_MeasureA, s)) draw->AddCircleFilled(s, 4.0f, IM_COL32(255, 215, 70, 255));
+        // What a click would pick: a vertex (square), a surface (ring) or the ground (grey ring).
+        if (hover)
+            if (ImVec2 s; toScreen(hover->Point, s))
+            {
+                if (hover->Kind == SceneMeasure::PickKind::Vertex) draw->AddRect(ImVec2(s.x - 5, s.y - 5), ImVec2(s.x + 5, s.y + 5), IM_COL32(90, 220, 120, 255), 0.0f, 0, 2.0f);
+                else draw->AddCircle(s, 6.0f, hover->Kind == SceneMeasure::PickKind::Ground ? IM_COL32(170, 170, 170, 220) : IM_COL32(255, 215, 70, 255), 16, 2.0f);
+            }
+        // The tool's line at the bottom of the view.
+        std::string help = summary.empty() ? (m_MeasureA ? "Measure: click the second point" : "Measure: click the first point")
+                                           : summary;
+        help += "      (vertices snap, Shift: surfaces only, Esc: clear)";
+        ImVec2 ts = ImGui::CalcTextSize(help.c_str());
+        ImVec2 at(origin.x + 8.0f, origin.y + size.y - ts.y - 12.0f);
+        draw->AddRectFilled(ImVec2(at.x - 6, at.y - 4), ImVec2(at.x + ts.x + 6, at.y + ts.y + 4), IM_COL32(20, 20, 24, 200), 4.0f);
+        draw->AddText(at, IM_COL32(235, 235, 235, 255), help.c_str());
+        return m_SceneViewHovered;
+    }
+
     bool EditorLayer::UpdateVertexSnap(const ImVec2& origin, const ImVec2& size)
     {
         bool held = ImGui::IsKeyDown(ImGuiKey_V) && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput;
@@ -2575,6 +2686,14 @@ namespace Editor
                 DrawViewsMenu();
                 ImGui::EndPopup();
             }
+            // The measuring tool.
+            ImGui::SameLine();
+            bool measuring = m_Measuring;
+            if (measuring) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::Button("Measure")) SetMeasuring(!m_Measuring);
+            if (measuring) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Measure distances in the Scene view (%s): click two points", Shortcuts::Label("tool.measure").c_str());
 
             // Play controls (center)
             float w = ImGui::GetFrameHeight() * 1.25f * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
@@ -2684,15 +2803,16 @@ namespace Editor
             ImGui::EndDragDropTarget();
         }
 
-        bool tilePainting = UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail);
-        bool lineEditing = UpdateLinePointEditing(origin, avail);
-        bool vertexSnapping = !tilePainting && !lineEditing && m_LinePoint < 0 && UpdateVertexSnap(origin, avail);
-        bool handles = !tilePainting && !lineEditing && !vertexSnapping && UpdateScriptHandles(origin, avail);
+        bool measuring = UpdateMeasure(origin, avail); // the measuring tool owns the view's clicks
+        bool tilePainting = !measuring && (UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail));
+        bool lineEditing = !measuring && UpdateLinePointEditing(origin, avail);
+        bool vertexSnapping = !measuring && !tilePainting && !lineEditing && m_LinePoint < 0 && UpdateVertexSnap(origin, avail);
+        bool handles = !measuring && !tilePainting && !lineEditing && !vertexSnapping && UpdateScriptHandles(origin, avail);
 
         // Transform gizmo
-        bool gizmoHovered = lineEditing || vertexSnapping || handles;
+        bool gizmoHovered = measuring || lineEditing || vertexSnapping || handles;
         if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
-            m_HandleDrag == 0)
+            !measuring && m_HandleDrag == 0)
         {
             auto& reg = scene.GetRegistry();
             auto& t = reg.Get<TransformComponent>(m_Ctx.Selected);
@@ -3226,6 +3346,7 @@ namespace Editor
             if (Pressed("tool.move")) m_GizmoOperation = ImGuizmo::TRANSLATE;
             if (Pressed("tool.rotate")) m_GizmoOperation = ImGuizmo::ROTATE;
             if (Pressed("tool.scale")) m_GizmoOperation = ImGuizmo::SCALE;
+            if (Pressed("tool.measure")) SetMeasuring(!m_Measuring);
             if (Pressed("scene.frame")) FocusSelected();
             if (Pressed("scene.frameAll")) FrameAll();
             for (int slot = 1; slot <= SceneBookmarks::kSlots; ++slot)

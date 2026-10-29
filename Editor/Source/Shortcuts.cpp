@@ -50,6 +50,7 @@ namespace Editor::Shortcuts
                 { "tool.move", "Tools", "Move Tool", ImGuiKey_W },
                 { "tool.rotate", "Tools", "Rotate Tool", ImGuiKey_E },
                 { "tool.scale", "Tools", "Scale Tool", ImGuiKey_R },
+                { "tool.measure", "Tools", "Measure", ImGuiKey_M },
             };
             for (Shortcut& x : s) x.Key = x.Default;
             return s;

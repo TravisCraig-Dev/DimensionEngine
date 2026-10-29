@@ -21,6 +21,7 @@
 #include <Dimension/Asset/AssetListing.h>
 #include <Dimension/Asset/ProjectFavorites.h>
 #include <Dimension/Scene/SceneBounds.h>
+#include <Dimension/Scene/SceneMeasure.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -8384,6 +8385,56 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // The Scene view's measuring tool: what a click picks (a vertex near the mouse, else the surface, else the ground)
+    // and how lengths read.
+    void TestSceneMeasure()
+    {
+        CHECK(SceneMeasure::FormatLength(1.25f) == "1.25 m" && SceneMeasure::FormatLength(12.5f) == "12.5 m");
+        CHECK(SceneMeasure::FormatLength(0.35f) == "35.0 cm" && SceneMeasure::FormatLength(0.0042f) == "4.2 mm");
+        CHECK(SceneMeasure::FormatLength(1234.0f) == "1.23 km" && SceneMeasure::FormatLength(-0.5f) == "-50.0 cm");
+        CHECK(SceneMeasure::FormatLength(0.0f) == "0.0 mm");
+
+        fs::path dir = fs::temp_directory_path() / "dimension_measure";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        AssetManager::Init(dir);
+        Scene scene("Measure");
+        Entity cube = scene.CreateEntity("Cube");
+        scene.GetRegistry().Emplace<MeshRendererComponent>(cube).Mesh = AssetManager::kCube; // -0.5..0.5
+        scene.UpdateTransforms();
+
+        // A camera at (3, 3, 3) looking at the middle, 800 x 600.
+        glm::vec3 eye(3.0f);
+        glm::mat4 viewProj = glm::perspective(glm::radians(60.0f), 800.0f / 600.0f, 0.1f, 100.0f) * glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0, 1, 0));
+        glm::vec2 viewport(800.0f, 600.0f);
+        auto screenOf = [&](const glm::vec3& p) {
+            glm::vec4 c = viewProj * glm::vec4(p, 1.0f);
+            return glm::vec2((c.x / c.w * 0.5f + 0.5f) * viewport.x, (0.5f - c.y / c.w * 0.5f) * viewport.y);
+        };
+        auto pickAt = [&](const glm::vec3& aim, glm::vec2 nudge = {}, float pixels = 12.0f) {
+            return SceneMeasure::PickPoint(scene, viewProj, viewport, screenOf(aim) + nudge, eye, glm::normalize(aim - eye), pixels);
+        };
+        // At a corner: the corner (also a few pixels off it).
+        auto corner = pickAt({ 0.5f, 0.5f, 0.5f });
+        CHECK(corner.Kind == SceneMeasure::PickKind::Vertex && Near(corner.Point, { 0.5f, 0.5f, 0.5f }) && corner.Object == cube);
+        auto nearCorner = pickAt({ 0.5f, 0.5f, 0.42f }, { 0.0f, 0.0f });
+        CHECK(nearCorner.Kind == SceneMeasure::PickKind::Vertex && Near(nearCorner.Point, { 0.5f, 0.5f, 0.5f }));
+        // Without vertex snapping: the surface point there.
+        auto plain = pickAt({ 0.5f, 0.5f, 0.42f }, {}, 0.0f);
+        CHECK(plain.Kind == SceneMeasure::PickKind::Surface && Near(plain.Point, { 0.5f, 0.5f, 0.42f }, 1e-3f));
+        // The middle of the top face: far from the corners, a surface point.
+        auto top = pickAt({ 0.0f, 0.5f, 0.0f });
+        CHECK(top.Kind == SceneMeasure::PickKind::Surface && Near(top.Point, { 0.0f, 0.5f, 0.0f }, 1e-3f) && top.Object == cube);
+        // Off the cube: the ground plane; at the sky: nothing.
+        auto ground = pickAt({ 2.0f, 0.0f, -1.5f });
+        CHECK(ground.Kind == SceneMeasure::PickKind::Ground && Near(ground.Point, { 2.0f, 0.0f, -1.5f }, 1e-3f) && ground.Object.IsNull());
+        auto sky = SceneMeasure::PickPoint(scene, viewProj, viewport, glm::vec2(400.0f, 5.0f), eye, glm::normalize(glm::vec3(-1.0f, 0.5f, -1.0f)));
+        CHECK(!sky.Hit());
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
     // class and tag, skipping the open scene.
     void TestProjectSearch()
@@ -10217,6 +10268,7 @@ int main(int argc, char** argv)
     Run("Project list view and Favorites", TestProjectListAndFavorites);
     Run("Audio preview (waveform and playback)", TestAudioPreview);
     Run("Frame All and camera bookmarks", TestFrameAllAndBookmarks);
+    Run("Scene view measuring tool", TestSceneMeasure);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);
