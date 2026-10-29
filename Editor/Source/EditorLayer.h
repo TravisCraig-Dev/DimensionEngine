@@ -84,6 +84,13 @@ namespace Editor
         void SaveLayout(const std::string& name);
         void ApplyPendingLayout();
         void DrawLayoutsMenu();
+        // Edit > Undo History (cached between refreshes), and notes' labels in the Scene view.
+        bool m_ShowUndoHistory = false;
+        std::vector<EditorContext::HistoryStep> m_HistoryCache;
+        int m_HistoryFrame = 0;
+        size_t m_HistoryDone = 0, m_HistoryCount = 0;
+        void DrawUndoHistory();
+        void DrawNoteLabels(const ImVec2& origin, const ImVec2& size);
         void OpenScene(const fs::path& path);
         // Another scene's objects alongside the main scene's (a Hierarchy section of its own), and closing it.
         void OpenSceneAdditive(const fs::path& path);

@@ -1,5 +1,6 @@
 #include "EditorContext.h"
 #include <Dimension/Scene/SceneSerializer.h>
+#include <Dimension/Scene/SceneDiff.h>
 
 namespace Editor
 {
@@ -21,6 +22,31 @@ namespace Editor
             if (Entity e = EditorScene->FindEntityByGuid(Guid(g)); !e.IsNull()) Selection.push_back(e);
         if (!Selected.IsNull() && !IsSelected(Selected)) Selection.push_back(Selected);
         Dirty = true;
+    }
+
+    std::vector<EditorContext::HistoryStep> EditorContext::History()
+    {
+        std::vector<HistoryStep> out;
+        for (size_t i = 0; i < m_UndoStack.size(); ++i)
+        {
+            Snapshot& s = m_UndoStack[i];
+            if (!s.Named && i + 1 < m_UndoStack.size())
+            {
+                s.Name = SceneDiff::Describe(s.Scene, m_UndoStack[i + 1].Scene);
+                s.Named = true;
+            }
+            // The last step's result is the scene as it is now (still changing: not kept).
+            std::string name = s.Named ? s.Name : SceneDiff::Describe(s.Scene, SceneSerializer::Serialize(*EditorScene));
+            out.push_back({ name, false });
+        }
+        for (auto it = m_RedoStack.rbegin(); it != m_RedoStack.rend(); ++it) out.push_back({ it->Name, true });
+        return out;
+    }
+
+    void EditorContext::JumpTo(size_t done)
+    {
+        while (m_UndoStack.size() > done && !m_UndoStack.empty()) Undo();
+        while (m_UndoStack.size() < done && !m_RedoStack.empty()) Redo();
     }
 
     void EditorContext::EnterPrefabMode(AssetHandle prefab, Ref<Scene> stageScene)
@@ -55,10 +81,22 @@ namespace Editor
             if (Entity e = EditorScene->FindEntityByGuid(Guid(stage.SelectedGuid)); !e.IsNull()) Selected = e;
     }
 
-    void EditorContext::RecordUndo()
+    void EditorContext::RecordUndo(const char* name)
     {
         if (IsPlaying()) return;
-        m_UndoStack.push_back(Capture());
+        Snapshot now = Capture();
+        // The step before this one is now complete: name it while both of its states are at hand.
+        if (!m_UndoStack.empty() && !m_UndoStack.back().Named)
+        {
+            m_UndoStack.back().Name = SceneDiff::Describe(m_UndoStack.back().Scene, now.Scene);
+            m_UndoStack.back().Named = true;
+        }
+        m_UndoStack.push_back(std::move(now));
+        if (name && *name)
+        {
+            m_UndoStack.back().Name = name;
+            m_UndoStack.back().Named = true;
+        }
         if (m_UndoStack.size() > kMaxHistory) m_UndoStack.pop_front();
         m_RedoStack.clear();
         Dirty = true;
@@ -67,18 +105,25 @@ namespace Editor
     void EditorContext::Undo()
     {
         if (IsPlaying() || m_UndoStack.empty()) return;
-        m_RedoStack.push_back(Capture());
+        Snapshot current = Capture();
         Snapshot s = std::move(m_UndoStack.back());
         m_UndoStack.pop_back();
+        // Redo does the same step again.
+        current.Name = s.Named ? s.Name : SceneDiff::Describe(s.Scene, current.Scene);
+        current.Named = true;
+        m_RedoStack.push_back(std::move(current));
         Restore(s);
     }
 
     void EditorContext::Redo()
     {
         if (IsPlaying() || m_RedoStack.empty()) return;
-        m_UndoStack.push_back(Capture());
         Snapshot s = std::move(m_RedoStack.back());
         m_RedoStack.pop_back();
+        Snapshot current = Capture();
+        current.Name = s.Name;
+        current.Named = true;
+        m_UndoStack.push_back(std::move(current));
         Restore(s);
     }
 }

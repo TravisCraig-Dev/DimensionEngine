@@ -92,8 +92,19 @@ namespace Editor
         bool HasValidSelection() { return !Selected.IsNull() && ActiveScene().IsValid(Selected); }
 
         // Undo/redo via full scene snapshots. Call RecordUndo() *before* a change.
-        // Edits during play mode are not recorded (they are discarded on Stop, like Unity).
-        void RecordUndo();
+        // Edits during play mode are not recorded (they are discarded on Stop, like Unity). A step is named after what
+        // it changed (SceneDiff), or by `name` when given.
+        void RecordUndo(const char* name = nullptr);
+        // The Undo History: the steps done (oldest first), then the ones undone (next to redo first).
+        struct HistoryStep
+        {
+            std::string Name;
+            bool Undone = false;
+        };
+        std::vector<HistoryStep> History();
+        size_t HistoryDone() const { return m_UndoStack.size(); }
+        // Undoes or redoes until `done` steps are done (0: all undone).
+        void JumpTo(size_t done);
         void Undo();
         void Redo();
         bool CanUndo() const { return !m_UndoStack.empty(); }
@@ -158,6 +169,9 @@ namespace Editor
             nlohmann::json Scene;
             uint64_t SelectedGuid;
             std::vector<uint64_t> SelectionGuids;
+            // The step from this state (undo) or to it (redo); Named once known for good.
+            std::string Name = {};
+            bool Named = false;
         };
         Snapshot Capture();
         void Restore(const Snapshot& s);

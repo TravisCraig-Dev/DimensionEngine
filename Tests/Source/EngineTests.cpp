@@ -23,6 +23,7 @@
 #include <Dimension/Scene/SceneTemplates.h>
 #include <Dimension/Project/RecentScenes.h>
 #include <Dimension/Project/ProjectHub.h>
+#include <Dimension/Scene/SceneDiff.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -8267,6 +8268,60 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Undo steps' names: what changed between two states of a scene, said briefly. Notes: the Note component.
+    void TestSceneDiff()
+    {
+        Scene scene("Diff");
+        auto& reg = scene.GetRegistry();
+        nlohmann::json state = SceneSerializer::Serialize(scene);
+        auto step = [&]() {
+            nlohmann::json now = SceneSerializer::Serialize(scene);
+            std::string name = SceneDiff::Describe(state, now);
+            state = now;
+            return name;
+        };
+        Entity cube = scene.CreateEntity("Cube");
+        CHECK(step() == "Create Cube");
+        Entity car = scene.CreateEntity("Car");
+        Entity wheel = scene.CreateEntity("Wheel");
+        scene.SetParent(wheel, car);
+        CHECK(step() == "Create Car"); // with its child: once
+        scene.DestroyEntity(cube);
+        CHECK(step() == "Delete Cube");
+        reg.Get<TagComponent>(car).Name = "Truck";
+        CHECK(step() == "Rename Car to Truck");
+        reg.Get<TransformComponent>(car).Position.x = 3.0f;
+        CHECK(step() == "Truck: Transform (Position)");
+        reg.Emplace<PointLightComponent>(car);
+        CHECK(step() == "Add Point Light to Truck");
+        reg.Remove<PointLightComponent>(car);
+        CHECK(step() == "Remove Point Light from Truck");
+        reg.Get<TransformComponent>(car).Position.y = 1.0f;
+        reg.Get<TransformComponent>(wheel).Position.y = 1.0f;
+        CHECK(step() == "Transform on 2 objects");
+        reg.Get<TransformComponent>(car).Scale = glm::vec3(2.0f);
+        reg.Get<TagComponent>(wheel).Name = "Tire";
+        CHECK(step() == "Edit 2 objects");
+        scene.GetSettings().Fog = true;
+        CHECK(step() == "Scene Settings");
+        CHECK(step() == "No change");
+        Entity lamp = scene.CreateEntity("Lamp");
+        step();
+        scene.SetSiblingIndex(lamp, 0);
+        CHECK(step() == "Reorder objects");
+        scene.SetParent(wheel, Entity::Null(), false);
+        CHECK(step().rfind("Reparent Tire", 0) == 0);
+        Entity a = scene.CreateEntity("A");
+        scene.DestroyEntity(lamp);
+        CHECK(step() == "Create A; Delete Lamp");
+
+        const ComponentInfo* note = ComponentRegistry::Find("Note");
+        CHECK(note && note->Fields.size() == 3 && note->Fields[0].Name == "Text" && note->Fields[0].Multiline);
+        reg.Emplace<NoteComponent>(a).Text = "Fix the\nlighting here";
+        CHECK(step() == "Add Note to A");
+        (void)a;
+    }
+
     void TestAssetLabels()
     {
         // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
@@ -9784,6 +9839,7 @@ int main(int argc, char** argv)
     Run("Scene sections", TestSceneSections);
     Run("Scene templates", TestSceneTemplates);
     Run("Project hub", TestProjectHub);
+    Run("Scene diff", TestSceneDiff);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

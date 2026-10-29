@@ -661,6 +661,14 @@ namespace Editor::UI
                 r = Track(ImGui::InputTextWithHint("##v", kMixedText, &typed));
                 if (r.Changed) *(std::string*)p = typed;
             }
+            else if (f.Multiline)
+            {
+                // Grows with its text (3 to 12 lines).
+                const std::string& text = *(std::string*)p;
+                int lines = 1 + (int)std::count(text.begin(), text.end(), '\n');
+                float height = ImGui::GetTextLineHeight() * (float)std::clamp(lines + 1, 3, 12) + ImGui::GetStyle().FramePadding.y * 2.0f;
+                r = Track(ImGui::InputTextMultiline("##v", (std::string*)p, ImVec2(-FLT_MIN, height)));
+            }
             else
                 r = Track(ImGui::InputText("##v", (std::string*)p));
             break;

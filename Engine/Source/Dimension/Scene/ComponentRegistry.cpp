@@ -838,6 +838,11 @@ namespace Dimension
             .Field("Bounciness", &CircleCollider2DComponent::Restitution).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Is Trigger", &CircleCollider2DComponent::IsTrigger);
 
+        Register<NoteComponent>("Note", "Miscellaneous")
+            .Field("Text", &NoteComponent::Text).Multiline().Tooltip("Shown in the Inspector, at the object in the Scene view and in the Hierarchy")
+            .Field("Color", &NoteComponent::Color).As(FieldType::Color4)
+            .Field("Show In Scene", &NoteComponent::ShowInScene);
+
         Register<LODGroupComponent>("LOD Group", "Rendering")
             .Field("LOD 1 Below", &LODGroupComponent::LOD1Below).Range(0.0f, 1.0f).Speed(0.005f).Tooltip("Screen height (fraction) below which child 1 shows instead of child 0")
             .Field("LOD 2 Below", &LODGroupComponent::LOD2Below).Range(0.0f, 1.0f).Speed(0.005f)

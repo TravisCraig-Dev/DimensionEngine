@@ -304,6 +304,13 @@ namespace Editor
         ImGui::PopStyleColor(pushedColors);
         ImVec2 rowMin = ImGui::GetItemRectMin(), rowMax = ImGui::GetItemRectMax();
         bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
+        // A note on the object: a mark after its name, its text when hovered.
+        if (const auto* note = reg.TryGet<NoteComponent>(e); note && !note->Text.empty())
+        {
+            ImVec2 nameEnd(rowMin.x + ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(tag.Name.c_str()).x + 8.0f, (rowMin.y + rowMax.y) * 0.5f);
+            ImGui::GetWindowDrawList()->AddCircleFilled(nameEnd, 3.5f, ImGui::ColorConvertFloat4ToU32(ImVec4(note->Color.r, note->Color.g, note->Color.b, 1.0f)));
+            if (rowHovered) ImGui::SetTooltip("%s", note->Text.c_str());
+        }
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
         {

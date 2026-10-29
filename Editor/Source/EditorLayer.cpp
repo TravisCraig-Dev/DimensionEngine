@@ -175,6 +175,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Shortcuts") m_ShowShortcuts = true;
         else if (m_Options.OpenWindow == "New Scene") m_ShowNewScene = true;
         else if (m_Options.OpenWindow == "Project Hub") m_ShowHub = true;
+        else if (m_Options.OpenWindow == "Undo History") m_ShowUndoHistory = true;
         else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
             OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
         else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
@@ -1071,7 +1072,7 @@ namespace Editor
                  { "Timeline", &m_ShowTimeline }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
                  { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings },
                  { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
-                 { "Shortcuts", &m_ShowShortcuts } };
+                 { "Shortcuts", &m_ShowShortcuts }, { "Undo History", &m_ShowUndoHistory } };
     }
 
     // Named layouts: the window arrangement (ImGui's settings) and which windows are open, in .dimension/Layouts.
@@ -1160,6 +1161,79 @@ namespace Editor
             ImGui::EndMenu();
         }
         ImGui::EndMenu();
+    }
+
+    void EditorLayer::DrawUndoHistory()
+    {
+        // Every step, oldest first, named after what it did; the steps undone below the current one (greyed). Clicking
+        // a step goes back or forward to just after it ("Start": before them all).
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 420.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Undo History", &m_ShowUndoHistory))
+        {
+            ImGui::End();
+            return;
+        }
+        // The current step's name follows the scene as it changes: refreshed now and then.
+        if (m_HistoryCache.empty() || ImGui::GetFrameCount() - m_HistoryFrame > 20 || m_HistoryDone != m_Ctx.HistoryDone() ||
+            m_HistoryCount != m_HistoryCache.size())
+        {
+            m_HistoryCache = m_Ctx.History();
+            m_HistoryFrame = ImGui::GetFrameCount();
+            m_HistoryDone = m_Ctx.HistoryDone();
+            m_HistoryCount = m_HistoryCache.size();
+        }
+        std::optional<size_t> jump;
+        ImGui::BeginDisabled(m_Ctx.IsPlaying());
+        if (ImGui::Selectable("Start", m_HistoryDone == 0)) jump = 0;
+        for (size_t i = 0; i < m_HistoryCache.size(); ++i)
+        {
+            const auto& step = m_HistoryCache[i];
+            ImGui::PushID((int)i);
+            if (step.Undone) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            if (ImGui::Selectable(step.Name.c_str(), i + 1 == m_HistoryDone)) jump = i + 1;
+            if (step.Undone) ImGui::PopStyleColor();
+            ImGui::PopID();
+        }
+        ImGui::EndDisabled();
+        if (m_HistoryCache.empty()) ImGui::TextDisabled("Changes to the scene show here.");
+        if (m_Ctx.IsPlaying()) ImGui::TextDisabled("Play mode changes are not recorded.");
+        ImGui::End();
+        if (jump && *jump != m_Ctx.HistoryDone())
+        {
+            m_Ctx.JumpTo(*jump);
+            m_HistoryCache.clear();
+        }
+    }
+
+    void EditorLayer::DrawNoteLabels(const ImVec2& origin, const ImVec2& size)
+    {
+        // Notes (Note component, Show In Scene) as labels at their objects: the first line, all of it when hovered.
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 mouse = ImGui::GetMousePos();
+        for (auto [e, note, t] : reg.ViewOf<NoteComponent, TransformComponent>())
+        {
+            if (!note.ShowInScene || note.Text.empty() || !t.ActiveInHierarchy) continue;
+            glm::vec4 clip = viewProj * glm::vec4(t.GetWorldPosition(), 1.0f);
+            if (clip.w <= 1e-4f) continue;
+            ImVec2 at(origin.x + (clip.x / clip.w * 0.5f + 0.5f) * size.x, origin.y + (0.5f - clip.y / clip.w * 0.5f) * size.y);
+            if (at.x < origin.x || at.y < origin.y || at.x > origin.x + size.x || at.y > origin.y + size.y) continue;
+            std::string first = note.Text.substr(0, note.Text.find('\n'));
+            ImVec2 textSize = ImGui::CalcTextSize(first.c_str());
+            ImVec2 box(at.x + 10.0f, at.y - textSize.y - 14.0f);
+            bool hovered = mouse.x >= box.x && mouse.x <= box.x + textSize.x + 12.0f && mouse.y >= box.y && mouse.y <= box.y + textSize.y + 8.0f;
+            const std::string& shown = hovered ? note.Text : first;
+            ImVec2 full = ImGui::CalcTextSize(shown.c_str(), nullptr, false, 320.0f);
+            ImU32 color = ImGui::ColorConvertFloat4ToU32(ImVec4(note.Color.r, note.Color.g, note.Color.b, 0.92f));
+            dl->AddLine(at, ImVec2(box.x, box.y + textSize.y + 8.0f), color, 1.5f);
+            dl->AddRectFilled(box, ImVec2(box.x + full.x + 12.0f, box.y + full.y + 8.0f), color, 4.0f);
+            dl->AddText(nullptr, 0.0f, ImVec2(box.x + 6.0f, box.y + 4.0f), IM_COL32(25, 25, 25, 255), shown.c_str(), nullptr, 320.0f);
+        }
     }
 
     void EditorLayer::DrawNewSceneWindow()
@@ -2104,6 +2178,7 @@ namespace Editor
         if (m_ShowShortcuts) DrawShortcutsWindow();
         if (m_ShowNewScene) DrawNewSceneWindow();
         if (m_ShowHub) DrawProjectHub();
+        if (m_ShowUndoHistory) DrawUndoHistory();
         else m_RebindingShortcut = -1;
         if (m_ShowExportPackage) DrawExportPackage();
         if (m_ShowImportPackage) DrawImportPackage();
@@ -2253,8 +2328,16 @@ namespace Editor
         }
         if (ImGui::BeginMenu("Edit"))
         {
-            if (ImGui::MenuItem("Undo", Shortcuts::Label("edit.undo").c_str(), false, m_Ctx.CanUndo() && !m_Ctx.IsPlaying())) m_Ctx.Undo();
-            if (ImGui::MenuItem("Redo", Shortcuts::Label("edit.redo").c_str(), false, m_Ctx.CanRedo() && !m_Ctx.IsPlaying())) m_Ctx.Redo();
+            // "Undo Delete Wall A": the steps' names.
+            auto history = m_Ctx.History();
+            size_t done = m_Ctx.HistoryDone();
+            std::string undo = done > 0 ? "Undo " + history[done - 1].Name : "Undo";
+            std::string redo = done < history.size() ? "Redo " + history[done].Name : "Redo";
+            if (undo.size() > 48) undo = undo.substr(0, 45) + "...";
+            if (redo.size() > 48) redo = redo.substr(0, 45) + "...";
+            if (ImGui::MenuItem(undo.c_str(), Shortcuts::Label("edit.undo").c_str(), false, m_Ctx.CanUndo() && !m_Ctx.IsPlaying())) m_Ctx.Undo();
+            if (ImGui::MenuItem(redo.c_str(), Shortcuts::Label("edit.redo").c_str(), false, m_Ctx.CanRedo() && !m_Ctx.IsPlaying())) m_Ctx.Redo();
+            if (ImGui::MenuItem("Undo History", nullptr, m_ShowUndoHistory)) m_ShowUndoHistory = !m_ShowUndoHistory;
             ImGui::Separator();
             if (ImGui::MenuItem("Copy", Shortcuts::Label("edit.copy").c_str(), false, m_Ctx.HasValidSelection())) CopySelected(m_Ctx);
             if (ImGui::MenuItem("Paste", Shortcuts::Label("edit.paste").c_str(), false, !m_Ctx.IsPlaying())) PasteClipboard(m_Ctx);
@@ -2627,6 +2710,8 @@ namespace Editor
             m_SceneTarget->RequestPick((uint32_t)(mouse.x - origin.x), (uint32_t)(mouse.y - origin.y));
             m_PickAdditive = ImGui::GetIO().KeyCtrl;
         }
+
+        DrawNoteLabels(origin, avail);
 
         // Overlay info
         ImGui::SetCursorScreenPos(ImVec2(origin.x + 8, origin.y + 6));
@@ -4118,8 +4203,8 @@ namespace Editor
             }
             return Entity::Null();
         };
-        hooks.Undo = [this](const char*) {
-            m_Ctx.RecordUndo();
+        hooks.Undo = [this](const char* name) {
+            m_Ctx.RecordUndo(name); // C#'s Undo.Record("Name") names the step
             m_Ctx.MarkDirty();
         };
         hooks.Handle = [this](int kind, float* v, int n, const char* text) { return DoHandle(kind, v, n, text); };

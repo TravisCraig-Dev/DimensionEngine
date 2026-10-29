@@ -1446,4 +1446,13 @@ namespace Dimension
         bool Broken = false;
         float CurrentForce = 0.0f, CurrentTorque = 0.0f;
     };
+
+    // A note on an object (editor comments, like a sticky note): its text in the Inspector, and with Show In Scene a
+    // label at the object in the Scene view (its tooltip in the Hierarchy). Nothing in the game uses it.
+    struct NoteComponent
+    {
+        std::string Text;
+        glm::vec4 Color{ 1.0f, 0.85f, 0.35f, 1.0f };
+        bool ShowInScene = true;
+    };
 }

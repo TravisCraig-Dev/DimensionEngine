@@ -43,6 +43,7 @@ namespace Dimension
         std::string Tooltip;
         std::string Header;  // heading drawn above the field in the Inspector
         bool Hidden = false; // serialized but not shown in the Inspector
+        bool Multiline = false; // String: a text box of several lines
         // StructList: the element struct's fields (relative to an element), the list's operations, and the element
         // field whose text titles each element in the Inspector ("" = numbered). Max (when above 0) caps the length.
         // A single unnamed element field makes a list of plain values: saved as an array of them, each drawn in one
@@ -141,6 +142,7 @@ namespace Dimension
         FieldListBuilder& Tooltip(std::string text) { m_Fields.back().Tooltip = std::move(text); return *this; }
         FieldListBuilder& HideInInspector() { m_Fields.back().Hidden = true; return *this; }
         FieldListBuilder& Header(std::string text) { m_Fields.back().Header = std::move(text); return *this; }
+        FieldListBuilder& Multiline() { m_Fields.back().Multiline = true; return *this; }
 
     private:
         std::vector<FieldInfo>& m_Fields;
