@@ -8,7 +8,7 @@ namespace Editor::Shortcuts
     {
         static std::vector<Shortcut> shortcuts = [] {
             std::vector<Shortcut> s = {
-                { "file.new", "File", "New Scene", ImGuiMod_Ctrl | ImGuiKey_N },
+                { "file.new", "File", "New Scene...", ImGuiMod_Ctrl | ImGuiKey_N },
                 { "file.open", "File", "Open Scene", ImGuiMod_Ctrl | ImGuiKey_O },
                 { "file.save", "File", "Save Scene", ImGuiMod_Ctrl | ImGuiKey_S },
                 { "file.saveAs", "File", "Save Scene As", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S },

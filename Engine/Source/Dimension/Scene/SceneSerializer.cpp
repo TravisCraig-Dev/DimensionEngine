@@ -338,6 +338,15 @@ namespace Dimension
         return scene;
     }
 
+    Ref<Scene> SceneSerializer::DeserializeCopy(const json& data, const std::string& name)
+    {
+        auto scene = MakeRef<Scene>(name);
+        if (data.contains("settings")) ReadSettings(data["settings"], scene->GetSettings());
+        if (data.contains("entities")) DeserializeEntities(*scene, data["entities"], Entity::Null(), true);
+        scene->UpdateTransforms();
+        return scene;
+    }
+
     bool SceneSerializer::SaveToFile(Scene& scene, const fs::path& path)
     {
         std::ofstream out(path);

@@ -20,6 +20,8 @@
 #include <Dimension/Scene/ProjectSearch.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneSections.h>
+#include <Dimension/Scene/SceneTemplates.h>
+#include <Dimension/Project/RecentScenes.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Physics/Wind.h>
 #include <Dimension/Navigation/NavMesh.h>
@@ -8161,6 +8163,71 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // Scene templates: the built-in ones, and a project template (a scene labelled Template) whose copies get new
+    // GUIDs with references between their objects following. Recent scenes: newest first, at most ten, moved up when
+    // opened again, missing files left out, kept in the project.
+    void TestSceneTemplates()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_templates";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        CHECK(Project::Open(dir));
+        AssetManager::Init(dir / "Assets");
+        auto all = SceneTemplates::All();
+        CHECK(all.size() == 4 && all[0].Name == "Basic 3D" && all[3].Name == "Empty");
+        auto find = [&](const std::string& name) {
+            for (auto& t : SceneTemplates::All())
+                if (t.Name == name) return t;
+            return SceneTemplates::Template{};
+        };
+        auto basic = SceneTemplates::Create(find("Basic 3D"));
+        CHECK(basic && basic->GetRegistry().AliveCount() == 2 && basic->GetPrimaryCamera() != Entity::Null() &&
+              !basic->FindEntityByName("Directional Light").IsNull());
+        auto flat = SceneTemplates::Create(find("Basic 2D"));
+        CHECK(flat && flat->GetRegistry().Get<CameraComponent>(flat->GetPrimaryCamera()).Projection == ProjectionType::Orthographic);
+        auto outdoor = SceneTemplates::Create(find("Outdoor"));
+        CHECK(outdoor && outdoor->GetSettings().Fog && !outdoor->FindEntityByName("Ground").IsNull());
+        CHECK(SceneTemplates::Create(find("Empty"))->GetRegistry().AliveCount() == 0);
+
+        // A project template, with a joint that references another of its objects.
+        Scene arena("Arena");
+        Entity post = arena.CreateEntity("Post"), door = arena.CreateEntity("Door");
+        arena.GetRegistry().Emplace<JointComponent>(door).ConnectedBody = post;
+        AssetHandle h = SceneTemplates::SaveAsTemplate(arena, "Arena", "A post and a door on a hinge");
+        CHECK(h.IsValid() && AssetManager::GetLabels(h) == std::vector<std::string>{ SceneTemplates::kLabel });
+        auto mine = find("Arena");
+        CHECK(mine.Scene == h && mine.Description == "A post and a door on a hinge" && SceneTemplates::All().size() == 5);
+        auto copy = SceneTemplates::Create(mine), second = SceneTemplates::Create(mine);
+        CHECK(copy && second && copy->GetName() == "Untitled" && copy->GetRegistry().AliveCount() == 2);
+        if (copy && second)
+        {
+            Entity copiedPost = copy->FindEntityByName("Post"), copiedDoor = copy->FindEntityByName("Door");
+            CHECK(copy->GetGuid(copiedPost) != arena.GetGuid(post) && copy->GetGuid(copiedPost) != second->GetGuid(second->FindEntityByName("Post")));
+            CHECK(copy->GetRegistry().Get<JointComponent>(copiedDoor).ConnectedBody == copiedPost);
+        }
+
+        // Recent scenes.
+        fs::create_directories(dir / "Assets/Scenes", ec);
+        for (int i = 0; i < 12; ++i)
+        {
+            std::ofstream(dir / ("Assets/Scenes/S" + std::to_string(i) + ".scene")) << "{}";
+            RecentScenes::Add(dir / ("Assets/Scenes/S" + std::to_string(i) + ".scene"));
+        }
+        auto recent = RecentScenes::List();
+        CHECK(recent.size() == RecentScenes::kMax && recent[0].filename() == "S11.scene" && recent[9].filename() == "S2.scene");
+        RecentScenes::Add(dir / "Assets/Scenes/S5.scene");
+        CHECK(RecentScenes::List()[0].filename() == "S5.scene" && RecentScenes::List().size() == RecentScenes::kMax);
+        fs::remove(dir / "Assets/Scenes/S11.scene", ec);
+        RecentScenes::Remove(dir / "Assets/Scenes/S10.scene");
+        recent = RecentScenes::List();
+        CHECK(recent.size() == 8 && std::none_of(recent.begin(), recent.end(), [](const fs::path& p) { return p.filename() == "S10.scene"; }));
+        CHECK(Project::Open(dir) && RecentScenes::List().size() == 8); // kept with the project
+        RecentScenes::Clear();
+        CHECK(RecentScenes::List().empty());
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
     void TestAssetLabels()
     {
         // Labels live in the .meta files; the search matches names, t:Type and l:Label terms together.
@@ -9676,6 +9743,7 @@ int main(int argc, char** argv)
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);
+    Run("Scene templates", TestSceneTemplates);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);

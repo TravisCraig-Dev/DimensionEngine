@@ -17,6 +17,8 @@
 #include <Dimension/Scene/SceneSearch.h>
 #include <Dimension/Scene/SceneSnapping.h>
 #include <Dimension/Scene/ProjectSearch.h>
+#include <Dimension/Scene/SceneTemplates.h>
+#include <Dimension/Project/RecentScenes.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
 #include <Dimension/Navigation/NavMesh.h>
@@ -168,6 +170,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Snap Settings") m_ShowSnapSettings = true;
         else if (m_Options.OpenWindow == "Lighting") m_ShowLighting = true;
         else if (m_Options.OpenWindow == "Shortcuts") m_ShowShortcuts = true;
+        else if (m_Options.OpenWindow == "New Scene") m_ShowNewScene = true;
         else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
             OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
         else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
@@ -224,7 +227,9 @@ namespace Editor
                 m_Ctx.SelectAsset(h);
                 m_Content->ShowDirectory((AssetManager::GetAssetsDirectory() / m_Options.SelectAsset).parent_path());
             }
-        // --open-additive and --prefab-instance (automation).
+        // --new-scene "Template", --open-additive and --prefab-instance (automation).
+        for (const auto& t : SceneTemplates::All())
+            if (!m_Options.NewSceneTemplate.empty() && t.Name == m_Options.NewSceneTemplate) NewSceneFrom(t);
         for (size_t start = 0; start < m_Options.AdditiveScenes.size();)
         {
             size_t comma = m_Options.AdditiveScenes.find(',', start);
@@ -259,21 +264,17 @@ namespace Editor
 
     // ---- Scenes -------------------------------------------------------------------------
 
-    void EditorLayer::NewScene()
+    void EditorLayer::NewScene() { NewSceneFrom(SceneTemplates::All().front()); } // Basic 3D
+
+    void EditorLayer::NewSceneFrom(const SceneTemplates::Template& t)
     {
         if (m_Ctx.IsPlaying()) Stop();
-        auto scene = MakeRef<Scene>("Untitled");
-        auto& reg = scene->GetRegistry();
-        Entity cam = scene->CreateEntity("Main Camera");
-        reg.Emplace<CameraComponent>(cam).Clear = ClearMode::Skybox;
-        reg.Get<TransformComponent>(cam).Position = { 0.0f, 2.0f, 8.0f };
-        reg.Get<TransformComponent>(cam).Rotation = glm::radians(glm::vec3(-12.0f, 0.0f, 0.0f));
-        reg.Get<TagComponent>(cam).Tag = "MainCamera";
-        Entity light = scene->CreateEntity("Directional Light");
-        reg.Emplace<DirectionalLightComponent>(light);
-        reg.Get<TransformComponent>(light).Position = { 0.0f, 3.0f, 0.0f };
-        reg.Get<TransformComponent>(light).Rotation = glm::radians(glm::vec3(-50.0f, -30.0f, 0.0f));
-        scene->UpdateTransforms();
+        auto scene = SceneTemplates::Create(t);
+        if (!scene)
+        {
+            Log::Error("Could not read the template '{}'", t.Name);
+            return;
+        }
 
         m_Ctx.EditorScene = scene;
         m_Ctx.Sections.Clear();
@@ -297,6 +298,7 @@ namespace Editor
         m_Ctx.Select(Entity::Null());
         m_Ctx.ClearHistory();
         UpdateWindowTitle();
+        RecentScenes::Add(path);
         Log::Info("Opened scene '{}'", path.filename().string());
     }
 
@@ -345,6 +347,7 @@ namespace Editor
         if (!path) return false;
         m_Ctx.ScenePath = *path;
         m_Ctx.EditorScene->SetName(path->stem().string());
+        RecentScenes::Add(*path);
         return SaveScene();
     }
 
@@ -926,6 +929,81 @@ namespace Editor
         }
     }
 
+    void EditorLayer::DrawNewSceneWindow()
+    {
+        // The templates a new scene starts from (the built-in ones, then the project's: scenes labelled Template), and
+        // saving the open scene as one.
+        ImGui::SetNextWindowSize(ImVec2(620.0f, 440.0f), ImGuiCond_FirstUseEver);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                                ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("New Scene", &m_ShowNewScene))
+        {
+            ImGui::End();
+            return;
+        }
+        auto templates = SceneTemplates::All();
+        m_NewSceneTemplate = std::clamp(m_NewSceneTemplate, 0, (int)templates.size() - 1);
+        bool create = false;
+        float footer = ImGui::GetFrameHeightWithSpacing() * 3.0f + ImGui::GetStyle().ItemSpacing.y * 4.0f;
+        ImGui::BeginChild("##templates", ImVec2(220.0f, -footer), ImGuiChildFlags_Borders);
+        bool projectHeader = false;
+        for (int i = 0; i < (int)templates.size(); ++i)
+        {
+            if (templates[i].Scene.IsValid() && !projectHeader)
+            {
+                ImGui::SeparatorText("Project");
+                projectHeader = true;
+            }
+            if (ImGui::Selectable(templates[i].Name.c_str(), i == m_NewSceneTemplate, ImGuiSelectableFlags_AllowDoubleClick))
+            {
+                m_NewSceneTemplate = i;
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) create = true;
+            }
+        }
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("##about", ImVec2(0.0f, -footer));
+        const auto& chosen = templates[m_NewSceneTemplate];
+        ImGui::TextUnformatted(chosen.Name.c_str());
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", chosen.Description.c_str());
+        ImGui::PopStyleColor();
+        if (chosen.Scene.IsValid())
+        {
+            ImGui::Spacing();
+            ImGui::TextDisabled("A copy of %s (its objects get new identities).", AssetManager::GetDisplayName(chosen.Scene).c_str());
+        }
+        ImGui::EndChild();
+        ImGui::BeginDisabled(m_Ctx.IsPlaying());
+        if (ImGui::Button("Create", ImVec2(120.0f, 0.0f))) create = true;
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        // The open scene as a project template.
+        ImGui::SetNextItemWidth(160.0f);
+        ImGui::InputTextWithHint("##templateName", "Template name", &m_TemplateName);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputTextWithHint("##templateAbout", "Description", &m_TemplateDescription);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_TemplateName.find_first_not_of(' ') == std::string::npos || m_Ctx.IsPlaying() || m_Ctx.InPrefabMode());
+        if (ImGui::Button("Save Open Scene as Template"))
+        {
+            if (SceneTemplates::SaveAsTemplate(*m_Ctx.EditorScene, m_TemplateName, m_TemplateDescription).IsValid())
+                Log::Info("Saved scene template '{}'", m_TemplateName);
+            m_TemplateName.clear();
+            m_TemplateDescription.clear();
+        }
+        ImGui::EndDisabled();
+        ImGui::End();
+        if (create && !m_Ctx.IsPlaying() && ConfirmDiscardChanges())
+        {
+            NewSceneFrom(chosen);
+            m_ShowNewScene = false;
+        }
+    }
+
     void EditorLayer::DrawShortcutsWindow()
     {
         // Every shortcut by category: its key, a button to bind a new one (the next key pressed, with its modifiers;
@@ -1165,7 +1243,9 @@ namespace Editor
         // modes, and the scripts' [MenuItem]s and windows.
         std::vector<EditorCommand> out;
         auto add = [&](std::string name, std::function<void()> run) { out.push_back({ std::move(name), std::move(run) }); };
-        add("File/New Scene", [this] { if (ConfirmDiscardChanges()) NewScene(); });
+        add("File/New Scene...", [this] { m_ShowNewScene = true; });
+        for (const fs::path& p : RecentScenes::List())
+            add("File/Open Recent/" + p.filename().string(), [this, p] { if (ConfirmDiscardChanges()) OpenScene(p); });
         add("File/Open Scene...", [this] { OpenSceneWithDialog(); });
         add("File/Save Scene", [this] { SaveScene(); });
         add("File/Save Scene As...", [this] { SaveSceneAs(); });
@@ -1793,6 +1873,7 @@ namespace Editor
         if (m_ShowSearch) DrawSearchWindow();
         if (m_ShowLighting) DrawLightingWindow();
         if (m_ShowShortcuts) DrawShortcutsWindow();
+        if (m_ShowNewScene) DrawNewSceneWindow();
         else m_RebindingShortcut = -1;
         if (m_ShowExportPackage) DrawExportPackage();
         if (m_ShowImportPackage) DrawImportPackage();
@@ -1902,8 +1983,24 @@ namespace Editor
         if (!ImGui::BeginMainMenuBar()) return;
         if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::MenuItem("New Scene", Shortcuts::Label("file.new").c_str()) && ConfirmDiscardChanges()) NewScene();
+            if (ImGui::MenuItem("New Scene...", Shortcuts::Label("file.new").c_str())) m_ShowNewScene = true;
             if (ImGui::MenuItem("Open Scene...", Shortcuts::Label("file.open").c_str())) OpenSceneWithDialog();
+            // The project's last opened scenes (newest first).
+            if (ImGui::BeginMenu("Open Recent"))
+            {
+                auto recent = RecentScenes::List();
+                for (const fs::path& p : recent)
+                {
+                    std::string label = p.lexically_relative(AssetManager::GetAssetsDirectory()).generic_string();
+                    if (ImGui::MenuItem(label.c_str(), nullptr, !m_Ctx.ScenePath.empty() && p == m_Ctx.ScenePath.lexically_normal()) &&
+                        ConfirmDiscardChanges())
+                        OpenScene(p);
+                }
+                if (recent.empty()) ImGui::TextDisabled("No scenes yet");
+                ImGui::Separator();
+                if (ImGui::MenuItem("Clear Recent", nullptr, false, !recent.empty())) RecentScenes::Clear();
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem("Open Scene Additive...", nullptr, false, !m_Ctx.IsPlaying() && !m_Ctx.InPrefabMode()))
                 if (auto p = FileDialogs::OpenFile({ { L"Scene", L"*.scene" } }, AssetManager::GetAssetsDirectory())) OpenSceneAdditive(*p);
             if (ImGui::MenuItem("Save", Shortcuts::Label("file.save").c_str(), false, !m_Ctx.IsPlaying())) SaveScene();
@@ -2664,7 +2761,7 @@ namespace Editor
         if (Pressed("play.pause")) TogglePause();
         if (Pressed("file.save")) SaveScene();
         if (Pressed("file.saveAs")) SaveSceneAs();
-        if (Pressed("file.new") && ConfirmDiscardChanges()) NewScene();
+        if (Pressed("file.new")) m_ShowNewScene = true;
         if (Pressed("file.buildModule")) BuildGameModule();
         if (Pressed("file.buildSettings")) m_ShowBuildSettings = true;
         if (Pressed("file.buildAndRun") && !m_Ctx.IsPlaying()) BuildGame(true, Project::GetConfig().BuildFolder);

@@ -8,6 +8,7 @@
 #include "AssetPreviews.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Asset/AssetPackage.h>
+#include <Dimension/Scene/SceneTemplates.h>
 #include <atomic>
 #include <unordered_set>
 #include <memory>
@@ -35,6 +36,7 @@ namespace Editor
         std::string PackagePath;  // --package file: with --open "Import Package", the package shown
         std::string AdditiveScenes; // --open-additive "a.scene,b.scene": opened alongside the scene
         std::string PrefabInstance; // --prefab-instance "Name": that instance's prefab in Prefab Mode, in context
+        std::string NewSceneTemplate; // --new-scene "Template": start with a new scene from that template
         bool InspectorDebug = false;      // --inspector-debug: the Inspector starts in Debug mode
         std::string DrawMode;             // --draw-mode wireframe|shaded-wireframe|unlit|overdraw: the Scene view's
         std::string HideEntities;         // --hide "A,B": hidden in the Scene view for the session
@@ -60,6 +62,12 @@ namespace Editor
     private:
         // Scene management
         void NewScene();
+        void NewSceneFrom(const Dimension::SceneTemplates::Template& t);
+        // File > New Scene...: the templates (the chosen one), and naming the open scene as a new template.
+        bool m_ShowNewScene = false;
+        int m_NewSceneTemplate = 0;
+        std::string m_TemplateName, m_TemplateDescription;
+        void DrawNewSceneWindow();
         void OpenScene(const fs::path& path);
         // Another scene's objects alongside the main scene's (a Hierarchy section of its own), and closing it.
         void OpenSceneAdditive(const fs::path& path);

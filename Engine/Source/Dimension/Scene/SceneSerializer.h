@@ -14,6 +14,8 @@ namespace Dimension
         // Only these root objects (with their children), in this order: one scene file of several open together.
         static nlohmann::json Serialize(Scene& scene, const std::vector<Entity>& roots);
         static Ref<Scene> Deserialize(const nlohmann::json& data);
+        // A copy of serialized scene data: every object gets a new GUID (references between them follow).
+        static Ref<Scene> DeserializeCopy(const nlohmann::json& data, const std::string& name);
 
         static bool SaveToFile(Scene& scene, const fs::path& path);
         static Ref<Scene> LoadFromFile(const fs::path& path);
