@@ -27,6 +27,7 @@
 #include <Dimension/Scene/ViewAlign.h>
 #include <Dimension/Renderer/SceneGrid.h>
 #include <Dimension/Reflection/FieldSearch.h>
+#include <Dimension/Scene/DebugDraw.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/SceneBookmarks.h>
 #include <Dimension/Scene/ProjectSearch.h>
@@ -7282,6 +7283,11 @@ namespace
         CHECK(Near(yaw, 90.0f, 1.0f)); // 90 deg/s for one second, applied by C# through the native API
         glm::vec4 c = runtime->GetRegistry().Get<MeshRendererComponent>(r).Color;
         CHECK(!(Near(c.r, 1.0f) && Near(c.g, 1.0f) && Near(c.b, 1.0f))); // recolored from C#
+        // Debug.DrawRay from C#: the Spinner's facing ray (cyan, 1.5 long, this update) among the lines.
+        bool spinnerRay = false;
+        for (const auto& l : DebugDraw::Lines())
+            spinnerRay = spinnerRay || (l.Remaining == 0.0f && Near(glm::length(l.B - l.A), 1.5f, 1e-3f) && Near(l.Color.b, 1.0f));
+        CHECK(spinnerRay);
         // Profiling from C#: Rainbow's samples (one nested in the other) and counter in the frame's record.
         {
             Profiler::SetPaused(false);
@@ -8899,6 +8905,38 @@ namespace
         bool allSame = same.size() == a.Sections.size();
         for (const auto& r : same) allSame = allSame && r.InA && r.InB && r.MsA == r.MsB;
         CHECK(allSame);
+    }
+
+    // Debug lines from game code: until the next update, or for a duration of game time; kept while paused, cleared
+    // when play stops.
+    void TestDebugDraw()
+    {
+        DebugDraw::Clear();
+        DebugDraw::Line({ 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0, 1 });
+        DebugDraw::Ray({ 0, 1, 0 }, { 0, 2, 0 }, { 0, 1, 0, 1 }, 0.5f);
+        CHECK(DebugDraw::Lines().size() == 2 && Near(DebugDraw::Lines()[1].B, { 0.0f, 3.0f, 0.0f }));
+        DebugDraw::Tick(0.0625f); // the next update: the one-update line goes
+        CHECK(DebugDraw::Lines().size() == 1 && Near(DebugDraw::Lines()[0].Remaining, 0.4375f));
+        for (int i = 0; i < 6; ++i) DebugDraw::Tick(0.0625f); // 0.375 s more: still there (0.0625 left)
+        CHECK(DebugDraw::Lines().size() == 1);
+        DebugDraw::Tick(0.0625f);
+        CHECK(DebugDraw::Lines().empty());
+
+        // Through a running scene: Scene::OnUpdateRuntime ticks them; paused, they stay; stopping play clears them.
+        Scene scene("Debug Lines");
+        auto runtime = scene.Clone();
+        runtime->OnRuntimeStart();
+        runtime->OnUpdateRuntime(1.0f / 60.0f);
+        DebugDraw::Line({ 0, 0, 0 }, { 0, 0, 1 });        // drawn during this update
+        DebugDraw::Line({ 0, 0, 0 }, { 0, 1, 0 }, glm::vec4(1.0f), 10.0f);
+        runtime->SetPaused(true);
+        runtime->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(DebugDraw::Lines().size() == 2); // paused: nothing ticks
+        runtime->SetPaused(false);
+        runtime->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(DebugDraw::Lines().size() == 1 && DebugDraw::Lines()[0].Remaining > 9.9f);
+        runtime->OnRuntimeStop();
+        CHECK(DebugDraw::Lines().empty());
     }
 
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script
@@ -10742,6 +10780,7 @@ int main(int argc, char** argv)
     Run("Inspector search", TestFieldSearch);
     Run("Profiler timeline", TestProfilerTimeline);
     Run("Profiler recordings and comparison", TestProfilerRecordings);
+    Run("Debug lines", TestDebugDraw);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

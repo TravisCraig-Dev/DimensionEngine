@@ -219,6 +219,21 @@ namespace Dimension
         public static void Log(object message) => Write(1, message?.ToString());
         public static void LogWarning(object message) => Write(2, message?.ToString());
         public static void LogError(object message) => Write(3, message?.ToString());
+
+        /// <summary>
+        /// A line from <paramref name="start"/> to <paramref name="end"/> in the editor's Scene and Game views (with the
+        /// gizmos; not in builds), until the next update, or for <paramref name="duration"/> seconds of game time.
+        /// </summary>
+        public static void DrawLine(System.Numerics.Vector3 start, System.Numerics.Vector3 end, Color? color = null, float duration = 0.0f)
+        {
+            Color c = color ?? Color.White;
+            float* data = stackalloc float[11] { start.X, start.Y, start.Z, end.X, end.Y, end.Z, c.R, c.G, c.B, c.A, duration };
+            Native.Api.DebugLine(data);
+        }
+
+        /// <summary>A line from <paramref name="start"/> along <paramref name="direction"/> (its length the line's); see DrawLine.</summary>
+        public static void DrawRay(System.Numerics.Vector3 start, System.Numerics.Vector3 direction, Color? color = null, float duration = 0.0f) =>
+            DrawLine(start, start + direction, color, duration);
     }
 
     /// <summary>

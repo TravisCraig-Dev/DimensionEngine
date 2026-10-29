@@ -24,6 +24,7 @@
 #include <Dimension/Scene/SceneMeasure.h>
 #include <Dimension/Scene/SelectionHistory.h>
 #include <Dimension/Scene/ViewAlign.h>
+#include <Dimension/Scene/DebugDraw.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
@@ -1088,7 +1089,12 @@ namespace Editor
             if (options.Highlighting) options.Highlight = m_Ctx.SearchMatches();
             // C# scripts' gizmos (OnDrawGizmos, and OnDrawGizmosSelected for the selection).
             if (m_ShowGizmos)
+            {
                 for (const auto& g : CSharpRuntime::CollectGizmos(scene, m_Ctx.Selection)) m_SceneRenderer.DrawLine(g.A, g.B, g.Color);
+                // Debug.DrawLine / DrawRay from the game while playing.
+                if (m_Ctx.IsPlaying())
+                    for (const auto& l : DebugDraw::Lines()) m_SceneRenderer.DrawLine(l.A, l.B, l.Color);
+            }
             int timer = RenderDevice::Get().BeginGpuTimer(cmd, "Scene View");
             m_SceneRenderer.Render(cmd, scene, cam, *m_SceneTarget, options);
             RenderDevice::Get().EndGpuTimer(cmd, timer);
@@ -1102,6 +1108,9 @@ namespace Editor
             SceneRenderOptions gameOptions;
             gameOptions.RenderUI = true;
             gameOptions.FrameDebugStop = m_ShowFrameDebugger ? m_FrameDebugger->StopFor(1) : -2;
+            // Debug.DrawLine / DrawRay show in the Game view too (with the gizmos, as in Unity).
+            if (m_ShowGizmos && m_Ctx.IsPlaying())
+                for (const auto& l : DebugDraw::Lines()) m_GameRenderer.DrawLine(l.A, l.B, l.Color);
             {
                 DIM_PROFILE_SCOPE("Game View");
                 int timer = RenderDevice::Get().BeginGpuTimer(cmd, "Game View");

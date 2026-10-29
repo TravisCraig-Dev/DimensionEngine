@@ -14,6 +14,7 @@
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
 #include "Dimension/Core/Profiler.h"
+#include "Dimension/Scene/DebugDraw.h"
 #include <nlohmann/json.hpp>
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
@@ -146,6 +147,7 @@ namespace Dimension
             int (*SceneRunning)(void*);
             int (*EditorHandle)(int, float*, int, const char*); // see Handles in EditorApi.cs
             void (*ProfilerSample)(int, const char*, float);     // 0 begin (name), 1 end, 2 set counter (name, value)
+            void (*DebugLine)(const float*);                     // from, to, color (rgba), duration: 11 floats
         };
 
         // Background scene loads started from C#, by id.
@@ -870,6 +872,9 @@ namespace Dimension
             a.EditorUndo = [](const char* name) { if (s_EditorHooks.Undo) s_EditorHooks.Undo(name ? name : ""); };
             a.Gizmo = [](int kind, const float* data) { AddGizmo(kind, data); };
             a.SceneRunning = [](void* scene) -> int { return scene && S(scene).IsRunning() ? 1 : 0; };
+            a.DebugLine = [](const float* d) {
+                DebugDraw::Line({ d[0], d[1], d[2] }, { d[3], d[4], d[5] }, { d[6], d[7], d[8], d[9] }, d[10]);
+            };
             a.ProfilerSample = [](int op, const char* name, float value) {
                 if (op == 0) Profiler::BeginSample(name ? name : "C#");
                 else if (op == 1) Profiler::EndSample();

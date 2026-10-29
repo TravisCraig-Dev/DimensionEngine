@@ -31,6 +31,10 @@ namespace Game
             var p = Transform.Position;
             p.Y = m_BaseY + System.MathF.Sin(m_Time * BobSpeed) * BobHeight;
             Transform.Position = p;
+            // While playing, in the editor: where it faces now, and a fading fan of where it faced (a ray kept a second,
+            // four times a second).
+            Debug.DrawRay(p, Transform.Forward * 1.5f, new Color(0.2f, 0.9f, 1.0f));
+            if ((int)(m_Time * 4.0f) != (int)((m_Time - dt) * 4.0f)) Debug.DrawRay(p, Transform.Forward * 1.2f, new Color(1.0f, 0.5f, 0.2f), 1.0f);
         }
     }
 }

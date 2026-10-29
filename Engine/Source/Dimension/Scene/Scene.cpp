@@ -1,3 +1,4 @@
+#include "Dimension/Scene/DebugDraw.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Scene/SceneSerializer.h"
 #include "Dimension/Scripting/ScriptableEntity.h"
@@ -493,6 +494,7 @@ namespace Dimension
 
     void Scene::OnRuntimeStop()
     {
+        DebugDraw::Clear();
         if (!m_Running) return;
         Input::SetKeyboardCapturedByUI(false);
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
@@ -521,6 +523,7 @@ namespace Dimension
             dt = kFixedTimestep;
         }
         dt = std::min(dt, 0.1f); // avoid spiral of death after hitches
+        DebugDraw::Tick(dt);     // the last update's debug lines go (timed ones count down)
         m_Time += dt;
         m_DeltaTime = dt;
         ++m_FrameCount;

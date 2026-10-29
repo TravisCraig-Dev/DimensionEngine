@@ -117,6 +117,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, float*, int, byte*, int> EditorHandle;
         // The Profiler: 0 begin a sample (name), 1 end it, 2 set a counter (name, value).
         public delegate* unmanaged<int, byte*, float, void> ProfilerSample;
+        // Debug.DrawLine: from, to, color (rgba), duration (11 floats).
+        public delegate* unmanaged<float*, void> DebugLine;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
