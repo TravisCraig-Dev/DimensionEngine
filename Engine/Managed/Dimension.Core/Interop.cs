@@ -123,6 +123,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, byte*, byte*, byte*> PlayerPrefs;
         // Input actions by name: 0 button held, 1 pressed this frame, 2 released this frame, 3 axis value.
         public delegate* unmanaged<int, byte*, float> InputAction;
+        // Localization: op (see Localization in Api.cs), text, scene, entity -> text, or null.
+        public delegate* unmanaged<int, byte*, IntPtr, ulong, byte*> Localization;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

@@ -646,6 +646,8 @@ namespace Dimension
         TextVAlign VerticalAlign = TextVAlign::Middle;
         bool Wrap = true;
         bool RichText = true; // <b>, <i>, <u>, <s>, <color=...>, <size=...> and <br> tags (see Font::ParseRichText)
+        // A string table key: when set, the text shown is its text in the current language (Localization), not Text.
+        std::string LocalizedKey;
     };
 
     enum class UINavigationMode : int32_t { Automatic = 0, Explicit = 1, None = 2 };

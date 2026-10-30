@@ -1251,7 +1251,172 @@
           ],
           "Alignment": 1,
           "Vertical Alignment": 1,
-          "Wrap": false
+          "Wrap": false,
+          "Localized Key": "menu.back_to_3d"
+        }
+      }
+    },
+    {
+      "guid": 850013,
+      "parent": 850010,
+      "components": {
+        "Tag": {
+          "Name": "Language Button",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            278,
+            32
+          ],
+          "Size": [
+            320,
+            56
+          ]
+        },
+        "UI Image": {
+          "Image": 100041,
+          "Color": [
+            0.12,
+            0.13,
+            0.17,
+            0.85
+          ],
+          "Image Type": 1,
+          "Border": [
+            16,
+            16,
+            16,
+            16
+          ],
+          "Border Scale": 1.0
+        },
+        "UI Button": {
+          "Normal Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Hover Color": [
+            1.4,
+            1.4,
+            1.5,
+            1
+          ],
+          "Pressed Color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "Interactable": true
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.LanguageButton",
+              "Fields": {},
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 850014,
+      "parent": 850013,
+      "components": {
+        "Tag": {
+          "Name": "Label",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
+        "UI Text": {
+          "Text": "Language: English",
+          "Font": 0,
+          "Font Size": 28,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
+          "Wrap": false,
+          "Localized Key": "menu.language"
         }
       }
     },

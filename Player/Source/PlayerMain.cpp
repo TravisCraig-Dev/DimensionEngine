@@ -6,10 +6,12 @@
 //        [--cpu-light-culling]                    build the light clusters on the CPU instead of in a compute shader
 //        [--no-occlusion]                         draw meshes hidden behind others too (for comparisons)
 //        [--wait-for-debugger]                    wait up to 60 s for a C# debugger to attach
+//        [--system-language fr-FR]                start as if the system's language were that (unless one was chosen)
 // A built game ships as DimensionPlayer.exe next to a "Project" folder.
 #include <Dimension/Dimension.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Core/PlayerPrefs.h>
+#include <Dimension/Project/Localization.h>
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Core/Profiler.h>
@@ -179,6 +181,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--no-occlusion")) SceneRenderer::SetOcclusionCullingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-vsync")) noVSync = true;
         else if (!std::strcmp(argv[i], "--wait-for-debugger")) waitForDebugger = true;
+        else if (!std::strcmp(argv[i], "--system-language") && i + 1 < argc) Localization::SetSystemLanguage(argv[++i]);
         else if ((!std::strcmp(argv[i], "--click") || !std::strcmp(argv[i], "--move")) && i + 1 < argc)
         {
             bool click = !std::strcmp(argv[i], "--click");

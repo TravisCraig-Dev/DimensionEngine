@@ -182,6 +182,15 @@ namespace Dimension
             get => Native.FromUtf8(Native.Api.GetUIText(Entity.Scene, Entity.Id));
             set { var e = Entity; Native.WithUtf8(value, p => Native.Api.SetUIText(e.Scene, e.Id, (byte*)p)); }
         }
+        /// <summary>
+        /// A string table key: while set, the text shown is its text in the current language (and follows when the
+        /// language changes). Setting <see cref="Text"/> clears it.
+        /// </summary>
+        public string LocalizedKey
+        {
+            get => Localization.Call(8, null, Entity) ?? "";
+            set => Localization.Call(9, value, Entity);
+        }
     }
 
     public class UIButton : Component

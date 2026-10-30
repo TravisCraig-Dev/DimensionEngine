@@ -29,6 +29,7 @@
 #include <Dimension/Reflection/FieldSearch.h>
 #include <Dimension/Scene/DebugDraw.h>
 #include <Dimension/Core/PlayerPrefs.h>
+#include <Dimension/Project/Localization.h>
 #include <Dimension/Project/InputActions.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/SceneBookmarks.h>
@@ -7351,6 +7352,50 @@ namespace
         PlayerData::SetFolder({});
         fs::remove_all(playerData, pdError);
 
+        // Localization from C#: the Sandbox's LanguageButton switches to the next language on a click; its label
+        // (a Localized Key) follows, and the choice is kept for the next run.
+        {
+            fs::path locDir = fs::temp_directory_path() / "dimension_csharp_localization";
+            fs::remove_all(locDir, pdError);
+            fs::create_directories(locDir / "Assets");
+            fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Localization/Menu.csv", locDir / "Assets/Menu.csv");
+            AssetManager::Init(locDir / "Assets");
+            PlayerData::SetFolder(locDir / "PlayerData");
+            Localization::SetSystemLanguage("en-GB");
+            Scene loc("Localization");
+            auto& lreg = loc.GetRegistry();
+            Entity lcanvas = loc.CreateEntity("Canvas");
+            lreg.Emplace<CanvasComponent>(lcanvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+            Entity button = loc.CreateEntity("Language Button", lcanvas);
+            {
+                auto& br = lreg.Emplace<UIRectComponent>(button);
+                br.AnchorMin = br.AnchorMax = br.Pivot = { 0, 0 };
+                br.Size = { 200, 50 };
+            }
+            lreg.Emplace<UIButtonComponent>(button);
+            lreg.Emplace<UITextComponent>(button).LocalizedKey = "menu.language";
+            lreg.Emplace<ScriptComponent>(button).Add("Game.LanguageButton");
+            loc.UpdateTransforms();
+            CHECK(Localization::Language() == "en" && Localization::Get("menu.language") == "Language: English");
+            auto rt = loc.Clone();
+            rt->OnRuntimeStart();
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            rt->SetUIInput({ 50, 25 }, true, { 800, 600 });
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            rt->SetUIInput({ 50, 25 }, false, { 800, 600 });
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(Localization::Language() == "fr" && PlayerPrefs::GetString("Language") == "fr");
+            CHECK(Localization::Get(rt->GetRegistry().Get<UITextComponent>(button).LocalizedKey) == "Langue : Fran\xC3\xA7" "ais");
+            rt->OnRuntimeStop();
+            rt.reset();
+            Localization::Reset(); // the next run starts in the language chosen
+            CHECK(Localization::Language() == "fr");
+            AssetManager::Shutdown();
+            Localization::SetSystemLanguage({});
+            PlayerData::SetFolder({});
+            fs::remove_all(locDir, pdError);
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -9012,6 +9057,85 @@ namespace
 
     // Input actions: buttons and axes by name from keys, mouse buttons and gamepad controls (fed here from a fake
     // source), with Down/Up on the frames they change; a project's own actions saved in its file.
+    // Localization: CSV string tables merged per language, the language picked (saved choice, system, default) and
+    // texts falling back to the default language.
+    void TestLocalization()
+    {
+        // CSV cells: quotes around commas and line breaks, "" for a quote, CRLF rows, a byte order mark, blank lines.
+        auto rows = Localization::ParseCsv("\xEF\xBB\xBFKey,en\r\na,\"x, y\"\r\n\r\nb,\"say \"\"hi\"\"\"\nc,\"two\r\nlines\"\nd,");
+        CHECK(rows.size() == 5 && rows[0] == std::vector<std::string>({ "Key", "en" }));
+        CHECK(rows[1][1] == "x, y" && rows[2][1] == "say \"hi\"" && rows[3][1] == "two\nlines");
+        CHECK(rows[4] == std::vector<std::string>({ "d", "" }));
+        // Headers: "Name (code)" or the code alone; comment rows and empty keys are skipped; one column is no table.
+        std::string error;
+        auto table = StringTable::Parse("Key,English (en),fr,\n# menu\nplay,Play,Jouer\n,orphan\nquit,Quit\n", &error);
+        CHECK(table && table->Languages.size() == 2 && table->Languages[0].Code == "en" && table->Languages[0].Name == "English");
+        CHECK(table && table->Languages[1].Code == "fr" && table->Languages[1].Name == "fr");
+        CHECK(table && table->Entries.size() == 2 && table->Entries[1].Key == "quit" && table->Entries[1].Texts == std::vector<std::string>({ "Quit", "" }));
+        CHECK(!StringTable::Parse("Key\nplay\n", &error) && !error.empty() && !StringTable::Parse("", &error));
+
+        // A project with two tables: the second adds German and repeats a key (the first table's wins).
+        fs::path dir = fs::temp_directory_path() / "dimension_localization";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "Assets/UI");
+        std::ofstream(dir / "Assets/UI/A.csv") << "Key,English (en),Fran\xC3\xA7" "ais (fr)\nmenu.play,Play,Jouer\nmenu.quit,Quit,\n";
+        std::ofstream(dir / "Assets/UI/B.csv") << "Key,Deutsch (de),English (en)\nmenu.play,Spielen,Start\nhud.score,Punkte: {0},Score: {0}\n";
+        auto& config = Project::GetConfig();
+        std::string savedDefault = config.DefaultLanguage;
+        config.DefaultLanguage.clear();
+        PlayerData::SetFolder(dir / "PlayerData");
+        Localization::SetSystemLanguage("fr-CA");
+        AssetManager::Init(dir / "Assets");
+        CHECK(AssetManager::GetAssetsOfType(AssetType::StringTable).size() == 2);
+        const auto& langs = Localization::Languages();
+        CHECK(langs.size() == 3 && langs[0].Code == "en" && langs[1].Code == "fr" && langs[2].Code == "de" && langs[2].Name == "Deutsch");
+        // The system's "fr-CA" picks French (its base language); a text French lacks comes from the default (English).
+        CHECK(Localization::Language() == "fr" && Localization::Get("menu.play") == "Jouer" && Localization::Get("menu.quit") == "Quit");
+        CHECK(Localization::Get("menu.play", "de") == "Play" && Localization::Get("menu.play", "en") == "Play"); // A.csv's row, no German
+        CHECK(Localization::Get("hud.score", "fr") == "Score: {0}" && Localization::Get("missing.key") == "missing.key");
+        CHECK(Localization::Has("hud.score") && !Localization::Has("missing.key"));
+        CHECK(Localization::Keys() == std::vector<std::string>({ "hud.score", "menu.play", "menu.quit" }));
+        CHECK(Localization::Match("DE_at") == "de" && Localization::Match("en") == "en" && Localization::Match("pt-BR").empty());
+        // Choosing a language: kept in PlayerPrefs, so the next run (another project load) starts in it.
+        CHECK(Localization::SetLanguage("de-AT") && Localization::Language() == "de" && PlayerPrefs::GetString("Language") == "de");
+        CHECK(!Localization::SetLanguage("ja") && Localization::Language() == "de");
+        AssetManager::Init(dir / "Assets");
+        CHECK(Localization::Language() == "de" && Localization::Get("hud.score") == "Punkte: {0}");
+        // No choice and a system language no table has: the project's default language.
+        PlayerPrefs::DeleteKey("Language");
+        Localization::SetSystemLanguage("ja-JP");
+        config.DefaultLanguage = "de";
+        Localization::Reset();
+        CHECK(Localization::Language() == "de" && Localization::DefaultLanguage() == "de");
+        CHECK(Localization::Get("menu.quit", "fr") == "Quit"); // German lacks it too: any translation beats none
+        config.DefaultLanguage.clear();
+        Localization::Reset();
+        CHECK(Localization::Language() == "en"); // else the first column
+
+        // Editing a table reloads it; removing one drops its keys and languages.
+        std::ofstream(dir / "Assets/UI/A.csv") << "Key,English (en),Fran\xC3\xA7" "ais (fr)\nmenu.play,Play!,Jouer !\n";
+        fs::last_write_time(dir / "Assets/UI/A.csv", fs::last_write_time(dir / "Assets/UI/A.csv") + std::chrono::seconds(2));
+        AssetManager::Refresh();
+        CHECK(Localization::Get("menu.play") == "Play!" && !Localization::Has("menu.quit"));
+        // Builds ship every string table (no scene references them); packages and searches only what they are asked for.
+        auto shipped = AssetDependencies::Collect({}).Assets;
+        CHECK(shipped.size() == 2 && AssetDependencies::Collect({}, false).Assets.empty());
+        fs::remove(dir / "Assets/UI/B.csv");
+        fs::remove(dir / "Assets/UI/B.csv.meta");
+        AssetManager::Refresh();
+        CHECK(Localization::Languages().size() == 2 && !Localization::Has("hud.score"));
+        // UI Text's key is a saved field.
+        const ComponentInfo* text = ComponentRegistry::Find("UI Text");
+        CHECK(text && std::any_of(text->Fields.begin(), text->Fields.end(), [](const FieldInfo& f) { return f.Name == "Localized Key"; }));
+
+        AssetManager::Shutdown();
+        Localization::SetSystemLanguage({});
+        config.DefaultLanguage = savedDefault;
+        PlayerData::SetFolder({});
+        fs::remove_all(dir, ec);
+    }
+
     void TestInputActions()
     {
         // A fake input: the keys and buttons held, and the gamepad axes.
@@ -10951,6 +11075,7 @@ int main(int argc, char** argv)
     Run("Debug lines", TestDebugDraw);
     Run("Player prefs", TestPlayerPrefs);
     Run("Input actions", TestInputActions);
+    Run("Localization", TestLocalization);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

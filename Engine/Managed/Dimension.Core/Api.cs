@@ -407,6 +407,57 @@ namespace Dimension
     }
 
     /// <summary>
+    /// The game's text in the player's language, from the project's string tables (.csv assets: a column per language,
+    /// a row per key). The language starts as the one chosen last, else the system's, else the project's default
+    /// (Project Settings > Localization); a text missing in a language comes from the default one.
+    /// </summary>
+    public static unsafe class Localization
+    {
+        internal static string Call(int op, string text, Entity entity = default) =>
+            Native.WithUtf8<string>(text ?? "", p => Native.FromUtf8(Native.Api.Localization(op, (byte*)p, entity.Scene, entity.Id)));
+
+        /// <summary>The key's text in the current language (the key itself when no table has it).</summary>
+        public static string Get(string key) => Call(0, key) ?? key ?? "";
+        /// <summary>The key's text with {0}, {1}... filled in (string.Format): <c>Get("score", points)</c>.</summary>
+        public static string Get(string key, params object[] args) => string.Format(System.Globalization.CultureInfo.InvariantCulture, Get(key), args);
+        public static bool Has(string key) => Call(1, key) != null;
+
+        /// <summary>The current language's code ("en", "fr"...); setting it picks the closest the tables have ("de-AT"
+        /// picks "de") and keeps the choice for the next run. UI Texts with a Localized Key follow.</summary>
+        public static string Language
+        {
+            get => Call(2, null) ?? "";
+            set => SetLanguage(value);
+        }
+        /// <summary>Like setting <see cref="Language"/>; false (nothing changes) when no table has the language.</summary>
+        public static bool SetLanguage(string code)
+        {
+            bool ok = Call(3, code) != null;
+            if (!ok) Debug.LogWarning($"Localization: no string table has the language '{code}'");
+            return ok;
+        }
+
+        /// <summary>The languages of the project's tables (codes, in column order).</summary>
+        public static string[] Languages
+        {
+            get
+            {
+                string list = Call(4, null) ?? "";
+                var lines = list.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                var codes = new string[lines.Length];
+                for (int i = 0; i < lines.Length; i++) codes[i] = lines[i].Split('\t')[0];
+                return codes;
+            }
+        }
+        /// <summary>A language's name from the table headers ("Deutsch" for "de"), or the code.</summary>
+        public static string LanguageName(string code) => Call(7, code) ?? code ?? "";
+        /// <summary>The system's language as a locale name ("fr-FR").</summary>
+        public static string SystemLanguage => Call(5, null) ?? "";
+        /// <summary>The project's default language (Project Settings > Localization, else the first column).</summary>
+        public static string DefaultLanguage => Call(6, null) ?? "";
+    }
+
+    /// <summary>
     /// Small settings kept between runs (like Unity's PlayerPrefs): ints, floats and strings by key, saved in
     /// <see cref="Application.PersistentDataPath"/> whenever one changes. A key of another type, or not set, reads as
     /// the default.

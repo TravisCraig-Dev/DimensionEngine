@@ -137,6 +137,7 @@ namespace Editor::UI
         case AssetType::Timeline: return { 0.95f, 0.75f, 0.45f, 1 };
         case AssetType::SpriteAtlas: return { 0.95f, 0.6f, 0.55f, 1 };
         case AssetType::Preset: return { 0.6f, 0.85f, 0.85f, 1 };
+        case AssetType::StringTable: return { 0.85f, 0.9f, 0.55f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -156,6 +157,7 @@ namespace Editor::UI
         case AssetType::Timeline: return "TIME";
         case AssetType::SpriteAtlas: return "ATLAS";
         case AssetType::Preset: return "PRESET";
+        case AssetType::StringTable: return "TEXT";
         default: return "FILE";
         }
     }

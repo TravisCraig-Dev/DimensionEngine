@@ -1,6 +1,7 @@
 #include "Dimension/UI/UI.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Project/Localization.h"
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/RenderDevice.h"
@@ -1290,13 +1291,14 @@ namespace Dimension::UI
                 EmitArrow(out, { mx.x - pad - arrow * 0.5f, mn.y + size.y * 0.5f }, arrow, dd->Open, dd->TextColor * dim, white, rect);
             }
 
-            if (auto* text = reg.TryGet<UITextComponent>(e); text && !text->Text.empty())
+            if (auto* text = reg.TryGet<UITextComponent>(e); text && (!text->Text.empty() || !text->LocalizedKey.empty()))
             {
                 auto font = AssetManager::GetFont(text->Font);
                 if (!font) continue;
                 float pixelSize = text->FontSize * s;
                 glm::vec2 block;
-                auto quads = font->Layout(text->Text, pixelSize, text->Wrap ? size.x : 0.0f, text->Align, size.x, block, text->RichText, s);
+                std::string localized = text->LocalizedKey.empty() ? std::string() : Localization::Get(text->LocalizedKey);
+                auto quads = font->Layout(text->LocalizedKey.empty() ? text->Text : localized, pixelSize, text->Wrap ? size.x : 0.0f, text->Align, size.x, block, text->RichText, s);
                 float y = text->VerticalAlign == TextVAlign::Top      ? 0.0f
                         : text->VerticalAlign == TextVAlign::Middle   ? (size.y - block.y) * 0.5f
                                                                       : size.y - block.y;

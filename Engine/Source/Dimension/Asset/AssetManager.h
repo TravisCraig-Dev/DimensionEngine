@@ -17,7 +17,7 @@ namespace Dimension
     struct SpriteAtlas;
     struct SpriteRect;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -45,6 +45,7 @@ namespace Dimension
 
         static void Init(const fs::path& assetsDirectory);
         static void Shutdown();
+        static bool IsInitialized();
         // Rescans the Assets folder: imports new files, drops deleted ones, reloads changed ones.
         static void Refresh();
 

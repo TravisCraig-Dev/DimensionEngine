@@ -111,7 +111,7 @@ namespace Dimension::AssetDependencies
     {
         std::vector<AssetHandle> out;
         if (!AssetManager::GetMetadata(asset)) return out;
-        for (int type = (int)AssetType::Texture; type <= (int)AssetType::Preset; ++type)
+        for (int type = (int)AssetType::Texture; type <= (int)AssetType::StringTable; ++type)
             for (AssetHandle h : AssetManager::GetAssetsOfType((AssetType)type))
             {
                 if (h == asset) continue;
@@ -138,6 +138,8 @@ namespace Dimension::AssetDependencies
                     auto first = m->Path.begin();
                     if (first != m->Path.end() && first->string() == "Resources") pending.push_back(h);
                 }
+        // String tables ship wherever they are: scripts and UI Texts name their keys, not the tables.
+        for (AssetHandle h : resources ? AssetManager::GetAssetsOfType(AssetType::StringTable) : std::vector<AssetHandle>{}) pending.push_back(h);
 
         while (!pending.empty())
         {

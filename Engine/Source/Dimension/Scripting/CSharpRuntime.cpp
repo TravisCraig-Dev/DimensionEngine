@@ -17,6 +17,7 @@
 #include "Dimension/Scene/DebugDraw.h"
 #include "Dimension/Core/PlayerPrefs.h"
 #include "Dimension/Project/InputActions.h"
+#include "Dimension/Project/Localization.h"
 #include <climits>
 #include <cmath>
 #include <limits>
@@ -157,6 +158,10 @@ namespace Dimension
             // 7 delete key, 8 delete all, 9 save, 10 the player data folder.
             const char* (*PlayerPrefs)(int, const char*, const char*);
             float (*InputAction)(int, const char*); // 0 button held, 1 pressed this frame, 2 released this frame, 3 axis
+            // Localization (text in, text out; null for none): 0 a key's text, 1 has key, 2 the language, 3 set it,
+            // 4 the languages ("code\tname" lines), 5 the system's, 6 the default, 7 a language's name, 8 / 9 get / set
+            // a UI Text's Localized Key (scene, entity).
+            const char* (*Localization)(int, const char*, void*, uint64_t);
         };
 
         // Background scene loads started from C#, by id.
@@ -831,7 +836,7 @@ namespace Dimension
                 return 1;
             };
             a.SetUIText = [](void* s, uint64_t e, const char* text) {
-                if (auto* t = Comp<UITextComponent>(s, e)) t->Text = text;
+                if (auto* t = Comp<UITextComponent>(s, e)) t->Text = text, t->LocalizedKey.clear(); // a script's text wins
                 else if (auto* f = Comp<UIInputFieldComponent>(s, e)) f->Text = text;
             };
             a.GetUIText = [](void* s, uint64_t e) -> const char* {
@@ -920,6 +925,33 @@ namespace Dimension
                 }
                 default: return nullptr;
                 }
+            };
+            a.Localization = [](int op, const char* text, void* s, uint64_t e) -> const char* {
+                thread_local std::string result;
+                std::string t = text ? text : "";
+                switch (op)
+                {
+                case 0: result = Localization::Get(t); break;
+                case 1: return Localization::Has(t) ? "1" : nullptr;
+                case 2: result = Localization::Language(); break;
+                case 3: return Localization::SetLanguage(t) ? "1" : nullptr;
+                case 4:
+                    result.clear();
+                    for (const auto& lang : Localization::Languages()) result += lang.Code + "\t" + lang.Name + "\n";
+                    break;
+                case 5: result = Localization::SystemLanguage(); break;
+                case 6: result = Localization::DefaultLanguage(); break;
+                case 7: result = Localization::LanguageName(t); break;
+                case 8:
+                    if (auto* c = Comp<UITextComponent>(s, e)) result = c->LocalizedKey;
+                    else return nullptr;
+                    break;
+                case 9:
+                    if (auto* c = Comp<UITextComponent>(s, e)) c->LocalizedKey = t;
+                    return nullptr;
+                default: return nullptr;
+                }
+                return result.c_str();
             };
             a.InputAction = [](int op, const char* name) -> float {
                 std::string n = name ? name : "";

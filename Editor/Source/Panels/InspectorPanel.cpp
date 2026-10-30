@@ -25,6 +25,7 @@
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Animation/AnimatorController.h>
+#include <Dimension/Project/Localization.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -2088,6 +2089,62 @@ namespace Editor
         else if (meta->Type == AssetType::Scene)
         {
             if (ImGui::Button("Open Scene")) m_Ctx.RequestOpenScene = AssetManager::GetAbsolutePath(handle);
+        }
+        else if (meta->Type == AssetType::StringTable)
+        {
+            // Its keys and texts per language (edited in a spreadsheet or text editor: the table reloads when saved).
+            std::string error;
+            auto table = StringTable::Load(AssetManager::GetAbsolutePath(handle), &error);
+            if (!table)
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "Not a string table: %s", error.c_str());
+                return;
+            }
+            size_t missing = 0;
+            for (const auto& e : table->Entries)
+                for (const auto& t : e.Texts) missing += t.empty();
+            ImGui::Text("%zu keys in %zu languages", table->Entries.size(), table->Languages.size());
+            if (missing)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "(%zu texts missing)", missing);
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("Shown now in %s (picked in Project Settings > Localization). Edit the .csv in a spreadsheet: "
+                               "it reloads when saved.", Localization::LanguageName(Localization::Language()).c_str());
+            ImGui::PopStyleColor();
+            ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+            float height = std::min(ImGui::GetContentRegionAvail().y, ImGui::GetTextLineHeightWithSpacing() * (table->Entries.size() + 1.5f));
+            if (ImGui::BeginTable("Strings", 1 + (int)table->Languages.size(), flags, ImVec2(0, std::max(height, 60.0f))))
+            {
+                ImGui::TableSetupScrollFreeze(1, 1);
+                ImGui::TableSetupColumn("Key");
+                for (const auto& l : table->Languages) ImGui::TableSetupColumn(l.Name.c_str()); // the code is in Project Settings
+                ImGui::TableHeadersRow();
+                ImGuiListClipper clipper;
+                clipper.Begin((int)table->Entries.size());
+                while (clipper.Step())
+                    for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r)
+                    {
+                        const auto& e = table->Entries[r];
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(e.Key.c_str());
+                        for (const auto& t : e.Texts)
+                        {
+                            ImGui::TableNextColumn();
+                            if (t.empty()) ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "(missing)");
+                            else
+                            {
+                                // One line per cell (a text with line breaks shows its first, the rest in the tooltip).
+                                size_t nl = t.find('\n');
+                                ImGui::TextUnformatted(t.c_str(), nl == std::string::npos ? nullptr : t.c_str() + nl);
+                                if (nl != std::string::npos) ImGui::SetItemTooltip("%s", t.c_str());
+                            }
+                        }
+                    }
+                ImGui::EndTable();
+            }
         }
         else if (meta->Type == AssetType::Prefab)
         {

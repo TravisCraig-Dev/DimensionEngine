@@ -449,6 +449,9 @@ namespace Dimension
             .Field("Border Scale", &UIImageComponent::BorderScale).Range(0.01f, 100.0f).Speed(0.01f);
         Register<UITextComponent>("UI Text", "UI")
             .Field("Text", &UITextComponent::Text)
+            .Field("Localized Key", &UITextComponent::LocalizedKey)
+            .Tooltip("A key of the project's string tables (.csv): the text shown is its text in the player's language, "
+                     "and follows when the language changes. Empty: Text is shown.")
             .Field("Font", &UITextComponent::Font).As(FieldType::Font)
             .Field("Font Size", &UITextComponent::FontSize).Range(1.0f, 1000.0f).Speed(0.5f)
             .Field("Color", &UITextComponent::Color).As(FieldType::Color4)

@@ -26,6 +26,7 @@
 #include <Dimension/Scene/ViewAlign.h>
 #include <Dimension/Scene/DebugDraw.h>
 #include <Dimension/Project/InputActions.h>
+#include <Dimension/Project/Localization.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include "Shortcuts.h"
@@ -186,6 +187,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Views") m_OpenViewsMenu = true;
         else if (m_Options.OpenWindow == "Grid") m_OpenGridMenu = true;
         else if (m_Options.OpenWindow == "Input Settings") m_ShowProjectSettings = m_OpenInputSettings = true;
+        else if (m_Options.OpenWindow == "Localization Settings") m_ShowProjectSettings = m_OpenLocalizationSettings = true;
         else if (m_Options.OpenWindow == "Export Package" && !m_Options.SelectAsset.empty())
             OpenExportPackage({ AssetManager::GetHandle(m_Options.SelectAsset) });
         else if (m_Options.OpenWindow == "Import Package" && !m_Options.PackagePath.empty()) OpenImportPackage(m_Options.PackagePath);
@@ -3462,6 +3464,7 @@ namespace Editor
             ImGui::TextDisabled("Changes apply the next time play mode starts.");
         }
         if (ImGui::CollapsingHeader("Input", m_OpenInputSettings ? ImGuiTreeNodeFlags_DefaultOpen : 0)) changed |= DrawInputSettings();
+        if (ImGui::CollapsingHeader("Localization", m_OpenLocalizationSettings ? ImGuiTreeNodeFlags_DefaultOpen : 0)) changed |= DrawLocalizationSettings();
         if (ImGui::CollapsingHeader("Import Defaults", config.ImportRules.empty() ? 0 : ImGuiTreeNodeFlags_DefaultOpen))
         {
             // Folder rules: the import settings new textures and models get there (the deepest folder's rule wins).
@@ -3621,6 +3624,91 @@ namespace Editor
             changed = true;
         }
         ImGui::EndDisabled();
+        return changed;
+    }
+
+    bool EditorLayer::DrawLocalizationSettings()
+    {
+        // The string tables' languages: the default one (for missing texts and unmatched systems), the one shown now
+        // (UI Texts with a Localized Key, Localization.Get), and how far each table is translated.
+        auto& config = Project::GetConfig();
+        bool changed = false;
+        ImGui::TextDisabled("Scripts read texts by key: Localization.Get(\"menu.play\"); UI Texts take a Localized Key.");
+        const auto& languages = Localization::Languages();
+        if (languages.empty())
+        {
+            ImGui::TextDisabled("No string tables yet: add a .csv to Assets with a header row Key,English (en),French (fr),...");
+            ImGui::TextDisabled("and a row per key.");
+            return false;
+        }
+        auto label = [](const StringTable::Language& l) { return l.Name == l.Code ? l.Code : l.Name + " (" + l.Code + ")"; };
+        std::string firstColumn = "First column: " + label(languages[0]);
+        auto current = std::find_if(languages.begin(), languages.end(), [&](const auto& l) { return l.Code == config.DefaultLanguage; });
+        ImGui::SetNextItemWidth(240.0f);
+        if (ImGui::BeginCombo("Default Language", current == languages.end() ? firstColumn.c_str() : label(*current).c_str()))
+        {
+            if (ImGui::Selectable(firstColumn.c_str(), current == languages.end())) config.DefaultLanguage.clear(), changed = true;
+            for (const auto& l : languages)
+                if (ImGui::Selectable(label(l).c_str(), l.Code == config.DefaultLanguage)) config.DefaultLanguage = l.Code, changed = true;
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        UI::HelpMarker("For players whose system language no table has, and for texts not translated into a language.");
+        const std::string& shown = Localization::Language();
+        ImGui::SetNextItemWidth(240.0f);
+        if (ImGui::BeginCombo("Current Language", label({ shown, Localization::LanguageName(shown) }).c_str()))
+        {
+            for (const auto& l : languages)
+                if (ImGui::Selectable(label(l).c_str(), l.Code == shown)) Localization::SetLanguage(l.Code);
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        UI::HelpMarker("What the editor shows (and what playing starts in): a player's choice, kept like Localization.Language "
+                       "set from a script. A new player starts in the system's language.");
+        std::string system = Localization::SystemLanguage(), match = Localization::Match(system);
+        ImGui::TextDisabled("System language: %s (%s)", system.c_str(), match.empty() ? "no table has it: the default is used" : ("uses " + match).c_str());
+
+        // Each table: its keys, and how many have a text in each language (orange: some missing).
+        if (ImGui::BeginTable("StringTables", 2 + (int)languages.size(), ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+        {
+            ImGui::TableSetupColumn("String Table", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Keys");
+            for (const auto& l : languages) ImGui::TableSetupColumn(l.Code.c_str());
+            ImGui::TableHeadersRow();
+            for (AssetHandle h : AssetManager::GetAssetsOfType(AssetType::StringTable))
+            {
+                const AssetMetadata* meta = AssetManager::GetMetadata(h);
+                std::string error;
+                auto table = StringTable::Load(AssetManager::GetAbsolutePath(h), &error);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::PushID((int)(uint64_t)h);
+                if (ImGui::Selectable(meta->Path.generic_string().c_str(), m_Ctx.SelectedAsset == h)) m_Ctx.SelectedAsset = h;
+                ImGui::PopID();
+                if (!table)
+                {
+                    ImGui::SetItemTooltip("%s", error.c_str());
+                    continue;
+                }
+                ImGui::TableNextColumn();
+                ImGui::Text("%zu", table->Entries.size());
+                for (const auto& l : languages)
+                {
+                    ImGui::TableNextColumn();
+                    auto column = std::find_if(table->Languages.begin(), table->Languages.end(), [&](const auto& t) { return t.Code == l.Code; });
+                    if (column == table->Languages.end())
+                    {
+                        ImGui::TextDisabled("-");
+                        continue;
+                    }
+                    size_t c = column - table->Languages.begin(), done = 0;
+                    for (const auto& e : table->Entries) done += !e.Texts[c].empty();
+                    if (done == table->Entries.size()) ImGui::Text("%zu", done);
+                    else ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.3f, 1.0f), "%zu", done);
+                }
+            }
+            ImGui::EndTable();
+        }
         return changed;
     }
 

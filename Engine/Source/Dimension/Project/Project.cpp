@@ -85,6 +85,7 @@ namespace Dimension
                         s_Config.NavAreaCosts[i] = j["navAreas"][i].value("cost", s_Config.NavAreaCosts[i]);
                     }
                 s_Config.NavPathBudget = j.value("navPathBudget", s_Config.NavPathBudget);
+                s_Config.DefaultLanguage = j.value("defaultLanguage", std::string());
                 // Input actions: each binding's kind and control code (with its name, for people reading the file).
                 s_Config.InputActions.clear();
                 s_Config.InputActionsSet = j.contains("inputActions") && j["inputActions"].is_array();
@@ -187,6 +188,7 @@ namespace Dimension
                           { "navPathBudget", s_Config.NavPathBudget },
                           { "defaultPresets", defaultPresets },
                           { "importRules", importRules },
+                          { "defaultLanguage", s_Config.DefaultLanguage },
                           { "engineVersion", "0.1.0" } };
         if (s_Config.InputActionsSet) j["inputActions"] = inputActions;
         std::ofstream out(s_Directory / kFileName);

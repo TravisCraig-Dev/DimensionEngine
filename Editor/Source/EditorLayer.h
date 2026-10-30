@@ -251,6 +251,8 @@ namespace Editor
         // Project Settings > Input: the named input actions and their bindings.
         bool DrawInputSettings();
         bool m_OpenInputSettings = false;
+        bool DrawLocalizationSettings();
+        bool m_OpenLocalizationSettings = false;
         // Selection history (Alt+Left/Right) and saved selections (Ctrl+Alt+1-9 saves, Alt+1-9 selects).
         Dimension::SelectionSnapshot CaptureSelection();
         bool CanApplySelection(const Dimension::SelectionSnapshot& s);

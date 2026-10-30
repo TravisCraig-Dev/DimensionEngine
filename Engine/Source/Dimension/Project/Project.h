@@ -46,6 +46,9 @@ namespace Dimension
         std::map<std::string, AssetHandle> DefaultPresets;
         // Import defaults per folder (ImportDefaults): the settings new assets of a type get there.
         std::vector<ImportRule> ImportRules;
+        // Localization: the language for players whose system language no string table has, and for texts missing in
+        // a language (a language code; "" = the tables' first column).
+        std::string DefaultLanguage;
         // Named input actions (Project Settings > Input); InputActionsSet false: the built-in defaults apply.
         std::vector<InputAction> InputActions;
         bool InputActionsSet = false;

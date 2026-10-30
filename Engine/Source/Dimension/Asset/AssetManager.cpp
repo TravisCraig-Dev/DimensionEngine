@@ -14,6 +14,7 @@
 #include "Dimension/Renderer/SpriteAtlas.h"
 #include "Dimension/Asset/ImportDefaults.h"
 #include "Dimension/Project/Project.h"
+#include "Dimension/Project/Localization.h"
 #include "Dimension/Renderer/SpriteSlicing.h"
 #include "embedded/kDefaultFontData.h"
 #include <algorithm>
@@ -88,12 +89,14 @@ namespace Dimension
         void Register(AssetMetadata m)
         {
             s->AtlasIndexDirty = true;
+            if (m.Type == AssetType::StringTable) Localization::Invalidate();
             s->PathToHandle[Key(m.Path)] = m.Handle;
             s->Assets[m.Handle] = std::move(m);
         }
 
         void Unload(AssetHandle h)
         {
+            if (auto it = s->Assets.find(h); it != s->Assets.end() && it->second.Type == AssetType::StringTable) Localization::Invalidate();
             // An atlas, or a sprite packed into atlases: packed again when next asked for.
             s->AtlasIndexDirty = true;
             s->SpriteAtlases.erase(h);
@@ -140,6 +143,7 @@ namespace Dimension
         case AssetType::Timeline: return "Timeline";
         case AssetType::SpriteAtlas: return "Sprite Atlas";
         case AssetType::Preset: return "Preset";
+        case AssetType::StringTable: return "String Table";
         default: return "None";
         }
     }
@@ -233,6 +237,7 @@ namespace Dimension
         s = new State();
         s->AssetsDir = assetsDirectory;
         fs::create_directories(assetsDirectory);
+        Localization::Reset(); // this project's tables, and its player's language
 
         Refresh();
         Log::Info("Asset database: {} assets in '{}'", s->Assets.size(), assetsDirectory.string());
@@ -246,7 +251,10 @@ namespace Dimension
         Terrain::ReleaseRuntimes();
         delete s;
         s = nullptr;
+        Localization::Reset();
     }
+
+    bool AssetManager::IsInitialized() { return s != nullptr; }
 
     const fs::path& AssetManager::GetAssetsDirectory() { return s->AssetsDir; }
 
@@ -265,6 +273,7 @@ namespace Dimension
         if (ext == ".timeline") return AssetType::Timeline;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
+        if (ext == ".csv") return AssetType::StringTable;
         if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" || ext == ".opus") return AssetType::Audio;
         return AssetType::None;
     }
