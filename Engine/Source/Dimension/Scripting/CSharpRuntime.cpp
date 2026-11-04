@@ -220,6 +220,11 @@ namespace Dimension
             float (*ParticlesControl)(void*, uint64_t, int);
             // Emit with overrides: position 3, velocity 3, color 4, size, lifetime; flags bits 1 2 4 8 16 say which are set.
             void (*ParticlesEmitWith)(void*, uint64_t, const float*, int, int);
+            // A Tilemap: 0 get tile (x, y), 1 set tile (x, y, tile; < 0 clears), 2 clear all, 3 painted count, 4 cell to
+            // world (io out: xyz), 5 world to cell (io in: xyz, out: x, y), 6 bounds (io out: min x, y, max x, y; 0 = none).
+            int (*TilemapOp)(void*, uint64_t, int, int, int, int, float*);
+            // A Terrain: the ground (xyz) and normal (xyz) under a world point; 0 outside it.
+            int (*TerrainSample)(void*, uint64_t, const float*, float*);
         };
 
         // Background scene loads started from C#, by id.
@@ -1371,6 +1376,47 @@ namespace Dimension
                 p.Size = v[10];
                 p.Lifetime = v[11];
                 ps->Emit(p, count);
+            };
+            a.TilemapOp = [](void* s, uint64_t e, int op, int x, int y, int tile, float* io) -> int {
+                auto* tm = Comp<TilemapComponent>(s, e);
+                if (!tm) return op == 0 ? -1 : 0;
+                switch (op)
+                {
+                case 0: return tm->GetTile(x, y);
+                case 1: tm->SetTile(x, y, tile); return 1;
+                case 2: tm->Clear(); return 1;
+                case 3: return (int)tm->Count();
+                case 4:
+                {
+                    glm::vec3 p = tm->CellToWorld(S(s).GetRegistry().Get<TransformComponent>(Unpack(e)).World, { x, y });
+                    io[0] = p.x; io[1] = p.y; io[2] = p.z;
+                    return 1;
+                }
+                case 5:
+                {
+                    glm::ivec2 c = tm->WorldToCell(S(s).GetRegistry().Get<TransformComponent>(Unpack(e)).World, { io[0], io[1], io[2] });
+                    io[0] = (float)c.x; io[1] = (float)c.y;
+                    return 1;
+                }
+                case 6:
+                {
+                    glm::ivec2 lo, hi;
+                    if (!tm->CellBounds(lo, hi)) return 0;
+                    io[0] = (float)lo.x; io[1] = (float)lo.y; io[2] = (float)hi.x; io[3] = (float)hi.y;
+                    return 1;
+                }
+                default: return 0;
+                }
+            };
+            a.TerrainSample = [](void* s, uint64_t e, const float* p, float* out) -> int {
+                auto* terrain = Comp<TerrainComponent>(s, e);
+                if (!terrain) return 0;
+                glm::vec3 ground, normal;
+                if (!Terrain::Sample(*terrain, S(s).GetRegistry().Get<TransformComponent>(Unpack(e)).World, { p[0], p[1], p[2] }, ground, normal))
+                    return 0;
+                out[0] = ground.x; out[1] = ground.y; out[2] = ground.z;
+                out[3] = normal.x; out[4] = normal.y; out[5] = normal.z;
+                return 1;
             };
             a.SpriteAnimatorTime = [](void* s, uint64_t e, int op, float v) -> float {
                 auto* anim = Comp<SpriteAnimatorComponent>(s, e);

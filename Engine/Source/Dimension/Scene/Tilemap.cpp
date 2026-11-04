@@ -28,6 +28,7 @@ namespace Dimension
         }
         m_DecodedHash = std::hash<std::string>{}(Data);
         m_Decoded = true;
+        ++m_Revision;
     }
 
     void TilemapComponent::Encode()
@@ -65,15 +66,19 @@ namespace Dimension
     void TilemapComponent::SetTile(int32_t x, int32_t y, int32_t tile)
     {
         Cells();
-        if (tile < 0) m_Cells.erase(Key(x, y));
+        auto it = m_Cells.find(Key(x, y));
+        if (tile < 0 ? it == m_Cells.end() : it != m_Cells.end() && it->second == tile) return; // unchanged
+        if (tile < 0) m_Cells.erase(it);
         else m_Cells[Key(x, y)] = tile;
         Encode();
+        ++m_Revision;
     }
 
     void TilemapComponent::Clear()
     {
         m_Cells.clear();
         Encode();
+        ++m_Revision;
     }
 
     std::vector<glm::vec4> TilemapComponent::ColliderBoxes()
@@ -100,5 +105,31 @@ namespace Dimension
     {
         float cs = CellSize > 0.0f ? CellSize : 1.0f;
         return { (int32_t)std::floor(local.x / cs), (int32_t)std::floor(local.y / cs) };
+    }
+
+    glm::vec3 TilemapComponent::CellToWorld(const glm::mat4& world, const glm::ivec2& cell) const
+    {
+        float cs = CellSize > 0.0f ? CellSize : 1.0f;
+        return glm::vec3(world * glm::vec4((glm::vec2(cell) + 0.5f) * cs, 0.0f, 1.0f));
+    }
+
+    glm::ivec2 TilemapComponent::WorldToCell(const glm::mat4& world, const glm::vec3& point) const
+    {
+        return LocalToCell(glm::vec2(glm::inverse(world) * glm::vec4(point, 1.0f)));
+    }
+
+    bool TilemapComponent::CellBounds(glm::ivec2& min, glm::ivec2& max)
+    {
+        auto& cells = Cells();
+        if (cells.empty()) return false;
+        min = glm::ivec2(INT32_MAX);
+        max = glm::ivec2(INT32_MIN);
+        for (auto& [k, t] : cells)
+        {
+            glm::ivec2 c(KeyX(k), KeyY(k));
+            min = glm::min(min, c);
+            max = glm::max(max, c);
+        }
+        return true;
     }
 }

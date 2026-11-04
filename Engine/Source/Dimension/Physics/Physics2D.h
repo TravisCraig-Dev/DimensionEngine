@@ -78,7 +78,14 @@ namespace Dimension
             Joint2DType Type;
         };
         std::vector<JointRecord> m_Joints;
-        std::vector<uint64_t> m_TilemapBodies; // b2BodyId packed
+        struct TilemapBody
+        {
+            Entity Owner;
+            uint64_t Id = 0;       // b2BodyId packed (0: no tiles, so no body)
+            uint32_t Revision = 0; // the tiles it was made from
+        };
+        std::vector<TilemapBody> m_TilemapBodies;
+        void SyncTilemaps(); // remakes the bodies of tilemaps whose tiles changed (or that went away)
         std::vector<std::pair<uint64_t, uint64_t>> m_Touching; // shape pairs touching now (b2ShapeId packed), for Stay
         std::vector<std::pair<uint64_t, uint64_t>> m_InSensor; // sensor shape, visitor shape: overlapping now
     };

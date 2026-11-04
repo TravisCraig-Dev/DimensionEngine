@@ -372,6 +372,81 @@ namespace Dimension
         }
     }
 
+    /// <summary>
+    /// A grid of tiles from a sprite sheet (like Unity's Tilemap): cell (x, y) is CellSize wide in the object's XY plane,
+    /// from its origin, and shows the sheet's tile number `tile` (counted row by row; -1 is an empty cell). Its collider
+    /// follows the tiles painted or cleared while playing (from the next physics step).
+    /// </summary>
+    public unsafe class Tilemap : Component
+    {
+        internal override string NativeName => "Tilemap";
+        private int Op(int op, int x = 0, int y = 0, int tile = 0, float* io = null) => Native.Api.TilemapOp(Entity.Scene, Entity.Id, op, x, y, tile, io);
+
+        /// <summary>The tile in a cell (-1: empty).</summary>
+        public int GetTile(int x, int y) => Op(0, x, y);
+        public int GetTile(Vector2Int cell) => GetTile(cell.X, cell.Y);
+        public bool HasTile(Vector2Int cell) => GetTile(cell) >= 0;
+        /// <summary>Paints a cell with a tile of the sheet (a negative tile empties it).</summary>
+        public void SetTile(int x, int y, int tile) => Op(1, x, y, tile);
+        public void SetTile(Vector2Int cell, int tile) => SetTile(cell.X, cell.Y, tile);
+        public void ClearTile(Vector2Int cell) => SetTile(cell.X, cell.Y, -1);
+        /// <summary>Paints every cell of a rectangle (min and max inclusive).</summary>
+        public void BoxFill(Vector2Int min, Vector2Int max, int tile)
+        {
+            for (int y = Math.Min(min.Y, max.Y); y <= Math.Max(min.Y, max.Y); ++y)
+                for (int x = Math.Min(min.X, max.X); x <= Math.Max(min.X, max.X); ++x) SetTile(x, y, tile);
+        }
+        /// <summary>Empties every cell.</summary>
+        public void ClearAllTiles() => Op(2);
+        /// <summary>How many cells are painted.</summary>
+        public int TileCount => Op(3);
+
+        /// <summary>The center of a cell in world space.</summary>
+        public Vector3 CellToWorld(Vector2Int cell) { Vector3 p; Op(4, cell.X, cell.Y, 0, (float*)&p); return p; }
+        /// <summary>The cell under a world point (e.g. the mouse, from Camera.ScreenToWorldPoint).</summary>
+        public Vector2Int WorldToCell(Vector3 world) { Op(5, 0, 0, 0, (float*)&world); return new Vector2Int((int)world.X, (int)world.Y); }
+        /// <summary>The smallest and largest painted cells (inclusive), or false when nothing is painted.</summary>
+        public bool GetCellBounds(out Vector2Int min, out Vector2Int max)
+        {
+            float* v = stackalloc float[4];
+            bool any = Op(6, 0, 0, 0, v) != 0;
+            min = new Vector2Int((int)v[0], (int)v[1]);
+            max = new Vector2Int((int)v[2], (int)v[3]);
+            return any;
+        }
+        public float CellSize { get => GetFloat("Cell Size"); set => SetFloat("Cell Size", value); }
+        public Color Color { get { Vector4 v = GetVector4("Color"); return new Color(v.X, v.Y, v.Z, v.W); } set => SetVector4("Color", new Vector4(value.R, value.G, value.B, value.A)); }
+    }
+
+    /// <summary>A Terrain (its height field), for putting things on the ground.</summary>
+    public unsafe class Terrain : Component
+    {
+        internal override string NativeName => "Terrain";
+
+        /// <summary>The scene's first active terrain (null when there is none).</summary>
+        public static Terrain Active => Entity.FindObjectOfType<Terrain>();
+
+        /// <summary>The ground under (or over) a world point, along the terrain's up axis, and the surface normal there;
+        /// false outside the terrain's area. Holes are ignored.</summary>
+        public bool TrySample(Vector3 worldPosition, out Vector3 ground, out Vector3 normal)
+        {
+            float* v = stackalloc float[6];
+            bool inside = Native.Api.TerrainSample(Entity.Scene, Entity.Id, (float*)&worldPosition, v) != 0;
+            ground = new Vector3(v[0], v[1], v[2]);
+            normal = new Vector3(v[3], v[4], v[5]);
+            return inside;
+        }
+        /// <summary>
+        /// The world height (Y) of the ground under a point (Unity's SampleHeight gives it from the terrain's position;
+        /// this is the world Y, ready for a position). Outside the terrain: the point's own Y.
+        /// </summary>
+        public float SampleHeight(Vector3 worldPosition) => TrySample(worldPosition, out Vector3 g, out _) ? g.Y : worldPosition.Y;
+        /// <summary>The surface normal under a point (up outside the terrain).</summary>
+        public Vector3 GetNormal(Vector3 worldPosition) => TrySample(worldPosition, out _, out Vector3 n) ? n : Vector3.UnitY;
+        /// <summary>Meters along X and Z, centered on the object.</summary>
+        public Vector2 Size => GetVector2("Size");
+    }
+
     public enum LightType { Directional = 0, Point = 1, Spot = 2 }
 
     /// <summary>

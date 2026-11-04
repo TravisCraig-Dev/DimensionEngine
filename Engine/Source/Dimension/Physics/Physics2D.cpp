@@ -154,8 +154,18 @@ namespace Dimension
         auto& reg = m_Scene.GetRegistry();
         auto& tm = reg.Get<TilemapComponent>(e);
         auto& t = reg.Get<TransformComponent>(e);
+        std::erase_if(m_TilemapBodies, [&](const TilemapBody& b) {
+            if (b.Owner != e) return false;
+            if (b.Id) b2DestroyBody(b2LoadBodyId(b.Id));
+            return true;
+        });
+        TilemapBody record{ e, 0, tm.Revision() };
         auto boxes = tm.ColliderBoxes();
-        if (boxes.empty()) return;
+        if (boxes.empty())
+        {
+            m_TilemapBodies.push_back(record); // painted later: SyncTilemaps makes it then
+            return;
+        }
         glm::vec3 p = t.GetWorldPosition();
         glm::vec2 scale = glm::abs(glm::vec2(t.Scale));
         b2BodyDef bd = b2DefaultBodyDef();
@@ -176,7 +186,27 @@ namespace Dimension
             b2Polygon poly = b2MakeOffsetBox(half.x, half.y, { center.x, center.y }, b2Rot_identity);
             b2CreatePolygonShape(body, &sd, &poly);
         }
-        m_TilemapBodies.push_back(b2StoreBodyId(body));
+        record.Id = b2StoreBodyId(body);
+        m_TilemapBodies.push_back(record);
+    }
+
+    void Physics2DWorld::SyncTilemaps()
+    {
+        auto& reg = m_Scene.GetRegistry();
+        std::vector<Entity> changed;
+        for (auto it = m_TilemapBodies.begin(); it != m_TilemapBodies.end();)
+        {
+            auto* tm = m_Scene.IsValid(it->Owner) ? reg.TryGet<TilemapComponent>(it->Owner) : nullptr;
+            if (!tm || !tm->Collider)
+            {
+                if (it->Id) b2DestroyBody(b2LoadBodyId(it->Id));
+                it = m_TilemapBodies.erase(it);
+                continue;
+            }
+            if (tm->Revision() != it->Revision) changed.push_back(it->Owner);
+            ++it;
+        }
+        for (Entity e : changed) CreateTilemapBody(e);
     }
 
     void Physics2DWorld::CreateJoint(Entity e)
@@ -370,6 +400,7 @@ namespace Dimension
     {
         auto& reg = m_Scene.GetRegistry();
         b2WorldId world = LoadWorld(m_World);
+        SyncTilemaps(); // tiles painted or cleared while playing
 
         // Bodies of inactive objects are disabled, and enabled again (where the object now is) when it is activated.
         for (auto [e, rb, t] : reg.ViewOf<Rigidbody2DComponent, TransformComponent>())

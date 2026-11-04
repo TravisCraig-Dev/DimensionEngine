@@ -112,6 +112,10 @@ namespace Dimension
         const DetailInstances& GetDetails(const TerrainComponent& terrain);
         // The heights (as BuildHeights, or the edit arrays while editing), cached for the current settings and edits.
         std::vector<float> GetHeights(const TerrainComponent& terrain);
+        // The ground under (or over) a world point, straight along the terrain's up axis, and the surface normal there,
+        // both in world space (`world` is the object's transform). False when the point is outside the terrain's area.
+        // Holes are ignored (the height is still that of the surface around them).
+        bool Sample(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& point, glm::vec3& ground, glm::vec3& normal);
         // Where a ray (world space) first meets the terrain (`world` is the object's transform).
         bool Raycast(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& origin, const glm::vec3& direction, glm::vec3& hit);
 

@@ -919,6 +919,79 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestTilemapEditsAndTerrainSample()
+    {
+        // Cells, bounds, revisions and cell <-> world.
+        {
+            TilemapComponent tm;
+            tm.CellSize = 0.5f;
+            glm::ivec2 lo, hi;
+            CHECK(!tm.CellBounds(lo, hi));
+            uint32_t r0 = tm.Revision();
+            tm.SetTile(-2, 3, 1);
+            tm.SetTile(4, -1, 2);
+            uint32_t r1 = tm.Revision();
+            tm.SetTile(4, -1, 2); // the same tile: nothing changes
+            tm.SetTile(7, 7, -1); // clearing an empty cell: nothing either
+            CHECK(r1 != r0 && tm.Revision() == r1);
+            CHECK(tm.CellBounds(lo, hi) && lo == glm::ivec2(-2, -1) && hi == glm::ivec2(4, 3));
+            glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(2, 1, 0));
+            glm::vec3 c = tm.CellToWorld(world, { 4, -1 });
+            CHECK(Near(c.x, 2.0f + 2.25f, 1e-5f) && Near(c.y, 1.0f - 0.25f, 1e-5f));
+            CHECK(tm.WorldToCell(world, c) == glm::ivec2(4, -1) && tm.WorldToCell(world, { 1.99f, 0.99f, 3.0f }) == glm::ivec2(-1, -1));
+            tm.Data = "0,0,5;"; // replaced (as by loading or undo)
+            CHECK(tm.GetTile(0, 0) == 5 && tm.Revision() != r1);
+        }
+
+        // Tiles painted or cleared while playing: the collider follows from the next step.
+        {
+            Scene scene("Tiles");
+            Entity map = scene.CreateEntity("Map");
+            auto& tm = scene.GetRegistry().Emplace<TilemapComponent>(map);
+            tm.SetTile(0, 0, 0);
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& live = rt->GetRegistry().Get<TilemapComponent>(map);
+            auto down = [&](float x) { return Physics2DWorld::Raycast(*rt, { x, 5.0f }, { 0.0f, -1.0f }, 10.0f); };
+            const float dt = 1.0f / 60.0f;
+            rt->OnUpdateRuntime(dt);
+            CHECK(down(0.5f).Hit == map && !down(4.5f));
+            live.SetTile(4, 0, 1);
+            live.SetTile(0, 0, -1);
+            rt->OnUpdateRuntime(dt);
+            CHECK(!down(0.5f) && down(4.5f).Hit == map && Near(down(4.5f).Point.y, 1.0f, 1e-3f));
+            live.Clear();
+            rt->OnUpdateRuntime(dt);
+            CHECK(!down(4.5f));
+            live.SetTile(2, 1, 0); // painted again after it had no tiles at all
+            rt->OnUpdateRuntime(dt);
+            CHECK(down(2.5f).Hit == map && Near(down(2.5f).Point.y, 2.0f, 1e-3f));
+            rt->OnRuntimeStop();
+        }
+
+        // The ground under a point, its normal, and outside the terrain.
+        {
+            TerrainComponent terrain;
+            terrain.Size = { 40.0f, 40.0f };
+            terrain.Resolution = 64;
+            terrain.Height = 10.0f;
+            glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(10, 5, 0));
+            glm::vec3 ground, normal;
+            CHECK(Terrain::Sample(terrain, world, { 13.0f, 100.0f, 2.0f }, ground, normal));
+            auto heights = Terrain::GetHeights(terrain);
+            CHECK(Near(ground.x, 13.0f, 1e-4f) && Near(ground.z, 2.0f, 1e-4f) && Near(ground.y, 5.0f + Terrain::HeightAt(terrain, heights, 3.0f, 2.0f), 1e-4f));
+            glm::vec3 hit;
+            CHECK(Terrain::Raycast(terrain, world, { 13.0f, 100.0f, 2.0f }, { 0, -1, 0 }, hit) && Near(hit.y, ground.y, 0.02f));
+            CHECK(Near(glm::length(normal), 1.0f, 1e-4f) && normal.y > 0.0f);
+            // A tilted terrain's normal turns with it.
+            glm::vec3 flatN;
+            terrain.Height = 0.0f;
+            glm::mat4 tilted = glm::rotate(glm::mat4(1.0f), glm::radians(30.0f), glm::vec3(0, 0, 1));
+            CHECK(Terrain::Sample(terrain, tilted, { 0.0f, 3.0f, 0.0f }, ground, flatN) && Near(flatN.x, -0.5f, 1e-3f) && Near(flatN.y, 0.866f, 1e-3f));
+            CHECK(!Terrain::Sample(terrain, world, { 31.0f, 0.0f, 0.0f }, ground, normal));
+        }
+    }
+
     void TestParticleEmitAndPause()
     {
         Scene scene("Particles");
@@ -12159,6 +12232,7 @@ int main(int argc, char** argv)
     Run("Audio source control", TestAudioSourceControl);
     Run("Sprite animator seek", TestSpriteAnimatorSeek);
     Run("Particle emit and pause", TestParticleEmitAndPause);
+    Run("Tilemap edits and terrain sample", TestTilemapEditsAndTerrainSample);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

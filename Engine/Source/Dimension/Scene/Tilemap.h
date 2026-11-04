@@ -37,11 +37,20 @@ namespace Dimension
         std::vector<glm::vec4> ColliderBoxes();
         // Cell containing a point in the tilemap's local space.
         glm::ivec2 LocalToCell(const glm::vec2& local) const;
+        // The center of a cell in world space (`world` is the object's transform), and the cell under a world point
+        // (projected onto the tilemap's plane).
+        glm::vec3 CellToWorld(const glm::mat4& world, const glm::ivec2& cell) const;
+        glm::ivec2 WorldToCell(const glm::mat4& world, const glm::vec3& point) const;
+        // The smallest and largest painted cells (inclusive); false when nothing is painted.
+        bool CellBounds(glm::ivec2& min, glm::ivec2& max);
+        // Changes whenever the cells do (SetTile, Clear, or Data replaced), e.g. to remake colliders.
+        uint32_t Revision() { Cells(); return m_Revision; }
 
     private:
         std::unordered_map<int64_t, int32_t> m_Cells;
         size_t m_DecodedHash = 0;
         bool m_Decoded = false;
+        uint32_t m_Revision = 0;
         void Decode();
         void Encode();
     };

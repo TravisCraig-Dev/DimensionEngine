@@ -754,6 +754,23 @@ namespace Dimension::Terrain
         return cache[key] = BuildDetails(terrain, terrain.EditHeights.size() == (size_t)SampleCount(terrain) * SampleCount(terrain) ? terrain.EditHeights : BuildHeights(terrain));
     }
 
+    bool Sample(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& point, glm::vec3& ground, glm::vec3& normal)
+    {
+        glm::mat4 inv = glm::inverse(world);
+        glm::vec3 local = glm::vec3(inv * glm::vec4(point, 1.0f));
+        glm::vec2 half = glm::max(terrain.Size, glm::vec2(0.01f)) * 0.5f;
+        if (std::abs(local.x) > half.x || std::abs(local.z) > half.y) return false;
+        std::vector<float> heights = GetHeights(terrain);
+        local.y = HeightAt(terrain, heights, local.x, local.z);
+        ground = glm::vec3(world * glm::vec4(local, 1.0f));
+        // From the height slopes around the point, over about a sample's spacing.
+        float h = std::max(terrain.Size.x, terrain.Size.y) / (float)std::max(SampleCount(terrain) - 1, 1) * 0.5f;
+        float dx = HeightAt(terrain, heights, local.x + h, local.z) - HeightAt(terrain, heights, local.x - h, local.z);
+        float dz = HeightAt(terrain, heights, local.x, local.z + h) - HeightAt(terrain, heights, local.x, local.z - h);
+        normal = glm::normalize(glm::transpose(glm::mat3(inv)) * glm::vec3(-dx, 2.0f * h, -dz));
+        return true;
+    }
+
     std::vector<float> GetHeights(const TerrainComponent& terrain)
     {
         int n = SampleCount(terrain);

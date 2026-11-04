@@ -162,6 +162,24 @@ namespace Dimension
         public bool Destroy(Behaviour script) => Entity.Destroy(script);
     }
 
+    /// <summary>A cell or point on an integer grid (a Tilemap's cells).</summary>
+    public readonly record struct Vector2Int(int X, int Y)
+    {
+        public static Vector2Int Zero => new(0, 0);
+        public static Vector2Int One => new(1, 1);
+        public static Vector2Int Up => new(0, 1);
+        public static Vector2Int Down => new(0, -1);
+        public static Vector2Int Left => new(-1, 0);
+        public static Vector2Int Right => new(1, 0);
+        public static Vector2Int operator +(Vector2Int a, Vector2Int b) => new(a.X + b.X, a.Y + b.Y);
+        public static Vector2Int operator -(Vector2Int a, Vector2Int b) => new(a.X - b.X, a.Y - b.Y);
+        public static Vector2Int operator *(Vector2Int a, int k) => new(a.X * k, a.Y * k);
+        public static implicit operator Vector2(Vector2Int v) => new(v.X, v.Y);
+        /// <summary>The cell containing a point (rounded down).</summary>
+        public static Vector2Int FloorToInt(Vector2 v) => new((int)MathF.Floor(v.X), (int)MathF.Floor(v.Y));
+        public override string ToString() => $"({X}, {Y})";
+    }
+
     /// <summary>A rectangle: X, Y is its top-left corner (screen pixels grow down and right).</summary>
     public readonly record struct Rect(float X, float Y, float Width, float Height)
     {

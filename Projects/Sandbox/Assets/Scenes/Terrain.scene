@@ -1073,6 +1073,69 @@
           "Wrap": true
         }
       }
+    },
+    {
+      "guid": 4000200,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Rover",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            30,
+            10,
+            -30
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            2.4,
+            1.0,
+            3.4
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Albedo": 0,
+          "Color": [
+            1.0,
+            0.55,
+            0.15,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.Rover",
+              "Fields": {
+                "Center": [
+                  0.0,
+                  0.0,
+                  -30.0
+                ],
+                "Radius": 30.0,
+                "Speed": 8.0,
+                "Clearance": 0.6
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
     }
   ]
 }
