@@ -211,6 +211,10 @@ namespace Dimension
             float (*AudioControl)(void*, uint64_t, int, float);
             uint64_t (*AudioClip)(void*, uint64_t, int, uint64_t);              // 0 get the clip's GUID, 1 set it
             void (*PlayClipAtPoint)(void*, uint64_t, const float*, float);       // clip GUID, world position, volume
+            // An asset field of a component by its Inspector label (a UI Image's "Image"): 0 get its GUID, 1 set it.
+            // Returns the GUID afterwards; ~0 when the field is missing or is not an asset.
+            uint64_t (*ComponentAsset)(void*, uint64_t, const char*, const char*, int, uint64_t);
+            int (*UIRectScreen)(void*, uint64_t, float*); // the laid-out rect: min x, y, max x, y (pixels), scale
         };
 
         // Background scene loads started from C#, by id.
@@ -1327,6 +1331,22 @@ namespace Dimension
             };
             a.PlayClipAtPoint = [](void* s, uint64_t clip, const float* p, float volume) {
                 if (s) AudioWorld::PlayClipAtPoint(S(s), AssetHandle(clip), { p[0], p[1], p[2] }, volume);
+            };
+            a.ComponentAsset = [](void* s, uint64_t e, const char* component, const char* field, int op, uint64_t guid) -> uint64_t {
+                const FieldInfo* f = nullptr;
+                void* value = ReflectedField(s, e, component, field, f);
+                if (!value || f->Type < FieldType::Texture || f->Type > FieldType::Timeline) return ~0ull;
+                auto& handle = *static_cast<AssetHandle*>(value);
+                if (op == 1) handle = AssetHandle(guid);
+                return (uint64_t)handle;
+            };
+            a.UIRectScreen = [](void* s, uint64_t e, float* out) -> int {
+                auto* r = Comp<UIRectComponent>(s, e);
+                if (!r) return 0;
+                out[0] = r->ComputedMin.x; out[1] = r->ComputedMin.y;
+                out[2] = r->ComputedMax.x; out[3] = r->ComputedMax.y;
+                out[4] = r->ComputedScale;
+                return 1;
             };
             a.AnimatorQuery = [](void* s, uint64_t e, int op, int layer, const char* name, float value) -> float {
                 auto* an = Comp<AnimatorComponent>(s, e);

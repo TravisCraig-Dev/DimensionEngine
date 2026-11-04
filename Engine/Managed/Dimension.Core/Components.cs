@@ -33,10 +33,24 @@ namespace Dimension
         public bool SetInt(string field, int value) => SetFloat(field, value);
         public bool GetBool(string field) => GetFloat(field) != 0.0f;
         public bool SetBool(string field, bool value) => SetFloat(field, value ? 1.0f : 0.0f);
+        public Vector2 GetVector2(string field) { float* v = stackalloc float[4]; ReadField(field, v); return new Vector2(v[0], v[1]); }
+        public bool SetVector2(string field, Vector2 value) => WriteField(field, (float*)&value, 2);
         public Vector3 GetVector3(string field) { float* v = stackalloc float[4]; ReadField(field, v); return new Vector3(v[0], v[1], v[2]); }
         public bool SetVector3(string field, Vector3 value) => WriteField(field, (float*)&value, 3);
         public Vector4 GetVector4(string field) { float* v = stackalloc float[4]; ReadField(field, v); return new Vector4(v[0], v[1], v[2], v[3]); }
         public bool SetVector4(string field, Vector4 value) => WriteField(field, (float*)&value, 4);
+
+        // An asset field (a texture, mesh, clip...) by its label, as its GUID: 0 when empty, ulong.MaxValue when missing.
+        private ulong AssetField(string field, int op, ulong guid)
+        {
+            var e = Entity;
+            string component = NativeName;
+            return Native.WithUtf8(component, c => Native.WithUtf8(field, f => Native.Api.ComponentAsset(e.Scene, e.Id, (byte*)c, (byte*)f, op, guid)));
+        }
+        /// <summary>The GUID of the asset an asset field refers to (0: none; ulong.MaxValue: no such asset field).</summary>
+        public ulong GetAssetGuid(string field) => AssetField(field, 0, 0);
+        /// <summary>Points an asset field at another asset (GUID 0 empties it); false when there is no such asset field.</summary>
+        public bool SetAssetGuid(string field, ulong guid) => AssetField(field, 1, guid) != ulong.MaxValue;
     }
 
     /// <summary>Any engine component by its Inspector name, for components without their own class
@@ -253,6 +267,67 @@ namespace Dimension
             get { Color c; Native.Api.GetColor(Entity.Scene, Entity.Id, (float*)&c); return c; }
             set => Native.Api.SetColor(Entity.Scene, Entity.Id, (float*)&value);
         }
+        /// <summary>The texture it draws.</summary>
+        public Texture Sprite { get => new(GetAssetGuid("Sprite")); set => SetAssetGuid("Sprite", value.Guid); }
+        public bool FlipX { get => GetBool("Flip X"); set => SetBool("Flip X", value); }
+        public bool FlipY { get => GetBool("Flip Y"); set => SetBool("Flip Y", value); }
+    }
+
+    /// <summary>
+    /// Where a UI element sits (like Unity's RectTransform). Anchors and the pivot are fractions of the parent's rect
+    /// (0,0 is its top-left); <see cref="AnchoredPosition"/> is the pivot's offset from the anchors and <see cref="Size"/>
+    /// is added to the span between them (so it is the size when both anchors are the same point), in canvas units.
+    /// </summary>
+    public unsafe class UIRect : Component
+    {
+        internal override string NativeName => "UI Rect";
+        public Vector2 AnchoredPosition { get => GetVector2("Position"); set => SetVector2("Position", value); }
+        /// <summary>Added to the anchors' span (Unity's sizeDelta); the size itself when the anchors coincide.</summary>
+        public Vector2 Size { get => GetVector2("Size"); set => SetVector2("Size", value); }
+        public Vector2 AnchorMin { get => GetVector2("Anchor Min"); set => SetVector2("Anchor Min", Clamp01(value)); }
+        public Vector2 AnchorMax { get => GetVector2("Anchor Max"); set => SetVector2("Anchor Max", Clamp01(value)); }
+        public Vector2 Pivot { get => GetVector2("Pivot"); set => SetVector2("Pivot", Clamp01(value)); }
+        private static Vector2 Clamp01(Vector2 v) => Vector2.Clamp(v, Vector2.Zero, Vector2.One);
+
+        /// <summary>Both anchors at once (e.g. (0,0)-(1,1) to stretch over the parent).</summary>
+        public void SetAnchors(Vector2 min, Vector2 max) { AnchorMin = min; AnchorMax = max; }
+
+        /// <summary>
+        /// Where it is on screen in pixels (top-left origin, like <see cref="Input.MousePosition"/>), as laid out at the
+        /// start of this frame: changes made since show next frame.
+        /// </summary>
+        public Rect ScreenRect
+        {
+            get
+            {
+                float* v = stackalloc float[5];
+                if (Native.Api.UIRectScreen(Entity.Scene, Entity.Id, v) == 0) return default;
+                return new Rect(v[0], v[1], v[2] - v[0], v[3] - v[1]);
+            }
+        }
+        /// <summary>Canvas units to screen pixels for this element (its canvas's scale).</summary>
+        public float Scale { get { float* v = stackalloc float[5]; return Native.Api.UIRectScreen(Entity.Scene, Entity.Id, v) != 0 ? v[4] : 1.0f; } }
+        /// <summary>Whether a screen point (the mouse) is over it (see <see cref="ScreenRect"/>).</summary>
+        public bool ContainsScreenPoint(Vector2 screen) => ScreenRect.Contains(screen);
+    }
+
+    public enum UIImageType { Simple = 0, Sliced = 1 }
+
+    /// <summary>A UI picture or panel: a texture (or white without one) tinted by <see cref="Color"/>.</summary>
+    public unsafe class UIImage : Component
+    {
+        internal override string NativeName => "UI Image";
+        public Color Color
+        {
+            get { Vector4 v = GetVector4("Color"); return new Color(v.X, v.Y, v.Z, v.W); }
+            set => SetVector4("Color", new Vector4(value.R, value.G, value.B, value.A));
+        }
+        /// <summary>The texture it shows (none: a plain colored rect).</summary>
+        public Texture Sprite { get => new(GetAssetGuid("Image")); set => SetAssetGuid("Image", value.Guid); }
+        /// <summary>Simple stretches the texture; Sliced keeps its <see cref="Border"/> unstretched (9-slice).</summary>
+        public UIImageType Type { get => (UIImageType)GetInt("Image Type"); set => SetInt("Image Type", (int)value); }
+        /// <summary>The 9-slice borders in texture pixels: left, top, right, bottom.</summary>
+        public Vector4 Border { get => GetVector4("Border"); set => SetVector4("Border", value); }
     }
 
     public unsafe class UIText : Component

@@ -161,6 +161,18 @@ namespace Dimension
         public bool Destroy(Behaviour script) => Entity.Destroy(script);
     }
 
+    /// <summary>A rectangle: X, Y is its top-left corner (screen pixels grow down and right).</summary>
+    public readonly record struct Rect(float X, float Y, float Width, float Height)
+    {
+        public Vector2 Min => new(X, Y);
+        public Vector2 Max => new(X + Width, Y + Height);
+        public Vector2 Size => new(Width, Height);
+        public Vector2 Center => new(X + Width * 0.5f, Y + Height * 0.5f);
+        public bool Contains(Vector2 p) => p.X >= X && p.Y >= Y && p.X < X + Width && p.Y < Y + Height;
+        public bool Overlaps(Rect o) => o.X < X + Width && X < o.X + o.Width && o.Y < Y + Height && Y < o.Y + o.Height;
+        public static Rect MinMax(Vector2 min, Vector2 max) => new(min.X, min.Y, max.X - min.X, max.Y - min.Y);
+    }
+
     /// <summary>RGBA color in sRGB space, components 0..1.</summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct Color

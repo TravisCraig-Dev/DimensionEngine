@@ -158,6 +158,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, float, float> AudioControl;               // see AudioSource in Components.cs
         public delegate* unmanaged<IntPtr, ulong, int, ulong, ulong> AudioClip;                  // 0 get, 1 set the clip
         public delegate* unmanaged<IntPtr, ulong, float*, float, void> PlayClipAtPoint;
+        public delegate* unmanaged<IntPtr, ulong, byte*, byte*, int, ulong, ulong> ComponentAsset; // 0 get, 1 set; ~0: no such asset field
+        public delegate* unmanaged<IntPtr, ulong, float*, int> UIRectScreen;                       // min x, y, max x, y, scale
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

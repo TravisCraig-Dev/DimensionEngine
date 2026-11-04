@@ -5016,6 +5016,224 @@
      ]
     }
    }
+  },
+  {
+   "guid": 6000104,
+   "parent": 6000100,
+   "components": {
+    "Tag": {
+     "Name": "Hit Meter",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "UI Rect": {
+     "Anchor Min": [
+      0,
+      0
+     ],
+     "Anchor Max": [
+      0,
+      0
+     ],
+     "Pivot": [
+      0,
+      0
+     ],
+     "Position": [
+      34,
+      256
+     ],
+     "Size": [
+      420,
+      34
+     ]
+    },
+    "UI Image": {
+     "Image": 100041,
+     "Color": [
+      0.12,
+      0.13,
+      0.17,
+      0.85
+     ],
+     "Image Type": 1,
+     "Border": [
+      16,
+      16,
+      16,
+      16
+     ],
+     "Border Scale": 0.5
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.HitMeter",
+       "Fields": {
+        "Board": 6000103,
+        "Fill": 6000105,
+        "Icon": 6000106,
+        "FullIcon": 100003
+       },
+       "Enabled": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "guid": 6000105,
+   "parent": 6000104,
+   "components": {
+    "Tag": {
+     "Name": "Fill",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "UI Rect": {
+     "Anchor Min": [
+      0,
+      0
+     ],
+     "Anchor Max": [
+      0,
+      1
+     ],
+     "Pivot": [
+      0,
+      0.5
+     ],
+     "Position": [
+      6,
+      0
+     ],
+     "Size": [
+      0,
+      -12
+     ]
+    },
+    "UI Image": {
+     "Image": 0,
+     "Color": [
+      0.25,
+      0.75,
+      0.45,
+      1.0
+     ],
+     "Image Type": 0,
+     "Border": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "Border Scale": 1.0
+    }
+   }
+  },
+  {
+   "guid": 6000106,
+   "parent": 6000104,
+   "components": {
+    "Tag": {
+     "Name": "Icon",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "UI Rect": {
+     "Anchor Min": [
+      1,
+      0.5
+     ],
+     "Anchor Max": [
+      1,
+      0.5
+     ],
+     "Pivot": [
+      0,
+      0.5
+     ],
+     "Position": [
+      10,
+      0
+     ],
+     "Size": [
+      34,
+      34
+     ]
+    },
+    "UI Image": {
+     "Image": 100011,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Image Type": 0,
+     "Border": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "Border Scale": 1.0
+    }
+   }
   }
  ]
 }
