@@ -10,6 +10,8 @@ namespace Dimension
         public Entity Entity { get; internal set; }
         /// <summary>Component name in the engine registry (as shown in the Inspector).</summary>
         internal abstract string NativeName { get; }
+        /// <summary>Every engine component this class stands for (Light: the three kinds), for FindObjectsOfType.</summary>
+        internal virtual string[] NativeNames => new[] { NativeName };
 
         // Any numeric field shown in the Inspector, by its label (e.g. "Max Steer Angle"): bools, ints, enums (by index),
         // floats, vectors and colors. Missing fields read as 0.
@@ -309,6 +311,109 @@ namespace Dimension
         public float Scale { get { float* v = stackalloc float[5]; return Native.Api.UIRectScreen(Entity.Scene, Entity.Id, v) != 0 ? v[4] : 1.0f; } }
         /// <summary>Whether a screen point (the mouse) is over it (see <see cref="ScreenRect"/>).</summary>
         public bool ContainsScreenPoint(Vector2 screen) => ScreenRect.Contains(screen);
+    }
+
+    /// <summary>
+    /// A sprite sheet's flip-book on a Sprite Renderer: it plays FrameCount frames from FirstFrame (the sheet's frames
+    /// are numbered row by row) at FramesPerSecond.
+    /// </summary>
+    public unsafe class SpriteAnimator : Component
+    {
+        internal override string NativeName => "Sprite Animator";
+        /// <summary>Its speed; changing it while playing goes on from the frame it is on.</summary>
+        public float FramesPerSecond
+        {
+            get => GetFloat("Frames Per Second");
+            set
+            {
+                float before = FramesPerSecond, time = Time;
+                SetFloat("Frames Per Second", value);
+                float after = FramesPerSecond; // within the Inspector's range
+                if (before > 0.0f && after > 0.0f && after != before) Time = time * before / after;
+            }
+        }
+        public int FirstFrame { get => GetInt("First Frame"); set => SetInt("First Frame", value); }
+        public int FrameCount { get => GetInt("Frame Count"); set => SetInt("Frame Count", value); }
+        /// <summary>Starts over after the last frame; otherwise it stops there (IsPlaying turns false).</summary>
+        public bool Loop { get => GetBool("Loop"); set => SetBool("Loop", value); }
+        public bool IsPlaying => GetBool("Playing");
+
+        /// <summary>Plays from the first frame.</summary>
+        public void Play() { SetBool("Playing", true); Time = 0.0f; }
+        /// <summary>Plays another run of the sheet's frames (a clip: e.g. a walk cycle's frames) from its start.</summary>
+        public void Play(int firstFrame, int frameCount, bool loop = true)
+        {
+            FirstFrame = firstFrame;
+            FrameCount = frameCount;
+            Loop = loop;
+            Play();
+        }
+        /// <summary>Holds the frame it is on; Resume goes on from there.</summary>
+        public void Pause() => SetBool("Playing", false);
+        public void Resume() => SetBool("Playing", true);
+        /// <summary>Stops and goes back to the first frame.</summary>
+        public void Stop() { SetBool("Playing", false); Time = 0.0f; }
+
+        /// <summary>Seconds into the run; setting it jumps there and shows that frame at once.</summary>
+        public float Time
+        {
+            get => Native.Api.SpriteAnimatorTime(Entity.Scene, Entity.Id, 0, 0.0f);
+            set => Native.Api.SpriteAnimatorTime(Entity.Scene, Entity.Id, 1, value);
+        }
+        /// <summary>The frame it shows, counted from FirstFrame (0 to FrameCount - 1); setting it jumps there.</summary>
+        public int Frame
+        {
+            get
+            {
+                int count = Math.Max(FrameCount, 1), step = (int)(Time * FramesPerSecond);
+                return Loop ? step % count : Math.Min(step, count - 1);
+            }
+            set { float fps = FramesPerSecond; if (fps > 0.0f) Time = (value + 0.5f) / fps; }
+        }
+    }
+
+    public enum LightType { Directional = 0, Point = 1, Spot = 2 }
+
+    /// <summary>
+    /// A Directional, Point or Spot Light (like Unity's Light: one class for the three; <see cref="Type"/> says which).
+    /// Values are kept within the Inspector's ranges; ones a kind does not have (a directional light's Range) read 0.
+    /// AddComponent&lt;Light&gt;() adds a Point Light.
+    /// </summary>
+    public unsafe class Light : Component
+    {
+        private static readonly string[] s_Kinds = { "Directional Light", "Point Light", "Spot Light" };
+        internal override string NativeName => s_Kinds[(int)Type];
+        internal override string[] NativeNames => s_Kinds;
+
+        public LightType Type
+        {
+            get
+            {
+                if (Entity.HasComponent(s_Kinds[0])) return LightType.Directional;
+                return Entity.HasComponent(s_Kinds[2]) ? LightType.Spot : LightType.Point;
+            }
+        }
+        /// <summary>Its color (sRGB, as in the Inspector; alpha is always 1).</summary>
+        public Color Color
+        {
+            get { Vector3 c = GetVector3("Color"); return new Color(c.X, c.Y, c.Z); }
+            set => SetVector3("Color", new Vector3(value.R, value.G, value.B));
+        }
+        public float Intensity { get => GetFloat("Intensity"); set => SetFloat("Intensity", value); }
+        /// <summary>How far a point or spot light reaches, in world units.</summary>
+        public float Range { get => GetFloat("Range"); set => SetFloat("Range", value); }
+        /// <summary>A spot light's full cone angle in degrees, and that of its fully lit core.</summary>
+        public float SpotAngle { get => GetFloat("Spot Angle"); set => SetFloat("Spot Angle", value); }
+        public float InnerSpotAngle { get => GetFloat("Inner Spot Angle"); set => SetFloat("Inner Spot Angle", value); }
+        /// <summary>Whether it casts shadows (point and spot lights share 4 shadow slots).</summary>
+        public bool CastShadows { get => GetBool("Cast Shadows"); set => SetBool("Cast Shadows", value); }
+        public float ShadowBias { get => GetFloat("Shadow Bias"); set => SetFloat("Shadow Bias", value); }
+        /// <summary>A point or spot light's cookie: a texture that tints its light (none: plain).</summary>
+        public Texture Cookie
+        {
+            get { ulong g = GetAssetGuid("Cookie"); return new Texture(g == ulong.MaxValue ? 0 : g); }
+            set => SetAssetGuid("Cookie", value.Guid);
+        }
     }
 
     public enum UIImageType { Simple = 0, Sliced = 1 }

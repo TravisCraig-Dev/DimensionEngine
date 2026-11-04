@@ -5721,6 +5721,17 @@
             1,
             1
           ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.LightShow",
+              "Fields": {
+                "Flickering": false
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     },
@@ -18618,6 +18629,71 @@
             1,
             1,
             1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 2000383,
+      "parent": 2000381,
+      "components": {
+        "Tag": {
+          "Name": "Help",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            34,
+            84
+          ],
+          "Size": [
+            1400,
+            40
+          ]
+        },
+        "UI Text": {
+          "Text": "F makes them flicker like candles (LightShow)",
+          "Font": 0,
+          "Font Size": 28,
+          "Color": [
+            0.6,
+            0.67,
+            0.73,
             1
           ],
           "Alignment": 0,

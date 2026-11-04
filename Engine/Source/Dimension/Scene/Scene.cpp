@@ -883,12 +883,12 @@ namespace Dimension
         FlushDeferredDestroys();
     }
 
-    void Scene::UpdateSpriteAnimators(float dt)
+    namespace
     {
-        for (auto [e, anim, sprite] : m_Registry.ViewOf<SpriteAnimatorComponent, SpriteRendererComponent>())
+        // Shows the animator's frame for its Time (a run that does not loop stops on its last frame).
+        void ShowSpriteFrame(SpriteAnimatorComponent& anim, SpriteRendererComponent& sprite)
         {
-            if (!anim.Playing || anim.FrameCount <= 0) continue;
-            anim.Time += dt;
+            if (anim.FrameCount <= 0) return;
             int step = (int)(anim.Time * anim.FramesPerSecond);
             if (anim.Loop) step %= anim.FrameCount;
             else if (step >= anim.FrameCount)
@@ -898,6 +898,24 @@ namespace Dimension
             }
             sprite.Frame = anim.FirstFrame + step;
         }
+    }
+
+    void Scene::UpdateSpriteAnimators(float dt)
+    {
+        for (auto [e, anim, sprite] : m_Registry.ViewOf<SpriteAnimatorComponent, SpriteRendererComponent>())
+        {
+            if (!anim.Playing || anim.FrameCount <= 0) continue;
+            anim.Time += dt;
+            ShowSpriteFrame(anim, sprite);
+        }
+    }
+
+    void Scene::SetSpriteAnimatorTime(Entity entity, float seconds)
+    {
+        auto* anim = m_Registry.TryGet<SpriteAnimatorComponent>(entity);
+        if (!anim) return;
+        anim->Time = std::max(seconds, 0.0f);
+        if (auto* sprite = m_Registry.TryGet<SpriteRendererComponent>(entity)) ShowSpriteFrame(*anim, *sprite);
     }
 
     void Scene::OnUpdateEditor(float dt)

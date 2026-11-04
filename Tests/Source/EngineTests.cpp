@@ -919,6 +919,46 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestSpriteAnimatorSeek()
+    {
+        Scene scene("Sprites");
+        Entity coin = scene.CreateEntity("Coin");
+        auto& reg = scene.GetRegistry();
+        reg.Emplace<SpriteRendererComponent>(coin);
+        auto& anim = reg.Emplace<SpriteAnimatorComponent>(coin);
+        anim.FramesPerSecond = 10.0f;
+        anim.FirstFrame = 2;
+        anim.FrameCount = 4;
+        anim.Loop = true;
+        anim.Playing = false;
+        auto frame = [&](Scene& s) { return s.GetRegistry().Get<SpriteRendererComponent>(coin).Frame; };
+
+        // Seeking shows the frame at once, also while stopped; looping wraps.
+        scene.SetSpriteAnimatorTime(coin, 0.25f);
+        CHECK(frame(scene) == 4 && Near(anim.Time, 0.25f, 1e-5f));
+        scene.SetSpriteAnimatorTime(coin, 0.65f);
+        CHECK(frame(scene) == 2 + 2);
+        scene.SetSpriteAnimatorTime(coin, -3.0f);
+        CHECK(frame(scene) == 2 && anim.Time == 0.0f);
+
+        // Without looping, a seek past the end shows the last frame and stops it.
+        anim.Loop = false;
+        anim.Playing = true;
+        scene.SetSpriteAnimatorTime(coin, 5.0f);
+        CHECK(frame(scene) == 5 && !anim.Playing);
+
+        // Playing goes on from a seek.
+        anim.Loop = true;
+        anim.Playing = true;
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        rt->SetSpriteAnimatorTime(coin, 0.15f);
+        rt->OnUpdateRuntime(0.1f);
+        auto& ra = rt->GetRegistry().Get<SpriteAnimatorComponent>(coin);
+        CHECK(Near(ra.Time, 0.25f, 1e-4f) && frame(*rt) == 4);
+        rt->OnRuntimeStop();
+    }
+
     void TestAudioSourceControl()
     {
         AudioEngine::Init();
@@ -12036,6 +12076,7 @@ int main(int argc, char** argv)
     Run("Trigger stay", TestTriggerStay);
     Run("Instantiate and remove", TestInstantiateAndRemove);
     Run("Audio source control", TestAudioSourceControl);
+    Run("Sprite animator seek", TestSpriteAnimatorSeek);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

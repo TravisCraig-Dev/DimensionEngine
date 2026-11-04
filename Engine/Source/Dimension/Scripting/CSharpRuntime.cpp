@@ -215,6 +215,7 @@ namespace Dimension
             // Returns the GUID afterwards; ~0 when the field is missing or is not an asset.
             uint64_t (*ComponentAsset)(void*, uint64_t, const char*, const char*, int, uint64_t);
             int (*UIRectScreen)(void*, uint64_t, float*); // the laid-out rect: min x, y, max x, y (pixels), scale
+            float (*SpriteAnimatorTime)(void*, uint64_t, int, float); // 0 get the time, 1 seek to v (showing that frame)
         };
 
         // Background scene loads started from C#, by id.
@@ -1339,6 +1340,12 @@ namespace Dimension
                 auto& handle = *static_cast<AssetHandle*>(value);
                 if (op == 1) handle = AssetHandle(guid);
                 return (uint64_t)handle;
+            };
+            a.SpriteAnimatorTime = [](void* s, uint64_t e, int op, float v) -> float {
+                auto* anim = Comp<SpriteAnimatorComponent>(s, e);
+                if (!anim) return 0.0f;
+                if (op == 1) S(s).SetSpriteAnimatorTime(Unpack(e), v);
+                return anim->Time;
             };
             a.UIRectScreen = [](void* s, uint64_t e, float* out) -> int {
                 auto* r = Comp<UIRectComponent>(s, e);

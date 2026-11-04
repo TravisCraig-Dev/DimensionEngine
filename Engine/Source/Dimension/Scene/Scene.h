@@ -220,6 +220,9 @@ namespace Dimension
         Entity GetObjectUnderPointer() const { return m_MouseOver; }
         // The nearest 3D or 2D collider under a view point (pixels, top-left origin), seen through the primary camera.
         Entity PickObject(const glm::vec2& viewPoint);
+        // Moves a Sprite Animator to `seconds` into its frames and shows that frame at once (also while it is stopped);
+        // past the end of a run that does not loop, it shows the last frame and stops.
+        void SetSpriteAnimatorTime(Entity entity, float seconds);
         // The UI widget selected for keyboard/gamepad navigation (Null = none).
         Entity GetUISelected() const { return m_UISelected; }
         void SetUISelected(Entity e) { m_UISelected = e; }

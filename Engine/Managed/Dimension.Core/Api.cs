@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -272,17 +273,19 @@ namespace Dimension
             IntPtr scene = Native.CurrentScene;
             if (scene == IntPtr.Zero) return Array.Empty<T>();
             if (IsScript(typeof(T))) return ScriptHost.ScriptsInScene(scene, includeInactive).OfType<T>().ToArray();
-            string name = new Entity(scene, 0).Wrapper(typeof(T)).NativeName;
-            int count = Native.WithUtf8<int>(name, p => Native.Api.EntitiesWithComponent(scene, (byte*)p, null, 0, includeInactive ? 1 : 0));
-            var ids = new ulong[count];
-            fixed (ulong* q = ids)
+            var found = new List<ulong>();
+            foreach (string name in new Entity(scene, 0).Wrapper(typeof(T)).NativeNames)
             {
-                ulong* at = q;
-                count = Math.Min(count, Native.WithUtf8<int>(name, p => Native.Api.EntitiesWithComponent(scene, (byte*)p, at, ids.Length, includeInactive ? 1 : 0)));
+                int count = Native.WithUtf8<int>(name, p => Native.Api.EntitiesWithComponent(scene, (byte*)p, null, 0, includeInactive ? 1 : 0));
+                var ids = new ulong[count];
+                fixed (ulong* q = ids)
+                {
+                    ulong* at = q;
+                    count = Math.Min(count, Native.WithUtf8<int>(name, p => Native.Api.EntitiesWithComponent(scene, (byte*)p, at, ids.Length, includeInactive ? 1 : 0)));
+                }
+                for (int i = 0; i < count; ++i) if (!found.Contains(ids[i])) found.Add(ids[i]);
             }
-            var result = new T[count];
-            for (int i = 0; i < count; ++i) result[i] = (T)(object)new Entity(scene, ids[i]).Wrapper(typeof(T));
-            return result;
+            return found.Select(id => (T)(object)new Entity(scene, id).Wrapper(typeof(T))).ToArray();
         }
 
         public void Destroy() { if (Scene != IntPtr.Zero) Native.Api.Destroy(Scene, Id); }
