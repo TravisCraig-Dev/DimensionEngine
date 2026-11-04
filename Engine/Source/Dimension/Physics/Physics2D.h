@@ -1,8 +1,11 @@
 #pragma once
 #include "Dimension/ECS/Entity.h"
 #include <glm/glm.hpp>
+#include <array>
 #include <cstdint>
 #include <vector>
+
+struct b2ShapeId;
 
 namespace Dimension
 {
@@ -36,6 +39,19 @@ namespace Dimension
         void OnEntityDestroyed(Entity e);
         // The object's own body made again from its components (after one was removed while playing).
         void RebuildBody(Entity e);
+        // The object's colliders' settings (size, offset, trigger, friction, bounciness, density) applied to its body,
+        // keeping its motion.
+        void RefreshColliders(Entity e);
+
+        // While playing (like Unity's Physics settings, for this world only; the project's are left as they are):
+        // gravity, which layers collide (a copy of the project's Layer Collision Matrix), and pairs of objects that never
+        // collide. Changes wake the bodies they concern, and touching pairs part at once.
+        glm::vec2 GetGravity() const;
+        void SetGravity(const glm::vec2& gravity);
+        bool GetLayersCollide(int a, int b) const;
+        void SetLayersCollide(int a, int b, bool collide);
+        void SetIgnoreCollision(Entity a, Entity b, bool ignore);
+        bool IsCollisionIgnored(Entity a, Entity b) const;
 
         // Script-facing helpers (no-ops for entities without a body).
         static void SetLinearVelocity(Scene& scene, Entity e, const glm::vec2& v);
@@ -67,6 +83,9 @@ namespace Dimension
         void CreateBody(Entity e);
         void CreateJoint(Entity e);
         void CreateTilemapBody(Entity e);
+        void AddShapes(Entity e, uint64_t body);
+        void RefilterShapes(Entity e); // filters from the layer matrix again, which also drops its contacts for re-checking
+        static bool CustomFilter(b2ShapeId a, b2ShapeId b, void* context);
 
         Scene& m_Scene;
         uint32_t m_World = 0;  // b2WorldId packed
@@ -78,6 +97,8 @@ namespace Dimension
             Joint2DType Type;
         };
         std::vector<JointRecord> m_Joints;
+        std::array<uint32_t, 32> m_Matrix{};                   // layer collision matrix while playing
+        std::vector<std::pair<Entity, Entity>> m_IgnoredPairs; // never collide
         struct TilemapBody
         {
             Entity Owner;

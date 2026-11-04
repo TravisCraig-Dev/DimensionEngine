@@ -160,11 +160,80 @@ namespace Dimension
         public void AddTorque(float torque) => Native.Api.Body2D(Entity.Scene, Entity.Id, 2, torque);
     }
 
-    /// <summary>3D colliders, for HasComponent/AddComponent and [RequireComponent] (their settings are edited in the Inspector).</summary>
-    public class BoxCollider : Component { internal override string NativeName => "Box Collider"; }
-    public class SphereCollider : Component { internal override string NativeName => "Sphere Collider"; }
-    public class CapsuleCollider : Component { internal override string NativeName => "Capsule Collider"; }
-    public class MeshCollider : Component { internal override string NativeName => "Mesh Collider"; }
+    /// <summary>
+    /// Any 3D collider (GetComponent&lt;Collider&gt;() finds whichever the object has). Changes while playing apply to its
+    /// body at once, keeping its motion.
+    /// </summary>
+    public unsafe class Collider : Component
+    {
+        private static readonly string[] s_Kinds = { "Box Collider", "Sphere Collider", "Capsule Collider", "Mesh Collider" };
+        internal override string NativeName => Array.Find(s_Kinds, k => Entity.HasComponent(k)) ?? s_Kinds[0];
+        internal override string[] NativeNames => GetType() == typeof(Collider) ? s_Kinds : new[] { NativeName };
+        private protected void Changed() => Native.Api.RefreshColliders(Entity.Scene, Entity.Id);
+        private protected void Set(string field, float v) { SetFloat(field, v); Changed(); }
+        private protected void Set(string field, Vector3 v) { SetVector3(field, v); Changed(); }
+
+        /// <summary>A trigger: reports OnTriggerEnter/Stay/Exit instead of colliding.</summary>
+        public bool IsTrigger { get => GetBool("Is Trigger"); set { SetBool("Is Trigger", value); Changed(); } }
+        public float Friction { get => GetFloat("Friction"); set => Set("Friction", value); }
+        /// <summary>How much of the speed it keeps off a hit (0 a thud, 1 a full bounce).</summary>
+        public float Bounciness { get => GetFloat("Bounciness"); set => Set("Bounciness", value); }
+    }
+    public class BoxCollider : Collider
+    {
+        internal override string NativeName => "Box Collider";
+        /// <summary>Its middle, in the object's space.</summary>
+        public Vector3 Center { get => GetVector3("Offset"); set => Set("Offset", value); }
+        public Vector3 Size { get => GetVector3("Size"); set => Set("Size", value); }
+    }
+    public class SphereCollider : Collider
+    {
+        internal override string NativeName => "Sphere Collider";
+        public Vector3 Center { get => GetVector3("Offset"); set => Set("Offset", value); }
+        public float Radius { get => GetFloat("Radius"); set => Set("Radius", value); }
+    }
+    /// <summary>Upright (along the object's Y), Height from end to end.</summary>
+    public class CapsuleCollider : Collider
+    {
+        internal override string NativeName => "Capsule Collider";
+        public Vector3 Center { get => GetVector3("Offset"); set => Set("Offset", value); }
+        public float Radius { get => GetFloat("Radius"); set => Set("Radius", value); }
+        public float Height { get => GetFloat("Height"); set => Set("Height", value); }
+    }
+    public class MeshCollider : Collider
+    {
+        internal override string NativeName => "Mesh Collider";
+        /// <summary>Its convex hull instead of the exact triangles (dynamic bodies always use the hull).</summary>
+        public bool Convex { get => GetBool("Convex"); set { SetBool("Convex", value); Changed(); } }
+    }
+
+    /// <summary>Any 2D collider (GetComponent&lt;Collider2D&gt;() finds whichever the object has); changes while playing
+    /// apply to its body at once.</summary>
+    public unsafe class Collider2D : Component
+    {
+        private static readonly string[] s_Kinds = { "Box Collider 2D", "Circle Collider 2D" };
+        internal override string NativeName => Array.Find(s_Kinds, k => Entity.HasComponent(k)) ?? s_Kinds[0];
+        internal override string[] NativeNames => GetType() == typeof(Collider2D) ? s_Kinds : new[] { NativeName };
+        private protected void Changed() => Native.Api.RefreshColliders(Entity.Scene, Entity.Id);
+        private protected void Set(string field, float v) { SetFloat(field, v); Changed(); }
+
+        public bool IsTrigger { get => GetBool("Is Trigger"); set { SetBool("Is Trigger", value); Changed(); } }
+        public float Friction { get => GetFloat("Friction"); set => Set("Friction", value); }
+        public float Bounciness { get => GetFloat("Bounciness"); set => Set("Bounciness", value); }
+        /// <summary>Mass per square meter (the body's mass follows its shapes').</summary>
+        public float Density { get => GetFloat("Density"); set => Set("Density", value); }
+        public Vector2 Offset { get => GetVector2("Offset"); set { SetVector2("Offset", value); Changed(); } }
+    }
+    public class BoxCollider2D : Collider2D
+    {
+        internal override string NativeName => "Box Collider 2D";
+        public Vector2 Size { get => GetVector2("Size"); set { SetVector2("Size", value); Changed(); } }
+    }
+    public class CircleCollider2D : Collider2D
+    {
+        internal override string NativeName => "Circle Collider 2D";
+        public float Radius { get => GetFloat("Radius"); set => Set("Radius", value); }
+    }
 
     public unsafe class Rigidbody : Component
     {

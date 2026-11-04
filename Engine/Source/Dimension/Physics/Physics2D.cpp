@@ -27,12 +27,12 @@ namespace Dimension
             return b2Body_IsValid(id) ? id : b2_nullBodyId;
         }
 
-        b2Filter LayerFilter(Scene& scene, Entity e)
+        b2Filter LayerFilter(Scene& scene, Entity e, const std::array<uint32_t, 32>& matrix)
         {
             int layer = std::clamp(scene.GetRegistry().Get<TagComponent>(e).Layer, 0, 31);
             b2Filter f = b2DefaultFilter();
             f.categoryBits = 1ull << layer;
-            f.maskBits = Project::GetConfig().LayerCollisionMatrix[layer];
+            f.maskBits = matrix[layer];
             return f;
         }
 
@@ -105,6 +105,8 @@ namespace Dimension
         auto g = scene.GetSettings().Gravity2D;
         def.gravity = { g.x, g.y };
         m_World = b2StoreWorldId(b2CreateWorld(&def));
+        m_Matrix = Project::GetConfig().LayerCollisionMatrix;
+        b2World_SetCustomFilterCallback(LoadWorld(m_World), &Physics2DWorld::CustomFilter, this);
 
         auto& reg = scene.GetRegistry();
         std::vector<Entity> entities;
@@ -176,7 +178,7 @@ namespace Dimension
         b2BodyId body = b2CreateBody(LoadWorld(m_World), &bd);
         b2ShapeDef sd = b2DefaultShapeDef();
         sd.material.friction = tm.Friction;
-        sd.filter = LayerFilter(m_Scene, e);
+        sd.filter = LayerFilter(m_Scene, e, m_Matrix);
         sd.enableContactEvents = true;
         sd.userData = PackEntity(e);
         for (auto& b : boxes)
@@ -349,7 +351,14 @@ namespace Dimension
         bd.isEnabled = t.ActiveInHierarchy;
         b2BodyId body = b2CreateBody(LoadWorld(m_World), &bd);
         rb.RuntimeBody = b2StoreBodyId(body);
+        AddShapes(e, rb.RuntimeBody);
+    }
 
+    void Physics2DWorld::AddShapes(Entity e, uint64_t bodyId)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& t = reg.Get<TransformComponent>(e);
+        b2BodyId body = b2LoadBodyId(bodyId);
         glm::vec2 scale = glm::abs(glm::vec2(t.Scale));
         if (auto* box = reg.TryGet<BoxCollider2DComponent>(e))
         {
@@ -358,7 +367,7 @@ namespace Dimension
             sd.material.friction = box->Friction;
             sd.material.restitution = box->Restitution;
             sd.isSensor = box->IsTrigger;
-            sd.filter = LayerFilter(m_Scene, e);
+            sd.filter = LayerFilter(m_Scene, e, m_Matrix);
             sd.enableSensorEvents = true;
             sd.enableContactEvents = true;
             sd.userData = PackEntity(e);
@@ -373,13 +382,111 @@ namespace Dimension
             sd.material.friction = circle->Friction;
             sd.material.restitution = circle->Restitution;
             sd.isSensor = circle->IsTrigger;
-            sd.filter = LayerFilter(m_Scene, e);
+            sd.filter = LayerFilter(m_Scene, e, m_Matrix);
             sd.enableSensorEvents = true;
             sd.enableContactEvents = true;
             sd.userData = PackEntity(e);
             b2Circle c{ { circle->Offset.x * scale.x, circle->Offset.y * scale.y }, circle->Radius * std::max(scale.x, scale.y) };
             b2CreateCircleShape(body, &sd, &c);
         }
+    }
+
+    void Physics2DWorld::RefreshColliders(Entity e)
+    {
+        b2BodyId body = BodyOf(m_Scene, e);
+        if (B2_IS_NULL(body)) return;
+        std::vector<b2ShapeId> shapes(b2Body_GetShapeCount(body));
+        int n = b2Body_GetShapes(body, shapes.data(), (int)shapes.size());
+        for (int i = 0; i < n; ++i) b2DestroyShape(shapes[i], false);
+        AddShapes(e, b2StoreBodyId(body));
+        b2Body_ApplyMassFromShapes(body);
+        b2Body_SetAwake(body, true);
+    }
+
+    void Physics2DWorld::RefilterShapes(Entity e)
+    {
+        b2BodyId body = BodyOf(m_Scene, e);
+        if (B2_IS_NULL(body)) return;
+        b2Filter filter = LayerFilter(m_Scene, e, m_Matrix);
+        b2ShapeId shapes[16];
+        int n = b2Body_GetShapes(body, shapes, 16);
+        for (int i = 0; i < n; ++i)
+        {
+            // A filter change drops the shape's contacts, so the next step checks its pairs again (custom filter too).
+            b2Filter other = filter;
+            other.groupIndex = filter.groupIndex == 0 ? 1 : 0;
+            b2Shape_SetFilter(shapes[i], other);
+            b2Shape_SetFilter(shapes[i], filter);
+        }
+        if (b2Body_GetType(body) != b2_staticBody) b2Body_SetAwake(body, true);
+    }
+
+    bool Physics2DWorld::CustomFilter(b2ShapeId a, b2ShapeId b, void* context)
+    {
+        auto* self = static_cast<Physics2DWorld*>(context);
+        if (self->m_IgnoredPairs.empty()) return true;
+        return !self->IsCollisionIgnored(UnpackEntity(b2Shape_GetUserData(a)), UnpackEntity(b2Shape_GetUserData(b)));
+    }
+
+    glm::vec2 Physics2DWorld::GetGravity() const
+    {
+        b2Vec2 g = b2World_GetGravity(LoadWorld(m_World));
+        return { g.x, g.y };
+    }
+
+    void Physics2DWorld::SetGravity(const glm::vec2& gravity)
+    {
+        b2World_SetGravity(LoadWorld(m_World), { gravity.x, gravity.y });
+        m_Scene.GetSettings().Gravity2D = gravity;
+        for (auto [e, rb] : m_Scene.GetRegistry().ViewOf<Rigidbody2DComponent>())
+            if (rb.RuntimeBody && rb.Type == BodyType::Dynamic) b2Body_SetAwake(b2LoadBodyId(rb.RuntimeBody), true);
+    }
+
+    bool Physics2DWorld::GetLayersCollide(int a, int b) const
+    {
+        return a >= 0 && b >= 0 && a < 32 && b < 32 && ((m_Matrix[a] >> b) & 1u);
+    }
+
+    void Physics2DWorld::SetLayersCollide(int a, int b, bool collide)
+    {
+        if (a < 0 || b < 0 || a >= 32 || b >= 32 || GetLayersCollide(a, b) == collide) return;
+        if (collide) { m_Matrix[a] |= 1u << b; m_Matrix[b] |= 1u << a; }
+        else { m_Matrix[a] &= ~(1u << b); m_Matrix[b] &= ~(1u << a); }
+        auto& reg = m_Scene.GetRegistry();
+        std::vector<Entity> affected;
+        for (auto [e, rb] : reg.ViewOf<Rigidbody2DComponent>())
+        {
+            int layer = reg.Get<TagComponent>(e).Layer;
+            if (rb.RuntimeBody && (layer == a || layer == b)) affected.push_back(e);
+        }
+        for (Entity e : affected) RefilterShapes(e);
+        for (auto& body : m_TilemapBodies)
+        {
+            if (!body.Id || !m_Scene.IsValid(body.Owner)) continue;
+            int layer = reg.Get<TagComponent>(body.Owner).Layer;
+            if (layer != a && layer != b) continue;
+            b2ShapeId shapes[64];
+            int n = b2Body_GetShapes(b2LoadBodyId(body.Id), shapes, 64);
+            for (int i = 0; i < n; ++i) b2Shape_SetFilter(shapes[i], LayerFilter(m_Scene, body.Owner, m_Matrix));
+        }
+    }
+
+    void Physics2DWorld::SetIgnoreCollision(Entity a, Entity b, bool ignore)
+    {
+        if (a == b) return;
+        bool ignored = IsCollisionIgnored(a, b);
+        if (ignore == ignored) return;
+        if (ignore) m_IgnoredPairs.push_back({ a, b });
+        else std::erase_if(m_IgnoredPairs, [&](auto& p) { return (p.first == a && p.second == b) || (p.first == b && p.second == a); });
+        RefilterShapes(a);
+        RefilterShapes(b);
+    }
+
+    bool Physics2DWorld::IsCollisionIgnored(Entity a, Entity b) const
+    {
+        for (auto& p : m_IgnoredPairs)
+            if ((p.first == a && p.second == b) || (p.first == b && p.second == a)) return true;
+        return false;
     }
 
     void Physics2DWorld::RebuildBody(Entity e)
@@ -410,8 +517,8 @@ namespace Dimension
             // A layer changed while playing (a script's Layer): every shape takes the new filter.
             b2ShapeId shapes[16];
             int shapeCount = b2Body_GetShapes(id, shapes, 16);
-            if (shapeCount > 0 && b2Shape_GetFilter(shapes[0]).categoryBits != LayerFilter(m_Scene, e).categoryBits)
-                for (int i = 0; i < shapeCount; ++i) b2Shape_SetFilter(shapes[i], LayerFilter(m_Scene, e));
+            if (shapeCount > 0 && b2Shape_GetFilter(shapes[0]).categoryBits != LayerFilter(m_Scene, e, m_Matrix).categoryBits)
+                for (int i = 0; i < shapeCount; ++i) b2Shape_SetFilter(shapes[i], LayerFilter(m_Scene, e, m_Matrix));
             if (b2Body_IsEnabled(id) == t.ActiveInHierarchy) continue;
             if (t.ActiveInHierarchy)
             {

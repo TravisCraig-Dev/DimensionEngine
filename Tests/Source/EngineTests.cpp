@@ -919,6 +919,124 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestPhysicsSettingsWhilePlaying()
+    {
+        const float dt = 1.0f / 60.0f;
+        // 3D: a crate resting on a floor.
+        {
+            Scene scene("Physics3D");
+            auto& reg = scene.GetRegistry();
+            Entity floor = scene.CreateEntity("Floor");
+            reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+            reg.Emplace<BoxColliderComponent>(floor).Size = { 20, 1, 20 };
+            Entity crate = scene.CreateEntity("Crate");
+            reg.Get<TransformComponent>(crate).Position = { 0, 0.5f, 0 };
+            reg.Emplace<RigidbodyComponent>(crate).Type = BodyType::Dynamic;
+            reg.Emplace<BoxColliderComponent>(crate);
+            reg.Get<TagComponent>(crate).Layer = 3;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto* world = rt->GetPhysics3D();
+            auto y = [&] { return rt->GetRegistry().Get<TransformComponent>(crate).Position.y; };
+            auto run = [&](int steps) { for (int i = 0; i < steps; ++i) rt->OnUpdateRuntime(dt); };
+            run(120); // settles and sleeps
+            CHECK(Near(y(), 0.5f, 0.05f) && Physics3DWorld::IsSleeping(*rt, crate));
+
+            // Gravity turned up: the sleeping crate wakes and rises.
+            world->SetGravity({ 0, 9.81f, 0 });
+            run(20);
+            CHECK(y() > 0.6f && Near(world->GetGravity().y, 9.81f, 1e-4f) && rt->GetSettings().Gravity.y > 0.0f);
+            world->SetGravity({ 0, -9.81f, 0 });
+            run(120);
+            CHECK(Near(y(), 0.5f, 0.05f));
+
+            // Layers 3 and 0 no longer collide: it falls through (the project's matrix is left alone).
+            world->SetLayersCollide(3, 0, false);
+            run(30);
+            CHECK(y() < 0.0f && !world->GetLayersCollide(0, 3) && Project::GetConfig().LayersCollide(3, 0));
+            world->SetLayersCollide(3, 0, true);
+            Physics3DWorld::SetLinearVelocity(*rt, crate, { 0, 0, 0 });
+            rt->GetRegistry().Get<TransformComponent>(crate).Position.y = 2.0f;
+            rt->UpdateTransforms();
+            world->RebuildBody(crate);
+            run(120);
+            CHECK(Near(y(), 0.5f, 0.05f));
+
+            // An ignored pair: the resting crate drops through that floor at once.
+            world->SetIgnoreCollision(crate, floor, true);
+            CHECK(world->IsCollisionIgnored(floor, crate));
+            run(30);
+            CHECK(y() < 0.0f);
+            world->SetIgnoreCollision(crate, floor, false);
+            CHECK(!world->IsCollisionIgnored(crate, floor));
+
+            // A collider changed while playing: a bigger box rests higher, keeping the Rigidbody's mass; a trigger
+            // lets things through.
+            Physics3DWorld::SetLinearVelocity(*rt, crate, { 0, 0, 0 });
+            rt->GetRegistry().Get<TransformComponent>(crate).Position.y = 2.0f;
+            rt->UpdateTransforms();
+            world->RebuildBody(crate);
+            run(60);
+            rt->GetRegistry().Get<BoxColliderComponent>(crate).Size = { 2, 2, 2 };
+            world->RefreshColliders(crate);
+            run(90);
+            CHECK(Near(y(), 1.0f, 0.06f));
+            rt->GetRegistry().Get<BoxColliderComponent>(floor).IsTrigger = true;
+            world->RefreshColliders(floor);
+            run(30);
+            CHECK(y() < 0.5f);
+            rt->OnRuntimeStop();
+        }
+
+        // 2D: the same on a Box2D floor.
+        {
+            Scene scene("Physics2D");
+            auto& reg = scene.GetRegistry();
+            Entity floor = scene.CreateEntity("Floor");
+            reg.Get<TransformComponent>(floor).Position = { 0, -0.5f, 0 };
+            reg.Emplace<BoxCollider2DComponent>(floor).Size = { 20, 1 };
+            Entity box = scene.CreateEntity("Box");
+            reg.Get<TransformComponent>(box).Position = { 0, 0.5f, 0 };
+            reg.Emplace<Rigidbody2DComponent>(box).Type = BodyType::Dynamic;
+            reg.Emplace<BoxCollider2DComponent>(box);
+            reg.Get<TagComponent>(box).Layer = 3;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto* world = rt->GetPhysics2D();
+            auto y = [&] { return rt->GetRegistry().Get<TransformComponent>(box).Position.y; };
+            auto run = [&](int steps) { for (int i = 0; i < steps; ++i) rt->OnUpdateRuntime(dt); };
+            auto reset = [&] {
+                rt->GetRegistry().Get<TransformComponent>(box).Position.y = 2.0f;
+                rt->UpdateTransforms();
+                world->RebuildBody(box);
+                run(120);
+            };
+            run(150);
+            CHECK(Near(y(), 0.5f, 0.05f));
+            world->SetGravity({ 0, 9.81f });
+            run(20);
+            CHECK(y() > 0.6f && Near(world->GetGravity().y, 9.81f, 1e-4f));
+            world->SetGravity({ 0, -9.81f });
+            reset();
+            CHECK(Near(y(), 0.5f, 0.05f));
+            world->SetLayersCollide(0, 3, false);
+            run(30);
+            CHECK(y() < 0.0f && !world->GetLayersCollide(3, 0));
+            world->SetLayersCollide(0, 3, true);
+            reset();
+            world->SetIgnoreCollision(floor, box, true);
+            run(30);
+            CHECK(y() < 0.0f && world->IsCollisionIgnored(box, floor));
+            world->SetIgnoreCollision(floor, box, false);
+            reset();
+            rt->GetRegistry().Get<BoxCollider2DComponent>(box).Size = { 2, 2 };
+            world->RefreshColliders(box);
+            run(90);
+            CHECK(Near(y(), 1.0f, 0.06f));
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestTilemapEditsAndTerrainSample()
     {
         // Cells, bounds, revisions and cell <-> world.
@@ -12234,6 +12352,7 @@ int main(int argc, char** argv)
     Run("Sprite animator seek", TestSpriteAnimatorSeek);
     Run("Particle emit and pause", TestParticleEmitAndPause);
     Run("Tilemap edits and terrain sample", TestTilemapEditsAndTerrainSample);
+    Run("Physics settings while playing", TestPhysicsSettingsWhilePlaying);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

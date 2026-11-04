@@ -808,10 +808,50 @@ namespace Dimension
             Native.Api.TerrainCrater(Native.CurrentScene, (float*)&point, radius, depth, paintLayer);
     }
 
+    /// <summary>The project's physics layers by name (Project Settings > Physics), and masks of them for queries.</summary>
+    public static unsafe class LayerMask
+    {
+        /// <summary>A layer's name ("" for an unused one).</summary>
+        public static string LayerToName(int layer) => layer is >= 0 and < 32 ? Native.FromUtf8(Native.Api.LayerName(layer)) : "";
+        /// <summary>The layer with a name (-1 when there is none).</summary>
+        public static int NameToLayer(string name)
+        {
+            for (int i = 0; i < 32; ++i)
+                if (!string.IsNullOrEmpty(name) && LayerToName(i) == name) return i;
+            return -1;
+        }
+        /// <summary>A mask of the named layers, for Physics queries (unknown names are left out).</summary>
+        public static uint GetMask(params string[] names)
+        {
+            uint mask = 0;
+            foreach (string n in names)
+                if (NameToLayer(n) is int layer and >= 0) mask |= 1u << layer;
+            return mask;
+        }
+    }
+
     public static unsafe class Physics
     {
         /// <summary>Layer mask with every layer except "Ignore Raycast" (the default for queries).</summary>
         public const uint DefaultLayers = ~(1u << 1);
+
+        /// <summary>The 3D world's gravity (m/s^2); setting it wakes the bodies resting, so they feel it.</summary>
+        public static Vector3 Gravity
+        {
+            get { Vector3 g; Native.Api.PhysicsSettings(Native.CurrentScene, 0, 0, 0, (float*)&g); return g; }
+            set => Native.Api.PhysicsSettings(Native.CurrentScene, 1, 0, 0, (float*)&value);
+        }
+        /// <summary>Stops (or lets again) objects on two layers colliding while playing, as unticking the pair in the
+        /// Layer Collision Matrix would (the project's matrix is left as it is).</summary>
+        public static void IgnoreLayerCollision(int layer1, int layer2, bool ignore = true)
+        {
+            float v = ignore ? 0.0f : 1.0f;
+            Native.Api.PhysicsSettings(Native.CurrentScene, 5, layer1, layer2, &v);
+        }
+        public static bool GetIgnoreLayerCollision(int layer1, int layer2) => Native.Api.PhysicsSettings(Native.CurrentScene, 4, layer1, layer2, null) == 0;
+        /// <summary>Stops (or lets again) two objects colliding with each other while playing (touching now, they part).</summary>
+        public static void IgnoreCollision(Entity a, Entity b, bool ignore = true) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 1, ignore ? 1 : 0);
+        public static bool GetIgnoreCollision(Entity a, Entity b) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 0, 0) != 0;
 
         public static bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
         {
@@ -920,6 +960,23 @@ namespace Dimension
     {
         /// <summary>Every layer except "Ignore Raycast" (the default for queries).</summary>
         public const uint DefaultLayers = ~(1u << 1);
+
+        /// <summary>The 2D world's gravity (m/s^2); setting it wakes the bodies resting.</summary>
+        public static Vector2 Gravity
+        {
+            get { Vector2 g; Native.Api.PhysicsSettings(Native.CurrentScene, 2, 0, 0, (float*)&g); return g; }
+            set => Native.Api.PhysicsSettings(Native.CurrentScene, 3, 0, 0, (float*)&value);
+        }
+        /// <summary>Stops (or lets again) 2D objects on two layers colliding while playing (the 2D world's own matrix).</summary>
+        public static void IgnoreLayerCollision(int layer1, int layer2, bool ignore = true)
+        {
+            float v = ignore ? 0.0f : 1.0f;
+            Native.Api.PhysicsSettings(Native.CurrentScene, 7, layer1, layer2, &v);
+        }
+        public static bool GetIgnoreLayerCollision(int layer1, int layer2) => Native.Api.PhysicsSettings(Native.CurrentScene, 6, layer1, layer2, null) == 0;
+        /// <summary>Stops (or lets again) two 2D objects colliding with each other while playing.</summary>
+        public static void IgnoreCollision(Entity a, Entity b, bool ignore = true) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 3, ignore ? 1 : 0);
+        public static bool GetIgnoreCollision(Entity a, Entity b) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 2, 0) != 0;
         private const int MaxResults = 256;
 
         private static RaycastHit2D[] Cast(int op, Vector2 origin, Vector2 direction, float maxDistance, uint layerMask)

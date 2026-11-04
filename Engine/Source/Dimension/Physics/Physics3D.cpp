@@ -164,6 +164,22 @@ namespace Dimension
                 if (s == a && o == b) return JPH::SoftBodyValidateResult::RejectContact;
             return JPH::SoftBodyValidateResult::AcceptContact;
         }
+        // Pairs of objects that never collide (a script's IgnoreCollision); read-only during Update.
+        std::vector<std::pair<Entity, Entity>> IgnoredPairs;
+        bool Ignored(Entity a, Entity b) const
+        {
+            for (const auto& p : IgnoredPairs)
+                if ((p.first == a && p.second == b) || (p.first == b && p.second == a)) return true;
+            return false;
+        }
+        JPH::ValidateResult OnContactValidate(const JPH::Body& a, const JPH::Body& b, JPH::RVec3Arg, const JPH::CollideShapeResult&) override
+        {
+            if (IgnoredPairs.empty()) return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+            auto ea = BodyToEntity.find(a.GetID().GetIndexAndSequenceNumber()), eb = BodyToEntity.find(b.GetID().GetIndexAndSequenceNumber());
+            if (ea != BodyToEntity.end() && eb != BodyToEntity.end() && Ignored(ea->second, eb->second))
+                return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
+            return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+        }
         BroadPhaseLayerInterfaceImpl BroadPhase;
         ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhase;
         ObjectLayerPairFilterImpl ObjectPair;
@@ -2325,6 +2341,107 @@ namespace Dimension
         if (!t.ActiveInHierarchy) bi.RemoveBody(id); // inactive objects have no collider until they are activated
         if (sensor) m_Impl->Sensors.insert(rb.RuntimeBody);
     }
+
+    void Physics3DWorld::RefreshColliders(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto* rb = reg.TryGet<RigidbodyComponent>(e);
+        if (!rb || rb->RuntimeBody == 0xFFFFFFFF || reg.Has<CharacterControllerComponent>(e)) return;
+        JPH::ShapeRefC shape;
+        float friction, restitution;
+        bool sensor;
+        if (!BuildBodyShape(m_Scene, e, shape, friction, restitution, sensor)) return;
+        JPH::BodyID id(rb->RuntimeBody);
+        auto& bi = m_Impl->System.GetBodyInterface();
+        bool added = bi.IsAdded(id);
+        JPH::AABox before = added ? bi.GetTransformedShape(id).GetWorldSpaceBounds() : JPH::AABox();
+        bi.SetShape(id, shape, false, added ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+        bi.SetFriction(id, friction);
+        bi.SetRestitution(id, restitution);
+        {
+            JPH::BodyLockWrite lock(m_Impl->System.GetBodyLockInterface(), id);
+            if (lock.Succeeded())
+            {
+                JPH::Body& body = lock.GetBody();
+                body.SetIsSensor(sensor);
+                body.SetCollideKinematicVsNonDynamic(sensor);
+                if (body.IsDynamic())
+                {
+                    // The Rigidbody's mass, spread as the new shape spreads it.
+                    JPH::MassProperties mass = shape->GetMassProperties();
+                    mass.ScaleToMass(std::max(rb->Mass, 1e-4f));
+                    body.GetMotionProperties()->SetMassProperties(body.GetMotionProperties()->GetAllowedDOFs(), mass);
+                }
+            }
+        }
+        if (sensor) m_Impl->Sensors.insert(rb->RuntimeBody);
+        else m_Impl->Sensors.erase(rb->RuntimeBody);
+        if (!added) return;
+        bi.InvalidateContactCache(id);
+        // What rests on or against it wakes (a floor turned into a trigger drops what sleeps on it).
+        JPH::AABox around = before;
+        around.Encapsulate(bi.GetTransformedShape(id).GetWorldSpaceBounds());
+        around.ExpandBy(JPH::Vec3::sReplicate(0.05f));
+        bi.ActivateBodiesInAABox(around, JPH::BroadPhaseLayerFilter(), JPH::ObjectLayerFilter());
+    }
+
+    glm::vec3 Physics3DWorld::GetGravity() const { return FromJolt(m_Impl->System.GetGravity()); }
+
+    void Physics3DWorld::SetGravity(const glm::vec3& gravity)
+    {
+        m_Impl->System.SetGravity(ToJolt(gravity));
+        m_Scene.GetSettings().Gravity = gravity;
+        auto& bi = m_Impl->System.GetBodyInterface();
+        for (auto& [body, e] : m_Impl->BodyToEntity)
+        {
+            JPH::BodyID id(body);
+            if (bi.IsAdded(id) && bi.GetMotionType(id) == JPH::EMotionType::Dynamic) bi.ActivateBody(id);
+        }
+    }
+
+    bool Physics3DWorld::GetLayersCollide(int a, int b) const
+    {
+        return a >= 0 && b >= 0 && a < 32 && b < 32 && ((m_Impl->ObjectPair.Matrix[a] >> b) & 1u);
+    }
+
+    void Physics3DWorld::SetLayersCollide(int a, int b, bool collide)
+    {
+        if (a < 0 || b < 0 || a >= 32 || b >= 32 || GetLayersCollide(a, b) == collide) return;
+        auto& m = m_Impl->ObjectPair.Matrix;
+        if (collide) { m[a] |= 1u << b; m[b] |= 1u << a; }
+        else { m[a] &= ~(1u << b); m[b] &= ~(1u << a); }
+        // Bodies on the two layers check their pairs again (resting ones too).
+        auto& reg = m_Scene.GetRegistry();
+        auto& bi = m_Impl->System.GetBodyInterface();
+        for (auto& [body, e] : m_Impl->BodyToEntity)
+        {
+            JPH::BodyID id(body);
+            int layer = m_Scene.IsValid(e) ? reg.Get<TagComponent>(e).Layer : -1;
+            if ((layer != a && layer != b) || !bi.IsAdded(id)) continue;
+            bi.InvalidateContactCache(id);
+            if (bi.GetMotionType(id) != JPH::EMotionType::Static) bi.ActivateBody(id);
+        }
+    }
+
+    void Physics3DWorld::SetIgnoreCollision(Entity a, Entity b, bool ignore)
+    {
+        if (a == b || IsCollisionIgnored(a, b) == ignore) return;
+        auto& pairs = m_Impl->IgnoredPairs;
+        if (ignore) pairs.push_back({ a, b });
+        else std::erase_if(pairs, [&](auto& p) { return (p.first == a && p.second == b) || (p.first == b && p.second == a); });
+        auto& bi = m_Impl->System.GetBodyInterface();
+        for (Entity e : { a, b })
+        {
+            auto* rb = m_Scene.IsValid(e) ? m_Scene.GetRegistry().TryGet<RigidbodyComponent>(e) : nullptr;
+            if (!rb || rb->RuntimeBody == 0xFFFFFFFF) continue;
+            JPH::BodyID id(rb->RuntimeBody);
+            if (!bi.IsAdded(id)) continue;
+            bi.InvalidateContactCache(id); // touching now: they part at once
+            if (bi.GetMotionType(id) != JPH::EMotionType::Static) bi.ActivateBody(id);
+        }
+    }
+
+    bool Physics3DWorld::IsCollisionIgnored(Entity a, Entity b) const { return m_Impl->Ignored(a, b); }
 
     void Physics3DWorld::RebuildBody(Entity e)
     {

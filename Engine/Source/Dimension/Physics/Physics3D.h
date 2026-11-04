@@ -42,6 +42,19 @@ namespace Dimension
         void OnEntityDestroyed(Entity e);
         // The object's own body made again from its components (after one was removed while playing).
         void RebuildBody(Entity e);
+        // The object's colliders' settings (size, offset, trigger, friction, bounciness) applied to its body, keeping its
+        // motion, mass and joints.
+        void RefreshColliders(Entity e);
+
+        // While playing (like Unity's Physics settings, for this world only; the project's are left as they are):
+        // gravity, which layers collide (a copy of the project's Layer Collision Matrix), and pairs of objects that never
+        // collide. Changes wake the bodies they concern, and touching pairs part at once.
+        glm::vec3 GetGravity() const;
+        void SetGravity(const glm::vec3& gravity);
+        bool GetLayersCollide(int a, int b) const;
+        void SetLayersCollide(int a, int b, bool collide);
+        void SetIgnoreCollision(Entity a, Entity b, bool ignore);
+        bool IsCollisionIgnored(Entity a, Entity b) const;
 
         static void SetLinearVelocity(Scene& scene, Entity e, const glm::vec3& v);
         static glm::vec3 GetLinearVelocity(Scene& scene, Entity e);

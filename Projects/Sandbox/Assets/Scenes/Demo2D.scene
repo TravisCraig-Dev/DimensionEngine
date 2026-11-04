@@ -83,6 +83,14 @@
                 "Spin": 360.0
               },
               "Enabled": true
+            },
+            {
+              "Class": "Game.GravityPulse",
+              "Fields": {
+                "Seconds": 0.6,
+                "Bouncy": 0.85
+              },
+              "Enabled": true
             }
           ]
         }
@@ -1712,12 +1720,12 @@
             104
           ],
           "Size": [
-            1200,
+            1400,
             40
           ]
         },
         "UI Text": {
-          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder)",
+          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse)",
           "Font": 0,
           "Font Size": 26,
           "Color": [

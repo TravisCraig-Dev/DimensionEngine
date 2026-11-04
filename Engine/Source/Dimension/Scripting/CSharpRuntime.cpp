@@ -17,6 +17,7 @@
 #include "Dimension/Core/Profiler.h"
 #include "Dimension/Scene/DebugDraw.h"
 #include "Dimension/Core/PlayerPrefs.h"
+#include "Dimension/Project/Project.h"
 #include "Dimension/Project/InputActions.h"
 #include "Dimension/Project/Localization.h"
 #include "Dimension/Asset/DataAsset.h"
@@ -227,6 +228,13 @@ namespace Dimension
             int (*TerrainSample)(void*, uint64_t, const float*, float*);
             // A Mesh Renderer's per-slot material overrides: 0 count, 1 get slot, 2 set slot (growing the list), 3 clear.
             uint64_t (*RendererMaterials)(void*, uint64_t, int, int, uint64_t);
+            // Physics settings while playing: 0/1 get/set gravity (v xyz), 2/3 get/set 2D gravity (v xy), 4/5 get/set
+            // whether layers a and b collide in 3D (v[0] != 0), 6/7 the same in 2D. Returns the "collide" answers.
+            int (*PhysicsSettings)(void*, int, int, int, float*);
+            // Pairs of objects that never collide: 0 get, 1 set (ignore != 0) in 3D; 2 get, 3 set in 2D.
+            int (*PhysicsIgnore)(void*, uint64_t, uint64_t, int, int);
+            void (*RefreshColliders)(void*, uint64_t); // after a script changed a collider's fields
+            const char* (*LayerName)(int);             // the project's physics layer name ("" unused)
         };
 
         // Background scene loads started from C#, by id.
@@ -1380,6 +1388,49 @@ namespace Dimension
                 p.Size = v[10];
                 p.Lifetime = v[11];
                 ps->Emit(p, count);
+            };
+            a.PhysicsSettings = [](void* s, int op, int la, int lb, float* v) -> int {
+                if (!s) return 0;
+                Scene& scene = S(s);
+                Physics3DWorld* w3 = scene.GetPhysics3D();
+                Physics2DWorld* w2 = scene.GetPhysics2D();
+                const auto& config = Project::GetConfig();
+                switch (op)
+                {
+                case 0: { glm::vec3 g = w3 ? w3->GetGravity() : scene.GetSettings().Gravity; v[0] = g.x; v[1] = g.y; v[2] = g.z; return 1; }
+                case 1: if (w3) w3->SetGravity({ v[0], v[1], v[2] }); else scene.GetSettings().Gravity = { v[0], v[1], v[2] }; return 1;
+                case 2: { glm::vec2 g = w2 ? w2->GetGravity() : scene.GetSettings().Gravity2D; v[0] = g.x; v[1] = g.y; return 1; }
+                case 3: if (w2) w2->SetGravity({ v[0], v[1] }); else scene.GetSettings().Gravity2D = { v[0], v[1] }; return 1;
+                case 4: return (w3 ? w3->GetLayersCollide(la, lb) : config.LayersCollide(la, lb)) ? 1 : 0;
+                case 5: if (w3) w3->SetLayersCollide(la, lb, v[0] != 0.0f); return 1;
+                case 6: return (w2 ? w2->GetLayersCollide(la, lb) : config.LayersCollide(la, lb)) ? 1 : 0;
+                case 7: if (w2) w2->SetLayersCollide(la, lb, v[0] != 0.0f); return 1;
+                default: return 0;
+                }
+            };
+            a.PhysicsIgnore = [](void* s, uint64_t ea, uint64_t eb, int op, int ignore) -> int {
+                if (!s) return 0;
+                Scene& scene = S(s);
+                Entity x = Unpack(ea), y = Unpack(eb);
+                if (op < 2)
+                {
+                    Physics3DWorld* w = scene.GetPhysics3D();
+                    if (w && op == 1) w->SetIgnoreCollision(x, y, ignore != 0);
+                    return w && w->IsCollisionIgnored(x, y) ? 1 : 0;
+                }
+                Physics2DWorld* w = scene.GetPhysics2D();
+                if (w && op == 3) w->SetIgnoreCollision(x, y, ignore != 0);
+                return w && w->IsCollisionIgnored(x, y) ? 1 : 0;
+            };
+            a.RefreshColliders = [](void* s, uint64_t e) {
+                if (!s || !S(s).IsValid(Unpack(e))) return;
+                if (auto* w = S(s).GetPhysics3D()) w->RefreshColliders(Unpack(e));
+                if (auto* w = S(s).GetPhysics2D()) w->RefreshColliders(Unpack(e));
+            };
+            a.LayerName = [](int layer) -> const char* {
+                const auto& names = Project::GetConfig().PhysicsLayers;
+                s_StringReturn = layer >= 0 && layer < (int)names.size() ? names[layer] : "";
+                return s_StringReturn.c_str();
             };
             a.RendererMaterials = [](void* s, uint64_t e, int op, int slot, uint64_t guid) -> uint64_t {
                 auto* mr = Comp<MeshRendererComponent>(s, e);
