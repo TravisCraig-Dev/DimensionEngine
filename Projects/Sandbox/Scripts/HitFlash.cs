@@ -4,14 +4,15 @@ using Dimension;
 
 namespace Game
 {
-    /// <summary>Flashes the object's color when it hits something hard (its speed along the contact normal), and draws
-    /// the contact normals for a moment.</summary>
+    /// <summary>Flashes the object's color when it hits something hard (its speed along the contact normal), plays
+    /// HitSound there, and draws the contact normals for a moment.</summary>
     public class HitFlash : Behaviour
     {
         [Tooltip("Impact speed (m/s) that flashes")] public float MinSpeed = 2.0f;
         public Color FlashColor = new(1.0f, 0.35f, 0.2f);
         [Range(0.05f, 3.0f)] public float FlashSeconds = 0.4f;
         [Tooltip("Told about each hard hit (empty: the scene's first Scoreboard, if any)")] public Scoreboard Board;
+        [Tooltip("Played where it hits, louder the harder (none: silent)")] public AudioClip HitSound;
 
         private MeshRenderer m_Renderer;
         private Color m_BaseColor;
@@ -32,6 +33,8 @@ namespace Game
             foreach (ContactPoint p in collision.Contacts) Debug.DrawRay(p.Point, p.Normal * 0.75f, FlashColor, 0.5f);
             Debug.Log($"{Name} hit {collision.Other.Name} at {speed:0.0} m/s ({collision.Impulse:0} N*s, {collision.ContactCount} contacts)");
             (Board ?? FindObjectOfType<Scoreboard>())?.Add($"{Name} into {collision.Other.Name}");
+            if (HitSound.IsValid && collision.ContactCount > 0)
+                AudioSource.PlayClipAtPoint(HitSound, collision.Contacts[0].Point, MathF.Min(speed / 8.0f, 1.0f));
         }
 
         public override void OnUpdate(float dt)

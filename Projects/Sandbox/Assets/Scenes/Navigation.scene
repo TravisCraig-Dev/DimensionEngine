@@ -830,7 +830,8 @@
          1.0
         ],
         "FlashSeconds": 0.4,
-        "Board": 6000103
+        "Board": 6000103,
+        "HitSound": 100007
        },
        "Enabled": true
       },
@@ -925,7 +926,8 @@
          1.0
         ],
         "FlashSeconds": 0.4,
-        "Board": 6000103
+        "Board": 6000103,
+        "HitSound": 100007
        },
        "Enabled": true
       },
@@ -1020,7 +1022,8 @@
          1.0
         ],
         "FlashSeconds": 0.4,
-        "Board": 6000103
+        "Board": 6000103,
+        "HitSound": 100007
        },
        "Enabled": true
       },

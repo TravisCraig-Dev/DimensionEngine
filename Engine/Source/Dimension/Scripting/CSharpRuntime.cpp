@@ -207,6 +207,10 @@ namespace Dimension
             // The Animator (see Animator in Components.cs for the ops); `layer` 0 is the base layer.
             float (*AnimatorQuery)(void*, uint64_t, int, int, const char*, float);
             const char* (*AnimatorStateName)(void*, uint64_t, int, int); // layer; 0 current state, 1 the one fading out, 2 layer name
+            // An Audio Source: 0 pause, 1 unpause, 2 is paused, 3 time, 4 seek (v), 5 length, 6 set loop (v != 0).
+            float (*AudioControl)(void*, uint64_t, int, float);
+            uint64_t (*AudioClip)(void*, uint64_t, int, uint64_t);              // 0 get the clip's GUID, 1 set it
+            void (*PlayClipAtPoint)(void*, uint64_t, const float*, float);       // clip GUID, world position, volume
         };
 
         // Background scene loads started from C#, by id.
@@ -1298,6 +1302,31 @@ namespace Dimension
                     return 0;
                 }
                 return name && scene.RemoveComponentDeferred(e, name) ? 1 : 0;
+            };
+            a.AudioControl = [](void* s, uint64_t packed, int op, float v) -> float {
+                if (!s) return 0.0f;
+                Scene& scene = S(s);
+                Entity e = Unpack(packed);
+                switch (op)
+                {
+                case 0: AudioWorld::Pause(scene, e); return 0.0f;
+                case 1: AudioWorld::UnPause(scene, e); return 0.0f;
+                case 2: return AudioWorld::IsPaused(scene, e) ? 1.0f : 0.0f;
+                case 3: return AudioWorld::GetTime(scene, e);
+                case 4: AudioWorld::SetTime(scene, e, v); return 0.0f;
+                case 5: return AudioWorld::GetLength(scene, e);
+                case 6: AudioWorld::SetLoop(scene, e, v != 0.0f); return 0.0f;
+                default: return 0.0f;
+                }
+            };
+            a.AudioClip = [](void* s, uint64_t e, int op, uint64_t clip) -> uint64_t {
+                auto* src = Comp<AudioSourceComponent>(s, e);
+                if (!src) return 0;
+                if (op == 1) AudioWorld::SetClip(S(s), Unpack(e), AssetHandle(clip));
+                return (uint64_t)src->Clip;
+            };
+            a.PlayClipAtPoint = [](void* s, uint64_t clip, const float* p, float volume) {
+                if (s) AudioWorld::PlayClipAtPoint(S(s), AssetHandle(clip), { p[0], p[1], p[2] }, volume);
             };
             a.AnimatorQuery = [](void* s, uint64_t e, int op, int layer, const char* name, float value) -> float {
                 auto* an = Comp<AnimatorComponent>(s, e);

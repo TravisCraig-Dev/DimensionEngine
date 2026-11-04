@@ -919,6 +919,81 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestAudioSourceControl()
+    {
+        AudioEngine::Init();
+        if (!AudioEngine::IsAvailable())
+        {
+            std::printf("  skipped: no audio device\n");
+            return;
+        }
+        std::error_code ec;
+        fs::path assets = fs::temp_directory_path() / "dimension_audio_control" / "Assets";
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        for (const char* name : { "Tone.opus", "Tone2.opus" }) fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Tests" / "Data" / "Tone.opus", assets / name);
+        AssetManager::Init(assets);
+        AssetHandle tone = AssetManager::GetHandle(assets / "Tone.opus"), other = AssetManager::GetHandle(assets / "Tone2.opus");
+        Scene scene("Audio");
+        Entity speaker = scene.CreateEntity("Speaker");
+        auto& src = scene.GetRegistry().Emplace<AudioSourceComponent>(speaker);
+        src.Clip = tone;
+        src.PlayOnAwake = false;
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto wait = [](float seconds) { std::this_thread::sleep_for(std::chrono::milliseconds((int)(seconds * 1000.0f))); };
+        float length = AudioWorld::GetLength(*rt, speaker);
+        CHECK(length > 0.3f);
+
+        // Pause holds the position; UnPause goes on from it.
+        AudioWorld::Play(*rt, speaker);
+        wait(0.1f);
+        AudioWorld::Pause(*rt, speaker);
+        float held = AudioWorld::GetTime(*rt, speaker);
+        CHECK(held > 0.03f && AudioWorld::IsPaused(*rt, speaker) && !AudioWorld::IsPlaying(*rt, speaker));
+        wait(0.1f);
+        CHECK(Near(AudioWorld::GetTime(*rt, speaker), held, 0.005f));
+        AudioWorld::UnPause(*rt, speaker);
+        CHECK(AudioWorld::IsPlaying(*rt, speaker) && !AudioWorld::IsPaused(*rt, speaker));
+        // Seeking, and Stop forgets a pause.
+        AudioWorld::SetTime(*rt, speaker, 0.0f);
+        CHECK(AudioWorld::GetTime(*rt, speaker) < 0.03f);
+        AudioWorld::SetTime(*rt, speaker, 1000.0f); // clamped into the clip
+        CHECK(AudioWorld::GetTime(*rt, speaker) <= length);
+        AudioWorld::Pause(*rt, speaker);
+        AudioWorld::Stop(*rt, speaker);
+        AudioWorld::UnPause(*rt, speaker);
+        CHECK(!AudioWorld::IsPaused(*rt, speaker) && !AudioWorld::IsPlaying(*rt, speaker));
+
+        // Looping keeps it playing past its end; off, it ends.
+        AudioWorld::SetLoop(*rt, speaker, true);
+        AudioWorld::Play(*rt, speaker);
+        wait(length + 0.15f);
+        CHECK(AudioWorld::IsPlaying(*rt, speaker) && rt->GetRegistry().Get<AudioSourceComponent>(speaker).Loop);
+        AudioWorld::SetLoop(*rt, speaker, false);
+        wait(length + 0.15f);
+        CHECK(!AudioWorld::IsPlaying(*rt, speaker));
+
+        // Another clip: it stops, Play plays the new one.
+        AudioWorld::Play(*rt, speaker);
+        AudioWorld::SetClip(*rt, speaker, other);
+        CHECK(rt->GetRegistry().Get<AudioSourceComponent>(speaker).Clip == other && !AudioWorld::IsPlaying(*rt, speaker));
+        AudioWorld::Play(*rt, speaker);
+        CHECK(AudioWorld::IsPlaying(*rt, speaker));
+        AudioWorld::Stop(*rt, speaker);
+
+        // A one-shot at a point, without a source: released once it ends.
+        AudioWorld::PlayClipAtPoint(*rt, tone, { 3, 0, 0 });
+        CHECK(rt->GetAudio()->GetOneShotCount() == 1);
+        wait(length + 0.15f);
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(rt->GetAudio()->GetOneShotCount() == 0);
+        rt->OnRuntimeStop();
+        rt.reset();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
     void TestMeshImportSettings()
     {
         fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
@@ -11960,6 +12035,7 @@ int main(int argc, char** argv)
     Run("Mouse events", TestMouseEvents);
     Run("Trigger stay", TestTriggerStay);
     Run("Instantiate and remove", TestInstantiateAndRemove);
+    Run("Audio source control", TestAudioSourceControl);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

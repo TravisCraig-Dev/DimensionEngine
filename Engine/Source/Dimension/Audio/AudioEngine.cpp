@@ -1035,6 +1035,7 @@ namespace Dimension
     {
         auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
         if (!src || !SoundOf(*src)) return;
+        src->Paused = false;
         ma_sound_seek_to_pcm_frame(SoundOf(*src), 0);
         ma_sound_start(SoundOf(*src));
     }
@@ -1042,7 +1043,94 @@ namespace Dimension
     void AudioWorld::Stop(Scene& scene, Entity e)
     {
         auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
-        if (src && SoundOf(*src)) ma_sound_stop(SoundOf(*src));
+        if (!src) return;
+        src->Paused = false;
+        if (SoundOf(*src)) ma_sound_stop(SoundOf(*src));
+    }
+
+    void AudioWorld::Pause(Scene& scene, Entity e)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        if (!src || !SoundOf(*src) || !ma_sound_is_playing(SoundOf(*src))) return;
+        ma_sound_stop(SoundOf(*src)); // miniaudio keeps the cursor
+        src->Paused = true;
+    }
+
+    void AudioWorld::UnPause(Scene& scene, Entity e)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        if (!src || !src->Paused) return;
+        src->Paused = false;
+        if (SoundOf(*src)) ma_sound_start(SoundOf(*src));
+    }
+
+    bool AudioWorld::IsPaused(Scene& scene, Entity e)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        return src && src->Paused;
+    }
+
+    float AudioWorld::GetTime(Scene& scene, Entity e)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        float t = 0.0f;
+        if (src && SoundOf(*src)) ma_sound_get_cursor_in_seconds(SoundOf(*src), &t);
+        return t;
+    }
+
+    void AudioWorld::SetTime(Scene& scene, Entity e, float seconds)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        ma_sound* sound = src ? SoundOf(*src) : nullptr;
+        if (!sound) return;
+        ma_uint32 rate = 0;
+        ma_sound_get_data_format(sound, nullptr, nullptr, &rate, nullptr, 0);
+        ma_uint64 frames = 0;
+        ma_sound_get_length_in_pcm_frames(sound, &frames);
+        ma_uint64 frame = (ma_uint64)(std::max(seconds, 0.0f) * (float)rate);
+        ma_sound_seek_to_pcm_frame(sound, frames > 0 ? std::min(frame, frames - 1) : frame);
+    }
+
+    float AudioWorld::GetLength(Scene& scene, Entity e)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        float length = 0.0f;
+        if (src && SoundOf(*src)) ma_sound_get_length_in_seconds(SoundOf(*src), &length);
+        return length;
+    }
+
+    void AudioWorld::SetLoop(Scene& scene, Entity e, bool loop)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        if (!src) return;
+        src->Loop = loop;
+        if (SoundOf(*src)) ma_sound_set_looping(SoundOf(*src), loop ? MA_TRUE : MA_FALSE);
+    }
+
+    void AudioWorld::SetClip(Scene& scene, Entity e, AssetHandle clip)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        if (!src || src->Clip == clip) return;
+        src->Runtime.reset(); // stops it
+        src->Paused = false;
+        src->Clip = clip;
+        if (AudioWorld* world = scene.GetAudio()) world->CreateSource(e, false);
+    }
+
+    void AudioWorld::PlayClipAtPoint(Scene& scene, AssetHandle clip, const glm::vec3& position, float volume)
+    {
+        AudioWorld* world = scene.GetAudio();
+        if (!world || !s_Engine || !clip.IsValid()) return;
+        AudioSourceComponent settings; // a spatial source with the defaults
+        settings.Clip = clip;
+        settings.Volume = volume;
+        settings.Spatial = true;
+        auto sound = MakeSound(settings, clip, false);
+        if (!sound) return;
+        auto* s = static_cast<ma_sound*>(sound.get());
+        ma_sound_set_position(s, position.x, position.y, position.z);
+        ma_sound_start(s);
+        world->m_OneShots.push_back(std::move(sound));
     }
 
     bool AudioWorld::IsPlaying(Scene& scene, Entity e)

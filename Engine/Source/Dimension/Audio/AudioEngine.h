@@ -84,6 +84,20 @@ namespace Dimension
         static void PlayOneShot(Scene& scene, Entity e, AssetHandle clip, float volumeScale = 1.0f);
         // Switches the entity's Audio Source to `clip` (if it plays another) and plays it from `offset` seconds.
         static void PlayClip(Scene& scene, Entity e, AssetHandle clip, float offset = 0.0f);
+        // Pause keeps the position: UnPause goes on from it (Play starts over, Stop forgets it).
+        static void Pause(Scene& scene, Entity e);
+        static void UnPause(Scene& scene, Entity e);
+        static bool IsPaused(Scene& scene, Entity e);
+        // The playing position in seconds, and seeking to one (clamped to the clip); the clip's length.
+        static float GetTime(Scene& scene, Entity e);
+        static void SetTime(Scene& scene, Entity e, float seconds);
+        static float GetLength(Scene& scene, Entity e);
+        static void SetLoop(Scene& scene, Entity e, bool loop);
+        // Another clip for the source (it stops; Play plays the new one).
+        static void SetClip(Scene& scene, Entity e, AssetHandle clip);
+        // A fire-and-forget 3D sound at a world point, without an Audio Source (like Unity's AudioSource.PlayClipAtPoint).
+        static void PlayClipAtPoint(Scene& scene, AssetHandle clip, const glm::vec3& position, float volume = 1.0f);
+        size_t GetOneShotCount() const { return m_OneShots.size(); }
 
     private:
         void CreateSource(Entity e, bool autoplay);

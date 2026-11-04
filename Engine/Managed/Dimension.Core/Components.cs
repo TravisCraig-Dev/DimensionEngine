@@ -651,6 +651,30 @@ namespace Dimension
         public void Play() => Native.Api.AudioPlay(Entity.Scene, Entity.Id, 1);
         public void Stop() => Native.Api.AudioPlay(Entity.Scene, Entity.Id, 0);
         public bool IsPlaying => Native.Api.AudioIsPlaying(Entity.Scene, Entity.Id) != 0;
+
+        // Ops: 0 pause, 1 unpause, 2 is paused, 3 time, 4 seek, 5 length, 6 set loop.
+        private float Control(int op, float value = 0.0f) => Native.Api.AudioControl(Entity.Scene, Entity.Id, op, value);
+        /// <summary>Stops where it is: UnPause goes on from there (Play starts over, Stop forgets the position).</summary>
+        public void Pause() => Control(0);
+        public void UnPause() => Control(1);
+        public bool IsPaused => Control(2) != 0.0f;
+        /// <summary>The playing position in seconds; setting it seeks (also while paused or stopped, for the next UnPause).</summary>
+        public float Time { get => Control(3); set => Control(4, value); }
+        /// <summary>The clip's length in seconds (0 without a clip or an audio device).</summary>
+        public float Length => Control(5);
+        /// <summary>The clip it plays; setting another stops it (Play plays the new one).</summary>
+        public AudioClip Clip
+        {
+            get => new(Native.Api.AudioClip(Entity.Scene, Entity.Id, 0, 0));
+            set => Native.Api.AudioClip(Entity.Scene, Entity.Id, 1, value.Guid);
+        }
+        public float Volume { get => GetFloat("Volume"); set => SetFloat("Volume", Math.Clamp(value, 0.0f, 1.0f)); }
+        public float Pitch { get => GetFloat("Pitch"); set => SetFloat("Pitch", Math.Clamp(value, 0.1f, 3.0f)); }
+        public bool Mute { get => GetBool("Mute"); set => SetBool("Mute", value); }
+        public bool Loop { get => GetBool("Loop"); set => Control(6, value ? 1.0f : 0.0f); }
+        /// <summary>A fire-and-forget 3D sound at a world point, without an Audio Source (it goes when it ends).</summary>
+        public static void PlayClipAtPoint(AudioClip clip, Vector3 position, float volume = 1.0f) =>
+            Native.Api.PlayClipAtPoint(Native.CurrentScene, clip.Guid, (float*)&position, volume);
         /// <summary>Plays a clip (asset GUID; 0 = this source's clip) once, overlapping other sounds, through this source's mixer group.</summary>
         public void PlayOneShot(ulong clipGuid = 0, float volumeScale = 1.0f) => Native.Api.AudioPlayOneShot(Entity.Scene, Entity.Id, clipGuid, volumeScale);
     }

@@ -709,6 +709,7 @@ namespace Dimension
         float OcclusionVolume = -9.0f;
         float OcclusionCutoff = 1200.0f;
         float OcclusionAmount = 0.0f;  // runtime: 0 = clear line, 1 = fully occluded
+        bool Paused = false;           // runtime: stopped by Pause (UnPause goes on from where it was)
         std::shared_ptr<void> Runtime; // ma_sound (and its occlusion filter), runtime only
     };
 
