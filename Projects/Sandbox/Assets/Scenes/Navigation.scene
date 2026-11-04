@@ -4753,6 +4753,19 @@
         "Radius": 0.3
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.Cloner",
+       "Fields": {
+        "Template": 6000013,
+        "Area": [
+         14.0,
+         4.0,
+         14.0
+        ],
+        "MaxCopies": 8
+       },
+       "Enabled": true
       }
      ]
     }
@@ -4910,7 +4923,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it, right-click one to shove it (it flashes when it hits something hard); T toggles slow motion.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion.",
      "Font": 0,
      "Font Size": 26,
      "Color": [

@@ -22,6 +22,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include "Dimension/Asset/DataAsset.h"
 #include "Dimension/Scene/CameraProjection.h"
+#include "Dimension/Scene/ComponentRegistry.h"
 #include <algorithm>
 #include <map>
 #include <fstream>
@@ -118,9 +119,125 @@ namespace Dimension
 
     void Scene::FlushDeferredDestroys()
     {
+        auto removals = std::move(m_PendingRemovals);
+        m_PendingRemovals.clear();
+        for (auto& r : removals)
+        {
+            if (!IsValid(r.E)) continue;
+            if (r.Script)
+            {
+                auto* sc = m_Registry.TryGet<ScriptComponent>(r.E);
+                auto it = sc ? std::find_if(sc->Scripts.begin(), sc->Scripts.end(), [&](auto& s) { return s.Instance.get() == r.Script; })
+                             : std::vector<ScriptInstance>::iterator();
+                if (!sc || it == sc->Scripts.end()) continue;
+                auto instance = it->Instance; // kept alive through its callbacks
+                sc->Scripts.erase(it);
+                if (instance->m_EnableNotified) { instance->m_EnableNotified = false; instance->OnDisable(); }
+                instance->OnDestroy();
+                continue;
+            }
+            const ComponentInfo* info = ComponentRegistry::Find(r.Component);
+            if (!info || !info->Has(*this, r.E)) continue;
+            if (m_Audio && r.Component == "Audio Source") m_Audio->OnEntityDestroyed(r.E);
+            info->Remove(*this, r.E);
+            static const char* k3D[] = { "Rigidbody", "Box Collider", "Sphere Collider", "Capsule Collider", "Mesh Collider", "Character Controller" };
+            static const char* k2D[] = { "Rigidbody 2D", "Box Collider 2D", "Circle Collider 2D" };
+            for (const char* n : k3D)
+                if (m_Physics3D && r.Component == n) m_Physics3D->RebuildBody(r.E);
+            for (const char* n : k2D)
+                if (m_Physics2D && r.Component == n) m_Physics2D->RebuildBody(r.E);
+        }
         auto pending = std::move(m_PendingDestroy);
         m_PendingDestroy.clear();
         for (Entity e : pending) DestroyEntity(e);
+    }
+
+    bool Scene::RemoveScriptDeferred(Entity e, const ScriptableEntity* script)
+    {
+        auto* sc = IsValid(e) && script ? m_Registry.TryGet<ScriptComponent>(e) : nullptr;
+        if (!sc || std::none_of(sc->Scripts.begin(), sc->Scripts.end(), [&](auto& s) { return s.Instance.get() == script; })) return false;
+        m_PendingRemovals.push_back({ e, script, {} });
+        if (!m_Running) FlushDeferredDestroys();
+        return true;
+    }
+
+    bool Scene::RemoveComponentDeferred(Entity e, const std::string& component)
+    {
+        static const char* kKept[] = { "Transform", "Tag", "ID", "Hierarchy", "Script" }; // part of every object (scripts go one by one)
+        for (const char* k : kKept)
+            if (component == k) return false;
+        const ComponentInfo* info = ComponentRegistry::Find(component);
+        if (!IsValid(e) || !info || !info->Has(*this, e)) return false;
+        m_PendingRemovals.push_back({ e, nullptr, component });
+        if (!m_Running) FlushDeferredDestroys();
+        return true;
+    }
+
+    void Scene::SetWorldPose(Entity e, const glm::vec3& position, const glm::quat& rotation)
+    {
+        UpdateTransforms();
+        auto& t = m_Registry.Get<TransformComponent>(e);
+        glm::vec3 scale(glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[1])), glm::length(glm::vec3(t.World[2])));
+        glm::mat4 world = glm::translate(glm::mat4(1.0f), position) * glm::toMat4(rotation) * glm::scale(glm::mat4(1.0f), scale);
+        Entity parent = GetParent(e);
+        glm::mat4 local = parent.IsNull() ? world : glm::inverse(m_Registry.Get<TransformComponent>(parent).World) * world;
+        glm::vec3 s, p, skew;
+        glm::vec4 perspective;
+        glm::quat r;
+        if (glm::decompose(local, s, r, p, skew, perspective))
+        {
+            t.Position = p;
+            t.Rotation = glm::eulerAngles(r);
+            t.Scale = s;
+        }
+        UpdateTransforms();
+    }
+
+    void Scene::StartAdded(Entity root)
+    {
+        if (!m_Running) return;
+        UpdateTransforms();
+        if (m_Physics2D) m_Physics2D->CreateBodiesFor(root);
+        if (m_Physics3D) m_Physics3D->CreateBodiesFor(root);
+        if (m_Audio) m_Audio->CreateSourcesFor(root);
+        InstantiateScripts();
+    }
+
+    void Scene::CaptureScriptFields(Entity root)
+    {
+        EntityRefResolver resolver;
+        resolver.ToGuid = [this](Entity x) { return IsValid(x) ? (uint64_t)GetGuid(x) : uint64_t(0); };
+        resolver.FromGuid = [this](uint64_t g) { return FindEntityByGuid(Guid(g)); };
+        std::vector<Entity> subtree{ root };
+        for (size_t i = 0; i < subtree.size(); ++i)
+            for (Entity c : GetChildren(subtree[i])) subtree.push_back(c);
+        for (Entity e : subtree)
+            if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
+                for (auto& script : sc->Scripts)
+                {
+                    const ScriptInfo* info = script.Instance ? ScriptRegistry::Find(script.ClassName) : nullptr;
+                    if (!info) continue;
+                    script.Instance->OnBeforeSerialize();
+                    void* obj = info->ToObject(script.Instance.get());
+                    for (auto& f : info->Fields) script.Fields[f.Name] = FieldToJson(f, obj, &resolver);
+                }
+    }
+
+    Entity Scene::Instantiate(Entity original, Entity parent, const glm::vec3* position, const glm::quat* rotation)
+    {
+        if (!IsValid(original) || (!parent.IsNull() && !IsValid(parent))) return Entity::Null();
+        if (m_Running) CaptureScriptFields(original);
+        UpdateTransforms();
+        glm::vec3 scale, p, skew;
+        glm::vec4 perspective;
+        glm::quat r;
+        glm::decompose(m_Registry.Get<TransformComponent>(original).World, scale, r, p, skew, perspective);
+        auto tree = SceneSerializer::SerializeEntityTree(*this, original);
+        Entity copy = SceneSerializer::DeserializeEntityTree(*this, tree, parent, true);
+        if (copy.IsNull()) return copy;
+        SetWorldPose(copy, position ? *position : p, rotation ? *rotation : r);
+        StartAdded(copy);
+        return copy;
     }
 
     Entity Scene::DuplicateEntity(Entity e)
@@ -334,6 +451,15 @@ namespace Dimension
     }
 
     // ---- Prefabs --------------------------------------------------------------------
+
+    Entity Scene::InstantiatePrefab(AssetHandle prefab, const glm::vec3& position, const glm::quat& rotation, Entity parent)
+    {
+        Entity root = Prefabs::Instantiate(*this, prefab, parent);
+        if (root.IsNull()) return root;
+        SetWorldPose(root, position, rotation);
+        StartAdded(root);
+        return root;
+    }
 
     Entity Scene::InstantiatePrefab(AssetHandle prefab, const glm::vec3& position, Entity parent)
     {

@@ -89,5 +89,6 @@ namespace Dimension
         static bool RawMouseDown(MouseButton button);
         // Automated runs (the Player's --click): sets a mouse button's state for this frame (replacing the real one).
         static void SimulateMouseButton(MouseButton button, bool down);
+        static void SimulateKey(Key key, bool down); // likewise for a key (tests)
     };
 }

@@ -2326,6 +2326,16 @@ namespace Dimension
         if (sensor) m_Impl->Sensors.insert(rb.RuntimeBody);
     }
 
+    void Physics3DWorld::RebuildBody(Entity e)
+    {
+        OnEntityDestroyed(e);
+        auto& reg = m_Scene.GetRegistry();
+        if (reg.Has<RigidbodyComponent>(e) || reg.Has<BoxColliderComponent>(e) || reg.Has<SphereColliderComponent>(e) ||
+            reg.Has<CapsuleColliderComponent>(e) || reg.Has<MeshColliderComponent>(e) || reg.Has<CharacterControllerComponent>(e) ||
+            reg.Has<TerrainComponent>(e))
+            CreateBody(e);
+    }
+
     void Physics3DWorld::OnEntityDestroyed(Entity e)
     {
         // Hitches on or to this object go before its body.

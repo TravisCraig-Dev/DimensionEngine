@@ -299,6 +299,7 @@ namespace Dimension
     bool Input::IsMouseDown(MouseButton b) { return s_GameInput && s_Mouse[(int)b]; }
     bool Input::IsMousePressed(MouseButton b) { return s_GameInput && s_Mouse[(int)b] && !s_PrevMouse[(int)b]; }
     void Input::SimulateMouseButton(MouseButton b, bool down) { s_Mouse[(int)b] = down; }
+    void Input::SimulateKey(Key key, bool down) { s_Keys[(int)key] = down; }
     glm::vec2 Input::GetMousePosition() { return s_MousePos; }
     glm::vec2 Input::GetMouseDelta() { return s_MousePos - s_PrevMousePos; }
     float Input::GetScrollDelta() { return s_Scroll; }

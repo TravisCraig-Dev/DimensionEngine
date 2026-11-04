@@ -150,6 +150,9 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, IntPtr*, int, int, int> SceneScripts;
         public delegate* unmanaged<IntPtr, byte*, ulong*, int, int, int> EntitiesWithComponent;
         public delegate* unmanaged<IntPtr, ulong, byte*, IntPtr> AddScript;
+        // Copies (kind 0 an object, 1 a prefab GUID) with a pose (position, rotation xyzw; flags 1 / 2) under a parent.
+        public delegate* unmanaged<IntPtr, int, ulong, float*, int, ulong, ulong> InstantiateObject;
+        public delegate* unmanaged<IntPtr, ulong, byte*, IntPtr, int> RemoveComponent; // a script (handle) or a component (name)
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

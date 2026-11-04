@@ -115,6 +115,17 @@ namespace Dimension
         void DestroyEntity(Entity e);         // immediate, includes children
         void DestroyEntityDeferred(Entity e); // safe during iteration; flushed at end of frame
         Entity DuplicateEntity(Entity e);
+        // A copy of an object with its children (like Unity's Instantiate): under `parent` (Null: a root object), at the
+        // original's world position and rotation unless they are given (world space). While playing, its scripts start
+        // with the original's live field values, and its bodies, sounds and scripts start at once. References inside
+        // the copied tree point to the copies.
+        Entity Instantiate(Entity original, Entity parent = Entity::Null(), const glm::vec3* position = nullptr,
+                           const glm::quat* rotation = nullptr);
+        // At the end of the frame, one script or an engine component (by its registry name) leaves an object: a script
+        // gets OnDisable and OnDestroy, a physics component's body is made again without it. False for what cannot go
+        // (Transform, Tag and the like) or is not there.
+        bool RemoveScriptDeferred(Entity e, const ScriptableEntity* script);
+        bool RemoveComponentDeferred(Entity e, const std::string& component);
         bool IsValid(Entity e) const { return m_Registry.Valid(e); }
 
         Entity FindEntityByGuid(Guid id) const;
@@ -150,6 +161,8 @@ namespace Dimension
 
         // ---- Prefabs
         Entity InstantiatePrefab(AssetHandle prefab, const glm::vec3& position, Entity parent = Entity::Null());
+        // At a world position and rotation (under `parent`).
+        Entity InstantiatePrefab(AssetHandle prefab, const glm::vec3& position, const glm::quat& rotation, Entity parent);
 
         // ---- Lifecycle
         void OnRuntimeStart();
@@ -273,6 +286,14 @@ namespace Dimension
                                                                        const struct EntityRefResolver& resolver);
     private:
         void FlushDeferredDestroys();
+        // An object's world position and rotation (keeping its world scale), as local values under its parent.
+        void SetWorldPose(Entity e, const glm::vec3& position, const glm::quat& rotation);
+        // Bodies, sounds and scripts of a subtree added while playing.
+        void StartAdded(Entity root);
+        // The live values of a subtree's scripts' fields into what they save (before copying it while playing).
+        void CaptureScriptFields(Entity root);
+        struct PendingRemoval { Entity E; const ScriptableEntity* Script; std::string Component; };
+        std::vector<PendingRemoval> m_PendingRemovals;
         std::vector<Entity>& SiblingList(Entity e);
 
         std::string m_Name;

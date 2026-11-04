@@ -842,6 +842,83 @@ namespace
         }
     }
 
+    class CloneProbe : public ScriptableEntity
+    {
+    public:
+        float Speed = 1.0f;
+        Entity Target;
+        static inline int Created = 0;
+        void OnCreate() override { ++Created; }
+    };
+
+    void TestInstantiateAndRemove()
+    {
+        Scene scene("Clones");
+        auto& reg = scene.GetRegistry();
+        Entity crate = scene.CreateEntity("Crate");
+        reg.Get<TransformComponent>(crate).Position = { 0, 5, 0 };
+        reg.Emplace<RigidbodyComponent>(crate);
+        reg.Emplace<BoxColliderComponent>(crate);
+        Entity lid = scene.CreateEntity("Lid", crate), outside = scene.CreateEntity("Outside");
+        reg.Get<TransformComponent>(lid).Position = { 0, 0.6f, 0 };
+        auto& lidScripts = reg.Emplace<ScriptComponent>(lid);
+        lidScripts.Add("CloneProbe").Fields["Target"] = (uint64_t)scene.GetGuid(crate);
+        lidScripts.Add("CloneProbe").Fields["Target"] = (uint64_t)scene.GetGuid(outside);
+        lidScripts.Add("EnableProbe");
+        Entity shelf = scene.CreateEntity("Shelf");
+        reg.Get<TransformComponent>(shelf).Position = { 10, 0, 0 };
+        reg.Get<TransformComponent>(shelf).Rotation = { 0, glm::radians(90.0f), 0 };
+        Entity wall = scene.CreateEntity("Wall");
+        reg.Get<TransformComponent>(wall).Position = { -10, 0, -20 };
+        reg.Emplace<BoxColliderComponent>(wall);
+
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        CloneProbe::Created = 0;
+        // A live value the scene does not have saved.
+        static_cast<CloneProbe*>(rr.Get<ScriptComponent>(lid).Scripts[0].Instance.get())->Speed = 9.0f;
+
+        glm::vec3 at(5, 3, 0);
+        glm::quat turned = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+        Entity copy = rt->Instantiate(crate, Entity::Null(), &at, &turned);
+        CHECK(!copy.IsNull() && copy != crate && rt->GetChildren(copy).size() == 1 && rt->GetParent(copy).IsNull());
+        CHECK(Near(rr.Get<TransformComponent>(copy).GetWorldPosition(), at) && Near(rr.Get<TransformComponent>(copy).Rotation.y, glm::radians(90.0f)));
+        Entity copyLid = rt->GetChildren(copy)[0];
+        auto& copied = rr.Get<ScriptComponent>(copyLid).Scripts;
+        auto* first = static_cast<CloneProbe*>(copied[0].Instance.get());
+        auto* second = static_cast<CloneProbe*>(copied[1].Instance.get());
+        // Started (OnCreate), with the live value, a reference inside the copy pointing to the copy, one outside kept.
+        CHECK(CloneProbe::Created == 2 && first && Near(first->Speed, 9.0f) && first->Target == copy && second->Target == outside);
+        // Its body works: it falls from where it was put.
+        for (int i = 0; i < 30; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        glm::vec3 fallen = rr.Get<TransformComponent>(copy).Position;
+        CHECK(fallen.y < 2.8f && Near(fallen.x, 5.0f, 0.05f));
+        // Under a parent, at the original's world pose by default (the parent turns it, the local values make up for it).
+        Entity onShelf = rt->Instantiate(outside, shelf);
+        CHECK(rt->GetParent(onShelf) == shelf && Near(rr.Get<TransformComponent>(onShelf).GetWorldPosition(), rr.Get<TransformComponent>(outside).GetWorldPosition()));
+
+        // Removing a script: at the end of the frame, after OnDisable and before nothing else of it runs.
+        EnableProbe::Log.clear();
+        auto* probe = copied[2].Instance.get();
+        CHECK(rt->RemoveScriptDeferred(copyLid, probe) && rr.Get<ScriptComponent>(copyLid).Scripts.size() == 3);
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(rr.Get<ScriptComponent>(copyLid).Scripts.size() == 2);
+        CHECK(EnableProbe::Log.size() == 2 && EnableProbe::Log[0] == "Lid disable" && EnableProbe::Log[1] == "Lid destroy");
+        // Removing the copy's Rigidbody: its body is made again, static (it stops falling); a collider: no more hits.
+        CHECK(!rt->RemoveComponentDeferred(copy, "Transform") && !rt->RemoveComponentDeferred(copy, "Camera"));
+        CHECK(rt->RemoveComponentDeferred(copy, "Rigidbody"));
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        float y = rr.Get<TransformComponent>(copy).Position.y;
+        for (int i = 0; i < 20; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(rr.Get<RigidbodyComponent>(copy).Type == BodyType::Static && Near(rr.Get<TransformComponent>(copy).Position.y, y));
+        CHECK(Physics3DWorld::Raycast(*rt, { -10, 0, 0 }, { 0, 0, -1 }, 50.0f).Hit == wall);
+        CHECK(rt->RemoveComponentDeferred(wall, "Box Collider"));
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(Physics3DWorld::Raycast(*rt, { -10, 0, 0 }, { 0, 0, -1 }, 50.0f).Hit.IsNull() && !rr.Has<BoxColliderComponent>(wall));
+        rt->OnRuntimeStop();
+    }
+
     void TestMeshImportSettings()
     {
         fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
@@ -8147,6 +8224,46 @@ namespace
             rt->OnRuntimeStop();
         }
 
+        // Instantiate / Destroy from C#: the Sandbox's Cloner drops copies of a crate (with its children and scripts) on C,
+        // keeping at most MaxCopies.
+        {
+            Scene cl("Cloner");
+            auto& creg = cl.GetRegistry();
+            Entity crate = cl.CreateEntity("Crate");
+            creg.Get<TransformComponent>(crate).Position = { 0, 0.5f, 30 };
+            creg.Emplace<RigidbodyComponent>(crate).UseGravity = false;
+            creg.Emplace<BoxColliderComponent>(crate);
+            creg.Emplace<ScriptComponent>(crate).Add("Game.HitFlash");
+            cl.CreateEntity("Slat", crate);
+            Entity spawner = cl.CreateEntity("Spawner");
+            auto& cloner = creg.Emplace<ScriptComponent>(spawner).Add("Game.Cloner");
+            cloner.Fields["Template"] = (uint64_t)cl.GetGuid(crate);
+            cloner.Fields["MaxCopies"] = 2;
+            auto rt = cl.Clone();
+            rt->OnRuntimeStart();
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            for (int i = 0; i < 3; ++i)
+            {
+                Input::SimulateKey(Key::C, true);
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                Input::SimulateKey(Key::C, false);
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+            }
+            Input::SetGameInputEnabled(gameInput);
+            int copies = 0;
+            bool whole = true;
+            rt->GetRegistry().EachEntity([&](Entity e) {
+                if (rt->GetRegistry().Get<TagComponent>(e).Name != "Crate copy") return;
+                ++copies;
+                auto* sc = rt->GetRegistry().TryGet<ScriptComponent>(e);
+                whole &= rt->GetChildren(e).size() == 1 && sc && sc->Scripts.size() == 1 && sc->Scripts[0].Instance != nullptr &&
+                         std::abs(rt->GetRegistry().Get<TransformComponent>(e).Position.y - 4.0f) < 0.2f;
+            });
+            CHECK(copies == 2 && whole);
+            rt->OnRuntimeStop();
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -11822,6 +11939,7 @@ int main(int argc, char** argv)
     ScriptRegistry::Register<EnableProbe>("EnableProbe");
     ScriptRegistry::Register<CollisionProbe>("CollisionProbe");
     ScriptRegistry::Register<MouseProbe>("MouseProbe");
+    ScriptRegistry::Register<CloneProbe>("CloneProbe").Field("Speed", &CloneProbe::Speed).Field("Target", &CloneProbe::Target);
     ScriptRegistry::Register<TriggerStayProbe>("TriggerStayProbe");
     ScriptRegistry::Register<LegacyCollisionProbe>("LegacyCollisionProbe");
     ScriptRegistry::Register<TestScript>("TestScript").Field("Speed", &TestScript::Speed).Field("Target", &TestScript::Target);
@@ -11841,6 +11959,7 @@ int main(int argc, char** argv)
     Run("Collision details", TestCollisionDetails);
     Run("Mouse events", TestMouseEvents);
     Run("Trigger stay", TestTriggerStay);
+    Run("Instantiate and remove", TestInstantiateAndRemove);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

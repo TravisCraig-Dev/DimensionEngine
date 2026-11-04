@@ -40,6 +40,8 @@ namespace Dimension
         void Step(float dt);
         void CreateBodiesFor(Entity root); // bodies, then joints, for the subtree
         void OnEntityDestroyed(Entity e);
+        // The object's own body made again from its components (after one was removed while playing).
+        void RebuildBody(Entity e);
 
         static void SetLinearVelocity(Scene& scene, Entity e, const glm::vec3& v);
         static glm::vec3 GetLinearVelocity(Scene& scene, Entity e);

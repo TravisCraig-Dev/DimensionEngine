@@ -352,6 +352,13 @@ namespace Dimension
         }
     }
 
+    void Physics2DWorld::RebuildBody(Entity e)
+    {
+        OnEntityDestroyed(e);
+        auto& reg = m_Scene.GetRegistry();
+        if (reg.Has<Rigidbody2DComponent>(e) || reg.Has<BoxCollider2DComponent>(e) || reg.Has<CircleCollider2DComponent>(e)) CreateBody(e);
+    }
+
     void Physics2DWorld::OnEntityDestroyed(Entity e)
     {
         b2BodyId body = BodyOf(m_Scene, e);

@@ -34,6 +34,8 @@ namespace Dimension
         void Step(float dt);
         void CreateBodiesFor(Entity root); // includes children
         void OnEntityDestroyed(Entity e);
+        // The object's own body made again from its components (after one was removed while playing).
+        void RebuildBody(Entity e);
 
         // Script-facing helpers (no-ops for entities without a body).
         static void SetLinearVelocity(Scene& scene, Entity e, const glm::vec2& v);

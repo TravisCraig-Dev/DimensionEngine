@@ -198,6 +198,12 @@ namespace Dimension
             int (*SceneScripts)(void*, intptr_t*, int, int);
             int (*EntitiesWithComponent)(void*, const char*, uint64_t*, int, int);
             intptr_t (*AddScript)(void*, uint64_t, const char*);
+            // A copy of an object (kind 0, source packed) or a prefab (kind 1, source its GUID); pose: position xyz,
+            // rotation xyzw, used as flags say (1 position, 2 rotation); parent packed (UINT64_MAX: none). The copy, or
+            // UINT64_MAX.
+            uint64_t (*InstantiateObject)(void*, int, uint64_t, const float*, int, uint64_t);
+            // Takes a script (its managed object) or an engine component (by name) off an object at the end of the frame.
+            int (*RemoveComponent)(void*, uint64_t, const char*, intptr_t);
         };
 
         // Background scene loads started from C#, by id.
@@ -1262,6 +1268,33 @@ namespace Dimension
                     ++n;
                 });
                 return n;
+            };
+            a.InstantiateObject = [](void* s, int kind, uint64_t source, const float* pose, int flags, uint64_t parent) -> uint64_t {
+                if (!s) return UINT64_MAX;
+                Scene& scene = S(s);
+                Entity under = parent == UINT64_MAX ? Entity::Null() : Unpack(parent);
+                glm::vec3 position(pose[0], pose[1], pose[2]);
+                glm::quat rotation(pose[6], pose[3], pose[4], pose[5]);
+                Entity copy;
+                if (kind == 0)
+                    copy = scene.Instantiate(Unpack(source), under, flags & 1 ? &position : nullptr, flags & 2 ? &rotation : nullptr);
+                else
+                    copy = scene.InstantiatePrefab(AssetHandle(source), position, flags & 2 ? rotation : glm::quat(1, 0, 0, 0), under);
+                return copy.IsNull() ? UINT64_MAX : Pack(copy);
+            };
+            a.RemoveComponent = [](void* s, uint64_t packed, const char* name, intptr_t script) -> int {
+                if (!s) return 0;
+                Scene& scene = S(s);
+                Entity e = Unpack(packed);
+                if (script)
+                {
+                    if (auto* sc = Comp<ScriptComponent>(s, packed))
+                        for (auto& inst : sc->Scripts)
+                            if (auto* m = dynamic_cast<ManagedScript*>(inst.Instance.get()); m && m->Handle() == script)
+                                return scene.RemoveScriptDeferred(e, m) ? 1 : 0;
+                    return 0;
+                }
+                return name && scene.RemoveComponentDeferred(e, name) ? 1 : 0;
             };
             a.AddScript = [](void* s, uint64_t e, const char* name) -> intptr_t {
                 if (!s || !name) return 0;

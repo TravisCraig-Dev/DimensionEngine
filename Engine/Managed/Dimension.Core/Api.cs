@@ -145,7 +145,20 @@ namespace Dimension
         public bool HasComponent<T>() where T : class => Entity.HasComponent<T>();
         public Entity Find(string name) => Entity.Find(name);
         public Entity Instantiate(ulong prefabGuid, Vector3 position) => Entity.Instantiate(prefabGuid, position);
+        public Entity Instantiate(ulong prefabGuid, Vector3 position, Quaternion rotation, Entity parent = default) =>
+            Entity.Instantiate(prefabGuid, position, rotation, parent);
+        /// <summary>A copy of an object (see Entity.Instantiate).</summary>
+        public Entity Instantiate(Entity original, Entity parent = default) => Entity.Instantiate(original, parent);
+        public Entity Instantiate(Entity original, Vector3 position, Quaternion rotation, Entity parent = default) =>
+            Entity.Instantiate(original, position, rotation, parent);
+        public T Instantiate<T>(T original, Entity parent = default) where T : Behaviour => Entity.Instantiate(original, parent);
+        public T Instantiate<T>(T original, Vector3 position, Quaternion rotation, Entity parent = default) where T : Behaviour =>
+            Entity.Instantiate(original, position, rotation, parent);
         public void Destroy(Entity entity) => entity.Destroy();
+        /// <summary>Takes an engine component off its object at the end of the frame.</summary>
+        public bool Destroy(Component component) => Entity.Destroy(component);
+        /// <summary>Takes a script off its object at the end of the frame (Destroy(this) for this one).</summary>
+        public bool Destroy(Behaviour script) => Entity.Destroy(script);
     }
 
     /// <summary>RGBA color in sRGB space, components 0..1.</summary>
@@ -437,6 +450,53 @@ namespace Dimension
             ulong id = Native.WithUtf8<ulong>(name, p => Native.Api.FindEntity(scene, (byte*)p));
             return id == ulong.MaxValue ? Null : new Entity(scene, id);
         }
+
+        // A copy (kind 0: of the object `source`, 1: of the prefab `source`) with the pose parts that are given.
+        private static Entity Copy(int kind, ulong source, Vector3? position, Quaternion? rotation, Entity parent)
+        {
+            IntPtr scene = Native.CurrentScene;
+            if (scene == IntPtr.Zero) return Null;
+            Vector3 p = position ?? Vector3.Zero;
+            Quaternion r = rotation ?? Quaternion.Identity;
+            float* pose = stackalloc float[7] { p.X, p.Y, p.Z, r.X, r.Y, r.Z, r.W };
+            int flags = (position.HasValue ? 1 : 0) | (rotation.HasValue ? 2 : 0);
+            ulong id = Native.Api.InstantiateObject(scene, kind, source, pose, flags, parent.IsValid ? parent.Id : ulong.MaxValue);
+            return id == ulong.MaxValue ? Null : new Entity(scene, id);
+        }
+
+        /// <summary>A copy of an object with its children, components and scripts (like Unity's Instantiate): at the
+        /// original's place in the world, as a root object or under `parent`. While playing its scripts start with the
+        /// original's current field values; references inside the copied objects point to the copies.</summary>
+        public static Entity Instantiate(Entity original, Entity parent = default) =>
+            original.IsValid ? Copy(0, original.Id, null, null, parent) : Null;
+        /// <summary>A copy at a world position and rotation.</summary>
+        public static Entity Instantiate(Entity original, Vector3 position, Quaternion rotation, Entity parent = default) =>
+            original.IsValid ? Copy(0, original.Id, position, rotation, parent) : Null;
+        /// <summary>A copy of the object a script is on; the copy's script of the same place (its own copy).</summary>
+        public static T Instantiate<T>(T original, Entity parent = default) where T : Behaviour => CopyOf(original, Instantiate(original.Entity, parent));
+        public static T Instantiate<T>(T original, Vector3 position, Quaternion rotation, Entity parent = default) where T : Behaviour =>
+            CopyOf(original, Instantiate(original.Entity, position, rotation, parent));
+        private static T CopyOf<T>(T original, Entity copy) where T : Behaviour
+        {
+            int index = ScriptHost.ScriptsOf(original.Entity).IndexOf(original);
+            var scripts = ScriptHost.ScriptsOf(copy);
+            return index >= 0 && index < scripts.Count ? scripts[index] as T : null;
+        }
+        /// <summary>A prefab instance at a world position and rotation, under `parent` (default: a root object).</summary>
+        public static Entity Instantiate(ulong prefabGuid, Vector3 position, Quaternion rotation, Entity parent = default) =>
+            Copy(1, prefabGuid, position, rotation, parent);
+
+        /// <summary>Takes an engine component off its object at the end of the frame (a physics component's body is made
+        /// again without it). False for Transform and the like, which every object has.</summary>
+        public static bool Destroy(Component component)
+        {
+            if (component == null || !component.Entity.IsValid) return false;
+            Entity e = component.Entity;
+            return Native.WithUtf8<int>(component.NativeName, p => Native.Api.RemoveComponent(e.Scene, e.Id, (byte*)p, IntPtr.Zero)) != 0;
+        }
+        /// <summary>Takes a script off its object at the end of the frame (OnDisable, then OnDestroy).</summary>
+        public static bool Destroy(Behaviour script) =>
+            script != null && script.Handle != IntPtr.Zero && Native.Api.RemoveComponent(script.Entity.Scene, script.Entity.Id, null, script.Handle) != 0;
 
         /// <summary>Instantiates a prefab asset (by GUID, as shown in the Inspector) at a world position.</summary>
         public static Entity Instantiate(ulong prefabGuid, Vector3 position)

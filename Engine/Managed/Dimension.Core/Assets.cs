@@ -30,6 +30,8 @@ namespace Dimension
         public bool IsValid => Guid != 0;
         // A new instance in the scene of the running script.
         public Entity Instantiate(Vector3 position) => Entity.Instantiate(Guid, position);
+        /// <summary>At a world position and rotation, under `parent` (default: a root object).</summary>
+        public Entity Instantiate(Vector3 position, Quaternion rotation, Entity parent = default) => Entity.Instantiate(Guid, position, rotation, parent);
         public static implicit operator ulong(Prefab a) => a.Guid;
     }
 
