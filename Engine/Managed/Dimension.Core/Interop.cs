@@ -178,6 +178,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, float*, int> ColliderQuery;
         public delegate* unmanaged<int, int, int, float> InputQuery;  // see Input in Api.cs
         public delegate* unmanaged<int, int, byte*> InputText;
+        public delegate* unmanaged<int, double, double, double, double> AppControl;  // see Application in Api.cs
+        public delegate* unmanaged<int, byte*> AppText;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

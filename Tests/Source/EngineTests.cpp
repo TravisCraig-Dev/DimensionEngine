@@ -1,4 +1,5 @@
 // Headless engine tests (no GPU/window needed). Run: ctest --preset debug, or DimensionTests.exe
+#include <Dimension/Core/AppRuntime.h>
 #include <Dimension/Dimension.h>
 #include <Dimension/Scene/ComponentRegistry.h>
 #include <Dimension/Scene/SceneSerializer.h>
@@ -736,6 +737,18 @@ namespace
         void OnMouseUpAsButton() override { Log.push_back("click"); }
         std::string Take() { std::string s; for (auto& l : Log) s += (s.empty() ? "" : " ") + l; Log.clear(); return s; }
     };
+    class AppProbe : public ScriptableEntity
+    {
+    public:
+        std::vector<std::string> Log;
+        int FixedSteps = 0;
+        void OnFixedUpdate(float) override { ++FixedSteps; }
+        void OnApplicationFocus(bool f) override { Log.push_back(f ? "focus" : "blur"); }
+        void OnApplicationPause(bool p) override { Log.push_back(p ? "pause" : "resume"); }
+        void OnApplicationQuit() override { Log.push_back("quit"); }
+        void OnDestroy() override { Log.push_back("destroy"); }
+        std::string Take() { std::string s; for (auto& l : Log) s += (s.empty() ? "" : " ") + l; Log.clear(); return s; }
+    };
     class TriggerStayProbe : public ScriptableEntity
     {
     public:
@@ -744,6 +757,63 @@ namespace
         void OnTriggerStay(Entity) override { ++Stays; }
         void OnTriggerExit(Entity) override { ++Exits; }
     };
+
+    void TestAppAndTiming()
+    {
+        Scene scene("App");
+        Entity e = scene.CreateEntity("Probe");
+        scene.GetRegistry().Emplace<ScriptComponent>(e).Add("AppProbe");
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto* probe = static_cast<AppProbe*>(rt->GetRegistry().Get<ScriptComponent>(e).Scripts[0].Instance.get());
+        // The fixed step: 1/60 by default, then 1/100 (ten steps in 0.1 s); FixedTime counts the steps.
+        CHECK(Near(rt->GetFixedTimestep(), 1.0f / 60.0f, 1e-6f));
+        rt->OnUpdateRuntime(0.1f);
+        CHECK(probe->FixedSteps == 6 && Near(rt->GetFixedTime(), 0.1f, 1e-4f));
+        rt->SetFixedTimestep(0.01f);
+        probe->FixedSteps = 0;
+        rt->OnUpdateRuntime(0.1f);
+        CHECK((probe->FixedSteps == 10 || probe->FixedSteps == 9 || probe->FixedSteps == 11) && rt->GetFixedTime() <= rt->GetTime() + 1e-4f);
+        // The longest frame step.
+        float t = rt->GetTime();
+        rt->SetMaximumDeltaTime(0.05f);
+        rt->OnUpdateRuntime(0.5f);
+        CHECK(Near(rt->GetTime() - t, 0.05f, 1e-5f));
+        rt->SetMaximumDeltaTime(0.1f);
+        // Time since the last (single) scene load.
+        CHECK(Near(rt->GetTimeSinceLevelLoad(), rt->GetTime(), 1e-6f));
+        Scene next("Next");
+        rt->LoadSceneData(SceneSerializer::Serialize(next), false);
+        rt->OnUpdateRuntime(0.05f);
+        CHECK(Near(rt->GetTimeSinceLevelLoad(), 0.05f, 1e-5f) && rt->GetTime() > 0.25f);
+        rt->OnRuntimeStop();
+
+        // The window's focus and minimizing reach running scripts; closing calls OnApplicationQuit.
+        rt = scene.Clone();
+        rt->OnRuntimeStart();
+        probe = static_cast<AppProbe*>(rt->GetRegistry().Get<ScriptComponent>(e).Scripts[0].Instance.get());
+        AppRuntime::ReportWindowState(true, false);
+        CHECK(probe->Take().empty());
+        AppRuntime::ReportWindowState(false, false);
+        AppRuntime::ReportWindowState(false, true);
+        AppRuntime::ReportWindowState(true, false);
+        CHECK(probe->Take() == "blur pause resume focus" && AppRuntime::IsFocused() && !AppRuntime::IsMinimized());
+        rt->NotifyApplicationQuit();
+        CHECK(probe->Take() == "quit"); // (hosts stop the scene after it: OnDisable and OnDestroy follow)
+        rt->OnRuntimeStop();
+        AppRuntime::ReportWindowState(false, false); // a stopped scene hears nothing (and is not called)
+        AppRuntime::ReportWindowState(true, false);
+
+        // Quit requests are taken once; the frame rate setting; the real clock.
+        AppRuntime::RequestQuit();
+        CHECK(AppRuntime::TakeQuitRequest() && !AppRuntime::TakeQuitRequest());
+        AppRuntime::SetTargetFrameRate(30);
+        CHECK(AppRuntime::GetTargetFrameRate() == 30);
+        AppRuntime::SetTargetFrameRate(0);
+        CHECK(AppRuntime::GetTargetFrameRate() == -1);
+        double before = AppRuntime::GetRealtimeSinceStartup();
+        CHECK(before > 0.0 && AppRuntime::GetRealtimeSinceStartup() >= before);
+    }
 
     void TestMouseEvents()
     {
@@ -12700,6 +12770,7 @@ int main(int argc, char** argv)
     ScriptRegistry::Register<EnableProbe>("EnableProbe");
     ScriptRegistry::Register<CollisionProbe>("CollisionProbe");
     ScriptRegistry::Register<MouseProbe>("MouseProbe");
+    ScriptRegistry::Register<AppProbe>("AppProbe");
     ScriptRegistry::Register<CloneProbe>("CloneProbe").Field("Speed", &CloneProbe::Speed).Field("Target", &CloneProbe::Target);
     ScriptRegistry::Register<TriggerStayProbe>("TriggerStayProbe");
     ScriptRegistry::Register<LegacyCollisionProbe>("LegacyCollisionProbe");
@@ -12730,6 +12801,7 @@ int main(int argc, char** argv)
     Run("Joint rebuild while playing", TestJointRebuildWhilePlaying);
     Run("Rigidbody settings while playing", TestRigidbodySettingsWhilePlaying);
     Run("Physics queries and triggers", TestPhysicsQueriesAndTriggers);
+    Run("App and timing control", TestAppAndTiming);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

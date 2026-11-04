@@ -69,6 +69,12 @@ namespace Dimension
         public virtual void OnValueChanged(float value) { }
         /// <summary>Called when a Joint or Joint 2D on this entity breaks (its Break Force/Torque was exceeded).</summary>
         public virtual void OnJointBreak(float force) { }
+        /// <summary>The game's window gained (true) or lost (false) focus.</summary>
+        public virtual void OnApplicationFocus(bool hasFocus) { }
+        /// <summary>The game's window was minimized (true) or restored (false).</summary>
+        public virtual void OnApplicationPause(bool paused) { }
+        /// <summary>The game is closing (in the editor: play is stopping), before OnDisable and OnDestroy.</summary>
+        public virtual void OnApplicationQuit() { }
         /// <summary>Called when the text of a UI Input Field on this entity is edited.</summary>
         public virtual void OnTextChanged(string text) { }
         /// <summary>Called when Enter is pressed in a UI Input Field on this entity.</summary>
@@ -627,6 +633,35 @@ namespace Dimension
         public static float UnscaledDeltaTime => Native.Api.TimeControl(Native.CurrentScene, 2, 0.0f);
         /// <summary>Real seconds since play mode started (TimeScale does not change it; pausing the editor does).</summary>
         public static float UnscaledTime => Native.Api.TimeControl(Native.CurrentScene, 3, 0.0f);
+        /// <summary>The fixed step of OnFixedUpdate and physics, in seconds (1/60 when play starts). A shorter step makes
+        /// physics more precise and costs more.</summary>
+        public static float FixedDeltaTime
+        {
+            get => Native.Api.TimeControl(Native.CurrentScene, 4, 0.0f);
+            set => Native.Api.TimeControl(Native.CurrentScene, 5, value);
+        }
+        /// <summary>The time the fixed steps have reached (a multiple of FixedDeltaTime, just behind `time`).</summary>
+        public static float FixedTime => Native.Api.TimeControl(Native.CurrentScene, 6, 0.0f);
+        /// <summary>The longest step one frame may take (0.1 s when play starts): after a hitch the game slows down rather
+        /// than jumping ahead.</summary>
+        public static float MaximumDeltaTime
+        {
+            get => Native.Api.TimeControl(Native.CurrentScene, 7, 0.0f);
+            set => Native.Api.TimeControl(Native.CurrentScene, 8, value);
+        }
+        /// <summary>Seconds (scaled, as `time`) since the current scene was loaded (LoadScene, not additively).</summary>
+        public static float TimeSinceLevelLoad => Native.Api.TimeControl(Native.CurrentScene, 9, 0.0f);
+        /// <summary>Real seconds since the program started (whatever the scene or TimeScale; for timing and profiling).</summary>
+        public static float RealtimeSinceStartup => (float)Native.Api.AppControl(12, 0, 0, 0);
+        public static double RealtimeSinceStartupAsDouble => Native.Api.AppControl(12, 0, 0, 0);
+    }
+
+    /// <summary>A display mode: size in pixels and refresh rate.</summary>
+    public struct Resolution
+    {
+        public int Width, Height;
+        public int RefreshRate;
+        public override string ToString() => $"{Width} x {Height} @ {RefreshRate}Hz";
     }
 
     /// <summary>The view the game is shown in: the window in a build, the Game view in the editor.</summary>
@@ -637,6 +672,25 @@ namespace Dimension
         public static int Width => (int)Size.X;
         /// <summary>Height in pixels.</summary>
         public static int Height => (int)Size.Y;
+        /// <summary>Whether the game fills the screen (borderless, on its monitor); setting it switches, as Alt+Enter
+        /// does. Only a built game's window: in the editor it reads false and setting it does nothing.</summary>
+        public static bool FullScreen
+        {
+            get => Native.Api.AppControl(5, 0, 0, 0) != 0.0;
+            set => Native.Api.AppControl(6, value ? 1 : 0, 0, 0);
+        }
+        /// <summary>Makes the game's window `width` x `height` (windowed), or fullscreen at the monitor's own mode (the
+        /// size is kept for when it leaves fullscreen). Nothing in the editor.</summary>
+        public static void SetResolution(int width, int height, bool fullScreen) => Native.Api.AppControl(7, width, height, fullScreen ? 1 : 0);
+        /// <summary>The monitor's current display mode (the one the window is on).</summary>
+        public static Resolution CurrentResolution => new()
+        {
+            Width = (int)Native.Api.AppControl(8, 0, 0, 0),
+            Height = (int)Native.Api.AppControl(9, 0, 0, 0),
+            RefreshRate = (int)Native.Api.AppControl(10, 0, 0, 0),
+        };
+        /// <summary>The screen's dots per inch as Windows scales it (96 at 100%, 144 at 150%).</summary>
+        public static float Dpi => (float)Native.Api.AppControl(11, 0, 0, 0);
     }
 
     public enum CursorLockMode { None = 0, Locked = 1 }
@@ -1193,12 +1247,34 @@ namespace Dimension
         }
     }
 
+    /// <summary>What runs the game (as Unity's values).</summary>
+    public enum RuntimePlatform { WindowsPlayer = 2, WindowsEditor = 7 }
+
     /// <summary>Runtime scene switching (scenes come from File > Build Settings). Loads happen at the end of the frame.</summary>
     public static unsafe class Application
     {
         /// <summary>Whether the running script's scene is playing (false for [ExecuteInEditMode] scripts in the editor,
         /// and in editor code).</summary>
         public static bool IsPlaying => Native.CurrentScene != IntPtr.Zero && Native.Api.SceneRunning(Native.CurrentScene) != 0;
+        /// <summary>Closes the game (after this frame, calling OnApplicationQuit first). In the editor it does nothing, as
+        /// Unity's does: stop play instead.</summary>
+        public static void Quit() => Native.Api.AppControl(0, 0, 0, 0);
+        /// <summary>Frames per second the game holds itself to (-1: as fast as it goes, or the display's rate with VSync).
+        /// Lowering it saves power in menus.</summary>
+        public static int TargetFrameRate
+        {
+            get => (int)Native.Api.AppControl(1, 0, 0, 0);
+            set => Native.Api.AppControl(2, value, 0, 0);
+        }
+        /// <summary>Whether the game's window has the keyboard focus.</summary>
+        public static bool IsFocused => Native.Api.AppControl(3, 0, 0, 0) != 0.0;
+        /// <summary>What runs the game.</summary>
+        public static RuntimePlatform Platform => (int)Native.Api.AppControl(4, 0, 0, 0) == 2 ? RuntimePlatform.WindowsEditor : RuntimePlatform.WindowsPlayer;
+        public static bool IsEditor => Platform == RuntimePlatform.WindowsEditor;
+        /// <summary>Project Settings' Product Name, Version and Company Name.</summary>
+        public static string ProductName => Native.FromUtf8(Native.Api.AppText(0)) ?? "";
+        public static string Version => Native.FromUtf8(Native.Api.AppText(1)) ?? "";
+        public static string CompanyName => Native.FromUtf8(Native.Api.AppText(2)) ?? "";
 
         /// <summary>
         /// The folder for the player's data (save games, settings): <c>%APPDATA%\&lt;product name&gt;</c> in a build, the

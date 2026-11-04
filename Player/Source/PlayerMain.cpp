@@ -20,6 +20,7 @@
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Platform/AppIcon.h>
+#include <Dimension/Core/AppRuntime.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -74,6 +75,7 @@ namespace
                           st.DrawCalls, st.Meshes, st.InstancedMeshes, st.Occluded, st.Triangles, st.ShadowCasters, avg, m_TimedFrames,
                           m_UpdateMs / n, m_RenderMs / n, m_ListMs / n);
             }
+            m_Scene->NotifyApplicationQuit();
             m_Scene->OnRuntimeStop();
             m_Scene.reset();
             m_Target.reset();
@@ -165,6 +167,7 @@ namespace
 
 int main(int argc, char** argv)
 {
+    AppRuntime::SetHost(AppRuntime::Host::Player);
     fs::path projectDir;
     fs::path sceneOverride;
     int maxFrames = 0;

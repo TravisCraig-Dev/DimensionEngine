@@ -8,6 +8,7 @@
 #include "Dimension/Physics/Water.h"
 #include "Dimension/Navigation/NavMesh.h"
 #include "Dimension/Core/Profiler.h"
+#include "Dimension/Core/AppRuntime.h"
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/UI/UI.h"
@@ -656,6 +657,25 @@ namespace Dimension
         m_Time = 0.0f;
         m_TimeScale = 1.0f;
         m_UnscaledTime = 0.0f;
+        m_FixedTimestep = kFixedTimestep;
+        m_FixedTime = 0.0f;
+        m_MaxDeltaTime = 0.1f;
+        m_LevelLoadTime = 0.0f;
+        if (!m_WindowListener)
+            m_WindowListener = AppRuntime::AddWindowListener([this](bool focused, bool focusChanged, bool minimized, bool minimizedChanged) {
+                std::vector<Entity> scripted;
+                for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>()) scripted.push_back(e);
+                for (Entity e : scripted)
+                {
+                    auto* sc = IsValid(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr;
+                    if (!sc) continue;
+                    for (auto& inst : sc->LiveInstances(true))
+                    {
+                        if (minimizedChanged) inst->OnApplicationPause(minimized);
+                        if (focusChanged) inst->OnApplicationFocus(focused);
+                    }
+                }
+            });
         Input::SetCursorMode(CursorMode::Normal);
         m_FrameCount = 0;
         UpdateTransforms();
@@ -726,6 +746,7 @@ namespace Dimension
         std::erase_if(m_Persistent, [this](Entity e) { return !IsValid(e); });
         if (!additive)
         {
+            m_LevelLoadTime = m_Time;
             std::vector<Entity> roots = m_Roots; // copy: destroying edits the list
             for (Entity r : roots)
                 if (!IsPersistent(r)) DestroyEntity(r);
@@ -776,6 +797,11 @@ namespace Dimension
     void Scene::OnRuntimeStop()
     {
         DebugDraw::Clear();
+        if (m_WindowListener)
+        {
+            AppRuntime::RemoveWindowListener(m_WindowListener);
+            m_WindowListener = 0;
+        }
         if (!m_Running) return;
         Input::SetKeyboardCapturedByUI(false);
         Input::SetCursorMode(CursorMode::Normal);
@@ -805,9 +831,9 @@ namespace Dimension
                 return;
             }
             --m_StepFrames;
-            dt = kFixedTimestep;
+            dt = m_FixedTimestep;
         }
-        dt = std::min(dt, 0.1f); // avoid spiral of death after hitches
+        dt = std::min(dt, m_MaxDeltaTime); // avoid spiral of death after hitches
         DebugDraw::Tick(dt);     // the last update's debug lines go (timed ones count down)
         const float unscaledDt = dt;
         m_UnscaledDeltaTime = dt;
@@ -894,21 +920,22 @@ namespace Dimension
         UpdateSpriteAnimators(dt);
 
         m_FixedAccumulator += dt;
-        while (m_FixedAccumulator >= kFixedTimestep)
+        while (m_FixedAccumulator >= m_FixedTimestep)
         {
             DIM_PROFILE_SCOPE("Fixed Update");
             m_Registry.ViewOf<ScriptComponent>().Each([&](Entity e, ScriptComponent& sc) {
                 if (!m_Registry.Get<TransformComponent>(e).ActiveInHierarchy) return;
-                for (auto& inst : sc.LiveInstances(true)) inst->OnFixedUpdate(kFixedTimestep);
+                for (auto& inst : sc.LiveInstances(true)) inst->OnFixedUpdate(m_FixedTimestep);
             });
-            for (auto& sys : m_Systems) sys->OnFixedUpdate(*this, kFixedTimestep);
+            for (auto& sys : m_Systems) sys->OnFixedUpdate(*this, m_FixedTimestep);
             UpdateTransforms();
             {
                 DIM_PROFILE_SCOPE("Physics");
-                m_Physics2D->Step(kFixedTimestep);
-                m_Physics3D->Step(kFixedTimestep);
+                m_Physics2D->Step(m_FixedTimestep);
+                m_Physics3D->Step(m_FixedTimestep);
             }
-            m_FixedAccumulator -= kFixedTimestep;
+            m_FixedAccumulator -= m_FixedTimestep;
+            m_FixedTime += m_FixedTimestep;
         }
 
         Timeline::Update(*this, dt);
@@ -1401,6 +1428,16 @@ namespace Dimension
         // After iteration: scripts may change the registry.
         for (auto& [e, names] : firedEvents)
             for (auto& name : names) DispatchAnimationEvent(e, name);
+    }
+
+    void Scene::NotifyApplicationQuit()
+    {
+        if (!m_Running) return;
+        std::vector<Entity> scripted;
+        for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>()) scripted.push_back(e);
+        for (Entity e : scripted)
+            if (auto* sc = IsValid(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr)
+                for (auto& inst : sc->LiveInstances(true)) inst->OnApplicationQuit();
     }
 
     void Scene::DispatchJointBreak(Entity e, float force)

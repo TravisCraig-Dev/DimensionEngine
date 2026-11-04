@@ -56,6 +56,11 @@ namespace Dimension
         virtual void OnUISubmit(const std::string& text) {}        // UI Input Field: Enter pressed
         virtual void OnAnimationEvent(const std::string& name) {}  // Animator state event reached
         virtual void OnJointBreak(float force) {}                  // a Joint / Joint 2D on this entity broke (reaction force, N)
+        // The game's window gained or lost focus; was minimized (paused) or restored; is closing (also when play stops
+        // in the editor), before OnDisable and OnDestroy.
+        virtual void OnApplicationFocus(bool focused) {}
+        virtual void OnApplicationPause(bool paused) {}
+        virtual void OnApplicationQuit() {}
         // Engine-internal, for reloading scripts while playing: OnBeforeSerialize brings the live field values into the
         // fields the engine reads (C# keeps them on the managed object); a recreated script gets OnScriptsReloaded
         // instead of OnCreate.

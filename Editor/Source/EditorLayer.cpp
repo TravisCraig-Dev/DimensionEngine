@@ -513,6 +513,7 @@ namespace Editor
     {
         if (!m_Ctx.IsPlaying()) return;
         SceneManager::CancelPendingLoad();
+        m_Ctx.RuntimeScene->NotifyApplicationQuit(); // as Unity's editor does when play stops
         m_Ctx.RuntimeScene->OnRuntimeStop();
         m_Ctx.RuntimeScene.reset();
         m_Ctx.State = PlayState::Edit;
@@ -3412,6 +3413,10 @@ namespace Editor
         {
             UI::PropertyLabel("Product Name");
             changed |= ImGui::InputText("##name", &config.Name);
+            UI::PropertyLabel("Company Name");
+            changed |= ImGui::InputText("##company", &config.CompanyName);
+            UI::PropertyLabel("Version");
+            changed |= ImGui::InputText("##version", &config.Version);
             changed |= UI::AssetField("Start Scene", config.StartScene, AssetType::Scene).Changed;
             UI::PropertyLabel("Window Width");
             changed |= ImGui::InputScalar("##w", ImGuiDataType_U32, &config.WindowWidth);
@@ -4456,6 +4461,8 @@ namespace Editor
         {
             UI::PropertyLabel("Product Name");
             changed |= ImGui::InputText("##name", &config.Name);
+            UI::PropertyLabel("Version");
+            changed |= ImGui::InputText("##version", &config.Version);
             UI::PropertyLabel("Window Size");
             int size[2] = { (int)config.WindowWidth, (int)config.WindowHeight };
             if (ImGui::InputInt2("##size", size))

@@ -1,5 +1,6 @@
 // Dimension Editor entry point.
 // Usage: DimensionEditor [projectDir] [--play] [--frames N] [--screenshot file.png] [--build outputFolder]
+#include <Dimension/Core/AppRuntime.h>
 #include "EditorLayer.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Project/Project.h>
@@ -10,6 +11,7 @@ using namespace Dimension;
 
 int main(int argc, char** argv)
 {
+    Dimension::AppRuntime::SetHost(Dimension::AppRuntime::Host::Editor); // Application.Quit is ignored, as in Unity's editor
     fs::path projectDir = DIM_DEFAULT_PROJECT;
     Editor::EditorOptions options;
     ApplicationSpec spec;

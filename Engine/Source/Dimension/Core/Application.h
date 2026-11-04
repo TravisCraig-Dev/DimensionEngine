@@ -54,6 +54,7 @@ namespace Dimension
         void PopAllLayers(); // detaches and destroys layers (call before unloading a game module)
 
         static Application& Get();
+        static Application* TryGet(); // null without one (tests, tools)
         Window& GetWindow() { return *m_Window; }
         RenderDevice& GetDevice() { return *m_Device; }
         const ApplicationSpec& GetSpec() const { return m_Spec; }

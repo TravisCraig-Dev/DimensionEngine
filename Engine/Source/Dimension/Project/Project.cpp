@@ -29,6 +29,8 @@ namespace Dimension
             {
                 auto j = nlohmann::json::parse(std::ifstream(file));
                 s_Config.Name = j.value("name", s_Config.Name);
+                s_Config.Version = j.value("version", std::string("1.0"));
+                s_Config.CompanyName = j.value("companyName", std::string());
                 s_Config.StartScene = Guid(j.value("startScene", uint64_t(0)));
                 s_Config.WindowWidth = j.value("windowWidth", s_Config.WindowWidth);
                 s_Config.WindowHeight = j.value("windowHeight", s_Config.WindowHeight);
@@ -175,6 +177,8 @@ namespace Dimension
         nlohmann::json defaultPresets = nlohmann::json::object();
         for (auto& [component, preset] : s_Config.DefaultPresets) defaultPresets[component] = (uint64_t)preset;
         nlohmann::json j{ { "name", s_Config.Name },
+                          { "version", s_Config.Version },
+                          { "companyName", s_Config.CompanyName },
                           { "buildScenes", buildScenes },
                           { "audioMixer", mixer },
                           { "audioSnapshots", snapshots },

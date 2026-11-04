@@ -15,6 +15,8 @@ namespace Dimension
     struct ProjectConfig
     {
         std::string Name = "New Project";
+        std::string Version = "1.0";   // the game's version (scripts: Application.Version)
+        std::string CompanyName;       // (Application.CompanyName)
         AssetHandle StartScene = AssetHandle::None();
         uint32_t WindowWidth = 1280, WindowHeight = 720;
         std::string GameModule = "SandboxGame"; // DLL (without extension) containing scripts and systems

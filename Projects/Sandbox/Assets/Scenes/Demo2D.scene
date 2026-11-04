@@ -108,6 +108,14 @@
                 "Ease": 10.0
               },
               "Enabled": true
+            },
+            {
+              "Class": "Game.FocusPause",
+              "Fields": {
+                "Label": 850016,
+                "IdleFrameRate": 15
+              },
+              "Enabled": true
             }
           ]
         }
@@ -1956,7 +1964,7 @@
           ]
         },
         "UI Text": {
-          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse); E ties the nearest box to the player on a rope, E again lets go (Tether); Q hangs the boxes in the air, H makes them heavy (BoxHang); the blue lift on the left rides up and down (Lift); the lookout on the wall turns red when something solid hides the player, coins don't (Lookout); the mouse wheel zooms, the middle button puts it back (ScrollZoom)",
+          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse); E ties the nearest box to the player on a rope, E again lets go (Tether); Q hangs the boxes in the air, H makes them heavy (BoxHang); the blue lift on the left rides up and down (Lift); the lookout on the wall turns red when something solid hides the player, coins don't (Lookout); the mouse wheel zooms, the middle button puts it back (ScrollZoom); clicking another window pauses the game (FocusPause)",
           "Font": 0,
           "Font Size": 26,
           "Color": [
@@ -1967,6 +1975,71 @@
           ],
           "Alignment": 0,
           "Vertical Alignment": 0,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 850016,
+      "parent": 850010,
+      "components": {
+        "Tag": {
+          "Name": "Paused",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0.5,
+            0.5
+          ],
+          "Anchor Max": [
+            0.5,
+            0.5
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            900,
+            120
+          ]
+        },
+        "UI Text": {
+          "Text": "Paused: click the game to go on",
+          "Font": 0,
+          "Font Size": 56,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
           "Wrap": true
         }
       }

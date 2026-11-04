@@ -987,6 +987,9 @@ namespace Dimension
                     case 14: b.OnMouseDrag(); break;
                     case 15: b.OnMouseUp(); break;
                     case 16: b.OnMouseUpAsButton(); break;
+                    case 17: b.OnApplicationFocus(dt != 0.0f); break;
+                    case 18: b.OnApplicationPause(dt != 0.0f); break;
+                    case 19: b.OnApplicationQuit(); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

@@ -1,4 +1,6 @@
 #include "Dimension/Scripting/CSharpRuntime.h"
+#include "Dimension/Core/Application.h"
+#include "Dimension/Core/AppRuntime.h"
 #include "Dimension/Scene/CameraProjection.h"
 #include "Dimension/Scripting/ScriptRegistry.h"
 #include "Dimension/Scripting/ScriptableEntity.h"
@@ -252,6 +254,12 @@ namespace Dimension
             float (*InputQuery)(int, int, int);
             // 0 this frame's typed text (with \b and \n), 1 a gamepad's name (pad); "" when none.
             const char* (*InputText)(int, int);
+            // The app: 0 quit, 1 target frame rate, 2 set it (a), 3 focused, 4 host (0 none, 1 Player, 2 editor), 5 fullscreen,
+            // 6 set it (a), 7 set the window size (a, b; c fullscreen), 8-10 the monitor's width, height and refresh rate,
+            // 11 DPI, 12 real seconds since startup.
+            double (*AppControl)(int, double, double, double);
+            // 0 product name, 1 version, 2 company name.
+            const char* (*AppText)(int);
         };
 
         // Background scene loads started from C#, by id.
@@ -848,6 +856,9 @@ namespace Dimension
             void OnClick() override { if (m_Handle) s_Managed.Invoke(m_Handle, 4, 0.0f); }
             void OnUIValueChanged(float v) override { if (m_Handle) s_Managed.Invoke(m_Handle, 5, v); }
             void OnJointBreak(float force) override { if (m_Handle) s_Managed.Invoke(m_Handle, 6, force); }
+            void OnApplicationFocus(bool focused) override { if (m_Handle) s_Managed.Invoke(m_Handle, 17, focused ? 1.0f : 0.0f); }
+            void OnApplicationPause(bool paused) override { if (m_Handle) s_Managed.Invoke(m_Handle, 18, paused ? 1.0f : 0.0f); }
+            void OnApplicationQuit() override { if (m_Handle) s_Managed.Invoke(m_Handle, 19, 0.0f); }
             void OnUITextChanged(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 0, t.c_str()); }
             void OnUISubmit(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 1, t.c_str()); }
             void OnAnimationEvent(const std::string& n) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 2, n.c_str()); }
@@ -1697,7 +1708,13 @@ namespace Dimension
                 case 0: return S(s).GetTimeScale();
                 case 1: S(s).SetTimeScale(value); return 0.0f;
                 case 2: return S(s).GetUnscaledDeltaTime();
-                default: return S(s).GetUnscaledTime();
+                case 3: return S(s).GetUnscaledTime();
+                case 4: return S(s).GetFixedTimestep();
+                case 5: S(s).SetFixedTimestep(value); return 0.0f;
+                case 6: return S(s).GetFixedTime();
+                case 7: return S(s).GetMaximumDeltaTime();
+                case 8: S(s).SetMaximumDeltaTime(value); return 0.0f;
+                default: return S(s).GetTimeSinceLevelLoad();
                 }
             };
             a.CursorControl = [](int op, int mode) -> int {
@@ -1735,6 +1752,37 @@ namespace Dimension
                 case 7: return Input::IsGamepadConnected(pad) ? 1.0f : 0.0f;
                 default: return 4.0f;
                 }
+            };
+            a.AppControl = [](int op, double x, double y, double z) -> double {
+                Window* window = Application::TryGet() ? &Application::TryGet()->GetWindow() : nullptr;
+                bool player = AppRuntime::GetHost() == AppRuntime::Host::Player; // the editor's window is not the game's
+                int w = 0, h = 0, hz = 0;
+                if (op >= 8 && op <= 10 && window) window->GetMonitorMode(w, h, hz);
+                switch (op)
+                {
+                case 0: AppRuntime::RequestQuit(); return 0.0;
+                case 1: return AppRuntime::GetTargetFrameRate();
+                case 2: AppRuntime::SetTargetFrameRate((int)x); return 0.0;
+                case 3: return AppRuntime::IsFocused() ? 1.0 : 0.0;
+                case 4: return (double)(int)AppRuntime::GetHost();
+                case 5: return window && player && window->IsFullscreen() ? 1.0 : 0.0;
+                case 6: if (window && player) window->SetFullscreen(x != 0.0); return 0.0;
+                case 7:
+                    if (!window || !player) return 0.0;
+                    window->SetSize((uint32_t)std::max(x, 0.0), (uint32_t)std::max(y, 0.0)); // kept for windowed while fullscreen
+                    window->SetFullscreen(z != 0.0);
+                    return 0.0;
+                case 8: return w;
+                case 9: return h;
+                case 10: return hz;
+                case 11: return window ? window->GetDpi() : 96.0;
+                default: return AppRuntime::GetRealtimeSinceStartup();
+                }
+            };
+            a.AppText = [](int op) -> const char* {
+                const auto& config = Project::GetConfig();
+                s_StringReturn = op == 0 ? config.Name : op == 1 ? config.Version : config.CompanyName;
+                return s_StringReturn.c_str();
             };
             a.InputText = [](int op, int pad) -> const char* {
                 s_StringReturn = op == 0 ? Input::GetInputString() : Input::GetGamepadName(pad);

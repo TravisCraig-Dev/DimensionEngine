@@ -254,6 +254,17 @@ namespace Dimension
         float GetTimeScale() const { return m_TimeScale; }
         float GetUnscaledDeltaTime() const { return m_UnscaledDeltaTime; } // this frame's step before the time scale
         float GetUnscaledTime() const { return m_UnscaledTime; }           // real seconds since play started
+        // The fixed step (OnFixedUpdate, physics; Unity's Time.fixedDeltaTime, 1/60 by default when play starts), the
+        // time fixed steps have reached (Time.fixedTime), the longest step a frame may take (Time.maximumDeltaTime,
+        // 0.1 s: a hitch slows the game rather than jumping it), and the time since the last single scene load.
+        void SetFixedTimestep(float seconds) { m_FixedTimestep = std::clamp(seconds, 0.0001f, 1.0f); }
+        float GetFixedTimestep() const { return m_FixedTimestep; }
+        float GetFixedTime() const { return m_FixedTime; }
+        void SetMaximumDeltaTime(float seconds) { m_MaxDeltaTime = std::clamp(seconds, 0.001f, 1.0f); }
+        float GetMaximumDeltaTime() const { return m_MaxDeltaTime; }
+        float GetTimeSinceLevelLoad() const { return m_Time - m_LevelLoadTime; }
+        // The game is closing (or play stopping in the editor): OnApplicationQuit on every running script.
+        void NotifyApplicationQuit();
         // The view the scene is shown in (from SetUIInput): its size in pixels (a 1280x720 stand-in before the first
         // frame), and the pointer in it (top-left origin).
         glm::vec2 GetViewSize() const { return m_UIScreen.x >= 1.0f && m_UIScreen.y >= 1.0f ? m_UIScreen : glm::vec2(1280.0f, 720.0f); }
@@ -282,7 +293,7 @@ namespace Dimension
         // OnScriptsReloaded instead of OnCreate. Scripts whose class is gone stay inactive. Returns reload's result.
         bool ReloadScriptModule(const std::string& module, const std::function<bool()>& reload);
 
-        static constexpr float kFixedTimestep = 1.0f / 60.0f;
+        static constexpr float kFixedTimestep = 1.0f / 60.0f; // the default fixed step
 
     private:
         void UpdateSpriteAnimators(float dt);
@@ -326,6 +337,8 @@ namespace Dimension
         float m_UIScroll = 0.0f;
         float m_Time = 0.0f, m_DeltaTime = 0.0f;
         float m_TimeScale = 1.0f, m_UnscaledDeltaTime = 0.0f, m_UnscaledTime = 0.0f;
+        float m_FixedTimestep = kFixedTimestep, m_FixedTime = 0.0f, m_MaxDeltaTime = 0.1f, m_LevelLoadTime = 0.0f;
+        int m_WindowListener = 0; // AppRuntime listener while running (OnApplicationFocus / Pause)
         float m_EditorTime = 0.0f; // waves and other previews while editing
         uint64_t m_FrameCount = 0;
         std::string m_UIInjectedText;

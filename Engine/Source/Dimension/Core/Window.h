@@ -31,6 +31,11 @@ namespace Dimension
         bool IsMinimized() const;
         bool IsFocused() const;
         void SetFullscreen(bool fullscreen);
+        // The window's client size in screen coordinates while windowed (fullscreen: the size it goes back to).
+        void SetSize(uint32_t width, uint32_t height);
+        // The monitor the window is on (the primary one if unsure): its current mode and its DPI (96 at 100% scale).
+        void GetMonitorMode(int& width, int& height, int& refreshRate) const;
+        float GetDpi() const;
         // Window/taskbar icon from RGBA images of different sizes (the system picks the closest). Empty = the
         // executable's own icon.
         struct IconImage { int Width, Height; const uint8_t* Rgba; };

@@ -1,5 +1,6 @@
 #include "Dimension/Project/InputActions.h"
 #include "Dimension/Core/Application.h"
+#include "Dimension/Core/AppRuntime.h"
 #include "Dimension/Core/Profiler.h"
 #include "Dimension/Core/Input.h"
 #include "Dimension/Core/Log.h"
@@ -10,6 +11,7 @@
 #include "Dimension/Audio/AudioEngine.h"
 #include <GLFW/glfw3.h>
 #include <chrono>
+#include <thread>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -23,6 +25,7 @@ namespace Dimension
     static Application* s_App = nullptr;
 
     Application& Application::Get() { return *s_App; }
+    Application* Application::TryGet() { return s_App; }
 
     Application::Application(const ApplicationSpec& spec) : m_Spec(spec)
     {
@@ -96,6 +99,7 @@ namespace Dimension
         while (m_Running && !m_Window->ShouldClose())
         {
             m_Window->PollEvents();
+            AppRuntime::ReportWindowState(m_Window->IsFocused(), m_Window->IsMinimized());
             if (m_Window->IsMinimized())
             {
                 m_Window->WaitEvents();
@@ -105,6 +109,7 @@ namespace Dimension
             auto now = std::chrono::steady_clock::now();
             m_FrameTime = std::chrono::duration<float>(now - last).count();
             last = now;
+            const auto frameStart = now;
             Input::NewFrame();
             InputActions::Update(m_FrameTime); // the named actions from this frame's input
             Profiler::BeginFrame();
@@ -182,6 +187,20 @@ namespace Dimension
             {
                 DIM_PROFILE_SCOPE("Submit");
                 m_Device->EndFrame();
+            }
+            // A script's Application.Quit: the Player closes; the editor ignores it, as Unity's does.
+            if (AppRuntime::TakeQuitRequest())
+            {
+                if (AppRuntime::GetHost() == AppRuntime::Host::Editor) Log::Info("Application.Quit is ignored in the editor (it closes a built game)");
+                else m_Running = false;
+            }
+            // Target frame rate: the rest of the frame slept away (the last part spun, as sleeps overshoot).
+            if (int fps = AppRuntime::GetTargetFrameRate(); fps > 0)
+            {
+                auto until = frameStart + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / fps));
+                auto coarse = until - std::chrono::milliseconds(2);
+                if (std::chrono::steady_clock::now() < coarse) std::this_thread::sleep_until(coarse);
+                while (std::chrono::steady_clock::now() < until) std::this_thread::yield();
             }
 
             if (lastFrame)

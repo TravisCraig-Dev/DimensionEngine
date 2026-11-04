@@ -84,6 +84,52 @@ namespace Dimension
         m_Fullscreen = fullscreen;
     }
 
+    void Window::SetSize(uint32_t width, uint32_t height)
+    {
+        width = std::max(width, 64u);
+        height = std::max(height, 64u);
+        if (m_Fullscreen)
+        {
+            m_WindowedRect[2] = (int)width;
+            m_WindowedRect[3] = (int)height;
+            return;
+        }
+        glfwSetWindowSize(m_Window, (int)width, (int)height);
+    }
+
+    void Window::GetMonitorMode(int& width, int& height, int& refreshRate) const
+    {
+        GLFWmonitor* monitor = glfwGetWindowMonitor(m_Window);
+        if (!monitor)
+        {
+            // The monitor holding the window's middle.
+            int wx, wy, ww, wh, count = 0;
+            glfwGetWindowPos(m_Window, &wx, &wy);
+            glfwGetWindowSize(m_Window, &ww, &wh);
+            GLFWmonitor** monitors = glfwGetMonitors(&count);
+            for (int i = 0; i < count && !monitor; ++i)
+            {
+                int mx, my;
+                glfwGetMonitorPos(monitors[i], &mx, &my);
+                const GLFWvidmode* m = glfwGetVideoMode(monitors[i]);
+                int cx = wx + ww / 2, cy = wy + wh / 2;
+                if (m && cx >= mx && cy >= my && cx < mx + m->width && cy < my + m->height) monitor = monitors[i];
+            }
+            if (!monitor) monitor = glfwGetPrimaryMonitor();
+        }
+        const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+        width = mode ? mode->width : 0;
+        height = mode ? mode->height : 0;
+        refreshRate = mode ? mode->refreshRate : 0;
+    }
+
+    float Window::GetDpi() const
+    {
+        float sx = 1.0f, sy = 1.0f;
+        glfwGetWindowContentScale(m_Window, &sx, &sy);
+        return 96.0f * sx;
+    }
+
     bool Window::IsMinimized() const
     {
         auto s = GetFramebufferSize();
