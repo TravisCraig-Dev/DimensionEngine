@@ -508,9 +508,32 @@ namespace Dimension
         for (auto& p : begun)
             if (touching(p.first, p.second) == m_Touching.end()) m_Touching.push_back(p);
         b2SensorEvents sensors = b2World_GetSensorEvents(world);
+        auto inSensor = [&](uint64_t s, uint64_t v) {
+            return std::find_if(m_InSensor.begin(), m_InSensor.end(), [&](auto& p) { return p.first == s && p.second == v; });
+        };
+        // Overlaps from before this step: Stay, for objects with scripts (as for contacts, none while both sleep).
+        std::erase_if(m_InSensor, [](auto& p) { return !b2Shape_IsValid(b2LoadShapeId(p.first)) || !b2Shape_IsValid(b2LoadShapeId(p.second)); });
+        for (int i = 0; i < sensors.endCount; ++i)
+            if (auto it = inSensor(b2StoreShapeId(sensors.endEvents[i].sensorShapeId), b2StoreShapeId(sensors.endEvents[i].visitorShapeId));
+                it != m_InSensor.end())
+                m_InSensor.erase(it);
+        for (auto& [ks, kv] : m_InSensor)
+        {
+            b2ShapeId s = b2LoadShapeId(ks), v = b2LoadShapeId(kv);
+            Entity es = UnpackEntity(b2Shape_GetUserData(s)), ev = UnpackEntity(b2Shape_GetUserData(v));
+            bool scripted = (reg.Valid(es) && reg.Has<ScriptComponent>(es)) || (reg.Valid(ev) && reg.Has<ScriptComponent>(ev));
+            bool awake = b2Body_IsAwake(b2Shape_GetBody(s)) || b2Body_IsAwake(b2Shape_GetBody(v));
+            if (scripted && awake) events.push_back({ es, ev, CollisionPhase::Stay, true, {} });
+        }
         for (int i = 0; i < sensors.beginCount; ++i)
-            events.push_back({ UnpackEntity(b2Shape_GetUserData(sensors.beginEvents[i].sensorShapeId)),
-                               UnpackEntity(b2Shape_GetUserData(sensors.beginEvents[i].visitorShapeId)), CollisionPhase::Enter, true, {} });
+        {
+            auto& ev = sensors.beginEvents[i];
+            events.push_back({ UnpackEntity(b2Shape_GetUserData(ev.sensorShapeId)), UnpackEntity(b2Shape_GetUserData(ev.visitorShapeId)),
+                               CollisionPhase::Enter, true, {} });
+            if (b2Shape_IsValid(ev.sensorShapeId) && b2Shape_IsValid(ev.visitorShapeId) &&
+                inSensor(b2StoreShapeId(ev.sensorShapeId), b2StoreShapeId(ev.visitorShapeId)) == m_InSensor.end())
+                m_InSensor.push_back({ b2StoreShapeId(ev.sensorShapeId), b2StoreShapeId(ev.visitorShapeId) });
+        }
         for (int i = 0; i < sensors.endCount; ++i)
         {
             auto& ev = sensors.endEvents[i];

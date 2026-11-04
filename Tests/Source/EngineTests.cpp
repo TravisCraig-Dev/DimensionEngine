@@ -721,6 +721,127 @@ namespace
         }
     }
 
+    // Records its OnMouse* callbacks (Over and Drag once per frame are counted, not listed).
+    class MouseProbe : public ScriptableEntity
+    {
+    public:
+        std::vector<std::string> Log;
+        int Overs = 0, Drags = 0;
+        void OnMouseEnter() override { Log.push_back("enter"); }
+        void OnMouseOver() override { ++Overs; }
+        void OnMouseExit() override { Log.push_back("exit"); }
+        void OnMouseDown() override { Log.push_back("down"); }
+        void OnMouseDrag() override { ++Drags; }
+        void OnMouseUp() override { Log.push_back("up"); }
+        void OnMouseUpAsButton() override { Log.push_back("click"); }
+        std::string Take() { std::string s; for (auto& l : Log) s += (s.empty() ? "" : " ") + l; Log.clear(); return s; }
+    };
+    class TriggerStayProbe : public ScriptableEntity
+    {
+    public:
+        int Enters = 0, Stays = 0, Exits = 0;
+        void OnTriggerEnter(Entity) override { ++Enters; }
+        void OnTriggerStay(Entity) override { ++Stays; }
+        void OnTriggerExit(Entity) override { ++Exits; }
+    };
+
+    void TestMouseEvents()
+    {
+        Scene scene("Mouse");
+        auto& reg = scene.GetRegistry();
+        Entity cam = scene.CreateEntity("Camera");
+        reg.Emplace<CameraComponent>(cam);
+        reg.Get<TransformComponent>(cam).Position = { 0, 0, 10 };
+        Entity cube = scene.CreateEntity("Cube"), tile = scene.CreateEntity("Tile"), hidden = scene.CreateEntity("Hidden");
+        reg.Emplace<BoxColliderComponent>(cube);
+        reg.Get<TransformComponent>(tile).Position = { 3, 0, 0 };
+        reg.Emplace<BoxCollider2DComponent>(tile);
+        reg.Get<TransformComponent>(hidden).Position = { -3, 0, 0 };
+        reg.Emplace<BoxColliderComponent>(hidden);
+        for (Entity e : { cube, tile, hidden }) reg.Emplace<ScriptComponent>(e).Add("MouseProbe");
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        rt->SetActive(hidden, false);
+        auto probe = [&](Entity e) { return static_cast<MouseProbe*>(rt->GetRegistry().Get<ScriptComponent>(e).Scripts[0].Instance.get()); };
+        glm::vec2 view(800, 600);
+        auto screenOf = [&](glm::vec3 p) { return glm::vec2(CameraProjection::WorldToScreen(*rt, cam, p, view)); };
+        auto frame = [&](glm::vec2 at, bool down, bool valid = true) {
+            rt->SetUIInput(at, down, view, valid);
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+        };
+        MouseProbe* c = probe(cube);
+        glm::vec2 onCube = screenOf({ 0, 0, 0 }), empty = screenOf({ 0, 3, 0 });
+
+        frame(onCube, false);
+        frame(onCube, false);
+        CHECK(c->Take() == "enter" && c->Overs == 2 && rt->GetObjectUnderPointer() == cube);
+        // Pressed on it, dragged off and released elsewhere: Drag continues off it, Up but no click.
+        frame(onCube, true);
+        frame(empty, true);
+        frame(empty, true);
+        frame(empty, false);
+        CHECK(c->Take() == "down exit up" && c->Drags == 2 && rt->GetObjectUnderPointer().IsNull());
+        // A click on it.
+        frame(onCube, true);
+        frame(onCube, false);
+        CHECK(c->Take() == "enter down up click");
+        // Pressed elsewhere and released over it: nothing for it but hovering.
+        frame(empty, true);
+        frame(onCube, true);
+        frame(onCube, false);
+        CHECK(c->Take() == "exit enter" && c->Drags == 2);
+        // The pointer leaving the view.
+        frame(onCube, false, false);
+        CHECK(c->Take() == "exit");
+
+        // 2D colliders (in the z = 0 plane), and an inactive object gets nothing.
+        frame(screenOf({ 3, 0, 0 }), true);
+        frame(screenOf({ 3, 0, 0 }), false);
+        CHECK(probe(tile)->Take() == "enter down up click" && rt->GetObjectUnderPointer().IsNull() == false);
+        frame(screenOf({ -3, 0, 0 }), true);
+        frame(screenOf({ -3, 0, 0 }), false);
+        CHECK(probe(hidden)->Take().empty() && probe(hidden)->Overs == 0 && rt->GetObjectUnderPointer().IsNull());
+        rt->OnRuntimeStop();
+    }
+
+    void TestTriggerStay()
+    {
+        for (bool twoD : { false, true })
+        {
+            Scene scene("TriggerStay");
+            auto& reg = scene.GetRegistry();
+            Entity zone = scene.CreateEntity("Zone");
+            reg.Get<TransformComponent>(zone).Scale = { 6, 6, 6 };
+            Entity ball = scene.CreateEntity("Ball");
+            // (Off the step grid: Box2D v3.1.1 reports a sensor exit for a step where a circle's center lies exactly on the
+            // sensor polygon's edge.)
+            reg.Get<TransformComponent>(ball).Position = { -5.03f, 0, 0 };
+            if (twoD)
+            {
+                reg.Emplace<BoxCollider2DComponent>(zone).IsTrigger = true;
+                reg.Emplace<Rigidbody2DComponent>(ball).GravityScale = 0.0f;
+                reg.Emplace<CircleCollider2DComponent>(ball).Radius = 0.25f;
+            }
+            else
+            {
+                reg.Emplace<BoxColliderComponent>(zone).IsTrigger = true;
+                reg.Emplace<RigidbodyComponent>(ball).UseGravity = false;
+                reg.Emplace<SphereColliderComponent>(ball).Radius = 0.25f;
+            }
+            reg.Emplace<ScriptComponent>(ball).Add("TriggerStayProbe");
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto* probe = static_cast<TriggerStayProbe*>(rt->GetRegistry().Get<ScriptComponent>(ball).Scripts[0].Instance.get());
+            // Through the 6 m zone at 4 m/s: about 1.6 s inside.
+            if (twoD) Physics2DWorld::SetLinearVelocity(*rt, ball, { 4, 0 });
+            else Physics3DWorld::SetLinearVelocity(*rt, ball, { 4, 0, 0 });
+            for (int i = 0; i < 180; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(probe->Enters == 1 && probe->Exits == 1);
+            CHECK(probe->Stays > 70 && probe->Stays < 110);
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestMeshImportSettings()
     {
         fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
@@ -7973,6 +8094,46 @@ namespace
             rt->OnRuntimeStop();
         }
 
+        // OnMouseDown / OnMouseDrag from C#: the Sandbox's Draggable carries a crate after the pointer (pressed on it, then
+        // moved 4 m to the side while held), and leaves it when released.
+        {
+            Scene dg("Drag");
+            auto& creg = dg.GetRegistry();
+            Entity cam = dg.CreateEntity("Main Camera");
+            creg.Emplace<CameraComponent>(cam);
+            creg.Get<TransformComponent>(cam).Position = { 0, 12, 12 };
+            creg.Get<TransformComponent>(cam).Rotation = { glm::radians(-45.0f), 0, 0 };
+            Entity ground = dg.CreateEntity("Ground");
+            creg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            creg.Get<TransformComponent>(ground).Scale = { 40, 1, 40 };
+            creg.Emplace<BoxColliderComponent>(ground);
+            Entity crate = dg.CreateEntity("Crate");
+            creg.Get<TransformComponent>(crate).Position = { 0, 0.5f, 0 };
+            creg.Emplace<RigidbodyComponent>(crate);
+            creg.Emplace<BoxColliderComponent>(crate);
+            creg.Emplace<ScriptComponent>(crate).Add("Game.Draggable");
+            auto rt = dg.Clone();
+            rt->OnRuntimeStart();
+            glm::vec2 view(1280, 720);
+            glm::vec2 onCrate(CameraProjection::WorldToScreen(*rt, cam, { 0, 0.5f, 0 }, view));
+            glm::vec2 aside(CameraProjection::WorldToScreen(*rt, cam, { 4, 1.0f, 0 }, view)); // at the carrying height
+            rt->SetUIInput(onCrate, false, view);
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            rt->SetUIInput(onCrate, true, view);
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            for (int i = 0; i < 60; ++i)
+            {
+                rt->SetUIInput(aside, true, view);
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+            }
+            glm::vec3 held = rt->GetRegistry().Get<TransformComponent>(crate).Position;
+            CHECK(Near(held.x, 4.0f, 0.3f) && held.y > 0.7f);
+            rt->SetUIInput(aside, false, view);
+            for (int i = 0; i < 90; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(rt->GetRegistry().Get<TransformComponent>(crate).Position.y < 0.6f); // let go: it drops back
+            rt->OnRuntimeStop();
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -11647,6 +11808,8 @@ int main(int argc, char** argv)
     ScriptRegistry::Register<CounterB>("CounterB");
     ScriptRegistry::Register<EnableProbe>("EnableProbe");
     ScriptRegistry::Register<CollisionProbe>("CollisionProbe");
+    ScriptRegistry::Register<MouseProbe>("MouseProbe");
+    ScriptRegistry::Register<TriggerStayProbe>("TriggerStayProbe");
     ScriptRegistry::Register<LegacyCollisionProbe>("LegacyCollisionProbe");
     ScriptRegistry::Register<TestScript>("TestScript").Field("Speed", &TestScript::Speed).Field("Target", &TestScript::Target);
 
@@ -11663,6 +11826,8 @@ int main(int argc, char** argv)
     Run("2D physics queries", TestPhysics2DQueries);
     Run("3D shape casts and spin", TestPhysics3DCasts);
     Run("Collision details", TestCollisionDetails);
+    Run("Mouse events", TestMouseEvents);
+    Run("Trigger stay", TestTriggerStay);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

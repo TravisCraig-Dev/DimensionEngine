@@ -389,7 +389,6 @@ namespace Dimension
 
         void OnContactPersisted(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
         {
-            if (a.IsSensor() || b.IsSensor()) return;
             if (!ScriptedBodies.contains(a.GetID().GetIndexAndSequenceNumber()) && !ScriptedBodies.contains(b.GetID().GetIndexAndSequenceNumber())) return;
             Event ev = MakeEvent(a, b, manifold, true);
             std::lock_guard lock(EventMutex);
@@ -2967,7 +2966,23 @@ namespace Dimension
     {
         JPH::BodyInterface* bi;
         JPH::BodyID id;
-        if (BodyFor(scene, e, bi, id)) bi->SetLinearVelocity(id, ToJolt(v));
+        if (!BodyFor(scene, e, bi, id)) return;
+        bi->SetLinearVelocity(id, ToJolt(v));
+        if (v != glm::vec3(0.0f)) bi->ActivateBody(id); // as in Unity, setting a velocity wakes the body
+    }
+
+    void Physics3DWorld::WakeUp(Scene& scene, Entity e)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (BodyFor(scene, e, bi, id) && bi->IsAdded(id)) bi->ActivateBody(id);
+    }
+
+    bool Physics3DWorld::IsSleeping(Scene& scene, Entity e)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        return BodyFor(scene, e, bi, id) && bi->IsAdded(id) && !bi->IsActive(id);
     }
 
     glm::vec3 Physics3DWorld::GetLinearVelocity(Scene& scene, Entity e)

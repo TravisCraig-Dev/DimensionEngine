@@ -832,6 +832,14 @@
         "FlashSeconds": 0.4
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.Draggable",
+       "Fields": {
+        "Lift": 0.5,
+        "Stiffness": 10.0
+       },
+       "Enabled": true
       }
      ]
     }
@@ -918,6 +926,14 @@
         "FlashSeconds": 0.4
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.Draggable",
+       "Fields": {
+        "Lift": 0.5,
+        "Stiffness": 10.0
+       },
+       "Enabled": true
       }
      ]
     }
@@ -1002,6 +1018,14 @@
          1.0
         ],
         "FlashSeconds": 0.4
+       },
+       "Enabled": true
+      },
+      {
+       "Class": "Game.Draggable",
+       "Fields": {
+        "Lift": 0.5,
+        "Stiffness": 10.0
        },
        "Enabled": true
       }
@@ -4883,7 +4907,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), right-click a crate to shove it (it flashes when it hits something hard); T toggles slow motion.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it, right-click one to shove it (it flashes when it hits something hard); T toggles slow motion.",
      "Font": 0,
      "Font Size": 26,
      "Color": [

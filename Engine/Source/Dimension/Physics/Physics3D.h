@@ -47,6 +47,9 @@ namespace Dimension
         static void AddImpulse(Scene& scene, Entity e, const glm::vec3& impulse);
         // Spin (world axes, radians per second), torque (N*m), and a force or impulse at a world point (it also turns the
         // body when the point is off its center of mass).
+        // Sleeping bodies (at rest for a while) are not simulated until something touches or moves them.
+        static void WakeUp(Scene& scene, Entity e);
+        static bool IsSleeping(Scene& scene, Entity e);
         static glm::vec3 GetAngularVelocity(Scene& scene, Entity e);
         static void SetAngularVelocity(Scene& scene, Entity e, const glm::vec3& radiansPerSecond);
         static void AddTorque(Scene& scene, Entity e, const glm::vec3& torque);

@@ -672,6 +672,14 @@ namespace Dimension
                         if (type.GetMethod(nameof(Behaviour.OnCollisionStay), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(Collision) })
                                 ?.DeclaringType != typeof(Behaviour))
                             w.WriteBoolean("collisionStay", true);
+                        if (type.GetMethod(nameof(Behaviour.OnTriggerStay), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(Entity) })
+                                ?.DeclaringType != typeof(Behaviour))
+                            w.WriteBoolean("triggerStay", true);
+                        // OnMouse* callbacks are only called (every frame for Over / Drag) on classes that have one.
+                        string[] mouse = { nameof(Behaviour.OnMouseEnter), nameof(Behaviour.OnMouseOver), nameof(Behaviour.OnMouseExit),
+                                           nameof(Behaviour.OnMouseDown), nameof(Behaviour.OnMouseDrag), nameof(Behaviour.OnMouseUp),
+                                           nameof(Behaviour.OnMouseUpAsButton) };
+                        if (mouse.Any(Overrides)) w.WriteBoolean("mouseEvents", true);
                         w.WriteStartArray("contextMenu");
                         for (Type t = type; t != null && t != typeof(Behaviour); t = t.BaseType)
                             foreach (MethodInfo m in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
@@ -919,6 +927,13 @@ namespace Dimension
                     case 7: b.OnReloaded(); break;
                     case 8: b.OnEnable(); break;
                     case 9: b.OnDisable(); break;
+                    case 10: b.OnMouseEnter(); break;
+                    case 11: b.OnMouseOver(); break;
+                    case 12: b.OnMouseExit(); break;
+                    case 13: b.OnMouseDown(); break;
+                    case 14: b.OnMouseDrag(); break;
+                    case 15: b.OnMouseUp(); break;
+                    case 16: b.OnMouseUpAsButton(); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
@@ -944,7 +959,7 @@ namespace Dimension
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
         }
 
-        // 0 CollisionEnter, 1 CollisionExit, 2 TriggerEnter, 3 TriggerExit
+        // 0 CollisionEnter, 1 CollisionExit, 2 TriggerEnter, 3 TriggerExit, 4 TriggerStay
         [UnmanagedCallersOnly]
         internal static void InvokeEntity(IntPtr handle, int method, ulong other)
         {
@@ -960,6 +975,7 @@ namespace Dimension
                     case 1: b.OnCollisionExit(o); break;
                     case 2: b.OnTriggerEnter(o); break;
                     case 3: b.OnTriggerExit(o); break;
+                    case 4: b.OnTriggerStay(o); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

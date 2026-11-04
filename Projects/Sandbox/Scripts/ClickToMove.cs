@@ -16,6 +16,7 @@ namespace Game
 
             Ray ray = Camera.Main.ScreenPointToRay(Input.MousePosition);
             if (!Physics.Raycast(ray, out RaycastHit hit, 500.0f)) return;
+            if (hit.Entity.GetComponent<Rigidbody>() is { IsDynamic: true }) return; // a physics object (crates are dragged), not the ground
             Marker.Transform.Position = hit.Point;
             Debug.DrawRay(ray.Origin, ray.Direction * hit.Distance, new Color(1.0f, 0.85f, 0.2f), 1.0f);
             Debug.Log($"Sent to {hit.Point.X:0.0}, {hit.Point.Z:0.0} ({hit.Entity.Name})");

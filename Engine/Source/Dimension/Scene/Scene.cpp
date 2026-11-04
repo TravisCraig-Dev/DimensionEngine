@@ -21,6 +21,7 @@
 #include "Dimension/Core/Input.h"
 #include <glm/gtx/matrix_decompose.hpp>
 #include "Dimension/Asset/DataAsset.h"
+#include "Dimension/Scene/CameraProjection.h"
 #include <algorithm>
 #include <map>
 #include <fstream>
@@ -670,6 +671,7 @@ namespace Dimension
             m_UIScroll = 0.0f;
             m_UIWasDown = m_UIDown;
         }
+        UpdateMouseEvents();
 
         {
             DIM_PROFILE_SCOPE("Scripts");
@@ -1201,6 +1203,72 @@ namespace Dimension
             for (auto& inst : sc->LiveInstances(true)) inst->OnAnimationEvent(name);
     }
 
+    Entity Scene::PickObject(const glm::vec2& viewPoint)
+    {
+        Entity camera = GetPrimaryCamera();
+        if (camera.IsNull()) return Entity::Null();
+        glm::vec3 origin, direction;
+        CameraProjection::ScreenPointToRay(*this, camera, viewPoint, GetViewSize(), origin, direction);
+        float farClip = m_Registry.Get<CameraComponent>(camera).FarClip;
+        Entity found = Entity::Null();
+        float nearest = farClip;
+        if (m_Physics3D)
+            if (RaycastHit hit = Physics3DWorld::Raycast(*this, origin, direction, farClip); !hit.Hit.IsNull())
+            {
+                found = hit.Hit;
+                nearest = hit.Distance;
+            }
+        // 2D colliders lie in the z = 0 plane.
+        if (m_Physics2D && std::abs(direction.z) > 1e-6f)
+        {
+            float t = -origin.z / direction.z;
+            if (t >= 0.0f && t < nearest)
+            {
+                glm::vec3 p = origin + direction * t;
+                std::vector<Entity> under = Physics2DWorld::OverlapPoint(*this, { p.x, p.y });
+                if (!under.empty()) found = under.front();
+            }
+        }
+        return found;
+    }
+
+    void Scene::UpdateMouseEvents()
+    {
+        DIM_PROFILE_SCOPE("Mouse Events");
+        Entity over = m_UIInputValid && m_UIHovered.IsNull() ? PickObject(m_UIPointer) : Entity::Null();
+        // The scripts of an active object (copied first: callbacks may change the scene).
+        auto send = [&](Entity e, auto&& call) {
+            auto* sc = IsValid(e) && IsActiveInHierarchy(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr;
+            if (!sc) return;
+            for (auto& inst : sc->LiveInstances(true)) call(*inst);
+        };
+        if (over != m_MouseOver)
+        {
+            Entity left = m_MouseOver;
+            m_MouseOver = over;
+            send(left, [](ScriptableEntity& s) { s.OnMouseExit(); });
+            send(over, [](ScriptableEntity& s) { s.OnMouseEnter(); });
+        }
+        send(over, [](ScriptableEntity& s) { s.OnMouseOver(); });
+
+        bool down = m_UIInputValid && m_UIDown;
+        if (down && !m_MouseWasDown)
+        {
+            m_MousePressed = over;
+            send(over, [](ScriptableEntity& s) { s.OnMouseDown(); });
+        }
+        else if (down)
+            send(m_MousePressed, [](ScriptableEntity& s) { s.OnMouseDrag(); });
+        if (!down && m_MouseWasDown && !m_MousePressed.IsNull())
+        {
+            Entity pressed = m_MousePressed;
+            m_MousePressed = Entity::Null();
+            send(pressed, [](ScriptableEntity& s) { s.OnMouseUp(); });
+            if (pressed == over) send(pressed, [](ScriptableEntity& s) { s.OnMouseUpAsButton(); });
+        }
+        m_MouseWasDown = down;
+    }
+
     void Scene::SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid, float scroll)
     {
         m_UIScroll = scroll;
@@ -1245,14 +1313,18 @@ namespace Dimension
 
     void Scene::DispatchCollision(Entity a, Entity b, CollisionPhase phase, bool trigger, const Collision* fromA)
     {
-        if (trigger && phase == CollisionPhase::Stay) return;
         bool begin = phase == CollisionPhase::Enter;
         auto call = [&](Entity self, const Collision& c) {
             auto* sc = IsValid(self) ? m_Registry.TryGet<ScriptComponent>(self) : nullptr;
             if (!sc || !IsValid(c.Other)) return;
             for (auto& inst : sc->LiveInstances(true))
             {
-                if (trigger) begin ? inst->OnTriggerEnter(c.Other) : inst->OnTriggerExit(c.Other);
+                if (trigger)
+                {
+                    if (phase == CollisionPhase::Enter) inst->OnTriggerEnter(c.Other);
+                    else if (phase == CollisionPhase::Stay) inst->OnTriggerStay(c.Other);
+                    else inst->OnTriggerExit(c.Other);
+                }
                 else if (phase == CollisionPhase::Enter) inst->OnCollisionEnter(c);
                 else if (phase == CollisionPhase::Stay) inst->OnCollisionStay(c);
                 else inst->OnCollisionExit(c);

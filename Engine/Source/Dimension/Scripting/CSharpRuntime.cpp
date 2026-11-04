@@ -189,7 +189,7 @@ namespace Dimension
             // hit out: point xyz, normal xyz, distance. Returns the hit count (at most max are written).
             int (*Query3D)(void*, int, const float*, float, uint32_t, uint64_t*, float*, int);
             // A 3D body: 0 angular velocity (out xyz, rad/s), 1 set it, 2 add torque, 3 add force at a point (force, point),
-            // 4 add impulse at a point.
+            // 4 add impulse at a point, 5 wake up, 6 is sleeping (v[0] = 1 / 0).
             void (*Body3D)(void*, uint64_t, int, float*);
         };
 
@@ -433,6 +433,8 @@ namespace Dimension
             std::vector<bool> Drawn;          // per field: a C# property drawer draws it
             bool HasGizmos = false;           // overrides OnDrawGizmos or OnDrawGizmosSelected
             bool HasCollisionStay = false;    // overrides OnCollisionStay (else it is not called every step)
+            bool HasTriggerStay = false;      // overrides OnTriggerStay
+            bool HasMouseEvents = false;      // overrides an OnMouse* callback
             std::vector<std::string> ContextMenu;
         };
 
@@ -802,6 +804,15 @@ namespace Dimension
             }
             void OnTriggerEnter(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 2, Pack(o)); }
             void OnTriggerExit(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 3, Pack(o)); }
+            void OnTriggerStay(Entity o) override { if (m_Handle && m_Class->HasTriggerStay) s_Managed.InvokeEntity(m_Handle, 4, Pack(o)); }
+            void OnMouseEnter() override { Mouse(10); }
+            void OnMouseOver() override { Mouse(11); }
+            void OnMouseExit() override { Mouse(12); }
+            void OnMouseDown() override { Mouse(13); }
+            void OnMouseDrag() override { Mouse(14); }
+            void OnMouseUp() override { Mouse(15); }
+            void OnMouseUpAsButton() override { Mouse(16); }
+            void Mouse(int method) { if (m_Handle && m_Class->HasMouseEvents) s_Managed.Invoke(m_Handle, method, 0.0f); }
 
         private:
             const ManagedClass* m_Class;
@@ -819,6 +830,8 @@ namespace Dimension
                 BuildLayout(j.at("fields"), cls.Values, cls);
                 cls.HasGizmos = j.value("gizmos", false);
                 cls.HasCollisionStay = j.value("collisionStay", false);
+                cls.HasTriggerStay = j.value("triggerStay", false);
+                cls.HasMouseEvents = j.value("mouseEvents", false);
                 for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
                 for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
 
@@ -1191,7 +1204,9 @@ namespace Dimension
                 case 1: Physics3DWorld::SetAngularVelocity(scene, e, a3); break;
                 case 2: Physics3DWorld::AddTorque(scene, e, a3); break;
                 case 3: Physics3DWorld::AddForceAtPosition(scene, e, a3, { v[3], v[4], v[5] }); break;
-                default: Physics3DWorld::AddImpulseAtPosition(scene, e, a3, { v[3], v[4], v[5] }); break;
+                case 4: Physics3DWorld::AddImpulseAtPosition(scene, e, a3, { v[3], v[4], v[5] }); break;
+                case 5: Physics3DWorld::WakeUp(scene, e); break;
+                default: v[0] = Physics3DWorld::IsSleeping(scene, e) ? 1.0f : 0.0f; break;
                 }
             };
             a.IsMousePressed = [](int b) -> int { return b >= 0 && b < 3 && Input::IsMousePressed((MouseButton)b) ? 1 : 0; };

@@ -38,7 +38,18 @@ namespace Dimension
         virtual void OnCollisionStay(const Collision& collision) {}
         virtual void OnCollisionExit(const Collision& collision) { OnCollisionExit(collision.Other); }
         virtual void OnTriggerEnter(Entity other) {}
+        virtual void OnTriggerStay(Entity other) {} // every physics step inside (not while both bodies sleep)
         virtual void OnTriggerExit(Entity other) {}
+        // The pointer and this object's collider (seen through the primary camera, not through UI): Enter / Over (every
+        // frame) / Exit as it moves over; Down when pressed on it, then Drag every frame while held (even off it) and Up
+        // on release; UpAsButton when released over it too (a click).
+        virtual void OnMouseEnter() {}
+        virtual void OnMouseOver() {}
+        virtual void OnMouseExit() {}
+        virtual void OnMouseDown() {}
+        virtual void OnMouseDrag() {}
+        virtual void OnMouseUp() {}
+        virtual void OnMouseUpAsButton() {}
         virtual void OnClick() {} // UI Button on this entity was clicked
         virtual void OnUIValueChanged(float value) {}              // UI Slider value, or UI Toggle (1 = on)
         virtual void OnUITextChanged(const std::string& text) {}   // UI Input Field edited

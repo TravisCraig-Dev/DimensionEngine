@@ -160,6 +160,11 @@ namespace Dimension
         }
         public void AddForce(Vector3 force) => Native.Api.AddForce3D(Entity.Scene, Entity.Id, (float*)&force);
         public void AddImpulse(Vector3 impulse) => Native.Api.AddImpulse3D(Entity.Scene, Entity.Id, (float*)&impulse);
+        /// <summary>Moved by physics (Body Type Dynamic). Colliders without a Rigidbody get a static one while playing.</summary>
+        public bool IsDynamic => GetInt("Body Type") == 1;
+        /// <summary>At rest for a while, so not simulated until something touches or moves it (setting Velocity wakes it).</summary>
+        public bool IsSleeping { get { float* v = stackalloc float[6]; Native.Api.Body3D(Entity.Scene, Entity.Id, 6, v); return v[0] != 0.0f; } }
+        public void WakeUp() { float* v = stackalloc float[6]; Native.Api.Body3D(Entity.Scene, Entity.Id, 5, v); }
         /// <summary>Spin about the world axes in radians per second (as Unity's 3D Rigidbody).</summary>
         public Vector3 AngularVelocity
         {

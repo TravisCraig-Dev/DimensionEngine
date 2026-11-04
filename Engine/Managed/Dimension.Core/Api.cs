@@ -45,6 +45,22 @@ namespace Dimension
         public virtual void OnCollisionExit(Collision collision) => OnCollisionExit(collision.Other);
         public virtual void OnTriggerEnter(Entity other) { }
         public virtual void OnTriggerExit(Entity other) { }
+        /// <summary>Every physics step while inside a trigger (or something is inside this one), except while both
+        /// bodies sleep (only called on classes that override it).</summary>
+        public virtual void OnTriggerStay(Entity other) { }
+        /// <summary>The pointer moved over this object's collider (seen through the main camera, not through UI).</summary>
+        public virtual void OnMouseEnter() { }
+        /// <summary>Every frame while the pointer is over this object's collider.</summary>
+        public virtual void OnMouseOver() { }
+        public virtual void OnMouseExit() { }
+        /// <summary>The mouse button went down over this object.</summary>
+        public virtual void OnMouseDown() { }
+        /// <summary>Every frame while the button pressed on this object is held (even off it): dragging.</summary>
+        public virtual void OnMouseDrag() { }
+        /// <summary>The button pressed on this object was released (anywhere).</summary>
+        public virtual void OnMouseUp() { }
+        /// <summary>The button pressed on this object was released over it: a click.</summary>
+        public virtual void OnMouseUpAsButton() { }
         /// <summary>Called when a UI Button on this entity is clicked.</summary>
         public virtual void OnClick() { }
         /// <summary>Called when a UI Slider (its value), UI Toggle (1 = on, 0 = off) or UI Dropdown (option index) on this entity changes.</summary>

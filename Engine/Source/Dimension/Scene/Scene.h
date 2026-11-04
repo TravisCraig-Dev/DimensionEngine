@@ -200,6 +200,11 @@ namespace Dimension
         // UI input for the current frame (pointer in render-target pixels). Applied in OnUpdateRuntime.
         void SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid = true, float scroll = 0.0f);
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
+        // The object whose collider is under the pointer (through the primary camera; not when over UI), as the
+        // OnMouse* script events see it; Null when none.
+        Entity GetObjectUnderPointer() const { return m_MouseOver; }
+        // The nearest 3D or 2D collider under a view point (pixels, top-left origin), seen through the primary camera.
+        Entity PickObject(const glm::vec2& viewPoint);
         // The UI widget selected for keyboard/gamepad navigation (Null = none).
         Entity GetUISelected() const { return m_UISelected; }
         void SetUISelected(Entity e) { m_UISelected = e; }
@@ -232,8 +237,7 @@ namespace Dimension
         void DispatchUIValueChanged(Entity e, float value);
         void DispatchUIText(Entity e, const std::string& text, bool submit);
 
-        // Script/physics glue (called by physics worlds): `fromA` is the collision as `a` sees it (b flips it); triggers
-        // have no Stay.
+        // Script/physics glue (called by physics worlds): `fromA` is the collision as `a` sees it (b flips it).
         void DispatchCollision(Entity a, Entity b, CollisionPhase phase, bool trigger, const Collision* fromA = nullptr);
 
         // Engine events for listeners outside the entity's own scripts (C# events such as UIButton.Clicked). Kinds:
@@ -252,6 +256,7 @@ namespace Dimension
 
     private:
         void UpdateSpriteAnimators(float dt);
+        void UpdateMouseEvents();
     public:
         // Advances Animator time by dt (0 = just evaluate the pose) and computes skinning matrices.
         void UpdateAnimators(float dt);
@@ -291,6 +296,8 @@ namespace Dimension
         bool m_UINavigating = false;
         int m_UIStickDir = 0; // left stick direction last frame (navigation repeats only on a new push)
         Entity m_UIHovered = Entity::Null();
+        Entity m_MouseOver = Entity::Null(), m_MousePressed = Entity::Null(); // OnMouse* events
+        bool m_MouseWasDown = false;
         std::vector<Scope<System>> m_Systems;
         std::vector<LoadedScene> m_LoadedScenes;
         std::vector<Entity> m_Persistent;
