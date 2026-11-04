@@ -74,17 +74,28 @@ namespace Dimension
         static float GetAngularVelocity(Scene& scene, Entity e);
         static void SetAngularVelocity(Scene& scene, Entity e, float radiansPerSecond);
         static void ApplyTorque(Scene& scene, Entity e, float torque);
-        // layerMask: bit per physics layer (default: all but "Ignore Raycast").
+        // layerMask: bit per physics layer (default: all but "Ignore Raycast"); hitTriggers false skips trigger colliders.
         static RaycastHit2D Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
-                                    uint32_t layerMask = ~(1u << 1));
+                                    uint32_t layerMask = ~(1u << 1), bool hitTriggers = true);
         // Every collider along the ray, nearest first (one hit per object: its nearest).
         static std::vector<RaycastHit2D> RaycastAll(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
-                                                    uint32_t layerMask = ~(1u << 1));
+                                                    uint32_t layerMask = ~(1u << 1), bool hitTriggers = true);
+        // The first collider a circle / a box (half extents, turned `angle` radians) meets when moved along `direction` up
+        // to maxDistance: Point is where they touch, Distance how far the shape moved (0 for one it starts in).
+        static RaycastHit2D CircleCast(Scene& scene, const glm::vec2& center, float radius, const glm::vec2& direction, float maxDistance,
+                                       uint32_t layerMask = ~(1u << 1), bool hitTriggers = true);
+        static RaycastHit2D BoxCast(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle, const glm::vec2& direction,
+                                    float maxDistance, uint32_t layerMask = ~(1u << 1), bool hitTriggers = true);
         // The objects whose colliders contain a point (e.g. under the mouse, from ScreenToWorld).
-        static std::vector<Entity> OverlapPoint(Scene& scene, const glm::vec2& point, uint32_t layerMask = ~(1u << 1));
-        static std::vector<Entity> OverlapCircle(Scene& scene, const glm::vec2& center, float radius, uint32_t layerMask = ~(1u << 1));
+        static std::vector<Entity> OverlapPoint(Scene& scene, const glm::vec2& point, uint32_t layerMask = ~(1u << 1), bool hitTriggers = true);
+        static std::vector<Entity> OverlapCircle(Scene& scene, const glm::vec2& center, float radius, uint32_t layerMask = ~(1u << 1),
+                                                 bool hitTriggers = true);
         static std::vector<Entity> OverlapBox(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle = 0.0f,
-                                              uint32_t layerMask = ~(1u << 1));
+                                              uint32_t layerMask = ~(1u << 1), bool hitTriggers = true);
+        // The point on the object's colliders nearest to `point` (the point itself when inside one); false without a body.
+        static bool ClosestPoint(Scene& scene, Entity e, const glm::vec2& point, glm::vec2& closest);
+        // The world box around the object's colliders now; false without a body.
+        static bool GetBounds(Scene& scene, Entity e, glm::vec2& min, glm::vec2& max);
 
         uint32_t GetWorldId() const { return m_World; }
         size_t GetJointCount() const { return m_Joints.size(); }

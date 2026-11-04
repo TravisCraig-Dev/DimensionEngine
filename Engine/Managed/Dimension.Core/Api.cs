@@ -853,28 +853,20 @@ namespace Dimension
         public static void IgnoreCollision(Entity a, Entity b, bool ignore = true) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 1, ignore ? 1 : 0);
         public static bool GetIgnoreCollision(Entity a, Entity b) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 0, 0) != 0;
 
-        public static bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
-        {
-            ulong id;
-            Vector3 point, normal;
-            float distance;
-            int ok = Native.Api.Raycast3DMask(Native.CurrentScene, (float*)&origin, (float*)&direction, maxDistance, layerMask, &id,
-                                              (float*)&point, (float*)&normal, &distance);
-            hit = new RaycastHit { Entity = ok != 0 ? new Entity(Native.CurrentScene, id) : Entity.Null, Point = point, Normal = normal, Distance = distance };
-            return ok != 0;
-        }
-
-        public static bool Raycast(Ray ray, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
-            Raycast(ray.Origin, ray.Direction, out hit, maxDistance, layerMask);
+        /// <summary>Whether queries given <see cref="QueryTriggerInteraction.UseGlobal"/> (the default) hit trigger colliders.</summary>
+        public static bool QueriesHitTriggers { get; set; } = true;
+        internal static int Triggers(QueryTriggerInteraction q) =>
+            q == QueryTriggerInteraction.Collide || (q == QueryTriggerInteraction.UseGlobal && QueriesHitTriggers) ? 1 : 0;
 
         private const int MaxResults = 256;
-        // Query3D's hits (point, normal and distance: 7 floats each).
-        private static RaycastHit[] Query(int op, float* v, float maxDistance, uint layerMask)
+        // PhysicsQuery's hits (point, normal and distance: 7 floats each). Ops: 0 raycast, 1 raycast all, 2 sphere cast,
+        // 3 box cast, 4 capsule cast, 5 overlap sphere, 6 overlap box, 7 overlap capsule.
+        private static RaycastHit[] Query(int op, float* v, float maxDistance, uint layerMask, QueryTriggerInteraction triggers)
         {
             ulong* ids = stackalloc ulong[MaxResults];
             float* data = stackalloc float[MaxResults * 7];
             IntPtr scene = Native.CurrentScene;
-            int count = Math.Min(Native.Api.Query3D(scene, op, v, maxDistance, layerMask, ids, data, MaxResults), MaxResults);
+            int count = Math.Min(Native.Api.PhysicsQuery(scene, op, v, maxDistance, layerMask, Triggers(triggers), ids, data, MaxResults), MaxResults);
             var hits = new RaycastHit[count];
             for (int i = 0; i < count; ++i)
             {
@@ -884,66 +876,148 @@ namespace Dimension
             }
             return hits;
         }
-
-        /// <summary>Every collider along a ray, nearest first (each object once; a ray starting inside one hits it at 0).</summary>
-        public static RaycastHit[] RaycastAll(Vector3 origin, Vector3 direction, float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
+        private static bool First(int op, float* v, float maxDistance, uint layerMask, QueryTriggerInteraction triggers, out RaycastHit hit)
         {
-            float* v = stackalloc float[6] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z };
-            return Query(0, v, maxDistance, layerMask);
-        }
-        public static RaycastHit[] RaycastAll(Ray ray, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
-            RaycastAll(ray.Origin, ray.Direction, maxDistance, layerMask);
-
-        /// <summary>Moves a sphere along `direction` and returns the first collider it touches (a thick raycast: Point is
-        /// where they touch, Distance how far the sphere moved). A collider it starts inside is hit at distance 0.</summary>
-        public static bool SphereCast(Vector3 origin, float radius, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f,
-                                      uint layerMask = DefaultLayers)
-        {
-            float* v = stackalloc float[7] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, radius };
-            RaycastHit[] hits = Query(1, v, maxDistance, layerMask);
+            RaycastHit[] hits = Query(op, v, maxDistance, layerMask, triggers);
             hit = hits.Length > 0 ? hits[0] : default;
             return hits.Length > 0;
         }
-        public static bool SphereCast(Ray ray, float radius, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
-            SphereCast(ray.Origin, radius, ray.Direction, out hit, maxDistance, layerMask);
-
-        /// <summary>As SphereCast, for a box `halfExtents` in each direction turned by `orientation`.</summary>
-        public static bool BoxCast(Vector3 center, Vector3 halfExtents, Vector3 direction, out RaycastHit hit, Quaternion orientation,
-                                   float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
+        private static Entity[] Overlap(int op, float* v, uint layerMask, QueryTriggerInteraction triggers)
         {
-            float* v = stackalloc float[13] { center.X, center.Y, center.Z, direction.X, direction.Y, direction.Z,
-                                               halfExtents.X, halfExtents.Y, halfExtents.Z, orientation.X, orientation.Y, orientation.Z, orientation.W };
-            RaycastHit[] hits = Query(2, v, maxDistance, layerMask);
-            hit = hits.Length > 0 ? hits[0] : default;
-            return hits.Length > 0;
-        }
-        public static bool BoxCast(Vector3 center, Vector3 halfExtents, Vector3 direction, out RaycastHit hit) =>
-            BoxCast(center, halfExtents, direction, out hit, Quaternion.Identity);
-
-        /// <summary>Entities whose 3D colliders overlap a box `halfExtents` in each direction (turned by `orientation`).</summary>
-        public static Entity[] OverlapBox(Vector3 center, Vector3 halfExtents, Quaternion orientation, uint layerMask = DefaultLayers)
-        {
-            float* v = stackalloc float[10] { center.X, center.Y, center.Z, halfExtents.X, halfExtents.Y, halfExtents.Z,
-                                               orientation.X, orientation.Y, orientation.Z, orientation.W };
             ulong* ids = stackalloc ulong[MaxResults];
             IntPtr scene = Native.CurrentScene;
-            int count = Math.Min(Native.Api.Query3D(scene, 3, v, 0.0f, layerMask, ids, null, MaxResults), MaxResults);
+            int count = Math.Min(Native.Api.PhysicsQuery(scene, op, v, 0.0f, layerMask, Triggers(triggers), ids, null, MaxResults), MaxResults);
             var result = new Entity[count];
             for (int i = 0; i < count; ++i) result[i] = new Entity(scene, ids[i]);
             return result;
         }
-        public static Entity[] OverlapBox(Vector3 center, Vector3 halfExtents) => OverlapBox(center, halfExtents, Quaternion.Identity);
+
+        /// <summary>The nearest collider along a ray (direction need not be normalized).</summary>
+        public static bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                   QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[6] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z };
+            return First(0, v, maxDistance, layerMask, triggers, out hit);
+        }
+        public static bool Raycast(Ray ray, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                   QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            Raycast(ray.Origin, ray.Direction, out hit, maxDistance, layerMask, triggers);
+        /// <summary>Whether anything is in the way from `start` to `end` (the nearest such collider in hit).</summary>
+        public static bool Linecast(Vector3 start, Vector3 end, out RaycastHit hit, uint layerMask = DefaultLayers,
+                                    QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            Vector3 d = end - start;
+            float length = d.Length();
+            if (length <= 0.0f) { hit = default; return false; }
+            return Raycast(start, d, out hit, length, layerMask, triggers);
+        }
+        public static bool Linecast(Vector3 start, Vector3 end, uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            Linecast(start, end, out _, layerMask, triggers);
+
+        /// <summary>Every collider along a ray, nearest first (each object once; a ray starting inside one hits it at 0).</summary>
+        public static RaycastHit[] RaycastAll(Vector3 origin, Vector3 direction, float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                              QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[6] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z };
+            return Query(1, v, maxDistance, layerMask, triggers);
+        }
+        public static RaycastHit[] RaycastAll(Ray ray, float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                              QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            RaycastAll(ray.Origin, ray.Direction, maxDistance, layerMask, triggers);
+
+        /// <summary>Moves a sphere along `direction` and returns the first collider it touches (a thick raycast: Point is
+        /// where they touch, Distance how far the sphere moved). A collider it starts inside is hit at distance 0.</summary>
+        public static bool SphereCast(Vector3 origin, float radius, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f,
+                                      uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[7] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, radius };
+            return First(2, v, maxDistance, layerMask, triggers, out hit);
+        }
+        public static bool SphereCast(Ray ray, float radius, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                      QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            SphereCast(ray.Origin, radius, ray.Direction, out hit, maxDistance, layerMask, triggers);
+
+        /// <summary>As SphereCast, for a box `halfExtents` in each direction turned by `orientation`.</summary>
+        public static bool BoxCast(Vector3 center, Vector3 halfExtents, Vector3 direction, out RaycastHit hit, Quaternion orientation,
+                                   float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                   QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[13] { center.X, center.Y, center.Z, direction.X, direction.Y, direction.Z,
+                                               halfExtents.X, halfExtents.Y, halfExtents.Z, orientation.X, orientation.Y, orientation.Z, orientation.W };
+            return First(3, v, maxDistance, layerMask, triggers, out hit);
+        }
+        public static bool BoxCast(Vector3 center, Vector3 halfExtents, Vector3 direction, out RaycastHit hit) =>
+            BoxCast(center, halfExtents, direction, out hit, Quaternion.Identity);
+
+        /// <summary>As SphereCast, for a capsule whose ends' centers are point1 and point2 (a character's body: its feet's
+        /// and head's spheres).</summary>
+        public static bool CapsuleCast(Vector3 point1, Vector3 point2, float radius, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f,
+                                       uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[10] { point1.X, point1.Y, point1.Z, point2.X, point2.Y, point2.Z, direction.X, direction.Y, direction.Z, radius };
+            return First(4, v, maxDistance, layerMask, triggers, out hit);
+        }
 
         /// <summary>Entities whose 3D colliders overlap the sphere.</summary>
-        public static Entity[] OverlapSphere(Vector3 center, float radius, uint layerMask = DefaultLayers)
+        public static Entity[] OverlapSphere(Vector3 center, float radius, uint layerMask = DefaultLayers,
+                                             QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
         {
-            const int max = 256;
-            ulong* ids = stackalloc ulong[max];
-            int count = Math.Min(Native.Api.OverlapSphere(Native.CurrentScene, (float*)&center, radius, layerMask, ids, max), max);
-            var result = new Entity[count];
-            for (int i = 0; i < count; ++i) result[i] = new Entity(Native.CurrentScene, ids[i]);
-            return result;
+            float* v = stackalloc float[4] { center.X, center.Y, center.Z, radius };
+            return Overlap(5, v, layerMask, triggers);
         }
+        /// <summary>Entities whose 3D colliders overlap a box `halfExtents` in each direction (turned by `orientation`).</summary>
+        public static Entity[] OverlapBox(Vector3 center, Vector3 halfExtents, Quaternion orientation, uint layerMask = DefaultLayers,
+                                          QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[10] { center.X, center.Y, center.Z, halfExtents.X, halfExtents.Y, halfExtents.Z,
+                                               orientation.X, orientation.Y, orientation.Z, orientation.W };
+            return Overlap(6, v, layerMask, triggers);
+        }
+        public static Entity[] OverlapBox(Vector3 center, Vector3 halfExtents) => OverlapBox(center, halfExtents, Quaternion.Identity);
+        /// <summary>Entities whose 3D colliders overlap the capsule from point1 to point2 (its ends' centers).</summary>
+        public static Entity[] OverlapCapsule(Vector3 point1, Vector3 point2, float radius, uint layerMask = DefaultLayers,
+                                              QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[7] { point1.X, point1.Y, point1.Z, point2.X, point2.Y, point2.Z, radius };
+            return Overlap(7, v, layerMask, triggers);
+        }
+
+        /// <summary>Whether any 3D collider overlaps the sphere / box / capsule (a room to stand in, a spawn point free).</summary>
+        public static bool CheckSphere(Vector3 center, float radius, uint layerMask = DefaultLayers,
+                                       QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            OverlapSphere(center, radius, layerMask, triggers).Length > 0;
+        public static bool CheckBox(Vector3 center, Vector3 halfExtents, Quaternion orientation, uint layerMask = DefaultLayers,
+                                    QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            OverlapBox(center, halfExtents, orientation, layerMask, triggers).Length > 0;
+        public static bool CheckBox(Vector3 center, Vector3 halfExtents) => CheckBox(center, halfExtents, Quaternion.Identity);
+        public static bool CheckCapsule(Vector3 point1, Vector3 point2, float radius, uint layerMask = DefaultLayers,
+                                        QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            OverlapCapsule(point1, point2, radius, layerMask, triggers).Length > 0;
+    }
+
+    /// <summary>Whether a physics query hits trigger colliders: as Physics.QueriesHitTriggers says (UseGlobal), never
+    /// (Ignore) or always (Collide).</summary>
+    public enum QueryTriggerInteraction { UseGlobal = 0, Ignore = 1, Collide = 2 }
+
+    /// <summary>An axis-aligned box (a collider's world bounds).</summary>
+    public struct Bounds
+    {
+        public Vector3 Center;
+        /// <summary>Half the size.</summary>
+        public Vector3 Extents;
+        public Bounds(Vector3 center, Vector3 size) { Center = center; Extents = size * 0.5f; }
+        public Vector3 Size { get => Extents * 2.0f; set => Extents = value * 0.5f; }
+        public Vector3 Min => Center - Extents;
+        public Vector3 Max => Center + Extents;
+        public static Bounds FromMinMax(Vector3 min, Vector3 max) => new((min + max) * 0.5f, max - min);
+        public bool Contains(Vector3 point) =>
+            point.X >= Min.X && point.X <= Max.X && point.Y >= Min.Y && point.Y <= Max.Y && point.Z >= Min.Z && point.Z <= Max.Z;
+        public bool Intersects(Bounds other) =>
+            Min.X <= other.Max.X && Max.X >= other.Min.X && Min.Y <= other.Max.Y && Max.Y >= other.Min.Y && Min.Z <= other.Max.Z && Max.Z >= other.Min.Z;
+        /// <summary>Grows to take in a point.</summary>
+        public void Encapsulate(Vector3 point) { Vector3 lo = Vector3.Min(Min, point), hi = Vector3.Max(Max, point); this = FromMinMax(lo, hi); }
+        public Vector3 ClosestPoint(Vector3 point) => Vector3.Clamp(point, Min, Max);
+        public override string ToString() => $"Center {Center}, Extents {Extents}";
     }
 
     public struct RaycastHit2D
@@ -979,13 +1053,19 @@ namespace Dimension
         public static bool GetIgnoreCollision(Entity a, Entity b) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 2, 0) != 0;
         private const int MaxResults = 256;
 
-        private static RaycastHit2D[] Cast(int op, Vector2 origin, Vector2 direction, float maxDistance, uint layerMask)
+        /// <summary>Whether 2D queries given <see cref="QueryTriggerInteraction.UseGlobal"/> (the default) hit trigger colliders.</summary>
+        public static bool QueriesHitTriggers { get; set; } = true;
+        private static int Triggers(QueryTriggerInteraction q) =>
+            q == QueryTriggerInteraction.Collide || (q == QueryTriggerInteraction.UseGlobal && QueriesHitTriggers) ? 1 : 0;
+
+        // PhysicsQuery's 2D ops: 100 raycast, 101 raycast all, 102 circle cast, 103 box cast (hits: point, normal and
+        // distance, 5 floats each), 104 overlap circle, 105 overlap box, 106 overlap point.
+        private static RaycastHit2D[] Cast(int op, float* v, float maxDistance, uint layerMask, QueryTriggerInteraction triggers)
         {
-            float* v = stackalloc float[4] { origin.X, origin.Y, direction.X, direction.Y };
             ulong* ids = stackalloc ulong[MaxResults];
             float* data = stackalloc float[MaxResults * 5];
             IntPtr scene = Native.CurrentScene;
-            int count = Math.Min(Native.Api.Raycast2D(scene, op, v, maxDistance, layerMask, ids, data, MaxResults), MaxResults);
+            int count = Math.Min(Native.Api.PhysicsQuery(scene, op, v, maxDistance, layerMask, Triggers(triggers), ids, data, MaxResults), MaxResults);
             var hits = new RaycastHit2D[count];
             for (int i = 0; i < count; ++i)
             {
@@ -994,50 +1074,88 @@ namespace Dimension
             }
             return hits;
         }
-
-        /// <summary>The nearest collider along a ray from `origin` (direction need not be normalized).</summary>
-        public static bool Raycast(Vector2 origin, Vector2 direction, out RaycastHit2D hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
+        private static bool First(int op, float* v, float maxDistance, uint layerMask, QueryTriggerInteraction triggers, out RaycastHit2D hit)
         {
-            RaycastHit2D[] hits = Cast(0, origin, direction, maxDistance, layerMask);
+            RaycastHit2D[] hits = Cast(op, v, maxDistance, layerMask, triggers);
             hit = hits.Length > 0 ? hits[0] : default;
             return hits.Length > 0;
         }
-        /// <summary>Every collider along the ray, nearest first (each object once).</summary>
-        public static RaycastHit2D[] RaycastAll(Vector2 origin, Vector2 direction, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
-            Cast(1, origin, direction, maxDistance, layerMask);
 
-        private static Entity[] Overlap(int shape, float* v, uint layerMask)
+        /// <summary>The nearest collider along a ray from `origin` (direction need not be normalized).</summary>
+        public static bool Raycast(Vector2 origin, Vector2 direction, out RaycastHit2D hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                   QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[4] { origin.X, origin.Y, direction.X, direction.Y };
+            return First(100, v, maxDistance, layerMask, triggers, out hit);
+        }
+        /// <summary>Every collider along the ray, nearest first (each object once).</summary>
+        public static RaycastHit2D[] RaycastAll(Vector2 origin, Vector2 direction, float maxDistance = 1000.0f, uint layerMask = DefaultLayers,
+                                                QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[4] { origin.X, origin.Y, direction.X, direction.Y };
+            return Cast(101, v, maxDistance, layerMask, triggers);
+        }
+        /// <summary>Whether anything is in the way from `start` to `end` (the nearest such collider in hit).</summary>
+        public static bool Linecast(Vector2 start, Vector2 end, out RaycastHit2D hit, uint layerMask = DefaultLayers,
+                                    QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            Vector2 d = end - start;
+            float length = d.Length();
+            if (length <= 0.0f) { hit = default; return false; }
+            return Raycast(start, d, out hit, length, layerMask, triggers);
+        }
+        public static bool Linecast(Vector2 start, Vector2 end, uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal) =>
+            Linecast(start, end, out _, layerMask, triggers);
+        /// <summary>Moves a circle along `direction` and returns the first collider it touches (Point is where they touch,
+        /// Distance how far it moved; 0 for one it starts in).</summary>
+        public static bool CircleCast(Vector2 origin, float radius, Vector2 direction, out RaycastHit2D hit, float maxDistance = 1000.0f,
+                                      uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[5] { origin.X, origin.Y, direction.X, direction.Y, radius };
+            return First(102, v, maxDistance, layerMask, triggers, out hit);
+        }
+        /// <summary>As CircleCast, for a box `size` across turned `angleDegrees` counterclockwise.</summary>
+        public static bool BoxCast(Vector2 origin, Vector2 size, float angleDegrees, Vector2 direction, out RaycastHit2D hit, float maxDistance = 1000.0f,
+                                   uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
+        {
+            float* v = stackalloc float[7] { origin.X, origin.Y, direction.X, direction.Y, size.X * 0.5f, size.Y * 0.5f, angleDegrees * MathF.PI / 180.0f };
+            return First(103, v, maxDistance, layerMask, triggers, out hit);
+        }
+
+        private static Entity[] Overlap(int op, float* v, uint layerMask, QueryTriggerInteraction triggers)
         {
             ulong* ids = stackalloc ulong[MaxResults];
             IntPtr scene = Native.CurrentScene;
-            int count = Math.Min(Native.Api.Overlap2D(scene, shape, v, layerMask, ids, MaxResults), MaxResults);
+            int count = Math.Min(Native.Api.PhysicsQuery(scene, op, v, 0.0f, layerMask, Triggers(triggers), ids, null, MaxResults), MaxResults);
             var result = new Entity[count];
             for (int i = 0; i < count; ++i) result[i] = new Entity(scene, ids[i]);
             return result;
         }
         /// <summary>The objects whose colliders overlap a circle.</summary>
-        public static Entity[] OverlapCircle(Vector2 center, float radius, uint layerMask = DefaultLayers)
+        public static Entity[] OverlapCircle(Vector2 center, float radius, uint layerMask = DefaultLayers,
+                                             QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
         {
             float* v = stackalloc float[3] { center.X, center.Y, radius };
-            return Overlap(0, v, layerMask);
+            return Overlap(104, v, layerMask, triggers);
         }
         /// <summary>The objects whose colliders overlap a box `size` across, turned `angleDegrees` counterclockwise.</summary>
-        public static Entity[] OverlapBox(Vector2 center, Vector2 size, float angleDegrees = 0.0f, uint layerMask = DefaultLayers)
+        public static Entity[] OverlapBox(Vector2 center, Vector2 size, float angleDegrees = 0.0f, uint layerMask = DefaultLayers,
+                                          QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
         {
             float* v = stackalloc float[5] { center.X, center.Y, size.X * 0.5f, size.Y * 0.5f, angleDegrees * MathF.PI / 180.0f };
-            return Overlap(1, v, layerMask);
+            return Overlap(105, v, layerMask, triggers);
         }
         /// <summary>The object whose collider contains a point (Null when none), e.g. under the mouse:
         /// <c>Physics2D.OverlapPoint(Camera.Main.ScreenToWorldPoint(...))</c>.</summary>
-        public static Entity OverlapPoint(Vector2 point, uint layerMask = DefaultLayers)
+        public static Entity OverlapPoint(Vector2 point, uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
         {
-            Entity[] all = OverlapPointAll(point, layerMask);
+            Entity[] all = OverlapPointAll(point, layerMask, triggers);
             return all.Length > 0 ? all[0] : Entity.Null;
         }
-        public static Entity[] OverlapPointAll(Vector2 point, uint layerMask = DefaultLayers)
+        public static Entity[] OverlapPointAll(Vector2 point, uint layerMask = DefaultLayers, QueryTriggerInteraction triggers = QueryTriggerInteraction.UseGlobal)
         {
             float* v = stackalloc float[2] { point.X, point.Y };
-            return Overlap(2, v, layerMask);
+            return Overlap(106, v, layerMask, triggers);
         }
     }
 

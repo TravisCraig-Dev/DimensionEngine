@@ -242,6 +242,11 @@ namespace Dimension
             // Rigidbody / Rigidbody 2D: 0 apply its settings, 1 teleport to v (position xyz, Euler radians xyz), 2 move
             // there (kinematic: during the next step), 3 the 2D mass, 4 set it (v[0]).
             float (*RigidbodyOp)(void*, uint64_t, int, const float*);
+            // Physics queries with a choice about triggers; see Physics / Physics2D in Api.cs for the ops and v's layout.
+            // Hits fill ids and data (3D: point, normal, distance = 7 floats; 2D: 5); overlaps only ids. Returns the count.
+            int (*PhysicsQuery)(void*, int, const float*, float, uint32_t, int, uint64_t*, float*, int);
+            // A collider's 0 closest point to v (3D), 1 bounds (min, max into v), 2 closest point (2D), 3 bounds (2D).
+            int (*ColliderQuery)(void*, uint64_t, int, float*);
         };
 
         // Background scene loads started from C#, by id.
@@ -1458,6 +1463,74 @@ namespace Dimension
                 case 2: scene.MoveBody(e, { v[0], v[1], v[2] }, { v[3], v[4], v[5] }, op == 1); return 0.0f;
                 case 3: return scene.GetPhysics2D() ? scene.GetPhysics2D()->GetMass(e) : 0.0f;
                 default: if (scene.GetPhysics2D()) scene.GetPhysics2D()->SetMass(e, v[0]); return 0.0f;
+                }
+            };
+            a.PhysicsQuery = [](void* s, int op, const float* v, float maxDistance, uint32_t mask, int triggers, uint64_t* ids, float* data,
+                                int max) -> int {
+                if (!s) return 0;
+                Scene& scene = S(s);
+                bool hitTriggers = triggers != 0;
+                auto entities = [&](const std::vector<Entity>& found) {
+                    for (int i = 0; i < (int)found.size() && i < max; ++i) ids[i] = Pack(found[i]);
+                    return (int)found.size();
+                };
+                if (op >= 100) // 2D
+                {
+                    glm::vec2 a2(v[0], v[1]), b2(v[2], v[3]);
+                    std::vector<RaycastHit2D> hits;
+                    switch (op)
+                    {
+                    case 100: hits.push_back(Physics2DWorld::Raycast(scene, a2, b2, maxDistance, mask, hitTriggers)); break;
+                    case 101: hits = Physics2DWorld::RaycastAll(scene, a2, b2, maxDistance, mask, hitTriggers); break;
+                    case 102: hits.push_back(Physics2DWorld::CircleCast(scene, a2, v[4], b2, maxDistance, mask, hitTriggers)); break;
+                    case 103: hits.push_back(Physics2DWorld::BoxCast(scene, a2, { v[4], v[5] }, v[6], b2, maxDistance, mask, hitTriggers)); break;
+                    case 104: return entities(Physics2DWorld::OverlapCircle(scene, a2, v[2], mask, hitTriggers));
+                    case 105: return entities(Physics2DWorld::OverlapBox(scene, a2, b2, v[4], mask, hitTriggers));
+                    default: return entities(Physics2DWorld::OverlapPoint(scene, a2, mask, hitTriggers));
+                    }
+                    std::erase_if(hits, [](const RaycastHit2D& h) { return h.Hit.IsNull(); });
+                    for (int i = 0; i < (int)hits.size() && i < max; ++i)
+                    {
+                        ids[i] = Pack(hits[i].Hit);
+                        float* d = data + i * 5;
+                        d[0] = hits[i].Point.x; d[1] = hits[i].Point.y; d[2] = hits[i].Normal.x; d[3] = hits[i].Normal.y; d[4] = hits[i].Distance;
+                    }
+                    return (int)hits.size();
+                }
+                glm::vec3 a3(v[0], v[1], v[2]), b3(v[3], v[4], v[5]);
+                std::vector<RaycastHit> hits;
+                switch (op)
+                {
+                case 0: hits.push_back(Physics3DWorld::Raycast(scene, a3, b3, maxDistance, mask, hitTriggers)); break;
+                case 1: hits = Physics3DWorld::RaycastAll(scene, a3, b3, maxDistance, mask, false, hitTriggers); break;
+                case 2: hits.push_back(Physics3DWorld::SphereCast(scene, a3, v[6], b3, maxDistance, mask, hitTriggers)); break;
+                case 3: hits.push_back(Physics3DWorld::BoxCast(scene, a3, { v[6], v[7], v[8] }, glm::quat(v[12], v[9], v[10], v[11]), b3, maxDistance, mask, hitTriggers)); break;
+                case 4: hits.push_back(Physics3DWorld::CapsuleCast(scene, a3, b3, v[9], { v[6], v[7], v[8] }, maxDistance, mask, hitTriggers)); break;
+                case 5: return entities(Physics3DWorld::OverlapSphere(scene, a3, v[3], mask, hitTriggers));
+                case 6: return entities(Physics3DWorld::OverlapBox(scene, a3, b3, glm::quat(v[9], v[6], v[7], v[8]), mask, hitTriggers));
+                default: return entities(Physics3DWorld::OverlapCapsule(scene, a3, b3, v[6], mask, hitTriggers));
+                }
+                std::erase_if(hits, [](const RaycastHit& h) { return h.Hit.IsNull(); });
+                for (int i = 0; i < (int)hits.size() && i < max; ++i)
+                {
+                    ids[i] = Pack(hits[i].Hit);
+                    float* d = data + i * 7;
+                    std::memcpy(d, &hits[i].Point, 12);
+                    std::memcpy(d + 3, &hits[i].Normal, 12);
+                    d[6] = hits[i].Distance;
+                }
+                return (int)hits.size();
+            };
+            a.ColliderQuery = [](void* s, uint64_t packed, int op, float* v) -> int {
+                if (!s || !S(s).IsValid(Unpack(packed))) return 0;
+                Scene& scene = S(s);
+                Entity e = Unpack(packed);
+                switch (op)
+                {
+                case 0: { glm::vec3 c; if (!Physics3DWorld::ClosestPoint(scene, e, { v[0], v[1], v[2] }, c)) return 0; std::memcpy(v, &c, 12); return 1; }
+                case 1: { glm::vec3 lo, hi; if (!Physics3DWorld::GetBounds(scene, e, lo, hi)) return 0; std::memcpy(v, &lo, 12); std::memcpy(v + 3, &hi, 12); return 1; }
+                case 2: { glm::vec2 c; if (!Physics2DWorld::ClosestPoint(scene, e, { v[0], v[1] }, c)) return 0; v[0] = c.x; v[1] = c.y; return 1; }
+                default: { glm::vec2 lo, hi; if (!Physics2DWorld::GetBounds(scene, e, lo, hi)) return 0; v[0] = lo.x; v[1] = lo.y; v[2] = hi.x; v[3] = hi.y; return 1; }
                 }
             };
             a.RebuildJoint = [](void* s, uint64_t e) { if (s && S(s).IsRunning() && S(s).IsValid(Unpack(e))) S(s).RebuildJoint(Unpack(e)); };

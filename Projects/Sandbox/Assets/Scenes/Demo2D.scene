@@ -1266,6 +1266,124 @@
       }
     },
     {
+      "guid": 520021,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Lookout",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -10,
+            4.1,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.5,
+            0.5,
+            1
+          ]
+        },
+        "Sprite Renderer": {
+          "Sprite": 0,
+          "Color": [
+            0.3,
+            1,
+            0.4,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Sorting Order": 6,
+          "Flip X": false,
+          "Flip Y": false
+        },
+        "Line Renderer": {
+          "Alignment": 0,
+          "Blend": 0,
+          "Color": [
+            [
+              0.0,
+              1.0,
+              1.0,
+              1.0,
+              0.7
+            ],
+            [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              0.2
+            ]
+          ],
+          "Corner Vertices": 0,
+          "End Cap Vertices": 0,
+          "Loop": false,
+          "Positions": [
+            [
+              -10,
+              4.1,
+              0.1
+            ],
+            [
+              -4,
+              2,
+              0.1
+            ]
+          ],
+          "Sorting Order": 7,
+          "Texture": 0,
+          "Texture Mode": 0,
+          "Use World Space": true,
+          "Width": 0.05,
+          "Width Curve": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0
+            ]
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.Lookout",
+              "Fields": {
+                "Target": 500021,
+                "Sees": [
+                  0.3,
+                  1.0,
+                  0.4,
+                  1.0
+                ],
+                "Blocked": [
+                  1.0,
+                  0.3,
+                  0.25,
+                  1.0
+                ]
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "guid": 850010,
       "parent": 0,
       "components": {
@@ -1824,11 +1942,11 @@
           ],
           "Size": [
             1700,
-            112
+            144
           ]
         },
         "UI Text": {
-          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse); E ties the nearest box to the player on a rope, E again lets go (Tether); Q hangs the boxes in the air, H makes them heavy (BoxHang); the blue lift on the left rides up and down (Lift)",
+          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse); E ties the nearest box to the player on a rope, E again lets go (Tether); Q hangs the boxes in the air, H makes them heavy (BoxHang); the blue lift on the left rides up and down (Lift); the lookout on the wall turns red when something solid hides the player, coins don't (Lookout)",
           "Font": 0,
           "Font Size": 26,
           "Color": [

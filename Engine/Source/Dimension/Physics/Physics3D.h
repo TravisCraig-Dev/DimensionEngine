@@ -90,25 +90,37 @@ namespace Dimension
         void RefreshShape(Entity e);
         // Breaks a Breakable object into its pieces now, flying apart from `point` (world space). Returns the pieces.
         static std::vector<Entity> Break(Scene& scene, Entity e, const glm::vec3& point);
-        // Closest hit along a ray (direction need not be normalized). Triggers are hit too.
+        // Queries: hitTriggers false skips trigger colliders (as Unity's QueryTriggerInteraction.Ignore).
+        // Closest hit along a ray (direction need not be normalized).
         static RaycastHit Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                                  uint32_t layerMask = Physics::kDefaultQueryMask);
+                                  uint32_t layerMask = Physics::kDefaultQueryMask, bool hitTriggers = true);
         // Every body along a ray, nearest first (one hit per body; a ray starting inside a body hits it at distance 0).
         // everySurface: each surface crossed instead (a mesh's floors one above the other each give a hit).
         static std::vector<RaycastHit> RaycastAll(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                                                  uint32_t layerMask = Physics::kDefaultQueryMask, bool everySurface = false);
-        // The first collider a sphere / an oriented box meets when moved along `direction` up to maxDistance (like a thick
-        // ray): Point is where they touch, Normal the surface's there, Distance how far the shape moved. A collider the
-        // shape starts inside is hit at distance 0.
+                                                  uint32_t layerMask = Physics::kDefaultQueryMask, bool everySurface = false,
+                                                  bool hitTriggers = true);
+        // The first collider a sphere / an oriented box / a capsule (from point1 to point2, the centers of its ends) meets
+        // when moved along `direction` up to maxDistance (like a thick ray): Point is where they touch, Normal the
+        // surface's there, Distance how far the shape moved. A collider the shape starts inside is hit at distance 0.
         static RaycastHit SphereCast(Scene& scene, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance,
-                                     uint32_t layerMask = Physics::kDefaultQueryMask);
+                                     uint32_t layerMask = Physics::kDefaultQueryMask, bool hitTriggers = true);
         static RaycastHit BoxCast(Scene& scene, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation,
-                                  const glm::vec3& direction, float maxDistance, uint32_t layerMask = Physics::kDefaultQueryMask);
-        // Entities whose colliders overlap a sphere / an oriented box.
+                                  const glm::vec3& direction, float maxDistance, uint32_t layerMask = Physics::kDefaultQueryMask,
+                                  bool hitTriggers = true);
+        static RaycastHit CapsuleCast(Scene& scene, const glm::vec3& point1, const glm::vec3& point2, float radius, const glm::vec3& direction,
+                                      float maxDistance, uint32_t layerMask = Physics::kDefaultQueryMask, bool hitTriggers = true);
+        // Entities whose colliders overlap a sphere / an oriented box / a capsule.
         static std::vector<Entity> OverlapSphere(Scene& scene, const glm::vec3& center, float radius,
-                                                 uint32_t layerMask = Physics::kDefaultQueryMask);
+                                                 uint32_t layerMask = Physics::kDefaultQueryMask, bool hitTriggers = true);
         static std::vector<Entity> OverlapBox(Scene& scene, const glm::vec3& center, const glm::vec3& halfExtents,
-                                              const glm::quat& rotation = glm::quat(1, 0, 0, 0), uint32_t layerMask = Physics::kDefaultQueryMask);
+                                              const glm::quat& rotation = glm::quat(1, 0, 0, 0), uint32_t layerMask = Physics::kDefaultQueryMask,
+                                              bool hitTriggers = true);
+        static std::vector<Entity> OverlapCapsule(Scene& scene, const glm::vec3& point1, const glm::vec3& point2, float radius,
+                                                  uint32_t layerMask = Physics::kDefaultQueryMask, bool hitTriggers = true);
+        // The point on the object's colliders nearest to `point` (the point itself when inside them); false without a body.
+        static bool ClosestPoint(Scene& scene, Entity e, const glm::vec3& point, glm::vec3& closest);
+        // The world box around the object's colliders now; false without a body.
+        static bool GetBounds(Scene& scene, Entity e, glm::vec3& min, glm::vec3& max);
 
         size_t GetJointCount() const;
 

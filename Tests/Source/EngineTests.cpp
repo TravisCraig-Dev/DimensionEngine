@@ -919,6 +919,98 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestPhysicsQueriesAndTriggers()
+    {
+        auto near3 = [](glm::vec3 a, glm::vec3 b, float eps) { return glm::distance(a, b) < eps; };
+        // 3D: a floor, a trigger box over its middle, and a crate further along +Z.
+        {
+            Scene scene("Queries3D");
+            auto& reg = scene.GetRegistry();
+            auto box = [&](const char* name, glm::vec3 at, glm::vec3 size, bool trigger) {
+                Entity e = scene.CreateEntity(name);
+                reg.Get<TransformComponent>(e).Position = at;
+                auto& c = reg.Emplace<BoxColliderComponent>(e);
+                c.Size = size;
+                c.IsTrigger = trigger;
+                return e;
+            };
+            Entity floor = box("Floor", { 0, -0.5f, 0 }, { 20, 1, 20 }, false);
+            Entity zone = box("Zone", { 0, 1, 0 }, { 1, 1, 1 }, true);
+            Entity crate = box("Crate", { 0, 1, 5 }, { 1, 1, 1 }, false);
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            Scene& s = *rt;
+            // A ray down through the trigger: it counts, or the floor is hit.
+            RaycastHit hit = Physics3DWorld::Raycast(s, { 0, 5, 0 }, { 0, -1, 0 }, 10.0f);
+            CHECK(hit.Hit == zone && Near(hit.Distance, 3.5f, 0.02f));
+            hit = Physics3DWorld::Raycast(s, { 0, 5, 0 }, { 0, -1, 0 }, 10.0f, Physics::kDefaultQueryMask, false);
+            CHECK(hit.Hit == floor && Near(hit.Distance, 5.0f, 0.02f));
+            CHECK(Physics3DWorld::RaycastAll(s, { 0, 5, 0 }, { 0, -1, 0 }, 10.0f, Physics::kDefaultQueryMask, false, false).size() == 1);
+            // A standing capsule moved along +Z meets the trigger first, else the crate.
+            hit = Physics3DWorld::CapsuleCast(s, { 0, 0.8f, -5 }, { 0, 1.6f, -5 }, 0.3f, { 0, 0, 1 }, 20.0f);
+            CHECK(hit.Hit == zone && Near(hit.Distance, 4.2f, 0.05f));
+            hit = Physics3DWorld::CapsuleCast(s, { 0, 0.8f, -5 }, { 0, 1.6f, -5 }, 0.3f, { 0, 0, 1 }, 20.0f, Physics::kDefaultQueryMask, false);
+            CHECK(hit.Hit == crate && Near(hit.Distance, 9.2f, 0.05f));
+            // A lying capsule (ends along X) fits between the trigger and crate; one reaching both overlaps both.
+            auto found = Physics3DWorld::OverlapCapsule(s, { -1, 1, 2.5f }, { 1, 1, 2.5f }, 0.4f);
+            CHECK(found.empty());
+            found = Physics3DWorld::OverlapCapsule(s, { 0, 1, 0 }, { 0, 1, 5 }, 0.2f);
+            CHECK(found.size() == 2);
+            found = Physics3DWorld::OverlapCapsule(s, { 0, 1, 0 }, { 0, 1, 5 }, 0.2f, Physics::kDefaultQueryMask, false);
+            CHECK(found.size() == 1 && found[0] == crate);
+            CHECK(Physics3DWorld::OverlapSphere(s, { 0, 1, 0 }, 0.2f, Physics::kDefaultQueryMask, false).empty());
+            // Closest point and bounds.
+            glm::vec3 c;
+            CHECK(Physics3DWorld::ClosestPoint(s, crate, { 0, 1, 10 }, c) && near3(c, { 0, 1, 5.5f }, 0.02f));
+            // (an edge: Jolt's boxes are rounded there by their convex radius, 5 cm)
+            CHECK(Physics3DWorld::ClosestPoint(s, crate, { 3, 3, 5 }, c) && near3(c, { 0.5f, 1.5f, 5 }, 0.04f));
+            CHECK(Physics3DWorld::ClosestPoint(s, crate, { 0.1f, 1.2f, 5 }, c) && near3(c, { 0.1f, 1.2f, 5 }, 1e-4f));
+            glm::vec3 lo, hi;
+            CHECK(Physics3DWorld::GetBounds(s, crate, lo, hi) && near3(lo, { -0.5f, 0.5f, 4.5f }, 0.05f) && near3(hi, { 0.5f, 1.5f, 5.5f }, 0.05f));
+            rt->OnRuntimeStop();
+        }
+        // 2D: the same with a trigger circle.
+        {
+            Scene scene("Queries2D");
+            auto& reg = scene.GetRegistry();
+            Entity ground = scene.CreateEntity("Ground");
+            reg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            reg.Emplace<BoxCollider2DComponent>(ground).Size = { 20, 1 };
+            Entity zone = scene.CreateEntity("Zone");
+            reg.Get<TransformComponent>(zone).Position = { 0, 1, 0 };
+            auto& cc = reg.Emplace<CircleCollider2DComponent>(zone);
+            cc.Radius = 0.5f;
+            cc.IsTrigger = true;
+            Entity crate = scene.CreateEntity("Crate");
+            reg.Get<TransformComponent>(crate).Position = { 5, 1, 0 };
+            reg.Emplace<BoxCollider2DComponent>(crate).Size = { 1, 1 };
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            Scene& s = *rt;
+            RaycastHit2D hit = Physics2DWorld::Raycast(s, { 0, 5 }, { 0, -1 }, 10.0f);
+            CHECK(hit.Hit == zone && Near(hit.Distance, 3.5f, 0.02f));
+            hit = Physics2DWorld::Raycast(s, { 0, 5 }, { 0, -1 }, 10.0f, ~(1u << 1), false);
+            CHECK(hit.Hit == ground && Near(hit.Distance, 5.0f, 0.02f));
+            hit = Physics2DWorld::CircleCast(s, { -5, 1 }, 0.25f, { 1, 0 }, 20.0f);
+            CHECK(hit.Hit == zone && Near(hit.Distance, 4.25f, 0.05f));
+            hit = Physics2DWorld::CircleCast(s, { -5, 1 }, 0.25f, { 1, 0 }, 20.0f, ~(1u << 1), false);
+            CHECK(hit.Hit == crate && Near(hit.Distance, 9.25f, 0.05f) && Near(hit.Point.x, 4.5f, 0.05f));
+            hit = Physics2DWorld::BoxCast(s, { 5, 5 }, { 0.25f, 0.25f }, 0.0f, { 0, -1 }, 10.0f);
+            CHECK(hit.Hit == crate && Near(hit.Distance, 3.25f, 0.05f));
+            CHECK(Physics2DWorld::OverlapCircle(s, { 0, 1 }, 0.2f).size() == 1 &&
+                  Physics2DWorld::OverlapCircle(s, { 0, 1 }, 0.2f, ~(1u << 1), false).empty());
+            CHECK(Physics2DWorld::OverlapPoint(s, { 0, 1 }, ~(1u << 1), false).empty());
+            glm::vec2 c;
+            CHECK(Physics2DWorld::ClosestPoint(s, crate, { 10, 1 }, c) && Near(c.x, 5.5f, 0.02f) && Near(c.y, 1.0f, 0.02f));
+            CHECK(Physics2DWorld::ClosestPoint(s, crate, { 5.2f, 1.1f }, c) && Near(c.x, 5.2f, 1e-4f) && Near(c.y, 1.1f, 1e-4f));
+            glm::vec2 lo, hi;
+            CHECK(Physics2DWorld::GetBounds(s, crate, lo, hi) && Near(lo.x, 4.5f, 0.05f) && Near(hi.y, 1.5f, 0.05f));
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestRigidbodySettingsWhilePlaying()
     {
         const float dt = 1.0f / 60.0f;
@@ -12604,6 +12696,7 @@ int main(int argc, char** argv)
     Run("Camera switching", TestCameraSwitching);
     Run("Joint rebuild while playing", TestJointRebuildWhilePlaying);
     Run("Rigidbody settings while playing", TestRigidbodySettingsWhilePlaying);
+    Run("Physics queries and triggers", TestPhysicsQueriesAndTriggers);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

@@ -90,12 +90,58 @@ namespace Dimension
             return c;
         }
 
+        struct OverlapContext
+        {
+            std::vector<Entity> Found;
+            bool HitTriggers = true;
+        };
+
         bool CollectEntity(b2ShapeId shape, void* context)
         {
-            auto* out = static_cast<std::vector<Entity>*>(context);
+            auto& c = *static_cast<OverlapContext*>(context);
+            if (!c.HitTriggers && b2Shape_IsSensor(shape)) return true;
             Entity e = UnpackEntity(b2Shape_GetUserData(shape));
-            if (std::find(out->begin(), out->end(), e) == out->end()) out->push_back(e);
+            if (std::find(c.Found.begin(), c.Found.end(), e) == c.Found.end()) c.Found.push_back(e);
             return true;
+        }
+
+        // The nearest hit of a ray (proxy null) or a swept shape, skipping triggers unless they count.
+        RaycastHit2D CastClosest(uint32_t worldId, const b2ShapeProxy* proxy, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
+                                 uint32_t layerMask, bool hitTriggers)
+        {
+            struct Context { RaycastHit2D Hit; float Fraction = 2.0f; bool HitTriggers; } ctx{ {}, 2.0f, hitTriggers };
+            RaycastHit2D none;
+            float len = glm::length(direction);
+            if (len <= 0.0f) return none;
+            glm::vec2 translation = direction / len * maxDistance;
+            auto closest = [](b2ShapeId shape, b2Vec2 point, b2Vec2 normal, float fraction, void* context) -> float {
+                auto& c = *static_cast<Context*>(context);
+                if (!c.HitTriggers && b2Shape_IsSensor(shape)) return -1.0f; // ignore it, go on
+                if (fraction < c.Fraction)
+                {
+                    c.Fraction = fraction;
+                    c.Hit = { UnpackEntity(b2Shape_GetUserData(shape)), { point.x, point.y }, { normal.x, normal.y }, 0.0f };
+                }
+                return fraction; // only nearer ones from here
+            };
+            b2WorldId world = LoadWorld(worldId);
+            if (proxy) b2World_CastShape(world, proxy, { translation.x, translation.y }, MaskQuery(layerMask), closest, &ctx);
+            else b2World_CastRay(world, { origin.x, origin.y }, { translation.x, translation.y }, MaskQuery(layerMask), closest, &ctx);
+            if (ctx.Fraction > 1.0f) return none;
+            ctx.Hit.Distance = ctx.Fraction * maxDistance;
+            return ctx.Hit;
+        }
+
+        // A box's corners, turned `angle` about its center.
+        void BoxCorners(const glm::vec2& center, const glm::vec2& halfExtents, float angle, b2Vec2 (&points)[4])
+        {
+            float c = std::cos(angle), s = std::sin(angle);
+            const glm::vec2 corners[4] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
+            for (int i = 0; i < 4; ++i)
+            {
+                glm::vec2 p = corners[i] * halfExtents;
+                points[i] = { center.x + p.x * c - p.y * s, center.y + p.x * s + p.y * c };
+            }
         }
     }
 
@@ -842,15 +888,16 @@ namespace Dimension
     }
 
     std::vector<RaycastHit2D> Physics2DWorld::RaycastAll(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
-                                                         uint32_t layerMask)
+                                                         uint32_t layerMask, bool hitTriggers)
     {
-        struct Context { std::vector<RaycastHit2D> Hits; float MaxDistance; } ctx{ {}, maxDistance };
+        struct Context { std::vector<RaycastHit2D> Hits; float MaxDistance; bool HitTriggers; } ctx{ {}, maxDistance, hitTriggers };
         Physics2DWorld* world = scene.GetPhysics2D();
         float len = glm::length(direction);
         if (!world || len <= 0.0f) return {};
         glm::vec2 translation = direction / len * maxDistance;
         auto collect = [](b2ShapeId shape, b2Vec2 point, b2Vec2 normal, float fraction, void* context) -> float {
             auto& c = *static_cast<Context*>(context);
+            if (!c.HitTriggers && b2Shape_IsSensor(shape)) return 1.0f;
             RaycastHit2D hit{ UnpackEntity(b2Shape_GetUserData(shape)), { point.x, point.y }, { normal.x, normal.y }, fraction * c.MaxDistance };
             auto same = std::find_if(c.Hits.begin(), c.Hits.end(), [&](const RaycastHit2D& h) { return h.Hit == hit.Hit; });
             if (same == c.Hits.end()) c.Hits.push_back(hit);
@@ -862,60 +909,114 @@ namespace Dimension
         return ctx.Hits;
     }
 
-    std::vector<Entity> Physics2DWorld::OverlapPoint(Scene& scene, const glm::vec2& point, uint32_t layerMask)
+    std::vector<Entity> Physics2DWorld::OverlapPoint(Scene& scene, const glm::vec2& point, uint32_t layerMask, bool hitTriggers)
     {
-        std::vector<Entity> out;
+        OverlapContext ctx{ {}, hitTriggers };
         Physics2DWorld* world = scene.GetPhysics2D();
-        if (!world) return out;
+        if (!world) return {};
         b2Vec2 p{ point.x, point.y };
         b2ShapeProxy proxy = b2MakeProxy(&p, 1, 0.0f);
-        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &out);
-        return out;
+        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &ctx);
+        return ctx.Found;
     }
 
-    RaycastHit2D Physics2DWorld::Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance, uint32_t layerMask)
+    RaycastHit2D Physics2DWorld::Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance, uint32_t layerMask,
+                                         bool hitTriggers)
     {
-        RaycastHit2D result;
         Physics2DWorld* world = scene.GetPhysics2D();
-        float len = glm::length(direction);
-        if (!world || len <= 0.0f) return result;
-        glm::vec2 translation = direction / len * maxDistance;
-        b2RayResult hit = b2World_CastRayClosest(LoadWorld(world->m_World), { origin.x, origin.y }, { translation.x, translation.y },
-                                                 MaskQuery(layerMask));
-        if (!hit.hit) return result;
-        result.Hit = UnpackEntity(b2Shape_GetUserData(hit.shapeId));
-        result.Point = { hit.point.x, hit.point.y };
-        result.Normal = { hit.normal.x, hit.normal.y };
-        result.Distance = hit.fraction * maxDistance;
-        return result;
+        if (!world) return {};
+        return CastClosest(world->m_World, nullptr, origin, direction, maxDistance, layerMask, hitTriggers);
     }
 
-    std::vector<Entity> Physics2DWorld::OverlapCircle(Scene& scene, const glm::vec2& center, float radius, uint32_t layerMask)
+    RaycastHit2D Physics2DWorld::CircleCast(Scene& scene, const glm::vec2& center, float radius, const glm::vec2& direction, float maxDistance,
+                                            uint32_t layerMask, bool hitTriggers)
     {
-        std::vector<Entity> out;
         Physics2DWorld* world = scene.GetPhysics2D();
-        if (!world) return out;
+        if (!world) return {};
         b2Vec2 c{ center.x, center.y };
         b2ShapeProxy proxy = b2MakeProxy(&c, 1, std::max(radius, 1e-4f));
-        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &out);
-        return out;
+        return CastClosest(world->m_World, &proxy, center, direction, maxDistance, layerMask, hitTriggers);
     }
 
-    std::vector<Entity> Physics2DWorld::OverlapBox(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle, uint32_t layerMask)
+    RaycastHit2D Physics2DWorld::BoxCast(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle, const glm::vec2& direction,
+                                         float maxDistance, uint32_t layerMask, bool hitTriggers)
     {
-        std::vector<Entity> out;
         Physics2DWorld* world = scene.GetPhysics2D();
-        if (!world) return out;
-        float c = std::cos(angle), s = std::sin(angle);
+        if (!world) return {};
         b2Vec2 points[4];
-        const glm::vec2 corners[4] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
-        for (int i = 0; i < 4; ++i)
-        {
-            glm::vec2 p = corners[i] * halfExtents;
-            points[i] = { center.x + p.x * c - p.y * s, center.y + p.x * s + p.y * c };
-        }
+        BoxCorners(center, glm::max(halfExtents, glm::vec2(1e-4f)), angle, points);
         b2ShapeProxy proxy = b2MakeProxy(points, 4, 0.0f);
-        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &out);
-        return out;
+        return CastClosest(world->m_World, &proxy, center, direction, maxDistance, layerMask, hitTriggers);
+    }
+
+    std::vector<Entity> Physics2DWorld::OverlapCircle(Scene& scene, const glm::vec2& center, float radius, uint32_t layerMask, bool hitTriggers)
+    {
+        OverlapContext ctx{ {}, hitTriggers };
+        Physics2DWorld* world = scene.GetPhysics2D();
+        if (!world) return {};
+        b2Vec2 c{ center.x, center.y };
+        b2ShapeProxy proxy = b2MakeProxy(&c, 1, std::max(radius, 1e-4f));
+        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &ctx);
+        return ctx.Found;
+    }
+
+    std::vector<Entity> Physics2DWorld::OverlapBox(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle, uint32_t layerMask,
+                                                   bool hitTriggers)
+    {
+        OverlapContext ctx{ {}, hitTriggers };
+        Physics2DWorld* world = scene.GetPhysics2D();
+        if (!world) return {};
+        b2Vec2 points[4];
+        BoxCorners(center, halfExtents, angle, points);
+        b2ShapeProxy proxy = b2MakeProxy(points, 4, 0.0f);
+        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &ctx);
+        return ctx.Found;
+    }
+
+    bool Physics2DWorld::ClosestPoint(Scene& scene, Entity e, const glm::vec2& point, glm::vec2& closest)
+    {
+        b2BodyId body = BodyOf(scene, e);
+        if (B2_IS_NULL(body)) return false;
+        b2ShapeId shapes[16];
+        int n = b2Body_GetShapes(body, shapes, 16);
+        float best = std::numeric_limits<float>::max();
+        for (int i = 0; i < n; ++i)
+        {
+            if (b2Shape_TestPoint(shapes[i], { point.x, point.y }))
+            {
+                closest = point; // inside: the point itself
+                return true;
+            }
+            b2Vec2 p = b2Shape_GetClosestPoint(shapes[i], { point.x, point.y });
+            float d = (p.x - point.x) * (p.x - point.x) + (p.y - point.y) * (p.y - point.y);
+            if (d < best) { best = d; closest = { p.x, p.y }; }
+        }
+        return n > 0;
+    }
+
+    bool Physics2DWorld::GetBounds(Scene& scene, Entity e, glm::vec2& min, glm::vec2& max)
+    {
+        b2BodyId body = BodyOf(scene, e);
+        if (B2_IS_NULL(body)) return false;
+        b2ShapeId shapes[16];
+        int n = b2Body_GetShapes(body, shapes, 16);
+        b2Transform xf = b2Body_GetTransform(body);
+        for (int i = 0; i < n; ++i)
+        {
+            // The exact box (b2Shape_GetAABB's carries a speculative margin).
+            b2AABB box;
+            switch (b2Shape_GetType(shapes[i]))
+            {
+            case b2_circleShape: { b2Circle c = b2Shape_GetCircle(shapes[i]); box = b2ComputeCircleAABB(&c, xf); break; }
+            case b2_capsuleShape: { b2Capsule c = b2Shape_GetCapsule(shapes[i]); box = b2ComputeCapsuleAABB(&c, xf); break; }
+            case b2_polygonShape: { b2Polygon p = b2Shape_GetPolygon(shapes[i]); box = b2ComputePolygonAABB(&p, xf); break; }
+            case b2_segmentShape: { b2Segment g = b2Shape_GetSegment(shapes[i]); box = b2ComputeSegmentAABB(&g, xf); break; }
+            default: box = b2Shape_GetAABB(shapes[i]); break;
+            }
+            glm::vec2 lo(box.lowerBound.x, box.lowerBound.y), hi(box.upperBound.x, box.upperBound.y);
+            min = i == 0 ? lo : glm::min(min, lo);
+            max = i == 0 ? hi : glm::max(max, hi);
+        }
+        return n > 0;
     }
 }

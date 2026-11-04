@@ -23,6 +23,8 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollidePointResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
@@ -101,6 +103,17 @@ namespace Dimension
 
         private:
             uint32_t m_Mask;
+        };
+
+        // Query filter: skips trigger (sensor) bodies unless triggers count.
+        class TriggerFilter final : public JPH::BodyFilter
+        {
+        public:
+            explicit TriggerFilter(bool hitTriggers) : m_HitTriggers(hitTriggers) {}
+            bool ShouldCollideLocked(const JPH::Body& body) const override { return m_HitTriggers || !body.IsSensor(); }
+
+        private:
+            bool m_HitTriggers;
         };
 
         class BroadPhaseLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface
@@ -3274,7 +3287,7 @@ namespace Dimension
     {
         // A convex shape swept from `transform` along `direction` (normalized) * maxDistance: the first body it meets.
         RaycastHit CastShape(Scene& scene, const JPH::Shape& shape, const JPH::RMat44& transform, const glm::vec3& direction, float maxDistance,
-                             uint32_t layerMask)
+                             uint32_t layerMask, bool hitTriggers)
         {
             RaycastHit result;
             Physics3DWorld* world = scene.GetPhysics3D();
@@ -3286,7 +3299,8 @@ namespace Dimension
             JPH::ShapeCastSettings settings;
             settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
             JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-            impl->System.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(), collector, {}, LayerMaskFilter(layerMask));
+            impl->System.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(), collector, {}, LayerMaskFilter(layerMask),
+                                                         TriggerFilter(hitTriggers));
             if (!collector.HadHit()) return result;
             const JPH::ShapeCastResult& hit = collector.mHit;
             result.Hit = impl->Lookup(hit.mBodyID2);
@@ -3296,26 +3310,53 @@ namespace Dimension
             result.Normal = axis.LengthSq() > 1e-12f ? -FromJolt(axis.Normalized()) : -glm::normalize(sweep);
             return result;
         }
+
+        // A capsule from the center of one end to the other's: Jolt's capsules stand along Y about their middle. Ends
+        // at one point make a sphere.
+        JPH::Ref<JPH::Shape> CapsuleBetween(const glm::vec3& p1, const glm::vec3& p2, float radius, JPH::RMat44& transform)
+        {
+            glm::vec3 axis = p2 - p1;
+            float length = glm::length(axis);
+            radius = std::max(radius, 1e-4f);
+            glm::vec3 middle = (p1 + p2) * 0.5f;
+            if (length < 1e-5f)
+            {
+                transform = JPH::RMat44::sTranslation(JPH::RVec3(ToJolt(middle)));
+                return new JPH::SphereShape(radius);
+            }
+            glm::quat turn = glm::rotation(glm::vec3(0, 1, 0), axis / length);
+            transform = JPH::RMat44::sRotationTranslation(ToJolt(turn), JPH::RVec3(ToJolt(middle)));
+            return new JPH::CapsuleShape(length * 0.5f, radius);
+        }
     }
 
     RaycastHit Physics3DWorld::SphereCast(Scene& scene, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance,
-                                          uint32_t layerMask)
+                                          uint32_t layerMask, bool hitTriggers)
     {
         JPH::Ref<JPH::SphereShape> sphere = new JPH::SphereShape(std::max(radius, 1e-4f));
-        return CastShape(scene, *sphere, JPH::RMat44::sTranslation(JPH::RVec3(ToJolt(origin))), direction, maxDistance, layerMask);
+        return CastShape(scene, *sphere, JPH::RMat44::sTranslation(JPH::RVec3(ToJolt(origin))), direction, maxDistance, layerMask, hitTriggers);
+    }
+
+    RaycastHit Physics3DWorld::CapsuleCast(Scene& scene, const glm::vec3& point1, const glm::vec3& point2, float radius, const glm::vec3& direction,
+                                           float maxDistance, uint32_t layerMask, bool hitTriggers)
+    {
+        JPH::RMat44 transform;
+        JPH::Ref<JPH::Shape> capsule = CapsuleBetween(point1, point2, radius, transform);
+        return CastShape(scene, *capsule, transform, direction, maxDistance, layerMask, hitTriggers);
     }
 
     RaycastHit Physics3DWorld::BoxCast(Scene& scene, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation,
-                                       const glm::vec3& direction, float maxDistance, uint32_t layerMask)
+                                       const glm::vec3& direction, float maxDistance, uint32_t layerMask, bool hitTriggers)
     {
         glm::vec3 half = glm::max(halfExtents, glm::vec3(1e-3f));
         float convex = std::min(JPH::cDefaultConvexRadius, std::min(half.x, std::min(half.y, half.z)) * 0.5f);
         JPH::Ref<JPH::BoxShape> box = new JPH::BoxShape(ToJolt(half), convex);
         return CastShape(scene, *box, JPH::RMat44::sRotationTranslation(ToJolt(rotation), JPH::RVec3(ToJolt(center))), direction, maxDistance,
-                         layerMask);
+                         layerMask, hitTriggers);
     }
 
-    RaycastHit Physics3DWorld::Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask)
+    RaycastHit Physics3DWorld::Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask,
+                                       bool hitTriggers)
     {
         RaycastHit result;
         Physics3DWorld* world = scene.GetPhysics3D();
@@ -3325,7 +3366,7 @@ namespace Dimension
         auto& system = world->GetImpl()->System;
         JPH::RRayCast ray(JPH::RVec3(ToJolt(origin)), ToJolt(dir));
         JPH::RayCastResult hit;
-        if (!system.GetNarrowPhaseQuery().CastRay(ray, hit, {}, LayerMaskFilter(layerMask))) return result;
+        if (!system.GetNarrowPhaseQuery().CastRay(ray, hit, {}, LayerMaskFilter(layerMask), TriggerFilter(hitTriggers))) return result;
         result.Hit = world->GetImpl()->Lookup(hit.mBodyID);
         result.Distance = hit.mFraction * maxDistance;
         result.Point = origin + dir * hit.mFraction;
@@ -3336,7 +3377,7 @@ namespace Dimension
     }
 
     std::vector<RaycastHit> Physics3DWorld::RaycastAll(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                                                       uint32_t layerMask, bool everySurface)
+                                                       uint32_t layerMask, bool everySurface, bool hitTriggers)
     {
         std::vector<RaycastHit> out;
         Physics3DWorld* world = scene.GetPhysics3D();
@@ -3346,7 +3387,7 @@ namespace Dimension
         auto& system = world->GetImpl()->System;
         JPH::RRayCast ray(JPH::RVec3(ToJolt(origin)), ToJolt(dir));
         JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
-        system.GetNarrowPhaseQuery().CastRay(ray, JPH::RayCastSettings(), collector, {}, LayerMaskFilter(layerMask));
+        system.GetNarrowPhaseQuery().CastRay(ray, JPH::RayCastSettings(), collector, {}, LayerMaskFilter(layerMask), TriggerFilter(hitTriggers));
         collector.Sort();
         for (const JPH::RayCastResult& hit : collector.mHits)
         {
@@ -3365,7 +3406,7 @@ namespace Dimension
 
     namespace
     {
-        std::vector<Entity> CollideWith(Scene& scene, const JPH::Shape& shape, const JPH::RMat44& transform, uint32_t layerMask)
+        std::vector<Entity> CollideWith(Scene& scene, const JPH::Shape& shape, const JPH::RMat44& transform, uint32_t layerMask, bool hitTriggers)
         {
             std::vector<Entity> out;
             Physics3DWorld* world = scene.GetPhysics3D();
@@ -3374,7 +3415,7 @@ namespace Dimension
             JPH::CollideShapeSettings settings;
             JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
             impl->System.GetNarrowPhaseQuery().CollideShape(&shape, JPH::Vec3::sReplicate(1.0f), transform, settings, JPH::RVec3::sZero(),
-                                                            collector, {}, LayerMaskFilter(layerMask));
+                                                            collector, {}, LayerMaskFilter(layerMask), TriggerFilter(hitTriggers));
             for (auto& hit : collector.mHits)
             {
                 Entity e = impl->Lookup(hit.mBodyID2);
@@ -3384,19 +3425,69 @@ namespace Dimension
         }
     }
 
-    std::vector<Entity> Physics3DWorld::OverlapSphere(Scene& scene, const glm::vec3& center, float radius, uint32_t layerMask)
+    std::vector<Entity> Physics3DWorld::OverlapSphere(Scene& scene, const glm::vec3& center, float radius, uint32_t layerMask, bool hitTriggers)
     {
         JPH::Ref<JPH::SphereShape> sphere = new JPH::SphereShape(std::max(radius, 1e-4f));
-        return CollideWith(scene, *sphere, JPH::RMat44::sTranslation(JPH::RVec3(ToJolt(center))), layerMask);
+        return CollideWith(scene, *sphere, JPH::RMat44::sTranslation(JPH::RVec3(ToJolt(center))), layerMask, hitTriggers);
+    }
+
+    std::vector<Entity> Physics3DWorld::OverlapCapsule(Scene& scene, const glm::vec3& point1, const glm::vec3& point2, float radius,
+                                                       uint32_t layerMask, bool hitTriggers)
+    {
+        JPH::RMat44 transform;
+        JPH::Ref<JPH::Shape> capsule = CapsuleBetween(point1, point2, radius, transform);
+        return CollideWith(scene, *capsule, transform, layerMask, hitTriggers);
+    }
+
+    bool Physics3DWorld::GetBounds(Scene& scene, Entity e, glm::vec3& min, glm::vec3& max)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (!BodyFor(scene, e, bi, id) || !bi->IsAdded(id)) return false;
+        JPH::AABox box = bi->GetTransformedShape(id).GetWorldSpaceBounds();
+        min = FromJolt(box.mMin);
+        max = FromJolt(box.mMax);
+        return true;
+    }
+
+    bool Physics3DWorld::ClosestPoint(Scene& scene, Entity e, const glm::vec3& point, glm::vec3& closest)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (!BodyFor(scene, e, bi, id) || !bi->IsAdded(id)) return false;
+        JPH::TransformedShape shape = bi->GetTransformedShape(id);
+        JPH::RVec3 at(ToJolt(point));
+        JPH::AnyHitCollisionCollector<JPH::CollidePointCollector> inside;
+        shape.CollidePoint(at, inside);
+        if (inside.HadHit())
+        {
+            closest = point;
+            return true;
+        }
+        // A tiny sphere at the point against the shape, reaching out as far as the shape could be: the contact on the
+        // shape that is least far away is the nearest point.
+        JPH::AABox box = shape.GetWorldSpaceBounds();
+        JPH::Ref<JPH::SphereShape> probe = new JPH::SphereShape(1e-4f);
+        JPH::CollideShapeSettings settings;
+        settings.mMaxSeparationDistance = glm::distance(point, FromJolt(box.GetCenter())) + glm::length(FromJolt(box.GetExtent())) + 1.0f;
+        settings.mBackFaceMode = JPH::EBackFaceMode::CollideWithBackFaces;
+        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> hits;
+        shape.CollideShape(probe, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sTranslation(at), settings, JPH::RVec3::sZero(), hits);
+        if (!hits.HadHit()) return false;
+        const JPH::CollideShapeResult* best = &hits.mHits[0];
+        for (const auto& hit : hits.mHits)
+            if (hit.mPenetrationDepth > best->mPenetrationDepth) best = &hit;
+        closest = FromJolt(best->mContactPointOn2);
+        return true;
     }
 
     std::vector<Entity> Physics3DWorld::OverlapBox(Scene& scene, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation,
-                                                   uint32_t layerMask)
+                                                   uint32_t layerMask, bool hitTriggers)
     {
         glm::vec3 half = glm::max(halfExtents, glm::vec3(1e-3f));
         float convex = std::min(JPH::cDefaultConvexRadius, std::min(half.x, std::min(half.y, half.z)) * 0.5f);
         JPH::Ref<JPH::BoxShape> box = new JPH::BoxShape(ToJolt(half), convex);
-        return CollideWith(scene, *box, JPH::RMat44::sRotationTranslation(ToJolt(rotation), JPH::RVec3(ToJolt(center))), layerMask);
+        return CollideWith(scene, *box, JPH::RMat44::sRotationTranslation(ToJolt(rotation), JPH::RVec3(ToJolt(center))), layerMask, hitTriggers);
     }
 
     namespace

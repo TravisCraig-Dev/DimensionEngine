@@ -243,6 +243,25 @@ namespace Dimension
         public float Friction { get => GetFloat("Friction"); set => Set("Friction", value); }
         /// <summary>How much of the speed it keeps off a hit (0 a thud, 1 a full bounce).</summary>
         public float Bounciness { get => GetFloat("Bounciness"); set => Set("Bounciness", value); }
+
+        /// <summary>The point on the object's colliders nearest to `position` (`position` itself when inside them; while
+        /// playing).</summary>
+        public Vector3 ClosestPoint(Vector3 position)
+        {
+            float* v = stackalloc float[6] { position.X, position.Y, position.Z, 0, 0, 0 };
+            return Native.Api.ColliderQuery(Entity.Scene, Entity.Id, 0, v) != 0 ? new Vector3(v[0], v[1], v[2]) : position;
+        }
+        /// <summary>The world box around the object's colliders now (while playing; empty at its position otherwise).</summary>
+        public Bounds Bounds
+        {
+            get
+            {
+                float* v = stackalloc float[6];
+                return Native.Api.ColliderQuery(Entity.Scene, Entity.Id, 1, v) != 0
+                    ? Bounds.FromMinMax(new Vector3(v[0], v[1], v[2]), new Vector3(v[3], v[4], v[5]))
+                    : new Bounds(Transform.WorldPosition, Vector3.Zero);
+            }
+        }
     }
     public class BoxCollider : Collider
     {
@@ -288,6 +307,25 @@ namespace Dimension
         /// <summary>Mass per square meter (the body's mass follows its shapes').</summary>
         public float Density { get => GetFloat("Density"); set => Set("Density", value); }
         public Vector2 Offset { get => GetVector2("Offset"); set { SetVector2("Offset", value); Changed(); } }
+
+        /// <summary>The point on the object's colliders nearest to `position` (`position` itself when inside one).</summary>
+        public Vector2 ClosestPoint(Vector2 position)
+        {
+            float* v = stackalloc float[4] { position.X, position.Y, 0, 0 };
+            return Native.Api.ColliderQuery(Entity.Scene, Entity.Id, 2, v) != 0 ? new Vector2(v[0], v[1]) : position;
+        }
+        /// <summary>The world box around the object's colliders now (z: 0 thick, at the object's depth).</summary>
+        public Bounds Bounds
+        {
+            get
+            {
+                float* v = stackalloc float[4];
+                float z = Transform.WorldPosition.Z;
+                return Native.Api.ColliderQuery(Entity.Scene, Entity.Id, 3, v) != 0
+                    ? Bounds.FromMinMax(new Vector3(v[0], v[1], z), new Vector3(v[2], v[3], z))
+                    : new Bounds(Transform.WorldPosition, Vector3.Zero);
+            }
+        }
     }
     public class BoxCollider2D : Collider2D
     {
