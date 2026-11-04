@@ -92,6 +92,9 @@ namespace Dimension
                 for (auto& a : j.value("inputActions", nlohmann::json::array()))
                 {
                     InputAction action{ a.value("name", std::string()), a.value("axis", false), a.value("deadZone", 0.15f), {} };
+                    action.Sensitivity = a.value("sensitivity", 0.0f);
+                    action.Gravity = a.value("gravity", 0.0f);
+                    action.Snap = a.value("snap", false);
                     for (auto& b : a.value("bindings", nlohmann::json::array()))
                     {
                         std::string kind = b.value("kind", std::string("key"));
@@ -165,7 +168,9 @@ namespace Dimension
                                                                               : "key";
                 bindings.push_back({ { "kind", kind }, { "code", b.Code }, { "control", InputActions::ControlName(b.Type, b.Code) }, { "scale", b.Scale } });
             }
-            inputActions.push_back({ { "name", a.Name }, { "axis", a.Axis }, { "deadZone", a.DeadZone }, { "bindings", bindings } });
+            nlohmann::json action{ { "name", a.Name }, { "axis", a.Axis }, { "deadZone", a.DeadZone }, { "bindings", bindings } };
+            if (a.Sensitivity > 0.0f) action["sensitivity"] = a.Sensitivity, action["gravity"] = a.Gravity, action["snap"] = a.Snap;
+            inputActions.push_back(action);
         }
         nlohmann::json defaultPresets = nlohmann::json::object();
         for (auto& [component, preset] : s_Config.DefaultPresets) defaultPresets[component] = (uint64_t)preset;

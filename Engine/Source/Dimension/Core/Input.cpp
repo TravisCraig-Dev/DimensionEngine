@@ -18,12 +18,14 @@ namespace Dimension
         std::array<bool, 8> s_Mouse{}, s_PrevMouse{};
         glm::vec2 s_MousePos{}, s_PrevMousePos{};
         float s_Scroll = 0.0f, s_ScrollAccum = 0.0f;
+        float s_ScrollX = 0.0f, s_ScrollXAccum = 0.0f;
         bool s_GameInput = true;
         bool s_UICapture = false;
         CursorMode s_CursorRequested = CursorMode::Normal, s_CursorApplied = CursorMode::Normal;
         bool s_CursorReleased = false;
         bool KeyboardOpen() { return s_GameInput && !s_UICapture; }
         std::string s_TypedAccum, s_Typed;
+        std::string s_InputStringAccum, s_InputString; // typed text with \b and \n
         std::array<uint8_t, GLFW_KEY_LAST + 1> s_KeyTypedAccum{}, s_KeyTyped{}; // presses + repeats this frame
         int s_ModsAccum = 0, s_Mods = 0; // modifiers seen with key presses this frame
         const std::string s_Empty;
@@ -174,8 +176,12 @@ namespace Dimension
         if (cursorChanged) s_PrevMousePos = s_MousePos;
         s_Scroll = s_ScrollAccum;
         s_ScrollAccum = 0.0f;
+        s_ScrollX = s_ScrollXAccum;
+        s_ScrollXAccum = 0.0f;
         s_Typed = std::move(s_TypedAccum);
         s_TypedAccum.clear();
+        s_InputString = std::move(s_InputStringAccum);
+        s_InputStringAccum.clear();
         s_KeyTyped = s_KeyTypedAccum;
         s_KeyTypedAccum.fill(0);
         s_Mods = s_ModsAccum;
@@ -219,9 +225,17 @@ namespace Dimension
     {
         return s_GameInput && IsGamepadConnected(pad) && s_Pads[pad].Buttons[(int)b] && !s_Pads[pad].PrevButtons[(int)b];
     }
+    bool Input::IsGamepadButtonReleased(GamepadButton b, int pad)
+    {
+        return s_GameInput && IsGamepadConnected(pad) && !s_Pads[pad].Buttons[(int)b] && s_Pads[pad].PrevButtons[(int)b];
+    }
     float Input::GetGamepadAxis(GamepadAxis a, int pad) { return s_GameInput && IsGamepadConnected(pad) ? s_Pads[pad].Axes[(int)a] : 0.0f; }
 
-    void Input::AddScroll(float dy) { s_ScrollAccum += dy; }
+    void Input::AddScroll(float dy, float dx)
+    {
+        s_ScrollAccum += dy;
+        s_ScrollXAccum += dx;
+    }
 
     void Input::AddKeyEvent(int key, int action, int mods)
     {
@@ -241,6 +255,11 @@ namespace Dimension
             }
         if (key >= 0 && key <= GLFW_KEY_LAST && (action == GLFW_PRESS || action == GLFW_REPEAT) && s_KeyTypedAccum[key] < 255)
             ++s_KeyTypedAccum[key];
+        if (action == GLFW_PRESS || action == GLFW_REPEAT)
+        {
+            if (key == GLFW_KEY_BACKSPACE) s_InputStringAccum += '\b';
+            else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) s_InputStringAccum += '\n';
+        }
     }
 
     std::string Input::GetClipboardText()
@@ -257,13 +276,16 @@ namespace Dimension
     void Input::AddChar(unsigned int cp)
     {
         // UTF-8 encode.
+        size_t from = s_TypedAccum.size();
         if (cp < 0x80) s_TypedAccum += (char)cp;
         else if (cp < 0x800) { s_TypedAccum += (char)(0xC0 | (cp >> 6)); s_TypedAccum += (char)(0x80 | (cp & 0x3F)); }
         else if (cp < 0x10000) { s_TypedAccum += (char)(0xE0 | (cp >> 12)); s_TypedAccum += (char)(0x80 | ((cp >> 6) & 0x3F)); s_TypedAccum += (char)(0x80 | (cp & 0x3F)); }
         else { s_TypedAccum += (char)(0xF0 | (cp >> 18)); s_TypedAccum += (char)(0x80 | ((cp >> 12) & 0x3F)); s_TypedAccum += (char)(0x80 | ((cp >> 6) & 0x3F)); s_TypedAccum += (char)(0x80 | (cp & 0x3F)); }
+        s_InputStringAccum.append(s_TypedAccum, from, std::string::npos);
     }
 
     const std::string& Input::GetTypedText() { return KeyboardOpen() ? s_Typed : s_Empty; }
+    const std::string& Input::GetInputString() { return KeyboardOpen() ? s_InputString : s_Empty; }
     void Input::SetKeyboardCapturedByUI(bool captured) { s_UICapture = captured; }
     bool Input::IsKeyboardCapturedByUI() { return s_UICapture; }
     void Input::SetGameInputEnabled(bool enabled)
@@ -285,6 +307,29 @@ namespace Dimension
 
     bool Input::IsKeyDown(Key key) { return KeyboardOpen() && s_Keys[(int)key]; }
     bool Input::IsKeyPressed(Key key) { return KeyboardOpen() && s_Keys[(int)key] && !s_PrevKeys[(int)key]; }
+    bool Input::IsKeyReleased(Key key) { return KeyboardOpen() && !s_Keys[(int)key] && s_PrevKeys[(int)key]; }
+    bool Input::IsAnyKeyDown()
+    {
+        if (!s_GameInput) return false;
+        if (KeyboardOpen() && std::any_of(s_Keys.begin(), s_Keys.end(), [](bool k) { return k; })) return true;
+        if (std::any_of(s_Mouse.begin(), s_Mouse.end(), [](bool m) { return m; })) return true;
+        for (const PadState& p : s_Pads)
+            if (p.Connected && std::any_of(p.Buttons.begin(), p.Buttons.end(), [](bool b) { return b; })) return true;
+        return false;
+    }
+    bool Input::IsAnyKeyPressed()
+    {
+        if (!s_GameInput) return false;
+        if (KeyboardOpen())
+            for (size_t k = 0; k < s_Keys.size(); ++k)
+                if (s_Keys[k] && !s_PrevKeys[k]) return true;
+        for (size_t b = 0; b < s_Mouse.size(); ++b)
+            if (s_Mouse[b] && !s_PrevMouse[b]) return true;
+        for (const PadState& p : s_Pads)
+            for (size_t b = 0; p.Connected && b < p.Buttons.size(); ++b)
+                if (p.Buttons[b] && !p.PrevButtons[b]) return true;
+        return false;
+    }
     int Input::GetModifiers()
     {
         if (!KeyboardOpen()) return 0;
@@ -298,9 +343,11 @@ namespace Dimension
     bool Input::IsKeyTyped(Key key) { return KeyboardOpen() && (s_KeyTyped[(int)key] > 0 || (s_Keys[(int)key] && !s_PrevKeys[(int)key])); }
     bool Input::IsMouseDown(MouseButton b) { return s_GameInput && s_Mouse[(int)b]; }
     bool Input::IsMousePressed(MouseButton b) { return s_GameInput && s_Mouse[(int)b] && !s_PrevMouse[(int)b]; }
+    bool Input::IsMouseReleased(MouseButton b) { return s_GameInput && !s_Mouse[(int)b] && s_PrevMouse[(int)b]; }
     void Input::SimulateMouseButton(MouseButton b, bool down) { s_Mouse[(int)b] = down; }
     void Input::SimulateKey(Key key, bool down) { s_Keys[(int)key] = down; }
     glm::vec2 Input::GetMousePosition() { return s_MousePos; }
     glm::vec2 Input::GetMouseDelta() { return s_MousePos - s_PrevMousePos; }
     float Input::GetScrollDelta() { return s_Scroll; }
+    glm::vec2 Input::GetScroll2D() { return { s_ScrollX, s_Scroll }; }
 }

@@ -15,6 +15,7 @@ namespace Dimension::InputActions
         struct State
         {
             float Value = 0.0f, Previous = 0.0f;
+            float Smoothed = 0.0f; // GetAxis of an action with a Sensitivity
         };
         std::unordered_map<std::string, State> s_States; // by lower-case name
         std::set<std::string> s_Warned;
@@ -85,21 +86,35 @@ namespace Dimension::InputActions
         return std::clamp(sum, -1.0f, 1.0f);
     }
 
-    void Update(const Source& source)
+    void Update(const Source& source, float dt)
     {
         std::unordered_map<std::string, State> next;
         for (const InputAction& a : Current())
         {
             std::string key = Lower(a.Name);
             State s;
-            if (auto it = s_States.find(key); it != s_States.end()) s.Previous = it->second.Value;
+            float smoothed = 0.0f;
+            if (auto it = s_States.find(key); it != s_States.end()) s.Previous = it->second.Value, smoothed = it->second.Smoothed;
             s.Value = Evaluate(a, source);
+            if (a.Axis && a.Sensitivity > 0.0f)
+            {
+                // Toward the controls' value while pushed (from 0 first if Snap and pushed the other way), else back to 0.
+                float target = s.Value;
+                if (a.Snap && target != 0.0f && smoothed != 0.0f && (target > 0.0f) != (smoothed > 0.0f)) smoothed = 0.0f;
+                float rate = target != 0.0f ? a.Sensitivity : std::max(a.Gravity, 0.0f);
+                float step = rate * std::max(dt, 0.0f);
+                if (target == 0.0f && a.Gravity <= 0.0f) smoothed = 0.0f; // no Gravity: let go at once
+                else smoothed = smoothed < target ? std::min(smoothed + step, target) : std::max(smoothed - step, target);
+            }
+            else
+                smoothed = s.Value;
+            s.Smoothed = smoothed;
             next[key] = s;
         }
         s_States = std::move(next);
     }
 
-    void Update()
+    void Update(float dt)
     {
         Source live;
         live.Down = [](InputBinding::Kind kind, int code) {
@@ -112,7 +127,7 @@ namespace Dimension::InputActions
             }
         };
         live.Axis = [](int code) { return Input::GetGamepadAxis((GamepadAxis)code); };
-        Update(live);
+        Update(live, dt);
     }
 
     bool GetButton(const std::string& name)
@@ -131,6 +146,11 @@ namespace Dimension::InputActions
         return s && s->Value == 0.0f && s->Previous != 0.0f;
     }
     float GetAxis(const std::string& name)
+    {
+        const State* s = Find(name);
+        return s ? s->Smoothed : 0.0f;
+    }
+    float GetAxisRaw(const std::string& name)
     {
         const State* s = Find(name);
         return s ? s->Value : 0.0f;

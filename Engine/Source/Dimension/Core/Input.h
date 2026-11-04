@@ -39,19 +39,26 @@ namespace Dimension
     public:
         static bool IsKeyDown(Key key);
         static bool IsKeyPressed(Key key); // went down this frame
+        static bool IsKeyReleased(Key key); // came up this frame
+        // Any key, mouse button or gamepad button held / gone down this frame (Unity's anyKey / anyKeyDown).
+        static bool IsAnyKeyDown();
+        static bool IsAnyKeyPressed();
         static bool IsKeyTyped(Key key);   // went down or auto-repeated this frame (text editing)
         // Modifiers held now or during any key press this frame (catches taps shorter than a frame).
         static int GetModifiers();
         static bool IsMouseDown(MouseButton button);
         static bool IsMousePressed(MouseButton button);
+        static bool IsMouseReleased(MouseButton button);
         static glm::vec2 GetMousePosition(); // window pixels, top-left origin
         static glm::vec2 GetMouseDelta();
         static float GetScrollDelta();
+        static glm::vec2 GetScroll2D(); // this frame's scroll: x sideways (tilt wheels, touchpads), y the wheel
         // Gamepads (up to 4, any controller SDL's mapping database knows). Sticks have a 0.15 dead zone.
         static bool IsGamepadConnected(int pad = 0);
         static std::string GetGamepadName(int pad = 0);
         static bool IsGamepadButtonDown(GamepadButton button, int pad = 0);
         static bool IsGamepadButtonPressed(GamepadButton button, int pad = 0); // went down this frame
+        static bool IsGamepadButtonReleased(GamepadButton button, int pad = 0); // came up this frame
         static float GetGamepadAxis(GamepadAxis axis, int pad = 0);
         // Rumble (XInput controllers): low-frequency (left, heavy) and high-frequency (right, light) motor speeds 0..1.
         // A positive duration stops it after that many seconds; 0 keeps it until changed. Silent while game input is off.
@@ -59,6 +66,9 @@ namespace Dimension
         static void StopAllVibration();
         // UTF-8 text typed this frame (respects the game-input gate).
         static const std::string& GetTypedText();
+        // This frame's typed text as Unity's Input.inputString has it: the characters, with '\b' for each Backspace and
+        // '\n' for each Enter (in order).
+        static const std::string& GetInputString();
         static std::string GetClipboardText();
         static void SetClipboardText(const std::string& text);
 
@@ -81,7 +91,7 @@ namespace Dimension
         // Engine-internal
         static void Init(GLFWwindow* window);
         static void NewFrame();
-        static void AddScroll(float dy);
+        static void AddScroll(float dy, float dx = 0.0f);
         static void AddChar(unsigned int codepoint);
         static void AddKeyEvent(int key, int action, int mods);
         // Raw access that ignores the game-input gate (editor tools).

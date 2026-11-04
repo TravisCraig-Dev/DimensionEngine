@@ -689,15 +689,34 @@ namespace Dimension
         public static bool GetButtonDown(string action) => Action(1, action) != 0.0f;
         /// <summary>The action was released this frame.</summary>
         public static bool GetButtonUp(string action) => Action(2, action) != 0.0f;
-        /// <summary>An axis action's value, -1..1 (e.g. "Horizontal": A/D, arrows and the left stick added up).</summary>
+        /// <summary>An axis action's value, -1..1 (e.g. "Horizontal": A/D, arrows and the left stick added up), smoothed
+        /// when the action has a Sensitivity (Project Settings > Input, as Unity's Input Manager smooths keys).</summary>
         public static float GetAxis(string action) => Action(3, action);
+        /// <summary>An axis action's value with no smoothing: what its controls say this frame.</summary>
+        public static float GetAxisRaw(string action) => Action(4, action);
+
+        private static float Query(int op, int code = 0, int pad = 0) => Native.Api.InputQuery(op, code, pad);
 
         public static bool GetKey(KeyCode key) => Native.Api.IsKeyDown((int)key) != 0;
         public static bool GetKeyDown(KeyCode key) => Native.Api.IsKeyPressed((int)key) != 0;
+        /// <summary>Whether the key came up this frame.</summary>
+        public static bool GetKeyUp(KeyCode key) => Query(0, (int)key) != 0.0f;
+        /// <summary>Any key, mouse button or gamepad button held.</summary>
+        public static bool AnyKey => Query(3) != 0.0f;
+        /// <summary>Any key, mouse button or gamepad button went down this frame ("press any key").</summary>
+        public static bool AnyKeyDown => Query(4) != 0.0f;
+        /// <summary>The text typed this frame, as the keyboard layout makes it, with '\b' for each Backspace and '\n' for
+        /// each Enter (empty while a UI text field has the keyboard).</summary>
+        public static string InputString => Native.FromUtf8(Native.Api.InputText(0, 0)) ?? "";
+
         /// <summary>0 = left, 1 = right, 2 = middle.</summary>
         public static bool GetMouseButton(int button) => Native.Api.IsMouseDown(button) != 0;
         /// <summary>Whether the mouse button went down this frame.</summary>
         public static bool GetMouseButtonDown(int button) => Native.Api.IsMousePressed(button) != 0;
+        /// <summary>Whether the mouse button came up this frame.</summary>
+        public static bool GetMouseButtonUp(int button) => Query(1, button) != 0.0f;
+        /// <summary>This frame's scrolling: y the wheel (positive away from you), x sideways (tilt wheels, touchpads).</summary>
+        public static Vector2 MouseScrollDelta => new(Query(5), Query(6));
         /// <summary>The mouse in pixels, top-left origin: in the view the game is shown in while playing (the Game view
         /// in the editor, so it matches Camera.ScreenPointToRay and the UI), in the window otherwise.</summary>
         public static Vector2 MousePosition
@@ -720,6 +739,21 @@ namespace Dimension
         public static bool GetGamepadButton(GamepadButton button, int pad = 0) => Native.Api.GamepadButton((int)button, pad, 0) != 0;
         /// <summary>Gamepad button went down this frame.</summary>
         public static bool GetGamepadButtonDown(GamepadButton button, int pad = 0) => Native.Api.GamepadButton((int)button, pad, 1) != 0;
+        /// <summary>Gamepad button came up this frame.</summary>
+        public static bool GetGamepadButtonUp(GamepadButton button, int pad = 0) => Query(2, (int)button, pad) != 0.0f;
+        /// <summary>Whether a gamepad is plugged in as pad 0-3.</summary>
+        public static bool IsGamepadConnected(int pad = 0) => Query(7, 0, pad) != 0.0f;
+        /// <summary>A pad's name ("" when none is connected there).</summary>
+        public static string GetGamepadName(int pad = 0) => Native.FromUtf8(Native.Api.InputText(1, pad)) ?? "";
+        /// <summary>The names of pads 0-3, "" for each slot with none (as Unity's GetJoystickNames).</summary>
+        public static string[] GetJoystickNames()
+        {
+            var names = new string[(int)Query(8)];
+            for (int i = 0; i < names.Length; ++i) names[i] = GetGamepadName(i);
+            return names;
+        }
+        /// <summary>How many pads are connected.</summary>
+        public static int GamepadCount { get { int n = 0; for (int i = 0, max = (int)Query(8); i < max; ++i) n += IsGamepadConnected(i) ? 1 : 0; return n; } }
         /// <summary>Sticks -1..1 (+Y is down) with a dead zone; triggers 0..1.</summary>
         public static float GetGamepadAxis(GamepadAxis axis, int pad = 0) => Native.Api.GamepadAxis((int)axis, pad);
         /// <summary>Rumble: low-frequency (heavy) and high-frequency (light) motor speeds 0..1. A positive duration

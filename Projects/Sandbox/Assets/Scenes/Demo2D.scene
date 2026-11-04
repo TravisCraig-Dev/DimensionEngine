@@ -98,6 +98,16 @@
                 "Heavy": 6.0
               },
               "Enabled": true
+            },
+            {
+              "Class": "Game.ScrollZoom",
+              "Fields": {
+                "Step": 0.12,
+                "Closest": 3.0,
+                "Farthest": 12.0,
+                "Ease": 10.0
+              },
+              "Enabled": true
             }
           ]
         }
@@ -1946,7 +1956,7 @@
           ]
         },
         "UI Text": {
-          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse); E ties the nearest box to the player on a rope, E again lets go (Tether); Q hangs the boxes in the air, H makes them heavy (BoxHang); the blue lift on the left rides up and down (Lift); the lookout on the wall turns red when something solid hides the player, coins don't (Lookout)",
+          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse); E ties the nearest box to the player on a rope, E again lets go (Tether); Q hangs the boxes in the air, H makes them heavy (BoxHang); the blue lift on the left rides up and down (Lift); the lookout on the wall turns red when something solid hides the player, coins don't (Lookout); the mouse wheel zooms, the middle button puts it back (ScrollZoom)",
           "Font": 0,
           "Font Size": 26,
           "Color": [

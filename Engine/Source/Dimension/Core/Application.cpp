@@ -106,7 +106,7 @@ namespace Dimension
             m_FrameTime = std::chrono::duration<float>(now - last).count();
             last = now;
             Input::NewFrame();
-            InputActions::Update(); // the named actions from this frame's input
+            InputActions::Update(m_FrameTime); // the named actions from this frame's input
             Profiler::BeginFrame();
 
             bool begun;

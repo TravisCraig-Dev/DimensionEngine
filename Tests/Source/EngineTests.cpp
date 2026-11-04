@@ -10888,19 +10888,42 @@ namespace
         CHECK(InputActions::Current().size() == defaults.size()); // none of its own yet: the defaults
         auto& config = Project::GetConfig();
         config.InputActions = { { "Dash", false, 0.15f, { { InputBinding::Kind::Key, (int)Key::LeftShift, 1.0f }, { InputBinding::Kind::GamepadButton, (int)GamepadButton::RightBumper, 1.0f } } },
-                                { "Turn", true, 0.25f, { { InputBinding::Kind::Key, (int)Key::E, 1.0f }, { InputBinding::Kind::Key, (int)Key::Q, -1.0f }, { InputBinding::Kind::GamepadAxis, (int)GamepadAxis::RightX, 0.5f } } } };
+                                { "Turn", true, 0.25f, { { InputBinding::Kind::Key, (int)Key::E, 1.0f }, { InputBinding::Kind::Key, (int)Key::Q, -1.0f }, { InputBinding::Kind::GamepadAxis, (int)GamepadAxis::RightX, 0.5f } } },
+                                { "Steer", true, 0.15f, { { InputBinding::Kind::Key, (int)Key::D, 1.0f }, { InputBinding::Kind::Key, (int)Key::A, -1.0f } }, 3.0f, 3.0f, true } };
         config.InputActionsSet = true;
         auto saved = config.InputActions;
         CHECK(Project::Save() && Project::Open(dir));
-        CHECK(Project::GetConfig().InputActionsSet && Project::GetConfig().InputActions == saved && InputActions::Current().size() == 2);
+        CHECK(Project::GetConfig().InputActionsSet && Project::GetConfig().InputActions == saved && InputActions::Current().size() == 3);
         held = { key(Key::Q) };
         axes[(int)GamepadAxis::RightX] = 1.0f;
         InputActions::Update(fake);
         CHECK(Near(InputActions::GetAxis("Turn"), -0.5f) && !InputActions::GetButton("Jump")); // Jump is not one of its actions now
+        // A smoothed axis (Sensitivity 3, Gravity 3, Snap): GetAxis ramps up at 3 per second, GetAxisRaw jumps.
+        held = { key(Key::D) };
+        InputActions::Update(fake, 0.1f);
+        CHECK(Near(InputActions::GetAxis("Steer"), 0.3f, 1e-4f) && InputActions::GetAxisRaw("Steer") == 1.0f);
+        for (int i = 0; i < 4; ++i) InputActions::Update(fake, 0.1f);
+        CHECK(InputActions::GetAxis("Steer") == 1.0f);
+        held = { key(Key::A) }; // the other way: snaps through 0
+        InputActions::Update(fake, 0.1f);
+        CHECK(Near(InputActions::GetAxis("Steer"), -0.3f, 1e-4f) && InputActions::GetAxisRaw("Steer") == -1.0f);
+        held.clear(); // let go: back to 0 at Gravity
+        InputActions::Update(fake, 0.05f);
+        CHECK(Near(InputActions::GetAxis("Steer"), -0.15f, 1e-4f) && InputActions::GetAxisRaw("Steer") == 0.0f);
+        InputActions::Update(fake, 0.1f);
+        CHECK(InputActions::GetAxis("Steer") == 0.0f);
+        // Not smoothed (no Sensitivity): GetAxis is GetAxisRaw.
+        held = { key(Key::E) };
+        InputActions::Update(fake, 0.1f);
+        CHECK(InputActions::GetAxis("Turn") == 1.0f && InputActions::GetAxisRaw("Turn") == 1.0f);
+        held = { key(Key::Q) };
+        axes[(int)GamepadAxis::RightX] = 1.0f;
+        InputActions::Update(fake);
         {
             std::ifstream in(dir / "Project.dproj");
             std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
             CHECK(text.find("\"control\": \"Left Shift\"") != std::string::npos); // readable in the file
+            CHECK(text.find("\"sensitivity\"") != std::string::npos); // only where smoothed: Steer
         }
         // Back to the defaults: none saved.
         Project::GetConfig().InputActions.clear();
@@ -10909,6 +10932,16 @@ namespace
         held.clear();
         InputActions::Update(fake);
         fs::remove_all(dir, ec);
+
+        // Any key: a key or a mouse button held.
+        CHECK(!Input::IsAnyKeyDown());
+        Input::SimulateKey(Key::K, true);
+        CHECK(Input::IsAnyKeyDown());
+        Input::SimulateKey(Key::K, false);
+        Input::SimulateMouseButton(MouseButton::Middle, true);
+        CHECK(Input::IsAnyKeyDown());
+        Input::SimulateMouseButton(MouseButton::Middle, false);
+        CHECK(!Input::IsAnyKeyDown());
     }
 
     // Search across scene files (the Search window): objects of scenes that are not open, by name, component, script

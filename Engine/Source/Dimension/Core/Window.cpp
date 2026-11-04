@@ -20,7 +20,7 @@ namespace Dimension
         if (spec.Fullscreen) SetFullscreen(true);
 
         // Installed before ImGui so its GLFW backend chains to these callbacks.
-        glfwSetScrollCallback(m_Window, [](GLFWwindow*, double, double dy) { Input::AddScroll((float)dy); });
+        glfwSetScrollCallback(m_Window, [](GLFWwindow*, double dx, double dy) { Input::AddScroll((float)dy, (float)dx); });
         glfwSetCharCallback(m_Window, [](GLFWwindow*, unsigned int cp) { Input::AddChar(cp); });
         glfwSetKeyCallback(m_Window, [](GLFWwindow*, int key, int, int action, int mods) { Input::AddKeyEvent(key, action, mods); });
         glfwSetDropCallback(m_Window, [](GLFWwindow* w, int count, const char** paths) {

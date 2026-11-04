@@ -3579,6 +3579,21 @@ namespace Editor
                 ImGui::SetItemTooltip("Gamepad axes below this count as 0 (the rest rescaled to the full range)");
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Remove Action")) removeAction = i;
+                if (a.Axis)
+                {
+                    ImGui::SetNextItemWidth(70.0f);
+                    edited |= ImGui::DragFloat("Sensitivity", &a.Sensitivity, 0.05f, 0.0f, 100.0f, "%.2f");
+                    ImGui::SetItemTooltip("Smoothing: GetAxis moves toward the controls' value at this many units per second (0: no smoothing; Unity's keys use 3)");
+                    ImGui::BeginDisabled(a.Sensitivity <= 0.0f);
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(70.0f);
+                    edited |= ImGui::DragFloat("Gravity", &a.Gravity, 0.05f, 0.0f, 100.0f, "%.2f");
+                    ImGui::SetItemTooltip("How fast it falls back to 0 once let go, per second (0: at once)");
+                    ImGui::SameLine();
+                    edited |= ImGui::Checkbox("Snap", &a.Snap);
+                    ImGui::SetItemTooltip("Pushed the other way, it jumps to 0 first instead of sliding through");
+                    ImGui::EndDisabled();
+                }
                 std::optional<size_t> removeBinding;
                 for (size_t b = 0; b < a.Bindings.size(); ++b)
                 {

@@ -176,6 +176,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, float*, float> RigidbodyOp;  // see Rigidbody in Components.cs
         public delegate* unmanaged<IntPtr, int, float*, float, uint, int, ulong*, float*, int, int> PhysicsQuery;  // see Physics in Api.cs
         public delegate* unmanaged<IntPtr, ulong, int, float*, int> ColliderQuery;
+        public delegate* unmanaged<int, int, int, float> InputQuery;  // see Input in Api.cs
+        public delegate* unmanaged<int, int, byte*> InputText;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

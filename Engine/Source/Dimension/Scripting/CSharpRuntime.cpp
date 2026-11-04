@@ -247,6 +247,11 @@ namespace Dimension
             int (*PhysicsQuery)(void*, int, const float*, float, uint32_t, int, uint64_t*, float*, int);
             // A collider's 0 closest point to v (3D), 1 bounds (min, max into v), 2 closest point (2D), 3 bounds (2D).
             int (*ColliderQuery)(void*, uint64_t, int, float*);
+            // Input: 0 key up (code), 1 mouse button up, 2 gamepad button up (code, pad), 3 any key held, 4 any key down,
+            // 5 scroll x, 6 scroll y, 7 gamepad connected (pad), 8 gamepads Input reads.
+            float (*InputQuery)(int, int, int);
+            // 0 this frame's typed text (with \b and \n), 1 a gamepad's name (pad); "" when none.
+            const char* (*InputText)(int, int);
         };
 
         // Background scene loads started from C#, by id.
@@ -1713,8 +1718,27 @@ namespace Dimension
                 case 0: return InputActions::GetButton(n) ? 1.0f : 0.0f;
                 case 1: return InputActions::GetButtonDown(n) ? 1.0f : 0.0f;
                 case 2: return InputActions::GetButtonUp(n) ? 1.0f : 0.0f;
+                case 4: return InputActions::GetAxisRaw(n);
                 default: return InputActions::GetAxis(n);
                 }
+            };
+            a.InputQuery = [](int op, int code, int pad) -> float {
+                switch (op)
+                {
+                case 0: return Input::IsKeyReleased((Key)code) ? 1.0f : 0.0f;
+                case 1: return code >= 0 && code < 8 && Input::IsMouseReleased((MouseButton)code) ? 1.0f : 0.0f;
+                case 2: return code >= 0 && code < 15 && Input::IsGamepadButtonReleased((GamepadButton)code, pad) ? 1.0f : 0.0f;
+                case 3: return Input::IsAnyKeyDown() ? 1.0f : 0.0f;
+                case 4: return Input::IsAnyKeyPressed() ? 1.0f : 0.0f;
+                case 5: return Input::IsGameInputEnabled() ? Input::GetScroll2D().x : 0.0f;
+                case 6: return Input::IsGameInputEnabled() ? Input::GetScroll2D().y : 0.0f;
+                case 7: return Input::IsGamepadConnected(pad) ? 1.0f : 0.0f;
+                default: return 4.0f;
+                }
+            };
+            a.InputText = [](int op, int pad) -> const char* {
+                s_StringReturn = op == 0 ? Input::GetInputString() : Input::GetGamepadName(pad);
+                return s_StringReturn.c_str();
             };
             a.DebugLine = [](const float* d) {
                 DebugDraw::Line({ d[0], d[1], d[2] }, { d[3], d[4], d[5] }, { d[6], d[7], d[8], d[9] }, d[10]);

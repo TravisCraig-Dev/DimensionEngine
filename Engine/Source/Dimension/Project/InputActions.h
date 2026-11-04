@@ -24,6 +24,12 @@ namespace Dimension
         bool Axis = false;
         float DeadZone = 0.15f; // gamepad axes: values below it count as 0 (the rest rescaled to 0..1)
         std::vector<InputBinding> Bindings;
+        // Axes, as Unity's Input Manager smooths them: GetAxis moves toward its controls' value at Sensitivity per second,
+        // and back to 0 at Gravity per second once they are let go; Snap jumps to 0 first when they push the other way.
+        // Sensitivity 0 (the default): no smoothing, GetAxis is GetAxisRaw.
+        float Sensitivity = 0.0f;
+        float Gravity = 0.0f;
+        bool Snap = false;
         bool operator==(const InputAction&) const = default;
     };
 
@@ -43,16 +49,18 @@ namespace Dimension
         };
         // An action's value: a button's 1 or 0, an axis's sum of its bindings (dead zone applied) clamped to -1..1.
         float Evaluate(const InputAction& action, const Source& source);
-        // Once a frame (after the input is read): every action sampled, keeping the last frame's for Down and Up.
-        void Update();                       // from the live input (Input::)
-        void Update(const Source& source);   // from another source (tests, replays)
+        // Once a frame (after the input is read): every action sampled, keeping the last frame's for Down and Up;
+        // dt (seconds since the last) advances smoothed axes.
+        void Update(float dt = 0.0f);                          // from the live input (Input::)
+        void Update(const Source& source, float dt = 0.0f);    // from another source (tests, replays)
 
         // This frame's state of an action by name (case-insensitive); unknown names read as not pressed / 0 (with a
         // warning, once per name).
         bool GetButton(const std::string& name);
         bool GetButtonDown(const std::string& name); // pressed this frame
         bool GetButtonUp(const std::string& name);   // released this frame
-        float GetAxis(const std::string& name);
+        float GetAxis(const std::string& name);    // smoothed when the action has a Sensitivity
+        float GetAxisRaw(const std::string& name); // the controls' value now, unsmoothed
 
         // Names for the Project Settings pickers (and the saved project file): keys, mouse and gamepad controls.
         const std::vector<std::pair<int, const char*>>& Controls(InputBinding::Kind kind);
