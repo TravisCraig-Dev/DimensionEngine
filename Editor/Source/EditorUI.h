@@ -51,6 +51,9 @@ namespace Editor::UI
     ImVec4 AccentBackground(float amount = 0.3f);
     ImVec4 AccentText();
     EditResult EntityField(const char* label, Entity& entity, Scene& scene);
+    // Only the objects `accept` takes (type label in the button: "None (Health)" for a script's field).
+    EditResult EntityField(const char* label, Entity& entity, Scene& scene, const std::function<bool(Entity)>& accept,
+                           const std::string& typeLabel);
     // Inline editors: drag keys, double-click to add, right-click a key to remove.
     EditResult CurveEditor(const char* id, Curve& curve, float height = 64.0f);
     EditResult GradientEditor(const char* id, Gradient& gradient);

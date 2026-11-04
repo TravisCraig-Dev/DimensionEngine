@@ -140,6 +140,8 @@ namespace Dimension
         void SetActive(Entity e, bool active);
         // Whether e and every parent are active (computed now, unlike TransformComponent::ActiveInHierarchy).
         bool IsActiveInHierarchy(Entity e) const;
+        // Adds a script to an object; while playing it starts at once (OnCreate, OnEnable). Null when the class is unknown.
+        ScriptableEntity* AddScript(Entity e, const std::string& className);
         // Turns one script on or off (its checkbox), with OnEnable / OnDisable while playing.
         void SetScriptEnabled(Entity e, size_t scriptIndex, bool enabled);
         // Gives e's scripts OnEnable / OnDisable where their state (playing, object active, script enabled) differs

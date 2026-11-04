@@ -228,6 +228,22 @@ namespace Dimension
             if (IsValid(x)) SyncScriptsEnabled(x); // a callback may destroy objects
     }
 
+    ScriptableEntity* Scene::AddScript(Entity e, const std::string& className)
+    {
+        const ScriptInfo* info = ScriptRegistry::Find(className);
+        if (!IsValid(e) || !info) return nullptr;
+        auto& sc = m_Registry.TryGet<ScriptComponent>(e) ? m_Registry.Get<ScriptComponent>(e) : m_Registry.Emplace<ScriptComponent>(e);
+        ScriptInstance& script = sc.Add(className);
+        if (!m_Running) return nullptr;
+        EntityRefResolver resolver;
+        resolver.FromGuid = [this](uint64_t g) { return FindEntityByGuid(Guid(g)); };
+        auto instance = CreateScriptInstance(e, script, *info, resolver); // `script` may move once OnCreate adds more
+        instance->OnBeforeCreate();
+        instance->OnCreate();
+        if (IsValid(e)) SyncScriptsEnabled(e);
+        return instance.get();
+    }
+
     void Scene::SetScriptEnabled(Entity e, size_t scriptIndex, bool enabled)
     {
         auto* sc = IsValid(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr;
@@ -401,6 +417,7 @@ namespace Dimension
             }
             created.push_back(CreateScriptInstance(s.E, script, *info, resolver));
         }
+        for (auto& inst : created) inst->OnBeforeCreate();
         for (auto& inst : created) inst->OnScriptsReloaded();
         for (auto& s : saved)
             if (IsValid(s.E)) SyncScriptsEnabled(s.E); // OnEnable again (listeners started over)
@@ -451,6 +468,7 @@ namespace Dimension
         }
         // OnCreate may create entities/scripts, so call after the iteration (in attachment order, like Awake), then
         // OnEnable for the scripts of active objects.
+        for (auto& inst : created) inst->OnBeforeCreate();
         for (auto& inst : created) inst->OnCreate();
         for (Entity e : owners)
             if (IsValid(e)) SyncScriptsEnabled(e);

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Dimension.Interop;
@@ -130,12 +131,18 @@ namespace Dimension
             if (entity.IsValid) entity.Destroy();
         }
 
-        public T GetComponent<T>() where T : Component, new() => Entity.GetComponent<T>();
-        public T GetComponentInChildren<T>(bool includeInactive = false) where T : Component, new() => Entity.GetComponentInChildren<T>(includeInactive);
-        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : Component, new() => Entity.GetComponentsInChildren<T>(includeInactive);
-        public T GetComponentInParent<T>() where T : Component, new() => Entity.GetComponentInParent<T>();
+        /// <summary>An engine component (Rigidbody, Camera, ...) or another script (a Behaviour class) on this object.</summary>
+        public T GetComponent<T>() where T : class => Entity.GetComponent<T>();
+        public T[] GetComponents<T>() where T : class => Entity.GetComponents<T>();
+        public T GetComponentInChildren<T>(bool includeInactive = false) where T : class => Entity.GetComponentInChildren<T>(includeInactive);
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : class => Entity.GetComponentsInChildren<T>(includeInactive);
+        public T GetComponentInParent<T>() where T : class => Entity.GetComponentInParent<T>();
+        public T AddComponent<T>() where T : class => Entity.AddComponent<T>();
+        /// <summary>The first active object's script or engine component of a type in this scene (null when none).</summary>
+        public T FindObjectOfType<T>(bool includeInactive = false) where T : class => Entity.FindObjectOfType<T>(includeInactive);
+        public T[] FindObjectsOfType<T>(bool includeInactive = false) where T : class => Entity.FindObjectsOfType<T>(includeInactive);
         public Component GetComponent(string componentName) => Entity.GetComponent(componentName);
-        public bool HasComponent<T>() where T : Component, new() => Entity.HasComponent<T>();
+        public bool HasComponent<T>() where T : class => Entity.HasComponent<T>();
         public Entity Find(string name) => Entity.Find(name);
         public Entity Instantiate(ulong prefabGuid, Vector3 position) => Entity.Instantiate(prefabGuid, position);
         public void Destroy(Entity entity) => entity.Destroy();
@@ -187,23 +194,70 @@ namespace Dimension
             var self = this;
             return Native.WithUtf8(componentName, p => Native.Api.HasComponent(self.Scene, self.Id, (byte*)p)) != 0;
         }
-        public bool HasComponent<T>() where T : Component, new() => HasComponent(new T().NativeName);
+        public bool HasComponent<T>() where T : class => GetComponent<T>() != null;
 
         /// <summary>Any component by its Inspector name (null if the entity has none), for its numeric fields.</summary>
         public Component GetComponent(string componentName) => HasComponent(componentName) ? new NamedComponent(componentName) { Entity = this } : null;
 
-        public T GetComponent<T>() where T : Component, new()
+        // T is an engine component (a Component class) or a script (a Behaviour class).
+        private static bool IsScript(Type t) => typeof(Behaviour).IsAssignableFrom(t);
+        private Component Wrapper(Type t)
         {
-            var c = new T { Entity = this };
-            return HasComponent(c.NativeName) ? c : null;
+            if (!typeof(Component).IsAssignableFrom(t) || t.IsAbstract)
+                throw new ArgumentException($"{t.Name} is neither an engine component nor a script (Behaviour)");
+            var c = (Component)Activator.CreateInstance(t);
+            c.Entity = this;
+            return c;
         }
 
-        public T AddComponent<T>() where T : Component, new()
+        /// <summary>An engine component (Rigidbody, Camera, ...) or a script of a type (a Behaviour class, or one deriving
+        /// from it) on this object; null when it has none.</summary>
+        public T GetComponent<T>() where T : class
         {
-            var c = new T { Entity = this };
+            if (IsScript(typeof(T))) return ScriptHost.ScriptsOf(this).OfType<T>().FirstOrDefault();
+            Component c = Wrapper(typeof(T));
+            return HasComponent(c.NativeName) ? (T)(object)c : null;
+        }
+
+        /// <summary>Every script of a type on this object (an engine component: the one, as it has at most one).</summary>
+        public T[] GetComponents<T>() where T : class =>
+            IsScript(typeof(T)) ? ScriptHost.ScriptsOf(this).OfType<T>().ToArray() : GetComponent<T>() is { } c ? new[] { c } : Array.Empty<T>();
+
+        /// <summary>Adds an engine component (if missing) or a script; a script added while playing starts at once
+        /// (OnCreate, OnEnable) and is returned.</summary>
+        public T AddComponent<T>() where T : class
+        {
             var self = this;
+            if (IsScript(typeof(T)))
+            {
+                IntPtr handle = Native.WithUtf8<IntPtr>(typeof(T).FullName, p => Native.Api.AddScript(self.Scene, self.Id, (byte*)p));
+                return handle != IntPtr.Zero ? System.Runtime.InteropServices.GCHandle.FromIntPtr(handle).Target as T : null;
+            }
+            Component c = Wrapper(typeof(T));
             if (!HasComponent(c.NativeName)) Native.WithUtf8(c.NativeName, p => Native.Api.AddComponent(self.Scene, self.Id, (byte*)p));
-            return c;
+            return (T)(object)c;
+        }
+
+        /// <summary>The first object's script or engine component of a type in the running script's scene (active objects
+        /// unless `includeInactive`); null when none.</summary>
+        public static T FindObjectOfType<T>(bool includeInactive = false) where T : class => FindObjectsOfType<T>(includeInactive).FirstOrDefault();
+        /// <summary>Every such script or component (scripts in object order, an object's in its order).</summary>
+        public static T[] FindObjectsOfType<T>(bool includeInactive = false) where T : class
+        {
+            IntPtr scene = Native.CurrentScene;
+            if (scene == IntPtr.Zero) return Array.Empty<T>();
+            if (IsScript(typeof(T))) return ScriptHost.ScriptsInScene(scene, includeInactive).OfType<T>().ToArray();
+            string name = new Entity(scene, 0).Wrapper(typeof(T)).NativeName;
+            int count = Native.WithUtf8<int>(name, p => Native.Api.EntitiesWithComponent(scene, (byte*)p, null, 0, includeInactive ? 1 : 0));
+            var ids = new ulong[count];
+            fixed (ulong* q = ids)
+            {
+                ulong* at = q;
+                count = Math.Min(count, Native.WithUtf8<int>(name, p => Native.Api.EntitiesWithComponent(scene, (byte*)p, at, ids.Length, includeInactive ? 1 : 0)));
+            }
+            var result = new T[count];
+            for (int i = 0; i < count; ++i) result[i] = (T)(object)new Entity(scene, ids[i]).Wrapper(typeof(T));
+            return result;
         }
 
         public void Destroy() { if (Scene != IntPtr.Zero) Native.Api.Destroy(Scene, Id); }
@@ -324,7 +378,7 @@ namespace Dimension
 
         /// <summary>A component on this object or the first of its descendants that has one (depth first, in
         /// Hierarchy order); inactive objects are skipped unless `includeInactive`.</summary>
-        public T GetComponentInChildren<T>(bool includeInactive = false) where T : Component, new()
+        public T GetComponentInChildren<T>(bool includeInactive = false) where T : class
         {
             if (!includeInactive && !ActiveInHierarchy) return null;
             if (GetComponent<T>() is { } own) return own;
@@ -333,20 +387,20 @@ namespace Dimension
             return null;
         }
         /// <summary>The components on this object and all of its descendants (depth first).</summary>
-        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : Component, new()
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : class
         {
             var list = new System.Collections.Generic.List<T>();
             CollectInChildren(list, includeInactive);
             return list.ToArray();
         }
-        private void CollectInChildren<T>(System.Collections.Generic.List<T> list, bool includeInactive) where T : Component, new()
+        private void CollectInChildren<T>(System.Collections.Generic.List<T> list, bool includeInactive) where T : class
         {
             if (!includeInactive && !ActiveInHierarchy) return;
-            if (GetComponent<T>() is { } own) list.Add(own);
+            list.AddRange(GetComponents<T>());
             for (int i = 0, n = ChildCount; i < n; ++i) GetChild(i).CollectInChildren(list, includeInactive);
         }
         /// <summary>A component on this object or the nearest parent that has one.</summary>
-        public T GetComponentInParent<T>() where T : Component, new()
+        public T GetComponentInParent<T>() where T : class
         {
             for (Entity e = this; e.IsValid; e = e.Parent)
                 if (e.GetComponent<T>() is { } found) return found;

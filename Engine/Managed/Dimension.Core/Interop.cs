@@ -144,6 +144,12 @@ namespace Dimension.Interop
         // 3D (see Physics in Api.cs): op, values in, max distance, mask, ids out, hit data out (7 floats each), max.
         public delegate* unmanaged<IntPtr, int, float*, float, uint, ulong*, float*, int, int> Query3D;
         public delegate* unmanaged<IntPtr, ulong, int, float*, void> Body3D; // see Rigidbody in Components.cs
+        // Scripts (see ScriptHost.ScriptsOf): an object's managed scripts, every one in a scene, objects with a component,
+        // adding a script.
+        public delegate* unmanaged<IntPtr, ulong, IntPtr*, int, int> EntityScripts;
+        public delegate* unmanaged<IntPtr, IntPtr*, int, int, int> SceneScripts;
+        public delegate* unmanaged<IntPtr, byte*, ulong*, int, int, int> EntitiesWithComponent;
+        public delegate* unmanaged<IntPtr, ulong, byte*, IntPtr> AddScript;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

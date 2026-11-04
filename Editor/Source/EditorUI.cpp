@@ -1,5 +1,6 @@
 #include "EditorUI.h"
 #include <Dimension/Asset/DataAsset.h>
+#include <Dimension/Scripting/ScriptRegistry.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/ImGui/ImGuiLayer.h>
 #include <imgui_internal.h>
@@ -241,12 +242,17 @@ namespace Editor::UI
         return r;
     }
 
-    EditResult EntityField(const char* label, Entity& entity, Scene& scene)
+    EditResult EntityField(const char* label, Entity& entity, Scene& scene) { return EntityField(label, entity, scene, {}, "Entity"); }
+
+    EditResult EntityField(const char* label, Entity& entity, Scene& scene, const std::function<bool(Entity)>& accept,
+                           const std::string& typeLabel)
     {
         EditResult r;
         PropertyLabel(label);
         ImGui::PushID(label);
-        std::string name = s_Mixed ? std::string(kMixedText) : scene.IsValid(entity) ? scene.GetRegistry().Get<TagComponent>(entity).Name : "None (Entity)";
+        std::string name = s_Mixed ? std::string(kMixedText)
+                         : scene.IsValid(entity) ? scene.GetRegistry().Get<TagComponent>(entity).Name + (accept ? "  (" + typeLabel + ")" : "")
+                                                 : "None (" + typeLabel + ")";
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
         if (ImGui::Button(name.c_str(), ImVec2(-FLT_MIN, 0))) ImGui::OpenPopup("picker");
         ImGui::PopStyleVar();
@@ -255,7 +261,7 @@ namespace Editor::UI
             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kEntityPayload))
             {
                 Entity e = scene.FindEntityByGuid(Guid(*(const uint64_t*)p->Data));
-                if (!e.IsNull())
+                if (!e.IsNull() && (!accept || accept(e)))
                 {
                     r.Activated = r.Changed = true;
                     entity = e;
@@ -271,6 +277,7 @@ namespace Editor::UI
                 entity = Entity::Null();
             }
             scene.GetRegistry().EachEntity([&](Entity e) {
+                if (accept && !accept(e)) return;
                 ImGui::PushID((int)e.Index);
                 if (ImGui::Selectable(scene.GetRegistry().Get<TagComponent>(e).Name.c_str(), e == entity))
                 {
@@ -749,7 +756,20 @@ namespace Editor::UI
             break;
         }
         case FieldType::EntityRef:
-            if (scene) r = EntityField(label, *(Entity*)p, *scene);
+            if (scene && !f.ScriptClass.empty())
+            {
+                // An object's script: only objects with a script of the field's class (or a derived one).
+                std::string cls = f.ScriptClass;
+                Scene* sc = scene;
+                size_t dot = cls.find_last_of('.');
+                r = EntityField(label, *(Entity*)p, *scene, [cls, sc](Entity e) {
+                    if (auto* scripts = sc->GetRegistry().TryGet<ScriptComponent>(e))
+                        for (auto& s : scripts->Scripts)
+                            if (ScriptRegistry::IsA(s.ClassName, cls)) return true;
+                    return false;
+                }, dot == std::string::npos ? cls : cls.substr(dot + 1));
+            }
+            else if (scene) r = EntityField(label, *(Entity*)p, *scene);
             break;
         case FieldType::Curve:
         {

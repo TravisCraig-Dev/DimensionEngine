@@ -339,6 +339,40 @@ namespace Dimension
             }
         }
 
+        // The live C# scripts on an object, in order.
+        internal static List<Behaviour> ScriptsOf(Entity e)
+        {
+            var result = new List<Behaviour>();
+            if (e.Scene == IntPtr.Zero) return result;
+            IntPtr* handles = stackalloc IntPtr[32];
+            int count = Native.Api.EntityScripts(e.Scene, e.Id, handles, 32);
+            if (count > 32)
+            {
+                var more = new IntPtr[count];
+                fixed (IntPtr* p = more) count = Math.Min(count, Native.Api.EntityScripts(e.Scene, e.Id, p, more.Length));
+                foreach (IntPtr h in more.Take(count)) if (GCHandle.FromIntPtr(h).Target is Behaviour b) result.Add(b);
+                return result;
+            }
+            for (int i = 0; i < count; ++i) if (GCHandle.FromIntPtr(handles[i]).Target is Behaviour b) result.Add(b);
+            return result;
+        }
+
+        // Every live C# script in a scene (of active objects unless `includeInactive`).
+        internal static List<Behaviour> ScriptsInScene(IntPtr scene, bool includeInactive)
+        {
+            var result = new List<Behaviour>();
+            int count = Native.Api.SceneScripts(scene, null, 0, includeInactive ? 1 : 0);
+            var handles = new IntPtr[count];
+            fixed (IntPtr* p = handles) count = Math.Min(count, Native.Api.SceneScripts(scene, p, handles.Length, includeInactive ? 1 : 0));
+            for (int i = 0; i < count; ++i) if (GCHandle.FromIntPtr(handles[i]).Target is Behaviour b) result.Add(b);
+            return result;
+        }
+
+        // A field of a script type: the object's script of that type (stored as the object).
+        private static bool IsScript(Type t) => typeof(Behaviour).IsAssignableFrom(t);
+        private static Behaviour ScriptOn(IntPtr scene, ulong entity, Type t) =>
+            ScriptsOf(new Entity(scene, entity)).FirstOrDefault(t.IsInstanceOfType);
+
         // Field values (a JSON array in registration order, entities as packed ids) into a script.
         private static void ApplyFields(Behaviour b, ScriptClass cls, string json)
         {
@@ -379,6 +413,7 @@ namespace Dimension
             }
             if (IsDataAsset(t)) return v.ValueKind == JsonValueKind.Number ? LoadDataAsset(v.GetUInt64(), t) : null;
             if (t == typeof(Entity)) return v.ValueKind == JsonValueKind.Number ? new Entity(scene, v.GetUInt64()) : Entity.Null;
+            if (IsScript(t)) return v.ValueKind == JsonValueKind.Number ? ScriptOn(scene, v.GetUInt64(), t) : null;
             if (v.ValueKind == JsonValueKind.Null) return t == typeof(string) ? "" : Activator.CreateInstance(t);
             if (IsSerializable(t))
             {
@@ -501,7 +536,7 @@ namespace Dimension
         // and arrays of either.
         private static bool IsDataAsset(Type t) => typeof(DataAsset).IsAssignableFrom(t);
         private static bool IsScalar(Type t) =>
-            s_Supported.Contains(t) || IsDataAsset(t) ||
+            s_Supported.Contains(t) || IsDataAsset(t) || IsScript(t) ||
             (t.IsEnum && Type.GetTypeCode(Enum.GetUnderlyingType(t)) is TypeCode.Int32 or TypeCode.Int16 or TypeCode.UInt16 or TypeCode.Byte or TypeCode.SByte);
         private static Type ElementType(Type t) =>
             t.IsArray && t.GetArrayRank() == 1 ? t.GetElementType() :
@@ -553,6 +588,13 @@ namespace Dimension
                 w.WriteEndArray();
                 return;
             }
+            if (IsScript(t))
+            {
+                // Another object's script: picked as that object (among those with a script of the type).
+                w.WriteString("type", "Entity");
+                w.WriteString("scriptClass", t.FullName);
+                return;
+            }
             if (IsDataAsset(t))
             {
                 w.WriteString("type", "DataAsset");
@@ -579,6 +621,10 @@ namespace Dimension
                     break;
                 case Enum e: w.WriteNumberValue(Convert.ToInt32(e)); break;
                 case DataAsset d: w.WriteNumberValue(d.Guid); break;
+                case Behaviour b:
+                    if (b.Entity.Scene == IntPtr.Zero) w.WriteNullValue();
+                    else w.WriteNumberValue(b.Entity.Id);
+                    break;
                 case System.Collections.IList list:
                     w.WriteStartArray();
                     foreach (object item in list) WriteValue(w, item);
@@ -665,6 +711,10 @@ namespace Dimension
                         w.WriteString("name", type.FullName);
                         if (type.GetCustomAttribute<AddComponentMenuAttribute>() is { } menu) w.WriteString("menu", menu.Path);
                         if (type.IsDefined(typeof(ExecuteInEditModeAttribute), true)) w.WriteBoolean("executeInEditMode", true);
+                        // The script classes it derives from (fields of those types take it).
+                        w.WriteStartArray("bases");
+                        for (Type b = type.BaseType; b != null && b != typeof(Behaviour); b = b.BaseType) w.WriteStringValue(b.FullName);
+                        w.WriteEndArray();
                         // Gizmos (an OnDrawGizmos or OnDrawGizmosSelected of its own) and [ContextMenu] methods.
                         bool Overrides(string name) => type.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)?.DeclaringType != typeof(Behaviour);
                         if (Overrides(nameof(Behaviour.OnDrawGizmos)) || Overrides(nameof(Behaviour.OnDrawGizmosSelected))) w.WriteBoolean("gizmos", true);
@@ -743,7 +793,9 @@ namespace Dimension
                     w.WriteStartArray("fields");
                     foreach (FieldInfo f in SerializedFields(type))
                     {
-                        if (f.FieldType == typeof(Entity) || ElementType(f.FieldType) == typeof(Entity)) continue;
+                        // (An asset belongs to no scene: no objects or their scripts.)
+                        Type element = ElementType(f.FieldType) ?? f.FieldType;
+                        if (element == typeof(Entity) || IsScript(element)) continue;
                         cls.Fields.Add(f);
                         WriteField(w, f, defaults, 0);
                     }
@@ -900,6 +952,7 @@ namespace Dimension
                     t == typeof(Color) ? *(Color*)value :
                     typeof(IAssetReference).IsAssignableFrom(t) ? Activator.CreateInstance(t, *(ulong*)value) :
                     IsDataAsset(t) ? LoadDataAsset(*(ulong*)value, t) :
+                    IsScript(t) ? ScriptOn(b.Entity.Scene, *(ulong*)value, t) :
                     (object)new Entity(b.Entity.Scene, *(ulong*)value);
                 f.SetValue(b, v);
             }

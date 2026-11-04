@@ -18,6 +18,7 @@ namespace Dimension
         std::string Menu;                  // Add Component menu path ("Category/Name"); empty = the Scripts section
         std::vector<std::string> Requires; // components (registry names) added with the script in the editor
         bool ExecuteInEditMode = false;    // also runs in the editor outside play mode (see EditModeScripts)
+        std::vector<std::string> Bases;    // script classes it derives from (C#), for fields of those types
     };
 
     // Editor options of a C++ script (what C# scripts say with [AddComponentMenu] and [RequireComponent]).
@@ -53,6 +54,14 @@ namespace Dimension
         }
 
         static const std::deque<ScriptInfo>& All() { return Scripts(); }
+        // Whether a script of class `name` fits a field of class `base`: itself, one it derives from, or any script for
+        // "Dimension.Behaviour".
+        static bool IsA(const std::string& name, const std::string& base)
+        {
+            if (name == base || base == "Dimension.Behaviour") return true;
+            const ScriptInfo* info = Find(name);
+            return info && std::find(info->Bases.begin(), info->Bases.end(), base) != info->Bases.end();
+        }
         // Removes every registered script.
         static void Clear() { Scripts().clear(); }
         // Removes the scripts of one module (game module or C# assembly unload).

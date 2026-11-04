@@ -57,6 +57,7 @@ namespace Dimension
         std::function<void(void*, size_t, size_t)> ListMove; // an element from one place to another
         std::string ElementTitle;
         std::string AssetClass; // DataAsset: the class of the assets it takes ("Dimension.DataAsset": any)
+        std::string ScriptClass; // EntityRef holding a script: only objects with a script of this class (or derived)
     };
 
     inline bool IsValueList(const FieldInfo& f) { return f.Type == FieldType::StructList && f.Elements.size() == 1 && f.Elements[0].Name.empty(); }

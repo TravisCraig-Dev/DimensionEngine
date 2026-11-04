@@ -61,6 +61,9 @@ namespace Dimension
         // instead of OnCreate.
         virtual void OnBeforeSerialize() {}
         virtual void OnScriptsReloaded() {}
+        // Engine-internal: called for every script made at once (play starting, a prefab placed) before any OnCreate, so
+        // C# objects all exist when their fields (which may refer to each other) are set.
+        virtual void OnBeforeCreate() {}
         // Engine-internal: the fields the engine reads were given new values (an edit-mode script edited in the
         // Inspector); C# pushes them to the managed object.
         virtual void OnFieldsChanged() {}

@@ -8062,7 +8062,8 @@ namespace
         }
 
         // OnCollisionEnter(Collision) from C#: the Sandbox's HitFlash flashes a box landing hard (about 6 m/s) but not one
-        // set down gently.
+        // set down gently, and tells a Scoreboard: one box through its Board field (a script on another object, picked
+        // as that object), another with Board empty through FindObjectOfType<Scoreboard>().
         {
             Scene hf("HitFlash");
             auto& creg = hf.GetRegistry();
@@ -8070,15 +8071,25 @@ namespace
             creg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
             creg.Get<TransformComponent>(ground).Scale = { 20, 1, 20 };
             creg.Emplace<BoxColliderComponent>(ground);
-            Entity dropped = hf.CreateEntity("Dropped"), placed = hf.CreateEntity("Placed");
+            Entity dropped = hf.CreateEntity("Dropped"), placed = hf.CreateEntity("Placed"), unlinked = hf.CreateEntity("Unlinked");
             creg.Get<TransformComponent>(dropped).Position = { -3, 2.5f, 0 };
             creg.Get<TransformComponent>(placed).Position = { 3, 0.52f, 0 };
-            for (Entity e : { dropped, placed })
+            creg.Get<TransformComponent>(unlinked).Position = { 6, 4.0f, 0 };
+            Entity board = hf.CreateEntity("Board");
+            creg.Emplace<UITextComponent>(board);
+            creg.Emplace<ScriptComponent>(board).Add("Game.Scoreboard");
+            const ScriptInfo* flashInfo = ScriptRegistry::Find("Game.HitFlash");
+            bool boardField = false;
+            for (auto& f : flashInfo ? flashInfo->Fields : std::vector<FieldInfo>{})
+                boardField |= f.Name == "Board" && f.Type == FieldType::EntityRef && f.ScriptClass == "Game.Scoreboard";
+            CHECK(boardField);
+            for (Entity e : { dropped, placed, unlinked })
             {
                 creg.Emplace<MeshRendererComponent>(e).Color = { 1, 1, 1, 1 };
                 creg.Emplace<RigidbodyComponent>(e);
                 creg.Emplace<BoxColliderComponent>(e);
-                creg.Emplace<ScriptComponent>(e).Add("Game.HitFlash");
+                auto& s = creg.Emplace<ScriptComponent>(e).Add("Game.HitFlash");
+                if (e == dropped) s.Fields["Board"] = (uint64_t)hf.GetGuid(board);
             }
             auto rt = hf.Clone();
             rt->OnRuntimeStart();
@@ -8091,6 +8102,8 @@ namespace
             }
             CHECK(flashed && !placedFlashed);
             CHECK(Near(rt->GetRegistry().Get<MeshRendererComponent>(dropped).Color.g, 1.0f, 0.01f)); // faded back
+            std::string score = rt->GetRegistry().Get<UITextComponent>(board).Text;
+            CHECK(score == "Hard hits: 2 (last: Unlinked into Ground)");
             rt->OnRuntimeStop();
         }
 

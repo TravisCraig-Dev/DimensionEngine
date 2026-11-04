@@ -829,7 +829,8 @@
          0.2,
          1.0
         ],
-        "FlashSeconds": 0.4
+        "FlashSeconds": 0.4,
+        "Board": 6000103
        },
        "Enabled": true
       },
@@ -923,7 +924,8 @@
          0.2,
          1.0
         ],
-        "FlashSeconds": 0.4
+        "FlashSeconds": 0.4,
+        "Board": 6000103
        },
        "Enabled": true
       },
@@ -1017,7 +1019,8 @@
          0.2,
          1.0
         ],
-        "FlashSeconds": 0.4
+        "FlashSeconds": 0.4,
+        "Board": 6000103
        },
        "Enabled": true
       },
@@ -4919,6 +4922,82 @@
      "Alignment": 0,
      "Vertical Alignment": 0,
      "Wrap": true
+    }
+   }
+  },
+  {
+   "guid": 6000103,
+   "parent": 6000100,
+   "components": {
+    "Tag": {
+     "Name": "Hits",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "UI Rect": {
+     "Anchor Min": [
+      0,
+      0
+     ],
+     "Anchor Max": [
+      0,
+      0
+     ],
+     "Pivot": [
+      0,
+      0
+     ],
+     "Position": [
+      34,
+      210
+     ],
+     "Size": [
+      1200,
+      40
+     ]
+    },
+    "UI Text": {
+     "Text": "Hard hits: 0 (last: none)",
+     "Font": 0,
+     "Font Size": 30,
+     "Color": [
+      1.0,
+      0.85,
+      0.55,
+      1.0
+     ],
+     "Alignment": 0,
+     "Vertical Alignment": 0,
+     "Wrap": true
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.Scoreboard",
+       "Fields": {
+        "Format": "Hard hits: {0} (last: {1})"
+       },
+       "Enabled": true
+      }
+     ]
     }
    }
   }

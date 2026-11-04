@@ -191,6 +191,13 @@ namespace Dimension
             // A 3D body: 0 angular velocity (out xyz, rad/s), 1 set it, 2 add torque, 3 add force at a point (force, point),
             // 4 add impulse at a point, 5 wake up, 6 is sleeping (v[0] = 1 / 0).
             void (*Body3D)(void*, uint64_t, int, float*);
+            // Scripts: the managed objects of an object's C# scripts (in order); every C# script's in the scene (active
+            // objects unless `inactive`); objects with an engine component (by Inspector name); add a script to an object
+            // (its managed object, or 0). Counts are all of them, though at most max are written.
+            int (*EntityScripts)(void*, uint64_t, intptr_t*, int);
+            int (*SceneScripts)(void*, intptr_t*, int, int);
+            int (*EntitiesWithComponent)(void*, const char*, uint64_t*, int, int);
+            intptr_t (*AddScript)(void*, uint64_t, const char*);
         };
 
         // Background scene loads started from C#, by id.
@@ -460,6 +467,7 @@ namespace Dimension
                 info.AssetClass = f.value("class", std::string("Dimension.DataAsset"));
                 return Slot::Asset;
             }
+            info.ScriptClass = f.value("scriptClass", std::string()); // an object's script (stored as the object)
             if (type == "Enum")
             {
                 info.Type = FieldType::Enum;
@@ -733,9 +741,15 @@ namespace Dimension
 
             // Creates the managed object, pushes the native field values to it and calls `method` (0 OnCreate,
             // 7 OnReloaded).
+            // The managed object, without its fields yet (see OnBeforeCreate).
+            void OnBeforeCreate() override
+            {
+                if (!m_Handle) m_Handle = s_Managed.CreateInstance(m_Class->Name.c_str(), &GetScene(), Pack(Self()));
+            }
+
             void CreateManaged(int method)
             {
-                m_Handle = s_Managed.CreateInstance(m_Class->Name.c_str(), &GetScene(), Pack(Self()));
+                OnBeforeCreate();
                 if (!m_Handle) return;
                 PushFields();
                 s_Managed.Invoke(m_Handle, method, 0.0f);
@@ -856,6 +870,8 @@ namespace Dimension
                 info.Fields = cls.Values.Fields;
                 info.Menu = j.value("menu", std::string());
                 info.ExecuteInEditMode = j.value("executeInEditMode", false);
+                for (auto& b : j.value("bases", nlohmann::json::array()))
+                    if (b.is_string()) info.Bases.push_back(b.get<std::string>());
                 for (auto& r : j.value("requires", nlohmann::json::array()))
                     if (r.is_string()) info.Requires.push_back(r.get<std::string>());
             }
@@ -1208,6 +1224,49 @@ namespace Dimension
                 case 5: Physics3DWorld::WakeUp(scene, e); break;
                 default: v[0] = Physics3DWorld::IsSleeping(scene, e) ? 1.0f : 0.0f; break;
                 }
+            };
+            a.EntityScripts = [](void* s, uint64_t packed, intptr_t* out, int max) -> int {
+                auto* sc = Comp<ScriptComponent>(s, packed);
+                if (!sc || !S(s).IsValid(Unpack(packed))) return 0;
+                int n = 0;
+                for (auto& script : sc->Scripts)
+                    if (auto* m = dynamic_cast<ManagedScript*>(script.Instance.get()); m && m->Handle())
+                    {
+                        if (n < max) out[n] = m->Handle();
+                        ++n;
+                    }
+                return n;
+            };
+            a.SceneScripts = [](void* s, intptr_t* out, int max, int inactive) -> int {
+                if (!s) return 0;
+                int n = 0;
+                for (auto [e, sc] : S(s).GetRegistry().ViewOf<ScriptComponent>())
+                {
+                    if (!inactive && !S(s).IsActiveInHierarchy(e)) continue;
+                    for (auto& script : sc.Scripts)
+                        if (auto* m = dynamic_cast<ManagedScript*>(script.Instance.get()); m && m->Handle())
+                        {
+                            if (n < max) out[n] = m->Handle();
+                            ++n;
+                        }
+                }
+                return n;
+            };
+            a.EntitiesWithComponent = [](void* s, const char* name, uint64_t* out, int max, int inactive) -> int {
+                const ComponentInfo* info = s && name ? ComponentRegistry::Find(name) : nullptr;
+                if (!info) return 0;
+                int n = 0;
+                S(s).GetRegistry().EachEntity([&](Entity e) {
+                    if (!info->Has(S(s), e) || (!inactive && !S(s).IsActiveInHierarchy(e))) return;
+                    if (n < max) out[n] = Pack(e);
+                    ++n;
+                });
+                return n;
+            };
+            a.AddScript = [](void* s, uint64_t e, const char* name) -> intptr_t {
+                if (!s || !name) return 0;
+                auto* m = dynamic_cast<ManagedScript*>(S(s).AddScript(Unpack(e), name));
+                return m ? m->Handle() : 0;
             };
             a.IsMousePressed = [](int b) -> int { return b >= 0 && b < 3 && Input::IsMousePressed((MouseButton)b) ? 1 : 0; };
             a.MainCamera = [](void* s) -> uint64_t {

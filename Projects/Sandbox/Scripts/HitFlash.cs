@@ -11,6 +11,7 @@ namespace Game
         [Tooltip("Impact speed (m/s) that flashes")] public float MinSpeed = 2.0f;
         public Color FlashColor = new(1.0f, 0.35f, 0.2f);
         [Range(0.05f, 3.0f)] public float FlashSeconds = 0.4f;
+        [Tooltip("Told about each hard hit (empty: the scene's first Scoreboard, if any)")] public Scoreboard Board;
 
         private MeshRenderer m_Renderer;
         private Color m_BaseColor;
@@ -30,6 +31,7 @@ namespace Game
             m_Flash = 1.0f;
             foreach (ContactPoint p in collision.Contacts) Debug.DrawRay(p.Point, p.Normal * 0.75f, FlashColor, 0.5f);
             Debug.Log($"{Name} hit {collision.Other.Name} at {speed:0.0} m/s ({collision.Impulse:0} N*s, {collision.ContactCount} contacts)");
+            (Board ?? FindObjectOfType<Scoreboard>())?.Add($"{Name} into {collision.Other.Name}");
         }
 
         public override void OnUpdate(float dt)
