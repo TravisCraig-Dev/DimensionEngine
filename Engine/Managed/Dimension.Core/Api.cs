@@ -621,6 +621,73 @@ namespace Dimension
         public static bool Raycast(Ray ray, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
             Raycast(ray.Origin, ray.Direction, out hit, maxDistance, layerMask);
 
+        private const int MaxResults = 256;
+        // Query3D's hits (point, normal and distance: 7 floats each).
+        private static RaycastHit[] Query(int op, float* v, float maxDistance, uint layerMask)
+        {
+            ulong* ids = stackalloc ulong[MaxResults];
+            float* data = stackalloc float[MaxResults * 7];
+            IntPtr scene = Native.CurrentScene;
+            int count = Math.Min(Native.Api.Query3D(scene, op, v, maxDistance, layerMask, ids, data, MaxResults), MaxResults);
+            var hits = new RaycastHit[count];
+            for (int i = 0; i < count; ++i)
+            {
+                float* d = data + i * 7;
+                hits[i] = new RaycastHit { Entity = new Entity(scene, ids[i]), Point = new Vector3(d[0], d[1], d[2]),
+                                           Normal = new Vector3(d[3], d[4], d[5]), Distance = d[6] };
+            }
+            return hits;
+        }
+
+        /// <summary>Every collider along a ray, nearest first (each object once; a ray starting inside one hits it at 0).</summary>
+        public static RaycastHit[] RaycastAll(Vector3 origin, Vector3 direction, float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
+        {
+            float* v = stackalloc float[6] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z };
+            return Query(0, v, maxDistance, layerMask);
+        }
+        public static RaycastHit[] RaycastAll(Ray ray, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
+            RaycastAll(ray.Origin, ray.Direction, maxDistance, layerMask);
+
+        /// <summary>Moves a sphere along `direction` and returns the first collider it touches (a thick raycast: Point is
+        /// where they touch, Distance how far the sphere moved). A collider it starts inside is hit at distance 0.</summary>
+        public static bool SphereCast(Vector3 origin, float radius, Vector3 direction, out RaycastHit hit, float maxDistance = 1000.0f,
+                                      uint layerMask = DefaultLayers)
+        {
+            float* v = stackalloc float[7] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, radius };
+            RaycastHit[] hits = Query(1, v, maxDistance, layerMask);
+            hit = hits.Length > 0 ? hits[0] : default;
+            return hits.Length > 0;
+        }
+        public static bool SphereCast(Ray ray, float radius, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
+            SphereCast(ray.Origin, radius, ray.Direction, out hit, maxDistance, layerMask);
+
+        /// <summary>As SphereCast, for a box `halfExtents` in each direction turned by `orientation`.</summary>
+        public static bool BoxCast(Vector3 center, Vector3 halfExtents, Vector3 direction, out RaycastHit hit, Quaternion orientation,
+                                   float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
+        {
+            float* v = stackalloc float[13] { center.X, center.Y, center.Z, direction.X, direction.Y, direction.Z,
+                                               halfExtents.X, halfExtents.Y, halfExtents.Z, orientation.X, orientation.Y, orientation.Z, orientation.W };
+            RaycastHit[] hits = Query(2, v, maxDistance, layerMask);
+            hit = hits.Length > 0 ? hits[0] : default;
+            return hits.Length > 0;
+        }
+        public static bool BoxCast(Vector3 center, Vector3 halfExtents, Vector3 direction, out RaycastHit hit) =>
+            BoxCast(center, halfExtents, direction, out hit, Quaternion.Identity);
+
+        /// <summary>Entities whose 3D colliders overlap a box `halfExtents` in each direction (turned by `orientation`).</summary>
+        public static Entity[] OverlapBox(Vector3 center, Vector3 halfExtents, Quaternion orientation, uint layerMask = DefaultLayers)
+        {
+            float* v = stackalloc float[10] { center.X, center.Y, center.Z, halfExtents.X, halfExtents.Y, halfExtents.Z,
+                                               orientation.X, orientation.Y, orientation.Z, orientation.W };
+            ulong* ids = stackalloc ulong[MaxResults];
+            IntPtr scene = Native.CurrentScene;
+            int count = Math.Min(Native.Api.Query3D(scene, 3, v, 0.0f, layerMask, ids, null, MaxResults), MaxResults);
+            var result = new Entity[count];
+            for (int i = 0; i < count; ++i) result[i] = new Entity(scene, ids[i]);
+            return result;
+        }
+        public static Entity[] OverlapBox(Vector3 center, Vector3 halfExtents) => OverlapBox(center, halfExtents, Quaternion.Identity);
+
         /// <summary>Entities whose 3D colliders overlap the sphere.</summary>
         public static Entity[] OverlapSphere(Vector3 center, float radius, uint layerMask = DefaultLayers)
         {

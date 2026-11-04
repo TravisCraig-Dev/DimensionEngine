@@ -184,6 +184,13 @@ namespace Dimension
             // Overlaps: 0 circle (center xy, radius), 1 box (center xy, half size xy, angle in radians), 2 point (xy).
             int (*Overlap2D)(void*, int, const float*, uint32_t, uint64_t*, int);
             float (*Body2D)(void*, uint64_t, int, float); // 0 angular velocity (rad/s), 1 set it, 2 apply torque
+            // 3D queries: 0 every hit along a ray (v: origin, direction), 1 sphere cast (origin, direction, radius), 2 box
+            // cast (center, direction, half size, rotation xyzw), 3 overlap box (center, half size, rotation xyzw). Per
+            // hit out: point xyz, normal xyz, distance. Returns the hit count (at most max are written).
+            int (*Query3D)(void*, int, const float*, float, uint32_t, uint64_t*, float*, int);
+            // A 3D body: 0 angular velocity (out xyz, rad/s), 1 set it, 2 add torque, 3 add force at a point (force, point),
+            // 4 add impulse at a point.
+            void (*Body3D)(void*, uint64_t, int, float*);
         };
 
         // Background scene loads started from C#, by id.
@@ -1121,6 +1128,48 @@ namespace Dimension
                 case 0: return Physics2DWorld::GetAngularVelocity(S(s), Unpack(e));
                 case 1: Physics2DWorld::SetAngularVelocity(S(s), Unpack(e), value); return 0.0f;
                 default: Physics2DWorld::ApplyTorque(S(s), Unpack(e), value); return 0.0f;
+                }
+            };
+            a.Query3D = [](void* s, int op, const float* v, float maxDistance, uint32_t mask, uint64_t* ids, float* data, int max) -> int {
+                if (!s) return 0;
+                Scene& scene = S(s);
+                glm::vec3 a3(v[0], v[1], v[2]), b3(v[3], v[4], v[5]);
+                std::vector<RaycastHit> hits;
+                if (op == 3)
+                {
+                    std::vector<Entity> found = Physics3DWorld::OverlapBox(scene, a3, b3, glm::quat(v[9], v[6], v[7], v[8]), mask);
+                    for (int i = 0; i < (int)found.size() && i < max; ++i) ids[i] = Pack(found[i]);
+                    return (int)found.size();
+                }
+                if (op == 0) hits = Physics3DWorld::RaycastAll(scene, a3, b3, maxDistance, mask);
+                else
+                {
+                    RaycastHit hit = op == 1 ? Physics3DWorld::SphereCast(scene, a3, v[6], b3, maxDistance, mask)
+                                             : Physics3DWorld::BoxCast(scene, a3, { v[6], v[7], v[8] }, glm::quat(v[12], v[9], v[10], v[11]), b3, maxDistance, mask);
+                    if (!hit.Hit.IsNull()) hits.push_back(hit);
+                }
+                for (int i = 0; i < (int)hits.size() && i < max; ++i)
+                {
+                    ids[i] = Pack(hits[i].Hit);
+                    float* d = data + i * 7;
+                    std::memcpy(d, &hits[i].Point, 12);
+                    std::memcpy(d + 3, &hits[i].Normal, 12);
+                    d[6] = hits[i].Distance;
+                }
+                return (int)hits.size();
+            };
+            a.Body3D = [](void* s, uint64_t packed, int op, float* v) {
+                if (!s) return;
+                Scene& scene = S(s);
+                Entity e = Unpack(packed);
+                glm::vec3 a3(v[0], v[1], v[2]);
+                switch (op)
+                {
+                case 0: { glm::vec3 w = Physics3DWorld::GetAngularVelocity(scene, e); std::memcpy(v, &w, 12); break; }
+                case 1: Physics3DWorld::SetAngularVelocity(scene, e, a3); break;
+                case 2: Physics3DWorld::AddTorque(scene, e, a3); break;
+                case 3: Physics3DWorld::AddForceAtPosition(scene, e, a3, { v[3], v[4], v[5] }); break;
+                default: Physics3DWorld::AddImpulseAtPosition(scene, e, a3, { v[3], v[4], v[5] }); break;
                 }
             };
             a.IsMousePressed = [](int b) -> int { return b >= 0 && b < 3 && Input::IsMousePressed((MouseButton)b) ? 1 : 0; };

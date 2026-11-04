@@ -160,6 +160,26 @@ namespace Dimension
         }
         public void AddForce(Vector3 force) => Native.Api.AddForce3D(Entity.Scene, Entity.Id, (float*)&force);
         public void AddImpulse(Vector3 impulse) => Native.Api.AddImpulse3D(Entity.Scene, Entity.Id, (float*)&impulse);
+        /// <summary>Spin about the world axes in radians per second (as Unity's 3D Rigidbody).</summary>
+        public Vector3 AngularVelocity
+        {
+            get { Vector3 w = default; Native.Api.Body3D(Entity.Scene, Entity.Id, 0, (float*)&w); return w; }
+            set => Native.Api.Body3D(Entity.Scene, Entity.Id, 1, (float*)&value);
+        }
+        /// <summary>Turns the body (N*m about world axes) for this step, like AddForce for rotation.</summary>
+        public void AddTorque(Vector3 torque) => Native.Api.Body3D(Entity.Scene, Entity.Id, 2, (float*)&torque);
+        /// <summary>A force at a world point: pushes the body and, off its center of mass, turns it too.</summary>
+        public void AddForceAtPosition(Vector3 force, Vector3 position)
+        {
+            float* v = stackalloc float[6] { force.X, force.Y, force.Z, position.X, position.Y, position.Z };
+            Native.Api.Body3D(Entity.Scene, Entity.Id, 3, v);
+        }
+        /// <summary>An instant push at a world point (a hit where something struck it).</summary>
+        public void AddImpulseAtPosition(Vector3 impulse, Vector3 position)
+        {
+            float* v = stackalloc float[6] { impulse.X, impulse.Y, impulse.Z, position.X, position.Y, position.Z };
+            Native.Api.Body3D(Entity.Scene, Entity.Id, 4, v);
+        }
     }
 
     public unsafe class MeshRenderer : Component

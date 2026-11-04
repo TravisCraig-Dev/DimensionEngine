@@ -30,6 +30,7 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
@@ -2865,6 +2866,88 @@ namespace Dimension
         JPH::BodyInterface* bi;
         JPH::BodyID id;
         if (BodyFor(scene, e, bi, id)) bi->AddImpulse(id, ToJolt(i));
+    }
+
+    glm::vec3 Physics3DWorld::GetAngularVelocity(Scene& scene, Entity e)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        return BodyFor(scene, e, bi, id) ? FromJolt(bi->GetAngularVelocity(id)) : glm::vec3(0.0f);
+    }
+
+    void Physics3DWorld::SetAngularVelocity(Scene& scene, Entity e, const glm::vec3& w)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (!BodyFor(scene, e, bi, id)) return;
+        bi->SetAngularVelocity(id, ToJolt(w));
+        if (w != glm::vec3(0.0f)) bi->ActivateBody(id);
+    }
+
+    void Physics3DWorld::AddTorque(Scene& scene, Entity e, const glm::vec3& torque)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (BodyFor(scene, e, bi, id)) bi->AddTorque(id, ToJolt(torque));
+    }
+
+    void Physics3DWorld::AddForceAtPosition(Scene& scene, Entity e, const glm::vec3& force, const glm::vec3& point)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (BodyFor(scene, e, bi, id)) bi->AddForce(id, ToJolt(force), JPH::RVec3(ToJolt(point)));
+    }
+
+    void Physics3DWorld::AddImpulseAtPosition(Scene& scene, Entity e, const glm::vec3& impulse, const glm::vec3& point)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (BodyFor(scene, e, bi, id)) bi->AddImpulse(id, ToJolt(impulse), JPH::RVec3(ToJolt(point)));
+    }
+
+    namespace
+    {
+        // A convex shape swept from `transform` along `direction` (normalized) * maxDistance: the first body it meets.
+        RaycastHit CastShape(Scene& scene, const JPH::Shape& shape, const JPH::RMat44& transform, const glm::vec3& direction, float maxDistance,
+                             uint32_t layerMask)
+        {
+            RaycastHit result;
+            Physics3DWorld* world = scene.GetPhysics3D();
+            float len = glm::length(direction);
+            if (!world || len <= 0.0f) return result;
+            glm::vec3 sweep = direction / len * maxDistance;
+            auto* impl = world->GetImpl();
+            JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(&shape, JPH::Vec3::sReplicate(1.0f), transform, ToJolt(sweep));
+            JPH::ShapeCastSettings settings;
+            settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
+            JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+            impl->System.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(), collector, {}, LayerMaskFilter(layerMask));
+            if (!collector.HadHit()) return result;
+            const JPH::ShapeCastResult& hit = collector.mHit;
+            result.Hit = impl->Lookup(hit.mBodyID2);
+            result.Distance = hit.mFraction * maxDistance;
+            result.Point = FromJolt(hit.mContactPointOn2);
+            JPH::Vec3 axis = hit.mPenetrationAxis;
+            result.Normal = axis.LengthSq() > 1e-12f ? -FromJolt(axis.Normalized()) : -glm::normalize(sweep);
+            return result;
+        }
+    }
+
+    RaycastHit Physics3DWorld::SphereCast(Scene& scene, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance,
+                                          uint32_t layerMask)
+    {
+        JPH::Ref<JPH::SphereShape> sphere = new JPH::SphereShape(std::max(radius, 1e-4f));
+        return CastShape(scene, *sphere, JPH::RMat44::sTranslation(JPH::RVec3(ToJolt(origin))), direction, maxDistance, layerMask);
+    }
+
+    RaycastHit Physics3DWorld::BoxCast(Scene& scene, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation,
+                                       const glm::vec3& direction, float maxDistance, uint32_t layerMask)
+    {
+        glm::vec3 half = glm::max(halfExtents, glm::vec3(1e-3f));
+        float convex = std::min(JPH::cDefaultConvexRadius, std::min(half.x, std::min(half.y, half.z)) * 0.5f);
+        JPH::Ref<JPH::BoxShape> box = new JPH::BoxShape(ToJolt(half), convex);
+        return CastShape(scene, *box, JPH::RMat44::sRotationTranslation(ToJolt(rotation), JPH::RVec3(ToJolt(center))), direction, maxDistance,
+                         layerMask);
     }
 
     RaycastHit Physics3DWorld::Raycast(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask)

@@ -141,6 +141,9 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, float*, float, uint, ulong*, float*, int, int> Raycast2D;
         public delegate* unmanaged<IntPtr, int, float*, uint, ulong*, int, int> Overlap2D; // 0 circle, 1 box, 2 point
         public delegate* unmanaged<IntPtr, ulong, int, float, float> Body2D;               // 0 angular velocity, 1 set, 2 torque
+        // 3D (see Physics in Api.cs): op, values in, max distance, mask, ids out, hit data out (7 floats each), max.
+        public delegate* unmanaged<IntPtr, int, float*, float, uint, ulong*, float*, int, int> Query3D;
+        public delegate* unmanaged<IntPtr, ulong, int, float*, void> Body3D; // see Rigidbody in Components.cs
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

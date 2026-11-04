@@ -45,6 +45,13 @@ namespace Dimension
         static glm::vec3 GetLinearVelocity(Scene& scene, Entity e);
         static void AddForce(Scene& scene, Entity e, const glm::vec3& force);
         static void AddImpulse(Scene& scene, Entity e, const glm::vec3& impulse);
+        // Spin (world axes, radians per second), torque (N*m), and a force or impulse at a world point (it also turns the
+        // body when the point is off its center of mass).
+        static glm::vec3 GetAngularVelocity(Scene& scene, Entity e);
+        static void SetAngularVelocity(Scene& scene, Entity e, const glm::vec3& radiansPerSecond);
+        static void AddTorque(Scene& scene, Entity e, const glm::vec3& torque);
+        static void AddForceAtPosition(Scene& scene, Entity e, const glm::vec3& force, const glm::vec3& point);
+        static void AddImpulseAtPosition(Scene& scene, Entity e, const glm::vec3& impulse, const glm::vec3& point);
         // A Ragdoll's capsule nearest `point` takes the impulse there (a hit knocks the limb it lands on).
         static void AddRagdollImpulse(Scene& scene, Entity e, const glm::vec3& impulse, const glm::vec3& point);
         // Dents a Deformable object at a world point, pushing its surface along `direction` (world, into the object) by up
@@ -63,6 +70,13 @@ namespace Dimension
         // everySurface: each surface crossed instead (a mesh's floors one above the other each give a hit).
         static std::vector<RaycastHit> RaycastAll(Scene& scene, const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                                                   uint32_t layerMask = Physics::kDefaultQueryMask, bool everySurface = false);
+        // The first collider a sphere / an oriented box meets when moved along `direction` up to maxDistance (like a thick
+        // ray): Point is where they touch, Normal the surface's there, Distance how far the shape moved. A collider the
+        // shape starts inside is hit at distance 0.
+        static RaycastHit SphereCast(Scene& scene, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance,
+                                     uint32_t layerMask = Physics::kDefaultQueryMask);
+        static RaycastHit BoxCast(Scene& scene, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation,
+                                  const glm::vec3& direction, float maxDistance, uint32_t layerMask = Physics::kDefaultQueryMask);
         // Entities whose colliders overlap a sphere / an oriented box.
         static std::vector<Entity> OverlapSphere(Scene& scene, const glm::vec3& center, float radius,
                                                  uint32_t layerMask = Physics::kDefaultQueryMask);

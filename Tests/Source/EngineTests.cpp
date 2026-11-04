@@ -587,6 +587,60 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestPhysics3DCasts()
+    {
+        Scene scene("Casts");
+        auto& reg = scene.GetRegistry();
+        Entity boxes[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            boxes[i] = scene.CreateEntity("Box " + std::to_string(i));
+            reg.Get<TransformComponent>(boxes[i]).Position = { 3.0f + 3.0f * i, 0, 0 };
+            reg.Emplace<BoxColliderComponent>(boxes[i]);
+        }
+        Entity spinner = scene.CreateEntity("Spinner"), twisted = scene.CreateEntity("Twisted"), struck = scene.CreateEntity("Struck");
+        float x = -10.0f;
+        for (Entity e : { spinner, twisted, struck })
+        {
+            reg.Get<TransformComponent>(e).Position = { x, 10, 0 };
+            x -= 5.0f;
+            reg.Emplace<RigidbodyComponent>(e).UseGravity = false;
+            reg.Emplace<BoxColliderComponent>(e);
+        }
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+
+        // A sphere moved along +X touches the first box's face after 2 m (its center 0.5 short of the face).
+        RaycastHit s = Physics3DWorld::SphereCast(*rt, { 0, 0, 0 }, 0.5f, { 1, 0, 0 }, 20.0f);
+        CHECK(s.Hit == boxes[0] && Near(s.Distance, 2.0f, 0.02f) && Near(s.Point.x, 2.5f, 0.02f) && Near(s.Normal, glm::vec3(-1, 0, 0), 0.02f));
+        // Passing 0.2 m over the boxes: a thin sphere misses, a thicker one grazes the first.
+        CHECK(Physics3DWorld::SphereCast(*rt, { 0, 1.2f, 0 }, 0.5f, { 1, 0, 0 }, 20.0f).Hit.IsNull());
+        CHECK(Physics3DWorld::SphereCast(*rt, { 0, 1.2f, 0 }, 0.8f, { 1, 0, 0 }, 20.0f).Hit == boxes[0]);
+        CHECK(Physics3DWorld::SphereCast(*rt, { 0, 0, 0 }, 0.5f, { 1, 0, 0 }, 1.5f).Hit.IsNull()); // max distance
+        // Boxes: face on, then turned 45 degrees (its corner leads, half a diagonal ahead).
+        RaycastHit b = Physics3DWorld::BoxCast(*rt, { 0, 0, 0 }, glm::vec3(0.5f), glm::quat(1, 0, 0, 0), { 1, 0, 0 }, 20.0f);
+        CHECK(b.Hit == boxes[0] && Near(b.Distance, 2.0f, 0.02f));
+        RaycastHit turned = Physics3DWorld::BoxCast(*rt, { 0, 0, 0 }, glm::vec3(0.5f), glm::angleAxis(glm::radians(45.0f), glm::vec3(0, 1, 0)),
+                                                    { 1, 0, 0 }, 20.0f);
+        CHECK(turned.Hit == boxes[0] && Near(turned.Distance, 2.5f - std::sqrt(0.5f), 0.02f));
+        // Layer masks leave the first box out.
+        rt->GetRegistry().Get<TagComponent>(boxes[0]).Layer = 5;
+        rt->OnUpdateRuntime(1.0f / 30.0f);
+        RaycastHit masked = Physics3DWorld::SphereCast(*rt, { 0, 0, 0 }, 0.5f, { 1, 0, 0 }, 20.0f, ~(1u << 5));
+        CHECK(masked.Hit == boxes[1] && Near(masked.Distance, 5.0f, 0.02f));
+
+        // Spin set directly, from a torque over a step, and from an impulse off the center (which also pushes).
+        Physics3DWorld::SetAngularVelocity(*rt, spinner, { 0, 2, 0 });
+        CHECK(Near(Physics3DWorld::GetAngularVelocity(*rt, spinner), glm::vec3(0, 2, 0), 0.01f));
+        Physics3DWorld::AddTorque(*rt, twisted, { 0, 0, 20 });
+        glm::vec3 at = rt->GetRegistry().Get<TransformComponent>(struck).Position;
+        Physics3DWorld::AddImpulseAtPosition(*rt, struck, { 0, 0, 1 }, at + glm::vec3(0.5f, 0, 0));
+        CHECK(Physics3DWorld::GetLinearVelocity(*rt, struck).z > 0.5f && Physics3DWorld::GetAngularVelocity(*rt, struck).y < -0.5f);
+        rt->OnUpdateRuntime(1.0f / 30.0f);
+        CHECK(Physics3DWorld::GetAngularVelocity(*rt, twisted).z > 0.1f);
+        rt->OnRuntimeStop();
+    }
+
     void TestMeshImportSettings()
     {
         fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
@@ -7778,6 +7832,34 @@ namespace
             rt->OnRuntimeStop();
         }
 
+        // Physics.SphereCast and Rigidbody.AddImpulseAtPosition from C#: the Sandbox's Shover pushes the crate under a
+        // right-click along the mouse ray.
+        {
+            Scene sh("Shove");
+            auto& creg = sh.GetRegistry();
+            Entity cam = sh.CreateEntity("Main Camera");
+            creg.Emplace<CameraComponent>(cam);
+            creg.Get<TransformComponent>(cam).Position = { 0, 2, 8 };
+            creg.Emplace<ScriptComponent>(cam).Add("Game.Shover");
+            Entity crate = sh.CreateEntity("Crate");
+            creg.Get<TransformComponent>(crate).Position = { 0.3f, 2, 0 };
+            creg.Emplace<RigidbodyComponent>(crate).UseGravity = false;
+            creg.Emplace<BoxColliderComponent>(crate);
+            auto rt = sh.Clone();
+            rt->OnRuntimeStart();
+            glm::vec2 view(1280, 720);
+            rt->SetUIInput(glm::vec2(CameraProjection::WorldToScreen(*rt, cam, { 0.3f, 2, 0.5f }, view)), false, view);
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            Input::SimulateMouseButton(MouseButton::Right, true);
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            Input::SimulateMouseButton(MouseButton::Right, false);
+            Input::SetGameInputEnabled(gameInput);
+            glm::vec3 v = Physics3DWorld::GetLinearVelocity(*rt, crate);
+            CHECK(v.z < -1.0f && glm::length(Physics3DWorld::GetAngularVelocity(*rt, crate)) > 0.01f);
+            rt->OnRuntimeStop();
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -11464,6 +11546,7 @@ int main(int argc, char** argv)
     Run("Camera projection", TestCameraProjection);
     Run("Time scale and cursor", TestTimeScaleAndCursor);
     Run("2D physics queries", TestPhysics2DQueries);
+    Run("3D shape casts and spin", TestPhysics3DCasts);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

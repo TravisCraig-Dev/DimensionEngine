@@ -4662,6 +4662,16 @@
         "SlowMotion": 0.25
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.Shover",
+       "Fields": {
+        "Button": 1,
+        "Strength": 150.0,
+        "Lift": 0.4,
+        "Radius": 0.3
+       },
+       "Enabled": true
       }
      ]
     }
@@ -4819,7 +4829,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there); T toggles slow motion.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), right-click a crate to shove it; T toggles slow motion.",
      "Font": 0,
      "Font Size": 26,
      "Color": [
