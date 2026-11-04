@@ -102,7 +102,7 @@ namespace Dimension
             void (*AudioPlayOneShot)(void*, uint64_t, uint64_t, float);
             void (*MixerSetVolume)(const char*, float);
             float (*MixerGetVolume)(const char*);
-            void (*CharacterMove)(void*, uint64_t, const float*, int);
+            int (*CharacterMove)(void*, uint64_t, const float*, int); // Move: collision flags; SimpleMove: grounded
             int (*CharacterState)(void*, uint64_t, float*, float*);
             void (*CharacterSetVerticalSpeed)(void*, uint64_t, float);
             void (*LineSetPositions)(void*, uint64_t, const float*, int);
@@ -260,6 +260,7 @@ namespace Dimension
             double (*AppControl)(int, double, double, double);
             // 0 product name, 1 version, 2 company name.
             const char* (*AppText)(int);
+            int (*CharacterFlags)(void*, uint64_t);   // the Character Controller's last move's collision flags
         };
 
         // Background scene loads started from C#, by id.
@@ -503,6 +504,7 @@ namespace Dimension
             bool HasGizmos = false;           // overrides OnDrawGizmos or OnDrawGizmosSelected
             bool HasCollisionStay = false;    // overrides OnCollisionStay (else it is not called every step)
             bool HasTriggerStay = false;      // overrides OnTriggerStay
+            bool HasControllerHit = false;    // overrides OnControllerColliderHit (called for every move's hits)
             bool HasMouseEvents = false;      // overrides an OnMouse* callback
             std::vector<std::string> ContextMenu;
         };
@@ -859,6 +861,13 @@ namespace Dimension
             void OnApplicationFocus(bool focused) override { if (m_Handle) s_Managed.Invoke(m_Handle, 17, focused ? 1.0f : 0.0f); }
             void OnApplicationPause(bool paused) override { if (m_Handle) s_Managed.Invoke(m_Handle, 18, paused ? 1.0f : 0.0f); }
             void OnApplicationQuit() override { if (m_Handle) s_Managed.Invoke(m_Handle, 19, 0.0f); }
+            void OnControllerColliderHit(const ControllerColliderHit& hit) override
+            {
+                if (!m_Handle || !m_Class->HasControllerHit) return;
+                float data[14] = { hit.Normal.x, hit.Normal.y, hit.Normal.z, hit.MoveDirection.x, hit.MoveDirection.y, hit.MoveDirection.z,
+                                   hit.MoveLength, hit.Point.x, hit.Point.y, hit.Point.z, hit.Normal.x, hit.Normal.y, hit.Normal.z, 0.0f };
+                s_Managed.InvokeCollision(m_Handle, 3, Pack(hit.Other), data, 1);
+            }
             void OnUITextChanged(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 0, t.c_str()); }
             void OnUISubmit(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 1, t.c_str()); }
             void OnAnimationEvent(const std::string& n) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 2, n.c_str()); }
@@ -910,6 +919,7 @@ namespace Dimension
                 cls.HasGizmos = j.value("gizmos", false);
                 cls.HasCollisionStay = j.value("collisionStay", false);
                 cls.HasTriggerStay = j.value("triggerStay", false);
+                cls.HasControllerHit = j.value("controllerHit", false);
                 cls.HasMouseEvents = j.value("mouseEvents", false);
                 for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
                 for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
@@ -1865,10 +1875,14 @@ namespace Dimension
                 if (s) AudioWorld::PlayOneShot(S(s), Unpack(e), AssetHandle(clip), scale);
             };
             a.MixerSetVolume = [](const char* group, float db) { AudioMixer::SetVolumeDb(group ? group : "", db); };
-            a.CharacterMove = [](void* s, uint64_t e, const float* v, int simple) {
-                if (!s) return;
-                if (simple) Physics3DWorld::SimpleMoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] });
-                else Physics3DWorld::MoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] });
+            a.CharacterMove = [](void* s, uint64_t e, const float* v, int simple) -> int {
+                if (!s) return 0;
+                if (simple) return Physics3DWorld::SimpleMoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] }) ? 1 : 0;
+                return Physics3DWorld::MoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] });
+            };
+            a.CharacterFlags = [](void* s, uint64_t e) -> int {
+                auto* cc = Comp<CharacterControllerComponent>(s, e);
+                return cc ? cc->CollisionFlags : 0;
             };
             a.CharacterState = [](void* s, uint64_t e, float* velocity, float* verticalSpeed) -> int {
                 auto* cc = Comp<CharacterControllerComponent>(s, e);

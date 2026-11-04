@@ -61,7 +61,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, ulong, float, void> AudioPlayOneShot;
         public delegate* unmanaged<byte*, float, void> MixerSetVolume;
         public delegate* unmanaged<byte*, float> MixerGetVolume;
-        public delegate* unmanaged<IntPtr, ulong, float*, int, void> CharacterMove;
+        public delegate* unmanaged<IntPtr, ulong, float*, int, int> CharacterMove;
         public delegate* unmanaged<IntPtr, ulong, float*, float*, int> CharacterState;
         public delegate* unmanaged<IntPtr, ulong, float, void> CharacterSetVerticalSpeed;
         public delegate* unmanaged<IntPtr, ulong, float*, int, void> LineSetPositions;
@@ -180,6 +180,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, int, byte*> InputText;
         public delegate* unmanaged<int, double, double, double, double> AppControl;  // see Application in Api.cs
         public delegate* unmanaged<int, byte*> AppText;
+        public delegate* unmanaged<IntPtr, ulong, int> CharacterFlags;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

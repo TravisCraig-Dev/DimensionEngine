@@ -752,6 +752,111 @@
    }
   },
   {
+   "guid": 6000110,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Walker",
+     "Tag": "Player",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -6,
+      1,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Character Controller": {
+     "Height": 2.0,
+     "Radius": 0.5,
+     "Center": [
+      0,
+      0,
+      0
+     ],
+     "Slope Limit": 45.0,
+     "Step Offset": 0.3,
+     "Skin Width": 0.02,
+     "Mass": 70.0,
+     "Push Strength": 100.0,
+     "Ride Moving Platforms": true
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.Walker",
+       "Fields": {
+        "Speed": 4.0,
+        "JumpSpeed": 5.0,
+        "Push": 2.5,
+        "Body": 6000111
+       },
+       "Enabled": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "guid": 6000111,
+   "parent": 6000110,
+   "components": {
+    "Tag": {
+     "Name": "Walker Body",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      0.95,
+      0.55,
+      0.15,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.4,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
    "guid": 6000013,
    "parent": 0,
    "components": {
@@ -4961,7 +5066,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into).",
      "Font": 0,
      "Font Size": 26,
      "Color": [

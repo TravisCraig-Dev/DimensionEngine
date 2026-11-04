@@ -38,4 +38,19 @@ namespace Dimension
             return c;
         }
     };
+
+    // Which parts of a Character Controller's capsule touched something in its last move (like Unity's
+    // CollisionFlags): its sides, its top (above the upper sphere's center), its bottom (below the lower one's).
+    enum CharacterCollisionFlags : int { CharacterCollidedNone = 0, CharacterCollidedSides = 1, CharacterCollidedAbove = 2, CharacterCollidedBelow = 4 };
+
+    // What a Character Controller ran into while moving (like Unity's ControllerColliderHit): given to
+    // OnControllerColliderHit during the move, once per object touched.
+    struct ControllerColliderHit
+    {
+        Entity Other = Entity::Null();
+        glm::vec3 Point{ 0.0f };          // where they touch
+        glm::vec3 Normal{ 0.0f };         // the surface there, pointing toward the character
+        glm::vec3 MoveDirection{ 0.0f };  // the move's direction (normalized; zero for none)
+        float MoveLength = 0.0f;          // how far the move asked to go
+    };
 }

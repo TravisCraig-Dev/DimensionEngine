@@ -725,6 +725,9 @@ namespace Dimension
                         if (type.GetMethod(nameof(Behaviour.OnTriggerStay), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(Entity) })
                                 ?.DeclaringType != typeof(Behaviour))
                             w.WriteBoolean("triggerStay", true);
+                        if (type.GetMethod(nameof(Behaviour.OnControllerColliderHit), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(ControllerColliderHit) })
+                                ?.DeclaringType != typeof(Behaviour))
+                            w.WriteBoolean("controllerHit", true);
                         // OnMouse* callbacks are only called (every frame for Over / Drag) on classes that have one.
                         string[] mouse = { nameof(Behaviour.OnMouseEnter), nameof(Behaviour.OnMouseOver), nameof(Behaviour.OnMouseExit),
                                            nameof(Behaviour.OnMouseDown), nameof(Behaviour.OnMouseDrag), nameof(Behaviour.OnMouseUp),
@@ -1051,6 +1054,17 @@ namespace Dimension
                 {
                     float* d = data + 7 + i * 7;
                     contacts[i] = new ContactPoint { Point = new Vector3(d[0], d[1], d[2]), Normal = new Vector3(d[3], d[4], d[5]), Separation = d[6] };
+                }
+                if (phase == 3)
+                {
+                    // A Character Controller's hit: normal, move direction, move length, then the contact's point.
+                    b.OnControllerColliderHit(new ControllerColliderHit
+                    {
+                        Entity = new Entity(b.Entity.Scene, other), Controller = b.Entity.GetComponent<CharacterController>(),
+                        Normal = new Vector3(data[0], data[1], data[2]), MoveDirection = new Vector3(data[3], data[4], data[5]),
+                        MoveLength = data[6], Point = contactCount > 0 ? contacts[0].Point : default,
+                    });
+                    return;
                 }
                 var c = new Collision(new Entity(b.Entity.Scene, other), contacts, new Vector3(data[0], data[1], data[2]),
                                       new Vector3(data[3], data[4], data[5]), data[6]);

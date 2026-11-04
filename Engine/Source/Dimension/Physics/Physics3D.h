@@ -126,8 +126,13 @@ namespace Dimension
 
         // Character Controller (moves immediately, using this frame's delta time):
         // Move: displacement for this frame (no gravity). SimpleMove: horizontal speed in units/s, gravity applied.
-        static void MoveCharacter(Scene& scene, Entity e, const glm::vec3& motion);
-        static void SimpleMoveCharacter(Scene& scene, Entity e, const glm::vec3& speed);
+        // Move returns the CharacterCollisionFlags of the move, SimpleMove whether it is grounded after it. Scripts on the
+        // character get OnControllerColliderHit for what it ran into, during the call.
+        static int MoveCharacter(Scene& scene, Entity e, const glm::vec3& motion);
+        static bool SimpleMoveCharacter(Scene& scene, Entity e, const glm::vec3& speed);
+        // The character made again from its Character Controller (Height, Radius, Center, Slope Limit, Step Offset, Skin
+        // Width, Mass, Push Strength changed while playing), where it is, keeping its speeds.
+        void RefreshCharacter(Entity e);
 
         struct Impl;
         Impl* GetImpl() { return m_Impl.get(); }

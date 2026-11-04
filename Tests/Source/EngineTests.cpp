@@ -7703,6 +7703,98 @@ namespace
         }
     };
 
+    // Drives its Character Controller each update (Move, or SimpleMove with gravity) and records what it hit.
+    class CharacterHitProbe : public ScriptableEntity
+    {
+    public:
+        glm::vec3 Motion{ 0.0f }; // per second
+        bool Simple = true;
+        int Flags = 0;
+        std::vector<ControllerColliderHit> Hits;
+        void OnUpdate(float dt) override
+        {
+            Hits.clear();
+            if (Simple) Physics3DWorld::SimpleMoveCharacter(GetScene(), Self(), Motion);
+            else Flags = Physics3DWorld::MoveCharacter(GetScene(), Self(), Motion * dt);
+            if (Simple) Flags = Get<CharacterControllerComponent>().CollisionFlags;
+        }
+        void OnControllerColliderHit(const ControllerColliderHit& hit) override { Hits.push_back(hit); }
+        bool Hit(Scene& scene, const char* name) const
+        {
+            return std::any_of(Hits.begin(), Hits.end(), [&](const ControllerColliderHit& h) {
+                return scene.GetRegistry().Get<TagComponent>(h.Other).Name == name;
+            });
+        }
+    };
+
+    void TestCharacterSettingsAndHits()
+    {
+        Scene scene("Characters");
+        auto& reg = scene.GetRegistry();
+        auto box = [&](const char* name, glm::vec3 at, glm::vec3 size) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = at;
+            reg.Emplace<BoxColliderComponent>(e).Size = size;
+            return e;
+        };
+        box("Floor", { 0, -0.5f, 0 }, { 40, 1, 40 });
+        box("Wall", { 4, 2, 0 }, { 1, 4, 40 });              // its face at x = 3.5
+        box("Ceiling", { -10, 3.0f, 0 }, { 6, 1, 40 });      // over x -13..-7, its underside at 2.5
+        box("Step", { -4, 0.125f, 0 }, { 2, 0.25f, 40 });    // x -5..-3, 0.25 high
+        Entity hero = scene.CreateEntity("Hero");
+        reg.Get<TransformComponent>(hero).Position = { 0, 1.0f, 0 }; // capsule 2 high about its position: feet at 0
+        auto& cc = reg.Emplace<CharacterControllerComponent>(hero);
+        cc.StepOffset = 0.0f;
+        reg.Emplace<ScriptComponent>(hero).Add("CharacterHitProbe");
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto* probe = static_cast<CharacterHitProbe*>(rr.Get<ScriptComponent>(hero).Scripts[0].Instance.get());
+        auto pos = [&] { return rr.Get<TransformComponent>(hero).Position; };
+        auto run = [&](int n) { for (int i = 0; i < n; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); };
+        auto setting = [&](auto&& change) { change(rr.Get<CharacterControllerComponent>(hero)); rt->GetPhysics3D()->RefreshCharacter(hero); };
+
+        // Standing: the floor is below it, and a hit.
+        run(30);
+        CHECK(rr.Get<CharacterControllerComponent>(hero).IsGrounded && (probe->Flags & CharacterCollidedBelow) && probe->Hit(*rt, "Floor"));
+        CHECK(Near(pos().y, 1.0f, 0.05f));
+        // Into the wall: stopped at it, touching with its side; the hit says how it was moving.
+        probe->Motion = { 4, 0, 0 };
+        run(90);
+        CHECK(Near(pos().x, 3.0f, 0.05f) && (probe->Flags & CharacterCollidedSides) && probe->Hit(*rt, "Wall"));
+        auto wall = std::find_if(probe->Hits.begin(), probe->Hits.end(), [&](const ControllerColliderHit& h) { return rr.Get<TagComponent>(h.Other).Name == "Wall"; });
+        CHECK(wall != probe->Hits.end() && wall->Normal.x < -0.9f && wall->MoveDirection.x > 0.9f && Near(wall->Point.x, 3.5f, 0.05f)); // (SimpleMove presses down a little too)
+        // Wider (Radius 1, live): it stands further from the wall.
+        setting([](auto& c) { c.Radius = 1.0f; });
+        run(30);
+        CHECK(Near(pos().x, 2.5f, 0.06f));
+        setting([](auto& c) { c.Radius = 0.5f; });
+        // Shorter (Height 1): it settles lower, feet on the floor.
+        probe->Motion = { 0, 0, 0 };
+        setting([](auto& c) { c.Height = 1.0f; });
+        run(40);
+        CHECK(Near(pos().y, 0.5f, 0.05f) && rr.Get<CharacterControllerComponent>(hero).IsGrounded);
+        setting([](auto& c) { c.Height = 2.0f; });
+        run(40);
+        CHECK(Near(pos().y, 1.0f, 0.06f));
+        // Under the ceiling, moving up (Move, no gravity): its top touches.
+        rr.Get<TransformComponent>(hero).Position = { -10, 1.0f, 0 };
+        probe->Simple = false;
+        probe->Motion = { 0, 3, 0 };
+        run(30);
+        CHECK(Near(pos().y, 1.5f, 0.05f) && (probe->Flags & CharacterCollidedAbove) && probe->Hit(*rt, "Ceiling"));
+        // The step: Step Offset 0 stops it at the step; 0.3 (live) walks up it.
+        rr.Get<TransformComponent>(hero).Position = { -1, 1.0f, 0 };
+        probe->Simple = true;
+        probe->Motion = { -3, 0, 0 };
+        run(60);
+        CHECK(pos().x > -2.6f && pos().y < 1.1f && probe->Hit(*rt, "Step"));
+        setting([](auto& c) { c.StepOffset = 0.3f; });
+        run(25); // (on top of it; it walks down its far side later)
+        CHECK(pos().x < -3.2f && pos().x > -5.0f && Near(pos().y, 1.25f, 0.06f));
+        rt->OnRuntimeStop();
+    }
+
     void TestMeshCollidersAndCharacters()
     {
         AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets"); // CPU mesh data only
@@ -12771,6 +12863,7 @@ int main(int argc, char** argv)
     ScriptRegistry::Register<CollisionProbe>("CollisionProbe");
     ScriptRegistry::Register<MouseProbe>("MouseProbe");
     ScriptRegistry::Register<AppProbe>("AppProbe");
+    ScriptRegistry::Register<CharacterHitProbe>("CharacterHitProbe");
     ScriptRegistry::Register<CloneProbe>("CloneProbe").Field("Speed", &CloneProbe::Speed).Field("Target", &CloneProbe::Target);
     ScriptRegistry::Register<TriggerStayProbe>("TriggerStayProbe");
     ScriptRegistry::Register<LegacyCollisionProbe>("LegacyCollisionProbe");
@@ -12802,6 +12895,7 @@ int main(int argc, char** argv)
     Run("Rigidbody settings while playing", TestRigidbodySettingsWhilePlaying);
     Run("Physics queries and triggers", TestPhysicsQueriesAndTriggers);
     Run("App and timing control", TestAppAndTiming);
+    Run("Character settings and hits", TestCharacterSettingsAndHits);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

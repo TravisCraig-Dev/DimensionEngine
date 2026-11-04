@@ -75,6 +75,9 @@ namespace Dimension
         public virtual void OnApplicationPause(bool paused) { }
         /// <summary>The game is closing (in the editor: play is stopping), before OnDisable and OnDestroy.</summary>
         public virtual void OnApplicationQuit() { }
+        /// <summary>This object's Character Controller ran into something during Move / SimpleMove (each object once per
+        /// move, the ground it walks on too).</summary>
+        public virtual void OnControllerColliderHit(ControllerColliderHit hit) { }
         /// <summary>Called when the text of a UI Input Field on this entity is edited.</summary>
         public virtual void OnTextChanged(string text) { }
         /// <summary>Called when Enter is pressed in a UI Input Field on this entity.</summary>

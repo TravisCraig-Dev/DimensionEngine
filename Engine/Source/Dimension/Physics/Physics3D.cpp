@@ -1,4 +1,5 @@
 #include "Dimension/Physics/Physics3D.h"
+#include "Dimension/Scripting/ScriptableEntity.h"
 #include "Dimension/Physics/ConvexDecomposition.h"
 #include "Dimension/Physics/Cloth.h"
 #include "Dimension/Physics/Water.h"
@@ -2370,8 +2371,13 @@ namespace Dimension
     void Physics3DWorld::RefreshColliders(Entity e)
     {
         auto& reg = m_Scene.GetRegistry();
+        if (reg.Has<CharacterControllerComponent>(e))
+        {
+            RefreshCharacter(e); // its capsule is its collider
+            return;
+        }
         auto* rb = reg.TryGet<RigidbodyComponent>(e);
-        if (!rb || rb->RuntimeBody == 0xFFFFFFFF || reg.Has<CharacterControllerComponent>(e)) return;
+        if (!rb || rb->RuntimeBody == 0xFFFFFFFF) return;
         JPH::ShapeRefC shape;
         float friction, restitution;
         bool sensor;
@@ -2463,6 +2469,28 @@ namespace Dimension
         if (!bi.IsAdded(id)) return;
         bi.SetPositionAndRotation(id, JPH::RVec3(ToJolt(position)), ToJolt(glm::quat(rotation)),
                                   rb->Type == BodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+    }
+
+    void Physics3DWorld::RefreshCharacter(Entity e)
+    {
+        auto* cc = m_Scene.IsValid(e) ? m_Scene.GetRegistry().TryGet<CharacterControllerComponent>(e) : nullptr;
+        if (!cc || !cc->Runtime) return;
+        auto& old = *static_cast<JPH::Ref<JPH::CharacterVirtual>*>(cc->Runtime.get());
+        glm::vec3 position = FromJolt(JPH::Vec3(old->GetPosition()));
+        float verticalSpeed = cc->VerticalSpeed;
+        glm::vec3 velocity = cc->Velocity;
+        bool grounded = cc->IsGrounded;
+        m_Impl->BodyToEntity.erase(old->GetInnerBodyID().GetIndexAndSequenceNumber());
+        cc->Runtime.reset();
+        std::erase(m_Impl->Characters, e);
+        CreateCharacter(e);
+        if (!cc->Runtime) return;
+        auto& character = *static_cast<JPH::Ref<JPH::CharacterVirtual>*>(cc->Runtime.get());
+        character->SetPosition(JPH::RVec3(ToJolt(position)));
+        character->SetLinearVelocity(ToJolt(velocity));
+        cc->VerticalSpeed = verticalSpeed;
+        cc->Velocity = velocity;
+        cc->IsGrounded = grounded;
     }
 
     void Physics3DWorld::RebuildJoint(Entity e)
@@ -3492,7 +3520,7 @@ namespace Dimension
 
     namespace
     {
-        void UpdateCharacter(Scene& scene, Entity e, const glm::vec3& velocity, float dt)
+        void UpdateCharacter(Scene& scene, Entity e, const glm::vec3& velocity, float dt, const glm::vec3& asked)
         {
             Physics3DWorld* world = scene.GetPhysics3D();
             auto* cc = scene.GetRegistry().TryGet<CharacterControllerComponent>(e);
@@ -3530,27 +3558,61 @@ namespace Dimension
             cc->Velocity = (end - start) / dt;
             cc->IsGrounded = character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
             scene.UpdateTransforms();
+
+            // What it touched: which part of the capsule (its spheres' centers split it into bottom, sides and top), and
+            // one hit per object for OnControllerColliderHit.
+            float radius = std::max(0.01f, cc->Radius);
+            float halfCylinder = std::max(0.01f, cc->Height * 0.5f - radius);
+            float middle = end.y + cc->Center.y;
+            int flags = CharacterCollidedNone;
+            std::vector<ControllerColliderHit> hits;
+            float length = glm::length(asked);
+            for (const auto& c : character->GetActiveContacts())
+            {
+                if (!c.mHadCollision || c.mWasDiscarded || c.mIsSensorB) continue;
+                glm::vec3 point = FromJolt(JPH::Vec3(c.mPosition));
+                flags |= point.y < middle - halfCylinder ? CharacterCollidedBelow : point.y > middle + halfCylinder ? CharacterCollidedAbove : CharacterCollidedSides;
+                Entity other = c.mBodyB.IsInvalid() ? Entity::Null() : impl->Lookup(c.mBodyB);
+                if (other.IsNull() || other == e) continue;
+                if (std::any_of(hits.begin(), hits.end(), [&](const ControllerColliderHit& h) { return h.Other == other; })) continue;
+                hits.push_back({ other, point, FromJolt(c.mSurfaceNormal), length > 1e-6f ? asked / length : glm::vec3(0.0f), length });
+            }
+            cc->CollisionFlags = flags;
+            if (hits.empty()) return;
+            if (auto* sc = scene.GetRegistry().TryGet<ScriptComponent>(e))
+            {
+                std::vector<ScriptableEntity*> live;
+                for (auto& inst : sc->LiveInstances(true)) live.push_back(inst.get());
+                for (const auto& hit : hits)
+                    for (ScriptableEntity* inst : live)
+                        if (scene.IsValid(e) && scene.IsValid(hit.Other)) inst->OnControllerColliderHit(hit);
+            }
         }
     }
 
-    void Physics3DWorld::MoveCharacter(Scene& scene, Entity e, const glm::vec3& motion)
+    int Physics3DWorld::MoveCharacter(Scene& scene, Entity e, const glm::vec3& motion)
     {
         float dt = scene.GetDeltaTime();
-        if (dt > 0.0f) UpdateCharacter(scene, e, motion / dt, dt);
+        if (dt > 0.0f) UpdateCharacter(scene, e, motion / dt, dt, motion);
+        auto* cc = scene.IsValid(e) ? scene.GetRegistry().TryGet<CharacterControllerComponent>(e) : nullptr;
+        return cc ? cc->CollisionFlags : 0;
     }
 
-    void Physics3DWorld::SimpleMoveCharacter(Scene& scene, Entity e, const glm::vec3& speed)
+    bool Physics3DWorld::SimpleMoveCharacter(Scene& scene, Entity e, const glm::vec3& speed)
     {
         auto* cc = scene.GetRegistry().TryGet<CharacterControllerComponent>(e);
         Physics3DWorld* world = scene.GetPhysics3D();
         float dt = scene.GetDeltaTime();
-        if (!cc || !world || dt <= 0.0f) return;
+        if (!cc || !world || dt <= 0.0f) return cc && cc->IsGrounded;
         float gravity = world->GetImpl()->System.GetGravity().GetY();
         if (cc->IsGrounded && cc->VerticalSpeed <= 0.0f) cc->VerticalSpeed = -1.0f; // keep a little contact with the ground
         else cc->VerticalSpeed += gravity * dt;
-        UpdateCharacter(scene, e, glm::vec3(speed.x, cc->VerticalSpeed, speed.z), dt);
+        UpdateCharacter(scene, e, glm::vec3(speed.x, cc->VerticalSpeed, speed.z), dt, glm::vec3(speed.x, cc->VerticalSpeed, speed.z) * dt);
+        cc = scene.IsValid(e) ? scene.GetRegistry().TryGet<CharacterControllerComponent>(e) : nullptr; // a hit callback may have changed it
+        if (!cc) return false;
         if (cc->IsGrounded && cc->VerticalSpeed < 0.0f) cc->VerticalSpeed = -1.0f;
         else if (!cc->IsGrounded && cc->Velocity.y > -1e-3f && cc->VerticalSpeed > 0.0f && cc->Velocity.y < cc->VerticalSpeed * 0.5f)
             cc->VerticalSpeed = 0.0f; // hit a ceiling
+        return cc->IsGrounded;
     }
 }

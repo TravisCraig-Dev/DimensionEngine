@@ -1396,6 +1396,7 @@ namespace Dimension
         glm::vec3 Velocity{ 0.0f };   // actual velocity of the last move
         float VerticalSpeed = 0.0f;   // SimpleMove's gravity accumulator (set it to jump)
         glm::vec3 GroundVelocity{ 0.0f }; // velocity of the moving platform under the character (last move)
+        int CollisionFlags = 0;       // CharacterCollisionFlags of the last move
         std::shared_ptr<void> Runtime; // JPH::CharacterVirtual
     };
 

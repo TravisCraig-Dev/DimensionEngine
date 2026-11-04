@@ -61,6 +61,8 @@ namespace Dimension
         virtual void OnApplicationFocus(bool focused) {}
         virtual void OnApplicationPause(bool paused) {}
         virtual void OnApplicationQuit() {}
+        // This entity's Character Controller ran into something during Move / SimpleMove (once per object, the ground too).
+        virtual void OnControllerColliderHit(const ControllerColliderHit& hit) {}
         // Engine-internal, for reloading scripts while playing: OnBeforeSerialize brings the live field values into the
         // fields the engine reads (C# keeps them on the managed object); a recreated script gets OnScriptsReloaded
         // instead of OnCreate.

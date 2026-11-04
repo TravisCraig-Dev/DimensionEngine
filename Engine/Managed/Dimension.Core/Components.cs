@@ -1399,13 +1399,55 @@ namespace Dimension
     }
 
     /// <summary>Capsule character moved by scripts (like Unity's CharacterController).</summary>
+    /// <summary>Which parts of a Character Controller touched something in its last move.</summary>
+    [Flags]
+    public enum CollisionFlags { None = 0, Sides = 1, Above = 2, Below = 4 }
+
+    /// <summary>What a Character Controller ran into while moving (given to OnControllerColliderHit).</summary>
+    public struct ControllerColliderHit
+    {
+        /// <summary>The object it touched.</summary>
+        public Entity Entity;
+        public CharacterController Controller;
+        /// <summary>Where they touch, and the surface there (pointing toward the character).</summary>
+        public Vector3 Point, Normal;
+        /// <summary>The move's direction (normalized) and how far it asked to go.</summary>
+        public Vector3 MoveDirection;
+        public float MoveLength;
+        /// <summary>The object's Rigidbody (null when it has none, or a static one).</summary>
+        public Rigidbody Rigidbody => Entity.GetComponent<Rigidbody>() is { IsDynamic: true } rb ? rb : null;
+        public Collider Collider => Entity.GetComponent<Collider>();
+    }
+
+    /// <summary>
+    /// Walks a capsule through the world without a Rigidbody: Move / SimpleMove slide along walls and step up stairs.
+    /// Its shape and limits apply while playing too (the capsule is made again where it stands).
+    /// </summary>
     public unsafe class CharacterController : Component
     {
         internal override string NativeName => "Character Controller";
-        /// <summary>Moves by `motion` this frame (no gravity), sliding along and stepping over geometry.</summary>
-        public void Move(Vector3 motion) => Native.Api.CharacterMove(Entity.Scene, Entity.Id, (float*)&motion, 0);
-        /// <summary>Moves at `speed` units/s horizontally with gravity applied.</summary>
-        public void SimpleMove(Vector3 speed) => Native.Api.CharacterMove(Entity.Scene, Entity.Id, (float*)&speed, 1);
+        private void Changed() => Native.Api.RefreshColliders(Entity.Scene, Entity.Id);
+        private void Set(string field, float v) { SetFloat(field, v); Changed(); }
+
+        /// <summary>Moves by `motion` this frame (no gravity), sliding along and stepping over geometry; returns which
+        /// parts of it touched something.</summary>
+        public CollisionFlags Move(Vector3 motion) => (CollisionFlags)Native.Api.CharacterMove(Entity.Scene, Entity.Id, (float*)&motion, 0);
+        /// <summary>Moves at `speed` units/s horizontally with gravity applied; returns whether it is grounded.</summary>
+        public bool SimpleMove(Vector3 speed) => Native.Api.CharacterMove(Entity.Scene, Entity.Id, (float*)&speed, 1) != 0;
+        /// <summary>Which parts of it touched something in its last move.</summary>
+        public CollisionFlags CollisionFlags => (CollisionFlags)Native.Api.CharacterFlags(Entity.Scene, Entity.Id);
+        /// <summary>From the bottom of the capsule to its top.</summary>
+        public float Height { get => GetFloat("Height"); set => Set("Height", value); }
+        public float Radius { get => GetFloat("Radius"); set => Set("Radius", value); }
+        /// <summary>The capsule's middle, from the object's position.</summary>
+        public Vector3 Center { get => GetVector3("Center"); set { SetVector3("Center", value); Changed(); } }
+        /// <summary>The steepest slope it walks up, in degrees.</summary>
+        public float SlopeLimit { get => GetFloat("Slope Limit"); set => Set("Slope Limit", value); }
+        /// <summary>The tallest step it walks up (and down without falling).</summary>
+        public float StepOffset { get => GetFloat("Step Offset"); set => Set("Step Offset", value); }
+        public float SkinWidth { get => GetFloat("Skin Width"); set => Set("Skin Width", value); }
+        /// <summary>The most force it pushes rigidbodies with.</summary>
+        public float PushStrength { get => GetFloat("Push Strength"); set => Set("Push Strength", value); }
         /// <summary>Starts a jump for SimpleMove (vertical speed in units/s).</summary>
         public void Jump(float speed) => Native.Api.CharacterSetVerticalSpeed(Entity.Scene, Entity.Id, speed);
         public bool IsGrounded { get { Vector3 v; float vs; return Native.Api.CharacterState(Entity.Scene, Entity.Id, (float*)&v, &vs) != 0; } }
