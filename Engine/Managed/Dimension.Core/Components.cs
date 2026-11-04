@@ -546,12 +546,54 @@ namespace Dimension
             var e = Entity;
             Native.WithUtf8(name, p => Native.Api.AnimatorSetParameter(e.Scene, e.Id, (byte*)p, value, kind));
         }
-        public void SetFloat(string name, float value) => SetParameter(name, value, 0);
+        // (These take the controller's parameters; Component's GetFloat / SetFloat of Inspector fields are hidden here.)
+        public new void SetFloat(string name, float value) => SetParameter(name, value, 0);
         public void SetInteger(string name, int value) => SetParameter(name, value, 1);
-        public void SetBool(string name, bool value) => SetParameter(name, value ? 1 : 0, 2);
+        public new void SetBool(string name, bool value) => SetParameter(name, value ? 1 : 0, 2);
         public void SetTrigger(string name) => SetParameter(name, 1, 3);
+        /// <summary>Clears a trigger that was set but has not fired a transition yet.</summary>
+        public void ResetTrigger(string name) => Query(1, 0, name);
+
+        // Ops: 0 parameter value, 1 reset trigger, 2 normalized time, 3 transition progress (-1 none), 4 speed, 5 set it,
+        // 6 layer count, 7 layer weight, 8 set it, 9 has parameter, 10 layer index by name (-1 none).
+        private float Query(int op, int layer, string name = null, float value = 0.0f)
+        {
+            var e = Entity;
+            return Native.WithUtf8<float>(name ?? "", p => Native.Api.AnimatorQuery(e.Scene, e.Id, op, layer, (byte*)p, value));
+        }
+        private string StateName(int layer, int which) => Native.FromUtf8(Native.Api.AnimatorStateName(Entity.Scene, Entity.Id, layer, which));
+
+        /// <summary>A parameter's value: what was set, else the controller's default (a trigger: true until it fires).</summary>
+        public new float GetFloat(string name) => Query(0, 0, name);
+        public int GetInteger(string name) => (int)MathF.Round(Query(0, 0, name));
+        public new bool GetBool(string name) => Query(0, 0, name) != 0.0f;
+        public bool HasParameter(string name) => Query(9, 0, name) != 0.0f;
+
         /// <summary>Name of the state machine's current state ("" without a controller).</summary>
         public string CurrentState => Native.FromUtf8(Native.Api.AnimatorGetState(Entity.Scene, Entity.Id));
+        /// <summary>A layer's current state (0 = the base layer).</summary>
+        public string GetCurrentState(int layer) => StateName(layer, 0);
+        /// <summary>How far the current state has played: 0.5 halfway through, 2.3 in its third loop (as Unity's
+        /// normalizedTime). Without a controller, the clip's position (0-1).</summary>
+        public float NormalizedTime => Query(2, 0);
+        public float GetNormalizedTime(int layer) => Query(2, layer);
+        /// <summary>Whether the layer is crossfading into its current state.</summary>
+        public bool IsInTransition(int layer = 0) => Query(3, layer) >= 0.0f;
+        /// <summary>The crossfade's progress (0-1), or -1 when not in one.</summary>
+        public float TransitionProgress(int layer = 0) => Query(3, layer);
+        /// <summary>The state fading out while in a transition ("" otherwise).</summary>
+        public string PreviousState(int layer = 0) => StateName(layer, 1);
+
+        /// <summary>Playback speed of every layer (1 = normal, 0 = frozen).</summary>
+        public float Speed { get => Query(4, 0); set => Query(5, 0, null, value); }
+        /// <summary>Layers in the controller, the base layer included.</summary>
+        public int LayerCount => (int)Query(6, 0);
+        public string GetLayerName(int layer) => StateName(layer, 2);
+        /// <summary>A layer's index by name ("Base Layer" is 0), or -1.</summary>
+        public int GetLayerIndex(string name) => (int)Query(10, 0, name);
+        public float GetLayerWeight(int layer) => Query(7, layer);
+        /// <summary>Sets an extra layer's weight (0-1; the base layer's is always 1), at once.</summary>
+        public void SetLayerWeight(int layer, float weight) => Query(8, layer, null, weight);
     }
 
     public unsafe class ParticleSystem : Component

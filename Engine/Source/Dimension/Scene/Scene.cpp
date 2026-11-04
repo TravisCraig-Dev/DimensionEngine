@@ -1108,6 +1108,9 @@ namespace Dimension
                     if (clip) Animation::Sample(*skeleton, *clip, pb.Time, out);
                     else out.SetBindPose(*skeleton);
                 }
+                // How far the state has played, for scripts (Animator.NormalizedTime).
+                pb.NormalizedTime = machine && pb.Runtime.State >= 0 ? AnimatorStateMachine::NormalizedTime(*machine, pb.Runtime, duration)
+                                  : clip && clip->Duration > 0.0f ? pb.Time / clip->Duration : 0.0f;
 
                 if (pb.FadeDuration > 0.0f && pb.FadeElapsed < pb.FadeDuration)
                 {

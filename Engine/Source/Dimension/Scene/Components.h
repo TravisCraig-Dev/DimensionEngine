@@ -389,6 +389,7 @@ namespace Dimension
         float FadeElapsed = 0.0f, FadeDuration = 0.0f;
         float Weight = -1.0f; // < 0: use the layer's weight from the controller
         int StateIndex = -1, PreviousStateIndex = -1; // controller states (synced layers follow them)
+        float NormalizedTime = 0.0f; // the current state's: loops done (1 = once through; not wrapped)
     };
 
     struct AnimatorComponent
@@ -441,6 +442,7 @@ namespace Dimension
         float PreviousTime = 0.0f; // seconds for clips, normalized time for blend trees
         float FadeElapsed = 0.0f, FadeDuration = 0.0f;
         int StateIndex = -1, PreviousStateIndex = -1; // controller states (synced layers follow them)
+        float NormalizedTime = 0.0f; // the current state's (or clip's): loops done (1 = once through)
         std::vector<glm::mat4> SkinMatrices;
 
         // Switches clips, blending from the current pose over `fadeSeconds`.

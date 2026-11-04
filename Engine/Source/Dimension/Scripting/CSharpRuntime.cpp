@@ -204,6 +204,9 @@ namespace Dimension
             uint64_t (*InstantiateObject)(void*, int, uint64_t, const float*, int, uint64_t);
             // Takes a script (its managed object) or an engine component (by name) off an object at the end of the frame.
             int (*RemoveComponent)(void*, uint64_t, const char*, intptr_t);
+            // The Animator (see Animator in Components.cs for the ops); `layer` 0 is the base layer.
+            float (*AnimatorQuery)(void*, uint64_t, int, int, const char*, float);
+            const char* (*AnimatorStateName)(void*, uint64_t, int, int); // layer; 0 current state, 1 the one fading out, 2 layer name
         };
 
         // Background scene loads started from C#, by id.
@@ -1295,6 +1298,67 @@ namespace Dimension
                     return 0;
                 }
                 return name && scene.RemoveComponentDeferred(e, name) ? 1 : 0;
+            };
+            a.AnimatorQuery = [](void* s, uint64_t e, int op, int layer, const char* name, float value) -> float {
+                auto* an = Comp<AnimatorComponent>(s, e);
+                if (!an || !S(s).IsValid(Unpack(e))) return op == 10 ? -1.0f : 0.0f;
+                Ref<AnimatorController> controller = AssetManager::GetAnimatorController(an->Controller);
+                int extra = controller ? (int)controller->Layers.size() : 0;
+                std::string n = name ? name : "";
+                // A layer's playback: the component itself (base) or an extra layer's (null when it has not run yet).
+                const AnimatorLayerPlayback* pb = layer >= 1 && layer <= (int)an->Layers.size() ? &an->Layers[layer - 1] : nullptr;
+                auto fade = [&](float elapsed, float duration) { return duration > 0.0f && elapsed < duration ? elapsed / duration : -1.0f; };
+                switch (op)
+                {
+                case 0: // a parameter's value (a trigger: 1 while set)
+                {
+                    const AnimParameter* p = controller ? controller->FindParameter(n) : nullptr;
+                    if (p && p->Type == AnimParameterType::Trigger) return an->Runtime.Triggers.contains(n) ? 1.0f : 0.0f;
+                    if (auto it = an->Runtime.Parameters.find(n); it != an->Runtime.Parameters.end()) return it->second;
+                    return p ? p->Default : 0.0f;
+                }
+                case 1: an->ResetTrigger(n); return 0.0f;
+                case 2: return layer == 0 ? an->NormalizedTime : pb ? pb->NormalizedTime : 0.0f;
+                case 3: // transition progress 0-1, -1 when none
+                    return layer == 0 ? fade(an->FadeElapsed, an->FadeDuration) : pb ? fade(pb->FadeElapsed, pb->FadeDuration) : -1.0f;
+                case 4: return an->Speed;
+                case 5: an->Speed = value; return 0.0f;
+                case 6: return (float)(extra + 1);
+                case 7: // layer weight
+                    if (layer == 0) return 1.0f;
+                    if (pb && pb->Weight >= 0.0f) return pb->Weight;
+                    return layer <= extra ? controller->Layers[layer - 1].Weight : 0.0f;
+                case 8: an->SetLayerWeight(layer, value); return 0.0f;
+                case 9: return controller && controller->FindParameter(n) ? 1.0f : 0.0f;
+                case 10:
+                    for (int i = 0; i < extra; ++i)
+                        if (controller->Layers[i].Name == n) return (float)(i + 1);
+                    return n == "Base Layer" ? 0.0f : -1.0f;
+                default: return 0.0f;
+                }
+            };
+            a.AnimatorStateName = [](void* s, uint64_t e, int layer, int which) -> const char* {
+                s_StringReturn.clear();
+                auto* an = Comp<AnimatorComponent>(s, e);
+                if (!an) return "";
+                Ref<AnimatorController> controller = AssetManager::GetAnimatorController(an->Controller);
+                const AnimatorController* machine = layer == 0 ? controller.get()
+                                                  : controller && layer <= (int)controller->Layers.size() ? &controller->Layers[layer - 1].Machine : nullptr;
+                if (which == 2) s_StringReturn = layer == 0 ? "Base Layer" : machine ? controller->Layers[layer - 1].Name : "";
+                else if (layer == 0 && which == 0) s_StringReturn = an->CurrentState;
+                else
+                {
+                    const AnimatorLayerPlayback* pb = layer >= 1 && layer <= (int)an->Layers.size() ? &an->Layers[layer - 1] : nullptr;
+                    if (which == 0) s_StringReturn = pb ? pb->CurrentState : "";
+                    else
+                    {
+                        bool fading = layer == 0 ? an->FadeDuration > 0.0f && an->FadeElapsed < an->FadeDuration
+                                                 : pb && pb->FadeDuration > 0.0f && pb->FadeElapsed < pb->FadeDuration;
+                        int index = layer == 0 ? an->PreviousStateIndex : pb ? pb->PreviousStateIndex : -1;
+                        if (fading && machine && index >= 0 && index < (int)machine->States.size()) s_StringReturn = machine->States[index].Name;
+                    }
+                }
+                return s_StringReturn.c_str();
             };
             a.AddScript = [](void* s, uint64_t e, const char* name) -> intptr_t {
                 if (!s || !name) return 0;

@@ -153,6 +153,8 @@ namespace Dimension.Interop
         // Copies (kind 0 an object, 1 a prefab GUID) with a pose (position, rotation xyzw; flags 1 / 2) under a parent.
         public delegate* unmanaged<IntPtr, int, ulong, float*, int, ulong, ulong> InstantiateObject;
         public delegate* unmanaged<IntPtr, ulong, byte*, IntPtr, int> RemoveComponent; // a script (handle) or a component (name)
+        public delegate* unmanaged<IntPtr, ulong, int, int, byte*, float, float> AnimatorQuery; // see Animator in Components.cs
+        public delegate* unmanaged<IntPtr, ulong, int, int, byte*> AnimatorStateName;           // layer; 0 current, 1 fading out, 2 layer name
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
