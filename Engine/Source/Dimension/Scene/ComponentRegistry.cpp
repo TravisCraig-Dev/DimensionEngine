@@ -260,7 +260,9 @@ namespace Dimension
             .Field("Tiling", &MeshRendererComponent::Tiling)
             .Field("Smoothness", &MeshRendererComponent::Smoothness).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Emission", &MeshRendererComponent::Emission).Range(0.0f, 100.0f).Speed(0.05f)
-            .Field("Cast Shadows", &MeshRendererComponent::CastShadows);
+            .Field("Cast Shadows", &MeshRendererComponent::CastShadows)
+            .Field("Tint", &MeshRendererComponent::Tint).As(FieldType::Color4)
+                .Tooltip("Multiplies the color of whatever it draws (the material asset's too), for this object only");
 
         Register<AnimatorComponent>("Animator", "Animation")
             .Field("Controller", &AnimatorComponent::Controller).As(FieldType::AnimatorController)

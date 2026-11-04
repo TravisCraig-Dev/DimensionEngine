@@ -333,6 +333,9 @@ namespace Dimension
         float Smoothness = 0.5f;
         float Emission = 0.0f;
         bool CastShadows = true;
+        // Multiplies the color (and alpha) of whatever it draws, its material asset's too: a per-object recolor or a
+        // script's flash without changing the shared material (like a Unity MaterialPropertyBlock's color).
+        glm::vec4 Tint{ 1.0f };
     };
 
     struct DirectionalLightComponent

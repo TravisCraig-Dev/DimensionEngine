@@ -225,6 +225,8 @@ namespace Dimension
             int (*TilemapOp)(void*, uint64_t, int, int, int, int, float*);
             // A Terrain: the ground (xyz) and normal (xyz) under a world point; 0 outside it.
             int (*TerrainSample)(void*, uint64_t, const float*, float*);
+            // A Mesh Renderer's per-slot material overrides: 0 count, 1 get slot, 2 set slot (growing the list), 3 clear.
+            uint64_t (*RendererMaterials)(void*, uint64_t, int, int, uint64_t);
         };
 
         // Background scene loads started from C#, by id.
@@ -970,12 +972,14 @@ namespace Dimension
             a.SetUIText = [](void* s, uint64_t e, const char* text) {
                 if (auto* t = Comp<UITextComponent>(s, e)) t->Text = text, t->LocalizedKey.clear(); // a script's text wins
                 else if (auto* f = Comp<UIInputFieldComponent>(s, e)) f->Text = text;
+                else if (auto* r = Comp<TextRendererComponent>(s, e)) r->Text = text;
             };
             a.GetUIText = [](void* s, uint64_t e) -> const char* {
                 if (auto* t = Comp<UITextComponent>(s, e)) s_StringReturn = t->Text;
                 else if (auto* f = Comp<UIInputFieldComponent>(s, e)) s_StringReturn = f->Text;
                 else if (auto* d = Comp<UIDropdownComponent>(s, e); d && d->Value >= 0 && d->Value < (int)d->Options.size())
                     s_StringReturn = d->Options[d->Value];
+                else if (auto* r = Comp<TextRendererComponent>(s, e)) s_StringReturn = r->Text;
                 else s_StringReturn.clear();
                 return s_StringReturn.c_str();
             };
@@ -1376,6 +1380,25 @@ namespace Dimension
                 p.Size = v[10];
                 p.Lifetime = v[11];
                 ps->Emit(p, count);
+            };
+            a.RendererMaterials = [](void* s, uint64_t e, int op, int slot, uint64_t guid) -> uint64_t {
+                auto* mr = Comp<MeshRendererComponent>(s, e);
+                if (!mr) return 0;
+                auto& list = mr->Materials;
+                switch (op)
+                {
+                case 0: return list.size();
+                case 1: return slot >= 0 && slot < (int)list.size() ? (uint64_t)list[slot] : 0;
+                case 2:
+                    if (slot < 0 || slot >= 256) return 0;
+                    if (slot >= (int)list.size()) list.resize(slot + 1, AssetHandle::None());
+                    list[slot] = AssetHandle(guid);
+                    // Trailing empty slots fall through anyway: keep the list short.
+                    while (!list.empty() && !list.back().IsValid()) list.pop_back();
+                    return 1;
+                case 3: list.clear(); return 1;
+                default: return 0;
+                }
             };
             a.TilemapOp = [](void* s, uint64_t e, int op, int x, int y, int tile, float* io) -> int {
                 auto* tm = Comp<TilemapComponent>(s, e);

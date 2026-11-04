@@ -8443,11 +8443,12 @@ namespace
             for (int i = 0; i < 90; ++i)
             {
                 rt->OnUpdateRuntime(1.0f / 60.0f);
-                flashed |= rt->GetRegistry().Get<MeshRendererComponent>(dropped).Color.g < 0.9f;
-                placedFlashed |= rt->GetRegistry().Get<MeshRendererComponent>(placed).Color.g < 0.99f;
+                flashed |= rt->GetRegistry().Get<MeshRendererComponent>(dropped).Tint.g < 0.9f; // the Tint, so over materials too
+                placedFlashed |= rt->GetRegistry().Get<MeshRendererComponent>(placed).Tint.g < 0.99f;
             }
             CHECK(flashed && !placedFlashed);
-            CHECK(Near(rt->GetRegistry().Get<MeshRendererComponent>(dropped).Color.g, 1.0f, 0.01f)); // faded back
+            CHECK(Near(rt->GetRegistry().Get<MeshRendererComponent>(dropped).Tint.g, 1.0f, 0.01f) &&
+                  rt->GetRegistry().Get<MeshRendererComponent>(dropped).Color == glm::vec4(1.0f)); // faded back; its Color untouched
             std::string score = rt->GetRegistry().Get<UITextComponent>(board).Text;
             CHECK(score == "Hard hits: 2 (last: Unlinked into Ground)");
             rt->OnRuntimeStop();

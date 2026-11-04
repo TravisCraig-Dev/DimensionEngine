@@ -1790,6 +1790,7 @@ namespace Dimension
                     mix(&mr->Mesh, sizeof(mr->Mesh));
                     mix(&mr->Material, sizeof(mr->Material));
                     mix(&mr->Color, sizeof(mr->Color));
+                    mix(&mr->Tint, sizeof(mr->Tint));
                     for (const auto& m : mr->Materials) mix(&m, sizeof(m));
                 }
                 for (Entity c : scene.GetChildren(e)) walk(c);
@@ -1801,6 +1802,7 @@ namespace Dimension
                 mix(&mr.Mesh, sizeof(mr.Mesh));
                 mix(&mr.Material, sizeof(mr.Material));
                 mix(&mr.Color, sizeof(mr.Color));
+                mix(&mr.Tint, sizeof(mr.Tint));
             }
             else if (!scene.GetChildren(group).empty())
                 walk(scene.GetChildren(group)[0]);
@@ -2356,6 +2358,14 @@ namespace Dimension
                     matPtr = slotMat.get();
                 }
                 if (!matPtr) matPtr = &ResolveMaterial(mr, scratch);
+                // The renderer's Tint on top of whichever material it draws (this object only).
+                Material tinted;
+                if (mr.Tint != glm::vec4(1.0f))
+                {
+                    tinted = *matPtr;
+                    tinted.BaseColor *= mr.Tint;
+                    matPtr = &tinted;
+                }
                 const Material& mat = *matPtr;
                 VkDeviceAddress address;
                 if (terrainRt)

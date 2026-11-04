@@ -4,7 +4,7 @@ using Dimension;
 
 namespace Game
 {
-    /// <summary>Flashes the object's color when it hits something hard (its speed along the contact normal), plays
+    /// <summary>Flashes the object's color (its renderer's Tint, so it shows over a material too) when it hits something hard (its speed along the contact normal), plays
     /// HitSound there, throws sparks from Sparks (a Particle System) off the contact, and draws the contact normals for
     /// a moment.</summary>
     public class HitFlash : Behaviour
@@ -18,14 +18,9 @@ namespace Game
         [Tooltip("Sparks at 8 m/s (fewer for softer hits)")] public int SparkCount = 24;
 
         private MeshRenderer m_Renderer;
-        private Color m_BaseColor;
         private float m_Flash;
 
-        public override void OnCreate()
-        {
-            m_Renderer = GetComponent<MeshRenderer>();
-            if (m_Renderer != null) m_BaseColor = m_Renderer.Color;
-        }
+        public override void OnCreate() => m_Renderer = GetComponent<MeshRenderer>();
 
         public override void OnCollisionEnter(Collision collision)
         {
@@ -64,7 +59,7 @@ namespace Game
         {
             if (m_Flash <= 0.0f || m_Renderer == null) return;
             m_Flash = MathF.Max(m_Flash - dt / FlashSeconds, 0.0f);
-            m_Renderer.Color = Color.Lerp(m_BaseColor, FlashColor, m_Flash);
+            m_Renderer.Tint = Color.Lerp(Color.White, FlashColor, m_Flash);
         }
     }
 }

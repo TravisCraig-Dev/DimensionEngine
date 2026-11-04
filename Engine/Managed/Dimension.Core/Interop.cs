@@ -165,6 +165,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, float*, int, int, void> ParticlesEmitWith;
         public delegate* unmanaged<IntPtr, ulong, int, int, int, int, float*, int> TilemapOp;      // see Tilemap
         public delegate* unmanaged<IntPtr, ulong, float*, float*, int> TerrainSample;              // ground xyz, normal xyz
+        public delegate* unmanaged<IntPtr, ulong, int, int, ulong, ulong> RendererMaterials;       // see MeshRenderer
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

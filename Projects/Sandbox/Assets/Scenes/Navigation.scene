@@ -843,6 +843,13 @@
         "Stiffness": 10.0
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.ScuffMarks",
+       "Fields": {
+        "Mark": 6000108
+       },
+       "Enabled": true
       }
      ]
     }
@@ -940,6 +947,13 @@
         "Stiffness": 10.0
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.ScuffMarks",
+       "Fields": {
+        "Mark": 6000108
+       },
+       "Enabled": true
       }
      ]
     }
@@ -1035,6 +1049,13 @@
        "Fields": {
         "Lift": 0.5,
         "Stiffness": 10.0
+       },
+       "Enabled": true
+      },
+      {
+       "Class": "Game.ScuffMarks",
+       "Fields": {
+        "Mark": 6000108
        },
        "Enabled": true
       }
@@ -4769,7 +4790,13 @@
          4.0,
          14.0
         ],
-        "MaxCopies": 8
+        "MaxCopies": 8,
+        "Looks": [
+         100061,
+         100022,
+         100026,
+         100024
+        ]
        },
        "Enabled": true
       }
@@ -5292,6 +5319,52 @@
      "Collision Plane Height": 0.0,
      "Bounce": 0.35,
      "Blend": 0
+    }
+   }
+  },
+  {
+   "guid": 6000108,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Scuff Mark",
+     "Tag": "Untagged",
+     "Active": false,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      -20,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Decal": {
+     "Texture": 0,
+     "Color": [
+      0.25,
+      0.2,
+      0.16,
+      0.8
+     ],
+     "Size": [
+      1.3,
+      1.3,
+      0.6
+     ],
+     "Blend": 1,
+     "Angle Fade": 0.3,
+     "Sorting Order": 0
     }
    }
   }

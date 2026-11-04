@@ -203,6 +203,11 @@ namespace Dimension
         }
     }
 
+    /// <summary>
+    /// Draws a mesh: with a <see cref="Material"/> asset, that material's look; without one, the simple fields here
+    /// (<see cref="Texture"/>, <see cref="Color"/>, <see cref="Smoothness"/>, <see cref="Emission"/>). <see cref="Tint"/>
+    /// recolors either, for this object only.
+    /// </summary>
     public unsafe class MeshRenderer : Component
     {
         internal override string NativeName => "Mesh Renderer";
@@ -211,6 +216,74 @@ namespace Dimension
             get { Color c; Native.Api.GetColor(Entity.Scene, Entity.Id, (float*)&c); return c; }
             set => Native.Api.SetColor(Entity.Scene, Entity.Id, (float*)&value);
         }
+        /// <summary>The mesh it draws (the built-in shapes too: a cube is GUID 1, a sphere 2).</summary>
+        public Mesh Mesh { get => new(GetAssetGuid("Mesh")); set => SetAssetGuid("Mesh", value.Guid); }
+        /// <summary>Its material asset (none: the simple fields below).</summary>
+        public Material Material { get => new(GetAssetGuid("Material")); set => SetAssetGuid("Material", value.Guid); }
+        /// <summary>The albedo texture of the simple look (no Material).</summary>
+        public Texture Texture { get => new(GetAssetGuid("Albedo")); set => SetAssetGuid("Albedo", value.Guid); }
+        public Vector2 Tiling { get => GetVector2("Tiling"); set => SetVector2("Tiling", value); }
+        /// <summary>0 rough to 1 polished (the simple look).</summary>
+        public float Smoothness { get => GetFloat("Smoothness"); set => SetFloat("Smoothness", value); }
+        /// <summary>How much it glows in its color (0: not at all; above 1 blooms).</summary>
+        public float Emission { get => GetFloat("Emission"); set => SetFloat("Emission", value); }
+        public bool CastShadows { get => GetBool("Cast Shadows"); set => SetBool("Cast Shadows", value); }
+        /// <summary>Multiplies the color of whatever it draws, a material asset's too (white: as it is); for this object
+        /// only, so flashing one crate leaves the others sharing its material alone.</summary>
+        public Color Tint
+        {
+            get { Vector4 v = GetVector4("Tint"); return new Color(v.X, v.Y, v.Z, v.W); }
+            set => SetVector4("Tint", new Vector4(value.R, value.G, value.B, value.A));
+        }
+
+        // Ops: 0 count, 1 get slot, 2 set slot, 3 clear.
+        private ulong Slots(int op, int slot = 0, ulong guid = 0) => Native.Api.RendererMaterials(Entity.Scene, Entity.Id, op, slot, guid);
+        /// <summary>How many material slots are overridden (slot N replaces the model's material N; see SetMaterial).</summary>
+        public int MaterialOverrideCount => (int)Slots(0);
+        /// <summary>The material overriding a slot of the model (none: Material, or the model's own).</summary>
+        public Material GetMaterial(int slot) => new(Slots(1, slot));
+        /// <summary>Overrides one material slot of a model with several (none puts its own back).</summary>
+        public void SetMaterial(int slot, Material material) => Slots(2, slot, material.Guid);
+        public void ClearMaterialOverrides() => Slots(3);
+    }
+
+    public enum DecalBlend { Alpha = 0, Multiply = 1, Additive = 2 }
+
+    /// <summary>Projects a texture onto the surfaces in front of it (along its -Z), like Unity's URP Decal Projector:
+    /// scorch marks, dirt, paint, footprints.</summary>
+    public unsafe class Decal : Component
+    {
+        internal override string NativeName => "Decal";
+        /// <summary>The picture projected (none: a soft round spot).</summary>
+        public Texture Texture { get => new(GetAssetGuid("Texture")); set => SetAssetGuid("Texture", value.Guid); }
+        /// <summary>Its tint; alpha is the opacity (fade it out by lowering it).</summary>
+        public Color Color { get { Vector4 v = GetVector4("Color"); return new Color(v.X, v.Y, v.Z, v.W); } set => SetVector4("Color", new Vector4(value.R, value.G, value.B, value.A)); }
+        /// <summary>Width and height of the picture, and how deep it projects.</summary>
+        public Vector3 Size { get => GetVector3("Size"); set => SetVector3("Size", value); }
+        public DecalBlend Blend { get => (DecalBlend)GetInt("Blend"); set => SetInt("Blend", (int)value); }
+        /// <summary>Surfaces tilted away from it fade out from this cosine on (0-1).</summary>
+        public float AngleFade { get => GetFloat("Angle Fade"); set => SetFloat("Angle Fade", value); }
+        public int SortingOrder { get => GetInt("Sorting Order"); set => SetInt("Sorting Order", value); }
+    }
+
+    public enum TextAlignment { Left = 0, Center = 1, Right = 2 }
+
+    /// <summary>Text in the 3D world (a Text (3D) component, like Unity's TextMesh): labels, signs, damage numbers.</summary>
+    public unsafe class TextMesh : Component
+    {
+        internal override string NativeName => "Text (3D)";
+        public string Text
+        {
+            get => Native.FromUtf8(Native.Api.GetUIText(Entity.Scene, Entity.Id));
+            set { var e = Entity; Native.WithUtf8(value ?? "", p => Native.Api.SetUIText(e.Scene, e.Id, (byte*)p)); }
+        }
+        public Color Color { get { Vector4 v = GetVector4("Color"); return new Color(v.X, v.Y, v.Z, v.W); } set => SetVector4("Color", new Vector4(value.R, value.G, value.B, value.A)); }
+        /// <summary>The height of a line in world units.</summary>
+        public float FontSize { get => GetFloat("Font Size"); set => SetFloat("Font Size", value); }
+        public TextAlignment Alignment { get => (TextAlignment)GetInt("Alignment"); set => SetInt("Alignment", (int)value); }
+        /// <summary>Whether tags like &lt;b&gt; and &lt;color=#ff8000&gt; style it.</summary>
+        public bool RichText { get => GetBool("Rich Text"); set => SetBool("Rich Text", value); }
+        public int SortingOrder { get => GetInt("Sorting Order"); set => SetInt("Sorting Order", value); }
     }
 
     /// <summary>
