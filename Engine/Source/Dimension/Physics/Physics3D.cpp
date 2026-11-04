@@ -173,6 +173,7 @@ namespace Dimension
 
         std::unordered_map<JPH::uint32, Entity> BodyToEntity; // read-only during Update
         std::unordered_set<JPH::uint32> Sensors;               // read-only during Update
+        std::unordered_set<JPH::uint32> ScriptedBodies;        // bodies of objects with scripts (they get Stay); read-only during Update
         struct Joint
         {
             Entity A, B;
@@ -296,7 +297,22 @@ namespace Dimension
             System.RemoveConstraint(Vehicles[i].Constraint);
             Vehicles.erase(Vehicles.begin() + i);
         }
-        struct Event { Entity A, B; bool Begin, Trigger; float Speed = 0.0f; glm::vec3 Point{ 0.0f }, VelocityA{ 0.0f }, VelocityB{ 0.0f }, Normal{ 0.0f }; };
+        // Normal points from A to B. Stay: still touching (a persisted contact). Contacts and Impulse as A sees them.
+        struct Event
+        {
+            Entity A, B;
+            bool Begin, Trigger;
+            float Speed = 0.0f;
+            glm::vec3 Point{ 0.0f }, VelocityA{ 0.0f }, VelocityB{ 0.0f }, Normal{ 0.0f };
+            bool Stay = false;
+            std::vector<ContactPoint> Contacts;
+            float Impulse = 0.0f;
+            JPH::uint32 BodyA = ~0u, BodyB = ~0u; // JPH::BodyID index and sequence
+        };
+        // Contacts Jolt dropped because both bodies fell asleep (or one did against a static body): still touching, so no
+        // Exit unless they wake up apart.
+        struct SleepingPair { JPH::uint32 BodyA, BodyB; Entity A, B; bool Trigger; };
+        std::vector<SleepingPair> SleepingPairs;
         std::mutex EventMutex;
         std::vector<Event> Events;
         // Breakables: pieces cut once per mesh and settings (shared by every copy that breaks), and pieces that go.
@@ -341,14 +357,43 @@ namespace Dimension
             return it != BodyToEntity.end() ? it->second : Entity::Null();
         }
 
-        void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
+        Event MakeEvent(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, bool stay)
         {
             // The impact speed along the normal (Breakables compare it with their Break Speed).
             JPH::RVec3 point = manifold.GetWorldSpaceContactPointOn1(0);
-            float speed = std::abs((a.GetPointVelocity(point) - b.GetPointVelocity(point)).Dot(manifold.mWorldSpaceNormal));
+            float approach = (a.GetPointVelocity(point) - b.GetPointVelocity(point)).Dot(manifold.mWorldSpaceNormal); // > 0: closing
+            Event ev{ Lookup(a.GetID()), Lookup(b.GetID()), !stay, a.IsSensor() || b.IsSensor(), std::abs(approach), FromJolt(JPH::Vec3(point)),
+                      FromJolt(a.GetLinearVelocity()), FromJolt(b.GetLinearVelocity()), FromJolt(manifold.mWorldSpaceNormal) };
+            ev.Stay = stay;
+            ev.BodyA = a.GetID().GetIndexAndSequenceNumber();
+            ev.BodyB = b.GetID().GetIndexAndSequenceNumber();
+            glm::vec3 towardA = -ev.Normal;
+            for (JPH::uint i = 0; i < manifold.mRelativeContactPointsOn1.size(); ++i)
+            {
+                JPH::RVec3 p = (manifold.GetWorldSpaceContactPointOn1(i) + manifold.GetWorldSpaceContactPointOn2(i)) * 0.5f;
+                ev.Contacts.push_back({ FromJolt(JPH::Vec3(p)), towardA, -manifold.mPenetrationDepth });
+            }
+            // An inelastic hit's impulse: the closing speed times the pair's reduced mass (static bodies weigh infinitely).
+            auto inverseMass = [](const JPH::Body& body) { return body.IsDynamic() ? body.GetMotionProperties()->GetInverseMass() : 0.0f; };
+            float inv = inverseMass(a) + inverseMass(b);
+            ev.Impulse = inv > 0.0f ? std::max(approach, 0.0f) / inv : 0.0f;
+            return ev;
+        }
+
+        void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
+        {
+            Event ev = MakeEvent(a, b, manifold, false);
             std::lock_guard lock(EventMutex);
-            Events.push_back({ Lookup(a.GetID()), Lookup(b.GetID()), true, a.IsSensor() || b.IsSensor(), speed, FromJolt(JPH::Vec3(point)),
-                               FromJolt(a.GetLinearVelocity()), FromJolt(b.GetLinearVelocity()), FromJolt(manifold.mWorldSpaceNormal) });
+            Events.push_back(std::move(ev));
+        }
+
+        void OnContactPersisted(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
+        {
+            if (a.IsSensor() || b.IsSensor()) return;
+            if (!ScriptedBodies.contains(a.GetID().GetIndexAndSequenceNumber()) && !ScriptedBodies.contains(b.GetID().GetIndexAndSequenceNumber())) return;
+            Event ev = MakeEvent(a, b, manifold, true);
+            std::lock_guard lock(EventMutex);
+            Events.push_back(std::move(ev));
         }
 
         void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
@@ -356,7 +401,10 @@ namespace Dimension
             bool trigger = Sensors.contains(pair.GetBody1ID().GetIndexAndSequenceNumber()) ||
                            Sensors.contains(pair.GetBody2ID().GetIndexAndSequenceNumber());
             std::lock_guard lock(EventMutex);
-            Events.push_back({ Lookup(pair.GetBody1ID()), Lookup(pair.GetBody2ID()), false, trigger });
+            Event ev{ Lookup(pair.GetBody1ID()), Lookup(pair.GetBody2ID()), false, trigger };
+            ev.BodyA = pair.GetBody1ID().GetIndexAndSequenceNumber();
+            ev.BodyB = pair.GetBody2ID().GetIndexAndSequenceNumber();
+            Events.push_back(std::move(ev));
         }
     };
 
@@ -2433,6 +2481,10 @@ namespace Dimension
         UpdateBoats(dt);
         UpdateHitches(dt);
         UpdateRagdolls(dt, false);
+        // Which bodies' objects have scripts (only they are told while contacts persist).
+        m_Impl->ScriptedBodies.clear();
+        for (auto& [id, e] : m_Impl->BodyToEntity)
+            if (reg.Valid(e) && reg.Has<ScriptComponent>(e)) m_Impl->ScriptedBodies.insert(id);
         m_Impl->System.Update(dt, 1, m_Impl->TempAllocator.get(), m_Impl->JobSystem.get());
         UpdateCloths(dt, true);
         UpdateRopes(dt, true);
@@ -2511,7 +2563,78 @@ namespace Dimension
             std::lock_guard lock(m_Impl->EventMutex);
             events.swap(m_Impl->Events);
         }
-        for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, ev.Trigger);
+        // Falling asleep removes a body's contacts (and waking adds them again): not an Exit and a new Enter for scripts.
+        {
+            auto asleep = [&](JPH::uint32 id) { JPH::BodyID b(id); return bi.IsAdded(b) && !bi.IsActive(b); };
+            auto& sleeping = m_Impl->SleepingPairs;
+            auto findSleeping = [&](JPH::uint32 a, JPH::uint32 b) {
+                return std::find_if(sleeping.begin(), sleeping.end(), [&](const Impl::SleepingPair& p) {
+                    return (p.BodyA == a && p.BodyB == b) || (p.BodyA == b && p.BodyB == a);
+                });
+            };
+            std::vector<Impl::Event> kept;
+            for (auto& ev : events)
+            {
+                bool exit = !ev.Begin && !ev.Stay;
+                if (exit && asleep(ev.BodyA) && asleep(ev.BodyB))
+                {
+                    if (findSleeping(ev.BodyA, ev.BodyB) == sleeping.end()) sleeping.push_back({ ev.BodyA, ev.BodyB, ev.A, ev.B, ev.Trigger });
+                    continue;
+                }
+                if (ev.Begin)
+                    if (auto it = findSleeping(ev.BodyA, ev.BodyB); it != sleeping.end())
+                    {
+                        sleeping.erase(it); // woke up still touching
+                        ev.Begin = false;
+                        ev.Stay = true;
+                    }
+                kept.push_back(std::move(ev));
+            }
+            // Woke up without touching again: they came apart (or a body went).
+            for (auto it = sleeping.begin(); it != sleeping.end();)
+                if (!asleep(it->BodyA) || !asleep(it->BodyB))
+                {
+                    Impl::Event ev{ it->A, it->B, false, it->Trigger };
+                    ev.BodyA = it->BodyA;
+                    ev.BodyB = it->BodyB;
+                    kept.push_back(std::move(ev));
+                    it = sleeping.erase(it);
+                }
+                else
+                    ++it;
+            events = std::move(kept);
+        }
+        // One event per body pair and kind this step (a pair touches through several sub-shapes, e.g. a compound or a
+        // mesh's triangles): their contacts together.
+        std::vector<Impl::Event> merged;
+        for (auto& ev : events)
+        {
+            auto same = std::find_if(merged.begin(), merged.end(), [&](const Impl::Event& m) {
+                return m.Begin == ev.Begin && m.Stay == ev.Stay && m.Trigger == ev.Trigger &&
+                       ((m.A == ev.A && m.B == ev.B) || (m.A == ev.B && m.B == ev.A));
+            });
+            if (same == merged.end()) { merged.push_back(ev); continue; }
+            bool swapped = same->A != ev.A;
+            for (ContactPoint c : ev.Contacts)
+            {
+                if (swapped) c.Normal = -c.Normal;
+                same->Contacts.push_back(c);
+            }
+            same->Impulse = std::max(same->Impulse, ev.Impulse);
+        }
+        for (auto& ev : merged)
+        {
+            CollisionPhase phase = ev.Begin ? CollisionPhase::Enter : ev.Stay ? CollisionPhase::Stay : CollisionPhase::Exit;
+            Collision c;
+            if (phase != CollisionPhase::Exit)
+            {
+                c.Contacts = ev.Contacts;
+                c.Normal = -ev.Normal;
+                c.RelativeVelocity = ev.VelocityA - ev.VelocityB;
+                c.Impulse = ev.Impulse;
+            }
+            m_Scene.DispatchCollision(ev.A, ev.B, phase, ev.Trigger, &c);
+        }
         for (auto& [e, force] : broken) m_Scene.DispatchJointBreak(e, force);
         // Glue that is pulled or twisted too hard lets go.
         if (dt > 0.0f)

@@ -816,6 +816,24 @@
      "Linear Damping": 0.05,
      "Angular Damping": 0.05,
      "Use Gravity": true
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.HitFlash",
+       "Fields": {
+        "MinSpeed": 2.0,
+        "FlashColor": [
+         1.0,
+         0.35,
+         0.2,
+         1.0
+        ],
+        "FlashSeconds": 0.4
+       },
+       "Enabled": true
+      }
+     ]
     }
    }
   },
@@ -884,6 +902,24 @@
      "Linear Damping": 0.05,
      "Angular Damping": 0.05,
      "Use Gravity": true
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.HitFlash",
+       "Fields": {
+        "MinSpeed": 2.0,
+        "FlashColor": [
+         1.0,
+         0.35,
+         0.2,
+         1.0
+        ],
+        "FlashSeconds": 0.4
+       },
+       "Enabled": true
+      }
+     ]
     }
    }
   },
@@ -952,6 +988,24 @@
      "Linear Damping": 0.05,
      "Angular Damping": 0.05,
      "Use Gravity": true
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.HitFlash",
+       "Fields": {
+        "MinSpeed": 2.0,
+        "FlashColor": [
+         1.0,
+         0.35,
+         0.2,
+         1.0
+        ],
+        "FlashSeconds": 0.4
+       },
+       "Enabled": true
+      }
+     ]
     }
    }
   },
@@ -4829,7 +4883,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), right-click a crate to shove it; T toggles slow motion.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), right-click a crate to shove it (it flashes when it hits something hard); T toggles slow motion.",
      "Font": 0,
      "Font Size": 26,
      "Color": [

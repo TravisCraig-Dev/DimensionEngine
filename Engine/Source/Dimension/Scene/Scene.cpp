@@ -1243,22 +1243,30 @@ namespace Dimension
         if (s_EventHook && IsValid(e)) s_EventHook(*this, e, submit ? EventKind::Submit : EventKind::TextChanged, 0.0f, Entity::Null(), text.c_str());
     }
 
-    void Scene::DispatchCollision(Entity a, Entity b, bool begin, bool trigger)
+    void Scene::DispatchCollision(Entity a, Entity b, CollisionPhase phase, bool trigger, const Collision* fromA)
     {
-        auto call = [&](Entity self, Entity other) {
-            auto* sc = m_Registry.TryGet<ScriptComponent>(self);
-            if (!sc) return;
+        if (trigger && phase == CollisionPhase::Stay) return;
+        bool begin = phase == CollisionPhase::Enter;
+        auto call = [&](Entity self, const Collision& c) {
+            auto* sc = IsValid(self) ? m_Registry.TryGet<ScriptComponent>(self) : nullptr;
+            if (!sc || !IsValid(c.Other)) return;
             for (auto& inst : sc->LiveInstances(true))
             {
-                if (trigger) begin ? inst->OnTriggerEnter(other) : inst->OnTriggerExit(other);
-                else begin ? inst->OnCollisionEnter(other) : inst->OnCollisionExit(other);
+                if (trigger) begin ? inst->OnTriggerEnter(c.Other) : inst->OnTriggerExit(c.Other);
+                else if (phase == CollisionPhase::Enter) inst->OnCollisionEnter(c);
+                else if (phase == CollisionPhase::Stay) inst->OnCollisionStay(c);
+                else inst->OnCollisionExit(c);
             }
         };
         if (IsValid(a) && IsValid(b))
         {
-            call(a, b);
-            call(b, a);
-            if (s_EventHook)
+            Collision seenByA;
+            if (fromA) seenByA = *fromA;
+            seenByA.Other = b;
+            Collision seenByB = seenByA.Flipped(a);
+            call(a, seenByA);
+            call(b, seenByB);
+            if (s_EventHook && phase != CollisionPhase::Stay)
             {
                 EventKind kind = trigger ? (begin ? EventKind::TriggerEnter : EventKind::TriggerExit) : (begin ? EventKind::CollisionEnter : EventKind::CollisionExit);
                 if (IsValid(a) && IsValid(b)) s_EventHook(*this, a, kind, 0.0f, b, nullptr);

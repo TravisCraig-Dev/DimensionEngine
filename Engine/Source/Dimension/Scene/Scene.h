@@ -2,6 +2,7 @@
 #include "Dimension/ECS/Registry.h"
 #include "Dimension/Scene/Components.h"
 #include "Dimension/Scene/System.h"
+#include "Dimension/Physics/Collision.h"
 #include <algorithm>
 #include <unordered_map>
 
@@ -231,8 +232,9 @@ namespace Dimension
         void DispatchUIValueChanged(Entity e, float value);
         void DispatchUIText(Entity e, const std::string& text, bool submit);
 
-        // Script/physics glue (called by physics worlds).
-        void DispatchCollision(Entity a, Entity b, bool begin, bool trigger);
+        // Script/physics glue (called by physics worlds): `fromA` is the collision as `a` sees it (b flips it); triggers
+        // have no Stay.
+        void DispatchCollision(Entity a, Entity b, CollisionPhase phase, bool trigger, const Collision* fromA = nullptr);
 
         // Engine events for listeners outside the entity's own scripts (C# events such as UIButton.Clicked). Kinds:
         // 0 click, 1 value changed (value), 2 text changed, 3 submit (text), 4/5 collision enter/exit and 6/7 trigger

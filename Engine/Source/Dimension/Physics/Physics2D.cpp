@@ -44,6 +44,52 @@ namespace Dimension
             return q;
         }
 
+        // The collision as shape A's object sees it, from the contact between the two shapes after the step; `begin` is the
+        // manifold recorded when they started touching, used when the contact has none now.
+        Collision ContactBetween(b2ShapeId a, b2ShapeId b, const b2Manifold* begin)
+        {
+            Collision c;
+            b2Manifold manifold{};
+            bool found = false, flip = false;
+            int capacity = b2Shape_GetContactCapacity(a);
+            if (capacity > 0)
+            {
+                std::vector<b2ContactData> data(capacity);
+                int n = b2Shape_GetContactData(a, data.data(), capacity);
+                for (int i = 0; i < n && !found; ++i)
+                {
+                    bool ab = B2_ID_EQUALS(data[i].shapeIdA, a) && B2_ID_EQUALS(data[i].shapeIdB, b);
+                    bool ba = B2_ID_EQUALS(data[i].shapeIdA, b) && B2_ID_EQUALS(data[i].shapeIdB, a);
+                    if ((ab || ba) && data[i].manifold.pointCount > 0) { manifold = data[i].manifold; found = true; flip = ba; }
+                }
+            }
+            if (!found && begin) manifold = *begin;
+            // Box2D's normal points from its shape A to B: toward our A it is the other way.
+            glm::vec2 n(manifold.normal.x, manifold.normal.y);
+            glm::vec2 towardA = flip ? n : -n;
+            float closing = 0.0f; // pre-solve speed of A toward B along the normal
+            for (int i = 0; i < manifold.pointCount; ++i)
+            {
+                const b2ManifoldPoint& p = manifold.points[i];
+                c.Contacts.push_back({ { p.point.x, p.point.y, 0.0f }, { towardA, 0.0f }, p.separation });
+                closing = std::max(closing, -p.normalVelocity);
+            }
+            c.Normal = { towardA, 0.0f };
+            // Now: A's velocity minus B's, with its part along the normal as it was before the solver pushed them apart.
+            b2Vec2 va = b2Body_GetLinearVelocity(b2Shape_GetBody(a)), vb = b2Body_GetLinearVelocity(b2Shape_GetBody(b));
+            glm::vec2 rel(va.x - vb.x, va.y - vb.y), alongAB = -towardA;
+            rel += alongAB * (closing - glm::dot(rel, alongAB));
+            c.RelativeVelocity = { rel, 0.0f };
+            // An inelastic hit's impulse, as in 3D: the closing speed times the pair's reduced mass (Box2D's own totals
+            // count every substep and the push out of overlap).
+            auto inverseMass = [](b2BodyId body) {
+                return b2Body_GetType(body) == b2_dynamicBody && b2Body_GetMass(body) > 0.0f ? 1.0f / b2Body_GetMass(body) : 0.0f;
+            };
+            float inv = inverseMass(b2Shape_GetBody(a)) + inverseMass(b2Shape_GetBody(b));
+            c.Impulse = inv > 0.0f ? closing / inv : 0.0f;
+            return c;
+        }
+
         bool CollectEntity(b2ShapeId shape, void* context)
         {
             auto* out = static_cast<std::vector<Entity>*>(context);
@@ -425,29 +471,54 @@ namespace Dimension
         }
 
         // Dispatch events after the step (collect first: callbacks may destroy bodies).
-        struct Event { Entity A, B; bool Begin, Trigger; };
+        struct Event { Entity A, B; CollisionPhase Phase; bool Trigger; Collision C; };
         std::vector<Event> events;
         b2ContactEvents contacts = b2World_GetContactEvents(world);
+        auto key = [](b2ShapeId a, b2ShapeId b) { return std::make_pair(b2StoreShapeId(a), b2StoreShapeId(b)); };
+        auto touching = [&](uint64_t a, uint64_t b) {
+            return std::find_if(m_Touching.begin(), m_Touching.end(), [&](auto& p) { return (p.first == a && p.second == b) || (p.first == b && p.second == a); });
+        };
+        std::vector<std::pair<uint64_t, uint64_t>> begun;
         for (int i = 0; i < contacts.beginCount; ++i)
-            events.push_back({ UnpackEntity(b2Shape_GetUserData(contacts.beginEvents[i].shapeIdA)),
-                               UnpackEntity(b2Shape_GetUserData(contacts.beginEvents[i].shapeIdB)), true, false });
+        {
+            auto& ev = contacts.beginEvents[i];
+            if (!b2Shape_IsValid(ev.shapeIdA) || !b2Shape_IsValid(ev.shapeIdB)) continue;
+            events.push_back({ UnpackEntity(b2Shape_GetUserData(ev.shapeIdA)), UnpackEntity(b2Shape_GetUserData(ev.shapeIdB)), CollisionPhase::Enter,
+                               false, ContactBetween(ev.shapeIdA, ev.shapeIdB, &ev.manifold) });
+            begun.push_back(key(ev.shapeIdA, ev.shapeIdB));
+        }
         for (int i = 0; i < contacts.endCount; ++i)
         {
             auto& ev = contacts.endEvents[i];
+            if (auto it = touching(b2StoreShapeId(ev.shapeIdA), b2StoreShapeId(ev.shapeIdB)); it != m_Touching.end()) m_Touching.erase(it);
             if (!b2Shape_IsValid(ev.shapeIdA) || !b2Shape_IsValid(ev.shapeIdB)) continue;
-            events.push_back({ UnpackEntity(b2Shape_GetUserData(ev.shapeIdA)), UnpackEntity(b2Shape_GetUserData(ev.shapeIdB)), false, false });
+            events.push_back({ UnpackEntity(b2Shape_GetUserData(ev.shapeIdA)), UnpackEntity(b2Shape_GetUserData(ev.shapeIdB)), CollisionPhase::Exit,
+                               false, {} });
         }
+        // Pairs still touching from before this step: Stay, for objects with scripts.
+        std::erase_if(m_Touching, [](auto& p) { return !b2Shape_IsValid(b2LoadShapeId(p.first)) || !b2Shape_IsValid(b2LoadShapeId(p.second)); });
+        for (auto& [ka, kb] : m_Touching)
+        {
+            b2ShapeId a = b2LoadShapeId(ka), b = b2LoadShapeId(kb);
+            Entity ea = UnpackEntity(b2Shape_GetUserData(a)), eb = UnpackEntity(b2Shape_GetUserData(b));
+            bool scripted = (reg.Valid(ea) && reg.Has<ScriptComponent>(ea)) || (reg.Valid(eb) && reg.Has<ScriptComponent>(eb));
+            bool awake = b2Body_IsAwake(b2Shape_GetBody(a)) || b2Body_IsAwake(b2Shape_GetBody(b)); // as in 3D: none while asleep
+            if (scripted && awake) events.push_back({ ea, eb, CollisionPhase::Stay, false, ContactBetween(a, b, nullptr) });
+        }
+        for (auto& p : begun)
+            if (touching(p.first, p.second) == m_Touching.end()) m_Touching.push_back(p);
         b2SensorEvents sensors = b2World_GetSensorEvents(world);
         for (int i = 0; i < sensors.beginCount; ++i)
             events.push_back({ UnpackEntity(b2Shape_GetUserData(sensors.beginEvents[i].sensorShapeId)),
-                               UnpackEntity(b2Shape_GetUserData(sensors.beginEvents[i].visitorShapeId)), true, true });
+                               UnpackEntity(b2Shape_GetUserData(sensors.beginEvents[i].visitorShapeId)), CollisionPhase::Enter, true, {} });
         for (int i = 0; i < sensors.endCount; ++i)
         {
             auto& ev = sensors.endEvents[i];
             if (!b2Shape_IsValid(ev.sensorShapeId) || !b2Shape_IsValid(ev.visitorShapeId)) continue;
-            events.push_back({ UnpackEntity(b2Shape_GetUserData(ev.sensorShapeId)), UnpackEntity(b2Shape_GetUserData(ev.visitorShapeId)), false, true });
+            events.push_back({ UnpackEntity(b2Shape_GetUserData(ev.sensorShapeId)), UnpackEntity(b2Shape_GetUserData(ev.visitorShapeId)),
+                               CollisionPhase::Exit, true, {} });
         }
-        for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Begin, ev.Trigger);
+        for (auto& ev : events) m_Scene.DispatchCollision(ev.A, ev.B, ev.Phase, ev.Trigger, &ev.C);
         for (auto& [e, force] : broken) m_Scene.DispatchJointBreak(e, force);
     }
 

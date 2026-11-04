@@ -176,6 +176,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> SceneGUI;
         // A data asset's file was written (0: play starts, every data asset object is made again).
         public delegate* unmanaged<ulong, void> DataAssetChanged;
+        // A collision: phase (0 enter, 1 stay, 2 exit), other, data (see ScriptHost.InvokeCollision), contact count.
+        public delegate* unmanaged<IntPtr, int, ulong, float*, int, void> InvokeCollision;
     }
 
     internal static unsafe class Native
@@ -236,6 +238,7 @@ namespace Dimension.Interop
                 api->RunContextMenu = &ScriptHost.RunContextMenu;
                 api->SceneGUI = &ScriptHost.SceneGUI;
                 api->DataAssetChanged = &ScriptHost.DataAssetChanged;
+                api->InvokeCollision = &ScriptHost.InvokeCollision;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

@@ -641,6 +641,86 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    // The collision details a script is given.
+    class CollisionProbe : public ScriptableEntity
+    {
+    public:
+        Collision Entered;
+        int Enters = 0, Stays = 0, Exits = 0;
+        float LastStayImpulse = -1.0f;
+        void OnCollisionEnter(const Collision& c) override { Entered = c; ++Enters; }
+        void OnCollisionStay(const Collision& c) override { ++Stays; LastStayImpulse = c.Impulse; }
+        void OnCollisionExit(const Collision& c) override { ++Exits; }
+    };
+    // A script written before collision details (only the Entity overload): still called.
+    class LegacyCollisionProbe : public ScriptableEntity
+    {
+    public:
+        int Enters = 0, Exits = 0;
+        void OnCollisionEnter(Entity) override { ++Enters; }
+        void OnCollisionExit(Entity) override { ++Exits; }
+    };
+
+    void TestCollisionDetails()
+    {
+        for (bool twoD : { false, true })
+        {
+            Scene scene(twoD ? "Collisions2D" : "Collisions3D");
+            auto& reg = scene.GetRegistry();
+            Entity ground = scene.CreateEntity("Ground");
+            reg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            reg.Get<TransformComponent>(ground).Scale = { 20, 1, 20 };
+            Entity box = scene.CreateEntity("Box");
+            reg.Get<TransformComponent>(box).Position = { 0, 3, 0 };
+            if (twoD)
+            {
+                reg.Emplace<BoxCollider2DComponent>(ground);
+                reg.Emplace<Rigidbody2DComponent>(box);
+                reg.Emplace<BoxCollider2DComponent>(box);
+            }
+            else
+            {
+                reg.Emplace<BoxColliderComponent>(ground);
+                reg.Emplace<RigidbodyComponent>(box);
+                reg.Emplace<BoxColliderComponent>(box);
+            }
+            auto& sc = reg.Emplace<ScriptComponent>(box);
+            sc.Add("CollisionProbe");
+            sc.Add("LegacyCollisionProbe");
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rsc = rt->GetRegistry().Get<ScriptComponent>(box);
+            auto* probe = static_cast<CollisionProbe*>(rsc.Scripts[0].Instance.get());
+            auto* legacy = static_cast<LegacyCollisionProbe*>(rsc.Scripts[1].Instance.get());
+            for (int i = 0; i < 180 && probe->Enters == 0; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+
+            // Landing: on the ground's top, its normal up toward the box, falling at about sqrt(2 g h) = 6.6 m/s.
+            const Collision& c = probe->Entered;
+            CHECK(probe->Enters == 1 && legacy->Enters == 1 && c.Other == ground);
+            CHECK(Near(c.Normal, glm::vec3(0, 1, 0), 0.01f) && !c.Contacts.empty());
+            bool onTop = !c.Contacts.empty();
+            for (auto& p : c.Contacts) onTop &= std::abs(p.Point.y) < 0.1f && Near(p.Normal, glm::vec3(0, 1, 0), 0.01f) && std::abs(p.Point.x) < 0.6f;
+            CHECK(onTop);
+            CHECK(c.RelativeVelocity.y < -5.0f && c.RelativeVelocity.y > -8.0f);
+            CHECK(c.Impulse > 3.0f && c.Impulse < 15.0f); // a 1 kg box stopping from about 6.6 m/s
+
+            // Resting: Stay every step with little impulse, until the box falls asleep (sleeping bodies get none, as in Unity).
+            for (int i = 0; i < 90; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(probe->Stays > 10 && probe->LastStayImpulse >= 0.0f && probe->LastStayImpulse < 1.0f);
+            CHECK(probe->Exits == 0 && legacy->Exits == 0 && probe->Enters == 1); // falling asleep is not leaving
+
+            // Thrown up: Exit, for both scripts.
+            if (twoD) Physics2DWorld::SetLinearVelocity(*rt, box, { 0, 12 });
+            else Physics3DWorld::SetLinearVelocity(*rt, box, { 0, 12, 0 });
+            for (int i = 0; i < 30 && probe->Exits == 0; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(probe->Exits == 1 && legacy->Exits == 1);
+            int stays = probe->Stays;
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(probe->Stays == stays); // no Stay while apart
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestMeshImportSettings()
     {
         fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
@@ -7860,6 +7940,39 @@ namespace
             rt->OnRuntimeStop();
         }
 
+        // OnCollisionEnter(Collision) from C#: the Sandbox's HitFlash flashes a box landing hard (about 6 m/s) but not one
+        // set down gently.
+        {
+            Scene hf("HitFlash");
+            auto& creg = hf.GetRegistry();
+            Entity ground = hf.CreateEntity("Ground");
+            creg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            creg.Get<TransformComponent>(ground).Scale = { 20, 1, 20 };
+            creg.Emplace<BoxColliderComponent>(ground);
+            Entity dropped = hf.CreateEntity("Dropped"), placed = hf.CreateEntity("Placed");
+            creg.Get<TransformComponent>(dropped).Position = { -3, 2.5f, 0 };
+            creg.Get<TransformComponent>(placed).Position = { 3, 0.52f, 0 };
+            for (Entity e : { dropped, placed })
+            {
+                creg.Emplace<MeshRendererComponent>(e).Color = { 1, 1, 1, 1 };
+                creg.Emplace<RigidbodyComponent>(e);
+                creg.Emplace<BoxColliderComponent>(e);
+                creg.Emplace<ScriptComponent>(e).Add("Game.HitFlash");
+            }
+            auto rt = hf.Clone();
+            rt->OnRuntimeStart();
+            bool flashed = false, placedFlashed = false;
+            for (int i = 0; i < 90; ++i)
+            {
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                flashed |= rt->GetRegistry().Get<MeshRendererComponent>(dropped).Color.g < 0.9f;
+                placedFlashed |= rt->GetRegistry().Get<MeshRendererComponent>(placed).Color.g < 0.99f;
+            }
+            CHECK(flashed && !placedFlashed);
+            CHECK(Near(rt->GetRegistry().Get<MeshRendererComponent>(dropped).Color.g, 1.0f, 0.01f)); // faded back
+            rt->OnRuntimeStop();
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -11533,6 +11646,8 @@ int main(int argc, char** argv)
     ScriptRegistry::Register<CounterA>("CounterA");
     ScriptRegistry::Register<CounterB>("CounterB");
     ScriptRegistry::Register<EnableProbe>("EnableProbe");
+    ScriptRegistry::Register<CollisionProbe>("CollisionProbe");
+    ScriptRegistry::Register<LegacyCollisionProbe>("LegacyCollisionProbe");
     ScriptRegistry::Register<TestScript>("TestScript").Field("Speed", &TestScript::Speed).Field("Target", &TestScript::Target);
 
     Run("Registry basics", TestRegistryBasics);
@@ -11547,6 +11662,7 @@ int main(int argc, char** argv)
     Run("Time scale and cursor", TestTimeScaleAndCursor);
     Run("2D physics queries", TestPhysics2DQueries);
     Run("3D shape casts and spin", TestPhysics3DCasts);
+    Run("Collision details", TestCollisionDetails);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

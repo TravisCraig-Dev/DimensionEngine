@@ -32,6 +32,11 @@ namespace Dimension
         virtual void OnDisable() {}
         virtual void OnCollisionEnter(Entity other) {}
         virtual void OnCollisionExit(Entity other) {}
+        // With the contacts, normal, relative velocity and impulse (by default they call the ones above). Stay comes
+        // every physics step while they touch, except while both bodies sleep.
+        virtual void OnCollisionEnter(const Collision& collision) { OnCollisionEnter(collision.Other); }
+        virtual void OnCollisionStay(const Collision& collision) {}
+        virtual void OnCollisionExit(const Collision& collision) { OnCollisionExit(collision.Other); }
         virtual void OnTriggerEnter(Entity other) {}
         virtual void OnTriggerExit(Entity other) {}
         virtual void OnClick() {} // UI Button on this entity was clicked

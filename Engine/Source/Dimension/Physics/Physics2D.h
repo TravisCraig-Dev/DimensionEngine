@@ -77,5 +77,6 @@ namespace Dimension
         };
         std::vector<JointRecord> m_Joints;
         std::vector<uint64_t> m_TilemapBodies; // b2BodyId packed
+        std::vector<std::pair<uint64_t, uint64_t>> m_Touching; // shape pairs touching now (b2ShapeId packed), for Stay
     };
 }

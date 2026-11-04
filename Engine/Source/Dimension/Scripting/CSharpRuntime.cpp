@@ -222,6 +222,9 @@ namespace Dimension
             const char* (*RunContextMenu)(int, intptr_t, const char*, const char*, void*, uint64_t);
             const char* (*SceneGUI)(int, intptr_t, const char*, const char*, void*, uint64_t); // as Inspect
             void (*DataAssetChanged)(uint64_t); // a data asset's file was written (0: play starts, all made again)
+            // A collision: 0 enter, 1 stay, 2 exit; the other object; normal xyz, relative velocity xyz, impulse, then
+            // per contact point xyz, normal xyz, separation; the contact count.
+            void (*InvokeCollision)(intptr_t, int, uint64_t, const float*, int);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -429,6 +432,7 @@ namespace Dimension
             std::deque<Layout> NestedLayouts; // the [Serializable] types' (stable addresses)
             std::vector<bool> Drawn;          // per field: a C# property drawer draws it
             bool HasGizmos = false;           // overrides OnDrawGizmos or OnDrawGizmosSelected
+            bool HasCollisionStay = false;    // overrides OnCollisionStay (else it is not called every step)
             std::vector<std::string> ContextMenu;
         };
 
@@ -777,8 +781,25 @@ namespace Dimension
             void OnUITextChanged(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 0, t.c_str()); }
             void OnUISubmit(const std::string& t) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 1, t.c_str()); }
             void OnAnimationEvent(const std::string& n) override { if (m_Handle) s_Managed.InvokeString(m_Handle, 2, n.c_str()); }
-            void OnCollisionEnter(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 0, Pack(o)); }
-            void OnCollisionExit(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 1, Pack(o)); }
+            void OnCollisionEnter(const Collision& c) override { SendCollision(0, c); }
+            void OnCollisionStay(const Collision& c) override { if (m_Class->HasCollisionStay) SendCollision(1, c); }
+            void OnCollisionExit(const Collision& c) override { SendCollision(2, c); }
+            void SendCollision(int phase, const Collision& c)
+            {
+                if (!m_Handle) return;
+                std::vector<float> data(7 + 7 * c.Contacts.size());
+                std::memcpy(data.data(), &c.Normal, 12);
+                std::memcpy(data.data() + 3, &c.RelativeVelocity, 12);
+                data[6] = c.Impulse;
+                for (size_t i = 0; i < c.Contacts.size(); ++i)
+                {
+                    float* d = data.data() + 7 + i * 7;
+                    std::memcpy(d, &c.Contacts[i].Point, 12);
+                    std::memcpy(d + 3, &c.Contacts[i].Normal, 12);
+                    d[6] = c.Contacts[i].Separation;
+                }
+                s_Managed.InvokeCollision(m_Handle, phase, Pack(c.Other), data.data(), (int)c.Contacts.size());
+            }
             void OnTriggerEnter(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 2, Pack(o)); }
             void OnTriggerExit(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 3, Pack(o)); }
 
@@ -797,6 +818,7 @@ namespace Dimension
                 cls.Name = j.at("name").get<std::string>();
                 BuildLayout(j.at("fields"), cls.Values, cls);
                 cls.HasGizmos = j.value("gizmos", false);
+                cls.HasCollisionStay = j.value("collisionStay", false);
                 for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
                 for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
 

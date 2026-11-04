@@ -668,6 +668,10 @@ namespace Dimension
                         // Gizmos (an OnDrawGizmos or OnDrawGizmosSelected of its own) and [ContextMenu] methods.
                         bool Overrides(string name) => type.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)?.DeclaringType != typeof(Behaviour);
                         if (Overrides(nameof(Behaviour.OnDrawGizmos)) || Overrides(nameof(Behaviour.OnDrawGizmosSelected))) w.WriteBoolean("gizmos", true);
+                        // OnCollisionStay is only called (every physics step) for classes that have one.
+                        if (type.GetMethod(nameof(Behaviour.OnCollisionStay), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(Collision) })
+                                ?.DeclaringType != typeof(Behaviour))
+                            w.WriteBoolean("collisionStay", true);
                         w.WriteStartArray("contextMenu");
                         for (Type t = type; t != null && t != typeof(Behaviour); t = t.BaseType)
                             foreach (MethodInfo m in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
@@ -956,6 +960,33 @@ namespace Dimension
                     case 1: b.OnCollisionExit(o); break;
                     case 2: b.OnTriggerEnter(o); break;
                     case 3: b.OnTriggerExit(o); break;
+                }
+            }
+            catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
+        }
+
+        // data: normal, relative velocity, impulse, then per contact its point, normal and separation (7 floats each).
+        [UnmanagedCallersOnly]
+        internal static void InvokeCollision(IntPtr handle, int phase, ulong other, float* data, int contactCount)
+        {
+            Behaviour b = null;
+            try
+            {
+                b = (Behaviour)GCHandle.FromIntPtr(handle).Target;
+                Native.CurrentScene = b.Entity.Scene;
+                var contacts = new ContactPoint[contactCount];
+                for (int i = 0; i < contactCount; ++i)
+                {
+                    float* d = data + 7 + i * 7;
+                    contacts[i] = new ContactPoint { Point = new Vector3(d[0], d[1], d[2]), Normal = new Vector3(d[3], d[4], d[5]), Separation = d[6] };
+                }
+                var c = new Collision(new Entity(b.Entity.Scene, other), contacts, new Vector3(data[0], data[1], data[2]),
+                                      new Vector3(data[3], data[4], data[5]), data[6]);
+                switch (phase)
+                {
+                    case 0: b.OnCollisionEnter(c); break;
+                    case 1: b.OnCollisionStay(c); break;
+                    case 2: b.OnCollisionExit(c); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

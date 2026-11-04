@@ -36,6 +36,13 @@ namespace Dimension
         public virtual void OnDisable() { }
         public virtual void OnCollisionEnter(Entity other) { }
         public virtual void OnCollisionExit(Entity other) { }
+        /// <summary>As OnCollisionEnter(Entity) (which it calls unless overridden), with where and how hard they hit.</summary>
+        public virtual void OnCollisionEnter(Collision collision) => OnCollisionEnter(collision.Other);
+        /// <summary>Every physics step while touching another collider, except while both bodies sleep (only called on
+        /// classes that override it).</summary>
+        public virtual void OnCollisionStay(Collision collision) { }
+        /// <summary>As OnCollisionExit(Entity) (which it calls unless overridden); a Collision without contacts.</summary>
+        public virtual void OnCollisionExit(Collision collision) => OnCollisionExit(collision.Other);
         public virtual void OnTriggerEnter(Entity other) { }
         public virtual void OnTriggerExit(Entity other) { }
         /// <summary>Called when a UI Button on this entity is clicked.</summary>
@@ -582,6 +589,42 @@ namespace Dimension
         public Ray(Vector3 origin, Vector3 direction) { Origin = origin; Direction = Vector3.Normalize(direction); }
         public Vector3 GetPoint(float distance) => Origin + Direction * distance;
         public override string ToString() => $"Ray({Origin} -> {Direction})";
+    }
+
+    /// <summary>Where two colliders touch (2D: z = 0).</summary>
+    public struct ContactPoint
+    {
+        public Vector3 Point;
+        /// <summary>The other object's surface there, pointing toward this object.</summary>
+        public Vector3 Normal;
+        /// <summary>Negative while they overlap.</summary>
+        public float Separation;
+    }
+
+    /// <summary>A collision as this object sees it (OnCollisionEnter / Stay / Exit), in 2D and 3D.</summary>
+    public sealed class Collision
+    {
+        public Collision(Entity other, ContactPoint[] contacts, Vector3 normal, Vector3 relativeVelocity, float impulse)
+        {
+            Other = other;
+            Contacts = contacts ?? Array.Empty<ContactPoint>();
+            Normal = normal;
+            RelativeVelocity = relativeVelocity;
+            Impulse = impulse;
+        }
+        public Entity Other { get; }
+        /// <summary>The contact points (none on Exit).</summary>
+        public ContactPoint[] Contacts { get; }
+        public int ContactCount => Contacts.Length;
+        public ContactPoint GetContact(int index) => Contacts[index];
+        /// <summary>The contacts' normal, pointing toward this object.</summary>
+        public Vector3 Normal { get; }
+        /// <summary>This object's velocity minus the other's as they met: <c>RelativeVelocity.Length()</c> is how fast
+        /// they hit.</summary>
+        public Vector3 RelativeVelocity { get; }
+        /// <summary>How hard they hit (N*s): the speed along the normal times the pair's reduced mass, as for an
+        /// inelastic hit (about 0 while resting).</summary>
+        public float Impulse { get; }
     }
 
     public struct RaycastHit
