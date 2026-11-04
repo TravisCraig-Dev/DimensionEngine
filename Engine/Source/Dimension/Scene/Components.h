@@ -1039,8 +1039,13 @@ namespace Dimension
         BodyType Type = BodyType::Dynamic;
         float GravityScale = 1.0f;
         float LinearDamping = 0.0f;
+        float AngularDamping = 0.0f;
         bool FixedRotation = false;
         uint64_t RuntimeBody = 0; // b2BodyId packed, runtime only
+        // Runtime: the pose (x, y, angle) the body last left its Transform at. A kinematic body whose Transform moved
+        // from there (a script) moves to it by velocity in the next step, so it pushes and carries what it meets.
+        glm::vec3 SyncedPose{ 0.0f };
+        bool Driven = false;
     };
 
     struct BoxCollider2DComponent
@@ -1094,6 +1099,9 @@ namespace Dimension
         float LinearDamping = 0.05f;
         float AngularDamping = 0.05f;
         bool UseGravity = true;
+        // Axes a dynamic body may not move along or turn about, as Unity's RigidbodyConstraints: 2/4/8 freeze position
+        // X/Y/Z, 16/32/64 freeze rotation X/Y/Z (112 all rotation).
+        int32_t Constraints = 0;
         uint32_t RuntimeBody = 0xFFFFFFFF; // JPH::BodyID, runtime only
     };
 

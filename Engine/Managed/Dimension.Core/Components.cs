@@ -152,9 +152,62 @@ namespace Dimension
         }
     }
 
+    /// <summary>How a body moves: not at all (Static), by physics (Dynamic), or where scripts put it (Kinematic).</summary>
+    public enum RigidbodyType { Static = 0, Dynamic = 1, Kinematic = 2 }
+
+    /// <summary>Axes a dynamic 3D body may not move along or turn about (as Unity's).</summary>
+    [Flags]
+    public enum RigidbodyConstraints
+    {
+        None = 0,
+        FreezePositionX = 2, FreezePositionY = 4, FreezePositionZ = 8,
+        FreezeRotationX = 16, FreezeRotationY = 32, FreezeRotationZ = 64,
+        FreezePosition = 14, FreezeRotation = 112, FreezeAll = 126,
+    }
+
+    /// <summary>
+    /// A 2D body. Its settings apply while playing, keeping its motion and joints. A kinematic body moved by
+    /// <see cref="MovePosition"/> (or by setting its Transform) travels there during the next physics step, so it
+    /// pushes and carries what it meets; <see cref="Position"/> and <see cref="Rotation"/> put it there at once.
+    /// </summary>
     public unsafe class Rigidbody2D : Component
     {
         internal override string NativeName => "Rigidbody 2D";
+        private void Refresh() => Native.Api.RigidbodyOp(Entity.Scene, Entity.Id, 0, null);
+        private void Move(Vector2 position, float degrees, bool teleport)
+        {
+            float* v = stackalloc float[6] { position.X, position.Y, 0.0f, 0.0f, 0.0f, degrees * MathF.PI / 180.0f };
+            Native.Api.RigidbodyOp(Entity.Scene, Entity.Id, teleport ? 1 : 2, v);
+        }
+
+        public RigidbodyType BodyType { get => (RigidbodyType)GetInt("Body Type"); set { SetInt("Body Type", (int)value); Refresh(); } }
+        /// <summary>Moved only by scripts (true), or by physics (false: Dynamic).</summary>
+        public bool IsKinematic { get => BodyType == RigidbodyType.Kinematic; set => BodyType = value ? RigidbodyType.Kinematic : RigidbodyType.Dynamic; }
+        /// <summary>Its mass in kg, from its colliders' densities; setting it scales those densities.</summary>
+        public float Mass
+        {
+            get => Native.Api.RigidbodyOp(Entity.Scene, Entity.Id, 3, null);
+            set { float m = value; Native.Api.RigidbodyOp(Entity.Scene, Entity.Id, 4, &m); }
+        }
+        /// <summary>How strongly gravity pulls it (0 floats, -1 falls up).</summary>
+        public float GravityScale { get => GetFloat("Gravity Scale"); set { SetFloat("Gravity Scale", value); Refresh(); } }
+        /// <summary>How quickly it slows down by itself (Linear Damping).</summary>
+        public float Drag { get => GetFloat("Linear Damping"); set { SetFloat("Linear Damping", value); Refresh(); } }
+        public float AngularDrag { get => GetFloat("Angular Damping"); set { SetFloat("Angular Damping", value); Refresh(); } }
+        /// <summary>Never turns (Fixed Rotation).</summary>
+        public bool FreezeRotation { get => GetBool("Fixed Rotation"); set { SetBool("Fixed Rotation", value); Refresh(); } }
+        /// <summary>Where the body is (bodies move their objects as if they had no parent); setting it moves it there at once.</summary>
+        public Vector2 Position
+        {
+            get { Vector3 p = Transform.Position; return new Vector2(p.X, p.Y); }
+            set => Move(value, Rotation, true);
+        }
+        /// <summary>Its angle in degrees (counterclockwise); setting it turns the body at once.</summary>
+        public float Rotation { get => Transform.EulerAngles.Z; set => Move(Position, value, true); }
+        /// <summary>Kinematic: travels to a world position during the next physics step (pushing and carrying what it
+        /// meets); others are put there at once.</summary>
+        public void MovePosition(Vector2 position) => Move(position, Rotation, false);
+        public void MoveRotation(float degrees) => Move(Position, degrees, false);
         public Vector2 Velocity
         {
             get { Vector2 v; Native.Api.GetVelocity2D(Entity.Scene, Entity.Id, (float*)&v); return v; }
@@ -247,9 +300,46 @@ namespace Dimension
         public float Radius { get => GetFloat("Radius"); set => Set("Radius", value); }
     }
 
+    /// <summary>
+    /// A 3D body. Its settings apply while playing, keeping its motion and joints. A kinematic body moved by
+    /// <see cref="MovePosition"/> (or by setting its Transform) travels there during the next physics step, pushing what
+    /// it meets; <see cref="Position"/> and <see cref="Rotation"/> put it there at once.
+    /// </summary>
     public unsafe class Rigidbody : Component
     {
         internal override string NativeName => "Rigidbody";
+        private void Refresh() => Native.Api.RigidbodyOp(Entity.Scene, Entity.Id, 0, null);
+        private void Move(Vector3 position, Vector3 eulerDegrees, bool teleport)
+        {
+            Vector3 r = eulerDegrees * (MathF.PI / 180.0f);
+            float* v = stackalloc float[6] { position.X, position.Y, position.Z, r.X, r.Y, r.Z };
+            Native.Api.RigidbodyOp(Entity.Scene, Entity.Id, teleport ? 1 : 2, v);
+        }
+
+        public RigidbodyType BodyType { get => (RigidbodyType)GetInt("Body Type"); set { SetInt("Body Type", (int)value); Refresh(); } }
+        /// <summary>Moved only by scripts (true), or by physics (false: Dynamic).</summary>
+        public bool IsKinematic { get => BodyType == RigidbodyType.Kinematic; set => BodyType = value ? RigidbodyType.Kinematic : RigidbodyType.Dynamic; }
+        /// <summary>In kg (spread as its colliders' shapes spread it).</summary>
+        public float Mass { get => GetFloat("Mass"); set { SetFloat("Mass", value); Refresh(); } }
+        /// <summary>How quickly it slows down by itself (Linear Damping).</summary>
+        public float Drag { get => GetFloat("Linear Damping"); set { SetFloat("Linear Damping", value); Refresh(); } }
+        public float AngularDrag { get => GetFloat("Angular Damping"); set { SetFloat("Angular Damping", value); Refresh(); } }
+        public bool UseGravity { get => GetBool("Use Gravity"); set { SetBool("Use Gravity", value); Refresh(); } }
+        public RigidbodyConstraints Constraints { get => (RigidbodyConstraints)GetInt("Constraints"); set { SetInt("Constraints", (int)value); Refresh(); } }
+        /// <summary>Never turns (all of Constraints' rotation axes).</summary>
+        public bool FreezeRotation
+        {
+            get => (Constraints & RigidbodyConstraints.FreezeRotation) == RigidbodyConstraints.FreezeRotation;
+            set => Constraints = value ? Constraints | RigidbodyConstraints.FreezeRotation : Constraints & ~RigidbodyConstraints.FreezeRotation;
+        }
+        /// <summary>Where the body is (bodies move their objects as if they had no parent); setting it moves it there at once.</summary>
+        public Vector3 Position { get => Transform.Position; set => Move(value, Rotation, true); }
+        /// <summary>Its rotation as Euler angles in degrees; setting it turns the body at once.</summary>
+        public Vector3 Rotation { get => Transform.EulerAngles; set => Move(Position, value, true); }
+        /// <summary>Kinematic: travels to a world position during the next physics step (pushing what it meets); others
+        /// are put there at once.</summary>
+        public void MovePosition(Vector3 position) => Move(position, Rotation, false);
+        public void MoveRotation(Vector3 eulerDegrees) => Move(Position, eulerDegrees, false);
         public Vector3 Velocity
         {
             get { Vector3 v; Native.Api.GetVelocity3D(Entity.Scene, Entity.Id, (float*)&v); return v; }
@@ -258,7 +348,7 @@ namespace Dimension
         public void AddForce(Vector3 force) => Native.Api.AddForce3D(Entity.Scene, Entity.Id, (float*)&force);
         public void AddImpulse(Vector3 impulse) => Native.Api.AddImpulse3D(Entity.Scene, Entity.Id, (float*)&impulse);
         /// <summary>Moved by physics (Body Type Dynamic). Colliders without a Rigidbody get a static one while playing.</summary>
-        public bool IsDynamic => GetInt("Body Type") == 1;
+        public bool IsDynamic => BodyType == RigidbodyType.Dynamic;
         /// <summary>At rest for a while, so not simulated until something touches or moves it (setting Velocity wakes it).</summary>
         public bool IsSleeping { get { float* v = stackalloc float[6]; Native.Api.Body3D(Entity.Scene, Entity.Id, 6, v); return v[0] != 0.0f; } }
         public void WakeUp() { float* v = stackalloc float[6]; Native.Api.Body3D(Entity.Scene, Entity.Id, 5, v); }

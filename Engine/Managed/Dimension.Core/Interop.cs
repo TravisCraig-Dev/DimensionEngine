@@ -173,6 +173,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, void> SetMainCamera;
         public delegate* unmanaged<IntPtr, ulong, void> RebuildJoint;
         public delegate* unmanaged<IntPtr, ulong, byte*, byte*, int, ulong, ulong> ComponentEntity;  // 0 get, 1 set
+        public delegate* unmanaged<IntPtr, ulong, int, float*, float> RigidbodyOp;  // see Rigidbody in Components.cs
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

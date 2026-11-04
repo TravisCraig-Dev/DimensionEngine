@@ -827,6 +827,7 @@ namespace Dimension
             .Field("Body Type", &Rigidbody2DComponent::Type).Enum({ "Static", "Dynamic", "Kinematic" })
             .Field("Gravity Scale", &Rigidbody2DComponent::GravityScale).Speed(0.01f)
             .Field("Linear Damping", &Rigidbody2DComponent::LinearDamping).Range(0.0f, 100.0f).Speed(0.01f)
+            .Field("Angular Damping", &Rigidbody2DComponent::AngularDamping).Range(0.0f, 100.0f).Speed(0.01f)
             .Field("Fixed Rotation", &Rigidbody2DComponent::FixedRotation);
         Register<BoxCollider2DComponent>("Box Collider 2D", "Physics 2D")
             .Field("Offset", &BoxCollider2DComponent::Offset)
@@ -864,7 +865,9 @@ namespace Dimension
             .Field("Mass", &RigidbodyComponent::Mass).Range(0.001f, 100000.0f).Speed(0.05f)
             .Field("Linear Damping", &RigidbodyComponent::LinearDamping).Range(0.0f, 100.0f).Speed(0.01f)
             .Field("Angular Damping", &RigidbodyComponent::AngularDamping).Range(0.0f, 100.0f).Speed(0.01f)
-            .Field("Use Gravity", &RigidbodyComponent::UseGravity);
+            .Field("Use Gravity", &RigidbodyComponent::UseGravity)
+            .Field("Constraints", &RigidbodyComponent::Constraints).Range(0, 126)
+                .Tooltip("Axes it may not move along or turn about (adds up): 2/4/8 freeze position X/Y/Z, 16/32/64 freeze rotation X/Y/Z, 112 all rotation");
         Register<BoxColliderComponent>("Box Collider", "Physics")
             .Field("Offset", &BoxColliderComponent::Offset)
             .Field("Size", &BoxColliderComponent::Size)

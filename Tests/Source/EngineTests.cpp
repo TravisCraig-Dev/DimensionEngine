@@ -919,6 +919,150 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestRigidbodySettingsWhilePlaying()
+    {
+        const float dt = 1.0f / 60.0f;
+        // 3D
+        {
+            Scene scene("Bodies3D");
+            auto& reg = scene.GetRegistry();
+            auto crate = [&](const char* name, glm::vec3 at, BodyType type) {
+                Entity e = scene.CreateEntity(name);
+                reg.Get<TransformComponent>(e).Position = at;
+                reg.Emplace<RigidbodyComponent>(e).Type = type;
+                reg.Emplace<BoxColliderComponent>(e);
+                return e;
+            };
+            Entity a = crate("A", { 0, 10, 0 }, BodyType::Dynamic);
+            Entity paddle = crate("Paddle", { -3, 30, 0 }, BodyType::Kinematic);
+            Entity ball = crate("Ball", { 0, 30, 0 }, BodyType::Dynamic);
+            Entity lone = scene.CreateEntity("Lone"); // a collider alone: given a static body
+            reg.Get<TransformComponent>(lone).Position = { 10, 10, 0 };
+            reg.Emplace<BoxColliderComponent>(lone);
+            reg.Get<RigidbodyComponent>(ball).UseGravity = false;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rr = rt->GetRegistry();
+            auto pos = [&](Entity e) { return rr.Get<TransformComponent>(e).Position; };
+            auto run = [&](int n) { for (int i = 0; i < n; ++i) rt->OnUpdateRuntime(dt); };
+            auto set = [&](Entity e, auto&& change) { change(rr.Get<RigidbodyComponent>(e)); rt->RefreshBody(e); };
+            run(20);
+            CHECK(pos(a).y < 9.8f);
+            // Kinematic: it stops where it is; Static too; Dynamic again: it falls.
+            set(a, [](auto& rb) { rb.Type = BodyType::Kinematic; });
+            float held = pos(a).y;
+            run(20);
+            CHECK(Near(pos(a).y, held, 1e-3f));
+            set(a, [](auto& rb) { rb.Type = BodyType::Static; });
+            run(20);
+            CHECK(Near(pos(a).y, held, 1e-3f));
+            set(a, [](auto& rb) { rb.Type = BodyType::Dynamic; });
+            run(20);
+            CHECK(pos(a).y < held - 0.3f);
+            // No gravity: it keeps its speed; frozen Y position: it slides along X only; frozen rotation: no spin.
+            set(a, [](auto& rb) { rb.UseGravity = false; });
+            Physics3DWorld::SetLinearVelocity(*rt, a, { 0, 0, 0 });
+            held = pos(a).y;
+            run(20);
+            CHECK(Near(pos(a).y, held, 1e-3f));
+            set(a, [](auto& rb) { rb.UseGravity = true; rb.Constraints = 4 | 112; });
+            Physics3DWorld::SetLinearVelocity(*rt, a, { 2, 0, 0 });
+            Physics3DWorld::SetAngularVelocity(*rt, a, { 0, 3, 0 });
+            float x0 = pos(a).x;
+            run(30);
+            CHECK(Near(pos(a).y, held, 1e-3f) && pos(a).x > x0 + 0.5f && glm::length(rr.Get<TransformComponent>(a).Rotation) < 1e-3f);
+            // Mass: the same push moves a heavier body slower.
+            set(a, [](auto& rb) { rb.Constraints = 0; rb.UseGravity = false; rb.Mass = 10.0f; });
+            Physics3DWorld::SetLinearVelocity(*rt, a, { 0, 0, 0 });
+            Physics3DWorld::AddImpulse(*rt, a, { 0, 0, 10 });
+            CHECK(Near(Physics3DWorld::GetLinearVelocity(*rt, a).z, 1.0f, 0.05f));
+            // Teleport.
+            rt->MoveBody(a, { 5, 50, 5 }, glm::vec3(0.0f), true);
+            Physics3DWorld::SetLinearVelocity(*rt, a, { 0, 0, 0 });
+            run(1);
+            CHECK(glm::distance(pos(a), glm::vec3(5, 50, 5)) < 0.05f);
+            // A kinematic paddle moved toward a floating ball pushes it on.
+            for (int i = 0; i < 60; ++i)
+            {
+                glm::vec3 p = pos(paddle);
+                rt->MoveBody(paddle, p + glm::vec3(4.0f * dt, 0, 0), glm::vec3(0.0f), false);
+                rt->OnUpdateRuntime(dt);
+            }
+            CHECK(pos(paddle).x > 0.9f && pos(ball).x > 1.5f && Physics3DWorld::GetLinearVelocity(*rt, ball).x > 0.5f);
+            // A lone collider's static body made dynamic falls.
+            set(lone, [](auto& rb) { rb.Type = BodyType::Dynamic; });
+            run(20);
+            CHECK(pos(lone).y < 9.8f);
+            rt->OnRuntimeStop();
+        }
+        // 2D
+        {
+            Scene scene("Bodies2D");
+            auto& reg = scene.GetRegistry();
+            auto box = [&](const char* name, glm::vec3 at, glm::vec2 size, BodyType type) {
+                Entity e = scene.CreateEntity(name);
+                reg.Get<TransformComponent>(e).Position = at;
+                reg.Emplace<Rigidbody2DComponent>(e).Type = type;
+                reg.Emplace<BoxCollider2DComponent>(e).Size = size;
+                return e;
+            };
+            Entity a = box("A", { 20, 10, 0 }, { 1, 1 }, BodyType::Dynamic);
+            Entity platform = box("Platform", { 0, 0, 0 }, { 6, 0.5f }, BodyType::Kinematic);
+            Entity rider = box("Rider", { 0, 0.76f, 0 }, { 1, 1 }, BodyType::Dynamic);
+            reg.Get<BoxCollider2DComponent>(rider).Friction = 1.0f;
+            reg.Get<BoxCollider2DComponent>(platform).Friction = 1.0f;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rr = rt->GetRegistry();
+            auto* world = rt->GetPhysics2D();
+            auto pos = [&](Entity e) { return rr.Get<TransformComponent>(e).Position; };
+            auto run = [&](int n) { for (int i = 0; i < n; ++i) rt->OnUpdateRuntime(dt); };
+            auto set = [&](Entity e, auto&& change) { change(rr.Get<Rigidbody2DComponent>(e)); rt->RefreshBody(e); };
+            run(30);
+            CHECK(pos(a).y < 9.8f && Near(pos(rider).y, 0.75f, 0.05f));
+            set(a, [](auto& rb) { rb.Type = BodyType::Kinematic; });
+            float held = pos(a).y;
+            run(20);
+            CHECK(Near(pos(a).y, held, 1e-3f));
+            set(a, [](auto& rb) { rb.Type = BodyType::Dynamic; rb.GravityScale = -1.0f; });
+            run(20);
+            CHECK(pos(a).y > held + 0.3f);
+            // Mass from density, and set by scaling it.
+            CHECK(Near(world->GetMass(a), 1.0f, 1e-3f));
+            world->SetMass(a, 4.0f);
+            CHECK(Near(world->GetMass(a), 4.0f, 1e-3f) && Near(rr.Get<BoxCollider2DComponent>(a).Density, 4.0f, 1e-3f));
+            // A kinematic body given a velocity moves (and its Transform with it).
+            set(a, [](auto& rb) { rb.Type = BodyType::Kinematic; });
+            Physics2DWorld::SetLinearVelocity(*rt, a, { 1, 0 });
+            float x0 = pos(a).x;
+            run(30);
+            CHECK(Near(pos(a).x, x0 + 0.5f, 0.02f));
+            // Teleport.
+            rt->MoveBody(a, { 30, 3, 0 }, { 0, 0, 1.0f }, true);
+            Physics2DWorld::SetLinearVelocity(*rt, a, { 0, 0 });
+            run(1);
+            CHECK(Near(pos(a).x, 30.0f, 1e-3f) && Near(rr.Get<TransformComponent>(a).Rotation.z, 1.0f, 1e-3f));
+            // A kinematic platform moved along carries the box riding on it, and stops when it is left alone.
+            for (int i = 0; i < 60; ++i)
+            {
+                glm::vec3 p = pos(platform);
+                rt->MoveBody(platform, p + glm::vec3(2.0f * dt, 0, 0), glm::vec3(0.0f), false);
+                rt->OnUpdateRuntime(dt);
+            }
+            CHECK(Near(pos(platform).x, 2.0f, 0.02f) && pos(rider).x > 1.5f && Near(pos(rider).y, 0.75f, 0.05f));
+            run(10);
+            CHECK(Near(pos(platform).x, 2.0f, 0.02f) && glm::length(Physics2DWorld::GetLinearVelocity(*rt, platform)) < 1e-4f);
+            // Fixed rotation.
+            set(rider, [](auto& rb) { rb.FixedRotation = true; });
+            float angle = rr.Get<TransformComponent>(rider).Rotation.z;
+            Physics2DWorld::SetAngularVelocity(*rt, rider, 5.0f);
+            Physics2DWorld::ApplyTorque(*rt, rider, 50.0f);
+            run(10);
+            CHECK(Near(rr.Get<TransformComponent>(rider).Rotation.z, angle, 1e-3f));
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestJointRebuildWhilePlaying()
     {
         const float dt = 1.0f / 60.0f;
@@ -12459,6 +12603,7 @@ int main(int argc, char** argv)
     Run("Physics settings while playing", TestPhysicsSettingsWhilePlaying);
     Run("Camera switching", TestCameraSwitching);
     Run("Joint rebuild while playing", TestJointRebuildWhilePlaying);
+    Run("Rigidbody settings while playing", TestRigidbodySettingsWhilePlaying);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

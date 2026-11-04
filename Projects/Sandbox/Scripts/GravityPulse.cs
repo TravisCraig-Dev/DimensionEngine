@@ -22,7 +22,7 @@ namespace Game
                 int n = 0;
                 foreach (Collider2D c in FindObjectsOfType<Collider2D>())
                 {
-                    if (c.Entity.GetComponent<Rigidbody2D>() is not { } body || c.IsTrigger || body.GetInt("Body Type") != 1) continue;
+                    if (c.Entity.GetComponent<Rigidbody2D>() is not { } body || c.IsTrigger || body.BodyType != RigidbodyType.Dynamic) continue;
                     c.Bounciness = m_Bouncy ? Bouncy : 0.0f;
                     ++n;
                 }

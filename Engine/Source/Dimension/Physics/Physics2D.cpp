@@ -346,11 +346,14 @@ namespace Dimension
         bd.rotation = b2MakeRot(t.Rotation.z);
         bd.gravityScale = rb.GravityScale;
         bd.linearDamping = rb.LinearDamping;
+        bd.angularDamping = rb.AngularDamping;
         bd.fixedRotation = rb.FixedRotation;
         bd.userData = PackEntity(e);
         bd.isEnabled = t.ActiveInHierarchy;
         b2BodyId body = b2CreateBody(LoadWorld(m_World), &bd);
         rb.RuntimeBody = b2StoreBodyId(body);
+        rb.SyncedPose = { worldPos.x, worldPos.y, t.Rotation.z };
+        rb.Driven = false;
         AddShapes(e, rb.RuntimeBody);
     }
 
@@ -401,6 +404,67 @@ namespace Dimension
         AddShapes(e, b2StoreBodyId(body));
         b2Body_ApplyMassFromShapes(body);
         b2Body_SetAwake(body, true);
+    }
+
+    void Physics2DWorld::RefreshBody(Entity e)
+    {
+        b2BodyId body = BodyOf(m_Scene, e);
+        if (B2_IS_NULL(body)) return;
+        auto& rb = m_Scene.GetRegistry().Get<Rigidbody2DComponent>(e);
+        b2BodyType type = rb.Type == BodyType::Dynamic ? b2_dynamicBody : rb.Type == BodyType::Kinematic ? b2_kinematicBody : b2_staticBody;
+        if (b2Body_GetType(body) != type)
+        {
+            b2Body_SetType(body, type);
+            if (type != b2_dynamicBody) // it stops where it is (as a 3D body does)
+            {
+                b2Body_SetLinearVelocity(body, { 0.0f, 0.0f });
+                b2Body_SetAngularVelocity(body, 0.0f);
+            }
+        }
+        b2Body_SetGravityScale(body, rb.GravityScale);
+        b2Body_SetLinearDamping(body, std::max(rb.LinearDamping, 0.0f));
+        b2Body_SetAngularDamping(body, std::max(rb.AngularDamping, 0.0f));
+        b2Body_SetFixedRotation(body, rb.FixedRotation);
+        rb.Driven = false;
+        if (type != b2_staticBody) b2Body_SetAwake(body, true);
+    }
+
+    void Physics2DWorld::MoveBody(Entity e, const glm::vec2& position, float angle, bool teleport)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& t = reg.Get<TransformComponent>(e);
+        t.Position.x = position.x;
+        t.Position.y = position.y;
+        t.Rotation.z = angle;
+        b2BodyId body = BodyOf(m_Scene, e);
+        if (B2_IS_NULL(body)) return;
+        auto& rb = reg.Get<Rigidbody2DComponent>(e);
+        if (!teleport && rb.Type == BodyType::Kinematic) return; // the next step moves it there
+        b2Body_SetTransform(body, { position.x, position.y }, b2MakeRot(angle));
+        rb.SyncedPose = { position.x, position.y, angle };
+        if (rb.Type != BodyType::Static) b2Body_SetAwake(body, true);
+    }
+
+    float Physics2DWorld::GetMass(Entity e) const
+    {
+        b2BodyId body = BodyOf(m_Scene, e);
+        if (B2_IS_NULL(body)) return 0.0f;
+        b2ShapeId shapes[16];
+        int n = b2Body_GetShapes(body, shapes, 16);
+        float mass = 0.0f;
+        for (int i = 0; i < n; ++i) mass += b2Shape_GetMassData(shapes[i]).mass; // static bodies too
+        return mass;
+    }
+
+    void Physics2DWorld::SetMass(Entity e, float mass)
+    {
+        float current = GetMass(e);
+        if (current <= 0.0f || mass <= 0.0f) return;
+        float k = mass / current;
+        auto& reg = m_Scene.GetRegistry();
+        if (auto* box = reg.TryGet<BoxCollider2DComponent>(e)) box->Density *= k;
+        if (auto* circle = reg.TryGet<CircleCollider2DComponent>(e)) circle->Density *= k;
+        RefreshColliders(e);
     }
 
     void Physics2DWorld::RebuildJoint(Entity e)
@@ -543,19 +607,42 @@ namespace Dimension
             {
                 glm::vec3 p = t.GetWorldPosition();
                 b2Body_SetTransform(id, { p.x, p.y }, b2MakeRot(t.Rotation.z));
+                rb.SyncedPose = { p.x, p.y, t.Rotation.z };
                 b2Body_Enable(id);
             }
             else
                 b2Body_Disable(id);
         }
 
-        // Kinematic/static bodies follow their transforms (moved by scripts).
+        // Static bodies follow their transforms (moved by scripts). A kinematic body whose Transform a script moved
+        // gets the velocity that takes it there in this step (so it pushes and carries what it meets, as Unity's
+        // MovePosition does) and stops after; one left alone keeps the velocity a script gave it.
         for (auto [e, rb, t] : reg.ViewOf<Rigidbody2DComponent, TransformComponent>())
         {
             if (!rb.RuntimeBody || rb.Type == BodyType::Dynamic) continue;
             b2BodyId id = b2LoadBodyId(rb.RuntimeBody);
             glm::vec3 p = t.GetWorldPosition();
-            b2Body_SetTransform(id, { p.x, p.y }, b2MakeRot(t.Rotation.z));
+            if (rb.Type == BodyType::Static)
+            {
+                b2Body_SetTransform(id, { p.x, p.y }, b2MakeRot(t.Rotation.z));
+                continue;
+            }
+            glm::vec3 target(p.x, p.y, t.Rotation.z);
+            if (glm::any(glm::greaterThan(glm::abs(target - rb.SyncedPose), glm::vec3(1e-5f))) && dt > 0.0f)
+            {
+                b2Transform to{ { target.x, target.y }, b2MakeRot(target.z) };
+                b2Vec2 from = b2Body_GetWorldCenterOfMass(id);
+                b2Vec2 center = b2TransformPoint(to, b2Body_GetLocalCenterOfMass(id));
+                b2Body_SetLinearVelocity(id, { (center.x - from.x) / dt, (center.y - from.y) / dt });
+                if (!rb.FixedRotation) b2Body_SetAngularVelocity(id, b2RelativeAngle(to.q, b2Body_GetRotation(id)) / dt);
+                rb.Driven = true;
+            }
+            else if (rb.Driven)
+            {
+                b2Body_SetLinearVelocity(id, { 0.0f, 0.0f });
+                b2Body_SetAngularVelocity(id, 0.0f);
+                rb.Driven = false;
+            }
         }
 
         // Hinge motors follow their components (scripts may change them while playing).
@@ -626,12 +713,13 @@ namespace Dimension
 
         for (auto [e, rb, t] : reg.ViewOf<Rigidbody2DComponent, TransformComponent>())
         {
-            if (!rb.RuntimeBody || rb.Type != BodyType::Dynamic) continue;
+            if (!rb.RuntimeBody || rb.Type == BodyType::Static) continue;
             b2BodyId id = b2LoadBodyId(rb.RuntimeBody);
             b2Vec2 p = b2Body_GetPosition(id);
             t.Position.x = p.x;
             t.Position.y = p.y;
             t.Rotation.z = b2Rot_GetAngle(b2Body_GetRotation(id));
+            rb.SyncedPose = { p.x, p.y, t.Rotation.z };
         }
 
         // Dispatch events after the step (collect first: callbacks may destroy bodies).
@@ -744,7 +832,7 @@ namespace Dimension
     void Physics2DWorld::SetAngularVelocity(Scene& scene, Entity e, float w)
     {
         b2BodyId id = BodyOf(scene, e);
-        if (B2_IS_NON_NULL(id)) b2Body_SetAngularVelocity(id, w);
+        if (B2_IS_NON_NULL(id) && !b2Body_IsFixedRotation(id)) b2Body_SetAngularVelocity(id, w);
     }
 
     void Physics2DWorld::ApplyTorque(Scene& scene, Entity e, float torque)

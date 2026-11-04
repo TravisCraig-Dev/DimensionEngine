@@ -239,6 +239,9 @@ namespace Dimension
             void (*RebuildJoint)(void*, uint64_t);     // after a script changed a joint's connection or shape
             // An object field of a component by its label (a joint's "Connected Body"): 0 get, 1 set. ~0 = none/missing.
             uint64_t (*ComponentEntity)(void*, uint64_t, const char*, const char*, int, uint64_t);
+            // Rigidbody / Rigidbody 2D: 0 apply its settings, 1 teleport to v (position xyz, Euler radians xyz), 2 move
+            // there (kinematic: during the next step), 3 the 2D mass, 4 set it (v[0]).
+            float (*RigidbodyOp)(void*, uint64_t, int, const float*);
         };
 
         // Background scene loads started from C#, by id.
@@ -1443,6 +1446,19 @@ namespace Dimension
                 auto& ref = *static_cast<Entity*>(value);
                 if (op == 1) ref = target == UINT64_MAX || !S(s).IsValid(Unpack(target)) ? Entity::Null() : Unpack(target);
                 return ref.IsNull() || !S(s).IsValid(ref) ? UINT64_MAX : Pack(ref);
+            };
+            a.RigidbodyOp = [](void* s, uint64_t packed, int op, const float* v) -> float {
+                if (!s || !S(s).IsValid(Unpack(packed))) return 0.0f;
+                Scene& scene = S(s);
+                Entity e = Unpack(packed);
+                switch (op)
+                {
+                case 0: if (scene.IsRunning()) scene.RefreshBody(e); return 0.0f;
+                case 1:
+                case 2: scene.MoveBody(e, { v[0], v[1], v[2] }, { v[3], v[4], v[5] }, op == 1); return 0.0f;
+                case 3: return scene.GetPhysics2D() ? scene.GetPhysics2D()->GetMass(e) : 0.0f;
+                default: if (scene.GetPhysics2D()) scene.GetPhysics2D()->SetMass(e, v[0]); return 0.0f;
+                }
             };
             a.RebuildJoint = [](void* s, uint64_t e) { if (s && S(s).IsRunning() && S(s).IsValid(Unpack(e))) S(s).RebuildJoint(Unpack(e)); };
             a.LayerName = [](int layer) -> const char* {

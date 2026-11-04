@@ -30,7 +30,7 @@ namespace Game
             float best = Reach;
             foreach (Entity other in Physics2D.OverlapCircle(at, Reach))
             {
-                if (other == Entity || other.GetComponent<Rigidbody2D>() is not { } body || body.GetInt("Body Type") != 1 || other.HasComponent("Joint 2D")) continue;
+                if (other == Entity || other.GetComponent<Rigidbody2D>() is not { } body || body.BodyType != RigidbodyType.Dynamic || other.HasComponent("Joint 2D")) continue;
                 float d = Vector2.Distance(at, new Vector2(other.Transform.WorldPosition.X, other.Transform.WorldPosition.Y));
                 if (d < best) { best = d; nearest = other; }
             }

@@ -2288,6 +2288,17 @@ namespace Dimension
         m_Impl->System.GetBodyInterface().SetShape(JPH::BodyID(rb->RuntimeBody), shape, rb->Type == BodyType::Dynamic, JPH::EActivation::Activate);
     }
 
+    // Jolt's allowed degrees of freedom: its bits are RigidbodyComponent::Constraints' shifted down by one.
+    static JPH::EAllowedDOFs AllowedDOFs(int32_t constraints)
+    {
+        return JPH::EAllowedDOFs(uint8_t(JPH::EAllowedDOFs::All) & ~uint8_t((constraints >> 1) & 0x3F));
+    }
+
+    static JPH::EMotionType MotionOf(BodyType type)
+    {
+        return type == BodyType::Dynamic ? JPH::EMotionType::Dynamic : type == BodyType::Kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Static;
+    }
+
     void Physics3DWorld::CreateBody(Entity e)
     {
         auto& reg = m_Scene.GetRegistry();
@@ -2297,7 +2308,8 @@ namespace Dimension
             return;
         }
         if (reg.Has<SoftBodyComponent>(e)) return; // the soft body is its own collider
-        if (!reg.Has<RigidbodyComponent>(e)) reg.Emplace<RigidbodyComponent>(e).Type = BodyType::Static;
+        bool ownRigidbody = reg.Has<RigidbodyComponent>(e); // (not one added for a lone collider)
+        if (!ownRigidbody) reg.Emplace<RigidbodyComponent>(e).Type = BodyType::Static;
         auto& rb = reg.Get<RigidbodyComponent>(e);
         if (rb.RuntimeBody != 0xFFFFFFFF) return;
         auto& t = reg.Get<TransformComponent>(e);
@@ -2308,9 +2320,7 @@ namespace Dimension
         bool sensor;
         if (!BuildBodyShape(m_Scene, e, shape, friction, restitution, sensor)) return;
 
-        JPH::EMotionType motion = rb.Type == BodyType::Dynamic ? JPH::EMotionType::Dynamic
-                                : rb.Type == BodyType::Kinematic ? JPH::EMotionType::Kinematic
-                                                                 : JPH::EMotionType::Static;
+        JPH::EMotionType motion = MotionOf(rb.Type);
         JPH::BodyCreationSettings settings(shape, JPH::RVec3(ToJolt(t.GetWorldPosition())), ToJolt(t.GetRotationQuat()),
                                            motion, Layers::Make(reg.Get<TagComponent>(e).Layer, motion != JPH::EMotionType::Static));
         settings.mIsSensor = sensor;
@@ -2320,6 +2330,8 @@ namespace Dimension
         settings.mLinearDamping = rb.LinearDamping;
         settings.mAngularDamping = rb.AngularDamping;
         settings.mGravityFactor = rb.UseGravity ? 1.0f : 0.0f;
+        settings.mAllowDynamicOrKinematic = ownRigidbody; // a script may make a static Rigidbody move
+        if (motion == JPH::EMotionType::Dynamic) settings.mAllowedDOFs = AllowedDOFs(rb.Constraints);
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = rb.Mass;
         if (motion != JPH::EMotionType::Dynamic)
@@ -2370,7 +2382,7 @@ namespace Dimension
                     // The Rigidbody's mass, spread as the new shape spreads it.
                     JPH::MassProperties mass = shape->GetMassProperties();
                     mass.ScaleToMass(std::max(rb->Mass, 1e-4f));
-                    body.GetMotionProperties()->SetMassProperties(body.GetMotionProperties()->GetAllowedDOFs(), mass);
+                    body.GetMotionProperties()->SetMassProperties(AllowedDOFs(rb->Constraints), mass);
                 }
             }
         }
@@ -2383,6 +2395,61 @@ namespace Dimension
         around.Encapsulate(bi.GetTransformedShape(id).GetWorldSpaceBounds());
         around.ExpandBy(JPH::Vec3::sReplicate(0.05f));
         bi.ActivateBodiesInAABox(around, JPH::BroadPhaseLayerFilter(), JPH::ObjectLayerFilter());
+    }
+
+    void Physics3DWorld::RefreshBody(Entity e)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto* rb = m_Scene.IsValid(e) ? reg.TryGet<RigidbodyComponent>(e) : nullptr;
+        if (!rb || rb->RuntimeBody == 0xFFFFFFFF || reg.Has<CharacterControllerComponent>(e)) return;
+        auto& bi = m_Impl->System.GetBodyInterface();
+        JPH::BodyID id(rb->RuntimeBody);
+        JPH::EMotionType motion = MotionOf(rb->Type);
+        if (bi.GetMotionType(id) != motion)
+        {
+            bool canMove = false;
+            {
+                JPH::BodyLockRead lock(m_Impl->System.GetBodyLockInterface(), id);
+                canMove = lock.Succeeded() && lock.GetBody().GetMotionPropertiesUnchecked() != nullptr;
+            }
+            if (!canMove && motion != JPH::EMotionType::Static)
+            {
+                // Made without motion (a lone collider's static body): made again, with its joints.
+                RebuildBody(e);
+                RebuildJoint(e);
+                return;
+            }
+            bi.SetMotionType(id, motion, JPH::EActivation::DontActivate);
+            bi.SetObjectLayer(id, Layers::Make(reg.Get<TagComponent>(e).Layer, motion != JPH::EMotionType::Static));
+        }
+        RefreshColliders(e); // the shape for the type (a dynamic mesh collider is its hull), its mass and axes
+        {
+            JPH::BodyLockWrite lock(m_Impl->System.GetBodyLockInterface(), id);
+            if (lock.Succeeded())
+                if (JPH::MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked())
+                {
+                    mp->SetLinearDamping(std::max(rb->LinearDamping, 0.0f));
+                    mp->SetAngularDamping(std::max(rb->AngularDamping, 0.0f));
+                    mp->SetGravityFactor(rb->UseGravity ? 1.0f : 0.0f);
+                }
+        }
+        if (bi.IsAdded(id) && motion != JPH::EMotionType::Static) bi.ActivateBody(id);
+    }
+
+    void Physics3DWorld::MoveBody(Entity e, const glm::vec3& position, const glm::vec3& rotation, bool teleport)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto& t = reg.Get<TransformComponent>(e);
+        t.Position = position;
+        t.Rotation = rotation;
+        auto* rb = reg.TryGet<RigidbodyComponent>(e);
+        if (!rb || rb->RuntimeBody == 0xFFFFFFFF) return;
+        if (!teleport && rb->Type == BodyType::Kinematic) return; // the next step moves it there (MoveKinematic)
+        auto& bi = m_Impl->System.GetBodyInterface();
+        JPH::BodyID id(rb->RuntimeBody);
+        if (!bi.IsAdded(id)) return;
+        bi.SetPositionAndRotation(id, JPH::RVec3(ToJolt(position)), ToJolt(glm::quat(rotation)),
+                                  rb->Type == BodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
     }
 
     void Physics3DWorld::RebuildJoint(Entity e)

@@ -45,6 +45,15 @@ namespace Dimension
         // The object's joint made again from its component (another connected body, anchor, type, limits...; a broken
         // one is mended), or removed when the component is gone. Its bodies wake.
         void RebuildJoint(Entity e);
+        // The Rigidbody 2D's settings (Body Type, Gravity Scale, damping, Fixed Rotation) applied to its body while
+        // playing, keeping its motion and joints.
+        void RefreshBody(Entity e);
+        // Puts the body (and its Transform) at a world position and angle (radians): at once (teleport), or for a
+        // kinematic body by moving there during the next step, pushing and carrying what it meets.
+        void MoveBody(Entity e, const glm::vec2& position, float angle, bool teleport);
+        // The body's mass from its colliders' densities, and a new one by scaling those densities.
+        float GetMass(Entity e) const;
+        void SetMass(Entity e, float mass);
 
         // While playing (like Unity's Physics settings, for this world only; the project's are left as they are):
         // gravity, which layers collide (a copy of the project's Layer Collision Matrix), and pairs of objects that never

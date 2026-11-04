@@ -181,6 +181,11 @@ namespace Dimension
         void SetPrimaryCamera(Entity camera);
         // While playing: the object's 3D and 2D joints made again from their components (see Physics3DWorld::RebuildJoint).
         void RebuildJoint(Entity e);
+        // While playing: the object's Rigidbody (3D) or Rigidbody 2D settings applied to its body (see RefreshBody).
+        void RefreshBody(Entity e);
+        // Puts the object and its body at a world position and rotation (Euler radians; 2D uses z's angle): at once
+        // (teleport), or a kinematic body moves there in the next physics step, pushing what it meets.
+        void MoveBody(Entity e, const glm::vec3& position, const glm::vec3& rotation, bool teleport);
         // Counts the times the camera the game shows changed (a cut): the renderer starts its temporal history over.
         uint32_t GetCameraCuts() const { return m_CameraCuts; }
         // A 3D physics world for queries only (raycasts against the colliders; nothing is simulated), on a scene that

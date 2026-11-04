@@ -519,6 +519,36 @@ namespace Dimension
         if (m_Physics2D) m_Physics2D->RebuildJoint(e);
     }
 
+    void Scene::RefreshBody(Entity e)
+    {
+        if (!IsValid(e)) return;
+        if (m_Physics3D) m_Physics3D->RefreshBody(e);
+        if (m_Physics2D && m_Registry.Has<Rigidbody2DComponent>(e)) m_Physics2D->RefreshBody(e);
+    }
+
+    void Scene::MoveBody(Entity e, const glm::vec3& position, const glm::vec3& rotation, bool teleport)
+    {
+        if (!IsValid(e)) return;
+        if (m_Registry.Has<Rigidbody2DComponent>(e))
+        {
+            if (m_Physics2D) m_Physics2D->MoveBody(e, position, rotation.z, teleport);
+            else
+            {
+                auto& t = m_Registry.Get<TransformComponent>(e);
+                t.Position = glm::vec3(position.x, position.y, t.Position.z);
+                t.Rotation.z = rotation.z;
+            }
+            return;
+        }
+        if (m_Physics3D) m_Physics3D->MoveBody(e, position, rotation, teleport);
+        else
+        {
+            auto& t = m_Registry.Get<TransformComponent>(e);
+            t.Position = position;
+            t.Rotation = rotation;
+        }
+    }
+
     void Scene::SetPrimaryCamera(Entity camera)
     {
         if (!IsValid(camera) || !m_Registry.Has<CameraComponent>(camera)) return;
