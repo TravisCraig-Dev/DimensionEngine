@@ -477,6 +477,56 @@ namespace Dimension
         if (B2_IS_NON_NULL(id)) b2Body_ApplyLinearImpulseToCenter(id, { i.x, i.y }, true);
     }
 
+    float Physics2DWorld::GetAngularVelocity(Scene& scene, Entity e)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        return B2_IS_NON_NULL(id) ? b2Body_GetAngularVelocity(id) : 0.0f;
+    }
+
+    void Physics2DWorld::SetAngularVelocity(Scene& scene, Entity e, float w)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NON_NULL(id)) b2Body_SetAngularVelocity(id, w);
+    }
+
+    void Physics2DWorld::ApplyTorque(Scene& scene, Entity e, float torque)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NON_NULL(id)) b2Body_ApplyTorque(id, torque, true);
+    }
+
+    std::vector<RaycastHit2D> Physics2DWorld::RaycastAll(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
+                                                         uint32_t layerMask)
+    {
+        struct Context { std::vector<RaycastHit2D> Hits; float MaxDistance; } ctx{ {}, maxDistance };
+        Physics2DWorld* world = scene.GetPhysics2D();
+        float len = glm::length(direction);
+        if (!world || len <= 0.0f) return {};
+        glm::vec2 translation = direction / len * maxDistance;
+        auto collect = [](b2ShapeId shape, b2Vec2 point, b2Vec2 normal, float fraction, void* context) -> float {
+            auto& c = *static_cast<Context*>(context);
+            RaycastHit2D hit{ UnpackEntity(b2Shape_GetUserData(shape)), { point.x, point.y }, { normal.x, normal.y }, fraction * c.MaxDistance };
+            auto same = std::find_if(c.Hits.begin(), c.Hits.end(), [&](const RaycastHit2D& h) { return h.Hit == hit.Hit; });
+            if (same == c.Hits.end()) c.Hits.push_back(hit);
+            else if (hit.Distance < same->Distance) *same = hit;
+            return 1.0f; // keep going: every shape along the ray
+        };
+        b2World_CastRay(LoadWorld(world->m_World), { origin.x, origin.y }, { translation.x, translation.y }, MaskQuery(layerMask), collect, &ctx);
+        std::sort(ctx.Hits.begin(), ctx.Hits.end(), [](const RaycastHit2D& a, const RaycastHit2D& b) { return a.Distance < b.Distance; });
+        return ctx.Hits;
+    }
+
+    std::vector<Entity> Physics2DWorld::OverlapPoint(Scene& scene, const glm::vec2& point, uint32_t layerMask)
+    {
+        std::vector<Entity> out;
+        Physics2DWorld* world = scene.GetPhysics2D();
+        if (!world) return out;
+        b2Vec2 p{ point.x, point.y };
+        b2ShapeProxy proxy = b2MakeProxy(&p, 1, 0.0f);
+        b2World_OverlapShape(LoadWorld(world->m_World), &proxy, MaskQuery(layerMask), &CollectEntity, &out);
+        return out;
+    }
+
     RaycastHit2D Physics2DWorld::Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance, uint32_t layerMask)
     {
         RaycastHit2D result;

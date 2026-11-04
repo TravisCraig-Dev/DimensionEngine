@@ -62,16 +62,29 @@
           ]
         },
         "Script": {
-          "Class": "CameraFollow",
-          "Fields": {
-            "Target": 500021,
-            "Offset": [
-              0,
-              1,
-              10
-            ],
-            "Smoothing": 4.0
-          }
+          "Scripts": [
+            {
+              "Class": "CameraFollow",
+              "Fields": {
+                "Target": 500021,
+                "Offset": [
+                  0,
+                  1,
+                  10
+                ],
+                "Smoothing": 4.0
+              },
+              "Enabled": true
+            },
+            {
+              "Class": "Game.ClickToKick",
+              "Fields": {
+                "Kick": 6.0,
+                "Spin": 360.0
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     },

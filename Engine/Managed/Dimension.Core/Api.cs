@@ -633,6 +633,84 @@ namespace Dimension
         }
     }
 
+    public struct RaycastHit2D
+    {
+        public Entity Entity;
+        public Vector2 Point;
+        public Vector2 Normal;
+        public float Distance;
+    }
+
+    /// <summary>Queries against the 2D colliders (Box / Circle Collider 2D, tilemaps) while playing. Layer masks have
+    /// a bit per physics layer.</summary>
+    public static unsafe class Physics2D
+    {
+        /// <summary>Every layer except "Ignore Raycast" (the default for queries).</summary>
+        public const uint DefaultLayers = ~(1u << 1);
+        private const int MaxResults = 256;
+
+        private static RaycastHit2D[] Cast(int op, Vector2 origin, Vector2 direction, float maxDistance, uint layerMask)
+        {
+            float* v = stackalloc float[4] { origin.X, origin.Y, direction.X, direction.Y };
+            ulong* ids = stackalloc ulong[MaxResults];
+            float* data = stackalloc float[MaxResults * 5];
+            IntPtr scene = Native.CurrentScene;
+            int count = Math.Min(Native.Api.Raycast2D(scene, op, v, maxDistance, layerMask, ids, data, MaxResults), MaxResults);
+            var hits = new RaycastHit2D[count];
+            for (int i = 0; i < count; ++i)
+            {
+                float* d = data + i * 5;
+                hits[i] = new RaycastHit2D { Entity = new Entity(scene, ids[i]), Point = new Vector2(d[0], d[1]), Normal = new Vector2(d[2], d[3]), Distance = d[4] };
+            }
+            return hits;
+        }
+
+        /// <summary>The nearest collider along a ray from `origin` (direction need not be normalized).</summary>
+        public static bool Raycast(Vector2 origin, Vector2 direction, out RaycastHit2D hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers)
+        {
+            RaycastHit2D[] hits = Cast(0, origin, direction, maxDistance, layerMask);
+            hit = hits.Length > 0 ? hits[0] : default;
+            return hits.Length > 0;
+        }
+        /// <summary>Every collider along the ray, nearest first (each object once).</summary>
+        public static RaycastHit2D[] RaycastAll(Vector2 origin, Vector2 direction, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
+            Cast(1, origin, direction, maxDistance, layerMask);
+
+        private static Entity[] Overlap(int shape, float* v, uint layerMask)
+        {
+            ulong* ids = stackalloc ulong[MaxResults];
+            IntPtr scene = Native.CurrentScene;
+            int count = Math.Min(Native.Api.Overlap2D(scene, shape, v, layerMask, ids, MaxResults), MaxResults);
+            var result = new Entity[count];
+            for (int i = 0; i < count; ++i) result[i] = new Entity(scene, ids[i]);
+            return result;
+        }
+        /// <summary>The objects whose colliders overlap a circle.</summary>
+        public static Entity[] OverlapCircle(Vector2 center, float radius, uint layerMask = DefaultLayers)
+        {
+            float* v = stackalloc float[3] { center.X, center.Y, radius };
+            return Overlap(0, v, layerMask);
+        }
+        /// <summary>The objects whose colliders overlap a box `size` across, turned `angleDegrees` counterclockwise.</summary>
+        public static Entity[] OverlapBox(Vector2 center, Vector2 size, float angleDegrees = 0.0f, uint layerMask = DefaultLayers)
+        {
+            float* v = stackalloc float[5] { center.X, center.Y, size.X * 0.5f, size.Y * 0.5f, angleDegrees * MathF.PI / 180.0f };
+            return Overlap(1, v, layerMask);
+        }
+        /// <summary>The object whose collider contains a point (Null when none), e.g. under the mouse:
+        /// <c>Physics2D.OverlapPoint(Camera.Main.ScreenToWorldPoint(...))</c>.</summary>
+        public static Entity OverlapPoint(Vector2 point, uint layerMask = DefaultLayers)
+        {
+            Entity[] all = OverlapPointAll(point, layerMask);
+            return all.Length > 0 ? all[0] : Entity.Null;
+        }
+        public static Entity[] OverlapPointAll(Vector2 point, uint layerMask = DefaultLayers)
+        {
+            float* v = stackalloc float[2] { point.X, point.Y };
+            return Overlap(2, v, layerMask);
+        }
+    }
+
     /// <summary>Runtime scene switching (scenes come from File > Build Settings). Loads happen at the end of the frame.</summary>
     public static unsafe class Application
     {

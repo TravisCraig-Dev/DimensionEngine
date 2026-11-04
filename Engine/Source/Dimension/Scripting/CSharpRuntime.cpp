@@ -178,6 +178,12 @@ namespace Dimension
             float (*TimeControl)(void*, int, float); // 0 time scale, 1 set it, 2 unscaled delta time, 3 unscaled time
             int (*CursorControl)(int, int);          // 0 get the cursor mode (0 normal, 1 hidden, 2 locked), 1 set it
             int (*IsMousePressed)(int);              // went down this frame
+            // 2D physics queries: 0 raycast (nearest), 1 every hit; v: origin xy, direction xy in; per hit out: point xy,
+            // normal xy, distance. Returns the hit count (all of them, though at most max are written).
+            int (*Raycast2D)(void*, int, const float*, float, uint32_t, uint64_t*, float*, int);
+            // Overlaps: 0 circle (center xy, radius), 1 box (center xy, half size xy, angle in radians), 2 point (xy).
+            int (*Overlap2D)(void*, int, const float*, uint32_t, uint64_t*, int);
+            float (*Body2D)(void*, uint64_t, int, float); // 0 angular velocity (rad/s), 1 set it, 2 apply torque
         };
 
         // Background scene loads started from C#, by id.
@@ -1081,6 +1087,41 @@ namespace Dimension
                     return 1;
                 }
                 return 0;
+            };
+            a.Raycast2D = [](void* s, int op, const float* v, float maxDistance, uint32_t mask, uint64_t* ids, float* data, int max) -> int {
+                if (!s) return 0;
+                std::vector<RaycastHit2D> hits;
+                if (op == 0)
+                {
+                    RaycastHit2D hit = Physics2DWorld::Raycast(S(s), { v[0], v[1] }, { v[2], v[3] }, maxDistance, mask);
+                    if (hit) hits.push_back(hit);
+                }
+                else
+                    hits = Physics2DWorld::RaycastAll(S(s), { v[0], v[1] }, { v[2], v[3] }, maxDistance, mask);
+                for (int i = 0; i < (int)hits.size() && i < max; ++i)
+                {
+                    ids[i] = Pack(hits[i].Hit);
+                    float* d = data + i * 5;
+                    d[0] = hits[i].Point.x; d[1] = hits[i].Point.y; d[2] = hits[i].Normal.x; d[3] = hits[i].Normal.y; d[4] = hits[i].Distance;
+                }
+                return (int)hits.size();
+            };
+            a.Overlap2D = [](void* s, int shape, const float* v, uint32_t mask, uint64_t* ids, int max) -> int {
+                if (!s) return 0;
+                std::vector<Entity> found = shape == 0 ? Physics2DWorld::OverlapCircle(S(s), { v[0], v[1] }, v[2], mask)
+                                          : shape == 1 ? Physics2DWorld::OverlapBox(S(s), { v[0], v[1] }, { v[2], v[3] }, v[4], mask)
+                                                       : Physics2DWorld::OverlapPoint(S(s), { v[0], v[1] }, mask);
+                for (int i = 0; i < (int)found.size() && i < max; ++i) ids[i] = Pack(found[i]);
+                return (int)found.size();
+            };
+            a.Body2D = [](void* s, uint64_t e, int op, float value) -> float {
+                if (!s) return 0.0f;
+                switch (op)
+                {
+                case 0: return Physics2DWorld::GetAngularVelocity(S(s), Unpack(e));
+                case 1: Physics2DWorld::SetAngularVelocity(S(s), Unpack(e), value); return 0.0f;
+                default: Physics2DWorld::ApplyTorque(S(s), Unpack(e), value); return 0.0f;
+                }
             };
             a.IsMousePressed = [](int b) -> int { return b >= 0 && b < 3 && Input::IsMousePressed((MouseButton)b) ? 1 : 0; };
             a.MainCamera = [](void* s) -> uint64_t {

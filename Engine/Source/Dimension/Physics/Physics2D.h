@@ -40,9 +40,18 @@ namespace Dimension
         static glm::vec2 GetLinearVelocity(Scene& scene, Entity e);
         static void ApplyForce(Scene& scene, Entity e, const glm::vec2& force);
         static void ApplyImpulse(Scene& scene, Entity e, const glm::vec2& impulse);
+        // Spin in radians per second (counterclockwise), and torque in N*m.
+        static float GetAngularVelocity(Scene& scene, Entity e);
+        static void SetAngularVelocity(Scene& scene, Entity e, float radiansPerSecond);
+        static void ApplyTorque(Scene& scene, Entity e, float torque);
         // layerMask: bit per physics layer (default: all but "Ignore Raycast").
         static RaycastHit2D Raycast(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
                                     uint32_t layerMask = ~(1u << 1));
+        // Every collider along the ray, nearest first (one hit per object: its nearest).
+        static std::vector<RaycastHit2D> RaycastAll(Scene& scene, const glm::vec2& origin, const glm::vec2& direction, float maxDistance,
+                                                    uint32_t layerMask = ~(1u << 1));
+        // The objects whose colliders contain a point (e.g. under the mouse, from ScreenToWorld).
+        static std::vector<Entity> OverlapPoint(Scene& scene, const glm::vec2& point, uint32_t layerMask = ~(1u << 1));
         static std::vector<Entity> OverlapCircle(Scene& scene, const glm::vec2& center, float radius, uint32_t layerMask = ~(1u << 1));
         static std::vector<Entity> OverlapBox(Scene& scene, const glm::vec2& center, const glm::vec2& halfExtents, float angle = 0.0f,
                                               uint32_t layerMask = ~(1u << 1));

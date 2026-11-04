@@ -134,6 +134,14 @@ namespace Dimension
         }
         public void AddForce(Vector2 force) => Native.Api.ApplyForce2D(Entity.Scene, Entity.Id, (float*)&force);
         public void AddImpulse(Vector2 impulse) => Native.Api.ApplyImpulse2D(Entity.Scene, Entity.Id, (float*)&impulse);
+        /// <summary>Spin in degrees per second, counterclockwise.</summary>
+        public float AngularVelocity
+        {
+            get => Native.Api.Body2D(Entity.Scene, Entity.Id, 0, 0.0f) * 180.0f / MathF.PI;
+            set => Native.Api.Body2D(Entity.Scene, Entity.Id, 1, value * MathF.PI / 180.0f);
+        }
+        /// <summary>Turns the body (N*m, counterclockwise) for this step, like AddForce for rotation.</summary>
+        public void AddTorque(float torque) => Native.Api.Body2D(Entity.Scene, Entity.Id, 2, torque);
     }
 
     /// <summary>3D colliders, for HasComponent/AddComponent and [RequireComponent] (their settings are edited in the Inspector).</summary>

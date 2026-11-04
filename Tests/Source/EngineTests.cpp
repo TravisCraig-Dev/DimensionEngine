@@ -538,6 +538,55 @@ namespace
         Input::SetGameInputEnabled(gameInput);
     }
 
+    void TestPhysics2DQueries()
+    {
+        Scene scene("Queries2D");
+        auto& reg = scene.GetRegistry();
+        Entity boxes[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            boxes[i] = scene.CreateEntity("Box " + std::to_string(i));
+            reg.Get<TransformComponent>(boxes[i]).Position = { 2.0f + 3.0f * i, 0, 0 };
+            reg.Emplace<BoxCollider2DComponent>(boxes[i]);
+        }
+        reg.Get<TagComponent>(boxes[1]).Layer = 5;
+        Entity disc = scene.CreateEntity("Disc");
+        reg.Get<TransformComponent>(disc).Position = { 0, 5, 0 };
+        reg.Emplace<CircleCollider2DComponent>(disc);
+        Entity spinner = scene.CreateEntity("Spinner"), pushed = scene.CreateEntity("Pushed");
+        for (Entity e : { spinner, pushed })
+        {
+            reg.Get<TransformComponent>(e).Position = { e == spinner ? -10.0f : -20.0f, 20, 0 };
+            reg.Emplace<Rigidbody2DComponent>(e).GravityScale = 0.0f;
+            reg.Emplace<BoxCollider2DComponent>(e);
+        }
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+
+        // Every hit along a ray, nearest first, with its point, normal and distance; masks leave layers out.
+        auto hits = Physics2DWorld::RaycastAll(*rt, { 0, 0 }, { 1, 0 }, 20.0f);
+        CHECK(hits.size() == 3 && hits[0].Hit == boxes[0] && hits[1].Hit == boxes[1] && hits[2].Hit == boxes[2]);
+        CHECK(hits.size() == 3 && Near(hits[0].Distance, 1.5f) && Near(hits[2].Distance, 7.5f) && Near(hits[1].Point, glm::vec2(4.5f, 0.0f)) &&
+              Near(hits[0].Normal, glm::vec2(-1.0f, 0.0f)));
+        auto masked = Physics2DWorld::RaycastAll(*rt, { 0, 0 }, { 1, 0 }, 20.0f, ~(1u << 5));
+        CHECK(masked.size() == 2 && masked[1].Hit == boxes[2]);
+        CHECK(Physics2DWorld::RaycastAll(*rt, { 0, 0 }, { 1, 0 }, 4.0f).size() == 1); // max distance
+
+        // Points inside boxes and circles (not their bounding boxes).
+        auto at = [&](glm::vec2 p) { auto v = Physics2DWorld::OverlapPoint(*rt, p); return v.empty() ? Entity::Null() : v[0]; };
+        CHECK(at({ 5.0f, 0.2f }) == boxes[1] && at({ 3.5f, 0.0f }).IsNull());
+        CHECK(at({ 0.0f, 5.3f }) == disc && at({ 0.4f, 5.4f }).IsNull());
+        CHECK(Physics2DWorld::OverlapPoint(*rt, { 5.0f, 0.0f }, ~(1u << 5)).empty());
+
+        // Spin: set directly, or from a torque over a step.
+        Physics2DWorld::SetAngularVelocity(*rt, spinner, 2.0f);
+        CHECK(Near(Physics2DWorld::GetAngularVelocity(*rt, spinner), 2.0f));
+        Physics2DWorld::ApplyTorque(*rt, pushed, 50.0f);
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(Physics2DWorld::GetAngularVelocity(*rt, pushed) > 0.1f);
+        rt->OnRuntimeStop();
+    }
+
     void TestMeshImportSettings()
     {
         fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
@@ -7701,6 +7750,34 @@ namespace
             rt->OnRuntimeStop();
         }
 
+        // Physics2D.OverlapPoint and Rigidbody2D.AngularVelocity from C#: the Sandbox's ClickToKick kicks the body under a
+        // click up, spinning away from the side clicked.
+        {
+            Scene ck("Kick");
+            auto& creg = ck.GetRegistry();
+            Entity cam = ck.CreateEntity("Main Camera");
+            creg.Emplace<CameraComponent>(cam).Projection = ProjectionType::Orthographic;
+            creg.Get<TransformComponent>(cam).Position = { 0, 0, 10 };
+            creg.Emplace<ScriptComponent>(cam).Add("Game.ClickToKick");
+            Entity box = ck.CreateEntity("Box");
+            creg.Get<TransformComponent>(box).Position = { 2, 1, 0 };
+            creg.Emplace<Rigidbody2DComponent>(box).GravityScale = 0.0f;
+            creg.Emplace<BoxCollider2DComponent>(box);
+            auto rt = ck.Clone();
+            rt->OnRuntimeStart();
+            glm::vec2 view(1280, 720);
+            glm::vec3 screen = CameraProjection::WorldToScreen(*rt, cam, { 1.7f, 1.0f, 0.0f }, view); // left of center
+            rt->SetUIInput(glm::vec2(screen), true, view);
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            Input::SimulateMouseButton(MouseButton::Left, true);
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            Input::SimulateMouseButton(MouseButton::Left, false);
+            Input::SetGameInputEnabled(gameInput);
+            CHECK(Physics2DWorld::GetLinearVelocity(*rt, box).y > 1.0f && Physics2DWorld::GetAngularVelocity(*rt, box) < -1.0f);
+            rt->OnRuntimeStop();
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -11386,6 +11463,7 @@ int main(int argc, char** argv)
     Run("Active state and tags", TestActiveState);
     Run("Camera projection", TestCameraProjection);
     Run("Time scale and cursor", TestTimeScaleAndCursor);
+    Run("2D physics queries", TestPhysics2DQueries);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

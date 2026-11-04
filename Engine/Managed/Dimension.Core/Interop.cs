@@ -137,6 +137,10 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, float, float> TimeControl; // 0 scale, 1 set scale, 2 unscaled dt, 3 unscaled time
         public delegate* unmanaged<int, int, int> CursorControl;           // 0 get mode, 1 set mode (0 normal, 1 hidden, 2 locked)
         public delegate* unmanaged<int, int> IsMousePressed;
+        // 2D physics (see Physics2D in Api.cs): raycast op, origin+direction, max distance, mask, ids out, hit data out, max.
+        public delegate* unmanaged<IntPtr, int, float*, float, uint, ulong*, float*, int, int> Raycast2D;
+        public delegate* unmanaged<IntPtr, int, float*, uint, ulong*, int, int> Overlap2D; // 0 circle, 1 box, 2 point
+        public delegate* unmanaged<IntPtr, ulong, int, float, float> Body2D;               // 0 angular velocity, 1 set, 2 torque
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
