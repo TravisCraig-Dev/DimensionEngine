@@ -26,6 +26,7 @@
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Animation/AnimatorController.h>
 #include <Dimension/Project/Localization.h>
+#include <Dimension/Asset/DataAsset.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -2089,6 +2090,39 @@ namespace Editor
         else if (meta->Type == AssetType::Scene)
         {
             if (ImGui::Button("Open Scene")) m_Ctx.RequestOpenScene = AssetManager::GetAbsolutePath(handle);
+        }
+        else if (meta->Type == AssetType::DataAsset)
+        {
+            // A data class's values (from the file, the class's defaults for fields it lacks), saved at once: scripts
+            // holding the asset while playing take the new values.
+            nlohmann::json file = DataAssets::Read(handle);
+            std::string cls = file.is_object() ? file["class"].get<std::string>() : std::string();
+            const DataAssets::ClassInfo* info = DataAssets::FindClass(cls);
+            if (!info || !info->Create)
+            {
+                ImGui::TextWrapped(cls.empty() ? "Not a data asset (expected {\"class\": ..., \"fields\": {...}})."
+                                               : "Its class '%s' is not among the scripts' data classes (yet): the values are kept as they are.",
+                                   cls.c_str());
+                return;
+            }
+            ImGui::TextDisabled("Data asset of %s", cls.c_str());
+            std::shared_ptr<void> storage = info->Create();
+            for (const FieldInfo& f : info->Fields)
+                if (file["fields"].contains(f.Name)) FieldFromJson(f, storage.get(), file["fields"][f.Name], nullptr);
+            bool changed = false;
+            if (UI::BeginProperties("DataAssetFields"))
+            {
+                for (const FieldInfo& f : info->Fields)
+                    if (!f.Hidden) changed |= UI::Field(f, storage.get(), nullptr).Changed;
+                UI::EndProperties();
+            }
+            if (changed)
+            {
+                nlohmann::json fields = file["fields"]; // keeps values of fields the class no longer has
+                for (const FieldInfo& f : info->Fields) fields[f.Name] = FieldToJson(f, storage.get(), nullptr);
+                DataAssets::Write(AssetManager::GetAbsolutePath(handle), cls, fields);
+            }
+            ImGui::TextDisabled("Changes are saved to the .asset file immediately.");
         }
         else if (meta->Type == AssetType::StringTable)
         {

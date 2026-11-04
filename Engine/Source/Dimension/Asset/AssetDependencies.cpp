@@ -34,7 +34,7 @@ namespace Dimension::AssetDependencies
         {
             std::string ext = LowerExtension(path);
             return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller" || ext == ".spriteatlas" ||
-                   ext == ".timeline" || ext == ".preset";
+                   ext == ".timeline" || ext == ".preset" || ext == ".asset";
         }
 
         // Relative URIs inside a .gltf (buffers and images), resolved against the model's folder (Assets-relative).
@@ -111,7 +111,7 @@ namespace Dimension::AssetDependencies
     {
         std::vector<AssetHandle> out;
         if (!AssetManager::GetMetadata(asset)) return out;
-        for (int type = (int)AssetType::Texture; type <= (int)AssetType::StringTable; ++type)
+        for (int type = (int)AssetType::Texture; type <= (int)AssetType::DataAsset; ++type)
             for (AssetHandle h : AssetManager::GetAssetsOfType((AssetType)type))
             {
                 if (h == asset) continue;

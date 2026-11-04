@@ -125,6 +125,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, byte*, float> InputAction;
         // Localization: op (see Localization in Api.cs), text, scene, entity -> text, or null.
         public delegate* unmanaged<int, byte*, IntPtr, ulong, byte*> Localization;
+        // A data asset's file as JSON ({"class", "fields"}), or null.
+        public delegate* unmanaged<ulong, byte*> DataAssetFile;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
@@ -155,6 +157,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> RunContextMenu;
         // A custom Inspector's OnSceneGUI (arguments and result as Inspect's)
         public delegate* unmanaged<int, IntPtr, byte*, byte*, IntPtr, ulong, byte*> SceneGUI;
+        // A data asset's file was written (0: play starts, every data asset object is made again).
+        public delegate* unmanaged<ulong, void> DataAssetChanged;
     }
 
     internal static unsafe class Native
@@ -214,6 +218,7 @@ namespace Dimension.Interop
                 api->DrawGizmos = &ScriptHost.DrawGizmos;
                 api->RunContextMenu = &ScriptHost.RunContextMenu;
                 api->SceneGUI = &ScriptHost.SceneGUI;
+                api->DataAssetChanged = &ScriptHost.DataAssetChanged;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

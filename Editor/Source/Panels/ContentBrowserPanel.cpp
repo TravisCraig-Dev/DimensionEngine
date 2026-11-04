@@ -1,5 +1,6 @@
 #include "../AssetPreviews.h"
 #include <Dimension/Renderer/SpriteAtlas.h>
+#include <Dimension/Asset/DataAsset.h>
 #include "Panels.h"
 #include "../EditorUI.h"
 #include <Dimension/Renderer/Texture.h>
@@ -574,6 +575,20 @@ namespace Editor
                     AssetHandle h = AssetManager::CreateTimeline(UniquePath(m_Current / "New Timeline.timeline"));
                     if (h.IsValid()) m_Ctx.SelectAsset(h);
                 }
+                if (ImGui::BeginMenu("New Data Asset", !DataAssets::Classes().empty()))
+                {
+                    // An asset of each data class the scripts define (C# classes deriving from DataAsset).
+                    for (const auto& c : DataAssets::Classes())
+                        if (ImGui::MenuItem(c.Name.c_str()))
+                        {
+                            std::string shortName = c.Name.substr(c.Name.find_last_of('.') + 1);
+                            AssetHandle h = DataAssets::Create(UniquePath(m_Current / ("New " + shortName + ".asset")), c.Name);
+                            if (h.IsValid()) m_Ctx.SelectAsset(h);
+                        }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && DataAssets::Classes().empty())
+                    ImGui::SetTooltip("Derive a C# class from DataAsset to make assets of it");
                 if (ImGui::MenuItem("New Sprite Atlas"))
                 {
                     // Packs the textures in this folder to begin with.

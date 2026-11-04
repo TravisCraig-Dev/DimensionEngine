@@ -43,7 +43,8 @@ namespace Dimension
         case FieldType::Material:
         case FieldType::Font:
         case FieldType::AnimatorController:
-        case FieldType::Timeline: return (uint64_t) * (const Guid*)p;
+        case FieldType::Timeline:
+        case FieldType::DataAsset: return (uint64_t) * (const Guid*)p;
         case FieldType::EntityRef:
         {
             Entity e = *(const Entity*)p;
@@ -135,7 +136,8 @@ namespace Dimension
             case FieldType::Material:
             case FieldType::Font:
             case FieldType::AnimatorController:
-            case FieldType::Timeline: *(Guid*)p = Guid(v.get<uint64_t>()); break;
+            case FieldType::Timeline:
+            case FieldType::DataAsset: *(Guid*)p = Guid(v.get<uint64_t>()); break;
             case FieldType::EntityRef:
                 *(Entity*)p = resolver ? resolver->FromGuid(v.get<uint64_t>()) : Entity::Null();
                 break;

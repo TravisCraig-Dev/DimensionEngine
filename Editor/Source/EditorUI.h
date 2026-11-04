@@ -43,6 +43,9 @@ namespace Editor::UI
     bool IsListField(FieldType type);
     EditResult Vec3Control(const char* label, glm::vec3& value, float resetValue = 0.0f, float speed = 0.05f);
     EditResult AssetField(const char* label, AssetHandle& handle, AssetType type);
+    // Only the assets `accept` takes (type label in the button: "Enemy Stats" for data assets of a class).
+    EditResult AssetField(const char* label, AssetHandle& handle, AssetType type, const std::function<bool(AssetHandle)>& accept,
+                          const std::string& typeLabel);
     // Theme-aware colors: a background tinted toward the accent (amount 0-1), and accent-colored text that stays
     // readable on light and dark themes (prefab overrides, highlights).
     ImVec4 AccentBackground(float amount = 0.3f);

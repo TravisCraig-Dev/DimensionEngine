@@ -18,6 +18,7 @@
 #include "Dimension/Core/PlayerPrefs.h"
 #include "Dimension/Project/InputActions.h"
 #include "Dimension/Project/Localization.h"
+#include "Dimension/Asset/DataAsset.h"
 #include <climits>
 #include <cmath>
 #include <limits>
@@ -162,6 +163,7 @@ namespace Dimension
             // 4 the languages ("code\tname" lines), 5 the system's, 6 the default, 7 a language's name, 8 / 9 get / set
             // a UI Text's Localized Key (scene, entity).
             const char* (*Localization)(int, const char*, void*, uint64_t);
+            const char* (*DataAssetFile)(uint64_t); // a data asset's file as JSON ({class, fields}), or null
         };
 
         // Background scene loads started from C#, by id.
@@ -192,6 +194,7 @@ namespace Dimension
             const char* (*DrawGizmos)(int, intptr_t, const char*, const char*, void*, uint64_t);
             const char* (*RunContextMenu)(int, intptr_t, const char*, const char*, void*, uint64_t);
             const char* (*SceneGUI)(int, intptr_t, const char*, const char*, void*, uint64_t); // as Inspect
+            void (*DataAssetChanged)(uint64_t); // a data asset's file was written (0: play starts, all made again)
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -417,6 +420,13 @@ namespace Dimension
                     info.Type = a.second;
                     return Slot::Asset;
                 }
+            if (type == "DataAsset")
+            {
+                // A data asset of the field's class (picked among the .asset files of it or a derived class).
+                info.Type = FieldType::DataAsset;
+                info.AssetClass = f.value("class", std::string("Dimension.DataAsset"));
+                return Slot::Asset;
+            }
             if (type == "Enum")
             {
                 info.Type = FieldType::Enum;
@@ -760,6 +770,20 @@ namespace Dimension
                 for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
                 for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
 
+                if (j.value("dataAsset", false))
+                {
+                    // A data class (C#'s DataAsset): made into .asset files, not attached to objects.
+                    DataAssets::ClassInfo& data = DataAssets::AddClass(cls.Name, "csharp");
+                    const ManagedClass* ptr = &cls;
+                    data.Fields = cls.Values.Fields;
+                    for (auto& b : j.value("bases", nlohmann::json::array()))
+                        if (b.is_string()) data.Bases.push_back(b.get<std::string>());
+                    data.Create = [ptr]() -> std::shared_ptr<void> {
+                        auto block = std::make_shared<Block>(&ptr->Values);
+                        return std::shared_ptr<void>(block, block->Data());
+                    };
+                    return;
+                }
                 ScriptInfo& info = ScriptRegistry::RegisterDynamic(cls.Name, "csharp");
                 const ManagedClass* ptr = &cls;
                 info.Create = [ptr] { return std::make_shared<ManagedScript>(ptr); };
@@ -951,6 +975,13 @@ namespace Dimension
                     return nullptr;
                 default: return nullptr;
                 }
+                return result.c_str();
+            };
+            a.DataAssetFile = [](uint64_t guid) -> const char* {
+                thread_local std::string result;
+                nlohmann::json j = DataAssets::Read(AssetHandle(guid));
+                if (j.is_null()) return nullptr;
+                result = j.dump();
                 return result.c_str();
             };
             a.InputAction = [](int op, const char* name) -> float {
@@ -1354,6 +1385,10 @@ namespace Dimension
         Scene::SetEventHook([](Scene& scene, Entity e, Scene::EventKind kind, float value, Entity other, const char* text) {
             if (s_Managed.RaiseEvent) s_Managed.RaiseEvent(&scene, Pack(e), (int)kind, value, Pack(other), text);
         });
+        // Data assets: objects scripts hold take an asset's new values when it is saved, and start over when play starts.
+        DataAssets::SetChangedHook([](AssetHandle h) {
+            if (s_Available && s_Managed.DataAssetChanged) s_Managed.DataAssetChanged((uint64_t)h);
+        });
         return true;
     }
 
@@ -1476,6 +1511,7 @@ namespace Dimension
         if (!s_Available) return;
         s_EditorItems.clear();
         ScriptRegistry::ClearModule("csharp");
+        DataAssets::ClearModule("csharp");
         s_Classes.clear();
         s_Managed.UnloadScripts();
     }

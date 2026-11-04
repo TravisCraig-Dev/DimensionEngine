@@ -28,6 +28,7 @@ namespace Dimension
         MaterialList,     // std::vector<AssetHandle> of materials (per-slot overrides)
         StructList,       // std::vector of a struct whose fields are Elements (FieldListBuilder::List)
         Struct,           // a nested struct: Elements are its fields (Access relative to the field's address)
+        DataAsset,        // AssetHandle of a data asset (.asset) whose class is AssetClass or derives from it
     };
 
     struct FieldInfo
@@ -55,6 +56,7 @@ namespace Dimension
         std::function<void(void*, size_t)> ListErase;
         std::function<void(void*, size_t, size_t)> ListMove; // an element from one place to another
         std::string ElementTitle;
+        std::string AssetClass; // DataAsset: the class of the assets it takes ("Dimension.DataAsset": any)
     };
 
     inline bool IsValueList(const FieldInfo& f) { return f.Type == FieldType::StructList && f.Elements.size() == 1 && f.Elements[0].Name.empty(); }

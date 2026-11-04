@@ -38,6 +38,10 @@ namespace Dimension
 
         private static ScriptLoadContext s_Context;
         private static readonly Dictionary<string, ScriptClass> s_Classes = new();
+        // DataAsset classes (made into .asset files) and the objects made from assets so far, by GUID: one per asset,
+        // shared by every field referring to it, made again when play starts.
+        private static readonly Dictionary<string, ScriptClass> s_DataClasses = new();
+        private static readonly Dictionary<ulong, DataAsset> s_DataAssets = new();
         // Editor extensions by id: [MenuItem] methods, EditorWindow classes and Inspector classes (with their instance
         // once drawn).
         private sealed class EditorItem
@@ -373,6 +377,7 @@ namespace Dimension
                 foreach (object item in items) list.Add(item);
                 return list;
             }
+            if (IsDataAsset(t)) return v.ValueKind == JsonValueKind.Number ? LoadDataAsset(v.GetUInt64(), t) : null;
             if (t == typeof(Entity)) return v.ValueKind == JsonValueKind.Number ? new Entity(scene, v.GetUInt64()) : Entity.Null;
             if (v.ValueKind == JsonValueKind.Null) return t == typeof(string) ? "" : Activator.CreateInstance(t);
             if (IsSerializable(t))
@@ -492,9 +497,11 @@ namespace Dimension
             typeof(Prefab), typeof(Texture), typeof(Material), typeof(Mesh), typeof(AudioClip),
         };
 
-        // Serialized field types: the ones above, enums (stored as their int value), and lists and arrays of either.
+        // Serialized field types: the ones above, data assets (by GUID), enums (stored as their int value), and lists
+        // and arrays of either.
+        private static bool IsDataAsset(Type t) => typeof(DataAsset).IsAssignableFrom(t);
         private static bool IsScalar(Type t) =>
-            s_Supported.Contains(t) ||
+            s_Supported.Contains(t) || IsDataAsset(t) ||
             (t.IsEnum && Type.GetTypeCode(Enum.GetUnderlyingType(t)) is TypeCode.Int32 or TypeCode.Int16 or TypeCode.UInt16 or TypeCode.Byte or TypeCode.SByte);
         private static Type ElementType(Type t) =>
             t.IsArray && t.GetArrayRank() == 1 ? t.GetElementType() :
@@ -504,7 +511,7 @@ namespace Dimension
         private const int kMaxDepth = 4;
         private static bool IsSerializable(Type t) =>
             !t.IsPrimitive && !t.IsEnum && !t.IsGenericType && !t.IsArray && t != typeof(string) && !s_Supported.Contains(t) &&
-            t.IsDefined(typeof(SerializableAttribute), false) && !typeof(Behaviour).IsAssignableFrom(t) &&
+            t.IsDefined(typeof(SerializableAttribute), false) && !typeof(Behaviour).IsAssignableFrom(t) && !IsDataAsset(t) &&
             t.Assembly != typeof(object).Assembly && t.Assembly != typeof(Behaviour).Assembly &&
             (t.IsValueType || (!t.IsAbstract && t.GetConstructor(Type.EmptyTypes) != null));
         private static bool IsSupported(Type t, int depth = 0)
@@ -546,6 +553,12 @@ namespace Dimension
                 w.WriteEndArray();
                 return;
             }
+            if (IsDataAsset(t))
+            {
+                w.WriteString("type", "DataAsset");
+                w.WriteString("class", t.FullName);
+                return;
+            }
             w.WriteString("type", TypeName(t));
         }
 
@@ -565,6 +578,7 @@ namespace Dimension
                     else w.WriteNumberValue(e.Id);
                     break;
                 case Enum e: w.WriteNumberValue(Convert.ToInt32(e)); break;
+                case DataAsset d: w.WriteNumberValue(d.Guid); break;
                 case System.Collections.IList list:
                     w.WriteStartArray();
                     foreach (object item in list) WriteValue(w, item);
@@ -612,7 +626,7 @@ namespace Dimension
         private static IEnumerable<FieldInfo> SerializedFields(Type type, int depth = 0)
         {
             var chain = new List<Type>();
-            for (Type t = type; t != null && t != typeof(Behaviour); t = t.BaseType) chain.Insert(0, t);
+            for (Type t = type; t != null && t != typeof(Behaviour) && t != typeof(DataAsset); t = t.BaseType) chain.Insert(0, t);
             foreach (Type t in chain)
                 foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
@@ -685,6 +699,7 @@ namespace Dimension
                     Array.Copy(json, withNul, json.Length);
                     fixed (byte* q = withNul) Native.Api.RegisterScriptClass(q);
                 }
+                RegisterDataClasses(assembly);
                 RegisterEditorItems(assembly);
                 return s_Classes.Count;
             }
@@ -695,12 +710,113 @@ namespace Dimension
             }
         }
 
+        // DataAsset classes: their fields (not entities: an asset belongs to no scene) and the data classes they derive
+        // from (fields of those take them too).
+        private static void RegisterDataClasses(Assembly assembly)
+        {
+            foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(DataAsset))).OrderBy(t => t.FullName))
+            {
+                var cls = new ScriptClass { Type = type };
+                object defaults = null;
+                try { defaults = Activator.CreateInstance(type); } catch (Exception e) { Debug.LogError($"{type.FullName}: constructor failed: {e.Message}"); }
+                using var stream = new MemoryStream();
+                using (var w = new Utf8JsonWriter(stream))
+                {
+                    w.WriteStartObject();
+                    w.WriteString("name", type.FullName);
+                    w.WriteBoolean("dataAsset", true);
+                    w.WriteStartArray("bases");
+                    for (Type b = type.BaseType; b != null && b != typeof(DataAsset); b = b.BaseType) w.WriteStringValue(b.FullName);
+                    w.WriteEndArray();
+                    w.WriteStartArray("fields");
+                    foreach (FieldInfo f in SerializedFields(type))
+                    {
+                        if (f.FieldType == typeof(Entity) || ElementType(f.FieldType) == typeof(Entity)) continue;
+                        cls.Fields.Add(f);
+                        WriteField(w, f, defaults, 0);
+                    }
+                    w.WriteEndArray();
+                    w.WriteEndObject();
+                }
+                s_DataClasses[type.FullName] = cls;
+                byte[] json = stream.ToArray();
+                var withNul = new byte[json.Length + 1];
+                Array.Copy(json, withNul, json.Length);
+                fixed (byte* q = withNul) Native.Api.RegisterScriptClass(q);
+            }
+        }
+
+        // The object of a data asset (made from its file on first use), or null when there is none of type `expected`.
+        internal static DataAsset LoadDataAsset(ulong guid, Type expected)
+        {
+            if (guid == 0) return null;
+            if (!s_DataAssets.TryGetValue(guid, out DataAsset asset))
+            {
+                string json = Native.FromUtf8(Native.Api.DataAssetFile(guid));
+                if (json == null) return null;
+                using var doc = JsonDocument.Parse(json);
+                string name = doc.RootElement.GetProperty("class").GetString();
+                if (!s_DataClasses.TryGetValue(name ?? "", out ScriptClass cls))
+                {
+                    Debug.LogWarning($"Data asset {guid}: no data class '{name}'");
+                    return null;
+                }
+                asset = (DataAsset)Activator.CreateInstance(cls.Type);
+                asset.Guid = guid;
+                s_DataAssets[guid] = asset; // before its fields: assets referring to each other get this object
+                ReadDataFields(asset, cls, doc.RootElement);
+            }
+            if (!expected.IsInstanceOfType(asset))
+            {
+                Debug.LogWarning($"Data asset {guid} is a {asset.GetType().FullName}, not a {expected.FullName}");
+                return null;
+            }
+            return asset;
+        }
+
+        private static void ReadDataFields(DataAsset asset, ScriptClass cls, JsonElement file)
+        {
+            if (file.TryGetProperty("fields", out JsonElement fields) && fields.ValueKind == JsonValueKind.Object)
+                foreach (FieldInfo f in cls.Fields)
+                    if (fields.TryGetProperty(f.Name, out JsonElement v) && v.ValueKind != JsonValueKind.Null)
+                        f.SetValue(asset, ReadValue(f.FieldType, v, IntPtr.Zero));
+            try { asset.OnLoaded(); }
+            catch (Exception e) { Debug.LogError($"{cls.Type.FullName}.OnLoaded failed: {e}"); }
+        }
+
+        [UnmanagedCallersOnly]
+        internal static void DataAssetChanged(ulong guid)
+        {
+            try
+            {
+                if (guid == 0)
+                {
+                    s_DataAssets.Clear();
+                    return;
+                }
+                // Saved: the object scripts hold takes the new values (in place, so every reference sees them).
+                if (!s_DataAssets.TryGetValue(guid, out DataAsset asset)) return;
+                string json = Native.FromUtf8(Native.Api.DataAssetFile(guid));
+                using var doc = json != null ? JsonDocument.Parse(json) : null;
+                if (doc == null || doc.RootElement.GetProperty("class").GetString() != asset.GetType().FullName ||
+                    !s_DataClasses.TryGetValue(asset.GetType().FullName, out ScriptClass cls))
+                {
+                    s_DataAssets.Remove(guid);
+                    return;
+                }
+                ReadDataFields(asset, cls, doc.RootElement);
+            }
+            catch (Exception e) { Debug.LogError($"Reloading data asset failed: {e}"); }
+        }
+
         // Separate, non-inlined frame: otherwise (especially in Debug builds) the JIT can keep the
         // context alive in a stack slot of the caller and the collectible assembly never unloads.
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static WeakReference BeginUnload()
         {
             s_Classes.Clear();
+            s_DataClasses.Clear();
+            s_DataAssets.Clear();
             s_EditorItems.Clear();
             s_Drawers.Clear();
             s_GizmoFailures.Clear();
@@ -770,6 +886,7 @@ namespace Dimension
                     t == typeof(Vector4) ? *(Vector4*)value :
                     t == typeof(Color) ? *(Color*)value :
                     typeof(IAssetReference).IsAssignableFrom(t) ? Activator.CreateInstance(t, *(ulong*)value) :
+                    IsDataAsset(t) ? LoadDataAsset(*(ulong*)value, t) :
                     (object)new Entity(b.Entity.Scene, *(ulong*)value);
                 f.SetValue(b, v);
             }

@@ -30,6 +30,7 @@
 #include <Dimension/Scene/DebugDraw.h>
 #include <Dimension/Core/PlayerPrefs.h>
 #include <Dimension/Project/Localization.h>
+#include <Dimension/Asset/DataAsset.h>
 #include <Dimension/Project/InputActions.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/SceneBookmarks.h>
@@ -7396,6 +7397,47 @@ namespace
             fs::remove_all(locDir, pdError);
         }
 
+        // Data assets from C#: the Sandbox's Palette (a DataAsset) shared by two PaletteTint scripts, one object for both,
+        // taking the asset's new values when it is saved while playing.
+        {
+            fs::path daDir = fs::temp_directory_path() / "dimension_csharp_data_assets";
+            fs::remove_all(daDir, pdError);
+            fs::create_directories(daDir / "Assets");
+            AssetManager::Init(daDir / "Assets");
+            const DataAssets::ClassInfo* palette = DataAssets::FindClass("Game.Palette");
+            CHECK(palette && palette->Fields.size() == 2 && palette->Fields[0].Name == "Colors" && !ScriptRegistry::Find("Game.Palette"));
+            const ScriptInfo* tint = ScriptRegistry::Find("Game.PaletteTint");
+            CHECK(tint && tint->Fields.size() == 2 && tint->Fields[0].Type == FieldType::DataAsset && tint->Fields[0].AssetClass == "Game.Palette");
+            // A new asset holds the class's defaults (two colors, 1.5 s each).
+            AssetHandle asset = DataAssets::Create(daDir / "Assets/Tints.asset", "Game.Palette");
+            nlohmann::json fields = DataAssets::Read(asset)["fields"];
+            CHECK(asset.IsValid() && fields["Colors"].size() == 2 && Near(fields["SecondsPerColor"].get<float>(), 1.5f));
+            fields["Colors"] = nlohmann::json::array({ nlohmann::json::array({ 0.2f, 0.4f, 0.6f, 1.0f }) });
+            DataAssets::Write(daDir / "Assets/Tints.asset", "Game.Palette", fields);
+
+            Scene da("DataAssets");
+            Entity a = da.CreateEntity("A"), b = da.CreateEntity("B");
+            for (Entity x : { a, b })
+            {
+                da.GetRegistry().Emplace<MeshRendererComponent>(x).Color = { 1, 1, 1, 1 };
+                da.GetRegistry().Emplace<ScriptComponent>(x).Add("Game.PaletteTint").Fields["Palette"] = (uint64_t)asset;
+            }
+            auto rt = da.Clone();
+            rt->OnRuntimeStart();
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            auto colorOf = [&](Entity x) { return rt->GetRegistry().Get<MeshRendererComponent>(x).Color; };
+            CHECK(Near(colorOf(a).r, 0.2f) && Near(colorOf(a).b, 0.6f) && Near(colorOf(b).g, 0.4f));
+            // Saved while playing: both scripts' palette (the same object) has the new color at once.
+            fields["Colors"] = nlohmann::json::array({ nlohmann::json::array({ 0.9f, 0.1f, 0.1f, 1.0f }) });
+            DataAssets::Write(daDir / "Assets/Tints.asset", "Game.Palette", fields);
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            CHECK(Near(colorOf(a).r, 0.9f) && Near(colorOf(b).r, 0.9f) && Near(colorOf(b).g, 0.1f));
+            rt->OnRuntimeStop();
+            rt.reset();
+            AssetManager::Shutdown();
+            fs::remove_all(daDir, pdError);
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -9133,6 +9175,90 @@ namespace
         Localization::SetSystemLanguage({});
         config.DefaultLanguage = savedDefault;
         PlayerData::SetFolder({});
+        fs::remove_all(dir, ec);
+    }
+
+    // Data assets: .asset files of a data class's fields, created with its defaults, read, filtered by class (bases
+    // too), shipped when referenced, and the scripts told when one is saved and when play starts.
+    struct TestStats
+    {
+        float Speed = 3.5f;
+        std::string Title = "Grunt";
+    };
+
+    void TestDataAssets()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_data_assets";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "Assets");
+        AssetManager::Init(dir / "Assets");
+        CHECK(AssetManager::TypeFromExtension("Boss.asset") == AssetType::DataAsset);
+
+        // A data class as the C# runtime registers one: its fields over storage holding the defaults.
+        auto addClass = [](const std::string& name, std::vector<std::string> bases) {
+            DataAssets::ClassInfo& c = DataAssets::AddClass(name, "test");
+            c.Bases = std::move(bases);
+            FieldInfo speed;
+            speed.Name = "Speed";
+            speed.Type = FieldType::Float;
+            speed.Access = [](void* o) -> void* { return &static_cast<TestStats*>(o)->Speed; };
+            FieldInfo title;
+            title.Name = "Title";
+            title.Type = FieldType::String;
+            title.Access = [](void* o) -> void* { return &static_cast<TestStats*>(o)->Title; };
+            c.Fields = { speed, title };
+            c.Create = [] { return std::shared_ptr<void>(std::make_shared<TestStats>()); };
+        };
+        addClass("Game.Stats", {});
+        addClass("Game.BossStats", { "Game.Stats" });
+        std::vector<uint64_t> told;
+        DataAssets::SetChangedHook([&](AssetHandle h) { told.push_back((uint64_t)h); });
+
+        AssetHandle grunt = DataAssets::Create(dir / "Assets/Grunt.asset", "Game.Stats");
+        AssetHandle boss = DataAssets::Create(dir / "Assets/Boss.asset", "Game.BossStats");
+        CHECK(grunt.IsValid() && boss.IsValid() && AssetManager::GetMetadata(boss)->Type == AssetType::DataAsset);
+        CHECK(!DataAssets::Create(dir / "Assets/Nope.asset", "Game.Unknown").IsValid() && !fs::exists(dir / "Assets/Nope.asset"));
+        nlohmann::json file = DataAssets::Read(grunt);
+        CHECK(file["class"] == "Game.Stats" && file["fields"]["Speed"] == 3.5f && file["fields"]["Title"] == "Grunt");
+        CHECK(told == std::vector<uint64_t>({ (uint64_t)grunt, (uint64_t)boss }));
+        // Saving tells the scripts; so does play starting (every object made again: handle 0).
+        nlohmann::json fields = file["fields"];
+        fields["Speed"] = 9.0f;
+        CHECK(DataAssets::Write(dir / "Assets/Grunt.asset", "Game.Stats", fields) == grunt);
+        CHECK(DataAssets::Read(grunt)["fields"]["Speed"] == 9.0f && told.back() == (uint64_t)grunt);
+        Scene stage("Stage");
+        stage.OnRuntimeStart();
+        CHECK(told.back() == 0);
+        stage.OnRuntimeStop();
+
+        // Fields of a class take its assets and those of classes deriving from it; DataAsset itself takes any.
+        CHECK(DataAssets::ClassOf(boss) == "Game.BossStats" && DataAssets::ClassOf(AssetHandle::None()).empty());
+        CHECK(DataAssets::IsA("Game.BossStats", "Game.Stats") && !DataAssets::IsA("Game.Stats", "Game.BossStats"));
+        CHECK(DataAssets::IsA("Game.Stats", "Dimension.DataAsset") && !DataAssets::IsA("", "Game.Stats"));
+        // A data asset field saves the asset's GUID.
+        AssetHandle slot = AssetHandle::None();
+        FieldInfo ref;
+        ref.Name = "Stats";
+        ref.Type = FieldType::DataAsset;
+        ref.Access = [](void* o) -> void* { return o; };
+        FieldFromJson(ref, &slot, (uint64_t)boss, nullptr);
+        CHECK(slot == boss && FieldToJson(ref, &slot, nullptr) == (uint64_t)boss);
+        // A scene referencing one ships it (and what the asset references in turn).
+        fields["Icon"] = (uint64_t)grunt;
+        DataAssets::Write(dir / "Assets/Boss.asset", "Game.BossStats", fields);
+        Scene level("Level");
+        level.GetRegistry().Emplace<ScriptComponent>(level.CreateEntity("Spawner")).Add("Game.Spawner").Fields["Stats"] = (uint64_t)boss;
+        SceneSerializer::SaveToFile(level, dir / "Assets/Level.scene");
+        AssetManager::Refresh();
+        auto shipped = AssetDependencies::Collect({ AssetManager::GetHandle(dir / "Assets/Level.scene") }).Assets;
+        CHECK(shipped.contains(boss) && shipped.contains(grunt));
+        // The scripts unloading takes their classes away.
+        DataAssets::ClearModule("test");
+        CHECK(!DataAssets::FindClass("Game.Stats") && DataAssets::ClassOf(boss) == "Game.BossStats");
+
+        DataAssets::SetChangedHook({});
+        AssetManager::Shutdown();
         fs::remove_all(dir, ec);
     }
 
@@ -11076,6 +11202,7 @@ int main(int argc, char** argv)
     Run("Player prefs", TestPlayerPrefs);
     Run("Input actions", TestInputActions);
     Run("Localization", TestLocalization);
+    Run("Data assets", TestDataAssets);
     Run("Project search", TestProjectSearch);
     Run("Asset packages", TestAssetPackages);
     Run("Scene sections", TestSceneSections);

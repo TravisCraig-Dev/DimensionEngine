@@ -144,6 +144,7 @@ namespace Dimension
         case AssetType::SpriteAtlas: return "Sprite Atlas";
         case AssetType::Preset: return "Preset";
         case AssetType::StringTable: return "String Table";
+        case AssetType::DataAsset: return "Data Asset";
         default: return "None";
         }
     }
@@ -274,6 +275,7 @@ namespace Dimension
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;
+        if (ext == ".asset") return AssetType::DataAsset;
         if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" || ext == ".opus") return AssetType::Audio;
         return AssetType::None;
     }

@@ -48,7 +48,7 @@ namespace Dimension::AssetPackage
     std::vector<AssetHandle> AssetsIn(const fs::path& folder)
     {
         std::vector<AssetHandle> out;
-        for (int type = (int)AssetType::Texture; type <= (int)AssetType::StringTable; ++type)
+        for (int type = (int)AssetType::Texture; type <= (int)AssetType::DataAsset; ++type)
             for (AssetHandle h : AssetManager::GetAssetsOfType((AssetType)type))
                 if (const AssetMetadata* m = AssetManager::GetMetadata(h); m && IsUnder(m->Path.lexically_normal(), folder.lexically_normal()))
                     out.push_back(h);

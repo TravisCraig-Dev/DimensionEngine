@@ -1,4 +1,5 @@
 #include "EditorUI.h"
+#include <Dimension/Asset/DataAsset.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/ImGui/ImGuiLayer.h>
 #include <imgui_internal.h>
@@ -138,6 +139,7 @@ namespace Editor::UI
         case AssetType::SpriteAtlas: return { 0.95f, 0.6f, 0.55f, 1 };
         case AssetType::Preset: return { 0.6f, 0.85f, 0.85f, 1 };
         case AssetType::StringTable: return { 0.85f, 0.9f, 0.55f, 1 };
+        case AssetType::DataAsset: return { 0.7f, 0.6f, 0.95f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -158,11 +160,18 @@ namespace Editor::UI
         case AssetType::SpriteAtlas: return "ATLAS";
         case AssetType::Preset: return "PRESET";
         case AssetType::StringTable: return "TEXT";
+        case AssetType::DataAsset: return "DATA";
         default: return "FILE";
         }
     }
 
     EditResult AssetField(const char* label, AssetHandle& handle, AssetType type)
+    {
+        return AssetField(label, handle, type, {}, AssetTypeToString(type));
+    }
+
+    EditResult AssetField(const char* label, AssetHandle& handle, AssetType type, const std::function<bool(AssetHandle)>& accept,
+                          const std::string& typeLabel)
     {
         EditResult r;
         PropertyLabel(label);
@@ -179,7 +188,7 @@ namespace Editor::UI
             }
         }
         float width = ImGui::GetContentRegionAvail().x;
-        std::string text = name + "  (" + AssetTypeToString(type) + ")";
+        std::string text = name + "  (" + typeLabel + ")";
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
         if (ImGui::Button(text.c_str(), ImVec2(width, 0))) ImGui::OpenPopup("picker");
         ImGui::PopStyleVar();
@@ -191,7 +200,7 @@ namespace Editor::UI
             {
                 AssetHandle dropped(*(const uint64_t*)p->Data);
                 auto* meta = AssetManager::GetMetadata(dropped);
-                if (meta && meta->Type == type)
+                if (meta && meta->Type == type && (!accept || accept(dropped)))
                 {
                     r.Activated = r.Changed = true;
                     handle = dropped;
@@ -225,7 +234,7 @@ namespace Editor::UI
                 for (AssetHandle b : { AssetManager::kCube, AssetManager::kSphere, AssetManager::kPlane, AssetManager::kQuad, AssetManager::kCylinder })
                     option(b, AssetManager::GetDisplayName(b));
             for (AssetHandle a : AssetManager::GetAssetsOfType(type))
-                option(a, AssetManager::GetMetadata(a)->Path.generic_string());
+                if (!accept || accept(a)) option(a, AssetManager::GetMetadata(a)->Path.generic_string());
             ImGui::EndPopup();
         }
         ImGui::PopID();
@@ -729,6 +738,16 @@ namespace Editor::UI
         case FieldType::Font: r = AssetField(label, *(AssetHandle*)p, AssetType::Font); break;
         case FieldType::AnimatorController: r = AssetField(label, *(AssetHandle*)p, AssetType::AnimatorController); break;
         case FieldType::Timeline: r = AssetField(label, *(AssetHandle*)p, AssetType::Timeline); break;
+        case FieldType::DataAsset:
+        {
+            // Data assets of the field's class (or a class deriving from it).
+            std::string cls = f.AssetClass;
+            size_t dot = cls.find_last_of('.');
+            r = AssetField(label, *(AssetHandle*)p, AssetType::DataAsset,
+                           [cls](AssetHandle h) { return DataAssets::IsA(DataAssets::ClassOf(h), cls); },
+                           dot == std::string::npos ? cls : cls.substr(dot + 1));
+            break;
+        }
         case FieldType::EntityRef:
             if (scene) r = EntityField(label, *(Entity*)p, *scene);
             break;

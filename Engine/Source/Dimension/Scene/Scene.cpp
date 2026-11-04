@@ -20,6 +20,7 @@
 #include "Dimension/Core/Log.h"
 #include "Dimension/Core/Input.h"
 #include <glm/gtx/matrix_decompose.hpp>
+#include "Dimension/Asset/DataAsset.h"
 #include <algorithm>
 #include <map>
 #include <fstream>
@@ -405,6 +406,7 @@ namespace Dimension
             a.Node = -1;
         }
         Navigation::BakeAll(*this);
+        DataAssets::OnRuntimeStart(); // the scripts' data asset objects start from their files
         InstantiateScripts();
         for (auto& sys : m_Systems) sys->OnStart(*this);
         m_Audio->Start();

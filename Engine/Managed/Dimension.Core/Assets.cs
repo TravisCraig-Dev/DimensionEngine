@@ -10,6 +10,21 @@ namespace Dimension
         ulong Guid { get; }
     }
 
+    /// <summary>
+    /// Data kept in an asset (like Unity's ScriptableObject): derive a class from this, give it public fields, then
+    /// make <c>.asset</c> files of it in the Project window (Create > Data Asset) and set their values in the Inspector.
+    /// Script fields of the class pick one of those assets; while playing, every field referring to an asset holds the
+    /// same object (changes made to it last until play stops). Saving the asset in the Inspector while playing updates
+    /// the object in place.
+    /// </summary>
+    public abstract class DataAsset
+    {
+        /// <summary>The asset's GUID.</summary>
+        public ulong Guid { get; internal set; }
+        /// <summary>After the values are read from the asset (first use while playing, and each save in the Inspector).</summary>
+        public virtual void OnLoaded() { }
+    }
+
     public readonly record struct Prefab(ulong Guid) : IAssetReference
     {
         public bool IsValid => Guid != 0;
