@@ -403,6 +403,25 @@ namespace Dimension
         b2Body_SetAwake(body, true);
     }
 
+    void Physics2DWorld::RebuildJoint(Entity e)
+    {
+        for (auto it = m_Joints.begin(); it != m_Joints.end();)
+        {
+            if (it->Owner != e) { ++it; continue; }
+            b2JointId id = b2LoadJointId(it->Id);
+            if (b2Joint_IsValid(id))
+            {
+                b2Joint_WakeBodies(id);
+                b2DestroyJoint(id);
+            }
+            it = m_Joints.erase(it);
+        }
+        auto& reg = m_Scene.GetRegistry();
+        if (!m_Scene.IsValid(e) || !reg.Has<Joint2DComponent>(e)) return;
+        CreateJoint(e);
+        if (!m_Joints.empty() && m_Joints.back().Owner == e) b2Joint_WakeBodies(b2LoadJointId(m_Joints.back().Id));
+    }
+
     void Physics2DWorld::RefilterShapes(Entity e)
     {
         b2BodyId body = BodyOf(m_Scene, e);

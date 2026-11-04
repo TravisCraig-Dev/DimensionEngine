@@ -42,6 +42,9 @@ namespace Dimension
         // The object's colliders' settings (size, offset, trigger, friction, bounciness, density) applied to its body,
         // keeping its motion.
         void RefreshColliders(Entity e);
+        // The object's joint made again from its component (another connected body, anchor, type, limits...; a broken
+        // one is mended), or removed when the component is gone. Its bodies wake.
+        void RebuildJoint(Entity e);
 
         // While playing (like Unity's Physics settings, for this world only; the project's are left as they are):
         // gravity, which layers collide (a copy of the project's Layer Collision Matrix), and pairs of objects that never

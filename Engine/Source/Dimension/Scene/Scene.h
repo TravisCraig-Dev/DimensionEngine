@@ -179,6 +179,8 @@ namespace Dimension
         Entity GetPrimaryCamera();
         // Makes a camera the one the game shows (Primary, and no other camera Primary).
         void SetPrimaryCamera(Entity camera);
+        // While playing: the object's 3D and 2D joints made again from their components (see Physics3DWorld::RebuildJoint).
+        void RebuildJoint(Entity e);
         // Counts the times the camera the game shows changed (a cut): the renderer starts its temporal history over.
         uint32_t GetCameraCuts() const { return m_CameraCuts; }
         // A 3D physics world for queries only (raycasts against the colliders; nothing is simulated), on a scene that

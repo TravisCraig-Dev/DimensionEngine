@@ -146,6 +146,7 @@ namespace Dimension
                 if (m_Physics3D && r.Component == n) m_Physics3D->RebuildBody(r.E);
             for (const char* n : k2D)
                 if (m_Physics2D && r.Component == n) m_Physics2D->RebuildBody(r.E);
+            if (r.Component == "Joint" || r.Component == "Joint 2D") RebuildJoint(r.E); // the joint lets go
         }
         auto pending = std::move(m_PendingDestroy);
         m_PendingDestroy.clear();
@@ -510,6 +511,12 @@ namespace Dimension
             m_LastPrimaryCamera = found;
         }
         return found;
+    }
+
+    void Scene::RebuildJoint(Entity e)
+    {
+        if (m_Physics3D) m_Physics3D->RebuildJoint(e);
+        if (m_Physics2D) m_Physics2D->RebuildJoint(e);
     }
 
     void Scene::SetPrimaryCamera(Entity camera)

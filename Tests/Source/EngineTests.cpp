@@ -919,6 +919,90 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestJointRebuildWhilePlaying()
+    {
+        const float dt = 1.0f / 60.0f;
+        // 3D: a crate pinned to the world by a point joint; broken, mended, then joined to a second crate.
+        {
+            Scene scene("Joints3D");
+            auto& reg = scene.GetRegistry();
+            auto crate = [&](const char* name, glm::vec3 at) {
+                Entity e = scene.CreateEntity(name);
+                reg.Get<TransformComponent>(e).Position = at;
+                reg.Emplace<RigidbodyComponent>(e).Type = BodyType::Dynamic;
+                reg.Emplace<BoxColliderComponent>(e).Size = glm::vec3(0.5f);
+                return e;
+            };
+            Entity a = crate("A", { 0, 5, 0 }), b = crate("B", { 2, 5, 0 });
+            reg.Emplace<JointComponent>(a).Type = JointType::Point;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rr = rt->GetRegistry();
+            auto pos = [&](Entity e) { return rr.Get<TransformComponent>(e).Position; };
+            auto run = [&](int n) { for (int i = 0; i < n; ++i) rt->OnUpdateRuntime(dt); };
+            run(30);
+            CHECK(Near(pos(a).y, 5.0f, 0.05f) && pos(b).y < 4.5f); // A held, B falls
+            // Breaks under its own weight with a tiny break force; Reconnect (RebuildJoint) mends it where it is now.
+            rr.Get<JointComponent>(a).BreakForce = 1.0f;
+            Physics3DWorld::WakeUp(*rt, a); // hanging still it sleeps, and a sleeping joint feels no force
+            run(10);
+            CHECK(rr.Get<JointComponent>(a).Broken && pos(a).y < 5.0f);
+            rr.Get<JointComponent>(a).BreakForce = 0.0f;
+            rt->RebuildJoint(a);
+            float heldAt = pos(a).y;
+            run(30);
+            CHECK(!rr.Get<JointComponent>(a).Broken && Near(pos(a).y, heldAt, 0.1f) && rt->GetPhysics3D()->GetJointCount() == 1);
+            // Joined to B instead of the world: both fall, kept their distance apart.
+            rr.Get<JointComponent>(a).ConnectedBody = b;
+            rt->RebuildJoint(a);
+            float apart = glm::distance(pos(a), pos(b));
+            run(30);
+            CHECK(pos(a).y < heldAt - 1.0f && Near(glm::distance(pos(a), pos(b)), apart, 0.1f) && rt->GetPhysics3D()->GetJointCount() == 1);
+            // The component gone: rebuilding removes the joint.
+            rr.Remove<JointComponent>(a);
+            rt->RebuildJoint(a);
+            CHECK(rt->GetPhysics3D()->GetJointCount() == 0);
+            rt->OnRuntimeStop();
+        }
+        // 2D: the same with a hinge.
+        {
+            Scene scene("Joints2D");
+            auto& reg = scene.GetRegistry();
+            auto box = [&](const char* name, glm::vec3 at) {
+                Entity e = scene.CreateEntity(name);
+                reg.Get<TransformComponent>(e).Position = at;
+                reg.Emplace<Rigidbody2DComponent>(e).Type = BodyType::Dynamic;
+                reg.Emplace<BoxCollider2DComponent>(e).Size = glm::vec2(0.5f);
+                return e;
+            };
+            Entity a = box("A", { 0, 5, 0 }), b = box("B", { 2, 5, 0 });
+            reg.Emplace<Joint2DComponent>(a).Type = Joint2DType::Hinge;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rr = rt->GetRegistry();
+            auto pos = [&](Entity e) { return rr.Get<TransformComponent>(e).Position; };
+            auto run = [&](int n) { for (int i = 0; i < n; ++i) rt->OnUpdateRuntime(dt); };
+            run(30);
+            CHECK(Near(pos(a).y, 5.0f, 0.05f) && pos(b).y < 4.5f && rt->GetPhysics2D()->GetJointCount() == 1);
+            rr.Get<Joint2DComponent>(a).BreakForce = 0.1f;
+            run(10);
+            CHECK(rr.Get<Joint2DComponent>(a).Broken && rt->GetPhysics2D()->GetJointCount() == 0);
+            rr.Get<Joint2DComponent>(a).BreakForce = 0.0f;
+            rt->RebuildJoint(a);
+            float heldAt = pos(a).y;
+            run(30);
+            CHECK(!rr.Get<Joint2DComponent>(a).Broken && Near(pos(a).y, heldAt, 0.1f) && rt->GetPhysics2D()->GetJointCount() == 1);
+            rr.Get<Joint2DComponent>(a).ConnectedBody = b;
+            rt->RebuildJoint(a);
+            run(30);
+            CHECK(pos(a).y < heldAt - 1.0f && rt->GetPhysics2D()->GetJointCount() == 1);
+            rr.Remove<Joint2DComponent>(a);
+            rt->RebuildJoint(a);
+            CHECK(rt->GetPhysics2D()->GetJointCount() == 0);
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestCameraSwitching()
     {
         Scene scene("Cameras");
@@ -12374,6 +12458,7 @@ int main(int argc, char** argv)
     Run("Tilemap edits and terrain sample", TestTilemapEditsAndTerrainSample);
     Run("Physics settings while playing", TestPhysicsSettingsWhilePlaying);
     Run("Camera switching", TestCameraSwitching);
+    Run("Joint rebuild while playing", TestJointRebuildWhilePlaying);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

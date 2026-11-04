@@ -171,6 +171,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, void> RefreshColliders;
         public delegate* unmanaged<int, byte*> LayerName;
         public delegate* unmanaged<IntPtr, ulong, void> SetMainCamera;
+        public delegate* unmanaged<IntPtr, ulong, void> RebuildJoint;
+        public delegate* unmanaged<IntPtr, ulong, byte*, byte*, int, ulong, ulong> ComponentEntity;  // 0 get, 1 set
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

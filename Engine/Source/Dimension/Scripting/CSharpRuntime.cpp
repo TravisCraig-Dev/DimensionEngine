@@ -236,6 +236,9 @@ namespace Dimension
             void (*RefreshColliders)(void*, uint64_t); // after a script changed a collider's fields
             const char* (*LayerName)(int);             // the project's physics layer name ("" unused)
             void (*SetMainCamera)(void*, uint64_t);    // makes a camera the one the game shows
+            void (*RebuildJoint)(void*, uint64_t);     // after a script changed a joint's connection or shape
+            // An object field of a component by its label (a joint's "Connected Body"): 0 get, 1 set. ~0 = none/missing.
+            uint64_t (*ComponentEntity)(void*, uint64_t, const char*, const char*, int, uint64_t);
         };
 
         // Background scene loads started from C#, by id.
@@ -936,7 +939,11 @@ namespace Dimension
                 return info && s && info->Has(S(s), Unpack(e)) ? 1 : 0;
             };
             a.AddComponent = [](void* s, uint64_t e, const char* name) {
-                if (auto* info = ComponentRegistry::Find(name); info && s && S(s).IsValid(Unpack(e))) info->Add(S(s), Unpack(e));
+                auto* info = ComponentRegistry::Find(name);
+                if (!info || !s || !S(s).IsValid(Unpack(e))) return;
+                info->Add(S(s), Unpack(e));
+                // A joint added while playing holds at once (attached to the world until a script connects it).
+                if (S(s).IsRunning() && (info->Name == "Joint" || info->Name == "Joint 2D")) S(s).RebuildJoint(Unpack(e));
             };
             a.IsValid = [](void* s, uint64_t e) -> int { return s && S(s).IsValid(Unpack(e)) ? 1 : 0; };
             a.FindEntity = [](void* s, const char* name) -> uint64_t {
@@ -1429,6 +1436,15 @@ namespace Dimension
                 if (auto* w = S(s).GetPhysics2D()) w->RefreshColliders(Unpack(e));
             };
             a.SetMainCamera = [](void* s, uint64_t e) { if (s) S(s).SetPrimaryCamera(Unpack(e)); };
+            a.ComponentEntity = [](void* s, uint64_t e, const char* component, const char* field, int op, uint64_t target) -> uint64_t {
+                const FieldInfo* f = nullptr;
+                void* value = ReflectedField(s, e, component, field, f);
+                if (!value || f->Type != FieldType::EntityRef) return UINT64_MAX;
+                auto& ref = *static_cast<Entity*>(value);
+                if (op == 1) ref = target == UINT64_MAX || !S(s).IsValid(Unpack(target)) ? Entity::Null() : Unpack(target);
+                return ref.IsNull() || !S(s).IsValid(ref) ? UINT64_MAX : Pack(ref);
+            };
+            a.RebuildJoint = [](void* s, uint64_t e) { if (s && S(s).IsRunning() && S(s).IsValid(Unpack(e))) S(s).RebuildJoint(Unpack(e)); };
             a.LayerName = [](int layer) -> const char* {
                 const auto& names = Project::GetConfig().PhysicsLayers;
                 s_StringReturn = layer >= 0 && layer < (int)names.size() ? names[layer] : "";

@@ -2385,6 +2385,39 @@ namespace Dimension
         bi.ActivateBodiesInAABox(around, JPH::BroadPhaseLayerFilter(), JPH::ObjectLayerFilter());
     }
 
+    void Physics3DWorld::RebuildJoint(Entity e)
+    {
+        auto& bi = m_Impl->System.GetBodyInterface();
+        auto& joints = m_Impl->Joints;
+        auto wake = [&](Entity x) {
+            auto* rb = m_Scene.IsValid(x) ? m_Scene.GetRegistry().TryGet<RigidbodyComponent>(x) : nullptr;
+            if (rb && rb->RuntimeBody != 0xFFFFFFFF && bi.IsAdded(JPH::BodyID(rb->RuntimeBody))) bi.ActivateBody(JPH::BodyID(rb->RuntimeBody));
+        };
+        for (auto it = joints.begin(); it != joints.end();)
+        {
+            if (it->A != e) { ++it; continue; }
+            Entity a = it->A, b = it->B;
+            m_Impl->System.RemoveConstraint(it->Constraint.GetPtr());
+            it = joints.erase(it);
+            // The pair may collide again, unless another joint still keeps them apart.
+            bool stillJoined = std::any_of(joints.begin(), joints.end(), [&](const Impl::Joint& j) { return (j.A == a && j.B == b) || (j.A == b && j.B == a); });
+            auto* ra = m_Scene.IsValid(a) ? m_Scene.GetRegistry().TryGet<RigidbodyComponent>(a) : nullptr;
+            auto* rb = m_Scene.IsValid(b) ? m_Scene.GetRegistry().TryGet<RigidbodyComponent>(b) : nullptr;
+            if (!stillJoined && ra && rb)
+            {
+                auto sa = m_Impl->SubGroupOf.find(ra->RuntimeBody), sb = m_Impl->SubGroupOf.find(rb->RuntimeBody);
+                if (sa != m_Impl->SubGroupOf.end() && sb != m_Impl->SubGroupOf.end()) m_Impl->JointFilter->EnableCollision(sa->second, sb->second);
+            }
+            wake(a);
+            wake(b);
+        }
+        auto& reg = m_Scene.GetRegistry();
+        if (!m_Scene.IsValid(e) || !reg.Has<JointComponent>(e)) return;
+        CreateJoint(e);
+        wake(e);
+        wake(reg.Get<JointComponent>(e).ConnectedBody);
+    }
+
     glm::vec3 Physics3DWorld::GetGravity() const { return FromJolt(m_Impl->System.GetGravity()); }
 
     void Physics3DWorld::SetGravity(const glm::vec3& gravity)

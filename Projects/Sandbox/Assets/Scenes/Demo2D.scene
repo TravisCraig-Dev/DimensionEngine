@@ -159,11 +159,25 @@
           "Is Trigger": false
         },
         "Script": {
-          "Class": "PlayerController2D",
-          "Fields": {
-            "Move Speed": 6.0,
-            "Jump Impulse": 7.0
-          }
+          "Scripts": [
+            {
+              "Class": "PlayerController2D",
+              "Fields": {
+                "Move Speed": 6.0,
+                "Jump Impulse": 7.0
+              },
+              "Enabled": true
+            },
+            {
+              "Class": "Game.Tether",
+              "Fields": {
+                "Reach": 4.0,
+                "Length": 0.0,
+                "BreakForce": 400.0
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     },
@@ -1720,12 +1734,12 @@
             104
           ],
           "Size": [
-            1400,
-            40
+            1700,
+            80
           ]
         },
         "UI Text": {
-          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse)",
+          "Text": "Click a box to kick it; right-click builds a tile, Shift+right-click digs one out (TileBuilder); G flips gravity for a moment, B makes the boxes bouncy (GravityPulse); E ties the nearest box to the player on a rope, E again lets go (Tether)",
           "Font": 0,
           "Font Size": 26,
           "Color": [

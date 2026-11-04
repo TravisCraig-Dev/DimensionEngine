@@ -55,6 +55,16 @@ namespace Dimension
         public ulong GetAssetGuid(string field) => AssetField(field, 0, 0);
         /// <summary>Points an asset field at another asset (GUID 0 empties it); false when there is no such asset field.</summary>
         public bool SetAssetGuid(string field, ulong guid) => AssetField(field, 1, guid) != ulong.MaxValue;
+
+        // An object field (a joint's Connected Body) by its label: the object, or default when empty or missing.
+        private ulong EntityField(string field, int op, ulong target)
+        {
+            var e = Entity;
+            string component = NativeName;
+            return Native.WithUtf8(component, c => Native.WithUtf8(field, f => Native.Api.ComponentEntity(e.Scene, e.Id, (byte*)c, (byte*)f, op, target)));
+        }
+        public Entity GetEntity(string field) { ulong id = EntityField(field, 0, 0); return id == ulong.MaxValue ? default : new Entity(Entity.Scene, id); }
+        public void SetEntity(string field, Entity value) => EntityField(field, 1, value.IsValid ? value.Id : ulong.MaxValue);
     }
 
     /// <summary>Any engine component by its Inspector name, for components without their own class
@@ -626,6 +636,49 @@ namespace Dimension
         public Vector2 Size => GetVector2("Size");
     }
 
+    /// <summary>
+    /// A 2D joint between this object's Rigidbody 2D and ConnectedBody's (none: the world); changes to what it connects or
+    /// its shape while playing make it again (as Joint does); the motor and break limits apply as they are.
+    /// </summary>
+    public unsafe class Joint2D : Component
+    {
+        internal override string NativeName => "Joint 2D";
+        private float State(int i) { float* s = stackalloc float[4]; Native.Api.GetJointState(Entity.Scene, Entity.Id, s); return s[i]; }
+        private void Rebuild() => Native.Api.RebuildJoint(Entity.Scene, Entity.Id);
+        private void Shape(string field, float v) { SetFloat(field, v); Rebuild(); }
+        private void Shape(string field, Vector2 v) { SetVector2(field, v); Rebuild(); }
+
+        public Joint2DType Type { get => (Joint2DType)GetInt("Type"); set { SetInt("Type", (int)value); Rebuild(); } }
+        public Entity ConnectedBody { get => GetEntity("Connected Body"); set { SetEntity("Connected Body", value); Rebuild(); } }
+        public Vector2 Anchor { get => GetVector2("Anchor"); set => Shape("Anchor", value); }
+        public Vector2 ConnectedAnchor { get => GetVector2("Connected Anchor"); set => Shape("Connected Anchor", value); }
+        public bool UseLimits { get => GetBool("Use Limits"); set { SetBool("Use Limits", value); Rebuild(); } }
+        /// <summary>Hinge limits in degrees.</summary>
+        public float LowerAngle { get => GetFloat("Lower Angle"); set => Shape("Lower Angle", value); }
+        public float UpperAngle { get => GetFloat("Upper Angle"); set => Shape("Upper Angle", value); }
+        /// <summary>Distance joints: the length (0: the distance when it is made).</summary>
+        public float Distance { get => GetFloat("Distance"); set => Shape("Distance", value); }
+        /// <summary>Slider axis, in this object's space, and its travel from where it was made.</summary>
+        public Vector2 Axis { get => GetVector2("Axis"); set => Shape("Axis", value); }
+        public float LowerTranslation { get => GetFloat("Lower Translation"); set => Shape("Lower Translation", value); }
+        public float UpperTranslation { get => GetFloat("Upper Translation"); set => Shape("Upper Translation", value); }
+        public float SpringFrequency { get => GetFloat("Spring Frequency"); set => Shape("Spring Frequency", value); }
+        public float SpringDamping { get => GetFloat("Spring Damping"); set => Shape("Spring Damping", value); }
+        public bool CollideConnected { get => GetBool("Collide Connected"); set { SetBool("Collide Connected", value); Rebuild(); } }
+        /// <summary>Hinge: drives toward MotorSpeed degrees per second; slider: units per second.</summary>
+        public bool UseMotor { get => GetBool("Use Motor"); set => SetBool("Use Motor", value); }
+        public float MotorSpeed { get => GetFloat("Motor Speed"); set => SetFloat("Motor Speed", value); }
+        public float MotorMaxTorque { get => GetFloat("Motor Max Torque"); set => SetFloat("Motor Max Torque", value); }
+        public float BreakForce { get => GetFloat("Break Force"); set => SetFloat("Break Force", value); }
+        public float BreakTorque { get => GetFloat("Break Torque"); set => SetFloat("Break Torque", value); }
+        public bool IsBroken { get { float* s = stackalloc float[4]; return Native.Api.GetJointState(Entity.Scene, Entity.Id, s) == 1; } }
+        /// <summary>Reaction force (N) and torque (N*m) during the last physics step.</summary>
+        public float Force => State(2);
+        public float Torque => State(3);
+        /// <summary>Makes the joint again as it is set now (mending a broken one).</summary>
+        public void Reconnect() => Rebuild();
+    }
+
     public enum LightType { Directional = 0, Point = 1, Spot = 2 }
 
     /// <summary>
@@ -774,10 +827,50 @@ namespace Dimension
     }
 
     /// <summary>A Joint (3D) or Joint 2D on the entity: hinge motor control and break state.</summary>
+    public enum JointType { Fixed = 0, Hinge = 1, Point = 2, Distance = 3, Slider = 4 }
+    public enum Joint2DType { Fixed = 0, Hinge = 1, Distance = 2, Slider = 3 }
+
+    /// <summary>
+    /// A 3D joint between this object's Rigidbody and ConnectedBody's (none: the world). Changing what it connects, its
+    /// type, anchor, axis or limits while playing makes the joint again from the object's pose then (so a Distance of 0
+    /// takes the distance at that moment); the motor and break limits apply as they are. AddComponent&lt;Joint&gt;() while
+    /// playing pins the object to the world where it is until it is connected.
+    /// </summary>
     public unsafe class Joint : Component
     {
         internal override string NativeName => "Joint";
         private float State(int i) { float* s = stackalloc float[4]; Native.Api.GetJointState(Entity.Scene, Entity.Id, s); return s[i]; }
+        private void Rebuild() => Native.Api.RebuildJoint(Entity.Scene, Entity.Id);
+        private void Shape(string field, float v) { SetFloat(field, v); Rebuild(); }
+        private void Shape(string field, Vector3 v) { SetVector3(field, v); Rebuild(); }
+
+        public JointType Type { get => (JointType)GetInt("Type"); set { SetInt("Type", (int)value); Rebuild(); } }
+        /// <summary>The body it holds this one to (default: the world).</summary>
+        public Entity ConnectedBody { get => GetEntity("Connected Body"); set { SetEntity("Connected Body", value); Rebuild(); } }
+        /// <summary>The pivot, in this object's space.</summary>
+        public Vector3 Anchor { get => GetVector3("Anchor"); set => Shape("Anchor", value); }
+        /// <summary>Hinge or slider axis, in this object's space.</summary>
+        public Vector3 Axis { get => GetVector3("Axis"); set => Shape("Axis", value); }
+        public Vector3 ConnectedAnchor { get => GetVector3("Connected Anchor"); set => Shape("Connected Anchor", value); }
+        public bool UseLimits { get => GetBool("Use Limits"); set { SetBool("Use Limits", value); Rebuild(); } }
+        /// <summary>Hinge limits in degrees.</summary>
+        public float MinAngle { get => GetFloat("Min Angle"); set => Shape("Min Angle", value); }
+        public float MaxAngle { get => GetFloat("Max Angle"); set => Shape("Max Angle", value); }
+        public float MinDistance { get => GetFloat("Min Distance"); set => Shape("Min Distance", value); }
+        public float MaxDistance { get => GetFloat("Max Distance"); set => Shape("Max Distance", value); }
+        public float SliderMin { get => GetFloat("Slider Min"); set => Shape("Slider Min", value); }
+        public float SliderMax { get => GetFloat("Slider Max"); set => Shape("Slider Max", value); }
+        /// <summary>Distance joints: above 0, a spring of this many oscillations per second.</summary>
+        public float SpringFrequency { get => GetFloat("Spring Frequency"); set => Shape("Spring Frequency", value); }
+        public float SpringDamping { get => GetFloat("Spring Damping"); set => Shape("Spring Damping", value); }
+        /// <summary>Whether the two connected bodies collide with each other.</summary>
+        public bool EnableCollision { get => GetBool("Enable Collision"); set { SetBool("Enable Collision", value); Rebuild(); } }
+        public float MotorMaxTorque { get => GetFloat("Motor Max Torque"); set => SetFloat("Motor Max Torque", value); }
+        /// <summary>It breaks above this force (N) or torque (N*m); 0 never.</summary>
+        public float BreakForce { get => GetFloat("Break Force"); set => SetFloat("Break Force", value); }
+        public float BreakTorque { get => GetFloat("Break Torque"); set => SetFloat("Break Torque", value); }
+        /// <summary>Makes the joint again as it is set now (mending a broken one), from the bodies' poses now.</summary>
+        public void Reconnect() => Rebuild();
         public bool UseMotor
         {
             get => State(0) != 0.0f;
@@ -929,11 +1022,6 @@ namespace Dimension
         internal override string NativeName => "Soft Body";
         /// <summary>Inflation; applied live (0 = limp).</summary>
         public float Pressure { get => GetFloat("Pressure"); set => SetFloat("Pressure", value); }
-    }
-
-    public unsafe class Joint2D : Joint
-    {
-        internal override string NativeName => "Joint 2D";
     }
 
     public unsafe class UIDropdown : Component
