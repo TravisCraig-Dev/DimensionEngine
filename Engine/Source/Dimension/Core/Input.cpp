@@ -20,6 +20,8 @@ namespace Dimension
         float s_Scroll = 0.0f, s_ScrollAccum = 0.0f;
         bool s_GameInput = true;
         bool s_UICapture = false;
+        CursorMode s_CursorRequested = CursorMode::Normal, s_CursorApplied = CursorMode::Normal;
+        bool s_CursorReleased = false;
         bool KeyboardOpen() { return s_GameInput && !s_UICapture; }
         std::string s_TypedAccum, s_Typed;
         std::array<uint8_t, GLFW_KEY_LAST + 1> s_KeyTypedAccum{}, s_KeyTyped{}; // presses + repeats this frame
@@ -153,10 +155,23 @@ namespace Dimension
         s_PrevMouse = s_Mouse;
         for (int k = GLFW_KEY_SPACE; k <= GLFW_KEY_LAST; ++k) s_Keys[k] = glfwGetKey(s_Window, k) == GLFW_PRESS;
         for (int b = 0; b < 8; ++b) s_Mouse[b] = glfwGetMouseButton(s_Window, b) == GLFW_PRESS;
+
+        // The cursor mode first: locking moves the cursor, which must not count as mouse movement.
+        CursorMode cursor = GetEffectiveCursorMode();
+        bool cursorChanged = cursor != s_CursorApplied;
+        if (cursorChanged)
+        {
+            glfwSetInputMode(s_Window, GLFW_CURSOR, cursor == CursorMode::Locked ? GLFW_CURSOR_DISABLED
+                                                    : cursor == CursorMode::Hidden ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
+            if (glfwRawMouseMotionSupported())
+                glfwSetInputMode(s_Window, GLFW_RAW_MOUSE_MOTION, cursor == CursorMode::Locked ? GLFW_TRUE : GLFW_FALSE);
+            s_CursorApplied = cursor;
+        }
         double x, y;
         glfwGetCursorPos(s_Window, &x, &y);
         s_PrevMousePos = s_MousePos;
         s_MousePos = { (float)x, (float)y };
+        if (cursorChanged) s_PrevMousePos = s_MousePos;
         s_Scroll = s_ScrollAccum;
         s_ScrollAccum = 0.0f;
         s_Typed = std::move(s_TypedAccum);
@@ -259,6 +274,12 @@ namespace Dimension
     }
     bool Input::IsGameInputEnabled() { return s_GameInput; }
 
+    void Input::SetCursorMode(CursorMode mode) { s_CursorRequested = mode; }
+    CursorMode Input::GetCursorMode() { return s_CursorRequested; }
+    void Input::SetCursorReleased(bool released) { s_CursorReleased = released; }
+    bool Input::IsCursorReleased() { return s_CursorReleased; }
+    CursorMode Input::GetEffectiveCursorMode() { return s_GameInput && !s_CursorReleased ? s_CursorRequested : CursorMode::Normal; }
+
     bool Input::RawKeyDown(Key key) { return s_Keys[(int)key]; }
     bool Input::RawMouseDown(MouseButton b) { return s_Mouse[(int)b]; }
 
@@ -277,6 +298,7 @@ namespace Dimension
     bool Input::IsKeyTyped(Key key) { return KeyboardOpen() && (s_KeyTyped[(int)key] > 0 || (s_Keys[(int)key] && !s_PrevKeys[(int)key])); }
     bool Input::IsMouseDown(MouseButton b) { return s_GameInput && s_Mouse[(int)b]; }
     bool Input::IsMousePressed(MouseButton b) { return s_GameInput && s_Mouse[(int)b] && !s_PrevMouse[(int)b]; }
+    void Input::SimulateMouseButton(MouseButton b, bool down) { s_Mouse[(int)b] = down; }
     glm::vec2 Input::GetMousePosition() { return s_MousePos; }
     glm::vec2 Input::GetMouseDelta() { return s_MousePos - s_PrevMousePos; }
     float Input::GetScrollDelta() { return s_Scroll; }

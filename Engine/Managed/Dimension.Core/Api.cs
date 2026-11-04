@@ -445,6 +445,54 @@ namespace Dimension
         public static float time => Native.Api.GetTime(Native.CurrentScene);
         /// <summary>Frames simulated since play mode started.</summary>
         public static ulong FrameCount => Native.Api.GetFrameCount(Native.CurrentScene);
+        /// <summary>Game speed: 1 normal, 0.25 slow motion, 0 frozen (a pause menu), up to 100. Scales DeltaTime,
+        /// `time`, physics, animation, particles and WaitForSeconds; UI animation keeps real time. Back to 1 when play
+        /// starts.</summary>
+        public static float TimeScale
+        {
+            get => Native.Api.TimeControl(Native.CurrentScene, 0, 0.0f);
+            set => Native.Api.TimeControl(Native.CurrentScene, 1, value);
+        }
+        /// <summary>This frame's step in real seconds (before TimeScale): for menus and effects that run while frozen.</summary>
+        public static float UnscaledDeltaTime => Native.Api.TimeControl(Native.CurrentScene, 2, 0.0f);
+        /// <summary>Real seconds since play mode started (TimeScale does not change it; pausing the editor does).</summary>
+        public static float UnscaledTime => Native.Api.TimeControl(Native.CurrentScene, 3, 0.0f);
+    }
+
+    /// <summary>The view the game is shown in: the window in a build, the Game view in the editor.</summary>
+    public static unsafe class Screen
+    {
+        private static Vector2 Size { get { Vector2 v = default; Native.Api.ViewOp(Native.CurrentScene, 0, 3, (float*)&v); return v; } }
+        /// <summary>Width in pixels.</summary>
+        public static int Width => (int)Size.X;
+        /// <summary>Height in pixels.</summary>
+        public static int Height => (int)Size.Y;
+    }
+
+    public enum CursorLockMode { None = 0, Locked = 1 }
+
+    /// <summary>
+    /// The mouse cursor while the game has input (in the editor: while the Game view is focused; Escape gives it back
+    /// until the Game view is clicked). It is normal again when play stops.
+    /// </summary>
+    public static class Cursor
+    {
+        /// <summary>Locked: hidden and held in place, for mouse look (read Input.MouseDelta). Setting None shows it.</summary>
+        public static unsafe CursorLockMode LockState
+        {
+            get => Native.Api.CursorControl(0, 0) == 2 ? CursorLockMode.Locked : CursorLockMode.None;
+            set => Native.Api.CursorControl(1, value == CursorLockMode.Locked ? 2 : 0);
+        }
+        /// <summary>Whether the cursor shows over the window (a locked cursor is always hidden).</summary>
+        public static unsafe bool Visible
+        {
+            get => Native.Api.CursorControl(0, 0) == 0;
+            set
+            {
+                int mode = Native.Api.CursorControl(0, 0);
+                if (mode != 2) Native.Api.CursorControl(1, value ? 0 : 1);
+            }
+        }
     }
 
     /// <summary>Key codes (same values as GLFW / the engine's Key enum).</summary>
@@ -478,9 +526,24 @@ namespace Dimension
         public static bool GetKeyDown(KeyCode key) => Native.Api.IsKeyPressed((int)key) != 0;
         /// <summary>0 = left, 1 = right, 2 = middle.</summary>
         public static bool GetMouseButton(int button) => Native.Api.IsMouseDown(button) != 0;
+        /// <summary>Whether the mouse button went down this frame.</summary>
+        public static bool GetMouseButtonDown(int button) => Native.Api.IsMousePressed(button) != 0;
+        /// <summary>The mouse in pixels, top-left origin: in the view the game is shown in while playing (the Game view
+        /// in the editor, so it matches Camera.ScreenPointToRay and the UI), in the window otherwise.</summary>
         public static Vector2 MousePosition
         {
-            get { Vector2 v; Native.Api.GetMousePosition((float*)&v); return v; }
+            get
+            {
+                Vector2 v;
+                if (Application.IsPlaying) Native.Api.ViewOp(Native.CurrentScene, 0, 4, (float*)&v);
+                else Native.Api.GetMousePosition((float*)&v);
+                return v;
+            }
+        }
+        /// <summary>How far the mouse moved this frame in pixels (keeps reporting while the cursor is locked).</summary>
+        public static Vector2 MouseDelta
+        {
+            get { Vector2 v; Native.Api.ViewOp(IntPtr.Zero, 0, 5, (float*)&v); return v; }
         }
 
         /// <summary>Gamepad button held (standard Xbox-style layout; pad 0-3).</summary>
@@ -510,6 +573,16 @@ namespace Dimension
     }
 
     public enum GamepadAxis { LeftX = 0, LeftY, RightX, RightY, LeftTrigger, RightTrigger }
+
+    /// <summary>A half-line: Origin plus Direction (normalized) times a distance.</summary>
+    public struct Ray
+    {
+        public Vector3 Origin;
+        public Vector3 Direction;
+        public Ray(Vector3 origin, Vector3 direction) { Origin = origin; Direction = Vector3.Normalize(direction); }
+        public Vector3 GetPoint(float distance) => Origin + Direction * distance;
+        public override string ToString() => $"Ray({Origin} -> {Direction})";
+    }
 
     public struct RaycastHit
     {
@@ -544,6 +617,9 @@ namespace Dimension
             hit = new RaycastHit { Entity = ok != 0 ? new Entity(Native.CurrentScene, id) : Entity.Null, Point = point, Normal = normal, Distance = distance };
             return ok != 0;
         }
+
+        public static bool Raycast(Ray ray, out RaycastHit hit, float maxDistance = 1000.0f, uint layerMask = DefaultLayers) =>
+            Raycast(ray.Origin, ray.Direction, out hit, maxDistance, layerMask);
 
         /// <summary>Entities whose 3D colliders overlap the sphere.</summary>
         public static Entity[] OverlapSphere(Vector3 center, float radius, uint layerMask = DefaultLayers)

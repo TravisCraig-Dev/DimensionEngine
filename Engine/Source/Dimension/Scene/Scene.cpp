@@ -460,6 +460,9 @@ namespace Dimension
         m_Running = true;
         m_FixedAccumulator = 0.0f;
         m_Time = 0.0f;
+        m_TimeScale = 1.0f;
+        m_UnscaledTime = 0.0f;
+        Input::SetCursorMode(CursorMode::Normal);
         m_FrameCount = 0;
         UpdateTransforms();
 
@@ -581,6 +584,7 @@ namespace Dimension
         DebugDraw::Clear();
         if (!m_Running) return;
         Input::SetKeyboardCapturedByUI(false);
+        Input::SetCursorMode(CursorMode::Normal);
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
             for (auto& inst : sc.LiveInstances(false))
                 if (inst->m_EnableNotified) { inst->m_EnableNotified = false; inst->OnDisable(); }
@@ -611,6 +615,10 @@ namespace Dimension
         }
         dt = std::min(dt, 0.1f); // avoid spiral of death after hitches
         DebugDraw::Tick(dt);     // the last update's debug lines go (timed ones count down)
+        const float unscaledDt = dt;
+        m_UnscaledDeltaTime = dt;
+        m_UnscaledTime += dt;
+        dt *= m_TimeScale;
         m_Time += dt;
         m_DeltaTime = dt;
         ++m_FrameCount;
@@ -654,7 +662,7 @@ namespace Dimension
             pointer.SetClipboard = [](const std::string& text) { Input::SetClipboardText(text); };
             m_UIInjectedText.clear();
             m_UIInjectedBackspace = m_UIInjectedEnter = false;
-            m_UIHovered = UI::Update(*this, pointer, m_UIScreen, dt);
+            m_UIHovered = UI::Update(*this, pointer, m_UIScreen, unscaledDt); // menus work while the game is frozen
             // A focused text field keeps the keys from gameplay (WASD while typing a name must not move the player).
             bool typing = false;
             for (auto [e, field] : m_Registry.ViewOf<UIInputFieldComponent>()) typing |= field.Focused;

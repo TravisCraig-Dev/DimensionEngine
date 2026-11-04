@@ -2,6 +2,7 @@
 #include "Dimension/ECS/Registry.h"
 #include "Dimension/Scene/Components.h"
 #include "Dimension/Scene/System.h"
+#include <algorithm>
 #include <unordered_map>
 
 namespace Dimension
@@ -210,6 +211,17 @@ namespace Dimension
         // Play time while running, otherwise the editor's preview clock (waves move in the editor too).
         float GetDisplayTime() const { return m_Running ? m_Time : m_EditorTime; }
         float GetDeltaTime() const { return m_DeltaTime; } // this frame's (clamped) update step
+        // Game speed (like Unity's Time.timeScale; 1 = normal, 0 = frozen, up to 100): each update step is scaled, so
+        // physics, animation, particles, script time and coroutines follow; UI animation keeps real time. Play
+        // starts at 1.
+        void SetTimeScale(float scale) { m_TimeScale = std::clamp(scale, 0.0f, 100.0f); }
+        float GetTimeScale() const { return m_TimeScale; }
+        float GetUnscaledDeltaTime() const { return m_UnscaledDeltaTime; } // this frame's step before the time scale
+        float GetUnscaledTime() const { return m_UnscaledTime; }           // real seconds since play started
+        // The view the scene is shown in (from SetUIInput): its size in pixels (a 1280x720 stand-in before the first
+        // frame), and the pointer in it (top-left origin).
+        glm::vec2 GetViewSize() const { return m_UIScreen.x >= 1.0f && m_UIScreen.y >= 1.0f ? m_UIScreen : glm::vec2(1280.0f, 720.0f); }
+        glm::vec2 GetViewPointer() const { return m_UIPointer; }
         uint64_t GetFrameCount() const { return m_FrameCount; }
         // Extra UI keyboard input for this frame (tests / injected input); combined with the Input module.
         void InjectUIKeyboard(const std::string& text, bool backspace = false, bool enter = false);
@@ -268,6 +280,7 @@ namespace Dimension
         bool m_UIDown = false, m_UIWasDown = false, m_UIInputValid = false;
         float m_UIScroll = 0.0f;
         float m_Time = 0.0f, m_DeltaTime = 0.0f;
+        float m_TimeScale = 1.0f, m_UnscaledDeltaTime = 0.0f, m_UnscaledTime = 0.0f;
         float m_EditorTime = 0.0f; // waves and other previews while editing
         uint64_t m_FrameCount = 0;
         std::string m_UIInjectedText;

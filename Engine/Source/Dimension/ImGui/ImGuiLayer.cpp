@@ -2,6 +2,7 @@
 #include "Dimension/Renderer/RenderDevice.h"
 #include "Dimension/Core/Window.h"
 #include "Dimension/Core/Log.h"
+#include "Dimension/Core/Input.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -63,6 +64,14 @@ namespace Dimension
     void ImGuiLayer::BeginFrame()
     {
         ImGui_ImplVulkan_NewFrame();
+        // A game's hidden cursor: ImGui would otherwise show it again every frame. A locked one moves freely out of
+        // sight, so the editor's windows must not react to it (clicks while mouse-looking).
+        ImGuiIO& io = ImGui::GetIO();
+        CursorMode cursor = Input::GetEffectiveCursorMode();
+        if (cursor != CursorMode::Normal) io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+        else io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+        if (cursor == CursorMode::Locked) io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        else io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();

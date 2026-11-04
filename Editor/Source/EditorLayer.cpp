@@ -529,6 +529,7 @@ namespace Editor
         if (!m_Ctx.EditorScene->IsValid(m_Ctx.Selected)) m_Ctx.Select(Entity::Null());
         Input::StopAllVibration();
         Input::SetGameInputEnabled(true);
+        Input::SetCursorReleased(false);
         ImGui::SetWindowFocus("Scene");
         UpdateWindowTitle();
     }
@@ -3177,7 +3178,14 @@ namespace Editor
         ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::Image(ImTextureRef((ImTextureID)m_GameTarget->GetImGuiTexture()), avail);
         bool imageHovered = ImGui::IsItemHovered();
-        if (ImGui::IsItemClicked()) ImGui::SetWindowFocus();
+        if (ImGui::IsItemClicked())
+        {
+            ImGui::SetWindowFocus();
+            Input::SetCursorReleased(false); // a game's locked or hidden cursor applies again
+        }
+        // Escape gives a game's locked or hidden cursor back to the editor (as in Unity), until the next click.
+        if (m_Ctx.IsPlaying() && Input::GetCursorMode() != CursorMode::Normal && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            Input::SetCursorReleased(true);
         if (m_Ctx.IsPlaying())
         {
             ImVec2 mouse = ImGui::GetMousePos();

@@ -4652,6 +4652,18 @@
       1
      ],
      "Clear Flags": 1
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.ClickToMove",
+       "Fields": {
+        "Marker": 6000059,
+        "SlowMotion": 0.25
+       },
+       "Enabled": true
+      }
+     ]
     }
    }
   },
@@ -4807,7 +4819,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there); T toggles slow motion.",
      "Font": 0,
      "Font Size": 26,
      "Color": [

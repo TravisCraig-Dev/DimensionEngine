@@ -26,6 +26,10 @@ namespace Dimension
     };
     enum class GamepadAxis : int { LeftX = 0, LeftY, RightX, RightY, LeftTrigger, RightTrigger }; // sticks -1..1 (+Y down), triggers 0..1
 
+    // The mouse cursor while the game has input: shown, hidden over the window, or hidden and held in place (mouse
+    // look: GetMouseDelta keeps reporting movement).
+    enum class CursorMode : int { Normal = 0, Hidden = 1, Locked = 2 };
+
     // Modifier bits (match GLFW).
     enum KeyModifier : int { ModShift = 1, ModControl = 2, ModAlt = 4, ModSuper = 8 };
 
@@ -65,6 +69,15 @@ namespace Dimension
         static void SetKeyboardCapturedByUI(bool captured);
         static bool IsKeyboardCapturedByUI();
 
+        // The cursor the game asks for. It applies only while game input is enabled and the cursor is not released
+        // (the editor releases it on Escape until the Game view is clicked again); otherwise the cursor is normal.
+        static void SetCursorMode(CursorMode mode);
+        static CursorMode GetCursorMode();
+        static void SetCursorReleased(bool released);
+        static bool IsCursorReleased();
+        // The mode in effect now (applied to the window at NewFrame).
+        static CursorMode GetEffectiveCursorMode();
+
         // Engine-internal
         static void Init(GLFWwindow* window);
         static void NewFrame();
@@ -74,5 +87,7 @@ namespace Dimension
         // Raw access that ignores the game-input gate (editor tools).
         static bool RawKeyDown(Key key);
         static bool RawMouseDown(MouseButton button);
+        // Automated runs (the Player's --click): sets a mouse button's state for this frame (replacing the real one).
+        static void SimulateMouseButton(MouseButton button, bool down);
     };
 }

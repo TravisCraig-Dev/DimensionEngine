@@ -31,6 +31,7 @@
 #include <Dimension/Core/PlayerPrefs.h>
 #include <Dimension/Project/Localization.h>
 #include <Dimension/Asset/DataAsset.h>
+#include <Dimension/Scene/CameraProjection.h>
 #include <Dimension/Project/InputActions.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/SceneBookmarks.h>
@@ -436,6 +437,105 @@ namespace
         CHECK(Physics3DWorld::Raycast(*prt, { -5, 0, 0 }, { 1, 0, 0 }, 20.0f, 1u << 5).Hit == box3);
         CHECK(Physics2DWorld::Raycast(*prt, { -5, 10 }, { 1, 0 }, 20.0f, 1u << 5).Hit == box2);
         prt->OnRuntimeStop();
+    }
+
+    void TestCameraProjection()
+    {
+        Scene scene("Cameras");
+        auto& reg = scene.GetRegistry();
+        Entity cam = scene.CreateEntity("Camera");
+        reg.Emplace<CameraComponent>(cam); // 60 degrees, looking down -Z
+        reg.Get<TransformComponent>(cam).Position = { 0, 0, 10 };
+        reg.Get<TransformComponent>(cam).Scale = { 3, 3, 3 }; // ignored, as by the renderer
+        scene.UpdateTransforms();
+        glm::vec2 view(800, 600);
+        using namespace CameraProjection;
+
+        // The point looked at is the view's center, its distance the depth; up is toward the top row.
+        glm::vec3 center = WorldToScreen(scene, cam, { 0, 0, 0 }, view);
+        CHECK(Near(center.x, 400.0f) && Near(center.y, 300.0f) && Near(center.z, 10.0f));
+        glm::vec3 upRight = WorldToScreen(scene, cam, { 1, 1, 0 }, view);
+        CHECK(upRight.x > 400.0f && upRight.y < 300.0f);
+        // tan(30 deg) * 10 above the center is the top edge.
+        CHECK(Near(WorldToScreen(scene, cam, { 0, std::tan(glm::radians(30.0f)) * 10.0f, 0 }, view).y, 0.0f, 1e-3f));
+        CHECK(WorldToScreen(scene, cam, { 0, 0, 20 }, view).z < 0.0f); // behind
+
+        // Round trips through a turned camera, and the ray through a pixel.
+        reg.Get<TransformComponent>(cam).Rotation = { -0.6f, 0.9f, 0.1f };
+        scene.UpdateTransforms();
+        bool same = true;
+        for (glm::vec3 p : { glm::vec3(1, 2, 3), glm::vec3(-4, 0.5f, -2), glm::vec3(7, -3, 1) })
+        {
+            glm::vec3 s = WorldToScreen(scene, cam, p, view);
+            if (s.z > 0.0f) same &= glm::length(ScreenToWorld(scene, cam, s, view) - p) < 1e-3f;
+        }
+        CHECK(same);
+        glm::vec3 origin, dir, target(2, -1, 0.5f);
+        ScreenPointToRay(scene, cam, glm::vec2(WorldToScreen(scene, cam, target, view)), view, origin, dir);
+        glm::vec3 toTarget = glm::normalize(target - origin);
+        CHECK(glm::dot(dir, toTarget) > 0.99999f && Near(glm::length(dir), 1.0f));
+
+        // Orthographic: the view is OrthographicSize high (half), its width by the aspect.
+        auto& c = reg.Get<CameraComponent>(cam);
+        c.Projection = ProjectionType::Orthographic;
+        c.OrthographicSize = 5.0f;
+        reg.Get<TransformComponent>(cam).Rotation = { 0, 0, 0 };
+        scene.UpdateTransforms();
+        glm::vec3 corner = ScreenToWorld(scene, cam, { 0, 0, 4 }, view);
+        CHECK(Near(corner.x, -5.0f * 800.0f / 600.0f, 1e-3f) && Near(corner.y, 5.0f, 1e-3f) && Near(corner.z, 6.0f, 1e-3f));
+        ScreenPointToRay(scene, cam, { 800, 600 }, view, origin, dir);
+        CHECK(Near(dir.z, -1.0f) && Near(origin.x, 5.0f * 800.0f / 600.0f, 1e-3f) && Near(origin.y, -5.0f, 1e-3f));
+    }
+
+    void TestTimeScaleAndCursor()
+    {
+        // Time scale: script steps, play time and physics slow down; the unscaled clock does not.
+        Scene scene("Time");
+        auto& reg = scene.GetRegistry();
+        Entity e = scene.CreateEntity("Scripted");
+        reg.Emplace<ScriptComponent>(e).Add("TestScript").Fields["Speed"] = 0.0f;
+        Entity ball = scene.CreateEntity("Ball");
+        reg.Get<TransformComponent>(ball).Position = { 0, 10, 0 };
+        reg.Emplace<RigidbodyComponent>(ball);
+        reg.Emplace<SphereColliderComponent>(ball);
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        CHECK(Near(rt->GetTimeScale(), 1.0f));
+        rt->SetTimeScale(0.5f);
+        rt->OnUpdateRuntime(0.0625f);
+        CHECK(Near(rt->GetDeltaTime(), 0.03125f) && Near(rt->GetUnscaledDeltaTime(), 0.0625f) && Near(rt->GetTime(), 0.03125f) &&
+              Near(rt->GetUnscaledTime(), 0.0625f));
+        rt->SetTimeScale(0.0f);
+        float y = rt->GetRegistry().Get<TransformComponent>(ball).Position.y;
+        for (int i = 0; i < 30; ++i) rt->OnUpdateRuntime(0.0625f);
+        CHECK(Near(rt->GetRegistry().Get<TransformComponent>(ball).Position.y, y) && Near(rt->GetTime(), 0.03125f));
+        CHECK(Near(rt->GetUnscaledTime(), 0.0625f * 31.0f, 1e-3f));
+        rt->SetTimeScale(1.0f);
+        rt->OnUpdateRuntime(0.0625f);
+        CHECK(rt->GetRegistry().Get<TransformComponent>(ball).Position.y < y); // falling again
+        rt->SetTimeScale(-3.0f);
+        CHECK(Near(rt->GetTimeScale(), 0.0f));
+        rt->SetTimeScale(250.0f);
+        CHECK(Near(rt->GetTimeScale(), 100.0f));
+
+        // Cursor: the game's mode applies only with game input and while not released; play stop resets it.
+        bool gameInput = Input::IsGameInputEnabled();
+        Input::SetGameInputEnabled(true);
+        Input::SetCursorMode(CursorMode::Locked);
+        CHECK(Input::GetEffectiveCursorMode() == CursorMode::Locked);
+        Input::SetCursorReleased(true);
+        CHECK(Input::GetEffectiveCursorMode() == CursorMode::Normal && Input::GetCursorMode() == CursorMode::Locked);
+        Input::SetCursorReleased(false);
+        Input::SetGameInputEnabled(false);
+        CHECK(Input::GetEffectiveCursorMode() == CursorMode::Normal);
+        Input::SetGameInputEnabled(true);
+        rt->OnRuntimeStop();
+        CHECK(Input::GetCursorMode() == CursorMode::Normal);
+        auto again = scene.Clone();
+        again->OnRuntimeStart();
+        CHECK(Near(again->GetTimeScale(), 1.0f));
+        again->OnRuntimeStop();
+        Input::SetGameInputEnabled(gameInput);
     }
 
     void TestMeshImportSettings()
@@ -7569,6 +7669,38 @@ namespace
             rt->OnRuntimeStop();
         }
 
+        // Camera.Main.ScreenPointToRay + Physics.Raycast from C#: the Sandbox's ClickToMove moves its marker to the
+        // ground point under a click (the pointer in view pixels, as the Game view or the Player passes it).
+        {
+            Scene cm("Click");
+            auto& creg = cm.GetRegistry();
+            Entity cam = cm.CreateEntity("Main Camera");
+            creg.Emplace<CameraComponent>(cam);
+            creg.Get<TransformComponent>(cam).Position = { 0, 12, 12 };
+            creg.Get<TransformComponent>(cam).Rotation = { glm::radians(-45.0f), 0, 0 };
+            Entity ground = cm.CreateEntity("Ground");
+            creg.Get<TransformComponent>(ground).Position = { 0, -0.5f, 0 };
+            creg.Get<TransformComponent>(ground).Scale = { 40, 1, 40 };
+            creg.Emplace<BoxColliderComponent>(ground);
+            Entity marker = cm.CreateEntity("Marker");
+            creg.Emplace<ScriptComponent>(cam).Add("Game.ClickToMove").Fields["Marker"] = (uint64_t)cm.GetGuid(marker);
+            auto rt = cm.Clone();
+            rt->OnRuntimeStart();
+            glm::vec2 view(1280, 720);
+            glm::vec3 target(3.0f, 0.0f, -2.0f);
+            glm::vec3 screen = CameraProjection::WorldToScreen(*rt, cam, target, view);
+            rt->SetUIInput(glm::vec2(screen), true, view);
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            Input::SimulateMouseButton(MouseButton::Left, true);
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            Input::SimulateMouseButton(MouseButton::Left, false);
+            Input::SetGameInputEnabled(gameInput);
+            glm::vec3 moved = rt->GetRegistry().Get<TransformComponent>(marker).Position;
+            CHECK(glm::length(moved - target) < 0.02f);
+            rt->OnRuntimeStop();
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -11252,6 +11384,8 @@ int main(int argc, char** argv)
     Run("Duplicate entity", TestDuplicateRemapsReferences);
     Run("Script runtime", TestScriptsRuntime);
     Run("Active state and tags", TestActiveState);
+    Run("Camera projection", TestCameraProjection);
+    Run("Time scale and cursor", TestTimeScaleAndCursor);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

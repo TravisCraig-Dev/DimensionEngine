@@ -131,6 +131,12 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, ulong, byte*, ulong> Hierarchy;
         public delegate* unmanaged<IntPtr, ulong, byte*> GetTag;
         public delegate* unmanaged<IntPtr, byte*, ulong*, int, int> FindAllWithTag;
+        // The view and cameras: scene, camera, op (see Camera in Components.cs), values in/out -> 0 when no camera.
+        public delegate* unmanaged<IntPtr, ulong, int, float*, int> ViewOp;
+        public delegate* unmanaged<IntPtr, ulong> MainCamera;
+        public delegate* unmanaged<IntPtr, int, float, float> TimeControl; // 0 scale, 1 set scale, 2 unscaled dt, 3 unscaled time
+        public delegate* unmanaged<int, int, int> CursorControl;           // 0 get mode, 1 set mode (0 normal, 1 hidden, 2 locked)
+        public delegate* unmanaged<int, int> IsMousePressed;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

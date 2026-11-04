@@ -1,4 +1,5 @@
 #include "Dimension/Scripting/CSharpRuntime.h"
+#include "Dimension/Scene/CameraProjection.h"
 #include "Dimension/Scripting/ScriptRegistry.h"
 #include "Dimension/Scripting/ScriptableEntity.h"
 #include "Dimension/Scene/ComponentRegistry.h"
@@ -168,6 +169,15 @@ namespace Dimension
             uint64_t (*Hierarchy)(void*, uint64_t, int, uint64_t, const char*);
             const char* (*GetTag)(void*, uint64_t);
             int (*FindAllWithTag)(void*, const char*, uint64_t*, int); // fills up to max; returns the full count
+            // The view and cameras (screen points in view pixels, top-left origin): 0 world -> screen (v: xyz in/out),
+            // 1 screen -> world (xyz), 2 screen point -> ray (v: xy in; origin xyz, direction xyz out), 3 view size
+            // (xy out), 4 the pointer in the view (xy out), 5 mouse movement this frame (xy out). Returns 0 when the
+            // camera is missing.
+            int (*ViewOp)(void*, uint64_t, int, float*);
+            uint64_t (*MainCamera)(void*);           // the scene's rendering camera (packed), UINT64_MAX when none
+            float (*TimeControl)(void*, int, float); // 0 time scale, 1 set it, 2 unscaled delta time, 3 unscaled time
+            int (*CursorControl)(int, int);          // 0 get the cursor mode (0 normal, 1 hidden, 2 locked), 1 set it
+            int (*IsMousePressed)(int);              // went down this frame
         };
 
         // Background scene loads started from C#, by id.
@@ -1044,6 +1054,53 @@ namespace Dimension
                 std::vector<Entity> found = S(s).FindEntitiesByTag(tag ? tag : "");
                 for (int i = 0; i < (int)found.size() && i < max; ++i) out[i] = Pack(found[i]);
                 return (int)found.size();
+            };
+            a.ViewOp = [](void* s, uint64_t cam, int op, float* v) -> int {
+                if (op == 5) { glm::vec2 d = Input::IsGameInputEnabled() ? Input::GetMouseDelta() : glm::vec2(0.0f); std::memcpy(v, &d, 8); return 1; }
+                if (!s) return 0;
+                Scene& scene = S(s);
+                glm::vec2 size = scene.GetViewSize();
+                if (op == 3) { std::memcpy(v, &size, 8); return 1; }
+                if (op == 4) { glm::vec2 p = scene.GetViewPointer(); std::memcpy(v, &p, 8); return 1; }
+                Entity camera = Unpack(cam);
+                if (!scene.IsValid(camera) || !scene.GetRegistry().Has<CameraComponent>(camera)) return 0;
+                if (op == 0 || op == 1)
+                {
+                    glm::vec3 in;
+                    std::memcpy(&in, v, 12);
+                    glm::vec3 out = op == 0 ? CameraProjection::WorldToScreen(scene, camera, in, size) : CameraProjection::ScreenToWorld(scene, camera, in, size);
+                    std::memcpy(v, &out, 12);
+                    return 1;
+                }
+                if (op == 2)
+                {
+                    glm::vec3 origin, direction;
+                    CameraProjection::ScreenPointToRay(scene, camera, { v[0], v[1] }, size, origin, direction);
+                    std::memcpy(v, &origin, 12);
+                    std::memcpy(v + 3, &direction, 12);
+                    return 1;
+                }
+                return 0;
+            };
+            a.IsMousePressed = [](int b) -> int { return b >= 0 && b < 3 && Input::IsMousePressed((MouseButton)b) ? 1 : 0; };
+            a.MainCamera = [](void* s) -> uint64_t {
+                if (!s) return UINT64_MAX;
+                Entity e = S(s).GetPrimaryCamera();
+                return e.IsNull() ? UINT64_MAX : Pack(e);
+            };
+            a.TimeControl = [](void* s, int op, float value) -> float {
+                if (!s) return op == 0 ? 1.0f : 0.0f;
+                switch (op)
+                {
+                case 0: return S(s).GetTimeScale();
+                case 1: S(s).SetTimeScale(value); return 0.0f;
+                case 2: return S(s).GetUnscaledDeltaTime();
+                default: return S(s).GetUnscaledTime();
+                }
+            };
+            a.CursorControl = [](int op, int mode) -> int {
+                if (op == 1) Input::SetCursorMode((CursorMode)std::clamp(mode, 0, 2));
+                return (int)Input::GetCursorMode();
             };
             a.DataAssetFile = [](uint64_t guid) -> const char* {
                 thread_local std::string result;

@@ -164,6 +164,54 @@ namespace Dimension
         }
     }
 
+    /// <summary>
+    /// A camera; <see cref="Main"/> is the one the scene renders with. Screen points are in pixels of the view the game
+    /// is shown in (<see cref="Screen.Width"/> x <see cref="Screen.Height"/>), with the origin at the top-left like
+    /// <see cref="Input.MousePosition"/>; their z is the distance in front of the camera in world units.
+    /// </summary>
+    public unsafe class Camera : Component
+    {
+        internal override string NativeName => "Camera";
+
+        /// <summary>The camera the running scene renders with (its primary one), or null.</summary>
+        public static Camera Main
+        {
+            get
+            {
+                IntPtr scene = Native.CurrentScene;
+                ulong id = scene == IntPtr.Zero ? ulong.MaxValue : Native.Api.MainCamera(scene);
+                return id == ulong.MaxValue ? null : new Camera { Entity = new Entity(scene, id) };
+            }
+        }
+
+        /// <summary>Where a world point shows on screen (z: its distance in front of the camera, negative behind it).</summary>
+        public Vector3 WorldToScreenPoint(Vector3 world)
+        {
+            Native.Api.ViewOp(Entity.Scene, Entity.Id, 0, (float*)&world);
+            return world;
+        }
+        /// <summary>The world point under a screen point, `screen.Z` world units in front of the camera.</summary>
+        public Vector3 ScreenToWorldPoint(Vector3 screen)
+        {
+            Native.Api.ViewOp(Entity.Scene, Entity.Id, 1, (float*)&screen);
+            return screen;
+        }
+        /// <summary>The ray from the camera through a screen point (e.g. the mouse), for Physics.Raycast.</summary>
+        public Ray ScreenPointToRay(Vector2 screen)
+        {
+            float* v = stackalloc float[6];
+            v[0] = screen.X; v[1] = screen.Y;
+            Native.Api.ViewOp(Entity.Scene, Entity.Id, 2, v);
+            return new Ray(new Vector3(v[0], v[1], v[2]), new Vector3(v[3], v[4], v[5]));
+        }
+
+        /// <summary>Vertical field of view in degrees (perspective cameras).</summary>
+        public float FieldOfView { get => GetFloat("Field Of View"); set => SetFloat("Field Of View", value); }
+        /// <summary>Half the view's height in world units (orthographic cameras).</summary>
+        public float OrthographicSize { get => GetFloat("Orthographic Size"); set => SetFloat("Orthographic Size", value); }
+        public bool Orthographic { get => GetInt("Projection") == 1; set => SetInt("Projection", value ? 1 : 0); }
+    }
+
     public unsafe class SpriteRenderer : Component
     {
         internal override string NativeName => "Sprite Renderer";

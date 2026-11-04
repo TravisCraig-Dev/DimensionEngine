@@ -108,6 +108,7 @@ namespace
                 m_TimedSeconds += dt;
                 ++m_TimedFrames;
             }
+            if (!m_PointerEvents.empty()) Input::SimulateMouseButton(MouseButton::Left, down); // scripts see the click too
             m_Scene->SetUIInput(pointer, down, { (float)size.x, (float)size.y }, true, Input::GetScrollDelta());
             auto updateStart = std::chrono::steady_clock::now();
             m_Scene->OnUpdateRuntime(dt);
