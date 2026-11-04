@@ -919,6 +919,26 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestCameraSwitching()
+    {
+        Scene scene("Cameras");
+        auto& reg = scene.GetRegistry();
+        Entity a = scene.CreateEntity("A"), b = scene.CreateEntity("B");
+        reg.Emplace<CameraComponent>(a).Primary = true;
+        reg.Emplace<CameraComponent>(b).Primary = false;
+        scene.UpdateTransforms();
+        CHECK(scene.GetPrimaryCamera() == a && scene.GetCameraCuts() == 0); // the first camera shown is no cut
+        scene.SetPrimaryCamera(b);
+        CHECK(scene.GetPrimaryCamera() == b && scene.GetCameraCuts() == 1 && !reg.Get<CameraComponent>(a).Primary);
+        CHECK(scene.GetPrimaryCamera() == b && scene.GetCameraCuts() == 1); // asking again is no cut
+        // The primary one switched off: the game shows the first active camera, another cut.
+        reg.Get<TagComponent>(b).Active = false;
+        scene.UpdateTransforms();
+        CHECK(scene.GetPrimaryCamera() == a && scene.GetCameraCuts() == 2);
+        scene.SetPrimaryCamera(Entity::Null()); // not a camera: nothing changes
+        CHECK(!reg.Get<CameraComponent>(a).Primary && reg.Get<CameraComponent>(b).Primary);
+    }
+
     void TestPhysicsSettingsWhilePlaying()
     {
         const float dt = 1.0f / 60.0f;
@@ -12353,6 +12373,7 @@ int main(int argc, char** argv)
     Run("Particle emit and pause", TestParticleEmitAndPause);
     Run("Tilemap edits and terrain sample", TestTilemapEditsAndTerrainSample);
     Run("Physics settings while playing", TestPhysicsSettingsWhilePlaying);
+    Run("Camera switching", TestCameraSwitching);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

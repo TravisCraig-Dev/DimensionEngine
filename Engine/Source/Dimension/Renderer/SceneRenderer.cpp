@@ -817,6 +817,13 @@ namespace Dimension
         CameraData camera = view;
         glm::mat4 unjitteredViewProj = view.Projection * view.View;
         bool taa = scene.GetSettings().TAA && !options.ProbeCapture && !options.EditorOverlays;
+        // A cut to another camera: the previous frames do not belong to this view (they would smear into it).
+        if (!options.ProbeCapture && target.Temporal.CameraCuts != scene.GetCameraCuts())
+        {
+            target.Temporal.CameraCuts = scene.GetCameraCuts();
+            target.Temporal.Valid = false;
+            target.Gi.Valid = false;
+        }
         if (taa)
         {
             uint32_t i = ++target.Temporal.Frame % 8 + 1;

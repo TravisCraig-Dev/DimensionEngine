@@ -175,7 +175,12 @@ namespace Dimension
         void Step(int frames = 1) { m_StepFrames = frames; }
 
         void UpdateTransforms();
+        // The camera the game shows: the first active one marked Primary, else the first active one.
         Entity GetPrimaryCamera();
+        // Makes a camera the one the game shows (Primary, and no other camera Primary).
+        void SetPrimaryCamera(Entity camera);
+        // Counts the times the camera the game shows changed (a cut): the renderer starts its temporal history over.
+        uint32_t GetCameraCuts() const { return m_CameraCuts; }
         // A 3D physics world for queries only (raycasts against the colliders; nothing is simulated), on a scene that
         // is not playing: the navigation bake uses one on a copy of the scene being edited.
         void StartQueryPhysics();
@@ -323,6 +328,8 @@ namespace Dimension
         int m_UIStickDir = 0; // left stick direction last frame (navigation repeats only on a new push)
         Entity m_UIHovered = Entity::Null();
         Entity m_MouseOver = Entity::Null(), m_MousePressed = Entity::Null(); // OnMouse* events
+        Entity m_LastPrimaryCamera = Entity::Null();
+        uint32_t m_CameraCuts = 0;
         bool m_MouseWasDown = false;
         std::vector<Scope<System>> m_Systems;
         std::vector<LoadedScene> m_LoadedScenes;

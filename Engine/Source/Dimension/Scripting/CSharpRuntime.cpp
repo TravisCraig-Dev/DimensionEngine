@@ -235,6 +235,7 @@ namespace Dimension
             int (*PhysicsIgnore)(void*, uint64_t, uint64_t, int, int);
             void (*RefreshColliders)(void*, uint64_t); // after a script changed a collider's fields
             const char* (*LayerName)(int);             // the project's physics layer name ("" unused)
+            void (*SetMainCamera)(void*, uint64_t);    // makes a camera the one the game shows
         };
 
         // Background scene loads started from C#, by id.
@@ -1427,6 +1428,7 @@ namespace Dimension
                 if (auto* w = S(s).GetPhysics3D()) w->RefreshColliders(Unpack(e));
                 if (auto* w = S(s).GetPhysics2D()) w->RefreshColliders(Unpack(e));
             };
+            a.SetMainCamera = [](void* s, uint64_t e) { if (s) S(s).SetPrimaryCamera(Unpack(e)); };
             a.LayerName = [](int layer) -> const char* {
                 const auto& names = Project::GetConfig().PhysicsLayers;
                 s_StringReturn = layer >= 0 && layer < (int)names.size() ? names[layer] : "";

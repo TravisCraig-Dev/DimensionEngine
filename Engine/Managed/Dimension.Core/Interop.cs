@@ -170,6 +170,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, ulong, int, int, int> PhysicsIgnore;
         public delegate* unmanaged<IntPtr, ulong, void> RefreshColliders;
         public delegate* unmanaged<int, byte*> LayerName;
+        public delegate* unmanaged<IntPtr, ulong, void> SetMainCamera;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

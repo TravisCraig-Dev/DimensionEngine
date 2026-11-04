@@ -4799,6 +4799,11 @@
         ]
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.CameraSwitcher",
+       "Fields": {},
+       "Enabled": true
       }
      ]
     }
@@ -4956,7 +4961,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion.",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back.",
      "Font": 0,
      "Font Size": 26,
      "Color": [
@@ -5365,6 +5370,50 @@
      "Blend": 1,
      "Angle Fade": 0.3,
      "Sorting Order": 0
+    }
+   }
+  },
+  {
+   "guid": 6000109,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Overhead Camera",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      48,
+      6
+     ],
+     "Rotation": [
+      -1.45,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Camera": {
+     "Projection": 0,
+     "Field Of View": 50,
+     "Orthographic Size": 5,
+     "Near Clip": 0.1,
+     "Far Clip": 400,
+     "Primary": false,
+     "Background": [
+      0.16,
+      0.18,
+      0.22,
+      1
+     ],
+     "Clear Flags": 1
     }
    }
   }

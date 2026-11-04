@@ -496,14 +496,26 @@ namespace Dimension
 
     Entity Scene::GetPrimaryCamera()
     {
-        Entity fallback = Entity::Null();
+        Entity found = Entity::Null(), fallback = Entity::Null();
         for (auto [e, cam, t] : m_Registry.ViewOf<CameraComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
-            if (cam.Primary) return e;
+            if (cam.Primary) { found = e; break; }
             if (fallback.IsNull()) fallback = e;
         }
-        return fallback;
+        if (found.IsNull()) found = fallback;
+        if (found != m_LastPrimaryCamera)
+        {
+            if (!m_LastPrimaryCamera.IsNull()) ++m_CameraCuts; // the first camera shown is no cut
+            m_LastPrimaryCamera = found;
+        }
+        return found;
+    }
+
+    void Scene::SetPrimaryCamera(Entity camera)
+    {
+        if (!IsValid(camera) || !m_Registry.Has<CameraComponent>(camera)) return;
+        for (auto [e, cam] : m_Registry.ViewOf<CameraComponent>()) cam.Primary = e == camera;
     }
 
     // ---- Runtime -----------------------------------------------------------------------

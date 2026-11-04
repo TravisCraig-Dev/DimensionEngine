@@ -8,6 +8,8 @@ namespace Dimension
     public abstract unsafe class Component
     {
         public Entity Entity { get; internal set; }
+        /// <summary>Its object's Transform (like Unity's component.transform).</summary>
+        public Transform Transform => Entity.Transform;
         /// <summary>Component name in the engine registry (as shown in the Inspector).</summary>
         internal abstract string NativeName { get; }
         /// <summary>Every engine component this class stands for (Light: the three kinds), for FindObjectsOfType.</summary>
@@ -364,7 +366,8 @@ namespace Dimension
     {
         internal override string NativeName => "Camera";
 
-        /// <summary>The camera the running scene renders with (its primary one), or null.</summary>
+        /// <summary>The camera the running scene renders with (its primary one), or null; setting another makes that one
+        /// primary (a cut: the view switches to it this frame).</summary>
         public static Camera Main
         {
             get
@@ -373,7 +376,39 @@ namespace Dimension
                 ulong id = scene == IntPtr.Zero ? ulong.MaxValue : Native.Api.MainCamera(scene);
                 return id == ulong.MaxValue ? null : new Camera { Entity = new Entity(scene, id) };
             }
+            set { if (value != null) value.MakeMain(); }
         }
+        /// <summary>Every active camera in the scene.</summary>
+        public static Camera[] AllCameras => Entity.FindObjectsOfType<Camera>();
+        /// <summary>Makes this the camera the game shows (marked Primary; the others not).</summary>
+        public void MakeMain() => Native.Api.SetMainCamera(Entity.Scene, Entity.Id);
+        /// <summary>Whether the game shows this camera now.</summary>
+        public bool IsMain => Native.Api.MainCamera(Entity.Scene) == Entity.Id;
+
+        /// <summary>Viewport points run from (0, 0) at the top-left of the view to (1, 1) at its bottom-right (as screen
+        /// points do in pixels); z is the distance in front of the camera.</summary>
+        public Vector3 WorldToViewportPoint(Vector3 world)
+        {
+            Vector3 s = WorldToScreenPoint(world);
+            Vector2 size = Screen.Size;
+            return new Vector3(s.X / MathF.Max(size.X, 1.0f), s.Y / MathF.Max(size.Y, 1.0f), s.Z);
+        }
+        public Vector3 ViewportToWorldPoint(Vector3 viewport) => ScreenToWorldPoint(ViewportToScreenPoint(viewport));
+        public Ray ViewportPointToRay(Vector2 viewport) { Vector3 s = ViewportToScreenPoint(new Vector3(viewport, 0)); return ScreenPointToRay(new Vector2(s.X, s.Y)); }
+        public static Vector3 ViewportToScreenPoint(Vector3 viewport) { Vector2 size = Screen.Size; return new Vector3(viewport.X * size.X, viewport.Y * size.Y, viewport.Z); }
+        public static Vector3 ScreenToViewportPoint(Vector3 screen) { Vector2 size = Screen.Size; return new Vector3(screen.X / MathF.Max(size.X, 1.0f), screen.Y / MathF.Max(size.Y, 1.0f), screen.Z); }
+        /// <summary>The view's width over its height.</summary>
+        public float Aspect { get { Vector2 size = Screen.Size; return size.X / MathF.Max(size.Y, 1.0f); } }
+
+        public float NearClipPlane { get => GetFloat("Near Clip"); set => SetFloat("Near Clip", value); }
+        public float FarClipPlane { get => GetFloat("Far Clip"); set => SetFloat("Far Clip", value); }
+        /// <summary>The color it clears to (with Clear Flags Solid Color).</summary>
+        public Color BackgroundColor
+        {
+            get { Vector4 v = GetVector4("Background"); return new Color(v.X, v.Y, v.Z, v.W); }
+            set => SetVector4("Background", new Vector4(value.R, value.G, value.B, value.A));
+        }
+        public CameraClearFlags ClearFlags { get => (CameraClearFlags)GetInt("Clear Flags"); set => SetInt("Clear Flags", (int)value); }
 
         /// <summary>Where a world point shows on screen (z: its distance in front of the camera, negative behind it).</summary>
         public Vector3 WorldToScreenPoint(Vector3 world)
@@ -402,6 +437,8 @@ namespace Dimension
         public float OrthographicSize { get => GetFloat("Orthographic Size"); set => SetFloat("Orthographic Size", value); }
         public bool Orthographic { get => GetInt("Projection") == 1; set => SetInt("Projection", value ? 1 : 0); }
     }
+
+    public enum CameraClearFlags { SolidColor = 0, Skybox = 1 }
 
     public unsafe class SpriteRenderer : Component
     {

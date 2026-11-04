@@ -632,7 +632,7 @@ namespace Dimension
     /// <summary>The view the game is shown in: the window in a build, the Game view in the editor.</summary>
     public static unsafe class Screen
     {
-        private static Vector2 Size { get { Vector2 v = default; Native.Api.ViewOp(Native.CurrentScene, 0, 3, (float*)&v); return v; } }
+        internal static Vector2 Size { get { Vector2 v = default; Native.Api.ViewOp(Native.CurrentScene, 0, 3, (float*)&v); return v; } }
         /// <summary>Width in pixels.</summary>
         public static int Width => (int)Size.X;
         /// <summary>Height in pixels.</summary>

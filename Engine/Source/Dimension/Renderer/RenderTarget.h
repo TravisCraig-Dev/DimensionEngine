@@ -102,6 +102,7 @@ namespace Dimension
             uint32_t Written = 0; // history image written last
             bool Valid = false;   // history holds a previous frame
             glm::mat4 PrevViewProj{ 1.0f };
+            uint32_t CameraCuts = 0; // the scene's count when the history was made (another camera: start over)
         } Temporal;
 
     private:
