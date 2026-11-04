@@ -831,7 +831,8 @@
         ],
         "FlashSeconds": 0.4,
         "Board": 6000103,
-        "HitSound": 100007
+        "HitSound": 100007,
+        "Sparks": 6000107
        },
        "Enabled": true
       },
@@ -927,7 +928,8 @@
         ],
         "FlashSeconds": 0.4,
         "Board": 6000103,
-        "HitSound": 100007
+        "HitSound": 100007,
+        "Sparks": 6000107
        },
        "Enabled": true
       },
@@ -1023,7 +1025,8 @@
         ],
         "FlashSeconds": 0.4,
         "Board": 6000103,
-        "HitSound": 100007
+        "HitSound": 100007,
+        "Sparks": 6000107
        },
        "Enabled": true
       },
@@ -5232,6 +5235,63 @@
       0
      ],
      "Border Scale": 1.0
+    }
+   }
+  },
+  {
+   "guid": 6000107,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Hit Sparks",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Particle System": {
+     "Duration": 5.0,
+     "Looping": true,
+     "Play On Awake": false,
+     "Start Lifetime": [
+      0.35,
+      0.8
+     ],
+     "Start Speed": [
+      1.0,
+      3.0
+     ],
+     "Start Size": [
+      0.12,
+      0.2
+     ],
+     "Gravity Modifier": 1.0,
+     "Drag": 0.5,
+     "Max Particles": 600,
+     "Simulation Space": 1,
+     "Rate Over Time": 0.0,
+     "Burst Count": 0,
+     "Shape": 3,
+     "Collision": 1,
+     "Collision Plane Height": 0.0,
+     "Bounce": 0.35,
+     "Blend": 0
     }
    }
   }

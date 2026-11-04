@@ -5,7 +5,8 @@ using Dimension;
 namespace Game
 {
     /// <summary>Flashes the object's color when it hits something hard (its speed along the contact normal), plays
-    /// HitSound there, and draws the contact normals for a moment.</summary>
+    /// HitSound there, throws sparks from Sparks (a Particle System) off the contact, and draws the contact normals for
+    /// a moment.</summary>
     public class HitFlash : Behaviour
     {
         [Tooltip("Impact speed (m/s) that flashes")] public float MinSpeed = 2.0f;
@@ -13,6 +14,8 @@ namespace Game
         [Range(0.05f, 3.0f)] public float FlashSeconds = 0.4f;
         [Tooltip("Told about each hard hit (empty: the scene's first Scoreboard, if any)")] public Scoreboard Board;
         [Tooltip("Played where it hits, louder the harder (none: silent)")] public AudioClip HitSound;
+        [Tooltip("A Particle System that throws the sparks (none: no sparks)")] public Entity Sparks;
+        [Tooltip("Sparks at 8 m/s (fewer for softer hits)")] public int SparkCount = 24;
 
         private MeshRenderer m_Renderer;
         private Color m_BaseColor;
@@ -35,6 +38,26 @@ namespace Game
             (Board ?? FindObjectOfType<Scoreboard>())?.Add($"{Name} into {collision.Other.Name}");
             if (HitSound.IsValid && collision.ContactCount > 0)
                 AudioSource.PlayClipAtPoint(HitSound, collision.Contacts[0].Point, MathF.Min(speed / 8.0f, 1.0f));
+            ThrowSparks(collision, speed);
+        }
+
+        private void ThrowSparks(Collision collision, float speed)
+        {
+            var sparks = Sparks.IsValid ? Sparks.GetComponent<ParticleSystem>() : null;
+            if (sparks == null || collision.ContactCount == 0) return;
+            ContactPoint contact = collision.Contacts[0];
+            int count = (int)(SparkCount * MathF.Min(speed / 8.0f, 1.5f));
+            for (int i = 0; i < count; ++i)
+            {
+                // Out of the contact, back toward this object (the normal points at it) and up, in a wide spray.
+                Vector3 dir = Vector3.Normalize(contact.Normal + Vector3.UnitY * 0.6f + Dimension.Random.InsideUnitSphere * 0.9f);
+                sparks.Emit(new EmitParams
+                {
+                    Position = contact.Point,
+                    Velocity = dir * speed * Dimension.Random.Range(0.4f, 0.9f),
+                    Color = Color.Lerp(FlashColor, new Color(1.0f, 0.9f, 0.5f), Dimension.Random.Value),
+                });
+            }
         }
 
         public override void OnUpdate(float dt)

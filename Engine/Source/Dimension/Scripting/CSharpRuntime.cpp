@@ -216,6 +216,10 @@ namespace Dimension
             uint64_t (*ComponentAsset)(void*, uint64_t, const char*, const char*, int, uint64_t);
             int (*UIRectScreen)(void*, uint64_t, float*); // the laid-out rect: min x, y, max x, y (pixels), scale
             float (*SpriteAnimatorTime)(void*, uint64_t, int, float); // 0 get the time, 1 seek to v (showing that frame)
+            // A Particle System: 0 pause, 1 is paused, 2 is playing, 3 is alive, 4 particle count, 5 clear, 6 time.
+            float (*ParticlesControl)(void*, uint64_t, int);
+            // Emit with overrides: position 3, velocity 3, color 4, size, lifetime; flags bits 1 2 4 8 16 say which are set.
+            void (*ParticlesEmitWith)(void*, uint64_t, const float*, int, int);
         };
 
         // Background scene loads started from C#, by id.
@@ -1340,6 +1344,33 @@ namespace Dimension
                 auto& handle = *static_cast<AssetHandle*>(value);
                 if (op == 1) handle = AssetHandle(guid);
                 return (uint64_t)handle;
+            };
+            a.ParticlesControl = [](void* s, uint64_t e, int op) -> float {
+                auto* ps = Comp<ParticleSystemComponent>(s, e);
+                if (!ps) return 0.0f;
+                switch (op)
+                {
+                case 0: ps->Pause(); return 0.0f;
+                case 1: return ps->Paused ? 1.0f : 0.0f;
+                case 2: return ps->Playing ? 1.0f : 0.0f;
+                case 3: return ps->IsAlive() ? 1.0f : 0.0f;
+                case 4: return (float)ps->Particles.size();
+                case 5: ps->Clear(); return 0.0f;
+                case 6: return ps->Time;
+                default: return 0.0f;
+                }
+            };
+            a.ParticlesEmitWith = [](void* s, uint64_t e, const float* v, int flags, int count) {
+                auto* ps = Comp<ParticleSystemComponent>(s, e);
+                if (!ps) return;
+                ParticleEmitParams p;
+                p.HasPosition = flags & 1; p.HasVelocity = flags & 2; p.HasColor = flags & 4; p.HasSize = flags & 8; p.HasLifetime = flags & 16;
+                p.Position = { v[0], v[1], v[2] };
+                p.Velocity = { v[3], v[4], v[5] };
+                p.Color = { v[6], v[7], v[8], v[9] };
+                p.Size = v[10];
+                p.Lifetime = v[11];
+                ps->Emit(p, count);
             };
             a.SpriteAnimatorTime = [](void* s, uint64_t e, int op, float v) -> float {
                 auto* anim = Comp<SpriteAnimatorComponent>(s, e);

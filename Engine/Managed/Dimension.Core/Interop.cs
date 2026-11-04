@@ -161,6 +161,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, byte*, byte*, int, ulong, ulong> ComponentAsset; // 0 get, 1 set; ~0: no such asset field
         public delegate* unmanaged<IntPtr, ulong, float*, int> UIRectScreen;                       // min x, y, max x, y, scale
         public delegate* unmanaged<IntPtr, ulong, int, float, float> SpriteAnimatorTime;           // 0 get, 1 seek
+        public delegate* unmanaged<IntPtr, ulong, int, float> ParticlesControl;                    // see ParticleSystem
+        public delegate* unmanaged<IntPtr, ulong, float*, int, int, void> ParticlesEmitWith;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

@@ -919,6 +919,87 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestParticleEmitAndPause()
+    {
+        Scene scene("Particles");
+        auto& reg = scene.GetRegistry();
+        auto make = [&](const char* name, glm::vec3 pos, float yawDegrees) {
+            Entity e = scene.CreateEntity(name);
+            auto& t = reg.Get<TransformComponent>(e);
+            t.Position = pos;
+            t.Rotation = { 0.0f, glm::radians(yawDegrees), 0.0f };
+            auto& ps = reg.Emplace<ParticleSystemComponent>(e);
+            ps.PlayOnAwake = false;
+            ps.RateOverTime = 0.0f;
+            ps.ColorOverLifetime = Gradient::Linear(glm::vec4(1.0f), glm::vec4(1.0f));
+            return e;
+        };
+        Entity world = make("World", { 0, 0, 0 }, 0.0f);
+        Entity local = make("Local", { 10, 0, 0 }, 90.0f);
+        reg.Get<ParticleSystemComponent>(local).SimulationSpace = ParticleSpace::Local;
+        scene.UpdateTransforms();
+        const float dt = 0.125f;
+
+        // Emit with start values of its own: given ones replace the system's, the rest are its own.
+        ParticleEmitParams p;
+        p.HasPosition = p.HasVelocity = p.HasColor = p.HasLifetime = true;
+        p.Position = { 5, 0, 0 };
+        p.Velocity = { 0, 2, 0 };
+        p.Color = { 1, 0, 0, 1 };
+        p.Lifetime = 3.0f;
+        auto& wp = reg.Get<ParticleSystemComponent>(world);
+        wp.Emit(p, 3);
+        ParticleSystems::Update(scene, dt);
+        CHECK(wp.Particles.size() == 3);
+        bool ok = true;
+        for (const Particle& q : wp.Particles)
+            ok &= glm::length(glm::vec2(q.Position.x - 5.0f, q.Position.z)) < wp.ShapeRadius + 1e-3f && Near(q.Position.y, 0.25f, 0.01f) &&
+                  Near(q.Velocity.y, 2.0f, 1e-4f) && q.Color == glm::vec4(1, 0, 0, 1) && q.Lifetime == 3.0f &&
+                  q.Size >= wp.StartSize.x && q.Size <= wp.StartSize.y;
+        CHECK(ok);
+
+        // A local-space system keeps a world velocity in its own frame (turned 90 degrees: world +X is its +Z).
+        auto& lp = reg.Get<ParticleSystemComponent>(local);
+        ParticleEmitParams v;
+        v.HasVelocity = true;
+        v.Velocity = { 1, 0, 0 };
+        lp.Emit(v, 1);
+        ParticleSystems::Update(scene, dt);
+        glm::vec3 worldVel = lp.Particles.empty() ? glm::vec3(0.0f) : glm::vec3(reg.Get<TransformComponent>(local).World * glm::vec4(lp.Particles[0].Velocity, 0.0f));
+        CHECK(lp.Particles.size() == 1 && Near(worldVel.x, 1.0f, 1e-4f) && Near(worldVel.z, 0.0f, 1e-4f));
+
+        // Pause freezes it (no emitting, no moving, no aging); Play goes on from there.
+        wp.Clear();
+        wp.RateOverTime = 40.0f;
+        wp.Play();
+        ParticleSystems::Update(scene, dt);
+        size_t count = wp.Particles.size();
+        CHECK(count == 5);
+        wp.Pause();
+        glm::vec3 held = wp.Particles[0].Position;
+        float heldAge = wp.Particles[0].Age, heldTime = wp.Time;
+        for (int i = 0; i < 5; ++i) ParticleSystems::Update(scene, dt);
+        CHECK(wp.Particles.size() == count && wp.Particles[0].Position == held && wp.Particles[0].Age == heldAge && wp.Time == heldTime);
+        wp.Play();
+        ParticleSystems::Update(scene, dt);
+        CHECK(!wp.Paused && wp.Playing && Near(wp.Time, heldTime + dt, 1e-4f) && wp.Particles.size() == count + 5);
+        // Stop forgets a pause; Restart (play mode starting) too.
+        wp.Pause();
+        wp.Stop();
+        CHECK(!wp.Paused && !wp.Playing);
+        wp.Pause();
+        ParticleSystems::Restart(scene);
+        CHECK(!wp.Paused && wp.PendingCustom.empty());
+
+        // Max Particles caps emitting from code too.
+        wp.Clear();
+        wp.Stop();
+        wp.MaxParticles = 4;
+        wp.Emit(p, 10);
+        ParticleSystems::Update(scene, dt);
+        CHECK(wp.Particles.size() == 4 && wp.PendingCustom.empty());
+    }
+
     void TestSpriteAnimatorSeek()
     {
         Scene scene("Sprites");
@@ -12077,6 +12158,7 @@ int main(int argc, char** argv)
     Run("Instantiate and remove", TestInstantiateAndRemove);
     Run("Audio source control", TestAudioSourceControl);
     Run("Sprite animator seek", TestSpriteAnimatorSeek);
+    Run("Particle emit and pause", TestParticleEmitAndPause);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

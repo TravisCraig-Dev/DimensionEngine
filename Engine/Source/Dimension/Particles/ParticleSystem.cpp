@@ -269,6 +269,23 @@ namespace Dimension
             for (auto& burst : ps.PendingBursts)
                 for (int i = 0; i < burst.Count; ++i) emit(&burst.WorldPosition);
             ps.PendingBursts.clear();
+            // Emitted from code with start values of their own (GPU systems: the position only).
+            for (auto& [params, count] : ps.PendingCustom)
+                for (int i = 0; i < count; ++i)
+                {
+                    const glm::vec3* at = params.HasPosition ? &params.Position : nullptr;
+                    if (ps.SimulateOnGpu) { QueueGpuEmission(ps, at, 1); continue; }
+                    size_t before = ps.Particles.size();
+                    EmitOne(ps, world, at, subEmits);
+                    if (ps.Particles.size() == before) break; // at Max Particles
+                    Particle& p = ps.Particles.back();
+                    if (params.HasVelocity)
+                        p.Velocity = ps.SimulationSpace == ParticleSpace::Local ? glm::vec3(glm::inverse(world) * glm::vec4(params.Velocity, 0.0f)) : params.Velocity;
+                    if (params.HasColor) p.Color = params.Color;
+                    if (params.HasSize) p.Size = std::max(params.Size, 0.0f);
+                    if (params.HasLifetime) p.Lifetime = std::max(params.Lifetime, 0.01f);
+                }
+            ps.PendingCustom.clear();
 
             ps.NoiseTime += dt;
             if (ps.SimulateOnGpu)
@@ -422,6 +439,7 @@ namespace Dimension
                     const auto* mr = reg.TryGet<MeshRendererComponent>(e);
                     ps.EmitMesh = ps.ShapeMesh.IsValid() ? ps.ShapeMesh : mr ? mr->Mesh : AssetHandle::None();
                 }
+                if (ps.Paused) continue; // frozen until Play
                 if (!ps.Started && !ps.Playing && ps.PlayOnAwake && ps.Time == 0.0f && ps.Particles.empty() && ps.PendingEmit == 0)
                     ps.Playing = true;
                 size_t first = subEmits.size();
@@ -577,6 +595,8 @@ namespace Dimension
                 ps.Started = false;
                 ps.Playing = ps.PlayOnAwake;
                 ps.PendingEmit = 0;
+                ps.PendingCustom.clear();
+                ps.Paused = false;
                 ps.GpuEmissions.clear();
                 ps.GpuPendingDt = 0.0f;
                 ps.GpuSinceEmit = 1e9f;

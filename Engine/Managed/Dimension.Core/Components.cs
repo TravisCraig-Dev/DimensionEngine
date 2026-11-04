@@ -780,8 +780,77 @@ namespace Dimension
     {
         internal override string NativeName => "Particle System";
         public void Emit(int count) => Native.Api.ParticlesEmit(Entity.Scene, Entity.Id, count);
+        /// <summary>Emits `count` particles with some start values of their own (the rest are the system's), this frame.
+        /// GPU systems take only the position.</summary>
+        public void Emit(EmitParams p, int count = 1)
+        {
+            float* v = stackalloc float[12];
+            int flags = 0;
+            if (p.Position is Vector3 at) { v[0] = at.X; v[1] = at.Y; v[2] = at.Z; flags |= 1; }
+            if (p.Velocity is Vector3 vel) { v[3] = vel.X; v[4] = vel.Y; v[5] = vel.Z; flags |= 2; }
+            if (p.Color is Color c) { v[6] = c.R; v[7] = c.G; v[8] = c.B; v[9] = c.A; flags |= 4; }
+            if (p.Size is float size) { v[10] = size; flags |= 8; }
+            if (p.Lifetime is float life) { v[11] = life; flags |= 16; }
+            Native.Api.ParticlesEmitWith(Entity.Scene, Entity.Id, v, flags, count);
+        }
+        /// <summary>Starts over, or goes on after <see cref="Pause"/>.</summary>
         public void Play() => Native.Api.ParticlesPlay(Entity.Scene, Entity.Id, 1);
+        /// <summary>Stops emitting; the particles already out finish their lives.</summary>
         public void Stop() => Native.Api.ParticlesPlay(Entity.Scene, Entity.Id, 0);
+        /// <summary>Stops emitting and removes every particle at once.</summary>
+        public void Stop(bool clear) { Stop(); if (clear) Clear(); }
+
+        // Ops: 0 pause, 1 is paused, 2 is playing, 3 is alive, 4 particle count, 5 clear, 6 time.
+        private float Control(int op) => Native.Api.ParticlesControl(Entity.Scene, Entity.Id, op);
+        /// <summary>Freezes it: its particles hang still and it emits nothing until Play.</summary>
+        public void Pause() => Control(0);
+        /// <summary>Removes every particle (it keeps playing, if it was).</summary>
+        public void Clear() => Control(5);
+        public bool IsPaused => Control(1) != 0.0f;
+        /// <summary>Emitting (or paused while it was).</summary>
+        public bool IsPlaying => Control(2) != 0.0f;
+        /// <summary>Emitting, or still has particles out.</summary>
+        public bool IsAlive => Control(3) != 0.0f;
+        /// <summary>Particles out now (CPU systems; a GPU system's live on the GPU, so it reads 0).</summary>
+        public int ParticleCount => (int)Control(4);
+        /// <summary>Seconds into the current loop of Duration.</summary>
+        public float Time => Control(6);
+
+        public float Duration { get => GetFloat("Duration"); set => SetFloat("Duration", value); }
+        public bool Looping { get => GetBool("Looping"); set => SetBool("Looping", value); }
+        /// <summary>Particles per second while playing.</summary>
+        public float EmissionRate { get => GetFloat("Rate Over Time"); set => SetFloat("Rate Over Time", value); }
+        /// <summary>Emitted at once when it starts (and each loop).</summary>
+        public int BurstCount { get => GetInt("Burst Count"); set => SetInt("Burst Count", value); }
+        public int MaxParticles { get => GetInt("Max Particles"); set => SetInt("Max Particles", value); }
+        /// <summary>Each particle picks a start lifetime (seconds) between X and Y; the same in both for a fixed one.</summary>
+        public Vector2 StartLifetime { get => GetVector2("Start Lifetime"); set => SetVector2("Start Lifetime", value); }
+        /// <summary>Start speed range (units per second).</summary>
+        public Vector2 StartSpeed { get => GetVector2("Start Speed"); set => SetVector2("Start Speed", value); }
+        /// <summary>Start size range (world units).</summary>
+        public Vector2 StartSize { get => GetVector2("Start Size"); set => SetVector2("Start Size", value); }
+        /// <summary>Each particle starts with a color between StartColorA and StartColorB; setting StartColor sets both.</summary>
+        public Color StartColor { get => StartColorA; set { StartColorA = value; StartColorB = value; } }
+        public Color StartColorA { get => ToColor(GetVector4("Start Color A")); set => SetVector4("Start Color A", ToVector(value)); }
+        public Color StartColorB { get => ToColor(GetVector4("Start Color B")); set => SetVector4("Start Color B", ToVector(value)); }
+        /// <summary>Multiples of gravity (9.81 m/s^2) pulling the particles down.</summary>
+        public float GravityModifier { get => GetFloat("Gravity Modifier"); set => SetFloat("Gravity Modifier", value); }
+        public bool SimulateOnGpu => GetBool("Simulate On GPU");
+        private static Color ToColor(Vector4 v) => new(v.X, v.Y, v.Z, v.W);
+        private static Vector4 ToVector(Color c) => new(c.R, c.G, c.B, c.A);
+    }
+
+    /// <summary>Start values for <see cref="ParticleSystem.Emit(EmitParams, int)"/>; the ones left null are the system's.</summary>
+    public struct EmitParams
+    {
+        /// <summary>Where the particle starts, in world space (null: from the system's shape).</summary>
+        public Vector3? Position;
+        /// <summary>World-space velocity (null: the shape's direction at the start speed).</summary>
+        public Vector3? Velocity;
+        public Color? Color;
+        public float? Size;
+        /// <summary>Seconds.</summary>
+        public float? Lifetime;
     }
 
     public unsafe class LineRenderer : Component

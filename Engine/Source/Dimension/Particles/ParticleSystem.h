@@ -38,6 +38,18 @@ namespace Dimension
         bool LeftDecal = false; // collision decals: only a particle's first impact marks
     };
 
+    // Particles emitted from code with some start values of their own (like Unity's EmitParams): each one set replaces
+    // the system's, the rest come from it as usual. GPU systems take only the position.
+    struct ParticleEmitParams
+    {
+        bool HasPosition = false, HasVelocity = false, HasColor = false, HasSize = false, HasLifetime = false;
+        glm::vec3 Position{ 0.0f }; // world space
+        glm::vec3 Velocity{ 0.0f }; // world space, units per second
+        glm::vec4 Color{ 1.0f };
+        float Size = 0.1f;
+        float Lifetime = 1.0f;      // seconds
+    };
+
     // CPU particle emitter (a compact take on Unity's ParticleSystem modules).
     // Ranges are (min, max) and are sampled uniformly per particle.
     struct ParticleSystemComponent
@@ -177,6 +189,8 @@ namespace Dimension
         bool Started = false;
         AssetHandle EmitMesh = AssetHandle::None(); // the Mesh shape's mesh, resolved every update
         int32_t PendingEmit = 0;
+        std::vector<std::pair<ParticleEmitParams, int32_t>> PendingCustom; // Emit(params, count) requests
+        bool Paused = false; // frozen: neither emits nor moves its particles until Play
         // GPU simulation hand-off: particles to create (at the emitter or at burst points) and time to simulate,
         // consumed by the renderer once per frame. Generation changes clear the GPU particles.
         static constexpr int kMaxGpuEmissions = 16;
@@ -187,8 +201,15 @@ namespace Dimension
         uint32_t GpuGeneration = 0;
         uint32_t GpuSeed = 0;
 
-        void Play() { Playing = true; Started = false; Time = 0.0f; }
-        void Stop() { Playing = false; }  // existing particles finish their lives
+        // Starts over, or (paused) goes on from where it was.
+        void Play()
+        {
+            if (Paused) { Paused = false; return; }
+            Playing = true; Started = false; Time = 0.0f;
+        }
+        void Stop() { Playing = false; Paused = false; }  // existing particles finish their lives
+        void Pause() { Paused = true; }
+        void Emit(const ParticleEmitParams& params, int count) { if (count > 0) PendingCustom.push_back({ params, count }); }
         void Clear() { Particles.clear(); GpuEmissions.clear(); ++GpuGeneration; GpuSinceEmit = 1e9f; }
         void Emit(int count) { PendingEmit += count; }
         void EmitAt(const glm::vec3& worldPosition, int count) { PendingBursts.push_back({ worldPosition, count }); }
