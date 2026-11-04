@@ -164,6 +164,10 @@ namespace Dimension
             // a UI Text's Localized Key (scene, entity).
             const char* (*Localization)(int, const char*, void*, uint64_t);
             const char* (*DataAssetFile)(uint64_t); // a data asset's file as JSON ({class, fields}), or null
+            // Hierarchy, active state, layer and tag (see Entity in Api.cs for the ops); entities packed, none = UINT64_MAX.
+            uint64_t (*Hierarchy)(void*, uint64_t, int, uint64_t, const char*);
+            const char* (*GetTag)(void*, uint64_t);
+            int (*FindAllWithTag)(void*, const char*, uint64_t*, int); // fills up to max; returns the full count
         };
 
         // Background scene loads started from C#, by id.
@@ -626,6 +630,7 @@ namespace Dimension
             }
 
             void* Storage() { return m_Values.Data(); }
+            intptr_t Handle() const { return m_Handle; }
 
             // Draws custom Inspector `id` for this script (its live object while playing, else one made from the slots)
             // and takes the values it leaves; true when they changed.
@@ -741,6 +746,8 @@ namespace Dimension
             void OnUpdate(float dt) override { s_DeltaTime = dt; if (m_Handle) s_Managed.Invoke(m_Handle, 1, dt); }
             void OnFixedUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 2, dt); }
             void OnDestroy() override { if (m_Handle) s_Managed.Invoke(m_Handle, 3, 0.0f); }
+            void OnEnable() override { if (m_Handle) s_Managed.Invoke(m_Handle, 8, 0.0f); }
+            void OnDisable() override { if (m_Handle) s_Managed.Invoke(m_Handle, 9, 0.0f); }
             void OnClick() override { if (m_Handle) s_Managed.Invoke(m_Handle, 4, 0.0f); }
             void OnUIValueChanged(float v) override { if (m_Handle) s_Managed.Invoke(m_Handle, 5, v); }
             void OnJointBreak(float force) override { if (m_Handle) s_Managed.Invoke(m_Handle, 6, force); }
@@ -976,6 +983,67 @@ namespace Dimension
                 default: return nullptr;
                 }
                 return result.c_str();
+            };
+            a.Hierarchy = [](void* s, uint64_t packed, int op, uint64_t arg, const char* text) -> uint64_t {
+                constexpr uint64_t none = UINT64_MAX;
+                if (!s) return op <= 2 || op == 14 ? none : 0;
+                Scene& scene = S(s);
+                auto entityOrNone = [](Entity x) { return x.IsNull() ? none : Pack(x); };
+                if (op == 14) return entityOrNone(scene.FindEntityByTag(text ? text : ""));
+                Entity e = Unpack(packed);
+                if (!scene.IsValid(e)) return op <= 2 ? none : 0;
+                auto& tag = scene.GetRegistry().Get<TagComponent>(e);
+                // The script whose managed object is `arg` (ops 15-17).
+                auto scriptIndex = [&]() -> int {
+                    if (auto* sc = scene.GetRegistry().TryGet<ScriptComponent>(e))
+                        for (size_t i = 0; i < sc->Scripts.size(); ++i)
+                            if (auto* m = dynamic_cast<ManagedScript*>(sc->Scripts[i].Instance.get()); m && (uint64_t)m->Handle() == arg) return (int)i;
+                    return -1;
+                };
+                switch (op)
+                {
+                case 0: return entityOrNone(scene.GetParent(e));
+                case 1: return scene.GetChildren(e).size();
+                case 2: return arg < scene.GetChildren(e).size() ? Pack(scene.GetChildren(e)[arg]) : none;
+                case 3:
+                case 4: scene.SetParent(e, arg == none ? Entity::Null() : Unpack(arg), op == 3); return 0;
+                case 5: return tag.Active ? 1 : 0;
+                case 6: return scene.IsActiveInHierarchy(e) ? 1 : 0;
+                case 7: scene.SetActive(e, arg != 0); return 0;
+                case 8: return (uint64_t)tag.Layer;
+                case 9: tag.Layer = (int32_t)std::min<uint64_t>(arg, 31); return 0;
+                case 10: return tag.Tag == (text ? text : "") ? 1 : 0;
+                case 11: tag.Tag = text && *text ? text : "Untagged"; return 0;
+                case 12:
+                {
+                    Entity parent = scene.GetParent(e);
+                    const auto& list = parent.IsNull() ? scene.GetRootEntities() : scene.GetChildren(parent);
+                    return (uint64_t)(std::find(list.begin(), list.end(), e) - list.begin());
+                }
+                case 13: scene.SetSiblingIndex(e, (size_t)arg); return 0;
+                case 15:
+                {
+                    int i = scriptIndex();
+                    return i >= 0 && scene.GetRegistry().Get<ScriptComponent>(e).Scripts[i].Enabled ? 1 : 0;
+                }
+                case 16:
+                case 17:
+                    if (int i = scriptIndex(); i >= 0) scene.SetScriptEnabled(e, (size_t)i, op == 16);
+                    return 0;
+                default: return 0;
+                }
+            };
+            a.GetTag = [](void* s, uint64_t e) -> const char* {
+                auto* tag = Comp<TagComponent>(s, e);
+                if (!tag || !S(s).IsValid(Unpack(e))) return "";
+                s_StringReturn = tag->Tag;
+                return s_StringReturn.c_str();
+            };
+            a.FindAllWithTag = [](void* s, const char* tag, uint64_t* out, int max) -> int {
+                if (!s) return 0;
+                std::vector<Entity> found = S(s).FindEntitiesByTag(tag ? tag : "");
+                for (int i = 0; i < (int)found.size() && i < max; ++i) out[i] = Pack(found[i]);
+                return (int)found.size();
             };
             a.DataAssetFile = [](uint64_t guid) -> const char* {
                 thread_local std::string result;

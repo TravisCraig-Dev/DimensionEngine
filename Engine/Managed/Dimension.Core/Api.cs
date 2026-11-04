@@ -12,11 +12,28 @@ namespace Dimension
         public Entity Entity { get; internal set; }
         public Transform Transform => Entity.Transform;
         public string Name { get => Entity.Name; set { var e = Entity; e.Name = value; } }
+        internal IntPtr Handle; // the engine's handle to this object
+
+        /// <summary>Whether this script is enabled (its checkbox in the Inspector). A disabled script gets no updates;
+        /// turning it off or on calls OnDisable / OnEnable while its object is active.</summary>
+        public bool Enabled
+        {
+            get => Handle != IntPtr.Zero && Entity.ScriptOp(15, Handle) == 1;
+            set { if (Handle != IntPtr.Zero) Entity.ScriptOp(value ? 16 : 17, Handle); }
+        }
+        public string Tag { get => Entity.Tag; set { var e = Entity; e.Tag = value; } }
+        public bool CompareTag(string tag) => Entity.CompareTag(tag);
 
         public virtual void OnCreate() { }
         public virtual void OnUpdate(float deltaTime) { }
         public virtual void OnFixedUpdate(float fixedDeltaTime) { }
         public virtual void OnDestroy() { }
+        /// <summary>Called when the script starts counting while playing: after OnCreate when its object is active and
+        /// it is enabled, and again each time its object (or a parent) is activated or the script is enabled.</summary>
+        public virtual void OnEnable() { }
+        /// <summary>Called when the script stops counting: its object or a parent is deactivated, the script is
+        /// disabled, or before OnDestroy.</summary>
+        public virtual void OnDisable() { }
         public virtual void OnCollisionEnter(Entity other) { }
         public virtual void OnCollisionExit(Entity other) { }
         public virtual void OnTriggerEnter(Entity other) { }
@@ -91,6 +108,9 @@ namespace Dimension
         }
 
         public T GetComponent<T>() where T : Component, new() => Entity.GetComponent<T>();
+        public T GetComponentInChildren<T>(bool includeInactive = false) where T : Component, new() => Entity.GetComponentInChildren<T>(includeInactive);
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : Component, new() => Entity.GetComponentsInChildren<T>(includeInactive);
+        public T GetComponentInParent<T>() where T : Component, new() => Entity.GetComponentInParent<T>();
         public Component GetComponent(string componentName) => Entity.GetComponent(componentName);
         public bool HasComponent<T>() where T : Component, new() => Entity.HasComponent<T>();
         public Entity Find(string name) => Entity.Find(name);
@@ -164,6 +184,151 @@ namespace Dimension
         }
 
         public void Destroy() { if (Scene != IntPtr.Zero) Native.Api.Destroy(Scene, Id); }
+
+        // ---- Hierarchy, active state, layer and tag (like Unity's GameObject and Transform) ---------------------
+        // Hierarchy ops: 0 parent, 1 child count, 2 child (arg), 3 / 4 set parent keeping the world / local transform,
+        // 5 active self, 6 active in hierarchy, 7 set active, 8 layer, 9 set layer, 10 compare tag, 11 set tag,
+        // 12 sibling index, 13 set it, 14 first with tag, 15 script enabled (arg: its handle), 16 enable, 17 disable.
+        private ulong Op(int op, ulong arg = 0) => Scene == IntPtr.Zero ? ulong.MaxValue : Native.Api.Hierarchy(Scene, Id, op, arg, null);
+        private ulong Op(int op, string text)
+        {
+            if (Scene == IntPtr.Zero) return 0;
+            var self = this;
+            return Native.WithUtf8<ulong>(text ?? "", p => Native.Api.Hierarchy(self.Scene, self.Id, op, 0, (byte*)p));
+        }
+        private Entity Wrap(ulong id) => id == ulong.MaxValue ? Null : new Entity(Scene, id);
+        internal ulong ScriptOp(int op, IntPtr handle) => Scene == IntPtr.Zero ? 0 : Native.Api.Hierarchy(Scene, Id, op, (ulong)handle, null);
+
+        /// <summary>The parent object (Null for a root).</summary>
+        public Entity Parent => Wrap(Op(0));
+        /// <summary>The topmost parent (itself for a root).</summary>
+        public Entity Root { get { Entity e = this; for (Entity p = e.Parent; p.IsValid; p = p.Parent) e = p; return e; } }
+        /// <summary>Moves this object under `parent` (Null: to the scene root), keeping where it is in the world unless
+        /// `worldPositionStays` is false (then its local position, rotation and scale stay as they are).</summary>
+        public void SetParent(Entity parent, bool worldPositionStays = true) =>
+            Op(worldPositionStays ? 3 : 4, parent.IsValid ? parent.Id : ulong.MaxValue);
+        public int ChildCount => Scene == IntPtr.Zero ? 0 : (int)Op(1);
+        /// <summary>The child at `index` (in Hierarchy order), Null when out of range.</summary>
+        public Entity GetChild(int index) => index < 0 ? Null : Wrap(Op(2, (ulong)index));
+        /// <summary>The direct children, in Hierarchy order.</summary>
+        public Entity[] Children
+        {
+            get
+            {
+                var result = new Entity[ChildCount];
+                for (int i = 0; i < result.Length; ++i) result[i] = GetChild(i);
+                return result;
+            }
+        }
+        /// <summary>A descendant by name, or by a path of names ("Arm/Hand"); Null when there is none.</summary>
+        public Entity FindChild(string path)
+        {
+            Entity at = this;
+            foreach (string part in (path ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries))
+            {
+                Entity next = Null;
+                for (int i = 0, n = at.ChildCount; i < n && !next.IsValid; ++i)
+                    if (at.GetChild(i).Name == part) next = at.GetChild(i);
+                if (!next.IsValid) return Null;
+                at = next;
+            }
+            return at == this ? Null : at;
+        }
+        /// <summary>Whether this object is somewhere under `ancestor`.</summary>
+        public bool IsChildOf(Entity ancestor)
+        {
+            for (Entity p = Parent; p.IsValid; p = p.Parent)
+                if (p == ancestor) return true;
+            return false;
+        }
+        /// <summary>The position among its siblings (the Hierarchy order).</summary>
+        public int SiblingIndex { get => (int)Op(12); set => Op(13, (ulong)Math.Max(value, 0)); }
+
+        /// <summary>The object's own Active box (its parents may still turn it off; see ActiveInHierarchy).</summary>
+        public bool ActiveSelf => Op(5) == 1;
+        /// <summary>Whether the object and all of its parents are active: only then do its scripts update, its
+        /// renderers draw and its colliders collide.</summary>
+        public bool ActiveInHierarchy => Op(6) == 1;
+        /// <summary>Turns the object on or off with its children. Scripts of the objects this switches get OnEnable /
+        /// OnDisable right away.</summary>
+        public void SetActive(bool active) => Op(7, active ? 1ul : 0ul);
+
+        /// <summary>The physics layer (0-31, named in Project Settings > Physics Layers). Colliders take a new layer at
+        /// the next physics step.</summary>
+        public int Layer { get => (int)Op(8); set => Op(9, (ulong)Math.Clamp(value, 0, 31)); }
+        /// <summary>The tag ("Untagged" when none; setting "" clears it).</summary>
+        public string Tag
+        {
+            get => Scene == IntPtr.Zero ? "" : Native.FromUtf8(Native.Api.GetTag(Scene, Id));
+            set => Op(11, value);
+        }
+        public bool CompareTag(string tag) => Op(10, tag) == 1;
+
+        /// <summary>The first object with a tag in the running script's scene (Null when none).</summary>
+        public static Entity FindWithTag(string tag)
+        {
+            IntPtr scene = Native.CurrentScene;
+            if (scene == IntPtr.Zero) return Null;
+            ulong id = Native.WithUtf8<ulong>(tag ?? "", p => Native.Api.Hierarchy(scene, 0, 14, 0, (byte*)p));
+            return id == ulong.MaxValue ? Null : new Entity(scene, id);
+        }
+        /// <summary>Every object with a tag (like Unity's FindGameObjectsWithTag).</summary>
+        public static Entity[] FindAllWithTag(string tag)
+        {
+            IntPtr scene = Native.CurrentScene;
+            if (scene == IntPtr.Zero) return Array.Empty<Entity>();
+            var ids = new ulong[256];
+            int count;
+            fixed (ulong* ptr = ids)
+            {
+                ulong* q = ptr;
+                count = Native.WithUtf8<int>(tag ?? "", p => Native.Api.FindAllWithTag(scene, (byte*)p, q, 256));
+            }
+            if (count > ids.Length)
+            {
+                ids = new ulong[count];
+                fixed (ulong* ptr = ids)
+                {
+                    ulong* q = ptr;
+                    int capacity = ids.Length;
+                    count = Math.Min(capacity, Native.WithUtf8<int>(tag ?? "", p => Native.Api.FindAllWithTag(scene, (byte*)p, q, capacity)));
+                }
+            }
+            var result = new Entity[count];
+            for (int i = 0; i < count; ++i) result[i] = new Entity(scene, ids[i]);
+            return result;
+        }
+
+        /// <summary>A component on this object or the first of its descendants that has one (depth first, in
+        /// Hierarchy order); inactive objects are skipped unless `includeInactive`.</summary>
+        public T GetComponentInChildren<T>(bool includeInactive = false) where T : Component, new()
+        {
+            if (!includeInactive && !ActiveInHierarchy) return null;
+            if (GetComponent<T>() is { } own) return own;
+            for (int i = 0, n = ChildCount; i < n; ++i)
+                if (GetChild(i).GetComponentInChildren<T>(includeInactive) is { } found) return found;
+            return null;
+        }
+        /// <summary>The components on this object and all of its descendants (depth first).</summary>
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : Component, new()
+        {
+            var list = new System.Collections.Generic.List<T>();
+            CollectInChildren(list, includeInactive);
+            return list.ToArray();
+        }
+        private void CollectInChildren<T>(System.Collections.Generic.List<T> list, bool includeInactive) where T : Component, new()
+        {
+            if (!includeInactive && !ActiveInHierarchy) return;
+            if (GetComponent<T>() is { } own) list.Add(own);
+            for (int i = 0, n = ChildCount; i < n; ++i) GetChild(i).CollectInChildren(list, includeInactive);
+        }
+        /// <summary>A component on this object or the nearest parent that has one.</summary>
+        public T GetComponentInParent<T>() where T : Component, new()
+        {
+            for (Entity e = this; e.IsValid; e = e.Parent)
+                if (e.GetComponent<T>() is { } found) return found;
+            return null;
+        }
 
         /// <summary>Raised when this entity's collider starts touching another (any script can listen, not only this entity's).</summary>
         public event Action<Entity> CollisionEnter

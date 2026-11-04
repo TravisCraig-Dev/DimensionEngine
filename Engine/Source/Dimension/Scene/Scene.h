@@ -117,6 +117,9 @@ namespace Dimension
 
         Entity FindEntityByGuid(Guid id) const;
         Entity FindEntityByName(const std::string& name) const;
+        // The first entity / every entity with a tag (in creation order).
+        Entity FindEntityByTag(const std::string& tag) const;
+        std::vector<Entity> FindEntitiesByTag(const std::string& tag) const;
         Guid GetGuid(Entity e) const;
         size_t GetEntityCount() const { return m_Registry.AliveCount(); }
 
@@ -128,6 +131,18 @@ namespace Dimension
         void SetSiblingIndex(Entity e, size_t index);
         const std::vector<Entity>& GetRootEntities() const { return m_Roots; }
         const std::vector<Entity>& GetChildren(Entity e) const;
+
+        // ---- Active state
+        // Turns an object on or off (its Active box). While playing, the scripts of the objects it switches get
+        // OnEnable / OnDisable at once; their physics bodies follow at the next step.
+        void SetActive(Entity e, bool active);
+        // Whether e and every parent are active (computed now, unlike TransformComponent::ActiveInHierarchy).
+        bool IsActiveInHierarchy(Entity e) const;
+        // Turns one script on or off (its checkbox), with OnEnable / OnDisable while playing.
+        void SetScriptEnabled(Entity e, size_t scriptIndex, bool enabled);
+        // Gives e's scripts OnEnable / OnDisable where their state (playing, object active, script enabled) differs
+        // from the last one they were told. Also run every frame, so changes made directly to the fields count too.
+        void SyncScriptsEnabled(Entity e);
 
         // ---- Prefabs
         Entity InstantiatePrefab(AssetHandle prefab, const glm::vec3& position, Entity parent = Entity::Null());

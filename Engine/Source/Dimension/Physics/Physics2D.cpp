@@ -323,6 +323,11 @@ namespace Dimension
         {
             if (!rb.RuntimeBody) continue;
             b2BodyId id = b2LoadBodyId(rb.RuntimeBody);
+            // A layer changed while playing (a script's Layer): every shape takes the new filter.
+            b2ShapeId shapes[16];
+            int shapeCount = b2Body_GetShapes(id, shapes, 16);
+            if (shapeCount > 0 && b2Shape_GetFilter(shapes[0]).categoryBits != LayerFilter(m_Scene, e).categoryBits)
+                for (int i = 0; i < shapeCount; ++i) b2Shape_SetFilter(shapes[i], LayerFilter(m_Scene, e));
             if (b2Body_IsEnabled(id) == t.ActiveInHierarchy) continue;
             if (t.ActiveInHierarchy)
             {

@@ -856,7 +856,8 @@ namespace Dimension
                 if (!s_Classes.TryGetValue(name, out var cls)) return IntPtr.Zero;
                 var behaviour = (Behaviour)Activator.CreateInstance(cls.Type);
                 behaviour.Entity = new Entity(scene, entity);
-                return GCHandle.ToIntPtr(GCHandle.Alloc(behaviour));
+                behaviour.Handle = GCHandle.ToIntPtr(GCHandle.Alloc(behaviour));
+                return behaviour.Handle;
             }
             catch (Exception e)
             {
@@ -912,6 +913,8 @@ namespace Dimension
                     case 5: b.OnValueChanged(dt); break;
                     case 6: b.OnJointBreak(dt); break;
                     case 7: b.OnReloaded(); break;
+                    case 8: b.OnEnable(); break;
+                    case 9: b.OnDisable(); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

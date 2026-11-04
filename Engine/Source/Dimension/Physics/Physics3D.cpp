@@ -2364,6 +2364,9 @@ namespace Dimension
                 bi.SetPositionAndRotation(id, JPH::RVec3(ToJolt(t.GetWorldPosition())), ToJolt(t.GetRotationQuat()), JPH::EActivation::DontActivate);
                 bi.AddBody(id, JPH::EActivation::Activate);
             }
+            // A layer changed while playing (a script's Layer).
+            JPH::ObjectLayer layer = Layers::Make(reg.Get<TagComponent>(e).Layer, rb.Type != BodyType::Static);
+            if (bi.GetObjectLayer(id) != layer) bi.SetObjectLayer(id, layer);
         }
 
         for (auto [e, rb, t] : reg.ViewOf<RigidbodyComponent, TransformComponent>())

@@ -333,6 +333,111 @@ namespace
         runtime->OnRuntimeStop();
     }
 
+    // Records its callbacks as "<object> <callback>" (OnEnable / OnDisable order with SetActive).
+    class EnableProbe : public ScriptableEntity
+    {
+    public:
+        static inline std::vector<std::string> Log;
+        int Updates = 0;
+        void Note(const char* what) { Log.push_back(Name() + " " + what); }
+        void OnCreate() override { Note("create"); }
+        void OnEnable() override { Note("enable"); }
+        void OnDisable() override { Note("disable"); }
+        void OnDestroy() override { Note("destroy"); }
+        void OnUpdate(float) override { ++Updates; }
+    };
+
+    void TestActiveState()
+    {
+        Scene scene("Active");
+        auto& reg = scene.GetRegistry();
+        Entity group = scene.CreateEntity("Group");
+        Entity child = scene.CreateEntity("Child", group);
+        Entity off = scene.CreateEntity("Off");
+        reg.Get<TagComponent>(off).Active = false;
+        reg.Emplace<ScriptComponent>(child).Add("EnableProbe");
+        reg.Emplace<ScriptComponent>(off).Add("EnableProbe");
+        reg.Get<TagComponent>(child).Tag = "Enemy";
+        reg.Get<TagComponent>(off).Tag = "Enemy";
+
+        // Tags, on any scene.
+        CHECK(scene.FindEntityByTag("Enemy") == child && scene.FindEntitiesByTag("Enemy").size() == 2 && scene.FindEntityByTag("None").IsNull());
+
+        EnableProbe::Log.clear();
+        auto rt = scene.Clone();
+        auto& rreg = rt->GetRegistry();
+        auto log = [] { std::string s; for (auto& l : EnableProbe::Log) s += (s.empty() ? "" : ", ") + l; EnableProbe::Log.clear(); return s; };
+        rt->OnRuntimeStart();
+        // OnEnable after every OnCreate, only for active objects.
+        std::string start = log();
+        CHECK(start == "Child create, Off create, Child enable" || start == "Off create, Child create, Child enable");
+        auto* probe = static_cast<EnableProbe*>(rreg.Get<ScriptComponent>(child).Scripts[0].Instance.get());
+
+        // Turning the parent off disables the child's scripts at once; its updates stop.
+        rt->SetActive(group, false);
+        CHECK(log() == "Child disable" && !rt->IsActiveInHierarchy(child) && !rreg.Get<TransformComponent>(child).ActiveInHierarchy);
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(probe->Updates == 0 && log().empty());
+        rt->SetActive(group, true);
+        CHECK(log() == "Child enable");
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(probe->Updates == 1);
+
+        // A script's own checkbox.
+        probe->SetEnabled(false);
+        CHECK(log() == "Child disable" && !probe->IsEnabled());
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(probe->Updates == 1);
+        probe->SetEnabled(true);
+        CHECK(log() == "Child enable" && probe->IsEnabled());
+
+        // Moved under an inactive object, then that object turned on: parents first.
+        rt->SetParent(child, off);
+        CHECK(log() == "Child disable");
+        rt->SetActive(off, true);
+        CHECK(log() == "Off enable, Child enable");
+
+        // Changed without SetActive (the Inspector's box): told on the next frame.
+        rreg.Get<TagComponent>(off).Active = false;
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        std::string direct = log();
+        CHECK(direct == "Off disable, Child disable" || direct == "Child disable, Off disable");
+        rreg.Get<TagComponent>(off).Active = true;
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        log();
+
+        // OnDisable before OnDestroy, also when play stops; an object already off only gets OnDestroy.
+        rt->DestroyEntity(child);
+        CHECK(log() == "Child disable, Child destroy");
+        rt->SetActive(off, false);
+        log();
+        rt->OnRuntimeStop();
+        CHECK(log() == "Off destroy");
+
+        // A layer changed while playing reaches the colliders at the next step (raycasts by layer mask see it).
+        Scene phys("Layers");
+        Entity box3 = phys.CreateEntity("Box3D");
+        phys.GetRegistry().Emplace<RigidbodyComponent>(box3).Type = BodyType::Static;
+        phys.GetRegistry().Emplace<BoxColliderComponent>(box3);
+        Entity box2 = phys.CreateEntity("Box2D");
+        phys.GetRegistry().Get<TransformComponent>(box2).Position = { 0, 10, 0 };
+        phys.GetRegistry().Emplace<Rigidbody2DComponent>(box2).Type = BodyType::Static;
+        phys.GetRegistry().Emplace<BoxCollider2DComponent>(box2);
+        auto prt = phys.Clone();
+        prt->OnRuntimeStart();
+        uint32_t notFive = ~(1u << 5);
+        CHECK(Physics3DWorld::Raycast(*prt, { -5, 0, 0 }, { 1, 0, 0 }, 20.0f, notFive).Hit == box3);
+        CHECK(Physics2DWorld::Raycast(*prt, { -5, 10 }, { 1, 0 }, 20.0f, notFive).Hit == box2);
+        prt->GetRegistry().Get<TagComponent>(box3).Layer = 5;
+        prt->GetRegistry().Get<TagComponent>(box2).Layer = 5;
+        prt->OnUpdateRuntime(1.0f / 30.0f); // at least one fixed step
+        CHECK(Physics3DWorld::Raycast(*prt, { -5, 0, 0 }, { 1, 0, 0 }, 20.0f, notFive).Hit.IsNull());
+        CHECK(Physics2DWorld::Raycast(*prt, { -5, 10 }, { 1, 0 }, 20.0f, notFive).Hit.IsNull());
+        CHECK(Physics3DWorld::Raycast(*prt, { -5, 0, 0 }, { 1, 0, 0 }, 20.0f, 1u << 5).Hit == box3);
+        CHECK(Physics2DWorld::Raycast(*prt, { -5, 10 }, { 1, 0 }, 20.0f, 1u << 5).Hit == box2);
+        prt->OnRuntimeStop();
+    }
+
     void TestMeshImportSettings()
     {
         fs::path models = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models";
@@ -7438,6 +7543,32 @@ namespace
             fs::remove_all(daDir, pdError);
         }
 
+        // Hierarchy, tags and SetActive from C#: the Sandbox's CoinGroup listens to its children (OnEnable), and the
+        // Player falling onto a coin turns it off; it comes back after RespawnSeconds.
+        {
+            Scene cg("Coins");
+            auto& creg = cg.GetRegistry();
+            Entity group = cg.CreateEntity("Coins");
+            creg.Emplace<ScriptComponent>(group).Add("Game.CoinGroup").Fields["RespawnSeconds"] = 0.5f;
+            Entity coin = cg.CreateEntity("Coin", group), other = cg.CreateEntity("Far Coin", group);
+            creg.Get<TransformComponent>(other).Position = { 20, 0, 0 };
+            for (Entity c : { coin, other }) creg.Emplace<CircleCollider2DComponent>(c).IsTrigger = true;
+            Entity player = cg.CreateEntity("Hero");
+            creg.Get<TagComponent>(player).Tag = "Player";
+            creg.Get<TransformComponent>(player).Position = { 0, 1.5f, 0 };
+            creg.Emplace<Rigidbody2DComponent>(player);
+            creg.Emplace<BoxCollider2DComponent>(player).Size = { 0.5f, 0.5f };
+            auto rt = cg.Clone();
+            rt->OnRuntimeStart();
+            auto& rreg = rt->GetRegistry();
+            int frames = 0;
+            while (rreg.Get<TagComponent>(coin).Active && frames < 120) { rt->OnUpdateRuntime(1.0f / 60.0f); ++frames; }
+            CHECK(!rreg.Get<TagComponent>(coin).Active && rreg.Get<TagComponent>(other).Active && frames < 120);
+            for (int i = 0; i < 40; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); // 0.67 s
+            CHECK(rreg.Get<TagComponent>(coin).Active);
+            rt->OnRuntimeStop();
+        }
+
         // Coroutines (WaitForSeconds, nested routines) and InvokeRepeating from C#.
         {
             Scene co("Coroutines");
@@ -11110,6 +11241,7 @@ int main(int argc, char** argv)
     ScriptRegistry::Register<BreakCounter>("BreakCounter");
     ScriptRegistry::Register<CounterA>("CounterA");
     ScriptRegistry::Register<CounterB>("CounterB");
+    ScriptRegistry::Register<EnableProbe>("EnableProbe");
     ScriptRegistry::Register<TestScript>("TestScript").Field("Speed", &TestScript::Speed).Field("Target", &TestScript::Target);
 
     Run("Registry basics", TestRegistryBasics);
@@ -11119,6 +11251,7 @@ int main(int argc, char** argv)
     Run("Serialization round trip", TestSerializationRoundTrip);
     Run("Duplicate entity", TestDuplicateRemapsReferences);
     Run("Script runtime", TestScriptsRuntime);
+    Run("Active state and tags", TestActiveState);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

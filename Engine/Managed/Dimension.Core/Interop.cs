@@ -127,6 +127,10 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, byte*, IntPtr, ulong, byte*> Localization;
         // A data asset's file as JSON ({"class", "fields"}), or null.
         public delegate* unmanaged<ulong, byte*> DataAssetFile;
+        // Hierarchy, active state, layer and tag: scene, entity, op (see Entity in Api.cs), argument, text.
+        public delegate* unmanaged<IntPtr, ulong, int, ulong, byte*, ulong> Hierarchy;
+        public delegate* unmanaged<IntPtr, ulong, byte*> GetTag;
+        public delegate* unmanaged<IntPtr, byte*, ulong*, int, int> FindAllWithTag;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

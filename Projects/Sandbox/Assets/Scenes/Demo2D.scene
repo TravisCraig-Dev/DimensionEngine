@@ -451,8 +451,48 @@
       }
     },
     {
-      "guid": 500048,
+      "guid": 500053,
       "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Coins",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.CoinGroup",
+              "Fields": {
+                "RespawnSeconds": 5.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 500048,
+      "parent": 500053,
       "components": {
         "Tag": {
           "Name": "Coin 1",
@@ -524,7 +564,7 @@
     },
     {
       "guid": 500049,
-      "parent": 0,
+      "parent": 500053,
       "components": {
         "Tag": {
           "Name": "Coin 2",
@@ -596,7 +636,7 @@
     },
     {
       "guid": 500050,
-      "parent": 0,
+      "parent": 500053,
       "components": {
         "Tag": {
           "Name": "Coin 3",
@@ -668,7 +708,7 @@
     },
     {
       "guid": 500051,
-      "parent": 0,
+      "parent": 500053,
       "components": {
         "Tag": {
           "Name": "Coin 4",

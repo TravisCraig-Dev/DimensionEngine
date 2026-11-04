@@ -94,7 +94,11 @@ namespace Dimension
         if (m_Running)
         {
             if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
-                for (auto& inst : sc->LiveInstances(false)) inst->OnDestroy();
+                for (auto& inst : sc->LiveInstances(false))
+                {
+                    if (inst->m_EnableNotified) { inst->m_EnableNotified = false; inst->OnDisable(); }
+                    inst->OnDestroy();
+                }
             if (m_Physics2D) m_Physics2D->OnEntityDestroyed(e);
             if (m_Physics3D) m_Physics3D->OnEntityDestroyed(e);
             if (m_Audio) m_Audio->OnEntityDestroyed(e);
@@ -180,6 +184,75 @@ namespace Dimension
         return false;
     }
 
+    Entity Scene::FindEntityByTag(const std::string& tag) const
+    {
+        Entity found = Entity::Null();
+        m_Registry.EachEntity([&](Entity e) {
+            if (found.IsNull() && m_Registry.Get<TagComponent>(e).Tag == tag) found = e;
+        });
+        return found;
+    }
+
+    std::vector<Entity> Scene::FindEntitiesByTag(const std::string& tag) const
+    {
+        std::vector<Entity> found;
+        m_Registry.EachEntity([&](Entity e) {
+            if (m_Registry.Get<TagComponent>(e).Tag == tag) found.push_back(e);
+        });
+        return found;
+    }
+
+    // ---- Active state ------------------------------------------------------------------
+
+    bool Scene::IsActiveInHierarchy(Entity e) const
+    {
+        for (Entity p = e; !p.IsNull(); p = GetParent(p))
+            if (!m_Registry.Get<TagComponent>(p).Active) return false;
+        return IsValid(e);
+    }
+
+    void Scene::SetActive(Entity e, bool active)
+    {
+        if (!IsValid(e)) return;
+        m_Registry.Get<TagComponent>(e).Active = active;
+        // The subtree's ActiveInHierarchy (and world matrices) now, so code asking right after sees the new state.
+        Entity parent = GetParent(e);
+        glm::mat4 parentWorld = parent.IsNull() ? glm::mat4(1.0f) : m_Registry.Get<TransformComponent>(parent).World;
+        UpdateTransformRecursive(e, parentWorld, parent.IsNull() || IsActiveInHierarchy(parent));
+        if (!m_Running) return;
+        std::vector<Entity> subtree{ e };
+        for (size_t i = 0; i < subtree.size(); ++i)
+            for (Entity c : GetChildren(subtree[i])) subtree.push_back(c);
+        for (Entity x : subtree)
+            if (IsValid(x)) SyncScriptsEnabled(x); // a callback may destroy objects
+    }
+
+    void Scene::SetScriptEnabled(Entity e, size_t scriptIndex, bool enabled)
+    {
+        auto* sc = IsValid(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr;
+        if (!sc || scriptIndex >= sc->Scripts.size()) return;
+        sc->Scripts[scriptIndex].Enabled = enabled;
+        SyncScriptsEnabled(e);
+    }
+
+    void Scene::SyncScriptsEnabled(Entity e)
+    {
+        auto* sc = m_Registry.TryGet<ScriptComponent>(e);
+        if (!sc) return;
+        bool active = m_Running && IsActiveInHierarchy(e);
+        // Copied first: the callbacks may add scripts or objects.
+        std::vector<std::pair<std::shared_ptr<ScriptableEntity>, bool>> changes;
+        for (auto& s : sc->Scripts)
+            if (s.Instance && s.Instance->m_EnableNotified != (active && s.Enabled)) changes.emplace_back(s.Instance, active && s.Enabled);
+        for (auto& [inst, on] : changes)
+        {
+            if (inst->m_EnableNotified == on) continue;
+            inst->m_EnableNotified = on;
+            if (on) inst->OnEnable();
+            else inst->OnDisable();
+        }
+    }
+
     std::vector<Entity>& Scene::SiblingList(Entity e)
     {
         Entity parent = GetParent(e);
@@ -230,6 +303,8 @@ namespace Dimension
             }
         }
         UpdateTransforms();
+        // Moved under an inactive parent (or out from under one): its scripts are told at once.
+        if (m_Running) SetActive(child, m_Registry.Get<TagComponent>(child).Active);
     }
 
     void Scene::SetSiblingIndex(Entity e, size_t index)
@@ -326,6 +401,8 @@ namespace Dimension
             created.push_back(CreateScriptInstance(s.E, script, *info, resolver));
         }
         for (auto& inst : created) inst->OnScriptsReloaded();
+        for (auto& s : saved)
+            if (IsValid(s.E)) SyncScriptsEnabled(s.E); // OnEnable again (listeners started over)
         Log::Info("Reloaded {} live script(s) while playing", created.size());
         return ok;
     }
@@ -355,6 +432,7 @@ namespace Dimension
         resolver.FromGuid = [this](uint64_t g) { return FindEntityByGuid(Guid(g)); };
 
         std::vector<std::shared_ptr<ScriptableEntity>> created;
+        std::vector<Entity> owners;
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
         {
             for (auto& script : sc.Scripts)
@@ -367,10 +445,14 @@ namespace Dimension
                     continue;
                 }
                 created.push_back(CreateScriptInstance(e, script, *info, resolver));
+                if (owners.empty() || owners.back() != e) owners.push_back(e);
             }
         }
-        // OnCreate may create entities/scripts, so call after the iteration (in attachment order, like Awake).
+        // OnCreate may create entities/scripts, so call after the iteration (in attachment order, like Awake), then
+        // OnEnable for the scripts of active objects.
         for (auto& inst : created) inst->OnCreate();
+        for (Entity e : owners)
+            if (IsValid(e)) SyncScriptsEnabled(e);
     }
 
     void Scene::OnRuntimeStart()
@@ -500,6 +582,9 @@ namespace Dimension
         if (!m_Running) return;
         Input::SetKeyboardCapturedByUI(false);
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
+            for (auto& inst : sc.LiveInstances(false))
+                if (inst->m_EnableNotified) { inst->m_EnableNotified = false; inst->OnDisable(); }
+        for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
             for (auto& inst : sc.LiveInstances(false)) inst->OnDestroy();
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
             for (auto& script : sc.Scripts) script.Instance.reset();
@@ -580,6 +665,11 @@ namespace Dimension
 
         {
             DIM_PROFILE_SCOPE("Scripts");
+            // OnEnable / OnDisable for changes made without SetActive / SetScriptEnabled (the Inspector's boxes).
+            std::vector<Entity> scripted;
+            for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>()) scripted.push_back(e);
+            for (Entity e : scripted)
+                if (IsValid(e)) SyncScriptsEnabled(e);
             m_Registry.ViewOf<ScriptComponent>().Each([&](Entity e, ScriptComponent& sc) {
                 if (!m_Registry.Get<TransformComponent>(e).ActiveInHierarchy) return;
                 for (auto& inst : sc.LiveInstances(true))

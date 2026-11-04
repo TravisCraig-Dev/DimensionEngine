@@ -26,6 +26,10 @@ namespace Dimension
         virtual void OnUpdate(float dt) {}
         virtual void OnFixedUpdate(float dt) {}
         virtual void OnDestroy() {}
+        // While playing: the script starts counting (after OnCreate, when its object is active and it is enabled) or
+        // stops (its object or a parent turned off, the script disabled, or before OnDestroy).
+        virtual void OnEnable() {}
+        virtual void OnDisable() {}
         virtual void OnCollisionEnter(Entity other) {}
         virtual void OnCollisionExit(Entity other) {}
         virtual void OnTriggerEnter(Entity other) {}
@@ -68,6 +72,32 @@ namespace Dimension
         Entity Find(const std::string& name) const { return m_Scene->FindEntityByName(name); }
         Entity Instantiate(AssetHandle prefab, const glm::vec3& position) { return m_Scene->InstantiatePrefab(prefab, position); }
         void Destroy(Entity e) { m_Scene->DestroyEntityDeferred(e); }
+
+        // Hierarchy, tags and the active state (like Unity's GameObject.SetActive, CompareTag and FindWithTag).
+        Entity Parent() const { return m_Scene->GetParent(m_Entity); }
+        const std::vector<Entity>& Children() const { return m_Scene->GetChildren(m_Entity); }
+        void SetParent(Entity parent, bool keepWorldTransform = true) { m_Scene->SetParent(m_Entity, parent, keepWorldTransform); }
+        void SetActive(bool active) { m_Scene->SetActive(m_Entity, active); }
+        bool IsActiveInHierarchy() const { return m_Scene->IsActiveInHierarchy(m_Entity); }
+        bool CompareTag(const std::string& tag) const { return m_Scene->GetRegistry().Get<TagComponent>(m_Entity).Tag == tag; }
+        Entity FindWithTag(const std::string& tag) const { return m_Scene->FindEntityByTag(tag); }
+        std::vector<Entity> FindAllWithTag(const std::string& tag) const { return m_Scene->FindEntitiesByTag(tag); }
+        // Whether this script is enabled (its checkbox); turning it off stops its updates and calls OnDisable.
+        bool IsEnabled() const
+        {
+            auto* sc = m_Scene->GetRegistry().TryGet<ScriptComponent>(m_Entity);
+            if (sc)
+                for (auto& s : sc->Scripts)
+                    if (s.Instance.get() == this) return s.Enabled;
+            return false;
+        }
+        void SetEnabled(bool enabled)
+        {
+            if (auto* sc = m_Scene->GetRegistry().TryGet<ScriptComponent>(m_Entity))
+                for (size_t i = 0; i < sc->Scripts.size(); ++i)
+                    if (sc->Scripts[i].Instance.get() == this) return m_Scene->SetScriptEnabled(m_Entity, i, enabled);
+        }
+
         RaycastHit Raycast(const glm::vec3& origin, const glm::vec3& dir, float maxDistance = 1000.0f)
         {
             return Physics3DWorld::Raycast(*m_Scene, origin, dir, maxDistance);
@@ -173,6 +203,7 @@ namespace Dimension
         friend class Scene;
         Entity m_Entity;
         Scene* m_Scene = nullptr;
+        bool m_EnableNotified = false; // OnEnable was called (and OnDisable not since)
         std::vector<Timer> m_Timers;
         int m_NextTimer = 0;
         std::vector<std::unique_ptr<RunningCoroutine>> m_Coroutines;
