@@ -1,4 +1,5 @@
 #include <Dimension/Terrain/Terrain.h>
+#include <Dimension/Asset/AssetPack.h>
 #include "EditorLayer.h"
 #include "Dimension/Platform/AppIcon.h"
 #include "Dimension/ImGui/ImGuiLayer.h"
@@ -4487,6 +4488,10 @@ namespace Editor
         ImGui::SameLine();
         UI::HelpMarker("Copies only the assets the build's scenes use (following prefabs, materials, controllers and models), "
                        "plus everything in Assets/Resources for scripts that load files by path.");
+        changed |= ImGui::Checkbox("Pack Assets", &config.PackAssets);
+        ImGui::SameLine();
+        UI::HelpMarker("Ships the assets as one Assets.pak instead of a folder of files. The game unpacks it once per version "
+                       "into the player's local app data on first start.");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 80);
         changed |= ImGui::InputTextWithHint("##folder", "Output folder", &config.BuildFolder);
         ImGui::SameLine();
@@ -4604,6 +4609,18 @@ namespace Editor
         }
         else
             fs::copy(Project::GetAssetsDirectory(), projectOut / "Assets", fs::copy_options::recursive, ec);
+        if (config.PackAssets && !ec)
+        {
+            // One archive instead of the folder (the game unpacks it on first start).
+            fs::path assetsOut = projectOut / "Assets";
+            if (!AssetPack::Write(projectOut / "Assets.pak", assetsOut, AssetPack::ListFiles(assetsOut)))
+            {
+                Log::Error("Packing the assets failed");
+                return false;
+            }
+            fs::remove_all(assetsOut, ec);
+            Log::Info("Packed the assets into Assets.pak ({:.1f} MB)", fs::file_size(projectOut / "Assets.pak", ec) / 1048576.0);
+        }
         // Work already done in the editor: convex decompositions (Mesh Colliders) and imported textures and models
         // (keyed by their path in Assets, so the game reads them instead of decoding the source files again).
         for (const char* cache : { "Convex", "Import" })

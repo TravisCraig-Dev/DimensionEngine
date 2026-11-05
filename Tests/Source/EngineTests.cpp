@@ -14,6 +14,7 @@
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/CameraStack.h>
 #include <Dimension/Renderer/PostProcess.h>
+#include <Dimension/Asset/AssetPack.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Scene/SceneSearch.h>
@@ -6317,6 +6318,49 @@ namespace
         fs::path lutPath = fs::temp_directory_path() / "dimension_neutral_lut.png";
         CHECK(PostProcess::WriteNeutralLookup(lutPath, 16) && fs::file_size(lutPath) > 100);
         fs::remove(lutPath);
+    }
+
+    // Asset packs: a folder packed into one file and unpacked again byte for byte; a changed file changes the hash
+    // (the unpacked copy's name); paths leaving the folder are refused.
+    void TestAssetPack()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_pack_test";
+        fs::remove_all(dir);
+        fs::create_directories(dir / "src" / "Scenes");
+        std::ofstream(dir / "src" / "a.txt") << "hello";
+        std::ofstream(dir / "src" / "Scenes" / "b.scene") << "{\"x\": 1}";
+        std::ofstream(dir / "src" / "empty.bin");
+        auto files = AssetPack::ListFiles(dir / "src");
+        CHECK(files.size() == 3);
+        CHECK(AssetPack::Write(dir / "Assets.pak", dir / "src", files));
+        std::vector<AssetPack::Entry> entries;
+        uint64_t hash = 0;
+        CHECK(AssetPack::Read(dir / "Assets.pak", entries, hash) && entries.size() == 3);
+        CHECK(AssetPack::Extract(dir / "Assets.pak", dir / "out"));
+        auto read = [](const fs::path& p) { std::ifstream in(p, std::ios::binary); return std::string((std::istreambuf_iterator<char>(in)), {}); };
+        CHECK(read(dir / "out" / "a.txt") == "hello" && read(dir / "out" / "Scenes" / "b.scene") == "{\"x\": 1}" && fs::exists(dir / "out" / "empty.bin"));
+        std::ofstream(dir / "src" / "a.txt") << "hellO";
+        CHECK(AssetPack::Write(dir / "Assets2.pak", dir / "src", files));
+        uint64_t hash2 = 0;
+        CHECK(AssetPack::Read(dir / "Assets2.pak", entries, hash2) && hash2 != hash);
+        // A pack whose table leaves the folder is refused.
+        {
+            std::ofstream bad(dir / "bad.pak", std::ios::binary);
+            bad.write("DIMPAK1", 8);
+            uint32_t count = 1;
+            uint64_t h = 0, offset = 0, size = 0;
+            std::string path = "../evil.txt";
+            uint32_t length = (uint32_t)path.size();
+            bad.write((const char*)&count, 4);
+            bad.write((const char*)&h, 8);
+            bad.write((const char*)&length, 4);
+            bad.write(path.data(), length);
+            bad.write((const char*)&offset, 8);
+            bad.write((const char*)&size, 8);
+        }
+        CHECK(!AssetPack::Read(dir / "bad.pak", entries, hash) && !AssetPack::Extract(dir / "bad.pak", dir / "badout"));
+        CHECK(!fs::exists(dir / "evil.txt"));
+        fs::remove_all(dir);
     }
 
     // Camera stacking: other cameras draw over the primary only when their viewport is smaller than the screen, in
@@ -13918,6 +13962,7 @@ int main(int argc, char** argv)
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);
     Run("Camera stack", TestCameraStack);
+    Run("Asset packs", TestAssetPack);
     Run("Post process volumes", TestPostProcessVolumes);
     Run("UI widgets", TestUIWidgets);
     Run("UI dropdown and scrollbar", TestUIDropdownAndScrollbar);

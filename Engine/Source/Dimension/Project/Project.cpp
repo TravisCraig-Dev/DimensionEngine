@@ -1,4 +1,5 @@
 #include "Dimension/Project/Project.h"
+#include "Dimension/Asset/AssetPack.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Core/Log.h"
 #include <nlohmann/json.hpp>
@@ -10,6 +11,7 @@ namespace Dimension
     {
         ProjectConfig s_Config;
         fs::path s_Directory;
+        fs::path s_AssetsDirectory; // Assets, or a packed game's unpacked copy
         bool s_Open = false;
     }
 
@@ -17,8 +19,10 @@ namespace Dimension
     {
         std::error_code ec;
         fs::path dir = fs::weakly_canonical(directory, ec);
-        fs::create_directories(dir / "Assets", ec);
         s_Directory = dir;
+        s_AssetsDirectory = dir / "Assets";
+        bool packed = !fs::exists(dir / "Assets") && fs::exists(dir / "Assets.pak");
+        if (!packed) fs::create_directories(dir / "Assets", ec);
         s_Config = ProjectConfig();
         s_Config.Name = dir.filename().string();
 
@@ -41,6 +45,7 @@ namespace Dimension
                 s_Config.BuildFolder = j.value("buildFolder", std::string());
                 s_Config.Icon = Guid(j.value("icon", uint64_t(0)));
                 s_Config.StripUnusedAssets = j.value("stripUnusedAssets", true);
+                s_Config.PackAssets = j.value("packAssets", false);
                 if (j.contains("audioMixer") && j["audioMixer"].is_array() && !j["audioMixer"].empty())
                 {
                     s_Config.MixerGroups.clear();
@@ -127,7 +132,14 @@ namespace Dimension
         }
         s_Open = true;
         AudioMixer::MarkStructureDirty(); // a new project means a new mixer graph
-        AssetManager::Init(dir / "Assets");
+        if (packed)
+        {
+            // A shipped game: its assets come in one archive, unpacked once per version into the user's app data.
+            fs::path mounted = AssetPack::Mount(dir / "Assets.pak", s_Config.Name);
+            if (mounted.empty()) return false;
+            s_AssetsDirectory = mounted;
+        }
+        AssetManager::Init(s_AssetsDirectory);
         if (!fs::exists(file)) Save();
         Log::Info("Opened project '{}' ({})", s_Config.Name, dir.string());
         return true;
@@ -191,6 +203,7 @@ namespace Dimension
                           { "buildFolder", s_Config.BuildFolder },
                           { "icon", (uint64_t)s_Config.Icon },
                           { "stripUnusedAssets", s_Config.StripUnusedAssets },
+                          { "packAssets", s_Config.PackAssets },
                           { "physicsLayers", s_Config.PhysicsLayers },
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "navAreas", navAreas },
@@ -208,5 +221,5 @@ namespace Dimension
     bool Project::IsOpen() { return s_Open; }
     ProjectConfig& Project::GetConfig() { return s_Config; }
     const fs::path& Project::GetDirectory() { return s_Directory; }
-    fs::path Project::GetAssetsDirectory() { return s_Directory / "Assets"; }
+    fs::path Project::GetAssetsDirectory() { return s_AssetsDirectory.empty() ? s_Directory / "Assets" : s_AssetsDirectory; }
 }

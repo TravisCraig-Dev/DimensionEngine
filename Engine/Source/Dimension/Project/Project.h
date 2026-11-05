@@ -28,6 +28,7 @@ namespace Dimension
         std::string BuildFolder;              // last output folder used by Build
         AssetHandle Icon = AssetHandle::None(); // texture used as the game's executable and window icon (None = engine icon)
         bool StripUnusedAssets = true;        // Build copies only assets the build scenes reach (plus Assets/Resources)
+        bool PackAssets = false;              // Build packs the shipped assets into one Assets.pak (see AssetPack)
 
         std::vector<AudioMixerGroup> MixerGroups = AudioMixer::DefaultGroups();
         std::vector<AudioMixerSnapshot> MixerSnapshots;
@@ -93,6 +94,7 @@ namespace Dimension
 
         static ProjectConfig& GetConfig();
         static const fs::path& GetDirectory();
+        // The project's Assets folder; a shipped game with Assets.pak instead uses its unpacked copy.
         static fs::path GetAssetsDirectory();
     };
 }
