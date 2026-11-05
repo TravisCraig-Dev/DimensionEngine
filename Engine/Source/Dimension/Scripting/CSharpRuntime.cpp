@@ -23,6 +23,7 @@
 #include "Dimension/Project/InputActions.h"
 #include "Dimension/Project/Localization.h"
 #include "Dimension/Asset/DataAsset.h"
+#include "Dimension/UI/UI.h"
 #include <climits>
 #include <cmath>
 #include <limits>
@@ -278,6 +279,10 @@ namespace Dimension
             void (*Body2DOp)(void*, uint64_t, int, float*);
             // A component's String field by label: 0 get, 1 set to value. Null when there is no such field.
             const char* (*ComponentString)(void*, uint64_t, const char*, const char*, int, const char*);
+            // UI input: 0 pointer over UI, 1 the selected element (ids[0]), 2 select ids[0] (~0 clears), 3 the elements
+            // under v (xy pixels) into ids, topmost first (returns the total), 4 the element under the pointer (ids[0]),
+            // 5 whether keyboard / gamepad navigation is on.
+            int (*UIEvents)(void*, int, float*, uint64_t*, int);
         };
 
         // Background scene loads started from C#, by id.
@@ -2017,6 +2022,32 @@ namespace Dimension
                 case 5: AudioEngine::SetPaused(v != 0.0); return 0.0;
                 case 6: if (s) AudioWorld::PlayScheduled(S(s), Unpack(e), v); return 0.0;
                 default: if (s) AudioWorld::SetScheduledEndTime(S(s), Unpack(e), v); return 0.0;
+                }
+            };
+            a.UIEvents = [](void* s, int op, float* v, uint64_t* ids, int max) -> int {
+                if (!s) return 0;
+                Scene& scene = S(s);
+                auto put = [&](Entity e) { if (max > 0) ids[0] = e.IsNull() || !scene.IsValid(e) ? ~0ull : Pack(e); return e.IsNull() ? 0 : 1; };
+                switch (op)
+                {
+                case 0: return scene.IsPointerOverUI() ? 1 : 0;
+                case 1: return put(scene.GetUISelected());
+                case 2:
+                {
+                    Entity e = ids[0] == ~0ull ? Entity::Null() : Unpack(ids[0]);
+                    if (!e.IsNull() && !scene.IsValid(e)) e = Entity::Null();
+                    scene.SetUISelected(e);
+                    if (!e.IsNull()) scene.SetUINavigating(true); // shown and pressed by Submit, as after arrow keys
+                    return 1;
+                }
+                case 3:
+                {
+                    auto under = UI::ElementsAt(scene, { v[0], v[1] }, scene.GetViewSize());
+                    for (int i = 0; i < (int)under.size() && i < max; ++i) ids[i] = Pack(under[i]);
+                    return (int)under.size();
+                }
+                case 4: return put(scene.GetUIHovered());
+                default: return scene.IsUINavigating() ? 1 : 0;
                 }
             };
             a.ComponentString = [](void* s, uint64_t e, const char* component, const char* field, int op, const char* value) -> const char* {

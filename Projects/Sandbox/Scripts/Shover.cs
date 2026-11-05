@@ -15,7 +15,7 @@ namespace Game
 
         public override void OnUpdate(float dt)
         {
-            if (!Input.GetMouseButtonDown(Button) || Camera.Main == null) return;
+            if (!Input.GetMouseButtonDown(Button) || EventSystem.IsPointerOverUI || Camera.Main == null) return;
             Ray ray = Camera.Main.ScreenPointToRay(Input.MousePosition);
             if (!Physics.SphereCast(ray, Radius, out RaycastHit hit, 500.0f)) return;
             if (hit.Entity.GetComponent<Rigidbody>() is not { } body) return;

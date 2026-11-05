@@ -12,7 +12,7 @@ namespace Game
 
         public override void OnUpdate(float dt)
         {
-            if (!Input.GetMouseButtonDown(0) || Camera.Main == null) return;
+            if (!Input.GetMouseButtonDown(0) || EventSystem.IsPointerOverUI || Camera.Main == null) return; // not a click on a button
             Vector3 world = Camera.Main.ScreenToWorldPoint(new Vector3(Input.MousePosition, 1.0f));
             Entity under = Physics2D.OverlapPoint(new Vector2(world.X, world.Y));
             if (!under.IsValid || under.GetComponent<Rigidbody2D>() is not { } body) return;

@@ -745,6 +745,38 @@ namespace Dimension
         public float Scale { get { float* v = stackalloc float[5]; return Native.Api.UIRectScreen(Entity.Scene, Entity.Id, v) != 0 ? v[4] : 1.0f; } }
         /// <summary>Whether a screen point (the mouse) is over it (see <see cref="ScreenRect"/>).</summary>
         public bool ContainsScreenPoint(Vector2 screen) => ScreenRect.Contains(screen);
+
+        /// <summary>
+        /// A screen point (pixels) in this element's own space, in canvas units from its pivot (Unity's
+        /// RectTransformUtility.ScreenPointToLocalPointInRectangle; y grows down here, as anchors do). With
+        /// <see cref="LocalRect"/> it says where on the element a click landed (a slider of your own, a map).
+        /// </summary>
+        public Vector2 ScreenPointToLocalPoint(Vector2 screen)
+        {
+            float* v = stackalloc float[5];
+            if (Native.Api.UIRectScreen(Entity.Scene, Entity.Id, v) == 0) return default;
+            Vector2 min = new(v[0], v[1]), max = new(v[2], v[3]);
+            Vector2 pivot = min + Pivot * (max - min);
+            return (screen - pivot) / MathF.Max(v[4], 1e-4f);
+        }
+        /// <summary>A screen point as a fraction of this element (0,0 its top-left corner, 1,1 its bottom-right).</summary>
+        public Vector2 ScreenPointToNormalized(Vector2 screen)
+        {
+            Rect r = ScreenRect;
+            if (r.Width <= 0 || r.Height <= 0) return default;
+            return new Vector2((screen.X - r.X) / r.Width, (screen.Y - r.Y) / r.Height);
+        }
+        /// <summary>Its rect in its own space (canvas units, from its pivot; Unity's rect.rect), as laid out.</summary>
+        public Rect LocalRect
+        {
+            get
+            {
+                Rect r = ScreenRect;
+                float s = MathF.Max(Scale, 1e-4f);
+                Vector2 size = new(r.Width / s, r.Height / s);
+                return new Rect(-Pivot.X * size.X, -Pivot.Y * size.Y, size.X, size.Y);
+            }
+        }
     }
 
     /// <summary>

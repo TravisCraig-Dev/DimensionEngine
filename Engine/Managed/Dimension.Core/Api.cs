@@ -942,6 +942,61 @@ namespace Dimension
         }
     }
 
+    /// <summary>
+    /// UI input as Unity's EventSystem gives it, so scripts can mix UI and gameplay input: whether the pointer is over
+    /// UI (a click on a button should not also shoot), the selected widget (keyboard / gamepad navigation), and the UI
+    /// elements under a screen point. Points are in pixels, top-left origin, like <see cref="Input.MousePosition"/>.
+    /// </summary>
+    public static unsafe class EventSystem
+    {
+        private static int Op(int op, ulong* ids = null, int max = 0, float* v = null) => Native.Api.UIEvents(Native.CurrentScene, op, v, ids, max);
+        private static Entity Get(int op)
+        {
+            ulong id = ulong.MaxValue;
+            return Op(op, &id, 1) != 0 && id != ulong.MaxValue ? new Entity(Native.CurrentScene, id) : Entity.Null;
+        }
+
+        /// <summary>Whether the pointer is over a UI element that takes it (a widget or an image; not plain text), this
+        /// frame. Gameplay clicks should check it first.</summary>
+        public static bool IsPointerOverUI => Op(0) != 0;
+        /// <summary>Unity's name for <see cref="IsPointerOverUI"/>.</summary>
+        public static bool IsPointerOverGameObject() => IsPointerOverUI;
+        /// <summary>The topmost UI element under the pointer this frame (Null when none).</summary>
+        public static Entity PointerOver => Get(4);
+
+        /// <summary>The widget selected for keyboard / gamepad navigation (Null when none): Submit presses it, the arrows
+        /// move from it. A click selects the clicked widget.</summary>
+        public static Entity CurrentSelected => Get(1);
+        /// <summary>Selects a widget (Null clears the selection), as the arrow keys would: it shows highlighted and Submit
+        /// presses it (e.g. a menu's first button when it opens, for gamepads). A widget that cannot be selected
+        /// (hidden, not interactable, not a widget) is dropped at the next UI update.</summary>
+        public static void SetSelected(Entity widget)
+        {
+            ulong id = widget.IsValid ? widget.Id : ulong.MaxValue;
+            Op(2, &id, 1);
+        }
+        /// <summary>True after arrow keys / D-pad (or <see cref="SetSelected"/>) until the next mouse click.</summary>
+        public static bool IsNavigating => Op(5) != 0;
+
+        /// <summary>The UI elements that take the pointer under a screen point, topmost first.</summary>
+        public static Entity[] RaycastAll(Vector2 screenPoint)
+        {
+            int count = Op(3, null, 0, (float*)&screenPoint);
+            if (count == 0) return Array.Empty<Entity>();
+            ulong[] ids = new ulong[count];
+            fixed (ulong* p = ids) count = Math.Min(count, Op(3, p, ids.Length, (float*)&screenPoint));
+            var result = new Entity[count];
+            for (int i = 0; i < count; ++i) result[i] = new Entity(Native.CurrentScene, ids[i]);
+            return result;
+        }
+        /// <summary>The topmost UI element that takes the pointer under a screen point (Null when none).</summary>
+        public static Entity Raycast(Vector2 screenPoint)
+        {
+            ulong id = 0;
+            return Op(3, &id, 1, (float*)&screenPoint) > 0 ? new Entity(Native.CurrentScene, id) : Entity.Null;
+        }
+    }
+
     public static unsafe class Physics
     {
         /// <summary>Layer mask with every layer except "Ignore Raycast" (the default for queries).</summary>

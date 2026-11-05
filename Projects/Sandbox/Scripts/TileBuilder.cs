@@ -20,7 +20,7 @@ namespace Game
 
         public override void OnUpdate(float dt)
         {
-            if (m_Map == null || !Input.GetMouseButtonDown(1) || Camera.Main == null) return;
+            if (m_Map == null || !Input.GetMouseButtonDown(1) || EventSystem.IsPointerOverUI || Camera.Main == null) return;
             Vector3 world = Camera.Main.ScreenToWorldPoint(new Vector3(Input.MousePosition, 1.0f));
             Vector2Int cell = m_Map.WorldToCell(world);
             bool dig = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);

@@ -55,6 +55,10 @@ namespace Dimension
         // Pointer/keyboard handling for all widgets; dispatches script events. Returns the topmost UI element under the pointer.
         Entity Update(Scene& scene, const PointerState& pointer, const glm::vec2& screenSize, float dt = 0.0f);
 
+        // The UI elements that take the pointer (widgets and images, not text) under a point (render-target pixels),
+        // topmost first, as laid out now.
+        std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screenSize);
+
         void BuildDrawList(Scene& scene, const glm::vec2& screenSize, std::vector<DrawCommand>& out);
 
         // Where keyboard/gamepad navigation goes from each reachable widget in each direction (explicit links and

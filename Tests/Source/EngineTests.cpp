@@ -9502,6 +9502,64 @@ namespace
             CHECK(glm::dot(forward(), aim) > 0.9999f && rt->GetRegistry().Get<MeshRendererComponent>(barrel).Emission > 1.0f);
             rt->OnRuntimeStop();
         }
+        // C# EventSystem: the Sandbox's PointerReadout names the button under the pointer and where on it
+        // (EventSystem.PointerOver, UIRect.ScreenPointToNormalized), Tab selects its First Button and Tab again clears it
+        // (SetSelected / CurrentSelected); UI::ElementsAt lists what takes the pointer, topmost first.
+        {
+            Scene us("EventSystem");
+            auto& ur = us.GetRegistry();
+            Entity canvas = us.CreateEntity("Canvas");
+            ur.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+            auto button = [&](const char* name, glm::vec2 at) {
+                Entity b = us.CreateEntity(name, canvas);
+                auto& r = ur.Emplace<UIRectComponent>(b);
+                r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+                r.Position = at;
+                r.Size = { 200, 50 };
+                ur.Emplace<UIImageComponent>(b);
+                ur.Emplace<UIButtonComponent>(b);
+                return b;
+            };
+            Entity play = button("Play", { 0, 0 });
+            Entity quit = button("Quit", { 0, 100 });
+            Entity icon = us.CreateEntity("Icon", quit); // an image on the Quit button, drawn over it
+            {
+                auto& r = ur.Emplace<UIRectComponent>(icon);
+                r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+                r.Size = { 20, 20 };
+                ur.Emplace<UIImageComponent>(icon);
+            }
+            Entity readout = us.CreateEntity("Readout", canvas);
+            ur.Emplace<UIRectComponent>(readout).Position = { 400, 400 };
+            ur.Emplace<UITextComponent>(readout).Text = "";
+            ur.Emplace<ScriptComponent>(readout).Add("Game.PointerReadout").Fields["FirstButton"] = (uint64_t)us.GetGuid(play);
+            us.UpdateTransforms();
+            auto rt = us.Clone();
+            rt->OnRuntimeStart();
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            auto frame = [&](glm::vec2 pointer, bool tab = false) {
+                if (tab) Input::SimulateKey(Key::Tab, true);
+                rt->SetUIInput(pointer, false, { 800, 600 });
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                if (tab) Input::SimulateKey(Key::Tab, false);
+                return rt->GetRegistry().Get<UITextComponent>(readout).Text;
+            };
+            std::string text = frame({ 50, 25 });
+            CHECK(rt->IsPointerOverUI() && text == "Pointer over Play (25%, 50%); selected: none (Tab)");
+            text = frame({ 600, 500 }, true);
+            CHECK(!rt->IsPointerOverUI() && text == "Pointer over the game; selected: Play (Tab)");
+            CHECK(rt->GetUISelected() == play && rt->IsUINavigating());
+            text = frame({ 10, 110 }); // the icon is under the pointer: named after its button
+            CHECK(text == "Pointer over Quit (5%, 20%); selected: Play (Tab)");
+            auto under = UI::ElementsAt(*rt, { 10, 110 }, { 800, 600 });
+            CHECK(under.size() == 2 && under[0] == icon && under[1] == quit);
+            CHECK(UI::ElementsAt(*rt, { 300, 300 }, { 800, 600 }).empty());
+            text = frame({ 600, 500 }, true);
+            CHECK(rt->GetUISelected().IsNull() && text == "Pointer over the game; selected: none (Tab)");
+            Input::SetGameInputEnabled(gameInput);
+            rt->OnRuntimeStop();
+        }
         // C# events: a label's script listens to another entity's UI Button (which has no script) and unsubscribes
         // after its Limit; the listeners end with play mode.
         {

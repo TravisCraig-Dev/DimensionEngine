@@ -12,7 +12,7 @@ namespace Game
         public override void OnUpdate(float dt)
         {
             if (Input.GetKeyDown(KeyCode.T)) Time.TimeScale = Time.TimeScale < 1.0f ? 1.0f : SlowMotion;
-            if (!Input.GetMouseButtonDown(0) || !Marker.IsValid || Camera.Main == null) return;
+            if (!Input.GetMouseButtonDown(0) || EventSystem.IsPointerOverUI || !Marker.IsValid || Camera.Main == null) return; // not through the UI
 
             Ray ray = Camera.Main.ScreenPointToRay(Input.MousePosition);
             if (!Physics.Raycast(ray, out RaycastHit hit, 500.0f)) return;

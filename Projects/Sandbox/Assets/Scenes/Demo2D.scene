@@ -2057,6 +2057,82 @@
       }
     },
     {
+      "guid": 850018,
+      "parent": 850010,
+      "components": {
+        "Tag": {
+          "Name": "Pointer Readout",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            1,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            0
+          ],
+          "Pivot": [
+            1,
+            1
+          ],
+          "Position": [
+            -32,
+            1040
+          ],
+          "Size": [
+            1100,
+            40
+          ]
+        },
+        "UI Text": {
+          "Text": "",
+          "Font": 0,
+          "Font Size": 24,
+          "Color": [
+            1,
+            1,
+            1,
+            0.8
+          ],
+          "Alignment": 2,
+          "Vertical Alignment": 0,
+          "Wrap": false
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.PointerReadout",
+              "Fields": {
+                "FirstButton": 850011
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "guid": 850016,
       "parent": 850010,
       "components": {

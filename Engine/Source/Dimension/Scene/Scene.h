@@ -227,6 +227,8 @@ namespace Dimension
         // UI input for the current frame (pointer in render-target pixels). Applied in OnUpdateRuntime.
         void SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid = true, float scroll = 0.0f);
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
+        // The topmost UI element under the pointer this frame (Null when none).
+        Entity GetUIHovered() const { return m_UIHovered; }
         // The object whose collider is under the pointer (through the primary camera; not when over UI), as the
         // OnMouse* script events see it; Null when none.
         Entity GetObjectUnderPointer() const { return m_MouseOver; }
