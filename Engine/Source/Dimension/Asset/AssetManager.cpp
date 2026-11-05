@@ -39,6 +39,7 @@ namespace Dimension
             std::unordered_map<AssetHandle, Ref<Mesh>> Meshes;
             std::unordered_map<AssetHandle, std::shared_ptr<const MeshData>> MeshDatas;
             std::unordered_map<AssetHandle, Ref<Material>> Materials;
+            std::unordered_map<AssetHandle, const void*> RuntimeMaterials; // made while playing: their owners
             std::unordered_map<AssetHandle, Ref<Font>> Fonts;
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
             std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
@@ -687,6 +688,33 @@ namespace Dimension
         it->second->Save(path);
         std::error_code ec;
         s->Assets[handle].LastWrite = fs::last_write_time(path, ec); // our own write is not an external change
+    }
+
+    AssetHandle AssetManager::CreateRuntimeMaterial(const Material& source, const void* owner)
+    {
+        AssetHandle handle; // a new random one
+        s->Materials[handle] = MakeRef<Material>(source);
+        s->RuntimeMaterials[handle] = owner;
+        return handle;
+    }
+
+    bool AssetManager::IsRuntimeMaterial(AssetHandle handle) { return s && s->RuntimeMaterials.contains(handle); }
+
+    void AssetManager::DestroyRuntimeMaterial(AssetHandle handle)
+    {
+        if (!s || !s->RuntimeMaterials.erase(handle)) return; // only made ones (assets stay)
+        s->Materials.erase(handle);
+    }
+
+    void AssetManager::ReleaseRuntimeMaterials(const void* owner)
+    {
+        if (!s) return;
+        for (auto it = s->RuntimeMaterials.begin(); it != s->RuntimeMaterials.end();)
+        {
+            if (it->second != owner) { ++it; continue; }
+            s->Materials.erase(it->first);
+            it = s->RuntimeMaterials.erase(it);
+        }
     }
 
     AssetHandle AssetManager::CreateMaterial(const fs::path& absolutePath)

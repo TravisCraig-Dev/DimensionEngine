@@ -264,6 +264,12 @@ namespace Dimension
             // An agent's path: 0 get its corners (count; negative when Partial), 1 set them (count, status), 2 calculate one
             // from where it stands to corners[0] (into corners; count, negative when Partial, 0 none).
             int (*NavAgentPath)(void*, uint64_t, int, float*, int, int);
+            // A material's field by label (Base Color, Metallic, Base Map...): 0 get (into v; returns its float count, 0
+            // when there is no such field), 1 set, 2 get a texture (into asset), 3 set it, 4 make a copy (of guid, or the
+            // defaults for 0; owned by the scene) into asset, 5 destroy one made so, 6 whether it is one made so.
+            float (*MaterialOp)(void*, uint64_t, int, const char*, float*, uint64_t*);
+            // A Mesh Renderer's own copy of its material (made the first time; from its simple look without one).
+            uint64_t (*RendererMaterialInstance)(void*, uint64_t);
         };
 
         // Background scene loads started from C#, by id.
@@ -1882,6 +1888,57 @@ namespace Dimension
                 if (!s) return 0;
                 if (simple) return Physics3DWorld::SimpleMoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] }) ? 1 : 0;
                 return Physics3DWorld::MoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] });
+            };
+            a.MaterialOp = [](void* s, uint64_t guid, int op, const char* field, float* v, uint64_t* asset) -> float {
+                if (op == 4)
+                {
+                    Ref<Material> from = guid ? AssetManager::GetMaterial(AssetHandle(guid)) : nullptr;
+                    *asset = (uint64_t)AssetManager::CreateRuntimeMaterial(from ? *from : Material(), s);
+                    return 1.0f;
+                }
+                if (op == 5) { AssetManager::DestroyRuntimeMaterial(AssetHandle(guid)); return 0.0f; }
+                if (op == 6) return AssetManager::IsRuntimeMaterial(AssetHandle(guid)) ? 1.0f : 0.0f;
+                Ref<Material> m = AssetManager::GetMaterial(AssetHandle(guid));
+                if (!m || !field) return 0.0f;
+                for (const FieldInfo& f : Material::Fields())
+                {
+                    if (f.Name != field) continue;
+                    void* p = f.Access(m.get());
+                    int n = 0;
+                    switch (f.Type)
+                    {
+                    case FieldType::Float: n = 1; break;
+                    case FieldType::Vec2: n = 2; break;
+                    case FieldType::Color3: n = 3; break;
+                    case FieldType::Color4: n = 4; break;
+                    case FieldType::Bool:
+                        if (op == 0) v[0] = *static_cast<bool*>(p) ? 1.0f : 0.0f;
+                        else if (op == 1) *static_cast<bool*>(p) = v[0] != 0.0f;
+                        return op <= 1 ? 1.0f : 0.0f;
+                    case FieldType::Enum:
+                        if (op == 0) v[0] = (float)*static_cast<int32_t*>(p);
+                        else if (op == 1) *static_cast<int32_t*>(p) = (int32_t)v[0];
+                        return op <= 1 ? 1.0f : 0.0f;
+                    case FieldType::Texture:
+                        if (op == 2) *asset = (uint64_t)*static_cast<AssetHandle*>(p);
+                        else if (op == 3) *static_cast<AssetHandle*>(p) = AssetHandle(*asset);
+                        return op >= 2 ? 1.0f : 0.0f;
+                    default: return 0.0f;
+                    }
+                    if (op == 0) std::memcpy(v, p, n * 4);
+                    else if (op == 1)
+                    {
+                        std::memcpy(p, v, n * 4);
+                        if (f.Max > f.Min) // its range (Roughness above 0, Metallic up to 1...)
+                            for (int i = 0; i < n; ++i) static_cast<float*>(p)[i] = std::clamp(static_cast<float*>(p)[i], f.Min, f.Max);
+                    }
+                    else return 0.0f;
+                    return (float)n;
+                }
+                return 0.0f;
+            };
+            a.RendererMaterialInstance = [](void* s, uint64_t e) -> uint64_t {
+                return s && S(s).IsValid(Unpack(e)) ? (uint64_t)S(s).GetRendererMaterialInstance(Unpack(e)) : 0;
             };
             a.NavAgentPath = [](void* s, uint64_t packed, int op, float* corners, int count, int status) -> int {
                 auto* agent = Comp<NavMeshAgentComponent>(s, packed);

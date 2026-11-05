@@ -265,6 +265,9 @@ namespace Dimension
         float GetTimeSinceLevelLoad() const { return m_Time - m_LevelLoadTime; }
         // The game is closing (or play stopping in the editor): OnApplicationQuit on every running script.
         void NotifyApplicationQuit();
+        // A Mesh Renderer's own copy of its material (Unity's renderer.material): made the first time (from its material,
+        // or its simple look without one), owned by this scene (released when play stops). None without a renderer.
+        AssetHandle GetRendererMaterialInstance(Entity e);
         // The view the scene is shown in (from SetUIInput): its size in pixels (a 1280x720 stand-in before the first
         // frame), and the pointer in it (top-left origin).
         glm::vec2 GetViewSize() const { return m_UIScreen.x >= 1.0f && m_UIScreen.y >= 1.0f ? m_UIScreen : glm::vec2(1280.0f, 720.0f); }

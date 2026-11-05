@@ -5058,6 +5058,13 @@
        "Class": "Game.CameraSwitcher",
        "Fields": {},
        "Enabled": true
+      },
+      {
+       "Class": "Game.CratePainter",
+       "Fields": {
+        "Glow": 0.6
+       },
+       "Enabled": true
       }
      ]
     }
@@ -5215,7 +5222,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview).",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview); P paints what is under the mouse a color of its own, O makes its shared material metal or wood (CratePainter).",
      "Font": 0,
      "Font Size": 26,
      "Color": [
@@ -5272,7 +5279,7 @@
      ],
      "Position": [
       34,
-      210
+      246
      ],
      "Size": [
       1200,
@@ -5348,7 +5355,7 @@
      ],
      "Position": [
       34,
-      256
+      292
      ],
      "Size": [
       420,

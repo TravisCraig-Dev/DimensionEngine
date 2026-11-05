@@ -427,8 +427,17 @@ namespace Dimension
         }
         /// <summary>The mesh it draws (the built-in shapes too: a cube is GUID 1, a sphere 2).</summary>
         public Mesh Mesh { get => new(GetAssetGuid("Mesh")); set => SetAssetGuid("Mesh", value.Guid); }
-        /// <summary>Its material asset (none: the simple fields below).</summary>
-        public Material Material { get => new(GetAssetGuid("Material")); set => SetAssetGuid("Material", value.Guid); }
+        /// <summary>Its own material, as Unity's renderer.material: the first time it is read, the material it uses (or its
+        /// simple look) is copied for this object alone, so changing it leaves the others alone; setting one uses that
+        /// one (shared).</summary>
+        public Material Material
+        {
+            get => new(Native.Api.RendererMaterialInstance(Entity.Scene, Entity.Id));
+            set => SetAssetGuid("Material", value.Guid);
+        }
+        /// <summary>The material it uses, shared with every object using it (none: the simple fields below); changing it
+        /// changes all of them.</summary>
+        public Material SharedMaterial { get => new(GetAssetGuid("Material")); set => SetAssetGuid("Material", value.Guid); }
         /// <summary>The albedo texture of the simple look (no Material).</summary>
         public Texture Texture { get => new(GetAssetGuid("Albedo")); set => SetAssetGuid("Albedo", value.Guid); }
         public Vector2 Tiling { get => GetVector2("Tiling"); set => SetVector2("Tiling", value); }

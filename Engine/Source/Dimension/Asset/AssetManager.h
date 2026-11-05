@@ -91,6 +91,12 @@ namespace Dimension
         static Ref<Material> GetMaterial(AssetHandle handle);
         static void SaveMaterial(AssetHandle handle);
         static AssetHandle CreateMaterial(const fs::path& absolutePath);
+        // Materials made while playing (a script's new Material, a renderer's own copy): in memory only, under a new
+        // handle GetMaterial finds, until destroyed or their owner (the scene that made them) releases them all.
+        static AssetHandle CreateRuntimeMaterial(const Material& source, const void* owner);
+        static bool IsRuntimeMaterial(AssetHandle handle);
+        static void DestroyRuntimeMaterial(AssetHandle handle);
+        static void ReleaseRuntimeMaterials(const void* owner);
         static Ref<Font> GetFont(AssetHandle handle); // falls back to the built-in font
         // Animator controllers are editable in place; call SaveAnimatorController after changing one.
         static Ref<AnimatorController> GetAnimatorController(AssetHandle handle);

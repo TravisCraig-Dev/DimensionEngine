@@ -336,6 +336,8 @@ namespace Dimension
         // Multiplies the color (and alpha) of whatever it draws, its material asset's too: a per-object recolor or a
         // script's flash without changing the shared material (like a Unity MaterialPropertyBlock's color).
         glm::vec4 Tint{ 1.0f };
+        // Runtime: the copy of its material made for it alone (a script's MeshRenderer.Material), while it uses it.
+        AssetHandle InstanceMaterial = AssetHandle::None();
     };
 
     struct DirectionalLightComponent

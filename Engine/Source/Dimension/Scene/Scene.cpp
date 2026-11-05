@@ -11,6 +11,7 @@
 #include "Dimension/Core/AppRuntime.h"
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Renderer/Material.h"
 #include "Dimension/UI/UI.h"
 #include "Dimension/Scene/Prefab.h"
 #include "Dimension/Particles/ParticleSystem.h"
@@ -797,6 +798,7 @@ namespace Dimension
     void Scene::OnRuntimeStop()
     {
         DebugDraw::Clear();
+        AssetManager::ReleaseRuntimeMaterials(this); // the materials scripts made while it played
         if (m_WindowListener)
         {
             AppRuntime::RemoveWindowListener(m_WindowListener);
@@ -1428,6 +1430,29 @@ namespace Dimension
         // After iteration: scripts may change the registry.
         for (auto& [e, names] : firedEvents)
             for (auto& name : names) DispatchAnimationEvent(e, name);
+    }
+
+    AssetHandle Scene::GetRendererMaterialInstance(Entity e)
+    {
+        auto* mr = IsValid(e) ? m_Registry.TryGet<MeshRendererComponent>(e) : nullptr;
+        if (!mr) return AssetHandle::None();
+        if (mr->InstanceMaterial.IsValid() && mr->Material == mr->InstanceMaterial && AssetManager::IsRuntimeMaterial(mr->InstanceMaterial))
+            return mr->InstanceMaterial;
+        Material copy;
+        if (auto m = AssetManager::GetMaterial(mr->Material)) copy = *m;
+        else
+        {
+            // Its simple look as a material (as SceneRenderer draws it).
+            copy.BaseColor = mr->Color;
+            copy.BaseColorMap = mr->Texture;
+            copy.Tiling = mr->Tiling;
+            copy.Roughness = std::clamp(1.0f - mr->Smoothness, 0.02f, 1.0f);
+            copy.EmissionColor = glm::vec3(mr->Color);
+            copy.EmissionStrength = mr->Emission;
+            copy.CastShadows = mr->CastShadows;
+        }
+        mr->InstanceMaterial = mr->Material = AssetManager::CreateRuntimeMaterial(copy, this);
+        return mr->InstanceMaterial;
     }
 
     void Scene::NotifyApplicationQuit()

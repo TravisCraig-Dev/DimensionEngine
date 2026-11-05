@@ -4004,6 +4004,55 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestRuntimeMaterials()
+    {
+        AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+        AssetHandle crateLook(uint64_t(100061)); // the Sandbox's crate material
+        Ref<Material> asset = AssetManager::GetMaterial(crateLook);
+        CHECK(asset != nullptr);
+        if (!asset) return;
+        glm::vec4 assetColor = asset->BaseColor;
+        Scene scene("Looks");
+        auto& reg = scene.GetRegistry();
+        auto cube = [&](const char* name) {
+            Entity e = scene.CreateEntity(name);
+            reg.Emplace<MeshRendererComponent>(e).Mesh = AssetManager::kCube;
+            return e;
+        };
+        Entity a = cube("A"), b = cube("B"), plain = cube("Plain");
+        reg.Get<MeshRendererComponent>(a).Material = reg.Get<MeshRendererComponent>(b).Material = crateLook;
+        reg.Get<MeshRendererComponent>(plain).Color = { 0.2f, 0.4f, 0.6f, 1.0f };
+        reg.Get<MeshRendererComponent>(plain).Smoothness = 0.8f;
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        // A's own copy: a new material, used by A only; changing it leaves the asset (and B) alone.
+        AssetHandle own = rt->GetRendererMaterialInstance(a);
+        CHECK(own.IsValid() && own != crateLook && AssetManager::IsRuntimeMaterial(own));
+        CHECK(rr.Get<MeshRendererComponent>(a).Material == own && rr.Get<MeshRendererComponent>(b).Material == crateLook);
+        AssetManager::GetMaterial(own)->BaseColor = { 1, 0, 0, 1 };
+        CHECK(AssetManager::GetMaterial(crateLook)->BaseColor == assetColor && AssetManager::GetMaterial(own)->BaseColorMap == asset->BaseColorMap);
+        CHECK(rt->GetRendererMaterialInstance(a) == own); // the same copy each time
+        // Given another material, then asked again: a new copy (of that one).
+        rr.Get<MeshRendererComponent>(a).Material = crateLook;
+        AssetHandle again = rt->GetRendererMaterialInstance(a);
+        CHECK(again != own && AssetManager::GetMaterial(again)->BaseColor == assetColor);
+        // A renderer with its simple look: the copy has that look.
+        AssetHandle simple = rt->GetRendererMaterialInstance(plain);
+        Ref<Material> sm = AssetManager::GetMaterial(simple);
+        CHECK(sm != nullptr && glm::distance(sm->BaseColor, glm::vec4(0.2f, 0.4f, 0.6f, 1.0f)) < 1e-6f && Near(sm->Roughness, 0.2f, 1e-5f));
+        // Made directly (a script's new Material), and destroyed; assets cannot be.
+        AssetHandle made = AssetManager::CreateRuntimeMaterial(*asset, rt.get());
+        CHECK(AssetManager::GetMaterial(made) && AssetManager::GetMaterial(made)->BaseColor == assetColor);
+        AssetManager::DestroyRuntimeMaterial(made);
+        AssetManager::DestroyRuntimeMaterial(crateLook);
+        CHECK(!AssetManager::GetMaterial(made) && AssetManager::GetMaterial(crateLook));
+        // Play stopping frees the scene's copies.
+        rt->OnRuntimeStop();
+        CHECK(!AssetManager::IsRuntimeMaterial(own) && !AssetManager::IsRuntimeMaterial(again) && !AssetManager::IsRuntimeMaterial(simple));
+        CHECK(!AssetManager::GetMaterial(again) && AssetManager::GetMaterial(crateLook));
+    }
+
     void TestNavQueriesAndPaths()
     {
         // The yard (BuildNavYard): a wall along z = 0 from x = -15 to 6, 0.6 thick; the mesh stops Agent Radius from it.
@@ -12954,6 +13003,7 @@ int main(int argc, char** argv)
     Run("App and timing control", TestAppAndTiming);
     Run("Character settings and hits", TestCharacterSettingsAndHits);
     Run("NavMesh queries and agent paths", TestNavQueriesAndPaths);
+    Run("Runtime materials", TestRuntimeMaterials);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);
