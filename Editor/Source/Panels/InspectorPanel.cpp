@@ -2307,6 +2307,16 @@ namespace Editor
             track(ImGui::SliderFloat("Film Grain", &s.FilmGrain, 0.0f, 1.0f));
             track(ImGui::SliderFloat("Lens Distortion", &s.LensDistortion, -1.0f, 1.0f));
             ImGui::SetItemTooltip("Above 0 the image bulges (barrel), below it pinches (pincushion)");
+            if (UI::BeginProperties("LensDirt"))
+            {
+                r |= UI::AssetField("Lens Dirt", s.LensDirt, AssetType::Texture);
+                UI::EndProperties();
+            }
+            ImGui::SetItemTooltip("A texture of smudges lit by the bloom (needs Bloom)");
+            if (s.LensDirt.IsValid()) track(ImGui::DragFloat("Dirt Intensity", &s.LensDirtIntensity, 0.01f, 0.0f, 20.0f));
+            track(ImGui::Checkbox("Motion Blur", &s.MotionBlur));
+            ImGui::SetItemTooltip("The image smeared along how the camera moved since the last frame");
+            if (s.MotionBlur) track(ImGui::SliderFloat("Shutter", &s.MotionBlurIntensity, 0.0f, 1.0f));
             ImGui::TextDisabled("Game view and Player only.");
             ImGui::TreePop();
         }

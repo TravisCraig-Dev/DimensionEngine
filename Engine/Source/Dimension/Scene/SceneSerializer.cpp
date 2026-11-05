@@ -184,6 +184,10 @@ namespace Dimension
                           { "chromaticAberration", s.ChromaticAberration },
                           { "lookupTexture", (uint64_t)s.LookupTexture },
                           { "lookupContribution", s.LookupContribution },
+                          { "motionBlur", s.MotionBlur },
+                          { "motionBlurIntensity", s.MotionBlurIntensity },
+                          { "lensDirt", (uint64_t)s.LensDirt },
+                          { "lensDirtIntensity", s.LensDirtIntensity },
                           { "filmGrain", s.FilmGrain },
                           { "lensDistortion", s.LensDistortion },
                           { "autoExposure", s.AutoExposure },
@@ -287,6 +291,10 @@ namespace Dimension
         s.ChromaticAberration = js.value("chromaticAberration", s.ChromaticAberration);
         s.LookupTexture = Guid(js.value("lookupTexture", uint64_t(0)));
         s.LookupContribution = js.value("lookupContribution", s.LookupContribution);
+        s.MotionBlur = js.value("motionBlur", s.MotionBlur);
+        s.MotionBlurIntensity = js.value("motionBlurIntensity", s.MotionBlurIntensity);
+        s.LensDirt = Guid(js.value("lensDirt", uint64_t(0)));
+        s.LensDirtIntensity = js.value("lensDirtIntensity", s.LensDirtIntensity);
         s.FilmGrain = js.value("filmGrain", s.FilmGrain);
         s.LensDistortion = js.value("lensDistortion", s.LensDistortion);
         s.AutoExposure = js.value("autoExposure", s.AutoExposure);

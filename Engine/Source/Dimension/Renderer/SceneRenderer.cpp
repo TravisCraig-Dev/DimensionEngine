@@ -76,6 +76,7 @@
 #include "shaders/Ssr.frag.h"
 #include "shaders/SsrApply.frag.h"
 #include "shaders/Taa.frag.h"
+#include "shaders/MotionBlur.frag.h"
 #include "shaders/Fog.frag.h"
 #include "shaders/Underwater.frag.h"
 #include "shaders/Decal.vert.h"
@@ -213,6 +214,8 @@ namespace Dimension
             uint32_t LookupTexture; // bindless index + 1, 0 = none
             uint32_t LookupSize;    // slices (= slice side)
             float LookupContribution;
+            uint32_t DirtTexture;   // lens dirt: bindless index + 1, 0 = none
+            float DirtIntensity;
         };
 
         struct DofPrefilterPush
@@ -407,7 +410,7 @@ namespace Dimension
         // Mesh-shaped GPU emitters' spawn points (ParticleSystems::MeshSurfaceSamples), uploaded once per mesh.
         struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
-        Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater;
+        Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater, MotionBlur;
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline FramePreview;          // the frame debugger's target pictures
         Pipeline Decals[3]; // by DecalBlend
@@ -642,6 +645,9 @@ namespace Dimension
         post.ColorAttachments = { { F::kHdrFormat } };
         post.DebugName = "TaaPipeline";
         r.Taa = Pipeline(post);
+        post.FragmentSpirv = kMotionBlur_frag;
+        post.DebugName = "MotionBlurPipeline";
+        r.MotionBlur = Pipeline(post);
         post.FragmentSpirv = kFog_frag;
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Premultiplied } };
         post.DebugName = "FogPipeline";
@@ -1469,6 +1475,35 @@ namespace Dimension
             target.Temporal.Valid = true;
             target.Temporal.PrevViewProj = unjitteredViewProj;
         }
+        // Camera motion blur: into the scratch image along each pixel's screen motion, then copied back.
+        if (settings.MotionBlur && settings.MotionBlurIntensity > 0.0f && !options.ProbeCapture && !options.EditorOverlays)
+        {
+            if (target.Motion.Valid)
+            {
+                struct
+                {
+                    glm::mat4 Reproject;
+                    uint32_t Hdr, Depth;
+                    float Intensity, MaxLength;
+                } push{ target.Motion.PrevViewProj * glm::inverse(camera.Projection * camera.View), target.GetHdrBindless(), target.GetDepthBindless(),
+                        std::clamp(settings.MotionBlurIntensity, 0.0f, 1.0f), 0.06f };
+                FullscreenPass(cmd, target.GetScratch(), false, res.MotionBlur, &push, sizeof(push));
+                VkImage hdr = target.GetHdr().GetHandle(), result = target.GetScratch().GetHandle();
+                Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                VkImageCopy copy{};
+                copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+                copy.dstSubresource = copy.srcSubresource;
+                copy.extent = { extent.width, extent.height, 1 };
+                vkCmdCopyImage(cmd, result, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hdr, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
+            target.Motion.PrevViewProj = camera.Projection * camera.View;
+            target.Motion.Valid = true;
+        }
+        else
+            target.Motion.Valid = false;
         // Auto exposure: this frame's brightness is measured (read a few frames later) and the exposure adapts.
         float autoExposure = 1.0f;
         if (settings.AutoExposure && !options.ProbeCapture && !camera.Transparent)
@@ -1499,7 +1534,13 @@ namespace Dimension
                             post.Saturation, post.Contrast, filter.r, filter.g, filter.b,
                             post.Lift.r, post.Lift.g, post.Lift.b, gamma.r, gamma.g, gamma.b, post.Gain.r, post.Gain.g, post.Gain.b,
                             options.EditorOverlays ? 0.0f : settings.ChromaticAberration, options.EditorOverlays ? 0.0f : settings.FilmGrain,
-                            options.EditorOverlays ? 0.0f : settings.LensDistortion, (uint32_t)RenderDevice::Get().Frame().FrameNumber, 0u, 0u, 0.0f };
+                            options.EditorOverlays ? 0.0f : settings.LensDistortion, (uint32_t)RenderDevice::Get().Frame().FrameNumber, 0u, 0u, 0.0f, 0u, 0.0f };
+        if (bloom && settings.LensDirt.IsValid() && settings.LensDirtIntensity > 0.0f && !options.EditorOverlays)
+            if (Ref<Texture2D> dirt = AssetManager::GetTexture(settings.LensDirt))
+            {
+                push.DirtTexture = dirt->GetBindlessIndex() + 1;
+                push.DirtIntensity = settings.LensDirtIntensity;
+            }
         if (post.LookupTexture && post.LookupContribution > 0.0f)
             if (Ref<Texture2D> lut = AssetManager::GetTexture(AssetHandle(post.LookupTexture)); lut && lut->GetHeight() > 1 && lut->GetWidth() == lut->GetHeight() * lut->GetHeight())
             {

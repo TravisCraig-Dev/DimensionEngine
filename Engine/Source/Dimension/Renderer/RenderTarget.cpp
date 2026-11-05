@@ -23,6 +23,9 @@ namespace Dimension
             m_TaaHistory[i] = Image({ m_Width, m_Height, kHdrFormat,
                                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1, "TAAHistory" });
         Temporal.Valid = false;
+        m_Scratch = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1,
+                            "SceneScratch" });
+        Motion.Valid = false;
         for (int i = 0; i < 2; ++i)
             m_GiHistory[i] = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSGIHistory" });
         Gi.Valid = false;
@@ -77,7 +80,7 @@ namespace Dimension
         // Establish the between-frames layouts so the images can be sampled even before the first render.
         std::vector<VkImage> images{ m_Hdr.GetHandle(), m_Output.GetHandle(), m_Ldr.GetHandle(), m_AO[0].GetHandle(), m_AO[1].GetHandle(),
                                      m_Dof[0].GetHandle(), m_Dof[1].GetHandle(), m_Reflections.GetHandle(), m_Indirect.GetHandle(), m_TaaHistory[0].GetHandle(),
-                                     m_TaaHistory[1].GetHandle(), m_OitAccum.GetHandle(), m_OitReveal.GetHandle(), m_GiHistory[0].GetHandle(),
+                                     m_TaaHistory[1].GetHandle(), m_Scratch.GetHandle(), m_OitAccum.GetHandle(), m_OitReveal.GetHandle(), m_GiHistory[0].GetHandle(),
                                      m_GiHistory[1].GetHandle() };
         for (auto& b : m_Bloom) images.push_back(b.GetHandle());
         device.ImmediateSubmit([&](VkCommandBuffer cmd) {
@@ -102,6 +105,7 @@ namespace Dimension
         for (uint32_t index : m_TaaHistoryBindless) device.UnregisterTexture(index);
         m_TaaHistory[0] = Image();
         m_TaaHistory[1] = Image();
+        m_Scratch = Image();
         for (uint32_t index : m_GiHistoryBindless) device.UnregisterTexture(index);
         m_GiHistory[0] = Image();
         m_GiHistory[1] = Image();

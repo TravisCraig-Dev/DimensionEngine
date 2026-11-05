@@ -24,6 +24,8 @@ layout(push_constant) uniform Push
     uint LookupTexture;        // bindless index + 1 of a color lookup strip (N slices of N x N), 0 = none
     uint LookupSize;           // N
     float LookupContribution;
+    uint DirtTexture;          // lens dirt: bindless index + 1, 0 = none (lit by the bloom)
+    float DirtIntensity;
 } pc;
 
 float Hash(vec2 p)
@@ -129,7 +131,12 @@ void main()
         hdr = mix(hdr, blurred.rgb, smoothstep(0.05, 0.35, blurred.a));
     }
     if (pc.BloomTexture != 0u)
-        hdr += texture(uTextures[nonuniformEXT(pc.BloomTexture - 1u)], uv).rgb * pc.BloomIntensity;
+    {
+        vec3 bloom = texture(uTextures[nonuniformEXT(pc.BloomTexture - 1u)], uv).rgb * pc.BloomIntensity;
+        hdr += bloom;
+        // Smudges on the lens light up where the bloom is.
+        if (pc.DirtTexture != 0u) hdr += bloom * texture(uTextures[nonuniformEXT(pc.DirtTexture - 1u)], vUV).rgb * pc.DirtIntensity;
+    }
     hdr *= pc.Exposure;
     vec3 mapped = pc.Tonemap == 1u ? ACESFilm(hdr) : pc.Tonemap == 2u ? NeutralTonemap(hdr) : pc.Tonemap == 3u ? AgxTonemap(hdr) : hdr;
     // Color grading: filter, saturation, then contrast around mid grey.

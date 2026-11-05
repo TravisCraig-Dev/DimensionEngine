@@ -97,6 +97,13 @@ namespace Dimension
         // Temporal anti-aliasing: two history images (one read, one written each frame) and what they were made with.
         const Image& GetTaaHistory(uint32_t i) const { return m_TaaHistory[i]; }
         uint32_t GetTaaHistoryBindless(uint32_t i) const { return m_TaaHistoryBindless[i]; }
+        const Image& GetScratch() const { return m_Scratch; }
+        // Camera motion blur: last frame's unjittered view-projection (Valid once one frame was drawn).
+        struct
+        {
+            glm::mat4 PrevViewProj{ 1.0f };
+            bool Valid = false;
+        } Motion;
         struct TemporalState
         {
             uint32_t Frame = 0;   // jitter sequence position
@@ -118,6 +125,7 @@ namespace Dimension
         Image m_OitAccum, m_OitReveal;
         uint32_t m_OitAccumBindless = 0, m_OitRevealBindless = 0;
         Image m_TaaHistory[2];
+        Image m_Scratch;               // full-size HDR scratch (motion blur's result, copied back)
         uint32_t m_TaaHistoryBindless[2] = {};
         Image m_GiHistory[2];
         uint32_t m_GiHistoryBindless[2] = {};

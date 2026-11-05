@@ -53,6 +53,12 @@ namespace Dimension
         // grading, by Lookup Contribution. Make one with Create > New Color Lookup Texture and grade it in an image editor.
         AssetHandle LookupTexture = AssetHandle::None();
         float LookupContribution = 1.0f;
+        // Camera motion blur: the image smeared along how each pixel moved on screen since the last frame (the
+        // camera's motion; Intensity is the shutter, 0-1). Lens dirt: a texture of smudges lit by the bloom.
+        bool MotionBlur = false;
+        float MotionBlurIntensity = 0.5f;
+        AssetHandle LensDirt = AssetHandle::None();
+        float LensDirtIntensity = 2.0f;
         bool AutoExposure = false;
         float ExposureCompensation = 0.0f;
         float AutoExposureMinEv = -4.0f, AutoExposureMaxEv = 4.0f;
