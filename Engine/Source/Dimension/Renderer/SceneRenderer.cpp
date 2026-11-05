@@ -77,6 +77,7 @@
 #include "shaders/SsrApply.frag.h"
 #include "shaders/Taa.frag.h"
 #include "shaders/MotionBlur.frag.h"
+#include "shaders/DepthCopy.frag.h"
 #include "shaders/Velocity.vert.h"
 #include "shaders/Velocity.frag.h"
 #include "shaders/VelocityCamera.frag.h"
@@ -444,6 +445,7 @@ namespace Dimension
         struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
         Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater, MotionBlur;
+        Pipeline DepthCopy;
         Pipeline Velocity, VelocityCamera, VelocityTiles, VelocitySprite, VelocityParticleGpu; // motion vectors
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline FramePreview;          // the frame debugger's target pictures
@@ -682,6 +684,10 @@ namespace Dimension
         post.FragmentSpirv = kMotionBlur_frag;
         post.DebugName = "MotionBlurPipeline";
         r.MotionBlur = Pipeline(post);
+        post.ColorAttachments = { { VK_FORMAT_R32_SFLOAT } };
+        post.FragmentSpirv = kDepthCopy_frag;
+        post.DebugName = "DepthCopyPipeline";
+        r.DepthCopy = Pipeline(post);
         post.ColorAttachments = { { F::kVelocityFormat } };
         post.FragmentSpirv = kVelocityCamera_frag;
         post.DebugName = "VelocityCameraPipeline";
@@ -1315,13 +1321,16 @@ namespace Dimension
                 u.Counts.y = (int)i + 1;
             }
         device.EndGpuTimer(cmd, shadowTimer);
-        if (ssao)
+        // Water surfaces read the opaque depth under them (shore foam): the depth prepass, copied.
+        bool waterDepth = m_FrameHasWater && !camera.Orthographic && !options.ProbeCapture;
+        u.Refraction.w = waterDepth ? (float)target.GetOpaqueDepthBindless() + 1.0f : 0.0f;
+        if (ssao || waterDepth)
         {
-            u.AOParams = glm::vec4(settings.SSAODebug ? 2.0f : 1.0f, (float)target.GetAOBindless(1), 1.0f / extent.width, 1.0f / extent.height);
+            if (ssao) u.AOParams = glm::vec4(settings.SSAODebug ? 2.0f : 1.0f, (float)target.GetAOBindless(1), 1.0f / extent.width, 1.0f / extent.height);
             device.BindBindless(cmd);
             device.BindUniforms(cmd, &u, sizeof(u));
-            int aoTimer = device.BeginGpuTimer(cmd, "Depth Prepass and SSAO");
-            RenderAmbientOcclusion(cmd, scene, target, u.ViewProj, settings);
+            int aoTimer = device.BeginGpuTimer(cmd, ssao ? "Depth Prepass and SSAO" : "Depth Prepass");
+            RenderAmbientOcclusion(cmd, scene, target, u.ViewProj, settings, ssao, waterDepth);
             device.EndGpuTimer(cmd, aoTimer);
         }
         int opaqueTimer = device.BeginGpuTimer(cmd, "Opaque");
@@ -1346,7 +1355,7 @@ namespace Dimension
         VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         depth.imageView = target.GetDepth().GetView();
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = ssao ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; // reuse the prepass depth
+        depth.loadOp = ssao || waterDepth ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR; // reuse the prepass depth
         // Depth of field focuses for the game camera: the editor's Scene view (overlays on) stays sharp.
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
         // Passes after this one read the depth: depth of field, SSR, decals, fog and TAA (and next frame's GPU particle
@@ -1499,7 +1508,7 @@ namespace Dimension
             device.BindBindless(cmd);
             // Refracting materials look up the finished opaque image behind them.
             SceneUniforms transparentU = u;
-            transparentU.Refraction = glm::vec4((float)target.GetHdrBindless() + 1.0f, 1.0f / (float)extent.width, 1.0f / (float)extent.height, 0.0f);
+            transparentU.Refraction = glm::vec4((float)target.GetHdrBindless() + 1.0f, 1.0f / (float)extent.width, 1.0f / (float)extent.height, u.Refraction.w);
             device.BindUniforms(cmd, &transparentU, sizeof(transparentU));
             DrawMeshes(cmd, u.ViewProj, MeshPass::Transparent);
             vkCmdEndRendering(cmd);
@@ -2305,6 +2314,7 @@ namespace Dimension
         m_RenderParts.clear();
         m_SimPositions.clear();
         m_FrameRefracts = false;
+        m_FrameHasWater = false;
         Material scratch;
 
         // Materials are uploaded once per distinct content, so objects sharing a material (or the same simple
@@ -2663,7 +2673,9 @@ namespace Dimension
                     // Water: the shader draws foam where the vertex normals say (Flags.w = 2).
                     MaterialGPU gpu = BuildMaterialGPU(mat);
                     gpu.Flags.w = 2u;
+                    gpu.Layers[0] = glm::vec4(std::max(water->ShoreFoam, 0.0f), 0.0f, 0.0f, 0.0f); // shore foam reach (m)
                     address = uploadMaterialGPU(dim(gpu, dark));
+                    m_FrameHasWater = true;
                 }
                 else
                     address = uploadMaterial(mat, dark);
@@ -2690,6 +2702,8 @@ namespace Dimension
                                               (uint32_t)m_RenderItems.size(), batch });
                 if (item.Indices) break;
             }
+            if (water)
+                for (size_t p = item.FirstPart; p < m_RenderParts.size(); ++p) m_RenderParts[p].Water = true;
             item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
             item.MeshRef = std::move(mesh);
             m_RenderItems.push_back(std::move(item));
@@ -3033,6 +3047,7 @@ namespace Dimension
             {
                 const RenderPart& part = m_RenderParts[p];
                 if (shadowPass && (!part.CastShadows || part.Transparent)) continue;
+                if (depthPass && part.Water) continue; // it reads the depth under it
                 if (part.Transparent)
                 {
                     if (depthPass || (pass == MeshPass::Main && m_Oit)) continue; // OIT draws them in their own pass
@@ -4820,7 +4835,7 @@ namespace Dimension
     }
 
     void SceneRenderer::RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
-                                               const SceneSettings& settings)
+                                               const SceneSettings& settings, bool ambientOcclusion, bool copyDepth)
     {
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
@@ -4854,6 +4869,17 @@ namespace Dimension
         VkImage depthImage = target.GetDepth().GetHandle();
         Vk::TransitionImage(cmd, depthImage, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             VK_IMAGE_ASPECT_DEPTH_BIT);
+        if (copyDepth)
+        {
+            uint32_t source = target.GetDepthBindless();
+            FullscreenPass(cmd, target.GetOpaqueDepth(), false, res.DepthCopy, &source, sizeof(source));
+        }
+        if (!ambientOcclusion)
+        {
+            Vk::TransitionImage(cmd, depthImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_ASPECT_DEPTH_BIT);
+            return;
+        }
         auto pass = [&](const Image& dst, const Pipeline& pipeline, const void* push, uint32_t pushSize) {
             Vk::TransitionImage(cmd, dst.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };

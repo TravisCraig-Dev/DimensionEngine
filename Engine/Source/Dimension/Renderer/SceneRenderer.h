@@ -250,6 +250,7 @@ namespace Dimension
         // Mesh renderers resolved once per frame (mesh, world bounds, uploaded materials, skinning) and then only
         // culled and batched by each pass (main, depth prepass, every shadow map).
         bool m_FrameRefracts = false; // a transparent material this frame refracts
+        bool m_FrameHasWater = false; // a water surface is drawn (it reads the opaque depth for shore foam)
         struct RenderPart
         {
             uint32_t FirstIndex, IndexCount;
@@ -257,6 +258,7 @@ namespace Dimension
             bool Transparent, DoubleSided, CastShadows; // CastShadows: the material's flag
             uint32_t Item;  // owning RenderItem
             uint32_t Batch; // parts with the same batch share mesh, range, material and culling: one instanced draw
+            bool Water = false; // a water surface: left out of the depth prepass (it foams against the depth under it)
         };
         struct RenderItem
         {
@@ -464,7 +466,7 @@ namespace Dimension
         void DrawGpuParticles(VkCommandBuffer cmd);
         void RenderIndirect(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings, const glm::mat4& viewProj); // screen-space GI
         void RenderAmbientOcclusion(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& viewProj,
-                                    const SceneSettings& settings);
+                                    const SceneSettings& settings, bool ambientOcclusion, bool copyDepth);
         // Renders the directional shadow map; returns the light view-projection.
         void RenderShadowMap(VkCommandBuffer cmd, Scene& scene, const CameraData& camera, const glm::vec3& lightDir,
                              float distance, int cascadeCount, const void* uniforms, size_t uniformSize, ShadowCascades& out);

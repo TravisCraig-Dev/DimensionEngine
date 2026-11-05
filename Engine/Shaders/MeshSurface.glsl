@@ -318,13 +318,31 @@ void main()
     float roughness = clamp(m.Params.y * mr.g, 0.02, 1.0);
     float metallic = clamp(m.Params.x * mr.b, 0.0, 1.0);
     vec3 albedo = base.rgb;
-    if (m.Flags.w == 2u && vFoam > 0.002)
+    float foam = m.Flags.w == 2u ? vFoam : 0.0;
+    if (m.Flags.w == 2u && uScene.Refraction.w > 0.5 && m.Layers[0].x > 0.0)
+    {
+        // Contact foam: a band where the opaque scene (a shore, rocks, a hull, a wading leg) meets the surface, from
+        // the depth drawn before the water: how far the view goes on through the water before it hits something,
+        // foaming within a quarter of Shore Foam (the shallows' wider foam comes from rays while playing).
+        uint depthTexture = uint(uScene.Refraction.w) - 1u;
+        ivec2 size = textureSize(uTextures[nonuniformEXT(depthTexture)], 0);
+        float d = texelFetch(uTextures[nonuniformEXT(depthTexture)], ivec2(gl_FragCoord.xy), 0).r;
+        if (d < 1.0)
+        {
+            vec2 suv = gl_FragCoord.xy / vec2(size);
+            vec4 p = uScene.InvViewProj * vec4(suv.x * 2.0 - 1.0, 1.0 - suv.y * 2.0, d, 1.0);
+            vec3 under = p.xyz / p.w;
+            float gap = distance(vWorldPos, under);
+            foam = max(foam, 1.0 - smoothstep(0.0, m.Layers[0].x * 0.25, gap));
+        }
+    }
+    if (foam > 0.002)
     {
         // Water foam: white froth broken into drifting patches, opaque and rough where it is thick.
         vec2 drift = uScene.Wind.xz * uScene.Wind.w * 0.05;
         float pattern = ValueNoise(vec3((vWorldPos.xz + drift) * 0.9, uScene.Wind.w * 0.15)) * 0.65 +
                         ValueNoise(vec3((vWorldPos.xz - drift) * 3.1, uScene.Wind.w * 0.4)) * 0.35;
-        float froth = smoothstep(0.25, 0.75, vFoam * (0.55 + pattern));
+        float froth = smoothstep(0.25, 0.75, foam * (0.55 + pattern));
         albedo = mix(albedo, vec3(0.92, 0.95, 0.97), froth);
         base.a = mix(base.a, 1.0, froth);
         roughness = mix(roughness, 0.8, froth);

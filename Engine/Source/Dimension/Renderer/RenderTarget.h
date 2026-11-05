@@ -104,6 +104,9 @@ namespace Dimension
         const Image& GetScratch() const { return m_Scratch; }
         // The velocity buffer (motion blur, TAA) and its tiles: the longest motion in each square of GetVelocityTileSize()
         // pixels.
+        // The opaque depth copied after the depth prepass, readable while the depth buffer is attached (water).
+        const Image& GetOpaqueDepth() const { return m_OpaqueDepth; }
+        uint32_t GetOpaqueDepthBindless() const { return m_OpaqueDepthBindless; }
         const Image& GetVelocity() const { return m_Velocity; }
         uint32_t GetVelocityBindless() const { return m_VelocityBindless; }
         const Image& GetVelocityTiles() const { return m_VelocityTiles; }
@@ -148,6 +151,8 @@ namespace Dimension
         Image m_TaaHistory[2];
         Image m_Scratch;               // full-size HDR scratch (motion blur's result, copied back)
         Image m_Velocity, m_VelocityTiles;
+        Image m_OpaqueDepth;
+        uint32_t m_OpaqueDepthBindless = 0;
         uint32_t m_VelocityBindless = 0, m_VelocityTilesBindless = 0, m_VelocityTileSize = 16;
         uint32_t m_TaaHistoryBindless[2] = {};
         Image m_GiHistory[2];
