@@ -582,6 +582,9 @@ namespace Dimension
         Register<UIContentSizeFitterComponent>("UI Content Size Fitter", "UI")
             .Field("Horizontal Fit", &UIContentSizeFitterComponent::Horizontal).Enum({ "Unconstrained", "Preferred Size" })
             .Field("Vertical Fit", &UIContentSizeFitterComponent::Vertical).Enum({ "Unconstrained", "Preferred Size" });
+        Register<UIStyleComponent>("UI Style", "UI")
+            .Field("Sheet", &UIStyleComponent::Sheet).As(FieldType::UIStyleSheet).Tooltip("None: the nearest parent UI Style's sheet")
+            .Field("Classes", &UIStyleComponent::Classes).Tooltip("Space-separated classes of the sheet, applied in order");
         Register<UIMaskComponent>("UI Mask", "UI")
             .Field("Shape", &UIMaskComponent::Shape).Enum({ "Rect", "Image" }).Tooltip("Image: children show only where this object's UI Image is opaque")
             .Field("Softness", &UIMaskComponent::Softness).Range(0.0f, 1000.0f).Speed(0.5f).Tooltip("Pixels over which the edges fade (horizontal, vertical)")
@@ -616,7 +619,8 @@ namespace Dimension
             .Field("Normal Color", &UIButtonComponent::NormalColor).As(FieldType::Color4)
             .Field("Hover Color", &UIButtonComponent::HoverColor).As(FieldType::Color4)
             .Field("Pressed Color", &UIButtonComponent::PressedColor).As(FieldType::Color4)
-            .Field("Interactable", &UIButtonComponent::Interactable);
+            .Field("Interactable", &UIButtonComponent::Interactable)
+            .Field("Fade Duration", &UIButtonComponent::FadeDuration).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("Seconds the tint takes to change between states");
 
         Register<UINavigationComponent>("UI Navigation", "UI")
             .Field("Mode", &UINavigationComponent::Mode).Enum({ "Automatic", "Explicit", "None" })

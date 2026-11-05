@@ -6135,6 +6135,10 @@
               "Enabled": true
             }
           ]
+        },
+        "UI Style": {
+          "Sheet": 100075,
+          "Classes": ""
         }
       }
     },
@@ -6258,6 +6262,10 @@
           "Alignment": 1,
           "Vertical Alignment": 1,
           "Wrap": true
+        },
+        "UI Style": {
+          "Sheet": 0,
+          "Classes": "caption"
         }
       }
     },
@@ -6338,6 +6346,21 @@
             1
           ],
           "Interactable": true
+        },
+        "UI Style": {
+          "Sheet": 0,
+          "Classes": "accent"
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.StyleToggle",
+              "Fields": {
+                "Class": "lit"
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     },

@@ -686,6 +686,21 @@ namespace Dimension
         UIFitMode Vertical = UIFitMode::Unconstrained;
     };
 
+    // Takes component values from a UI Style Sheet (.uistyle, like UI Toolkit's USS) by class: each class lists
+    // components and field values ({"classes": {"title": {"UI Text": {"Font Size": 40}}}}), applied in the order
+    // named here (later classes win) when the classes or the sheet change. Sheet: this one's, else the nearest
+    // ancestor UI Style's.
+    struct UIStyleComponent
+    {
+        AssetHandle Sheet = AssetHandle::None();
+        std::string Classes; // space-separated
+        // Runtime: what was applied last.
+        std::string AppliedClasses;
+        AssetHandle AppliedSheet = AssetHandle::None();
+        int64_t AppliedVersion = -1;
+        std::string BaseJson; // the values classes changed, from before any class: restored when a class goes
+    };
+
     enum class UIMaskShape : int32_t { Rect = 0, Image = 1 };
 
     // Clips its children (like Unity's Mask and RectMask2D): to its rect, or to its UI Image's shape (the texture's
@@ -775,8 +790,12 @@ namespace Dimension
         glm::vec4 HoverColor{ 0.92f, 0.92f, 0.92f, 1.0f };
         glm::vec4 PressedColor{ 0.75f, 0.75f, 0.75f, 1.0f };
         bool Interactable = true;
+        float FadeDuration = 0.1f; // seconds the tint takes between states (Unity's Color Tint fade)
         bool Hovered = false, Pressed = false; // runtime state
         int PointerId = 0; // runtime: the pointer holding it (0 the mouse, 1 + n the script ray n)
+        // Runtime: the tint shown, fading from TintFrom to TintTarget (x < 0: not started; the state's color is used).
+        glm::vec4 Tint{ -1.0f }, TintFrom{ -1.0f }, TintTarget{ -1.0f };
+        float TintTime = 0.0f;
     };
 
     // Captures the surroundings at its position; meshes inside its box reflect that instead of the sky (Unity's

@@ -78,6 +78,10 @@ namespace Dimension
             MaskInfo Mask{};
         };
 
+        // Applies UI Style Sheets to UI Style components whose classes or sheet changed since last time (ComputeLayout
+        // calls it). Returns how many elements were restyled.
+        int ApplyStyles(Scene& scene);
+
         // Resolves every UI Rect under a Canvas to screen pixels (layout groups, scroll offsets, clip rects).
         // Returns entities in draw order.
         // `canvas`: Null lays out the screen-space canvases on the screen; a World Space canvas lays out just that one,

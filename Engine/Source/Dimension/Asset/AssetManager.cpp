@@ -163,6 +163,7 @@ namespace Dimension
         case AssetType::DataAsset: return "Data Asset";
         case AssetType::AnimatorOverride: return "Animator Override Controller";
         case AssetType::RenderTexture: return "Render Texture";
+        case AssetType::UIStyleSheet: return "UI Style Sheet";
         default: return "None";
         }
     }
@@ -296,6 +297,7 @@ namespace Dimension
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;
         if (ext == ".asset") return AssetType::DataAsset;
+        if (ext == ".uistyle") return AssetType::UIStyleSheet;
         if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" || ext == ".opus") return AssetType::Audio;
         return AssetType::None;
     }

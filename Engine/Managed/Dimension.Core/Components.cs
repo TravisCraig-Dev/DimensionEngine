@@ -1029,6 +1029,29 @@ namespace Dimension
 
     public enum UIImageType { Simple = 0, Sliced = 1 }
 
+    /// <summary>
+    /// Takes component values from a UI Style Sheet (.uistyle) by class, like UI Toolkit's USS classes: changing
+    /// <see cref="Classes"/> restyles the element at the next UI update (later classes win).
+    /// </summary>
+    public class UIStyle : Component
+    {
+        internal override string NativeName => "UI Style";
+        /// <summary>Space-separated class names.</summary>
+        public string Classes { get => GetString("Classes") ?? ""; set => SetString("Classes", value ?? ""); }
+        public bool HasClass(string name) => System.Array.IndexOf(Classes.Split(' ', System.StringSplitOptions.RemoveEmptyEntries), name) >= 0;
+        public void AddClass(string name)
+        {
+            if (!HasClass(name)) Classes = (Classes + " " + name).Trim();
+        }
+        public void RemoveClass(string name) =>
+            Classes = string.Join(" ", System.Array.FindAll(Classes.Split(' ', System.StringSplitOptions.RemoveEmptyEntries), c => c != name));
+        public void ToggleClass(string name, bool on)
+        {
+            if (on) AddClass(name);
+            else RemoveClass(name);
+        }
+    }
+
     public enum UIMaskShape { Rect = 0, Image = 1 }
 
     /// <summary>

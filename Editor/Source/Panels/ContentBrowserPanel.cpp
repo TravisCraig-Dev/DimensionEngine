@@ -1,4 +1,5 @@
 #include "../AssetPreviews.h"
+#include <fstream>
 #include <Dimension/Asset/AssetPack.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Renderer/PostProcess.h>
@@ -610,6 +611,24 @@ namespace Editor
                         }
                         if (h.IsValid()) m_Ctx.SelectAsset(h);
                     }
+                }
+                if (ImGui::MenuItem("New UI Style Sheet"))
+                {
+                    // Classes of component values that UI Style components apply (like UI Toolkit's USS).
+                    fs::path p = UniquePath(m_Current / "New UI Style Sheet.uistyle");
+                    std::ofstream(p) << R"({
+  "classes": {
+    "title": { "UI Text": { "Font Size": 40, "Color": [1.0, 1.0, 1.0, 1.0] } },
+    "panel": { "UI Image": { "Color": [0.08, 0.1, 0.16, 0.9] } },
+    "primary": {
+      "UI Image": { "Color": [0.16, 0.45, 0.85, 1.0] },
+      "UI Button": { "Hover Color": [1.15, 1.15, 1.15, 1.0], "Fade Duration": 0.15 }
+    }
+  }
+}
+)";
+                    AssetHandle h = AssetManager::Import(p);
+                    if (h.IsValid()) m_Ctx.SelectAsset(h);
                 }
                 if (ImGui::MenuItem("New Render Texture"))
                 {

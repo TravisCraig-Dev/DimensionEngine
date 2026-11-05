@@ -6631,6 +6631,85 @@ namespace
         UI::SetTextMeasure({});
     }
 
+    // UI Style Sheets: classes of component values applied by UI Style components (the sheet inherited from a parent),
+    // later classes winning, a removed class's values reverting, an edited sheet reapplied; and button tint fades.
+    void TestUIStyles()
+    {
+        auto near4 = [](const glm::vec4& a, const glm::vec4& c, float eps = 1e-3f) { return glm::all(glm::lessThan(glm::abs(a - c), glm::vec4(eps))); };
+        std::error_code ec;
+        fs::path assets = fs::temp_directory_path() / "dimension_ui_styles" / "Assets";
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        auto writeSheet = [&](float titleSize) {
+            std::ofstream(assets / "Look.uistyle") << R"({ "classes": {
+                "title": { "UI Text": { "Font Size": )" << titleSize << R"(, "Color": [1, 0, 0, 1] } },
+                "big":   { "UI Text": { "Font Size": 64 } },
+                "panel": { "UI Image": { "Color": [0, 0, 1, 0.5] }, "UI Button": { "Fade Duration": 0.2 } }
+            } })";
+        };
+        writeSheet(40);
+        AssetManager::Init(assets);
+        AssetHandle sheet = AssetManager::GetHandle(assets / "Look.uistyle");
+        CHECK(sheet.IsValid() && AssetManager::GetMetadata(sheet)->Type == AssetType::UIStyleSheet);
+        {
+            Scene scene("Styles");
+            auto& reg = scene.GetRegistry();
+            Entity canvas = scene.CreateEntity("Canvas");
+            reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+            reg.Emplace<UIStyleComponent>(canvas).Sheet = sheet; // the children's sheet
+            Entity label = scene.CreateEntity("Label", canvas);
+            reg.Emplace<UIRectComponent>(label);
+            reg.Emplace<UITextComponent>(label).FontSize = 20.0f;
+            reg.Emplace<UIStyleComponent>(label).Classes = "title";
+            Entity button = scene.CreateEntity("Button", canvas);
+            auto& br = reg.Emplace<UIRectComponent>(button);
+            br.AnchorMin = br.AnchorMax = br.Pivot = { 0, 0 };
+            br.Position = { 300, 300 };
+            br.Size = { 100, 50 };
+            reg.Emplace<UIImageComponent>(button);
+            reg.Emplace<UIButtonComponent>(button);
+            reg.Emplace<UIStyleComponent>(button).Classes = "panel";
+            scene.UpdateTransforms();
+            UI::ComputeLayout(scene, { 800, 600 });
+            auto& text = reg.Get<UITextComponent>(label);
+            CHECK(Near(text.FontSize, 40.0f) && near4(text.Color, glm::vec4(1, 0, 0, 1)));
+            CHECK(near4(reg.Get<UIImageComponent>(button).Color, glm::vec4(0, 0, 1, 0.5f)) && Near(reg.Get<UIButtonComponent>(button).FadeDuration, 0.2f));
+            CHECK(UI::ApplyStyles(scene) == 0); // nothing changed: nothing restyled
+            reg.Get<UIStyleComponent>(label).Classes = "title big";
+            UI::ComputeLayout(scene, { 800, 600 });
+            CHECK(Near(text.FontSize, 64.0f) && near4(text.Color, glm::vec4(1, 0, 0, 1))); // big wins its size
+            reg.Get<UIStyleComponent>(label).Classes = "big";
+            UI::ComputeLayout(scene, { 800, 600 });
+            CHECK(Near(text.FontSize, 64.0f) && Near(text.Color.g, 0.12f));          // title's color is gone
+            reg.Get<UIStyleComponent>(label).Classes = "";
+            UI::ComputeLayout(scene, { 800, 600 });
+            CHECK(Near(text.FontSize, 20.0f));                                         // back to its own size
+            // The sheet edited on disk: restyled with the new values.
+            reg.Get<UIStyleComponent>(label).Classes = "title";
+            UI::ComputeLayout(scene, { 800, 600 });
+            writeSheet(48);
+            fs::last_write_time(assets / "Look.uistyle", fs::last_write_time(assets / "Look.uistyle") + std::chrono::seconds(5));
+            AssetManager::Refresh();
+            UI::ComputeLayout(scene, { 800, 600 });
+            CHECK(Near(text.FontSize, 48.0f));
+            // Button tint: from Normal to Hover over its Fade Duration (0.2 s).
+            auto& b = reg.Get<UIButtonComponent>(button);
+            b.NormalColor = glm::vec4(1.0f);
+            b.HoverColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            UI::PointerState away, over;
+            away.Position = { 10, 10 };
+            over.Position = { 350, 325 };
+            UI::Update(scene, away, { 800, 600 }, 0.05f);
+            CHECK(near4(b.Tint, glm::vec4(1.0f)));
+            UI::Update(scene, over, { 800, 600 }, 0.1f);  // hovered: half way after 0.1 s
+            CHECK(b.Hovered && near4(b.Tint, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f), 0.01f));
+            UI::Update(scene, over, { 800, 600 }, 0.15f);
+            CHECK(near4(b.Tint, glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)));
+        }
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
     // UI Mask: children clipped to the mask's rect (drawing and hit testing); the mask itself is not.
     void TestUIMask()
     {
@@ -14346,6 +14425,7 @@ int main(int argc, char** argv)
     Run("Multiple pointers", TestMultiplePointers);
     Run("UI mask", TestUIMask);
     Run("UI layout elements", TestUILayoutElements);
+    Run("UI styles", TestUIStyles);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

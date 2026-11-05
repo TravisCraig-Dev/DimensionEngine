@@ -6,6 +6,11 @@
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/RenderDevice.h"
+#include "Dimension/Core/Log.h"
+#include "Dimension/Scene/ComponentRegistry.h"
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -890,9 +895,87 @@ namespace Dimension::UI
         return links;
     }
 
+    namespace
+    {
+        struct CachedSheet
+        {
+            int64_t Version = -1;
+            nlohmann::json Json;
+        };
+
+        // A style sheet's JSON and its version (the file's write time), read again when the file changes.
+        const CachedSheet* LoadSheet(AssetHandle h)
+        {
+            static std::unordered_map<uint64_t, CachedSheet> cache;
+            const AssetMetadata* meta = AssetManager::GetMetadata(h);
+            if (!meta || meta->Type != AssetType::UIStyleSheet) return nullptr;
+            int64_t version = (int64_t)meta->LastWrite.time_since_epoch().count();
+            auto& c = cache[(uint64_t)h];
+            if (c.Version != version)
+            {
+                c.Version = version;
+                std::ifstream in(AssetManager::GetAbsolutePath(h));
+                c.Json = nlohmann::json::parse(in, nullptr, false);
+                if (c.Json.is_discarded() || !c.Json.is_object())
+                {
+                    Log::Warn("UI style sheet '{}' is not valid JSON", meta->Path.generic_string());
+                    c.Json = nlohmann::json::object();
+                }
+            }
+            return &c;
+        }
+    }
+
+    int ApplyStyles(Scene& scene)
+    {
+        auto& reg = scene.GetRegistry();
+        int restyled = 0;
+        for (auto [e, style] : reg.ViewOf<UIStyleComponent>())
+        {
+            // The sheet: its own, else the nearest ancestor's.
+            AssetHandle sheet = style.Sheet;
+            for (Entity p = scene.GetParent(e); !sheet.IsValid() && scene.IsValid(p); p = scene.GetParent(p))
+                if (auto* ps = reg.TryGet<UIStyleComponent>(p)) sheet = ps->Sheet;
+            const CachedSheet* cached = sheet.IsValid() ? LoadSheet(sheet) : nullptr;
+            int64_t version = cached ? cached->Version : -1;
+            if (style.AppliedClasses == style.Classes && style.AppliedSheet == sheet && style.AppliedVersion == version) continue;
+            style.AppliedClasses = style.Classes;
+            style.AppliedSheet = sheet;
+            style.AppliedVersion = version;
+            // Back to the values from before any class (so a class removed takes its values with it).
+            nlohmann::json base = style.BaseJson.empty() ? nlohmann::json::object() : nlohmann::json::parse(style.BaseJson, nullptr, false);
+            if (!base.is_object()) base = nlohmann::json::object();
+            auto setFields = [&](const std::string& component, const nlohmann::json& fields, bool remember, const std::string& from) {
+                const ComponentInfo* info = ComponentRegistry::Find(component);
+                if (!info || !fields.is_object() || !info->Has(scene, e)) return;
+                void* data = info->Get(scene, e);
+                for (const FieldInfo& f : info->Fields)
+                    if (auto v = fields.find(f.Name); v != fields.end())
+                    {
+                        if (remember && !base[component].contains(f.Name)) base[component][f.Name] = FieldToJson(f, data, nullptr);
+                        try { FieldFromJson(f, data, *v, nullptr); }
+                        catch (const std::exception&) { Log::Warn("UI style '{}': bad value for {}.{}", from, component, f.Name); }
+                    }
+            };
+            for (auto& [component, fields] : base.items()) setFields(component, fields, false, "(base)");
+            if (cached)
+            {
+                const auto& classes = cached->Json.value("classes", nlohmann::json::object());
+                std::istringstream names(style.Classes);
+                for (std::string name; names >> name;)
+                    if (auto it = classes.find(name); it != classes.end() && it->is_object())
+                        for (auto& [component, fields] : it->items()) setFields(component, fields, true, name);
+            }
+            style.BaseJson = base.dump();
+            ++restyled;
+        }
+        return restyled;
+    }
+
     std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screen, Entity only)
     {
         auto& reg = scene.GetRegistry();
+        ApplyStyles(scene);
         std::vector<std::pair<int32_t, Entity>> canvases;
         for (auto [e, canvas, t] : reg.ViewOf<CanvasComponent, TransformComponent>())
         {
@@ -1080,6 +1163,25 @@ namespace Dimension::UI
             if (!mine(e)) continue;
             bool over = e == hovered && button.Interactable;
             button.Hovered = over || (pointer.KeepHover && button.Hovered);
+            // The tint fades to the state's color over Fade Duration (once a frame: not again for later pointers).
+            if (!pointer.KeepHover)
+            {
+                bool navSelected = scene.IsUINavigating() && scene.GetUISelected() == e;
+                glm::vec4 target = !button.Interactable ? kDisabledTint
+                                 : button.Pressed ? button.PressedColor
+                                 : button.Hovered || navSelected ? button.HoverColor
+                                                                 : button.NormalColor;
+                if (button.Tint.x < 0.0f) button.Tint = button.TintFrom = button.TintTarget = target;
+                if (target != button.TintTarget)
+                {
+                    button.TintFrom = button.Tint;
+                    button.TintTarget = target;
+                    button.TintTime = 0.0f;
+                }
+                button.TintTime += dt;
+                float k = button.FadeDuration > 0.0f ? std::clamp(button.TintTime / button.FadeDuration, 0.0f, 1.0f) : 1.0f;
+                button.Tint = glm::mix(button.TintFrom, button.TintTarget, k);
+            }
             if (input.Pressed && over)
             {
                 button.Pressed = true;
@@ -1446,7 +1548,8 @@ namespace Dimension::UI
                 glm::vec4 color = image->Color;
                 if (auto* b = reg.TryGet<UIButtonComponent>(e))
                 {
-                    glm::vec4 tint = !b->Interactable ? kDisabledTint
+                    glm::vec4 tint = b->Tint.x >= 0.0f ? b->Tint // fading at runtime (UI::Update)
+                                   : !b->Interactable ? kDisabledTint
                                    : b->Pressed       ? b->PressedColor
                                    : b->Hovered || e == navSelected ? b->HoverColor
                                                       : b->NormalColor;

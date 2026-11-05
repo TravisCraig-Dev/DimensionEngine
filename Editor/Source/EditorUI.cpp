@@ -143,6 +143,7 @@ namespace Editor::UI
         case AssetType::DataAsset: return { 0.7f, 0.6f, 0.95f, 1 };
         case AssetType::AnimatorOverride: return { 0.45f, 0.8f, 0.85f, 1 };
         case AssetType::RenderTexture: return { 0.95f, 0.45f, 0.35f, 1 };
+        case AssetType::UIStyleSheet: return { 0.45f, 0.8f, 0.95f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -166,6 +167,7 @@ namespace Editor::UI
         case AssetType::DataAsset: return "DATA";
         case AssetType::AnimatorOverride: return "OVRD";
         case AssetType::RenderTexture: return "RT";
+        case AssetType::UIStyleSheet: return "USS";
         default: return "FILE";
         }
     }
@@ -757,6 +759,7 @@ namespace Editor::UI
         case FieldType::Font: r = AssetField(label, *(AssetHandle*)p, AssetType::Font); break;
         case FieldType::AnimatorController: r = AssetField(label, *(AssetHandle*)p, AssetType::AnimatorController); break;
         case FieldType::Timeline: r = AssetField(label, *(AssetHandle*)p, AssetType::Timeline); break;
+        case FieldType::UIStyleSheet: r = AssetField(label, *(AssetHandle*)p, AssetType::UIStyleSheet); break;
         case FieldType::DataAsset:
         {
             // Data assets of the field's class (or a class deriving from it).
