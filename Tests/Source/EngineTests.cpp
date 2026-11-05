@@ -6710,6 +6710,69 @@ namespace
         fs::remove_all(assets.parent_path(), ec);
     }
 
+    // UI style selectors: type rules, ":hover" / ":pressed" state rules (one frame after the state), and a rule's
+    // transition easing its fields there and back.
+    void TestUIStyleStates()
+    {
+        std::error_code ec;
+        fs::path assets = fs::temp_directory_path() / "dimension_ui_style_states" / "Assets";
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        std::ofstream(assets / "States.uistyle") << R"({
+            "types": {
+                "UI Button": { "UI Image": { "Color": [1, 1, 1, 1] } },
+                "UI Button:hover": { "UI Image": { "Color": [1, 0, 0, 1] }, "transition": 0.2 }
+            },
+            "classes": { "wide:pressed": { "UI Rect": { "Size": [200, 50] } } }
+        })";
+        AssetManager::Init(assets);
+        {
+            Scene scene("States");
+            auto& reg = scene.GetRegistry();
+            Entity canvas = scene.CreateEntity("Canvas");
+            reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+            reg.Emplace<UIStyleComponent>(canvas).Sheet = AssetManager::GetHandle(assets / "States.uistyle");
+            Entity button = scene.CreateEntity("Button", canvas);
+            auto& r = reg.Emplace<UIRectComponent>(button);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Position = { 300, 300 };
+            r.Size = { 100, 50 };
+            reg.Emplace<UIImageComponent>(button).Color = { 0, 0, 0, 1 };
+            reg.Emplace<UIButtonComponent>(button);
+            reg.Emplace<UIStyleComponent>(button).Classes = "wide";
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            auto frame = [&](glm::vec2 at, bool down) {
+                scene.SetUIInput(at, down, { 800, 600 });
+                scene.OnUpdateRuntime(0.05f);
+            };
+            auto green = [&] { return reg.Get<UIImageComponent>(button).Color.g; };
+            frame({ 10, 10 }, false);
+            CHECK(Near(green(), 1.0f));                // the type rule: white
+            frame({ 320, 320 }, false);                // hovered (seen by the styles next frame)
+            frame({ 320, 320 }, false);
+            frame({ 320, 320 }, false);
+            CHECK(green() > 0.05f && green() < 0.95f); // easing to red
+            for (int i = 0; i < 6; ++i) frame({ 320, 320 }, false);
+            CHECK(Near(green(), 0.0f));
+            frame({ 320, 320 }, true);
+            frame({ 320, 320 }, true);
+            CHECK(Near(reg.Get<UIRectComponent>(button).Size.x, 200.0f)); // wide while pressed
+            frame({ 320, 320 }, false);
+            frame({ 320, 320 }, false);
+            CHECK(Near(reg.Get<UIRectComponent>(button).Size.x, 100.0f));
+            frame({ 10, 10 }, false);
+            frame({ 10, 10 }, false);
+            frame({ 10, 10 }, false);
+            CHECK(green() > 0.05f && green() < 0.95f); // easing back to white
+            for (int i = 0; i < 6; ++i) frame({ 10, 10 }, false);
+            CHECK(Near(green(), 1.0f));
+            scene.OnRuntimeStop();
+        }
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
+    }
+
     // UI Mask: children clipped to the mask's rect (drawing and hit testing); the mask itself is not.
     void TestUIMask()
     {
@@ -14426,6 +14489,7 @@ int main(int argc, char** argv)
     Run("UI mask", TestUIMask);
     Run("UI layout elements", TestUILayoutElements);
     Run("UI styles", TestUIStyles);
+    Run("UI style states", TestUIStyleStates);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

@@ -926,48 +926,180 @@ namespace Dimension::UI
         }
     }
 
+    namespace
+    {
+        enum StyleState : uint32_t { kHover = 1, kPressed = 2, kSelected = 4, kDisabled = 8 };
+        const char* const kStateNames[] = { "hover", "pressed", "selected", "disabled" };
+
+        // The pseudo-class states of an element (one frame behind: the last UI update's).
+        uint32_t StyleStates(Scene& scene, Entity e)
+        {
+            auto& reg = scene.GetRegistry();
+            uint32_t s = 0;
+            for (Entity h = scene.GetUIHovered(); scene.IsValid(h); h = scene.GetParent(h))
+                if (h == e) { s |= kHover; break; }
+            if (auto* b = reg.TryGet<UIButtonComponent>(e))
+            {
+                if (b->Hovered) s |= kHover;
+                if (b->Pressed) s |= kPressed;
+                if (!b->Interactable) s |= kDisabled;
+            }
+            if (auto* t = reg.TryGet<UIToggleComponent>(e))
+            {
+                if (t->Pressed) s |= kPressed;
+                if (!t->Interactable) s |= kDisabled;
+            }
+            if (auto* sl = reg.TryGet<UISliderComponent>(e))
+            {
+                if (sl->Dragging) s |= kPressed;
+                if (!sl->Interactable) s |= kDisabled;
+            }
+            if (scene.GetUISelected() == e) s |= kSelected;
+            return s;
+        }
+
+        nlohmann::json LerpJson(const nlohmann::json& a, const nlohmann::json& b, float k)
+        {
+            if (a.is_number() && b.is_number()) return a.get<double>() + (b.get<double>() - a.get<double>()) * k;
+            if (a.is_array() && b.is_array() && a.size() == b.size())
+            {
+                nlohmann::json out = nlohmann::json::array();
+                for (size_t i = 0; i < a.size(); ++i) out.push_back(LerpJson(a[i], b[i], k));
+                return out;
+            }
+            return k < 1.0f ? a : b;
+        }
+    }
+
     int ApplyStyles(Scene& scene)
     {
         auto& reg = scene.GetRegistry();
         int restyled = 0;
+        float now = scene.GetUnscaledTime();
+        bool animate = scene.IsRunning();
+        using json = nlohmann::json;
         for (auto [e, style] : reg.ViewOf<UIStyleComponent>())
         {
+            auto field = [&](const std::string& component, const std::string& name, void*& data) -> const FieldInfo* {
+                const ComponentInfo* info = ComponentRegistry::Find(component);
+                if (!info || !info->Has(scene, e)) return nullptr;
+                data = info->Get(scene, e);
+                for (const FieldInfo& f : info->Fields)
+                    if (f.Name == name) return &f;
+                return nullptr;
+            };
+            auto set = [&](const std::string& component, const std::string& name, const json& value) {
+                void* data = nullptr;
+                if (const FieldInfo* f = field(component, name, data))
+                {
+                    try { FieldFromJson(*f, data, value, nullptr); }
+                    catch (const std::exception&) { Log::Warn("UI style: bad value for {}.{}", component, name); }
+                }
+            };
+
             // The sheet: its own, else the nearest ancestor's.
             AssetHandle sheet = style.Sheet;
             for (Entity p = scene.GetParent(e); !sheet.IsValid() && scene.IsValid(p); p = scene.GetParent(p))
                 if (auto* ps = reg.TryGet<UIStyleComponent>(p)) sheet = ps->Sheet;
             const CachedSheet* cached = sheet.IsValid() ? LoadSheet(sheet) : nullptr;
             int64_t version = cached ? cached->Version : -1;
-            if (style.AppliedClasses == style.Classes && style.AppliedSheet == sheet && style.AppliedVersion == version) continue;
-            style.AppliedClasses = style.Classes;
-            style.AppliedSheet = sheet;
-            style.AppliedVersion = version;
-            // Back to the values from before any class (so a class removed takes its values with it).
-            nlohmann::json base = style.BaseJson.empty() ? nlohmann::json::object() : nlohmann::json::parse(style.BaseJson, nullptr, false);
-            if (!base.is_object()) base = nlohmann::json::object();
-            auto setFields = [&](const std::string& component, const nlohmann::json& fields, bool remember, const std::string& from) {
-                const ComponentInfo* info = ComponentRegistry::Find(component);
-                if (!info || !fields.is_object() || !info->Has(scene, e)) return;
-                void* data = info->Get(scene, e);
-                for (const FieldInfo& f : info->Fields)
-                    if (auto v = fields.find(f.Name); v != fields.end())
-                    {
-                        if (remember && !base[component].contains(f.Name)) base[component][f.Name] = FieldToJson(f, data, nullptr);
-                        try { FieldFromJson(f, data, *v, nullptr); }
-                        catch (const std::exception&) { Log::Warn("UI style '{}': bad value for {}.{}", from, component, f.Name); }
-                    }
-            };
-            for (auto& [component, fields] : base.items()) setFields(component, fields, false, "(base)");
-            if (cached)
+            uint32_t states = StyleStates(scene, e);
+            if (style.AppliedClasses != style.Classes || style.AppliedSheet != sheet || style.AppliedVersion != version ||
+                style.AppliedStates != states)
             {
-                const auto& classes = cached->Json.value("classes", nlohmann::json::object());
-                std::istringstream names(style.Classes);
-                for (std::string name; names >> name;)
-                    if (auto it = classes.find(name); it != classes.end() && it->is_object())
-                        for (auto& [component, fields] : it->items()) setFields(component, fields, true, name);
+                style.AppliedClasses = style.Classes;
+                style.AppliedSheet = sheet;
+                style.AppliedVersion = version;
+                style.AppliedStates = states;
+                if (!style.Base.is_object()) style.Base = json::object();
+                // What the styled fields show now (mid-transition values included), then back to the values from
+                // before any rule (so a class removed or a state left takes its values with it).
+                json before = json::object();
+                for (auto& [component, fields] : style.Base.items())
+                    for (auto& [name, value] : fields.items())
+                    {
+                        void* data = nullptr;
+                        if (const FieldInfo* f = field(component, name, data)) before[component][name] = FieldToJson(*f, data, nullptr);
+                        set(component, name, value);
+                    }
+                // The rules, in order: types, then classes; each followed by its active states' rules.
+                std::vector<std::pair<const json*, std::string>> rules;
+                if (cached)
+                {
+                    auto addWithStates = [&](const json& table, const std::string& name) {
+                        if (auto it = table.find(name); it != table.end() && it->is_object()) rules.emplace_back(&*it, name);
+                        for (int i = 0; i < 4; ++i)
+                            if (states & (1u << i))
+                                if (auto it = table.find(name + ":" + kStateNames[i]); it != table.end() && it->is_object())
+                                    rules.emplace_back(&*it, name + ":" + kStateNames[i]);
+                    };
+                    static const json kNone = json::object();
+                    auto tIt = cached->Json.find("types"), cIt = cached->Json.find("classes");
+                    const json& types = tIt != cached->Json.end() && tIt->is_object() ? *tIt : kNone; // (rules point into the sheet)
+                    for (const ComponentInfo& info : ComponentRegistry::All())
+                        if (types.contains(info.Name) || types.contains(info.Name + ":hover") || types.contains(info.Name + ":pressed") ||
+                            types.contains(info.Name + ":selected") || types.contains(info.Name + ":disabled"))
+                            if (info.Has(scene, e)) addWithStates(types, info.Name);
+                    const json& classes = cIt != cached->Json.end() && cIt->is_object() ? *cIt : kNone;
+                    std::istringstream names(style.Classes);
+                    for (std::string name; names >> name;) addWithStates(classes, name);
+                }
+                for (auto& [rule, label] : rules)
+                {
+                    float transition = rule->value("transition", 0.0f);
+                    for (auto& [component, fields] : rule->items())
+                    {
+                        if (!fields.is_object()) continue;
+                        for (auto& [name, value] : fields.items())
+                        {
+                            void* data = nullptr;
+                            const FieldInfo* f = field(component, name, data);
+                            if (!f) continue;
+                            if (!style.Base[component].contains(name))
+                            {
+                                style.Base[component][name] = FieldToJson(*f, data, nullptr);
+                                if (!before[component].contains(name)) before[component][name] = style.Base[component][name];
+                            }
+                            if (transition > 0.0f) style.Transitions[component][name] = transition;
+                            set(component, name, value);
+                        }
+                    }
+                }
+                // Fields with a transition ease from what they showed to their new values.
+                if (animate)
+                    for (auto& [component, fields] : style.Base.items())
+                        for (auto& [name, unused] : fields.items())
+                        {
+                            float seconds = style.Transitions.contains(component) ? style.Transitions[component].value(name, 0.0f) : 0.0f;
+                            void* data = nullptr;
+                            const FieldInfo* f = field(component, name, data);
+                            if (seconds <= 0.0f || !f || !before.contains(component) || !before[component].contains(name)) continue;
+                            json to = FieldToJson(*f, data, nullptr), from = before[component][name];
+                            if (to == from) continue;
+                            json kept = json::array();
+                            for (auto& a : style.Anims)
+                                if (a["component"] != component || a["field"] != name) kept.push_back(a);
+                            style.Anims = kept;
+                            style.Anims.push_back({ { "component", component }, { "field", name }, { "from", from }, { "to", to },
+                                                    { "start", now }, { "seconds", seconds } });
+                            set(component, name, from);
+                        }
+                ++restyled;
             }
-            style.BaseJson = base.dump();
-            ++restyled;
+            // Easing fields.
+            if (style.Anims.is_array() && !style.Anims.empty())
+            {
+                json kept = json::array();
+                for (auto& a : style.Anims)
+                {
+                    float k = std::clamp((now - a.value("start", 0.0f)) / std::max(a.value("seconds", 1.0f), 1e-4f), 0.0f, 1.0f);
+                    if (!animate) k = 1.0f;
+                    k = k * k * (3.0f - 2.0f * k); // ease in and out
+                    set(a["component"].get<std::string>(), a["field"].get<std::string>(), LerpJson(a["from"], a["to"], k));
+                    if (k < 1.0f) kept.push_back(a);
+                }
+                style.Anims = kept;
+            }
         }
         return restyled;
     }

@@ -688,8 +688,10 @@ namespace Dimension
 
     // Takes component values from a UI Style Sheet (.uistyle, like UI Toolkit's USS) by class: each class lists
     // components and field values ({"classes": {"title": {"UI Text": {"Font Size": 40}}}}), applied in the order
-    // named here (later classes win) when the classes or the sheet change. Sheet: this one's, else the nearest
-    // ancestor UI Style's.
+    // named here (later classes win) when the classes, the sheet or the element's state change. "types" rules apply
+    // to styled elements having that component; "name:hover" / ":pressed" / ":selected" / ":disabled" rules apply
+    // in that state; a rule's "transition" (seconds) eases the numeric fields it sets, both ways. Sheet: this one's,
+    // else the nearest ancestor UI Style's.
     struct UIStyleComponent
     {
         AssetHandle Sheet = AssetHandle::None();
@@ -698,7 +700,10 @@ namespace Dimension
         std::string AppliedClasses;
         AssetHandle AppliedSheet = AssetHandle::None();
         int64_t AppliedVersion = -1;
-        std::string BaseJson; // the values classes changed, from before any class: restored when a class goes
+        uint32_t AppliedStates = 0;
+        nlohmann::json Base = nlohmann::json::object();        // values rules changed, from before any rule
+        nlohmann::json Transitions = nlohmann::json::object(); // seconds per field set by a rule with a transition
+        nlohmann::json Anims = nlohmann::json::array();        // fields easing: component, field, from, to, start, seconds
     };
 
     enum class UIMaskShape : int32_t { Rect = 0, Image = 1 };
