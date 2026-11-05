@@ -437,7 +437,7 @@ Done in this milestone: everything listed under Features. These are the largest 
 3. **Animation:** humanoid avatars (retargeting across differently built rigs), and keyframe editing of skeletal animation clips.
 4. **UI system:** UI shown and edited in the Scene view.
 5. **Scripting:** C# scripts in the built player without the .NET SDK (ahead-of-time compiled).
-6. **AI navigation:** navigation for large worlds (surfaces baked and streamed in tiles), and links found automatically when baking (drops and gaps agents can jump, as Unity's auto-generated links).
+6. **AI navigation:** navigation for large worlds (surfaces baked and streamed in tiles, rebaking only the tiles a change touches).
 7. **More audio:** audio from video files, and voice chat (encoding and sending microphone audio over the network).
 8. **Effects:** a visual effect graph, and particle systems colliding with and lit by the terrain's own shape.
 9. **Platform:** Linux support (file dialogs and paths), asset bundles loaded at run time (downloadable content packs mounted next to the game's own, with their scenes and prefabs), and haptics beyond XInput rumble.
