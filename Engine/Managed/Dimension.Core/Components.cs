@@ -1208,15 +1208,124 @@ namespace Dimension
     public unsafe class Cloth : Component
     {
         internal override string NativeName => "Cloth";
-        /// <summary>World-space acceleration on the free vertices (m/s^2), applied live.</summary>
+        /// <summary>World-space acceleration on the free vertices (m/s^2), applied live (Unity's externalAcceleration).</summary>
         public Vector3 Wind { get => GetVector3("Wind"); set => SetVector3("Wind", value); }
-        /// <summary>Takes effect when the cloth is created (play start).</summary>
+        public Vector3 ExternalAcceleration { get => Wind; set => Wind = value; }
+        // These take effect when the cloth is created (play start, or the object turned on).
         public float StretchCompliance { get => GetFloat("Stretch Compliance"); set => SetFloat("Stretch Compliance", value); }
         public float BendCompliance { get => GetFloat("Bend Compliance"); set => SetFloat("Bend Compliance", value); }
+        public float Mass { get => GetFloat("Mass"); set => SetFloat("Mass", value); }
+        public float Damping { get => GetFloat("Damping"); set => SetFloat("Damping", value); }
+        public float Friction { get => GetFloat("Friction"); set => SetFloat("Friction", value); }
+        public int Iterations { get => GetInt("Iterations"); set => SetInt("Iterations", value); }
+        public float Thickness { get => GetFloat("Thickness"); set => SetFloat("Thickness", value); }
+        /// <summary>Edges stretched past (1 + this) times their length tear (0 = never).</summary>
+        public float TearStretch { get => GetFloat("Tear Stretch"); set => SetFloat("Tear Stretch", value); }
+        /// <summary>The object the pinned vertices hold on to (Null: the cloth's own).</summary>
+        public Entity AttachTo { get => GetEntity("Attach To"); set => SetEntity("Attach To", value); }
     }
 
-    /// <summary>A pressurized soft body made from the object's mesh.</summary>
-    /// <summary>Plays a Timeline asset on this object and the objects under it.</summary>
+    /// <summary>
+    /// A cube map of the surroundings for reflections (Unity's ReflectionProbe): surfaces inside its box reflect it.
+    /// Baked probes capture when shown first and when moved; <see cref="RenderProbe"/> captures again (after the scene
+    /// around it changed); Realtime ones every frame.
+    /// </summary>
+    public unsafe class ReflectionProbe : Component
+    {
+        internal override string NativeName => "Reflection Probe";
+        /// <summary>The influence box (centered on the probe).</summary>
+        public Vector3 Size { get => GetVector3("Size"); set => SetVector3("Size", value); }
+        public float Intensity { get => GetFloat("Intensity"); set => SetFloat("Intensity", value); }
+        public bool BoxProjection { get => GetBool("Box Projection"); set => SetBool("Box Projection", value); }
+        public float BlendDistance { get => GetFloat("Blend Distance"); set => SetFloat("Blend Distance", value); }
+        public bool Realtime { get => GetBool("Realtime"); set => SetBool("Realtime", value); }
+        /// <summary>Pixels per cube face: 64, 128, 256 or 512 (others round to the nearest).</summary>
+        public int Resolution
+        {
+            get => 64 << GetInt("Resolution");
+            set => SetInt("Resolution", value <= 96 ? 0 : value <= 192 ? 1 : value <= 384 ? 2 : 3);
+        }
+        /// <summary>Captures it again this frame (Unity's RenderProbe).</summary>
+        public void RenderProbe() => Native.Api.EnvironmentOp(Entity.Scene, Entity.Id, 0, null);
+        /// <summary>Whether a world point is inside its box.</summary>
+        public bool Contains(Vector3 point)
+        {
+            Vector3 d = Vector3.Abs(point - Entity.Transform.WorldPosition), half = Vector3.Abs(Size) * 0.5f;
+            return d.X <= half.X && d.Y <= half.Y && d.Z <= half.Z;
+        }
+    }
+
+    /// <summary>9 spherical-harmonic coefficients of light from every direction (Unity's SphericalHarmonicsL2), as light
+    /// probes hold them.</summary>
+    public unsafe struct SphericalHarmonicsL2
+    {
+        internal fixed float Data[27];
+        /// <summary>Coefficient `i` (0-8) as RGB.</summary>
+        public Vector3 this[int i]
+        {
+            get => new(Data[i * 3], Data[i * 3 + 1], Data[i * 3 + 2]);
+            set { Data[i * 3] = value.X; Data[i * 3 + 1] = value.Y; Data[i * 3 + 2] = value.Z; }
+        }
+        /// <summary>The light reaching a surface facing `normal` (irradiance over pi: an even environment of color c
+        /// gives c).</summary>
+        public Color Evaluate(Vector3 normal)
+        {
+            float* v = stackalloc float[30];
+            for (int i = 0; i < 27; ++i) v[i] = Data[i];
+            v[27] = normal.X; v[28] = normal.Y; v[29] = normal.Z;
+            Native.Api.EnvironmentOp(IntPtr.Zero, 0, 3, v);
+            return new Color(v[0], v[1], v[2], 1.0f);
+        }
+    }
+
+    /// <summary>The baked light probes of the scene's Light Probe Volumes (Unity's LightProbes).</summary>
+    public static unsafe class LightProbes
+    {
+        /// <summary>The probe light at a world point (the smallest baked volume holding it, blended between its probes;
+        /// Intensity applied). False outside every baked volume.</summary>
+        public static bool GetInterpolatedProbe(Vector3 position, out SphericalHarmonicsL2 probe) => GetInterpolatedProbe(position, out probe, out _);
+        /// <summary>As above, with the volume's weight there (it fades to 0 over its Blend Distance at the walls).</summary>
+        public static bool GetInterpolatedProbe(Vector3 position, out SphericalHarmonicsL2 probe, out float weight)
+        {
+            float* v = stackalloc float[30];
+            v[0] = position.X; v[1] = position.Y; v[2] = position.Z;
+            bool inside = Native.Api.EnvironmentOp(Native.CurrentScene, 0, 1, v) != 0;
+            probe = default;
+            for (int i = 0; i < 27; ++i) probe.Data[i] = v[i];
+            weight = v[27];
+            return inside;
+        }
+        /// <summary>The probe light reaching a surface at a point facing `normal` (black outside the volumes).</summary>
+        public static Color GetLight(Vector3 position, Vector3 normal) =>
+            GetInterpolatedProbe(position, out var sh) ? sh.Evaluate(normal) : new Color(0, 0, 0, 1);
+    }
+
+    public enum WindZoneMode { Directional, Spherical }
+
+    /// <summary>
+    /// Wind (Unity's WindZone): Directional blows along the object's forward everywhere, Spherical out from it within
+    /// Radius; Main is the speed, with Turbulence swirls and Pulse gusts. It moves particles, cloth, trees and grass,
+    /// and bodies with wind drag. <see cref="GetWindAt"/> gives the wind of every zone at a point.
+    /// </summary>
+    public unsafe class WindZone : Component
+    {
+        internal override string NativeName => "Wind Zone";
+        public WindZoneMode Mode { get => (WindZoneMode)GetInt("Mode"); set => SetInt("Mode", (int)value); }
+        public float Radius { get => GetFloat("Radius"); set => SetFloat("Radius", value); }
+        /// <summary>Wind speed, m/s (Unity's windMain).</summary>
+        public float Main { get => GetFloat("Main"); set => SetFloat("Main", value); }
+        public float Turbulence { get => GetFloat("Turbulence"); set => SetFloat("Turbulence", value); }
+        public float PulseMagnitude { get => GetFloat("Pulse Magnitude"); set => SetFloat("Pulse Magnitude", value); }
+        public float PulseFrequency { get => GetFloat("Pulse Frequency"); set => SetFloat("Pulse Frequency", value); }
+        /// <summary>The wind velocity (m/s) at a world point now, from all the scene's zones.</summary>
+        public static Vector3 GetWindAt(Vector3 point)
+        {
+            float* v = stackalloc float[3] { point.X, point.Y, point.Z };
+            Native.Api.EnvironmentOp(Native.CurrentScene, 0, 2, v);
+            return new Vector3(v[0], v[1], v[2]);
+        }
+    }
+
     /// <summary>What a Timeline does at its end without Loop (Unity's DirectorWrapMode): Hold the last frame, Loop, or
     /// None (stop and go back to the start).</summary>
     public enum TimelineWrapMode { Hold, Loop, None }
@@ -1366,6 +1475,7 @@ namespace Dimension
         public int Break() => Break(Entity.Transform.Position);
     }
 
+    /// <summary>A pressurized soft body made from the object's mesh.</summary>
     public unsafe class SoftBody : Component
     {
         internal override string NativeName => "Soft Body";

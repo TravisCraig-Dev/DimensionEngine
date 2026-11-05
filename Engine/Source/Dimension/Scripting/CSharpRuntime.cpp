@@ -25,6 +25,8 @@
 #include "Dimension/Asset/DataAsset.h"
 #include "Dimension/UI/UI.h"
 #include "Dimension/Animation/Timeline.h"
+#include "Dimension/Renderer/Environment.h"
+#include "Dimension/Physics/Wind.h"
 #include <climits>
 #include <cmath>
 #include <limits>
@@ -295,6 +297,9 @@ namespace Dimension
             uint64_t (*TimelineTrack)(void*, uint64_t, int, int, uint64_t, const char**);
             // A Timeline's asset swapped while playing: hands the old one's Animators back and restarts at 0 (v: old GUID).
             void (*TimelineAssetChanged)(void*, uint64_t, uint64_t);
+            // Lighting and wind: 0 capture a Reflection Probe again, 1 light probes at v xyz (out: 27 SH floats, then the
+            // weight at v[27]), 2 the wind at v xyz (out xyz), 3 evaluate SH: v 27 coefficients, normal at v[27..29] (out rgb).
+            int (*EnvironmentOp)(void*, uint64_t, int, float*);
         };
 
         // Background scene loads started from C#, by id.
@@ -2181,6 +2186,43 @@ namespace Dimension
                 if (auto old = AssetManager::GetTimeline(AssetHandle(before))) Timeline::Release(scene, Unpack(e), *old);
                 tl->Bindings.clear();
                 tl->Time = 0.0f;
+            };
+            a.EnvironmentOp = [](void* s, uint64_t e, int op, float* v) -> int {
+                switch (op)
+                {
+                case 0:
+                {
+                    auto* probe = Comp<ReflectionProbeComponent>(s, e);
+                    if (!probe) return 0;
+                    ++probe->RenderRequests;
+                    return 1;
+                }
+                case 1:
+                {
+                    if (!s) return 0;
+                    Environment::SH9 sh;
+                    float weight = S(s).SampleLightProbes({ v[0], v[1], v[2] }, sh);
+                    for (int k = 0; k < 9; ++k) std::memcpy(v + k * 3, &sh[k], 12);
+                    v[27] = weight;
+                    return weight > 0.0f ? 1 : 0;
+                }
+                case 2:
+                {
+                    if (!s) return 0;
+                    Scene& scene = S(s);
+                    glm::vec3 w = Wind::Gather(scene, scene.GetTime()).At({ v[0], v[1], v[2] });
+                    std::memcpy(v, &w, 12);
+                    return 1;
+                }
+                default:
+                {
+                    Environment::SH9 sh;
+                    for (int k = 0; k < 9; ++k) std::memcpy(&sh[k], v + k * 3, 12);
+                    glm::vec3 c = Environment::EvaluateSH(sh, glm::normalize(glm::vec3(v[27], v[28], v[29]) + glm::vec3(1e-9f)));
+                    std::memcpy(v, &c, 12);
+                    return 1;
+                }
+                }
             };
             a.UIEvents = [](void* s, int op, float* v, uint64_t* ids, int max) -> int {
                 if (!s) return 0;

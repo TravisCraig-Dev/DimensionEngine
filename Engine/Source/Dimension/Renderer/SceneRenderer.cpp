@@ -4240,7 +4240,7 @@ namespace Dimension
             uint32_t resolution = 64u << std::clamp(probe.Resolution, 0, 3);
             glm::vec3 position = t.GetWorldPosition();
             // Re-capture when the probe or its scene changes (play mode works on a copy of the scene).
-            struct { glm::vec3 P; uint32_t R; const void* S; } keyData{ position, resolution, &scene };
+            struct { glm::vec3 P; uint32_t R; const void* S; uint32_t Requests; } keyData{ position, resolution, &scene, probe.RenderRequests };
             uint64_t key = 1469598103934665603ull;
             const auto* bytes = reinterpret_cast<const uint8_t*>(&keyData);
             for (size_t i = 0; i < sizeof(keyData); ++i) key = (key ^ bytes[i]) * 1099511628211ull;

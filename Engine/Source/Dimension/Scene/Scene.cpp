@@ -1635,6 +1635,51 @@ namespace Dimension
         t.World[3] += glm::vec4(worldDelta, 0.0f); // read before transforms update next (NavMesh Agents with Root Motion)
     }
 
+    float Scene::SampleLightProbes(const glm::vec3& position, std::array<glm::vec3, 9>& out)
+    {
+        out.fill(glm::vec3(0.0f));
+        const LightProbeVolumeComponent* best = nullptr;
+        glm::vec3 bestCenter(0.0f);
+        float bestVolume = 0.0f;
+        for (auto [e, lpv, t] : m_Registry.ViewOf<LightProbeVolumeComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || !lpv.IsBaked()) continue;
+            glm::vec3 center = t.GetWorldPosition(), half = glm::abs(lpv.Size) * 0.5f;
+            glm::vec3 d = glm::abs(position - center);
+            if (d.x > half.x || d.y > half.y || d.z > half.z) continue;
+            float volume = half.x * half.y * half.z;
+            if (!best || volume < bestVolume) { best = &lpv; bestCenter = center; bestVolume = volume; }
+        }
+        if (!best) return 0.0f;
+        const LightProbeVolumeComponent& v = *best;
+        glm::ivec3 n(std::max(v.ProbesX, 1), std::max(v.ProbesY, 1), std::max(v.ProbesZ, 1));
+        glm::vec3 size = glm::max(glm::abs(v.Size), glm::vec3(1e-4f));
+        // Grid coordinates (probes sit at the box's corners and evenly between; one probe on an axis sits in the middle).
+        glm::vec3 g = (position - bestCenter) / size + 0.5f;
+        glm::ivec3 i0(0), i1(0);
+        glm::vec3 f(0.0f);
+        for (int a = 0; a < 3; ++a)
+        {
+            if (n[a] <= 1) continue;
+            float x = std::clamp(g[a], 0.0f, 1.0f) * (float)(n[a] - 1);
+            i0[a] = std::min((int)std::floor(x), n[a] - 2);
+            i1[a] = i0[a] + 1;
+            f[a] = x - (float)i0[a];
+        }
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            glm::ivec3 c(corner & 1 ? i1.x : i0.x, corner & 2 ? i1.y : i0.y, corner & 4 ? i1.z : i0.z);
+            float w = (corner & 1 ? f.x : 1.0f - f.x) * (corner & 2 ? f.y : 1.0f - f.y) * (corner & 4 ? f.z : 1.0f - f.z);
+            if (w <= 0.0f) continue;
+            size_t probe = (size_t)(c.x + c.y * n.x + c.z * n.x * n.y);
+            for (int k = 0; k < 9; ++k) out[k] += v.Baked[probe * 9 + k] * w;
+        }
+        for (auto& coefficient : out) coefficient *= v.Intensity;
+        glm::vec3 half = glm::abs(v.Size) * 0.5f, inside = half - glm::abs(position - bestCenter);
+        float edge = std::min(inside.x, std::min(inside.y, inside.z));
+        return v.BlendDistance > 0.0f ? std::clamp(edge / v.BlendDistance, 0.0f, 1.0f) : 1.0f;
+    }
+
     void Scene::RebindAnimator(Entity e)
     {
         auto* anim = IsValid(e) ? m_Registry.TryGet<AnimatorComponent>(e) : nullptr;

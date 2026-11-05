@@ -5590,6 +5590,17 @@
           "Intensity": 1.0,
           "Box Projection": true,
           "Realtime": false
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.ProbeRefresher",
+              "Fields": {
+                "Interval": 2.0
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     },

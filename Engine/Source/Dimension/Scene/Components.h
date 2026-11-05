@@ -732,6 +732,7 @@ namespace Dimension
         bool BoxProjection = true;            // parallax-correct reflections against the box (rooms, courtyards)
         float BlendDistance = 1.0f;           // fades out over this distance inside the box walls (blends with neighbors)
         bool Realtime = false;                // re-capture every frame (six extra scene renders)
+        uint32_t RenderRequests = 0;          // runtime: bumped by ReflectionProbe.RenderProbe() to capture again once
     };
 
     // ---- Audio -------------------------------------------------------------------

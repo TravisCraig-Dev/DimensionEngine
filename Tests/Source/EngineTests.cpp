@@ -6229,6 +6229,31 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // Light probe sampling on the CPU (LightProbes.GetInterpolatedProbe): trilinear between a volume's probes, its
+    // Intensity applied, fading over its Blend Distance at the walls, and nothing outside.
+    void TestLightProbeSampling()
+    {
+        Scene scene("Probes");
+        Entity e = scene.CreateEntity("Volume");
+        auto& v = scene.GetRegistry().Emplace<LightProbeVolumeComponent>(e);
+        v.Size = { 10, 4, 10 };
+        v.ProbesX = 2;
+        v.ProbesY = v.ProbesZ = 1;
+        v.Intensity = 2.0f;
+        v.BlendDistance = 1.0f;
+        v.Baked.assign(18, glm::vec3(0.0f));
+        v.Baked[0] = { 1, 0, 0 }; // probe at x = -5
+        v.Baked[9] = { 0, 0, 1 }; // probe at x = +5
+        scene.UpdateTransforms();
+        std::array<glm::vec3, 9> sh;
+        CHECK(Near(scene.SampleLightProbes({ 0, 0, 0 }, sh), 1.0f) && glm::length(sh[0] - glm::vec3(1, 0, 1)) < 1e-4f);
+        CHECK(Near(scene.SampleLightProbes({ -4, 0, 0 }, sh), 1.0f) && glm::length(sh[0] - glm::vec3(1.8f, 0, 0.2f)) < 1e-4f);
+        CHECK(Near(scene.SampleLightProbes({ 4.5f, 0, 0 }, sh), 0.5f)); // half a meter from the wall, of 1 m blend
+        CHECK(scene.SampleLightProbes({ 0, 0, 20 }, sh) == 0.0f && sh[0] == glm::vec3(0.0f));
+        v.Baked.clear(); // not baked: no probes
+        CHECK(scene.SampleLightProbes({ 0, 0, 0 }, sh) == 0.0f);
+    }
+
     // Records the order of its update calls; LateUpdate only when asked for.
     class LateProbe : public ScriptableEntity
     {
@@ -9702,6 +9727,25 @@ namespace
             text = frame({ 600, 500 }, true);
             CHECK(rt->GetUISelected().IsNull() && text == "Pointer over the game; selected: none (Tab)");
             Input::SetGameInputEnabled(gameInput);
+            rt->OnRuntimeStop();
+        }
+        // C# WindZone.GetWindAt: the Sandbox's WindVane turns to point where a Wind Zone (turned 90 degrees left, so it
+        // blows toward -X) blows.
+        {
+            Scene wv("Wind");
+            Entity zone = wv.CreateEntity("Zone");
+            auto& wz = wv.GetRegistry().Emplace<WindZoneComponent>(zone);
+            wz.Main = 5.0f;
+            wz.Turbulence = wz.PulseMagnitude = 0.0f;
+            wv.GetRegistry().Get<TransformComponent>(zone).Rotation = { 0, glm::half_pi<float>(), 0 };
+            Entity vane = wv.CreateEntity("Vane");
+            wv.GetRegistry().Emplace<ScriptComponent>(vane).Add("Game.WindVane");
+            auto rt = wv.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 40; ++i) rt->OnUpdateRuntime(0.05f); // 2 s at 180 degrees a second
+            rt->UpdateTransforms();
+            glm::vec3 f = rt->GetRegistry().Get<TransformComponent>(vane).Forward();
+            CHECK(glm::dot(f, glm::vec3(-1, 0, 0)) > 0.999f);
             rt->OnRuntimeStop();
         }
         // C# Timeline control: the Sandbox's TimelineStatus hears Played (play on awake) / Paused / Stopped, its Opened()
@@ -13710,6 +13754,7 @@ int main(int argc, char** argv)
     Run("UI layout and clicks", TestUI);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
+    Run("Light probe sampling", TestLightProbeSampling);
     Run("UI widgets", TestUIWidgets);
     Run("UI dropdown and scrollbar", TestUIDropdownAndScrollbar);
     Run("UI text editing", TestUITextEditing);

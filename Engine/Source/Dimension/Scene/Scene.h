@@ -4,6 +4,7 @@
 #include "Dimension/Scene/System.h"
 #include "Dimension/Physics/Collision.h"
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 
 namespace Dimension
@@ -313,6 +314,10 @@ namespace Dimension
         // Puts an Animator back to its start: the controller's default state (or its clip) from the beginning, no
         // crossfade, parameters back to their defaults, root motion tracking and target matching reset.
         void RebindAnimator(Entity e);
+        // The light probes' irradiance (9 SH coefficients, Environment::SH9 order, Intensity applied) at a world point:
+        // the smallest baked Light Probe Volume holding it, trilinear between its probes. Returns the volume's weight
+        // there (1 inside, fading to 0 over its Blend Distance at the walls; 0 = no probes, `out` zeroed).
+        float SampleLightProbes(const glm::vec3& position, std::array<glm::vec3, 9>& out);
         void DispatchJointBreak(Entity e, float force);
         void DispatchUIValueChanged(Entity e, float value);
         void DispatchUIText(Entity e, const std::string& text, bool submit);
