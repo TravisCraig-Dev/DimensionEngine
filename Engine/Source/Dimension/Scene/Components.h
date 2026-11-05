@@ -823,13 +823,16 @@ namespace Dimension
         AssetHandle Timeline = AssetHandle::None();
         bool PlayOnAwake = true;
         bool Loop = false;
+        bool ResetOnEnd = false; // without Loop: at the end it stops and goes back to 0 (Unity's wrap mode None)
         float Speed = 1.0f;
         // Runtime.
         float Time = 0.0f;
         bool Playing = false;
         bool Started = false;
-        void Play() { Playing = true; Started = true; Time = 0.0f; }
-        void Stop() { Playing = false; Started = true; }
+        bool Paused = false;          // Pause(): held where it is until Resume()
+        std::vector<Entity> Bindings; // per track of its timeline: the object it drives instead of its path (Null: by path)
+        void Play() { Playing = true; Started = true; Paused = false; Time = 0.0f; }
+        void Stop() { Playing = false; Started = true; Paused = false; }
     };
 
     struct WaterVolumeComponent

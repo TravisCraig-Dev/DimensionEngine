@@ -1976,6 +1976,11 @@ namespace Dimension
         if (s_EventHook && IsValid(e)) s_EventHook(*this, e, EventKind::Click, 0.0f, Entity::Null(), nullptr);
     }
 
+    void Scene::DispatchTimelineEvent(Entity e, EventKind kind)
+    {
+        if (s_EventHook && IsValid(e)) s_EventHook(*this, e, kind, 0.0f, Entity::Null(), nullptr);
+    }
+
     void Scene::DispatchUIValueChanged(Entity e, float value)
     {
         if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))

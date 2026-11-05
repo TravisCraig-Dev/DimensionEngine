@@ -529,7 +529,7 @@ namespace Dimension
         private static readonly Type[] s_Supported =
         {
             typeof(float), typeof(int), typeof(bool), typeof(string), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Color), typeof(Entity),
-            typeof(Prefab), typeof(Texture), typeof(Material), typeof(Mesh), typeof(AudioClip), typeof(AnimatorController),
+            typeof(Prefab), typeof(Texture), typeof(Material), typeof(Mesh), typeof(AudioClip), typeof(AnimatorController), typeof(TimelineAsset),
         };
 
         // Serialized field types: the ones above, data assets (by GUID), enums (stored as their int value), and lists
@@ -608,7 +608,7 @@ namespace Dimension
             t == typeof(float) ? "Float" : t == typeof(int) ? "Int" : t == typeof(bool) ? "Bool" : t == typeof(string) ? "String" :
             t == typeof(Vector2) ? "Vec2" : t == typeof(Vector3) ? "Vec3" : t == typeof(Vector4) ? "Vec4" : t == typeof(Color) ? "Color4" :
             t == typeof(Prefab) ? "Prefab" : t == typeof(Texture) ? "Texture" : t == typeof(Material) ? "Material" : t == typeof(Mesh) ? "Mesh" :
-            t == typeof(AudioClip) ? "Audio" : t == typeof(AnimatorController) ? "AnimatorController" : "Entity";
+            t == typeof(AudioClip) ? "Audio" : t == typeof(AnimatorController) ? "AnimatorController" : t == typeof(TimelineAsset) ? "Timeline" : "Entity";
 
         // A field's value as the engine reads it (entities as packed ids, null for none; lists as arrays).
         private static void WriteValue(Utf8JsonWriter w, object v)
@@ -906,6 +906,7 @@ namespace Dimension
             s_StateBehaviourTypes.Clear();
             s_StateBehaviours.Clear();
             s_MissingStateBehaviours.Clear();
+            s_EventMethods.Clear();
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);
@@ -1041,7 +1042,12 @@ namespace Dimension
                 {
                     case 0: b.OnTextChanged(s); break;
                     case 1: b.OnSubmit(s); break;
-                    case 2: b.OnAnimationEvent(s); break;
+                    case 2:
+                        b.OnAnimationEvent(s);
+                        // Like Unity's animation events (and timeline signals): a method of that name, if the class has
+                        // one taking nothing, is called too.
+                        if (EventMethod(b.GetType(), s) is { } named) named.Invoke(b, null);
+                        break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
@@ -1184,6 +1190,17 @@ namespace Dimension
                 }
             }
             catch (Exception ex) { Debug.LogError($"{current}: {ex}"); }
+        }
+
+        private static readonly Dictionary<(Type, string), MethodInfo> s_EventMethods = new();
+        private static MethodInfo EventMethod(Type type, string name)
+        {
+            if (string.IsNullOrEmpty(name) || name == nameof(Behaviour.OnAnimationEvent)) return null;
+            if (s_EventMethods.TryGetValue((type, name), out var m)) return m;
+            m = type.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, Type.EmptyTypes);
+            if (m != null && (m.DeclaringType == typeof(Behaviour) || m.ReturnType != typeof(void) && m.ReturnType != typeof(System.Collections.IEnumerator))) m = null;
+            s_EventMethods[(type, name)] = m;
+            return m;
         }
 
         private static IntPtr s_FieldsBuffer; // the last GetFields result (native reads it before the next call)

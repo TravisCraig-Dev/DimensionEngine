@@ -189,6 +189,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, byte*, byte*, int, byte*, byte*> ComponentString;
         public delegate* unmanaged<IntPtr, int, float*, ulong*, int, int> UIEvents;  // see EventSystem in Api.cs
         public delegate* unmanaged<IntPtr, ulong, int, int, byte*, float*, int> AnimatorOp;  // see Animator in Components.cs
+        public delegate* unmanaged<IntPtr, ulong, int, int, ulong, byte**, ulong> TimelineTrack;  // see Timeline in Components.cs
+        public delegate* unmanaged<IntPtr, ulong, ulong, void> TimelineAssetChanged;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

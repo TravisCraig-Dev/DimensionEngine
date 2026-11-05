@@ -1217,12 +1217,84 @@ namespace Dimension
 
     /// <summary>A pressurized soft body made from the object's mesh.</summary>
     /// <summary>Plays a Timeline asset on this object and the objects under it.</summary>
+    /// <summary>What a Timeline does at its end without Loop (Unity's DirectorWrapMode): Hold the last frame, Loop, or
+    /// None (stop and go back to the start).</summary>
+    public enum TimelineWrapMode { Hold, Loop, None }
+
+    /// <summary>
+    /// Plays a timeline asset (Unity's PlayableDirector). Play starts from the beginning, Pause holds it, Resume goes
+    /// on, Stop goes back to the start (handing Animators back); Played / Paused / Stopped tell listeners (Stopped also
+    /// at its end). Tracks drive the objects their paths name under this one unless bound to others
+    /// (<see cref="SetGenericBinding"/>). Timeline events call the method of that name on the object's scripts.
+    /// </summary>
     public unsafe class Timeline : Component
     {
         internal override string NativeName => "Timeline";
-        public void Play() => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 0, 0.0f);
-        public void Stop() => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 1, 0.0f);
-        public bool IsPlaying => Native.Api.TimelineControl(Entity.Scene, Entity.Id, 4, 0.0f) != 0.0f;
+        private float Control(int op, float value = 0.0f) => Native.Api.TimelineControl(Entity.Scene, Entity.Id, op, value);
+        public void Play() => Control(0);
+        /// <summary>Stops and goes back to the start (Animators the timeline drove go back to their own playback).</summary>
+        public void Stop() => Control(1);
+        /// <summary>Holds it where it is (Resume goes on from there).</summary>
+        public void Pause() => Control(5);
+        public void Resume() => Control(6);
+        public bool IsPlaying => Control(4) != 0.0f;
+        public bool IsPaused => Control(7) != 0.0f;
+        /// <summary>The asset's length in seconds.</summary>
+        public float Duration => Control(8);
+        /// <summary>Writes every track's values at <see cref="Time"/> now (after setting Time while not playing).</summary>
+        public void Evaluate() => Control(9);
+        /// <summary>The asset it plays; setting another one starts it over at 0 (bindings cleared).</summary>
+        public TimelineAsset Asset
+        {
+            get => new(GetAssetGuid("Timeline"));
+            set
+            {
+                ulong before = GetAssetGuid("Timeline");
+                if (before == value.Guid) return;
+                SetAssetGuid("Timeline", value.Guid);
+                Native.Api.TimelineAssetChanged(Entity.Scene, Entity.Id, before);
+            }
+        }
+        public TimelineWrapMode WrapMode
+        {
+            get => Loop ? TimelineWrapMode.Loop : GetBool("Reset On End") ? TimelineWrapMode.None : TimelineWrapMode.Hold;
+            set { Loop = value == TimelineWrapMode.Loop; SetBool("Reset On End", value == TimelineWrapMode.None); }
+        }
+        /// <summary>Tracks in its asset.</summary>
+        public int TrackCount => (int)Control(10);
+        /// <summary>A track's kind, path and (property tracks) component and field, e.g. "Property Door Transform.Position".</summary>
+        public string GetTrackName(int track)
+        {
+            byte* text = null;
+            Native.Api.TimelineTrack(Entity.Scene, Entity.Id, 2, track, 0, &text);
+            return text != null ? Native.FromUtf8(text) : "";
+        }
+        /// <summary>Has a track drive `target` instead of the object its path names (Unity's SetGenericBinding: one
+        /// cutscene for different actors). Entity.Null goes back to the path.</summary>
+        public void SetGenericBinding(int track, Entity target) =>
+            Native.Api.TimelineTrack(Entity.Scene, Entity.Id, 1, track, target.IsValid ? target.Id : ulong.MaxValue, null);
+        /// <summary>The object a track is bound to (Null: it follows its path).</summary>
+        public Entity GetGenericBinding(int track)
+        {
+            ulong id = Native.Api.TimelineTrack(Entity.Scene, Entity.Id, 0, track, 0, null);
+            return id == ulong.MaxValue ? Entity.Null : new Entity(Entity.Scene, id);
+        }
+        public event Action Played
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.TimelinePlayed, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.TimelinePlayed, value);
+        }
+        public event Action Paused
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.TimelinePaused, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.TimelinePaused, value);
+        }
+        /// <summary>Stop() was called, or it reached its end (without Loop).</summary>
+        public event Action Stopped
+        {
+            add => EngineEvents.Add(Entity, EngineEvents.Kind.TimelineStopped, value);
+            remove => EngineEvents.Remove(Entity, EngineEvents.Kind.TimelineStopped, value);
+        }
         /// <summary>Seconds into the timeline; setting it jumps there.</summary>
         public float Time
         {

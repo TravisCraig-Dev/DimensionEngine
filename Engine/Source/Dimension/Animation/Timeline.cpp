@@ -321,7 +321,7 @@ namespace Dimension
                     if (track.Muted) continue;
                     if (track.IsClipTrack())
                     {
-                        Entity target = ResolvePath(scene, root, track.Path);
+                        Entity target = TrackTarget(scene, root, timeline, track);
                         if (target.IsNull()) continue;
                         if (track.Kind == TimelineTrackKind::Activation) written += ApplyActivation(scene, target, track, time);
                         else if (track.Kind == TimelineTrackKind::Animation) written += ApplyAnimation(scene, target, track, time);
@@ -329,7 +329,7 @@ namespace Dimension
                         continue;
                     }
                     if (track.Keys.empty()) continue;
-                    Entity target = ResolvePath(scene, root, track.Path);
+                    Entity target = TrackTarget(scene, root, timeline, track);
                     const ComponentInfo* info = ComponentRegistry::Find(track.Component);
                     if (target.IsNull() || !info || !info->Has(scene, target)) continue;
                     const FieldInfo* field = FindField(info, track.Field);
@@ -363,7 +363,7 @@ namespace Dimension
             for (const TimelineTrack& track : timeline.Tracks)
             {
                 if (track.Muted || track.Kind != TimelineTrackKind::Audio) continue;
-                Entity target = ResolvePath(scene, root, track.Path);
+                Entity target = TrackTarget(scene, root, timeline, track);
                 if (target.IsNull() || !scene.GetRegistry().Has<AudioSourceComponent>(target)) continue;
                 for (const TimelineClip& c : track.Clips)
                 {
@@ -381,7 +381,7 @@ namespace Dimension
                 for (const TimelineTrack& track : timeline.Tracks)
                 {
                     if (track.Kind != TimelineTrackKind::Animation && track.Kind != TimelineTrackKind::Control) continue;
-                    Entity target = ResolvePath(scene, root, track.Path);
+                    Entity target = TrackTarget(scene, root, timeline, track);
                     if (target.IsNull()) continue;
                     if (track.Kind == TimelineTrackKind::Control)
                     {
@@ -403,7 +403,7 @@ namespace Dimension
                 for (const TimelineTrack& track : timeline.Tracks)
                 {
                     if (track.Muted || track.Kind != TimelineTrackKind::Control) continue;
-                    Entity target = ResolvePath(scene, root, track.Path);
+                    Entity target = TrackTarget(scene, root, timeline, track);
                     if (target.IsNull()) continue;
                     for (const TimelineClip& c : track.Clips)
                     {
@@ -444,8 +444,68 @@ namespace Dimension
             AdvanceNested(scene, root, timeline, from, to, events, 0);
         }
 
+        Entity TrackTarget(Scene& scene, Entity root, const TimelineAsset& timeline, const TimelineTrack& track)
+        {
+            if (auto* tl = scene.GetRegistry().TryGet<TimelineComponent>(root); tl && !tl->Bindings.empty())
+            {
+                size_t index = (size_t)(&track - timeline.Tracks.data());
+                if (index < tl->Bindings.size() && !tl->Bindings[index].IsNull() && scene.IsValid(tl->Bindings[index]) &&
+                    AssetManager::GetTimeline(tl->Timeline).get() == &timeline)
+                    return tl->Bindings[index];
+            }
+            return ResolvePath(scene, root, track.Path);
+        }
+
+        void Play(Scene& scene, Entity e)
+        {
+            auto* tl = scene.GetRegistry().TryGet<TimelineComponent>(e);
+            if (!tl) return;
+            tl->Play();
+            tl->Time = 0.0f;
+            scene.DispatchTimelineEvent(e, Scene::EventKind::TimelinePlayed);
+        }
+
+        void Pause(Scene& scene, Entity e)
+        {
+            auto* tl = scene.GetRegistry().TryGet<TimelineComponent>(e);
+            if (!tl || !tl->Playing) return;
+            tl->Playing = false;
+            tl->Paused = true;
+            tl->Started = true;
+            scene.DispatchTimelineEvent(e, Scene::EventKind::TimelinePaused);
+        }
+
+        void Resume(Scene& scene, Entity e)
+        {
+            auto* tl = scene.GetRegistry().TryGet<TimelineComponent>(e);
+            if (!tl || tl->Playing) return;
+            tl->Playing = true;
+            tl->Paused = false;
+            tl->Started = true;
+            scene.DispatchTimelineEvent(e, Scene::EventKind::TimelinePlayed);
+        }
+
+        void Stop(Scene& scene, Entity e)
+        {
+            auto* tl = scene.GetRegistry().TryGet<TimelineComponent>(e);
+            if (!tl) return;
+            bool wasRunning = tl->Playing || tl->Paused;
+            tl->Stop();
+            tl->Time = 0.0f;
+            if (auto asset = AssetManager::GetTimeline(tl->Timeline)) Release(scene, e, *asset);
+            if (wasRunning) scene.DispatchTimelineEvent(e, Scene::EventKind::TimelineStopped);
+        }
+
+        void Evaluate(Scene& scene, Entity e)
+        {
+            auto* tl = scene.GetRegistry().TryGet<TimelineComponent>(e);
+            if (!tl) return;
+            if (auto asset = AssetManager::GetTimeline(tl->Timeline)) Apply(scene, e, *asset, tl->Time);
+        }
+
         void Update(Scene& scene, float dt)
         {
+            std::vector<std::pair<Entity, Scene::EventKind>> notices; // sent after iterating: listeners may change the scene
             for (auto [e, tl, t] : scene.GetRegistry().ViewOf<TimelineComponent, TransformComponent>())
             {
                 if (!t.ActiveInHierarchy) continue;
@@ -456,6 +516,7 @@ namespace Dimension
                     tl.Playing = tl.PlayOnAwake;
                     tl.Time = 0.0f;
                     starting = tl.Playing;
+                    if (starting) notices.emplace_back(e, Scene::EventKind::TimelinePlayed);
                 }
                 if (!tl.Playing) continue;
                 auto asset = AssetManager::GetTimeline(tl.Timeline);
@@ -479,13 +540,21 @@ namespace Dimension
                     {
                         tl.Time = duration;
                         tl.Playing = false;
+                        notices.emplace_back(e, Scene::EventKind::TimelineStopped);
                     }
                 }
                 else
                     Advance(scene, e, *asset, before, tl.Time, fired);
                 Apply(scene, e, *asset, tl.Time);
+                if (!tl.Playing && tl.ResetOnEnd)
+                {
+                    // Wrap mode None: back to the start, Animators handed back.
+                    tl.Time = 0.0f;
+                    Release(scene, e, *asset);
+                }
                 for (const auto& [target, fn] : fired) scene.DispatchAnimationEvent(target, fn);
             }
+            for (auto& [e, kind] : notices) scene.DispatchTimelineEvent(e, kind);
         }
 
         void Restart(Scene& scene)

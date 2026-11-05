@@ -10,7 +10,8 @@ namespace Dimension
     internal static class EngineEvents
     {
         // Matches Scene::EventKind.
-        internal enum Kind { Click = 0, ValueChanged = 1, TextChanged = 2, Submit = 3, CollisionEnter = 4, CollisionExit = 5, TriggerEnter = 6, TriggerExit = 7 }
+        internal enum Kind { Click = 0, ValueChanged = 1, TextChanged = 2, Submit = 3, CollisionEnter = 4, CollisionExit = 5, TriggerEnter = 6, TriggerExit = 7,
+                             TimelinePlayed = 8, TimelinePaused = 9, TimelineStopped = 10 }
 
         // Listeners in subscription order. One list per (entity, kind): widgets give the same event different types
         // (a slider's float, a toggle's bool, a dropdown's int), so delegates are kept as they were added.

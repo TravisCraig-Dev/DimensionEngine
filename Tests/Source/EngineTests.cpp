@@ -2676,6 +2676,33 @@ namespace
         CHECK(Near(rr.Get<TransformComponent>(door).Position.y, 2.0f, 0.1f) && Near(rr.Get<PointLightComponent>(lamp).Intensity, 8.0f, 0.01f));
         for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(1.0f / 60.0f);
         CHECK(!rr.Get<TimelineComponent>(door).Playing && Near(rr.Get<TransformComponent>(door).Position.y, 4.0f));
+
+        // Script controls: Pause holds it, Resume goes on, Stop goes back to 0.
+        auto frames = [&](int n) { for (int i = 0; i < n; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); };
+        auto doorY = [&] { return rr.Get<TransformComponent>(door).Position.y; };
+        Timeline::Play(*rt, door);
+        frames(30);
+        CHECK(Near(doorY(), 1.0f, 0.1f));
+        Timeline::Pause(*rt, door);
+        frames(30);
+        CHECK(Near(doorY(), 1.0f, 0.1f) && rr.Get<TimelineComponent>(door).Paused && !rr.Get<TimelineComponent>(door).Playing);
+        Timeline::Resume(*rt, door);
+        frames(30);
+        CHECK(Near(doorY(), 2.0f, 0.1f));
+        Timeline::Stop(*rt, door);
+        CHECK(rr.Get<TimelineComponent>(door).Time == 0.0f && !rr.Get<TimelineComponent>(door).Playing);
+        // A binding: the light track drives another lamp instead of its path's.
+        Entity spare = rt->CreateEntity("Spare Lamp");
+        rr.Emplace<PointLightComponent>(spare).Intensity = 1.0f;
+        rr.Get<PointLightComponent>(lamp).Intensity = 1.0f;
+        rr.Get<TimelineComponent>(door).Bindings = { Entity::Null(), spare };
+        Timeline::Play(*rt, door);
+        frames(70);
+        CHECK(Near(rr.Get<PointLightComponent>(spare).Intensity, 8.0f, 0.01f) && Near(rr.Get<PointLightComponent>(lamp).Intensity, 1.0f));
+        // Reset On End (wrap mode None): at the end it stops back at 0.
+        rr.Get<TimelineComponent>(door).ResetOnEnd = true;
+        frames(80);
+        CHECK(!rr.Get<TimelineComponent>(door).Playing && rr.Get<TimelineComponent>(door).Time == 0.0f);
         rt->OnRuntimeStop();
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path());
@@ -9676,6 +9703,44 @@ namespace
             CHECK(rt->GetUISelected().IsNull() && text == "Pointer over the game; selected: none (Tab)");
             Input::SetGameInputEnabled(gameInput);
             rt->OnRuntimeStop();
+        }
+        // C# Timeline control: the Sandbox's TimelineStatus hears Played (play on awake) / Paused / Stopped, its Opened()
+        // is called by the timeline event of that name, and P pauses and resumes it.
+        {
+            fs::path tdir = fs::temp_directory_path() / "dimension_timeline_cs";
+            fs::remove_all(tdir);
+            fs::create_directories(tdir / "Assets");
+            AssetManager::Init(tdir / "Assets");
+            AssetHandle th = AssetManager::CreateTimeline(tdir / "Assets" / "Short.timeline");
+            AssetManager::GetTimeline(th)->Duration = 1.0f;
+            AssetManager::GetTimeline(th)->Events = { { 0.5f, "Opened" } };
+            AssetManager::SaveTimeline(th);
+            Scene ts("TimelineCs");
+            Entity d = ts.CreateEntity("Director");
+            ts.GetRegistry().Emplace<TimelineComponent>(d).Timeline = th;
+            ts.GetRegistry().Emplace<UITextComponent>(d).Text = "";
+            ts.GetRegistry().Emplace<ScriptComponent>(d).Add("Game.TimelineStatus");
+            auto rt = ts.Clone();
+            rt->OnRuntimeStart();
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            auto text = [&] { return rt->GetRegistry().Get<UITextComponent>(d).Text; };
+            auto press = [&](Key k) {
+                Input::SimulateKey(k, true);
+                rt->OnUpdateRuntime(0.05f);
+                Input::SimulateKey(k, false);
+            };
+            for (int i = 0; i < 12; ++i) rt->OnUpdateRuntime(0.05f); // past 0.5 s
+            CHECK(text().rfind("played 1, paused 0, stopped 0, opened 1", 0) == 0);
+            press(Key::P);
+            CHECK(text().rfind("played 1, paused 1, stopped 0, opened 1", 0) == 0);
+            press(Key::P); // resumed: Played again
+            for (int i = 0; i < 12; ++i) rt->OnUpdateRuntime(0.05f); // to the end: Stopped
+            CHECK(text().rfind("played 2, paused 1, stopped 1, opened 1", 0) == 0);
+            Input::SetGameInputEnabled(gameInput);
+            rt->OnRuntimeStop();
+            AssetManager::Shutdown();
+            fs::remove_all(tdir);
         }
         // C# Animator.RuntimeAnimatorController: the Sandbox's TentacleBrain swaps to its Calm override controller on U
         // and back; an override of the same machine keeps the state (no Rebind), so the parameters set stay.

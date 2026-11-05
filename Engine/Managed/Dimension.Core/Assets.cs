@@ -42,6 +42,14 @@ namespace Dimension
         public static implicit operator ulong(Texture a) => a.Guid;
     }
 
+    /// <summary>A timeline asset (.timeline): what a <see cref="Dimension.Timeline"/> component plays (Unity's
+    /// PlayableAsset / TimelineAsset).</summary>
+    public readonly record struct TimelineAsset(ulong Guid) : IAssetReference
+    {
+        public bool IsValid => Guid != 0;
+        public static implicit operator ulong(TimelineAsset a) => a.Guid;
+    }
+
     /// <summary>An Animator Controller asset, or an Animator Override Controller (its controller with some clips
     /// swapped): what <see cref="Animator.RuntimeAnimatorController"/> runs (Unity's RuntimeAnimatorController).</summary>
     public readonly record struct AnimatorController(ulong Guid) : IAssetReference

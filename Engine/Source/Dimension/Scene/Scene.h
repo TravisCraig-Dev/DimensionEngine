@@ -323,8 +323,11 @@ namespace Dimension
         // Engine events for listeners outside the entity's own scripts (C# events such as UIButton.Clicked). Kinds:
         // 0 click, 1 value changed (value), 2 text changed, 3 submit (text), 4/5 collision enter/exit and 6/7 trigger
         // enter/exit (other), -1 play stopped (listeners of this scene end).
-        enum class EventKind : int { Stopped = -1, Click = 0, ValueChanged, TextChanged, Submit, CollisionEnter, CollisionExit, TriggerEnter, TriggerExit };
+        enum class EventKind : int { Stopped = -1, Click = 0, ValueChanged, TextChanged, Submit, CollisionEnter, CollisionExit, TriggerEnter, TriggerExit,
+                                     TimelinePlayed, TimelinePaused, TimelineStopped };
         using EventHook = void (*)(Scene& scene, Entity e, EventKind kind, float value, Entity other, const char* text);
+        // A Timeline component started playing, was paused, or stopped (also at its end), for C# listeners.
+        void DispatchTimelineEvent(Entity e, EventKind kind);
         static void SetEventHook(EventHook hook);
         // Animator states' behaviours (StateMachineBehaviour): kind 0 entered, 1 updated (every frame it plays, also
         // while fading out), 2 left (when its fade out ends); the state's index in its layer's machine and its info.

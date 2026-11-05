@@ -301,6 +301,7 @@ namespace Dimension
             .Field("Timeline", &TimelineComponent::Timeline).As(FieldType::Timeline).Tooltip("Timeline asset (.timeline); edit it in Window > Timeline")
             .Field("Play On Awake", &TimelineComponent::PlayOnAwake)
             .Field("Loop", &TimelineComponent::Loop)
+            .Field("Reset On End", &TimelineComponent::ResetOnEnd).Tooltip("Without Loop: at the end it stops and goes back to the start (otherwise it holds the last frame)")
             .Field("Speed", &TimelineComponent::Speed).Range(-10.0f, 10.0f).Speed(0.01f);
 
         Register<IKTargetComponent>("IK Target", "Animation")

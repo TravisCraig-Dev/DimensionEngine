@@ -94,6 +94,16 @@ namespace Dimension
         void SortClips(TimelineTrack& track);
         // Reads a track's field from its object now (for keying the current value). Returns the channel count.
         int ReadCurrent(Scene& scene, Entity root, const TimelineTrack& track, float out[4]);
+        // The object a track of `timeline` drives under `root`: the root's Timeline component binding for it (when that
+        // component plays this timeline), else the track's path.
+        Entity TrackTarget(Scene& scene, Entity root, const TimelineAsset& timeline, const TimelineTrack& track);
+        // A Timeline component's controls, as scripts use them: Play (from the start), Pause (held), Resume, Stop (back
+        // to 0, Animators handed back), each telling C# listeners; Evaluate writes the tracks at its time now.
+        void Play(Scene& scene, Entity e);
+        void Pause(Scene& scene, Entity e);
+        void Resume(Scene& scene, Entity e);
+        void Stop(Scene& scene, Entity e);
+        void Evaluate(Scene& scene, Entity e);
         // Plays the scene's Timeline components (play mode), firing events passed this frame.
         void Update(Scene& scene, float dt);
         void Restart(Scene& scene);

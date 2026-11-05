@@ -24,6 +24,7 @@
 #include "Dimension/Project/Localization.h"
 #include "Dimension/Asset/DataAsset.h"
 #include "Dimension/UI/UI.h"
+#include "Dimension/Animation/Timeline.h"
 #include <climits>
 #include <cmath>
 #include <limits>
@@ -289,6 +290,11 @@ namespace Dimension
             // seconds now, 6 match target (v: position, weight, start, end; joint `name`), 7 interrupt it (v[0]: finish),
             // 8 is matching, 9 rebind, 10 culled this frame. 0 when there is none.
             int (*AnimatorOp)(void*, uint64_t, int, int, const char*, float*);
+            // A Timeline's track `index`: 0 its binding (packed, ~0 by path), 1 bind it to `target` (~0: back to its
+            // path), 2 its description into s_StringReturn (kind, path, component and field). Returns the binding.
+            uint64_t (*TimelineTrack)(void*, uint64_t, int, int, uint64_t, const char**);
+            // A Timeline's asset swapped while playing: hands the old one's Animators back and restarts at 0 (v: old GUID).
+            void (*TimelineAssetChanged)(void*, uint64_t, uint64_t);
         };
 
         // Background scene loads started from C#, by id.
@@ -556,7 +562,8 @@ namespace Dimension
             // Asset references (Prefab, Texture, ...) are stored as their GUID and picked like built-in ones.
             const std::pair<const char*, FieldType> assets[] = { { "Prefab", FieldType::Prefab }, { "Texture", FieldType::Texture },
                                                                  { "Material", FieldType::Material }, { "Mesh", FieldType::Mesh },
-                                                                 { "Audio", FieldType::Audio }, { "AnimatorController", FieldType::AnimatorController } };
+                                                                 { "Audio", FieldType::Audio }, { "AnimatorController", FieldType::AnimatorController },
+                                                                 { "Timeline", FieldType::Timeline } };
             for (auto& a : assets)
                 if (type == a.first)
                 {
@@ -2142,6 +2149,39 @@ namespace Dimension
                 }
                 }
             };
+            a.TimelineTrack = [](void* s, uint64_t e, int op, int index, uint64_t target, const char** text) -> uint64_t {
+                auto* tl = Comp<TimelineComponent>(s, e);
+                if (!tl || index < 0) return ~0ull;
+                Scene& scene = S(s);
+                if (op == 1)
+                {
+                    if ((int)tl->Bindings.size() <= index) tl->Bindings.resize(index + 1, Entity::Null());
+                    tl->Bindings[index] = target == ~0ull ? Entity::Null() : Unpack(target);
+                }
+                if (op == 2)
+                {
+                    auto asset = AssetManager::GetTimeline(tl->Timeline);
+                    s_StringReturn.clear();
+                    if (asset && index < (int)asset->Tracks.size())
+                    {
+                        static const char* kinds[] = { "Property", "Activation", "Audio", "Animation", "Control" };
+                        const TimelineTrack& tr = asset->Tracks[index];
+                        s_StringReturn = std::string(kinds[std::clamp((int)tr.Kind, 0, 4)]) + " " + (tr.Path.empty() ? "(self)" : tr.Path);
+                        if (!tr.IsClipTrack()) s_StringReturn += " " + tr.Component + "." + tr.Field;
+                    }
+                    if (text) *text = s_StringReturn.c_str();
+                }
+                Entity bound = index < (int)tl->Bindings.size() ? tl->Bindings[index] : Entity::Null();
+                return bound.IsNull() || !scene.IsValid(bound) ? ~0ull : Pack(bound);
+            };
+            a.TimelineAssetChanged = [](void* s, uint64_t e, uint64_t before) {
+                auto* tl = Comp<TimelineComponent>(s, e);
+                if (!tl) return;
+                Scene& scene = S(s);
+                if (auto old = AssetManager::GetTimeline(AssetHandle(before))) Timeline::Release(scene, Unpack(e), *old);
+                tl->Bindings.clear();
+                tl->Time = 0.0f;
+            };
             a.UIEvents = [](void* s, int op, float* v, uint64_t* ids, int max) -> int {
                 if (!s) return 0;
                 Scene& scene = S(s);
@@ -2419,12 +2459,20 @@ namespace Dimension
             a.TimelineControl = [](void* s, uint64_t e, int action, float value) -> float {
                 auto* tl = Comp<TimelineComponent>(s, e);
                 if (!tl) return 0.0f;
+                Scene& scene = S(s);
+                Entity entity = Unpack(e);
                 switch (action)
                 {
-                case 0: tl->Play(); break;
-                case 1: tl->Stop(); break;
+                case 0: Timeline::Play(scene, entity); break;
+                case 1: Timeline::Stop(scene, entity); break;
                 case 3: tl->Time = std::max(value, 0.0f); tl->Started = true; break;
                 case 4: return tl->Playing ? 1.0f : 0.0f;
+                case 5: Timeline::Pause(scene, entity); break;
+                case 6: Timeline::Resume(scene, entity); break;
+                case 7: return tl->Paused ? 1.0f : 0.0f;
+                case 8: { auto asset = AssetManager::GetTimeline(tl->Timeline); return asset ? asset->Duration : 0.0f; }
+                case 9: Timeline::Evaluate(scene, entity); break;
+                case 10: { auto asset = AssetManager::GetTimeline(tl->Timeline); return asset ? (float)asset->Tracks.size() : 0.0f; }
                 }
                 return tl->Time;
             };
