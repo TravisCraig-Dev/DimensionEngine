@@ -2301,6 +2301,15 @@ namespace Editor
             ImGui::SetItemTooltip("ACES: filmic contrast. Neutral: keeps hues and saturation (product shots). AgX: soft highlights.");
             ImGui::Unindent();
         }
+        if (ImGui::TreeNode("Lens Effects"))
+        {
+            track(ImGui::SliderFloat("Chromatic Aberration", &s.ChromaticAberration, 0.0f, 1.0f));
+            track(ImGui::SliderFloat("Film Grain", &s.FilmGrain, 0.0f, 1.0f));
+            track(ImGui::SliderFloat("Lens Distortion", &s.LensDistortion, -1.0f, 1.0f));
+            ImGui::SetItemTooltip("Above 0 the image bulges (barrel), below it pinches (pincushion)");
+            ImGui::TextDisabled("Game view and Player only.");
+            ImGui::TreePop();
+        }
         track(ImGui::Checkbox("Auto Exposure", &s.AutoExposure));
         ImGui::SetItemTooltip("Eye adaptation: the image's average brightness is brought toward mid grey over time");
         if (s.AutoExposure)

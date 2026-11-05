@@ -46,6 +46,9 @@ namespace Dimension
         // Auto exposure (eye adaptation): the image's average brightness is brought toward mid grey, within Min / Max
         // EV of the manual exposure, at Adaptation Speed (faster getting darker than brighter, as eyes are);
         // Compensation (EV) brightens or darkens the target.
+        // Lens effects: colors split toward the edges (Chromatic Aberration, 0-1), noise like film (Film Grain, 0-1),
+        // and the image bulging (Lens Distortion > 0, barrel) or pinched (< 0, pincushion).
+        float ChromaticAberration = 0.0f, FilmGrain = 0.0f, LensDistortion = 0.0f;
         bool AutoExposure = false;
         float ExposureCompensation = 0.0f;
         float AutoExposureMinEv = -4.0f, AutoExposureMaxEv = 4.0f;

@@ -208,6 +208,8 @@ namespace Dimension
             float Saturation, Contrast;
             float FilterR, FilterG, FilterB; // color filter and white balance (linear)
             float LiftR, LiftG, LiftB, GammaR, GammaG, GammaB, GainR, GainG, GainB;
+            float ChromaticAberration, FilmGrain, LensDistortion;
+            uint32_t Seed; // changes every frame (grain)
         };
 
         struct DofPrefilterPush
@@ -1492,7 +1494,10 @@ namespace Dimension
                             post.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), post.Vignette,
                             dof ? target.GetDofBindless(1) + 1 : 0u, camera.Transparent ? 1u : 0u,
                             post.Saturation, post.Contrast, filter.r, filter.g, filter.b,
-                            post.Lift.r, post.Lift.g, post.Lift.b, gamma.r, gamma.g, gamma.b, post.Gain.r, post.Gain.g, post.Gain.b };
+                            post.Lift.r, post.Lift.g, post.Lift.b, gamma.r, gamma.g, gamma.b, post.Gain.r, post.Gain.g, post.Gain.b,
+                            options.EditorOverlays ? 0.0f : settings.ChromaticAberration, options.EditorOverlays ? 0.0f : settings.FilmGrain,
+                            options.EditorOverlays ? 0.0f : settings.LensDistortion, (uint32_t)RenderDevice::Get().Frame().FrameNumber };
+        static_assert(sizeof(CompositePush) <= kPushConstantSize, "composite push constants too large");
         auto beginPass = [&](const Image& image) {
             Vk::TransitionImage(cmd, image.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };

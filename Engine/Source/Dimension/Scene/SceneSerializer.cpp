@@ -181,6 +181,9 @@ namespace Dimension
                           { "skyGround", { s.SkyGround.r, s.SkyGround.g, s.SkyGround.b } },
                           { "tonemapping", s.Tonemapping },
                           { "tonemapper", s.Tonemapper },
+                          { "chromaticAberration", s.ChromaticAberration },
+                          { "filmGrain", s.FilmGrain },
+                          { "lensDistortion", s.LensDistortion },
                           { "autoExposure", s.AutoExposure },
                           { "exposureCompensation", s.ExposureCompensation },
                           { "autoExposureMinEv", s.AutoExposureMinEv },
@@ -279,6 +282,9 @@ namespace Dimension
         if (js.contains("skyGround")) vec(js["skyGround"], &s.SkyGround.x, 3);
         s.Tonemapping = js.value("tonemapping", s.Tonemapping);
         s.Tonemapper = js.value("tonemapper", s.Tonemapper);
+        s.ChromaticAberration = js.value("chromaticAberration", s.ChromaticAberration);
+        s.FilmGrain = js.value("filmGrain", s.FilmGrain);
+        s.LensDistortion = js.value("lensDistortion", s.LensDistortion);
         s.AutoExposure = js.value("autoExposure", s.AutoExposure);
         s.ExposureCompensation = js.value("exposureCompensation", s.ExposureCompensation);
         s.AutoExposureMinEv = js.value("autoExposureMinEv", s.AutoExposureMinEv);

@@ -17,7 +17,18 @@ layout(push_constant) uniform Push
     float Contrast;
     float FilterR, FilterG, FilterB;
     float LiftR, LiftG, LiftB, GammaR, GammaG, GammaB, GainR, GainG, GainB;
+    float ChromaticAberration; // 0-1
+    float FilmGrain;           // 0-1
+    float LensDistortion;      // > 0 barrel, < 0 pincushion
+    uint Seed;                 // per frame
 } pc;
+
+float Hash(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
 
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 outColor;
@@ -75,15 +86,30 @@ vec3 LinearToSRGB(vec3 c)
 
 void main()
 {
-    vec4 hdrSample = texture(uTextures[nonuniformEXT(pc.HdrTexture)], vUV);
+    // Lens distortion: the image bulges (barrel) or pinches, scaled so the corners stay near the frame.
+    vec2 uv = vUV;
+    if (pc.LensDistortion != 0.0)
+    {
+        vec2 c = uv - 0.5;
+        float k = pc.LensDistortion * 0.5;
+        uv = 0.5 + c * (1.0 - k * dot(c, c)) / (1.0 - k * 0.5);
+    }
+    vec4 hdrSample = texture(uTextures[nonuniformEXT(pc.HdrTexture)], uv);
     vec3 hdr = hdrSample.rgb;
+    // Chromatic aberration: red and blue pulled apart toward the edges.
+    if (pc.ChromaticAberration > 0.0)
+    {
+        vec2 shift = (uv - 0.5) * pc.ChromaticAberration * 0.02;
+        hdr.r = texture(uTextures[nonuniformEXT(pc.HdrTexture)], uv + shift).r;
+        hdr.b = texture(uTextures[nonuniformEXT(pc.HdrTexture)], uv - shift).b;
+    }
     if (pc.DofTexture != 0u)
     {
-        vec4 blurred = texture(uTextures[nonuniformEXT(pc.DofTexture - 1u)], vUV);
+        vec4 blurred = texture(uTextures[nonuniformEXT(pc.DofTexture - 1u)], uv);
         hdr = mix(hdr, blurred.rgb, smoothstep(0.05, 0.35, blurred.a));
     }
     if (pc.BloomTexture != 0u)
-        hdr += texture(uTextures[nonuniformEXT(pc.BloomTexture - 1u)], vUV).rgb * pc.BloomIntensity;
+        hdr += texture(uTextures[nonuniformEXT(pc.BloomTexture - 1u)], uv).rgb * pc.BloomIntensity;
     hdr *= pc.Exposure;
     vec3 mapped = pc.Tonemap == 1u ? ACESFilm(hdr) : pc.Tonemap == 2u ? NeutralTonemap(hdr) : pc.Tonemap == 3u ? AgxTonemap(hdr) : hdr;
     // Color grading: filter, saturation, then contrast around mid grey.
@@ -99,5 +125,13 @@ void main()
         float d = length(vUV - 0.5) * 1.41421;
         mapped *= 1.0 - pc.Vignette * smoothstep(0.4, 1.1, d);
     }
-    outColor = vec4(LinearToSRGB(mapped), pc.AlphaFromHdr != 0u ? clamp(hdrSample.a, 0.0, 1.0) : 1.0);
+    vec3 display = LinearToSRGB(mapped);
+    // Film grain in display space, strongest in the midtones.
+    if (pc.FilmGrain > 0.0)
+    {
+        float n = Hash(gl_FragCoord.xy + float(pc.Seed % 1024u) * 17.31) - 0.5;
+        float l = dot(display, vec3(0.2126, 0.7152, 0.0722));
+        display = clamp(display + n * pc.FilmGrain * 0.12 * (1.0 - abs(l * 2.0 - 1.0) * 0.6), 0.0, 1.0);
+    }
+    outColor = vec4(display, pc.AlphaFromHdr != 0u ? clamp(hdrSample.a, 0.0, 1.0) : 1.0);
 }
