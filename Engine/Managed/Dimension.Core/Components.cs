@@ -719,7 +719,8 @@ namespace Dimension
         public void Render() { ulong id = Entity.Id; Native.Api.TextureOp(Entity.Scene, 9, &id, null, null, 0, 0); }
     }
 
-    public enum CameraClearFlags { SolidColor = 0, Skybox = 1 }
+    /// <summary>What a camera's image starts from; Depth Only adds a camera drawn over another to the image below.</summary>
+    public enum CameraClearFlags { SolidColor = 0, Skybox = 1, DepthOnly = 2 }
 
     public unsafe class SpriteRenderer : Component
     {

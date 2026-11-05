@@ -102,7 +102,8 @@ namespace Dimension
             .Field("Near Clip", &CameraComponent::NearClip).Range(0.001f, 10000.0f).Speed(0.01f)
             .Field("Far Clip", &CameraComponent::FarClip).Range(0.01f, 100000.0f).Speed(1.0f)
             .Field("Primary", &CameraComponent::Primary)
-            .Field("Clear Flags", &CameraComponent::Clear).Enum({ "Solid Color", "Skybox" })
+            .Field("Clear Flags", &CameraComponent::Clear).Enum({ "Solid Color", "Skybox", "Depth Only" })
+                .Tooltip("Depth Only: a camera drawn over the primary one adds only its objects (a weapon or HUD model over the world)")
             .Field("Background", &CameraComponent::ClearColor).As(FieldType::Color4)
             .Field("Viewport Rect", &CameraComponent::Viewport).Speed(0.005f)
                 .Tooltip("x, y (from the top-left), width, height as fractions of the screen. A camera other than the primary one\n"

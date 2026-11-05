@@ -28,6 +28,7 @@ namespace Dimension
         bool Orthographic = false;
         bool Skybox = false;
         uint32_t CullingMask = ~0u; // layers drawn (meshes and sprites)
+        bool Transparent = false;   // Depth Only: no background; the output's alpha says where it drew
 
         // Builds camera data from a scene entity with a CameraComponent.
         static CameraData FromEntity(Scene& scene, Entity camera, float aspect);

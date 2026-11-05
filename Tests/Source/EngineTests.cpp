@@ -6281,6 +6281,11 @@ namespace
         CHECK(list[1].second == glm::vec4(600, 0, 800, 150) && list[0].second == glm::vec4(200, 0, 600, 120));
         CHECK(scene.GetPrimaryCamera() == main);
         CHECK(CameraStack::Cameras(scene, { 0, 0 }).empty());
+        // A Depth Only camera adds to the image even over the whole screen (a weapon over the world), by its Depth.
+        Entity weapon = camera("Weapon", false, { 0, 0, 1, 1 }, 1.5f);
+        reg.Get<CameraComponent>(weapon).Clear = ClearMode::DepthOnly;
+        list = CameraStack::Cameras(scene, { 800, 600 });
+        CHECK(list.size() == 3 && list[1].first == weapon && list[1].second == glm::vec4(0, 0, 800, 600));
     }
 
     // Records the order of its update calls; LateUpdate only when asked for.

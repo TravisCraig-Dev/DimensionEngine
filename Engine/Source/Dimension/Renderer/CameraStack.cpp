@@ -24,7 +24,8 @@ namespace Dimension
             if (!t.ActiveInHierarchy || e == primary || cam.TargetTexture.IsValid()) continue;
             glm::vec4 r = cam.Viewport;
             bool whole = r.x <= 0.0f && r.y <= 0.0f && r.x + r.z >= 1.0f && r.y + r.w >= 1.0f;
-            if (!whole && r.z > 0.0f && r.w > 0.0f) extra.emplace_back(cam.Depth, e);
+            // Depth Only cameras add to the image even over the whole screen.
+            if ((!whole || cam.Clear == ClearMode::DepthOnly) && r.z > 0.0f && r.w > 0.0f) extra.emplace_back(cam.Depth, e);
         }
         std::stable_sort(extra.begin(), extra.end(), [](auto& a, auto& b) { return a.first < b.first; });
         for (auto& [depth, e] : extra)

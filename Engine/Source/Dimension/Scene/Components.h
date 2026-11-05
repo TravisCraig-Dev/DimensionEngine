@@ -94,7 +94,9 @@ namespace Dimension
     // ---- Rendering ----------------------------------------------------------
 
     enum class ProjectionType : int32_t { Perspective = 0, Orthographic = 1 };
-    enum class ClearMode : int32_t { SolidColor = 0, Skybox = 1 };
+    // What a camera's image starts from: a color, the sky, or nothing (Depth Only: a camera drawn over another adds its
+    // objects to the image below, a weapon or HUD model over the world).
+    enum class ClearMode : int32_t { SolidColor = 0, Skybox = 1, DepthOnly = 2 };
 
     struct CameraComponent
     {

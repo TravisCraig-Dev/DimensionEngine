@@ -202,6 +202,7 @@ namespace Dimension
             float BloomIntensity;
             float Vignette;
             uint32_t DofTexture; // index + 1, 0 = none
+            uint32_t AlphaFromHdr; // 1: alpha is the HDR image's (Depth Only cameras), else opaque
         };
 
         struct DofPrefilterPush
@@ -709,6 +710,8 @@ namespace Dimension
         data.Orthographic = cam.Projection == ProjectionType::Orthographic;
         data.Skybox = cam.Clear == ClearMode::Skybox;
         data.CullingMask = (uint32_t)cam.CullingMask;
+        data.Transparent = cam.Clear == ClearMode::DepthOnly;
+        if (data.Transparent) data.ClearColor = glm::vec4(0.0f);
         return data;
     }
 
@@ -1243,7 +1246,7 @@ namespace Dimension
         colors[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         colors[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colors[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colors[0].clearValue.color = { { clear.r, clear.g, clear.b, options.ProbeCapture ? clear.a : 1.0f } }; // captures: alpha = covered
+        colors[0].clearValue.color = { { clear.r, clear.g, clear.b, options.ProbeCapture || camera.Transparent ? clear.a : 1.0f } }; // captures and Depth Only: alpha = covered
         colors[1] = colors[0];
         colors[1].imageView = target.GetIds().GetView();
         colors[1].clearValue.color.uint32[0] = 0;
@@ -1463,7 +1466,7 @@ namespace Dimension
         CompositePush push{ target.GetHdrBindless(), settings.Exposure, settings.Tonemapping ? 1u : 0u,
                             bloom ? target.GetBloomBindless(0) + 1 : 0u,
                             settings.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), settings.Vignette,
-                            dof ? target.GetDofBindless(1) + 1 : 0u };
+                            dof ? target.GetDofBindless(1) + 1 : 0u, camera.Transparent ? 1u : 0u };
         auto beginPass = [&](const Image& image) {
             Vk::TransitionImage(cmd, image.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
@@ -1485,7 +1488,7 @@ namespace Dimension
             vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
             vkCmdDraw(cmd, 3, 1, 0, 0);
         };
-        if (settings.FXAA)
+        if (settings.FXAA && !camera.Transparent) // FXAA's output is opaque
         {
             beginPass(target.GetLdr());
             composite();

@@ -12,6 +12,7 @@ layout(push_constant) uniform Push
     float BloomIntensity;
     float Vignette;      // 0..1 darkening at the corners
     uint DofTexture;     // bindless index + 1 of the blurred half-resolution image (alpha = blend), 0 = off
+    uint AlphaFromHdr;   // 1: alpha from the HDR image (a Depth Only camera: where it drew), else 1
 } pc;
 
 layout(location = 0) in vec2 vUV;
@@ -31,7 +32,8 @@ vec3 LinearToSRGB(vec3 c)
 
 void main()
 {
-    vec3 hdr = texture(uTextures[nonuniformEXT(pc.HdrTexture)], vUV).rgb;
+    vec4 hdrSample = texture(uTextures[nonuniformEXT(pc.HdrTexture)], vUV);
+    vec3 hdr = hdrSample.rgb;
     if (pc.DofTexture != 0u)
     {
         vec4 blurred = texture(uTextures[nonuniformEXT(pc.DofTexture - 1u)], vUV);
@@ -46,5 +48,5 @@ void main()
         float d = length(vUV - 0.5) * 1.41421;
         mapped *= 1.0 - pc.Vignette * smoothstep(0.4, 1.1, d);
     }
-    outColor = vec4(LinearToSRGB(mapped), 1.0);
+    outColor = vec4(LinearToSRGB(mapped), pc.AlphaFromHdr != 0u ? clamp(hdrSample.a, 0.0, 1.0) : 1.0);
 }
