@@ -270,6 +270,11 @@ namespace Dimension
             float (*MaterialOp)(void*, uint64_t, int, const char*, float*, uint64_t*);
             // A Mesh Renderer's own copy of its material (made the first time; from its simple look without one).
             uint64_t (*RendererMaterialInstance)(void*, uint64_t);
+            // Audio: 0 DSP time, 1 sample rate, 2 listener volume, 3 set it, 4 paused, 5 set it; 6 play the entity's
+            // source at DSP time v, 7 its scheduled end at v.
+            double (*AudioTiming)(void*, uint64_t, int, double);
+            // A component's String field by label: 0 get, 1 set to value. Null when there is no such field.
+            const char* (*ComponentString)(void*, uint64_t, const char*, const char*, int, const char*);
         };
 
         // Background scene loads started from C#, by id.
@@ -1936,6 +1941,28 @@ namespace Dimension
                     return (float)n;
                 }
                 return 0.0f;
+            };
+            a.AudioTiming = [](void* s, uint64_t e, int op, double v) -> double {
+                switch (op)
+                {
+                case 0: return AudioEngine::GetDspTime();
+                case 1: return AudioEngine::GetSampleRate();
+                case 2: return AudioEngine::GetMasterVolume();
+                case 3: AudioEngine::SetMasterVolume((float)v); return 0.0;
+                case 4: return AudioEngine::IsPaused() ? 1.0 : 0.0;
+                case 5: AudioEngine::SetPaused(v != 0.0); return 0.0;
+                case 6: if (s) AudioWorld::PlayScheduled(S(s), Unpack(e), v); return 0.0;
+                default: if (s) AudioWorld::SetScheduledEndTime(S(s), Unpack(e), v); return 0.0;
+                }
+            };
+            a.ComponentString = [](void* s, uint64_t e, const char* component, const char* field, int op, const char* value) -> const char* {
+                const FieldInfo* f = nullptr;
+                void* p = ReflectedField(s, e, component, field, f);
+                if (!p || f->Type != FieldType::String) return nullptr;
+                auto& text = *static_cast<std::string*>(p);
+                if (op == 1) text = value ? value : "";
+                s_StringReturn = text;
+                return s_StringReturn.c_str();
             };
             a.RendererMaterialInstance = [](void* s, uint64_t e) -> uint64_t {
                 return s && S(s).IsValid(Unpack(e)) ? (uint64_t)S(s).GetRendererMaterialInstance(Unpack(e)) : 0;

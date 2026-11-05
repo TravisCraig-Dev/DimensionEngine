@@ -695,6 +695,10 @@ namespace Dimension
 
     // ---- Audio -------------------------------------------------------------------
 
+    // How a spatial source fades with distance (Unity's AudioRolloffMode): full volume inside Min Distance, then as
+    // 1/distance (Logarithmic, the natural fall-off), or straight down to silence at Max Distance (Linear).
+    enum class AudioRolloff : int32_t { Logarithmic = 0, Linear = 1 };
+
     struct AudioSourceComponent
     {
         AssetHandle Clip = AssetHandle::None();
@@ -713,8 +717,14 @@ namespace Dimension
         bool Occlusion = false;
         float OcclusionVolume = -9.0f;
         float OcclusionCutoff = 1200.0f;
+        AudioRolloff Rolloff = AudioRolloff::Logarithmic;
+        // Pitch shift from the source's and the listener's motion (0 none, 1 natural; spatial sources).
+        float DopplerLevel = 1.0f;
         float OcclusionAmount = 0.0f;  // runtime: 0 = clear line, 1 = fully occluded
         bool Paused = false;           // runtime: stopped by Pause (UnPause goes on from where it was)
+        std::string RoutedOutput;      // runtime: the group its sound goes into (Output changed while playing: rerouted)
+        glm::vec3 LastPosition{ 0.0f }; // runtime: last update's position (its velocity, for the Doppler shift)
+        bool HasLastPosition = false;
         std::shared_ptr<void> Runtime; // ma_sound (and its occlusion filter), runtime only
     };
 

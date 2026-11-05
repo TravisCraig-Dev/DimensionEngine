@@ -829,15 +829,40 @@ namespace Dimension
         return seconds;
     }
     void* AudioEngine::GetNative() { return s_Engine; }
+    namespace
+    {
+        float s_MasterVolume = 1.0f;
+        bool s_Paused = false;
+    }
     void AudioEngine::SetMasterVolume(float v)
     {
-        if (s_Engine) ma_engine_set_volume(s_Engine, v);
+        s_MasterVolume = std::max(v, 0.0f);
+        if (s_Engine) ma_engine_set_volume(s_Engine, s_MasterVolume);
+    }
+    float AudioEngine::GetMasterVolume() { return s_MasterVolume; }
+    void AudioEngine::SetPaused(bool paused)
+    {
+        if (paused == s_Paused) return;
+        s_Paused = paused;
+        if (!s_Engine) return;
+        if (paused) ma_engine_stop(s_Engine);
+        else ma_engine_start(s_Engine);
+    }
+    bool AudioEngine::IsPaused() { return s_Paused; }
+    uint32_t AudioEngine::GetSampleRate() { return s_Engine ? ma_engine_get_sample_rate(s_Engine) : 0; }
+    double AudioEngine::GetDspTime()
+    {
+        if (!s_Engine) return 0.0;
+        return (double)ma_engine_get_time_in_pcm_frames(s_Engine) / std::max<double>(ma_engine_get_sample_rate(s_Engine), 1.0);
     }
 
-    AudioWorld::AudioWorld(Scene& scene) : m_Scene(scene) {}
+    AudioWorld::AudioWorld(Scene& scene) : m_Scene(scene) { m_VolumeAtStart = AudioEngine::GetMasterVolume(); }
 
     AudioWorld::~AudioWorld()
     {
+        // Play stopping: sound goes on again at the volume it had.
+        AudioEngine::SetPaused(false);
+        AudioEngine::SetMasterVolume(m_VolumeAtStart);
         for (auto [e, src] : m_Scene.GetRegistry().ViewOf<AudioSourceComponent>()) src.Runtime.reset();
         m_OneShots.clear();
         AudioMixer::ClearZoneReverbs();
@@ -907,6 +932,8 @@ namespace Dimension
             ma_sound_set_spatialization_enabled(sound, src.Spatial);
             ma_sound_set_min_distance(sound, src.MinDistance);
             ma_sound_set_max_distance(sound, src.MaxDistance);
+            ma_sound_set_attenuation_model(sound, src.Rolloff == AudioRolloff::Linear ? ma_attenuation_model_linear : ma_attenuation_model_inverse);
+            ma_sound_set_doppler_factor(sound, std::max(src.DopplerLevel, 0.0f));
             return std::shared_ptr<void>(voice, [](void* p) {
                 auto* v = static_cast<SourceVoice*>(p);
                 ma_sound_uninit(&v->Sound);
@@ -932,6 +959,8 @@ namespace Dimension
         src.Runtime = MakeSound(src, src.Clip, src.Stream);
         auto* sound = SoundOf(src);
         if (!sound) return;
+        src.RoutedOutput = src.Output;
+        src.HasLastPosition = false;
         ma_sound_set_looping(sound, src.Loop);
         if (autoplay && src.PlayOnAwake && m_Scene.GetRegistry().Get<TransformComponent>(e).ActiveInHierarchy)
             ma_sound_start(sound);
@@ -1016,6 +1045,11 @@ namespace Dimension
             ma_engine_listener_set_position(s_Engine, 0, p.x, p.y, p.z);
             ma_engine_listener_set_direction(s_Engine, 0, f.x, f.y, f.z);
             ma_engine_listener_set_world_up(s_Engine, 0, u.x, u.y, u.z);
+            // Its velocity (for the Doppler shift), from how far it moved.
+            glm::vec3 v = m_HasListener && dt > 0.0f ? (p - m_ListenerLast) / dt : glm::vec3(0.0f);
+            ma_engine_listener_set_velocity(s_Engine, 0, v.x, v.y, v.z);
+            m_ListenerLast = p;
+            m_HasListener = true;
         }
         for (auto [e, src, t] : reg.ViewOf<AudioSourceComponent, TransformComponent>())
         {
@@ -1026,6 +1060,25 @@ namespace Dimension
             ma_sound_set_volume(s, OccludedVolume(src));
             ma_sound_set_pitch(s, src.Pitch);
             SetCutoff(*VoiceOf(src), OccludedCutoff(src));
+            // Its 3D settings as they are now (scripts change them while playing), and its velocity.
+            ma_sound_set_spatialization_enabled(s, src.Spatial);
+            ma_sound_set_min_distance(s, std::max(src.MinDistance, 0.01f));
+            ma_sound_set_max_distance(s, std::max(src.MaxDistance, src.MinDistance));
+            ma_sound_set_attenuation_model(s, src.Rolloff == AudioRolloff::Linear ? ma_attenuation_model_linear : ma_attenuation_model_inverse);
+            ma_sound_set_doppler_factor(s, std::max(src.DopplerLevel, 0.0f));
+            glm::vec3 v = src.HasLastPosition && dt > 0.0f ? (p - src.LastPosition) / dt : glm::vec3(0.0f);
+            ma_sound_set_velocity(s, v.x, v.y, v.z);
+            src.LastPosition = p;
+            src.HasLastPosition = true;
+            // Another mixer group: the sound (or its occlusion filter) goes into that one now.
+            if (src.Output != src.RoutedOutput)
+            {
+                auto* group = static_cast<ma_node*>(AudioMixer::GetGroupNode(src.Output.empty() ? 0 : AudioMixer::FindGroup(src.Output)));
+                ma_node* destination = group ? group : ma_engine_get_endpoint(s_Engine);
+                SourceVoice* voice = VoiceOf(src);
+                ma_node_attach_output_bus(voice->HasFilter ? (ma_node*)&voice->Filter : (ma_node*)&voice->Sound, 0, destination, 0);
+                src.RoutedOutput = src.Output;
+            }
         }
         // Release finished one-shots.
         std::erase_if(m_OneShots, [](const std::shared_ptr<void>& p) { return ma_sound_at_end(static_cast<ma_sound*>(p.get())); });
@@ -1036,8 +1089,31 @@ namespace Dimension
         auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
         if (!src || !SoundOf(*src)) return;
         src->Paused = false;
-        ma_sound_seek_to_pcm_frame(SoundOf(*src), 0);
-        ma_sound_start(SoundOf(*src));
+        ma_sound* sound = SoundOf(*src);
+        ma_sound_set_start_time_in_pcm_frames(sound, 0); // now (a schedule is cancelled)
+        ma_sound_set_stop_time_in_pcm_frames(sound, ~(ma_uint64)0);
+        ma_sound_seek_to_pcm_frame(sound, 0);
+        ma_sound_start(sound);
+    }
+
+    void AudioWorld::PlayScheduled(Scene& scene, Entity e, double dspTime)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        if (!src || !SoundOf(*src) || !s_Engine) return;
+        src->Paused = false;
+        ma_sound* sound = SoundOf(*src);
+        ma_sound_stop(sound);
+        ma_sound_seek_to_pcm_frame(sound, 0);
+        ma_sound_set_stop_time_in_pcm_frames(sound, ~(ma_uint64)0);
+        ma_sound_set_start_time_in_pcm_frames(sound, (ma_uint64)std::llround(std::max(dspTime, 0.0) * ma_engine_get_sample_rate(s_Engine)));
+        ma_sound_start(sound);
+    }
+
+    void AudioWorld::SetScheduledEndTime(Scene& scene, Entity e, double dspTime)
+    {
+        auto* src = scene.GetRegistry().TryGet<AudioSourceComponent>(e);
+        if (!src || !SoundOf(*src) || !s_Engine) return;
+        ma_sound_set_stop_time_in_pcm_frames(SoundOf(*src), (ma_uint64)std::llround(std::max(dspTime, 0.0) * ma_engine_get_sample_rate(s_Engine)));
     }
 
     void AudioWorld::Stop(Scene& scene, Entity e)

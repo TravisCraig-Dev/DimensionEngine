@@ -818,7 +818,11 @@ namespace Dimension
             .Field("Occlusion", &AudioSourceComponent::Occlusion)
                 .Tooltip("Spatial sources: 3D colliders between the listener and the source muffle and quiet the sound (triggers and the source's own colliders don't; nor does the Ignore Raycast layer)")
             .Field("Occlusion Volume", &AudioSourceComponent::OcclusionVolume).Range(-60.0f, 0.0f).Speed(0.1f).Tooltip("dB when fully occluded")
-            .Field("Occlusion Cutoff", &AudioSourceComponent::OcclusionCutoff).Range(100.0f, 20000.0f).Speed(10.0f).Tooltip("Low-pass cutoff (Hz) when fully occluded");
+            .Field("Occlusion Cutoff", &AudioSourceComponent::OcclusionCutoff).Range(100.0f, 20000.0f).Speed(10.0f).Tooltip("Low-pass cutoff (Hz) when fully occluded")
+            .Field("Rolloff", &AudioSourceComponent::Rolloff).Enum({ "Logarithmic", "Linear" })
+                .Tooltip("Spatial sources: full volume inside Min Distance, then fading as 1/distance (Logarithmic) or straight to silence at Max Distance (Linear)")
+            .Field("Doppler Level", &AudioSourceComponent::DopplerLevel).Range(0.0f, 5.0f).Speed(0.01f)
+                .Tooltip("Spatial sources: how much moving toward or away from the listener shifts the pitch (0 none, 1 natural)");
 
         // Script fields are drawn/serialized specially (class picker + per-class fields).
         Register<ScriptComponent>("Script", "Scripting"); // custom-serialized list of scripts (see SceneSerializer)

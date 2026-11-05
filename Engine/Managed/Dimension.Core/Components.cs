@@ -65,6 +65,18 @@ namespace Dimension
         }
         public Entity GetEntity(string field) { ulong id = EntityField(field, 0, 0); return id == ulong.MaxValue ? default : new Entity(Entity.Scene, id); }
         public void SetEntity(string field, Entity value) => EntityField(field, 1, value.IsValid ? value.Id : ulong.MaxValue);
+
+        // A text field (an Audio Source's Output) by its label: its text, or null when there is no such field.
+        private string StringField(string field, int op, string value)
+        {
+            var e = Entity;
+            string component = NativeName;
+            return Native.WithUtf8(component, c => Native.WithUtf8(field, f => Native.WithUtf8(value ?? "", v =>
+                Native.FromUtf8(Native.Api.ComponentString(e.Scene, e.Id, (byte*)c, (byte*)f, op, (byte*)v)))));
+        }
+        public string GetString(string field) => StringField(field, 0, null);
+        /// <summary>False when there is no such text field.</summary>
+        public bool SetString(string field, string value) => StringField(field, 1, value) != null;
     }
 
     /// <summary>Any engine component by its Inspector name, for components without their own class
@@ -1405,9 +1417,61 @@ namespace Dimension
             Native.Api.PlayClipAtPoint(Native.CurrentScene, clip.Guid, (float*)&position, volume);
         /// <summary>Plays a clip (asset GUID; 0 = this source's clip) once, overlapping other sounds, through this source's mixer group.</summary>
         public void PlayOneShot(ulong clipGuid = 0, float volumeScale = 1.0f) => Native.Api.AudioPlayOneShot(Entity.Scene, Entity.Id, clipGuid, volumeScale);
+
+        /// <summary>Plays from the start at an exact time on the audio clock (AudioSettings.DspTime): sample-accurate, for
+        /// music and beats. Play cancels it.</summary>
+        public void PlayScheduled(double dspTime) => Native.Api.AudioTiming(Entity.Scene, Entity.Id, 6, dspTime);
+        /// <summary>Plays from the start after `seconds`.</summary>
+        public void PlayDelayed(float seconds) => PlayScheduled(AudioSettings.DspTime + Math.Max(seconds, 0.0f));
+        /// <summary>Stops it at a time on the audio clock (one already past: at once).</summary>
+        public void SetScheduledEndTime(double dspTime) => Native.Api.AudioTiming(Entity.Scene, Entity.Id, 7, dspTime);
+
+        /// <summary>0: plain stereo (2D); 1: placed at the object (3D: panned and fading with distance). This engine
+        /// has no in-between: below 0.5 is 2D.</summary>
+        public float SpatialBlend { get => GetBool("Spatial") ? 1.0f : 0.0f; set => SetBool("Spatial", value >= 0.5f); }
+        /// <summary>Full volume inside it.</summary>
+        public float MinDistance { get => GetFloat("Min Distance"); set => SetFloat("Min Distance", Math.Max(value, 0.01f)); }
+        /// <summary>Logarithmic: where it stops fading. Linear: where it is silent.</summary>
+        public float MaxDistance { get => GetFloat("Max Distance"); set => SetFloat("Max Distance", Math.Max(value, 0.01f)); }
+        public AudioRolloffMode RolloffMode { get => (AudioRolloffMode)GetInt("Rolloff"); set => SetInt("Rolloff", (int)value); }
+        /// <summary>How much moving toward or away from the listener shifts its pitch (0 none, 1 natural, up to 5).</summary>
+        public float DopplerLevel { get => GetFloat("Doppler Level"); set => SetFloat("Doppler Level", Math.Clamp(value, 0.0f, 5.0f)); }
+        /// <summary>The Audio Mixer group it plays through ("" Master); changing it while playing moves its sound there.</summary>
+        public string OutputAudioMixerGroup { get => GetString("Output") ?? ""; set => SetString("Output", value ?? ""); }
+        /// <summary>Spatial sources behind walls: quieter and muffled.</summary>
+        public bool Occlusion { get => GetBool("Occlusion"); set => SetBool("Occlusion", value); }
     }
 
-    /// <summary>Capsule character moved by scripts (like Unity's CharacterController).</summary>
+    /// <summary>How a 3D Audio Source fades with distance.</summary>
+    public enum AudioRolloffMode { Logarithmic = 0, Linear = 1 }
+
+    /// <summary>The audio device's clock and rate.</summary>
+    public static unsafe class AudioSettings
+    {
+        /// <summary>Seconds of sound the device has played: the clock PlayScheduled times are on (it stops while
+        /// AudioListener.Pause is on). 0 without a device.</summary>
+        public static double DspTime => Native.Api.AudioTiming(IntPtr.Zero, 0, 0, 0);
+        /// <summary>Samples per second the device plays.</summary>
+        public static int OutputSampleRate => (int)Native.Api.AudioTiming(IntPtr.Zero, 0, 1, 0);
+    }
+
+    /// <summary>What the player hears (the main camera is the listener).</summary>
+    public static unsafe class AudioListener
+    {
+        /// <summary>Every sound's volume together, 0 silent to 1 (back to what it was when play stops).</summary>
+        public static float Volume
+        {
+            get => (float)Native.Api.AudioTiming(IntPtr.Zero, 0, 2, 0);
+            set => Native.Api.AudioTiming(IntPtr.Zero, 0, 3, Math.Max(value, 0.0f));
+        }
+        /// <summary>Holds every sound where it is (a pause menu); off again, they go on. Play stopping turns it off.</summary>
+        public static bool Pause
+        {
+            get => Native.Api.AudioTiming(IntPtr.Zero, 0, 4, 0) != 0.0;
+            set => Native.Api.AudioTiming(IntPtr.Zero, 0, 5, value ? 1 : 0);
+        }
+    }
+
     /// <summary>Which parts of a Character Controller touched something in its last move.</summary>
     [Flags]
     public enum CollisionFlags { None = 0, Sides = 1, Above = 2, Below = 4 }

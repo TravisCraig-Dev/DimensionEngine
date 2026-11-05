@@ -3379,6 +3379,82 @@
    }
   },
   {
+   "guid": 6000114,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Metronome",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -12,
+      1.25,
+      14.5
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.5,
+      0.5,
+      0.5
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      0.3,
+      0.9,
+      0.5,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.6,
+     "Emission": 0.4,
+     "Cast Shadows": true
+    },
+    "Audio Source": {
+     "Clip": 100007,
+     "Volume": 0.8,
+     "Pitch": 1.0,
+     "Loop": false,
+     "Play On Awake": false,
+     "Spatial": true,
+     "Min Distance": 3.0,
+     "Max Distance": 30.0,
+     "Output": "SFX",
+     "Stream": false,
+     "Mute": false,
+     "Occlusion": false,
+     "Rolloff": 1,
+     "Doppler Level": 0.0
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.Metronome",
+       "Fields": {
+        "Tempo": 120.0,
+        "Accent": 4,
+        "Lookahead": 0.1
+       },
+       "Enabled": true
+      }
+     ]
+    }
+   }
+  },
+  {
    "guid": 6000062,
    "parent": 6000061,
    "components": {
@@ -5222,7 +5298,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview); P paints what is under the mouse a color of its own, O makes its shared material metal or wood (CratePainter).",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview); P paints what is under the mouse a color of its own, O makes its shared material metal or wood (CratePainter); K starts the metronome on the stage (scheduled on the audio clock, fading out across the yard), L pauses all sound (Metronome).",
      "Font": 0,
      "Font Size": 26,
      "Color": [

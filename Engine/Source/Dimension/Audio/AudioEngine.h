@@ -42,6 +42,14 @@ namespace Dimension
         static bool IsAvailable();
         static void* GetNative(); // ma_engine*
         static void SetMasterVolume(float volume);
+        static float GetMasterVolume();
+        // Every sound held where it is (Unity's AudioListener.pause): the device stops, the DSP clock with it.
+        static void SetPaused(bool paused);
+        static bool IsPaused();
+        // The audio clock (Unity's AudioSettings.dspTime): seconds of sound the device has played, as exact as its
+        // samples; PlayScheduled times are on it. 0 without a device.
+        static double GetDspTime();
+        static uint32_t GetSampleRate();
         static std::optional<AudioClipInfo> GetClipInfo(const fs::path& file);
         // Decodes the whole file (no audio device needed).
         static std::optional<AudioWaveform> GetWaveform(const fs::path& file, size_t buckets);
@@ -95,6 +103,10 @@ namespace Dimension
         static void SetLoop(Scene& scene, Entity e, bool loop);
         // Another clip for the source (it stops; Play plays the new one).
         static void SetClip(Scene& scene, Entity e, AssetHandle clip);
+        // Plays from the start at an exact time on the DSP clock (sample-accurate: for music and beats), and stops at
+        // one (scheduled end; a time in the past: at once). Play cancels both.
+        static void PlayScheduled(Scene& scene, Entity e, double dspTime);
+        static void SetScheduledEndTime(Scene& scene, Entity e, double dspTime);
         // A fire-and-forget 3D sound at a world point, without an Audio Source (like Unity's AudioSource.PlayClipAtPoint).
         static void PlayClipAtPoint(Scene& scene, AssetHandle clip, const glm::vec3& position, float volume = 1.0f);
         size_t GetOneShotCount() const { return m_OneShots.size(); }
@@ -102,6 +114,9 @@ namespace Dimension
     private:
         void CreateSource(Entity e, bool autoplay);
         Scene& m_Scene;
+        glm::vec3 m_ListenerLast{ 0.0f };
+        bool m_HasListener = false;
+        float m_VolumeAtStart = 1.0f; // the listener volume before play: back to it when play stops (and unpaused)
         std::vector<std::shared_ptr<void>> m_OneShots; // ma_sound, released when finished
     };
 }

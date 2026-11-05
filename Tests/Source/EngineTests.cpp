@@ -1704,13 +1704,53 @@ namespace
         CHECK(AudioWorld::IsPlaying(*rt, speaker));
         AudioWorld::Stop(*rt, speaker);
 
+        // Scheduled on the DSP clock: silent until its time, then playing; an end time stops it; Play cancels a schedule.
+        double now = AudioEngine::GetDspTime();
+        CHECK(AudioEngine::GetSampleRate() > 0 && now > 0.0);
+        AudioWorld::PlayScheduled(*rt, speaker, now + 0.25);
+        wait(0.1f);
+        CHECK(AudioWorld::GetTime(*rt, speaker) < 0.01f && AudioEngine::GetDspTime() > now + 0.05);
+        wait(0.3f);
+        CHECK(AudioWorld::GetTime(*rt, speaker) > 0.02f && AudioWorld::IsPlaying(*rt, speaker));
+        AudioWorld::SetScheduledEndTime(*rt, speaker, AudioEngine::GetDspTime() + 0.05);
+        wait(0.2f);
+        CHECK(!AudioWorld::IsPlaying(*rt, speaker));
+        AudioWorld::PlayScheduled(*rt, speaker, AudioEngine::GetDspTime() + 10.0);
+        AudioWorld::Play(*rt, speaker);
+        wait(0.1f);
+        CHECK(AudioWorld::GetTime(*rt, speaker) > 0.03f);
+        AudioWorld::Stop(*rt, speaker);
+        // The listener: paused, the clock stops (and every sound); on again it goes on. Volume.
+        AudioEngine::SetPaused(true);
+        double frozen = AudioEngine::GetDspTime();
+        wait(0.1f);
+        CHECK(AudioEngine::IsPaused() && Near((float)(AudioEngine::GetDspTime() - frozen), 0.0f, 1e-4f));
+        AudioEngine::SetPaused(false);
+        wait(0.1f);
+        CHECK(!AudioEngine::IsPaused() && AudioEngine::GetDspTime() > frozen + 0.03);
+        AudioEngine::SetMasterVolume(0.3f);
+        AudioEngine::SetPaused(true);
+        CHECK(Near(AudioEngine::GetMasterVolume(), 0.3f, 1e-6f));
+        // Another mixer group while playing: its sound goes there.
+        auto& live = rt->GetRegistry().Get<AudioSourceComponent>(speaker);
+        CHECK(live.RoutedOutput.empty());
+        live.Output = "Music";
+        live.Rolloff = AudioRolloff::Linear;
+        live.Spatial = true;
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        CHECK(live.RoutedOutput == "Music" && live.HasLastPosition);
+
         // A one-shot at a point, without a source: released once it ends.
+        AudioEngine::SetPaused(false);
         AudioWorld::PlayClipAtPoint(*rt, tone, { 3, 0, 0 });
         CHECK(rt->GetAudio()->GetOneShotCount() == 1);
         wait(length + 0.15f);
         rt->OnUpdateRuntime(1.0f / 60.0f);
         CHECK(rt->GetAudio()->GetOneShotCount() == 0);
+        // Play stopping: the listener's volume back as it was, not paused.
+        AudioEngine::SetPaused(true);
         rt->OnRuntimeStop();
+        CHECK(!AudioEngine::IsPaused() && Near(AudioEngine::GetMasterVolume(), 1.0f, 1e-6f));
         rt.reset();
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path(), ec);
