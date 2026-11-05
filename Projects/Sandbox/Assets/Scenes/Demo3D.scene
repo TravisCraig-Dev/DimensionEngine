@@ -8578,6 +8578,12 @@
           "Alignment": 1,
           "Vertical Alignment": 1,
           "Wrap": false
+        },
+        "UI Binding": {
+          "Source": 940070,
+          "Path": "HighScores.Count",
+          "Format": "High scores ({0})",
+          "Two Way": false
         }
       }
     },

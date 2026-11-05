@@ -357,6 +357,10 @@ namespace Dimension
             // An Animator state's behaviours: scene, entity, kind (0 enter, 1 update, 2 exit), layer, state index, class
             // names (one per line), state name, tag, info (normalized time, length, speed, loop).
             void (*InvokeStateBehaviour)(void*, uint64_t, int, int, int, const char*, const char*, const char*, const float*);
+            // A member of a script object that is not a field (UI Bindings): op 0 reads a property / calls a method
+            // with no parameters (its value as JSON, null when there is no such member), 1 writes a property / calls a
+            // method with one parameter ("true", or null).
+            const char* (*MemberOp)(intptr_t, int, const char*, const char*);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -852,6 +856,22 @@ namespace Dimension
             {
                 if (!m_Handle || !s_Managed.GetFields) return;
                 if (const char* text = s_Managed.GetFields(m_Handle)) ReadSlots(text);
+            }
+
+            bool ReadMember(const std::string& name, nlohmann::json& out) override
+            {
+                if (!m_Handle || !s_Managed.MemberOp) return false;
+                const char* text = s_Managed.MemberOp(m_Handle, 0, name.c_str(), nullptr);
+                if (!text) return false;
+                out = nlohmann::json::parse(text, nullptr, false);
+                return !out.is_discarded();
+            }
+
+            bool WriteMember(const std::string& name, const nlohmann::json& value) override
+            {
+                if (!m_Handle || !s_Managed.MemberOp) return false;
+                std::string text = value.dump();
+                return s_Managed.MemberOp(m_Handle, 1, name.c_str(), text.c_str()) != nullptr;
             }
 
             // The slots as GetFields writes the managed values (see ValuesJson).

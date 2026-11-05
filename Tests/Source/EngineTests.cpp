@@ -10057,6 +10057,42 @@ namespace
         const ScriptInfo* launcher = ScriptRegistry::Find("Game.Launcher");
         CHECK(launcher && launcher->Requires == std::vector<std::string>({ "Rigidbody", "Sphere Collider" }));
         CHECK(launcher && fieldOf(launcher, "m_Launches") && fieldOf(launcher, "Impulse") && !fieldOf(launcher, "Key")); // private [SerializeField] in, unsupported type out
+        // UI Bindings to C# properties and methods (not fields): a read-only property, a method's result and a
+        // property with a setter written by a slider.
+        {
+            Scene scene("Bound C#");
+            auto& reg = scene.GetRegistry();
+            Entity board = scene.CreateEntity("Board");
+            reg.Emplace<ScriptComponent>(board).Add("Game.HighScores");
+            Entity canvas = scene.CreateEntity("Canvas");
+            reg.Emplace<CanvasComponent>(canvas);
+            auto bound = [&](const char* name, const char* path, const char* format) {
+                Entity e = scene.CreateEntity(name, canvas);
+                reg.Emplace<UIRectComponent>(e);
+                auto& bc = reg.Emplace<UIBindingComponent>(e);
+                bc.Source = board;
+                bc.Path = path;
+                bc.Format = format;
+                return e;
+            };
+            Entity count = bound("Count", "HighScores.Count", "{0} scores");
+            reg.Emplace<UITextComponent>(count);
+            Entity leader = bound("Leader", "HighScores.Leader", "");
+            reg.Emplace<UITextComponent>(leader);
+            Entity slider = bound("Interval", "HighScores.IntervalSeconds", "");
+            reg.Emplace<UISliderComponent>(slider).MaxValue = 10.0f;
+            scene.UpdateTransforms();
+            scene.OnRuntimeStart();
+            scene.SetUIInput({ -10, -10 }, false, { 800, 600 });
+            scene.OnUpdateRuntime(0.016f);
+            CHECK(reg.Get<UITextComponent>(count).Text == "40 scores" && !reg.Get<UITextComponent>(leader).Text.empty());
+            CHECK(Near(reg.Get<UISliderComponent>(slider).Value, 2.0f));
+            reg.Get<UISliderComponent>(slider).Value = 5.0f;
+            scene.OnUpdateRuntime(0.016f);
+            nlohmann::json interval;
+            CHECK(reg.Get<ScriptComponent>(board).Scripts[0].Instance->ReadMember("IntervalSeconds", interval) && Near(interval.get<float>(), 5.0f));
+            scene.OnRuntimeStop();
+        }
 
         Scene scene("CSharp");
         auto& reg = scene.GetRegistry();

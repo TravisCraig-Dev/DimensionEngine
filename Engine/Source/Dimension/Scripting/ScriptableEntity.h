@@ -3,6 +3,7 @@
 #include "Dimension/Physics/Physics2D.h"
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Scripting/Coroutine.h"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -87,6 +88,10 @@ namespace Dimension
         // Engine-internal: the fields the engine reads were given new values (an edit-mode script edited in the
         // Inspector); C# pushes them to the managed object.
         virtual void OnFieldsChanged() {}
+        // Engine-internal: a member other than a field (C#: a readable property, or a method with no parameters) as
+        // JSON, and a value into one (a property's setter, or a method with one parameter). False: no such member.
+        virtual bool ReadMember(const std::string& name, nlohmann::json& out) { return false; }
+        virtual bool WriteMember(const std::string& name, const nlohmann::json& value) { return false; }
 
         Entity Self() const { return m_Entity; }
         Scene& GetScene() const { return *m_Scene; }

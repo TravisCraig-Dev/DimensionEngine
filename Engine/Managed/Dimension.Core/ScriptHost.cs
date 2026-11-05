@@ -1220,6 +1220,50 @@ namespace Dimension
             }
         }
 
+        // A member of a script that is not a field, for UI Bindings: op 0 a readable property's value or a method with no
+        // parameters' result (JSON; null when there is none), 1 a value (JSON) into a writable property or a method with
+        // one parameter ("true", or null).
+        [UnmanagedCallersOnly]
+        internal static byte* MemberOp(IntPtr handle, int op, byte* nameUtf8, byte* jsonUtf8)
+        {
+            try
+            {
+                var b = (Behaviour)GCHandle.FromIntPtr(handle).Target;
+                string name = Marshal.PtrToStringUTF8((IntPtr)nameUtf8) ?? "";
+                const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance;
+                Type t = b.GetType();
+                PropertyInfo p = t.GetProperty(name, flags);
+                if (op == 0)
+                {
+                    object value;
+                    if (p != null && p.CanRead && p.GetIndexParameters().Length == 0) value = p.GetValue(b);
+                    else if (t.GetMethod(name, flags, Type.EmptyTypes) is { ReturnType: var rt } m && rt != typeof(void)) value = m.Invoke(b, null);
+                    else return null;
+                    using var stream = new MemoryStream();
+                    using (var w = new Utf8JsonWriter(stream)) WriteValue(w, value);
+                    return Utf8Result(stream.ToArray());
+                }
+                string json = Marshal.PtrToStringUTF8((IntPtr)jsonUtf8) ?? "null";
+                if (p != null && p.CanWrite && p.GetIndexParameters().Length == 0)
+                {
+                    p.SetValue(b, ReadValue(p.PropertyType, json, b.Entity.Scene));
+                    return Utf8Result(System.Text.Encoding.UTF8.GetBytes("true"));
+                }
+                foreach (MethodInfo m in t.GetMethods(flags))
+                    if (m.Name == name && m.GetParameters() is { Length: 1 } ps)
+                    {
+                        m.Invoke(b, new[] { ReadValue(ps[0].ParameterType, json, b.Entity.Scene) });
+                        return Utf8Result(System.Text.Encoding.UTF8.GetBytes("true"));
+                    }
+                return null;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"UI Binding member access failed: {(e as TargetInvocationException)?.InnerException?.Message ?? e.Message}");
+                return null;
+            }
+        }
+
         private static byte* FieldsJson(Behaviour b)
         {
             var cls = s_Classes[b.GetType().FullName];

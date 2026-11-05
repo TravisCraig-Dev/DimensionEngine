@@ -234,6 +234,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, float*, ulong*, void> InvokePointer;
         // An Animator state's behaviours (see ScriptHost.InvokeStateBehaviour).
         public delegate* unmanaged<IntPtr, ulong, int, int, int, byte*, byte*, byte*, float*, void> InvokeStateBehaviour;
+        // A script's property or method by name for UI Bindings (see ScriptHost.MemberOp).
+        public delegate* unmanaged<IntPtr, int, byte*, byte*, byte*> MemberOp;
     }
 
     internal static unsafe class Native
@@ -298,6 +300,7 @@ namespace Dimension.Interop
                 api->CoroutinePhase = &ScriptHost.CoroutinePhase;
                 api->InvokePointer = &ScriptHost.InvokePointer;
                 api->InvokeStateBehaviour = &ScriptHost.InvokeStateBehaviour;
+                api->MemberOp = &ScriptHost.MemberOp;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

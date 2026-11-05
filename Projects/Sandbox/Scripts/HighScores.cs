@@ -24,6 +24,15 @@ namespace Game
         private static readonly string[] s_Names = { "Ada", "Grace", "Alan", "Edsger", "Barbara", "Ken", "Dennis", "Margaret", "Linus", "Bjarne" };
         private float m_Timer;
 
+        /// <summary>For UI Bindings to properties and methods: the heading binds Count.</summary>
+        public int Count => Scores.Count;
+        public string Leader() => Scores.Count > 0 ? Scores[0].Name : "";
+        public float IntervalSeconds
+        {
+            get => Interval;
+            set => Interval = MathF.Max(0.1f, value);
+        }
+
         public override void OnCreate()
         {
             for (int i = 0; i < 40; ++i) Add();

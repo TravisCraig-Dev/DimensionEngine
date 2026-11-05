@@ -1167,6 +1167,8 @@ namespace Dimension::UI
             const FieldInfo* Field = nullptr;
             void* Object = nullptr;
             std::vector<std::string> Sub; // a path inside the field's value (object keys, array indices)
+            std::string Member;           // instead of a field: a C# property or method (Field is null)
+            nlohmann::json Cached;        // the member's value read while resolving
         };
 
         std::vector<std::string> SplitPath(const std::string& path)
@@ -1216,6 +1218,13 @@ namespace Dimension::UI
                                 out = { inst.Instance.get(), &f, info->ToObject(inst.Instance.get()), { parts.begin() + 1, parts.end() } };
                                 return true;
                             }
+                        // Not a field: a property or method (C#).
+                        nlohmann::json value;
+                        if (inst.Instance->ReadMember(parts[0], value))
+                        {
+                            out = { inst.Instance.get(), nullptr, nullptr, { parts.begin() + 1, parts.end() }, parts[0], std::move(value) };
+                            return true;
+                        }
                     }
             }
             return false;
@@ -1251,13 +1260,20 @@ namespace Dimension::UI
 
         nlohmann::json ReadBound(const BoundField& bf)
         {
-            nlohmann::json full = FieldToJson(*bf.Field, bf.Object, nullptr);
+            nlohmann::json full = bf.Field ? FieldToJson(*bf.Field, bf.Object, nullptr) : bf.Cached;
             const nlohmann::json* at = JsonAt(full, bf.Sub);
             return at ? *at : nlohmann::json();
         }
 
         bool WriteBound(const BoundField& bf, const nlohmann::json& value)
         {
+            if (!bf.Field)
+            {
+                // A property or method: the whole value written (with the part the path names changed).
+                nlohmann::json full = bf.Cached;
+                if (!SetJsonAt(full, bf.Sub, value)) return false;
+                return bf.Instance->WriteMember(bf.Member, full);
+            }
             bf.Instance->OnBeforeSerialize(); // the other fields as they are, before the managed object is updated
             nlohmann::json full = FieldToJson(*bf.Field, bf.Object, nullptr);
             if (!SetJsonAt(full, bf.Sub, value)) return false;
