@@ -115,6 +115,7 @@ namespace Dimension
         {
             glm::mat4 World{ 1.0f };
             std::vector<glm::mat4> Joints;
+            std::vector<glm::vec3> Positions; // simulated vertices (cloth, soft bodies, ropes)
             uint64_t Frame = 0; // when it was last drawn (entries not drawn for a frame go)
         };
         struct

@@ -81,6 +81,8 @@
 #include "shaders/Velocity.frag.h"
 #include "shaders/VelocityCamera.frag.h"
 #include "shaders/VelocityTiles.frag.h"
+#include "shaders/VelocitySprite.vert.h"
+#include "shaders/VelocitySprite.frag.h"
 #include "shaders/Fog.frag.h"
 #include "shaders/Underwater.frag.h"
 #include "shaders/Decal.vert.h"
@@ -171,6 +173,15 @@ namespace Dimension
         {
             glm::mat4 Model, PrevModel;
             glm::uvec4 Joints; // xy this frame's skinning matrices, zw last frame's
+            glm::uvec4 Extra;  // xy last frame's simulated vertex positions (packed xyz)
+        };
+        // Vertex of the sprites' motion vector pass (VelocitySprite.vert).
+        struct VelocitySpriteVertex
+        {
+            glm::vec3 Position, Previous;
+            glm::vec2 UV;
+            uint32_t Texture;
+            float Alpha;
         };
 
         // std430 mirror of MeshInstance in MeshCommon.glsl.
@@ -432,7 +443,7 @@ namespace Dimension
         struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
         Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater, MotionBlur;
-        Pipeline Velocity, VelocityCamera, VelocityTiles; // motion vectors
+        Pipeline Velocity, VelocityCamera, VelocityTiles, VelocitySprite; // motion vectors
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline FramePreview;          // the frame debugger's target pictures
         Pipeline Decals[3]; // by DecalBlend
@@ -686,6 +697,17 @@ namespace Dimension
             velocity.ColorAttachments = { { F::kVelocityFormat } };
             velocity.DebugName = "VelocityPipeline";
             r.Velocity = Pipeline(velocity);
+            using SV = VelocitySpriteVertex;
+            velocity.VertexSpirv = kVelocitySprite_vert;
+            velocity.FragmentSpirv = kVelocitySprite_frag;
+            velocity.VertexStride = sizeof(SV);
+            velocity.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SV, Position) },
+                                    { 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SV, Previous) },
+                                    { 2, VK_FORMAT_R32G32_SFLOAT, offsetof(SV, UV) },
+                                    { 3, VK_FORMAT_R32_UINT, offsetof(SV, Texture) },
+                                    { 4, VK_FORMAT_R32_SFLOAT, offsetof(SV, Alpha) } };
+            velocity.DebugName = "VelocitySpritePipeline";
+            r.VelocitySprite = Pipeline(velocity);
         }
         post.FragmentSpirv = kFog_frag;
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Premultiplied } };
@@ -2273,6 +2295,7 @@ namespace Dimension
         auto& reg = scene.GetRegistry();
         m_RenderItems.clear();
         m_RenderParts.clear();
+        m_SimPositions.clear();
         m_FrameRefracts = false;
         Material scratch;
 
@@ -2480,6 +2503,9 @@ namespace Dimension
                     std::memcpy(block.Data, tube.data(), tube.size() * sizeof(Vertex));
                     item.Vertices = block.Buffer;
                     item.VertexOffset = block.Offset;
+                    item.SimPositions = (int32_t)m_SimPositions.size();
+                    auto& positions = m_SimPositions.emplace_back(tube.size());
+                    for (size_t i = 0; i < tube.size(); ++i) positions[i] = tube[i].Position;
                     bounds.Min = bounds.Max = tube[0].Position;
                     for (const Vertex& v : tube)
                     {
@@ -2516,6 +2542,8 @@ namespace Dimension
                     }
                     item.Vertices = block.Buffer;
                     item.VertexOffset = block.Offset;
+                    item.SimPositions = (int32_t)m_SimPositions.size();
+                    m_SimPositions.push_back(*simPositions);
                 }
                 // Torn cloth: only the triangles still attached.
                 if (cloth && !cloth->TornIndices.empty() && item.Vertices)
@@ -3510,6 +3538,7 @@ namespace Dimension
     {
         glm::mat4 invView = glm::inverse(camera.View);
         glm::vec3 right = glm::vec3(invView[0]), up = glm::vec3(invView[1]), forward = glm::cross(right, up);
+        float dt = scene.GetDeltaTime(); // how far particles moved this frame (motion vectors)
         for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || ps.Particles.empty()) continue;
@@ -3554,6 +3583,7 @@ namespace Dimension
                                 seg.Order = ps.SortingOrder;
                                 seg.Depth = (camera.View * glm::vec4(mid, 1.0f)).z;
                                 seg.Additive = ps.Blend == ParticleBlend::Additive;
+                                seg.MotionKind = 2;
                                 m_Sprites.push_back(seg);
                             }
                         }
@@ -3571,6 +3601,8 @@ namespace Dimension
                 d.Order = ps.SortingOrder;
                 d.Depth = (camera.View * glm::vec4(pos, 1.0f)).z;
                 d.Additive = ps.Blend == ParticleBlend::Additive;
+                d.MotionKind = 1;
+                d.Displacement = (local ? glm::vec3(t.World * glm::vec4(p.Velocity, 0.0f)) : p.Velocity) * dt;
                 m_Sprites.push_back(d);
             }
         }
@@ -3693,6 +3725,11 @@ namespace Dimension
                 if (m_UnpickableIds.contains(d.Entity)) d.Entity = 0;
         if (m_Sprites.empty()) return;
         auto& res = Renderer::Get();
+        {
+            std::unordered_map<uint32_t, uint32_t> occurrence;
+            for (SpriteDraw& d : m_Sprites)
+                if (d.MotionKind == 0) d.Occurrence = occurrence[d.Entity]++;
+        }
         std::stable_sort(m_Sprites.begin(), m_Sprites.end(), [](const SpriteDraw& a, const SpriteDraw& b) {
             if (a.Order != b.Order) return a.Order < b.Order;
             return a.Depth < b.Depth; // back to front
@@ -4420,7 +4457,8 @@ namespace Dimension
         for (size_t i = 0; i < m_RenderItems.size(); ++i)
         {
             const RenderItem& item = m_RenderItems[i];
-            if (item.MotionVectors == 0 || item.Vertices || item.Motion) continue; // simulated or swaying vertices: camera only
+            // Swaying grass and fur, and vertices made each frame that are not simulated (the ocean): camera only.
+            if (item.MotionVectors == 0 || item.Motion || (item.Vertices && item.SimPositions < 0)) continue;
             uint64_t key = ((uint64_t)item.EntityId << 32) | occurrence[item.EntityId]++;
             auto& last = motion.Objects[key];
             bool had = history && last.Frame + 1 == frame;
@@ -4428,8 +4466,17 @@ namespace Dimension
             bool posed = item.Joints && item.JointMatrices;
             bool samePose = !posed || !had || last.Joints.size() != item.JointMatrices->size() ||
                             std::memcmp(last.Joints.data(), item.JointMatrices->data(), last.Joints.size() * sizeof(glm::mat4)) == 0;
-            bool moved = had && (prevWorld != item.World || !samePose);
-            VelocityGPU gpu{ item.World, prevWorld, glm::uvec4(0u) };
+            const std::vector<glm::vec3>* positions = item.SimPositions >= 0 ? &m_SimPositions[item.SimPositions] : nullptr;
+            bool samePositions = !positions || !had || last.Positions.size() != positions->size() ||
+                                 std::memcmp(last.Positions.data(), positions->data(), positions->size() * sizeof(glm::vec3)) == 0;
+            bool moved = had && (prevWorld != item.World || !samePose || !samePositions);
+            VelocityGPU gpu{ item.World, prevWorld, glm::uvec4(0u), glm::uvec4(0u) };
+            if (moved && !samePositions && item.MotionVectors == 1)
+                if (TransientAllocation block = device.AllocateTransient(last.Positions.size() * sizeof(glm::vec3), 16))
+                {
+                    std::memcpy(block.Data, last.Positions.data(), last.Positions.size() * sizeof(glm::vec3));
+                    gpu.Extra = glm::uvec4(SplitAddress(block.Address), 0u, 0u);
+                }
             if (item.MotionVectors == 2) gpu.PrevModel = item.World; // no motion of its own (the camera's is taken off below)
             if (moved && posed && item.MotionVectors == 1)
             {
@@ -4446,6 +4493,8 @@ namespace Dimension
             last.World = item.World;
             if (posed) last.Joints = *item.JointMatrices;
             else last.Joints.clear();
+            if (positions) last.Positions = *positions;
+            else last.Positions.clear();
             last.Frame = frame;
             if (!moved && item.MotionVectors != 2) continue;
             if (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId)) continue;
@@ -4462,15 +4511,50 @@ namespace Dimension
             objects.push_back(gpu);
             draws.push_back({ (uint32_t)i, object });
         }
+        // Sprites (and text, tilemaps) that moved since the last frame, by their object's last transform, and particles
+        // by their own velocity; ribbons and trails move only with the camera.
+        std::vector<VelocitySpriteVertex> spriteVertices;
+        const glm::vec4 corners[4] = { { -0.5f, -0.5f, 0, 1 }, { 0.5f, -0.5f, 0, 1 }, { 0.5f, 0.5f, 0, 1 }, { -0.5f, 0.5f, 0, 1 } };
+        for (const SpriteDraw& s : m_Sprites)
+        {
+            if (s.HasCorners || s.MotionKind == 2) continue;
+            glm::mat4 prevTransform = s.Transform;
+            glm::vec3 displacement(0.0f);
+            if (s.MotionKind == 0)
+            {
+                uint64_t key = ((uint64_t)s.Entity << 32) | 0x80000000ull | s.Occurrence;
+                auto& last = motion.Objects[key];
+                bool had = history && last.Frame + 1 == frame;
+                if (had) prevTransform = last.World;
+                last.World = s.Transform;
+                last.Frame = frame;
+                if (!had || prevTransform == s.Transform) continue;
+            }
+            else
+            {
+                displacement = s.Displacement;
+                if (displacement == glm::vec3(0.0f)) continue;
+            }
+            glm::vec2 uvs[4] = { { s.UVMin.x, s.UVMin.y }, { s.UVMax.x, s.UVMin.y }, { s.UVMax.x, s.UVMax.y }, { s.UVMin.x, s.UVMax.y } };
+            for (int i = 0; i < 4; ++i)
+            {
+                glm::vec3 p = glm::vec3(s.Transform * corners[i]);
+                glm::vec3 before = s.MotionKind == 0 ? glm::vec3(prevTransform * corners[i]) : p - displacement;
+                spriteVertices.push_back({ p, before, uvs[i], s.Texture, s.Color.a });
+            }
+        }
         std::erase_if(motion.Objects, [frame](const auto& entry) { return entry.second.Frame != frame; });
         motion.PrevViewProj = unjitteredViewProj;
         motion.Valid = true;
-        if (draws.empty()) return;
+        if (draws.empty() && spriteVertices.empty()) return;
 
-        TransientAllocation objectBlock = device.AllocateTransient(objects.size() * sizeof(VelocityGPU), 16);
+        TransientAllocation objectBlock = objects.empty() ? TransientAllocation{} : device.AllocateTransient(objects.size() * sizeof(VelocityGPU), 16);
         TransientAllocation frameBlock = device.AllocateTransient(2 * sizeof(glm::mat4), 16);
-        if (!objectBlock || !frameBlock) return;
-        std::memcpy(objectBlock.Data, objects.data(), objects.size() * sizeof(VelocityGPU));
+        size_t spriteCount = std::min(spriteVertices.size() / 4, (size_t)kMaxQuadsPerDraw);
+        TransientAllocation spriteBlock = spriteCount ? device.AllocateTransient(spriteCount * 4 * sizeof(VelocitySpriteVertex), 16) : TransientAllocation{};
+        if ((!objects.empty() && !objectBlock) || !frameBlock) return;
+        if (objectBlock) std::memcpy(objectBlock.Data, objects.data(), objects.size() * sizeof(VelocityGPU));
+        if (spriteBlock) std::memcpy(spriteBlock.Data, spriteVertices.data(), spriteCount * 4 * sizeof(VelocitySpriteVertex));
         glm::mat4 matrices[2] = { unjitteredViewProj, prevViewProj };
         std::memcpy(frameBlock.Data, matrices, sizeof(matrices));
 
@@ -4491,7 +4575,7 @@ namespace Dimension
         VkRect2D scissor{ { 0, 0 }, extent };
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
-        res.Velocity.Bind(cmd);
+        if (!draws.empty()) res.Velocity.Bind(cmd);
         Mesh* bound = nullptr;
         for (const ObjectDraw& d : draws)
         {
@@ -4505,6 +4589,13 @@ namespace Dimension
                 item.MeshRef->Bind(cmd);
                 bound = item.MeshRef.get();
             }
+            if (item.Vertices)
+            {
+                // Simulated vertices (and torn cloth's triangles) instead of the mesh's.
+                vkCmdBindVertexBuffers(cmd, 0, 1, &item.Vertices, &item.VertexOffset);
+                if (item.Indices) vkCmdBindIndexBuffer(cmd, item.Indices, item.IndexOffset, VK_INDEX_TYPE_UINT32);
+                bound = nullptr;
+            }
             // Every part of the item, opaque ones only (transparent surfaces are not in the depth).
             for (uint32_t p = item.FirstPart; p < item.FirstPart + item.PartCount; ++p)
             {
@@ -4513,6 +4604,17 @@ namespace Dimension
                 vkCmdDrawIndexed(cmd, part.IndexCount, 1, part.FirstIndex, 0, d.Object);
                 m_Stats.DrawCalls++;
             }
+        }
+        if (spriteBlock && DebugDraw("Motion Vectors", "Velocity", "Sprites", 0, 1, (uint32_t)spriteCount * 2))
+        {
+            res.VelocitySprite.Bind(cmd);
+            struct { VkDeviceAddress Frame; uint32_t Depth, Pad; } push{ frameBlock.Address, target.GetDepthBindless(), 0u };
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            VkBuffer buffer = spriteBlock.Buffer;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &spriteBlock.Offset);
+            vkCmdBindIndexBuffer(cmd, res.QuadIndices.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, (uint32_t)spriteCount * 6, 1, 0, 0, 0);
+            m_Stats.DrawCalls++;
         }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, target.GetVelocity().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

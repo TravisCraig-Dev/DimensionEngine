@@ -240,6 +240,11 @@ namespace Dimension
             glm::vec3 P[4];
             glm::vec4 C[4];
             glm::vec2 UV[4];
+            // Motion vectors: 0 by its object's last transform (sprites, text, tilemaps), 1 moved by Displacement
+            // since the last frame (particles), 2 only the camera's motion (ribbons, trails).
+            uint8_t MotionKind = 0;
+            glm::vec3 Displacement{ 0.0f };
+            uint32_t Occurrence = 0; // its place among its object's sprites (set before sorting)
         };
 
         // Mesh renderers resolved once per frame (mesh, world bounds, uploaded materials, skinning) and then only
@@ -272,9 +277,11 @@ namespace Dimension
             uint32_t Fade = 0;         // LOD cross-fade: coverage (1-254) | side << 8, 0 = none (see LODGroups::Frame)
             uint8_t MotionVectors = 0; // MotionVectorMode: 0 camera only (static things), 1 per object, 2 none
             const std::vector<glm::mat4>* JointMatrices = nullptr; // skinned: this frame's pose (the Animator's)
+            int32_t SimPositions = -1; // simulated vertices: their positions in m_SimPositions (-1 = the mesh's own)
             uint32_t FirstPart, PartCount;
         };
         std::vector<RenderItem> m_RenderItems;
+        std::vector<std::vector<glm::vec3>> m_SimPositions; // this frame's simulated vertex positions, for motion vectors
         std::vector<RenderPart> m_RenderParts;
         std::vector<uint8_t> m_BatchInstanceable;       // per batch: false for skinned parts (one draw each)
         std::vector<uint32_t> m_BatchStart, m_BatchFill; // per-pass scratch for the counting sort

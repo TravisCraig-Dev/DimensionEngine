@@ -5,8 +5,8 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 
 // Motion vectors of a moving object: each vertex where it is now and where it was last frame (its last world matrix
-// and, when skinned, its last pose), both projected without the TAA jitter. Velocity.frag keeps the pixels where this
-// surface is the one the main pass saw.
+// and, when skinned, its last pose; simulated vertices where they were), both projected without the TAA jitter.
+// Velocity.frag keeps the pixels where this surface is the one the main pass saw.
 
 layout(location = 0) in vec3 aPosition;
 
@@ -23,7 +23,9 @@ struct VelocityObject
     mat4 Model;
     mat4 PrevModel;
     uvec4 Joints; // xy: this frame's skinning matrices, zw: last frame's (0 = not skinned)
+    uvec4 Extra;  // xy: last frame's simulated vertex positions (cloth, soft bodies, ropes: packed xyz), 0 = none
 };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer PositionsRef { float Values[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer ObjectsRef { VelocityObject Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer FrameRef
 {
@@ -59,6 +61,12 @@ void main()
         SkinVertex s = pc.Skin.Vertices[gl_VertexIndex];
         position = SkinMatrix(o.Joints.xy, s) * position;
         previous = SkinMatrix(o.Joints.zw, s) * previous;
+    }
+    if (o.Extra.x != 0u || o.Extra.y != 0u)
+    {
+        PositionsRef last = PositionsRef(o.Extra.xy);
+        uint i = uint(gl_VertexIndex) * 3u;
+        previous = vec4(last.Values[i], last.Values[i + 1u], last.Values[i + 2u], 1.0);
     }
     vec4 world = o.Model * position;
     vCurrent = pc.Frame.ViewProj * world;
