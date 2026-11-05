@@ -6826,6 +6826,7 @@ namespace
         int Count = 3;
         bool Muted = false;
         std::string PlayerName = "Ada";
+        std::vector<std::string> Names;
     };
 
     // UI Binding: script fields shown in texts (formatted), sliders, toggles and input fields, and the player's
@@ -6888,6 +6889,104 @@ namespace
         reg.Get<UIToggleComponent>(toggle).IsOn = false;
         frame();
         CHECK(probe.Muted);
+        scene.OnRuntimeStop();
+    }
+
+    // UI List View: rows cloned from a template for the items in view only (scrolling reuses them), bound to "item"
+    // and "index"; a row's input field writes its item back into the list; nested binding paths.
+    void TestUIListView()
+    {
+        Scene scene("List");
+        auto& reg = scene.GetRegistry();
+        Entity model = scene.CreateEntity("Model");
+        reg.Emplace<ScriptComponent>(model).Add("BindProbe");
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        Entity list = scene.CreateEntity("List", canvas);
+        {
+            auto& r = reg.Emplace<UIRectComponent>(list);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Size = { 200, 100 };
+        }
+        reg.Emplace<UIScrollViewComponent>(list);
+        Entity tmpl = scene.CreateEntity("Row", list);
+        reg.Emplace<UIRectComponent>(tmpl);
+        Entity label = scene.CreateEntity("Label", tmpl);
+        reg.Emplace<UIRectComponent>(label);
+        reg.Emplace<UITextComponent>(label);
+        reg.Emplace<UIBindingComponent>(label).Path = "item";
+        Entity number = scene.CreateEntity("Number", tmpl);
+        reg.Emplace<UIRectComponent>(number);
+        reg.Emplace<UITextComponent>(number);
+        {
+            auto& nb = reg.Emplace<UIBindingComponent>(number);
+            nb.Path = "number";
+            nb.Format = "#{0}";
+        }
+        Entity edit = scene.CreateEntity("Edit", tmpl);
+        reg.Emplace<UIRectComponent>(edit);
+        reg.Emplace<UIInputFieldComponent>(edit);
+        reg.Emplace<UIBindingComponent>(edit).Path = "item";
+        scene.SetActive(tmpl, false);
+        {
+            auto& lv = reg.Emplace<UIListViewComponent>(list);
+            lv.RowTemplate = tmpl;
+            lv.RowHeight = 20.0f;
+            lv.Spacing = 0.0f;
+            lv.Source = model;
+            lv.Path = "BindProbe.Names";
+        }
+        Entity second = scene.CreateEntity("Second", canvas);
+        reg.Emplace<UIRectComponent>(second);
+        reg.Emplace<UITextComponent>(second);
+        {
+            auto& sb = reg.Emplace<UIBindingComponent>(second);
+            sb.Source = model;
+            sb.Path = "BindProbe.Names.1"; // a nested path: the list's second entry
+        }
+        scene.UpdateTransforms();
+        scene.OnRuntimeStart();
+        auto& probe = static_cast<BindProbe&>(*reg.Get<ScriptComponent>(model).Scripts[0].Instance);
+        for (int i = 0; i < 50; ++i) probe.Names.push_back("name" + std::to_string(i));
+        auto frame = [&] {
+            scene.SetUIInput({ -10, -10 }, false, { 800, 600 });
+            scene.OnUpdateRuntime(0.016f);
+        };
+        frame();
+        frame();
+        auto& lv = reg.Get<UIListViewComponent>(list);
+        auto shownRows = [&] {
+            int n = 0;
+            for (Entity r : lv.Rows) n += reg.Get<TagComponent>(r).Active ? 1 : 0;
+            return n;
+        };
+        CHECK(lv.Items.size() == 50 && shownRows() == 6 && lv.Rows.size() < 12); // 100 high, 20 per row: 6 rows for 50 items
+        auto childText = [&](Entity row, const char* name) {
+            for (Entity c : scene.GetChildren(row))
+                if (reg.Get<TagComponent>(c).Name == name) return reg.Get<UITextComponent>(c).Text;
+            return std::string();
+        };
+        CHECK(childText(lv.Rows[0], "Label") == "name0" && childText(lv.Rows[5], "Number") == "#6");
+        CHECK(Near(reg.Get<UIRectComponent>(lv.Content).Size.y, 1000.0f));
+        CHECK(reg.Get<UITextComponent>(second).Text == "name1");
+        // Scrolled 10 rows down: the same 6 rows show items 10 to 15.
+        reg.Get<UIScrollViewComponent>(list).ScrollPosition = 200.0f;
+        frame();
+        frame();
+        CHECK(shownRows() == 6 && childText(lv.Rows[0], "Label") == "name10" && childText(lv.Rows[0], "Number") == "#11");
+        CHECK(Near(reg.Get<UIRectComponent>(lv.Rows[0]).ComputedMin.y, -0.0f + 0.0f, 0.5f)); // at the view's top
+        // Typing into row 0's field (item 10) writes the list.
+        for (Entity c : scene.GetChildren(lv.Rows[0]))
+            if (reg.Get<TagComponent>(c).Name == "Edit") reg.Get<UIInputFieldComponent>(c).Text = "renamed";
+        frame();
+        CHECK(probe.Names[10] == "renamed");
+        frame();
+        CHECK(childText(lv.Rows[0], "Label") == "renamed");
+        // Fewer items: rows past the end hide.
+        probe.Names.resize(3);
+        reg.Get<UIScrollViewComponent>(list).ScrollPosition = 0.0f;
+        frame();
+        CHECK(shownRows() == 3);
         scene.OnRuntimeStop();
     }
 
@@ -14539,7 +14638,7 @@ int main(int argc, char** argv)
     ComponentRegistry::RegisterBuiltins();
     ScriptRegistry::Register<ClickCounter>("ClickCounter");
     ScriptRegistry::Register<PointerProbe>("PointerProbe");
-    ScriptRegistry::Register<BindProbe>("BindProbe").Field("Volume", &BindProbe::Volume).Field("Count", &BindProbe::Count).Field("Muted", &BindProbe::Muted).Field("PlayerName", &BindProbe::PlayerName);
+    ScriptRegistry::Register<BindProbe>("BindProbe").Field("Volume", &BindProbe::Volume).Field("Count", &BindProbe::Count).Field("Muted", &BindProbe::Muted).Field("PlayerName", &BindProbe::PlayerName).Field("Names", &BindProbe::Names);
     ScriptRegistry::Register<LateProbe>("LateProbe");
     ScriptRegistry::Register<CoroutineProbe>("CoroutineProbe");
     ScriptRegistry::Register<CharacterProbe>("CharacterProbe");
@@ -14611,6 +14710,7 @@ int main(int argc, char** argv)
     Run("UI style states", TestUIStyleStates);
     Run("UI flex layout", TestUIFlexLayout);
     Run("UI binding", TestUIBinding);
+    Run("UI list view", TestUIListView);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

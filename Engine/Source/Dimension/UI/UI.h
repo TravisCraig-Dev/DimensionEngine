@@ -82,6 +82,8 @@ namespace Dimension
         // UI Bindings: script fields into their widgets when the values changed (before the UI update), and widgets the
         // player changed back into Two Way bindings' fields (after it). Scene::OnUpdateRuntime calls both.
         void PullBindings(Scene& scene);
+        // UI List Views: rows for the items in view, from the bound list (before PullBindings).
+        void UpdateListViews(Scene& scene);
         void PushBindings(Scene& scene);
         // A bound value as text: Format's {0} (or {0:Fn}) replaced by it, or the value alone.
         std::string FormatBinding(const nlohmann::json& value, const std::string& format);

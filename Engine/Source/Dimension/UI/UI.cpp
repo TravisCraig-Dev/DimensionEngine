@@ -1166,38 +1166,125 @@ namespace Dimension::UI
             ScriptableEntity* Instance = nullptr;
             const FieldInfo* Field = nullptr;
             void* Object = nullptr;
+            std::vector<std::string> Sub; // a path inside the field's value (object keys, array indices)
         };
 
-        // The script field a binding names: on its Source, or on the element or its nearest parent with the script.
-        bool ResolveBinding(Scene& scene, Entity e, const UIBindingComponent& b, BoundField& out)
+        std::vector<std::string> SplitPath(const std::string& path)
+        {
+            std::vector<std::string> parts;
+            for (size_t start = 0;;)
+            {
+                size_t dot = path.find('.', start);
+                parts.push_back(path.substr(start, dot == std::string::npos ? std::string::npos : dot - start));
+                if (dot == std::string::npos) break;
+                start = dot + 1;
+            }
+            return parts;
+        }
+
+        // The script field a path names ("Script.Field.Sub...", the script by its full or short class name; or
+        // "Field.Sub..." on the first script having that field): on `source`, or on `start` or its nearest parent.
+        bool ResolvePath(Scene& scene, Entity start, Entity source, const std::string& path, BoundField& out)
         {
             auto& reg = scene.GetRegistry();
-            size_t dot = b.Path.rfind('.');
-            std::string cls = dot == std::string::npos ? std::string() : b.Path.substr(0, dot);
-            std::string field = dot == std::string::npos ? b.Path : b.Path.substr(dot + 1);
-            if (field.empty()) return false;
-            auto matches = [&](const std::string& name) {
-                return cls.empty() || name == cls || (name.size() > cls.size() && name.ends_with("." + cls));
-            };
-            bool fixed = scene.IsValid(b.Source);
-            for (Entity s = fixed ? b.Source : e; scene.IsValid(s); s = fixed ? Entity::Null() : scene.GetParent(s))
+            if (path.empty()) return false;
+            bool fixed = scene.IsValid(source);
+            for (Entity s = fixed ? source : start; scene.IsValid(s); s = fixed ? Entity::Null() : scene.GetParent(s))
             {
                 auto* sc = reg.TryGet<ScriptComponent>(s);
                 if (!sc) continue;
-                for (auto& inst : sc->Scripts)
-                {
-                    if (!inst.Instance || !matches(inst.ClassName)) continue;
-                    const ScriptInfo* info = ScriptRegistry::Find(inst.ClassName);
-                    if (!info) continue;
-                    for (const FieldInfo& f : info->Fields)
-                        if (f.Name == field)
+                for (int pass = 0; pass < 2; ++pass) // the class named first, then a bare field
+                    for (auto& inst : sc->Scripts)
+                    {
+                        if (!inst.Instance) continue;
+                        std::string rest;
+                        if (pass == 0)
                         {
-                            out = { inst.Instance.get(), &f, info->ToObject(inst.Instance.get()) };
-                            return true;
+                            std::string shortName = inst.ClassName.substr(inst.ClassName.find_last_of('.') + 1);
+                            if (path.starts_with(inst.ClassName + ".")) rest = path.substr(inst.ClassName.size() + 1);
+                            else if (path.starts_with(shortName + ".")) rest = path.substr(shortName.size() + 1);
+                            else continue;
                         }
-                }
+                        else
+                            rest = path;
+                        std::vector<std::string> parts = SplitPath(rest);
+                        const ScriptInfo* info = ScriptRegistry::Find(inst.ClassName);
+                        if (!info || parts.empty()) continue;
+                        for (const FieldInfo& f : info->Fields)
+                            if (f.Name == parts[0])
+                            {
+                                out = { inst.Instance.get(), &f, info->ToObject(inst.Instance.get()), { parts.begin() + 1, parts.end() } };
+                                return true;
+                            }
+                    }
             }
             return false;
+        }
+
+        const nlohmann::json* JsonAt(const nlohmann::json& v, const std::vector<std::string>& sub)
+        {
+            const nlohmann::json* at = &v;
+            for (const std::string& key : sub)
+            {
+                if (at->is_object() && at->contains(key)) at = &(*at)[key];
+                else if (at->is_array() && !key.empty() && std::all_of(key.begin(), key.end(), ::isdigit) && std::stoul(key) < at->size())
+                    at = &(*at)[std::stoul(key)];
+                else
+                    return nullptr;
+            }
+            return at;
+        }
+
+        bool SetJsonAt(nlohmann::json& v, const std::vector<std::string>& sub, const nlohmann::json& value, size_t from = 0)
+        {
+            if (from == sub.size())
+            {
+                v = value;
+                return true;
+            }
+            const std::string& key = sub[from];
+            if (v.is_object() && v.contains(key)) return SetJsonAt(v[key], sub, value, from + 1);
+            if (v.is_array() && !key.empty() && std::all_of(key.begin(), key.end(), ::isdigit) && std::stoul(key) < v.size())
+                return SetJsonAt(v[std::stoul(key)], sub, value, from + 1);
+            return false;
+        }
+
+        nlohmann::json ReadBound(const BoundField& bf)
+        {
+            nlohmann::json full = FieldToJson(*bf.Field, bf.Object, nullptr);
+            const nlohmann::json* at = JsonAt(full, bf.Sub);
+            return at ? *at : nlohmann::json();
+        }
+
+        bool WriteBound(const BoundField& bf, const nlohmann::json& value)
+        {
+            bf.Instance->OnBeforeSerialize(); // the other fields as they are, before the managed object is updated
+            nlohmann::json full = FieldToJson(*bf.Field, bf.Object, nullptr);
+            if (!SetJsonAt(full, bf.Sub, value)) return false;
+            try
+            {
+                FieldFromJson(*bf.Field, bf.Object, full, nullptr);
+            }
+            catch (const std::exception&)
+            {
+                return false;
+            }
+            bf.Instance->OnFieldsChanged(); // C#: pushed to the managed object
+            return true;
+        }
+
+        // A list row's binding ("item", "item.Field", "index", "number" = index + 1): the row (this element or a
+        // parent) and the path in it.
+        bool RowPath(Scene& scene, Entity e, const std::string& path, Entity& row, std::vector<std::string>& sub, bool& index)
+        {
+            index = path == "index" || path == "number";
+            if (!index && path != "item" && !path.starts_with("item.")) return false;
+            for (row = e; scene.IsValid(row); row = scene.GetParent(row))
+                if (scene.GetRegistry().Has<UIListRowComponent>(row)) break;
+            if (!scene.IsValid(row)) return false;
+            sub.clear();
+            if (path.starts_with("item.")) sub = SplitPath(path.substr(5));
+            return true;
         }
 
         // What a bindable widget shows (null: none).
@@ -1248,16 +1335,101 @@ namespace Dimension::UI
         return out;
     }
 
+    void UpdateListViews(Scene& scene)
+    {
+        auto& reg = scene.GetRegistry();
+        std::vector<Entity> lists;
+        for (auto [e, lv] : reg.ViewOf<UIListViewComponent>()) lists.push_back(e);
+        for (Entity e : lists)
+        {
+            if (!scene.IsValid(e) || !scene.IsActiveInHierarchy(e)) continue;
+            auto* lv = reg.TryGet<UIListViewComponent>(e);
+            if (!lv) continue;
+            BoundField bf;
+            nlohmann::json items = nlohmann::json::array();
+            if (ResolvePath(scene, e, lv->Source, lv->Path, bf))
+            {
+                bf.Instance->OnBeforeSerialize();
+                nlohmann::json v = ReadBound(bf);
+                if (v.is_array()) items = std::move(v);
+            }
+            lv->Items = items;
+            // The rows' parent: the view's scrolled content (its first UI child), made at first use.
+            if (!scene.IsValid(lv->Content))
+            {
+                Entity content = scene.CreateEntity("List Rows", e);
+                auto& r = reg.Emplace<UIRectComponent>(content);
+                r.AnchorMin = { 0, 0 };
+                r.AnchorMax = { 1, 0 };
+                r.Pivot = { 0.5f, 0 };
+                r.Size = { 0, 0 };
+                scene.SetSiblingIndex(content, 0);
+                lv = &reg.Get<UIListViewComponent>(e); // (pools may have moved)
+                lv->Content = content;
+            }
+            float step = std::max(1.0f, lv->RowHeight + lv->Spacing);
+            int n = (int)items.size();
+            reg.Get<UIRectComponent>(lv->Content).Size.y = std::max(0.0f, n * step - lv->Spacing);
+            // The rows in view (from the last layout: the view's height and scroll).
+            float viewH = 0.0f, scroll = 0.0f;
+            if (auto* r = reg.TryGet<UIRectComponent>(e)) viewH = (r->ComputedMax.y - r->ComputedMin.y) / std::max(r->ComputedScale, 1e-4f);
+            if (auto* view = reg.TryGet<UIScrollViewComponent>(e)) scroll = view->ScrollPosition;
+            if (viewH <= 0.0f) viewH = step * 8.0f;
+            int first = std::clamp((int)std::floor(scroll / step), 0, std::max(0, n - 1));
+            int count = std::clamp((int)std::ceil(viewH / step) + 1, 0, std::max(0, n - first));
+            // Enough rows cloned from the template, the extra ones hidden.
+            while ((int)lv->Rows.size() < count && scene.IsValid(lv->RowTemplate))
+            {
+                Entity row = scene.DuplicateEntity(lv->RowTemplate);
+                scene.SetParent(row, lv->Content, false);
+                reg.Emplace<UIListRowComponent>(row).List = e;
+                lv = &reg.Get<UIListViewComponent>(e);
+                lv->Rows.push_back(row);
+            }
+            for (size_t i = 0; i < lv->Rows.size(); ++i)
+            {
+                Entity row = lv->Rows[i];
+                if (!scene.IsValid(row)) continue;
+                bool shown = (int)i < count;
+                if (reg.Get<TagComponent>(row).Active != shown) scene.SetActive(row, shown);
+                if (!shown) continue;
+                int index = first + (int)i;
+                auto& rr = reg.Get<UIRectComponent>(row);
+                rr.AnchorMin = { 0, 0 };
+                rr.AnchorMax = { 1, 0 };
+                rr.Pivot = { 0.5f, 0 };
+                rr.Position = { 0, index * step };
+                rr.Size = { 0, lv->RowHeight };
+                auto& rc = reg.Get<UIListRowComponent>(row);
+                rc.Index = index;
+                rc.Item = items[index];
+            }
+        }
+    }
+
     void PullBindings(Scene& scene)
     {
         auto& reg = scene.GetRegistry();
         std::unordered_set<ScriptableEntity*> pulled;
         for (auto [e, b] : reg.ViewOf<UIBindingComponent>())
         {
-            BoundField bf;
-            if (!ResolveBinding(scene, e, b, bf)) continue;
-            if (pulled.insert(bf.Instance).second) bf.Instance->OnBeforeSerialize(); // C#: the managed object's live values
-            nlohmann::json v = FieldToJson(*bf.Field, bf.Object, nullptr);
+            nlohmann::json v;
+            Entity row;
+            std::vector<std::string> sub;
+            bool index = false;
+            if (RowPath(scene, e, b.Path, row, sub, index))
+            {
+                const auto& rc = reg.Get<UIListRowComponent>(row);
+                if (index) v = rc.Index + (b.Path == "number" ? 1 : 0);
+                else if (const nlohmann::json* at = JsonAt(rc.Item, sub)) v = *at;
+            }
+            else
+            {
+                BoundField bf;
+                if (!ResolvePath(scene, e, b.Source, b.Path, bf)) continue;
+                if (pulled.insert(bf.Instance).second) bf.Instance->OnBeforeSerialize(); // C#: the managed object's live values
+                v = ReadBound(bf);
+            }
             if (v == b.LastValue) continue;
             b.LastValue = v;
             if (auto* t = reg.TryGet<UITextComponent>(e)) t->Text = FormatBinding(v, b.Format);
@@ -1278,20 +1450,32 @@ namespace Dimension::UI
             nlohmann::json w = WidgetValue(reg, e);
             if (w.is_null() || w == b.LastWidget) continue;
             b.LastWidget = w;
-            BoundField bf;
-            if (!ResolveBinding(scene, e, b, bf)) continue;
-            bf.Instance->OnBeforeSerialize(); // the other fields as they are, before the managed object is updated
-            try
+            Entity row;
+            std::vector<std::string> sub;
+            bool index = false;
+            bool written = false;
+            if (RowPath(scene, e, b.Path, row, sub, index))
             {
-                FieldFromJson(*bf.Field, bf.Object, w, nullptr);
+                // Into the list's item: the whole list field written back.
+                auto& rc = reg.Get<UIListRowComponent>(row);
+                auto* lv = reg.TryGet<UIListViewComponent>(rc.List);
+                BoundField bf;
+                if (!index && lv && ResolvePath(scene, rc.List, lv->Source, lv->Path, bf))
+                {
+                    sub.insert(sub.begin(), std::to_string(rc.Index));
+                    bf.Sub.insert(bf.Sub.end(), sub.begin(), sub.end());
+                    written = WriteBound(bf, w);
+                    if (written) SetJsonAt(rc.Item, { sub.begin() + 1, sub.end() }, w);
+                }
             }
-            catch (const std::exception&)
+            else
             {
-                Log::Warn("UI Binding '{}': the widget's value does not fit the field", b.Path);
-                continue;
+                BoundField bf;
+                if (!ResolvePath(scene, e, b.Source, b.Path, bf)) continue;
+                written = WriteBound(bf, w);
             }
-            bf.Instance->OnFieldsChanged(); // C#: pushed to the managed object
-            b.LastValue = FieldToJson(*bf.Field, bf.Object, nullptr);
+            if (!written) Log::Warn("UI Binding '{}': the widget's value could not be written", b.Path);
+            b.LastValue = w;
         }
     }
 

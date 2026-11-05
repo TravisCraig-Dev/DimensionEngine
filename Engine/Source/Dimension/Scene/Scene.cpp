@@ -895,6 +895,7 @@ namespace Dimension
             Entity navCanvas = CanvasOf(m_UISelected);
             if (!navCanvas.IsNull() && m_Registry.Get<CanvasComponent>(navCanvas).RenderMode != CanvasRenderMode::WorldSpace)
                 navCanvas = Entity::Null();
+            UI::UpdateListViews(*this); // list rows for the items in view
             UI::PullBindings(*this); // script values into bound widgets
             UI::PointerState screenPointer = pointer;
             if (!navCanvas.IsNull())

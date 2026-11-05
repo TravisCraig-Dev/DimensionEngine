@@ -728,6 +728,30 @@ namespace Dimension
         nlohmann::json LastWidget;
     };
 
+    // A scroll view that shows a list from a script field (an array) as rows (like a UI Toolkit ListView): Row
+    // Template (an element, usually inactive) is cloned for the rows in view only, Row Height plus Spacing apart, and
+    // each row's UI Bindings read "item" (or "item.Field"), "index" and "number" (index + 1). Source / Path as UI Binding's.
+    struct UIListViewComponent
+    {
+        Entity RowTemplate = Entity::Null();
+        float RowHeight = 40.0f;
+        float Spacing = 4.0f;
+        Entity Source = Entity::Null();
+        std::string Path;
+        // Runtime: the list, the rows' parent and the row pool.
+        nlohmann::json Items = nlohmann::json::array();
+        Entity Content = Entity::Null();
+        std::vector<Entity> Rows;
+    };
+
+    // Runtime: a list view's row and the item it shows.
+    struct UIListRowComponent
+    {
+        Entity List = Entity::Null();
+        int32_t Index = -1;
+        nlohmann::json Item;
+    };
+
     enum class UIMaskShape : int32_t { Rect = 0, Image = 1 };
 
     // Clips its children (like Unity's Mask and RectMask2D): to its rect, or to its UI Image's shape (the texture's

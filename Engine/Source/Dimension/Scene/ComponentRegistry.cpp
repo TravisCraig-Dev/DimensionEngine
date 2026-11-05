@@ -587,6 +587,12 @@ namespace Dimension
             .Field("Path", &UIBindingComponent::Path).Tooltip("Script.Field, e.g. Player.Health (or just the field)")
             .Field("Format", &UIBindingComponent::Format).Tooltip("Text: {0} is the value, {0:F1} with one decimal (empty: the value)")
             .Field("Two Way", &UIBindingComponent::TwoWay).Tooltip("Sliders, toggles, input fields and dropdowns write the player's changes back");
+        Register<UIListViewComponent>("UI List View", "UI")
+            .Field("Row Template", &UIListViewComponent::RowTemplate).Tooltip("The element cloned for each row in view (keep it inactive)")
+            .Field("Row Height", &UIListViewComponent::RowHeight).Range(1.0f, 10000.0f).Speed(0.5f)
+            .Field("Spacing", &UIListViewComponent::Spacing).Range(0.0f, 1000.0f).Speed(0.5f)
+            .Field("Source", &UIListViewComponent::Source).Tooltip("The object with the script (None: this one or the nearest parent with it)")
+            .Field("Path", &UIListViewComponent::Path).Tooltip("Script.Field of the list (an array); rows bind to item, item.Field and index");
         Register<UIStyleComponent>("UI Style", "UI")
             .Field("Sheet", &UIStyleComponent::Sheet).As(FieldType::UIStyleSheet).Tooltip("None: the nearest parent UI Style's sheet")
             .Field("Classes", &UIStyleComponent::Classes).Tooltip("Space-separated classes of the sheet, applied in order");
