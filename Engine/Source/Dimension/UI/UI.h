@@ -28,6 +28,11 @@ namespace Dimension
             // gamepad A) presses the selected widget; Cancel (Escape, gamepad B) closes lists and leaves text fields.
             bool NavUp = false, NavDown = false, NavLeft = false, NavRight = false, Submit = false, Cancel = false;
             bool SelectAll = false, Copy = false, Cut = false, Paste = false;
+            // Which pointer this is (0 the mouse, 1 + n a script's ray n): a widget pressed or dragged by one pointer
+            // is released only by it. KeepHover: another pointer already updated this canvas this frame, so hovers
+            // add up instead of replacing each other.
+            int Id = 0;
+            bool KeepHover = false;
             std::string PasteText;                              // clipboard contents when Paste is set
             std::function<void(const std::string&)> SetClipboard; // receives copied/cut text
         };

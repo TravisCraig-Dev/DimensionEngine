@@ -288,7 +288,7 @@ namespace Dimension
             // UI input: 0 pointer over UI, 1 the selected element (ids[0]), 2 select ids[0] (~0 clears), 3 the elements
             // under v (xy pixels) into ids, topmost first (returns the total), 4 the element under the pointer (ids[0]),
             // 5 whether keyboard / gamepad navigation is on, 6 a pointer ray for World Space canvases (v: origin, direction,
-            // pressed), 7 back to the mouse.
+            // pressed, id, cursor), 7 clear one (v[0]: its id, -1 all; back to the mouse when none is left).
             int (*UIEvents)(void*, int, float*, uint64_t*, int);
             // The Animator: 0 play state/clip `name` on `layer` (v: fade seconds, offset, fixed time != 0), 1 state info
             // (v[0] 0 current, 1 next; out v: normalized time, length, speed, loop), 2 this frame's root motion (v xyz, xyzw),
@@ -975,8 +975,8 @@ namespace Dimension
             void OnPointerEvent(PointerEventKind kind, const PointerEventData& d) override
             {
                 if (!m_Handle) return;
-                float data[10] = { d.Position.x, d.Position.y, d.Delta.x, d.Delta.y, d.PressPosition.x, d.PressPosition.y,
-                                   d.Scroll, (float)d.Button, (float)d.ClickCount, d.Dragging ? 1.0f : 0.0f };
+                float data[11] = { d.Position.x, d.Position.y, d.Delta.x, d.Delta.y, d.PressPosition.x, d.PressPosition.y,
+                                   d.Scroll, (float)d.Button, (float)d.ClickCount, d.Dragging ? 1.0f : 0.0f, (float)d.PointerId };
                 auto id = [this](Entity e) { return e.IsNull() || !GetScene().IsValid(e) ? ~0ull : Pack(e); };
                 uint64_t entities[3] = { id(d.Over), id(d.Press), id(d.Drag) };
                 s_Managed.InvokePointer(m_Handle, (int)kind, data, entities);
@@ -2345,8 +2345,8 @@ namespace Dimension
                     return (int)under.size();
                 }
                 case 4: return put(scene.GetUIHovered());
-                case 6: scene.SetUIPointerRay({ v[0], v[1], v[2] }, { v[3], v[4], v[5] }, v[6] != 0.0f); return 1;
-                case 7: scene.ClearUIPointerRay(); return 1;
+                case 6: scene.SetUIPointerRay({ v[0], v[1], v[2] }, { v[3], v[4], v[5] }, v[6] != 0.0f, std::max(0, (int)v[7]), v[8] != 0.0f); return 1;
+                case 7: scene.ClearUIPointerRay(v ? (int)v[0] : -1); return 1;
                 default: return scene.IsUINavigating() ? 1 : 0;
                 }
             };

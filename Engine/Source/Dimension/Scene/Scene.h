@@ -139,6 +139,7 @@ namespace Dimension
         float Scroll = 0.0f;             // wheel notches (positive = up)
         int Button = 0;                  // 0 left
         int ClickCount = 0;              // 2 for a double click (Click, and Down of the second press)
+        int PointerId = -1;              // -1 the mouse, n a script's pointer ray n
         bool Dragging = false;
         Entity Over = Entity::Null();    // the topmost UI element under the pointer
         Entity Press = Entity::Null();   // what handled Down
@@ -277,20 +278,33 @@ namespace Dimension
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
         // The topmost UI element under the pointer this frame (Null when none).
         Entity GetUIHovered() const { return m_UIHovered; }
-        // A pointer ray from scripts (EventSystem.SetPointerRay: a VR controller, a crosshair) that World Space canvases
-        // take instead of the main camera's mouse ray, with its own button; it stays until cleared.
-        void SetUIPointerRay(const glm::vec3& origin, const glm::vec3& direction, bool down)
+        // Pointer rays from scripts (EventSystem.SetPointerRay: VR controllers, a crosshair) that World Space canvases
+        // take instead of the main camera's mouse ray, each with its own id, button, hover, press and drag; one stays
+        // until cleared (id -1: all of them). `cursor` draws a dot where it meets a panel.
+        struct UIPointerRay
         {
-            m_UIRaySet = true;
-            m_UIRayOrigin = origin;
-            m_UIRayDirection = direction;
-            m_UIRayDown = down;
+            glm::vec3 Origin{ 0.0f }, Direction{ 0.0f, 0.0f, -1.0f };
+            bool Down = false, WasDown = false, Pressed = false, Released = false, Cursor = true;
+        };
+        void SetUIPointerRay(const glm::vec3& origin, const glm::vec3& direction, bool down, int id = 0, bool cursor = true)
+        {
+            auto& r = m_UIRays[id];
+            r.Origin = origin;
+            r.Direction = direction;
+            r.Down = down;
+            r.Cursor = cursor;
         }
-        void ClearUIPointerRay() { m_UIRaySet = false; m_UIRayDown = false; }
-        bool HasUIPointerRay() const { return m_UIRaySet; }
+        void ClearUIPointerRay(int id = -1)
+        {
+            if (id < 0) m_UIRays.clear();
+            else m_UIRays.erase(id);
+        }
+        bool HasUIPointerRay() const { return !m_UIRays.empty(); }
+        // Where the script rays (those with a cursor) meet a World Space canvas, in its pixels.
+        std::vector<glm::vec2> UIPointerCursors(Entity canvas);
         // The canvas an element belongs to (its nearest Canvas ancestor, itself included; null without one).
         Entity CanvasOf(Entity e);
-        // Where the pointer (the script's ray, else the mouse through the main camera) meets a World Space canvas.
+        // Where the mouse through the main camera meets a World Space canvas.
         bool WorldCanvasPointer(Entity canvas, glm::vec2& pixel);
         // Pixels the pointer must move while held before a drag begins (Unity's EventSystem drag threshold).
         static constexpr float kDragThreshold = 10.0f;
@@ -455,8 +469,7 @@ namespace Dimension
         Entity m_LastPrimaryCamera = Entity::Null();
         uint32_t m_CameraCuts = 0;
         bool m_MouseWasDown = false;
-        bool m_UIRaySet = false, m_UIRayDown = false, m_UIRayWasDown = false;
-        glm::vec3 m_UIRayOrigin{ 0.0f }, m_UIRayDirection{ 0.0f, 0.0f, -1.0f };
+        std::map<int, UIPointerRay> m_UIRays;
         struct PointerTracking
         {
             std::vector<Entity> Hovered; // the element under the pointer and its parents
@@ -466,6 +479,9 @@ namespace Dimension
             float LastClickTime = -1.0f;
             int ClickCount = 0;
         } m_Pointer;
+        std::map<int, PointerTracking> m_RayPointers; // pointer events of each script ray
+        PointerEventData m_PointerData; // the mouse's this frame
+        void PointerEventsFor(PointerTracking& p, int id, const UIPointerRay* ray, glm::vec2 position, bool down, float scroll);
         std::vector<Scope<System>> m_Systems;
         std::vector<LoadedScene> m_LoadedScenes;
         std::vector<Entity> m_Persistent;

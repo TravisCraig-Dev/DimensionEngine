@@ -1006,6 +1006,8 @@ namespace Dimension
         public Entity PointerPress { get; init; }
         /// <summary>What is being dragged (in OnDrop: what was dropped).</summary>
         public Entity PointerDrag { get; init; }
+        /// <summary>-1 the mouse; otherwise the id of the script pointer ray (<see cref="EventSystem.SetPointerRay"/>).</summary>
+        public int PointerId { get; init; } = -1;
     }
 
     /// <summary>
@@ -1047,15 +1049,23 @@ namespace Dimension
         /// <summary>
         /// Points at World Space canvases with a ray of your own instead of the mouse (a VR controller, a crosshair):
         /// buttons, sliders and pointer events on them follow it, `pressed` acting as the button. It stays (set it each
-        /// frame as the ray moves) until <see cref="ClearPointerRay"/>; it takes effect at the next UI update.
+        /// frame as the ray moves) until <see cref="ClearPointerRay"/>; it takes effect at the next UI update. Several
+        /// rays (one per `pointerId`, e.g. a VR controller in each hand) hover, press and drag on their own; pointer
+        /// events tell them apart by <see cref="PointerEventData.PointerId"/>. `showCursor` draws a dot where the ray
+        /// meets a panel.
         /// </summary>
-        public static void SetPointerRay(Vector3 origin, Vector3 direction, bool pressed = false)
+        public static void SetPointerRay(Vector3 origin, Vector3 direction, bool pressed = false, int pointerId = 0, bool showCursor = true)
         {
-            float* v = stackalloc float[7] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, pressed ? 1 : 0 };
+            float* v = stackalloc float[9] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, pressed ? 1 : 0, pointerId,
+                                             showCursor ? 1 : 0 };
             Op(6, null, 0, v);
         }
-        /// <summary>Back to the mouse for World Space canvases.</summary>
-        public static void ClearPointerRay() => Op(7);
+        /// <summary>Stops a pointer ray (-1: all of them); with none left, the mouse points at World Space canvases again.</summary>
+        public static void ClearPointerRay(int pointerId = -1)
+        {
+            float* v = stackalloc float[1] { pointerId };
+            Op(7, null, 0, v);
+        }
 
         /// <summary>The UI elements that take the pointer under a screen point, topmost first.</summary>
         public static Entity[] RaycastAll(Vector2 screenPoint)

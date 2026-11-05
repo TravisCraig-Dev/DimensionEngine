@@ -845,6 +845,7 @@ namespace Dimension::UI
                     if (!InBox(pointer.Position, g.TrackMin - grow, g.TrackMax + grow)) continue;
                     // Grab the handle where it was clicked; clicking the track centres the handle on the pointer.
                     view->DraggingScrollbar = true;
+                    view->PointerId = pointer.Id;
                     view->DraggingHorizontal = horizontal;
                     view->DragOffset = InBox(pointer.Position, g.HandleMin - grow, g.HandleMax + grow)
                                            ? pointer.Position[axis] - g.HandleMin[axis]
@@ -856,6 +857,7 @@ namespace Dimension::UI
         for (auto [e, view] : reg.ViewOf<UIScrollViewComponent>())
         {
             if (!mine(e)) continue;
+            if (view.PointerId != pointer.Id) continue; // another pointer's drag
             if (!pointer.Down) view.DraggingScrollbar = false;
             if (!view.DraggingScrollbar) continue;
             auto* r = reg.TryGet<UIRectComponent>(e);
@@ -921,11 +923,16 @@ namespace Dimension::UI
         for (auto [e, button] : reg.ViewOf<UIButtonComponent>())
         {
             if (!mine(e)) continue;
-            button.Hovered = e == hovered && button.Interactable;
-            if (input.Pressed && button.Hovered) button.Pressed = true;
-            if (input.Released)
+            bool over = e == hovered && button.Interactable;
+            button.Hovered = over || (pointer.KeepHover && button.Hovered);
+            if (input.Pressed && over)
             {
-                if (button.Pressed && button.Hovered) clicked.push_back(e);
+                button.Pressed = true;
+                button.PointerId = pointer.Id;
+            }
+            if (input.Released && button.PointerId == pointer.Id)
+            {
+                if (button.Pressed && over) clicked.push_back(e);
                 button.Pressed = false;
             }
         }
@@ -933,7 +940,12 @@ namespace Dimension::UI
         for (auto [e, slider] : reg.ViewOf<UISliderComponent>())
         {
             if (!mine(e)) continue;
-            if (input.Pressed && e == hovered && slider.Interactable) slider.Dragging = true;
+            if (input.Pressed && e == hovered && slider.Interactable)
+            {
+                slider.Dragging = true;
+                slider.PointerId = pointer.Id;
+            }
+            if (slider.PointerId != pointer.Id) continue; // another pointer's drag
             if (!pointer.Down) slider.Dragging = false;
             if (!slider.Dragging) continue;
             auto& r = reg.Get<UIRectComponent>(e);
@@ -953,8 +965,12 @@ namespace Dimension::UI
         {
             if (!mine(e)) continue;
             bool over = e == hovered && toggle.Interactable;
-            if (input.Pressed && over) toggle.Pressed = true;
-            if (input.Released)
+            if (input.Pressed && over)
+            {
+                toggle.Pressed = true;
+                toggle.PointerId = pointer.Id;
+            }
+            if (input.Released && toggle.PointerId == pointer.Id)
             {
                 if (toggle.Pressed && over)
                 {
@@ -1410,6 +1426,19 @@ namespace Dimension::UI
             Emit(out, { a.x, b.y - w }, b, { 0, 0 }, { 1, 1 }, color, white, clip);
             Emit(out, { a.x, a.y + w }, { a.x + w, b.y - w }, { 0, 0 }, { 1, 1 }, color, white, clip);
             Emit(out, { b.x - w, a.y + w }, { b.x, b.y - w }, { 0, 0 }, { 1, 1 }, color, white, clip);
+        }
+
+        // A World Space panel: a dot where each script pointer ray meets it (the mouse has the system cursor).
+        if (!only.IsNull())
+        {
+            UIRectComponent clip;
+            clip.ClipMin = glm::vec2(0.0f);
+            clip.ClipMax = screen;
+            for (const glm::vec2& c : scene.UIPointerCursors(only))
+            {
+                Emit(out, c - glm::vec2(9.0f), c + glm::vec2(9.0f), { 0, 0 }, { 1, 1 }, { 0.05f, 0.05f, 0.08f, 0.85f }, white, clip);
+                Emit(out, c - glm::vec2(6.0f), c + glm::vec2(6.0f), { 0, 0 }, { 1, 1 }, { 1.0f, 1.0f, 1.0f, 1.0f }, white, clip);
+            }
         }
 
         // Scrollbars sit on top of their view's content.

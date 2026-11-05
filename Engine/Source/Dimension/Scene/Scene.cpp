@@ -852,7 +852,7 @@ namespace Dimension
         ++m_FrameCount;
 
         Input::SetKeyboardCapturedByUI(false); // the UI reads the keyboard first
-        if (m_UIInputValid || m_UIRaySet) // a script's pointer ray works without a mouse (VR)
+        if (m_UIInputValid || !m_UIRays.empty()) // script pointer rays work without a mouse (VR)
         {
             UI::PointerState pointer{ m_UIPointer, m_UIDown, m_UIDown && !m_UIWasDown, !m_UIDown && m_UIWasDown, m_UIScroll };
             pointer.Text = Input::GetTypedText() + m_UIInjectedText;
@@ -905,31 +905,54 @@ namespace Dimension
             std::vector<Entity> worldCanvases;
             for (auto [ce, canvas, ct] : m_Registry.ViewOf<CanvasComponent, TransformComponent>())
                 if (ct.ActiveInHierarchy && canvas.RenderMode == CanvasRenderMode::WorldSpace) worldCanvases.push_back(ce);
-            bool rayPressed = m_UIRaySet && m_UIRayDown && !m_UIRayWasDown, rayReleased = m_UIRaySet && !m_UIRayDown && m_UIRayWasDown;
-            m_UIRayWasDown = m_UIRaySet && m_UIRayDown;
+            for (auto& [id, r] : m_UIRays)
+            {
+                r.Pressed = r.Down && !r.WasDown;
+                r.Released = !r.Down && r.WasDown;
+            }
             for (Entity ce : worldCanvases)
             {
                 if (!IsValid(ce)) continue;
-                glm::vec2 pixel(-1e6f);
-                bool hit = (m_UIRaySet || m_UIHovered.IsNull()) && WorldCanvasPointer(ce, pixel);
-                UI::PointerState p = pointer;
-                if (m_UIRaySet)
-                {
-                    // The script's ray and button instead of the mouse.
-                    p.Down = m_UIRayDown;
-                    p.Pressed = rayPressed;
-                    p.Released = rayReleased;
-                }
-                p.Position = hit ? pixel : glm::vec2(-1e6f);
-                p.Pressed = p.Pressed && hit;
-                p.Scroll = hit ? pointer.Scroll : 0.0f;
-                if (ce != navCanvas) p.NavUp = p.NavDown = p.NavLeft = p.NavRight = p.Submit = p.Cancel = false;
+                glm::vec2 size = m_Registry.Get<CanvasComponent>(ce).PixelSize;
+                bool navHere = ce == navCanvas;
                 Entity selectedBefore = m_UISelected;
-                Entity over = UI::Update(*this, p, m_Registry.Get<CanvasComponent>(ce).PixelSize, unscaledDt, ce);
-                if (m_UIHovered.IsNull() && hit) m_UIHovered = over;
+                // The pointers: each script ray with its own button, else the mouse through the camera. Keys and
+                // navigation go with the first; later ones add their hovers to it.
+                std::vector<std::pair<int, const UIPointerRay*>> sources;
+                for (auto& [id, r] : m_UIRays) sources.emplace_back(id + 1, &r);
+                if (sources.empty()) sources.emplace_back(0, nullptr);
+                for (size_t i = 0; i < sources.size(); ++i)
+                {
+                    const UIPointerRay* ray = sources[i].second;
+                    glm::vec2 pixel(-1e6f);
+                    bool hit = ray ? UI::WorldCanvasRayPoint(*this, ce, ray->Origin, ray->Direction, pixel)
+                                   : m_UIHovered.IsNull() && WorldCanvasPointer(ce, pixel);
+                    UI::PointerState p = pointer;
+                    if (ray)
+                    {
+                        p.Down = ray->Down;
+                        p.Pressed = ray->Pressed;
+                        p.Released = ray->Released;
+                    }
+                    p.Id = sources[i].first;
+                    p.KeepHover = i > 0;
+                    p.Position = hit ? pixel : glm::vec2(-1e6f);
+                    p.Pressed = p.Pressed && hit;
+                    p.Scroll = hit && !ray ? pointer.Scroll : 0.0f;
+                    if (!navHere || i > 0) p.NavUp = p.NavDown = p.NavLeft = p.NavRight = p.Submit = p.Cancel = false;
+                    if (i > 0)
+                    {
+                        p.Text.clear();
+                        p.Backspace = p.Enter = p.Delete = p.Left = p.Right = p.LineUp = p.LineDown = p.Home = p.End = p.Tab = false;
+                        p.SelectAll = p.Copy = p.Cut = p.Paste = false;
+                    }
+                    Entity over = UI::Update(*this, p, size, unscaledDt, ce);
+                    if (m_UIHovered.IsNull() && hit) m_UIHovered = over;
+                }
                 // Nothing further this way on the panel: on to the nearest other World Space panel that way on screen.
-                glm::vec2 dir = p.NavLeft ? glm::vec2(-1, 0) : p.NavRight ? glm::vec2(1, 0) : p.NavUp ? glm::vec2(0, -1) : p.NavDown ? glm::vec2(0, 1) : glm::vec2(0);
-                bool stays = ce == navCanvas && dir != glm::vec2(0.0f) && m_UISelected == selectedBefore && !m_UISelected.IsNull();
+                glm::vec2 dir = !navHere ? glm::vec2(0) : pointer.NavLeft ? glm::vec2(-1, 0) : pointer.NavRight ? glm::vec2(1, 0)
+                                : pointer.NavUp ? glm::vec2(0, -1) : pointer.NavDown ? glm::vec2(0, 1) : glm::vec2(0);
+                bool stays = navHere && dir != glm::vec2(0.0f) && m_UISelected == selectedBefore && !m_UISelected.IsNull();
                 if (stays && dir.x != 0.0f && m_Registry.Has<UISliderComponent>(m_UISelected)) stays = false; // it stepped
                 if (stays)
                     if (auto* dd = m_Registry.TryGet<UIDropdownComponent>(m_UISelected); dd && dd->Open) stays = false;
@@ -966,6 +989,7 @@ namespace Dimension
                     }
                 }
             }
+            for (auto& [id, r] : m_UIRays) r.WasDown = r.Down;
             UpdatePointerEvents(m_UIPointer, m_UIDown, m_UIScroll);
             // A focused text field keeps the keys from gameplay (WASD while typing a name must not move the player).
             bool typing = false;
@@ -1930,8 +1954,18 @@ namespace Dimension
 
     bool Scene::WorldCanvasPointer(Entity canvas, glm::vec2& pixel)
     {
-        if (m_UIRaySet) return UI::WorldCanvasRayPoint(*this, canvas, m_UIRayOrigin, m_UIRayDirection, pixel);
         return m_UIInputValid && UI::WorldCanvasPoint(*this, canvas, m_UIPointer, m_UIScreen, pixel);
+    }
+
+    std::vector<glm::vec2> Scene::UIPointerCursors(Entity canvas)
+    {
+        std::vector<glm::vec2> out;
+        for (auto& [id, r] : m_UIRays)
+        {
+            glm::vec2 pixel;
+            if (r.Cursor && UI::WorldCanvasRayPoint(*this, canvas, r.Origin, r.Direction, pixel)) out.push_back(pixel);
+        }
+        return out;
     }
 
     uint32_t Scene::PointerHandlers(Entity e)
@@ -1970,7 +2004,6 @@ namespace Dimension
     void Scene::UpdatePointerEvents(glm::vec2 position, bool down, float scroll)
     {
         DIM_PROFILE_SCOPE("Pointer Events");
-        PointerTracking& p = m_Pointer;
         bool any = false;
         for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
         {
@@ -1979,11 +2012,36 @@ namespace Dimension
         }
         if (!any)
         {
-            p = PointerTracking{};
-            p.Selected = m_UISelected;
-            p.WasDown = down;
+            m_Pointer = PointerTracking{};
+            m_Pointer.Selected = m_UISelected;
+            m_Pointer.WasDown = down;
+            m_RayPointers.clear();
             return;
         }
+        PointerEventsFor(m_Pointer, 0, nullptr, position, down, scroll);
+        for (auto& [id, r] : m_UIRays) PointerEventsFor(m_RayPointers[id], id + 1, &r, glm::vec2(0.0f), r.Down, 0.0f);
+        // A ray cleared: what it was over is left (and a press on it let go).
+        for (auto it = m_RayPointers.begin(); it != m_RayPointers.end();)
+        {
+            if (m_UIRays.count(it->first)) { ++it; continue; }
+            static const UIPointerRay gone{ glm::vec3(0.0f), glm::vec3(0.0f) };
+            PointerEventsFor(it->second, it->first + 1, &gone, it->second.LastPosition, false, 0.0f);
+            it = m_RayPointers.erase(it);
+        }
+        // Select / Deselect as the UI selection changes (clicks by any pointer, navigation, EventSystem.SetSelected).
+        if (m_UISelected != m_Pointer.Selected)
+        {
+            Entity before = m_Pointer.Selected;
+            m_Pointer.Selected = m_UISelected;
+            SendPointerEvent(before, PointerEventKind::Deselect, m_PointerData);
+            SendPointerEvent(m_Pointer.Selected, PointerEventKind::Select, m_PointerData);
+        }
+    }
+
+    // One pointer's events: id 0 the mouse (screen canvases, then World Space ones through the camera when no script
+    // rays point), 1 + n script ray n (World Space canvases only).
+    void Scene::PointerEventsFor(PointerTracking& p, int id, const UIPointerRay* ray, glm::vec2 position, bool down, float scroll)
+    {
 
         // While dragging, what is under the pointer beneath the dragged object (which usually follows the pointer), so
         // slots see it come and Drop goes to them.
@@ -1994,25 +2052,28 @@ namespace Dimension
         };
         auto takes = [this](Entity e) { return PointerHandlers(e) != 0; };
         Entity over = Entity::Null();
-        if (!m_UIRaySet)
+        bool gone = ray && ray->Direction == glm::vec3(0.0f);
+        if (!ray)
             for (Entity e : UI::ElementsAt(*this, position, m_UIScreen, takes))
                 if (!p.Dragging || !inDragged(e)) { over = e; break; }
         // World Space canvases (the script's ray, else the mouse through the camera): positions in the panel's pixels.
-        if (over.IsNull())
+        if (over.IsNull() && !gone && (ray || m_UIRays.empty()))
             for (auto [ce, canvas, ct] : m_Registry.ViewOf<CanvasComponent, TransformComponent>())
             {
                 glm::vec2 pixel;
-                if (!ct.ActiveInHierarchy || canvas.RenderMode != CanvasRenderMode::WorldSpace || !WorldCanvasPointer(ce, pixel)) continue;
+                if (!ct.ActiveInHierarchy || canvas.RenderMode != CanvasRenderMode::WorldSpace) continue;
+                if (ray ? !UI::WorldCanvasRayPoint(*this, ce, ray->Origin, ray->Direction, pixel) : !WorldCanvasPointer(ce, pixel)) continue;
                 for (Entity e : UI::ElementsAt(*this, pixel, canvas.PixelSize, takes, ce))
                     if (!p.Dragging || !inDragged(e)) { over = e; break; }
                 if (!over.IsNull() || p.Dragging)
                 {
                     position = pixel;
-                    if (m_UIRaySet) down = m_UIRayDown;
                     break;
                 }
             }
+        if (ray && over.IsNull() && !p.Dragging) position = p.LastPosition; // off every panel: no position of its own
         PointerEventData data;
+        data.PointerId = id - 1;
         data.Position = position;
         data.Delta = p.Started ? position - p.LastPosition : glm::vec2(0.0f);
         data.PressPosition = p.PressPosition;
@@ -2093,14 +2154,7 @@ namespace Dimension
         }
         if (scroll != 0.0f) SendPointerEvent(PointerHandler(data.Over, PointerEventKind::Scroll), PointerEventKind::Scroll, data);
 
-        // Select / Deselect as the UI selection changes (clicks, navigation, EventSystem.SetSelected).
-        if (m_UISelected != p.Selected)
-        {
-            Entity before = p.Selected;
-            p.Selected = m_UISelected;
-            SendPointerEvent(before, PointerEventKind::Deselect, data);
-            SendPointerEvent(p.Selected, PointerEventKind::Select, data);
-        }
+        if (id == 0) m_PointerData = data; // for Select / Deselect after every pointer's events
         p.WasDown = down;
         p.LastPosition = position;
     }

@@ -611,6 +611,7 @@ namespace Dimension
         glm::vec4 FillColor{ 0.25f, 0.55f, 0.95f, 1.0f };
         glm::vec4 HandleColor{ 1.0f };
         bool Dragging = false; // runtime
+        int PointerId = 0; // runtime: the pointer holding it (0 the mouse, 1 + n the script ray n)
     };
 
     // Checkbox with an optional label; clicking flips IsOn.
@@ -624,6 +625,7 @@ namespace Dimension
         glm::vec4 CheckColor{ 0.2f, 0.5f, 0.95f, 1.0f };
         glm::vec4 LabelColor{ 1.0f };
         bool Pressed = false; // runtime
+        int PointerId = 0; // runtime: the pointer holding it (0 the mouse, 1 + n the script ray n)
     };
 
     // Single-line text entry: click to focus, type, Enter submits.
@@ -681,6 +683,7 @@ namespace Dimension
         float ScrollPositionX = 0.0f; // canvas units scrolled right
         float MaxScrollX = 0.0f;
         bool DraggingScrollbar = false;
+        int PointerId = 0; // runtime: the pointer holding it (0 the mouse, 1 + n the script ray n)
         bool DraggingHorizontal = false; // which scrollbar is being dragged
         float DragOffset = 0.0f;      // pointer offset inside the handle (pixels)
     };
@@ -741,6 +744,7 @@ namespace Dimension
         glm::vec4 PressedColor{ 0.75f, 0.75f, 0.75f, 1.0f };
         bool Interactable = true;
         bool Hovered = false, Pressed = false; // runtime state
+        int PointerId = 0; // runtime: the pointer holding it (0 the mouse, 1 + n the script ray n)
     };
 
     // Captures the surroundings at its position; meshes inside its box reflect that instead of the sky (Unity's

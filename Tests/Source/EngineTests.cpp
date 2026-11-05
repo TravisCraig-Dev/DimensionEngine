@@ -6169,6 +6169,7 @@ namespace
             Log += GetScene().GetRegistry().Get<TagComponent>(Self()).Name + ":" + names[(int)kind];
             if (kind == PointerEventKind::Click) Log += std::to_string(d.ClickCount);
             if (kind == PointerEventKind::Drop) Log += "(" + GetScene().GetRegistry().Get<TagComponent>(d.Drag).Name + ")";
+            if (d.PointerId >= 0) Log += "@" + std::to_string(d.PointerId); // a script's pointer ray
             Log += " ";
         }
     };
@@ -6538,18 +6539,96 @@ namespace
         // A ray of the script's own (a controller beside the camera, pointing at the button) with its own button: the
         // mouse (off the panel, released) no longer counts.
         scene.SetUIPointerRay({ 3, 0, 2 }, glm::normalize(glm::vec3(-3, 0, -2)), false);
-        CHECK(frame({ 50, 50 }, false) == "Button:Enter");
+        CHECK(frame({ 50, 50 }, false) == "Button:Enter@0");
         CHECK(scene.IsPointerOverUI());
         for (int i = 0; i < 8; ++i) frame({ 50, 50 }, false); // past the double-click time
         scene.SetUIPointerRay({ 3, 0, 2 }, glm::normalize(glm::vec3(-3, 0, -2)), true);
-        CHECK(frame({ 50, 50 }, false) == "Button:Down");
+        CHECK(frame({ 50, 50 }, false) == "Button:Down@0");
         scene.SetUIPointerRay({ 3, 0, 2 }, glm::normalize(glm::vec3(-3, 0, -2)), false);
-        CHECK(frame({ 50, 50 }, false) == "Button:Up Button:Click1");
+        CHECK(frame({ 50, 50 }, false) == "Button:Up@0 Button:Click1@0");
         // Turned away: off the panel.
         scene.SetUIPointerRay({ 3, 0, 2 }, { 1, 0, 0 }, false);
-        CHECK(frame({ 400, 300 }, false) == "Button:Exit");
+        CHECK(frame({ 400, 300 }, false) == "Button:Exit@0");
         scene.ClearUIPointerRay();
         CHECK(frame({ 400, 300 }, false) == "Button:Enter"); // back to the mouse
+        scene.OnRuntimeStop();
+    }
+
+    // Several script pointer rays at once (two VR controllers): each hovers, presses and drags on its own, pointer
+    // events carry their ids, a dot is drawn where each meets the panel, and clearing one leaves what it was over.
+    void TestMultiplePointers()
+    {
+        Scene scene("Pointers");
+        auto& reg = scene.GetRegistry();
+        Entity panel = scene.CreateEntity("Panel");
+        auto& canvas = reg.Emplace<CanvasComponent>(panel);
+        canvas.RenderMode = CanvasRenderMode::WorldSpace;
+        canvas.PixelSize = { 400, 300 };
+        canvas.PixelsPerUnit = 100.0f; // 4 x 3 m
+        auto widget = [&](const char* name, glm::vec2 at, glm::vec2 size) {
+            Entity e = scene.CreateEntity(name, panel);
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Position = at;
+            r.Size = size;
+            reg.Emplace<UIImageComponent>(e);
+            return e;
+        };
+        Entity left = widget("L", { 50, 75 }, { 100, 50 }), right = widget("R", { 250, 75 }, { 100, 50 });
+        Entity slider = widget("S", { 50, 215 }, { 300, 30 });
+        reg.Emplace<UIButtonComponent>(left);
+        reg.Emplace<UIButtonComponent>(right);
+        reg.Emplace<UISliderComponent>(slider);
+        reg.Emplace<ScriptComponent>(left).Add("PointerProbe");
+        reg.Emplace<ScriptComponent>(right).Add("PointerProbe");
+        scene.UpdateTransforms();
+        scene.OnRuntimeStart();
+        // A ray straight at the panel's pixel (x, y).
+        auto aim = [&](int id, glm::vec2 px, bool down, bool cursor = true) {
+            scene.SetUIPointerRay({ px.x / 100.0f - 2.0f, 1.5f - px.y / 100.0f, 5.0f }, { 0, 0, -1 }, down, id, cursor);
+        };
+        auto frame = [&] {
+            PointerProbe::Log.clear();
+            scene.OnUpdateRuntime(0.05f);
+            if (!PointerProbe::Log.empty()) PointerProbe::Log.pop_back();
+            return PointerProbe::Log;
+        };
+        aim(0, { 100, 100 }, false);
+        aim(1, { 300, 100 }, false);
+        CHECK(frame() == "L:Enter@0 R:Enter@1");
+        CHECK(reg.Get<UIButtonComponent>(left).Hovered && reg.Get<UIButtonComponent>(right).Hovered); // both at once
+        CHECK(scene.UIPointerCursors(panel).size() == 2);
+        aim(0, { 100, 100 }, true);
+        CHECK(frame() == "L:Down@0 L:Select");
+        aim(1, { 300, 100 }, true);
+        CHECK(frame() == "R:Down@1 L:Deselect R:Select");
+        CHECK(reg.Get<UIButtonComponent>(left).Pressed && reg.Get<UIButtonComponent>(right).Pressed);
+        aim(1, { 300, 100 }, false);
+        CHECK(frame() == "R:Up@1 R:Click1@1");
+        CHECK(reg.Get<UIButtonComponent>(left).Pressed && !reg.Get<UIButtonComponent>(right).Pressed); // ray 0 still holds L
+        aim(0, { 100, 100 }, false);
+        CHECK(frame() == "L:Up@0 L:Click1@0");
+        // Ray 0 drags the slider while ray 1 hovers elsewhere without its button: the drag holds.
+        aim(0, { 60, 230 }, true);
+        frame();
+        aim(0, { 200, 230 }, true);
+        frame();
+        CHECK(reg.Get<UISliderComponent>(slider).Dragging && Near(reg.Get<UISliderComponent>(slider).Value, 0.5f, 0.02f));
+        aim(0, { 350, 230 }, true);
+        frame();
+        CHECK(Near(reg.Get<UISliderComponent>(slider).Value, 1.0f, 0.02f));
+        aim(0, { 350, 230 }, false);
+        frame();
+        CHECK(!reg.Get<UISliderComponent>(slider).Dragging);
+        // No cursor for ray 1; then clearing it: R is left.
+        aim(1, { 300, 100 }, false, false);
+        frame();
+        CHECK(scene.UIPointerCursors(panel).size() == 1);
+        scene.ClearUIPointerRay(1);
+        CHECK(frame() == "R:Exit@1");
+        CHECK(!reg.Get<UIButtonComponent>(right).Hovered);
+        scene.ClearUIPointerRay();
+        CHECK(!scene.HasUIPointerRay() && scene.UIPointerCursors(panel).empty());
         scene.OnRuntimeStop();
     }
 
@@ -14153,6 +14232,7 @@ int main(int argc, char** argv)
     Run("World space canvases", TestWorldSpaceCanvas);
     Run("World canvas pointers", TestWorldCanvasPointers);
     Run("World canvas navigation", TestWorldCanvasNavigation);
+    Run("Multiple pointers", TestMultiplePointers);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

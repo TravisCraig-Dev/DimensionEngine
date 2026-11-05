@@ -1128,7 +1128,7 @@ namespace Dimension
                 {
                     Position = new Vector2(data[0], data[1]), Delta = new Vector2(data[2], data[3]),
                     PressPosition = new Vector2(data[4], data[5]), ScrollDelta = data[6], Button = (int)data[7],
-                    ClickCount = (int)data[8], Dragging = data[9] != 0.0f,
+                    ClickCount = (int)data[8], Dragging = data[9] != 0.0f, PointerId = (int)data[10],
                     PointerEnter = E(ids[0]), PointerPress = E(ids[1]), PointerDrag = E(ids[2]),
                 };
                 switch (kind)
