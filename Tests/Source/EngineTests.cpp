@@ -6306,6 +6306,13 @@ namespace
         reg.Get<TagComponent>(b).Layer = 0;
         PostProcessValues looked = PostProcess::Evaluate(scene, { 10, 0, 0 }, ~0u);
         CHECK(looked.LookupTexture == 888 && Near(looked.LookupContribution, 0.5f)); // the box's weight is 0.5
+        // Lens and blur settings too: a volume turning on motion blur and grain where the camera is.
+        lv.OverrideMotionBlur = true;
+        lv.MotionBlur = 0.8f;
+        lv.OverrideFilmGrain = true;
+        lv.FilmGrain = 1.0f;
+        PostProcessValues lens = PostProcess::Evaluate(scene, { 10, 0, 0 }, ~0u);
+        CHECK(Near(lens.MotionBlur, 0.4f) && Near(lens.FilmGrain, 0.5f) && PostProcess::Evaluate(scene, { 0, 0, 0 }, ~0u).MotionBlur == 0.0f);
         // A neutral strip: 16 slices of 16 x 16 as a PNG.
         fs::path lutPath = fs::temp_directory_path() / "dimension_neutral_lut.png";
         CHECK(PostProcess::WriteNeutralLookup(lutPath, 16) && fs::file_size(lutPath) > 100);

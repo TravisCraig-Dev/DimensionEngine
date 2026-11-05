@@ -511,7 +511,15 @@ namespace Dimension
             .Field("Override Lookup", &PostProcessVolumeComponent::OverrideLookup)
             .Field("Lookup Texture", &PostProcessVolumeComponent::LookupTexture).As(FieldType::Texture)
                 .Tooltip("A color lookup strip (e.g. 256 x 16): Create > New Color Lookup Texture, then grade it in an image editor")
-            .Field("Lookup Contribution", &PostProcessVolumeComponent::LookupContribution).Range(0.0f, 1.0f).Speed(0.01f);
+            .Field("Lookup Contribution", &PostProcessVolumeComponent::LookupContribution).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Override Chromatic Aberration", &PostProcessVolumeComponent::OverrideChromaticAberration)
+            .Field("Chromatic Aberration", &PostProcessVolumeComponent::ChromaticAberration).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Override Film Grain", &PostProcessVolumeComponent::OverrideFilmGrain)
+            .Field("Film Grain", &PostProcessVolumeComponent::FilmGrain).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Override Lens Distortion", &PostProcessVolumeComponent::OverrideLensDistortion)
+            .Field("Lens Distortion", &PostProcessVolumeComponent::LensDistortion).Range(-1.0f, 1.0f).Speed(0.01f)
+            .Field("Override Motion Blur", &PostProcessVolumeComponent::OverrideMotionBlur)
+            .Field("Motion Blur", &PostProcessVolumeComponent::MotionBlur).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("The shutter: 0 turns it off there");
 
         Register<ReflectionProbeComponent>("Reflection Probe", "Rendering")
             .Field("Size", &ReflectionProbeComponent::Size).Speed(0.05f).Tooltip("Influence box: surfaces inside reflect this probe")

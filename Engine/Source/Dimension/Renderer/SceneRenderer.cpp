@@ -1475,8 +1475,14 @@ namespace Dimension
             target.Temporal.Valid = true;
             target.Temporal.PrevViewProj = unjitteredViewProj;
         }
+        // Post Process Volumes around this camera blend over the scene's settings (not in probe captures or the Scene view).
+        PostProcessValues post;
+        post.Exposure = settings.Exposure;
+        post.BloomIntensity = settings.BloomIntensity;
+        post.Vignette = settings.Vignette;
+        if (!options.ProbeCapture && !options.EditorOverlays) post = PostProcess::Evaluate(scene, camera.Position, camera.CullingMask);
         // Camera motion blur: into the scratch image along each pixel's screen motion, then copied back.
-        if (settings.MotionBlur && settings.MotionBlurIntensity > 0.0f && !options.ProbeCapture && !options.EditorOverlays)
+        if (post.MotionBlur > 0.0f && !options.ProbeCapture && !options.EditorOverlays)
         {
             if (target.Motion.Valid)
             {
@@ -1486,7 +1492,7 @@ namespace Dimension
                     uint32_t Hdr, Depth;
                     float Intensity, MaxLength;
                 } push{ target.Motion.PrevViewProj * glm::inverse(camera.Projection * camera.View), target.GetHdrBindless(), target.GetDepthBindless(),
-                        std::clamp(settings.MotionBlurIntensity, 0.0f, 1.0f), 0.06f };
+                        std::clamp(post.MotionBlur, 0.0f, 1.0f), 0.06f };
                 FullscreenPass(cmd, target.GetScratch(), false, res.MotionBlur, &push, sizeof(push));
                 VkImage hdr = target.GetHdr().GetHandle(), result = target.GetScratch().GetHandle();
                 Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -1518,12 +1524,6 @@ namespace Dimension
         if (dof) RenderDepthOfField(cmd, target, camera, settings);
 
         VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
-        // Post Process Volumes around this camera blend over the scene's settings (not in probe captures).
-        PostProcessValues post;
-        post.Exposure = settings.Exposure;
-        post.BloomIntensity = settings.BloomIntensity;
-        post.Vignette = settings.Vignette;
-        if (!options.ProbeCapture && !options.EditorOverlays) post = PostProcess::Evaluate(scene, camera.Position, camera.CullingMask);
         glm::vec3 filter = ToLinear(post.ColorFilter) * PostProcess::WhiteBalance(post.Temperature, post.Tint);
         glm::vec3 gamma = glm::max(post.Gamma, glm::vec3(0.01f));
         uint32_t tonemap = settings.Tonemapping ? 1u + (uint32_t)std::clamp(settings.Tonemapper, 0, 2) : 0u;
@@ -1533,8 +1533,8 @@ namespace Dimension
                             dof ? target.GetDofBindless(1) + 1 : 0u, camera.Transparent ? 1u : 0u,
                             post.Saturation, post.Contrast, filter.r, filter.g, filter.b,
                             post.Lift.r, post.Lift.g, post.Lift.b, gamma.r, gamma.g, gamma.b, post.Gain.r, post.Gain.g, post.Gain.b,
-                            options.EditorOverlays ? 0.0f : settings.ChromaticAberration, options.EditorOverlays ? 0.0f : settings.FilmGrain,
-                            options.EditorOverlays ? 0.0f : settings.LensDistortion, (uint32_t)RenderDevice::Get().Frame().FrameNumber, 0u, 0u, 0.0f, 0u, 0.0f };
+                            options.EditorOverlays ? 0.0f : post.ChromaticAberration, options.EditorOverlays ? 0.0f : post.FilmGrain,
+                            options.EditorOverlays ? 0.0f : post.LensDistortion, (uint32_t)RenderDevice::Get().Frame().FrameNumber, 0u, 0u, 0.0f, 0u, 0.0f };
         if (bloom && settings.LensDirt.IsValid() && settings.LensDirtIntensity > 0.0f && !options.EditorOverlays)
             if (Ref<Texture2D> dirt = AssetManager::GetTexture(settings.LensDirt))
             {

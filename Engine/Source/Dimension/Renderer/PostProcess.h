@@ -23,6 +23,8 @@ namespace Dimension
         glm::vec3 Lift{ 0.0f }, Gamma{ 1.0f }, Gain{ 1.0f };
         uint64_t LookupTexture = 0;       // asset GUID (0 none)
         float LookupContribution = 1.0f;
+        float ChromaticAberration = 0.0f, FilmGrain = 0.0f, LensDistortion = 0.0f;
+        float MotionBlur = 0.0f;          // the shutter (0 = off)
     };
 
     namespace PostProcess

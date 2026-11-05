@@ -1301,6 +1301,11 @@ namespace Dimension
         public float? Vignette { get => Get("Vignette", "Vignette"); set => Set("Vignette", "Vignette", value); }
         public float? Saturation { get => Get("Saturation", "Saturation"); set => Set("Saturation", "Saturation", value); }
         public float? Contrast { get => Get("Contrast", "Contrast"); set => Set("Contrast", "Contrast", value); }
+        public float? ChromaticAberration { get => Get("Chromatic Aberration", "Chromatic Aberration"); set => Set("Chromatic Aberration", "Chromatic Aberration", value); }
+        public float? FilmGrain { get => Get("Film Grain", "Film Grain"); set => Set("Film Grain", "Film Grain", value); }
+        public float? LensDistortion { get => Get("Lens Distortion", "Lens Distortion"); set => Set("Lens Distortion", "Lens Distortion", value); }
+        /// <summary>The motion blur shutter there (0 turns it off).</summary>
+        public float? MotionBlur { get => Get("Motion Blur", "Motion Blur"); set => Set("Motion Blur", "Motion Blur", value); }
         public Color? ColorFilter
         {
             get { if (!GetBool("Override Color Filter")) return null; Vector3 c = GetVector3("Color Filter"); return new Color(c.X, c.Y, c.Z); }

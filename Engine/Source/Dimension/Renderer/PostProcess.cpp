@@ -26,6 +26,10 @@ namespace Dimension
             v.Gain = settings.Gain;
             v.LookupTexture = (uint64_t)settings.LookupTexture;
             v.LookupContribution = settings.LookupTexture.IsValid() ? settings.LookupContribution : 0.0f;
+            v.ChromaticAberration = settings.ChromaticAberration;
+            v.FilmGrain = settings.FilmGrain;
+            v.LensDistortion = settings.LensDistortion;
+            v.MotionBlur = settings.MotionBlur ? settings.MotionBlurIntensity : 0.0f;
 
             auto& reg = scene.GetRegistry();
             std::vector<std::pair<float, Entity>> volumes;
@@ -61,6 +65,10 @@ namespace Dimension
                 if (vol.OverrideColorFilter) v.ColorFilter += (vol.ColorFilter - v.ColorFilter) * w;
                 blend(v.Temperature, vol.OverrideWhiteBalance, vol.Temperature);
                 blend(v.Tint, vol.OverrideWhiteBalance, vol.Tint);
+                blend(v.ChromaticAberration, vol.OverrideChromaticAberration, vol.ChromaticAberration);
+                blend(v.FilmGrain, vol.OverrideFilmGrain, vol.FilmGrain);
+                blend(v.LensDistortion, vol.OverrideLensDistortion, vol.LensDistortion);
+                blend(v.MotionBlur, vol.OverrideMotionBlur, vol.MotionBlur);
                 // A volume's lookup texture takes over (two lookups do not mix): its contribution scaled by the weight.
                 if (vol.OverrideLookup && vol.LookupTexture.IsValid())
                 {

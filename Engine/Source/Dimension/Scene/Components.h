@@ -764,6 +764,14 @@ namespace Dimension
         bool OverrideLookup = false;
         AssetHandle LookupTexture = AssetHandle::None();
         float LookupContribution = 1.0f;
+        bool OverrideChromaticAberration = false;
+        float ChromaticAberration = 0.5f;
+        bool OverrideFilmGrain = false;
+        float FilmGrain = 0.3f;
+        bool OverrideLensDistortion = false;
+        float LensDistortion = 0.3f;
+        bool OverrideMotionBlur = false;
+        float MotionBlur = 0.5f; // the shutter (0 turns it off there)
     };
 
     struct ReflectionProbeComponent
