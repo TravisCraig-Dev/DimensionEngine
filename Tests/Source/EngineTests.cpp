@@ -4449,6 +4449,29 @@ namespace
         CHECK(occ.Hides({ 0.0f, -6.0f, -20.0f }, glm::vec3(0.5f)) && !occ.Hides({ 0.0f, 6.0f, -20.0f }, glm::vec3(0.5f)));
         OccluderDepth none;
         CHECK(!none.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));
+        CHECK(!none.Reprojected(proj * view).IsValid());
+
+        // The camera moves on: the left-half wall's grid reprojected into the new view still hides what is behind it,
+        // but not what the move brought into sight past its edge.
+        for (uint32_t y = 0; y < occ.Height; ++y)
+            for (uint32_t x = 0; x < occ.Width; ++x) occ.Farthest[y * occ.Width + x] = x < occ.Width / 2 ? wallDepth : 1.0f;
+        glm::mat4 right = proj * glm::lookAt(glm::vec3(1, 0, 0), glm::vec3(1, 0, -1), glm::vec3(0, 1, 0));
+        OccluderDepth moved = occ.Reprojected(right);
+        CHECK(moved.IsValid() && moved.ViewProj == right);
+        CHECK(moved.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));
+        CHECK(occ.Hides({ -1.5f, 0.0f, -20.0f }, glm::vec3(0.3f)));          // behind the wall from where it was drawn
+        CHECK(!moved.Hides({ -1.5f, 0.0f, -20.0f }, glm::vec3(0.3f)));       // now seen past its edge
+        CHECK(!moved.Hides({ 3.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));        // open sky
+        CHECK(!moved.Hides({ -1.0f, 0.0f, -3.0f }, glm::vec3(0.5f)));        // in front of the wall
+        // Walking toward the wall: its cells spread out but leave no gaps.
+        OccluderDepth closer = occ.Reprojected(proj * glm::lookAt(glm::vec3(0, 0, -2), glm::vec3(0, 0, -3), glm::vec3(0, 1, 0)));
+        CHECK(closer.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));
+        CHECK(!closer.Hides({ 4.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));
+        // Turning left: what comes into view from beyond the old view's edge hides nothing.
+        glm::mat4 turned = proj * glm::lookAt(glm::vec3(0.0f), glm::vec3(-std::sin(0.6f), 0, -std::cos(0.6f)), glm::vec3(0, 1, 0));
+        OccluderDepth turnedOcc = occ.Reprojected(turned);
+        CHECK(turnedOcc.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));
+        CHECK(!turnedOcc.Hides({ -30.0f, 0.0f, -12.0f }, glm::vec3(0.5f)));
     }
 
     void TestMeshSimplify()

@@ -18,5 +18,9 @@ namespace Dimension
         // A world box (center, half extents) wholly hidden. Boxes reaching behind the camera or over half the view
         // are never hidden.
         bool Hides(const glm::vec3& center, const glm::vec3& extents) const;
+        // The grid as seen from another view (the camera has moved since it was drawn): each cell a quad at its
+        // farthest depth, put where the new view sees it, and each new cell keeps the farthest of the quads over its
+        // center. Cells no quad reaches (newly in view, or uncovered by the move) hide nothing.
+        OccluderDepth Reprojected(const glm::mat4& viewProj) const;
     };
 }

@@ -6,6 +6,7 @@
 //        [--no-clusters]                          shade every light at every pixel (for comparisons)
 //        [--cpu-light-culling]                    build the light clusters on the CPU instead of in a compute shader
 //        [--no-occlusion]                         draw meshes hidden behind others too (for comparisons)
+//        [--fixed-dt seconds]                     every frame advances the game by this step (repeatable runs)
 //        [--wait-for-debugger]                    wait up to 60 s for a C# debugger to attach
 //        [--system-language fr-FR]                start as if the system's language were that (unless one was chosen)
 // A built game ships as DimensionPlayer.exe next to a "Project" folder.
@@ -37,6 +38,8 @@ using namespace Dimension;
 namespace
 {
     // Scripted pointer: from Frame on the pointer sits at Position; a click is down for one frame, then up.
+    float s_FixedDt = 0.0f; // --fixed-dt: the step every frame advances the game by (0 = real time)
+
     struct PointerEvent
     {
         int Frame;
@@ -106,6 +109,7 @@ namespace
 
         void OnUpdate(float dt) override
         {
+            if (s_FixedDt > 0.0f) dt = s_FixedDt;
             auto size = Application::Get().GetWindow().GetFramebufferSize();
             m_Target->Resize(size.x, size.y);
             if (Input::IsKeyPressed(Key::Escape)) Application::Get().Close();
@@ -215,6 +219,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--cpu-light-culling")) SceneRenderer::SetGpuLightCullingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-occlusion")) SceneRenderer::SetOcclusionCullingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-vsync")) noVSync = true;
+        else if (!std::strcmp(argv[i], "--fixed-dt") && i + 1 < argc) s_FixedDt = (float)std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--wait-for-debugger")) waitForDebugger = true;
         else if (!std::strcmp(argv[i], "--system-language") && i + 1 < argc) Localization::SetSystemLanguage(argv[++i]);
         else if ((!std::strcmp(argv[i], "--click") || !std::strcmp(argv[i], "--move")) && i + 1 < argc)

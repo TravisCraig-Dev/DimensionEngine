@@ -1756,23 +1756,25 @@ namespace Dimension
 
     void SceneRenderer::ChooseOccluder(const CameraData& camera)
     {
-        // The newest finished grid, if the camera is still nearly where it was (else nothing is culled this frame:
-        // what the grid hid may show now).
+        // The newest finished grid: as it is while the camera stays nearly where it was, else reprojected into this
+        // view (within a few meters and a wide turn; farther, nothing is culled this frame).
         m_Occluder.Width = m_Occluder.Height = 0;
         uint64_t completed = RenderDevice::Get().GetCompletedFrameNumber();
         const OcclusionSlot* best = nullptr;
         for (const OcclusionSlot& s : m_OcclusionSlots)
             if (s.Used && s.Frame <= completed && (!best || s.Frame > best->Frame)) best = &s;
         if (!best) return;
-        glm::vec3 forward = -glm::vec3(glm::inverse(camera.View)[2]);
-        if (glm::distance(camera.Position, best->Position) > 0.25f || glm::dot(glm::normalize(forward), best->Forward) < std::cos(glm::radians(2.0f)) ||
-            std::abs(camera.Projection[0][0] - best->Projection[0][0]) > 1e-3f || std::abs(camera.Projection[1][1] - best->Projection[1][1]) > 1e-3f)
-            return;
+        glm::vec3 forward = glm::normalize(-glm::vec3(glm::inverse(camera.View)[2]));
+        float moved = glm::distance(camera.Position, best->Position), turned = glm::dot(forward, best->Forward);
+        if (moved > 5.0f || turned < std::cos(glm::radians(60.0f))) return;
         m_Occluder.Width = best->Width;
         m_Occluder.Height = best->Height;
         m_Occluder.ViewProj = best->ViewProj;
         const auto* cells = static_cast<const float*>(best->Data.GetMapped());
         m_Occluder.Farthest.assign(cells, cells + (size_t)best->Width * best->Height);
+        bool still = moved <= 0.01f && turned >= std::cos(glm::radians(0.1f)) && std::abs(camera.Projection[0][0] - best->Projection[0][0]) <= 1e-4f &&
+                     std::abs(camera.Projection[1][1] - best->Projection[1][1]) <= 1e-4f;
+        if (!still) m_Occluder = m_Occluder.Reprojected(camera.Projection * camera.View);
     }
 
     void SceneRenderer::ReduceDepth(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera)
