@@ -476,6 +476,23 @@ namespace Editor
                     {
                         changed |= ImGui::DragFloat("Speed", &st.Speed, 0.01f, -10.0f, 10.0f);
                         changed |= ImGui::Checkbox("Loop", &st.Loop);
+                        changed |= ImGui::InputTextWithHint("Tag", "for AnimatorStateInfo.IsTag", &st.Tag);
+
+                        ImGui::SeparatorText("Behaviours");
+                        int removeBehaviour = -1;
+                        for (int k = 0; k < (int)st.Behaviours.size(); ++k)
+                        {
+                            ImGui::PushID(k + 7000);
+                            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 28);
+                            changed |= ImGui::InputTextWithHint("##behaviour", "C# class, e.g. Game.Footsteps", &st.Behaviours[k]);
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("x")) removeBehaviour = k;
+                            ImGui::PopID();
+                        }
+                        if (removeBehaviour >= 0) { st.Behaviours.erase(st.Behaviours.begin() + removeBehaviour); changed = true; }
+                        if (ImGui::Button("+ Behaviour")) { st.Behaviours.emplace_back(); changed = true; }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("StateMachineBehaviour: OnStateEnter / Update / Exit");
 
                         ImGui::SeparatorText("Events");
                         int removeEvent = -1;

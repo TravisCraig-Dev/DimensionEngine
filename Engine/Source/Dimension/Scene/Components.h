@@ -384,6 +384,7 @@ namespace Dimension
         bool Valid = false;
         float NormalizedTime = 0.0f, Length = 0.0f, Speed = 1.0f;
         bool Loop = true;
+        std::string Tag;
     };
 
     // Playback of one extra Animator layer (runtime only); mirrors the base layer's fields on AnimatorComponent.

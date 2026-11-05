@@ -55,6 +55,8 @@ namespace Dimension
         float Speed = 1.0f;
         bool Loop = true;
         std::vector<AnimEvent> Events;
+        std::string Tag;                     // for scripts (AnimatorStateInfo.IsTag)
+        std::vector<std::string> Behaviours; // C# StateMachineBehaviour classes told when it is entered, updated, left
         glm::vec2 EditorPosition{ 0.0f }; // graph layout
         int Group = -1;                   // sub-state machine (index into Groups); -1 = the top level
     };

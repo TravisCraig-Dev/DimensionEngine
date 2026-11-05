@@ -227,6 +227,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, void> CoroutinePhase;
         // A UI pointer event: kind, data (see ScriptHost.InvokePointer), the over / press / drag elements.
         public delegate* unmanaged<IntPtr, int, float*, ulong*, void> InvokePointer;
+        // An Animator state's behaviours (see ScriptHost.InvokeStateBehaviour).
+        public delegate* unmanaged<IntPtr, ulong, int, int, int, byte*, byte*, byte*, float*, void> InvokeStateBehaviour;
     }
 
     internal static unsafe class Native
@@ -290,6 +292,7 @@ namespace Dimension.Interop
                 api->InvokeCollision = &ScriptHost.InvokeCollision;
                 api->CoroutinePhase = &ScriptHost.CoroutinePhase;
                 api->InvokePointer = &ScriptHost.InvokePointer;
+                api->InvokeStateBehaviour = &ScriptHost.InvokeStateBehaviour;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

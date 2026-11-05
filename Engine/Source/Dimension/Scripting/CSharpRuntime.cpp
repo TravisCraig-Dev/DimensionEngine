@@ -326,6 +326,9 @@ namespace Dimension
             // A UI pointer event (PointerEventKind): position xy, delta xy, press position xy, scroll, button, click
             // count, dragging; the elements under the pointer, pressed and dragged (packed, ~0 none).
             void (*InvokePointer)(intptr_t, int, const float*, const uint64_t*);
+            // An Animator state's behaviours: scene, entity, kind (0 enter, 1 update, 2 exit), layer, state index, class
+            // names (one per line), state name, tag, info (normalized time, length, speed, loop).
+            void (*InvokeStateBehaviour)(void*, uint64_t, int, int, int, const char*, const char*, const char*, const float*);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -1775,6 +1778,13 @@ namespace Dimension
                 Ref<AnimatorController> controller = AssetManager::GetAnimatorController(an->Controller);
                 const AnimatorController* machine = layer == 0 ? controller.get()
                                                   : controller && layer <= (int)controller->Layers.size() ? &controller->Layers[layer - 1].Machine : nullptr;
+                if (which == 3 || which == 4)
+                {
+                    const AnimatorStateInfo* info = layer == 0 ? &an->Info : layer <= (int)an->Layers.size() ? &an->Layers[layer - 1].Info : nullptr;
+                    const AnimatorStateInfo* prev = layer == 0 ? &an->PreviousInfo : layer <= (int)an->Layers.size() ? &an->Layers[layer - 1].PreviousInfo : nullptr;
+                    if (info && prev) s_StringReturn = which == 3 ? (prev->Valid ? prev->Tag : info->Tag) : (prev->Valid ? info->Tag : "");
+                    return s_StringReturn.c_str();
+                }
                 if (which == 2) s_StringReturn = layer == 0 ? "Base Layer" : machine ? controller->Layers[layer - 1].Name : "";
                 else if (layer == 0 && which == 0) s_StringReturn = an->CurrentState;
                 else
@@ -2490,6 +2500,14 @@ namespace Dimension
         // C# events on engine objects (UIButton.Clicked, Entity.CollisionEnter, ...).
         Scene::SetEventHook([](Scene& scene, Entity e, Scene::EventKind kind, float value, Entity other, const char* text) {
             if (s_Managed.RaiseEvent) s_Managed.RaiseEvent(&scene, Pack(e), (int)kind, value, Pack(other), text);
+        });
+        Scene::SetStateBehaviourHook([](Scene& scene, Entity e, int kind, int layer, int state, const std::string& name,
+                                        const AnimatorStateInfo& info, const std::vector<std::string>& behaviours) {
+            if (!s_Available || !s_Managed.InvokeStateBehaviour) return;
+            std::string classes;
+            for (auto& b : behaviours) classes += b + "\n";
+            float data[4] = { info.NormalizedTime, info.Length, info.Speed, info.Loop ? 1.0f : 0.0f };
+            s_Managed.InvokeStateBehaviour(&scene, Pack(e), kind, layer, state, classes.c_str(), name.c_str(), info.Tag.c_str(), data);
         });
         // Data assets: objects scripts hold take an asset's new values when it is saved, and start over when play starts.
         Scene::SetCoroutinePhaseHook([](Scene& scene, int phase) {

@@ -153,6 +153,8 @@ namespace Dimension
                     st.Children.push_back({ ch.value("clip", std::string()), ch.value("threshold", 0.0f), ch.value("y", 0.0f) });
                 for (auto& ev : s.value("events", json::array()))
                     st.Events.push_back({ ev.value("time", 0.0f), ev.value("function", std::string()) });
+                st.Tag = s.value("tag", std::string());
+                for (auto& b : s.value("behaviours", json::array())) st.Behaviours.push_back(b.get<std::string>());
                 if (s.contains("position")) st.EditorPosition = { s["position"][0].get<float>(), s["position"][1].get<float>() };
                 st.Group = s.value("group", -1);
                 c.States.push_back(st);
@@ -213,6 +215,8 @@ namespace Dimension
                     st["events"] = json::array();
                     for (auto& ev : s.Events) st["events"].push_back({ { "time", ev.Time }, { "function", ev.Function } });
                 }
+                if (!s.Tag.empty()) st["tag"] = s.Tag;
+                if (!s.Behaviours.empty()) st["behaviours"] = s.Behaviours;
                 if (s.Group >= 0) st["group"] = s.Group;
                 j["states"].push_back(std::move(st));
             }

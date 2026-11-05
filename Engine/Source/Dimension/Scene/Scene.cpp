@@ -50,7 +50,10 @@ namespace Dimension
     {
         Scene::EventHook s_EventHook = nullptr;
         Scene::CoroutinePhaseHook s_CoroutinePhaseHook = nullptr;
+        Scene::StateBehaviourHook s_StateBehaviourHook = nullptr;
     }
+
+    void Scene::SetStateBehaviourHook(StateBehaviourHook hook) { s_StateBehaviourHook = hook; }
 
     void Scene::SetEventHook(EventHook hook) { s_EventHook = hook; }
     void Scene::SetCoroutinePhaseHook(CoroutinePhaseHook hook) { s_CoroutinePhaseHook = hook; }
@@ -1082,6 +1085,16 @@ namespace Dimension
         Pose current, previous;
         std::vector<std::pair<Entity, std::vector<std::string>>> firedEvents;
         std::vector<Entity> animatorMoves; // objects whose scripts take the root motion (OnAnimatorMove)
+        // State behaviour calls, sent after every Animator has updated.
+        struct StateCall
+        {
+            Entity E;
+            int Kind, Layer, State;
+            std::string Name;
+            AnimatorStateInfo Info;
+            std::vector<std::string> Behaviours;
+        };
+        std::vector<StateCall> stateCalls;
 
         // IK targets, by the Animator they pull on (positions are this frame's world transforms).
         struct IKGoal
@@ -1176,13 +1189,25 @@ namespace Dimension
 
             // Runs one state machine (the base layer: `pb` is the AnimatorComponent itself; an extra layer: its playback)
             // and produces its pose, including the crossfade from the previous state.
-            auto evaluate = [&](auto& pb, const AnimatorController* machine, bool baseLayer, Pose& out) {
+            auto evaluate = [&](auto& pb, const AnimatorController* machine, bool baseLayer, Pose& out, int layerIndex) {
+                // Behaviour calls of this layer's states: queued here, their info filled in at the end.
+                size_t callsBefore = stateCalls.size();
+                auto queueCall = [&](int kind, int index) {
+                    if (!m_Running || !machine || index < 0 || index >= (int)machine->States.size()) return;
+                    const AnimState& st = machine->States[index];
+                    if (!st.Behaviours.empty()) stateCalls.push_back({ e, kind, layerIndex, index, st.Name, {}, st.Behaviours });
+                };
                 if (machine)
                 {
                     AnimatorStateMachine::Update(*machine, pb.Runtime, dt * anim.Speed, duration, [&](const AnimState& state, float fade) {
                         int index = (int)(&state - machine->States.data());
                         bool isTree = state.Motion != AnimMotionType::Clip;
                         bool hasCurrent = !pb.Clip.empty() || pb.TreeState >= 0;
+                        // Leaving: a state still fading out is left now; the current one when its fade out ends (now
+                        // without a fade).
+                        if (pb.FadeDuration > 0.0f && pb.FadeElapsed < pb.FadeDuration) queueCall(2, pb.PreviousStateIndex);
+                        if (!(fade > 0.0f && hasCurrent)) queueCall(2, pb.StateIndex);
+                        queueCall(0, index);
                         if (fade > 0.0f && hasCurrent)
                         {
                             pb.PreviousClip = pb.Clip;
@@ -1249,6 +1274,7 @@ namespace Dimension
                     pb.Info.Length = st ? AnimatorStateMachine::StateDuration(*machine, pb.Runtime, *st, duration) : clip ? clip->Duration : 0.0f;
                     pb.Info.Loop = st ? st->Loop : pb.Loop;
                     pb.Info.Speed = st ? st->Speed : 1.0f;
+                    if (st) pb.Info.Tag = st->Tag;
                     pb.PreviousInfo = {};
                     if (pb.FadeDuration > 0.0f && pb.FadeElapsed < pb.FadeDuration)
                     {
@@ -1261,12 +1287,14 @@ namespace Dimension
                         pb.PreviousInfo.NormalizedTime = prevTree ? pb.PreviousTime : length > 0.0f ? pb.PreviousTime / length : 0.0f;
                         pb.PreviousInfo.Loop = prevState ? prevState->Loop : true;
                         pb.PreviousInfo.Speed = prevState ? prevState->Speed : 1.0f;
+                        if (prevState) pb.PreviousInfo.Tag = prevState->Tag;
                     }
                 }
 
                 if (pb.FadeDuration > 0.0f && pb.FadeElapsed < pb.FadeDuration)
                 {
                     pb.FadeElapsed += dt;
+                    queueCall(pb.FadeElapsed >= pb.FadeDuration ? 2 : 1, pb.PreviousStateIndex); // its last frame: left
                     if (const AnimState* prevTree = treeOf(pb.PreviousTreeState))
                     {
                         float d = AnimatorStateMachine::StateDuration(*machine, pb.Runtime, *prevTree, duration);
@@ -1283,6 +1311,24 @@ namespace Dimension
                         Pose blended;
                         Animation::Blend(previous, out, std::clamp(pb.FadeElapsed / pb.FadeDuration, 0.0f, 1.0f), blended);
                         out = std::move(blended);
+                    }
+                }
+                // Updated every frame after the one it was entered in (as Unity's OnStateUpdate).
+                bool enteredNow = false;
+                for (size_t i = callsBefore; i < stateCalls.size(); ++i)
+                    enteredNow |= stateCalls[i].Kind == 0 && stateCalls[i].State == pb.Runtime.State;
+                if (!enteredNow) queueCall(1, pb.Runtime.State >= 0 && machine ? pb.Runtime.State : -1);
+                // Each queued call gets its state's info as of this update (the state fading out: the earlier info).
+                for (size_t i = callsBefore; i < stateCalls.size(); ++i)
+                {
+                    StateCall& call = stateCalls[i];
+                    call.Info = call.State == pb.Runtime.State ? pb.Info : pb.PreviousInfo;
+                    if (!call.Info.Valid)
+                    {
+                        const AnimState& st = machine->States[call.State];
+                        call.Info.Loop = st.Loop;
+                        call.Info.Speed = st.Speed;
+                        call.Info.Tag = st.Tag;
                     }
                 }
             };
@@ -1339,7 +1385,7 @@ namespace Dimension
                 blendGetUp();
                 continue;
             }
-            evaluate(anim, controller.get(), true, current);
+            evaluate(anim, controller.get(), true, current, 0);
 
             // Root motion from the base layer (play mode only). A script with OnAnimatorMove takes it instead.
             anim.RootMotionDelta = glm::vec3(0.0f);
@@ -1438,7 +1484,7 @@ namespace Dimension
                         // Parameters are shared; a trigger consumed by this layer is consumed for the whole Animator.
                         pb.Runtime.Parameters = anim.Runtime.Parameters;
                         pb.Runtime.Triggers = anim.Runtime.Triggers;
-                        evaluate(pb, &layer.Machine, false, layerPose);
+                        evaluate(pb, &layer.Machine, false, layerPose, (int)li + 1);
                         for (auto it = anim.Runtime.Triggers.begin(); it != anim.Runtime.Triggers.end();)
                             it = pb.Runtime.Triggers.contains(*it) ? std::next(it) : anim.Runtime.Triggers.erase(it);
                     }
@@ -1480,6 +1526,9 @@ namespace Dimension
         // After iteration: scripts may change the registry.
         for (auto& [e, names] : firedEvents)
             for (auto& name : names) DispatchAnimationEvent(e, name);
+        if (s_StateBehaviourHook)
+            for (auto& call : stateCalls)
+                if (IsValid(call.E)) s_StateBehaviourHook(*this, call.E, call.Kind, call.Layer, call.State, call.Name, call.Info, call.Behaviours);
         for (Entity e : animatorMoves)
             if (auto* sc = IsValid(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr)
                 for (auto& inst : sc->LiveInstances(true))

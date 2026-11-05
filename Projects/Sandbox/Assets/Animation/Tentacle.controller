@@ -42,6 +42,10 @@
         120,
         90
       ],
+      "tag": "Curled",
+      "behaviours": [
+        "Game.TipGlow"
+      ],
       "group": 0
     }
   ],

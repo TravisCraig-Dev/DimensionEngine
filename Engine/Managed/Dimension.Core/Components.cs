@@ -1427,7 +1427,8 @@ namespace Dimension
             if (Op(1, layer, null, v) == 0) return default;
             bool fading = IsInTransition(layer);
             string name = which == 0 ? (fading ? PreviousState(layer) : (layer == 0 ? CurrentState : GetCurrentState(layer))) : (layer == 0 ? CurrentState : GetCurrentState(layer));
-            return new AnimatorStateInfo(name, v[0], v[1], v[2], v[3] != 0.0f);
+            string tag = Native.FromUtf8(Native.Api.AnimatorStateName(Entity.Scene, Entity.Id, layer, which == 0 ? 3 : 4));
+            return new AnimatorStateInfo(name, v[0], v[1], v[2], v[3] != 0.0f, tag);
         }
         /// <summary>The layer's state as of this frame's update (Unity's view: while fading, the state fading out; the
         /// one coming in is <see cref="GetNextAnimatorStateInfo"/>).</summary>
@@ -1463,9 +1464,24 @@ namespace Dimension
         }
     }
 
-    /// <summary>An Animator layer's state as of this frame (Unity's AnimatorStateInfo).</summary>
-    public readonly record struct AnimatorStateInfo(string Name, float NormalizedTime, float Length, float SpeedMultiplier, bool Loop)
+    /// <summary>
+    /// A script on Animator states (Unity's StateMachineBehaviour): add its class to a state's Behaviours in the
+    /// Animator window. Each object with that Animator gets its own copy per state and layer. OnStateEnter runs when the
+    /// state is entered, OnStateUpdate every later frame it plays (also while fading out), OnStateExit when its fade out
+    /// ends, all after the frame's animation update.
+    /// </summary>
+    public abstract class StateMachineBehaviour
     {
+        public virtual void OnStateEnter(Animator animator, AnimatorStateInfo stateInfo, int layerIndex) { }
+        public virtual void OnStateUpdate(Animator animator, AnimatorStateInfo stateInfo, int layerIndex) { }
+        public virtual void OnStateExit(Animator animator, AnimatorStateInfo stateInfo, int layerIndex) { }
+    }
+
+    /// <summary>An Animator layer's state as of this frame (Unity's AnimatorStateInfo).</summary>
+    public readonly record struct AnimatorStateInfo(string Name, float NormalizedTime, float Length, float SpeedMultiplier, bool Loop, string Tag = "")
+    {
+        /// <summary>Whether the state's Tag (set in the Animator window) is `tag`.</summary>
+        public bool IsTag(string tag) => (Tag ?? "") == tag;
         /// <summary>False when there is no such state (no controller or clip; GetNextAnimatorStateInfo outside a transition).</summary>
         public bool IsValid => Name != null;
         public bool IsName(string name) => Name == name;

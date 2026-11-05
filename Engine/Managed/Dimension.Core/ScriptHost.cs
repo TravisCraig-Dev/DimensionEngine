@@ -697,6 +697,11 @@ namespace Dimension
                 using var symbols = File.Exists(pdb) ? new MemoryStream(File.ReadAllBytes(pdb)) : null;
                 Assembly assembly = s_Context.LoadFromStream(dll, symbols);
                 RegisterDrawers(assembly); // before the classes: their fields say which have one
+                foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(StateMachineBehaviour))))
+                {
+                    s_StateBehaviourTypes[type.FullName] = type;
+                    s_StateBehaviourTypes.TryAdd(type.Name, type); // the short name works too while it is unique
+                }
 
                 foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(Behaviour))).OrderBy(t => t.FullName))
                 {
@@ -898,6 +903,9 @@ namespace Dimension
             s_EditorItems.Clear();
             s_Drawers.Clear();
             s_GizmoFailures.Clear();
+            s_StateBehaviourTypes.Clear();
+            s_StateBehaviours.Clear();
+            s_MissingStateBehaviours.Clear();
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);
@@ -1136,6 +1144,48 @@ namespace Dimension
             catch (Exception ex) { Debug.LogError($"{b?.GetType().Name}: {ex}"); }
         }
 
+        // StateMachineBehaviour classes by full (and short) name, and their objects: one per entity, layer, state and
+        // class, made the first time (dropped when play stops).
+        private static readonly Dictionary<string, Type> s_StateBehaviourTypes = new();
+        private readonly record struct StateBehaviourKey(IntPtr Scene, ulong Entity, int Layer, int State, string Class);
+        private static readonly Dictionary<StateBehaviourKey, StateMachineBehaviour> s_StateBehaviours = new();
+        private static readonly HashSet<string> s_MissingStateBehaviours = new();
+
+        [UnmanagedCallersOnly]
+        internal static void InvokeStateBehaviour(IntPtr scene, ulong entity, int kind, int layer, int state, byte* classes, byte* name, byte* tag, float* info)
+        {
+            string current = null;
+            try
+            {
+                Native.CurrentScene = scene;
+                var e = new Entity(scene, entity);
+                Animator animator = e.GetComponent<Animator>();
+                var stateInfo = new AnimatorStateInfo(Native.FromUtf8(name), info[0], info[1], info[2], info[3] != 0.0f, Native.FromUtf8(tag));
+                foreach (string cls in Native.FromUtf8(classes).Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    current = cls.Trim();
+                    var key = new StateBehaviourKey(scene, entity, layer, state, current);
+                    if (!s_StateBehaviours.TryGetValue(key, out var behaviour))
+                    {
+                        if (!s_StateBehaviourTypes.TryGetValue(current, out Type type))
+                        {
+                            if (s_MissingStateBehaviours.Add(current)) Debug.LogError($"State behaviour class '{current}' (state {stateInfo.Name}) is not a StateMachineBehaviour in the scripts");
+                            continue;
+                        }
+                        behaviour = (StateMachineBehaviour)Activator.CreateInstance(type);
+                        s_StateBehaviours[key] = behaviour;
+                    }
+                    switch (kind)
+                    {
+                        case 0: behaviour.OnStateEnter(animator, stateInfo, layer); break;
+                        case 1: behaviour.OnStateUpdate(animator, stateInfo, layer); break;
+                        case 2: behaviour.OnStateExit(animator, stateInfo, layer); break;
+                    }
+                }
+            }
+            catch (Exception ex) { Debug.LogError($"{current}: {ex}"); }
+        }
+
         private static IntPtr s_FieldsBuffer; // the last GetFields result (native reads it before the next call)
 
         // Current values of a script's serialized fields, in registration order (entities as packed ids).
@@ -1192,7 +1242,11 @@ namespace Dimension
         {
             try
             {
-                if (kind < 0) EngineEvents.ClearScene(scene);
+                if (kind < 0)
+                {
+                    EngineEvents.ClearScene(scene);
+                    foreach (var key in s_StateBehaviours.Keys.Where(k => k.Scene == scene).ToList()) s_StateBehaviours.Remove(key);
+                }
                 else EngineEvents.Raise(scene, entity, (EngineEvents.Kind)kind, value, other, text != null ? Native.FromUtf8(text) : null);
             }
             catch (Exception e) { Debug.LogError($"Engine event failed: {e}"); }

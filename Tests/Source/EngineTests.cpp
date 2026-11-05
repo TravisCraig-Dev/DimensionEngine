@@ -12061,9 +12061,13 @@ namespace
         CHECK(rt.State == 0);
 
         fs::path path = fs::temp_directory_path() / "dimension_test.controller";
+        c.States[2].Tag = "Curled";
+        c.States[2].Behaviours = { "Game.TipGlow", "Footsteps" };
         CHECK(c.Save(path));
         auto loaded = AnimatorController::Load(path);
         CHECK(loaded->States.size() == 3 && loaded->Transitions.size() == 4 && loaded->Parameters.size() == 2);
+        CHECK(loaded->States[2].Tag == "Curled" && (loaded->States[2].Behaviours == std::vector<std::string>{ "Game.TipGlow", "Footsteps" }));
+        CHECK(loaded->States[0].Tag.empty() && loaded->States[0].Behaviours.empty());
         CHECK(loaded->Transitions[3].HasExitTime && loaded->Transitions[2].From == -1 && !loaded->States[2].Loop);
         fs::remove(path);
 
