@@ -12898,6 +12898,59 @@ namespace
         Pose pose;
         Animation::Sample(sk, walk, 0.9f, pose);
         CHECK(glm::length(Animation::ExtractRootMotion(sk, 0, pose, state, { 0, 0, 0 }, { 0, 0, 2 }, 0.9f, true, "Run")) == 0.0f);
+
+        // Root rotation: a root that turns 90 degrees left (about +Y) per 1 s loop while stepping +1 along its own
+        // facing (+Z at the start). The pose keeps the start heading; the turns add up across loop seams, and the
+        // travel comes in the object's frame (straight ahead, +Z), not the clip's turning one.
+        AnimationClip turn;
+        turn.Name = "Turn";
+        turn.Duration = 1.0f;
+        AnimationChannel rot;
+        rot.Joint = 0;
+        rot.Path = AnimationPath::Rotation;
+        rot.Times = { 0.0f, 1.0f };
+        glm::quat q90 = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0, 1, 0));
+        rot.Values = { { 0, 0, 0, 1 }, { q90.x, q90.y, q90.z, q90.w } };
+        turn.Channels.push_back(rot);
+        AnimationChannel fwd;
+        fwd.Joint = 0;
+        fwd.Path = AnimationPath::Translation;
+        fwd.Times = { 0.0f, 1.0f };
+        // Along the turning facing: the clip's root moves on a quarter circle of length 1 (radius 2 / pi).
+        float r = 2.0f / glm::pi<float>();
+        fwd.Times = {};
+        for (int k = 0; k <= 8; ++k)
+        {
+            float a = glm::half_pi<float>() * k / 8.0f;
+            fwd.Times.push_back(k / 8.0f);
+            fwd.Values.push_back({ r * (1.0f - std::cos(a)), 0, r * std::sin(a), 0 });
+        }
+        turn.Channels.push_back(fwd);
+        Pose p0, p1;
+        Animation::Sample(sk, turn, 0.0f, p0);
+        Animation::Sample(sk, turn, 1.0f, p1);
+        RootMotionState rs;
+        float yawTotal = 0.0f;
+        glm::vec3 local(0.0f);
+        bool headingPinned = true, straight = true;
+        time = 0.0f;
+        for (int frame = 0; frame <= 150; ++frame) // 2.5 loops
+        {
+            Pose pose;
+            Animation::Sample(sk, turn, time, pose);
+            float yaw = 0.0f;
+            glm::vec3 step = Animation::ExtractRootMotion(sk, 0, pose, rs, p0.Translations[0], p1.Translations[0], p0.Rotations[0], p1.Rotations[0],
+                                                          time, true, "Turn", yaw);
+            yawTotal += yaw;
+            local += step;
+            glm::vec3 f = pose.Rotations[0] * glm::vec3(0, 0, 1);
+            headingPinned &= Near(f.x, 0.0f, 1e-3f) && f.z > 0.999f;
+            if (frame > 0) straight &= step.z > 0.0f && std::abs(step.x) < 0.2f * step.z; // ahead, not sideways
+            time = std::fmod(time + dt, turn.Duration);
+        }
+        CHECK(headingPinned && straight);
+        CHECK(Near(yawTotal, 150.0f * dt * glm::half_pi<float>(), 0.03f)); // 2.5 loops of 90 degrees
+        CHECK(Near(local.z, 150.0f * dt, 0.05f));                            // about 1 unit per loop, ahead
     }
 
     void TestUINavigation()

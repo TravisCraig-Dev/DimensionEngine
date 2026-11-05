@@ -1439,11 +1439,27 @@ namespace Dimension
         /// <summary>The root joint's movement moves the object (or its Character Controller).</summary>
         public bool ApplyRootMotion { get => GetBool("Apply Root Motion"); set => SetBool("Apply Root Motion", value); }
         /// <summary>This frame's root motion (world space), in OnAnimatorMove or after the update.</summary>
-        public Vector3 DeltaPosition { get { float* v = stackalloc float[3]; Op(2, 0, null, v); return new Vector3(v[0], v[1], v[2]); } }
-        /// <summary>Moves the object by this frame's root motion as the Animator would (for OnAnimatorMove).</summary>
-        public void ApplyBuiltinRootMotion() => Move(DeltaPosition);
-        /// <summary>Moves the object by a world-space step the way root motion does (through its Character Controller).</summary>
-        public void Move(Vector3 worldDelta) { float* v = stackalloc float[3] { worldDelta.X, worldDelta.Y, worldDelta.Z }; Op(3, 0, null, v); }
+        public Vector3 DeltaPosition { get { float* v = stackalloc float[7]; Op(2, 0, null, v); return new Vector3(v[0], v[1], v[2]); } }
+        /// <summary>This frame's root turn (world space; with Apply Root Rotation, about the object's up axis).</summary>
+        public Quaternion DeltaRotation { get { float* v = stackalloc float[7]; Op(2, 0, null, v); return new Quaternion(v[3], v[4], v[5], v[6]); } }
+        /// <summary>The root's turning (about the vertical axis) turns the object, with root motion.</summary>
+        public bool ApplyRootRotation { get => GetBool("Apply Root Rotation"); set => SetBool("Apply Root Rotation", value); }
+        /// <summary>Moves and turns the object by this frame's root motion as the Animator would (for OnAnimatorMove).</summary>
+        public void ApplyBuiltinRootMotion() => Move(DeltaPosition, DeltaRotation);
+        /// <summary>Moves the object by a world-space step the way root motion does (through its Character Controller),
+        /// turning it by `worldTurn` first.</summary>
+        public void Move(Vector3 worldDelta, Quaternion? worldTurn = null)
+        {
+            Quaternion q = worldTurn ?? Quaternion.Identity;
+            float* v = stackalloc float[7] { worldDelta.X, worldDelta.Y, worldDelta.Z, q.X, q.Y, q.Z, q.W };
+            Op(3, 0, null, v);
+        }
+        /// <summary>When it advances: with game time, real time (on while paused), the physics steps, or only by
+        /// <see cref="Update"/> (Manual).</summary>
+        public AnimatorUpdateMode UpdateMode { get => (AnimatorUpdateMode)GetInt("Update Mode"); set => SetInt("Update Mode", (int)value); }
+        /// <summary>Advances this Animator by `deltaTime` seconds now (its state machine, pose, events and behaviours),
+        /// whatever its update mode: with Manual, a script drives its clock.</summary>
+        public void Update(float deltaTime) { float* v = stackalloc float[1] { deltaTime }; Op(5, 0, null, v); }
 
         /// <summary>A joint of the model's skeleton (by name, e.g. "Hand_R") in the world as last posed, or false when
         /// there is no such joint (or nothing posed yet). Unity's GetBoneTransform, for any joint by name.</summary>
@@ -1476,6 +1492,8 @@ namespace Dimension
         public virtual void OnStateUpdate(Animator animator, AnimatorStateInfo stateInfo, int layerIndex) { }
         public virtual void OnStateExit(Animator animator, AnimatorStateInfo stateInfo, int layerIndex) { }
     }
+
+    public enum AnimatorUpdateMode { Normal, UnscaledTime, AnimatePhysics, Manual }
 
     /// <summary>An Animator layer's state as of this frame (Unity's AnimatorStateInfo).</summary>
     public readonly record struct AnimatorStateInfo(string Name, float NormalizedTime, float Length, float SpeedMultiplier, bool Loop, string Tag = "")

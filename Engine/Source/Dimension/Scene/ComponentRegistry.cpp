@@ -273,7 +273,11 @@ namespace Dimension
             .Field("Playing", &AnimatorComponent::Playing)
             .Field("Apply Root Motion", &AnimatorComponent::ApplyRootMotion)
                 .Tooltip("Moves the object by the animation's root movement (walk cycles that travel). With a Character Controller it moves the character.")
+            .Field("Apply Root Rotation", &AnimatorComponent::ApplyRootRotation)
+                .Tooltip("With root motion: the root joint's turning (about the vertical axis) turns the object instead of the pose")
             .Field("Root Motion Joint", &AnimatorComponent::RootMotionJoint).Tooltip("Empty = the first root joint (e.g. Hips)")
+            .Field("Update Mode", &AnimatorComponent::UpdateMode).Enum({ "Normal", "Unscaled Time", "Animate Physics", "Manual" })
+                .Tooltip("Normal: game time. Unscaled Time: real time (goes on while paused). Animate Physics: with the physics steps. Manual: only Animator.Update from scripts.")
             .Field("Animation Source", &AnimatorComponent::ClipSource).As(FieldType::Mesh)
                 .Tooltip("Play the clips of another model, retargeted onto this skeleton by joint name (None = this mesh's own)");
 

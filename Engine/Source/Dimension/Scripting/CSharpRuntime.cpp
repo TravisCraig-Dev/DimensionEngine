@@ -284,8 +284,9 @@ namespace Dimension
             // 5 whether keyboard / gamepad navigation is on.
             int (*UIEvents)(void*, int, float*, uint64_t*, int);
             // The Animator: 0 play state/clip `name` on `layer` (v: fade seconds, offset, fixed time != 0), 1 state info
-            // (v[0] 0 current, 1 next; out v: normalized time, length, speed, loop), 2 this frame's root motion (v xyz),
-            // 3 move by root motion v xyz, 4 a joint's world matrix (16 floats). 0 when there is none.
+            // (v[0] 0 current, 1 next; out v: normalized time, length, speed, loop), 2 this frame's root motion (v xyz, xyzw),
+            // 3 move and turn by root motion (v: xyz, quaternion xyzw), 4 a joint's world matrix (16 floats), 5 advance by v[0]
+            // seconds now. 0 when there is none.
             int (*AnimatorOp)(void*, uint64_t, int, int, const char*, float*);
         };
 
@@ -2082,8 +2083,12 @@ namespace Dimension
                     v[0] = pick->NormalizedTime; v[1] = pick->Length; v[2] = pick->Speed; v[3] = pick->Loop ? 1.0f : 0.0f;
                     return 1;
                 }
-                case 2: std::memcpy(v, &an->RootMotionDelta, 12); return 1;
-                case 3: scene.ApplyRootMotion(entity, { v[0], v[1], v[2] }); return 1;
+                case 2: // this frame's root motion: travel xyz, turn xyzw
+                    std::memcpy(v, &an->RootMotionDelta, 12);
+                    v[3] = an->RootMotionRotation.x; v[4] = an->RootMotionRotation.y; v[5] = an->RootMotionRotation.z; v[6] = an->RootMotionRotation.w;
+                    return 1;
+                case 3: scene.ApplyRootMotion(entity, { v[0], v[1], v[2] }, glm::quat(v[6], v[3], v[4], v[5])); return 1;
+                case 5: scene.UpdateAnimators(std::max(v[0], 0.0f), entity); return 1; // Animator.Update
                 default:
                 {
                     auto* mr = scene.GetRegistry().TryGet<MeshRendererComponent>(entity);

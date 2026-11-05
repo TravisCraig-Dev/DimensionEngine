@@ -61,6 +61,7 @@ namespace Dimension
         glm::vec3 LastRoot{ 0.0f }; // root joint translation last frame (pose space)
         float LastTime = 0.0f;      // base motion time last frame (detects loop wrap-around)
         std::string LastMotion;     // base clip / blend-tree key last frame (a switch restarts tracking)
+        float LastYaw = 0.0f;       // the root's heading last frame (radians, model space), when turning is taken too
     };
 
     namespace Animation
@@ -71,6 +72,13 @@ namespace Dimension
         // wrap adds a whole cycle. `motionKey` identifies the playing motion; when it changes, tracking restarts.
         glm::vec3 ExtractRootMotion(const Skeleton& skeleton, int rootJoint, Pose& pose, RootMotionState& state, const glm::vec3& start,
                                     const glm::vec3& end, float time, bool loop, const std::string& motionKey);
+        // As above, also taking the root's turning about the model's vertical axis out of the pose (it keeps the start
+        // frame's heading): `yawDelta` gets this frame's turn (radians, counter-clockwise seen from above), and the
+        // travel is returned in the object's frame (turned as the object has). `startRotation`/`endRotation` are the
+        // root's rotations at the motion's first and last frames.
+        glm::vec3 ExtractRootMotion(const Skeleton& skeleton, int rootJoint, Pose& pose, RootMotionState& state, const glm::vec3& start,
+                                    const glm::vec3& end, const glm::quat& startRotation, const glm::quat& endRotation, float time,
+                                    bool loop, const std::string& motionKey, float& yawDelta);
         // Samples `clip` at `time` (seconds) on top of the bind pose.
         void Sample(const Skeleton& skeleton, const AnimationClip& clip, float time, Pose& out);
         // out = a * (1 - t) + b * t (rotations slerped).

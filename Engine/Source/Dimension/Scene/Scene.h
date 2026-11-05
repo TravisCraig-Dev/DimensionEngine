@@ -305,7 +305,7 @@ namespace Dimension
         void DispatchAnimationEvent(Entity e, const std::string& name);
         // Moves an animated object by a world-space root motion step as the Animator does (through its Character
         // Controller when it has one).
-        void ApplyRootMotion(Entity e, const glm::vec3& worldDelta);
+        void ApplyRootMotion(Entity e, const glm::vec3& worldDelta, const glm::quat& worldTurn = glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
         // Asks an Animator's layer (0 base) to play a state of its controller (or, without one, a clip on the base
         // layer): fading over `fadeSeconds`, from `offset` (normalized, or seconds when fixedTime). False when there is
         // no such state or clip name.
@@ -349,7 +349,8 @@ namespace Dimension
         void SendPointerEvent(Entity e, PointerEventKind kind, const PointerEventData& data);
     public:
         // Advances Animator time by dt (0 = just evaluate the pose) and computes skinning matrices.
-        void UpdateAnimators(float dt);
+        // `only`: just that Animator, by exactly dt (Animator.Update), whatever its update mode.
+        void UpdateAnimators(float dt, Entity only = Entity::Null());
     private:
         void UpdateTransformRecursive(Entity e, const glm::mat4& parentWorld, bool parentActive);
         void DetachFromParent(Entity e);
@@ -380,6 +381,7 @@ namespace Dimension
         bool m_Running = false, m_Paused = false;
         int m_StepFrames = 0;
         float m_FixedAccumulator = 0.0f;
+        int m_FixedStepsThisFrame = 0; // physics steps taken this frame (Animate Physics animators)
         std::vector<Entity> m_PendingDestroy;
         glm::vec2 m_UIPointer{ 0.0f }, m_UIScreen{ 0.0f };
         bool m_UIDown = false, m_UIWasDown = false, m_UIInputValid = false;

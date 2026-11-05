@@ -928,6 +928,7 @@ namespace Dimension
         UpdateSpriteAnimators(dt);
 
         m_FixedAccumulator += dt;
+        m_FixedStepsThisFrame = 0;
         while (m_FixedAccumulator >= m_FixedTimestep)
         {
             DIM_PROFILE_SCOPE("Fixed Update");
@@ -944,6 +945,7 @@ namespace Dimension
             }
             m_FixedAccumulator -= m_FixedTimestep;
             m_FixedTime += m_FixedTimestep;
+            ++m_FixedStepsThisFrame;
             if (s_CoroutinePhaseHook) s_CoroutinePhaseHook(*this, 0); // WaitForFixedUpdate
         }
         // Interpolating bodies: their objects shown between the last two steps, as far along as the time is.
@@ -1080,7 +1082,7 @@ namespace Dimension
         }
     }
 
-    void Scene::UpdateAnimators(float dt)
+    void Scene::UpdateAnimators(float frameDt, Entity only)
     {
         Pose current, previous;
         std::vector<std::pair<Entity, std::vector<std::string>>> firedEvents;
@@ -1122,6 +1124,16 @@ namespace Dimension
 
         for (auto [e, anim, mr] : m_Registry.ViewOf<AnimatorComponent, MeshRendererComponent>())
         {
+            if (!only.IsNull() && e != only) continue;
+            // This Animator's step: by its update mode while playing (Animator.Update gives its own; Manual animators
+            // only pose at their time).
+            float dt = frameDt;
+            if (only.IsNull() && m_Running)
+            {
+                if (anim.UpdateMode == AnimatorUpdateMode::UnscaledTime) dt = m_UnscaledDeltaTime;
+                else if (anim.UpdateMode == AnimatorUpdateMode::AnimatePhysics) dt = (float)m_FixedStepsThisFrame * m_FixedTimestep;
+                else if (anim.UpdateMode == AnimatorUpdateMode::Manual) dt = 0.0f;
+            }
             Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
             const Skeleton* skeleton = mesh ? mesh->GetSkeleton() : nullptr;
             if (!skeleton)
@@ -1389,6 +1401,7 @@ namespace Dimension
 
             // Root motion from the base layer (play mode only). A script with OnAnimatorMove takes it instead.
             anim.RootMotionDelta = glm::vec3(0.0f);
+            anim.RootMotionRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
             anim.ScriptRootMotion = false;
             if (auto* sc = m_Running ? m_Registry.TryGet<ScriptComponent>(e) : nullptr)
                 for (auto& s : sc->Scripts) anim.ScriptRootMotion |= s.Instance && s.Enabled && s.Instance->HandlesAnimatorMove();
@@ -1399,6 +1412,7 @@ namespace Dimension
                 if (root >= 0 && root < (int)skeleton->Joints.size())
                 {
                     glm::vec3 start = skeleton->Joints[root].Translation, end = start;
+                    glm::quat startRot = skeleton->Joints[root].Rotation, endRot = startRot;
                     const AnimationClip* baseClip = anim.TreeState < 0 ? Animation::FindClip(clips, anim.Clip) : nullptr;
                     if (!baseClip && anim.TreeState < 0 && anim.Clip.empty() && !clips.empty()) baseClip = &clips.front();
                     float time = anim.TreeState >= 0 ? anim.Runtime.StateTime : anim.Time;
@@ -1407,15 +1421,23 @@ namespace Dimension
                         Pose p;
                         Animation::Sample(*skeleton, *baseClip, 0.0f, p);
                         start = p.Translations[root];
+                        startRot = p.Rotations[root];
                         Animation::Sample(*skeleton, *baseClip, baseClip->Duration, p);
                         end = p.Translations[root];
+                        endRot = p.Rotations[root];
                     }
                     std::string key = anim.TreeState >= 0 ? "#" + std::to_string(anim.TreeState) : anim.Clip;
-                    glm::vec3 modelDelta = Animation::ExtractRootMotion(*skeleton, root, current, anim.RootMotion, start, end, time, anim.Loop, key);
+                    float yaw = 0.0f;
+                    glm::vec3 modelDelta = anim.ApplyRootRotation
+                        ? Animation::ExtractRootMotion(*skeleton, root, current, anim.RootMotion, start, end, startRot, endRot, time, anim.Loop, key, yaw)
+                        : Animation::ExtractRootMotion(*skeleton, root, current, anim.RootMotion, start, end, time, anim.Loop, key);
                     auto& t = m_Registry.Get<TransformComponent>(e);
                     glm::vec3 worldDelta = glm::mat3(t.World) * modelDelta;
                     anim.RootMotionDelta = worldDelta;
-                    if (!anim.ScriptRootMotion) ApplyRootMotion(e, worldDelta);
+                    // The turn about the object's own up axis, in world space.
+                    glm::vec3 up = glm::mat3(t.World) * glm::vec3(0, 1, 0);
+                    if (yaw != 0.0f && glm::dot(up, up) > 1e-12f) anim.RootMotionRotation = glm::angleAxis(yaw, glm::normalize(up));
+                    if (!anim.ScriptRootMotion) ApplyRootMotion(e, worldDelta, anim.RootMotionRotation);
                 }
             }
 
@@ -1535,16 +1557,31 @@ namespace Dimension
                     if (inst->HandlesAnimatorMove()) inst->OnAnimatorMove();
     }
 
-    void Scene::ApplyRootMotion(Entity e, const glm::vec3& worldDelta)
+    void Scene::ApplyRootMotion(Entity e, const glm::vec3& worldDelta, const glm::quat& worldTurn)
     {
-        if (!IsValid(e) || glm::dot(worldDelta, worldDelta) <= 0.0f) return;
+        if (!IsValid(e)) return;
+        Entity parent = GetParent(e);
+        if (std::abs(worldTurn.w) < 1.0f - 1e-7f)
+        {
+            // Turn: the world rotation becomes worldTurn * world, kept in the parent's space.
+            auto& t = m_Registry.Get<TransformComponent>(e);
+            glm::quat parentRot(1.0f, 0.0f, 0.0f, 0.0f);
+            if (!parent.IsNull())
+            {
+                glm::mat3 pm = glm::mat3(m_Registry.Get<TransformComponent>(parent).World);
+                for (int c = 0; c < 3; ++c)
+                    if (float len = glm::length(pm[c]); len > 1e-8f) pm[c] /= len;
+                parentRot = glm::normalize(glm::quat_cast(pm));
+            }
+            t.Rotation = glm::eulerAngles(glm::normalize(glm::inverse(parentRot) * worldTurn * parentRot * t.GetRotationQuat()));
+        }
+        if (glm::dot(worldDelta, worldDelta) <= 0.0f) return;
         if (m_Registry.Has<CharacterControllerComponent>(e) && m_Physics3D)
         {
             Physics3DWorld::MoveCharacter(*this, e, worldDelta);
             return;
         }
         auto& t = m_Registry.Get<TransformComponent>(e);
-        Entity parent = GetParent(e);
         glm::mat3 toParent = parent.IsNull() ? glm::mat3(1.0f) : glm::inverse(glm::mat3(m_Registry.Get<TransformComponent>(parent).World));
         t.Position += toParent * worldDelta;
         t.World[3] += glm::vec4(worldDelta, 0.0f); // read before transforms update next (NavMesh Agents with Root Motion)

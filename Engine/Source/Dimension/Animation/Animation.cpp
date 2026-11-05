@@ -106,6 +106,38 @@ namespace Dimension
         return modelDelta;
     }
 
+    glm::vec3 Animation::ExtractRootMotion(const Skeleton& skeleton, int root, Pose& pose, RootMotionState& state, const glm::vec3& start,
+                                           const glm::vec3& end, const glm::quat& startRotation, const glm::quat& endRotation, float time,
+                                           bool loop, const std::string& motionKey, float& yawDelta)
+    {
+        yawDelta = 0.0f;
+        if (root < 0 || root >= (int)pose.Rotations.size()) return glm::vec3(0.0f);
+        // The model-space rotation of the non-joint ancestors (scale removed).
+        glm::mat3 m = glm::mat3(skeleton.RootTransform);
+        for (int c = 0; c < 3; ++c)
+            if (float len = glm::length(m[c]); len > 1e-8f) m[c] /= len;
+        glm::quat toModel = glm::normalize(glm::quat_cast(m));
+        auto heading = [&](const glm::quat& q) {
+            glm::vec3 f = (toModel * q) * glm::vec3(0, 0, 1);
+            return std::atan2(f.x, f.z);
+        };
+        auto wrap = [](float a) { return std::remainder(a, glm::two_pi<float>()); };
+        float now = heading(pose.Rotations[root]), first = heading(startRotation), last = heading(endRotation);
+        if (state.Primed && state.LastMotion == motionKey)
+        {
+            float d = now - state.LastYaw;
+            if (loop && time < state.LastTime - 1e-5f) d += last - first; // wrapped: carry on from the cycle's end
+            yawDelta = wrap(d);
+        }
+        state.LastYaw = now;
+        // Pin the heading at the start frame's, then take the travel as usual, in the turned frame.
+        float offset = wrap(now - first);
+        glm::quat unturn = glm::angleAxis(-offset, glm::vec3(0, 1, 0));
+        pose.Rotations[root] = glm::normalize(glm::inverse(toModel) * unturn * toModel * pose.Rotations[root]);
+        glm::vec3 travel = ExtractRootMotion(skeleton, root, pose, state, start, end, time, loop, motionKey);
+        return unturn * travel;
+    }
+
     namespace Animation
     {
         void Sample(const Skeleton& skeleton, const AnimationClip& clip, float time, Pose& out)

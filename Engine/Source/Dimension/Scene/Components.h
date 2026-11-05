@@ -409,6 +409,11 @@ namespace Dimension
         float StartNormalized = -1.0f;        // without a controller: where the next clip starts (Animator.Play)
     };
 
+    // When an Animator advances (Unity's AnimatorUpdateMode): with the game's time, with real time (it goes on while
+    // the game is paused with a time scale of 0), with the physics steps taken this frame, or only by script
+    // (Animator.Update).
+    enum class AnimatorUpdateMode : int { Normal = 0, UnscaledTime, AnimatePhysics, Manual };
+
     struct AnimatorComponent
     {
         AssetHandle Controller = AssetHandle::None(); // optional state machine; when set it drives Clip/Loop
@@ -417,6 +422,8 @@ namespace Dimension
         bool Loop = true;
         bool Playing = true;
         bool ApplyRootMotion = false;  // the root joint's horizontal movement moves the object (or its Character Controller)
+        bool ApplyRootRotation = false; // with root motion: the root's turning (about the vertical axis) turns the object
+        AnimatorUpdateMode UpdateMode = AnimatorUpdateMode::Normal;
         std::string RootMotionJoint;   // empty = the skeleton's first root joint
         // Animation Source: another model whose clips this one plays, retargeted onto its own skeleton by joint name
         // (None = the clips of its own mesh).
@@ -424,6 +431,7 @@ namespace Dimension
 
         // Root motion (runtime): movement applied this frame, world space.
         glm::vec3 RootMotionDelta{ 0.0f };
+        glm::quat RootMotionRotation{ 1.0f, 0.0f, 0.0f, 0.0f }; // this frame's turn (world space)
         RootMotionState RootMotion;
 
         // State machine (runtime only).
