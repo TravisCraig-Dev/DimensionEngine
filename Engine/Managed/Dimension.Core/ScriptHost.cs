@@ -529,7 +529,7 @@ namespace Dimension
         private static readonly Type[] s_Supported =
         {
             typeof(float), typeof(int), typeof(bool), typeof(string), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Color), typeof(Entity),
-            typeof(Prefab), typeof(Texture), typeof(Material), typeof(Mesh), typeof(AudioClip),
+            typeof(Prefab), typeof(Texture), typeof(Material), typeof(Mesh), typeof(AudioClip), typeof(AnimatorController),
         };
 
         // Serialized field types: the ones above, data assets (by GUID), enums (stored as their int value), and lists
@@ -608,7 +608,7 @@ namespace Dimension
             t == typeof(float) ? "Float" : t == typeof(int) ? "Int" : t == typeof(bool) ? "Bool" : t == typeof(string) ? "String" :
             t == typeof(Vector2) ? "Vec2" : t == typeof(Vector3) ? "Vec3" : t == typeof(Vector4) ? "Vec4" : t == typeof(Color) ? "Color4" :
             t == typeof(Prefab) ? "Prefab" : t == typeof(Texture) ? "Texture" : t == typeof(Material) ? "Material" : t == typeof(Mesh) ? "Mesh" :
-            t == typeof(AudioClip) ? "Audio" : "Entity";
+            t == typeof(AudioClip) ? "Audio" : t == typeof(AnimatorController) ? "AnimatorController" : "Entity";
 
         // A field's value as the engine reads it (entities as packed ids, null for none; lists as arrays).
         private static void WriteValue(Utf8JsonWriter w, object v)

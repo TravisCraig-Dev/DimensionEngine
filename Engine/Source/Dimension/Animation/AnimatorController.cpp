@@ -247,6 +247,77 @@ namespace Dimension
         }
     }
 
+    std::vector<std::string> AnimatorController::UsedClips() const
+    {
+        std::vector<std::string> out;
+        auto add = [&](const std::string& clip) {
+            if (!clip.empty() && std::find(out.begin(), out.end(), clip) == out.end()) out.push_back(clip);
+        };
+        auto machine = [&](const AnimatorController& m) {
+            for (const AnimState& s : m.States)
+            {
+                add(s.Clip);
+                for (const BlendTreeChild& ch : s.Children) add(ch.Clip);
+            }
+        };
+        machine(*this);
+        for (const AnimLayer& l : Layers) machine(l.Machine);
+        return out;
+    }
+
+    void AnimatorController::ReplaceClips(const std::unordered_map<std::string, std::string>& map)
+    {
+        auto swap = [&](std::string& clip) {
+            if (auto it = map.find(clip); it != map.end() && !it->second.empty()) clip = it->second;
+        };
+        auto machine = [&](AnimatorController& m) {
+            for (AnimState& s : m.States)
+            {
+                swap(s.Clip);
+                for (BlendTreeChild& ch : s.Children) swap(ch.Clip);
+            }
+        };
+        machine(*this);
+        for (AnimLayer& l : Layers) machine(l.Machine);
+    }
+
+    Ref<AnimatorOverrideController> AnimatorOverrideController::Load(const fs::path& path)
+    {
+        auto o = MakeRef<AnimatorOverrideController>();
+        try
+        {
+            json j = json::parse(std::ifstream(path));
+            o->Controller = AssetHandle(j.value("controller", (uint64_t)0));
+            for (auto& c : j.value("clips", json::array()))
+                o->Clips.emplace_back(c.value("original", std::string()), c.value("override", std::string()));
+        }
+        catch (const std::exception& e)
+        {
+            Log::Error("Invalid override controller '{}': {}", path.string(), e.what());
+        }
+        return o;
+    }
+
+    bool AnimatorOverrideController::Save(const fs::path& path) const
+    {
+        json j{ { "controller", (uint64_t)Controller }, { "clips", json::array() } };
+        for (auto& [original, replacement] : Clips) j["clips"].push_back({ { "original", original }, { "override", replacement } });
+        std::ofstream out(path);
+        if (!out) return false;
+        out << j.dump(2);
+        return true;
+    }
+
+    Ref<AnimatorController> AnimatorOverrideController::Apply(const AnimatorController& base) const
+    {
+        auto c = MakeRef<AnimatorController>(base);
+        std::unordered_map<std::string, std::string> map;
+        for (auto& [original, replacement] : Clips) map[original] = replacement;
+        c->ReplaceClips(map);
+        c->LinkLayers();
+        return c;
+    }
+
     Ref<AnimatorController> AnimatorController::Load(const fs::path& path)
     {
         auto c = MakeRef<AnimatorController>();

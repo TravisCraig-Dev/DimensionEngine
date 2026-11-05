@@ -13,11 +13,12 @@ namespace Dimension
     struct Material;
     class Font;
     struct AnimatorController;
+    struct AnimatorOverrideController;
     struct TimelineAsset;
     struct SpriteAtlas;
     struct SpriteRect;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -102,6 +103,13 @@ namespace Dimension
         static Ref<AnimatorController> GetAnimatorController(AssetHandle handle);
         static void SaveAnimatorController(AssetHandle handle);
         static AssetHandle CreateAnimatorController(const fs::path& absolutePath);
+        // Override controllers (.overrideController): GetAnimatorController gives the controller they make (their
+        // controller with the clips swapped); these edit the override itself. SaveAnimatorOverride writes it and has the
+        // controller made again. GetBaseController: an override's controller, else the handle itself.
+        static Ref<AnimatorOverrideController> GetAnimatorOverride(AssetHandle handle);
+        static void SaveAnimatorOverride(AssetHandle handle);
+        static AssetHandle CreateAnimatorOverride(const fs::path& absolutePath, AssetHandle controller = AssetHandle::None());
+        static AssetHandle GetBaseController(AssetHandle handle);
         // Timelines (.timeline) are editable in place too; SaveTimeline writes the changes.
         static Ref<TimelineAsset> GetTimeline(AssetHandle handle);
         static void SaveTimeline(AssetHandle handle);

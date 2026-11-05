@@ -42,6 +42,14 @@ namespace Dimension
         public static implicit operator ulong(Texture a) => a.Guid;
     }
 
+    /// <summary>An Animator Controller asset, or an Animator Override Controller (its controller with some clips
+    /// swapped): what <see cref="Animator.RuntimeAnimatorController"/> runs (Unity's RuntimeAnimatorController).</summary>
+    public readonly record struct AnimatorController(ulong Guid) : IAssetReference
+    {
+        public bool IsValid => Guid != 0;
+        public static implicit operator ulong(AnimatorController a) => a.Guid;
+    }
+
     /// <summary>
     /// A material asset (or one made while playing). Its properties are read and set by their Inspector names ("Base
     /// Color", "Metallic", "Base Map", ...) or Unity's ("_Color", "_MainTex", "_Glossiness", ...). Changing an asset's

@@ -1698,7 +1698,8 @@
                 "EnergyPeriod": 6.0,
                 "PokeInterval": 3.0,
                 "Tip": 700090,
-                "TipJoint": "Bone5"
+                "TipJoint": "Bone5",
+                "Calm": 100072
               },
               "Enabled": true
             }

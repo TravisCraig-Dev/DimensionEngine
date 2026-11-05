@@ -2087,6 +2087,45 @@ namespace Editor
                                    "Assign the controller to an Animator component to use it.");
             }
         }
+        else if (meta->Type == AssetType::AnimatorOverride)
+        {
+            // Its controller and, per clip that controller plays, the clip played instead (empty: the same).
+            if (auto o = AssetManager::GetAnimatorOverride(handle))
+            {
+                bool changed = false;
+                AssetHandle base = o->Controller;
+                if (UI::AssetField("Controller", base, AssetType::AnimatorController,
+                                   [](AssetHandle h) { auto* m = AssetManager::GetMetadata(h); return m && m->Type == AssetType::AnimatorController; },
+                                   "Animator Controller").Changed)
+                {
+                    o->Controller = base;
+                    changed = true;
+                }
+                auto controller = AssetManager::GetMetadata(o->Controller) ? AssetManager::GetAnimatorController(o->Controller) : nullptr;
+                if (!controller)
+                    ImGui::TextDisabled("Choose the Animator Controller whose clips it swaps.");
+                else
+                {
+                    ImGui::SeparatorText("Clips");
+                    for (const std::string& clip : controller->UsedClips())
+                    {
+                        auto it = std::find_if(o->Clips.begin(), o->Clips.end(), [&](auto& p) { return p.first == clip; });
+                        std::string replacement = it != o->Clips.end() ? it->second : std::string();
+                        ImGui::PushID(clip.c_str());
+                        if (ImGui::InputTextWithHint(clip.c_str(), "(the same)", &replacement))
+                        {
+                            if (it != o->Clips.end()) it->second = replacement;
+                            else o->Clips.emplace_back(clip, replacement);
+                            changed = true;
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::TextWrapped("Clip names of the model the Animator plays (or its Animation Source). Assign this asset "
+                                       "as an Animator's Controller: it runs that controller's state machine with these clips.");
+                }
+                if (changed) AssetManager::SaveAnimatorOverride(handle);
+            }
+        }
         else if (meta->Type == AssetType::Scene)
         {
             if (ImGui::Button("Open Scene")) m_Ctx.RequestOpenScene = AssetManager::GetAbsolutePath(handle);

@@ -172,9 +172,10 @@ namespace Dimension
             return (IAssetReference)Activator.CreateInstance(t, guid);
         }
 
-        // Shared with the engine: 1 Prefab, 2 Texture, 3 Material, 4 Mesh, 5 Audio.
+        // Shared with the engine: 1 Prefab, 2 Texture, 3 Material, 4 Mesh, 5 Audio, 6 Animator Controller.
         internal static int AssetKind(Type t) =>
-            t == typeof(Prefab) ? 1 : t == typeof(Texture) ? 2 : t == typeof(Material) ? 3 : t == typeof(Mesh) ? 4 : t == typeof(AudioClip) ? 5 : 0;
+            t == typeof(Prefab) ? 1 : t == typeof(Texture) ? 2 : t == typeof(Material) ? 3 : t == typeof(Mesh) ? 4 : t == typeof(AudioClip) ? 5 :
+            t == typeof(AnimatorController) ? 6 : 0;
     }
 
     // Scene view drawing from OnDrawGizmos / OnDrawGizmosSelected (ignored anywhere else). Color and Matrix (applied to

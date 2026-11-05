@@ -9677,6 +9677,38 @@ namespace
             Input::SetGameInputEnabled(gameInput);
             rt->OnRuntimeStop();
         }
+        // C# Animator.RuntimeAnimatorController: the Sandbox's TentacleBrain swaps to its Calm override controller on U
+        // and back; an override of the same machine keeps the state (no Rebind), so the parameters set stay.
+        {
+            AssetManager::Init(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets");
+            Scene ac("Override");
+            Entity t = ac.CreateEntity("Tentacle");
+            auto& an = ac.GetRegistry().Emplace<AnimatorComponent>(t);
+            an.Controller = AssetHandle(100040);
+            auto& brain = ac.GetRegistry().Emplace<ScriptComponent>(t).Add("Game.TentacleBrain");
+            brain.Fields["Calm"] = (uint64_t)100072;
+            auto rt = ac.Clone();
+            rt->OnRuntimeStart();
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            auto pressU = [&] {
+                Input::SimulateKey(Key::U, true);
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                Input::SimulateKey(Key::U, false);
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+            };
+            rt->OnUpdateRuntime(1.0f / 60.0f);
+            auto& live = rt->GetRegistry().Get<AnimatorComponent>(t);
+            pressU();
+            CHECK(live.Controller == AssetHandle(100072) && live.Runtime.Parameters.contains("Energy")); // kept: no Rebind
+            auto calm = AssetManager::GetAnimatorController(live.Controller);
+            CHECK(calm && calm->States[calm->FindState("Wave")].Clip == "Sway"); // the override's clip
+            pressU();
+            CHECK(live.Controller == AssetHandle(100040));
+            Input::SetGameInputEnabled(gameInput);
+            rt->OnRuntimeStop();
+            AssetManager::Shutdown();
+        }
         // C# UI pointer events: the Sandbox's UIDragItem is dragged (OnBeginDrag / OnDrag / OnEndDrag) onto a UIDropSlot
         // (OnDrop centers it and names the slot), dropped on nothing it goes back, and a double click sends it home.
         {
@@ -12092,6 +12124,56 @@ namespace
         CHECK(c.Transitions.size() == 2 && c.Transitions[0].To == 1 && c.Transitions[1].From == 1);
     }
 
+    // Override controllers: the clips swap everywhere (states, blend trees, layers), the rest of the machine stays, the
+    // asset round-trips, and through the AssetManager an override follows edits of its controller.
+    void TestAnimatorOverrides()
+    {
+        AnimatorController c;
+        auto state = [](const char* name, const char* clip) { AnimState st; st.Name = name; st.Clip = clip; return st; };
+        c.States = { state("Idle", "Idle"), state("Walk", "Walk") };
+        AnimState tree;
+        tree.Name = "Move";
+        tree.Motion = AnimMotionType::BlendTree1D;
+        tree.Children = { { "Walk", 0.0f, 0.0f }, { "Run", 1.0f, 0.0f } };
+        c.States.push_back(tree);
+        AnimLayer upper;
+        upper.Name = "Upper";
+        upper.Machine.States = { state("Wave", "Wave") };
+        c.Layers.push_back(upper);
+        c.Transitions = { { 0, 1, false, 1.0f, 0.25f, {} } };
+        CHECK((c.UsedClips() == std::vector<std::string>{ "Idle", "Walk", "Run", "Wave" }));
+
+        AnimatorOverrideController o;
+        o.Clips = { { "Walk", "Sneak" }, { "Wave", "Salute" }, { "Idle", "" } };
+        auto made = o.Apply(c);
+        CHECK(made->States[0].Clip == "Idle" && made->States[1].Clip == "Sneak" && made->States[2].Children[0].Clip == "Sneak");
+        CHECK(made->States[2].Children[1].Clip == "Run" && made->Layers[0].Machine.States[0].Clip == "Salute");
+        CHECK(made->Transitions.size() == 1 && made->States[1].Name == "Walk" && c.States[1].Clip == "Walk"); // the original is untouched
+
+        fs::path dir = fs::temp_directory_path() / "dimension_override_test";
+        fs::remove_all(dir);
+        fs::create_directories(dir / "Assets");
+        AssetManager::Init(dir / "Assets");
+        CHECK(c.Save(dir / "Assets" / "Hero.controller"));
+        AssetHandle base = AssetManager::Import(dir / "Assets" / "Hero.controller");
+        AssetHandle ov = AssetManager::CreateAnimatorOverride(dir / "Assets" / "Goblin.overrideController", base);
+        CHECK(ov.IsValid() && AssetManager::GetMetadata(ov)->Type == AssetType::AnimatorOverride && AssetManager::GetBaseController(ov) == base);
+        AssetManager::GetAnimatorOverride(ov)->Clips = { { "Walk", "Shuffle" } };
+        AssetManager::SaveAnimatorOverride(ov);
+        auto goblin = AssetManager::GetAnimatorController(ov);
+        CHECK(goblin && goblin->States[1].Clip == "Shuffle" && goblin->States.size() == 3);
+        // Editing the controller reaches the override's machine once saved.
+        AssetManager::GetAnimatorController(base)->States.push_back(state("Jump", "Jump"));
+        AssetManager::SaveAnimatorController(base);
+        goblin = AssetManager::GetAnimatorController(ov);
+        CHECK(goblin && goblin->States.size() == 4 && goblin->States[1].Clip == "Shuffle");
+        // The file round-trips.
+        auto loaded = AnimatorOverrideController::Load(dir / "Assets" / "Goblin.overrideController");
+        CHECK(loaded->Controller == base && loaded->Clips.size() == 1 && loaded->Clips[0].second == "Shuffle");
+        AssetManager::Shutdown();
+        fs::remove_all(dir);
+    }
+
     class CounterA : public ScriptableEntity
     {
     public:
@@ -13592,6 +13674,7 @@ int main(int argc, char** argv)
     Run("C# scripting", TestCSharpScripts);
     Run("Multiple scripts per entity", TestMultipleScripts);
     Run("Animator state machine", TestAnimatorStateMachine);
+    Run("Animator override controllers", TestAnimatorOverrides);
     Run("Blend trees and animation events", TestBlendTreesAndEvents);
     Run("2D blend trees", TestBlendTrees2D);
     Run("Sub-state machines", TestSubStateMachines);

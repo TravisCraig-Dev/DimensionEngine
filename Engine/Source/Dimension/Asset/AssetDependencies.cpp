@@ -33,7 +33,7 @@ namespace Dimension::AssetDependencies
         bool IsJsonAsset(const fs::path& path)
         {
             std::string ext = LowerExtension(path);
-            return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller" || ext == ".spriteatlas" ||
+            return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller" || ext == ".overridecontroller" || ext == ".spriteatlas" ||
                    ext == ".timeline" || ext == ".preset" || ext == ".asset";
         }
 

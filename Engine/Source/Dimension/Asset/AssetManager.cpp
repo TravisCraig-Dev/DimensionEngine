@@ -42,6 +42,7 @@ namespace Dimension
             std::unordered_map<AssetHandle, const void*> RuntimeMaterials; // made while playing: their owners
             std::unordered_map<AssetHandle, Ref<Font>> Fonts;
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
+            std::unordered_map<AssetHandle, Ref<AnimatorOverrideController>> Overrides;
             std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
             std::unordered_map<AssetHandle, Ref<SpriteAtlas>> SpriteAtlases;
             std::unordered_map<AssetHandle, std::vector<SpriteRect>> SpriteRects; // parsed from textures' import settings
@@ -125,6 +126,10 @@ namespace Dimension
             s->Materials.erase(h);
             s->Fonts.erase(h);
             s->Controllers.erase(h);
+            s->Overrides.erase(h);
+            // Controllers made from overrides of this one are made again when next asked for.
+            for (auto& [o, ov] : s->Overrides)
+                if (ov && ov->Controller == h) s->Controllers.erase(o);
             s->Timelines.erase(h);
         }
     }
@@ -146,6 +151,7 @@ namespace Dimension
         case AssetType::Preset: return "Preset";
         case AssetType::StringTable: return "String Table";
         case AssetType::DataAsset: return "Data Asset";
+        case AssetType::AnimatorOverride: return "Animator Override Controller";
         default: return "None";
         }
     }
@@ -272,6 +278,7 @@ namespace Dimension
         if (ext == ".mat") return AssetType::Material;
         if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
         if (ext == ".controller") return AssetType::AnimatorController;
+        if (ext == ".overridecontroller") return AssetType::AnimatorOverride;
         if (ext == ".timeline") return AssetType::Timeline;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
@@ -760,17 +767,72 @@ namespace Dimension
         if (!handle.IsValid()) return nullptr;
         if (auto it = s->Controllers.find(handle); it != s->Controllers.end()) return it->second;
         auto* meta = GetMetadata(handle);
+        if (meta && meta->Type == AssetType::AnimatorOverride)
+        {
+            // Its controller with the clips swapped (an override of an override is not followed).
+            auto o = GetAnimatorOverride(handle);
+            auto* baseMeta = o ? GetMetadata(o->Controller) : nullptr;
+            if (!baseMeta || baseMeta->Type != AssetType::AnimatorController) return nullptr;
+            auto base = GetAnimatorController(o->Controller);
+            if (!base) return nullptr;
+            auto made = o->Apply(*base);
+            s->Controllers[handle] = made;
+            return made;
+        }
         if (!meta || meta->Type != AssetType::AnimatorController) return nullptr;
         auto controller = AnimatorController::Load(s->AssetsDir / meta->Path);
         s->Controllers[handle] = controller;
         return controller;
     }
 
+    Ref<AnimatorOverrideController> AssetManager::GetAnimatorOverride(AssetHandle handle)
+    {
+        if (!handle.IsValid() || !s) return nullptr;
+        if (auto it = s->Overrides.find(handle); it != s->Overrides.end()) return it->second;
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::AnimatorOverride) return nullptr;
+        auto o = AnimatorOverrideController::Load(s->AssetsDir / meta->Path);
+        s->Overrides[handle] = o;
+        return o;
+    }
+
+    void AssetManager::SaveAnimatorOverride(AssetHandle handle)
+    {
+        auto it = s->Overrides.find(handle);
+        auto* meta = GetMetadata(handle);
+        if (it == s->Overrides.end() || !it->second || !meta || meta->Type != AssetType::AnimatorOverride) return;
+        fs::path path = s->AssetsDir / meta->Path;
+        it->second->Save(path);
+        std::error_code ec;
+        s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
+        s->Controllers.erase(handle); // made again with the new clips
+    }
+
+    AssetHandle AssetManager::CreateAnimatorOverride(const fs::path& absolutePath, AssetHandle controller)
+    {
+        AnimatorOverrideController o;
+        o.Controller = controller;
+        if (!o.Save(absolutePath)) return AssetHandle::None();
+        return Import(absolutePath);
+    }
+
+    AssetHandle AssetManager::GetBaseController(AssetHandle handle)
+    {
+        auto* meta = GetMetadata(handle);
+        if (meta && meta->Type == AssetType::AnimatorOverride)
+            if (auto o = GetAnimatorOverride(handle)) return o->Controller;
+        return handle;
+    }
+
     void AssetManager::SaveAnimatorController(AssetHandle handle)
     {
         auto it = s->Controllers.find(handle);
         auto* meta = GetMetadata(handle);
-        if (it == s->Controllers.end() || !it->second || !meta) return;
+        if (it == s->Controllers.end() || !it->second || !meta || meta->Type != AssetType::AnimatorController) return;
+        // Controllers made from overrides of this one are made again with the change.
+        for (auto& [o, ov] : s->Overrides)
+            if (ov && ov->Controller == handle) s->Controllers.erase(o);
+        it = s->Controllers.find(handle);
         fs::path path = s->AssetsDir / meta->Path;
         it->second->Save(path);
         std::error_code ec;

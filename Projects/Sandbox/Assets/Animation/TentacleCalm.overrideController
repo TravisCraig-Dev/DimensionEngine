@@ -1,0 +1,9 @@
+{
+  "controller": 100040,
+  "clips": [
+    {
+      "original": "Wave",
+      "override": "Sway"
+    }
+  ]
+}

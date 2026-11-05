@@ -4911,9 +4911,10 @@ namespace Editor
             return e;
         };
         hooks.AssetField = [picker](int kind, const char* label, uint64_t guid) {
-            const AssetType types[] = { AssetType::None, AssetType::Prefab, AssetType::Texture, AssetType::Material, AssetType::Mesh, AssetType::Audio };
+            const AssetType types[] = { AssetType::None, AssetType::Prefab, AssetType::Texture, AssetType::Material, AssetType::Mesh, AssetType::Audio,
+                                        AssetType::AnimatorController };
             AssetHandle handle(guid);
-            if (kind > 0 && kind < 6) picker(label, [&] { UI::AssetField(label, handle, types[kind]); });
+            if (kind > 0 && kind < 7) picker(label, [&] { UI::AssetField(label, handle, types[kind]); });
             return (uint64_t)handle;
         };
         hooks.Selection = [this](int op, Entity e, const char* text) -> Entity {

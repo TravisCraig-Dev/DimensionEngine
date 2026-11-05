@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/Core/Base.h"
+#include "Dimension/Core/Guid.h"
 #include <glm/glm.hpp>
 #include <unordered_map>
 #include <unordered_set>
@@ -136,6 +137,25 @@ namespace Dimension
 
         static Ref<AnimatorController> Load(const fs::path& path);
         bool Save(const fs::path& path) const;
+
+        // Every clip its states play (clip states and blend tree children, in every layer), each once, in order.
+        std::vector<std::string> UsedClips() const;
+        // Replaces clip names everywhere (states, blend tree children, layers' own motions) by `map` (unlisted stay).
+        void ReplaceClips(const std::unordered_map<std::string, std::string>& map);
+    };
+
+    // Override controller asset (".overrideController"), like Unity's AnimatorOverrideController: the state machine
+    // of Controller with some of its clips swapped for others (the same states, transitions and parameters), so one
+    // machine drives characters with different animations.
+    struct AnimatorOverrideController
+    {
+        AssetHandle Controller = AssetHandle::None();
+        std::vector<std::pair<std::string, std::string>> Clips; // original -> override (empty override: keep)
+
+        static Ref<AnimatorOverrideController> Load(const fs::path& path);
+        bool Save(const fs::path& path) const;
+        // The controller to play: a copy of `base` with the overrides applied.
+        Ref<AnimatorController> Apply(const AnimatorController& base) const;
     };
 
     // An extra layer: its own states and transitions, sharing the controller's parameters.

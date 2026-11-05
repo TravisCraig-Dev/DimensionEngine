@@ -556,7 +556,7 @@ namespace Dimension
             // Asset references (Prefab, Texture, ...) are stored as their GUID and picked like built-in ones.
             const std::pair<const char*, FieldType> assets[] = { { "Prefab", FieldType::Prefab }, { "Texture", FieldType::Texture },
                                                                  { "Material", FieldType::Material }, { "Mesh", FieldType::Mesh },
-                                                                 { "Audio", FieldType::Audio } };
+                                                                 { "Audio", FieldType::Audio }, { "AnimatorController", FieldType::AnimatorController } };
             for (auto& a : assets)
                 if (type == a.first)
                 {
@@ -2108,6 +2108,26 @@ namespace Dimension
                 case 8: return an->Match.Active ? 1 : 0;
                 case 9: scene.RebindAnimator(entity); return 1;
                 case 10: return an->Culled ? 1 : 0;
+                case 11: // after a controller change from v[0] (a GUID): 1 when both run the same state machine (override)
+                {
+                    uint64_t before = 0;
+                    std::memcpy(&before, v, 8);
+                    if (before == 0 || AssetManager::GetBaseController(AssetHandle(before)) != AssetManager::GetBaseController(an->Controller)) return 0;
+                    // The same machine: the states playing now take their clips from the new controller.
+                    auto controller = AssetManager::GetAnimatorController(an->Controller);
+                    if (!controller) return 0;
+                    auto clipOf = [](const AnimatorController* m, int index, std::string& clip) {
+                        if (m && index >= 0 && index < (int)m->States.size() && m->States[index].Motion == AnimMotionType::Clip) clip = m->States[index].Clip;
+                    };
+                    clipOf(controller.get(), an->StateIndex, an->Clip);
+                    clipOf(controller.get(), an->PreviousStateIndex, an->PreviousClip);
+                    for (size_t i = 0; i < an->Layers.size() && i < controller->Layers.size(); ++i)
+                    {
+                        clipOf(&controller->Layers[i].Machine, an->Layers[i].StateIndex, an->Layers[i].Clip);
+                        clipOf(&controller->Layers[i].Machine, an->Layers[i].PreviousStateIndex, an->Layers[i].PreviousClip);
+                    }
+                    return 1;
+                }
                 default:
                 {
                     auto* mr = scene.GetRegistry().TryGet<MeshRendererComponent>(entity);

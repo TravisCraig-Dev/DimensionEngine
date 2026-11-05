@@ -113,7 +113,7 @@ namespace Editor
         if (m_Ctx.HasValidSelection())
             if (auto* anim = scene.GetRegistry().TryGet<AnimatorComponent>(m_Ctx.Selected); anim && anim->Controller.IsValid())
             {
-                m_Handle = anim->Controller;
+                m_Handle = AssetManager::GetBaseController(anim->Controller); // an override's machine is its controller's
                 entity = m_Ctx.Selected;
             }
         if (auto* meta = AssetManager::GetMetadata(m_Ctx.SelectedAsset); meta && meta->Type == AssetType::AnimatorController)

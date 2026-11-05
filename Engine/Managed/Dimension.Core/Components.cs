@@ -1483,6 +1483,23 @@ namespace Dimension
         /// <summary>Back to the start: the default state from its beginning, parameters at their defaults.</summary>
         public void Rebind() { float* v = stackalloc float[1]; Op(9, 0, null, v); }
 
+        /// <summary>The controller it runs (an Animator Controller or an Override Controller). Setting another one starts
+        /// it over (Rebind) with that one's state machine and clips; an override of the same controller keeps the state
+        /// and its time, swapping only the clips.</summary>
+        public AnimatorController RuntimeAnimatorController
+        {
+            get => new(GetAssetGuid("Controller"));
+            set
+            {
+                ulong before = GetAssetGuid("Controller");
+                if (before == value.Guid) return;
+                SetAssetGuid("Controller", value.Guid);
+                float* v = stackalloc float[2];
+                *(ulong*)v = before;
+                if (Op(11, 0, null, v) == 0) Rebind();
+            }
+        }
+
         /// <summary>A joint of the model's skeleton (by name, e.g. "Hand_R") in the world as last posed, or false when
         /// there is no such joint (or nothing posed yet). Unity's GetBoneTransform, for any joint by name.</summary>
         public bool GetBoneMatrix(string joint, out Matrix4x4 world)

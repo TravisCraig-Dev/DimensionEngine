@@ -5,13 +5,17 @@ namespace Game
     /// <summary>Drives a tentacle's Animator Controller: "Energy" rises and falls, and it gets poked now and then (only
     /// once its current state has played through and no crossfade is running). J plays its Curl state from halfway
     /// (Animator.Play with a normalized time; GetCurrentAnimatorStateInfo says how long it is), and Tip rides the tip
-    /// joint (GetBoneMatrix, in OnLateUpdate: after this frame's animation).</summary>
+    /// joint (GetBoneMatrix, in OnLateUpdate: after this frame's animation). U swaps its controller for Calm, an override
+    /// controller of the same state machine (Animator.RuntimeAnimatorController).</summary>
     public class TentacleBrain : Behaviour
     {
         public float EnergyPeriod = 6.0f;
         public float PokeInterval = 7.0f;
         [Tooltip("Optional: kept on the tip joint")] public Entity Tip;
         public string TipJoint = "Bone5";
+        [Tooltip("U swaps to this and back (an override controller: Wave played as Sway)")] public AnimatorController Calm;
+
+        private AnimatorController m_Own;
         [Tooltip("Where on the joint Tip sits, in the joint's space")] public System.Numerics.Vector3 TipOffset = new(0, 0.6f, 0);
 
         private float m_Time;
@@ -36,6 +40,13 @@ namespace Game
             {
                 m_NextPoke = m_Time + PokeInterval;
                 animator.SetTrigger("Poke");
+            }
+            if (Input.GetKeyDown(KeyCode.U) && Calm.IsValid)
+            {
+                // The same state machine with other clips: the state and its time carry on (RuntimeAnimatorController).
+                if (!m_Own.IsValid) m_Own = animator.RuntimeAnimatorController;
+                animator.RuntimeAnimatorController = animator.RuntimeAnimatorController == Calm ? m_Own : Calm;
+                Debug.Log($"{Name}: {(animator.RuntimeAnimatorController == Calm ? "calm" : "lively")}");
             }
             if (Input.GetKeyDown(KeyCode.J) && animator.Play("Curl", 0, 0.5f))
                 Debug.Log($"{Name}: Curl from halfway");

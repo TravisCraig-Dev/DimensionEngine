@@ -570,6 +570,14 @@ namespace Editor
                     AssetHandle h = AssetManager::CreateAnimatorController(UniquePath(m_Current / "New Animator.controller"));
                     if (h.IsValid()) m_Ctx.SelectAsset(h);
                 }
+                if (ImGui::MenuItem("New Animator Override Controller"))
+                {
+                    // Of the selected controller, when one is selected.
+                    AssetHandle base = AssetHandle::None();
+                    if (auto* meta = AssetManager::GetMetadata(m_Ctx.SelectedAsset); meta && meta->Type == AssetType::AnimatorController) base = m_Ctx.SelectedAsset;
+                    AssetHandle h = AssetManager::CreateAnimatorOverride(UniquePath(m_Current / "New Override.overrideController"), base);
+                    if (h.IsValid()) m_Ctx.SelectAsset(h);
+                }
                 if (ImGui::MenuItem("New Timeline"))
                 {
                     AssetHandle h = AssetManager::CreateTimeline(UniquePath(m_Current / "New Timeline.timeline"));
