@@ -273,6 +273,9 @@ namespace Dimension
             // Audio: 0 DSP time, 1 sample rate, 2 listener volume, 3 set it, 4 paused, 5 set it; 6 play the entity's
             // source at DSP time v, 7 its scheduled end at v.
             double (*AudioTiming)(void*, uint64_t, int, double);
+            // A Rigidbody 2D: 0 sleep, 1 a world point's velocity (v xy in, out), 2 local center of mass, 3 set it, 4 world
+            // center of mass, 5 inertia (v[0]), 6 set it, 7 wake it.
+            void (*Body2DOp)(void*, uint64_t, int, float*);
             // A component's String field by label: 0 get, 1 set to value. Null when there is no such field.
             const char* (*ComponentString)(void*, uint64_t, const char*, const char*, int, const char*);
         };
@@ -1317,6 +1320,44 @@ namespace Dimension
                 case 3: Physics3DWorld::AddForceAtPosition(scene, e, a3, { v[3], v[4], v[5] }); break;
                 case 4: Physics3DWorld::AddImpulseAtPosition(scene, e, a3, { v[3], v[4], v[5] }); break;
                 case 5: Physics3DWorld::WakeUp(scene, e); break;
+                case 7: Physics3DWorld::Sleep(scene, e); break;
+                case 8: { glm::vec3 pv = Physics3DWorld::GetPointVelocity(scene, e, a3); std::memcpy(v, &pv, 12); break; }
+                case 9:
+                case 10:
+                case 11:
+                {
+                    // The center of mass in the world (11), or in the object's space (9; 10 sets it there, moving
+                    // the Rigidbody's Center Of Mass Offset by the difference).
+                    glm::vec3 world = Physics3DWorld::GetWorldCenterOfMass(scene, e);
+                    auto& t = scene.GetRegistry().Get<TransformComponent>(e);
+                    // From the body's pose (the Transform lags while it interpolates).
+                    glm::vec3 at = t.GetWorldPosition();
+                    glm::quat turn = t.GetRotationQuat();
+                    Physics3DWorld::GetBodyPose(scene, e, at, turn);
+                    glm::vec3 local = glm::inverse(turn) * (world - at);
+                    if (op == 11) { std::memcpy(v, &world, 12); break; }
+                    if (op == 9) { std::memcpy(v, &local, 12); break; }
+                    if (auto* rb = scene.GetRegistry().TryGet<RigidbodyComponent>(e))
+                    {
+                        glm::vec3 scale = glm::max(glm::abs(t.Scale), glm::vec3(1e-6f));
+                        rb->CenterOfMassOffset += (a3 - local) / scale;
+                        if (auto* w = scene.GetPhysics3D()) w->RefreshColliders(e);
+                    }
+                    break;
+                }
+                case 12: { glm::vec3 i = Physics3DWorld::GetInertiaTensor(scene, e); std::memcpy(v, &i, 12); break; }
+                case 14:
+                {
+                    // The body's position and rotation (Euler radians) now, else its Transform's.
+                    auto& t = scene.GetRegistry().Get<TransformComponent>(e);
+                    glm::vec3 p = t.Position;
+                    glm::quat q = t.GetRotationQuat();
+                    glm::vec3 r = Physics3DWorld::GetBodyPose(scene, e, p, q) ? glm::eulerAngles(q) : t.Rotation;
+                    std::memcpy(v, &p, 12);
+                    std::memcpy(v + 3, &r, 12);
+                    break;
+                }
+                case 13: Physics3DWorld::SetInertiaTensor(scene, e, a3); break;
                 default: v[0] = Physics3DWorld::IsSleeping(scene, e) ? 1.0f : 0.0f; break;
                 }
             };
@@ -1461,6 +1502,8 @@ namespace Dimension
                 case 5: if (w3) w3->SetLayersCollide(la, lb, v[0] != 0.0f); return 1;
                 case 6: return (w2 ? w2->GetLayersCollide(la, lb) : config.LayersCollide(la, lb)) ? 1 : 0;
                 case 7: if (w2) w2->SetLayersCollide(la, lb, v[0] != 0.0f); return 1;
+                case 8: v[0] = w3 ? w3->GetSleepThreshold() : 0.03f; return 1;
+                case 9: if (w3) w3->SetSleepThreshold(v[0]); return 1;
                 default: return 0;
                 }
             };
@@ -1941,6 +1984,25 @@ namespace Dimension
                     return (float)n;
                 }
                 return 0.0f;
+            };
+            a.Body2DOp = [](void* s, uint64_t packed, int op, float* v) {
+                if (!s || !S(s).IsValid(Unpack(packed))) return;
+                Scene& scene = S(s);
+                Entity e = Unpack(packed);
+                glm::vec2 r;
+                switch (op)
+                {
+                case 0: Physics2DWorld::Sleep(scene, e); return;
+                case 1: r = Physics2DWorld::GetPointVelocity(scene, e, { v[0], v[1] }); break;
+                case 2: r = Physics2DWorld::GetLocalCenterOfMass(scene, e); break;
+                case 3: Physics2DWorld::SetLocalCenterOfMass(scene, e, { v[0], v[1] }); return;
+                case 4: r = Physics2DWorld::GetWorldCenterOfMass(scene, e); break;
+                case 5: v[0] = Physics2DWorld::GetInertia(scene, e); return;
+                case 6: Physics2DWorld::SetInertia(scene, e, v[0]); return;
+                default: Physics2DWorld::WakeUp(scene, e); return;
+                }
+                v[0] = r.x;
+                v[1] = r.y;
             };
             a.AudioTiming = [](void* s, uint64_t e, int op, double v) -> double {
                 switch (op)

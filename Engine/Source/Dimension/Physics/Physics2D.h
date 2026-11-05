@@ -51,6 +51,18 @@ namespace Dimension
         // Puts the body (and its Transform) at a world position and angle (radians): at once (teleport), or for a
         // kinematic body by moving there during the next step, pushing and carrying what it meets.
         void MoveBody(Entity e, const glm::vec2& position, float angle, bool teleport);
+        // Interpolating bodies' objects placed between their last two physics poses (alpha 0..1 of the way there).
+        void Interpolate(float alpha);
+        // The velocity of a world point moving with the body; its center of mass (world, and in its own space, set
+        // until its colliders change); its rotational inertia (kg m^2), set likewise; sleeping at once.
+        static glm::vec2 GetPointVelocity(Scene& scene, Entity e, const glm::vec2& point);
+        static glm::vec2 GetWorldCenterOfMass(Scene& scene, Entity e);
+        static glm::vec2 GetLocalCenterOfMass(Scene& scene, Entity e);
+        static void SetLocalCenterOfMass(Scene& scene, Entity e, const glm::vec2& center);
+        static float GetInertia(Scene& scene, Entity e);
+        static void SetInertia(Scene& scene, Entity e, float inertia);
+        static void Sleep(Scene& scene, Entity e);
+        static void WakeUp(Scene& scene, Entity e);
         // The body's mass from its colliders' densities, and a new one by scaling those densities.
         float GetMass(Entity e) const;
         void SetMass(Entity e, float mass);

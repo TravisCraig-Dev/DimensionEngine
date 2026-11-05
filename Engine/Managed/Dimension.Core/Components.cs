@@ -167,6 +167,11 @@ namespace Dimension
     /// <summary>How a body moves: not at all (Static), by physics (Dynamic), or where scripts put it (Kinematic).</summary>
     public enum RigidbodyType { Static = 0, Dynamic = 1, Kinematic = 2 }
 
+    /// <summary>Discrete: checked where it is each step (thin walls can be passed at speed); Continuous: swept along its motion.</summary>
+    public enum CollisionDetectionMode { Discrete = 0, Continuous = 1 }
+    /// <summary>None: its object jumps a physics step at a time; Interpolate: it moves smoothly between steps (a step behind).</summary>
+    public enum RigidbodyInterpolation { None = 0, Interpolate = 1 }
+
     /// <summary>Axes a dynamic 3D body may not move along or turn about (as Unity's).</summary>
     [Flags]
     public enum RigidbodyConstraints
@@ -220,6 +225,36 @@ namespace Dimension
         /// meets); others are put there at once.</summary>
         public void MovePosition(Vector2 position) => Move(position, Rotation, false);
         public void MoveRotation(float degrees) => Move(Position, degrees, false);
+
+        private Vector2 Op2(int op, Vector2 v = default) { Native.Api.Body2DOp(Entity.Scene, Entity.Id, op, (float*)&v); return v; }
+        /// <summary>Continuous: a bullet, swept against moving bodies too.</summary>
+        public CollisionDetectionMode CollisionDetectionMode
+        {
+            get => (CollisionDetectionMode)GetInt("Collision Detection");
+            set { SetInt("Collision Detection", (int)value); Refresh(); }
+        }
+        public RigidbodyInterpolation Interpolation
+        {
+            get => (RigidbodyInterpolation)GetInt("Interpolation");
+            set { SetInt("Interpolation", (int)value); Refresh(); }
+        }
+        /// <summary>Whether it falls asleep at rest, and below which speed (m/s).</summary>
+        public bool CanSleep { get => GetBool("Can Sleep"); set { SetBool("Can Sleep", value); Refresh(); } }
+        public float SleepThreshold { get => GetFloat("Sleep Threshold"); set { SetFloat("Sleep Threshold", MathF.Max(value, 0)); Refresh(); } }
+        /// <summary>Puts it to sleep now (until something touches or moves it).</summary>
+        public void Sleep() => Op2(0);
+        public void WakeUp() => Op2(7);
+        /// <summary>The velocity of a world point moving with it (a wheel's rim, a swinging plank's end).</summary>
+        public Vector2 GetPointVelocity(Vector2 worldPoint) => Op2(1, worldPoint);
+        /// <summary>Its center of mass in its own space (set: until its colliders change), and in the world.</summary>
+        public Vector2 CenterOfMass { get => Op2(2); set => Op2(3, value); }
+        public Vector2 WorldCenterOfMass => Op2(4);
+        /// <summary>How hard it is to spin (kg m^2, about its center of mass); set: until its colliders change.</summary>
+        public float Inertia
+        {
+            get { float* v = stackalloc float[2]; Native.Api.Body2DOp(Entity.Scene, Entity.Id, 5, v); return v[0]; }
+            set { float* v = stackalloc float[2] { value, 0 }; Native.Api.Body2DOp(Entity.Scene, Entity.Id, 6, v); }
+        }
         public Vector2 Velocity
         {
             get { Vector2 v; Native.Api.GetVelocity2D(Entity.Scene, Entity.Id, (float*)&v); return v; }
@@ -382,14 +417,55 @@ namespace Dimension
             get => (Constraints & RigidbodyConstraints.FreezeRotation) == RigidbodyConstraints.FreezeRotation;
             set => Constraints = value ? Constraints | RigidbodyConstraints.FreezeRotation : Constraints & ~RigidbodyConstraints.FreezeRotation;
         }
-        /// <summary>Where the body is (bodies move their objects as if they had no parent); setting it moves it there at once.</summary>
-        public Vector3 Position { get => Transform.Position; set => Move(value, Rotation, true); }
+        private (Vector3 Position, Vector3 Euler) Pose()
+        {
+            float* d = stackalloc float[6];
+            Native.Api.Body3D(Entity.Scene, Entity.Id, 14, d);
+            return (new Vector3(d[0], d[1], d[2]), new Vector3(d[3], d[4], d[5]) * (180.0f / MathF.PI));
+        }
+        /// <summary>Where the body is (bodies move their objects as if they had no parent; an interpolating one's object
+        /// lags a step behind this); setting it moves it there at once.</summary>
+        public Vector3 Position { get => Pose().Position; set => Move(value, Rotation, true); }
         /// <summary>Its rotation as Euler angles in degrees; setting it turns the body at once.</summary>
-        public Vector3 Rotation { get => Transform.EulerAngles; set => Move(Position, value, true); }
+        public Vector3 Rotation { get => Pose().Euler; set => Move(Position, value, true); }
         /// <summary>Kinematic: travels to a world position during the next physics step (pushing what it meets); others
         /// are put there at once.</summary>
         public void MovePosition(Vector3 position) => Move(position, Rotation, false);
         public void MoveRotation(Vector3 eulerDegrees) => Move(Position, eulerDegrees, false);
+
+        private Vector3 Op3(int op, Vector3 v = default)
+        {
+            float* d = stackalloc float[6] { v.X, v.Y, v.Z, 0, 0, 0 };
+            Native.Api.Body3D(Entity.Scene, Entity.Id, op, d);
+            return new Vector3(d[0], d[1], d[2]);
+        }
+        /// <summary>Continuous: swept along its motion, so at speed it stops at thin walls instead of passing them.</summary>
+        public CollisionDetectionMode CollisionDetectionMode
+        {
+            get => (CollisionDetectionMode)GetInt("Collision Detection");
+            set { SetInt("Collision Detection", (int)value); Refresh(); }
+        }
+        /// <summary>Interpolate: its object moves smoothly between physics steps (a step behind; Position reads that).</summary>
+        public RigidbodyInterpolation Interpolation
+        {
+            get => (RigidbodyInterpolation)GetInt("Interpolation");
+            set { SetInt("Interpolation", (int)value); Refresh(); }
+        }
+        /// <summary>The fastest it may spin (radians per second).</summary>
+        public float MaxAngularVelocity { get => GetFloat("Max Angular Velocity"); set { SetFloat("Max Angular Velocity", MathF.Max(value, 0)); Refresh(); } }
+        /// <summary>Whether it falls asleep at rest (below Physics.SleepThreshold).</summary>
+        public bool CanSleep { get => GetBool("Can Sleep"); set { SetBool("Can Sleep", value); Refresh(); } }
+        /// <summary>Puts it to sleep now (until something touches or moves it).</summary>
+        public void Sleep() => Op3(7);
+        /// <summary>The velocity of a world point moving with it (a wheel's rim, a door's edge).</summary>
+        public Vector3 GetPointVelocity(Vector3 worldPoint) => Op3(8, worldPoint);
+        /// <summary>Its center of mass in its own space; setting it moves it there (Center Of Mass Offset, kept).</summary>
+        public Vector3 CenterOfMass { get => Op3(9); set => Op3(10, value); }
+        /// <summary>Back to where its colliders put it.</summary>
+        public void ResetCenterOfMass() { SetVector3("Center Of Mass Offset", Vector3.Zero); Native.Api.RefreshColliders(Entity.Scene, Entity.Id); }
+        public Vector3 WorldCenterOfMass => Op3(11);
+        /// <summary>How hard it is to spin about its principal axes (kg m^2); set: until its colliders or mass change.</summary>
+        public Vector3 InertiaTensor { get => Op3(12); set => Op3(13, value); }
         public Vector3 Velocity
         {
             get { Vector3 v; Native.Api.GetVelocity3D(Entity.Scene, Entity.Id, (float*)&v); return v; }

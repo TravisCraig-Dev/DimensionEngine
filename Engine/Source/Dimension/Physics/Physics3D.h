@@ -54,6 +54,20 @@ namespace Dimension
         // Puts the body (and its Transform) at a world position and rotation (Euler radians): at once (teleport), or for
         // a kinematic body by moving there during the next step, pushing what it meets.
         void MoveBody(Entity e, const glm::vec3& position, const glm::vec3& rotation, bool teleport);
+        // Interpolating bodies' objects placed between their last two physics poses (alpha 0..1 of the way there).
+        void Interpolate(float alpha);
+        // Below this speed (m/s, at every point) bodies fall asleep (Jolt's, for the whole world).
+        float GetSleepThreshold() const;
+        void SetSleepThreshold(float metersPerSecond);
+        // The velocity of a world point moving with the body; its center of mass in the world; its principal moments of
+        // inertia (kg m^2, about its center of mass), and new ones until its colliders or mass change; sleeping at once.
+        static glm::vec3 GetPointVelocity(Scene& scene, Entity e, const glm::vec3& point);
+        static glm::vec3 GetWorldCenterOfMass(Scene& scene, Entity e);
+        static glm::vec3 GetInertiaTensor(Scene& scene, Entity e);
+        static void SetInertiaTensor(Scene& scene, Entity e, const glm::vec3& moments);
+        static void Sleep(Scene& scene, Entity e);
+        // Where the body is now (its Transform lags a step behind while it interpolates); false without one in the world.
+        static bool GetBodyPose(Scene& scene, Entity e, glm::vec3& position, glm::quat& rotation);
 
         // While playing (like Unity's Physics settings, for this world only; the project's are left as they are):
         // gravity, which layers collide (a copy of the project's Layer Collision Matrix), and pairs of objects that never

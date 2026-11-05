@@ -1050,6 +1050,12 @@ namespace Dimension
     // ---- Physics 2D ------------------------------------------------------------
 
     enum class BodyType : int32_t { Static = 0, Dynamic = 1, Kinematic = 2 };
+    // Fast bodies: checked only where they are each step (Discrete: thin walls can be skipped through), or swept along
+    // their motion (Continuous: they stop at what they would pass).
+    enum class CollisionDetection : int32_t { Discrete = 0, Continuous = 1 };
+    // How a dynamic body's object moves between physics steps: jumping a step at a time (None), or blended from the
+    // last step's pose to this one's (Interpolate: smooth at any frame rate, a step behind).
+    enum class RigidbodyInterpolation : int32_t { None = 0, Interpolate = 1 };
 
     struct Rigidbody2DComponent
     {
@@ -1058,7 +1064,13 @@ namespace Dimension
         float LinearDamping = 0.0f;
         float AngularDamping = 0.0f;
         bool FixedRotation = false;
+        CollisionDetection Detection = CollisionDetection::Discrete; // Continuous: a bullet (swept against moving bodies too)
+        RigidbodyInterpolation Interpolation = RigidbodyInterpolation::None;
+        bool CanSleep = true;
+        float SleepThreshold = 0.05f; // m/s it must stay under to fall asleep
         uint64_t RuntimeBody = 0; // b2BodyId packed, runtime only
+        glm::vec3 PreviousPose{ 0.0f }, CurrentPose{ 0.0f }; // runtime, Interpolate: the last two steps' (x, y, angle)
+        bool HasPose = false;
         // Runtime: the pose (x, y, angle) the body last left its Transform at. A kinematic body whose Transform moved
         // from there (a script) moves to it by velocity in the next step, so it pushes and carries what it meets.
         glm::vec3 SyncedPose{ 0.0f };
@@ -1119,7 +1131,16 @@ namespace Dimension
         // Axes a dynamic body may not move along or turn about, as Unity's RigidbodyConstraints: 2/4/8 freeze position
         // X/Y/Z, 16/32/64 freeze rotation X/Y/Z (112 all rotation).
         int32_t Constraints = 0;
+        // Moves the center of mass from where its colliders put it (in the object's space): lower is steadier.
+        glm::vec3 CenterOfMassOffset{ 0.0f };
+        CollisionDetection Detection = CollisionDetection::Discrete;
+        RigidbodyInterpolation Interpolation = RigidbodyInterpolation::None;
+        float MaxAngularVelocity = 47.1239f; // rad/s it may spin at most (Jolt's default, 15 pi)
+        bool CanSleep = true;
         uint32_t RuntimeBody = 0xFFFFFFFF; // JPH::BodyID, runtime only
+        glm::vec3 PreviousPosition{ 0.0f }, CurrentPosition{ 0.0f }; // runtime, Interpolate: the last two steps' poses
+        glm::quat PreviousRotation{ 1, 0, 0, 0 }, CurrentRotation{ 1, 0, 0, 0 };
+        bool HasPose = false;
     };
 
     enum class ClothPin : int32_t { TopEdge = 0, TopCorners = 1, None = 2 };

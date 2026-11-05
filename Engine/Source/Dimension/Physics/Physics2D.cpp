@@ -394,6 +394,9 @@ namespace Dimension
         bd.linearDamping = rb.LinearDamping;
         bd.angularDamping = rb.AngularDamping;
         bd.fixedRotation = rb.FixedRotation;
+        bd.isBullet = rb.Detection == CollisionDetection::Continuous;
+        bd.enableSleep = rb.CanSleep;
+        bd.sleepThreshold = std::max(rb.SleepThreshold, 0.0f);
         bd.userData = PackEntity(e);
         bd.isEnabled = t.ActiveInHierarchy;
         b2BodyId body = b2CreateBody(LoadWorld(m_World), &bd);
@@ -471,7 +474,11 @@ namespace Dimension
         b2Body_SetLinearDamping(body, std::max(rb.LinearDamping, 0.0f));
         b2Body_SetAngularDamping(body, std::max(rb.AngularDamping, 0.0f));
         b2Body_SetFixedRotation(body, rb.FixedRotation);
+        b2Body_SetBullet(body, rb.Detection == CollisionDetection::Continuous);
+        b2Body_EnableSleep(body, rb.CanSleep);
+        b2Body_SetSleepThreshold(body, std::max(rb.SleepThreshold, 0.0f));
         rb.Driven = false;
+        rb.HasPose = false;
         if (type != b2_staticBody) b2Body_SetAwake(body, true);
     }
 
@@ -488,7 +495,84 @@ namespace Dimension
         if (!teleport && rb.Type == BodyType::Kinematic) return; // the next step moves it there
         b2Body_SetTransform(body, { position.x, position.y }, b2MakeRot(angle));
         rb.SyncedPose = { position.x, position.y, angle };
+        rb.HasPose = false; // not blended from where it was
         if (rb.Type != BodyType::Static) b2Body_SetAwake(body, true);
+    }
+
+    void Physics2DWorld::Interpolate(float alpha)
+    {
+        alpha = std::clamp(alpha, 0.0f, 1.0f);
+        for (auto [e, rb, t] : m_Scene.GetRegistry().ViewOf<Rigidbody2DComponent, TransformComponent>())
+        {
+            if (rb.Interpolation == RigidbodyInterpolation::None || !rb.HasPose || rb.Type != BodyType::Dynamic || !rb.RuntimeBody) continue;
+            glm::vec2 p = glm::mix(glm::vec2(rb.PreviousPose), glm::vec2(rb.CurrentPose), alpha);
+            float turn = std::remainder(rb.CurrentPose.z - rb.PreviousPose.z, glm::two_pi<float>()); // the short way round
+            t.Position.x = p.x;
+            t.Position.y = p.y;
+            t.Rotation.z = rb.PreviousPose.z + turn * alpha;
+        }
+    }
+
+    glm::vec2 Physics2DWorld::GetPointVelocity(Scene& scene, Entity e, const glm::vec2& point)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NULL(id)) return glm::vec2(0.0f);
+        b2Vec2 v = b2Body_GetWorldPointVelocity(id, { point.x, point.y });
+        return { v.x, v.y };
+    }
+
+    glm::vec2 Physics2DWorld::GetWorldCenterOfMass(Scene& scene, Entity e)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NULL(id)) return glm::vec2(scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition());
+        b2Vec2 c = b2Body_GetWorldCenterOfMass(id);
+        return { c.x, c.y };
+    }
+
+    glm::vec2 Physics2DWorld::GetLocalCenterOfMass(Scene& scene, Entity e)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NULL(id)) return glm::vec2(0.0f);
+        b2Vec2 c = b2Body_GetLocalCenterOfMass(id);
+        return { c.x, c.y };
+    }
+
+    void Physics2DWorld::SetLocalCenterOfMass(Scene& scene, Entity e, const glm::vec2& center)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NULL(id) || b2Body_GetType(id) != b2_dynamicBody) return;
+        b2MassData md = b2Body_GetMassData(id);
+        // Its inertia stays the same about the center of mass (only where that is moves).
+        md.center = { center.x, center.y };
+        b2Body_SetMassData(id, md);
+        b2Body_SetAwake(id, true);
+    }
+
+    float Physics2DWorld::GetInertia(Scene& scene, Entity e)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        return B2_IS_NULL(id) ? 0.0f : b2Body_GetMassData(id).rotationalInertia;
+    }
+
+    void Physics2DWorld::SetInertia(Scene& scene, Entity e, float inertia)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NULL(id) || b2Body_GetType(id) != b2_dynamicBody) return;
+        b2MassData md = b2Body_GetMassData(id);
+        md.rotationalInertia = std::max(inertia, 0.0f);
+        b2Body_SetMassData(id, md);
+    }
+
+    void Physics2DWorld::Sleep(Scene& scene, Entity e)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NON_NULL(id)) b2Body_SetAwake(id, false);
+    }
+
+    void Physics2DWorld::WakeUp(Scene& scene, Entity e)
+    {
+        b2BodyId id = BodyOf(scene, e);
+        if (B2_IS_NON_NULL(id)) b2Body_SetAwake(id, true);
     }
 
     float Physics2DWorld::GetMass(Entity e) const
@@ -766,6 +850,12 @@ namespace Dimension
             t.Position.y = p.y;
             t.Rotation.z = b2Rot_GetAngle(b2Body_GetRotation(id));
             rb.SyncedPose = { p.x, p.y, t.Rotation.z };
+            if (rb.Type == BodyType::Dynamic && rb.Interpolation != RigidbodyInterpolation::None)
+            {
+                rb.PreviousPose = rb.HasPose ? rb.CurrentPose : rb.SyncedPose;
+                rb.CurrentPose = rb.SyncedPose;
+                rb.HasPose = true;
+            }
         }
 
         // Dispatch events after the step (collect first: callbacks may destroy bodies).

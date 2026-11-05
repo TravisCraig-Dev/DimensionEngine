@@ -2282,9 +2282,11 @@ namespace Dimension
                 Log::Error("Physics shape error: {}", shapeResult.GetError().c_str());
                 return false;
             }
-            // Vehicles: a lower center of mass keeps them on their wheels.
-            if (auto* vc = reg.TryGet<VehicleComponent>(e); vc && glm::dot(vc->CenterOfMassOffset, vc->CenterOfMassOffset) > 0.0f)
-                if (auto offset = JPH::OffsetCenterOfMassShapeSettings(ToJolt(vc->CenterOfMassOffset), shapeResult.Get()).Create(); !offset.HasError())
+            // Vehicles: a lower center of mass keeps them on their wheels. The Rigidbody's own offset adds to it.
+            glm::vec3 comOffset = rb.CenterOfMassOffset * scale;
+            if (auto* vc = reg.TryGet<VehicleComponent>(e)) comOffset += vc->CenterOfMassOffset;
+            if (glm::dot(comOffset, comOffset) > 0.0f)
+                if (auto offset = JPH::OffsetCenterOfMassShapeSettings(ToJolt(comOffset), shapeResult.Get()).Create(); !offset.HasError())
                     shapeResult = offset;
             shape = shapeResult.Get();
             return true;
@@ -2345,6 +2347,9 @@ namespace Dimension
         settings.mAngularDamping = rb.AngularDamping;
         settings.mGravityFactor = rb.UseGravity ? 1.0f : 0.0f;
         settings.mAllowDynamicOrKinematic = ownRigidbody; // a script may make a static Rigidbody move
+        settings.mMotionQuality = rb.Detection == CollisionDetection::Continuous ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
+        settings.mMaxAngularVelocity = std::max(rb.MaxAngularVelocity, 0.0f);
+        settings.mAllowSleeping = rb.CanSleep;
         if (motion == JPH::EMotionType::Dynamic) settings.mAllowedDOFs = AllowedDOFs(rb.Constraints);
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = rb.Mass;
@@ -2450,9 +2455,34 @@ namespace Dimension
                     mp->SetLinearDamping(std::max(rb->LinearDamping, 0.0f));
                     mp->SetAngularDamping(std::max(rb->AngularDamping, 0.0f));
                     mp->SetGravityFactor(rb->UseGravity ? 1.0f : 0.0f);
+                    mp->SetMaxAngularVelocity(std::max(rb->MaxAngularVelocity, 0.0f));
                 }
+            if (lock.Succeeded()) lock.GetBody().SetAllowSleeping(rb->CanSleep);
         }
+        if (motion != JPH::EMotionType::Static)
+            bi.SetMotionQuality(id, rb->Detection == CollisionDetection::Continuous ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete);
+        rb->HasPose = false;
         if (bi.IsAdded(id) && motion != JPH::EMotionType::Static) bi.ActivateBody(id);
+    }
+
+    void Physics3DWorld::Interpolate(float alpha)
+    {
+        alpha = std::clamp(alpha, 0.0f, 1.0f);
+        for (auto [e, rb, t] : m_Scene.GetRegistry().ViewOf<RigidbodyComponent, TransformComponent>())
+        {
+            if (rb.Interpolation == RigidbodyInterpolation::None || !rb.HasPose || rb.Type != BodyType::Dynamic || rb.RuntimeBody == 0xFFFFFFFF) continue;
+            t.Position = glm::mix(rb.PreviousPosition, rb.CurrentPosition, alpha);
+            t.Rotation = glm::eulerAngles(glm::slerp(rb.PreviousRotation, rb.CurrentRotation, alpha));
+        }
+    }
+
+    float Physics3DWorld::GetSleepThreshold() const { return m_Impl->System.GetPhysicsSettings().mPointVelocitySleepThreshold; }
+
+    void Physics3DWorld::SetSleepThreshold(float metersPerSecond)
+    {
+        JPH::PhysicsSettings settings = m_Impl->System.GetPhysicsSettings();
+        settings.mPointVelocitySleepThreshold = std::max(metersPerSecond, 0.0f);
+        m_Impl->System.SetPhysicsSettings(settings);
     }
 
     void Physics3DWorld::MoveBody(Entity e, const glm::vec3& position, const glm::vec3& rotation, bool teleport)
@@ -2464,6 +2494,7 @@ namespace Dimension
         auto* rb = reg.TryGet<RigidbodyComponent>(e);
         if (!rb || rb->RuntimeBody == 0xFFFFFFFF) return;
         if (!teleport && rb->Type == BodyType::Kinematic) return; // the next step moves it there (MoveKinematic)
+        rb->HasPose = false; // not blended from where it was
         auto& bi = m_Impl->System.GetBodyInterface();
         JPH::BodyID id(rb->RuntimeBody);
         if (!bi.IsAdded(id)) return;
@@ -2821,7 +2852,16 @@ namespace Dimension
             JPH::Quat rot;
             bi.GetPositionAndRotation(id, pos, rot);
             t.Position = FromJolt(JPH::Vec3(pos));
-            t.Rotation = glm::eulerAngles(FromJolt(rot));
+            glm::quat q = FromJolt(rot);
+            t.Rotation = glm::eulerAngles(q);
+            if (rb.Interpolation != RigidbodyInterpolation::None)
+            {
+                rb.PreviousPosition = rb.HasPose ? rb.CurrentPosition : t.Position;
+                rb.PreviousRotation = rb.HasPose ? rb.CurrentRotation : q;
+                rb.CurrentPosition = t.Position;
+                rb.CurrentRotation = q;
+                rb.HasPose = true;
+            }
         }
         UpdateVehicles(true);
 
@@ -3228,6 +3268,19 @@ namespace Dimension
             id = JPH::BodyID(rb->RuntimeBody);
             return true;
         }
+
+        // A change to a body's motion. One not in the world yet (an object activated this frame joins at the next step,
+        // awake) takes it directly: Jolt cannot wake it before then.
+        template <class Change> void ChangeMotion(Scene& scene, JPH::BodyInterface* bi, JPH::BodyID id, Change&& change)
+        {
+            if (bi->IsAdded(id))
+            {
+                change(nullptr);
+                return;
+            }
+            JPH::BodyLockWrite lock(scene.GetPhysics3D()->GetImpl()->System.GetBodyLockInterface(), id);
+            if (lock.Succeeded() && lock.GetBody().IsDynamic()) change(&lock.GetBody());
+        }
     }
 
     void Physics3DWorld::SetLinearVelocity(Scene& scene, Entity e, const glm::vec3& v)
@@ -3236,7 +3289,7 @@ namespace Dimension
         JPH::BodyID id;
         if (!BodyFor(scene, e, bi, id)) return;
         bi->SetLinearVelocity(id, ToJolt(v));
-        if (v != glm::vec3(0.0f)) bi->ActivateBody(id); // as in Unity, setting a velocity wakes the body
+        if (v != glm::vec3(0.0f) && bi->IsAdded(id)) bi->ActivateBody(id); // as in Unity, setting a velocity wakes the body
     }
 
     void Physics3DWorld::WakeUp(Scene& scene, Entity e)
@@ -3260,18 +3313,79 @@ namespace Dimension
         return BodyFor(scene, e, bi, id) ? FromJolt(bi->GetLinearVelocity(id)) : glm::vec3(0.0f);
     }
 
+    glm::vec3 Physics3DWorld::GetPointVelocity(Scene& scene, Entity e, const glm::vec3& point)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        return BodyFor(scene, e, bi, id) && bi->IsAdded(id) ? FromJolt(bi->GetPointVelocity(id, JPH::RVec3(ToJolt(point)))) : glm::vec3(0.0f);
+    }
+
+    glm::vec3 Physics3DWorld::GetWorldCenterOfMass(Scene& scene, Entity e)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (BodyFor(scene, e, bi, id) && bi->IsAdded(id)) return FromJolt(JPH::Vec3(bi->GetCenterOfMassPosition(id)));
+        return scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition();
+    }
+
+    glm::vec3 Physics3DWorld::GetInertiaTensor(Scene& scene, Entity e)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (!BodyFor(scene, e, bi, id)) return glm::vec3(0.0f);
+        JPH::BodyLockRead lock(scene.GetPhysics3D()->GetImpl()->System.GetBodyLockInterface(), id);
+        if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return glm::vec3(0.0f);
+        glm::vec3 inverse = FromJolt(lock.GetBody().GetMotionProperties()->GetInverseInertiaDiagonal());
+        auto moment = [](float i) { return i > 0.0f ? 1.0f / i : 0.0f; }; // 0: a frozen axis
+        return { moment(inverse.x), moment(inverse.y), moment(inverse.z) };
+    }
+
+    void Physics3DWorld::SetInertiaTensor(Scene& scene, Entity e, const glm::vec3& moments)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (!BodyFor(scene, e, bi, id)) return;
+        JPH::BodyLockWrite lock(scene.GetPhysics3D()->GetImpl()->System.GetBodyLockInterface(), id);
+        if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return;
+        JPH::MotionProperties* mp = lock.GetBody().GetMotionProperties();
+        auto inverse = [](float m) { return m > 1e-9f ? 1.0f / m : 0.0f; };
+        mp->SetInverseInertia(JPH::Vec3(inverse(moments.x), inverse(moments.y), inverse(moments.z)), mp->GetInertiaRotation());
+    }
+
+    bool Physics3DWorld::GetBodyPose(Scene& scene, Entity e, glm::vec3& position, glm::quat& rotation)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (!BodyFor(scene, e, bi, id) || !bi->IsAdded(id)) return false;
+        JPH::RVec3 p;
+        JPH::Quat q;
+        bi->GetPositionAndRotation(id, p, q);
+        position = FromJolt(JPH::Vec3(p));
+        rotation = FromJolt(q);
+        return true;
+    }
+
+    void Physics3DWorld::Sleep(Scene& scene, Entity e)
+    {
+        JPH::BodyInterface* bi;
+        JPH::BodyID id;
+        if (BodyFor(scene, e, bi, id) && bi->IsAdded(id)) bi->DeactivateBody(id);
+    }
+
     void Physics3DWorld::AddForce(Scene& scene, Entity e, const glm::vec3& f)
     {
         JPH::BodyInterface* bi;
         JPH::BodyID id;
-        if (BodyFor(scene, e, bi, id)) bi->AddForce(id, ToJolt(f));
+        if (BodyFor(scene, e, bi, id))
+            ChangeMotion(scene, bi, id, [&](JPH::Body* b) { b ? b->AddForce(ToJolt(f)) : bi->AddForce(id, ToJolt(f)); });
     }
 
     void Physics3DWorld::AddImpulse(Scene& scene, Entity e, const glm::vec3& i)
     {
         JPH::BodyInterface* bi;
         JPH::BodyID id;
-        if (BodyFor(scene, e, bi, id)) bi->AddImpulse(id, ToJolt(i));
+        if (BodyFor(scene, e, bi, id))
+            ChangeMotion(scene, bi, id, [&](JPH::Body* b) { b ? b->AddImpulse(ToJolt(i)) : bi->AddImpulse(id, ToJolt(i)); });
     }
 
     glm::vec3 Physics3DWorld::GetAngularVelocity(Scene& scene, Entity e)
@@ -3287,28 +3401,31 @@ namespace Dimension
         JPH::BodyID id;
         if (!BodyFor(scene, e, bi, id)) return;
         bi->SetAngularVelocity(id, ToJolt(w));
-        if (w != glm::vec3(0.0f)) bi->ActivateBody(id);
+        if (w != glm::vec3(0.0f) && bi->IsAdded(id)) bi->ActivateBody(id);
     }
 
     void Physics3DWorld::AddTorque(Scene& scene, Entity e, const glm::vec3& torque)
     {
         JPH::BodyInterface* bi;
         JPH::BodyID id;
-        if (BodyFor(scene, e, bi, id)) bi->AddTorque(id, ToJolt(torque));
+        if (BodyFor(scene, e, bi, id))
+            ChangeMotion(scene, bi, id, [&](JPH::Body* b) { b ? b->AddTorque(ToJolt(torque)) : bi->AddTorque(id, ToJolt(torque)); });
     }
 
     void Physics3DWorld::AddForceAtPosition(Scene& scene, Entity e, const glm::vec3& force, const glm::vec3& point)
     {
         JPH::BodyInterface* bi;
         JPH::BodyID id;
-        if (BodyFor(scene, e, bi, id)) bi->AddForce(id, ToJolt(force), JPH::RVec3(ToJolt(point)));
+        if (BodyFor(scene, e, bi, id))
+            ChangeMotion(scene, bi, id, [&](JPH::Body* b) { b ? b->AddForce(ToJolt(force), JPH::RVec3(ToJolt(point))) : bi->AddForce(id, ToJolt(force), JPH::RVec3(ToJolt(point))); });
     }
 
     void Physics3DWorld::AddImpulseAtPosition(Scene& scene, Entity e, const glm::vec3& impulse, const glm::vec3& point)
     {
         JPH::BodyInterface* bi;
         JPH::BodyID id;
-        if (BodyFor(scene, e, bi, id)) bi->AddImpulse(id, ToJolt(impulse), JPH::RVec3(ToJolt(point)));
+        if (BodyFor(scene, e, bi, id))
+            ChangeMotion(scene, bi, id, [&](JPH::Body* b) { b ? b->AddImpulse(ToJolt(impulse), JPH::RVec3(ToJolt(point))) : bi->AddImpulse(id, ToJolt(impulse), JPH::RVec3(ToJolt(point))); });
     }
 
     namespace

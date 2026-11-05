@@ -832,7 +832,13 @@ namespace Dimension
             .Field("Gravity Scale", &Rigidbody2DComponent::GravityScale).Speed(0.01f)
             .Field("Linear Damping", &Rigidbody2DComponent::LinearDamping).Range(0.0f, 100.0f).Speed(0.01f)
             .Field("Angular Damping", &Rigidbody2DComponent::AngularDamping).Range(0.0f, 100.0f).Speed(0.01f)
-            .Field("Fixed Rotation", &Rigidbody2DComponent::FixedRotation);
+            .Field("Fixed Rotation", &Rigidbody2DComponent::FixedRotation)
+            .Field("Collision Detection", &Rigidbody2DComponent::Detection).Enum({ "Discrete", "Continuous" })
+                .Tooltip("Continuous: a bullet, swept against moving bodies too so it cannot pass through them")
+            .Field("Interpolation", &Rigidbody2DComponent::Interpolation).Enum({ "None", "Interpolate" })
+                .Tooltip("Interpolate: its object moves smoothly between physics steps (a step behind)")
+            .Field("Can Sleep", &Rigidbody2DComponent::CanSleep)
+            .Field("Sleep Threshold", &Rigidbody2DComponent::SleepThreshold).Range(0.0f, 10.0f).Speed(0.005f).Tooltip("m/s it must stay under to fall asleep");
         Register<BoxCollider2DComponent>("Box Collider 2D", "Physics 2D")
             .Field("Offset", &BoxCollider2DComponent::Offset)
             .Field("Size", &BoxCollider2DComponent::Size)
@@ -871,7 +877,15 @@ namespace Dimension
             .Field("Angular Damping", &RigidbodyComponent::AngularDamping).Range(0.0f, 100.0f).Speed(0.01f)
             .Field("Use Gravity", &RigidbodyComponent::UseGravity)
             .Field("Constraints", &RigidbodyComponent::Constraints).Range(0, 126)
-                .Tooltip("Axes it may not move along or turn about (adds up): 2/4/8 freeze position X/Y/Z, 16/32/64 freeze rotation X/Y/Z, 112 all rotation");
+                .Tooltip("Axes it may not move along or turn about (adds up): 2/4/8 freeze position X/Y/Z, 16/32/64 freeze rotation X/Y/Z, 112 all rotation")
+            .Field("Center Of Mass Offset", &RigidbodyComponent::CenterOfMassOffset).Speed(0.01f)
+                .Tooltip("Moves the center of mass from where its colliders put it (object space); lower is steadier")
+            .Field("Collision Detection", &RigidbodyComponent::Detection).Enum({ "Discrete", "Continuous" })
+                .Tooltip("Continuous: swept along its motion, so a fast body stops at thin walls instead of passing them")
+            .Field("Interpolation", &RigidbodyComponent::Interpolation).Enum({ "None", "Interpolate" })
+                .Tooltip("Interpolate: its object moves smoothly between physics steps (a step behind)")
+            .Field("Max Angular Velocity", &RigidbodyComponent::MaxAngularVelocity).Range(0.0f, 1000.0f).Speed(0.1f).Tooltip("rad/s it may spin at most")
+            .Field("Can Sleep", &RigidbodyComponent::CanSleep);
         Register<BoxColliderComponent>("Box Collider", "Physics")
             .Field("Offset", &BoxColliderComponent::Offset)
             .Field("Size", &BoxColliderComponent::Size)

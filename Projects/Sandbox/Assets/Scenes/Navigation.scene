@@ -3455,6 +3455,81 @@
    }
   },
   {
+   "guid": 6000115,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Cannonball",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      30,
+      40
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.3,
+      0.3,
+      0.3
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 2,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      0.15,
+      0.15,
+      0.18,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.8,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Sphere Collider": {
+     "Offset": [
+      0,
+      0,
+      0
+     ],
+     "Radius": 0.5,
+     "Friction": 0.6,
+     "Bounciness": 0.3,
+     "Is Trigger": false
+    },
+    "Rigidbody": {
+     "Body Type": 1,
+     "Mass": 2.0,
+     "Linear Damping": 0.05,
+     "Angular Damping": 0.3,
+     "Use Gravity": true,
+     "Constraints": 0,
+     "Center Of Mass Offset": [
+      0,
+      0,
+      0
+     ],
+     "Collision Detection": 1,
+     "Interpolation": 1,
+     "Max Angular Velocity": 100.0,
+     "Can Sleep": true
+    }
+   }
+  },
+  {
    "guid": 6000062,
    "parent": 6000061,
    "components": {
@@ -5141,6 +5216,15 @@
         "Glow": 0.6
        },
        "Enabled": true
+      },
+      {
+       "Class": "Game.Cannon",
+       "Fields": {
+        "Ball": 6000115,
+        "Speed": 150.0,
+        "Lifetime": 8.0
+       },
+       "Enabled": true
       }
      ]
     }
@@ -5298,7 +5382,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview); P paints what is under the mouse a color of its own, O makes its shared material metal or wood (CratePainter); K starts the metronome on the stage (scheduled on the audio clock, fading out across the yard), L pauses all sound (Metronome).",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview); P paints what is under the mouse a color of its own, O makes its shared material metal or wood (CratePainter); K starts the metronome on the stage (scheduled on the audio clock, fading out across the yard), L pauses all sound (Metronome); F fires a fast ball at the mouse (continuous, so the thin walls stop it; interpolated; Cannon).",
      "Font": 0,
      "Font Size": 26,
      "Color": [
@@ -5355,7 +5439,7 @@
      ],
      "Position": [
       34,
-      246
+      273
      ],
      "Size": [
       1200,
@@ -5431,7 +5515,7 @@
      ],
      "Position": [
       34,
-      292
+      319
      ],
      "Size": [
       420,

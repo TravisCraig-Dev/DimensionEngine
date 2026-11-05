@@ -186,6 +186,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, ulong> RendererMaterialInstance;
         public delegate* unmanaged<IntPtr, ulong, int, double, double> AudioTiming;  // see AudioSettings in Components.cs
         public delegate* unmanaged<IntPtr, ulong, byte*, byte*, int, byte*, byte*> ComponentString;
+        public delegate* unmanaged<IntPtr, ulong, int, float*, void> Body2DOp;  // see Rigidbody2D in Components.cs
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

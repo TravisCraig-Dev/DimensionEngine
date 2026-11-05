@@ -939,6 +939,12 @@ namespace Dimension
             m_FixedAccumulator -= m_FixedTimestep;
             m_FixedTime += m_FixedTimestep;
         }
+        // Interpolating bodies: their objects shown between the last two steps, as far along as the time is.
+        {
+            float alpha = m_FixedAccumulator / std::max(m_FixedTimestep, 1e-6f);
+            m_Physics3D->Interpolate(alpha);
+            m_Physics2D->Interpolate(alpha);
+        }
 
         Timeline::Update(*this, dt);
         UpdateTransforms();

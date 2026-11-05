@@ -940,6 +940,12 @@ namespace Dimension
             Native.Api.PhysicsSettings(Native.CurrentScene, 5, layer1, layer2, &v);
         }
         public static bool GetIgnoreLayerCollision(int layer1, int layer2) => Native.Api.PhysicsSettings(Native.CurrentScene, 4, layer1, layer2, null) == 0;
+        /// <summary>Bodies moving slower than this everywhere (m/s) fall asleep (those that can); for the whole 3D world.</summary>
+        public static float SleepThreshold
+        {
+            get { float v = 0; Native.Api.PhysicsSettings(Native.CurrentScene, 8, 0, 0, &v); return v; }
+            set => Native.Api.PhysicsSettings(Native.CurrentScene, 9, 0, 0, &value);
+        }
         /// <summary>Stops (or lets again) two objects colliding with each other while playing (touching now, they part).</summary>
         public static void IgnoreCollision(Entity a, Entity b, bool ignore = true) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 1, ignore ? 1 : 0);
         public static bool GetIgnoreCollision(Entity a, Entity b) => Native.Api.PhysicsIgnore(a.Scene, a.Id, b.Id, 0, 0) != 0;

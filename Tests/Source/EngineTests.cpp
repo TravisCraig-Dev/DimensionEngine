@@ -1081,6 +1081,141 @@ namespace
         }
     }
 
+    void TestRigidbodyTuning()
+    {
+        const float step = Scene::kFixedTimestep;
+        // 3D
+        {
+            Scene scene("Tuning3D");
+            scene.GetSettings().Gravity = glm::vec3(0.0f);
+            auto& reg = scene.GetRegistry();
+            auto body = [&](const char* name, glm::vec3 at, BodyType type) {
+                Entity e = scene.CreateEntity(name);
+                reg.Get<TransformComponent>(e).Position = at;
+                reg.Emplace<RigidbodyComponent>(e).Type = type;
+                return e;
+            };
+            // Two small fast balls at a thin wall: one discrete, one continuous.
+            Entity wall = scene.CreateEntity("Wall");
+            reg.Get<TransformComponent>(wall).Position = { 0, 0, 0 };
+            reg.Emplace<BoxColliderComponent>(wall).Size = { 0.05f, 20, 20 };
+            Entity fast = body("Fast", { -2, 2, 0 }, BodyType::Dynamic), swept = body("Swept", { -2, -2, 0 }, BodyType::Dynamic);
+            for (Entity b : { fast, swept }) reg.Emplace<SphereColliderComponent>(b).Radius = 0.05f;
+            reg.Get<RigidbodyComponent>(swept).Detection = CollisionDetection::Continuous;
+            // A crate with its center of mass moved down, one spinning, one interpolated.
+            Entity crate = body("Crate", { 0, 0, 20 }, BodyType::Dynamic); // clear of the wall
+            reg.Emplace<BoxColliderComponent>(crate);
+            reg.Get<RigidbodyComponent>(crate).CenterOfMassOffset = { 0, -0.4f, 0 };
+            Entity spinner = body("Spinner", { 10, 0, 10 }, BodyType::Dynamic);
+            reg.Emplace<BoxColliderComponent>(spinner);
+            Entity smooth = body("Smooth", { 20, 0, 10 }, BodyType::Dynamic);
+            reg.Emplace<BoxColliderComponent>(smooth);
+            reg.Get<RigidbodyComponent>(smooth).Interpolation = RigidbodyInterpolation::Interpolate;
+            Entity late = body("Late", { 30, 0, 10 }, BodyType::Dynamic); // inactive until a script turns it on
+            reg.Emplace<SphereColliderComponent>(late);
+            reg.Get<TagComponent>(late).Active = false;
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rr = rt->GetRegistry();
+            auto pos = [&](Entity e) { return rr.Get<TransformComponent>(e).Position; };
+            Physics3DWorld::SetLinearVelocity(*rt, fast, { 400, 0, 0 });
+            Physics3DWorld::SetLinearVelocity(*rt, swept, { 400, 0, 0 });
+            for (int i = 0; i < 3; ++i) rt->OnUpdateRuntime(step);
+            CHECK(pos(fast).x > 1.0f && pos(swept).x < 0.0f); // through the wall / stopped at it
+            // Center of mass: the offset's 0.4 m below; and set it back up through the field.
+            glm::vec3 com = Physics3DWorld::GetWorldCenterOfMass(*rt, crate);
+            CHECK(Near(com, pos(crate) + glm::vec3(0, -0.4f, 0), 0.01f));
+            rr.Get<RigidbodyComponent>(crate).CenterOfMassOffset = glm::vec3(0.0f);
+            rt->GetPhysics3D()->RefreshColliders(crate);
+            CHECK(Near(Physics3DWorld::GetWorldCenterOfMass(*rt, crate), pos(crate), 0.01f));
+            // Inertia of a 1 kg unit cube (1/6 about each axis), and a heavier one set: the same torque turns it slower.
+            glm::vec3 inertia = Physics3DWorld::GetInertiaTensor(*rt, spinner);
+            CHECK(Near(inertia, glm::vec3(1.0f / 6.0f), 0.01f));
+            Physics3DWorld::AddTorque(*rt, spinner, { 0, 1, 0 });
+            rt->OnUpdateRuntime(step);
+            float light = Physics3DWorld::GetAngularVelocity(*rt, spinner).y;
+            Physics3DWorld::SetAngularVelocity(*rt, spinner, glm::vec3(0.0f));
+            Physics3DWorld::SetInertiaTensor(*rt, spinner, glm::vec3(10.0f / 6.0f));
+            CHECK(Near(Physics3DWorld::GetInertiaTensor(*rt, spinner), glm::vec3(10.0f / 6.0f), 0.01f));
+            Physics3DWorld::AddTorque(*rt, spinner, { 0, 1, 0 });
+            rt->OnUpdateRuntime(step);
+            CHECK(light > 0.0f && Near(Physics3DWorld::GetAngularVelocity(*rt, spinner).y, light / 10.0f, light * 0.02f));
+            // Spin capped by Max Angular Velocity; a point 1 m out moves around it.
+            rr.Get<RigidbodyComponent>(spinner).MaxAngularVelocity = 2.0f;
+            rt->RefreshBody(spinner);
+            Physics3DWorld::SetAngularVelocity(*rt, spinner, { 0, 20, 0 });
+            rt->OnUpdateRuntime(step);
+            glm::vec3 w = Physics3DWorld::GetAngularVelocity(*rt, spinner);
+            CHECK(glm::length(w) <= 2.0f + 1e-3f);
+            glm::vec3 c = Physics3DWorld::GetWorldCenterOfMass(*rt, spinner);
+            glm::vec3 pv = Physics3DWorld::GetPointVelocity(*rt, spinner, c + glm::vec3(1, 0, 0));
+            CHECK(Near(pv, glm::cross(w, glm::vec3(1, 0, 0)) + Physics3DWorld::GetLinearVelocity(*rt, spinner), 1e-3f));
+            // Sleeping on demand; not allowed to sleep, it stays awake at rest.
+            Physics3DWorld::SetAngularVelocity(*rt, spinner, glm::vec3(0.0f));
+            Physics3DWorld::Sleep(*rt, spinner);
+            CHECK(Physics3DWorld::IsSleeping(*rt, spinner));
+            rr.Get<RigidbodyComponent>(crate).CanSleep = false;
+            rt->RefreshBody(crate);
+            Physics3DWorld::SetLinearVelocity(*rt, crate, glm::vec3(0.0f));
+            for (int i = 0; i < 120; ++i) rt->OnUpdateRuntime(step);
+            CHECK(!Physics3DWorld::IsSleeping(*rt, crate));
+            rt->GetPhysics3D()->SetSleepThreshold(0.2f);
+            CHECK(Near(rt->GetPhysics3D()->GetSleepThreshold(), 0.2f, 1e-6f));
+            // Interpolated: halfway through a step its object is between the last two poses.
+            Physics3DWorld::SetLinearVelocity(*rt, smooth, { 0, 6, 0 });
+            rt->OnUpdateRuntime(step);
+            rt->OnUpdateRuntime(step);
+            auto& rb = rr.Get<RigidbodyComponent>(smooth);
+            rt->OnUpdateRuntime(step * 0.5f); // no step: half way
+            CHECK(rb.HasPose && Near(pos(smooth).y, (rb.PreviousPosition.y + rb.CurrentPosition.y) * 0.5f, 1e-3f) && rb.CurrentPosition.y > rb.PreviousPosition.y + 0.05f);
+            rt->OnUpdateRuntime(step * 0.5f); // a step: at its new pose
+            CHECK(Near(pos(smooth).y, rb.PreviousPosition.y, 1e-3f) || Near(pos(smooth).y, rb.CurrentPosition.y, 1e-3f));
+            // Turned on and pushed the same frame (its body joins the world at the next step): it takes the push.
+            rt->SetActive(late, true);
+            Physics3DWorld::SetLinearVelocity(*rt, late, { 0, 0, 5 });
+            Physics3DWorld::AddImpulse(*rt, late, { 5, 0, 0 });
+            Physics3DWorld::AddTorque(*rt, late, { 0, 1, 0 });
+            for (int i = 0; i < 10; ++i) rt->OnUpdateRuntime(step);
+            CHECK(pos(late).z > 10.5f && pos(late).x > 30.1f);
+            rt->OnRuntimeStop();
+        }
+        // 2D
+        {
+            Scene scene("Tuning2D");
+            scene.GetSettings().Gravity2D = glm::vec2(0.0f);
+            auto& reg = scene.GetRegistry();
+            Entity box = scene.CreateEntity("Box");
+            reg.Emplace<Rigidbody2DComponent>(box).Type = BodyType::Dynamic;
+            reg.Emplace<BoxCollider2DComponent>(box).Size = { 1, 1 };
+            Entity smooth = scene.CreateEntity("Smooth");
+            reg.Get<TransformComponent>(smooth).Position = { 10, 0, 0 };
+            auto& srb = reg.Emplace<Rigidbody2DComponent>(smooth);
+            srb.Type = BodyType::Dynamic;
+            srb.Interpolation = RigidbodyInterpolation::Interpolate;
+            reg.Emplace<BoxCollider2DComponent>(smooth);
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            auto& rr = rt->GetRegistry();
+            CHECK(Near(Physics2DWorld::GetLocalCenterOfMass(*rt, box), glm::vec2(0.0f), 1e-5f));
+            Physics2DWorld::SetLocalCenterOfMass(*rt, box, { 0.3f, 0 });
+            CHECK(Near(Physics2DWorld::GetLocalCenterOfMass(*rt, box), glm::vec2(0.3f, 0), 1e-5f) && Near(Physics2DWorld::GetWorldCenterOfMass(*rt, box), glm::vec2(0.3f, 0), 1e-4f));
+            float inertia = Physics2DWorld::GetInertia(*rt, box);
+            CHECK(inertia > 0.0f);
+            Physics2DWorld::SetInertia(*rt, box, inertia * 4.0f);
+            CHECK(Near(Physics2DWorld::GetInertia(*rt, box), inertia * 4.0f, 1e-4f));
+            Physics2DWorld::SetAngularVelocity(*rt, box, 2.0f);
+            glm::vec2 center = Physics2DWorld::GetWorldCenterOfMass(*rt, box);
+            CHECK(Near(Physics2DWorld::GetPointVelocity(*rt, box, center + glm::vec2(1, 0)), glm::vec2(0, 2), 1e-3f));
+            Physics2DWorld::SetLinearVelocity(*rt, smooth, { 6, 0 });
+            rt->OnUpdateRuntime(step);
+            rt->OnUpdateRuntime(step);
+            auto& rb = rr.Get<Rigidbody2DComponent>(smooth);
+            rt->OnUpdateRuntime(step * 0.5f);
+            CHECK(rb.HasPose && Near(rr.Get<TransformComponent>(smooth).Position.x, (rb.PreviousPose.x + rb.CurrentPose.x) * 0.5f, 1e-3f) && rb.CurrentPose.x > rb.PreviousPose.x + 0.05f);
+            rt->OnRuntimeStop();
+        }
+    }
+
     void TestRigidbodySettingsWhilePlaying()
     {
         const float dt = 1.0f / 60.0f;
@@ -13039,6 +13174,7 @@ int main(int argc, char** argv)
     Run("Camera switching", TestCameraSwitching);
     Run("Joint rebuild while playing", TestJointRebuildWhilePlaying);
     Run("Rigidbody settings while playing", TestRigidbodySettingsWhilePlaying);
+    Run("Rigidbody tuning", TestRigidbodyTuning);
     Run("Physics queries and triggers", TestPhysicsQueriesAndTriggers);
     Run("App and timing control", TestAppAndTiming);
     Run("Character settings and hits", TestCharacterSettingsAndHits);
