@@ -963,6 +963,11 @@ namespace Dimension
         NavPathStatus PathStatus = NavPathStatus::Invalid;
         glm::vec3 Velocity{ 0.0f };
         glm::vec3 DesiredVelocity{ 0.0f }; // the velocity it steers for (with Root Motion, what the animation is asked for)
+        // Scripts moving it themselves (Unity's updatePosition / updateRotation): off, the agent still walks its path,
+        // but only its NextPosition (world, where its object would stand) moves, and its object does not turn.
+        bool UpdatePosition = true, UpdateRotation = true;
+        glm::vec3 NextPosition{ 0.0f };
+        bool NextValid = false; // NextPosition has been set (by a move, or a script)
         float RemainingDistance = 0.0f;
         float RepathTimer = 0.0f;
         int32_t Node = -1; // where it stands on Mesh (-1 = not placed yet)

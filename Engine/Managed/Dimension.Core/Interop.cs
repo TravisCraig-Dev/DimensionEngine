@@ -181,6 +181,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, double, double, double, double> AppControl;  // see Application in Api.cs
         public delegate* unmanaged<int, byte*> AppText;
         public delegate* unmanaged<IntPtr, ulong, int> CharacterFlags;
+        public delegate* unmanaged<IntPtr, ulong, int, float*, int, int, int> NavAgentPath;
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

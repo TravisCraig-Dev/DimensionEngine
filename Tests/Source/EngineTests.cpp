@@ -4004,6 +4004,63 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestNavQueriesAndPaths()
+    {
+        // The yard (BuildNavYard): a wall along z = 0 from x = -15 to 6, 0.6 thick; the mesh stops Agent Radius from it.
+        Scene scene("Yard");
+        BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        Entity walker = scene.CreateEntity("Walker");
+        reg.Get<TransformComponent>(walker).Position = { -5.0f, 0.0f, -5.0f };
+        auto& a = reg.Emplace<NavMeshAgentComponent>(walker);
+        a.Speed = 6.0f;
+        a.Acceleration = 20.0f;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto pos = [&] { return rr.Get<TransformComponent>(walker).Position; };
+        auto run = [&](int n) { for (int i = 0; i < n; ++i) rt->OnUpdateRuntime(1.0f / 60.0f); };
+        run(1);
+        float edgeZ = -0.3f - 0.5f; // the wall's face, less the bake's Agent Radius
+        // Straight at the wall: stopped at the mesh's edge before it, facing back; a short way is clear.
+        Navigation::NavHit hit;
+        CHECK(Navigation::Raycast(*rt, { -5, 0, -5 }, { -5, 0, 5 }, hit) && hit.Hit);
+        CHECK(Near(hit.Position.z, edgeZ, 0.3f) && Near(hit.Position.x, -5.0f, 0.05f) && hit.Normal.z < -0.9f && Near(hit.Distance, 5.0f + edgeZ, 0.3f));
+        CHECK(!Navigation::Raycast(*rt, { -5, 0, -5 }, { -5, 0, -3 }, hit) && !hit.Hit && Near(hit.Position.z, -3.0f, 0.05f) && Near(hit.Distance, 2.0f, 0.05f));
+        // The nearest edge from 1.2 m short of it.
+        CHECK(Navigation::FindClosestEdge(*rt, { -5, 0, edgeZ - 1.2f }, hit) && Near(hit.Distance, 1.2f, 0.3f) && Near(hit.Position.z, edgeZ, 0.3f) && hit.Normal.z < -0.9f);
+        CHECK(!Navigation::FindClosestEdge(*rt, { 50, 0, 50 }, hit)); // off the mesh
+        // A path found first, then given to the agent: it walks it (around the wall's end) and arrives.
+        std::vector<glm::vec3> corners;
+        CHECK(Navigation::CalculatePath(*rt, { -5, 0, -5 }, { -5, 0, 5 }, corners) == NavPathStatus::Complete && corners.size() >= 3);
+        CHECK(Navigation::CalculatePath(*rt, { -5, 0, -5 }, { -5, 0, 5 }, corners, 0u) == NavPathStatus::Invalid); // no areas allowed
+        CHECK(Navigation::CalculatePath(*rt, { -5, 0, -5 }, { -5, 0, 5 }, corners) == NavPathStatus::Complete);
+        CHECK(Navigation::SetPath(*rt, walker, corners, NavPathStatus::Complete));
+        auto given = Navigation::GetPath(*rt, walker);
+        CHECK(given.size() == corners.size() && Near(given.back(), corners.back(), 1e-3f));
+        run(600);
+        CHECK(glm::distance(pos(), glm::vec3(-5, 0, 5)) < 0.5f);
+        // A path of its own: straight to a point (corners from where it stands).
+        CHECK(Navigation::SetPath(*rt, walker, { pos(), { -8, 0, 8 } }, NavPathStatus::Complete));
+        run(120);
+        CHECK(glm::distance(pos(), glm::vec3(-8, 0, 8)) < 0.5f);
+        // Scripts moving it: with Update Position off the object stays while its NextPosition walks; on again, it jumps there.
+        Navigation::SetUpdatePosition(*rt, walker, false);
+        rr.Get<NavMeshAgentComponent>(walker).UpdateRotation = false;
+        float yaw = rr.Get<TransformComponent>(walker).Rotation.y;
+        glm::vec3 stay = pos();
+        CHECK(Navigation::SetDestination(*rt, walker, { -12, 0, 8 }));
+        run(90);
+        glm::vec3 next = Navigation::GetNextPosition(*rt, walker);
+        CHECK(Near(pos(), stay, 1e-4f) && next.x < stay.x - 2.0f && Near(rr.Get<TransformComponent>(walker).Rotation.y, yaw, 1e-5f));
+        Navigation::SetUpdatePosition(*rt, walker, true);
+        CHECK(Near(pos(), next, 1e-3f));
+        run(120);
+        CHECK(glm::distance(pos(), glm::vec3(-12, 0, 8)) < 0.5f);
+        rt->OnRuntimeStop();
+    }
+
     void TestNavMeshAgents()
     {
         // Playing (baked as play starts): an agent sent to the far side of the wall walks around its end and arrives;
@@ -12896,6 +12953,7 @@ int main(int argc, char** argv)
     Run("Physics queries and triggers", TestPhysicsQueriesAndTriggers);
     Run("App and timing control", TestAppAndTiming);
     Run("Character settings and hits", TestCharacterSettingsAndHits);
+    Run("NavMesh queries and agent paths", TestNavQueriesAndPaths);
     Run("Physics 2D", TestPhysics2D);
     Run("Physics 3D", TestPhysics3D);
     Run("Inactive colliders", TestInactiveColliders);

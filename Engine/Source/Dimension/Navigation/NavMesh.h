@@ -122,7 +122,33 @@ namespace Dimension
         std::shared_ptr<NavMeshData> Carve(const NavMeshData& baked, const std::vector<CarveShape>& obstacles);
         // The nearest point on any surface's mesh to `point` within maxDistance.
         bool SamplePosition(Scene& scene, const glm::vec3& point, float maxDistance, glm::vec3& result);
-        NavPathStatus CalculatePath(Scene& scene, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners);
+        NavPathStatus CalculatePath(Scene& scene, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners,
+                                    uint32_t areaMask = 0xFFFFFFFFu);
+        // Like Unity's NavMeshHit: a spot on the mesh, the way off a wall there (horizontal), how far from the start.
+        struct NavHit
+        {
+            glm::vec3 Position{ 0.0f };
+            glm::vec3 Normal{ 0.0f };
+            float Distance = 0.0f;
+            bool Hit = false;
+        };
+        // Walks straight on the mesh from `from` toward `to` (Unity's NavMesh.Raycast): true when an edge or a wall is in
+        // the way (hit: where it stopped, facing back), false when the way is clear (hit: `to` on the mesh). From off
+        // the mesh it is blocked at once.
+        bool Raycast(Scene& scene, const glm::vec3& from, const glm::vec3& to, NavHit& hit, uint32_t areaMask = 0xFFFFFFFFu);
+        // The mesh's nearest edge (a wall's foot, a drop) to a point on it: where it is, the way from it to the point,
+        // and how far. False off the mesh.
+        bool FindClosestEdge(Scene& scene, const glm::vec3& point, NavHit& hit, uint32_t areaMask = 0xFFFFFFFFu);
+        // Gives an agent a path of its own (world corners, as CalculatePath makes them): it walks it from where it is.
+        bool SetPath(Scene& scene, Entity agent, const std::vector<glm::vec3>& corners, NavPathStatus status);
+        // An agent's path now, in world space.
+        std::vector<glm::vec3> GetPath(Scene& scene, Entity agent);
+        // Where an agent's simulation has it (its object's position, unless UpdatePosition is off); setting it moves
+        // the simulation there (and the object too, when UpdatePosition is on).
+        glm::vec3 GetNextPosition(Scene& scene, Entity agent);
+        void SetNextPosition(Scene& scene, Entity agent, const glm::vec3& position);
+        // Turns UpdatePosition on or off; on again, the object jumps to NextPosition (as Unity's does).
+        void SetUpdatePosition(Scene& scene, Entity agent, bool update);
 
         // Agents: steer along their paths and around their nearest neighbours (a playing scene, every frame). New paths
         // the agents need (following targets, around moved obstacles) are found at most Path Budget a frame; scripts'

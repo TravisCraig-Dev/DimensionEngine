@@ -3230,6 +3230,155 @@
    }
   },
   {
+   "guid": 6000112,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Ogre Path",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Line Renderer": {
+     "Alignment": 0,
+     "Blend": 0,
+     "Color": [
+      [
+       0.0,
+       1.0,
+       0.85,
+       0.2,
+       0.9
+      ],
+      [
+       1.0,
+       1.0,
+       0.85,
+       0.2,
+       0.9
+      ]
+     ],
+     "Corner Vertices": 2,
+     "End Cap Vertices": 2,
+     "Loop": false,
+     "Positions": [],
+     "Sorting Order": 0,
+     "Texture": 0,
+     "Texture Mode": 0,
+     "Use World Space": true,
+     "Width": 0.12,
+     "Width Curve": [
+      [
+       0.0,
+       1.0
+      ],
+      [
+       1.0,
+       1.0
+      ]
+     ]
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.PathPreview",
+       "Fields": {
+        "Agent": 6000061,
+        "Edge": 6000113,
+        "Lift": 0.15
+       },
+       "Enabled": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "guid": 6000113,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Ogre Edge Line",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Line Renderer": {
+     "Alignment": 0,
+     "Blend": 0,
+     "Color": [
+      [
+       0.0,
+       0.3,
+       0.8,
+       1.0,
+       0.9
+      ],
+      [
+       1.0,
+       0.3,
+       0.8,
+       1.0,
+       0.9
+      ]
+     ],
+     "Corner Vertices": 2,
+     "End Cap Vertices": 2,
+     "Loop": false,
+     "Positions": [],
+     "Sorting Order": 0,
+     "Texture": 0,
+     "Texture Mode": 0,
+     "Use World Space": true,
+     "Width": 0.06,
+     "Width Curve": [
+      [
+       0.0,
+       1.0
+      ],
+      [
+       1.0,
+       1.0
+      ]
+     ]
+    }
+   }
+  },
+  {
    "guid": 6000062,
    "parent": 6000061,
    "components": {
@@ -5066,7 +5215,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into).",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview).",
      "Font": 0,
      "Font Size": 26,
      "Color": [

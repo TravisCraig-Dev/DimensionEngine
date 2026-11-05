@@ -261,6 +261,9 @@ namespace Dimension
             // 0 product name, 1 version, 2 company name.
             const char* (*AppText)(int);
             int (*CharacterFlags)(void*, uint64_t);   // the Character Controller's last move's collision flags
+            // An agent's path: 0 get its corners (count; negative when Partial), 1 set them (count, status), 2 calculate one
+            // from where it stands to corners[0] (into corners; count, negative when Partial, 0 none).
+            int (*NavAgentPath)(void*, uint64_t, int, float*, int, int);
         };
 
         // Background scene loads started from C#, by id.
@@ -1880,6 +1883,29 @@ namespace Dimension
                 if (simple) return Physics3DWorld::SimpleMoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] }) ? 1 : 0;
                 return Physics3DWorld::MoveCharacter(S(s), Unpack(e), { v[0], v[1], v[2] });
             };
+            a.NavAgentPath = [](void* s, uint64_t packed, int op, float* corners, int count, int status) -> int {
+                auto* agent = Comp<NavMeshAgentComponent>(s, packed);
+                if (!agent) return 0;
+                Scene& scene = S(s);
+                Entity e = Unpack(packed);
+                std::vector<glm::vec3> path;
+                if (op == 1)
+                {
+                    for (int i = 0; i < count; ++i) path.push_back({ corners[i * 3], corners[i * 3 + 1], corners[i * 3 + 2] });
+                    return Navigation::SetPath(scene, e, path, (NavPathStatus)status) ? 1 : 0;
+                }
+                NavPathStatus result = agent->PathStatus;
+                if (op == 0) path = Navigation::GetPath(scene, e);
+                else
+                {
+                    result = Navigation::CalculatePath(scene, Navigation::GetNextPosition(scene, e), { corners[0], corners[1], corners[2] }, path,
+                                                       (uint32_t)agent->AreaMask);
+                    if (result == NavPathStatus::Invalid) return 0;
+                }
+                int n = std::min((int)path.size(), std::max(count, 0));
+                if (n > 0) std::memcpy(corners, path.data(), (size_t)n * 12);
+                return result == NavPathStatus::Partial ? -n : n;
+            };
             a.CharacterFlags = [](void* s, uint64_t e) -> int {
                 auto* cc = Comp<CharacterControllerComponent>(s, e);
                 return cc ? cc->CollisionFlags : 0;
@@ -2026,6 +2052,12 @@ namespace Dimension
                 case 10: return agent->Traversing ? 1.0f : 0.0f;
                 case 11: return agent->Waiting ? 1.0f : 0.0f;
                 case 12: std::memcpy(v, &agent->DesiredVelocity, 12); return 1.0f;
+                case 13: return agent->UpdatePosition ? 1.0f : 0.0f;
+                case 14: Navigation::SetUpdatePosition(scene, Unpack(e), v[0] != 0.0f); return 1.0f;
+                case 15: return agent->UpdateRotation ? 1.0f : 0.0f;
+                case 16: agent->UpdateRotation = v[0] != 0.0f; return 1.0f;
+                case 17: { glm::vec3 p = Navigation::GetNextPosition(scene, Unpack(e)); std::memcpy(v, &p, 12); return 1.0f; }
+                case 18: Navigation::SetNextPosition(scene, Unpack(e), { v[0], v[1], v[2] }); return 1.0f;
                 default: return 0.0f;
                 }
             };
@@ -2043,6 +2075,29 @@ namespace Dimension
                 {
                     std::vector<glm::vec3> corners;
                     NavPathStatus status = Navigation::CalculatePath(scene, { pa[0], pa[1], pa[2] }, { pb[0], pb[1], pb[2] }, corners);
+                    if (status == NavPathStatus::Invalid) return 0;
+                    int n = std::min((int)corners.size(), std::max(maxOut, 0));
+                    if (out && n > 0) std::memcpy(out, corners.data(), (size_t)n * 12);
+                    return status == NavPathStatus::Partial ? -n : n;
+                }
+                if (op == 4 || op == 5)
+                {
+                    // Raycast (pa to pb) / closest edge (pa), area mask in maxOut: out gets position, normal, distance.
+                    Navigation::NavHit hit;
+                    bool found = op == 4 ? Navigation::Raycast(scene, { pa[0], pa[1], pa[2] }, { pb[0], pb[1], pb[2] }, hit, (uint32_t)maxOut)
+                                         : Navigation::FindClosestEdge(scene, { pa[0], pa[1], pa[2] }, hit, (uint32_t)maxOut);
+                    std::memcpy(out, &hit.Position, 12);
+                    std::memcpy(out + 3, &hit.Normal, 12);
+                    out[6] = hit.Distance;
+                    return found ? 1 : 0;
+                }
+                if (op == 6)
+                {
+                    // CalculatePath with an area mask (in maxDistance's bits); corners into out (up to 256).
+                    std::vector<glm::vec3> corners;
+                    uint32_t mask;
+                    std::memcpy(&mask, &maxDistance, 4);
+                    NavPathStatus status = Navigation::CalculatePath(scene, { pa[0], pa[1], pa[2] }, { pb[0], pb[1], pb[2] }, corners, mask);
                     if (status == NavPathStatus::Invalid) return 0;
                     int n = std::min((int)corners.size(), std::max(maxOut, 0));
                     if (out && n > 0) std::memcpy(out, corners.data(), (size_t)n * 12);

@@ -1456,8 +1456,37 @@ namespace Dimension
 
     public enum NavMeshPathStatus { Complete = 0, Partial = 1, Invalid = 2 }
 
-    /// <summary>Walks the baked navigation mesh (NavMesh Surface) to a destination, steering around other agents.
-    /// Its other settings (Acceleration, Angular Speed, ...) are read and set with GetFloat/SetFloat.</summary>
+    /// <summary>A way across the navigation mesh: its corners (from the start to the end) and whether it gets there.</summary>
+    public class NavMeshPath
+    {
+        public Vector3[] Corners { get; internal set; } = Array.Empty<Vector3>();
+        public NavMeshPathStatus Status { get; internal set; } = NavMeshPathStatus.Invalid;
+        public void ClearCorners() { Corners = Array.Empty<Vector3>(); Status = NavMeshPathStatus.Invalid; }
+        /// <summary>Copies the corners into `results`; returns how many there are (as Unity's, for no garbage).</summary>
+        public int GetCornersNonAlloc(Vector3[] results) { Array.Copy(Corners, results, Math.Min(Corners.Length, results.Length)); return Corners.Length; }
+        /// <summary>Its length, corner to corner.</summary>
+        public float Length { get { float l = 0; for (int i = 1; i < Corners.Length; ++i) l += Vector3.Distance(Corners[i - 1], Corners[i]); return l; } }
+        internal unsafe void Set(Vector3* buffer, int n)
+        {
+            Status = n == 0 ? NavMeshPathStatus.Invalid : n < 0 ? NavMeshPathStatus.Partial : NavMeshPathStatus.Complete;
+            var corners = new Vector3[Math.Abs(n)];
+            for (int i = 0; i < corners.Length; ++i) corners[i] = buffer[i];
+            Corners = corners;
+        }
+    }
+
+    /// <summary>A spot found on the navigation mesh (NavMesh.Raycast, FindClosestEdge).</summary>
+    public struct NavMeshHit
+    {
+        public Vector3 Position;
+        /// <summary>The way off the edge there (horizontal).</summary>
+        public Vector3 Normal;
+        public float Distance;
+        /// <summary>Whether something was hit (Raycast: an edge was in the way).</summary>
+        public bool Hit;
+    }
+
+    /// <summary>Walks the baked navigation mesh (NavMesh Surface) to a destination, steering around other agents.</summary>
     public unsafe class NavMeshAgent : Component
     {
         internal override string NativeName => "NavMesh Agent";
@@ -1488,6 +1517,65 @@ namespace Dimension
         /// <summary>A bit per area it may walk (1 Walkable, 4 Road, 8 Grass, 16 Mud, 32 Water, ...); -1 = all. Takes
         /// effect on its next path.</summary>
         public int AreaMask { get => GetInt("Area Mask"); set => SetInt("Area Mask", value); }
+        /// <summary>The room it takes among other agents, and its height.</summary>
+        public float Radius { get => GetFloat("Radius"); set => SetFloat("Radius", value); }
+        public float Height { get => GetFloat("Height"); set => SetFloat("Height", value); }
+        /// <summary>How fast it speeds up and slows down (m/s^2), and turns (degrees per second).</summary>
+        public float Acceleration { get => GetFloat("Acceleration"); set => SetFloat("Acceleration", value); }
+        public float AngularSpeed { get => GetFloat("Angular Speed"); set => SetFloat("Angular Speed", value); }
+        /// <summary>Slows down to arrive instead of running past the end of its path.</summary>
+        public bool AutoBraking { get => GetBool("Auto Braking"); set => SetBool("Auto Braking", value); }
+        /// <summary>How far its object stands above the ground.</summary>
+        public float BaseOffset { get => GetFloat("Base Offset"); set => SetFloat("Base Offset", value); }
+        public bool ObstacleAvoidance { get => GetBool("Obstacle Avoidance"); set => SetBool("Obstacle Avoidance", value); }
+        /// <summary>0 most important to 99: it gives way to agents with a lower number.</summary>
+        public int AvoidancePriority { get => GetInt("Avoidance Priority"); set => SetInt("Avoidance Priority", value); }
+
+        /// <summary>Whether the agent moves its object (true), or only its NextPosition, for a script (or root motion) to
+        /// move the object itself. Turned on again, the object jumps to NextPosition.</summary>
+        public bool UpdatePosition { get => Op(13) != 0.0f; set => Op(14, new Vector3(value ? 1 : 0, 0, 0)); }
+        /// <summary>Whether the agent turns its object to face the way it goes.</summary>
+        public bool UpdateRotation { get => Op(15) != 0.0f; set => Op(16, new Vector3(value ? 1 : 0, 0, 0)); }
+        /// <summary>Where the agent's own walking has it (its object's position while UpdatePosition is on); setting it
+        /// moves its walking there (and its object too, with UpdatePosition on).</summary>
+        public Vector3 NextPosition
+        {
+            get { Vector3 v; Native.Api.NavAgent(Entity.Scene, Entity.Id, 17, (float*)&v); return v; }
+            set => Op(18, value);
+        }
+
+        private const int MaxCorners = 256;
+        /// <summary>The path it is walking (a copy).</summary>
+        public NavMeshPath Path
+        {
+            get
+            {
+                var path = new NavMeshPath();
+                Vector3* buffer = stackalloc Vector3[MaxCorners];
+                int n = Native.Api.NavAgentPath(Entity.Scene, Entity.Id, 0, (float*)buffer, MaxCorners, 0);
+                path.Set(buffer, n);
+                if (n != 0) path.Status = PathStatus;
+                return path;
+            }
+            set => SetPath(value);
+        }
+        /// <summary>Finds the way from where it stands to `target` for its Area Mask, without walking it (SetPath does).
+        /// False when there is none.</summary>
+        public bool CalculatePath(Vector3 target, NavMeshPath path)
+        {
+            Vector3* buffer = stackalloc Vector3[MaxCorners];
+            buffer[0] = target;
+            int n = Native.Api.NavAgentPath(Entity.Scene, Entity.Id, 2, (float*)buffer, MaxCorners, 0);
+            path.Set(buffer, n);
+            return n != 0;
+        }
+        /// <summary>Walks a path found before (CalculatePath, or corners of your own) from where it is.</summary>
+        public bool SetPath(NavMeshPath path)
+        {
+            if (path == null || path.Corners.Length == 0 || path.Status == NavMeshPathStatus.Invalid) return false;
+            fixed (Vector3* p = path.Corners)
+                return Native.Api.NavAgentPath(Entity.Scene, Entity.Id, 1, (float*)p, path.Corners.Length, (int)path.Status) != 0;
+        }
     }
 
     /// <summary>Queries on the baked navigation meshes.</summary>
@@ -1513,6 +1601,36 @@ namespace Dimension
             return corners;
         }
         public static Vector3[] CalculatePath(Vector3 from, Vector3 to) => CalculatePath(from, to, out _);
+        /// <summary>Every area (an Area Mask).</summary>
+        public const int AllAreas = -1;
+        /// <summary>The shortest path over the areas in `areaMask` (as Unity's): true when one was found (it may be
+        /// Partial).</summary>
+        public static bool CalculatePath(Vector3 from, Vector3 to, int areaMask, NavMeshPath path)
+        {
+            Vector3* buffer = stackalloc Vector3[256];
+            float mask = BitConverter.Int32BitsToSingle(areaMask);
+            int n = Native.Api.NavQuery(Native.CurrentScene, 6, (float*)&from, (float*)&to, mask, (float*)buffer, 256);
+            path.Set(buffer, n);
+            return n != 0;
+        }
+        /// <summary>Walks straight across the mesh from `source` toward `target`: true when an edge or wall is in the way
+        /// (hit: where it stops), false when the way is clear (as Unity's).</summary>
+        public static bool Raycast(Vector3 source, Vector3 target, out NavMeshHit hit, int areaMask = AllAreas)
+        {
+            float* d = stackalloc float[7];
+            int blocked = Native.Api.NavQuery(Native.CurrentScene, 4, (float*)&source, (float*)&target, 0.0f, d, areaMask);
+            hit = new NavMeshHit { Position = new Vector3(d[0], d[1], d[2]), Normal = new Vector3(d[3], d[4], d[5]), Distance = d[6], Hit = blocked != 0 };
+            return blocked != 0;
+        }
+        /// <summary>The nearest edge of the mesh (the foot of a wall, a drop) to a point on it: where, the way from it to
+        /// the point, and how far. False off the mesh.</summary>
+        public static bool FindClosestEdge(Vector3 source, out NavMeshHit hit, int areaMask = AllAreas)
+        {
+            float* d = stackalloc float[7];
+            int found = Native.Api.NavQuery(Native.CurrentScene, 5, (float*)&source, null, 0.0f, d, areaMask);
+            hit = new NavMeshHit { Position = new Vector3(d[0], d[1], d[2]), Normal = new Vector3(d[3], d[4], d[5]), Distance = d[6], Hit = found != 0 };
+            return found != 0;
+        }
         /// <summary>Bakes every NavMesh Surface again from the colliders as they are now (after the level changed).</summary>
         public static void Build() => Native.Api.NavQuery(Native.CurrentScene, 2, null, null, 0.0f, null, 0);
         /// <summary>After the level changed inside a box (a wall knocked down, a bridge built): the meshes over it sample

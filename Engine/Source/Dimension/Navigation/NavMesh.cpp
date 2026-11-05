@@ -628,7 +628,9 @@ namespace Dimension
             // Where the agent stands, in its mesh's space.
             glm::vec3 GroundOf(Scene& scene, Entity e, const NavMeshAgentComponent& agent)
             {
-                return ToMesh(scene, agent.Mesh.get(), scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition()) - glm::vec3(0.0f, agent.BaseOffset, 0.0f);
+                glm::vec3 at = !agent.UpdatePosition && agent.NextValid ? agent.NextPosition
+                                                                         : scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition();
+                return ToMesh(scene, agent.Mesh.get(), at) - glm::vec3(0.0f, agent.BaseOffset, 0.0f);
             }
 
             // Moves the object to a world position (agents are roots; under a parent it is converted).
@@ -641,10 +643,13 @@ namespace Dimension
                 t.World[3] = glm::vec4(world, 1.0f);
             }
 
-            // Stands the agent's object at a ground spot of its mesh (Base Offset above it).
-            void PlaceAgent(Scene& scene, Entity e, const NavMeshAgentComponent& agent, const glm::vec3& ground)
+            // Stands the agent at a ground spot of its mesh (Base Offset above it): its NextPosition, and its object unless a
+            // script moves that itself (UpdatePosition off).
+            void PlaceAgent(Scene& scene, Entity e, NavMeshAgentComponent& agent, const glm::vec3& ground)
             {
-                PlaceObject(scene, e, ToWorld(scene, agent.Mesh.get(), ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f)));
+                agent.NextPosition = ToWorld(scene, agent.Mesh.get(), ground + glm::vec3(0.0f, agent.BaseOffset, 0.0f));
+                agent.NextValid = true;
+                if (agent.UpdatePosition) PlaceObject(scene, e, agent.NextPosition);
             }
 
             // Finds the agent's mesh and the node it stands on (keeping it where it is when that is on the mesh).
@@ -1139,15 +1144,155 @@ namespace Dimension
             return true;
         }
 
-        NavPathStatus CalculatePath(Scene& scene, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners)
+        NavPathStatus CalculatePath(Scene& scene, const glm::vec3& from, const glm::vec3& to, std::vector<glm::vec3>& corners, uint32_t areaMask)
         {
             int node = -1;
             corners.clear();
-            auto mesh = MeshNear(scene, from, 2.0f, &node);
+            Filter filter;
+            filter.AreaMask = areaMask;
+            auto mesh = MeshNear(scene, from, 2.0f, &node, filter);
             if (!mesh) return NavPathStatus::Invalid;
-            NavPathStatus status = PathFrom(*mesh, node, ToMesh(scene, mesh.get(), from), ToMesh(scene, mesh.get(), to), corners, LinksOn(scene, *mesh), nullptr, {});
+            NavPathStatus status = PathFrom(*mesh, node, ToMesh(scene, mesh.get(), from), ToMesh(scene, mesh.get(), to), corners, LinksOn(scene, *mesh), nullptr, filter);
             for (glm::vec3& c : corners) c = ToWorld(scene, mesh.get(), c);
             return status;
+        }
+
+        bool Raycast(Scene& scene, const glm::vec3& from, const glm::vec3& to, NavHit& hit, uint32_t areaMask)
+        {
+            hit = {};
+            Filter filter;
+            filter.AreaMask = areaMask;
+            int node = -1;
+            auto mesh = MeshNear(scene, from, 2.0f, &node, filter);
+            if (!mesh)
+            {
+                hit.Position = from;
+                hit.Hit = true;
+                return true;
+            }
+            glm::vec3 a = ToMesh(scene, mesh.get(), from), b = ToMesh(scene, mesh.get(), to);
+            int end = node;
+            glm::vec2 reached;
+            bool clear = Walk(*mesh, node, { a.x, a.z }, { b.x, b.z }, &end, &reached, filter);
+            glm::vec3 local = OnMesh(*mesh, end, reached);
+            hit.Position = ToWorld(scene, mesh.get(), local);
+            hit.Distance = glm::length(reached - glm::vec2(a.x, a.z));
+            hit.Hit = !clear;
+            if (!clear)
+            {
+                glm::vec2 d = glm::vec2(b.x, b.z) - glm::vec2(a.x, a.z);
+                glm::vec2 n = glm::length(d) > 1e-6f ? -glm::normalize(d) : glm::vec2(0.0f);
+                hit.Normal = ToWorld(scene, mesh.get(), local + glm::vec3(n.x, 0.0f, n.y)) - hit.Position;
+            }
+            return !clear;
+        }
+
+        bool FindClosestEdge(Scene& scene, const glm::vec3& point, NavHit& hit, uint32_t areaMask)
+        {
+            hit = {};
+            Filter filter;
+            filter.AreaMask = areaMask;
+            int node = -1;
+            auto mesh = MeshNear(scene, point, 2.0f, &node, filter);
+            if (!mesh) return false;
+            const NavMeshData& m = *mesh;
+            glm::vec3 local = ToMesh(scene, mesh.get(), point);
+            glm::vec2 p(local.x, local.z);
+            // The edge is no further than the node's clearance (and a cell): look at the node sides in the columns that near.
+            float reach = (m.Clearance.empty() ? 5.0f : std::min(m.Clearance[node], 50.0f)) + m.CellSize * 2.0f;
+            int col = m.Columns[node], cx = col % m.Width, cz = col / m.Width;
+            int r = (int)std::ceil(reach / m.CellSize);
+            float best = kInf;
+            glm::vec3 edge(0.0f);
+            for (int z = std::max(cz - r, 0); z <= std::min(cz + r, m.Depth - 1); ++z)
+                for (int x = std::max(cx - r, 0); x <= std::min(cx + r, m.Width - 1); ++x)
+                {
+                    int c = m.Column(x, z);
+                    for (uint32_t n = m.ColumnStart[c]; n < m.ColumnStart[c + 1]; ++n)
+                    {
+                        if (m.Islands[n] != m.Islands[node] || !filter.Passes(m, (int)n)) continue;
+                        glm::vec3 at = m.NodePosition((int)n);
+                        for (int dir = 0; dir < 4; ++dir)
+                        {
+                            int next = m.Links[(size_t)n * 8 + dir];
+                            if (next >= 0 && filter.Passes(m, next)) continue;
+                            // The open side: half a cell out from the node, the nearest point along it.
+                            glm::vec2 out((float)kDirX[dir], (float)kDirZ[dir]), side(-out.y, out.x);
+                            glm::vec2 mid = glm::vec2(at.x, at.z) + out * (m.CellSize * 0.5f);
+                            float along = std::clamp(glm::dot(p - mid, side), -m.CellSize * 0.5f, m.CellSize * 0.5f);
+                            glm::vec2 q = mid + side * along;
+                            float d = glm::length(p - q);
+                            if (d < best)
+                            {
+                                best = d;
+                                edge = glm::vec3(q.x, at.y, q.y);
+                            }
+                        }
+                    }
+                }
+            if (best == kInf) return false;
+            hit.Position = ToWorld(scene, mesh.get(), edge);
+            glm::vec2 away = p - glm::vec2(edge.x, edge.z);
+            glm::vec2 n = glm::length(away) > 1e-6f ? glm::normalize(away) : glm::vec2(0.0f);
+            hit.Normal = ToWorld(scene, mesh.get(), edge + glm::vec3(n.x, 0.0f, n.y)) - hit.Position;
+            hit.Distance = best;
+            hit.Hit = true;
+            return true;
+        }
+
+        bool SetPath(Scene& scene, Entity e, const std::vector<glm::vec3>& corners, NavPathStatus status)
+        {
+            NavMeshAgentComponent* agent = AgentOf(scene, e);
+            if (!agent || corners.empty() || status == NavPathStatus::Invalid || !Place(scene, e, *agent)) return false;
+            agent->Destination = corners.back();
+            agent->HasDestination = true;
+            agent->DestinationMesh = agent->Mesh;
+            agent->MeshDestination = ToMesh(scene, agent->Mesh.get(), corners.back());
+            agent->HasMeshDestination = true;
+            agent->Path.clear();
+            for (const glm::vec3& c : corners) agent->Path.push_back(ToMesh(scene, agent->Mesh.get(), c));
+            agent->PathLinks.assign(agent->Path.size(), -1.0f);
+            agent->PathLinkOwners.assign(agent->Path.size(), Entity::Null());
+            agent->Corner = agent->Path.size() > 1 ? 1 : 0;
+            agent->PathStatus = status;
+            agent->PathDirty = agent->Waiting = agent->Queued = false;
+            agent->CrossMesh.reset();
+            agent->CrossLink = Entity::Null();
+            return true;
+        }
+
+        std::vector<glm::vec3> GetPath(Scene& scene, Entity e)
+        {
+            std::vector<glm::vec3> out;
+            NavMeshAgentComponent* agent = AgentOf(scene, e);
+            if (!agent || !agent->HasDestination) return out;
+            for (const glm::vec3& c : agent->Path) out.push_back(ToWorld(scene, agent->Mesh.get(), c));
+            return out;
+        }
+
+        glm::vec3 GetNextPosition(Scene& scene, Entity e)
+        {
+            NavMeshAgentComponent* agent = AgentOf(scene, e);
+            bool simulated = agent && agent->NextValid && !agent->UpdatePosition;
+            return simulated ? agent->NextPosition : scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition();
+        }
+
+        void SetNextPosition(Scene& scene, Entity e, const glm::vec3& position)
+        {
+            NavMeshAgentComponent* agent = AgentOf(scene, e);
+            if (!agent) return;
+            agent->NextPosition = position;
+            agent->NextValid = true;
+            if (agent->UpdatePosition) PlaceObject(scene, e, position);
+        }
+
+        void SetUpdatePosition(Scene& scene, Entity e, bool update)
+        {
+            NavMeshAgentComponent* agent = AgentOf(scene, e);
+            if (!agent || agent->UpdatePosition == update) return;
+            if (!update) agent->NextPosition = scene.GetRegistry().Get<TransformComponent>(e).GetWorldPosition(), agent->NextValid = true;
+            else if (agent->NextValid) PlaceObject(scene, e, agent->NextPosition);
+            agent->UpdatePosition = update;
         }
 
         bool SetDestination(Scene& scene, Entity e, const glm::vec3& destination)
@@ -1224,8 +1369,9 @@ namespace Dimension
                 for (auto [a, agent, at] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
                 {
                     if (!agent.Mesh || (agent.Mesh != s.Data && agent.Mesh != s.Baked)) continue;
-                    PlaceObject(scene, a, glm::vec3(moved * glm::vec4(at.GetWorldPosition(), 1.0f)));
-                    at.Rotation.y += turned;
+                    if (agent.NextValid) agent.NextPosition = glm::vec3(moved * glm::vec4(agent.NextPosition, 1.0f));
+                    if (agent.UpdatePosition) PlaceObject(scene, a, glm::vec3(moved * glm::vec4(at.GetWorldPosition(), 1.0f)));
+                    if (agent.UpdateRotation) at.Rotation.y += turned;
                 }
             }
         }
@@ -1485,7 +1631,7 @@ namespace Dimension
                 auto& transform = reg.Get<TransformComponent>(mv.E);
                 // Face the way it goes.
                 auto face = [&](glm::vec2 v2) {
-                    if (glm::length(v2) <= 0.05f) return;
+                    if (glm::length(v2) <= 0.05f || !agent.UpdateRotation) return;
                     float want = std::atan2(-v2.x, -v2.y) + (mv.Platform ? YawOf(mv.Platform->Frame) : 0.0f);
                     float turn = WrapAngle(want - transform.Rotation.y);
                     float maxTurn = glm::radians(agent.AngularSpeed) * dt;
