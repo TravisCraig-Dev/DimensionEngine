@@ -109,7 +109,10 @@ namespace Dimension
                          "draws over it when this is smaller than the screen (picture in picture, split screen, minimaps).")
             .Field("Depth", &CameraComponent::Depth).Speed(0.1f).Tooltip("Of the cameras drawn over the primary one, higher ones go on top")
             .Field("Culling Mask", &CameraComponent::CullingMask)
-                .Tooltip("The layers it draws, as bits (bit n = layer n; -1 = everything). Scripts set it with LayerMask.GetMask.");
+                .Tooltip("The layers it draws, as bits (bit n = layer n; -1 = everything). Scripts set it with LayerMask.GetMask.")
+            .Field("Target Texture", &CameraComponent::TargetTexture).As(FieldType::Texture)
+                .Tooltip("A Render Texture it draws into instead of the screen (mirrors, monitors): materials, sprites and UI Images\n"
+                         "showing that texture show this camera's view. Create one in the Project window.");
 
         Register<TerrainComponent>("Terrain", "Rendering")
             .Field("Size", &TerrainComponent::Size).Speed(0.5f).Tooltip("Meters along X and Z, centered on the object")

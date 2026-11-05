@@ -578,6 +578,11 @@ namespace Editor
                     AssetHandle h = AssetManager::CreateAnimatorOverride(UniquePath(m_Current / "New Override.overrideController"), base);
                     if (h.IsValid()) m_Ctx.SelectAsset(h);
                 }
+                if (ImGui::MenuItem("New Render Texture"))
+                {
+                    AssetHandle h = AssetManager::CreateRenderTexture(UniquePath(m_Current / "New Render Texture.rendertexture"));
+                    if (h.IsValid()) m_Ctx.SelectAsset(h);
+                }
                 if (ImGui::MenuItem("New Timeline"))
                 {
                     AssetHandle h = AssetManager::CreateTimeline(UniquePath(m_Current / "New Timeline.timeline"));

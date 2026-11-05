@@ -111,6 +111,9 @@ namespace Dimension
         glm::vec4 Viewport{ 0.0f, 0.0f, 1.0f, 1.0f };
         float Depth = 0.0f;       // of the cameras drawn over the primary, higher ones go on top
         int32_t CullingMask = -1; // layers it draws (bit n = layer n; -1 everything)
+        // A Render Texture asset it draws into instead of the screen (at the texture's size; materials, sprites and UI
+        // Images showing that texture show its view). None = the screen.
+        AssetHandle TargetTexture = AssetHandle::None();
 
         glm::mat4 GetProjection(float aspect) const;
     };

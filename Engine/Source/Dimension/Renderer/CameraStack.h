@@ -16,7 +16,8 @@ namespace Dimension
     // The scene's other cameras drawn over the primary one (Unity's camera stacking by viewport): every active camera
     // other than the primary whose Viewport Rect is smaller than the whole screen (picture in picture, split screen,
     // minimaps) renders into its own image, in Depth order (higher on top), and is drawn over the primary camera's
-    // view under the UI. Cameras covering the whole screen stay off unless primary, as before. Each has its own
+    // view under the UI. Cameras covering the whole screen stay off unless primary, as before. Cameras with a Target
+    // Texture draw into that Render Texture instead (first, so the others show it the same frame). Each has its own
     // renderer (its history, occlusion and probe captures), kept while the camera is.
     class CameraStack
     {
@@ -38,6 +39,7 @@ namespace Dimension
         {
             Scope<SceneRenderer> Renderer;
             Scope<SceneRenderTarget> Target;
+            Ref<class Texture2D> Texture; // a Render Texture it draws into
             uint64_t Frame = 0;
         };
         std::unordered_map<uint64_t, View> m_Views;

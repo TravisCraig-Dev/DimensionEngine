@@ -6,6 +6,7 @@
 #include "Dimension/Core/Log.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Renderer/Texture.h"
+#include "Dimension/Renderer/RenderDevice.h"
 #include "Dimension/Asset/AssetPrefetch.h"
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Renderer/Font.h"
@@ -152,6 +153,7 @@ namespace Dimension
         case AssetType::StringTable: return "String Table";
         case AssetType::DataAsset: return "Data Asset";
         case AssetType::AnimatorOverride: return "Animator Override Controller";
+        case AssetType::RenderTexture: return "Render Texture";
         default: return "None";
         }
     }
@@ -279,6 +281,7 @@ namespace Dimension
         if (ext == ".ttf" || ext == ".otf") return AssetType::Font;
         if (ext == ".controller") return AssetType::AnimatorController;
         if (ext == ".overridecontroller") return AssetType::AnimatorOverride;
+        if (ext == ".rendertexture") return AssetType::RenderTexture;
         if (ext == ".timeline") return AssetType::Timeline;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
@@ -466,6 +469,20 @@ namespace Dimension
         if (!handle.IsValid()) return nullptr;
         if (auto it = s->Textures.find(handle); it != s->Textures.end()) return it->second;
         auto* meta = GetMetadata(handle);
+        if (meta && meta->Type == AssetType::RenderTexture)
+        {
+            // A black image of its size that cameras draw into (sRGB like color maps; no mips).
+            glm::uvec2 size = GetRenderTextureSize(handle);
+            TextureSettings rs;
+            rs.GenerateMips = false;
+            json file;
+            try { file = json::parse(std::ifstream(s->AssetsDir / meta->Path)); } catch (...) {}
+            rs.Filter = (TextureFilter)(file.is_object() ? file.value("filter", 0) : 0);
+            std::vector<uint32_t> black((size_t)size.x * size.y, 0xFF000000u);
+            auto rt = MakeRef<Texture2D>(black.data(), size.x, size.y, rs, meta->Path.filename().string().c_str());
+            s->Textures[handle] = rt;
+            return rt;
+        }
         if (!meta || meta->Type != AssetType::Texture) return nullptr;
         TextureSettings ts;
         ts.Filter = (TextureFilter)meta->ImportSettings.value("filter", 0);
@@ -814,6 +831,44 @@ namespace Dimension
         o.Controller = controller;
         if (!o.Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
+    }
+
+    AssetHandle AssetManager::CreateRenderTexture(const fs::path& absolutePath, uint32_t width, uint32_t height)
+    {
+        std::ofstream out(absolutePath);
+        if (!out) return AssetHandle::None();
+        out << json{ { "width", width }, { "height", height }, { "filter", 0 } }.dump(2);
+        out.close();
+        return Import(absolutePath);
+    }
+
+    glm::uvec2 AssetManager::GetRenderTextureSize(AssetHandle handle)
+    {
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::RenderTexture) return glm::uvec2(0);
+        try
+        {
+            json j = json::parse(std::ifstream(s->AssetsDir / meta->Path));
+            return glm::clamp(glm::uvec2(j.value("width", 256u), j.value("height", 256u)), glm::uvec2(1), glm::uvec2(8192));
+        }
+        catch (...) { return glm::uvec2(256); }
+    }
+
+    bool AssetManager::SetRenderTextureSize(AssetHandle handle, uint32_t width, uint32_t height)
+    {
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::RenderTexture) return false;
+        fs::path path = s->AssetsDir / meta->Path;
+        json j = json::object();
+        try { j = json::parse(std::ifstream(path)); } catch (...) {}
+        j["width"] = std::clamp(width, 1u, 8192u);
+        j["height"] = std::clamp(height, 1u, 8192u);
+        std::ofstream(path) << j.dump(2);
+        std::error_code ec;
+        s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
+        RenderDevice::Get().WaitIdle(); // the old image may still be in use
+        s->Textures.erase(handle);
+        return true;
     }
 
     AssetHandle AssetManager::GetBaseController(AssetHandle handle)

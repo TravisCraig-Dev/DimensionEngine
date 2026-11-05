@@ -1,6 +1,8 @@
 #include "Dimension/Renderer/CameraStack.h"
 #include "Dimension/Renderer/SceneRenderer.h"
 #include "Dimension/Renderer/RenderTarget.h"
+#include "Dimension/Renderer/Texture.h"
+#include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Scene/Scene.h"
 #include <algorithm>
 
@@ -19,7 +21,7 @@ namespace Dimension
         std::vector<std::pair<float, Entity>> extra;
         for (auto [e, cam, t] : scene.GetRegistry().ViewOf<CameraComponent, TransformComponent>())
         {
-            if (!t.ActiveInHierarchy || e == primary) continue;
+            if (!t.ActiveInHierarchy || e == primary || cam.TargetTexture.IsValid()) continue;
             glm::vec4 r = cam.Viewport;
             bool whole = r.x <= 0.0f && r.y <= 0.0f && r.x + r.z >= 1.0f && r.y + r.w >= 1.0f;
             if (!whole && r.z > 0.0f && r.w > 0.0f) extra.emplace_back(cam.Depth, e);
@@ -42,6 +44,34 @@ namespace Dimension
     void CameraStack::Render(VkCommandBuffer cmd, Scene& scene, glm::uvec2 screen, std::vector<UI::DrawCommand>& out)
     {
         ++m_Frame;
+        // Cameras drawing into Render Textures: rendered at the texture's size, then copied into it (the output holds
+        // sRGB-encoded bytes, which the texture's sRGB format reads back as linear colors).
+        for (auto [e, cam, t] : scene.GetRegistry().ViewOf<CameraComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || !cam.TargetTexture.IsValid()) continue;
+            Ref<Texture2D> texture = AssetManager::GetTexture(cam.TargetTexture);
+            if (!texture) continue;
+            uint32_t w = texture->GetWidth(), h = texture->GetHeight();
+            uint64_t id = ((uint64_t)e.Generation << 32) | e.Index;
+            View& view = m_Views[id];
+            if (!view.Renderer) view.Renderer = MakeScope<SceneRenderer>();
+            if (!view.Target) view.Target = MakeScope<SceneRenderTarget>(w, h);
+            else if (view.Target->GetWidth() != w || view.Target->GetHeight() != h) view.Target->Resize(w, h);
+            view.Frame = m_Frame;
+            view.Texture = texture; // kept alive while the GPU may still copy into it
+            CameraData data = CameraData::FromEntity(scene, e, view.Target->GetAspect());
+            view.Renderer->Render(cmd, scene, data, *view.Target, {});
+            VkImage src = view.Target->GetOutput().GetHandle(), dst = texture->GetImage().GetHandle();
+            Vk::TransitionImage(cmd, src, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            Vk::TransitionImage(cmd, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageCopy copy{};
+            copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.extent = { w, h, 1 };
+            vkCmdCopyImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            Vk::TransitionImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            Vk::TransitionImage(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
         for (auto& [e, rect] : Cameras(scene, screen))
         {
             uint64_t id = ((uint64_t)e.Generation << 32) | e.Index;

@@ -12308,6 +12308,10 @@ namespace
         // The file round-trips.
         auto loaded = AnimatorOverrideController::Load(dir / "Assets" / "Goblin.overrideController");
         CHECK(loaded->Controller == base && loaded->Clips.size() == 1 && loaded->Clips[0].second == "Shuffle");
+        // Render textures: an asset of a size (as JSON), resized from the Inspector.
+        AssetHandle rt = AssetManager::CreateRenderTexture(dir / "Assets" / "Feed.rendertexture", 320, 180);
+        CHECK(rt.IsValid() && AssetManager::GetMetadata(rt)->Type == AssetType::RenderTexture);
+        CHECK(AssetManager::GetRenderTextureSize(rt) == glm::uvec2(320, 180));
         AssetManager::Shutdown();
         fs::remove_all(dir);
     }

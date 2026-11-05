@@ -2087,6 +2087,22 @@ namespace Editor
                                    "Assign the controller to an Animator component to use it.");
             }
         }
+        else if (meta->Type == AssetType::RenderTexture)
+        {
+            // Its size (made again when changed) and what it shows now.
+            glm::uvec2 size = AssetManager::GetRenderTextureSize(handle);
+            int wh[2] = { (int)size.x, (int)size.y };
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::InputInt2("Size", wh, ImGuiInputTextFlags_EnterReturnsTrue))
+                AssetManager::SetRenderTextureSize(handle, (uint32_t)std::max(wh[0], 1), (uint32_t)std::max(wh[1], 1));
+            if (auto tex = AssetManager::GetTexture(handle))
+            {
+                float w = std::min(ImGui::GetContentRegionAvail().x, 256.0f);
+                ImGui::Image(ImTextureRef((ImTextureID)tex->GetImGuiId()), ImVec2(w, w * tex->GetHeight() / std::max(tex->GetWidth(), 1u)));
+            }
+            ImGui::TextWrapped("Set it as a Camera's Target Texture: the camera draws into it instead of the screen, and materials, "
+                               "sprites and UI Images showing it show that view (while playing, and in the Game view).");
+        }
         else if (meta->Type == AssetType::AnimatorOverride)
         {
             // Its controller and, per clip that controller plays, the clip played instead (empty: the same).

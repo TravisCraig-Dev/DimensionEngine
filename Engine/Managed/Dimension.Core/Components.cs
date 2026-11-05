@@ -709,6 +709,9 @@ namespace Dimension
         public float Depth { get => GetFloat("Depth"); set => SetFloat("Depth", value); }
         /// <summary>The layers it draws (LayerMask.GetMask("Default", "Player"); -1 everything).</summary>
         public int CullingMask { get => GetInt("Culling Mask"); set => SetInt("Culling Mask", value); }
+        /// <summary>A Render Texture asset it draws into instead of the screen (default: none, the screen). Materials,
+        /// sprites and UI Images showing that texture show this camera's view.</summary>
+        public Texture TargetTexture { get => new(GetAssetGuid("Target Texture")); set => SetAssetGuid("Target Texture", value.Guid); }
     }
 
     public enum CameraClearFlags { SolidColor = 0, Skybox = 1 }

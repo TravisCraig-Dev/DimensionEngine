@@ -18,7 +18,7 @@ namespace Dimension
     struct SpriteAtlas;
     struct SpriteRect;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -110,6 +110,11 @@ namespace Dimension
         static void SaveAnimatorOverride(AssetHandle handle);
         static AssetHandle CreateAnimatorOverride(const fs::path& absolutePath, AssetHandle controller = AssetHandle::None());
         static AssetHandle GetBaseController(AssetHandle handle);
+        // Render textures (.rendertexture: {"width", "height", "filter"}): GetTexture gives their image (black until a
+        // camera with it as Target Texture draws into it). Create writes one; Set changes its size (made again).
+        static AssetHandle CreateRenderTexture(const fs::path& absolutePath, uint32_t width = 256, uint32_t height = 256);
+        static bool SetRenderTextureSize(AssetHandle handle, uint32_t width, uint32_t height);
+        static glm::uvec2 GetRenderTextureSize(AssetHandle handle);
         // Timelines (.timeline) are editable in place too; SaveTimeline writes the changes.
         static Ref<TimelineAsset> GetTimeline(AssetHandle handle);
         static void SaveTimeline(AssetHandle handle);

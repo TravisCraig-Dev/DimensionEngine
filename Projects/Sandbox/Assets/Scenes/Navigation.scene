@@ -6045,6 +6045,98 @@
      "Depth": 1
     }
    }
+  },
+  {
+   "guid": 6000120,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Security Camera",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      16,
+      10,
+      16
+     ],
+     "Rotation": [
+      -0.42,
+      0.785,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Camera": {
+     "Projection": 0,
+     "Field Of View": 55,
+     "Orthographic Size": 5,
+     "Near Clip": 0.1,
+     "Far Clip": 200,
+     "Primary": false,
+     "Clear Flags": 1,
+     "Background": [
+      0.16,
+      0.18,
+      0.22,
+      1
+     ],
+     "Target Texture": 100073
+    }
+   }
+  },
+  {
+   "guid": 6000121,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Security Monitor",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -12,
+      2.2,
+      16.5
+     ],
+     "Rotation": [
+      0.72,
+      0,
+      0
+     ],
+     "Scale": [
+      0.6,
+      1,
+      0.34
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 3,
+     "Material": 0,
+     "Albedo": 100073,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.2,
+     "Emission": 0.0,
+     "Cast Shadows": false
+    }
+   }
   }
  ]
 }

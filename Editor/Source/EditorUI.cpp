@@ -142,6 +142,7 @@ namespace Editor::UI
         case AssetType::StringTable: return { 0.85f, 0.9f, 0.55f, 1 };
         case AssetType::DataAsset: return { 0.7f, 0.6f, 0.95f, 1 };
         case AssetType::AnimatorOverride: return { 0.45f, 0.8f, 0.85f, 1 };
+        case AssetType::RenderTexture: return { 0.95f, 0.45f, 0.35f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -164,6 +165,7 @@ namespace Editor::UI
         case AssetType::StringTable: return "TEXT";
         case AssetType::DataAsset: return "DATA";
         case AssetType::AnimatorOverride: return "OVRD";
+        case AssetType::RenderTexture: return "RT";
         default: return "FILE";
         }
     }
@@ -204,7 +206,8 @@ namespace Editor::UI
                 AssetHandle dropped(*(const uint64_t*)p->Data);
                 auto* meta = AssetManager::GetMetadata(dropped);
                 // An Animator's controller can be an override controller too.
-                bool typeOk = meta && (meta->Type == type || (type == AssetType::AnimatorController && meta->Type == AssetType::AnimatorOverride));
+                bool typeOk = meta && (meta->Type == type || (type == AssetType::AnimatorController && meta->Type == AssetType::AnimatorOverride) ||
+                                       (type == AssetType::Texture && meta->Type == AssetType::RenderTexture));
                 if (typeOk && (!accept || accept(dropped)))
                 {
                     r.Activated = r.Changed = true;
@@ -241,6 +244,8 @@ namespace Editor::UI
             std::vector<AssetHandle> choices = AssetManager::GetAssetsOfType(type);
             if (type == AssetType::AnimatorController)
                 for (AssetHandle a : AssetManager::GetAssetsOfType(AssetType::AnimatorOverride)) choices.push_back(a);
+            if (type == AssetType::Texture) // a texture field takes render textures too
+                for (AssetHandle a : AssetManager::GetAssetsOfType(AssetType::RenderTexture)) choices.push_back(a);
             for (AssetHandle a : choices)
                 if (!accept || accept(a)) option(a, AssetManager::GetMetadata(a)->Path.generic_string());
             ImGui::EndPopup();
