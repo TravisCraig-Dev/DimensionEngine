@@ -7193,6 +7193,239 @@
           ]
         }
       }
+    },
+    {
+      "guid": 940030,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Ball Chip (Content Size Fitter)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            1,
+            1
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            1,
+            1
+          ],
+          "Position": [
+            -24,
+            -24
+          ],
+          "Size": [
+            10,
+            10
+          ]
+        },
+        "UI Image": {
+          "Image": 0,
+          "Color": [
+            0.05,
+            0.07,
+            0.12,
+            0.8
+          ]
+        },
+        "UI Layout Group": {
+          "Direction": 1,
+          "Spacing": 10,
+          "Padding": [
+            16,
+            8,
+            16,
+            8
+          ],
+          "Stretch Children": true,
+          "Cell Size": [
+            100,
+            100
+          ],
+          "Columns": 0
+        },
+        "UI Content Size Fitter": {
+          "Horizontal Fit": 1,
+          "Vertical Fit": 1
+        }
+      }
+    },
+    {
+      "guid": 940031,
+      "parent": 940030,
+      "components": {
+        "Tag": {
+          "Name": "Dot",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            12,
+            12
+          ]
+        },
+        "UI Image": {
+          "Image": 0,
+          "Color": [
+            0.35,
+            0.85,
+            0.45,
+            1
+          ]
+        },
+        "UI Layout Element": {
+          "Ignore Layout": false,
+          "Min Size": [
+            -1,
+            -1
+          ],
+          "Preferred Size": [
+            12,
+            -1
+          ],
+          "Flexible Size": [
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "guid": 940032,
+      "parent": 940030,
+      "components": {
+        "Tag": {
+          "Name": "Chip Text",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0,
+            0
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            10,
+            10
+          ]
+        },
+        "UI Text": {
+          "Text": "Balls in play: 0",
+          "Font": 0,
+          "Font Size": 26,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        },
+        "UI Content Size Fitter": {
+          "Horizontal Fit": 1,
+          "Vertical Fit": 1
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "EntityCounterText",
+              "Fields": {
+                "Name": "Ball",
+                "Label": "Balls in play"
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
     }
   ]
 }

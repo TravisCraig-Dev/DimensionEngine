@@ -38,7 +38,26 @@ namespace Dimension::UI
             return std::max(1, (int)std::floor((innerWidth + group.Spacing) / step + 1e-4f));
         }
 
-        // Children of a layout group are stacked along the main axis using their Size.
+        // A child a layout group places (not one with Ignore Layout).
+        bool InLayout(Registry& reg, Entity c)
+        {
+            if (!HasRect(reg, c)) return false;
+            auto* le = reg.TryGet<UILayoutElementComponent>(c);
+            return !le || !le->IgnoreLayout;
+        }
+
+        // Content and layout-group sizes (defined below, after the text helpers).
+        glm::vec2 ContentSize(LayoutContext& ctx, Entity e, float wrapWidth);
+        glm::vec2 ElementSize(LayoutContext& ctx, Entity e, float crossWidth);
+
+        float FlexibleWeight(Registry& reg, Entity e, int axis)
+        {
+            auto* le = reg.TryGet<UILayoutElementComponent>(e);
+            return le ? std::max(0.0f, le->FlexibleSize[axis]) : 0.0f;
+        }
+
+        // Children of a layout group are stacked along the main axis using their sizes (see ElementSize); flexible ones
+        // share what is left of the group's length.
         void LayoutGroupChildren(LayoutContext& ctx, Entity e, const UILayoutGroupComponent& group, glm::vec2 min, glm::vec2 max,
                                  glm::vec2 clipMin, glm::vec2 clipMax)
         {
@@ -51,14 +70,36 @@ namespace Dimension::UI
             int columns = grid ? GridColumns(group, (innerMax.x - innerMin.x) / s) : 0;
             int index = 0;
             float cursor = vertical ? innerMin.y : innerMin.x;
+            // Rows and columns: each child's length (units), plus its share of the leftover by flexible weight.
+            int main = vertical ? 1 : 0;
+            std::vector<Entity> placed;
+            std::vector<glm::vec2> sizes;
+            float crossWidth = vertical && group.StretchChildren ? (innerMax.x - innerMin.x) / s : -1.0f;
+            if (!grid)
+            {
+                float used = 0.0f, weights = 0.0f;
+                for (Entity c : ctx.TheScene.GetChildren(e))
+                    if (InLayout(reg, c))
+                    {
+                        placed.push_back(c);
+                        sizes.push_back(ElementSize(ctx, c, crossWidth));
+                        used += sizes.back()[main];
+                        weights += FlexibleWeight(reg, c, main);
+                    }
+                if (placed.size() > 1) used += group.Spacing * (placed.size() - 1);
+                float left = (innerMax[main] - innerMin[main]) / s - used;
+                if (left > 0.0f && weights > 0.0f)
+                    for (size_t i = 0; i < placed.size(); ++i) sizes[i][main] += left * FlexibleWeight(reg, placed[i], main) / weights;
+            }
+            size_t slot = 0;
             for (Entity c : ctx.TheScene.GetChildren(e))
             {
-                if (!HasRect(reg, c))
+                if (!InLayout(reg, c))
                 {
                     LayoutNode(ctx, c, min, max, clipMin, clipMax, nullptr, nullptr);
                     continue;
                 }
-                auto& r = reg.Get<UIRectComponent>(c);
+                glm::vec2 own = grid ? glm::vec2(0.0f) : sizes[slot++];
                 glm::vec2 cmin, cmax;
                 if (grid)
                 {
@@ -69,16 +110,16 @@ namespace Dimension::UI
                 }
                 else if (vertical)
                 {
-                    float h = r.Size.y * s;
-                    float w = group.StretchChildren ? innerMax.x - innerMin.x : r.Size.x * s;
+                    float h = own.y * s;
+                    float w = group.StretchChildren ? innerMax.x - innerMin.x : own.x * s;
                     cmin = { innerMin.x, cursor };
                     cmax = { innerMin.x + w, cursor + h };
                     cursor += h + group.Spacing * s;
                 }
                 else
                 {
-                    float w = r.Size.x * s;
-                    float h = group.StretchChildren ? innerMax.y - innerMin.y : r.Size.y * s;
+                    float w = own.x * s;
+                    float h = group.StretchChildren ? innerMax.y - innerMin.y : own.y * s;
                     cmin = { cursor, innerMin.y };
                     cmax = { cursor + w, innerMin.y + h };
                     cursor += w + group.Spacing * s;
@@ -95,7 +136,7 @@ namespace Dimension::UI
             if (group.Direction == UILayoutDirection::Grid)
             {
                 int n = 0;
-                for (Entity c : ctx.TheScene.GetChildren(e)) n += HasRect(reg, c) ? 1 : 0;
+                for (Entity c : ctx.TheScene.GetChildren(e)) n += InLayout(reg, c) ? 1 : 0;
                 int columns = GridColumns(group, width / ctx.Scale - group.Padding.x - group.Padding.z);
                 int rows = (n + columns - 1) / columns;
                 float h = group.Padding.y + group.Padding.w + rows * group.CellSize.y + std::max(0, rows - 1) * group.Spacing;
@@ -104,11 +145,12 @@ namespace Dimension::UI
             bool vertical = group.Direction == UILayoutDirection::Vertical;
             float total = vertical ? group.Padding.y + group.Padding.w : group.Padding.x + group.Padding.z;
             int n = 0;
+            float crossWidth = vertical && group.StretchChildren ? width / ctx.Scale - group.Padding.x - group.Padding.z : -1.0f;
             for (Entity c : ctx.TheScene.GetChildren(e))
-                if (HasRect(reg, c))
+                if (InLayout(reg, c))
                 {
-                    auto& r = reg.Get<UIRectComponent>(c);
-                    total += vertical ? r.Size.y : r.Size.x;
+                    glm::vec2 size = ElementSize(ctx, c, crossWidth);
+                    total += vertical ? size.y : size.x;
                     ++n;
                 }
             if (n > 1) total += group.Spacing * (n - 1);
@@ -139,6 +181,17 @@ namespace Dimension::UI
                 glm::vec2 anchorMin = parentMin + rect->AnchorMin * parentSize;
                 glm::vec2 anchorMax = parentMin + rect->AnchorMax * parentSize;
                 glm::vec2 size = (anchorMax - anchorMin) + rect->Size * s;
+                if (auto* fit = reg.TryGet<UIContentSizeFitterComponent>(e))
+                {
+                    // Sized to its content (about its pivot).
+                    bool fitX = fit->Horizontal == UIFitMode::PreferredSize, fitY = fit->Vertical == UIFitMode::PreferredSize;
+                    if (fitX || fitY)
+                    {
+                        glm::vec2 content = ContentSize(ctx, e, fitX ? -1.0f : size.x / s);
+                        if (fitX) size.x = content.x * s;
+                        if (fitY) size.y = content.y * s;
+                    }
+                }
                 glm::vec2 pivotPos = glm::mix(anchorMin, anchorMax, rect->Pivot) + rect->Position * s;
                 rect->ComputedMin = pivotPos - rect->Pivot * size;
                 rect->ComputedMax = rect->ComputedMin + size;
@@ -421,6 +474,102 @@ namespace Dimension::UI
                 para = nl + 1;
             }
             return lines;
+        }
+
+        std::string StripRichText(const std::string& s)
+        {
+            std::string out;
+            for (size_t i = 0; i < s.size(); ++i)
+            {
+                if (s[i] == '<')
+                    if (size_t close = s.find('>', i); close != std::string::npos)
+                    {
+                        if (s.compare(i, close - i + 1, "<br>") == 0) out += '\n';
+                        i = close;
+                        continue;
+                    }
+                out += s[i];
+            }
+            return out;
+        }
+
+        // A UI Text's size in canvas units: its widest line and its lines' height (wrapped at `wrapWidth` units when
+        // it wraps and that is positive).
+        glm::vec2 TextSize(const UITextComponent& text, float wrapWidth)
+        {
+            std::string s = text.LocalizedKey.empty() ? text.Text : Localization::Get(text.LocalizedKey);
+            if (text.RichText) s = StripRichText(s);
+            float px = text.FontSize;
+            TextLines lines = LayoutLines(s, text.Wrap && wrapWidth > 0.0f ? wrapWidth : 0.0f, px);
+            float width = 0.0f;
+            for (size_t i = 0; i < lines.Starts.size(); ++i) width = std::max(width, MeasureText(s.substr(lines.Starts[i], lines.Ends[i] - lines.Starts[i]), px));
+            float lineH = px * 1.2f;
+            if (RenderDevice::Exists())
+                if (auto font = AssetManager::GetDefaultFont()) lineH = font->GetLineHeight() * px / Font::kBakeSize;
+            return { std::ceil(width + 1.0f), std::ceil(lineH * (float)std::max<size_t>(1, lines.Starts.size())) };
+        }
+
+        // What an element's content asks for (canvas units): a layout group's children, a text's lines (wrapping at
+        // `wrapWidth` units), else its Size.
+        glm::vec2 ContentSize(LayoutContext& ctx, Entity e, float wrapWidth)
+        {
+            auto& reg = ctx.TheScene.GetRegistry();
+            const auto& r = reg.Get<UIRectComponent>(e);
+            if (auto* g = reg.TryGet<UILayoutGroupComponent>(e))
+            {
+                std::vector<glm::vec2> sizes;
+                float inner = wrapWidth > 0.0f ? wrapWidth - g->Padding.x - g->Padding.z : -1.0f;
+                for (Entity c : ctx.TheScene.GetChildren(e))
+                    if (InLayout(reg, c)) sizes.push_back(ElementSize(ctx, c, g->StretchChildren ? inner : -1.0f));
+                glm::vec2 pad(g->Padding.x + g->Padding.z, g->Padding.y + g->Padding.w);
+                int n = (int)sizes.size();
+                if (g->Direction == UILayoutDirection::Grid)
+                {
+                    int columns = wrapWidth > 0.0f ? GridColumns(*g, wrapWidth - pad.x) : (g->Columns > 0 ? g->Columns : std::max(1, n));
+                    columns = std::max(1, std::min(columns, std::max(1, n)));
+                    int rows = (n + columns - 1) / columns;
+                    return pad + glm::vec2(columns * g->CellSize.x + (columns - 1) * g->Spacing, rows * g->CellSize.y + std::max(0, rows - 1) * g->Spacing);
+                }
+                int main = g->Direction == UILayoutDirection::Vertical ? 1 : 0;
+                glm::vec2 total(0.0f);
+                for (const glm::vec2& sz : sizes)
+                {
+                    total[main] += sz[main];
+                    total[1 - main] = std::max(total[1 - main], sz[1 - main]);
+                }
+                if (n > 1) total[main] += g->Spacing * (n - 1);
+                return total + pad;
+            }
+            if (auto* t = reg.TryGet<UITextComponent>(e)) return TextSize(*t, wrapWidth);
+            return r.Size;
+        }
+
+        // The size a layout group gives a child (canvas units): its Size, its content's along axes its Content Size
+        // Fitter fits, then its Layout Element's preferred and min sizes. `crossWidth`: the width it gets when the group
+        // stretches it (text wraps there), else -1.
+        glm::vec2 ElementSize(LayoutContext& ctx, Entity e, float crossWidth)
+        {
+            auto& reg = ctx.TheScene.GetRegistry();
+            glm::vec2 size = reg.Get<UIRectComponent>(e).Size;
+            if (auto* fit = reg.TryGet<UIContentSizeFitterComponent>(e))
+            {
+                bool fitX = fit->Horizontal == UIFitMode::PreferredSize, fitY = fit->Vertical == UIFitMode::PreferredSize;
+                if (fitX || fitY)
+                {
+                    glm::vec2 content = ContentSize(ctx, e, fitX ? -1.0f : (crossWidth > 0.0f ? crossWidth : size.x));
+                    if (fitX) size.x = content.x;
+                    if (fitY) size.y = content.y;
+                }
+            }
+            if (auto* le = reg.TryGet<UILayoutElementComponent>(e))
+            {
+                for (int i = 0; i < 2; ++i)
+                {
+                    if (le->PreferredSize[i] >= 0.0f) size[i] = le->PreferredSize[i];
+                    if (le->MinSize[i] >= 0.0f) size[i] = std::max(size[i], le->MinSize[i]);
+                }
+            }
+            return size;
         }
 
         size_t PrevCodepoint(const std::string& s, size_t i)

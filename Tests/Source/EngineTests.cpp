@@ -6554,6 +6554,83 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // Layout Element (preferred, min and flexible sizes, Ignore Layout) and Content Size Fitter (text, layout group).
+    void TestUILayoutElements()
+    {
+        UI::SetTextMeasure([](const std::string& t, float px) { return 0.5f * px * (float)UI::CodepointCount(t); });
+        Scene scene("Layout");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto rect = [&](const char* name, Entity parent, glm::vec2 size) {
+            Entity e = scene.CreateEntity(name, parent);
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Size = size;
+            return e;
+        };
+        Entity column = rect("Column", canvas, { 300, 400 });
+        auto& g = reg.Emplace<UILayoutGroupComponent>(column);
+        g.Padding = glm::vec4(10.0f);
+        g.Spacing = 10.0f;
+        Entity a = rect("A", column, { 0, 50 });
+        Entity bEl = rect("B", column, { 0, 50 });
+        reg.Emplace<UILayoutElementComponent>(bEl).FlexibleSize = { 0, 1 };
+        Entity c = rect("C", column, { 0, 50 });
+        {
+            auto& le = reg.Emplace<UILayoutElementComponent>(c);
+            le.FlexibleSize = { 0, 3 };
+            le.PreferredSize = { -1, 20 };
+        }
+        Entity d = rect("D", column, { 10, 10 });
+        reg.Emplace<UILayoutElementComponent>(d).IgnoreLayout = true;
+        reg.Get<UIRectComponent>(d).Position = { 500, 500 };
+        Entity e = rect("E", column, { 0, 999 });
+        {
+            auto& t = reg.Emplace<UITextComponent>(e);
+            t.Text = "hello <b>world</b> foo bar"; // tags take no room: 19 characters of 10 px
+            t.FontSize = 20.0f;
+            reg.Emplace<UIContentSizeFitterComponent>(e).Vertical = UIFitMode::PreferredSize;
+        }
+        // A text sized to fit on one line, and a group sized to its children.
+        Entity label = rect("Label", canvas, { 10, 10 });
+        reg.Get<UIRectComponent>(label).Position = { 400, 0 };
+        {
+            auto& t = reg.Emplace<UITextComponent>(label);
+            t.Text = "abcd";
+            t.FontSize = 20.0f;
+            auto& fit = reg.Emplace<UIContentSizeFitterComponent>(label);
+            fit.Horizontal = fit.Vertical = UIFitMode::PreferredSize;
+        }
+        Entity box = rect("Box", canvas, { 100, 10 });
+        reg.Get<UIRectComponent>(box).Position = { 400, 100 };
+        {
+            auto& bg = reg.Emplace<UILayoutGroupComponent>(box);
+            bg.Padding = glm::vec4(5.0f);
+            bg.Spacing = 4.0f;
+            reg.Emplace<UIContentSizeFitterComponent>(box).Vertical = UIFitMode::PreferredSize;
+        }
+        rect("Row1", box, { 0, 30 });
+        Entity row2 = rect("Row2", box, { 0, 30 });
+        reg.Emplace<UILayoutElementComponent>(row2).MinSize = { -1, 40 };
+        scene.UpdateTransforms();
+        UI::ComputeLayout(scene, { 800, 600 });
+        auto span = [&](Entity x) { auto& r = reg.Get<UIRectComponent>(x); return std::make_pair(r.ComputedMin, r.ComputedMax); };
+        // Inner height 380; used 50 + 50 + 20 + 24 + 3 spacings = 174; the 206 left goes 1 : 3 to B and C.
+        CHECK(Near(span(a).first.y, 10.0f) && Near(span(a).second.y, 60.0f) && Near(span(a).second.x, 290.0f));
+        CHECK(Near(span(bEl).first.y, 70.0f) && Near(span(bEl).second.y, 171.5f));
+        CHECK(Near(span(c).first.y, 181.5f) && Near(span(c).second.y, 356.0f));
+        CHECK(Near(span(e).first.y, 366.0f) && Near(span(e).second.y, 390.0f)); // one 24 px line
+        CHECK(Near(span(d).first, glm::vec2(500, 500)));                        // left where its anchors put it
+        CHECK(Near(span(label).second - span(label).first, glm::vec2(41, 24)));
+        CHECK(Near(span(box).second.y - span(box).first.y, 5 + 30 + 4 + 40 + 5.0f)); // Row2's min size counts
+        // Narrower: the text wraps to two lines and its rect grows.
+        reg.Get<UIRectComponent>(column).Size.x = 150;
+        UI::ComputeLayout(scene, { 800, 600 });
+        CHECK(Near(span(e).second.y - span(e).first.y, 48.0f));
+        UI::SetTextMeasure({});
+    }
+
     // UI Mask: children clipped to the mask's rect (drawing and hit testing); the mask itself is not.
     void TestUIMask()
     {
@@ -14268,6 +14345,7 @@ int main(int argc, char** argv)
     Run("World canvas navigation", TestWorldCanvasNavigation);
     Run("Multiple pointers", TestMultiplePointers);
     Run("UI mask", TestUIMask);
+    Run("UI layout elements", TestUILayoutElements);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

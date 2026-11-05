@@ -665,6 +665,27 @@ namespace Dimension
         int32_t Columns = 0;                  // Grid: fixed column count; 0 = as many as fit the width
     };
 
+    // How a UI Rect sits in its parent's UI Layout Group (like Unity's Layout Element): Min / Preferred Size override
+    // its size there (-1: unset, its Size or content is used), Flexible Size shares out the group's leftover length
+    // along its axis by weight, and Ignore Layout leaves it where its own anchors put it.
+    struct UILayoutElementComponent
+    {
+        bool IgnoreLayout = false;
+        glm::vec2 MinSize{ -1.0f };
+        glm::vec2 PreferredSize{ -1.0f };
+        glm::vec2 FlexibleSize{ 0.0f };
+    };
+
+    enum class UIFitMode : int32_t { Unconstrained = 0, PreferredSize = 1 };
+
+    // Sizes its UI Rect to its content (like Unity's Content Size Fitter): a UI Text's lines (wrapped at the rect's
+    // width when only the height fits), a layout group's children, or a Layout Element's preferred size.
+    struct UIContentSizeFitterComponent
+    {
+        UIFitMode Horizontal = UIFitMode::Unconstrained;
+        UIFitMode Vertical = UIFitMode::Unconstrained;
+    };
+
     enum class UIMaskShape : int32_t { Rect = 0, Image = 1 };
 
     // Clips its children (like Unity's Mask and RectMask2D): to its rect, or to its UI Image's shape (the texture's

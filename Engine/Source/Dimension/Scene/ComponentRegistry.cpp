@@ -573,6 +573,15 @@ namespace Dimension
             .Field("Background Color", &UIInputFieldComponent::BackgroundColor).As(FieldType::Color4)
             .Field("Text Color", &UIInputFieldComponent::TextColor).As(FieldType::Color4)
             .Field("Placeholder Color", &UIInputFieldComponent::PlaceholderColor).As(FieldType::Color4);
+        Register<UILayoutElementComponent>("UI Layout Element", "UI")
+            .Field("Ignore Layout", &UILayoutElementComponent::IgnoreLayout).Tooltip("Placed by its own anchors, not by the parent's layout group")
+            .Field("Min Size", &UILayoutElementComponent::MinSize).Speed(0.5f).Tooltip("-1: unset")
+            .Field("Preferred Size", &UILayoutElementComponent::PreferredSize).Speed(0.5f).Tooltip("-1: its Size (or its content's, with a Content Size Fitter)")
+            .Field("Flexible Size", &UILayoutElementComponent::FlexibleSize).Range(0.0f, 1000.0f).Speed(0.05f)
+                .Tooltip("Weight of the group's leftover length it takes (rows: x, columns: y)");
+        Register<UIContentSizeFitterComponent>("UI Content Size Fitter", "UI")
+            .Field("Horizontal Fit", &UIContentSizeFitterComponent::Horizontal).Enum({ "Unconstrained", "Preferred Size" })
+            .Field("Vertical Fit", &UIContentSizeFitterComponent::Vertical).Enum({ "Unconstrained", "Preferred Size" });
         Register<UIMaskComponent>("UI Mask", "UI")
             .Field("Shape", &UIMaskComponent::Shape).Enum({ "Rect", "Image" }).Tooltip("Image: children show only where this object's UI Image is opaque")
             .Field("Softness", &UIMaskComponent::Softness).Range(0.0f, 1000.0f).Speed(0.5f).Tooltip("Pixels over which the edges fade (horizontal, vertical)")
