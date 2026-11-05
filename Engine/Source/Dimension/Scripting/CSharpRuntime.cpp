@@ -26,6 +26,7 @@
 #include "Dimension/UI/UI.h"
 #include "Dimension/Animation/Timeline.h"
 #include "Dimension/Renderer/Environment.h"
+#include "Dimension/Renderer/Texture.h"
 #include "Dimension/Physics/Wind.h"
 #include <climits>
 #include <cmath>
@@ -300,6 +301,9 @@ namespace Dimension
             // Lighting and wind: 0 capture a Reflection Probe again, 1 light probes at v xyz (out: 27 SH floats, then the
             // weight at v[27]), 2 the wind at v xyz (out xyz), 3 evaluate SH: v 27 coefficients, normal at v[27..29] (out rgb).
             int (*EnvironmentOp)(void*, uint64_t, int, float*);
+            // Textures made by scripts: 0 create (size w x h, flags 1 linear, 2 point filter; out the GUID), 1 set its
+            // pixels (count RGBA8), 2 get them, 3 destroy, 4 a texture's size (any texture; out w, h). 0 when it fails.
+            int (*TextureOp)(void*, int, uint64_t*, int*, uint32_t*, int, int);
         };
 
         // Background scene loads started from C#, by id.
@@ -2186,6 +2190,37 @@ namespace Dimension
                 if (auto old = AssetManager::GetTimeline(AssetHandle(before))) Timeline::Release(scene, Unpack(e), *old);
                 tl->Bindings.clear();
                 tl->Time = 0.0f;
+            };
+            a.TextureOp = [](void* s, int op, uint64_t* guid, int* size, uint32_t* pixels, int count, int flags) -> int {
+                switch (op)
+                {
+                case 0:
+                {
+                    AssetHandle h = AssetManager::CreateRuntimeTexture((uint32_t)std::max(size[0], 1), (uint32_t)std::max(size[1], 1),
+                                                                       !(flags & 1), (flags & 2) != 0, s);
+                    *guid = (uint64_t)h;
+                    return h.IsValid() ? 1 : 0;
+                }
+                case 1: return AssetManager::SetRuntimeTexturePixels(AssetHandle(*guid), pixels, (size_t)std::max(count, 0)) ? 1 : 0;
+                case 2:
+                {
+                    const auto* px = AssetManager::GetRuntimeTexturePixels(AssetHandle(*guid));
+                    if (!px || (size_t)count != px->size()) return 0;
+                    std::memcpy(pixels, px->data(), px->size() * 4);
+                    return 1;
+                }
+                case 3: AssetManager::DestroyRuntimeTexture(AssetHandle(*guid)); return 1;
+                default:
+                {
+                    glm::uvec2 sz(0);
+                    if (AssetManager::GetRuntimeTexturePixels(AssetHandle(*guid), &sz)) {}
+                    else if (AssetManager::GetRenderTextureSize(AssetHandle(*guid)) != glm::uvec2(0)) sz = AssetManager::GetRenderTextureSize(AssetHandle(*guid));
+                    else if (auto tex = AssetManager::GetTexture(AssetHandle(*guid))) sz = { tex->GetWidth(), tex->GetHeight() };
+                    size[0] = (int)sz.x;
+                    size[1] = (int)sz.y;
+                    return sz.x > 0 ? 1 : 0;
+                }
+                }
             };
             a.EnvironmentOp = [](void* s, uint64_t e, int op, float* v) -> int {
                 switch (op)

@@ -9777,6 +9777,36 @@ namespace
             CHECK(glm::dot(f, glm::vec3(-1, 0, 0)) > 0.999f);
             rt->OnRuntimeStop();
         }
+        // C# Texture2D: the Sandbox's PlasmaScreen makes a texture, draws it and shows it on its Mesh Renderer; its pixels
+        // change as it animates, and it goes when play stops.
+        {
+            fs::path pdir = fs::temp_directory_path() / "dimension_texture_cs";
+            fs::remove_all(pdir);
+            fs::create_directories(pdir / "Assets");
+            AssetManager::Init(pdir / "Assets");
+            Scene ps("Plasma");
+            Entity panel = ps.CreateEntity("Panel");
+            ps.GetRegistry().Emplace<MeshRendererComponent>(panel);
+            auto& plasma = ps.GetRegistry().Emplace<ScriptComponent>(panel).Add("Game.PlasmaScreen");
+            plasma.Fields["Size"] = 16;
+            auto rt = ps.Clone();
+            rt->OnRuntimeStart();
+            rt->OnUpdateRuntime(0.05f);
+            AssetHandle tex = rt->GetRegistry().Get<MeshRendererComponent>(panel).Texture;
+            glm::uvec2 size(0);
+            const auto* px = AssetManager::GetRuntimeTexturePixels(tex, &size);
+            CHECK(AssetManager::IsRuntimeTexture(tex) && px && size == glm::uvec2(16, 16));
+            std::vector<uint32_t> before = px ? *px : std::vector<uint32_t>{};
+            bool colored = false;
+            for (uint32_t p : before) colored |= p != 0xFFFFFFFFu;
+            for (int i = 0; i < 10; ++i) rt->OnUpdateRuntime(0.05f);
+            px = AssetManager::GetRuntimeTexturePixels(tex);
+            CHECK(colored && px && *px != before);
+            rt->OnRuntimeStop();
+            CHECK(!AssetManager::IsRuntimeTexture(tex));
+            AssetManager::Shutdown();
+            fs::remove_all(pdir);
+        }
         // C# Timeline control: the Sandbox's TimelineStatus hears Played (play on awake) / Paused / Stopped, its Opened()
         // is called by the timeline event of that name, and P pauses and resumes it.
         {

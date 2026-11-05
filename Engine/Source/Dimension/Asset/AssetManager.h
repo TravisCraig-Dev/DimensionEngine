@@ -98,6 +98,14 @@ namespace Dimension
         static bool IsRuntimeMaterial(AssetHandle handle);
         static void DestroyRuntimeMaterial(AssetHandle handle);
         static void ReleaseRuntimeMaterials(const void* owner);
+        // Textures made while playing (C# new Texture2D): RGBA8 pixels (rows from the top) kept here, the GPU texture
+        // made when first shown and again after SetRuntimeTexturePixels. Owned like runtime materials.
+        static AssetHandle CreateRuntimeTexture(uint32_t width, uint32_t height, bool srgb, bool pointFilter, const void* owner);
+        static bool IsRuntimeTexture(AssetHandle handle);
+        static bool SetRuntimeTexturePixels(AssetHandle handle, const uint32_t* rgba8, size_t count);
+        static const std::vector<uint32_t>* GetRuntimeTexturePixels(AssetHandle handle, glm::uvec2* size = nullptr);
+        static void DestroyRuntimeTexture(AssetHandle handle);
+        static void ReleaseRuntimeTextures(const void* owner);
         static Ref<Font> GetFont(AssetHandle handle); // falls back to the built-in font
         // Animator controllers are editable in place; call SaveAnimatorController after changing one.
         static Ref<AnimatorController> GetAnimatorController(AssetHandle handle);

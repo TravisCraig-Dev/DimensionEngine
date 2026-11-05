@@ -41,6 +41,14 @@ namespace Dimension
             std::unordered_map<AssetHandle, std::shared_ptr<const MeshData>> MeshDatas;
             std::unordered_map<AssetHandle, Ref<Material>> Materials;
             std::unordered_map<AssetHandle, const void*> RuntimeMaterials; // made while playing: their owners
+            struct RuntimeTexture
+            {
+                uint32_t Width = 1, Height = 1;
+                bool SRGB = true, Point = false, Dirty = true;
+                std::vector<uint32_t> Pixels;
+                const void* Owner = nullptr;
+            };
+            std::unordered_map<AssetHandle, RuntimeTexture> RuntimeTextures;
             std::unordered_map<AssetHandle, Ref<Font>> Fonts;
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
             std::unordered_map<AssetHandle, Ref<AnimatorOverrideController>> Overrides;
@@ -467,6 +475,21 @@ namespace Dimension
     Ref<Texture2D> AssetManager::GetTexture(AssetHandle handle)
     {
         if (!handle.IsValid()) return nullptr;
+        if (auto rt = s->RuntimeTextures.find(handle); rt != s->RuntimeTextures.end())
+        {
+            // Made (again) from its pixels when they changed; the old image is freed once the GPU is done with it.
+            auto& r = rt->second;
+            if (r.Dirty || !s->Textures.contains(handle))
+            {
+                TextureSettings ts;
+                ts.GenerateMips = false;
+                ts.SRGB = r.SRGB;
+                ts.Filter = r.Point ? TextureFilter::Point : TextureFilter::Bilinear;
+                s->Textures[handle] = MakeRef<Texture2D>(r.Pixels.data(), r.Width, r.Height, ts, "Runtime Texture");
+                r.Dirty = false;
+            }
+            return s->Textures[handle];
+        }
         if (auto it = s->Textures.find(handle); it != s->Textures.end()) return it->second;
         auto* meta = GetMetadata(handle);
         if (meta && meta->Type == AssetType::RenderTexture)
@@ -738,6 +761,56 @@ namespace Dimension
             if (it->second != owner) { ++it; continue; }
             s->Materials.erase(it->first);
             it = s->RuntimeMaterials.erase(it);
+        }
+    }
+
+    AssetHandle AssetManager::CreateRuntimeTexture(uint32_t width, uint32_t height, bool srgb, bool pointFilter, const void* owner)
+    {
+        if (!s) return AssetHandle::None();
+        AssetHandle handle; // a new random one
+        auto& r = s->RuntimeTextures[handle];
+        r.Width = std::clamp(width, 1u, 8192u);
+        r.Height = std::clamp(height, 1u, 8192u);
+        r.SRGB = srgb;
+        r.Point = pointFilter;
+        r.Owner = owner;
+        r.Pixels.assign((size_t)r.Width * r.Height, 0xFFFFFFFFu); // white, like Unity's new Texture2D's gray-ish default
+        return handle;
+    }
+
+    bool AssetManager::IsRuntimeTexture(AssetHandle handle) { return s && s->RuntimeTextures.contains(handle); }
+
+    bool AssetManager::SetRuntimeTexturePixels(AssetHandle handle, const uint32_t* rgba8, size_t count)
+    {
+        auto it = s ? s->RuntimeTextures.find(handle) : decltype(s->RuntimeTextures)::iterator{};
+        if (!s || it == s->RuntimeTextures.end() || count != it->second.Pixels.size()) return false;
+        std::memcpy(it->second.Pixels.data(), rgba8, count * 4);
+        it->second.Dirty = true;
+        return true;
+    }
+
+    const std::vector<uint32_t>* AssetManager::GetRuntimeTexturePixels(AssetHandle handle, glm::uvec2* size)
+    {
+        auto it = s ? s->RuntimeTextures.find(handle) : decltype(s->RuntimeTextures)::iterator{};
+        if (!s || it == s->RuntimeTextures.end()) return nullptr;
+        if (size) *size = { it->second.Width, it->second.Height };
+        return &it->second.Pixels;
+    }
+
+    void AssetManager::DestroyRuntimeTexture(AssetHandle handle)
+    {
+        if (!s || !s->RuntimeTextures.erase(handle)) return;
+        s->Textures.erase(handle);
+    }
+
+    void AssetManager::ReleaseRuntimeTextures(const void* owner)
+    {
+        if (!s) return;
+        for (auto it = s->RuntimeTextures.begin(); it != s->RuntimeTextures.end();)
+        {
+            if (it->second.Owner != owner) { ++it; continue; }
+            s->Textures.erase(it->first);
+            it = s->RuntimeTextures.erase(it);
         }
     }
 

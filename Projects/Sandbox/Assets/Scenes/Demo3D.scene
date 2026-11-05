@@ -1754,6 +1754,65 @@
       }
     },
     {
+      "guid": 700091,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Plasma Panel",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -7.5,
+            2.2,
+            -5
+          ],
+          "Rotation": [
+            1.29,
+            0.35,
+            0
+          ],
+          "Scale": [
+            0.3,
+            1,
+            0.3
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 3,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.1,
+          "Emission": 0.6,
+          "Cast Shadows": false
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.PlasmaScreen",
+              "Fields": {
+                "Size": 48,
+                "FramesPerSecond": 15.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "guid": 710001,
       "parent": 0,
       "components": {

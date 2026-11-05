@@ -804,6 +804,7 @@ namespace Dimension
     {
         DebugDraw::Clear();
         AssetManager::ReleaseRuntimeMaterials(this); // the materials scripts made while it played
+        AssetManager::ReleaseRuntimeTextures(this);  // and their textures
         if (m_WindowListener)
         {
             AppRuntime::RemoveWindowListener(m_WindowListener);

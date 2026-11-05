@@ -192,6 +192,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, int, ulong, byte**, ulong> TimelineTrack;  // see Timeline in Components.cs
         public delegate* unmanaged<IntPtr, ulong, ulong, void> TimelineAssetChanged;
         public delegate* unmanaged<IntPtr, ulong, int, float*, int> EnvironmentOp;  // see LightProbes / WindZone in Components.cs
+        public delegate* unmanaged<IntPtr, int, ulong*, int*, uint*, int, int, int> TextureOp;  // see Texture2D in Assets.cs
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

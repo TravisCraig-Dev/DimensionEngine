@@ -1,4 +1,6 @@
+using System;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Dimension.Interop;
 
 namespace Dimension
@@ -36,10 +38,91 @@ namespace Dimension
         public static implicit operator ulong(Prefab a) => a.Guid;
     }
 
-    public readonly record struct Texture(ulong Guid) : IAssetReference
+    public readonly unsafe record struct Texture(ulong Guid) : IAssetReference
     {
         public bool IsValid => Guid != 0;
         public static implicit operator ulong(Texture a) => a.Guid;
+        /// <summary>Its size in pixels (texture assets, render textures and textures made by scripts); 0 when unknown.</summary>
+        public int Width => Size().X;
+        public int Height => Size().Y;
+        private (int X, int Y) Size()
+        {
+            ulong guid = Guid;
+            int* s = stackalloc int[2];
+            return Native.Api.TextureOp(Native.CurrentScene, 4, &guid, s, null, 0, 0) != 0 ? (s[0], s[1]) : (0, 0);
+        }
+    }
+
+    /// <summary>How a texture made by a script is sampled between pixels (Unity's FilterMode).</summary>
+    public enum FilterMode { Bilinear, Point }
+
+    /// <summary>
+    /// A texture made by a script (Unity's Texture2D): pixels set on the CPU with SetPixel / SetPixels, shown once
+    /// <see cref="Apply"/> sends them to the GPU. Assign it (or its <see cref="Texture"/>) wherever a texture goes: a
+    /// Mesh Renderer's Albedo, a Sprite Renderer, a UI Image, a material's maps. Pixels count from the top-left (as the
+    /// screen and texture files do here; Unity's start at the bottom-left). It lasts until play stops or Destroy().
+    /// </summary>
+    public sealed unsafe class Texture2D
+    {
+        private readonly Color32[] m_Pixels;
+        public int Width { get; }
+        public int Height { get; }
+        public ulong Guid { get; private set; }
+        public Texture Texture => new(Guid);
+        public static implicit operator Texture(Texture2D t) => t?.Texture ?? default;
+
+        /// <param name="linear">Data rather than colors (normal maps, masks): not sRGB.</param>
+        public Texture2D(int width, int height, FilterMode filter = FilterMode.Bilinear, bool linear = false)
+        {
+            Width = Math.Clamp(width, 1, 8192);
+            Height = Math.Clamp(height, 1, 8192);
+            int* size = stackalloc int[2] { Width, Height };
+            ulong guid = 0;
+            Native.Api.TextureOp(Native.CurrentScene, 0, &guid, size, null, 0, (linear ? 1 : 0) | (filter == FilterMode.Point ? 2 : 0));
+            Guid = guid;
+            m_Pixels = new Color32[Width * Height];
+            Array.Fill(m_Pixels, new Color32(255, 255, 255, 255));
+        }
+
+        public Color32 GetPixel32(int x, int y) => m_Pixels[Index(x, y)];
+        public Color GetPixel(int x, int y) => m_Pixels[Index(x, y)];
+        public void SetPixel(int x, int y, Color color) => m_Pixels[Index(x, y)] = color;
+        public void SetPixel32(int x, int y, Color32 color) => m_Pixels[Index(x, y)] = color;
+        /// <summary>Every pixel, row by row from the top.</summary>
+        public Color32[] GetPixels32() => (Color32[])m_Pixels.Clone();
+        public void SetPixels32(Color32[] pixels) => Array.Copy(pixels, m_Pixels, Math.Min(pixels.Length, m_Pixels.Length));
+        public Color[] GetPixels() => Array.ConvertAll(m_Pixels, c => (Color)c);
+        public void SetPixels(Color[] pixels) { for (int i = 0; i < Math.Min(pixels.Length, m_Pixels.Length); ++i) m_Pixels[i] = pixels[i]; }
+        /// <summary>Fills the whole texture with one color.</summary>
+        public void Fill(Color color) => Array.Fill(m_Pixels, (Color32)color);
+        private int Index(int x, int y) => Math.Clamp(y, 0, Height - 1) * Width + Math.Clamp(x, 0, Width - 1);
+
+        /// <summary>Sends the pixels set since the last Apply to the GPU (where it is shown from the next frame).</summary>
+        public void Apply()
+        {
+            ulong guid = Guid;
+            fixed (Color32* p = m_Pixels) Native.Api.TextureOp(Native.CurrentScene, 1, &guid, null, (uint*)p, m_Pixels.Length, 0);
+        }
+        /// <summary>Frees it now (otherwise when play stops).</summary>
+        public void Destroy()
+        {
+            ulong guid = Guid;
+            Native.Api.TextureOp(Native.CurrentScene, 3, &guid, null, null, 0, 0);
+            Guid = 0;
+        }
+    }
+
+    /// <summary>A color of four bytes (Unity's Color32), sRGB-encoded as texture pixels are.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Color32
+    {
+        public byte R, G, B, A;
+        public Color32(byte r, byte g, byte b, byte a) { R = r; G = g; B = b; A = a; }
+        public static implicit operator Color(Color32 c) => new(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f);
+        public static implicit operator Color32(Color c) =>
+            new((byte)Math.Clamp((int)MathF.Round(c.R * 255f), 0, 255), (byte)Math.Clamp((int)MathF.Round(c.G * 255f), 0, 255),
+                (byte)Math.Clamp((int)MathF.Round(c.B * 255f), 0, 255), (byte)Math.Clamp((int)MathF.Round(c.A * 255f), 0, 255));
+        public override string ToString() => $"RGBA({R}, {G}, {B}, {A})";
     }
 
     /// <summary>A timeline asset (.timeline): what a <see cref="Dimension.Timeline"/> component plays (Unity's
