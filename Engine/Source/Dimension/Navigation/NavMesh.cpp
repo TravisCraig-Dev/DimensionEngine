@@ -1639,7 +1639,15 @@ namespace Dimension
                 };
                 if (agent.Traversing)
                 {
-                    // Crossing an off-mesh link: straight from end to end, Arc Height up in the middle.
+                    // Crossing an off-mesh link: straight from end to end, Arc Height up in the middle. With the link's
+                    // animation and Match Animation, it takes as long as that animation (known once it has played a frame).
+                    if (agent.TraverseMatch)
+                        if (auto* an = reg.TryGet<AnimatorComponent>(mv.E); an && an->Info.Valid && an->Info.Length > 0.0f &&
+                                                                              (an->CurrentState == agent.TraverseAnimation || an->Clip == agent.TraverseAnimation))
+                        {
+                            agent.TraverseDuration = std::max(an->Info.Length / std::max(std::abs(an->Info.Speed * an->Speed), 0.01f), 0.1f);
+                            agent.TraverseMatch = false;
+                        }
                     agent.TraverseTime += dt;
                     float t = std::clamp(agent.TraverseTime / std::max(agent.TraverseDuration, 1e-3f), 0.0f, 1.0f);
                     mv.Ground = glm::mix(agent.TraverseFrom, agent.TraverseTo, t) + glm::vec3(0.0f, agent.TraverseArc * 4.0f * t * (1.0f - t), 0.0f);
@@ -1650,6 +1658,13 @@ namespace Dimension
                     if (t >= 1.0f)
                     {
                         agent.Traversing = false;
+                        agent.TraverseMatch = false;
+                        if (!agent.TraverseAnimation.empty())
+                        {
+                            // Back to what it was doing (its controller's state; without one, the clip it played).
+                            if (!agent.TraverseReturnState.empty()) scene.PlayAnimatorState(mv.E, agent.TraverseReturnState, 0, 0.2f, 0.0f, false);
+                            agent.TraverseAnimation.clear();
+                        }
                         if (agent.CrossMesh && agent.Corner + 1 >= agent.Path.size())
                         {
                             // Over onto the other surface: on its mesh from here, and a path there.
@@ -1721,6 +1736,19 @@ namespace Dimension
                         agent.TraverseArc = agent.PathLinks[agent.Corner - 1];
                         agent.TraverseTime = 0.0f;
                         agent.TraverseDuration = std::max(glm::distance(agent.TraverseFrom, agent.TraverseTo) / std::max(agent.Speed, 0.1f), 0.25f);
+                        // The link's animation (a jump, a climb) on the agent's Animator.
+                        agent.TraverseAnimation.clear();
+                        agent.TraverseMatch = false;
+                        const auto* link = !owner.IsNull() && scene.IsValid(owner) ? reg.TryGet<OffMeshLinkComponent>(owner) : nullptr;
+                        if (auto* an = reg.TryGet<AnimatorComponent>(mv.E); link && an && !link->Animation.empty())
+                        {
+                            agent.TraverseReturnState = an->Controller.IsValid() ? an->CurrentState : an->Clip;
+                            if (scene.PlayAnimatorState(mv.E, link->Animation, 0, 0.1f, 0.0f, false))
+                            {
+                                agent.TraverseAnimation = link->Animation;
+                                agent.TraverseMatch = link->MatchAnimation;
+                            }
+                        }
                         agent.PathLinks[agent.Corner - 1] = -1.0f;
                         agent.DesiredVelocity = glm::vec3(0.0f);
                         continue;

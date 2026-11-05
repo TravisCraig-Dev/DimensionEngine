@@ -1026,6 +1026,11 @@ namespace Dimension
         // A door: while not Activated, agents still take paths through it and wait at its start until it is
         // (without Agents Wait a closed link is no way at all).
         bool AgentsWait = false;
+        // Played on a crossing agent's Animator (a state of its controller, or a clip of its model): a jump or a climb.
+        // With Match Animation the crossing takes as long as the animation; afterwards the Animator fades back to the
+        // state it was in.
+        std::string Animation;
+        bool MatchAnimation = true;
     };
 
     // A NavMesh Agent (like Unity's): walks the baked navigation mesh to its destination along the shortest path,
@@ -1067,6 +1072,9 @@ namespace Dimension
         bool Traversing = false;     // crossing an off-mesh link
         glm::vec3 TraverseFrom{ 0.0f }, TraverseTo{ 0.0f };
         float TraverseTime = 0.0f, TraverseDuration = 0.0f, TraverseArc = 0.0f;
+        std::string TraverseAnimation;  // the link's animation playing while crossing ("" none)
+        std::string TraverseReturnState; // the Animator state to fade back to afterwards
+        bool TraverseMatch = false;     // the crossing's duration still to be taken from the animation
         NavPathStatus PathStatus = NavPathStatus::Invalid;
         glm::vec3 Velocity{ 0.0f };
         glm::vec3 DesiredVelocity{ 0.0f }; // the velocity it steers for (with Root Motion, what the animation is asked for)

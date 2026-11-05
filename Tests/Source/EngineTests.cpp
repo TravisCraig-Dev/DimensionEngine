@@ -3935,9 +3935,11 @@ namespace
         link.Start = { 6.5f, 0.0f, 10.0f };
         link.End = { 9.0f, 1.0f, 10.0f };
         link.ArcHeight = 1.0f;
+        link.Animation = "Jump"; // played on the hopper's Animator while it crosses
         Entity hopper = scene.CreateEntity("Hopper");
         reg.Get<TransformComponent>(hopper).Position = { 0.0f, 0.0f, 10.0f };
         reg.Emplace<NavMeshAgentComponent>(hopper).Speed = 4.0f;
+        reg.Emplace<AnimatorComponent>(hopper).Clip = "Walk";
         scene.UpdateTransforms();
         auto rt = scene.Clone();
         rt->OnRuntimeStart();
@@ -3954,14 +3956,17 @@ namespace
         CHECK(Navigation::FindPath(mesh, { 0.0f, 0.0f, 10.0f }, { 10.0f, 1.0f, 10.5f }, corners) == NavPathStatus::Partial); // without links
         CHECK(Navigation::SetDestination(*rt, hopper, { 10.0f, 1.0f, 10.5f }));
         float peak = 0.0f;
-        bool crossed = false;
+        bool crossed = false, jumped = true;
         for (int i = 0; i < 360; ++i)
         {
             rt->OnUpdateRuntime(1.0f / 60.0f);
             peak = std::max(peak, rr.Get<TransformComponent>(hopper).Position.y);
-            crossed |= rr.Get<NavMeshAgentComponent>(hopper).Traversing;
+            bool across = rr.Get<NavMeshAgentComponent>(hopper).Traversing;
+            crossed |= across;
+            if (across) jumped &= rr.Get<AnimatorComponent>(hopper).Clip == "Jump"; // the link's animation while crossing
         }
-        CHECK(crossed && peak > 1.3f && Near(rr.Get<TransformComponent>(hopper).Position, { 10.0f, 1.0f, 10.5f }, 0.1f));
+        CHECK(crossed && jumped && peak > 1.3f && Near(rr.Get<TransformComponent>(hopper).Position, { 10.0f, 1.0f, 10.5f }, 0.1f));
+        CHECK(rr.Get<AnimatorComponent>(hopper).Clip == "Walk"); // back to its own afterwards
         // One way: from the platform there is no way back down.
         rr.Get<OffMeshLinkComponent>(jump).Bidirectional = false;
         CHECK(Navigation::FindPath(mesh, { 10.0f, 1.0f, 10.0f }, { 0.0f, 0.0f, 10.0f }, corners, Navigation::LinksOn(*rt, mesh)) == NavPathStatus::Partial);

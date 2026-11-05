@@ -2110,6 +2110,26 @@ namespace Dimension
     }
 
     /// <summary>Walks the baked navigation mesh (NavMesh Surface) to a destination, steering around other agents.</summary>
+    /// <summary>
+    /// A link agents cross between two points the navigation mesh does not join (Unity's OffMeshLink / NavMeshLink): a
+    /// jump, a ladder, a door (Activated). Animation plays on a crossing agent's Animator (with MatchAnimation, the
+    /// crossing takes as long as it).
+    /// </summary>
+    public unsafe class OffMeshLink : Component
+    {
+        internal override string NativeName => "Off Mesh Link";
+        public Vector3 Start { get => GetVector3("Start"); set => SetVector3("Start", value); }
+        public Vector3 End { get => GetVector3("End"); set => SetVector3("End", value); }
+        public bool Bidirectional { get => GetBool("Bidirectional"); set => SetBool("Bidirectional", value); }
+        public bool Activated { get => GetBool("Activated"); set => SetBool("Activated", value); }
+        public float ArcHeight { get => GetFloat("Arc Height"); set => SetFloat("Arc Height", value); }
+        public float CostModifier { get => GetFloat("Cost Modifier"); set => SetFloat("Cost Modifier", value); }
+        public bool AgentsWait { get => GetBool("Agents Wait"); set => SetBool("Agents Wait", value); }
+        /// <summary>An Animator state (or clip) played while an agent crosses ("" none).</summary>
+        public string Animation { get => GetString("Animation"); set => SetString("Animation", value ?? ""); }
+        public bool MatchAnimation { get => GetBool("Match Animation"); set => SetBool("Match Animation", value); }
+    }
+
     public unsafe class NavMeshAgent : Component
     {
         internal override string NativeName => "NavMesh Agent";

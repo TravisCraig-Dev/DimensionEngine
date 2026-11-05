@@ -806,7 +806,10 @@ namespace Dimension
             .Field("Activated", &OffMeshLinkComponent::Activated)
             .Field("Arc Height", &OffMeshLinkComponent::ArcHeight).Range(0.0f, 20.0f).Speed(0.01f).Tooltip("How high agents jump crossing it (0 = straight, a ladder)")
             .Field("Cost Modifier", &OffMeshLinkComponent::CostModifier).Range(0.0f, 100.0f).Speed(0.01f).Tooltip("Its length counts this many times when choosing paths")
-            .Field("Agents Wait", &OffMeshLinkComponent::AgentsWait).Tooltip("A door: while not Activated, agents still go this way and wait at it until it is");
+            .Field("Agents Wait", &OffMeshLinkComponent::AgentsWait).Tooltip("A door: while not Activated, agents still go this way and wait at it until it is")
+            .Field("Animation", &OffMeshLinkComponent::Animation)
+                .Tooltip("Played on a crossing agent's Animator: a state of its controller or a clip of its model (a jump, a climb)")
+            .Field("Match Animation", &OffMeshLinkComponent::MatchAnimation).Tooltip("The crossing takes as long as the animation");
         Register<NavMeshAgentComponent>("NavMesh Agent", "Navigation")
             .Field("Speed", &NavMeshAgentComponent::Speed).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Top speed, m/s")
             .Field("Angular Speed", &NavMeshAgentComponent::AngularSpeed).Range(0.0f, 3600.0f).Speed(1.0f).Tooltip("Turning, degrees per second")
