@@ -318,7 +318,10 @@ namespace Editor
             ImVec2 ClipMin, ClipMax;
             float HandleRadius = 6.0f;
             int View = 0; // 0 the Game view, 1 the Scene view: a drag belongs to the view it started in
+            Entity Canvas = Entity::Null(); // a World Space canvas (Null: the screen's)
         };
+        // A selected World Space canvas (or something under it) edited on its panel in the Scene view.
+        bool UpdateWorldCanvasEditing(ImVec2 origin, ImVec2 size);
         int m_UIRectDragView = 0;
         void UpdateUIRectEditing(const UIViewMapping& map, bool hovered);
         // Canvases in the Scene view: drawn into their own image (at the Game view's size) shown on the XY plane from

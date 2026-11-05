@@ -834,7 +834,20 @@ namespace Editor
         if (!scene.GetRegistry().Has<MeshRendererComponent>(m_Ctx.Selected)) HandleBounds(scene, m_Ctx.Selected, center, radius);
         // UI: its rectangle where the Scene view shows the canvas (the XY plane from the origin; the whole canvas for one).
         auto& reg = scene.GetRegistry();
-        if (m_ShowUIInSceneView && (reg.Has<UIRectComponent>(m_Ctx.Selected) || reg.Has<CanvasComponent>(m_Ctx.Selected)))
+        Entity worldCanvas = Entity::Null();
+        for (Entity e = m_Ctx.Selected; !e.IsNull(); e = scene.GetParent(e))
+            if (auto* c = reg.TryGet<CanvasComponent>(e))
+            {
+                if (c->RenderMode == CanvasRenderMode::WorldSpace) worldCanvas = e;
+                break;
+            }
+        if (!worldCanvas.IsNull())
+        {
+            // A World Space panel: frame the panel.
+            center = reg.Get<TransformComponent>(worldCanvas).GetWorldPosition();
+            radius = std::max(glm::length(reg.Get<CanvasComponent>(worldCanvas).WorldSize()) * 0.5f, 0.2f);
+        }
+        else if (m_ShowUIInSceneView && (reg.Has<UIRectComponent>(m_Ctx.Selected) || reg.Has<CanvasComponent>(m_Ctx.Selected)))
         {
             glm::vec2 layout = m_GameTarget ? glm::vec2((float)m_GameTarget->GetWidth(), (float)m_GameTarget->GetHeight()) : glm::vec2(1920.0f, 1080.0f);
             Dimension::UI::ComputeLayout(scene, layout);
@@ -3078,7 +3091,8 @@ namespace Editor
         bool uiEditing = !measuring && !tilePainting && !lineEditing && !vertexSnapping && !handles && DrawSceneViewUI(origin, avail);
         bool gizmoHovered = measuring || lineEditing || vertexSnapping || handles || uiEditing;
         // UI elements are moved by their rect handles on the canvas, not the transform gizmo.
-        bool uiSelected = m_SceneUITarget && m_Ctx.HasValidSelection() && scene.GetRegistry().Has<UIRectComponent>(m_Ctx.Selected);
+        bool uiSelected = m_Ctx.HasValidSelection() && scene.GetRegistry().Has<UIRectComponent>(m_Ctx.Selected) &&
+                          (m_SceneUITarget || !scene.GetParent(m_Ctx.Selected).IsNull());
         if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !uiSelected && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
             !measuring && m_HandleDrag == 0)
         {
@@ -3250,8 +3264,64 @@ namespace Editor
         ImGui::End();
     }
 
+    bool EditorLayer::UpdateWorldCanvasEditing(ImVec2 origin, ImVec2 size)
+    {
+        if (!m_Ctx.HasValidSelection() || m_Ctx.IsPlaying()) return false;
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        Entity canvasEntity = Entity::Null();
+        for (Entity e = m_Ctx.Selected; !e.IsNull(); e = scene.GetParent(e))
+            if (auto* c = reg.TryGet<CanvasComponent>(e))
+            {
+                if (c->RenderMode == CanvasRenderMode::WorldSpace) canvasEntity = e;
+                break;
+            }
+        if (canvasEntity.IsNull()) return false;
+        const auto& canvas = reg.Get<CanvasComponent>(canvasEntity);
+        glm::mat4 world = reg.Get<TransformComponent>(canvasEntity).World;
+        glm::vec2 layout = canvas.PixelSize, half = canvas.WorldSize() * 0.5f;
+        float ppu = std::max(canvas.PixelsPerUnit, 1e-3f);
+        glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
+        bool behind = false;
+        // The panel's pixels on its plane: centered on the object, +Y up, facing +Z.
+        auto toScreen = [&](glm::vec2 px) {
+            glm::vec4 p = world * glm::vec4(px.x / ppu - half.x, half.y - px.y / ppu, 0.0f, 1.0f);
+            glm::vec4 c = viewProj * p;
+            if (c.w <= 1e-5f) { behind = true; c.w = 1e-5f; }
+            glm::vec2 ndc = glm::vec2(c) / c.w;
+            return ImVec2(origin.x + (ndc.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - ndc.y * 0.5f) * size.y);
+        };
+        glm::mat4 inv = glm::inverse(viewProj), toLocal = glm::inverse(world);
+        auto toCanvas = [&](ImVec2 mouse) {
+            glm::vec2 ndc((mouse.x - origin.x) / size.x * 2.0f - 1.0f, 1.0f - (mouse.y - origin.y) / size.y * 2.0f);
+            glm::vec4 a = inv * glm::vec4(ndc, 0.0f, 1.0f), b = inv * glm::vec4(ndc, 1.0f, 1.0f);
+            glm::vec3 p0 = glm::vec3(toLocal * glm::vec4(glm::vec3(a) / a.w, 1.0f)), p1 = glm::vec3(toLocal * glm::vec4(glm::vec3(b) / b.w, 1.0f));
+            glm::vec3 d = p1 - p0;
+            if (std::abs(d.z) < 1e-8f) return glm::vec2(-1e6f);
+            glm::vec3 hit = p0 + d * (-p0.z / d.z);
+            return glm::vec2((hit.x + half.x) * ppu, (half.y - hit.y) * ppu);
+        };
+        toScreen({ 0.0f, 0.0f });
+        if (behind) return false;
+        UIViewMapping map;
+        map.Layout = layout;
+        map.ToCanvas = toCanvas;
+        map.ToScreen = toScreen;
+        map.ClipMin = origin;
+        map.ClipMax = ImVec2(origin.x + size.x, origin.y + size.y);
+        ImVec2 a = toScreen({ 0.0f, 0.0f }), b = toScreen({ 100.0f, 0.0f });
+        map.HandleRadius = 6.0f * 100.0f / std::max(std::hypot(b.x - a.x, b.y - a.y), 1e-3f);
+        map.View = 1;
+        map.Canvas = canvasEntity;
+        glm::vec2 m = toCanvas(ImGui::GetMousePos());
+        bool over = m_SceneViewHovered && !m_Camera.IsControlling() && glm::all(glm::greaterThanEqual(m, glm::vec2(0.0f))) && glm::all(glm::lessThanEqual(m, layout));
+        UpdateUIRectEditing(map, over);
+        return over || (m_UIRectDrag >= 0 && m_UIRectDragView == 1);
+    }
+
     bool EditorLayer::DrawSceneViewUI(ImVec2 origin, ImVec2 size)
     {
+        if (UpdateWorldCanvasEditing(origin, size)) return true;
         if (!m_SceneUITarget) return false;
         glm::vec2 layout((float)m_SceneUITarget->GetWidth(), (float)m_SceneUITarget->GetHeight());
         glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
@@ -3335,7 +3405,7 @@ namespace Editor
     {
         Scene& scene = m_Ctx.ActiveScene();
         auto& reg = scene.GetRegistry();
-        auto order = Dimension::UI::ComputeLayout(scene, map.Layout);
+        auto order = Dimension::UI::ComputeLayout(scene, map.Layout, map.Canvas);
         glm::vec2 m = map.ToCanvas(ImGui::GetMousePos());
         Entity sel = m_Ctx.HasValidSelection() ? m_Ctx.Selected : Entity::Null();
         auto* rect = sel.IsNull() ? nullptr : reg.TryGet<UIRectComponent>(sel);
