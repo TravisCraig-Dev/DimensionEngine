@@ -1,4 +1,5 @@
 #include "../AssetPreviews.h"
+#include <Dimension/Renderer/PostProcess.h>
 #include <Dimension/Renderer/SpriteAtlas.h>
 #include <Dimension/Asset/DataAsset.h>
 #include "Panels.h"
@@ -577,6 +578,22 @@ namespace Editor
                     if (auto* meta = AssetManager::GetMetadata(m_Ctx.SelectedAsset); meta && meta->Type == AssetType::AnimatorController) base = m_Ctx.SelectedAsset;
                     AssetHandle h = AssetManager::CreateAnimatorOverride(UniquePath(m_Current / "New Override.overrideController"), base);
                     if (h.IsValid()) m_Ctx.SelectAsset(h);
+                }
+                if (ImGui::MenuItem("New Color Lookup Texture"))
+                {
+                    // A neutral 16-slice strip to grade in an image editor (a screenshot graded alongside it shows the look).
+                    fs::path p = UniquePath(m_Current / "New Color Lookup.png");
+                    if (PostProcess::WriteNeutralLookup(p, 16))
+                    {
+                        AssetHandle h = AssetManager::Import(p);
+                        if (auto* meta = AssetManager::GetMetadata(h))
+                        {
+                            nlohmann::json settings = meta->ImportSettings;
+                            settings["mips"] = false; // exact texels: no blur between slices
+                            AssetManager::SetImportSettings(h, settings);
+                        }
+                        if (h.IsValid()) m_Ctx.SelectAsset(h);
+                    }
                 }
                 if (ImGui::MenuItem("New Render Texture"))
                 {

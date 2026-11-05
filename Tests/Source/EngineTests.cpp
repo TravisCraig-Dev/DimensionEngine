@@ -6297,6 +6297,19 @@ namespace
         glm::vec3 warm = PostProcess::WhiteBalance(0.5f, 0.0f);
         CHECK(warm.r > 1.0f && warm.b < 1.0f && Near(glm::dot(warm, glm::vec3(0.2126f, 0.7152f, 0.0722f)), 1.0f));
         CHECK(glm::length(PostProcess::WhiteBalance(0.0f, 0.0f) - glm::vec3(1.0f)) < 1e-5f);
+        // Lookup textures: the scene's applies fully; a volume's takes over by its weight there.
+        scene.GetSettings().LookupTexture = AssetHandle(uint64_t(777));
+        CHECK(PostProcess::Evaluate(scene, { 0, 0, 0 }, ~0u).LookupTexture == 777 && Near(PostProcess::Evaluate(scene, { 0, 0, 0 }, ~0u).LookupContribution, 1.0f));
+        auto& lv = reg.Get<PostProcessVolumeComponent>(b);
+        lv.OverrideLookup = true;
+        lv.LookupTexture = AssetHandle(uint64_t(888));
+        reg.Get<TagComponent>(b).Layer = 0;
+        PostProcessValues looked = PostProcess::Evaluate(scene, { 10, 0, 0 }, ~0u);
+        CHECK(looked.LookupTexture == 888 && Near(looked.LookupContribution, 0.5f)); // the box's weight is 0.5
+        // A neutral strip: 16 slices of 16 x 16 as a PNG.
+        fs::path lutPath = fs::temp_directory_path() / "dimension_neutral_lut.png";
+        CHECK(PostProcess::WriteNeutralLookup(lutPath, 16) && fs::file_size(lutPath) > 100);
+        fs::remove(lutPath);
     }
 
     // Camera stacking: other cameras draw over the primary only when their viewport is smaller than the screen, in

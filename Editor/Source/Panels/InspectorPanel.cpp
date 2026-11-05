@@ -2331,6 +2331,13 @@ namespace Editor
             track(ImGui::DragFloat3("Lift", &s.Lift.x, 0.005f, -1.0f, 1.0f));
             track(ImGui::DragFloat3("Gamma", &s.Gamma.x, 0.005f, 0.05f, 4.0f));
             track(ImGui::DragFloat3("Gain", &s.Gain.x, 0.005f, 0.0f, 4.0f));
+            if (UI::BeginProperties("Lookup"))
+            {
+                r |= UI::AssetField("Lookup Texture", s.LookupTexture, AssetType::Texture);
+                UI::EndProperties();
+            }
+            ImGui::SetItemTooltip("A color lookup strip (256 x 16): Project window > Create > New Color Lookup Texture, graded in an image editor");
+            if (s.LookupTexture.IsValid()) track(ImGui::SliderFloat("Lookup Contribution", &s.LookupContribution, 0.0f, 1.0f));
             ImGui::TextDisabled("Post Process Volumes blend over these per camera.");
             ImGui::TreePop();
         }

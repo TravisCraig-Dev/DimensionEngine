@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <filesystem>
 
 namespace Dimension
 {
@@ -20,6 +21,8 @@ namespace Dimension
         glm::vec3 ColorFilter{ 1.0f };    // multiplies the image (sRGB as picked)
         float Temperature = 0.0f, Tint = 0.0f; // white balance, -1..1
         glm::vec3 Lift{ 0.0f }, Gamma{ 1.0f }, Gain{ 1.0f };
+        uint64_t LookupTexture = 0;       // asset GUID (0 none)
+        float LookupContribution = 1.0f;
     };
 
     namespace PostProcess
@@ -28,5 +31,7 @@ namespace Dimension
         // White balance as per-channel gains (linear): warmer raises red and lowers blue, Tint trades green for
         // magenta; the result keeps the image's brightness.
         glm::vec3 WhiteBalance(float temperature, float tint);
+        // Writes a neutral (identity) color lookup strip of `size` slices (size * size by size pixels) as a PNG.
+        bool WriteNeutralLookup(const std::filesystem::path& path, int size = 16);
     }
 }

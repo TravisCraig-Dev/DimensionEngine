@@ -49,6 +49,10 @@ namespace Dimension
         // Lens effects: colors split toward the edges (Chromatic Aberration, 0-1), noise like film (Film Grain, 0-1),
         // and the image bulging (Lens Distortion > 0, barrel) or pinched (< 0, pincushion).
         float ChromaticAberration = 0.0f, FilmGrain = 0.0f, LensDistortion = 0.0f;
+        // A color lookup texture (Unity's LUT strip: N slices of N x N side by side, e.g. 256 x 16) applied after the
+        // grading, by Lookup Contribution. Make one with Create > New Color Lookup Texture and grade it in an image editor.
+        AssetHandle LookupTexture = AssetHandle::None();
+        float LookupContribution = 1.0f;
         bool AutoExposure = false;
         float ExposureCompensation = 0.0f;
         float AutoExposureMinEv = -4.0f, AutoExposureMaxEv = 4.0f;

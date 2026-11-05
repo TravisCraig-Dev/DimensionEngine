@@ -1,6 +1,8 @@
 #include "Dimension/Renderer/PostProcess.h"
 #include "Dimension/Scene/Scene.h"
+#include <stb_image_write.h>
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace Dimension
@@ -22,6 +24,8 @@ namespace Dimension
             v.Lift = settings.Lift;
             v.Gamma = settings.Gamma;
             v.Gain = settings.Gain;
+            v.LookupTexture = (uint64_t)settings.LookupTexture;
+            v.LookupContribution = settings.LookupTexture.IsValid() ? settings.LookupContribution : 0.0f;
 
             auto& reg = scene.GetRegistry();
             std::vector<std::pair<float, Entity>> volumes;
@@ -57,6 +61,12 @@ namespace Dimension
                 if (vol.OverrideColorFilter) v.ColorFilter += (vol.ColorFilter - v.ColorFilter) * w;
                 blend(v.Temperature, vol.OverrideWhiteBalance, vol.Temperature);
                 blend(v.Tint, vol.OverrideWhiteBalance, vol.Tint);
+                // A volume's lookup texture takes over (two lookups do not mix): its contribution scaled by the weight.
+                if (vol.OverrideLookup && vol.LookupTexture.IsValid())
+                {
+                    v.LookupTexture = (uint64_t)vol.LookupTexture;
+                    v.LookupContribution = vol.LookupContribution * w;
+                }
                 if (vol.OverrideLiftGammaGain)
                 {
                     v.Lift += (vol.Lift - v.Lift) * w;
@@ -65,6 +75,24 @@ namespace Dimension
                 }
             }
             return v;
+        }
+
+        bool WriteNeutralLookup(const std::filesystem::path& path, int size)
+        {
+            size = std::clamp(size, 2, 64);
+            int w = size * size, h = size;
+            std::vector<uint8_t> px((size_t)w * h * 4);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                {
+                    int slice = x / size, i = x % size;
+                    uint8_t* p = &px[((size_t)y * w + x) * 4];
+                    p[0] = (uint8_t)std::lround(255.0 * i / (size - 1));
+                    p[1] = (uint8_t)std::lround(255.0 * y / (size - 1));
+                    p[2] = (uint8_t)std::lround(255.0 * slice / (size - 1));
+                    p[3] = 255;
+                }
+            return stbi_write_png(path.string().c_str(), w, h, 4, px.data(), w * 4) != 0;
         }
 
         glm::vec3 WhiteBalance(float temperature, float tint)

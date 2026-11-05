@@ -761,6 +761,9 @@ namespace Dimension
         float Temperature = 0.0f, Tint = 0.0f; // -1..1
         bool OverrideLiftGammaGain = false;
         glm::vec3 Lift{ 0.0f }, Gamma{ 1.0f }, Gain{ 1.0f };
+        bool OverrideLookup = false;
+        AssetHandle LookupTexture = AssetHandle::None();
+        float LookupContribution = 1.0f;
     };
 
     struct ReflectionProbeComponent

@@ -210,6 +210,9 @@ namespace Dimension
             float LiftR, LiftG, LiftB, GammaR, GammaG, GammaB, GainR, GainG, GainB;
             float ChromaticAberration, FilmGrain, LensDistortion;
             uint32_t Seed; // changes every frame (grain)
+            uint32_t LookupTexture; // bindless index + 1, 0 = none
+            uint32_t LookupSize;    // slices (= slice side)
+            float LookupContribution;
         };
 
         struct DofPrefilterPush
@@ -1496,7 +1499,14 @@ namespace Dimension
                             post.Saturation, post.Contrast, filter.r, filter.g, filter.b,
                             post.Lift.r, post.Lift.g, post.Lift.b, gamma.r, gamma.g, gamma.b, post.Gain.r, post.Gain.g, post.Gain.b,
                             options.EditorOverlays ? 0.0f : settings.ChromaticAberration, options.EditorOverlays ? 0.0f : settings.FilmGrain,
-                            options.EditorOverlays ? 0.0f : settings.LensDistortion, (uint32_t)RenderDevice::Get().Frame().FrameNumber };
+                            options.EditorOverlays ? 0.0f : settings.LensDistortion, (uint32_t)RenderDevice::Get().Frame().FrameNumber, 0u, 0u, 0.0f };
+        if (post.LookupTexture && post.LookupContribution > 0.0f)
+            if (Ref<Texture2D> lut = AssetManager::GetTexture(AssetHandle(post.LookupTexture)); lut && lut->GetHeight() > 1 && lut->GetWidth() == lut->GetHeight() * lut->GetHeight())
+            {
+                push.LookupTexture = lut->GetBindlessIndex() + 1;
+                push.LookupSize = lut->GetHeight();
+                push.LookupContribution = std::clamp(post.LookupContribution, 0.0f, 1.0f);
+            }
         static_assert(sizeof(CompositePush) <= kPushConstantSize, "composite push constants too large");
         auto beginPass = [&](const Image& image) {
             Vk::TransitionImage(cmd, image.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);

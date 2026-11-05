@@ -182,6 +182,8 @@ namespace Dimension
                           { "tonemapping", s.Tonemapping },
                           { "tonemapper", s.Tonemapper },
                           { "chromaticAberration", s.ChromaticAberration },
+                          { "lookupTexture", (uint64_t)s.LookupTexture },
+                          { "lookupContribution", s.LookupContribution },
                           { "filmGrain", s.FilmGrain },
                           { "lensDistortion", s.LensDistortion },
                           { "autoExposure", s.AutoExposure },
@@ -283,6 +285,8 @@ namespace Dimension
         s.Tonemapping = js.value("tonemapping", s.Tonemapping);
         s.Tonemapper = js.value("tonemapper", s.Tonemapper);
         s.ChromaticAberration = js.value("chromaticAberration", s.ChromaticAberration);
+        s.LookupTexture = Guid(js.value("lookupTexture", uint64_t(0)));
+        s.LookupContribution = js.value("lookupContribution", s.LookupContribution);
         s.FilmGrain = js.value("filmGrain", s.FilmGrain);
         s.LensDistortion = js.value("lensDistortion", s.LensDistortion);
         s.AutoExposure = js.value("autoExposure", s.AutoExposure);

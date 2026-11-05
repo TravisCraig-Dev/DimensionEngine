@@ -507,7 +507,11 @@ namespace Dimension
             .Field("Override Lift Gamma Gain", &PostProcessVolumeComponent::OverrideLiftGammaGain)
             .Field("Lift", &PostProcessVolumeComponent::Lift).Speed(0.005f).Tooltip("Added to the shadows (per channel)")
             .Field("Gamma", &PostProcessVolumeComponent::Gamma).Speed(0.005f).Tooltip("Midtones: above 1 brighter (per channel)")
-            .Field("Gain", &PostProcessVolumeComponent::Gain).Speed(0.005f).Tooltip("Multiplies the highlights (per channel)");
+            .Field("Gain", &PostProcessVolumeComponent::Gain).Speed(0.005f).Tooltip("Multiplies the highlights (per channel)")
+            .Field("Override Lookup", &PostProcessVolumeComponent::OverrideLookup)
+            .Field("Lookup Texture", &PostProcessVolumeComponent::LookupTexture).As(FieldType::Texture)
+                .Tooltip("A color lookup strip (e.g. 256 x 16): Create > New Color Lookup Texture, then grade it in an image editor")
+            .Field("Lookup Contribution", &PostProcessVolumeComponent::LookupContribution).Range(0.0f, 1.0f).Speed(0.01f);
 
         Register<ReflectionProbeComponent>("Reflection Probe", "Rendering")
             .Field("Size", &ReflectionProbeComponent::Size).Speed(0.05f).Tooltip("Influence box: surfaces inside reflect this probe")

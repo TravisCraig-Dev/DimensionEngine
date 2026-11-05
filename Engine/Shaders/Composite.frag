@@ -21,6 +21,9 @@ layout(push_constant) uniform Push
     float FilmGrain;           // 0-1
     float LensDistortion;      // > 0 barrel, < 0 pincushion
     uint Seed;                 // per frame
+    uint LookupTexture;        // bindless index + 1 of a color lookup strip (N slices of N x N), 0 = none
+    uint LookupSize;           // N
+    float LookupContribution;
 } pc;
 
 float Hash(vec2 p)
@@ -84,6 +87,23 @@ vec3 LinearToSRGB(vec3 c)
     return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
 }
 
+// A display-space color through the lookup strip: red across a slice, green down it, blue picks (and blends) the
+// slices. The strip is an sRGB texture (decoded when sampled), so its values are encoded again.
+vec3 ApplyLookup(vec3 c)
+{
+    float n = float(pc.LookupSize);
+    c = clamp(c, 0.0, 1.0);
+    float slice = c.b * (n - 1.0);
+    float s0 = floor(slice), s1 = min(s0 + 1.0, n - 1.0), f = slice - s0;
+    vec2 inSlice = vec2(c.r * (n - 1.0) + 0.5, c.g * (n - 1.0) + 0.5);
+    vec2 size = vec2(n * n, n);
+    uint lut = pc.LookupTexture - 1u;
+    // Level 0 explicitly: the coordinates jump with the colors, so implicit derivatives would pick blurry mips.
+    vec3 a = textureLod(uTextures[nonuniformEXT(lut)], (vec2(s0 * n, 0.0) + inSlice) / size, 0.0).rgb;
+    vec3 b = textureLod(uTextures[nonuniformEXT(lut)], (vec2(s1 * n, 0.0) + inSlice) / size, 0.0).rgb;
+    return LinearToSRGB(mix(a, b, f));
+}
+
 void main()
 {
     // Lens distortion: the image bulges (barrel) or pinches, scaled so the corners stay near the frame.
@@ -126,6 +146,7 @@ void main()
         mapped *= 1.0 - pc.Vignette * smoothstep(0.4, 1.1, d);
     }
     vec3 display = LinearToSRGB(mapped);
+    if (pc.LookupTexture != 0u) display = mix(display, ApplyLookup(display), pc.LookupContribution);
     // Film grain in display space, strongest in the midtones.
     if (pc.FilmGrain > 0.0)
     {
