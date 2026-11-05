@@ -141,6 +141,26 @@ namespace Dimension
             }
         }
 
+        /// <summary>Its rotation (local: relative to its parent) as a quaternion, as EulerAngles is.</summary>
+        public Quaternion LocalRotation { get => Quaternion.Euler(EulerAngles); set => EulerAngles = value.EulerAngles; }
+        /// <summary>Its rotation in the world (its parents' too); setting it turns it so.</summary>
+        public Quaternion Rotation
+        {
+            get
+            {
+                Quaternion r = LocalRotation;
+                for (Entity p = Entity.Parent; p.IsValid; p = p.Parent) r = Quaternion.Euler(p.Transform.EulerAngles) * r;
+                return r;
+            }
+            set
+            {
+                Entity parent = Entity.Parent;
+                LocalRotation = parent.IsValid ? Quaternion.Inverse(parent.Transform.Rotation) * value : value;
+            }
+        }
+        /// <summary>Turns it by `rotation` (in its own space, after its current rotation).</summary>
+        public void Rotate(Quaternion rotation) => LocalRotation = LocalRotation * rotation;
+
         /// <summary>World-space forward (-Z), right (+X) and up (+Y) directions.</summary>
         public Vector3 Forward => Axis(new Vector3(0, 0, -1));
         public Vector3 Right => Axis(Vector3.UnitX);

@@ -223,6 +223,68 @@ namespace Dimension
         public const float Deg2Rad = MathF.PI / 180.0f;
         public const float Rad2Deg = 180.0f / MathF.PI;
         public const float Epsilon = 1e-6f;
+        public const float Infinity = float.PositiveInfinity;
+        public const float NegativeInfinity = float.NegativeInfinity;
+
+        public static float Abs(float v) => MathF.Abs(v);
+        public static int Abs(int v) => Math.Abs(v);
+        public static float Min(float a, float b) => MathF.Min(a, b);
+        public static float Min(params float[] values) { float m = float.PositiveInfinity; foreach (float v in values) m = MathF.Min(m, v); return values.Length == 0 ? 0 : m; }
+        public static int Min(int a, int b) => Math.Min(a, b);
+        public static float Max(float a, float b) => MathF.Max(a, b);
+        public static float Max(params float[] values) { float m = float.NegativeInfinity; foreach (float v in values) m = MathF.Max(m, v); return values.Length == 0 ? 0 : m; }
+        public static int Max(int a, int b) => Math.Max(a, b);
+        public static float Sqrt(float v) => MathF.Sqrt(v);
+        public static float Pow(float v, float p) => MathF.Pow(v, p);
+        public static float Exp(float v) => MathF.Exp(v);
+        public static float Log(float v) => MathF.Log(v);
+        public static float Log(float v, float b) => MathF.Log(v, b);
+        public static float Log10(float v) => MathF.Log10(v);
+        public static float Sin(float r) => MathF.Sin(r);
+        public static float Cos(float r) => MathF.Cos(r);
+        public static float Tan(float r) => MathF.Tan(r);
+        public static float Asin(float v) => MathF.Asin(v);
+        public static float Acos(float v) => MathF.Acos(v);
+        public static float Atan(float v) => MathF.Atan(v);
+        public static float Atan2(float y, float x) => MathF.Atan2(y, x);
+        /// <summary>1 for zero and above, -1 below (as Unity's).</summary>
+        public static float Sign(float v) => v >= 0.0f ? 1.0f : -1.0f;
+        /// <summary>To the nearest whole number (halves to the even one, as Unity's), down, up; as ints.</summary>
+        public static float Round(float v) => MathF.Round(v);
+        public static float Floor(float v) => MathF.Floor(v);
+        public static float Ceil(float v) => MathF.Ceiling(v);
+        public static int RoundToInt(float v) => (int)MathF.Round(v);
+        public static int FloorToInt(float v) => (int)MathF.Floor(v);
+        public static int CeilToInt(float v) => (int)MathF.Ceiling(v);
+        public static bool IsPowerOfTwo(int v) => v > 0 && (v & (v - 1)) == 0;
+        public static int NextPowerOfTwo(int v) { if (v <= 1) return 1; return (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)v); }
+        public static int ClosestPowerOfTwo(int v)
+        {
+            if (v <= 1) return 1;
+            int up = NextPowerOfTwo(v), down = up >> 1;
+            return up - v < v - down ? up : down;
+        }
+        /// <summary>sRGB to linear and back (one channel, 0..1).</summary>
+        public static float GammaToLinearSpace(float c) => c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
+        public static float LinearToGammaSpace(float c) => c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(c, 1.0f / 2.4f) - 0.055f;
+
+        /// <summary>The shortest turn from one angle to another, in degrees (-180 to 180).</summary>
+        public static float DeltaAngle(float current, float target)
+        {
+            float d = Repeat(target - current, 360.0f);
+            return d > 180.0f ? d - 360.0f : d;
+        }
+        /// <summary>Lerp between angles in degrees, the short way round.</summary>
+        public static float LerpAngle(float a, float b, float t) => a + DeltaAngle(a, b) * Clamp01(t);
+        /// <summary>Turns an angle toward another by at most maxDelta degrees, the short way round.</summary>
+        public static float MoveTowardsAngle(float current, float target, float maxDelta)
+        {
+            float d = DeltaAngle(current, target);
+            return MathF.Abs(d) <= maxDelta ? current + d : current + MathF.Sign(d) * maxDelta;
+        }
+        /// <summary>SmoothDamp for angles in degrees (the short way round).</summary>
+        public static float SmoothDampAngle(float current, float target, ref float velocity, float smoothTime, float deltaTime) =>
+            SmoothDamp(current, current + DeltaAngle(current, target), ref velocity, smoothTime, deltaTime);
 
         public static float Clamp(float v, float min, float max) => v < min ? min : v > max ? max : v;
         public static int Clamp(int v, int min, int max) => v < min ? min : v > max ? max : v;
@@ -313,5 +375,20 @@ namespace Dimension
         }
         public static System.Numerics.Vector3 InsideUnitSphere => OnUnitSphere * MathF.Cbrt(Value);
         public static Color ColorHSV(float saturation = 1.0f, float value = 1.0f) => Color.FromHSV(Value, saturation, value);
+        /// <summary>A rotation picked evenly from all of them (Shoemake's method).</summary>
+        public static System.Numerics.Quaternion Rotation
+        {
+            get
+            {
+                float u1 = Value, u2 = Range(0.0f, MathF.Tau), u3 = Range(0.0f, MathF.Tau);
+                float a = MathF.Sqrt(1.0f - u1), b = MathF.Sqrt(u1);
+                return new System.Numerics.Quaternion(a * MathF.Sin(u2), a * MathF.Cos(u2), b * MathF.Sin(u3), b * MathF.Cos(u3));
+            }
+        }
+        /// <summary>A point on the unit circle.</summary>
+        public static System.Numerics.Vector2 OnUnitCircle
+        {
+            get { float a = Range(0.0f, MathF.Tau); return new System.Numerics.Vector2(MathF.Cos(a), MathF.Sin(a)); }
+        }
     }
 }

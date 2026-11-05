@@ -3530,6 +3530,163 @@
    }
   },
   {
+   "guid": 6000116,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Turret",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      12,
+      0.25,
+      -1
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1.2,
+      0.25,
+      1.2
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 5,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      0.35,
+      0.37,
+      0.42,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.6,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.Turret",
+       "Fields": {
+        "Target": 6000061,
+        "Head": 6000117,
+        "Barrel": 6000118,
+        "TurnSpeed": 90.0,
+        "MaxPitch": 30.0,
+        "OnTargetAngle": 3.0
+       },
+       "Enabled": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "guid": 6000117,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Turret Head",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      12,
+      0.85,
+      -1
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.7,
+      0.5,
+      0.7
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      0.45,
+      0.48,
+      0.55,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.6,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
+   "guid": 6000118,
+   "parent": 6000117,
+   "components": {
+    "Tag": {
+     "Name": "Turret Barrel",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      0,
+      -1.0
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      0.3,
+      0.4,
+      1.4
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 1,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      1.0,
+      0.35,
+      0.2,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.6,
+     "Emission": 0.0,
+     "Cast Shadows": true
+    }
+   }
+  },
+  {
    "guid": 6000062,
    "parent": 6000061,
    "components": {
@@ -5382,7 +5539,7 @@
      ]
     },
     "UI Text": {
-     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview); P paints what is under the mouse a color of its own, O makes its shared material metal or wood (CratePainter); K starts the metronome on the stage (scheduled on the audio clock, fading out across the yard), L pauses all sound (Metronome); F fires a fast ball at the mouse (continuous, so the thin walls stop it; interpolated; Cannon).",
+     "Text": "Each agent walks to its flag across the yard, around the walls and the red barrier (it carves the mesh), up the ramp or jumping onto the stage, steering around the others. Statues (right) and boulders (left, levels generated from their mesh) get simpler with distance. Click the ground to send the ogre (its flag moves there), drag a crate to carry it (C drops more), right-click one to shove it (it flashes when it hits something hard); T toggles slow motion; V switches to the overhead camera and back; WASD walks the orange walker (Space jumps, X crouches, it shoves crates it walks into); the yellow line is the ogre's path and the blue one points to the nearest edge of the mesh (PathPreview); P paints what is under the mouse a color of its own, O makes its shared material metal or wood (CratePainter); K starts the metronome on the stage (scheduled on the audio clock, fading out across the yard), L pauses all sound (Metronome); F fires a fast ball at the mouse (continuous, so the thin walls stop it; interpolated; Cannon); the turret by Wall B turns after the ogre, its barrel glowing when on target (Turret).",
      "Font": 0,
      "Font Size": 26,
      "Color": [
@@ -5439,7 +5596,7 @@
      ],
      "Position": [
       34,
-      273
+      300
      ],
      "Size": [
       1200,
@@ -5515,7 +5672,7 @@
      ],
      "Position": [
       34,
-      319
+      346
      ],
      "Size": [
       420,

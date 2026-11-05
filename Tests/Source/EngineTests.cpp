@@ -9475,6 +9475,33 @@ namespace
             CHECK(text.find("40 frames, 60 steps") != std::string::npos);
             rt->OnRuntimeStop();
         }
+        // C# math (Quaternion.LookRotation / RotateTowards / Angle and Transform.Rotation): the Sandbox's Turret turns its
+        // head toward a target at its Turn Speed, then faces it (forward, -Z, at the target), its barrel lit.
+        {
+            Scene tu("Turret");
+            auto& treg = tu.GetRegistry();
+            Entity target = tu.CreateEntity("Target");
+            treg.Get<TransformComponent>(target).Position = { 6, -1, -6 }; // aimed at 1 m above: (6, 0, -6), level
+            Entity head = tu.CreateEntity("Head");
+            Entity barrel = tu.CreateEntity("Barrel", head);
+            treg.Emplace<MeshRendererComponent>(barrel);
+            Entity turret = tu.CreateEntity("Turret");
+            auto& sc = treg.Emplace<ScriptComponent>(turret).Add("Game.Turret");
+            sc.Fields["Target"] = (uint64_t)tu.GetGuid(target);
+            sc.Fields["Head"] = (uint64_t)tu.GetGuid(head);
+            sc.Fields["Barrel"] = (uint64_t)tu.GetGuid(barrel);
+            sc.Fields["TurnSpeed"] = 90.0f;
+            auto rt = tu.Clone();
+            rt->OnRuntimeStart();
+            auto forward = [&] { rt->UpdateTransforms(); return rt->GetRegistry().Get<TransformComponent>(head).Forward(); };
+            glm::vec3 aim = glm::normalize(glm::vec3(6, 0, -6));
+            for (int i = 0; i < 5; ++i) rt->OnUpdateRuntime(0.05f); // a quarter second: 22.5 degrees of the 45 to turn
+            float turned = glm::degrees(std::acos(std::clamp(glm::dot(forward(), glm::vec3(0, 0, -1)), -1.0f, 1.0f)));
+            CHECK(Near(turned, 22.5f, 0.5f) && rt->GetRegistry().Get<MeshRendererComponent>(barrel).Emission == 0.0f);
+            for (int i = 0; i < 30; ++i) rt->OnUpdateRuntime(1.0f / 30.0f);
+            CHECK(glm::dot(forward(), aim) > 0.9999f && rt->GetRegistry().Get<MeshRendererComponent>(barrel).Emission > 1.0f);
+            rt->OnRuntimeStop();
+        }
         // C# events: a label's script listens to another entity's UI Button (which has no script) and unsubscribes
         // after its Limit; the listeners end with play mode.
         {
