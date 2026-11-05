@@ -1113,6 +1113,7 @@ namespace Editor
             if (!camera.IsNull()) cam = CameraData::FromEntity(scene, camera, m_GameTarget->GetAspect());
             SceneRenderOptions gameOptions;
             gameOptions.RenderUI = true;
+            m_GameCameras.Render(cmd, scene, { m_GameTarget->GetWidth(), m_GameTarget->GetHeight() }, gameOptions.Underlays);
             gameOptions.FrameDebugStop = m_ShowFrameDebugger ? m_FrameDebugger->StopFor(1) : -2;
             // Debug.DrawLine / DrawRay show in the Game view too (with the gizmos, as in Unity).
             if (m_ShowGizmos && m_Ctx.IsPlaying())

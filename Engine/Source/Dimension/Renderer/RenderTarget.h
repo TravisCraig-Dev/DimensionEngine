@@ -71,6 +71,7 @@ namespace Dimension
         // Tonemapped image before FXAA (same format as the output).
         const Image& GetLdr() const { return m_Ldr; }
         uint32_t GetLdrBindless() const { return m_LdrBindless; }
+        uint32_t GetOutputBindless() const { return m_OutputBindless; } // the final image, sampled (display values)
         // Depth sampled by SSAO (nearest filtering), and the half-resolution AO images: [0] raw, [1] blurred.
         uint32_t GetDepthBindless() const { return m_DepthBindless; }
         const Image& GetAO(uint32_t i) const { return m_AO[i]; }
@@ -127,6 +128,7 @@ namespace Dimension
         std::vector<uint32_t> m_BloomBindless;
         Image m_Ldr;
         uint32_t m_LdrBindless = 0;
+        uint32_t m_OutputBindless = 0;
         uint32_t m_DepthBindless = 0;
         Image m_AO[2];
         uint32_t m_AOBindless[2] = {};

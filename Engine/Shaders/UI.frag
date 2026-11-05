@@ -27,8 +27,10 @@ float Median(vec3 c) { return max(min(c.r, c.g), min(max(c.r, c.g), c.b)); }
 
 void main()
 {
-    uint index = vTexture & 0x3FFFFFFFu;
+    // Bit 29: an image already in display space (another camera's output), shown as it is.
+    uint index = vTexture & 0x1FFFFFFFu;
     vec4 t = texture(uTextures[nonuniformEXT(index)], vUV);
     if ((vTexture & 0x80000000u) != 0u) t = vec4(1.0, 1.0, 1.0, DistanceAlpha((vTexture & 0x40000000u) != 0u ? Median(t.rgb) : t.a));
-    outColor = vec4(LinearToSRGB(t.rgb) * vColor.rgb, t.a * vColor.a);
+    vec3 rgb = (vTexture & 0x20000000u) != 0u ? t.rgb : LinearToSRGB(t.rgb);
+    outColor = vec4(rgb * vColor.rgb, t.a * vColor.a);
 }

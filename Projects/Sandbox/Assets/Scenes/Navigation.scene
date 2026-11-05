@@ -5994,6 +5994,57 @@
      "Clear Flags": 1
     }
    }
+  },
+  {
+   "guid": 6000119,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Minimap Camera",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      60,
+      0
+     ],
+     "Rotation": [
+      -1.5707964,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Camera": {
+     "Projection": 1,
+     "Field Of View": 50,
+     "Orthographic Size": 21,
+     "Near Clip": 0.1,
+     "Far Clip": 400,
+     "Primary": false,
+     "Background": [
+      0.16,
+      0.18,
+      0.22,
+      1
+     ],
+     "Clear Flags": 0,
+     "Viewport Rect": [
+      0.79,
+      0.62,
+      0.19,
+      0.34
+     ],
+     "Depth": 1
+    }
+   }
   }
  ]
 }

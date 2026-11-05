@@ -12,6 +12,7 @@
 #include <Dimension/Renderer/Mesh.h>
 #include <Dimension/Renderer/Environment.h>
 #include <Dimension/Renderer/SceneRenderer.h>
+#include <Dimension/Renderer/CameraStack.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Scene/SceneSearch.h>
@@ -6252,6 +6253,34 @@ namespace
         CHECK(scene.SampleLightProbes({ 0, 0, 20 }, sh) == 0.0f && sh[0] == glm::vec3(0.0f));
         v.Baked.clear(); // not baked: no probes
         CHECK(scene.SampleLightProbes({ 0, 0, 0 }, sh) == 0.0f);
+    }
+
+    // Camera stacking: other cameras draw over the primary only when their viewport is smaller than the screen, in
+    // Depth order, at their pixel rectangles; inactive ones and the primary are left out.
+    void TestCameraStack()
+    {
+        Scene scene("Cameras");
+        auto& reg = scene.GetRegistry();
+        auto camera = [&](const char* name, bool primary, glm::vec4 rect, float depth) {
+            Entity e = scene.CreateEntity(name);
+            auto& c = reg.Emplace<CameraComponent>(e);
+            c.Primary = primary;
+            c.Viewport = rect;
+            c.Depth = depth;
+            return e;
+        };
+        Entity main = camera("Main", true, { 0, 0, 1, 1 }, 0.0f);
+        camera("Spare", false, { 0, 0, 1, 1 }, 5.0f); // whole screen, not primary: not drawn
+        Entity map = camera("Minimap", false, { 0.75f, 0.0f, 0.25f, 0.25f }, 2.0f);
+        Entity mirror = camera("Mirror", false, { 0.25f, 0.0f, 0.5f, 0.2f }, 1.0f);
+        Entity off = camera("Off", false, { 0.0f, 0.5f, 0.5f, 0.5f }, 3.0f);
+        reg.Get<TagComponent>(off).Active = false;
+        scene.UpdateTransforms();
+        auto list = CameraStack::Cameras(scene, { 800, 600 });
+        CHECK(list.size() == 2 && list[0].first == mirror && list[1].first == map); // Depth 1 under Depth 2
+        CHECK(list[1].second == glm::vec4(600, 0, 800, 150) && list[0].second == glm::vec4(200, 0, 600, 120));
+        CHECK(scene.GetPrimaryCamera() == main);
+        CHECK(CameraStack::Cameras(scene, { 0, 0 }).empty());
     }
 
     // Records the order of its update calls; LateUpdate only when asked for.
@@ -13755,6 +13784,7 @@ int main(int argc, char** argv)
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);
+    Run("Camera stack", TestCameraStack);
     Run("UI widgets", TestUIWidgets);
     Run("UI dropdown and scrollbar", TestUIDropdownAndScrollbar);
     Run("UI text editing", TestUITextEditing);

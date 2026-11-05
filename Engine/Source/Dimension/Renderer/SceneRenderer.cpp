@@ -708,6 +708,7 @@ namespace Dimension
         data.ClearColor = cam.ClearColor;
         data.Orthographic = cam.Projection == ProjectionType::Orthographic;
         data.Skybox = cam.Clear == ClearMode::Skybox;
+        data.CullingMask = (uint32_t)cam.CullingMask;
         return data;
     }
 
@@ -783,9 +784,18 @@ namespace Dimension
         }
     }
 
+    bool SceneRenderer::LayerCulled(Scene& scene, Entity e) const
+    {
+        if (m_CullingMask == ~0u) return false;
+        auto* tag = scene.GetRegistry().TryGet<TagComponent>(e);
+        int layer = tag ? tag->Layer : 0;
+        return layer >= 0 && layer < 32 && !(m_CullingMask & (1u << layer));
+    }
+
     void SceneRenderer::Render(VkCommandBuffer cmd, Scene& scene, const CameraData& view, SceneRenderTarget& target,
                                const SceneRenderOptions& options)
     {
+        m_CullingMask = view.CullingMask;
         // Reflection probes capture the scene with nested Render calls, so they run before this view collects anything
         // (and light probe volumes bake through the same captures).
         if (!options.ProbeCapture)
@@ -1126,7 +1136,8 @@ namespace Dimension
         // GPU particles: simulate (once per frame, whichever view renders first) and list their draws.
         SimulateGpuParticles(cmd, scene, target, camera.View);
 
-        // Prepare CPU-side draw lists
+        // Prepare CPU-side draw lists (the camera's layers: nested probe captures above drew everything)
+        m_CullingMask = view.CullingMask;
         CollectSprites(scene, camera);
         CollectTilemaps(scene, camera);
         CollectText(scene, camera);
@@ -1491,6 +1502,11 @@ namespace Dimension
         {
             beginPass(target.GetOutput());
             composite();
+        }
+        if (!options.Underlays.empty())
+        {
+            vkCmdSetViewport(cmd, 0, 1, &flat);
+            DrawQuads(cmd, options.Underlays, extent);
         }
         if (!m_Lines.empty())
         {
@@ -2159,9 +2175,10 @@ namespace Dimension
         LODGroups::Evaluate(scene, camera.Position, camera.Projection, camera.Orthographic, lods);
         std::vector<uint32_t> partSubMesh; // per part of the current item: its sub-mesh
 
+        auto culled = [&](Entity e) { return LayerCulled(scene, e); };
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
-            if (!t.ActiveInHierarchy || (e.Index < lods.Hidden.size() && lods.Hidden[e.Index])) continue;
+            if (!t.ActiveInHierarchy || (e.Index < lods.Hidden.size() && lods.Hidden[e.Index]) || culled(e)) continue;
             int dark = dimmed(e);
             // LOD groups: a fading level is dithered; a group with generated levels draws its own mesh simplified.
             uint32_t lodFade = 0;
@@ -3142,6 +3159,7 @@ namespace Dimension
         for (auto [e, sr, t] : scene.GetRegistry().ViewOf<SpriteRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
+            if (LayerCulled(scene, e)) continue;
             Ref<Texture2D> tex = AssetManager::GetTexture(sr.Texture);
             SpriteDraw d;
             d.Transform = t.World;
@@ -3198,6 +3216,7 @@ namespace Dimension
         for (auto [e, tm, t] : scene.GetRegistry().ViewOf<TilemapComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
+            if (LayerCulled(scene, e)) continue;
             const auto& cells = tm.Cells();
             if (cells.empty()) continue;
             Ref<Texture2D> tex = AssetManager::GetTexture(tm.Tileset);
@@ -3233,6 +3252,7 @@ namespace Dimension
         for (auto [e, text, t] : scene.GetRegistry().ViewOf<TextRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || text.Text.empty()) continue;
+            if (LayerCulled(scene, e)) continue;
             auto font = AssetManager::GetFont(text.Font);
             if (!font) continue;
             glm::vec2 block;
@@ -3272,6 +3292,7 @@ namespace Dimension
         for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || ps.Particles.empty()) continue;
+            if (LayerCulled(scene, e)) continue;
             auto tex = ps.Texture.IsValid() ? AssetManager::GetTexture(ps.Texture) : nullptr;
             uint32_t texture = (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex();
             bool local = ps.SimulationSpace == ParticleSpace::Local;
@@ -3369,6 +3390,7 @@ namespace Dimension
         for (auto [e, line, t] : reg.ViewOf<LineRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || line.Positions.size() < 2) continue;
+            if (LayerCulled(scene, e)) continue;
             size_t n = line.Positions.size();
             float scale = line.UseWorldSpace ? 1.0f : glm::length(glm::vec3(t.World[0]));
             points.clear();
@@ -3391,6 +3413,7 @@ namespace Dimension
         for (auto [e, trail, t] : reg.ViewOf<TrailRendererComponent, TransformComponent>())
         {
             if (trail.Points.empty()) continue;
+            if (LayerCulled(scene, e)) continue;
             float lifetime = std::max(trail.Time, 1e-3f);
             auto add = [&](const glm::vec3& p, float age) {
                 float f = std::clamp(age / lifetime, 0.0f, 1.0f);
@@ -3504,7 +3527,13 @@ namespace Dimension
         std::vector<UI::DrawCommand> commands;
         glm::vec2 screen((float)extent.width, (float)extent.height);
         UI::BuildDrawList(scene, screen, commands);
+        DrawQuads(cmd, commands, extent);
+    }
+
+    void SceneRenderer::DrawQuads(VkCommandBuffer cmd, const std::vector<UI::DrawCommand>& commands, VkExtent2D extent)
+    {
         if (commands.empty()) return;
+        glm::vec2 screen((float)extent.width, (float)extent.height);
 
         TransientAllocation vb = RenderDevice::Get().AllocateTransient(commands.size() * 4 * sizeof(SpriteVertex));
         if (!vb) return;
@@ -3950,6 +3979,7 @@ namespace Dimension
         for (auto [e, d, t] : scene.GetRegistry().ViewOf<DecalComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || d.Color.a <= 0.0f) continue;
+            if (LayerCulled(scene, e)) continue;
             auto tex = d.Texture.IsValid() ? AssetManager::GetTexture(d.Texture) : nullptr;
             DecalDraw draw;
             draw.Model = t.World * glm::scale(glm::mat4(1.0f), glm::max(glm::abs(d.Size), glm::vec3(1e-3f)));
@@ -3965,6 +3995,7 @@ namespace Dimension
         for (auto [e, ps, t] : scene.GetRegistry().ViewOf<ParticleSystemComponent, TransformComponent>())
         {
             if (ps.Decals.empty() || !t.ActiveInHierarchy) continue;
+            if (LayerCulled(scene, e)) continue;
             auto tex = ps.DecalTexture.IsValid() ? AssetManager::GetTexture(ps.DecalTexture) : nullptr;
             uint32_t texture = (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex();
             float lifetime = std::max(ps.DecalLifetime, 1e-4f);

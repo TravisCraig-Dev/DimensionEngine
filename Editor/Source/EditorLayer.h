@@ -6,6 +6,7 @@
 #include "Panels/Panels.h"
 #include <Dimension/Core/Application.h>
 #include <Dimension/Renderer/SceneRenderer.h>
+#include <Dimension/Renderer/CameraStack.h>
 #include "AssetPreviews.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Asset/AssetPackage.h>
@@ -212,6 +213,7 @@ namespace Editor
 
         Scope<SceneRenderTarget> m_SceneTarget, m_GameTarget;
         SceneRenderer m_SceneRenderer, m_GameRenderer;
+        CameraStack m_GameCameras; // the Game view's other cameras (smaller viewports drawn over the primary)
         glm::uvec2 m_SceneViewSize{ 1280, 720 }, m_GameViewSize{ 1280, 720 };
         bool m_SceneViewVisible = false, m_GameViewVisible = false;
         bool m_SceneViewHovered = false, m_SceneViewFocused = false, m_GameViewFocused = false;

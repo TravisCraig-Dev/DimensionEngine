@@ -103,7 +103,13 @@ namespace Dimension
             .Field("Far Clip", &CameraComponent::FarClip).Range(0.01f, 100000.0f).Speed(1.0f)
             .Field("Primary", &CameraComponent::Primary)
             .Field("Clear Flags", &CameraComponent::Clear).Enum({ "Solid Color", "Skybox" })
-            .Field("Background", &CameraComponent::ClearColor).As(FieldType::Color4);
+            .Field("Background", &CameraComponent::ClearColor).As(FieldType::Color4)
+            .Field("Viewport Rect", &CameraComponent::Viewport).Speed(0.005f)
+                .Tooltip("x, y (from the top-left), width, height as fractions of the screen. A camera other than the primary one\n"
+                         "draws over it when this is smaller than the screen (picture in picture, split screen, minimaps).")
+            .Field("Depth", &CameraComponent::Depth).Speed(0.1f).Tooltip("Of the cameras drawn over the primary one, higher ones go on top")
+            .Field("Culling Mask", &CameraComponent::CullingMask)
+                .Tooltip("The layers it draws, as bits (bit n = layer n; -1 = everything). Scripts set it with LayerMask.GetMask.");
 
         Register<TerrainComponent>("Terrain", "Rendering")
             .Field("Size", &TerrainComponent::Size).Speed(0.5f).Tooltip("Meters along X and Z, centered on the object")

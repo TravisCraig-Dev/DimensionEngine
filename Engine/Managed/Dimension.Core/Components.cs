@@ -691,6 +691,24 @@ namespace Dimension
         /// <summary>Half the view's height in world units (orthographic cameras).</summary>
         public float OrthographicSize { get => GetFloat("Orthographic Size"); set => SetFloat("Orthographic Size", value); }
         public bool Orthographic { get => GetInt("Projection") == 1; set => SetInt("Projection", value ? 1 : 0); }
+        /// <summary>Where on the screen it draws (Unity's rect, but from the top-left): x, y, width, height as fractions of
+        /// the screen. A camera other than the main one draws over it when this is smaller than the screen (picture in
+        /// picture, split screen, a minimap).</summary>
+        public Rect Rect
+        {
+            get { Vector4 v = GetVector4("Viewport Rect"); return new Rect(v.X, v.Y, v.Z, v.W); }
+            set => SetVector4("Viewport Rect", new Vector4(value.X, value.Y, value.Width, value.Height));
+        }
+        /// <summary>The same in pixels.</summary>
+        public Rect PixelRect
+        {
+            get { Rect r = Rect; Vector2 s = Screen.Size; return new Rect(r.X * s.X, r.Y * s.Y, r.Width * s.X, r.Height * s.Y); }
+            set { Vector2 s = Screen.Size; Rect = new Rect(value.X / s.X, value.Y / s.Y, value.Width / s.X, value.Height / s.Y); }
+        }
+        /// <summary>Of the cameras drawn over the main one, higher ones go on top.</summary>
+        public float Depth { get => GetFloat("Depth"); set => SetFloat("Depth", value); }
+        /// <summary>The layers it draws (LayerMask.GetMask("Default", "Player"); -1 everything).</summary>
+        public int CullingMask { get => GetInt("Culling Mask"); set => SetInt("Culling Mask", value); }
     }
 
     public enum CameraClearFlags { SolidColor = 0, Skybox = 1 }

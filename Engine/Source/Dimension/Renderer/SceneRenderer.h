@@ -6,6 +6,7 @@
 #include "Dimension/Renderer/Occlusion.h"
 #include "Dimension/Renderer/SceneGrid.h"
 #include "Dimension/ECS/Entity.h"
+#include "Dimension/UI/UI.h"
 #include <glm/glm.hpp>
 #include <array>
 #include <unordered_map>
@@ -26,6 +27,7 @@ namespace Dimension
         glm::vec4 ClearColor{ 0.1f, 0.1f, 0.1f, 1.0f }; // sRGB
         bool Orthographic = false;
         bool Skybox = false;
+        uint32_t CullingMask = ~0u; // layers drawn (meshes and sprites)
 
         // Builds camera data from a scene entity with a CameraComponent.
         static CameraData FromEntity(Scene& scene, Entity camera, float aspect);
@@ -60,6 +62,8 @@ namespace Dimension
         // Frame debugger: -2 off; -1 records the frame's draws (GetFrameEvents) and draws them all; n >= 0 records them
         // and draws only events 0 to n (the frame as it stood after that draw; effects and post processing still run).
         int FrameDebugStop = -2;
+        // Quads drawn over the finished image, under the UI and gizmo lines: other cameras' views (CameraStack).
+        std::vector<UI::DrawCommand> Underlays;
     };
 
     // A draw the frame debugger recorded: the pass, the target it drew into, what it drew (a mesh's name, or "Sky",
@@ -446,6 +450,7 @@ namespace Dimension
         void BuildEntityOverlay(Scene& scene, Entity e);
         void FlushLines(VkCommandBuffer cmd, std::vector<LineVertex>& lines, const Pipeline& pipeline);
         void DrawUI(VkCommandBuffer cmd, Scene& scene, VkExtent2D extent);
+        void DrawQuads(VkCommandBuffer cmd, const std::vector<UI::DrawCommand>& commands, VkExtent2D extent);
         void RenderBloom(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings);
         // Renders the cube faces of each shadowed point light into the point shadow atlas.
         // faceCounts[i] is 6 for point lights and 1 for spot lights.
@@ -462,6 +467,9 @@ namespace Dimension
         static constexpr uint32_t kMaxPointShadows = 4;
         static constexpr uint32_t kPointShadowTile = 512;
     private:
+        // The camera's culling mask for this Render: objects on other layers are not drawn.
+        uint32_t m_CullingMask = ~0u;
+        bool LayerCulled(Scene& scene, Entity e) const;
         Scope<Image> m_PointShadowMap;
         uint32_t m_PointShadowBindless = 0;
 

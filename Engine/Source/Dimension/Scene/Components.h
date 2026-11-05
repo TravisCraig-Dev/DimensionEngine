@@ -106,6 +106,11 @@ namespace Dimension
         bool Primary = true;
         ClearMode Clear = ClearMode::SolidColor;
         glm::vec4 ClearColor{ 0.19f, 0.30f, 0.47f, 1.0f };
+        // Where on the screen it draws: x, y (from the top-left), width, height, as fractions of the screen. A camera
+        // other than the primary one draws over it when its rectangle is smaller than the screen (CameraStack).
+        glm::vec4 Viewport{ 0.0f, 0.0f, 1.0f, 1.0f };
+        float Depth = 0.0f;       // of the cameras drawn over the primary, higher ones go on top
+        int32_t CullingMask = -1; // layers it draws (bit n = layer n; -1 everything)
 
         glm::mat4 GetProjection(float aspect) const;
     };

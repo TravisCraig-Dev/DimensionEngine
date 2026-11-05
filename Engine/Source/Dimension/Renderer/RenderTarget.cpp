@@ -61,6 +61,7 @@ namespace Dimension
         auto& device = RenderDevice::Get();
         m_HdrBindless = device.RegisterTexture(m_Hdr.GetView(), device.GetClampSampler());
         m_LdrBindless = device.RegisterTexture(m_Ldr.GetView(), device.GetClampSampler());
+        m_OutputBindless = device.RegisterTexture(m_Output.GetView(), device.GetClampSampler());
         m_DepthBindless = device.RegisterTexture(m_Depth.GetView(), device.GetNearestClampSampler());
         m_SurfaceBindless = device.RegisterTexture(m_Surface.GetView(), device.GetNearestClampSampler());
         m_ReflectionsBindless = device.RegisterTexture(m_Reflections.GetView(), device.GetClampSampler());
@@ -89,6 +90,7 @@ namespace Dimension
         auto& device = RenderDevice::Get();
         device.UnregisterTexture(m_HdrBindless);
         device.UnregisterTexture(m_LdrBindless);
+        device.UnregisterTexture(m_OutputBindless);
         device.UnregisterTexture(m_DepthBindless);
         device.UnregisterTexture(m_SurfaceBindless);
         device.UnregisterTexture(m_ReflectionsBindless);

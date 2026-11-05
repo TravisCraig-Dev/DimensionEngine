@@ -38,6 +38,10 @@ namespace Dimension
         void SetTextMeasure(TextMeasure measure);
         float MeasureText(const std::string& text, float pixelSize);
 
+        // Set on a DrawCommand's Texture: the image already holds display (sRGB-encoded) values in a linear format (a
+        // camera's output image), so it is shown as it is.
+        constexpr uint32_t kDisplaySpaceTextureBit = 0x20000000u;
+
         // A textured, tinted screen-space quad (pixels, top-left origin), already clipped. Colors are display-space (sRGB).
         struct DrawCommand
         {

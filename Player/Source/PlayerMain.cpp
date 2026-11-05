@@ -14,6 +14,7 @@
 #include <Dimension/Project/Localization.h>
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Renderer/SceneRenderer.h>
+#include <Dimension/Renderer/CameraStack.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
@@ -128,6 +129,8 @@ namespace
             else Log::Warn("Scene has no camera");
             SceneRenderOptions options;
             options.RenderUI = true;
+            // Other cameras with smaller viewports draw over it (picture in picture, split screen).
+            m_Cameras.Render(cmd, *m_Scene, { m_Target->GetWidth(), m_Target->GetHeight() }, options.Underlays);
             m_Renderer.Render(cmd, *m_Scene, data, *m_Target, options);
             const RenderStats& st = m_Renderer.GetStats();
             Profiler::SetCounter("Draw Calls", (float)st.DrawCalls);
@@ -151,6 +154,7 @@ namespace
         Ref<Scene> m_Scene;
         Scope<SceneRenderTarget> m_Target;
         SceneRenderer m_Renderer;
+        CameraStack m_Cameras;
     };
 
     fs::path ExecutableDirectory()
