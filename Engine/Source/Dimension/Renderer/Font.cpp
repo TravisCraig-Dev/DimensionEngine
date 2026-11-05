@@ -5,6 +5,7 @@
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
+#include <unordered_map>
 #include <msdfgen.h>
 
 namespace Dimension
@@ -57,10 +58,79 @@ namespace Dimension
         }
     }
 
-    Ref<Font> Font::LoadFromMemory(const uint8_t* data, size_t size, const std::string& name)
+    // The font file (stb_truetype reads it in place), the atlas pixels kept for glyphs baked later, and those glyphs.
+    struct Font::Dynamic
     {
-        stbtt_fontinfo info;
-        if (!stbtt_InitFont(&info, data, stbtt_GetFontOffsetForIndex(data, 0)))
+        std::vector<uint8_t> Data;
+        stbtt_fontinfo Info{};
+        float Scale = 1.0f;
+        std::string Name;
+        static constexpr int kWidth = 2048, kHeight = 1024, kSpread = 6;
+        std::vector<uint32_t> Rgba;
+        int PenX = 1, PenY = 1, RowHeight = 0;
+        bool Full = false, Dirty = false;
+        std::unordered_map<uint32_t, Glyph> Glyphs;
+        std::unordered_map<uint32_t, bool> Has;
+
+        // Bakes a glyph's multi-channel distance field into the atlas (shelf packing); false when it does not fit.
+        bool Bake(uint32_t cp, Glyph& g)
+        {
+            constexpr int kWidthC = kWidth, kHeightC = kHeight;
+            auto toByte = [](float d) { return (uint32_t)std::clamp((int)std::lround(d * 255.0f), 0, 255); };
+            int advance, bearing;
+            stbtt_GetCodepointHMetrics(&Info, (int)cp, &advance, &bearing);
+            g.Advance = advance * Scale;
+            int x0, y0, x1, y1;
+            stbtt_GetCodepointBitmapBox(&Info, (int)cp, Scale, Scale, &x0, &y0, &x1, &y1);
+            if (x1 <= x0 || y1 <= y0) return true; // blank (a space)
+            int w = x1 - x0 + 2 * kSpread, h = y1 - y0 + 2 * kSpread, xoff = x0 - kSpread, yoff = y0 - kSpread;
+            if (PenX + w + 1 > kWidthC) { PenX = 1; PenY += RowHeight + 1; RowHeight = 0; }
+            if (PenY + h + 1 > kHeightC) { Full = true; return false; }
+            msdfgen::Shape shape;
+            if (GlyphShape(Info, (int)cp, shape))
+            {
+                // Pixel (x, row from the bottom) <- font units: x = scale * (fx + tx), row = scale * (fy + ty).
+                msdfgen::Bitmap<float, 4> field(w, h);
+                msdfgen::Projection projection(msdfgen::Vector2(Scale), msdfgen::Vector2(-xoff / Scale, (h + yoff) / Scale));
+                msdfgen::generateMTSDF(field, shape, msdfgen::SDFTransformation(projection, msdfgen::Range(2.0 * kSpread / Scale)));
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const float* d = field(x, h - 1 - y); // msdfgen rows go up, the atlas's down
+                        Rgba[size_t(PenY + y) * kWidthC + PenX + x] = toByte(d[0]) | toByte(d[1]) << 8 | toByte(d[2]) << 16 | toByte(d[3]) << 24;
+                    }
+            }
+            else
+            {
+                // No outline msdfgen can use: stb_truetype's single-channel field in all four channels.
+                int sw = 0, sh = 0, sx = 0, sy = 0;
+                unsigned char* sdf = stbtt_GetCodepointSDF(&Info, Scale, (int)cp, kSpread, 128, 128.0f / kSpread, &sw, &sh, &sx, &sy);
+                if (!sdf) return true;
+                for (int y = 0; y < std::min(sh, h); ++y)
+                    for (int x = 0; x < std::min(sw, w); ++x)
+                    {
+                        uint32_t d = sdf[size_t(y) * sw + x];
+                        Rgba[size_t(PenY + y) * kWidthC + PenX + x] = d | d << 8 | d << 16 | d << 24;
+                    }
+                stbtt_FreeSDF(sdf, nullptr);
+            }
+            g.UVMin = { PenX / (float)kWidthC, PenY / (float)kHeightC };
+            g.UVMax = { (PenX + w) / (float)kWidthC, (PenY + h) / (float)kHeightC };
+            g.Min = { (float)xoff, (float)yoff };
+            g.Max = { (float)(xoff + w), (float)(yoff + h) };
+            PenX += w + 1;
+            RowHeight = std::max(RowHeight, h);
+            Dirty = true;
+            return true;
+        }
+    };
+
+    Ref<Font> Font::LoadFromMemory(const uint8_t* data, size_t size, const std::string& name, bool bakeLatin1)
+    {
+        auto dyn = std::make_shared<Dynamic>();
+        dyn->Data.assign(data, data + size);
+        dyn->Name = name;
+        if (!stbtt_InitFont(&dyn->Info, dyn->Data.data(), stbtt_GetFontOffsetForIndex(dyn->Data.data(), 0)))
         {
             Log::Error("Invalid font '{}'", name);
             return nullptr;
@@ -69,81 +139,38 @@ namespace Dimension
         // Multi-channel signed distance field glyphs (MTSDF): RGB hold three distances whose median is the distance to
         // the outline with its corners kept sharp, alpha the true distance (for outlines and soft effects); 0.5 is on
         // the outline, with kSpread pixels of falloff each way at the bake size. Text stays crisp at any size.
-        constexpr int kWidth = 2048, kHeight = 1024, kSpread = 6;
-        std::vector<uint32_t> rgba(size_t(kWidth) * kHeight, 0u); // outside everywhere (the gutters too)
-        auto toByte = [](float d) { return (uint32_t)std::clamp((int)std::lround(d * 255.0f), 0, 255); };
+        dyn->Rgba.assign(size_t(Dynamic::kWidth) * Dynamic::kHeight, 0u); // outside everywhere (the gutters too)
         auto font = MakeRef<Font>();
-        float scale = stbtt_ScaleForPixelHeight(&info, kBakeSize);
+        font->m_Dynamic = dyn;
+        font->m_Latin1Baked = bakeLatin1;
+        dyn->Scale = stbtt_ScaleForPixelHeight(&dyn->Info, kBakeSize);
         int ascent, descent, lineGap;
-        stbtt_GetFontVMetrics(&info, &ascent, &descent, &lineGap);
-        font->m_Ascent = ascent * scale;
-        font->m_Descent = descent * scale;
-        font->m_LineGap = lineGap * scale;
-
-        int penX = 1, penY = 1, rowHeight = 0;
-        bool full = false;
-        for (uint32_t i = 0; i < kCharCount; ++i)
-        {
-            int cp = (int)(kFirstChar + i);
-            Glyph& g = font->m_Glyphs[i];
-            int advance, bearing;
-            stbtt_GetCodepointHMetrics(&info, cp, &advance, &bearing);
-            g.Advance = advance * scale;
-            // The glyph's box at the bake size, padded by the spread (as stb_truetype's own SDF does).
-            int x0, y0, x1, y1;
-            stbtt_GetCodepointBitmapBox(&info, cp, scale, scale, &x0, &y0, &x1, &y1);
-            if (x1 <= x0 || y1 <= y0) continue; // blank glyph (space)
-            int w = x1 - x0 + 2 * kSpread, h = y1 - y0 + 2 * kSpread, xoff = x0 - kSpread, yoff = y0 - kSpread;
-            // Shelf packing, one pixel apart.
-            if (penX + w + 1 > kWidth) { penX = 1; penY += rowHeight + 1; rowHeight = 0; }
-            if (penY + h + 1 > kHeight) { full = true; continue; }
-            msdfgen::Shape shape;
-            if (GlyphShape(info, cp, shape))
-            {
-                // Pixel (x, row from the bottom) <- font units: x = scale * (fx + tx), row = scale * (fy + ty).
-                msdfgen::Bitmap<float, 4> field(w, h);
-                msdfgen::Projection projection(msdfgen::Vector2(scale), msdfgen::Vector2(-xoff / scale, (h + yoff) / scale));
-                msdfgen::generateMTSDF(field, shape, msdfgen::SDFTransformation(projection, msdfgen::Range(2.0 * kSpread / scale)));
-                for (int y = 0; y < h; ++y)
-                    for (int x = 0; x < w; ++x)
-                    {
-                        const float* d = field(x, h - 1 - y); // msdfgen rows go up, the atlas's down
-                        rgba[size_t(penY + y) * kWidth + penX + x] = toByte(d[0]) | toByte(d[1]) << 8 | toByte(d[2]) << 16 | toByte(d[3]) << 24;
-                    }
-            }
-            else
-            {
-                // No outline msdfgen can use: stb_truetype's single-channel field in all four channels.
-                int sw = 0, sh = 0, sx = 0, sy = 0;
-                unsigned char* sdf = stbtt_GetCodepointSDF(&info, scale, cp, kSpread, 128, 128.0f / kSpread, &sw, &sh, &sx, &sy);
-                if (!sdf) continue;
-                for (int y = 0; y < std::min(sh, h); ++y)
-                    for (int x = 0; x < std::min(sw, w); ++x)
-                    {
-                        uint32_t d = sdf[size_t(y) * sw + x];
-                        rgba[size_t(penY + y) * kWidth + penX + x] = d | d << 8 | d << 16 | d << 24;
-                    }
-                stbtt_FreeSDF(sdf, nullptr);
-            }
-            g.UVMin = { penX / (float)kWidth, penY / (float)kHeight };
-            g.UVMax = { (penX + w) / (float)kWidth, (penY + h) / (float)kHeight };
-            g.Min = { (float)xoff, (float)yoff };
-            g.Max = { (float)(xoff + w), (float)(yoff + h) };
-            penX += w + 1;
-            rowHeight = std::max(rowHeight, h);
-        }
-        if (full) Log::Warn("Font '{}': some glyphs did not fit in the atlas", name);
-
-        TextureSettings settings;
-        settings.SRGB = false;
-        settings.GenerateMips = true;
-        font->m_Atlas = MakeRef<Texture2D>(rgba.data(), kWidth, kHeight, settings, name.c_str());
+        stbtt_GetFontVMetrics(&dyn->Info, &ascent, &descent, &lineGap);
+        font->m_Ascent = ascent * dyn->Scale;
+        font->m_Descent = descent * dyn->Scale;
+        font->m_LineGap = lineGap * dyn->Scale;
+        if (bakeLatin1)
+            for (uint32_t i = 0; i < kCharCount; ++i) dyn->Bake(kFirstChar + i, font->m_Glyphs[i]);
+        if (dyn->Full) Log::Warn("Font '{}': some glyphs did not fit in the atlas", name);
+        font->GetAtlasIndex(); // the atlas texture, now
         return font;
     }
 
-    uint32_t Font::GetAtlasIndex() const { return m_Atlas ? (m_Atlas->GetBindlessIndex() | kDistanceFieldBit | kMultiChannelBit) : 0u; }
+    uint32_t Font::GetAtlasIndex() const
+    {
+        if (m_Dynamic && (m_Dynamic->Dirty || !m_Atlas))
+        {
+            // Glyphs were baked since the atlas went up: upload it again (the old one goes once the GPU is done with it).
+            TextureSettings settings;
+            settings.SRGB = false;
+            settings.GenerateMips = true;
+            m_Atlas = MakeRef<Texture2D>(m_Dynamic->Rgba.data(), Dynamic::kWidth, Dynamic::kHeight, settings, m_Dynamic->Name.c_str());
+            m_Dynamic->Dirty = false;
+        }
+        return m_Atlas ? (m_Atlas->GetBindlessIndex() | kDistanceFieldBit | kMultiChannelBit) : 0u;
+    }
 
-    Ref<Font> Font::LoadFromFile(const fs::path& path)
+    Ref<Font> Font::LoadFromFile(const fs::path& path, bool bakeLatin1)
     {
         std::ifstream in(path, std::ios::binary);
         if (!in)
@@ -152,13 +179,220 @@ namespace Dimension
             return nullptr;
         }
         std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        return LoadFromMemory(bytes.data(), bytes.size(), path.filename().string());
+        return LoadFromMemory(bytes.data(), bytes.size(), path.filename().string(), bakeLatin1);
+    }
+
+    bool Font::HasGlyph(uint32_t cp) const
+    {
+        if (cp == ' ' || cp == '\t') return true;
+        if (!m_Dynamic) return cp >= kFirstChar && cp < kFirstChar + kCharCount;
+        auto it = m_Dynamic->Has.find(cp);
+        if (it != m_Dynamic->Has.end()) return it->second;
+        bool has = stbtt_FindGlyphIndex(&m_Dynamic->Info, (int)cp) != 0;
+        m_Dynamic->Has[cp] = has;
+        return has;
     }
 
     const Glyph& Font::GetGlyph(uint32_t cp) const
     {
-        if (cp < kFirstChar || cp >= kFirstChar + kCharCount) cp = '?';
-        return m_Glyphs[cp - kFirstChar];
+        if (m_Latin1Baked && cp >= kFirstChar && cp < kFirstChar + kCharCount) return m_Glyphs[cp - kFirstChar];
+        if (m_Dynamic)
+        {
+            if (auto it = m_Dynamic->Glyphs.find(cp); it != m_Dynamic->Glyphs.end()) return it->second;
+            if (HasGlyph(cp))
+            {
+                Glyph g;
+                if (m_Dynamic->Bake(cp, g) || g.Advance > 0.0f) return m_Dynamic->Glyphs[cp] = g;
+                static bool warned = false;
+                if (!warned) Log::Warn("Font '{}': its atlas is full; later characters show as '?'", m_Dynamic->Name);
+                warned = true;
+            }
+        }
+        if (cp != '?') return GetGlyph('?');
+        static const Glyph none;
+        return m_Latin1Baked ? m_Glyphs['?' - kFirstChar] : none;
+    }
+
+    namespace
+    {
+        std::vector<Ref<Font>>& Fallbacks()
+        {
+            static std::vector<Ref<Font>> fonts;
+            return fonts;
+        }
+        bool& FallbacksSet()
+        {
+            static bool set = false;
+            return set;
+        }
+    }
+
+    void Font::SetFallbackFonts(std::vector<Ref<Font>> fonts)
+    {
+        Fallbacks() = std::move(fonts);
+        FallbacksSet() = true;
+    }
+
+    const std::vector<Ref<Font>>& Font::GetFallbackFonts()
+    {
+        if (!FallbacksSet())
+        {
+            FallbacksSet() = true;
+            std::vector<fs::path> candidates;
+#ifdef _WIN32
+            for (const char* name : { "segoeui.ttf", "seguisym.ttf", "msyh.ttc", "malgun.ttf", "Nirmala.ttf" })
+                candidates.push_back(fs::path("C:/Windows/Fonts") / name);
+#else
+            for (const char* p : { "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                                   "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf" })
+                candidates.push_back(p);
+#endif
+            std::error_code ec;
+            for (const fs::path& p : candidates)
+                if (fs::exists(p, ec))
+                    if (auto f = LoadFromFile(p, false)) Fallbacks().push_back(f);
+        }
+        return Fallbacks();
+    }
+
+    namespace
+    {
+        // Arabic letters U+0621..U+064A: their first presentation form (isolated; then final, initial, medial for
+        // letters joining both sides) in Arabic Presentation Forms-B, and whether they join the next letter.
+        struct ArabicForms
+        {
+            uint16_t Isolated;
+            bool Dual;
+        };
+        const ArabicForms* ArabicLetter(uint32_t cp)
+        {
+            static const ArabicForms table[] = {
+                { 0xFE80, false }, { 0xFE81, false }, { 0xFE83, false }, { 0xFE85, false }, { 0xFE87, false }, { 0xFE89, true },  // 0621-0626
+                { 0xFE8D, false }, { 0xFE8F, true },  { 0xFE93, false }, { 0xFE95, true },  { 0xFE99, true },  { 0xFE9D, true },  // 0627-062C
+                { 0xFEA1, true },  { 0xFEA5, true },  { 0xFEA9, false }, { 0xFEAB, false }, { 0xFEAD, false }, { 0xFEAF, false }, // 062D-0632
+                { 0xFEB1, true },  { 0xFEB5, true },  { 0xFEB9, true },  { 0xFEBD, true },  { 0xFEC1, true },  { 0xFEC5, true },  // 0633-0638
+                { 0xFEC9, true },  { 0xFECD, true },  { 0, false },      { 0, false },      { 0, false },      { 0, false },      // 0639-063E
+                { 0, false },      { 0, false },      { 0xFED1, true },  { 0xFED5, true },  { 0xFED9, true },  { 0xFEDD, true },  // 063F-0644
+                { 0xFEE1, true },  { 0xFEE5, true },  { 0xFEE9, true },  { 0xFEED, false }, { 0xFEEF, false }, { 0xFEF1, true },  // 0645-064A
+            };
+            if (cp < 0x0621 || cp > 0x064A) return nullptr;
+            const ArabicForms& f = table[cp - 0x0621];
+            return f.Isolated ? &f : nullptr;
+        }
+        bool Transparent(uint32_t cp) { return (cp >= 0x064B && cp <= 0x065F) || cp == 0x0670; } // harakat
+        bool JoinsNext(uint32_t cp) { return cp == 0x0640 || (ArabicLetter(cp) && ArabicLetter(cp)->Dual); }
+        bool JoinsPrev(uint32_t cp) { return cp == 0x0640 || ArabicLetter(cp); }
+
+        enum class BidiClass { L, R, EN, N };
+        BidiClass ClassOf(uint32_t cp)
+        {
+            if ((cp >= 0x0590 && cp <= 0x08FF) || (cp >= 0xFB1D && cp <= 0xFDFF) || (cp >= 0xFE70 && cp <= 0xFEFF))
+                return (cp >= 0x0660 && cp <= 0x0669) || (cp >= 0x06F0 && cp <= 0x06F9) ? BidiClass::EN : BidiClass::R;
+            if (cp >= '0' && cp <= '9') return BidiClass::EN;
+            if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0xC0 && cp != 0xD7 && cp != 0xF7 && cp < 0x2000) || cp >= 0x2E80)
+                return BidiClass::L;
+            return BidiClass::N;
+        }
+        uint32_t Mirrored(uint32_t cp)
+        {
+            switch (cp)
+            {
+            case '(': return ')'; case ')': return '(';
+            case '[': return ']'; case ']': return '[';
+            case '{': return '}'; case '}': return '{';
+            case '<': return '>'; case '>': return '<';
+            case 0xAB: return 0xBB; case 0xBB: return 0xAB;
+            default: return cp;
+            }
+        }
+    }
+
+    void Font::ShapeArabic(std::vector<StyledChar>& chars)
+    {
+        auto neighbour = [&](size_t i, int dir) -> uint32_t {
+            for (int64_t j = (int64_t)i + dir; j >= 0 && j < (int64_t)chars.size(); j += dir)
+                if (!Transparent(chars[j].Codepoint)) return chars[j].Codepoint;
+            return 0;
+        };
+        std::vector<StyledChar> out;
+        out.reserve(chars.size());
+        for (size_t i = 0; i < chars.size(); ++i)
+        {
+            StyledChar c = chars[i];
+            const ArabicForms* f = ArabicLetter(c.Codepoint);
+            if (!f)
+            {
+                out.push_back(c);
+                continue;
+            }
+            bool prev = JoinsNext(neighbour(i, -1));
+            uint32_t nextCp = neighbour(i, +1);
+            // Lam then alef: one ligature (isolated or final).
+            if (c.Codepoint == 0x0644 && (nextCp == 0x0622 || nextCp == 0x0623 || nextCp == 0x0625 || nextCp == 0x0627))
+            {
+                uint32_t lig = nextCp == 0x0622 ? 0xFEF5 : nextCp == 0x0623 ? 0xFEF7 : nextCp == 0x0625 ? 0xFEF9 : 0xFEFB;
+                c.Codepoint = lig + (prev ? 1 : 0);
+                out.push_back(c);
+                size_t j = i + 1;
+                while (j < chars.size() && Transparent(chars[j].Codepoint)) out.push_back(chars[j++]);
+                i = j; // the alef is in the ligature
+                continue;
+            }
+            bool next = f->Dual && JoinsPrev(nextCp);
+            int form = f->Dual ? (prev && next ? 3 : prev ? 1 : next ? 2 : 0) : (prev ? 1 : 0);
+            c.Codepoint = f->Isolated + form;
+            out.push_back(c);
+        }
+        chars = std::move(out);
+    }
+
+    void Font::ReorderBidi(std::vector<StyledChar*>& line)
+    {
+        size_t n = line.size();
+        std::vector<BidiClass> cls(n);
+        bool anyR = false;
+        for (size_t i = 0; i < n; ++i)
+        {
+            cls[i] = ClassOf(line[i]->Codepoint);
+            anyR |= cls[i] == BidiClass::R;
+        }
+        if (!anyR) return; // all left-to-right: nothing moves
+        BidiClass para = BidiClass::L;
+        for (BidiClass c : cls)
+            if (c == BidiClass::L || c == BidiClass::R) { para = c; break; }
+        bool rtl = para == BidiClass::R;
+        // Neutrals between two characters of one direction take it (numbers count as right-to-left in a right-to-left
+        // paragraph); others the paragraph's.
+        auto strongOf = [&](BidiClass c) { return c == BidiClass::EN ? (rtl ? BidiClass::R : BidiClass::L) : c; };
+        std::vector<int> level(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            BidiClass c = cls[i];
+            if (c == BidiClass::N)
+            {
+                BidiClass before = para, after = para;
+                for (int64_t j = (int64_t)i - 1; j >= 0; --j)
+                    if (cls[j] != BidiClass::N) { before = strongOf(cls[j]); break; }
+                for (size_t j = i + 1; j < n; ++j)
+                    if (cls[j] != BidiClass::N) { after = strongOf(cls[j]); break; }
+                c = before == after ? before : para;
+            }
+            level[i] = c == BidiClass::R ? 1 : (rtl ? 2 : 0); // numbers and left-to-right text: even, above the paragraph
+        }
+        // Reverse every run at or above each level, highest first.
+        int maxLevel = *std::max_element(level.begin(), level.end());
+        for (int k = maxLevel; k >= 1; --k)
+            for (size_t i = 0; i < n;)
+            {
+                if (level[i] < k) { ++i; continue; }
+                size_t j = i;
+                while (j < n && level[j] >= k) ++j;
+                std::reverse(line.begin() + i, line.begin() + j);
+                std::reverse(level.begin() + i, level.begin() + j);
+                i = j;
+            }
+        for (size_t i = 0; i < n; ++i)
+            if (level[i] % 2 == 1) line[i]->Codepoint = Mirrored(line[i]->Codepoint);
     }
 
     namespace
@@ -316,20 +550,29 @@ namespace Dimension
                 chars.push_back(c);
             }
 
+        ShapeArabic(chars);
+        // Which font draws each character: this one, else the first fallback that has it.
+        for (StyledChar& c : chars)
+        {
+            c.Source = this;
+            if (c.Codepoint < 0x100 || c.Codepoint == '\n' || HasGlyph(c.Codepoint)) continue;
+            for (const Ref<Font>& f : GetFallbackFonts())
+                if (f && f->HasGlyph(c.Codepoint)) { c.Source = f.get(); break; }
+        }
         // Pixel size of a character: <size=N> is in the text's size units, <size=N%> scales.
         auto charPx = [&](const StyledChar& c) { return (c.Size > 0.0f ? c.Size * sizeUnit : pixelSize) * c.SizeScale; };
         auto boldOffset = [&](const StyledChar& c) { return c.Bold ? charPx(c) * 0.045f : 0.0f; };
-        auto advance = [&](const StyledChar& c) { return GetGlyph(c.Codepoint).Advance * charPx(c) / kBakeSize + boldOffset(c); };
+        auto advance = [&](const StyledChar& c) { return c.Source->GetGlyph(c.Codepoint).Advance * charPx(c) / kBakeSize + boldOffset(c); };
         struct Line
         {
-            std::vector<const StyledChar*> Chars;
+            std::vector<StyledChar*> Chars;
             float Width = 0.0f;
             float Px = 0.0f; // largest character size on the line (its height and ascent follow it)
         };
         std::vector<Line> lines(1);
 
         // Greedy word wrap.
-        std::vector<const StyledChar*> word;
+        std::vector<StyledChar*> word;
         float wordWidth = 0.0f;
         auto flushWord = [&] {
             Line& line = lines.back();
@@ -349,7 +592,7 @@ namespace Dimension
             word.clear();
             wordWidth = 0.0f;
         };
-        for (const StyledChar& c : chars)
+        for (StyledChar& c : chars)
         {
             if (c.Codepoint == '\r') continue;
             if (c.Codepoint == '\n')
@@ -377,14 +620,16 @@ namespace Dimension
         outSize = { widest, height };
 
         std::vector<TextQuad> quads;
+        std::vector<const Font*> quadFonts; // the font of each quad (fallback quads get its atlas at the end)
         float top = 0.0f;
-        for (const Line& line : lines)
+        for (Line& line : lines)
         {
+            ReorderBidi(line.Chars); // visual order (right-to-left runs reversed)
             float x = align == TextAlign::Left ? 0.0f : align == TextAlign::Center ? (blockWidth - line.Width) * 0.5f : blockWidth - line.Width;
             float baseline = top + m_Ascent * line.Px / kBakeSize;
             for (const StyledChar* c : line.Chars)
             {
-                const Glyph& g = GetGlyph(c->Codepoint);
+                const Glyph& g = c->Source->GetGlyph(c->Codepoint);
                 float s = charPx(*c) / kBakeSize, adv = advance(*c);
                 if (g.Max.x > g.Min.x && c->Codepoint != ' ')
                 {
@@ -398,12 +643,14 @@ namespace Dimension
                     q.Min.x -= q.Skew * below;
                     q.Max.x -= q.Skew * below;
                     quads.push_back(q);
+                    quadFonts.push_back(c->Source);
                     if (c->Bold) // faux bold: the glyph again, a little to the right
                     {
                         TextQuad b = q;
                         b.Min.x += boldOffset(*c);
                         b.Max.x += boldOffset(*c);
                         quads.push_back(b);
+                        quadFonts.push_back(c->Source);
                     }
                 }
                 // Underline below the baseline, strikethrough through the middle of lowercase letters.
@@ -413,6 +660,7 @@ namespace Dimension
                     q.HasColor = c->HasColor;
                     q.Solid = true;
                     quads.push_back(q);
+                    quadFonts.push_back(this);
                 };
                 float px = charPx(*c), thickness = std::max(1.0f, px * 0.06f);
                 if (c->Underline) rule(baseline + px * 0.12f, thickness);
@@ -421,6 +669,9 @@ namespace Dimension
             }
             top += GetLineHeight() * line.Px / kBakeSize;
         }
+        // Characters from fallback fonts: their atlases (after all the glyphs above were baked).
+        for (size_t i = 0; i < quads.size(); ++i)
+            if (quadFonts[i] != this) quads[i].Atlas = quadFonts[i]->GetAtlasIndex();
         return quads;
     }
 }

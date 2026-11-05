@@ -3462,7 +3462,7 @@ namespace Dimension
                 d.Color = q.HasColor ? glm::vec4(glm::vec3(ToLinear(q.Color)), q.Color.a * color.a) : color;
                 d.UVMin = { q.UVMin.x, q.UVMax.y };
                 d.UVMax = { q.UVMax.x, q.UVMin.y };
-                d.Texture = q.Solid ? white : atlas;
+                d.Texture = q.Solid ? white : q.Atlas ? q.Atlas : atlas;
                 d.Entity = e.Index + 1;
                 d.Order = text.SortingOrder;
                 d.Depth = depth;

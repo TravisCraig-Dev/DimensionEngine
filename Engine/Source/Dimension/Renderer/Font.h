@@ -28,6 +28,7 @@ namespace Dimension
         bool HasColor = false;
         float Skew = 0.0f;
         bool Solid = false;
+        uint32_t Atlas = 0; // a fallback font's atlas (as GetAtlasIndex gives it) for a character this font lacks; 0: this font's
     };
 
     // A character of rich text with the style its tags give it.
@@ -39,19 +40,34 @@ namespace Dimension
         float Size = -1.0f; // <size> in the text's size units; < 0 = the text's own size
         float SizeScale = 1.0f; // <size=N%>, multiplied in
         bool Bold = false, Italic = false, Underline = false, Strikethrough = false;
+        const class Font* Source = nullptr; // Layout: the font that draws it (this one or a fallback)
     };
 
-    // TrueType font baked into a texture atlas (Latin-1, codepoints 32..255) with stb_truetype.
+    // TrueType font baked into a texture atlas with stb_truetype and msdfgen: Latin-1 (codepoints 32..255) up front,
+    // any other character the font has when text first uses it (the atlas is uploaded again once a frame at most).
+    // Characters it lacks come from the fallback fonts; Arabic is shaped and right-to-left runs reordered.
     class Font
     {
     public:
         static constexpr float kBakeSize = 64.0f;
         static constexpr uint32_t kFirstChar = 32, kCharCount = 224;
 
-        static Ref<Font> LoadFromMemory(const uint8_t* data, size_t size, const std::string& name);
-        static Ref<Font> LoadFromFile(const fs::path& path);
+        // `bakeLatin1` false: every glyph is baked when first used (fallback fonts load at once that way).
+        static Ref<Font> LoadFromMemory(const uint8_t* data, size_t size, const std::string& name, bool bakeLatin1 = true);
+        static Ref<Font> LoadFromFile(const fs::path& path, bool bakeLatin1 = true);
 
-        const Glyph& GetGlyph(uint32_t codepoint) const;
+        const Glyph& GetGlyph(uint32_t codepoint) const; // baked on first use; '?' when the font lacks it
+        bool HasGlyph(uint32_t codepoint) const;
+        // Fonts asked, in order, for characters a font lacks. By default (first use) the system's: on Windows Segoe UI
+        // (Greek, Cyrillic, Arabic, Hebrew...), Segoe UI Symbol, Microsoft YaHei (Chinese, Japanese kana), Malgun Gothic
+        // (Korean) and Nirmala UI (Indic), as far as they are installed.
+        static void SetFallbackFonts(std::vector<Ref<Font>> fonts);
+        static const std::vector<Ref<Font>>& GetFallbackFonts();
+        // Text in its shaped, visual order: Arabic letters in their joined forms (and lam-alef ligatures), and right-to-
+        // left runs reversed (a simplified Unicode bidirectional algorithm: a paragraph takes its first strong
+        // character's direction, numbers stay left-to-right, brackets mirror). Layout does both; exposed for tests.
+        static void ShapeArabic(std::vector<StyledChar>& chars);
+        static void ReorderBidi(std::vector<StyledChar*>& line);
         const Ref<Texture2D>& GetAtlas() const { return m_Atlas; }
         // Bindless index of the atlas with kDistanceFieldBit set: the UI and sprite shaders read its alpha as a signed
         // distance (0.5 on the outline) instead of coverage.
@@ -79,8 +95,11 @@ namespace Dimension
         static std::string StripRichText(std::string_view text);
 
     private:
+        struct Dynamic; // the font file, the atlas pixels and the glyphs baked since loading
         std::array<Glyph, kCharCount> m_Glyphs{};
-        Ref<Texture2D> m_Atlas;
+        mutable Ref<Texture2D> m_Atlas;
+        std::shared_ptr<Dynamic> m_Dynamic;
+        bool m_Latin1Baked = true;
         float m_Ascent = 0, m_Descent = 0, m_LineGap = 0;
     };
 }

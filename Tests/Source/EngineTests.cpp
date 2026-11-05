@@ -6990,6 +6990,44 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // Complex scripts: Arabic letters take their joined forms (and lam-alef its ligature), and right-to-left runs are
+    // reordered for display (numbers and Latin words inside stay left-to-right, brackets mirror).
+    void TestTextShapingAndBidi()
+    {
+        auto styled = [](std::u32string s) {
+            std::vector<StyledChar> v;
+            for (char32_t c : s) v.push_back(StyledChar{ (uint32_t)c });
+            return v;
+        };
+        auto codes = [](const std::vector<StyledChar>& v) {
+            std::u32string s;
+            for (auto& c : v) s += (char32_t)c.Codepoint;
+            return s;
+        };
+        auto shaped = styled(U"سلام"); // salaam: seen, lam-alef, meem
+        Font::ShapeArabic(shaped);
+        CHECK(codes(shaped) == U"ﺳﻼﻡ");
+        auto bayt = styled(U"بيت"); // beh yeh teh: initial, medial, final
+        Font::ShapeArabic(bayt);
+        CHECK(codes(bayt) == U"ﺑﻴﺖ");
+        auto spaced = styled(U"ب ب"); // a space breaks the joining: isolated twice
+        Font::ShapeArabic(spaced);
+        CHECK(codes(spaced) == U"ﺏ ﺏ");
+        auto visual = [&](std::u32string s) {
+            auto v = styled(s);
+            std::vector<StyledChar*> line;
+            for (auto& c : v) line.push_back(&c);
+            Font::ReorderBidi(line);
+            std::u32string out;
+            for (auto* c : line) out += (char32_t)c->Codepoint;
+            return out;
+        };
+        CHECK(visual(U"abc def") == U"abc def");                                 // nothing to do
+        CHECK(visual(U"abc אבג def") == U"abc גבא def"); // a Hebrew word in English
+        CHECK(visual(U"אבג abc 123") == U"123 abc גבא"); // an English word and a number in Hebrew
+        CHECK(visual(U"(א)") == U"(א)");                               // brackets mirror
+    }
+
     // UI Mask: children clipped to the mask's rect (drawing and hit testing); the mask itself is not.
     void TestUIMask()
     {
@@ -14747,6 +14785,7 @@ int main(int argc, char** argv)
     Run("UI flex layout", TestUIFlexLayout);
     Run("UI binding", TestUIBinding);
     Run("UI list view", TestUIListView);
+    Run("Text shaping and bidi", TestTextShapingAndBidi);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

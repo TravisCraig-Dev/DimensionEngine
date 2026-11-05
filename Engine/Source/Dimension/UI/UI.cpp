@@ -415,7 +415,7 @@ namespace Dimension::UI
             for (auto& q : quads)
             {
                 glm::vec4 c = q.HasColor ? glm::vec4(glm::vec3(q.Color), q.Color.a * color.a) : color;
-                Emit(out, origin + q.Min, origin + q.Max, q.UVMin, q.UVMax, c, q.Solid ? white : atlas, clip, q.Skew);
+                Emit(out, origin + q.Min, origin + q.Max, q.UVMin, q.UVMax, c, q.Solid ? white : q.Atlas ? q.Atlas : atlas, clip, q.Skew);
             }
         }
 
@@ -448,7 +448,7 @@ namespace Dimension::UI
             auto quads = font.Layout(text, pixelSize, 0.0f, TextAlign::Left, 0.0f, block);
             glm::vec2 o = origin + glm::vec2(0.0f, (boxHeight - block.y) * 0.5f);
             uint32_t atlas = font.GetAtlasIndex();
-            for (auto& q : quads) Emit(out, o + q.Min, o + q.Max, q.UVMin, q.UVMax, color, atlas, clip);
+            for (auto& q : quads) Emit(out, o + q.Min, o + q.Max, q.UVMin, q.UVMax, color, q.Atlas ? q.Atlas : atlas, clip);
             return block.x;
         }
 
@@ -459,9 +459,22 @@ namespace Dimension::UI
 
         float TextWidth(const Font& font, const std::string& text, float pixelSize)
         {
+            // Each character's advance, from the font that draws it (a fallback for characters this one lacks).
             float w = 0.0f;
-            for (unsigned char c : text)
-                if (c >= Font::kFirstChar && (c & 0xC0) != 0x80) w += font.GetGlyph(c).Advance;
+            for (size_t i = 0; i < text.size();)
+            {
+                unsigned char c = (unsigned char)text[i];
+                int extra = c < 0x80 ? 0 : (c >> 5) == 0x6 ? 1 : (c >> 4) == 0xE ? 2 : (c >> 3) == 0x1E ? 3 : 0;
+                uint32_t cp = extra ? c & (0x3F >> extra) : c;
+                for (int k = 1; k <= extra && i + k < text.size(); ++k) cp = (cp << 6) | ((unsigned char)text[i + k] & 0x3F);
+                i += 1 + extra;
+                if (cp < Font::kFirstChar) continue;
+                const Font* f = &font;
+                if (cp >= 0x100 && !font.HasGlyph(cp))
+                    for (const Ref<Font>& fb : Font::GetFallbackFonts())
+                        if (fb && fb->HasGlyph(cp)) { f = fb.get(); break; }
+                w += f->GetGlyph(cp).Advance;
+            }
             return w * pixelSize / Font::kBakeSize;
         }
 
