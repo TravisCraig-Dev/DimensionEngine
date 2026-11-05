@@ -6819,6 +6819,78 @@ namespace
         CHECK(Near(rr.ComputedMax.y - rr.ComputedMin.y, 70.0f) && Near(rr.ComputedMax.x - rr.ComputedMin.x, 300.0f));
     }
 
+    class BindProbe : public ScriptableEntity
+    {
+    public:
+        float Volume = 0.25f;
+        int Count = 3;
+        bool Muted = false;
+        std::string PlayerName = "Ada";
+    };
+
+    // UI Binding: script fields shown in texts (formatted), sliders, toggles and input fields, and the player's
+    // changes to those widgets written back.
+    void TestUIBinding()
+    {
+        CHECK(UI::FormatBinding(2.5f, "Volume {0:F2}!") == "Volume 2.50!" && UI::FormatBinding(7, "") == "7" &&
+              UI::FormatBinding(nlohmann::json::array({ 1, 2 }), "({0})") == "(1, 2)");
+        Scene scene("Binding");
+        auto& reg = scene.GetRegistry();
+        Entity model = scene.CreateEntity("Model");
+        reg.Emplace<ScriptComponent>(model).Add("BindProbe");
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas);
+        auto bound = [&](const char* name, const char* path, const char* format) {
+            Entity e = scene.CreateEntity(name, canvas);
+            reg.Emplace<UIRectComponent>(e);
+            auto& bc = reg.Emplace<UIBindingComponent>(e);
+            bc.Source = model;
+            bc.Path = path;
+            bc.Format = format;
+            return e;
+        };
+        Entity countText = bound("CountText", "BindProbe.Count", "Count: {0}");
+        reg.Emplace<UITextComponent>(countText);
+        Entity volumeText = bound("VolumeText", "Volume", "{0:F1}");
+        reg.Emplace<UITextComponent>(volumeText);
+        Entity slider = bound("Slider", "BindProbe.Volume", "");
+        reg.Emplace<UISliderComponent>(slider);
+        Entity toggle = bound("Toggle", "BindProbe.Muted", "");
+        reg.Emplace<UIToggleComponent>(toggle);
+        Entity field = bound("Field", "BindProbe.PlayerName", "");
+        reg.Emplace<UIInputFieldComponent>(field);
+        Entity broken = bound("Broken", "BindProbe.Nope", "");
+        reg.Emplace<UITextComponent>(broken).Text = "kept";
+        scene.UpdateTransforms();
+        scene.OnRuntimeStart();
+        auto frame = [&] {
+            scene.SetUIInput({ -10, -10 }, false, { 800, 600 });
+            scene.OnUpdateRuntime(0.016f);
+        };
+        auto& probe = static_cast<BindProbe&>(*reg.Get<ScriptComponent>(model).Scripts[0].Instance);
+        frame();
+        CHECK(reg.Get<UITextComponent>(countText).Text == "Count: 3" && reg.Get<UITextComponent>(volumeText).Text == "0.2");
+        CHECK(Near(reg.Get<UISliderComponent>(slider).Value, 0.25f) && !reg.Get<UIToggleComponent>(toggle).IsOn);
+        CHECK(reg.Get<UIInputFieldComponent>(field).Text == "Ada" && reg.Get<UITextComponent>(broken).Text == "kept");
+        probe.Count = 12;
+        probe.Muted = true;
+        frame();
+        CHECK(reg.Get<UITextComponent>(countText).Text == "Count: 12" && reg.Get<UIToggleComponent>(toggle).IsOn);
+        // The player moves the slider and types a name: the fields follow (and the other bound text with them).
+        reg.Get<UISliderComponent>(slider).Value = 0.75f;
+        reg.Get<UIInputFieldComponent>(field).Text = "Grace";
+        frame();
+        CHECK(Near(probe.Volume, 0.75f) && probe.PlayerName == "Grace");
+        frame();
+        CHECK(reg.Get<UITextComponent>(volumeText).Text == "0.8");
+        // One way: the widget's changes stay in the widget.
+        reg.Get<UIBindingComponent>(toggle).TwoWay = false;
+        reg.Get<UIToggleComponent>(toggle).IsOn = false;
+        frame();
+        CHECK(probe.Muted);
+        scene.OnRuntimeStop();
+    }
+
     // UI Mask: children clipped to the mask's rect (drawing and hit testing); the mask itself is not.
     void TestUIMask()
     {
@@ -14467,6 +14539,7 @@ int main(int argc, char** argv)
     ComponentRegistry::RegisterBuiltins();
     ScriptRegistry::Register<ClickCounter>("ClickCounter");
     ScriptRegistry::Register<PointerProbe>("PointerProbe");
+    ScriptRegistry::Register<BindProbe>("BindProbe").Field("Volume", &BindProbe::Volume).Field("Count", &BindProbe::Count).Field("Muted", &BindProbe::Muted).Field("PlayerName", &BindProbe::PlayerName);
     ScriptRegistry::Register<LateProbe>("LateProbe");
     ScriptRegistry::Register<CoroutineProbe>("CoroutineProbe");
     ScriptRegistry::Register<CharacterProbe>("CharacterProbe");
@@ -14537,6 +14610,7 @@ int main(int argc, char** argv)
     Run("UI styles", TestUIStyles);
     Run("UI style states", TestUIStyleStates);
     Run("UI flex layout", TestUIFlexLayout);
+    Run("UI binding", TestUIBinding);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

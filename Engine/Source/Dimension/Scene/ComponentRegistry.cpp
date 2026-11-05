@@ -582,6 +582,11 @@ namespace Dimension
         Register<UIContentSizeFitterComponent>("UI Content Size Fitter", "UI")
             .Field("Horizontal Fit", &UIContentSizeFitterComponent::Horizontal).Enum({ "Unconstrained", "Preferred Size" })
             .Field("Vertical Fit", &UIContentSizeFitterComponent::Vertical).Enum({ "Unconstrained", "Preferred Size" });
+        Register<UIBindingComponent>("UI Binding", "UI")
+            .Field("Source", &UIBindingComponent::Source).Tooltip("The object with the script (None: this one or the nearest parent with it)")
+            .Field("Path", &UIBindingComponent::Path).Tooltip("Script.Field, e.g. Player.Health (or just the field)")
+            .Field("Format", &UIBindingComponent::Format).Tooltip("Text: {0} is the value, {0:F1} with one decimal (empty: the value)")
+            .Field("Two Way", &UIBindingComponent::TwoWay).Tooltip("Sliders, toggles, input fields and dropdowns write the player's changes back");
         Register<UIStyleComponent>("UI Style", "UI")
             .Field("Sheet", &UIStyleComponent::Sheet).As(FieldType::UIStyleSheet).Tooltip("None: the nearest parent UI Style's sheet")
             .Field("Classes", &UIStyleComponent::Classes).Tooltip("Space-separated classes of the sheet, applied in order");

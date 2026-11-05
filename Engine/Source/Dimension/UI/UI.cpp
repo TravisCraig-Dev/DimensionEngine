@@ -11,6 +11,10 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
+#include "Dimension/Scripting/ScriptRegistry.h"
+#include "Dimension/Scripting/ScriptableEntity.h"
+#include <format>
+#include <unordered_set>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -1153,6 +1157,142 @@ namespace Dimension::UI
             }
         }
         return restyled;
+    }
+
+    namespace
+    {
+        struct BoundField
+        {
+            ScriptableEntity* Instance = nullptr;
+            const FieldInfo* Field = nullptr;
+            void* Object = nullptr;
+        };
+
+        // The script field a binding names: on its Source, or on the element or its nearest parent with the script.
+        bool ResolveBinding(Scene& scene, Entity e, const UIBindingComponent& b, BoundField& out)
+        {
+            auto& reg = scene.GetRegistry();
+            size_t dot = b.Path.rfind('.');
+            std::string cls = dot == std::string::npos ? std::string() : b.Path.substr(0, dot);
+            std::string field = dot == std::string::npos ? b.Path : b.Path.substr(dot + 1);
+            if (field.empty()) return false;
+            auto matches = [&](const std::string& name) {
+                return cls.empty() || name == cls || (name.size() > cls.size() && name.ends_with("." + cls));
+            };
+            bool fixed = scene.IsValid(b.Source);
+            for (Entity s = fixed ? b.Source : e; scene.IsValid(s); s = fixed ? Entity::Null() : scene.GetParent(s))
+            {
+                auto* sc = reg.TryGet<ScriptComponent>(s);
+                if (!sc) continue;
+                for (auto& inst : sc->Scripts)
+                {
+                    if (!inst.Instance || !matches(inst.ClassName)) continue;
+                    const ScriptInfo* info = ScriptRegistry::Find(inst.ClassName);
+                    if (!info) continue;
+                    for (const FieldInfo& f : info->Fields)
+                        if (f.Name == field)
+                        {
+                            out = { inst.Instance.get(), &f, info->ToObject(inst.Instance.get()) };
+                            return true;
+                        }
+                }
+            }
+            return false;
+        }
+
+        // What a bindable widget shows (null: none).
+        nlohmann::json WidgetValue(Registry& reg, Entity e)
+        {
+            if (auto* s = reg.TryGet<UISliderComponent>(e)) return s->Value;
+            if (auto* t = reg.TryGet<UIToggleComponent>(e)) return t->IsOn;
+            if (auto* f = reg.TryGet<UIInputFieldComponent>(e)) return f->Text;
+            if (auto* d = reg.TryGet<UIDropdownComponent>(e)) return d->Value;
+            return nullptr;
+        }
+
+        std::string BindingText(const nlohmann::json& v, const std::string& spec)
+        {
+            if (v.is_string()) return v.get<std::string>();
+            if (v.is_boolean()) return v.get<bool>() ? "true" : "false";
+            if (v.is_number_integer()) return std::to_string(v.get<int64_t>());
+            if (v.is_number())
+            {
+                double d = v.get<double>();
+                if (spec.size() >= 2 && (spec[0] == 'F' || spec[0] == 'f' || spec[0] == 'N' || spec[0] == 'n') && std::isdigit((unsigned char)spec[1]))
+                    return std::format("{:.{}f}", d, std::clamp(std::atoi(spec.c_str() + 1), 0, 9));
+                return std::format("{}", (float)d);
+            }
+            if (v.is_array())
+            {
+                std::string out;
+                for (size_t i = 0; i < v.size(); ++i) out += (i ? ", " : "") + BindingText(v[i], spec);
+                return out;
+            }
+            return v.is_null() ? std::string() : v.dump();
+        }
+    }
+
+    std::string FormatBinding(const nlohmann::json& value, const std::string& format)
+    {
+        if (format.empty()) return BindingText(value, "");
+        std::string out = format;
+        for (size_t at = out.find("{0"); at != std::string::npos; at = out.find("{0", at))
+        {
+            size_t close = out.find('}', at);
+            if (close == std::string::npos) break;
+            std::string spec = out[at + 2] == ':' ? out.substr(at + 3, close - at - 3) : std::string();
+            std::string text = BindingText(value, spec);
+            out.replace(at, close - at + 1, text);
+            at += text.size();
+        }
+        return out;
+    }
+
+    void PullBindings(Scene& scene)
+    {
+        auto& reg = scene.GetRegistry();
+        std::unordered_set<ScriptableEntity*> pulled;
+        for (auto [e, b] : reg.ViewOf<UIBindingComponent>())
+        {
+            BoundField bf;
+            if (!ResolveBinding(scene, e, b, bf)) continue;
+            if (pulled.insert(bf.Instance).second) bf.Instance->OnBeforeSerialize(); // C#: the managed object's live values
+            nlohmann::json v = FieldToJson(*bf.Field, bf.Object, nullptr);
+            if (v == b.LastValue) continue;
+            b.LastValue = v;
+            if (auto* t = reg.TryGet<UITextComponent>(e)) t->Text = FormatBinding(v, b.Format);
+            if (auto* s = reg.TryGet<UISliderComponent>(e); s && v.is_number()) s->Value = v.get<float>();
+            if (auto* t = reg.TryGet<UIToggleComponent>(e); t && v.is_boolean()) t->IsOn = v.get<bool>();
+            if (auto* f = reg.TryGet<UIInputFieldComponent>(e); f && v.is_string() && !f->Focused) f->Text = v.get<std::string>();
+            if (auto* d = reg.TryGet<UIDropdownComponent>(e); d && v.is_number()) d->Value = v.get<int32_t>();
+            b.LastWidget = WidgetValue(reg, e);
+        }
+    }
+
+    void PushBindings(Scene& scene)
+    {
+        auto& reg = scene.GetRegistry();
+        for (auto [e, b] : reg.ViewOf<UIBindingComponent>())
+        {
+            if (!b.TwoWay) continue;
+            nlohmann::json w = WidgetValue(reg, e);
+            if (w.is_null() || w == b.LastWidget) continue;
+            b.LastWidget = w;
+            BoundField bf;
+            if (!ResolveBinding(scene, e, b, bf)) continue;
+            bf.Instance->OnBeforeSerialize(); // the other fields as they are, before the managed object is updated
+            try
+            {
+                FieldFromJson(*bf.Field, bf.Object, w, nullptr);
+            }
+            catch (const std::exception&)
+            {
+                Log::Warn("UI Binding '{}': the widget's value does not fit the field", b.Path);
+                continue;
+            }
+            bf.Instance->OnFieldsChanged(); // C#: pushed to the managed object
+            b.LastValue = FieldToJson(*bf.Field, bf.Object, nullptr);
+        }
     }
 
     std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screen, Entity only)

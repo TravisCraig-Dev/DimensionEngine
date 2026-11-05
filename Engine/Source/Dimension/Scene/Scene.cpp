@@ -895,6 +895,7 @@ namespace Dimension
             Entity navCanvas = CanvasOf(m_UISelected);
             if (!navCanvas.IsNull() && m_Registry.Get<CanvasComponent>(navCanvas).RenderMode != CanvasRenderMode::WorldSpace)
                 navCanvas = Entity::Null();
+            UI::PullBindings(*this); // script values into bound widgets
             UI::PointerState screenPointer = pointer;
             if (!navCanvas.IsNull())
                 screenPointer.NavUp = screenPointer.NavDown = screenPointer.NavLeft = screenPointer.NavRight = screenPointer.Submit =
@@ -990,6 +991,7 @@ namespace Dimension
                 }
             }
             for (auto& [id, r] : m_UIRays) r.WasDown = r.Down;
+            UI::PushBindings(*this); // widgets the player changed into their bound fields
             UpdatePointerEvents(m_UIPointer, m_UIDown, m_UIScroll);
             // A focused text field keeps the keys from gameplay (WASD while typing a name must not move the player).
             bool typing = false;

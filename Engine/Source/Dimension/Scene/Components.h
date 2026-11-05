@@ -713,6 +713,21 @@ namespace Dimension
         nlohmann::json Anims = nlohmann::json::array();        // fields easing: component, field, from, to, start, seconds
     };
 
+    // Binds this element's widget to a script field (like UI Toolkit's runtime bindings): a UI Text shows it (Format:
+    // "Score: {0}", "{0:F1}" for one decimal), and a slider, toggle, input field or dropdown shows it and, Two Way,
+    // writes the player's changes back. Path: "Script.Field" (or "Field": the first script having it), on Source, or
+    // on this object or the nearest parent with that script.
+    struct UIBindingComponent
+    {
+        Entity Source = Entity::Null();
+        std::string Path;
+        std::string Format;
+        bool TwoWay = true;
+        // Runtime: the field's value last shown, and the widget's value then.
+        nlohmann::json LastValue;
+        nlohmann::json LastWidget;
+    };
+
     enum class UIMaskShape : int32_t { Rect = 0, Image = 1 };
 
     // Clips its children (like Unity's Mask and RectMask2D): to its rect, or to its UI Image's shape (the texture's

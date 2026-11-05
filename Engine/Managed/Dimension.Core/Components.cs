@@ -1052,6 +1052,20 @@ namespace Dimension
         }
     }
 
+    /// <summary>
+    /// Binds this element's widget to a script field: a UI Text shows it through <see cref="Format"/>, and sliders,
+    /// toggles, input fields and dropdowns show it and (<see cref="TwoWay"/>) write the player's changes back.
+    /// </summary>
+    public class UIBinding : Component
+    {
+        internal override string NativeName => "UI Binding";
+        /// <summary>"Script.Field" (or just "Field").</summary>
+        public string Path { get => GetString("Path") ?? ""; set => SetString("Path", value ?? ""); }
+        /// <summary>Text: {0} is the value, {0:F1} with one decimal.</summary>
+        public string Format { get => GetString("Format") ?? ""; set => SetString("Format", value ?? ""); }
+        public bool TwoWay { get => GetBool("Two Way"); set => SetBool("Two Way", value); }
+    }
+
     public enum UIMaskShape { Rect = 0, Image = 1 }
 
     /// <summary>

@@ -3083,6 +3083,157 @@
       }
     },
     {
+      "guid": 940060,
+      "parent": 900001,
+      "components": {
+        "Tag": {
+          "Name": "Bob Label (UI Binding)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            34
+          ]
+        },
+        "UI Text": {
+          "Text": "Spinner bob height",
+          "Font": 0,
+          "Font Size": 28,
+          "Color": [
+            0.92,
+            0.95,
+            1,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        },
+        "UI Binding": {
+          "Source": 730001,
+          "Path": "Spinner.BobHeight",
+          "Format": "Spinner bob height: {0:F2} m",
+          "Two Way": true
+        }
+      }
+    },
+    {
+      "guid": 940061,
+      "parent": 900001,
+      "components": {
+        "Tag": {
+          "Name": "Bob Slider (UI Binding)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            30
+          ]
+        },
+        "UI Slider": {
+          "Min Value": 0.0,
+          "Max Value": 1.0,
+          "Value": 0.3,
+          "Whole Numbers": false,
+          "Interactable": true,
+          "Background Color": [
+            0.25,
+            0.27,
+            0.32,
+            1
+          ],
+          "Fill Color": [
+            0.45,
+            0.8,
+            0.95,
+            1
+          ],
+          "Handle Color": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Binding": {
+          "Source": 730001,
+          "Path": "Spinner.BobHeight",
+          "Format": "",
+          "Two Way": true
+        }
+      }
+    },
+    {
       "guid": 870002,
       "parent": 900001,
       "components": {

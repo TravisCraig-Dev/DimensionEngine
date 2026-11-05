@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/ECS/Entity.h"
+#include <nlohmann/json.hpp>
 #include <array>
 #include <glm/glm.hpp>
 #include <functional>
@@ -77,6 +78,13 @@ namespace Dimension
             float Slant = 0.0f; // italic text: the top edge moves right by Slant * height
             MaskInfo Mask{};
         };
+
+        // UI Bindings: script fields into their widgets when the values changed (before the UI update), and widgets the
+        // player changed back into Two Way bindings' fields (after it). Scene::OnUpdateRuntime calls both.
+        void PullBindings(Scene& scene);
+        void PushBindings(Scene& scene);
+        // A bound value as text: Format's {0} (or {0:Fn}) replaced by it, or the value alone.
+        std::string FormatBinding(const nlohmann::json& value, const std::string& format);
 
         // Applies UI Style Sheets to UI Style components whose classes or sheet changed since last time (ComputeLayout
         // calls it). Returns how many elements were restyled.
