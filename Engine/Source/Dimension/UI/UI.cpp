@@ -147,6 +147,12 @@ namespace Dimension::UI
             rect->ClipMin = clipMin;
             rect->ClipMax = clipMax;
             ctx.Order.push_back(e);
+            if (reg.Has<UIMaskComponent>(e))
+            {
+                // A mask clips what is under it to its rect (its shape and soft edges are applied when drawn).
+                clipMin = glm::max(clipMin, rect->ComputedMin);
+                clipMax = glm::min(clipMax, rect->ComputedMax);
+            }
 
             auto* group = reg.TryGet<UILayoutGroupComponent>(e);
             if (auto* view = reg.TryGet<UIScrollViewComponent>(e))
@@ -1250,13 +1256,41 @@ namespace Dimension::UI
         Entity navSelected = scene.IsUINavigating() ? scene.GetUISelected() : Entity::Null();
         if (std::find(order.begin(), order.end(), navSelected) == order.end()) navSelected = Entity::Null(); // another canvas's
 
+        // Each element's quads take the innermost UI Mask above it.
+        size_t maskFrom = out.size();
+        MaskInfo mask;
+        auto finishMask = [&] {
+            for (size_t i = maskFrom; i < out.size(); ++i) out[i].Mask = mask;
+        };
+        auto maskFor = [&](Entity e) {
+            MaskInfo m;
+            for (Entity p = scene.GetParent(e); scene.IsValid(p); p = scene.GetParent(p))
+            {
+                auto* mc = reg.TryGet<UIMaskComponent>(p);
+                auto* mr = reg.TryGet<UIRectComponent>(p);
+                if (!mc || !mr) continue;
+                m.Rect = { mr->ComputedMin, mr->ComputedMax };
+                m.Softness = glm::max(mc->Softness, glm::vec2(0.0f)) * mr->ComputedScale;
+                if (mc->Shape == UIMaskShape::Image)
+                    if (auto* img = reg.TryGet<UIImageComponent>(p))
+                        if (auto tex = AssetManager::GetTexture(img->Texture)) m.Texture = tex->GetBindlessIndex();
+                m.Active = m.Softness != glm::vec2(0.0f) || m.Texture != 0;
+                break;
+            }
+            return m;
+        };
+
         for (Entity e : order)
         {
+            finishMask();
+            maskFrom = out.size();
+            mask = maskFor(e);
             auto& rect = reg.Get<UIRectComponent>(e);
             glm::vec2 mn = rect.ComputedMin, mx = rect.ComputedMax, size = mx - mn;
             float s = rect.ComputedScale;
 
-            if (auto* image = reg.TryGet<UIImageComponent>(e))
+            auto* ownMask = reg.TryGet<UIMaskComponent>(e);
+            if (auto* image = reg.TryGet<UIImageComponent>(e); image && (!ownMask || ownMask->ShowMaskGraphic))
             {
                 glm::vec4 color = image->Color;
                 if (auto* b = reg.TryGet<UIButtonComponent>(e))
@@ -1411,6 +1445,8 @@ namespace Dimension::UI
                 EmitTextQuads(out, quads, origin, text->Color, font->GetAtlasIndex(), white, rect);
             }
         }
+
+        finishMask();
 
         // Navigation highlight: an outline around the selected widget.
         if (!navSelected.IsNull() && reg.Has<UIRectComponent>(navSelected) && reg.Get<TransformComponent>(navSelected).ActiveInHierarchy)

@@ -6554,6 +6554,40 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // UI Mask: children clipped to the mask's rect (drawing and hit testing); the mask itself is not.
+    void TestUIMask()
+    {
+        Scene scene("Mask");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto rect = [&](const char* name, Entity parent, glm::vec2 at, glm::vec2 size) {
+            Entity e = scene.CreateEntity(name, parent);
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Position = at;
+            r.Size = size;
+            reg.Emplace<UIImageComponent>(e);
+            return e;
+        };
+        Entity window = rect("Window", canvas, { 20, 20 }, { 100, 100 });
+        Entity item = rect("Item", window, { 50, 50 }, { 100, 100 }); // hangs out past the window's corner
+        Entity grand = rect("Grand", item, { 0, 0 }, { 200, 20 });
+        reg.Emplace<UIButtonComponent>(item);
+        scene.UpdateTransforms();
+        auto clipOf = [&](Entity e) { return std::make_pair(reg.Get<UIRectComponent>(e).ClipMin, reg.Get<UIRectComponent>(e).ClipMax); };
+        UI::ComputeLayout(scene, { 800, 600 });
+        CHECK(Near(clipOf(item).second, glm::vec2(800, 600))); // no mask yet: only the screen clips
+        reg.Emplace<UIMaskComponent>(window).Softness = { 4, 4 };
+        UI::ComputeLayout(scene, { 800, 600 });
+        CHECK(Near(clipOf(item).first, glm::vec2(20, 20)) && Near(clipOf(item).second, glm::vec2(120, 120)));
+        CHECK(Near(clipOf(grand).second, glm::vec2(120, 120)));    // under the item too
+        CHECK(Near(clipOf(window).second, glm::vec2(800, 600)));  // the mask itself is not clipped
+        auto at = [&](glm::vec2 p) { auto v = UI::ElementsAt(scene, p, { 800, 600 }); return v.empty() ? Entity::Null() : v.front(); };
+        CHECK(at({ 100, 100 }) == item);
+        CHECK(at({ 140, 140 }) != item);                          // inside the item, outside the mask
+    }
+
     // Several script pointer rays at once (two VR controllers): each hovers, presses and drags on its own, pointer
     // events carry their ids, a dot is drawn where each meets the panel, and clearing one leaves what it was over.
     void TestMultiplePointers()
@@ -14233,6 +14267,7 @@ int main(int argc, char** argv)
     Run("World canvas pointers", TestWorldCanvasPointers);
     Run("World canvas navigation", TestWorldCanvasNavigation);
     Run("Multiple pointers", TestMultiplePointers);
+    Run("UI mask", TestUIMask);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

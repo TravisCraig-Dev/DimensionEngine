@@ -1,12 +1,43 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 layout(set = 0, binding = 0) uniform sampler2D uTextures[];
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
 layout(location = 2) flat in uint vTexture;
+layout(location = 3) flat in uint vMask;
 layout(location = 0) out vec4 outColor;
+
+layout(push_constant) uniform Push { vec2 ScreenSize; uvec2 Masks; } pc;
+
+// UI Masks: rect (pixels), soft edges, and an image whose alpha shapes it.
+struct UIMask
+{
+    vec4 Rect;
+    vec2 Softness;
+    uint Texture;
+    uint Pad;
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer UIMaskTable { UIMask Masks[]; };
+
+float MaskAlpha()
+{
+    if (vMask == 0u) return 1.0;
+    UIMask m = UIMaskTable(pc.Masks).Masks[vMask - 1u];
+    vec2 p = gl_FragCoord.xy;
+    vec2 inside = min(p - m.Rect.xy, m.Rect.zw - p);
+    vec2 fade = clamp(inside / max(m.Softness, vec2(1e-4)), 0.0, 1.0);
+    float a = (m.Softness.x > 0.0 ? fade.x : 1.0) * (m.Softness.y > 0.0 ? fade.y : 1.0);
+    if (m.Texture != 0u)
+    {
+        vec2 uv = (p - m.Rect.xy) / max(m.Rect.zw - m.Rect.xy, vec2(1e-4));
+        a *= texture(uTextures[nonuniformEXT(m.Texture)], uv).a;
+    }
+    return a;
+}
 
 vec3 LinearToSRGB(vec3 c)
 {
@@ -32,5 +63,5 @@ void main()
     vec4 t = texture(uTextures[nonuniformEXT(index)], vUV);
     if ((vTexture & 0x80000000u) != 0u) t = vec4(1.0, 1.0, 1.0, DistanceAlpha((vTexture & 0x40000000u) != 0u ? Median(t.rgb) : t.a));
     vec3 rgb = (vTexture & 0x20000000u) != 0u ? t.rgb : LinearToSRGB(t.rgb);
-    outColor = vec4(rgb * vColor.rgb, t.a * vColor.a);
+    outColor = vec4(rgb * vColor.rgb, t.a * vColor.a * MaskAlpha());
 }

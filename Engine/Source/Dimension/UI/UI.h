@@ -48,6 +48,17 @@ namespace Dimension
         constexpr uint32_t kDisplaySpaceTextureBit = 0x20000000u;
 
         // A textured, tinted screen-space quad (pixels, top-left origin), already clipped. Colors are display-space (sRGB).
+        // A UI Mask over a quad, applied per pixel (the rect itself is also clipped on the CPU): edges faded over
+        // Softness pixels, and the mask image's alpha (Texture: bindless index, 0 none) stretched over Rect.
+        struct MaskInfo
+        {
+            glm::vec4 Rect{ 0.0f }; // min x, y, max x, y in pixels
+            glm::vec2 Softness{ 0.0f };
+            uint32_t Texture = 0;
+            bool Active = false;
+            bool operator==(const MaskInfo&) const = default;
+        };
+
         struct DrawCommand
         {
             glm::vec2 Min, Max;
@@ -55,6 +66,7 @@ namespace Dimension
             glm::vec4 Color;
             uint32_t Texture; // bindless index
             float Slant = 0.0f; // italic text: the top edge moves right by Slant * height
+            MaskInfo Mask{};
         };
 
         // Resolves every UI Rect under a Canvas to screen pixels (layout groups, scroll offsets, clip rects).

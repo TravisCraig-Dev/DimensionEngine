@@ -665,6 +665,17 @@ namespace Dimension
         int32_t Columns = 0;                  // Grid: fixed column count; 0 = as many as fit the width
     };
 
+    enum class UIMaskShape : int32_t { Rect = 0, Image = 1 };
+
+    // Clips its children (like Unity's Mask and RectMask2D): to its rect, or to its UI Image's shape (the texture's
+    // alpha), with edges faded over Softness pixels (left/right, top/bottom). Show Mask Graphic off hides its own image.
+    struct UIMaskComponent
+    {
+        UIMaskShape Shape = UIMaskShape::Rect;
+        glm::vec2 Softness{ 0.0f };
+        bool ShowMaskGraphic = true;
+    };
+
     // Clips its children to its rect and scrolls its first child (the content) vertically and/or horizontally.
     // Scrollbars on the right and bottom edges appear while the content is larger than the view.
     struct UIScrollViewComponent

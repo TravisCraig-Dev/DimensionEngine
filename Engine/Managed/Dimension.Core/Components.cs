@@ -1029,6 +1029,22 @@ namespace Dimension
 
     public enum UIImageType { Simple = 0, Sliced = 1 }
 
+    public enum UIMaskShape { Rect = 0, Image = 1 }
+
+    /// <summary>
+    /// Clips its children (Unity's Mask / RectMask2D): to its rect, or to its UI Image's shape, with soft edges.
+    /// </summary>
+    public class UIMask : Component
+    {
+        internal override string NativeName => "UI Mask";
+        /// <summary>Image: children show only where this object's UI Image is opaque.</summary>
+        public UIMaskShape Shape { get => (UIMaskShape)GetInt("Shape"); set => SetInt("Shape", (int)value); }
+        /// <summary>Pixels over which the edges fade (horizontal, vertical).</summary>
+        public Vector2 Softness { get => GetVector2("Softness"); set => SetVector2("Softness", value); }
+        /// <summary>Whether this object's own UI Image is drawn.</summary>
+        public bool ShowMaskGraphic { get => GetBool("Show Mask Graphic"); set => SetBool("Show Mask Graphic", value); }
+    }
+
     /// <summary>A UI picture or panel: a texture (or white without one) tinted by <see cref="Color"/>.</summary>
     public unsafe class UIImage : Component
     {

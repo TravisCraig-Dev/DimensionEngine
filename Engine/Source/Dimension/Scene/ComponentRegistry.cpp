@@ -573,6 +573,10 @@ namespace Dimension
             .Field("Background Color", &UIInputFieldComponent::BackgroundColor).As(FieldType::Color4)
             .Field("Text Color", &UIInputFieldComponent::TextColor).As(FieldType::Color4)
             .Field("Placeholder Color", &UIInputFieldComponent::PlaceholderColor).As(FieldType::Color4);
+        Register<UIMaskComponent>("UI Mask", "UI")
+            .Field("Shape", &UIMaskComponent::Shape).Enum({ "Rect", "Image" }).Tooltip("Image: children show only where this object's UI Image is opaque")
+            .Field("Softness", &UIMaskComponent::Softness).Range(0.0f, 1000.0f).Speed(0.5f).Tooltip("Pixels over which the edges fade (horizontal, vertical)")
+            .Field("Show Mask Graphic", &UIMaskComponent::ShowMaskGraphic).Tooltip("Draw this object's own UI Image");
         Register<UILayoutGroupComponent>("UI Layout Group", "UI")
             .Field("Direction", &UILayoutGroupComponent::Direction).Enum({ "Vertical", "Horizontal", "Grid" })
             .Field("Spacing", &UILayoutGroupComponent::Spacing).Speed(0.5f)

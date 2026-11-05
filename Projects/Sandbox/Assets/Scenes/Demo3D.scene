@@ -6800,6 +6800,399 @@
           "Wrap": true
         }
       }
+    },
+    {
+      "guid": 940020,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Round Badge (UI Mask, Image shape)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            24,
+            -24
+          ],
+          "Size": [
+            120,
+            120
+          ]
+        },
+        "UI Image": {
+          "Image": 100074,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Mask": {
+          "Shape": 1,
+          "Softness": [
+            0,
+            0
+          ],
+          "Show Mask Graphic": false
+        }
+      }
+    },
+    {
+      "guid": 940021,
+      "parent": 940020,
+      "components": {
+        "Tag": {
+          "Name": "Badge Picture",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
+        "UI Image": {
+          "Image": 100002,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "guid": 940022,
+      "parent": 940020,
+      "components": {
+        "Tag": {
+          "Name": "Badge Label",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            1
+          ],
+          "Position": [
+            0,
+            -8
+          ],
+          "Size": [
+            0,
+            36
+          ]
+        },
+        "UI Image": {
+          "Image": 0,
+          "Color": [
+            0.05,
+            0.07,
+            0.12,
+            0.75
+          ]
+        }
+      }
+    },
+    {
+      "guid": 940023,
+      "parent": 940022,
+      "components": {
+        "Tag": {
+          "Name": "Text",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
+        "UI Text": {
+          "Text": "CRATES",
+          "Font": 0,
+          "Font Size": 22,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 940024,
+      "parent": 600001,
+      "components": {
+        "Tag": {
+          "Name": "Ticker (UI Mask, soft edges)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            160,
+            -62
+          ],
+          "Size": [
+            440,
+            44
+          ]
+        },
+        "UI Image": {
+          "Image": 0,
+          "Color": [
+            0.05,
+            0.07,
+            0.12,
+            0.7
+          ]
+        },
+        "UI Mask": {
+          "Shape": 0,
+          "Softness": [
+            48,
+            0
+          ],
+          "Show Mask Graphic": true
+        }
+      }
+    },
+    {
+      "guid": 940025,
+      "parent": 940024,
+      "components": {
+        "Tag": {
+          "Name": "Ticker Text",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            0.5
+          ],
+          "Position": [
+            440,
+            0
+          ],
+          "Size": [
+            900,
+            0
+          ]
+        },
+        "UI Text": {
+          "Text": "World Space panels  -  laser pointers  -  soft UI masks  -  round badges  -  Dimension Engine",
+          "Font": 0,
+          "Font Size": 24,
+          "Color": [
+            1,
+            0.85,
+            0.4,
+            1
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 1,
+          "Wrap": false
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.TickerScroll",
+              "Fields": {
+                "Speed": 80.0,
+                "Restart": 440.0,
+                "Width": 900.0
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
     }
   ]
 }

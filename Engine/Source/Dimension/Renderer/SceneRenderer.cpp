@@ -3796,17 +3796,44 @@ namespace Dimension
         TransientAllocation vb = RenderDevice::Get().AllocateTransient(commands.size() * 4 * sizeof(SpriteVertex));
         if (!vb) return;
         auto* v = (SpriteVertex*)vb.Data;
+        // UI Masks (soft edges, image shapes): a table the fragment shader reads; each quad's vertices carry its index + 1.
+        struct GpuMask
+        {
+            glm::vec4 Rect;
+            glm::vec2 Softness;
+            uint32_t Texture, Pad;
+        };
+        std::vector<GpuMask> masks;
+        const UI::MaskInfo* lastMask = nullptr;
         for (auto& c : commands)
         {
+            uint32_t m = 0;
+            if (c.Mask.Active)
+            {
+                if (!lastMask || !(*lastMask == c.Mask)) masks.push_back({ c.Mask.Rect, c.Mask.Softness, c.Mask.Texture, 0 });
+                lastMask = &c.Mask;
+                m = (uint32_t)masks.size();
+            }
             float slant = c.Slant * (c.Max.y - c.Min.y); // italic: the top edge leans right
-            *v++ = { glm::vec3(c.Min.x + slant, c.Min.y, 0), c.Color, { c.UVMin.x, c.UVMin.y }, c.Texture, 0 };
-            *v++ = { glm::vec3(c.Max.x + slant, c.Min.y, 0), c.Color, { c.UVMax.x, c.UVMin.y }, c.Texture, 0 };
-            *v++ = { glm::vec3(c.Max.x, c.Max.y, 0), c.Color, { c.UVMax.x, c.UVMax.y }, c.Texture, 0 };
-            *v++ = { glm::vec3(c.Min.x, c.Max.y, 0), c.Color, { c.UVMin.x, c.UVMax.y }, c.Texture, 0 };
+            *v++ = { glm::vec3(c.Min.x + slant, c.Min.y, 0), c.Color, { c.UVMin.x, c.UVMin.y }, c.Texture, m };
+            *v++ = { glm::vec3(c.Max.x + slant, c.Min.y, 0), c.Color, { c.UVMax.x, c.UVMin.y }, c.Texture, m };
+            *v++ = { glm::vec3(c.Max.x, c.Max.y, 0), c.Color, { c.UVMax.x, c.UVMax.y }, c.Texture, m };
+            *v++ = { glm::vec3(c.Min.x, c.Max.y, 0), c.Color, { c.UVMin.x, c.UVMax.y }, c.Texture, m };
         }
+        struct UIPush
+        {
+            glm::vec2 Screen;
+            glm::uvec2 Masks;
+        } push{ screen, glm::uvec2(0) };
+        if (!masks.empty())
+            if (TransientAllocation mb = RenderDevice::Get().AllocateTransient(masks.size() * sizeof(GpuMask)))
+            {
+                std::memcpy(mb.Data, masks.data(), masks.size() * sizeof(GpuMask));
+                push.Masks = { (uint32_t)mb.Address, (uint32_t)(mb.Address >> 32) };
+            }
         auto& res = Renderer::Get();
         res.UI.Bind(cmd);
-        vkCmdPushConstants(cmd, RenderDevice::Get().GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(glm::vec2), &screen);
+        vkCmdPushConstants(cmd, RenderDevice::Get().GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
         VkBuffer buffer = vb.Buffer;
         vkCmdBindVertexBuffers(cmd, 0, 1, &buffer, &vb.Offset);
         vkCmdBindIndexBuffer(cmd, res.QuadIndices.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
