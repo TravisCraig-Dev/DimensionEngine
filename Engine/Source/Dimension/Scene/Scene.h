@@ -290,6 +290,10 @@ namespace Dimension
         enum class EventKind : int { Stopped = -1, Click = 0, ValueChanged, TextChanged, Submit, CollisionEnter, CollisionExit, TriggerEnter, TriggerExit };
         using EventHook = void (*)(Scene& scene, Entity e, EventKind kind, float value, Entity other, const char* text);
         static void SetEventHook(EventHook hook);
+        // Points in a frame scripts' coroutines can wait for (C#'s WaitForFixedUpdate / WaitForEndOfFrame): 0 after each
+        // physics step, 1 when the frame's update is done (after animation, particles and audio; before it is drawn).
+        using CoroutinePhaseHook = void (*)(Scene& scene, int phase);
+        static void SetCoroutinePhaseHook(CoroutinePhaseHook hook);
 
         // Reloads a script module while playing (C# hot reload): saves the live fields of that module's scripts,
         // destroys them (without OnDestroy), runs `reload`, then recreates them with the saved values and calls

@@ -312,6 +312,8 @@ namespace Dimension
             // A collision: 0 enter, 1 stay, 2 exit; the other object; normal xyz, relative velocity xyz, impulse, then
             // per contact point xyz, normal xyz, separation; the contact count.
             void (*InvokeCollision)(intptr_t, int, uint64_t, const float*, int);
+            // Coroutines of the scene's scripts waiting for a point in the frame: 0 after a physics step, 1 its end.
+            void (*CoroutinePhase)(void*, int);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -2395,6 +2397,9 @@ namespace Dimension
             if (s_Managed.RaiseEvent) s_Managed.RaiseEvent(&scene, Pack(e), (int)kind, value, Pack(other), text);
         });
         // Data assets: objects scripts hold take an asset's new values when it is saved, and start over when play starts.
+        Scene::SetCoroutinePhaseHook([](Scene& scene, int phase) {
+            if (s_Available && s_Managed.CoroutinePhase) s_Managed.CoroutinePhase(&scene, phase);
+        });
         DataAssets::SetChangedHook([](AssetHandle h) {
             if (s_Available && s_Managed.DataAssetChanged) s_Managed.DataAssetChanged((uint64_t)h);
         });

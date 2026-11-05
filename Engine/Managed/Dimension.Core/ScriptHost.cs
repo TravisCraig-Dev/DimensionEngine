@@ -998,6 +998,14 @@ namespace Dimension
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
         }
 
+        // Coroutines waiting on WaitForFixedUpdate (0) or WaitForEndOfFrame (1), in that scene.
+        [UnmanagedCallersOnly]
+        internal static void CoroutinePhase(IntPtr scene, int phase)
+        {
+            try { CoroutineRunner.ResumePhase(scene, phase); }
+            catch (Exception e) { Debug.LogError($"Coroutines: {e}"); }
+        }
+
         // 0 TextChanged, 1 Submit
         [UnmanagedCallersOnly]
         internal static unsafe void InvokeString(IntPtr handle, int method, byte* text)

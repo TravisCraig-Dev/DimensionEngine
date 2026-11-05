@@ -221,6 +221,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<ulong, void> DataAssetChanged;
         // A collision: phase (0 enter, 1 stay, 2 exit), other, data (see ScriptHost.InvokeCollision), contact count.
         public delegate* unmanaged<IntPtr, int, ulong, float*, int, void> InvokeCollision;
+        // Coroutines waiting for a point in the frame (0 after a physics step, 1 its end), for a scene.
+        public delegate* unmanaged<IntPtr, int, void> CoroutinePhase;
     }
 
     internal static unsafe class Native
@@ -282,6 +284,7 @@ namespace Dimension.Interop
                 api->SceneGUI = &ScriptHost.SceneGUI;
                 api->DataAssetChanged = &ScriptHost.DataAssetChanged;
                 api->InvokeCollision = &ScriptHost.InvokeCollision;
+                api->CoroutinePhase = &ScriptHost.CoroutinePhase;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version})");
                 return 1;
             }

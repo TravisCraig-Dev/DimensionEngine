@@ -7,7 +7,7 @@ namespace Dimension
     /// <summary>Base of objects a coroutine can yield to wait on.</summary>
     public abstract class YieldInstruction
     {
-        internal abstract bool KeepWaiting(float deltaTime);
+        internal abstract bool Wait(float deltaTime);
     }
 
     /// <summary>Suspends a coroutine for the given number of (scaled) seconds.</summary>
@@ -15,7 +15,7 @@ namespace Dimension
     {
         private float m_Remaining;
         public WaitForSeconds(float seconds) { m_Remaining = seconds; }
-        internal override bool KeepWaiting(float deltaTime) => (m_Remaining -= deltaTime) > 0.0f;
+        internal override bool Wait(float deltaTime) => (m_Remaining -= deltaTime) > 0.0f;
     }
 
     /// <summary>Suspends a coroutine until the predicate returns true (checked once per frame).</summary>
@@ -23,7 +23,7 @@ namespace Dimension
     {
         private readonly Func<bool> m_Predicate;
         public WaitUntil(Func<bool> predicate) { m_Predicate = predicate; }
-        internal override bool KeepWaiting(float deltaTime) => !m_Predicate();
+        internal override bool Wait(float deltaTime) => !m_Predicate();
     }
 
     /// <summary>Suspends a coroutine while the predicate returns true.</summary>
@@ -31,7 +31,45 @@ namespace Dimension
     {
         private readonly Func<bool> m_Predicate;
         public WaitWhile(Func<bool> predicate) { m_Predicate = predicate; }
-        internal override bool KeepWaiting(float deltaTime) => m_Predicate();
+        internal override bool Wait(float deltaTime) => m_Predicate();
+    }
+
+    /// <summary>Suspends a coroutine for real seconds, whatever Time.TimeScale is (a pause menu's timer).</summary>
+    public sealed class WaitForSecondsRealtime : YieldInstruction
+    {
+        private readonly double m_Seconds;
+        private double m_Until = -1.0;
+        public WaitForSecondsRealtime(float seconds) { m_Seconds = seconds; }
+        internal override bool Wait(float deltaTime)
+        {
+            double now = Time.RealtimeSinceStartupAsDouble;
+            if (m_Until < 0.0) m_Until = now + m_Seconds; // from when it first waits (so one can be reused)
+            if (now < m_Until) return true;
+            m_Until = -1.0;
+            return false;
+        }
+    }
+
+    /// <summary>Resumes the coroutine right after the next physics step (where OnFixedUpdate's results show), however
+    /// many steps a frame takes.</summary>
+    public sealed class WaitForFixedUpdate : YieldInstruction
+    {
+        internal override bool Wait(float deltaTime) => true; // resumed by the step itself
+    }
+
+    /// <summary>Resumes the coroutine when the frame's update is done: after every script's OnUpdate, animation,
+    /// particles and audio (this engine draws the frame after that, so it is not after drawing as in Unity).</summary>
+    public sealed class WaitForEndOfFrame : YieldInstruction
+    {
+        internal override bool Wait(float deltaTime) => true; // resumed by the frame's end
+    }
+
+    /// <summary>A wait of your own (as Unity's): a coroutine yielding it waits while KeepWaiting is true, checked once a
+    /// frame.</summary>
+    public abstract class CustomYieldInstruction : YieldInstruction
+    {
+        public abstract bool KeepWaiting { get; }
+        internal override bool Wait(float deltaTime) => KeepWaiting;
     }
 
     /// <summary>A running coroutine. Yield it from another coroutine to wait for it to finish.</summary>
@@ -41,23 +79,66 @@ namespace Dimension
         internal YieldInstruction Waiting;
         internal bool Fresh;   // started this frame: first resume happens next frame
         internal string Tag;   // Invoke method name
+        internal string Name;  // StartCoroutine(methodName)'s method
+        internal IEnumerator Root;
         public bool IsDone { get; internal set; }
-        internal override bool KeepWaiting(float deltaTime) => !IsDone;
+        internal override bool Wait(float deltaTime) => !IsDone;
     }
 
     /// <summary>Per-behaviour coroutine scheduler, ticked after OnUpdate.</summary>
     internal sealed class CoroutineRunner
     {
         private readonly List<Coroutine> m_Active = new();
+        private readonly Behaviour m_Owner;
+        // Runners with a coroutine waiting for a point in the frame (WaitForFixedUpdate / WaitForEndOfFrame).
+        private static readonly HashSet<CoroutineRunner> s_PhaseWaiters = new();
 
-        public Coroutine Start(IEnumerator routine, string tag)
+        public CoroutineRunner(Behaviour owner = null) { m_Owner = owner; }
+
+        public Coroutine Start(IEnumerator routine, string tag, string name = null)
         {
-            var c = new Coroutine { Tag = tag, Fresh = true };
+            var c = new Coroutine { Tag = tag, Name = name, Root = routine, Fresh = true };
             if (routine == null) { c.IsDone = true; return c; }
             c.Stack.Push(routine);
             m_Active.Add(c);
             Run(c); // like Unity: runs synchronously until the first yield
             return c;
+        }
+
+        public void StopNamed(string name)
+        {
+            foreach (var c in m_Active)
+                if (c.Name == name) c.IsDone = true;
+            m_Active.RemoveAll(c => c.IsDone);
+        }
+
+        public void StopRoutine(IEnumerator routine)
+        {
+            foreach (var c in m_Active)
+                if (ReferenceEquals(c.Root, routine)) c.IsDone = true;
+            m_Active.RemoveAll(c => c.IsDone);
+        }
+
+        private static bool IsPhase(YieldInstruction w, int phase) => phase == 0 ? w is WaitForFixedUpdate : w is WaitForEndOfFrame;
+
+        // The engine reached a point in the frame: coroutines of that scene's scripts waiting for it go on.
+        public static void ResumePhase(IntPtr scene, int phase)
+        {
+            if (s_PhaseWaiters.Count == 0) return;
+            foreach (var runner in new List<CoroutineRunner>(s_PhaseWaiters))
+            {
+                if (runner.m_Owner == null || runner.m_Owner.Entity.Scene != scene) continue;
+                Interop.Native.CurrentScene = scene;
+                foreach (var c in runner.m_Active.ToArray())
+                {
+                    if (c.IsDone || c.Waiting == null || !IsPhase(c.Waiting, phase)) continue;
+                    c.Waiting = null;
+                    c.Fresh = false;
+                    runner.Run(c);
+                }
+                runner.m_Active.RemoveAll(c => c.IsDone);
+                if (!runner.m_Active.Exists(c => c.Waiting is WaitForFixedUpdate or WaitForEndOfFrame)) s_PhaseWaiters.Remove(runner);
+            }
         }
 
         public void Stop(Coroutine c)
@@ -71,6 +152,7 @@ namespace Dimension
         {
             foreach (var c in m_Active) c.IsDone = true;
             m_Active.Clear();
+            s_PhaseWaiters.Remove(this);
         }
 
         public void StopTagged(string tag) // null = every Invoke
@@ -91,7 +173,8 @@ namespace Dimension
                 if (c.Fresh) { c.Fresh = false; continue; }
                 if (c.Waiting != null)
                 {
-                    if (c.Waiting.KeepWaiting(deltaTime)) continue;
+                    if (c.Waiting is WaitForFixedUpdate or WaitForEndOfFrame) continue; // the frame's point resumes it
+                    if (c.Waiting.Wait(deltaTime)) continue;
                     c.Waiting = null;
                 }
                 Run(c);
@@ -99,7 +182,7 @@ namespace Dimension
             m_Active.RemoveAll(c => c.IsDone);
         }
 
-        private static void Run(Coroutine c)
+        private void Run(Coroutine c)
         {
             try
             {
@@ -116,6 +199,10 @@ namespace Dimension
                         case null: return; // resume next frame
                         case IEnumerator nested: c.Stack.Push(nested); continue;
                         case Coroutine other when other.IsDone: continue;
+                        case WaitForFixedUpdate or WaitForEndOfFrame:
+                            c.Waiting = (YieldInstruction)top.Current;
+                            if (m_Owner != null) s_PhaseWaiters.Add(this);
+                            return;
                         case YieldInstruction wait: c.Waiting = wait; return;
                         default: return; // unknown values wait one frame
                     }

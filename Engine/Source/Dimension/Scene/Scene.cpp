@@ -49,9 +49,11 @@ namespace Dimension
     namespace
     {
         Scene::EventHook s_EventHook = nullptr;
+        Scene::CoroutinePhaseHook s_CoroutinePhaseHook = nullptr;
     }
 
     void Scene::SetEventHook(EventHook hook) { s_EventHook = hook; }
+    void Scene::SetCoroutinePhaseHook(CoroutinePhaseHook hook) { s_CoroutinePhaseHook = hook; }
 
     Scene::~Scene()
     {
@@ -938,6 +940,7 @@ namespace Dimension
             }
             m_FixedAccumulator -= m_FixedTimestep;
             m_FixedTime += m_FixedTimestep;
+            if (s_CoroutinePhaseHook) s_CoroutinePhaseHook(*this, 0); // WaitForFixedUpdate
         }
         // Interpolating bodies: their objects shown between the last two steps, as far along as the time is.
         {
@@ -964,6 +967,7 @@ namespace Dimension
             AudioMixer::Update(dt);
             m_Audio->Update(dt);
         }
+        if (s_CoroutinePhaseHook) s_CoroutinePhaseHook(*this, 1); // WaitForEndOfFrame
         FlushDeferredDestroys();
     }
 

@@ -9457,6 +9457,24 @@ namespace
             CHECK(x >= 9.5f && x <= 11.5f);
             rt->OnRuntimeStop();
         }
+        // Coroutines waiting for points in the frame (WaitForEndOfFrame once a frame, WaitForFixedUpdate after every
+        // physics step: two a frame at 30 fps), started by name: the Sandbox's FrameWatcher counts them in its UI Text.
+        {
+            Scene fw("Frames");
+            Entity counter = fw.CreateEntity("Counter");
+            fw.GetRegistry().Emplace<UITextComponent>(counter);
+            fw.GetRegistry().Emplace<ScriptComponent>(counter).Add("Game.FrameWatcher");
+            auto rt = fw.Clone();
+            rt->OnRuntimeStart();
+            for (int i = 0; i < 30; ++i) rt->OnUpdateRuntime(1.0f / 30.0f);
+            std::string text = rt->GetRegistry().Get<UITextComponent>(counter).Text;
+            CHECK(text.find("30 frames, 60 steps") != std::string::npos);
+            rt->SetTimeScale(0.0f); // frozen: frames go on, steps stop
+            for (int i = 0; i < 10; ++i) rt->OnUpdateRuntime(1.0f / 30.0f);
+            text = rt->GetRegistry().Get<UITextComponent>(counter).Text;
+            CHECK(text.find("40 frames, 60 steps") != std::string::npos);
+            rt->OnRuntimeStop();
+        }
         // C# events: a label's script listens to another entity's UI Button (which has no script) and unsubscribes
         // after its Limit; the listeners end with play mode.
         {

@@ -97,9 +97,30 @@ namespace Dimension
         internal CoroutineRunner Coroutines;
 
         /// <summary>Runs `routine` until its first yield now, then resumes it every frame after OnUpdate.
-        /// Yield null (next frame), WaitForSeconds, WaitUntil, WaitWhile, another IEnumerator (run nested) or a Coroutine (wait for it).</summary>
-        public Coroutine StartCoroutine(System.Collections.IEnumerator routine) => (Coroutines ??= new CoroutineRunner()).Start(routine, null);
+        /// Yield null (next frame), WaitForSeconds / WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForFixedUpdate,
+        /// WaitForEndOfFrame, an AsyncOperation (a scene loading), a CustomYieldInstruction, another IEnumerator (run
+        /// nested) or a Coroutine (wait for it).</summary>
+        public Coroutine StartCoroutine(System.Collections.IEnumerator routine) => (Coroutines ??= new CoroutineRunner(this)).Start(routine, null);
+        /// <summary>Starts this script's method of that name returning IEnumerator (with no parameter, or with `value`);
+        /// StopCoroutine(methodName) stops the ones started so.</summary>
+        public Coroutine StartCoroutine(string methodName, object value = null)
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            foreach (var method in GetType().GetMethods(flags))
+            {
+                if (method.Name != methodName || !typeof(System.Collections.IEnumerator).IsAssignableFrom(method.ReturnType)) continue;
+                var parameters = method.GetParameters();
+                if (parameters.Length > 1 || (parameters.Length == 0 && value != null)) continue;
+                var routine = (System.Collections.IEnumerator)method.Invoke(this, parameters.Length == 0 ? null : new[] { value });
+                return (Coroutines ??= new CoroutineRunner(this)).Start(routine, null, methodName);
+            }
+            Debug.LogError($"{GetType().Name}.StartCoroutine: no method '{methodName}' returning IEnumerator");
+            return null;
+        }
         public void StopCoroutine(Coroutine coroutine) => Coroutines?.Stop(coroutine);
+        public void StopCoroutine(string methodName) => Coroutines?.StopNamed(methodName);
+        /// <summary>Stops the coroutine started with that very IEnumerator.</summary>
+        public void StopCoroutine(System.Collections.IEnumerator routine) => Coroutines?.StopRoutine(routine);
         public void StopAllCoroutines() => Coroutines?.StopAll();
 
         /// <summary>Calls the parameterless method `methodName` on this script after `delay` seconds.</summary>
@@ -122,7 +143,7 @@ namespace Dimension
                 Debug.LogError($"{GetType().Name}.Invoke: no parameterless method '{methodName}'");
                 return;
             }
-            (Coroutines ??= new CoroutineRunner()).Start(InvokeRoutine(method, delay, rate), methodName);
+            (Coroutines ??= new CoroutineRunner(this)).Start(InvokeRoutine(method, delay, rate), methodName);
         }
 
         private System.Collections.IEnumerator InvokeRoutine(System.Reflection.MethodInfo method, float delay, float rate)
@@ -1415,9 +1436,10 @@ namespace Dimension
 
     public enum LoadSceneMode { Single = 0, Additive = 1 }
 
-    /// <summary>A background scene load (SceneManager.LoadSceneAsync).</summary>
-    public sealed unsafe class AsyncOperation
+    /// <summary>A background scene load (SceneManager.LoadSceneAsync); yield it in a coroutine to wait until it is done.</summary>
+    public sealed unsafe class AsyncOperation : YieldInstruction
     {
+        internal override bool Wait(float deltaTime) => !IsDone;
         private readonly int m_Id;
         internal AsyncOperation(int id) { m_Id = id; }
         /// <summary>0 to 0.9 while loading in the background; 1 once the scene is active.</summary>
