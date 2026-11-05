@@ -277,6 +277,19 @@ namespace Dimension
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
         // The topmost UI element under the pointer this frame (Null when none).
         Entity GetUIHovered() const { return m_UIHovered; }
+        // A pointer ray from scripts (EventSystem.SetPointerRay: a VR controller, a crosshair) that World Space canvases
+        // take instead of the main camera's mouse ray, with its own button; it stays until cleared.
+        void SetUIPointerRay(const glm::vec3& origin, const glm::vec3& direction, bool down)
+        {
+            m_UIRaySet = true;
+            m_UIRayOrigin = origin;
+            m_UIRayDirection = direction;
+            m_UIRayDown = down;
+        }
+        void ClearUIPointerRay() { m_UIRaySet = false; m_UIRayDown = false; }
+        bool HasUIPointerRay() const { return m_UIRaySet; }
+        // Where the pointer (the script's ray, else the mouse through the main camera) meets a World Space canvas.
+        bool WorldCanvasPointer(Entity canvas, glm::vec2& pixel);
         // Pixels the pointer must move while held before a drag begins (Unity's EventSystem drag threshold).
         static constexpr float kDragThreshold = 10.0f;
         // The UI element that pointer events go to under a point: the topmost one taking the pointer or handling them.
@@ -381,7 +394,7 @@ namespace Dimension
     private:
         void UpdateSpriteAnimators(float dt);
         void UpdateMouseEvents();
-        void UpdatePointerEvents(const glm::vec2& position, bool down, float scroll);
+        void UpdatePointerEvents(glm::vec2 position, bool down, float scroll);
         uint32_t PointerHandlers(Entity e);                        // the event kinds e's enabled scripts handle (bits)
         Entity PointerHandler(Entity from, PointerEventKind kind); // from or the nearest parent handling `kind`
         void SendPointerEvent(Entity e, PointerEventKind kind, const PointerEventData& data);
@@ -440,6 +453,8 @@ namespace Dimension
         Entity m_LastPrimaryCamera = Entity::Null();
         uint32_t m_CameraCuts = 0;
         bool m_MouseWasDown = false;
+        bool m_UIRaySet = false, m_UIRayDown = false, m_UIRayWasDown = false;
+        glm::vec3 m_UIRayOrigin{ 0.0f }, m_UIRayDirection{ 0.0f, 0.0f, -1.0f };
         struct PointerTracking
         {
             std::vector<Entity> Hovered; // the element under the pointer and its parents

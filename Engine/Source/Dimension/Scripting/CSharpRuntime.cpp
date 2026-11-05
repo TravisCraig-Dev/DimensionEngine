@@ -287,7 +287,8 @@ namespace Dimension
             const char* (*ComponentString)(void*, uint64_t, const char*, const char*, int, const char*);
             // UI input: 0 pointer over UI, 1 the selected element (ids[0]), 2 select ids[0] (~0 clears), 3 the elements
             // under v (xy pixels) into ids, topmost first (returns the total), 4 the element under the pointer (ids[0]),
-            // 5 whether keyboard / gamepad navigation is on.
+            // 5 whether keyboard / gamepad navigation is on, 6 a pointer ray for World Space canvases (v: origin, direction,
+            // pressed), 7 back to the mouse.
             int (*UIEvents)(void*, int, float*, uint64_t*, int);
             // The Animator: 0 play state/clip `name` on `layer` (v: fade seconds, offset, fixed time != 0), 1 state info
             // (v[0] 0 current, 1 next; out v: normalized time, length, speed, loop), 2 this frame's root motion (v xyz, xyzw),
@@ -2344,6 +2345,8 @@ namespace Dimension
                     return (int)under.size();
                 }
                 case 4: return put(scene.GetUIHovered());
+                case 6: scene.SetUIPointerRay({ v[0], v[1], v[2] }, { v[3], v[4], v[5] }, v[6] != 0.0f); return 1;
+                case 7: scene.ClearUIPointerRay(); return 1;
                 default: return scene.IsUINavigating() ? 1 : 0;
                 }
             };

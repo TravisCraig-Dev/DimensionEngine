@@ -1044,6 +1044,19 @@ namespace Dimension
         /// <summary>True after arrow keys / D-pad (or <see cref="SetSelected"/>) until the next mouse click.</summary>
         public static bool IsNavigating => Op(5) != 0;
 
+        /// <summary>
+        /// Points at World Space canvases with a ray of your own instead of the mouse (a VR controller, a crosshair):
+        /// buttons, sliders and pointer events on them follow it, `pressed` acting as the button. It stays (set it each
+        /// frame as the ray moves) until <see cref="ClearPointerRay"/>; it takes effect at the next UI update.
+        /// </summary>
+        public static void SetPointerRay(Vector3 origin, Vector3 direction, bool pressed = false)
+        {
+            float* v = stackalloc float[7] { origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, pressed ? 1 : 0 };
+            Op(6, null, 0, v);
+        }
+        /// <summary>Back to the mouse for World Space canvases.</summary>
+        public static void ClearPointerRay() => Op(7);
+
         /// <summary>The UI elements that take the pointer under a screen point, topmost first.</summary>
         public static Entity[] RaycastAll(Vector2 screenPoint)
         {

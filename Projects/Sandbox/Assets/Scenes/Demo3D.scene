@@ -953,6 +953,14 @@
                 "Turn Speed": 12.0
               },
               "Enabled": true
+            },
+            {
+              "Class": "Game.LaserPointer",
+              "Fields": {
+                "Height": 0.4,
+                "Length": 12.0
+              },
+              "Enabled": true
             }
           ]
         },
@@ -6073,6 +6081,391 @@
           "Bounciness": 0.3,
           "Iterations": 8,
           "Thickness": 0.02
+        }
+      }
+    },
+    {
+      "guid": 940001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Kiosk (World Space Canvas)",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            5.0,
+            1.3,
+            5.0
+          ],
+          "Rotation": [
+            0,
+            -0.69,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Canvas": {
+          "Scale Mode": 0,
+          "Reference Resolution": [
+            1920,
+            1080
+          ],
+          "Sorting Order": 0,
+          "Render Mode": 1,
+          "Pixel Size": [
+            400,
+            260
+          ],
+          "Pixels Per Unit": 200
+        }
+      }
+    },
+    {
+      "guid": 940002,
+      "parent": 940001,
+      "components": {
+        "Tag": {
+          "Name": "Background",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
+        "UI Image": {
+          "Image": 0,
+          "Color": [
+            0.06,
+            0.08,
+            0.13,
+            0.9
+          ]
+        }
+      }
+    },
+    {
+      "guid": 940003,
+      "parent": 940001,
+      "components": {
+        "Tag": {
+          "Name": "Kiosk Title",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            0
+          ],
+          "Pivot": [
+            0.5,
+            0
+          ],
+          "Position": [
+            0,
+            14
+          ],
+          "Size": [
+            -20,
+            70
+          ]
+        },
+        "UI Text": {
+          "Text": "Mouse, or the Player's laser (L on, F to press)",
+          "Font": 0,
+          "Font Size": 22,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 940004,
+      "parent": 940001,
+      "components": {
+        "Tag": {
+          "Name": "Kiosk Button",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0.5,
+            0.5
+          ],
+          "Anchor Max": [
+            0.5,
+            0.5
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            220,
+            64
+          ]
+        },
+        "UI Image": {
+          "Image": 0,
+          "Color": [
+            0.85,
+            0.35,
+            0.16,
+            0.95
+          ]
+        },
+        "UI Button": {
+          "Normal Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Hover Color": [
+            1.25,
+            1.25,
+            1.25,
+            1
+          ],
+          "Pressed Color": [
+            0.7,
+            0.7,
+            0.7,
+            1
+          ],
+          "Interactable": true
+        }
+      }
+    },
+    {
+      "guid": 940005,
+      "parent": 940004,
+      "components": {
+        "Tag": {
+          "Name": "Label",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            0
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            0.5
+          ],
+          "Position": [
+            0,
+            0
+          ],
+          "Size": [
+            0,
+            0
+          ]
+        },
+        "UI Text": {
+          "Text": "Press",
+          "Font": 0,
+          "Font Size": 30,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
+          "Wrap": true
+        }
+      }
+    },
+    {
+      "guid": 940006,
+      "parent": 940001,
+      "components": {
+        "Tag": {
+          "Name": "Kiosk Clicks",
+          "Tag": "Untagged",
+          "Active": true
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            1,
+            1
+          ],
+          "Pivot": [
+            0.5,
+            1
+          ],
+          "Position": [
+            0,
+            -16
+          ],
+          "Size": [
+            -20,
+            48
+          ]
+        },
+        "UI Text": {
+          "Text": "Clicks: 0",
+          "Font": 0,
+          "Font Size": 26,
+          "Color": [
+            0.9,
+            0.95,
+            1,
+            1
+          ],
+          "Alignment": 1,
+          "Vertical Alignment": 1,
+          "Wrap": true
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.ButtonCounter",
+              "Fields": {
+                "Button": "Kiosk Button",
+                "Limit": 0
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     }

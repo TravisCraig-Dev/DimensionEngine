@@ -734,10 +734,10 @@ namespace Dimension::UI
         return order;
     }
 
-    std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screen, const std::function<bool(Entity)>& alsoTakes)
+    std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screen, const std::function<bool(Entity)>& alsoTakes, Entity canvas)
     {
         auto& reg = scene.GetRegistry();
-        auto order = ComputeLayout(scene, screen);
+        auto order = ComputeLayout(scene, screen, canvas);
         std::vector<Entity> under;
         for (auto it = order.rbegin(); it != order.rend(); ++it)
             if ((BlocksPointer(reg, *it) || (alsoTakes && alsoTakes(*it))) && Contains(reg.Get<UIRectComponent>(*it), point)) under.push_back(*it);
@@ -1178,6 +1178,14 @@ namespace Dimension::UI
         if (!canvas || canvas->RenderMode != CanvasRenderMode::WorldSpace || camera.IsNull()) return false;
         glm::vec3 origin, direction;
         CameraProjection::ScreenPointToRay(scene, camera, screenPoint, screenSize, origin, direction);
+        return WorldCanvasRayPoint(scene, canvasEntity, origin, direction, pixel);
+    }
+
+    bool WorldCanvasRayPoint(Scene& scene, Entity canvasEntity, const glm::vec3& origin, const glm::vec3& direction, glm::vec2& pixel)
+    {
+        auto& reg = scene.GetRegistry();
+        auto* canvas = reg.TryGet<CanvasComponent>(canvasEntity);
+        if (!canvas || canvas->RenderMode != CanvasRenderMode::WorldSpace) return false;
         glm::mat4 inv = glm::inverse(reg.Get<TransformComponent>(canvasEntity).World);
         glm::vec3 o = glm::vec3(inv * glm::vec4(origin, 1.0f)), d = glm::vec3(inv * glm::vec4(direction, 0.0f));
         if (std::abs(d.z) < 1e-8f) return false;

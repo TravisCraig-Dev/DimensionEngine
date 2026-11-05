@@ -66,12 +66,14 @@ namespace Dimension
         // topmost first, as laid out now.
         // `alsoTakes`: elements that take the pointer too (those with pointer-event scripts).
         std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screenSize,
-                                       const std::function<bool(Entity)>& alsoTakes = {});
+                                       const std::function<bool(Entity)>& alsoTakes = {}, Entity canvas = Entity::Null());
 
         void BuildDrawList(Scene& scene, const glm::vec2& screenSize, std::vector<DrawCommand>& out, Entity canvas = Entity::Null());
         // Where the main camera's pointer ray (screen point) meets a World Space canvas, in its pixels; false when it
         // misses the panel (or the canvas is not World Space).
         bool WorldCanvasPoint(Scene& scene, Entity canvas, const glm::vec2& screenPoint, const glm::vec2& screenSize, glm::vec2& pixel);
+        // The same for any world-space ray (a VR controller, a crosshair).
+        bool WorldCanvasRayPoint(Scene& scene, Entity canvas, const glm::vec3& origin, const glm::vec3& direction, glm::vec2& pixel);
 
         // Where keyboard/gamepad navigation goes from each reachable widget in each direction (explicit links and
         // the automatic nearest widget), for the editor's Visualize Navigation overlay. Rects are in layout pixels.

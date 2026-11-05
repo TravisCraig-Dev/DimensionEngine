@@ -852,7 +852,7 @@ namespace Dimension
         ++m_FrameCount;
 
         Input::SetKeyboardCapturedByUI(false); // the UI reads the keyboard first
-        if (m_UIInputValid)
+        if (m_UIInputValid || m_UIRaySet) // a script's pointer ray works without a mouse (VR)
         {
             UI::PointerState pointer{ m_UIPointer, m_UIDown, m_UIDown && !m_UIWasDown, !m_UIDown && m_UIWasDown, m_UIScroll };
             pointer.Text = Input::GetTypedText() + m_UIInjectedText;
@@ -896,14 +896,23 @@ namespace Dimension
             std::vector<Entity> worldCanvases;
             for (auto [ce, canvas, ct] : m_Registry.ViewOf<CanvasComponent, TransformComponent>())
                 if (ct.ActiveInHierarchy && canvas.RenderMode == CanvasRenderMode::WorldSpace) worldCanvases.push_back(ce);
+            bool rayPressed = m_UIRaySet && m_UIRayDown && !m_UIRayWasDown, rayReleased = m_UIRaySet && !m_UIRayDown && m_UIRayWasDown;
+            m_UIRayWasDown = m_UIRaySet && m_UIRayDown;
             for (Entity ce : worldCanvases)
             {
                 if (!IsValid(ce)) continue;
                 glm::vec2 pixel(-1e6f);
-                bool hit = m_UIHovered.IsNull() && UI::WorldCanvasPoint(*this, ce, m_UIPointer, m_UIScreen, pixel);
+                bool hit = (m_UIRaySet || m_UIHovered.IsNull()) && WorldCanvasPointer(ce, pixel);
                 UI::PointerState p = pointer;
+                if (m_UIRaySet)
+                {
+                    // The script's ray and button instead of the mouse.
+                    p.Down = m_UIRayDown;
+                    p.Pressed = rayPressed;
+                    p.Released = rayReleased;
+                }
                 p.Position = hit ? pixel : glm::vec2(-1e6f);
-                p.Pressed = pointer.Pressed && hit;
+                p.Pressed = p.Pressed && hit;
                 p.Scroll = hit ? pointer.Scroll : 0.0f;
                 p.NavUp = p.NavDown = p.NavLeft = p.NavRight = p.Submit = p.Cancel = false;
                 Entity over = UI::Update(*this, p, m_Registry.Get<CanvasComponent>(ce).PixelSize, unscaledDt, ce);
@@ -1864,6 +1873,12 @@ namespace Dimension
         m_MouseWasDown = down;
     }
 
+    bool Scene::WorldCanvasPointer(Entity canvas, glm::vec2& pixel)
+    {
+        if (m_UIRaySet) return UI::WorldCanvasRayPoint(*this, canvas, m_UIRayOrigin, m_UIRayDirection, pixel);
+        return m_UIInputValid && UI::WorldCanvasPoint(*this, canvas, m_UIPointer, m_UIScreen, pixel);
+    }
+
     uint32_t Scene::PointerHandlers(Entity e)
     {
         if (!IsValid(e) || !IsActiveInHierarchy(e)) return 0;
@@ -1897,7 +1912,7 @@ namespace Dimension
 
     // Unity's EventSystem pointer events (see PointerEventKind). Events go to the target element or bubble to the
     // nearest parent handling them; Enter / Exit go to each object the pointer came over or left (its parents too).
-    void Scene::UpdatePointerEvents(const glm::vec2& position, bool down, float scroll)
+    void Scene::UpdatePointerEvents(glm::vec2 position, bool down, float scroll)
     {
         DIM_PROFILE_SCOPE("Pointer Events");
         PointerTracking& p = m_Pointer;
@@ -1915,11 +1930,6 @@ namespace Dimension
             return;
         }
 
-        PointerEventData data;
-        data.Position = position;
-        data.Delta = p.Started ? position - p.LastPosition : glm::vec2(0.0f);
-        data.PressPosition = p.PressPosition;
-        data.Scroll = scroll;
         // While dragging, what is under the pointer beneath the dragged object (which usually follows the pointer), so
         // slots see it come and Drop goes to them.
         auto inDragged = [&](Entity e) {
@@ -1927,8 +1937,32 @@ namespace Dimension
                 if (e == p.DragTarget) return true;
             return false;
         };
-        for (Entity e : UI::ElementsAt(*this, position, m_UIScreen, [this](Entity e) { return PointerHandlers(e) != 0; }))
-            if (!p.Dragging || !inDragged(e)) { data.Over = e; break; }
+        auto takes = [this](Entity e) { return PointerHandlers(e) != 0; };
+        Entity over = Entity::Null();
+        if (!m_UIRaySet)
+            for (Entity e : UI::ElementsAt(*this, position, m_UIScreen, takes))
+                if (!p.Dragging || !inDragged(e)) { over = e; break; }
+        // World Space canvases (the script's ray, else the mouse through the camera): positions in the panel's pixels.
+        if (over.IsNull())
+            for (auto [ce, canvas, ct] : m_Registry.ViewOf<CanvasComponent, TransformComponent>())
+            {
+                glm::vec2 pixel;
+                if (!ct.ActiveInHierarchy || canvas.RenderMode != CanvasRenderMode::WorldSpace || !WorldCanvasPointer(ce, pixel)) continue;
+                for (Entity e : UI::ElementsAt(*this, pixel, canvas.PixelSize, takes, ce))
+                    if (!p.Dragging || !inDragged(e)) { over = e; break; }
+                if (!over.IsNull() || p.Dragging)
+                {
+                    position = pixel;
+                    if (m_UIRaySet) down = m_UIRayDown;
+                    break;
+                }
+            }
+        PointerEventData data;
+        data.Position = position;
+        data.Delta = p.Started ? position - p.LastPosition : glm::vec2(0.0f);
+        data.PressPosition = p.PressPosition;
+        data.Scroll = scroll;
+        data.Over = over;
         data.Press = p.Press;
         data.Drag = p.DragTarget;
         data.Dragging = p.Dragging;

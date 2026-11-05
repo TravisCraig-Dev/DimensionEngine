@@ -6498,6 +6498,61 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // World Space canvases take pointer events (in the panel's pixels) from the camera's mouse ray, and from a
+    // script's ray (EventSystem.SetPointerRay) with its own button, which works without a mouse.
+    void TestWorldCanvasPointers()
+    {
+        Scene scene("World pointers");
+        auto& reg = scene.GetRegistry();
+        Entity cam = scene.CreateEntity("Camera");
+        reg.Get<TransformComponent>(cam).Position = { 0, 0, 5 };
+        reg.Emplace<CameraComponent>(cam);
+        Entity panel = scene.CreateEntity("Panel");
+        auto& canvas = reg.Emplace<CanvasComponent>(panel);
+        canvas.RenderMode = CanvasRenderMode::WorldSpace;
+        canvas.PixelSize = { 400, 300 };
+        canvas.PixelsPerUnit = 100.0f;
+        Entity button = scene.CreateEntity("Button", panel);
+        {
+            auto& r = reg.Emplace<UIRectComponent>(button);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0.5f, 0.5f };
+            r.Size = { 100, 50 };
+        }
+        reg.Emplace<UIImageComponent>(button);
+        reg.Emplace<UIButtonComponent>(button);
+        reg.Emplace<ScriptComponent>(button).Add("PointerProbe");
+        scene.UpdateTransforms();
+        scene.OnRuntimeStart();
+        auto frame = [&](glm::vec2 at, bool down) {
+            PointerProbe::Log.clear();
+            scene.SetUIInput(at, down, { 800, 600 }, true);
+            scene.OnUpdateRuntime(0.05f);
+            if (!PointerProbe::Log.empty()) PointerProbe::Log.pop_back();
+            return PointerProbe::Log;
+        };
+        CHECK(frame({ 50, 50 }, false).empty());
+        CHECK(frame({ 400, 300 }, false) == "Button:Enter"); // the camera's ray through the panel's middle
+        CHECK(frame({ 400, 300 }, true) == "Button:Down Button:Select");
+        CHECK(frame({ 400, 300 }, false) == "Button:Up Button:Click1");
+        CHECK(frame({ 50, 50 }, false) == "Button:Exit");
+        // A ray of the script's own (a controller beside the camera, pointing at the button) with its own button: the
+        // mouse (off the panel, released) no longer counts.
+        scene.SetUIPointerRay({ 3, 0, 2 }, glm::normalize(glm::vec3(-3, 0, -2)), false);
+        CHECK(frame({ 50, 50 }, false) == "Button:Enter");
+        CHECK(scene.IsPointerOverUI());
+        for (int i = 0; i < 8; ++i) frame({ 50, 50 }, false); // past the double-click time
+        scene.SetUIPointerRay({ 3, 0, 2 }, glm::normalize(glm::vec3(-3, 0, -2)), true);
+        CHECK(frame({ 50, 50 }, false) == "Button:Down");
+        scene.SetUIPointerRay({ 3, 0, 2 }, glm::normalize(glm::vec3(-3, 0, -2)), false);
+        CHECK(frame({ 50, 50 }, false) == "Button:Up Button:Click1");
+        // Turned away: off the panel.
+        scene.SetUIPointerRay({ 3, 0, 2 }, { 1, 0, 0 }, false);
+        CHECK(frame({ 400, 300 }, false) == "Button:Exit");
+        scene.ClearUIPointerRay();
+        CHECK(frame({ 400, 300 }, false) == "Button:Enter"); // back to the mouse
+        scene.OnRuntimeStop();
+    }
+
     void TestUI()
     {
         Scene scene("UI");
@@ -14025,6 +14080,7 @@ int main(int argc, char** argv)
     Run("Material round trip", TestMaterialRoundTrip);
     Run("UI layout and clicks", TestUI);
     Run("World space canvases", TestWorldSpaceCanvas);
+    Run("World canvas pointers", TestWorldCanvasPointers);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);
