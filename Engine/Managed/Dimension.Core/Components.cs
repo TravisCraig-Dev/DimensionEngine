@@ -1859,6 +1859,8 @@ namespace Dimension
 
         public float Duration { get => GetFloat("Duration"); set => SetFloat("Duration", value); }
         public bool Looping { get => GetBool("Looping"); set => SetBool("Looping", value); }
+        /// <summary>Shaded by the scene's lights (ambient, the sun and its shadow, point and spot lights).</summary>
+        public bool Lit { get => GetBool("Lit"); set => SetBool("Lit", value); }
         /// <summary>Particles per second while playing.</summary>
         public float EmissionRate { get => GetFloat("Rate Over Time"); set => SetFloat("Rate Over Time", value); }
         /// <summary>Emitted at once when it starts (and each loop).</summary>
