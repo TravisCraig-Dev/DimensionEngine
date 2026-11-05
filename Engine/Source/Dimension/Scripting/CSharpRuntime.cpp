@@ -25,6 +25,7 @@
 #include "Dimension/Asset/DataAsset.h"
 #include "Dimension/UI/UI.h"
 #include "Dimension/Animation/Timeline.h"
+#include "Dimension/Asset/AssetPack.h"
 #include "Dimension/Renderer/Environment.h"
 #include "Dimension/Renderer/Texture.h"
 #include <stb_image_write.h>
@@ -308,6 +309,9 @@ namespace Dimension
             // pixels (w x h) as PNG (returns the byte count), 8 copy that PNG into pixels (count bytes), 9 Camera.Render()
             // for the camera *guid (packed entity). 0 when it fails.
             int (*TextureOp)(void*, int, uint64_t*, int*, uint32_t*, int, int);
+            // Asset bundles: 0 load a pack (path; returns its Assets-relative folder, "" failed), 1 its assets (one per
+            // line), 2 an asset's GUID by its Assets-relative path (into *guid; returns "1" or "").
+            const char* (*BundleOp)(int, const char*, uint64_t*);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -2196,6 +2200,20 @@ namespace Dimension
                 if (auto old = AssetManager::GetTimeline(AssetHandle(before))) Timeline::Release(scene, Unpack(e), *old);
                 tl->Bindings.clear();
                 tl->Time = 0.0f;
+            };
+            a.BundleOp = [](int op, const char* path, uint64_t* guid) -> const char* {
+                s_StringReturn.clear();
+                std::string p = path ? path : "";
+                if (op == 0) s_StringReturn = AssetPack::LoadBundle(fs::u8path(p));
+                else if (op == 1)
+                    for (auto& a : AssetPack::BundleAssets(fs::u8path(p))) s_StringReturn += a + "\n";
+                else
+                {
+                    AssetHandle h = AssetManager::GetHandle(fs::u8path(p));
+                    if (guid) *guid = (uint64_t)h;
+                    if (h.IsValid()) s_StringReturn = "1";
+                }
+                return s_StringReturn.c_str();
             };
             a.TextureOp = [](void* s, int op, uint64_t* guid, int* size, uint32_t* pixels, int count, int flags) -> int {
                 switch (op)

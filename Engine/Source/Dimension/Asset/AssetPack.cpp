@@ -1,6 +1,8 @@
 #include "Dimension/Asset/AssetPack.h"
 #include "Dimension/Core/Log.h"
 #include "Dimension/Core/PlayerPrefs.h"
+#include "Dimension/Asset/AssetManager.h"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -120,6 +122,47 @@ namespace Dimension
                 if (!out.write(buffer.data(), (std::streamsize)e.Size)) return false;
             }
             return true;
+        }
+
+        std::string LoadBundle(const fs::path& pak)
+        {
+            std::vector<Entry> entries;
+            uint64_t hash = 0;
+            if (!AssetManager::IsInitialized() || !Read(pak, entries, hash)) return {};
+            std::string name = pak.stem().string();
+            std::string relative = "Bundles/" + name;
+            fs::path folder = AssetManager::GetAssetsDirectory() / "Bundles" / name;
+            char tag[17];
+            std::snprintf(tag, sizeof(tag), "%016llx", (unsigned long long)hash);
+            fs::path marker = folder / ".bundle";
+            std::string have;
+            if (std::ifstream in(marker); in) std::getline(in, have);
+            if (have != tag)
+            {
+                std::error_code ec;
+                fs::remove_all(folder, ec);
+                if (!Extract(pak, folder))
+                {
+                    Log::Error("Loading asset bundle {} failed", pak.string());
+                    return {};
+                }
+                std::ofstream(marker) << tag;
+            }
+            AssetManager::Refresh(); // imports the bundle's files (with their own GUIDs)
+            Log::Info("Loaded asset bundle '{}' ({} files)", name, entries.size());
+            return relative;
+        }
+
+        std::vector<std::string> BundleAssets(const fs::path& pak)
+        {
+            std::vector<Entry> entries;
+            uint64_t hash = 0;
+            std::vector<std::string> out;
+            if (!Read(pak, entries, hash)) return out;
+            std::string prefix = "Bundles/" + pak.stem().string() + "/";
+            for (auto& e : entries)
+                if (fs::path(e.Path).extension() != ".meta") out.push_back(prefix + e.Path);
+            return out;
         }
 
         fs::path Mount(const fs::path& pak, const std::string& product)

@@ -6365,6 +6365,23 @@ namespace
         }
         CHECK(!AssetPack::Read(dir / "bad.pak", entries, hash) && !AssetPack::Extract(dir / "bad.pak", dir / "badout"));
         CHECK(!fs::exists(dir / "evil.txt"));
+
+        // An asset bundle: a folder with a scene and its .meta, loaded into a running game's assets under
+        // Bundles/<name>, its GUID kept, its scene found by path; loading it again does not unpack it again.
+        fs::create_directories(dir / "Winter" / "Scenes");
+        std::ofstream(dir / "Winter" / "Scenes" / "Lake.scene") << "{\"version\": 1, \"name\": \"Lake\", \"entities\": []}";
+        std::ofstream(dir / "Winter" / "Scenes" / "Lake.scene.meta") << "{\"guid\": 424242, \"type\": \"Scene\", \"settings\": {}}";
+        CHECK(AssetPack::Write(dir / "Winter.pak", dir / "Winter", AssetPack::ListFiles(dir / "Winter")));
+        fs::create_directories(dir / "Game" / "Assets");
+        AssetManager::Init(dir / "Game" / "Assets");
+        CHECK(AssetPack::LoadBundle(dir / "Winter.pak") == "Bundles/Winter");
+        AssetHandle lake = AssetManager::GetHandle("Bundles/Winter/Scenes/Lake.scene");
+        CHECK(lake == AssetHandle(uint64_t(424242)) && SceneManager::Resolve("Bundles/Winter/Scenes/Lake") == lake);
+        CHECK((AssetPack::BundleAssets(dir / "Winter.pak") == std::vector<std::string>{ "Bundles/Winter/Scenes/Lake.scene" }));
+        auto stamp = fs::last_write_time(dir / "Game" / "Assets" / "Bundles" / "Winter" / "Scenes" / "Lake.scene");
+        CHECK(AssetPack::LoadBundle(dir / "Winter.pak") == "Bundles/Winter");
+        CHECK(fs::last_write_time(dir / "Game" / "Assets" / "Bundles" / "Winter" / "Scenes" / "Lake.scene") == stamp);
+        AssetManager::Shutdown();
         fs::remove_all(dir);
     }
 

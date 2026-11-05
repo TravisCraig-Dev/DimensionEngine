@@ -1,4 +1,6 @@
 #include "../AssetPreviews.h"
+#include <Dimension/Asset/AssetPack.h>
+#include <Dimension/Project/Project.h>
 #include <Dimension/Renderer/PostProcess.h>
 #include <Dimension/Renderer/SpriteAtlas.h>
 #include <Dimension/Asset/DataAsset.h>
@@ -168,6 +170,20 @@ namespace Editor
             if (path.extension() == ".scene" && ImGui::MenuItem("Open Additive", nullptr, false, !m_Ctx.IsPlaying()))
                 m_Ctx.RequestOpenAdditive = path;
             if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
+            if (fs::is_directory(path) && ImGui::MenuItem("Build Asset Bundle"))
+            {
+                // The folder's files with their .meta (GUIDs) as one pack a running game loads (AssetBundle.LoadFromFile).
+                fs::path out = Project::GetDirectory() / "Bundles" / (path.filename().string() + ".pak");
+                std::error_code ec;
+                fs::create_directories(out.parent_path(), ec);
+                if (AssetPack::Write(out, path, AssetPack::ListFiles(path)))
+                {
+                    Log::Info("Built asset bundle {} ({:.1f} MB)", out.string(), fs::file_size(out, ec) / 1048576.0);
+                    FileDialogs::OpenWithDefaultApp(out.parent_path());
+                }
+                else
+                    Log::Error("Building the asset bundle failed");
+            }
             if (AssetHandle item = AssetManager::GetHandle(path); item.IsValid())
             {
                 ImGui::Separator();

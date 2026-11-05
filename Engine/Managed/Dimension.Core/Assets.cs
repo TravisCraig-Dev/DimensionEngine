@@ -174,6 +174,53 @@ namespace Dimension
         }
     }
 
+    /// <summary>
+    /// Extra content loaded while the game runs (Unity's AssetBundle): a .pak the editor builds from a project folder
+    /// (Project window > Build Asset Bundle), with its scenes, prefabs and other assets. Loading adds its assets to the
+    /// game's (under Assets/Bundles/&lt;name&gt;, their GUIDs kept), so its scenes load by path and its prefabs place
+    /// like any other; they stay for the rest of the run.
+    /// </summary>
+    public sealed unsafe class AssetBundle
+    {
+        /// <summary>Its folder among the game's assets ("Bundles/&lt;name&gt;").</summary>
+        public string Folder { get; }
+        public string Name { get; }
+        private readonly string m_Path;
+        private AssetBundle(string path, string folder) { m_Path = path; Folder = folder; Name = System.IO.Path.GetFileNameWithoutExtension(path); }
+
+        /// <summary>Loads a bundle file (null when it is not one).</summary>
+        public static AssetBundle LoadFromFile(string path)
+        {
+            string folder = Native.WithUtf8(path, p => Native.FromUtf8(Native.Api.BundleOp(0, (byte*)p, null)));
+            return string.IsNullOrEmpty(folder) ? null : new AssetBundle(path, folder);
+        }
+
+        /// <summary>Its assets' paths (Assets-relative, e.g. "Bundles/Winter/Scenes/Lake.scene").</summary>
+        public string[] GetAllAssetNames()
+        {
+            string joined = Native.WithUtf8(m_Path, p => Native.FromUtf8(Native.Api.BundleOp(1, (byte*)p, null)));
+            return joined.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        }
+        /// <summary>Its scenes' paths, for SceneManager.LoadScene.</summary>
+        public string[] GetAllScenePaths() => Array.FindAll(GetAllAssetNames(), a => a.EndsWith(".scene", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>A prefab of the bundle by its path inside it ("Prefabs/Sled.prefab"); IsValid false when missing.</summary>
+        public Prefab LoadPrefab(string pathInBundle) => new(Guid(pathInBundle));
+        public Texture LoadTexture(string pathInBundle) => new(Guid(pathInBundle));
+        public Material LoadMaterial(string pathInBundle) => new(Guid(pathInBundle));
+        /// <summary>Loads one of its scenes ("Scenes/Lake" or "Scenes/Lake.scene").</summary>
+        public void LoadScene(string pathInBundle, LoadSceneMode mode = LoadSceneMode.Single) => SceneManager.LoadScene(Folder + "/" + pathInBundle, mode);
+
+        private ulong Guid(string pathInBundle)
+        {
+            ulong* guid = stackalloc ulong[1];
+            guid[0] = 0;
+            IntPtr at = (IntPtr)guid;
+            Native.WithUtf8(Folder + "/" + pathInBundle, p => { Native.Api.BundleOp(2, (byte*)p, (ulong*)at); return 0; });
+            return guid[0];
+        }
+    }
+
     /// <summary>A color of four bytes (Unity's Color32), sRGB-encoded as texture pixels are.</summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct Color32
