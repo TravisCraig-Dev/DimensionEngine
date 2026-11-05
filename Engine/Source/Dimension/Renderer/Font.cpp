@@ -233,6 +233,12 @@ namespace Dimension
         FallbacksSet() = true;
     }
 
+    void Font::ReleaseFallbackFonts()
+    {
+        Fallbacks().clear();
+        FallbacksSet() = false;
+    }
+
     const std::vector<Ref<Font>>& Font::GetFallbackFonts()
     {
         if (!FallbacksSet())

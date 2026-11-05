@@ -63,6 +63,8 @@ namespace Dimension
         // (Korean) and Nirmala UI (Indic), as far as they are installed.
         static void SetFallbackFonts(std::vector<Ref<Font>> fonts);
         static const std::vector<Ref<Font>>& GetFallbackFonts();
+        // Drops the fallback fonts (AssetManager::Shutdown, while the device lives); the next use loads them again.
+        static void ReleaseFallbackFonts();
         // Text in its shaped, visual order: Arabic letters in their joined forms (and lam-alef ligatures), and right-to-
         // left runs reversed (a simplified Unicode bidirectional algorithm: a paragraph takes its first strong
         // character's direction, numbers stay left-to-right, brackets mirror). Layout does both; exposed for tests.

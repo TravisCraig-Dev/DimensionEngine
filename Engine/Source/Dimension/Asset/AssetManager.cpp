@@ -268,6 +268,7 @@ namespace Dimension
         Cloth::ReleaseMeshes(); // GPU grids, before the device goes
         Rope::ReleaseMeshes();
         Water::ReleaseMeshes();
+        Font::ReleaseFallbackFonts(); // their atlases, before the device goes
         Terrain::ReleaseRuntimes();
         delete s;
         s = nullptr;
