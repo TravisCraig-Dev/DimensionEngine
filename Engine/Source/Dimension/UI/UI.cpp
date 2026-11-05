@@ -565,9 +565,20 @@ namespace Dimension::UI
         // pressed direction, Submit presses it, sliders step with Left/Right, and an open dropdown list is navigated
         // with Up/Down. A mouse click selects the clicked widget (or clears the selection).
         void Navigate(Scene& scene, Registry& reg, const std::vector<Entity>& order, const PointerState& pointer, const glm::vec2& screen,
-                      Entity hovered, std::vector<Entity>& clicked, std::vector<std::pair<Entity, float>>& values)
+                      Entity hovered, std::vector<Entity>& clicked, std::vector<std::pair<Entity, float>>& values, Entity only)
         {
             Entity selected = scene.GetUISelected();
+            // A selection on another canvas (the screen's while a World Space panel updates, or a panel's while the
+            // screen does) is that canvas's to keep or clear; a click here still takes it.
+            if (!selected.IsNull() && !pointer.Pressed && std::find(order.begin(), order.end(), selected) == order.end())
+            {
+                Entity owner = Entity::Null();
+                for (Entity e = selected; scene.IsValid(e) && owner.IsNull(); e = scene.GetParent(e))
+                    if (reg.Has<CanvasComponent>(e)) owner = e;
+                if (!owner.IsNull() && reg.Get<TransformComponent>(owner).ActiveInHierarchy &&
+                    (only.IsNull() ? reg.Get<CanvasComponent>(owner).RenderMode == CanvasRenderMode::WorldSpace : owner != only))
+                    return;
+            }
             std::vector<Entity> candidates = NavigationCandidates(reg, order);
             if (!selected.IsNull() && !IsSelectable(reg, selected)) selected = Entity::Null();
             if (pointer.Pressed)
@@ -686,6 +697,23 @@ namespace Dimension::UI
                 position[axis] += (1.0f - rect.Pivot[axis]) * d[axis];
             }
         }
+    }
+
+    Entity NavigationEntry(Scene& scene, Entity canvas, const glm::vec2& dir)
+    {
+        auto& reg = scene.GetRegistry();
+        auto* c = reg.TryGet<CanvasComponent>(canvas);
+        if (!c) return Entity::Null();
+        std::vector<Entity> candidates = NavigationCandidates(reg, ComputeLayout(scene, c->PixelSize, canvas));
+        Entity best = Entity::Null();
+        float bestScore = 1e30f;
+        for (Entity e : candidates)
+        {
+            glm::vec2 p = CenterOf(reg, e);
+            float score = glm::dot(p, dir) * 4.0f + p.y + p.x * 0.25f; // the near side first, then top-left
+            if (score < bestScore) { bestScore = score; best = e; }
+        }
+        return best;
     }
 
     std::vector<NavigationLink> NavigationLinks(Scene& scene, const std::vector<Entity>& order)
@@ -1162,7 +1190,7 @@ namespace Dimension::UI
             }
         }
 
-        Navigate(scene, reg, order, pointer, screen, hovered, clicked, values);
+        Navigate(scene, reg, order, pointer, screen, hovered, clicked, values, only);
 
         for (Entity e : clicked) scene.DispatchUIClick(e);
         for (auto& [e, v] : values) scene.DispatchUIValueChanged(e, v);
@@ -1204,6 +1232,7 @@ namespace Dimension::UI
         auto order = ComputeLayout(scene, screen, only);
         uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
         Entity navSelected = scene.IsUINavigating() ? scene.GetUISelected() : Entity::Null();
+        if (std::find(order.begin(), order.end(), navSelected) == order.end()) navSelected = Entity::Null(); // another canvas's
 
         for (Entity e : order)
         {

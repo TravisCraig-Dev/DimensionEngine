@@ -6553,6 +6553,77 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // Keyboard / gamepad navigation on World Space canvases: the arrows move within the panel holding the selection
+    // (the screen's UI keeps still), on to the nearest other panel that way when the panel has nothing further, and
+    // Submit presses the selected button there.
+    void TestWorldCanvasNavigation()
+    {
+        Scene scene("World navigation");
+        auto& reg = scene.GetRegistry();
+        Entity cam = scene.CreateEntity("Camera");
+        reg.Get<TransformComponent>(cam).Position = { 0, 0, 6 };
+        reg.Emplace<CameraComponent>(cam);
+        Entity screen = scene.CreateEntity("Screen");
+        reg.Emplace<CanvasComponent>(screen).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto widget = [&](const char* name, Entity parent, glm::vec2 at) {
+            Entity e = scene.CreateEntity(name, parent);
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Position = at;
+            r.Size = { 80, 40 };
+            reg.Emplace<UIImageComponent>(e);
+            reg.Emplace<UIButtonComponent>(e);
+            return e;
+        };
+        Entity menu = widget("Menu", screen, { 10, 10 });
+        auto panel = [&](const char* name, float x) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = { x, 0, 0 };
+            auto& c = reg.Emplace<CanvasComponent>(e);
+            c.RenderMode = CanvasRenderMode::WorldSpace;
+            c.PixelSize = { 200, 100 };
+            c.PixelsPerUnit = 100.0f;
+            return e;
+        };
+        Entity left = panel("Left", -1.5f), right = panel("Right", 1.5f);
+        Entity a1 = widget("A1", left, { 10, 30 }), a2 = widget("A2", left, { 110, 30 });
+        Entity b1 = widget("B1", right, { 10, 30 }), b2 = widget("B2", right, { 110, 30 });
+        reg.Emplace<ScriptComponent>(b2).Add("ClickCounter");
+        scene.UpdateTransforms();
+        CHECK(scene.CanvasOf(a2) == left && scene.CanvasOf(menu) == screen && scene.CanvasOf(cam).IsNull());
+        CHECK(UI::NavigationEntry(scene, right, { 1, 0 }) == b1 && UI::NavigationEntry(scene, right, { -1, 0 }) == b2);
+        scene.OnRuntimeStart();
+        auto press = [&](Key key) {
+            Input::SimulateKey(key, true);
+            scene.SetUIInput({ -100, -100 }, false, { 800, 600 });
+            scene.OnUpdateRuntime(0.016f);
+            Input::SimulateKey(key, false);
+            scene.SetUIInput({ -100, -100 }, false, { 800, 600 });
+            scene.OnUpdateRuntime(0.016f);
+            return scene.GetUISelected();
+        };
+        bool gameInput = Input::IsGameInputEnabled();
+        Input::SetGameInputEnabled(true);
+        bool keys = scene.GetSettings().UIKeyboardNavigation;
+        scene.GetSettings().UIKeyboardNavigation = true;
+        scene.SetUISelected(a1);
+        scene.SetUINavigating(true);
+
+        CHECK(press(Key::Right) == a2);    // within the left panel
+        CHECK(press(Key::Right) == b1);    // nothing further: onto the right panel's near side
+        CHECK(press(Key::Right) == b2);
+        CHECK(press(Key::Right) == b2);    // no panel further right
+        CHECK(press(Key::Down) == b2);     // nothing below: the screen's menu does not take it
+        ClickCounter::Clicks = 0;
+        press(Key::Enter);
+        CHECK(ClickCounter::Clicks == 1);
+        CHECK(press(Key::Left) == b1);
+        CHECK(press(Key::Left) == a2);     // back to the left panel's right side
+        scene.GetSettings().UIKeyboardNavigation = keys;
+        Input::SetGameInputEnabled(gameInput);
+        scene.OnRuntimeStop();
+    }
+
     void TestUI()
     {
         Scene scene("UI");
@@ -14081,6 +14152,7 @@ int main(int argc, char** argv)
     Run("UI layout and clicks", TestUI);
     Run("World space canvases", TestWorldSpaceCanvas);
     Run("World canvas pointers", TestWorldCanvasPointers);
+    Run("World canvas navigation", TestWorldCanvasNavigation);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

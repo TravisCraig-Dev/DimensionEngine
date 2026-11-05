@@ -72,6 +72,9 @@ namespace Dimension
         // Where the main camera's pointer ray (screen point) meets a World Space canvas, in its pixels; false when it
         // misses the panel (or the canvas is not World Space).
         bool WorldCanvasPoint(Scene& scene, Entity canvas, const glm::vec2& screenPoint, const glm::vec2& screenSize, glm::vec2& pixel);
+        // The widget keyboard / gamepad navigation enters `canvas` at when arriving from `dir` (pixels, +Y down): the
+        // nearest to the side it comes in at (null when the canvas has nothing selectable).
+        Entity NavigationEntry(Scene& scene, Entity canvas, const glm::vec2& dir);
         // The same for any world-space ray (a VR controller, a crosshair).
         bool WorldCanvasRayPoint(Scene& scene, Entity canvas, const glm::vec3& origin, const glm::vec3& direction, glm::vec2& pixel);
 

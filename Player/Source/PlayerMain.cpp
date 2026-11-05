@@ -1,6 +1,7 @@
 // Dimension Player: runs a project's start scene without the editor.
 // Usage: DimensionPlayer [projectDir] [--scene path] [--frames N] [--screenshot file]
 //        [--move x,y,frame] [--click x,y,frame]   simulated pointer for automated checks (framebuffer pixels)
+//        [--key name,frame]   a key pressed for that one frame (Right, Left, Up, Down, Enter, Space, Tab, Escape, A-Z)
 //        [--no-instancing] [--no-vsync]           draw every mesh separately / uncapped frame rate (for comparisons)
 //        [--no-clusters]                          shade every light at every pixel (for comparisons)
 //        [--cpu-light-culling]                    build the light clusters on the CPU instead of in a compute shader
@@ -42,12 +43,33 @@ namespace
         glm::vec2 Position;
         bool Click;
     };
+    // Scripted key: down for one frame.
+    struct KeyEvent
+    {
+        int Frame;
+        Key Code;
+    };
+
+    bool ParseKey(const std::string& name, Key& key)
+    {
+        static const std::pair<const char*, Key> named[] = { { "Right", Key::Right }, { "Left", Key::Left }, { "Up", Key::Up },
+                                                             { "Down", Key::Down }, { "Enter", Key::Enter }, { "Space", Key::Space },
+                                                             { "Tab", Key::Tab }, { "Escape", Key::Escape } };
+        for (auto& [n, k] : named)
+            if (name == n) { key = k; return true; }
+        if (name.size() == 1 && std::isalpha((unsigned char)name[0]))
+        {
+            key = (Key)std::toupper((unsigned char)name[0]);
+            return true;
+        }
+        return false;
+    }
 
     class PlayerLayer : public Layer
     {
     public:
-        PlayerLayer(fs::path scenePath, std::vector<PointerEvent> pointerEvents)
-            : m_ScenePath(std::move(scenePath)), m_PointerEvents(std::move(pointerEvents)) {}
+        PlayerLayer(fs::path scenePath, std::vector<PointerEvent> pointerEvents, std::vector<KeyEvent> keyEvents)
+            : m_ScenePath(std::move(scenePath)), m_PointerEvents(std::move(pointerEvents)), m_KeyEvents(std::move(keyEvents)) {}
 
         void OnAttach() override
         {
@@ -112,6 +134,9 @@ namespace
                 ++m_TimedFrames;
             }
             if (!m_PointerEvents.empty()) Input::SimulateMouseButton(MouseButton::Left, down); // scripts see the click too
+            for (auto& ev : m_KeyEvents) Input::SimulateKey(ev.Code, false);
+            for (auto& ev : m_KeyEvents)
+                if (ev.Frame == m_Frame - 1) Input::SimulateKey(ev.Code, true); // (m_Frame was advanced above)
             m_Scene->SetUIInput(pointer, down, { (float)size.x, (float)size.y }, true, Input::GetScrollDelta());
             auto updateStart = std::chrono::steady_clock::now();
             m_Scene->OnUpdateRuntime(dt);
@@ -146,6 +171,7 @@ namespace
     private:
         fs::path m_ScenePath;
         std::vector<PointerEvent> m_PointerEvents;
+        std::vector<KeyEvent> m_KeyEvents;
         glm::vec2 m_SimulatedPointer{ -1.0f };
         int m_Frame = 0;
         float m_TimedSeconds = 0.0f;
@@ -177,6 +203,7 @@ int main(int argc, char** argv)
     int maxFrames = 0;
     std::string screenshot;
     std::vector<PointerEvent> pointerEvents;
+    std::vector<KeyEvent> keyEvents;
     bool noVSync = false, waitForDebugger = false;
     for (int i = 1; i < argc; ++i)
     {
@@ -196,6 +223,14 @@ int main(int argc, char** argv)
             float x = 0, y = 0;
             int frame = 0;
             if (std::sscanf(argv[++i], "%f,%f,%d", &x, &y, &frame) == 3) pointerEvents.push_back({ frame, { x, y }, click });
+        }
+        else if (!std::strcmp(argv[i], "--key") && i + 1 < argc)
+        {
+            std::string arg = argv[++i];
+            size_t comma = arg.find(',');
+            Key key;
+            if (comma != std::string::npos && ParseKey(arg.substr(0, comma), key)) keyEvents.push_back({ std::atoi(arg.c_str() + comma + 1), key });
+            else Log::Warn("--key expects name,frame (got '{}')", arg);
         }
         else projectDir = argv[i];
     }
@@ -249,7 +284,7 @@ int main(int argc, char** argv)
         auto buildScenes = SceneManager::GetBuildScenes();
         fs::path scene = !sceneOverride.empty() ? sceneOverride : buildScenes.empty() ? fs::path() : AssetManager::GetAbsolutePath(buildScenes[0]);
         if (scene.empty()) Log::Error("Project has no scenes to run. Add some in the editor (File > Build Settings).");
-        app.PushLayer(MakeScope<PlayerLayer>(scene, std::move(pointerEvents)));
+        app.PushLayer(MakeScope<PlayerLayer>(scene, std::move(pointerEvents), std::move(keyEvents)));
         app.Run();
         app.PopAllLayers();
         GameModule::Unload();

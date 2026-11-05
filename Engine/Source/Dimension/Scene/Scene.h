@@ -288,6 +288,8 @@ namespace Dimension
         }
         void ClearUIPointerRay() { m_UIRaySet = false; m_UIRayDown = false; }
         bool HasUIPointerRay() const { return m_UIRaySet; }
+        // The canvas an element belongs to (its nearest Canvas ancestor, itself included; null without one).
+        Entity CanvasOf(Entity e);
         // Where the pointer (the script's ray, else the mouse through the main camera) meets a World Space canvas.
         bool WorldCanvasPointer(Entity canvas, glm::vec2& pixel);
         // Pixels the pointer must move while held before a drag begins (Unity's EventSystem drag threshold).

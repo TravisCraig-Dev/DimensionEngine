@@ -890,7 +890,16 @@ namespace Dimension
             pointer.SetClipboard = [](const std::string& text) { Input::SetClipboardText(text); };
             m_UIInjectedText.clear();
             m_UIInjectedBackspace = m_UIInjectedEnter = false;
-            m_UIHovered = UI::Update(*this, pointer, m_UIScreen, unscaledDt); // menus work while the game is frozen
+            // Keyboard / gamepad navigation goes to the canvas holding the selection: a World Space panel's own when it
+            // is on one, the screen's otherwise.
+            Entity navCanvas = CanvasOf(m_UISelected);
+            if (!navCanvas.IsNull() && m_Registry.Get<CanvasComponent>(navCanvas).RenderMode != CanvasRenderMode::WorldSpace)
+                navCanvas = Entity::Null();
+            UI::PointerState screenPointer = pointer;
+            if (!navCanvas.IsNull())
+                screenPointer.NavUp = screenPointer.NavDown = screenPointer.NavLeft = screenPointer.NavRight = screenPointer.Submit =
+                    screenPointer.Cancel = false;
+            m_UIHovered = UI::Update(*this, screenPointer, m_UIScreen, unscaledDt); // menus work while the game is frozen
             // World Space canvases: the pointer where the main camera's ray meets each panel, in its pixels (keys and
             // navigation stay with the screen's UI).
             std::vector<Entity> worldCanvases;
@@ -914,9 +923,48 @@ namespace Dimension
                 p.Position = hit ? pixel : glm::vec2(-1e6f);
                 p.Pressed = p.Pressed && hit;
                 p.Scroll = hit ? pointer.Scroll : 0.0f;
-                p.NavUp = p.NavDown = p.NavLeft = p.NavRight = p.Submit = p.Cancel = false;
+                if (ce != navCanvas) p.NavUp = p.NavDown = p.NavLeft = p.NavRight = p.Submit = p.Cancel = false;
+                Entity selectedBefore = m_UISelected;
                 Entity over = UI::Update(*this, p, m_Registry.Get<CanvasComponent>(ce).PixelSize, unscaledDt, ce);
                 if (m_UIHovered.IsNull() && hit) m_UIHovered = over;
+                // Nothing further this way on the panel: on to the nearest other World Space panel that way on screen.
+                glm::vec2 dir = p.NavLeft ? glm::vec2(-1, 0) : p.NavRight ? glm::vec2(1, 0) : p.NavUp ? glm::vec2(0, -1) : p.NavDown ? glm::vec2(0, 1) : glm::vec2(0);
+                bool stays = ce == navCanvas && dir != glm::vec2(0.0f) && m_UISelected == selectedBefore && !m_UISelected.IsNull();
+                if (stays && dir.x != 0.0f && m_Registry.Has<UISliderComponent>(m_UISelected)) stays = false; // it stepped
+                if (stays)
+                    if (auto* dd = m_Registry.TryGet<UIDropdownComponent>(m_UISelected); dd && dd->Open) stays = false;
+                if (stays)
+                    for (auto [fe, field] : m_Registry.ViewOf<UIInputFieldComponent>()) stays &= !field.Focused;
+                Entity camera = GetPrimaryCamera();
+                if (stays && !camera.IsNull())
+                {
+                    glm::vec2 view = m_UIScreen.x > 0.0f ? m_UIScreen : glm::vec2(1280, 720);
+                    auto onScreen = [&](Entity c, glm::vec2& at) {
+                        glm::vec3 s = CameraProjection::WorldToScreen(*this, camera, glm::vec3(m_Registry.Get<TransformComponent>(c).World[3]), view);
+                        at = glm::vec2(s);
+                        return s.z > 0.0f; // in front of the camera
+                    };
+                    glm::vec2 from;
+                    onScreen(ce, from);
+                    Entity best = Entity::Null(), entry = Entity::Null();
+                    float bestScore = 1e30f;
+                    for (Entity other : worldCanvases)
+                    {
+                        glm::vec2 at;
+                        if (other == ce || !IsValid(other) || !onScreen(other, at)) continue;
+                        glm::vec2 d = at - from;
+                        float along = glm::dot(d, dir), across = std::abs(d.x * dir.y - d.y * dir.x);
+                        if (along <= 1.0f || across > along * 2.0f) continue;
+                        float score = along + across * 2.0f;
+                        if (score >= bestScore) continue;
+                        if (Entity e = UI::NavigationEntry(*this, other, dir); !e.IsNull()) { bestScore = score; best = other; entry = e; }
+                    }
+                    if (!best.IsNull())
+                    {
+                        m_UISelected = entry;
+                        navCanvas = Entity::Null(); // this frame's move is used up
+                    }
+                }
             }
             UpdatePointerEvents(m_UIPointer, m_UIDown, m_UIScroll);
             // A focused text field keeps the keys from gameplay (WASD while typing a name must not move the player).
@@ -1871,6 +1919,13 @@ namespace Dimension
             if (pressed == over) send(pressed, [](ScriptableEntity& s) { s.OnMouseUpAsButton(); });
         }
         m_MouseWasDown = down;
+    }
+
+    Entity Scene::CanvasOf(Entity e)
+    {
+        for (; IsValid(e); e = GetParent(e))
+            if (m_Registry.Has<CanvasComponent>(e)) return e;
+        return Entity::Null();
     }
 
     bool Scene::WorldCanvasPointer(Entity canvas, glm::vec2& pixel)
