@@ -6773,6 +6773,52 @@ namespace
         fs::remove_all(assets.parent_path(), ec);
     }
 
+    // Flexbox-like rows: Wrap onto new lines, Justify along each line, Align across it, and a fitted wrapping row.
+    void TestUIFlexLayout()
+    {
+        Scene scene("Flex");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        Entity row = scene.CreateEntity("Row", canvas);
+        {
+            auto& r = reg.Emplace<UIRectComponent>(row);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Size = { 300, 200 };
+        }
+        auto& g = reg.Emplace<UILayoutGroupComponent>(row);
+        g.Direction = UILayoutDirection::Horizontal;
+        g.Padding = glm::vec4(0.0f);
+        g.Spacing = 10.0f;
+        g.StretchChildren = false;
+        g.Wrap = true;
+        g.Justify = UIJustify::Center;
+        g.Align = UIAlign::Center;
+        std::vector<Entity> kids;
+        for (float h : { 20.0f, 40.0f, 20.0f, 20.0f, 20.0f })
+        {
+            Entity k = scene.CreateEntity("Kid", row);
+            reg.Emplace<UIRectComponent>(k).Size = { 80, h };
+            kids.push_back(k);
+        }
+        scene.UpdateTransforms();
+        auto at = [&](int i) { return reg.Get<UIRectComponent>(kids[i]).ComputedMin; };
+        UI::ComputeLayout(scene, { 800, 600 });
+        // Three fit a 300-wide line (260 used): centred 20 in; the 40-high one sets the line, the others centred on it.
+        CHECK(Near(at(0), glm::vec2(20, 10)) && Near(at(1), glm::vec2(110, 0)) && Near(at(2), glm::vec2(200, 10)));
+        CHECK(Near(at(3), glm::vec2(65, 50)) && Near(at(4), glm::vec2(155, 50))); // the second line: 170 used
+        reg.Get<UILayoutGroupComponent>(row).Justify = UIJustify::SpaceBetween;
+        reg.Get<UILayoutGroupComponent>(row).Align = UIAlign::Start;
+        UI::ComputeLayout(scene, { 800, 600 });
+        CHECK(Near(at(0), glm::vec2(0, 0)) && Near(at(1), glm::vec2(110, 0)) && Near(at(2), glm::vec2(220, 0)));
+        CHECK(Near(at(3), glm::vec2(0, 50)) && Near(at(4), glm::vec2(220, 50)));
+        // Sized to its lines: 40 + 10 + 20.
+        reg.Emplace<UIContentSizeFitterComponent>(row).Vertical = UIFitMode::PreferredSize;
+        UI::ComputeLayout(scene, { 800, 600 });
+        auto& rr = reg.Get<UIRectComponent>(row);
+        CHECK(Near(rr.ComputedMax.y - rr.ComputedMin.y, 70.0f) && Near(rr.ComputedMax.x - rr.ComputedMin.x, 300.0f));
+    }
+
     // UI Mask: children clipped to the mask's rect (drawing and hit testing); the mask itself is not.
     void TestUIMask()
     {
@@ -14490,6 +14536,7 @@ int main(int argc, char** argv)
     Run("UI layout elements", TestUILayoutElements);
     Run("UI styles", TestUIStyles);
     Run("UI style states", TestUIStyleStates);
+    Run("UI flex layout", TestUIFlexLayout);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

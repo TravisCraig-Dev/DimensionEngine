@@ -54,11 +54,73 @@ namespace Dimension::UI
         // Content and layout-group sizes (defined below, after the text helpers).
         glm::vec2 ContentSize(LayoutContext& ctx, Entity e, float wrapWidth);
         glm::vec2 ElementSize(LayoutContext& ctx, Entity e, float crossWidth);
+        void FlowLines(LayoutContext& ctx, Entity e, const UILayoutGroupComponent& group, glm::vec2 inner,
+                       std::vector<glm::vec2>& outMin, std::vector<glm::vec2>& outSize);
 
         float FlexibleWeight(Registry& reg, Entity e, int axis)
         {
             auto* le = reg.TryGet<UILayoutElementComponent>(e);
             return le ? std::max(0.0f, le->FlexibleSize[axis]) : 0.0f;
+        }
+
+        // A row or column group's children in lines (canvas units, from the inner min; `inner`: the inner size): sizes
+        // from ElementSize, a new line when Wrap is on and the next child does not fit, each line's leftover length
+        // shared by flexible weight or else placed by Justify, children across their line by Align (or stretched).
+        void FlowLines(LayoutContext& ctx, Entity e, const UILayoutGroupComponent& group, glm::vec2 inner,
+                       std::vector<glm::vec2>& outMin, std::vector<glm::vec2>& outSize)
+        {
+            auto& reg = ctx.TheScene.GetRegistry();
+            int m = group.Direction == UILayoutDirection::Vertical ? 1 : 0, c = 1 - m;
+            float crossWidth = m == 1 && group.StretchChildren && !group.Wrap ? inner.x : -1.0f;
+            std::vector<Entity> kids;
+            std::vector<glm::vec2> sizes;
+            for (Entity k : ctx.TheScene.GetChildren(e))
+                if (InLayout(reg, k))
+                {
+                    kids.push_back(k);
+                    sizes.push_back(ElementSize(ctx, k, crossWidth));
+                }
+            outMin.assign(kids.size(), glm::vec2(0.0f));
+            outSize = sizes;
+            float crossCursor = 0.0f;
+            for (size_t first = 0; first < kids.size();)
+            {
+                // The line: as many as fit (at least one).
+                size_t last = first + 1;
+                float used = sizes[first][m];
+                if (group.Wrap)
+                    while (last < kids.size() && used + group.Spacing + sizes[last][m] <= inner[m] + 1e-3f) used += group.Spacing + sizes[last++][m];
+                else
+                    for (; last < kids.size(); ++last) used += group.Spacing + sizes[last][m];
+                size_t n = last - first;
+                float weights = 0.0f, lineCross = 0.0f;
+                for (size_t i = first; i < last; ++i)
+                {
+                    weights += FlexibleWeight(reg, kids[i], m);
+                    lineCross = std::max(lineCross, sizes[i][c]);
+                }
+                if (!group.Wrap) lineCross = inner[c]; // one line: the whole group across
+                float left = inner[m] - used;
+                if (left > 0.0f && weights > 0.0f)
+                {
+                    for (size_t i = first; i < last; ++i) outSize[i][m] += left * FlexibleWeight(reg, kids[i], m) / weights;
+                    left = 0.0f;
+                }
+                left = std::max(left, 0.0f);
+                float cursor = group.Justify == UIJustify::Center ? left * 0.5f : group.Justify == UIJustify::End ? left : 0.0f;
+                float gap = group.Spacing + (group.Justify == UIJustify::SpaceBetween && n > 1 ? left / (float)(n - 1) : 0.0f);
+                for (size_t i = first; i < last; ++i)
+                {
+                    float cross = group.StretchChildren ? lineCross : outSize[i][c];
+                    outSize[i][c] = cross;
+                    float offset = group.Align == UIAlign::Center ? (lineCross - cross) * 0.5f : group.Align == UIAlign::End ? lineCross - cross : 0.0f;
+                    outMin[i][m] = cursor;
+                    outMin[i][c] = crossCursor + offset;
+                    cursor += outSize[i][m] + gap;
+                }
+                crossCursor += lineCross + group.Spacing;
+                first = last;
+            }
         }
 
         // Children of a layout group are stacked along the main axis using their sizes (see ElementSize); flexible ones
@@ -70,32 +132,12 @@ namespace Dimension::UI
             float s = ctx.Scale;
             glm::vec2 innerMin = min + glm::vec2(group.Padding.x, group.Padding.y) * s;
             glm::vec2 innerMax = max - glm::vec2(group.Padding.z, group.Padding.w) * s;
-            bool vertical = group.Direction == UILayoutDirection::Vertical;
             bool grid = group.Direction == UILayoutDirection::Grid;
             int columns = grid ? GridColumns(group, (innerMax.x - innerMin.x) / s) : 0;
             int index = 0;
-            float cursor = vertical ? innerMin.y : innerMin.x;
-            // Rows and columns: each child's length (units), plus its share of the leftover by flexible weight.
-            int main = vertical ? 1 : 0;
-            std::vector<Entity> placed;
-            std::vector<glm::vec2> sizes;
-            float crossWidth = vertical && group.StretchChildren ? (innerMax.x - innerMin.x) / s : -1.0f;
-            if (!grid)
-            {
-                float used = 0.0f, weights = 0.0f;
-                for (Entity c : ctx.TheScene.GetChildren(e))
-                    if (InLayout(reg, c))
-                    {
-                        placed.push_back(c);
-                        sizes.push_back(ElementSize(ctx, c, crossWidth));
-                        used += sizes.back()[main];
-                        weights += FlexibleWeight(reg, c, main);
-                    }
-                if (placed.size() > 1) used += group.Spacing * (placed.size() - 1);
-                float left = (innerMax[main] - innerMin[main]) / s - used;
-                if (left > 0.0f && weights > 0.0f)
-                    for (size_t i = 0; i < placed.size(); ++i) sizes[i][main] += left * FlexibleWeight(reg, placed[i], main) / weights;
-            }
+            // Rows and columns: lines of children (one unless wrapping), each child's rect in canvas units from the inner min.
+            std::vector<glm::vec2> rectMin, rectSize;
+            if (!grid) FlowLines(ctx, e, group, (innerMax - innerMin) / s, rectMin, rectSize);
             size_t slot = 0;
             for (Entity c : ctx.TheScene.GetChildren(e))
             {
@@ -104,7 +146,6 @@ namespace Dimension::UI
                     LayoutNode(ctx, c, min, max, clipMin, clipMax, nullptr, nullptr);
                     continue;
                 }
-                glm::vec2 own = grid ? glm::vec2(0.0f) : sizes[slot++];
                 glm::vec2 cmin, cmax;
                 if (grid)
                 {
@@ -113,21 +154,11 @@ namespace Dimension::UI
                     cmin = innerMin + glm::vec2(col * (group.CellSize.x + group.Spacing), row * (group.CellSize.y + group.Spacing)) * s;
                     cmax = cmin + group.CellSize * s;
                 }
-                else if (vertical)
-                {
-                    float h = own.y * s;
-                    float w = group.StretchChildren ? innerMax.x - innerMin.x : own.x * s;
-                    cmin = { innerMin.x, cursor };
-                    cmax = { innerMin.x + w, cursor + h };
-                    cursor += h + group.Spacing * s;
-                }
                 else
                 {
-                    float w = own.x * s;
-                    float h = group.StretchChildren ? innerMax.y - innerMin.y : own.y * s;
-                    cmin = { cursor, innerMin.y };
-                    cmax = { cursor + w, innerMin.y + h };
-                    cursor += w + group.Spacing * s;
+                    cmin = innerMin + rectMin[slot] * s;
+                    cmax = cmin + rectSize[slot] * s;
+                    ++slot;
                 }
                 LayoutNode(ctx, c, min, max, clipMin, clipMax, &cmin, &cmax);
             }
@@ -146,6 +177,18 @@ namespace Dimension::UI
                 int rows = (n + columns - 1) / columns;
                 float h = group.Padding.y + group.Padding.w + rows * group.CellSize.y + std::max(0, rows - 1) * group.Spacing;
                 return h * ctx.Scale;
+            }
+            if (group.Wrap)
+            {
+                // Lines laid out across the width: their total height (rows) or width (columns: its height is the limit).
+                std::vector<glm::vec2> mins, sizes;
+                glm::vec2 inner(width / ctx.Scale - group.Padding.x - group.Padding.z, 1e9f);
+                if (group.Direction == UILayoutDirection::Vertical) inner = { 1e9f, 1e9f };
+                FlowLines(ctx, e, group, inner, mins, sizes);
+                float extent = 0.0f;
+                int axis = group.Direction == UILayoutDirection::Vertical ? 0 : 1;
+                for (size_t i = 0; i < mins.size(); ++i) extent = std::max(extent, mins[i][axis] + sizes[i][axis]);
+                return (extent + (axis ? group.Padding.y + group.Padding.w : group.Padding.x + group.Padding.z)) * ctx.Scale;
             }
             bool vertical = group.Direction == UILayoutDirection::Vertical;
             float total = vertical ? group.Padding.y + group.Padding.w : group.Padding.x + group.Padding.z;
@@ -236,7 +279,7 @@ namespace Dimension::UI
                     // Content grows downward from its top edge (columns, grids) or rightward from its left edge (rows).
                     if (auto* cg = reg.TryGet<UILayoutGroupComponent>(c))
                     {
-                        if (cg->Direction == UILayoutDirection::Horizontal) size.x = std::max(size.x, LayoutGroupExtent(ctx, c, *cg, size.x));
+                        if (cg->Direction == UILayoutDirection::Horizontal && !cg->Wrap) size.x = std::max(size.x, LayoutGroupExtent(ctx, c, *cg, size.x));
                         else size.y = std::max(size.y, LayoutGroupExtent(ctx, c, *cg, size.x));
                     }
                     float maxScroll = view->Vertical ? std::max(0.0f, (cmin.y + size.y - viewMax.y) / s) : 0.0f;
@@ -534,6 +577,14 @@ namespace Dimension::UI
                     columns = std::max(1, std::min(columns, std::max(1, n)));
                     int rows = (n + columns - 1) / columns;
                     return pad + glm::vec2(columns * g->CellSize.x + (columns - 1) * g->Spacing, rows * g->CellSize.y + std::max(0, rows - 1) * g->Spacing);
+                }
+                if (g->Wrap && g->Direction == UILayoutDirection::Horizontal && wrapWidth > 0.0f)
+                {
+                    std::vector<glm::vec2> mins, rects;
+                    FlowLines(ctx, e, *g, { wrapWidth - pad.x, 1e9f }, mins, rects);
+                    float height = 0.0f;
+                    for (size_t i = 0; i < mins.size(); ++i) height = std::max(height, mins[i].y + rects[i].y);
+                    return { wrapWidth, height + pad.y };
                 }
                 int main = g->Direction == UILayoutDirection::Vertical ? 1 : 0;
                 glm::vec2 total(0.0f);

@@ -595,7 +595,12 @@ namespace Dimension
             .Field("Padding", &UILayoutGroupComponent::Padding).Speed(0.5f).Tooltip("left, top, right, bottom")
             .Field("Stretch Children", &UILayoutGroupComponent::StretchChildren).Tooltip("Rows and columns: children fill the cross axis")
             .Field("Cell Size", &UILayoutGroupComponent::CellSize).Speed(0.5f).Tooltip("Grid: size of every cell")
-            .Field("Columns", &UILayoutGroupComponent::Columns).Range(0, 1000).Tooltip("Grid: fixed column count (0 = as many as fit)");
+            .Field("Columns", &UILayoutGroupComponent::Columns).Range(0, 1000).Tooltip("Grid: fixed column count (0 = as many as fit)")
+            .Field("Wrap", &UILayoutGroupComponent::Wrap).Tooltip("Rows and columns: children flow onto a new line when one is full")
+            .Field("Justify", &UILayoutGroupComponent::Justify).Enum({ "Start", "Center", "End", "Space Between" })
+                .Tooltip("Rows and columns: where each line's children sit along it")
+            .Field("Align", &UILayoutGroupComponent::Align).Enum({ "Start", "Center", "End" })
+                .Tooltip("Rows and columns: where children sit across their line (when not stretched)");
         Register<UIDropdownComponent>("UI Dropdown", "UI")
             .Field("Options", &UIDropdownComponent::Options)
             .Field("Value", &UIDropdownComponent::Value).Range(0, 10000).Tooltip("Index of the selected option")

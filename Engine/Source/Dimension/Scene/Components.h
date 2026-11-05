@@ -652,6 +652,8 @@ namespace Dimension
     };
 
     enum class UILayoutDirection : int32_t { Vertical = 0, Horizontal = 1, Grid = 2 };
+    enum class UIJustify : int32_t { Start = 0, Center = 1, End = 2, SpaceBetween = 3 };
+    enum class UIAlign : int32_t { Start = 0, Center = 1, End = 2 };
 
     // Arranges child UI Rects in a row or column (like Vertical/Horizontal Layout Group), or in a grid of equal cells
     // filled left to right, then top to bottom (like Grid Layout Group).
@@ -663,6 +665,11 @@ namespace Dimension
         bool StretchChildren = true; // children fill the cross axis (rows and columns only)
         glm::vec2 CellSize{ 100.0f, 100.0f }; // Grid: size of every cell
         int32_t Columns = 0;                  // Grid: fixed column count; 0 = as many as fit the width
+        // Rows and columns, like flexbox: Wrap flows children onto new lines when one is full; Justify places each
+        // line's children along it (with the leftover length); Align places them across their line.
+        bool Wrap = false;
+        UIJustify Justify = UIJustify::Start;
+        UIAlign Align = UIAlign::Start;
     };
 
     // How a UI Rect sits in its parent's UI Layout Group (like Unity's Layout Element): Min / Preferred Size override
