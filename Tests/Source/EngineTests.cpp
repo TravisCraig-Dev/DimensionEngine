@@ -12071,6 +12071,23 @@ namespace
         CHECK(loaded->Transitions[3].HasExitTime && loaded->Transitions[2].From == -1 && !loaded->States[2].Loop);
         fs::remove(path);
 
+        // Rebind: an Animator mid-crossfade with a match running goes back to the start.
+        {
+            Scene rb("Rebind");
+            Entity a = rb.CreateEntity("A");
+            auto& an = rb.GetRegistry().Emplace<AnimatorComponent>(a);
+            an.Clip = "Wave";
+            an.Time = 1.2f;
+            an.Runtime.State = 2;
+            an.Runtime.Parameters["Energy"] = 1.0f;
+            an.FadeDuration = 0.4f;
+            an.PreviousClip = "Sway";
+            an.Match.Active = true;
+            rb.RebindAnimator(a);
+            CHECK(an.Time == 0.0f && an.Runtime.State == -1 && an.Runtime.Parameters.empty() && an.FadeDuration == 0.0f);
+            CHECK(an.PreviousClip.empty() && !an.Match.Active && an.Clip == "Wave"); // no controller: its clip stays
+        }
+
         c.RemoveState(1); // removing Wave drops its transitions and reindexes the rest
         CHECK(c.Transitions.size() == 2 && c.Transitions[0].To == 1 && c.Transitions[1].From == 1);
     }

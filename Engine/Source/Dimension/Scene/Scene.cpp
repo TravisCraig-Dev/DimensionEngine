@@ -1141,6 +1141,31 @@ namespace Dimension
                 anim.SkinMatrices.clear();
                 continue;
             }
+            // Cull Completely: nothing runs while the object's bounds (grown for poses past the bind pose) are outside
+            // the main camera's view; Animator.Update still runs it.
+            anim.Culled = false;
+            if (m_Running && only.IsNull() && anim.CullingMode == AnimatorCullingMode::CullCompletely && !anim.SkinMatrices.empty())
+            {
+                Entity camera = GetPrimaryCamera();
+                if (!camera.IsNull())
+                {
+                    glm::mat4 vp = CameraProjection::Projection(*this, camera, GetViewSize()) * CameraProjection::View(*this, camera);
+                    const AABB& b = mesh->GetBounds();
+                    glm::vec3 c = b.Center(), ext = b.Extents() * 1.5f + glm::vec3(0.1f);
+                    glm::mat4 mvp = vp * m_Registry.Get<TransformComponent>(e).World;
+                    int outside[6] = {};
+                    for (int k = 0; k < 8; ++k)
+                    {
+                        glm::vec3 corner = c + ext * glm::vec3(k & 1 ? 1 : -1, k & 2 ? 1 : -1, k & 4 ? 1 : -1);
+                        glm::vec4 p = mvp * glm::vec4(corner, 1.0f);
+                        outside[0] += p.x < -p.w; outside[1] += p.x > p.w;
+                        outside[2] += p.y < -p.w; outside[3] += p.y > p.w;
+                        outside[4] += p.z < 0.0f;  outside[5] += p.z > p.w;
+                    }
+                    for (int k = 0; k < 6; ++k) anim.Culled |= outside[k] == 8;
+                    if (anim.Culled) continue;
+                }
+            }
             const auto& clips = AnimatorClips(anim, mesh);
             auto duration = [&](const std::string& name) {
                 const AnimationClip* c = Animation::FindClip(clips, name);
@@ -1441,6 +1466,29 @@ namespace Dimension
                 }
             }
 
+            // MatchTarget: over its window, a share of the gap between the joint and the target each frame (the share
+            // of the window's remaining time this frame took), all of it at the end.
+            if (anim.Match.Active && m_Running)
+            {
+                AnimatorMatchTarget& m = anim.Match;
+                int joint = skeleton->FindJoint(m.Joint);
+                float tNow = anim.NormalizedTime;
+                if (joint < 0 || anim.Runtime.State != m.State || (controller == nullptr && m.State >= 0)) m.Active = false;
+                else if (tNow >= m.Start)
+                {
+                    float from = std::max(m.LastTime < 0.0f ? m.Start : m.LastTime, m.Start);
+                    float share = tNow >= m.End ? 1.0f : (m.End - from > 1e-6f ? std::clamp((tNow - from) / (m.End - from), 0.0f, 1.0f) : 1.0f);
+                    std::vector<glm::mat4> globals;
+                    Animation::JointGlobals(*skeleton, current, globals);
+                    auto& t = m_Registry.Get<TransformComponent>(e);
+                    glm::vec3 at = glm::vec3(t.World * globals[joint][3]);
+                    glm::vec3 gap = (m.Position - at) * m.Weight;
+                    ApplyRootMotion(e, gap * share);
+                    m.LastTime = tNow;
+                    if (tNow >= m.End) m.Active = false;
+                }
+            }
+
             applyIK(0, 1.0f);
 
             // Samples a state's motion (clip or blend tree) at a normalized time.
@@ -1585,6 +1633,27 @@ namespace Dimension
         glm::mat3 toParent = parent.IsNull() ? glm::mat3(1.0f) : glm::inverse(glm::mat3(m_Registry.Get<TransformComponent>(parent).World));
         t.Position += toParent * worldDelta;
         t.World[3] += glm::vec4(worldDelta, 0.0f); // read before transforms update next (NavMesh Agents with Root Motion)
+    }
+
+    void Scene::RebindAnimator(Entity e)
+    {
+        auto* anim = IsValid(e) ? m_Registry.TryGet<AnimatorComponent>(e) : nullptr;
+        if (!anim) return;
+        anim->Runtime = {};
+        anim->Layers.clear();
+        anim->Time = 0.0f;
+        anim->TreeState = anim->PreviousTreeState = -1;
+        anim->StateIndex = anim->PreviousStateIndex = -1;
+        anim->PreviousClip.clear();
+        anim->FadeElapsed = anim->FadeDuration = 0.0f;
+        anim->NormalizedTime = 0.0f;
+        anim->CurrentState.clear();
+        anim->StateSpeed = 1.0f;
+        anim->RootMotion = {};
+        anim->Match = {};
+        anim->Info = anim->PreviousInfo = {};
+        // With a controller the machine enters its default state at the next update and chooses the clip.
+        if (AssetManager::GetAnimatorController(anim->Controller)) anim->Clip.clear();
     }
 
     bool Scene::PlayAnimatorState(Entity e, const std::string& name, int layer, float fadeSeconds, float offset, bool fixedTime)

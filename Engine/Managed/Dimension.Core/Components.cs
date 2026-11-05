@@ -1461,6 +1461,28 @@ namespace Dimension
         /// whatever its update mode: with Manual, a script drives its clock.</summary>
         public void Update(float deltaTime) { float* v = stackalloc float[1] { deltaTime }; Op(5, 0, null, v); }
 
+        /// <summary>Whether it animates off screen: always, or not at all (Cull Completely).</summary>
+        public AnimatorCullingMode CullingMode { get => (AnimatorCullingMode)GetInt("Culling Mode"); set => SetInt("Culling Mode", (int)value); }
+        /// <summary>Off screen and not animated this frame (Cull Completely).</summary>
+        public bool IsCulled { get { float* v = stackalloc float[1]; return Op(10, 0, null, v) != 0; } }
+        /// <summary>
+        /// Brings a joint (by name: a hand or foot) to `position` at `targetNormalizedTime` of the base layer's current
+        /// state, moving the object a little each frame from `startNormalizedTime` (Unity's MatchTarget, for jumps and
+        /// climbs that must land on a ledge). `positionWeight` per axis: 0 leaves that axis to the animation. It ends
+        /// at the target time or when the state changes.
+        /// </summary>
+        public void MatchTarget(Vector3 position, string joint, float startNormalizedTime, float targetNormalizedTime, Vector3? positionWeight = null)
+        {
+            Vector3 w = positionWeight ?? Vector3.One;
+            float* v = stackalloc float[8] { position.X, position.Y, position.Z, w.X, w.Y, w.Z, startNormalizedTime, targetNormalizedTime };
+            Op(6, 0, joint, v);
+        }
+        /// <summary>Stops matching; with `completeMatch`, the object is moved the rest of the way at the next update.</summary>
+        public void InterruptMatchTarget(bool completeMatch = true) { float* v = stackalloc float[1] { completeMatch ? 1 : 0 }; Op(7, 0, null, v); }
+        public bool IsMatchingTarget { get { float* v = stackalloc float[1]; return Op(8, 0, null, v) != 0; } }
+        /// <summary>Back to the start: the default state from its beginning, parameters at their defaults.</summary>
+        public void Rebind() { float* v = stackalloc float[1]; Op(9, 0, null, v); }
+
         /// <summary>A joint of the model's skeleton (by name, e.g. "Hand_R") in the world as last posed, or false when
         /// there is no such joint (or nothing posed yet). Unity's GetBoneTransform, for any joint by name.</summary>
         public bool GetBoneMatrix(string joint, out Matrix4x4 world)
@@ -1494,6 +1516,7 @@ namespace Dimension
     }
 
     public enum AnimatorUpdateMode { Normal, UnscaledTime, AnimatePhysics, Manual }
+    public enum AnimatorCullingMode { AlwaysAnimate, CullCompletely }
 
     /// <summary>An Animator layer's state as of this frame (Unity's AnimatorStateInfo).</summary>
     public readonly record struct AnimatorStateInfo(string Name, float NormalizedTime, float Length, float SpeedMultiplier, bool Loop, string Tag = "")

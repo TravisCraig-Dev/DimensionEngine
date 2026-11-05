@@ -413,6 +413,21 @@ namespace Dimension
     // the game is paused with a time scale of 0), with the physics steps taken this frame, or only by script
     // (Animator.Update).
     enum class AnimatorUpdateMode : int { Normal = 0, UnscaledTime, AnimatePhysics, Manual };
+    // Whether an Animator runs while its object is off screen (Unity's AnimatorCullingMode): always, or not at all
+    // (time, state machine and pose wait until the object's bounds are in the main camera's view again).
+    enum class AnimatorCullingMode : int { AlwaysAnimate = 0, CullCompletely };
+
+    // Animator.MatchTarget: between two normalized times of the base layer's current state, the object is moved so
+    // that a joint reaches Position at the end (each axis by Weight: 0 leaves that axis to the animation).
+    struct AnimatorMatchTarget
+    {
+        bool Active = false;
+        glm::vec3 Position{ 0.0f }, Weight{ 1.0f };
+        std::string Joint;
+        float Start = 0.0f, End = 1.0f;
+        int State = -1;         // the base layer state it belongs to (a change of state ends it)
+        float LastTime = -1.0f; // normalized time last frame (< 0: not started)
+    };
 
     struct AnimatorComponent
     {
@@ -424,6 +439,9 @@ namespace Dimension
         bool ApplyRootMotion = false;  // the root joint's horizontal movement moves the object (or its Character Controller)
         bool ApplyRootRotation = false; // with root motion: the root's turning (about the vertical axis) turns the object
         AnimatorUpdateMode UpdateMode = AnimatorUpdateMode::Normal;
+        AnimatorCullingMode CullingMode = AnimatorCullingMode::AlwaysAnimate;
+        AnimatorMatchTarget Match; // runtime
+        bool Culled = false;       // runtime: off screen and not animated this frame
         std::string RootMotionJoint;   // empty = the skeleton's first root joint
         // Animation Source: another model whose clips this one plays, retargeted onto its own skeleton by joint name
         // (None = the clips of its own mesh).

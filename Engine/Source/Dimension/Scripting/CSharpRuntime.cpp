@@ -286,7 +286,8 @@ namespace Dimension
             // The Animator: 0 play state/clip `name` on `layer` (v: fade seconds, offset, fixed time != 0), 1 state info
             // (v[0] 0 current, 1 next; out v: normalized time, length, speed, loop), 2 this frame's root motion (v xyz, xyzw),
             // 3 move and turn by root motion (v: xyz, quaternion xyzw), 4 a joint's world matrix (16 floats), 5 advance by v[0]
-            // seconds now. 0 when there is none.
+            // seconds now, 6 match target (v: position, weight, start, end; joint `name`), 7 interrupt it (v[0]: finish),
+            // 8 is matching, 9 rebind, 10 culled this frame. 0 when there is none.
             int (*AnimatorOp)(void*, uint64_t, int, int, const char*, float*);
         };
 
@@ -2089,6 +2090,24 @@ namespace Dimension
                     return 1;
                 case 3: scene.ApplyRootMotion(entity, { v[0], v[1], v[2] }, glm::quat(v[6], v[3], v[4], v[5])); return 1;
                 case 5: scene.UpdateAnimators(std::max(v[0], 0.0f), entity); return 1; // Animator.Update
+                case 6: // MatchTarget: v position xyz, weight xyz, start, end; name the joint
+                    if (!name || !*name) return 0;
+                    an->Match = {};
+                    an->Match.Active = true;
+                    an->Match.Position = { v[0], v[1], v[2] };
+                    an->Match.Weight = { v[3], v[4], v[5] };
+                    an->Match.Start = v[6];
+                    an->Match.End = std::max(v[7], v[6]);
+                    an->Match.Joint = name;
+                    an->Match.State = an->Runtime.State;
+                    return 1;
+                case 7: // InterruptMatchTarget (v[0] != 0: finish the move now)
+                    if (v[0] != 0.0f && an->Match.Active) an->Match.End = an->Match.Start = std::min(an->Match.Start, an->NormalizedTime);
+                    else an->Match.Active = false;
+                    return 1;
+                case 8: return an->Match.Active ? 1 : 0;
+                case 9: scene.RebindAnimator(entity); return 1;
+                case 10: return an->Culled ? 1 : 0;
                 default:
                 {
                     auto* mr = scene.GetRegistry().TryGet<MeshRendererComponent>(entity);

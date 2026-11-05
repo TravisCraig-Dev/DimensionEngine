@@ -1581,7 +1581,8 @@
           "Clip": "Wave",
           "Speed": 1.0,
           "Loop": true,
-          "Playing": true
+          "Playing": true,
+          "Culling Mode": 1
         }
       }
     },

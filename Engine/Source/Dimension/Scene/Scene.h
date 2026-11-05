@@ -310,6 +310,9 @@ namespace Dimension
         // layer): fading over `fadeSeconds`, from `offset` (normalized, or seconds when fixedTime). False when there is
         // no such state or clip name.
         bool PlayAnimatorState(Entity e, const std::string& name, int layer, float fadeSeconds, float offset, bool fixedTime);
+        // Puts an Animator back to its start: the controller's default state (or its clip) from the beginning, no
+        // crossfade, parameters back to their defaults, root motion tracking and target matching reset.
+        void RebindAnimator(Entity e);
         void DispatchJointBreak(Entity e, float force);
         void DispatchUIValueChanged(Entity e, float value);
         void DispatchUIText(Entity e, const std::string& text, bool submit);

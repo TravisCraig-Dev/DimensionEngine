@@ -278,6 +278,8 @@ namespace Dimension
             .Field("Root Motion Joint", &AnimatorComponent::RootMotionJoint).Tooltip("Empty = the first root joint (e.g. Hips)")
             .Field("Update Mode", &AnimatorComponent::UpdateMode).Enum({ "Normal", "Unscaled Time", "Animate Physics", "Manual" })
                 .Tooltip("Normal: game time. Unscaled Time: real time (goes on while paused). Animate Physics: with the physics steps. Manual: only Animator.Update from scripts.")
+            .Field("Culling Mode", &AnimatorComponent::CullingMode).Enum({ "Always Animate", "Cull Completely" })
+                .Tooltip("Cull Completely: no animation while the object is off screen (the main camera's view); it goes on where it was when seen again")
             .Field("Animation Source", &AnimatorComponent::ClipSource).As(FieldType::Mesh)
                 .Tooltip("Play the clips of another model, retargeted onto this skeleton by joint name (None = this mesh's own)");
 
