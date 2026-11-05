@@ -386,11 +386,14 @@ void main()
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 R = reflect(-V, N);
 #ifndef DIM_OIT
-    // The Scene view's Unlit draw mode: the surface's own color (and emission), no lights.
+    // The Scene view's Unlit draw mode: the surface's own color (and emission), no lights. Impostor captures write the
+    // normal in the view's space (2), the color alone (3) or the roughness and metallic (4, as a metallic-roughness map).
     if (uScene.CascadeParams.w > 0.5)
     {
         vec3 own = albedo;
-        if (m.Flags.z != 1u) own += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
+        if (uScene.CascadeParams.w > 1.5 && uScene.CascadeParams.w < 2.5) own = normalize(mat3(uScene.View) * N) * 0.5 + 0.5;
+        else if (uScene.CascadeParams.w > 3.5) own = vec3(0.0, roughness, metallic);
+        else if (m.Flags.z != 1u && uScene.CascadeParams.w < 1.5) own += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
         outColor = vec4(own, m.Flags.x == 2u ? base.a : 1.0);
         outEntity = vEntity;
         outSurface = uvec4(0u);

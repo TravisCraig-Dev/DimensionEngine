@@ -1406,6 +1406,7 @@ namespace Dimension
 
         device.BindBindless(cmd);
         u.CascadeParams.w = m_DrawMode == SceneDrawMode::Unlit ? 1.0f : 0.0f; // Unlit: the surfaces' own colors
+        if (options.ProbeCapture && options.CaptureChannel > 0) u.CascadeParams.w = (float)options.CaptureChannel; // impostor atlases
         device.BindUniforms(cmd, &u, sizeof(u));
 
         bool flatModes = m_DrawMode == SceneDrawMode::Wireframe || m_DrawMode == SceneDrawMode::Overdraw; // no sky behind them
@@ -2022,7 +2023,11 @@ namespace Dimension
         if (m_ShadowMap) RenderDevice::Get().UnregisterTexture(m_ShadowBindless);
         if (m_PointShadowMap) RenderDevice::Get().UnregisterTexture(m_PointShadowBindless);
         for (auto& [key, impostor] : m_Impostors)
+        {
             if (impostor.Bindless) RenderDevice::Get().UnregisterTexture(impostor.Bindless);
+            if (impostor.NormalBindless) RenderDevice::Get().UnregisterTexture(impostor.NormalBindless);
+            if (impostor.SurfaceBindless) RenderDevice::Get().UnregisterTexture(impostor.SurfaceBindless);
+        }
         for (auto& [key, canvas] : m_WorldCanvases)
             if (canvas.Bindless) RenderDevice::Get().UnregisterTexture(canvas.Bindless);
     }
@@ -2033,7 +2038,8 @@ namespace Dimension
 
         uint64_t ImpostorKey(Entity e) { return ((uint64_t)e.Index << 32) | e.Generation; }
 
-        // What the impostor pictures, as a number: the meshes, materials and places of LOD 0 and the directional lights.
+        // What the impostor pictures, as a number: the meshes, materials and places of LOD 0 (not the lights: impostors
+        // are lit live).
         uint64_t ImpostorSignature(Scene& scene, Entity group)
         {
             auto& reg = scene.GetRegistry();
@@ -2070,12 +2076,6 @@ namespace Dimension
                 walk(scene.GetChildren(group)[0]);
             glm::mat3 groupRotation(reg.Get<TransformComponent>(group).World);
             mix(&groupRotation, sizeof(groupRotation));
-            for (auto [e, light, t] : reg.ViewOf<DirectionalLightComponent, TransformComponent>())
-            {
-                mix(&t.World, sizeof(glm::mat4));
-                mix(&light.Color, sizeof(light.Color));
-                mix(&light.Intensity, sizeof(light.Intensity));
-            }
             return h;
         }
     }
@@ -2106,6 +2106,8 @@ namespace Dimension
             if (frame - it->second.LastUsed > 600)
             {
                 if (it->second.Bindless) device.UnregisterTexture(it->second.Bindless);
+                if (it->second.NormalBindless) device.UnregisterTexture(it->second.NormalBindless);
+                if (it->second.SurfaceBindless) device.UnregisterTexture(it->second.SurfaceBindless);
                 it = m_Impostors.erase(it);
             }
             else
@@ -2116,24 +2118,10 @@ namespace Dimension
     {
         auto& device = RenderDevice::Get();
         auto& reg = scene.GetRegistry();
-        // A scene of LOD 0 alone (in the group's space) under the scene's directional lights (turned into that space).
+        // A scene of LOD 0 alone (in the group's space), pictured as its surface colors and normals (lit live when drawn).
         Scene stage("Impostor");
         stage.GetSettings() = scene.GetSettings();
         auto& sreg = stage.GetRegistry();
-        const glm::mat4& groupWorld = reg.Get<TransformComponent>(group).World;
-        glm::quat groupRotation = glm::quat_cast(glm::mat3(glm::normalize(glm::vec3(groupWorld[0])), glm::normalize(glm::vec3(groupWorld[1])),
-                                                           glm::normalize(glm::vec3(groupWorld[2]))));
-        for (auto [e, light, t] : reg.ViewOf<DirectionalLightComponent, TransformComponent>())
-        {
-            if (!t.ActiveInHierarchy) continue;
-            glm::vec3 scale, position, skew;
-            glm::quat rotation;
-            glm::vec4 perspective;
-            glm::decompose(t.World, scale, rotation, position, skew, perspective);
-            Entity sun = stage.CreateEntity("Sun");
-            sreg.Get<TransformComponent>(sun).Rotation = glm::eulerAngles(glm::inverse(groupRotation) * rotation);
-            sreg.Emplace<DirectionalLightComponent>(sun) = light;
-        }
         Entity model;
         const auto* lod = reg.TryGet<LODGroupComponent>(group);
         if (lod && lod->GeneratedLevels > 0 && reg.Has<MeshRendererComponent>(group))
@@ -2162,15 +2150,34 @@ namespace Dimension
                                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, mips, "ImpostorAtlas" });
             impostor.Bindless = device.RegisterTexture(impostor.Atlas.GetView(), device.GetLinearSampler());
         }
+        if (!impostor.Normals.IsValid())
+        {
+            impostor.Normals = Image(ImageDesc{ width, height, SceneRenderTarget::kHdrFormat,
+                                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, mips, "ImpostorNormals" });
+            impostor.NormalBindless = device.RegisterTexture(impostor.Normals.GetView(), device.GetLinearSampler());
+        }
+        if (!impostor.Surface.IsValid())
+        {
+            impostor.Surface = Image(ImageDesc{ width, height, SceneRenderTarget::kHdrFormat,
+                                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, mips, "ImpostorSurface" });
+            impostor.SurfaceBindless = device.RegisterTexture(impostor.Surface.GetView(), device.GetLinearSampler());
+        }
         if (!m_ImpostorTarget) m_ImpostorTarget = MakeScope<SceneRenderTarget>(kImpostorTile, kImpostorTile);
-        VkImage atlas = impostor.Atlas.GetHandle();
-        Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImage atlases[3] = { impostor.Atlas.GetHandle(), impostor.Normals.GetHandle(), impostor.Surface.GetHandle() };
+        for (VkImage a : atlases) Vk::TransitionImage(cmd, a, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         RenderStats outer = m_Stats;
         SceneRenderOptions capture;
         capture.ProbeCapture = true;
         float r = impostor.Radius;
-        for (uint32_t side = 0; side < kImpostorSides; ++side)
+        for (uint32_t pass = 0; pass < kImpostorSides * 3; ++pass)
         {
+            // Each side three times: its surface colors, its normals (cleared to "facing the viewer" so the mips' edges
+            // do not lean; 0.7354 is the sRGB value of linear 0.5), and its roughness and metallic.
+            uint32_t side = pass / 3, channel = pass % 3;
+            bool normals = channel == 1;
+            VkImage atlas = atlases[channel];
+            const int channels[3] = { 3, 2, 4 };
+            capture.CaptureChannel = channels[channel];
             // Seen a little from above, from all round: side k from the direction yaw = k * 45 degrees (+Z at 0).
             float yaw = glm::two_pi<float>() * side / kImpostorSides, elevation = glm::radians(15.0f);
             glm::vec3 from(std::sin(yaw) * std::cos(elevation), std::sin(elevation), std::cos(yaw) * std::cos(elevation));
@@ -2180,7 +2187,8 @@ namespace Dimension
             cam.Projection = glm::ortho(-r, r, -r, r, 0.01f, r * 6.0f);
             cam.Orthographic = true;
             cam.Skybox = false;
-            cam.ClearColor = glm::vec4(0.0f); // alpha 0 where nothing is
+            cam.ClearColor = normals ? glm::vec4(0.7354f, 0.7354f, 1.0f, 0.0f) : channel == 2 ? glm::vec4(0.0f, 1.0f, 0.0f, 0.0f) // rough at the edges
+                                                                                       : glm::vec4(0.0f); // alpha 0 where nothing is
             Render(cmd, stage, cam, *m_ImpostorTarget, capture);
             VkImageCopy copy{};
             copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
@@ -2191,22 +2199,25 @@ namespace Dimension
             Vk::TransitionImage(cmd, m_ImpostorTarget->GetHdr().GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         m_Stats = outer;
-        int32_t w = (int32_t)width, h = (int32_t)height;
-        for (uint32_t mip = 1; mip < mips; ++mip)
+        for (VkImage atlas : atlases)
         {
-            Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
-            int32_t nw = std::max(1, w / 2), nh = std::max(1, h / 2);
-            VkImageBlit blit{};
-            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, 1 };
-            blit.srcOffsets[1] = { w, h, 1 };
-            blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1 };
-            blit.dstOffsets[1] = { nw, nh, 1 };
-            vkCmdBlitImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
-            Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
-            w = nw;
-            h = nh;
+            int32_t w = (int32_t)width, h = (int32_t)height;
+            for (uint32_t mip = 1; mip < mips; ++mip)
+            {
+                Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+                int32_t nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+                VkImageBlit blit{};
+                blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, 1 };
+                blit.srcOffsets[1] = { w, h, 1 };
+                blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1 };
+                blit.dstOffsets[1] = { nw, nh, 1 };
+                vkCmdBlitImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+                Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+                w = nw;
+                h = nh;
+            }
+            Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mips - 1, 1);
         }
-        Vk::TransitionImage(cmd, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mips - 1, 1);
     }
 
     glm::mat4 PointShadowFaceViewProj(const glm::vec3& position, int face, float nearPlane, float farPlane)
@@ -2755,13 +2766,16 @@ namespace Dimension
         }
 
         // Impostors: a quad turned to the camera (about the vertical), showing the atlas tile of the side nearest the
-        // camera's, lit as captured (emissive), cut out where nothing was.
+        // camera's, cut out where nothing was and lit live: the tile's normals (in that side's view, which is the
+        // quad's tangent frame) are its normal map.
         if (!lods.Impostors.empty())
             if (Ref<Mesh> quad = AssetManager::GetMesh(AssetManager::kQuad))
                 for (const auto& [g, fade] : lods.Impostors)
                 {
                     auto it = m_Impostors.find(ImpostorKey(g));
-                    if (it == m_Impostors.end() || !it->second.Bindless || it->second.Radius <= 0.0f || it->second.Owner != &scene) continue;
+                    if (it == m_Impostors.end() || !it->second.Bindless || !it->second.NormalBindless || !it->second.SurfaceBindless || it->second.Radius <= 0.0f ||
+                        it->second.Owner != &scene)
+                        continue;
                     const Impostor& impostor = it->second;
                     const auto& t = reg.Get<TransformComponent>(g);
                     float s = std::max({ glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[1])), glm::length(glm::vec3(t.World[2])) });
@@ -2783,12 +2797,12 @@ namespace Dimension
                     item.Fade = fade;
                     uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
                     MaterialGPU gpu{};
-                    gpu.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-                    gpu.Emission = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
-                    gpu.Params = glm::vec4(0.0f, 1.0f, 0.5f, 1.0f);
+                    gpu.BaseColor = glm::vec4(1.0f);
+                    gpu.Emission = glm::vec4(0.0f);
+                    gpu.Params = glm::vec4(1.0f, 1.0f, 0.5f, 1.0f); // metallic and roughness from the surface atlas
                     gpu.TilingOffset = glm::vec4(1.0f / kImpostorSides, 1.0f, (float)side / kImpostorSides, 0.0f);
-                    gpu.Maps = glm::uvec4(impostor.Bindless, white, white, impostor.Bindless);
-                    gpu.Flags = glm::uvec4(1u, 0u, 0u, 0u); // cutout
+                    gpu.Maps = glm::uvec4(impostor.Bindless, impostor.NormalBindless, impostor.SurfaceBindless, white);
+                    gpu.Flags = glm::uvec4(1u, 1u, 0u, 0u); // cutout, normal map
                     VkDeviceAddress address = uploadMaterialGPU(dim(gpu, dimmed(g)));
                     if (!address) continue;
                     const SubMesh& sub = quad->GetSubMeshes()[0];

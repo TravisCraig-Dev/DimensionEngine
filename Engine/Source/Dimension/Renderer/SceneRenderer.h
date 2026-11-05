@@ -48,6 +48,9 @@ namespace Dimension
         bool RenderUI = false;       // draw screen-space canvases (Game view / Player)
         bool DefaultLight = false;   // studio sun when the scene has no directional light (Prefab Mode)
         bool ProbeCapture = false;   // internal: HDR scene only, no post or probes (reflection probe faces)
+        // internal, with ProbeCapture: what the surfaces write (impostor atlases): 0 lit, 2 their normals in the view's
+        // space (encoded 0-1), 3 their own color (no lights, no emission), 4 their roughness (g) and metallic (b).
+        int CaptureChannel = 0;
         Entity Selected = Entity::Null();          // primary selection (camera frustum, light gizmos)
         std::vector<Entity> Selection;             // all selected entities (outlines)
         // Scene view search: while Highlighting, meshes of objects not in Highlight are drawn dimmed.
@@ -328,8 +331,10 @@ namespace Dimension
         // tile per side, with mips; alpha = covered) and kept while it stays the same.
         struct Impostor
         {
-            Image Atlas;
-            uint32_t Bindless = 0;
+            Image Atlas;   // surface colors (unlit), alpha where it covers
+            Image Normals; // normals in each side's view (x right, y up, z toward the viewer; encoded 0-1)
+            Image Surface; // roughness (g) and metallic (b), as a metallic-roughness map
+            uint32_t Bindless = 0, NormalBindless = 0, SurfaceBindless = 0;
             glm::vec3 Center{ 0.0f }; // in the group's space
             float Radius = 0.0f;      // 0 = nothing to picture
             uint64_t Signature = 0, LastUsed = 0;
