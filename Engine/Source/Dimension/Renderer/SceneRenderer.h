@@ -292,6 +292,21 @@ namespace Dimension
             uint32_t Width = 0, Height = 0;
         };
         OcclusionSlot m_OcclusionSlots[3];
+        // Auto exposure: the HDR image's log luminance per cell, read back a few frames later.
+        struct LuminanceSlot
+        {
+            Buffer Data;
+            VkDeviceAddress Address = 0;
+            uint64_t Frame = 0;
+            uint32_t Cells = 0;
+            bool Used = false, Read = false;
+        };
+        LuminanceSlot m_LuminanceSlots[3];
+        float m_AutoExposureEv = 0.0f;     // the adapted exposure (EV over the manual one)
+        bool m_AutoExposureStarted = false;
+        double m_AutoExposureClock = 0.0;  // seconds, for the adaptation's time step
+        void ReduceLuminance(VkCommandBuffer cmd, SceneRenderTarget& target);
+        float UpdateAutoExposure(const SceneSettings& settings); // returns the exposure multiplier
         OccluderDepth m_Occluder;
         std::vector<uint8_t> m_ItemOccluded;
         std::vector<Vertex> m_OceanVertices; // this frame's ocean surface (reused)

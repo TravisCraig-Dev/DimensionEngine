@@ -65,6 +65,7 @@
 #include "shaders/ProbePrefilter.frag.h"
 #include "shaders/LightCull.comp.h"
 #include "shaders/DepthReduce.comp.h"
+#include "shaders/LuminanceReduce.comp.h"
 #include "shaders/ParticleSim.comp.h"
 #include "shaders/ParticleSortKeys.comp.h"
 #include "shaders/ParticleSort.comp.h"
@@ -379,7 +380,7 @@ namespace Dimension
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
-        Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort, DepthReduce; // compute
+        Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort, DepthReduce, LuminanceReduce; // compute
         Pipeline GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive;
         // GPU particle systems' simulation buffers, per (scene, entity); dropped when unused for a while.
         struct GpuParticleState
@@ -667,6 +668,7 @@ namespace Dimension
         }
         r.LightCull = Pipeline::Compute(kLightCull_comp, "LightCullPipeline");
         r.DepthReduce = Pipeline::Compute(kDepthReduce_comp, "DepthReducePipeline");
+        r.LuminanceReduce = Pipeline::Compute(kLuminanceReduce_comp, "LuminanceReducePipeline");
         r.ParticleSim = Pipeline::Compute(kParticleSim_comp, "ParticleSimPipeline");
         r.ParticleSortKeys = Pipeline::Compute(kParticleSortKeys_comp, "ParticleSortKeysPipeline");
         r.ParticleSort = Pipeline::Compute(kParticleSort_comp, "ParticleSortPipeline");
@@ -1462,6 +1464,15 @@ namespace Dimension
             target.Temporal.Valid = true;
             target.Temporal.PrevViewProj = unjitteredViewProj;
         }
+        // Auto exposure: this frame's brightness is measured (read a few frames later) and the exposure adapts.
+        float autoExposure = 1.0f;
+        if (settings.AutoExposure && !options.ProbeCapture && !camera.Transparent)
+        {
+            autoExposure = UpdateAutoExposure(settings);
+            ReduceLuminance(cmd, target);
+        }
+        else
+            m_AutoExposureStarted = false;
         bool bloom = settings.Bloom && settings.BloomIntensity > 0.0f && target.GetBloomLevels() > 0;
         if (bloom) RenderBloom(cmd, target, settings);
         if (dof) RenderDepthOfField(cmd, target, camera, settings);
@@ -1476,7 +1487,7 @@ namespace Dimension
         glm::vec3 filter = ToLinear(post.ColorFilter) * PostProcess::WhiteBalance(post.Temperature, post.Tint);
         glm::vec3 gamma = glm::max(post.Gamma, glm::vec3(0.01f));
         uint32_t tonemap = settings.Tonemapping ? 1u + (uint32_t)std::clamp(settings.Tonemapper, 0, 2) : 0u;
-        CompositePush push{ target.GetHdrBindless(), post.Exposure, tonemap,
+        CompositePush push{ target.GetHdrBindless(), post.Exposure * autoExposure, tonemap,
                             bloom ? target.GetBloomBindless(0) + 1 : 0u,
                             post.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), post.Vignette,
                             dof ? target.GetDofBindless(1) + 1 : 0u, camera.Transparent ? 1u : 0u,
@@ -1673,6 +1684,74 @@ namespace Dimension
         vkCmdDispatch(cmd, (gw + 7) / 8, (gh + 7) / 8, 1);
         Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
     }
+    void SceneRenderer::ReduceLuminance(VkCommandBuffer cmd, SceneRenderTarget& target)
+    {
+        auto& device = RenderDevice::Get();
+        uint64_t frame = device.Frame().FrameNumber;
+        LuminanceSlot& slot = m_LuminanceSlots[frame % 3];
+        uint32_t width = target.GetWidth(), height = target.GetHeight();
+        uint32_t cell = std::max(8u, (std::max(width, height) + 15) / 16); // about 16 x 9 cells
+        uint32_t gw = (width + cell - 1) / cell, gh = (height + cell - 1) / cell;
+        if (!slot.Data.IsValid() || slot.Cells < gw * gh)
+        {
+            slot.Data = Buffer((VkDeviceSize)gw * gh * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                               MemoryUsage::GpuToCpu, "Luminance");
+            VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+            info.buffer = slot.Data.GetHandle();
+            slot.Address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+        }
+        slot.Cells = gw * gh;
+        slot.Frame = frame;
+        slot.Used = true;
+        slot.Read = false;
+        struct
+        {
+            glm::uvec2 Out;
+            uint32_t Hdr, CellSize;
+            glm::uvec2 Grid, Size;
+        } push{ { (uint32_t)slot.Address, (uint32_t)(slot.Address >> 32) }, target.GetHdrBindless(), cell, { gw, gh }, { width, height } };
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        Renderer::Get().LuminanceReduce.Bind(cmd);
+        device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+        vkCmdDispatch(cmd, (gw + 7) / 8, (gh + 7) / 8, 1);
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+    }
+
+    float SceneRenderer::UpdateAutoExposure(const SceneSettings& settings)
+    {
+        double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        float dt = m_AutoExposureStarted ? (float)std::clamp(now - m_AutoExposureClock, 0.0, 0.25) : 0.0f;
+        m_AutoExposureClock = now;
+        // The newest finished measurement (it saw the image as exposed then: undo that exposure).
+        uint64_t completed = RenderDevice::Get().GetCompletedFrameNumber();
+        LuminanceSlot* best = nullptr;
+        for (auto& s : m_LuminanceSlots)
+            if (s.Used && !s.Read && s.Frame <= completed && (!best || s.Frame > best->Frame)) best = &s;
+        if (best)
+        {
+            best->Read = true;
+            const float* cells = static_cast<const float*>(best->Data.GetMapped());
+            double sum = 0.0;
+            for (uint32_t i = 0; i < best->Cells; ++i) sum += cells[i];
+            float avgLog = best->Cells ? (float)(sum / best->Cells) : 0.0f;
+            // HDR values are before exposure, so the measurement does not depend on the adaptation.
+            float targetEv = std::log2(0.18f) - avgLog + settings.ExposureCompensation;
+            targetEv = std::clamp(targetEv, settings.AutoExposureMinEv, settings.AutoExposureMaxEv);
+            if (!m_AutoExposureStarted) m_AutoExposureEv = targetEv;
+            else
+            {
+                // Eyes adapt to the dark more slowly than to light.
+                float speed = std::max(settings.AdaptationSpeed, 0.0f) * (targetEv > m_AutoExposureEv ? 0.6f : 1.0f);
+                m_AutoExposureEv += (targetEv - m_AutoExposureEv) * (1.0f - std::exp(-dt * speed));
+            }
+            m_AutoExposureStarted = true;
+        }
+        return std::exp2(m_AutoExposureEv);
+    }
+
     bool SceneRenderer::IsGpuLightCullingEnabled() { return s_GpuLightCulling; }
 
     bool SceneRenderer::CullLightsOnGpu(VkCommandBuffer cmd, const void* uniforms, size_t size)

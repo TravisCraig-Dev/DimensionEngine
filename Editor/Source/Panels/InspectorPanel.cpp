@@ -2301,6 +2301,17 @@ namespace Editor
             ImGui::SetItemTooltip("ACES: filmic contrast. Neutral: keeps hues and saturation (product shots). AgX: soft highlights.");
             ImGui::Unindent();
         }
+        track(ImGui::Checkbox("Auto Exposure", &s.AutoExposure));
+        ImGui::SetItemTooltip("Eye adaptation: the image's average brightness is brought toward mid grey over time");
+        if (s.AutoExposure)
+        {
+            ImGui::Indent();
+            track(ImGui::DragFloat("Compensation (EV)", &s.ExposureCompensation, 0.01f, -8.0f, 8.0f));
+            track(ImGui::DragFloat("Min EV", &s.AutoExposureMinEv, 0.05f, -16.0f, 0.0f));
+            track(ImGui::DragFloat("Max EV", &s.AutoExposureMaxEv, 0.05f, 0.0f, 16.0f));
+            track(ImGui::DragFloat("Adaptation Speed", &s.AdaptationSpeed, 0.01f, 0.0f, 20.0f));
+            ImGui::Unindent();
+        }
         if (ImGui::TreeNode("Color Grading"))
         {
             track(ImGui::SliderFloat("Temperature", &s.Temperature, -1.0f, 1.0f));

@@ -43,6 +43,13 @@ namespace Dimension
         float Saturation = 1.0f, Contrast = 1.0f;
         glm::vec3 ColorFilter{ 1.0f };
         glm::vec3 Lift{ 0.0f }, Gamma{ 1.0f }, Gain{ 1.0f };
+        // Auto exposure (eye adaptation): the image's average brightness is brought toward mid grey, within Min / Max
+        // EV of the manual exposure, at Adaptation Speed (faster getting darker than brighter, as eyes are);
+        // Compensation (EV) brightens or darkens the target.
+        bool AutoExposure = false;
+        float ExposureCompensation = 0.0f;
+        float AutoExposureMinEv = -4.0f, AutoExposureMaxEv = 4.0f;
+        float AdaptationSpeed = 1.5f;
         // Sky: 0 = procedural gradient, 1 = equirectangular texture (ideally .hdr) that also lights the scene.
         int32_t SkyMode = 0;
         AssetHandle SkyTexture = AssetHandle::None();

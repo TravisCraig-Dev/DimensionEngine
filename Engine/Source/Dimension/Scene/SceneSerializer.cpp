@@ -181,6 +181,11 @@ namespace Dimension
                           { "skyGround", { s.SkyGround.r, s.SkyGround.g, s.SkyGround.b } },
                           { "tonemapping", s.Tonemapping },
                           { "tonemapper", s.Tonemapper },
+                          { "autoExposure", s.AutoExposure },
+                          { "exposureCompensation", s.ExposureCompensation },
+                          { "autoExposureMinEv", s.AutoExposureMinEv },
+                          { "autoExposureMaxEv", s.AutoExposureMaxEv },
+                          { "adaptationSpeed", s.AdaptationSpeed },
                           { "temperature", s.Temperature },
                           { "tint", s.Tint },
                           { "saturation", s.Saturation },
@@ -274,6 +279,11 @@ namespace Dimension
         if (js.contains("skyGround")) vec(js["skyGround"], &s.SkyGround.x, 3);
         s.Tonemapping = js.value("tonemapping", s.Tonemapping);
         s.Tonemapper = js.value("tonemapper", s.Tonemapper);
+        s.AutoExposure = js.value("autoExposure", s.AutoExposure);
+        s.ExposureCompensation = js.value("exposureCompensation", s.ExposureCompensation);
+        s.AutoExposureMinEv = js.value("autoExposureMinEv", s.AutoExposureMinEv);
+        s.AutoExposureMaxEv = js.value("autoExposureMaxEv", s.AutoExposureMaxEv);
+        s.AdaptationSpeed = js.value("adaptationSpeed", s.AdaptationSpeed);
         s.Temperature = js.value("temperature", s.Temperature);
         s.Tint = js.value("tint", s.Tint);
         s.Saturation = js.value("saturation", s.Saturation);
