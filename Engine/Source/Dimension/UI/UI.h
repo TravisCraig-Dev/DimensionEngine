@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/ECS/Entity.h"
+#include <array>
 #include <glm/glm.hpp>
 #include <functional>
 #include <string>
@@ -48,13 +49,21 @@ namespace Dimension
         constexpr uint32_t kDisplaySpaceTextureBit = 0x20000000u;
 
         // A textured, tinted screen-space quad (pixels, top-left origin), already clipped. Colors are display-space (sRGB).
-        // A UI Mask over a quad, applied per pixel (the rect itself is also clipped on the CPU): edges faded over
-        // Softness pixels, and the mask image's alpha (Texture: bindless index, 0 none) stretched over Rect.
-        struct MaskInfo
+        // The UI Masks over a quad that act per pixel (rects themselves are also clipped on the CPU), innermost first:
+        // edges faded over Softness pixels, and the mask image's alpha (Texture: bindless index, 0 none) stretched
+        // over Rect. Nested ones multiply.
+        struct MaskLevel
         {
             glm::vec4 Rect{ 0.0f }; // min x, y, max x, y in pixels
             glm::vec2 Softness{ 0.0f };
             uint32_t Texture = 0;
+            bool operator==(const MaskLevel&) const = default;
+        };
+        struct MaskInfo
+        {
+            static constexpr int kMaxLevels = 4;
+            std::array<MaskLevel, kMaxLevels> Levels{};
+            int Count = 0;
             bool Active = false;
             bool operator==(const MaskInfo&) const = default;
         };

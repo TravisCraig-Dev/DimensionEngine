@@ -3796,23 +3796,34 @@ namespace Dimension
         TransientAllocation vb = RenderDevice::Get().AllocateTransient(commands.size() * 4 * sizeof(SpriteVertex));
         if (!vb) return;
         auto* v = (SpriteVertex*)vb.Data;
-        // UI Masks (soft edges, image shapes): a table the fragment shader reads; each quad's vertices carry its index + 1.
+        // UI Masks (soft edges, image shapes): a table the fragment shader reads; each quad's vertices carry the index + 1
+        // of its innermost mask, whose Parent (index + 1, 0 none) links to the one outside it.
         struct GpuMask
         {
             glm::vec4 Rect;
             glm::vec2 Softness;
-            uint32_t Texture, Pad;
+            uint32_t Texture, Parent;
         };
         std::vector<GpuMask> masks;
         const UI::MaskInfo* lastMask = nullptr;
+        uint32_t lastIndex = 0;
         for (auto& c : commands)
         {
             uint32_t m = 0;
             if (c.Mask.Active)
             {
-                if (!lastMask || !(*lastMask == c.Mask)) masks.push_back({ c.Mask.Rect, c.Mask.Softness, c.Mask.Texture, 0 });
+                if (!lastMask || !(*lastMask == c.Mask))
+                {
+                    lastIndex = (uint32_t)masks.size() + 1;
+                    for (int i = 0; i < c.Mask.Count; ++i)
+                    {
+                        const auto& l = c.Mask.Levels[i];
+                        uint32_t parent = i + 1 < c.Mask.Count ? (uint32_t)masks.size() + 2 : 0;
+                        masks.push_back({ l.Rect, l.Softness, l.Texture, parent });
+                    }
+                }
                 lastMask = &c.Mask;
-                m = (uint32_t)masks.size();
+                m = lastIndex;
             }
             float slant = c.Slant * (c.Max.y - c.Min.y); // italic: the top edge leans right
             *v++ = { glm::vec3(c.Min.x + slant, c.Min.y, 0), c.Color, { c.UVMin.x, c.UVMin.y }, c.Texture, m };

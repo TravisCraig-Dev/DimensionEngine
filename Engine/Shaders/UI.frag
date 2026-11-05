@@ -19,15 +19,12 @@ struct UIMask
     vec4 Rect;
     vec2 Softness;
     uint Texture;
-    uint Pad;
+    uint Parent; // the mask outside it: index + 1, 0 none
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer UIMaskTable { UIMask Masks[]; };
 
-float MaskAlpha()
+float MaskLevelAlpha(UIMask m, vec2 p)
 {
-    if (vMask == 0u) return 1.0;
-    UIMask m = UIMaskTable(pc.Masks).Masks[vMask - 1u];
-    vec2 p = gl_FragCoord.xy;
     vec2 inside = min(p - m.Rect.xy, m.Rect.zw - p);
     vec2 fade = clamp(inside / max(m.Softness, vec2(1e-4)), 0.0, 1.0);
     float a = (m.Softness.x > 0.0 ? fade.x : 1.0) * (m.Softness.y > 0.0 ? fade.y : 1.0);
@@ -35,6 +32,20 @@ float MaskAlpha()
     {
         vec2 uv = (p - m.Rect.xy) / max(m.Rect.zw - m.Rect.xy, vec2(1e-4));
         a *= texture(uTextures[nonuniformEXT(m.Texture)], uv).a;
+    }
+    return a;
+}
+
+// Every mask over the quad, innermost to outermost, multiplied.
+float MaskAlpha()
+{
+    float a = 1.0;
+    uint index = vMask;
+    for (int i = 0; i < 4 && index != 0u; ++i)
+    {
+        UIMask m = UIMaskTable(pc.Masks).Masks[index - 1u];
+        a *= MaskLevelAlpha(m, gl_FragCoord.xy);
+        index = m.Parent;
     }
     return a;
 }

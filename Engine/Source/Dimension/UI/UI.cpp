@@ -1412,20 +1412,22 @@ namespace Dimension::UI
             for (size_t i = maskFrom; i < out.size(); ++i) out[i].Mask = mask;
         };
         auto maskFor = [&](Entity e) {
+            // Every mask above it with soft edges or an image shape (plain rects are clipped already), innermost first.
             MaskInfo m;
-            for (Entity p = scene.GetParent(e); scene.IsValid(p); p = scene.GetParent(p))
+            for (Entity p = scene.GetParent(e); scene.IsValid(p) && m.Count < MaskInfo::kMaxLevels; p = scene.GetParent(p))
             {
                 auto* mc = reg.TryGet<UIMaskComponent>(p);
                 auto* mr = reg.TryGet<UIRectComponent>(p);
                 if (!mc || !mr) continue;
-                m.Rect = { mr->ComputedMin, mr->ComputedMax };
-                m.Softness = glm::max(mc->Softness, glm::vec2(0.0f)) * mr->ComputedScale;
+                MaskLevel level;
+                level.Rect = { mr->ComputedMin, mr->ComputedMax };
+                level.Softness = glm::max(mc->Softness, glm::vec2(0.0f)) * mr->ComputedScale;
                 if (mc->Shape == UIMaskShape::Image)
                     if (auto* img = reg.TryGet<UIImageComponent>(p))
-                        if (auto tex = AssetManager::GetTexture(img->Texture)) m.Texture = tex->GetBindlessIndex();
-                m.Active = m.Softness != glm::vec2(0.0f) || m.Texture != 0;
-                break;
+                        if (auto tex = AssetManager::GetTexture(img->Texture)) level.Texture = tex->GetBindlessIndex();
+                if (level.Softness != glm::vec2(0.0f) || level.Texture != 0) m.Levels[m.Count++] = level;
             }
+            m.Active = m.Count > 0;
             return m;
         };
 
