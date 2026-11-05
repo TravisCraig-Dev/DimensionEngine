@@ -733,6 +733,10 @@ namespace Dimension
                                            nameof(Behaviour.OnMouseDown), nameof(Behaviour.OnMouseDrag), nameof(Behaviour.OnMouseUp),
                                            nameof(Behaviour.OnMouseUpAsButton) };
                         if (mouse.Any(Overrides)) w.WriteBoolean("mouseEvents", true);
+                        if (Overrides(nameof(Behaviour.OnAnimatorMove))) w.WriteBoolean("animatorMove", true);
+                        if (type.GetMethod(nameof(Behaviour.OnLateUpdate), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(float) })
+                                ?.DeclaringType != typeof(Behaviour))
+                            w.WriteBoolean("lateUpdate", true);
                         // UI pointer events, by PointerEventKind bit: only the overridden ones are sent.
                         uint pointer = 0;
                         for (int k = 0; k < PointerEventData.MethodNames.Length; ++k)
@@ -1000,6 +1004,8 @@ namespace Dimension
                     case 17: b.OnApplicationFocus(dt != 0.0f); break;
                     case 18: b.OnApplicationPause(dt != 0.0f); break;
                     case 19: b.OnApplicationQuit(); break;
+                    case 20: b.OnAnimatorMove(); break;
+                    case 21: b.OnLateUpdate(dt); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

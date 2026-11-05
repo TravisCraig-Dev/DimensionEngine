@@ -957,6 +957,21 @@ namespace Dimension
             DIM_PROFILE_SCOPE("Animation");
             UpdateAnimators(dt);
         }
+        {
+            // LateUpdate (as Unity's): after animation, so scripts see this frame's poses (bones, root motion).
+            DIM_PROFILE_SCOPE("Late Update");
+            std::vector<Entity> late;
+            for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
+                for (auto& s : sc.Scripts)
+                    if (s.Instance && s.Enabled && s.Instance->HandlesLateUpdate()) { late.push_back(e); break; }
+            for (Entity e : late)
+            {
+                if (!IsValid(e) || !m_Registry.Get<TransformComponent>(e).ActiveInHierarchy) continue;
+                if (auto* sc = m_Registry.TryGet<ScriptComponent>(e))
+                    for (auto& inst : sc->LiveInstances(true))
+                        if (inst->HandlesLateUpdate()) inst->OnLateUpdate(dt);
+            }
+        }
         Water::Update(*this, m_Time);
         {
             DIM_PROFILE_SCOPE("Particles");
@@ -1066,6 +1081,7 @@ namespace Dimension
     {
         Pose current, previous;
         std::vector<std::pair<Entity, std::vector<std::string>>> firedEvents;
+        std::vector<Entity> animatorMoves; // objects whose scripts take the root motion (OnAnimatorMove)
 
         // IK targets, by the Animator they pull on (positions are this frame's world transforms).
         struct IKGoal
@@ -1181,7 +1197,7 @@ namespace Dimension
                         pb.StateIndex = index;
                         pb.TreeState = isTree ? index : -1;
                         pb.Clip = isTree ? std::string() : state.Clip;
-                        pb.Time = 0.0f;
+                        pb.Time = isTree ? 0.0f : pb.Runtime.StateTime; // 0, or where Animator.Play started it
                         pb.Loop = state.Loop;
                         pb.StateSpeed = state.Speed;
                         pb.CurrentState = state.Name;
@@ -1200,6 +1216,12 @@ namespace Dimension
                 const AnimState* tree = treeOf(pb.TreeState);
                 const AnimationClip* clip = tree ? nullptr : Animation::FindClip(clips, pb.Clip);
                 if (baseLayer && !tree && !clip && !clips.empty() && pb.Clip.empty()) clip = &clips.front(); // default to the first clip
+                if (pb.StartNormalized >= 0.0f && !machine && clip)
+                {
+                    pb.Time = pb.StartNormalized * clip->Duration;
+                    if (pb.Loop && clip->Duration > 0.0f) pb.Time = std::fmod(pb.Time, clip->Duration);
+                    pb.StartNormalized = -1.0f;
+                }
 
                 auto advance = [&](float& time, const AnimationClip* c) {
                     if (!c || !pb.Playing) return;
@@ -1218,6 +1240,29 @@ namespace Dimension
                 // How far the state has played, for scripts (Animator.NormalizedTime).
                 pb.NormalizedTime = machine && pb.Runtime.State >= 0 ? AnimatorStateMachine::NormalizedTime(*machine, pb.Runtime, duration)
                                   : clip && clip->Duration > 0.0f ? pb.Time / clip->Duration : 0.0f;
+                // State info for scripts: the current state, and while fading the one fading out (as of this update).
+                {
+                    const AnimState* st = machine && pb.Runtime.State >= 0 && pb.Runtime.State < (int)machine->States.size() ? &machine->States[pb.Runtime.State] : nullptr;
+                    pb.Info = {};
+                    pb.Info.Valid = st || clip;
+                    pb.Info.NormalizedTime = pb.NormalizedTime;
+                    pb.Info.Length = st ? AnimatorStateMachine::StateDuration(*machine, pb.Runtime, *st, duration) : clip ? clip->Duration : 0.0f;
+                    pb.Info.Loop = st ? st->Loop : pb.Loop;
+                    pb.Info.Speed = st ? st->Speed : 1.0f;
+                    pb.PreviousInfo = {};
+                    if (pb.FadeDuration > 0.0f && pb.FadeElapsed < pb.FadeDuration)
+                    {
+                        const AnimState* prevState = treeOf(pb.PreviousStateIndex);
+                        const AnimState* prevTree = treeOf(pb.PreviousTreeState);
+                        const AnimationClip* prevClip = prevTree ? nullptr : Animation::FindClip(clips, pb.PreviousClip);
+                        float length = prevTree ? AnimatorStateMachine::StateDuration(*machine, pb.Runtime, *prevTree, duration) : prevClip ? prevClip->Duration : 0.0f;
+                        pb.PreviousInfo.Valid = prevTree || prevClip;
+                        pb.PreviousInfo.Length = length;
+                        pb.PreviousInfo.NormalizedTime = prevTree ? pb.PreviousTime : length > 0.0f ? pb.PreviousTime / length : 0.0f;
+                        pb.PreviousInfo.Loop = prevState ? prevState->Loop : true;
+                        pb.PreviousInfo.Speed = prevState ? prevState->Speed : 1.0f;
+                    }
+                }
 
                 if (pb.FadeDuration > 0.0f && pb.FadeElapsed < pb.FadeDuration)
                 {
@@ -1296,9 +1341,13 @@ namespace Dimension
             }
             evaluate(anim, controller.get(), true, current);
 
-            // Root motion from the base layer (play mode only).
+            // Root motion from the base layer (play mode only). A script with OnAnimatorMove takes it instead.
             anim.RootMotionDelta = glm::vec3(0.0f);
-            if (anim.ApplyRootMotion && dt > 0.0f && !current.Translations.empty())
+            anim.ScriptRootMotion = false;
+            if (auto* sc = m_Running ? m_Registry.TryGet<ScriptComponent>(e) : nullptr)
+                for (auto& s : sc->Scripts) anim.ScriptRootMotion |= s.Instance && s.Enabled && s.Instance->HandlesAnimatorMove();
+            if (anim.ScriptRootMotion) animatorMoves.push_back(e);
+            if ((anim.ApplyRootMotion || anim.ScriptRootMotion) && dt > 0.0f && !current.Translations.empty())
             {
                 int root = anim.RootMotionJoint.empty() ? (skeleton->Order.empty() ? 0 : skeleton->Order.front()) : skeleton->FindJoint(anim.RootMotionJoint);
                 if (root >= 0 && root < (int)skeleton->Joints.size())
@@ -1320,17 +1369,7 @@ namespace Dimension
                     auto& t = m_Registry.Get<TransformComponent>(e);
                     glm::vec3 worldDelta = glm::mat3(t.World) * modelDelta;
                     anim.RootMotionDelta = worldDelta;
-                    if (glm::dot(worldDelta, worldDelta) > 0.0f)
-                    {
-                        if (m_Registry.Has<CharacterControllerComponent>(e) && m_Physics3D) Physics3DWorld::MoveCharacter(*this, e, worldDelta);
-                        else
-                        {
-                            Entity parent = GetParent(e);
-                            glm::mat3 toParent = parent.IsNull() ? glm::mat3(1.0f) : glm::inverse(glm::mat3(m_Registry.Get<TransformComponent>(parent).World));
-                            t.Position += toParent * worldDelta;
-                            t.World[3] += glm::vec4(worldDelta, 0.0f); // read before transforms update next (NavMesh Agents with Root Motion)
-                        }
-                    }
+                    if (!anim.ScriptRootMotion) ApplyRootMotion(e, worldDelta);
                 }
             }
 
@@ -1441,6 +1480,56 @@ namespace Dimension
         // After iteration: scripts may change the registry.
         for (auto& [e, names] : firedEvents)
             for (auto& name : names) DispatchAnimationEvent(e, name);
+        for (Entity e : animatorMoves)
+            if (auto* sc = IsValid(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr)
+                for (auto& inst : sc->LiveInstances(true))
+                    if (inst->HandlesAnimatorMove()) inst->OnAnimatorMove();
+    }
+
+    void Scene::ApplyRootMotion(Entity e, const glm::vec3& worldDelta)
+    {
+        if (!IsValid(e) || glm::dot(worldDelta, worldDelta) <= 0.0f) return;
+        if (m_Registry.Has<CharacterControllerComponent>(e) && m_Physics3D)
+        {
+            Physics3DWorld::MoveCharacter(*this, e, worldDelta);
+            return;
+        }
+        auto& t = m_Registry.Get<TransformComponent>(e);
+        Entity parent = GetParent(e);
+        glm::mat3 toParent = parent.IsNull() ? glm::mat3(1.0f) : glm::inverse(glm::mat3(m_Registry.Get<TransformComponent>(parent).World));
+        t.Position += toParent * worldDelta;
+        t.World[3] += glm::vec4(worldDelta, 0.0f); // read before transforms update next (NavMesh Agents with Root Motion)
+    }
+
+    bool Scene::PlayAnimatorState(Entity e, const std::string& name, int layer, float fadeSeconds, float offset, bool fixedTime)
+    {
+        auto* anim = IsValid(e) ? m_Registry.TryGet<AnimatorComponent>(e) : nullptr;
+        if (!anim) return false;
+        Ref<AnimatorController> controller = AssetManager::GetAnimatorController(anim->Controller);
+        if (controller)
+        {
+            controller->LinkLayers();
+            const AnimatorController* machine = controller->LayerMachine(layer);
+            int index = machine ? machine->FindState(name) : -1;
+            if (index < 0) return false;
+            AnimatorRuntime* runtime = &anim->Runtime;
+            if (layer > 0)
+            {
+                if ((int)anim->Layers.size() < layer) anim->Layers.resize(layer);
+                runtime = &anim->Layers[layer - 1].Runtime;
+            }
+            runtime->RequestedState = index;
+            runtime->RequestedFade = fadeSeconds;
+            runtime->RequestedOffset = offset;
+            runtime->RequestedFixedTime = fixedTime;
+            return true;
+        }
+        if (layer != 0 || name.empty()) return false;
+        // No controller: a clip of the model, from the offset (seconds become a fraction once the clip is known).
+        anim->CrossFade(name, fadeSeconds);
+        anim->Time = fixedTime ? std::max(offset, 0.0f) : 0.0f;
+        anim->StartNormalized = fixedTime ? -1.0f : std::max(offset, 0.0f);
+        return true;
     }
 
     AssetHandle Scene::GetRendererMaterialInstance(Entity e)

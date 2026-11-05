@@ -25,6 +25,10 @@ namespace Dimension
         virtual void OnCreate() {}
         virtual void OnUpdate(float dt) {}
         virtual void OnFixedUpdate(float dt) {}
+        // Every frame after animation (Unity's LateUpdate), for scripts whose HandlesLateUpdate is true: cameras that
+        // follow, objects kept on a bone.
+        virtual bool HandlesLateUpdate() const { return false; }
+        virtual void OnLateUpdate(float dt) {}
         virtual void OnDestroy() {}
         // While playing: the script starts counting (after OnCreate, when its object is active and it is enabled) or
         // stops (its object or a parent turned off, the script disabled, or before OnDestroy).
@@ -59,6 +63,11 @@ namespace Dimension
         virtual void OnUITextChanged(const std::string& text) {}   // UI Input Field edited
         virtual void OnUISubmit(const std::string& text) {}        // UI Input Field: Enter pressed
         virtual void OnAnimationEvent(const std::string& name) {}  // Animator state event reached
+        // The Animator on this entity extracted its root motion (AnimatorComponent::RootMotionDelta): a script with
+        // HandlesAnimatorMove applies it itself (Scene::ApplyRootMotion does what the Animator would), even when Apply
+        // Root Motion is off.
+        virtual bool HandlesAnimatorMove() const { return false; }
+        virtual void OnAnimatorMove() {}
         virtual void OnJointBreak(float force) {}                  // a Joint / Joint 2D on this entity broke (reaction force, N)
         // The game's window gained or lost focus; was minimized (paused) or restored; is closing (also when play stops
         // in the editor), before OnDisable and OnDestroy.

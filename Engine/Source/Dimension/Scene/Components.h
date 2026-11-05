@@ -377,6 +377,15 @@ namespace Dimension
     };
 
     // Plays skeletal animation clips of the entity's skinned Mesh Renderer (like Unity's Animator/Animation).
+    // A state's playback as scripts see it (Unity's AnimatorStateInfo): how far it has played (loops done, not wrapped),
+    // seconds per loop, whether it loops, and its speed.
+    struct AnimatorStateInfo
+    {
+        bool Valid = false;
+        float NormalizedTime = 0.0f, Length = 0.0f, Speed = 1.0f;
+        bool Loop = true;
+    };
+
     // Playback of one extra Animator layer (runtime only); mirrors the base layer's fields on AnimatorComponent.
     struct AnimatorLayerPlayback
     {
@@ -395,6 +404,8 @@ namespace Dimension
         float Weight = -1.0f; // < 0: use the layer's weight from the controller
         int StateIndex = -1, PreviousStateIndex = -1; // controller states (synced layers follow them)
         float NormalizedTime = 0.0f; // the current state's: loops done (1 = once through; not wrapped)
+        AnimatorStateInfo Info, PreviousInfo; // for scripts, as of the last update
+        float StartNormalized = -1.0f;        // without a controller: where the next clip starts (Animator.Play)
     };
 
     struct AnimatorComponent
@@ -448,6 +459,9 @@ namespace Dimension
         float FadeElapsed = 0.0f, FadeDuration = 0.0f;
         int StateIndex = -1, PreviousStateIndex = -1; // controller states (synced layers follow them)
         float NormalizedTime = 0.0f; // the current state's (or clip's): loops done (1 = once through)
+        AnimatorStateInfo Info, PreviousInfo; // the state playing and the one fading out (Valid only while fading)
+        float StartNormalized = -1.0f;        // without a controller: where the next clip starts (Animator.Play)
+        bool ScriptRootMotion = false;        // a script's OnAnimatorMove takes the root motion (RootMotionDelta)
         std::vector<glm::mat4> SkinMatrices;
 
         // Switches clips, blending from the current pose over `fadeSeconds`.

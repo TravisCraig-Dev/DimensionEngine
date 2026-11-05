@@ -303,6 +303,13 @@ namespace Dimension
         void InjectUIKeyboard(const std::string& text, bool backspace = false, bool enter = false);
         void DispatchUIClick(Entity e);
         void DispatchAnimationEvent(Entity e, const std::string& name);
+        // Moves an animated object by a world-space root motion step as the Animator does (through its Character
+        // Controller when it has one).
+        void ApplyRootMotion(Entity e, const glm::vec3& worldDelta);
+        // Asks an Animator's layer (0 base) to play a state of its controller (or, without one, a clip on the base
+        // layer): fading over `fadeSeconds`, from `offset` (normalized, or seconds when fixedTime). False when there is
+        // no such state or clip name.
+        bool PlayAnimatorState(Entity e, const std::string& name, int layer, float fadeSeconds, float offset, bool fixedTime);
         void DispatchJointBreak(Entity e, float force);
         void DispatchUIValueChanged(Entity e, float value);
         void DispatchUIText(Entity e, const std::string& text, bool submit);

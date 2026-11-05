@@ -6202,6 +6202,42 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // Records the order of its update calls; LateUpdate only when asked for.
+    class LateProbe : public ScriptableEntity
+    {
+    public:
+        static inline std::string Log;
+        bool Late = true;
+        bool HandlesLateUpdate() const override { return Late; }
+        void OnUpdate(float) override { Log += "U"; }
+        void OnLateUpdate(float) override { Log += "L"; }
+    };
+
+    // OnLateUpdate runs every frame after OnUpdate (and animation), only for scripts that handle it, and not on
+    // inactive objects.
+    void TestLateUpdate()
+    {
+        Scene scene("Late");
+        Entity e = scene.CreateEntity("Probe");
+        scene.GetRegistry().Emplace<ScriptComponent>(e).Add("LateProbe");
+        scene.OnRuntimeStart();
+        LateProbe::Log.clear();
+        scene.OnUpdateRuntime(0.05f);
+        scene.OnUpdateRuntime(0.05f);
+        CHECK(LateProbe::Log == "ULUL");
+        auto& probe = static_cast<LateProbe&>(*scene.GetRegistry().Get<ScriptComponent>(e).Scripts[0].Instance);
+        probe.Late = false;
+        LateProbe::Log.clear();
+        scene.OnUpdateRuntime(0.05f);
+        CHECK(LateProbe::Log == "U");
+        probe.Late = true;
+        scene.SetActive(e, false);
+        LateProbe::Log.clear();
+        scene.OnUpdateRuntime(0.05f);
+        CHECK(LateProbe::Log.empty());
+        scene.OnRuntimeStop();
+    }
+
     void TestUI()
     {
         Scene scene("UI");
@@ -12002,6 +12038,28 @@ namespace
         rt.Parameters["Energy"] = 0.0f;
         CHECK(step(0.1f) == 1 && entered.back() == "Sway");
 
+        // A script's request (Animator.Play / CrossFade): entered at the next update from its offset, then the clock
+        // runs on; a fixed-time offset is in seconds. The fade reaches `enter`.
+        float fadeSeen = -1.0f;
+        auto enterFade = [&](const AnimState& s, float fade) { entered.push_back(s.Name); fadeSeen = fade; };
+        rt.RequestedState = 2;
+        rt.RequestedOffset = 0.25f; // a quarter of Curl's 2 s
+        rt.RequestedFade = 0.3f;
+        AnimatorStateMachine::Update(c, rt, 0.1f, duration, enterFade);
+        CHECK(rt.State == 2 && entered.back() == "Curl" && Near(fadeSeen, 0.3f) && rt.RequestedState < 0);
+        CHECK(Near(AnimatorStateMachine::NormalizedTime(c, rt, duration), 0.3f)); // 0.5 s + 0.1 s of 2 s
+        rt.RequestedState = 1;
+        rt.RequestedOffset = 1.5f;
+        rt.RequestedFixedTime = true;
+        rt.RequestedFade = 0.0f;
+        rt.Parameters["Energy"] = 1.0f; // Wave's transition back to Sway (Energy low) would fire in the same update
+        AnimatorStateMachine::Update(c, rt, 0.0f, duration, enterFade);
+        CHECK(rt.State == 1 && Near(rt.StateTime, 1.5f) && fadeSeen == 0.0f);
+        rt.RequestedFixedTime = false;
+        rt.Parameters["Energy"] = 0.0f;
+        step(0.1f); // the machine's own transitions still apply after a request
+        CHECK(rt.State == 0);
+
         fs::path path = fs::temp_directory_path() / "dimension_test.controller";
         CHECK(c.Save(path));
         auto loaded = AnimatorController::Load(path);
@@ -13368,6 +13426,7 @@ int main(int argc, char** argv)
     ComponentRegistry::RegisterBuiltins();
     ScriptRegistry::Register<ClickCounter>("ClickCounter");
     ScriptRegistry::Register<PointerProbe>("PointerProbe");
+    ScriptRegistry::Register<LateProbe>("LateProbe");
     ScriptRegistry::Register<CoroutineProbe>("CoroutineProbe");
     ScriptRegistry::Register<CharacterProbe>("CharacterProbe");
     ScriptRegistry::Register<TimerProbe>("TimerProbe");
@@ -13429,6 +13488,7 @@ int main(int argc, char** argv)
     Run("Material round trip", TestMaterialRoundTrip);
     Run("UI layout and clicks", TestUI);
     Run("UI pointer events", TestPointerEvents);
+    Run("Late update", TestLateUpdate);
     Run("UI widgets", TestUIWidgets);
     Run("UI dropdown and scrollbar", TestUIDropdownAndScrollbar);
     Run("UI text editing", TestUITextEditing);

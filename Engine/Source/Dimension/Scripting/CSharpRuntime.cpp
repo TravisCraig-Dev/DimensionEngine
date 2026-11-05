@@ -283,6 +283,10 @@ namespace Dimension
             // under v (xy pixels) into ids, topmost first (returns the total), 4 the element under the pointer (ids[0]),
             // 5 whether keyboard / gamepad navigation is on.
             int (*UIEvents)(void*, int, float*, uint64_t*, int);
+            // The Animator: 0 play state/clip `name` on `layer` (v: fade seconds, offset, fixed time != 0), 1 state info
+            // (v[0] 0 current, 1 next; out v: normalized time, length, speed, loop), 2 this frame's root motion (v xyz),
+            // 3 move by root motion v xyz, 4 a joint's world matrix (16 floats). 0 when there is none.
+            int (*AnimatorOp)(void*, uint64_t, int, int, const char*, float*);
         };
 
         // Background scene loads started from C#, by id.
@@ -533,6 +537,8 @@ namespace Dimension
             bool HasTriggerStay = false;      // overrides OnTriggerStay
             bool HasControllerHit = false;    // overrides OnControllerColliderHit (called for every move's hits)
             bool HasMouseEvents = false;      // overrides an OnMouse* callback
+            bool HasAnimatorMove = false;     // overrides OnAnimatorMove (takes the Animator's root motion)
+            bool HasLateUpdate = false;       // overrides OnLateUpdate
             uint32_t PointerEvents = 0;       // the UI pointer events it overrides (bits of PointerEventKind)
             std::vector<std::string> ContextMenu;
         };
@@ -930,6 +936,10 @@ namespace Dimension
             void OnMouseUpAsButton() override { Mouse(16); }
             void Mouse(int method) { if (m_Handle && m_Class->HasMouseEvents) s_Managed.Invoke(m_Handle, method, 0.0f); }
             uint32_t PointerEventMask() const override { return m_Handle ? m_Class->PointerEvents : 0; }
+            bool HandlesAnimatorMove() const override { return m_Handle && m_Class->HasAnimatorMove; }
+            bool HandlesLateUpdate() const override { return m_Handle && m_Class->HasLateUpdate; }
+            void OnLateUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 21, dt); }
+            void OnAnimatorMove() override { if (m_Handle) s_Managed.Invoke(m_Handle, 20, 0.0f); }
             void OnPointerEvent(PointerEventKind kind, const PointerEventData& d) override
             {
                 if (!m_Handle) return;
@@ -959,6 +969,8 @@ namespace Dimension
                 cls.HasTriggerStay = j.value("triggerStay", false);
                 cls.HasControllerHit = j.value("controllerHit", false);
                 cls.HasMouseEvents = j.value("mouseEvents", false);
+                cls.HasAnimatorMove = j.value("animatorMove", false);
+                cls.HasLateUpdate = j.value("lateUpdate", false);
                 cls.PointerEvents = j.value("pointerEvents", 0u);
                 for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
                 for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
@@ -2037,6 +2049,43 @@ namespace Dimension
                 case 5: AudioEngine::SetPaused(v != 0.0); return 0.0;
                 case 6: if (s) AudioWorld::PlayScheduled(S(s), Unpack(e), v); return 0.0;
                 default: if (s) AudioWorld::SetScheduledEndTime(S(s), Unpack(e), v); return 0.0;
+                }
+            };
+            a.AnimatorOp = [](void* s, uint64_t e, int op, int layer, const char* name, float* v) -> int {
+                auto* an = Comp<AnimatorComponent>(s, e);
+                if (!an) return 0;
+                Scene& scene = S(s);
+                Entity entity = Unpack(e);
+                switch (op)
+                {
+                case 0: return scene.PlayAnimatorState(entity, name ? name : "", layer, v[0], v[1], v[2] != 0.0f) ? 1 : 0;
+                case 1:
+                {
+                    // Unity's view: while fading, the current state is the one fading out and the next the one coming.
+                    const AnimatorStateInfo* info = nullptr;
+                    const AnimatorStateInfo* prev = nullptr;
+                    if (layer == 0) { info = &an->Info; prev = &an->PreviousInfo; }
+                    else if (layer <= (int)an->Layers.size()) { info = &an->Layers[layer - 1].Info; prev = &an->Layers[layer - 1].PreviousInfo; }
+                    if (!info) return 0;
+                    const AnimatorStateInfo* pick = v[0] == 0.0f ? (prev->Valid ? prev : info) : (prev->Valid ? info : nullptr);
+                    if (!pick || !pick->Valid) return 0;
+                    v[0] = pick->NormalizedTime; v[1] = pick->Length; v[2] = pick->Speed; v[3] = pick->Loop ? 1.0f : 0.0f;
+                    return 1;
+                }
+                case 2: std::memcpy(v, &an->RootMotionDelta, 12); return 1;
+                case 3: scene.ApplyRootMotion(entity, { v[0], v[1], v[2] }); return 1;
+                default:
+                {
+                    auto* mr = scene.GetRegistry().TryGet<MeshRendererComponent>(entity);
+                    Ref<Mesh> mesh = mr && !AssetManager::IsBuiltin(mr->Mesh) ? AssetManager::GetMesh(mr->Mesh) : nullptr;
+                    const Skeleton* skeleton = mesh ? mesh->GetSkeleton() : nullptr;
+                    int joint = skeleton && name ? skeleton->FindJoint(name) : -1;
+                    if (joint < 0 || joint >= (int)an->SkinMatrices.size()) return 0;
+                    // The joint's model-space pose is its skin matrix undone by the inverse bind matrix.
+                    glm::mat4 world = scene.GetRegistry().Get<TransformComponent>(entity).World * an->SkinMatrices[joint] * glm::inverse(skeleton->Joints[joint].InverseBind);
+                    std::memcpy(v, &world, 64);
+                    return 1;
+                }
                 }
             };
             a.UIEvents = [](void* s, int op, float* v, uint64_t* ids, int max) -> int {

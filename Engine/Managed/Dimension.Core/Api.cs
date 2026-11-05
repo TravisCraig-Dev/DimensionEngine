@@ -112,6 +112,13 @@ namespace Dimension
         public virtual void OnSubmit(string text) { }
         /// <summary>Called when an Animator state event on this entity is reached (the event's function name).</summary>
         public virtual void OnAnimationEvent(string name) { }
+        /// <summary>The Animator on this object extracted this frame's root motion (Animator.DeltaPosition): a script
+        /// with OnAnimatorMove moves the object itself (Unity's "handled by script"), also with Apply Root Motion off.
+        /// Animator.ApplyBuiltinRootMotion() moves it as the Animator would.</summary>
+        public virtual void OnAnimatorMove() { }
+        /// <summary>Every frame after animation (Unity's LateUpdate): read this frame's bone poses here (objects kept on
+        /// a bone, cameras following an animated character).</summary>
+        public virtual void OnLateUpdate(float dt) { }
         /// <summary>Called instead of OnCreate when the scripts were recompiled and reloaded while playing. Serialized
         /// fields (public and [SerializeField]) keep their values; other state, coroutines and event listeners start over.</summary>
         public virtual void OnReloaded() { }

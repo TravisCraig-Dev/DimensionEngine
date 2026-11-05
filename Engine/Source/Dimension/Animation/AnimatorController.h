@@ -162,6 +162,12 @@ namespace Dimension
         std::unordered_map<std::string, float> Parameters;
         std::unordered_set<std::string> Triggers;
         std::vector<std::string> FiredEvents; // animation events passed during the last Update (cleared by Update)
+        // A state a script asked for (Animator.Play / CrossFade), entered at the next Update before transitions are
+        // checked: fading over RequestedFade seconds, starting RequestedOffset into it (normalized, or seconds when
+        // RequestedFixedTime).
+        int RequestedState = -1;
+        float RequestedFade = 0.0f, RequestedOffset = 0.0f;
+        bool RequestedFixedTime = false;
     };
 
     namespace AnimatorStateMachine

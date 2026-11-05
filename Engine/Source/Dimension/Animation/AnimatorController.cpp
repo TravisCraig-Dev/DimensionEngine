@@ -567,6 +567,24 @@ namespace Dimension
                 runtime.StateTime = 0.0f;
                 enter(controller.States[runtime.State], 0.0f);
             }
+            // A state a script asked for: entered at its start offset (seconds for clips, normalized for blend trees).
+            if (runtime.RequestedState >= 0)
+            {
+                int to = runtime.RequestedState;
+                runtime.RequestedState = -1;
+                if (to < stateCount)
+                {
+                    const AnimState& st = controller.States[to];
+                    runtime.State = to;
+                    runtime.StateTime = 0.0f;
+                    float length = StateDuration(controller, runtime, st, clipDuration);
+                    float offset = std::max(runtime.RequestedOffset, 0.0f);
+                    bool tree = st.Motion != AnimMotionType::Clip;
+                    if (runtime.RequestedFixedTime) runtime.StateTime = tree ? (length > 0.0f ? offset / length : 0.0f) : offset;
+                    else runtime.StateTime = tree ? offset : offset * length;
+                    enter(st, std::max(runtime.RequestedFade, 0.0f));
+                }
+            }
             // Time in the current state, and the events it passes.
             {
                 const AnimState& state = controller.States[runtime.State];

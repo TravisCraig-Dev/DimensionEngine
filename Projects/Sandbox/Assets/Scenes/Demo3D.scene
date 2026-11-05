@@ -1695,11 +1695,59 @@
               "Class": "Game.TentacleBrain",
               "Fields": {
                 "EnergyPeriod": 6.0,
-                "PokeInterval": 3.0
+                "PokeInterval": 3.0,
+                "Tip": 700090,
+                "TipJoint": "Bone5"
               },
               "Enabled": true
             }
           ]
+        }
+      }
+    },
+    {
+      "guid": 700090,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Tip Bead",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            4.3,
+            3,
+            -2
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.18,
+            0.18,
+            0.18
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 2,
+          "Albedo": 0,
+          "Color": [
+            0.3,
+            0.9,
+            1.0,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 3.0,
+          "Cast Shadows": false
         }
       }
     },

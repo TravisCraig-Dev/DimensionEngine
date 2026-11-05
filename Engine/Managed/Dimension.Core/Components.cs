@@ -1393,6 +1393,84 @@ namespace Dimension
         public float GetLayerWeight(int layer) => Query(7, layer);
         /// <summary>Sets an extra layer's weight (0-1; the base layer's is always 1), at once.</summary>
         public void SetLayerWeight(int layer, float weight) => Query(8, layer, null, weight);
+
+        private int Op(int op, int layer, string name, float* v)
+        {
+            var e = Entity;
+            return Native.WithUtf8<int>(name ?? "", p => Native.Api.AnimatorOp(e.Scene, e.Id, op, layer, (byte*)p, v));
+        }
+        private bool PlayState(string state, int layer, float fadeSeconds, float offset, bool fixedTime)
+        {
+            float* v = stackalloc float[3] { fadeSeconds, offset, fixedTime ? 1 : 0 };
+            return Op(0, layer, state, v) != 0;
+        }
+        /// <summary>
+        /// Plays a state of the controller on a layer (without a controller: a clip of the model) at once, from
+        /// `normalizedTime` into it (0.5: halfway). The state machine goes on from there (its transitions still apply).
+        /// False when there is no such state.
+        /// </summary>
+        public bool Play(string state, int layer, float normalizedTime = 0.0f) => PlayState(state, layer, 0.0f, normalizedTime, false);
+        /// <summary>
+        /// Fades into a state of the controller (or a clip without one) over `seconds` (this engine's CrossFade takes
+        /// seconds, as CrossFadeInFixedTime does, not Unity's fraction of the state), starting `normalizedTimeOffset`
+        /// into it. False when there is no such state.
+        /// </summary>
+        public bool CrossFade(string state, float seconds, int layer, float normalizedTimeOffset = 0.0f) => PlayState(state, layer, seconds, normalizedTimeOffset, false);
+        /// <summary>As CrossFade, with the start given in seconds into the state.</summary>
+        public bool CrossFadeInFixedTime(string state, float seconds, int layer = 0, float fixedTimeOffset = 0.0f) => PlayState(state, layer, seconds, fixedTimeOffset, true);
+        /// <summary>As Play, with the start given in seconds into the state.</summary>
+        public bool PlayInFixedTime(string state, int layer = 0, float fixedTime = 0.0f) => PlayState(state, layer, 0.0f, fixedTime, true);
+
+        private AnimatorStateInfo Info(int layer, int which)
+        {
+            float* v = stackalloc float[4] { which, 0, 0, 0 };
+            if (Op(1, layer, null, v) == 0) return default;
+            bool fading = IsInTransition(layer);
+            string name = which == 0 ? (fading ? PreviousState(layer) : (layer == 0 ? CurrentState : GetCurrentState(layer))) : (layer == 0 ? CurrentState : GetCurrentState(layer));
+            return new AnimatorStateInfo(name, v[0], v[1], v[2], v[3] != 0.0f);
+        }
+        /// <summary>The layer's state as of this frame's update (Unity's view: while fading, the state fading out; the
+        /// one coming in is <see cref="GetNextAnimatorStateInfo"/>).</summary>
+        public AnimatorStateInfo GetCurrentAnimatorStateInfo(int layer = 0) => Info(layer, 0);
+        /// <summary>The state being faded into (only while in a transition; otherwise IsValid is false).</summary>
+        public AnimatorStateInfo GetNextAnimatorStateInfo(int layer = 0) => Info(layer, 1);
+
+        /// <summary>The root joint's movement moves the object (or its Character Controller).</summary>
+        public bool ApplyRootMotion { get => GetBool("Apply Root Motion"); set => SetBool("Apply Root Motion", value); }
+        /// <summary>This frame's root motion (world space), in OnAnimatorMove or after the update.</summary>
+        public Vector3 DeltaPosition { get { float* v = stackalloc float[3]; Op(2, 0, null, v); return new Vector3(v[0], v[1], v[2]); } }
+        /// <summary>Moves the object by this frame's root motion as the Animator would (for OnAnimatorMove).</summary>
+        public void ApplyBuiltinRootMotion() => Move(DeltaPosition);
+        /// <summary>Moves the object by a world-space step the way root motion does (through its Character Controller).</summary>
+        public void Move(Vector3 worldDelta) { float* v = stackalloc float[3] { worldDelta.X, worldDelta.Y, worldDelta.Z }; Op(3, 0, null, v); }
+
+        /// <summary>A joint of the model's skeleton (by name, e.g. "Hand_R") in the world as last posed, or false when
+        /// there is no such joint (or nothing posed yet). Unity's GetBoneTransform, for any joint by name.</summary>
+        public bool GetBoneMatrix(string joint, out Matrix4x4 world)
+        {
+            float* v = stackalloc float[16];
+            world = Matrix4x4.Identity;
+            if (Op(4, 0, joint, v) == 0) return false;
+            // glm stores columns; System.Numerics' rows are those columns (row vectors), so the floats map one to one.
+            world = new Matrix4x4(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]);
+            return true;
+        }
+        public Vector3 GetBonePosition(string joint) => GetBoneMatrix(joint, out Matrix4x4 m) ? m.Translation : Vector3.Zero;
+        public Quaternion GetBoneRotation(string joint)
+        {
+            if (!GetBoneMatrix(joint, out Matrix4x4 m) || !Matrix4x4.Decompose(m, out _, out Quaternion r, out _)) return Quaternion.Identity;
+            return r;
+        }
+    }
+
+    /// <summary>An Animator layer's state as of this frame (Unity's AnimatorStateInfo).</summary>
+    public readonly record struct AnimatorStateInfo(string Name, float NormalizedTime, float Length, float SpeedMultiplier, bool Loop)
+    {
+        /// <summary>False when there is no such state (no controller or clip; GetNextAnimatorStateInfo outside a transition).</summary>
+        public bool IsValid => Name != null;
+        public bool IsName(string name) => Name == name;
+        /// <summary>Seconds into the current loop.</summary>
+        public float Time => Length * (Loop ? NormalizedTime - MathF.Floor(NormalizedTime) : MathF.Min(NormalizedTime, 1.0f));
     }
 
     public unsafe class ParticleSystem : Component
