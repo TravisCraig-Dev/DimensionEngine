@@ -97,6 +97,26 @@ namespace Dimension
         int FogSteps = 24;
     };
 
+    // UI pointer events for scripts (like Unity's IPointerEnterHandler and friends), sent to UI elements: Enter / Exit
+    // as the pointer comes over an element or its children and leaves; Down, Up and Click (released over what was
+    // pressed); BeginDrag, Drag (each frame it moves) and EndDrag once it moved kDragThreshold pixels while held, with
+    // Drop on what it is released over (while dragging, the pointer is over what lies beneath the dragged object);
+    // Select / Deselect as the UI selection changes; Scroll for the wheel.
+    enum class PointerEventKind : int { Enter, Exit, Down, Up, Click, BeginDrag, Drag, EndDrag, Drop, Select, Deselect, Scroll, Count };
+    struct PointerEventData
+    {
+        glm::vec2 Position{ 0.0f };      // render-target pixels, top-left origin
+        glm::vec2 Delta{ 0.0f };         // moved since last frame
+        glm::vec2 PressPosition{ 0.0f }; // where the button went down
+        float Scroll = 0.0f;             // wheel notches (positive = up)
+        int Button = 0;                  // 0 left
+        int ClickCount = 0;              // 2 for a double click (Click, and Down of the second press)
+        bool Dragging = false;
+        Entity Over = Entity::Null();    // the topmost UI element under the pointer
+        Entity Press = Entity::Null();   // what handled Down
+        Entity Drag = Entity::Null();    // what is being dragged (Drop: what was dropped)
+    };
+
     // A scene: an ECS registry plus hierarchy, identity (Guid) mapping and the
     // runtime systems (scripts, physics, audio) that run in play mode.
     class Scene
@@ -229,6 +249,10 @@ namespace Dimension
         bool IsPointerOverUI() const { return !m_UIHovered.IsNull(); }
         // The topmost UI element under the pointer this frame (Null when none).
         Entity GetUIHovered() const { return m_UIHovered; }
+        // Pixels the pointer must move while held before a drag begins (Unity's EventSystem drag threshold).
+        static constexpr float kDragThreshold = 10.0f;
+        // The UI element that pointer events go to under a point: the topmost one taking the pointer or handling them.
+        Entity PointerEventTarget(const glm::vec2& point);
         // The object whose collider is under the pointer (through the primary camera; not when over UI), as the
         // OnMouse* script events see it; Null when none.
         Entity GetObjectUnderPointer() const { return m_MouseOver; }
@@ -307,6 +331,10 @@ namespace Dimension
     private:
         void UpdateSpriteAnimators(float dt);
         void UpdateMouseEvents();
+        void UpdatePointerEvents(const glm::vec2& position, bool down, float scroll);
+        uint32_t PointerHandlers(Entity e);                        // the event kinds e's enabled scripts handle (bits)
+        Entity PointerHandler(Entity from, PointerEventKind kind); // from or the nearest parent handling `kind`
+        void SendPointerEvent(Entity e, PointerEventKind kind, const PointerEventData& data);
     public:
         // Advances Animator time by dt (0 = just evaluate the pose) and computes skinning matrices.
         void UpdateAnimators(float dt);
@@ -360,6 +388,15 @@ namespace Dimension
         Entity m_LastPrimaryCamera = Entity::Null();
         uint32_t m_CameraCuts = 0;
         bool m_MouseWasDown = false;
+        struct PointerTracking
+        {
+            std::vector<Entity> Hovered; // the element under the pointer and its parents
+            Entity Press, ClickTarget, DragTarget, LastClick, Selected;
+            glm::vec2 PressPosition{ 0.0f }, LastPosition{ 0.0f };
+            bool WasDown = false, Dragging = false, Started = false;
+            float LastClickTime = -1.0f;
+            int ClickCount = 0;
+        } m_Pointer;
         std::vector<Scope<System>> m_Systems;
         std::vector<LoadedScene> m_LoadedScenes;
         std::vector<Entity> m_Persistent;

@@ -51,6 +51,10 @@ namespace Dimension
         virtual void OnMouseUp() {}
         virtual void OnMouseUpAsButton() {}
         virtual void OnClick() {} // UI Button on this entity was clicked
+        // UI pointer events (see PointerEventKind) on this UI element, or bubbled up from its children to the nearest
+        // object handling them. Only the kinds whose bits (1 << kind) PointerEventMask returns are sent.
+        virtual uint32_t PointerEventMask() const { return 0; }
+        virtual void OnPointerEvent(PointerEventKind kind, const PointerEventData& data) {}
         virtual void OnUIValueChanged(float value) {}              // UI Slider value, or UI Toggle (1 = on)
         virtual void OnUITextChanged(const std::string& text) {}   // UI Input Field edited
         virtual void OnUISubmit(const std::string& text) {}        // UI Input Field: Enter pressed

@@ -727,13 +727,13 @@ namespace Dimension::UI
         return order;
     }
 
-    std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screen)
+    std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screen, const std::function<bool(Entity)>& alsoTakes)
     {
         auto& reg = scene.GetRegistry();
         auto order = ComputeLayout(scene, screen);
         std::vector<Entity> under;
         for (auto it = order.rbegin(); it != order.rend(); ++it)
-            if (BlocksPointer(reg, *it) && Contains(reg.Get<UIRectComponent>(*it), point)) under.push_back(*it);
+            if ((BlocksPointer(reg, *it) || (alsoTakes && alsoTakes(*it))) && Contains(reg.Get<UIRectComponent>(*it), point)) under.push_back(*it);
         return under;
     }
 

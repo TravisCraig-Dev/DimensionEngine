@@ -6121,6 +6121,87 @@ namespace
         void OnClick() override { ++Clicks; }
     };
 
+    // Records the UI pointer events it gets ("Name:Kind ..."), handling those in Mask.
+    class PointerProbe : public ScriptableEntity
+    {
+    public:
+        static inline std::string Log;
+        int Mask = 0x0FFF;
+        uint32_t PointerEventMask() const override { return (uint32_t)Mask; }
+        void OnPointerEvent(PointerEventKind kind, const PointerEventData& d) override
+        {
+            static const char* names[] = { "Enter", "Exit", "Down", "Up", "Click", "BeginDrag", "Drag", "EndDrag", "Drop", "Select", "Deselect", "Scroll" };
+            Log += GetScene().GetRegistry().Get<TagComponent>(Self()).Name + ":" + names[(int)kind];
+            if (kind == PointerEventKind::Click) Log += std::to_string(d.ClickCount);
+            if (kind == PointerEventKind::Drop) Log += "(" + GetScene().GetRegistry().Get<TagComponent>(d.Drag).Name + ")";
+            Log += " ";
+        }
+    };
+
+    // Pointer events: Enter / Exit along the hierarchy, Down / Up / Click bubbling to the nearest handler, double clicks,
+    // drags past the threshold (no click; Drop beneath the dragged object), scroll, and Select / Deselect.
+    void TestPointerEvents()
+    {
+        Scene scene("Pointer");
+        auto& reg = scene.GetRegistry();
+        Entity canvas = scene.CreateEntity("Canvas");
+        reg.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+        auto rect = [&](const char* name, Entity parent, glm::vec2 at, glm::vec2 size) {
+            Entity e = scene.CreateEntity(name, parent);
+            auto& r = reg.Emplace<UIRectComponent>(e);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+            r.Position = at;
+            r.Size = size;
+            return e;
+        };
+        Entity panel = rect("Panel", canvas, { 0, 0 }, { 300, 300 }); // no image: takes the pointer for its script
+        Entity label = rect("Label", panel, { 10, 10 }, { 100, 40 });  // under the panel's script: events bubble up
+        reg.Emplace<UITextComponent>(label).Text = "x";
+        Entity slot = rect("Slot", canvas, { 400, 0 }, { 100, 100 });
+        reg.Emplace<UIImageComponent>(slot);
+        Entity item = rect("Item", canvas, { 10, 200 }, { 50, 50 });
+        reg.Emplace<UIImageComponent>(item);
+        reg.Emplace<UIButtonComponent>(item); // selectable: a click selects it
+        reg.Emplace<ScriptComponent>(panel).Add("PointerProbe");
+        reg.Emplace<ScriptComponent>(slot).Add("PointerProbe");
+        reg.Emplace<ScriptComponent>(item).Add("PointerProbe");
+        scene.UpdateTransforms();
+        scene.OnRuntimeStart();
+        auto frame = [&](glm::vec2 at, bool down, float scroll = 0.0f) {
+            PointerProbe::Log.clear();
+            scene.SetUIInput(at, down, { 800, 600 }, true, scroll);
+            scene.OnUpdateRuntime(0.05f);
+            if (!PointerProbe::Log.empty()) PointerProbe::Log.pop_back();
+            return PointerProbe::Log;
+        };
+        CHECK(frame({ 700, 500 }, false).empty());
+        CHECK(frame({ 20, 20 }, false) == "Panel:Enter");   // over the label: the panel (its parent) is entered
+        CHECK(frame({ 20, 20 }, true) == "Panel:Down");
+        CHECK(frame({ 22, 21 }, false) == "Panel:Up Panel:Click1"); // moved less than the drag threshold
+        CHECK(frame({ 22, 21 }, true) == "Panel:Down");
+        CHECK(frame({ 22, 21 }, false) == "Panel:Up Panel:Click2"); // within 0.3 s: a double click
+        CHECK(frame({ 22, 21 }, false, 1.0f) == "Panel:Scroll");
+        // Onto the item (a child of the canvas, not the panel): the panel is left.
+        CHECK(frame({ 30, 220 }, false) == "Panel:Exit Item:Enter");
+        CHECK(frame({ 30, 220 }, true) == "Item:Down Item:Select"); // the click selects the button
+        CHECK(frame({ 35, 222 }, true).empty());                    // under the threshold: no drag yet
+        CHECK(frame({ 60, 220 }, true) == "Item:BeginDrag Item:Drag");
+        // Dragged over the slot (the item would follow the pointer; the slot beneath is what the pointer is over).
+        reg.Get<UIRectComponent>(item).Position = { 420, 20 };
+        CHECK(frame({ 440, 40 }, true) == "Item:Exit Slot:Enter Item:Drag");
+        CHECK(frame({ 440, 40 }, false) == "Item:Up Slot:Drop(Item) Item:EndDrag"); // no click after a drag
+        CHECK(frame({ 440, 40 }, false) == "Slot:Exit Item:Enter");                // the item is on top again
+        // A click elsewhere clears the selection.
+        CHECK(frame({ 700, 500 }, true) == "Item:Exit Item:Deselect");
+        frame({ 700, 500 }, false);
+        // Handlers only get the kinds they ask for: without Enter the panel is skipped, and the press still bubbles.
+        static_cast<PointerProbe&>(*reg.Get<ScriptComponent>(panel).Scripts[0].Instance).Mask = 1 << (int)PointerEventKind::Down;
+        CHECK(frame({ 20, 20 }, false).empty());
+        CHECK(frame({ 20, 20 }, true) == "Panel:Down");
+        CHECK(frame({ 20, 20 }, false).empty());
+        scene.OnRuntimeStop();
+    }
+
     void TestUI()
     {
         Scene scene("UI");
@@ -9558,6 +9639,58 @@ namespace
             text = frame({ 600, 500 }, true);
             CHECK(rt->GetUISelected().IsNull() && text == "Pointer over the game; selected: none (Tab)");
             Input::SetGameInputEnabled(gameInput);
+            rt->OnRuntimeStop();
+        }
+        // C# UI pointer events: the Sandbox's UIDragItem is dragged (OnBeginDrag / OnDrag / OnEndDrag) onto a UIDropSlot
+        // (OnDrop centers it and names the slot), dropped on nothing it goes back, and a double click sends it home.
+        {
+            Scene dd("Drag");
+            auto& dr = dd.GetRegistry();
+            Entity canvas = dd.CreateEntity("Canvas");
+            dr.Emplace<CanvasComponent>(canvas).ScaleMode = CanvasScaleMode::ConstantPixelSize;
+            auto rect = [&](const char* name, glm::vec2 at, glm::vec2 size) {
+                Entity e = dd.CreateEntity(name, canvas);
+                auto& r = dr.Emplace<UIRectComponent>(e);
+                r.AnchorMin = r.AnchorMax = r.Pivot = { 0, 0 };
+                r.Position = at;
+                r.Size = size;
+                dr.Emplace<UIImageComponent>(e);
+                return e;
+            };
+            Entity label = dd.CreateEntity("Label", canvas);
+            dr.Emplace<UIRectComponent>(label).Position = { 0, 400 };
+            dr.Emplace<UITextComponent>(label).Text = "";
+            Entity slotA = rect("Slot A", { 0, 0 }, { 100, 100 });
+            Entity slotB = rect("Slot B", { 200, 0 }, { 100, 100 });
+            Entity coin = rect("Coin", { 20, 20 }, { 60, 60 });
+            for (Entity s : { slotA, slotB })
+                dr.Emplace<ScriptComponent>(s).Add("Game.UIDropSlot").Fields["Label"] = (uint64_t)dd.GetGuid(label);
+            dr.Emplace<ScriptComponent>(coin).Add("Game.UIDragItem");
+            dd.UpdateTransforms();
+            auto rt = dd.Clone();
+            rt->OnRuntimeStart();
+            auto frame = [&](glm::vec2 at, bool down) {
+                rt->SetUIInput(at, down, { 800, 600 });
+                rt->OnUpdateRuntime(0.05f);
+            };
+            auto at = [&] { return rt->GetRegistry().Get<UIRectComponent>(coin).Position; };
+            frame({ 50, 50 }, false);
+            frame({ 50, 50 }, true);
+            frame({ 80, 50 }, true);  // past the threshold: the drag begins and the coin follows (+30)
+            CHECK(at() == glm::vec2(50, 20));
+            frame({ 250, 50 }, true);
+            frame({ 250, 50 }, false); // released over Slot B, beneath the coin
+            CHECK(at() == glm::vec2(220, 20) && rt->GetRegistry().Get<UITextComponent>(label).Text == "Coin is in Slot B");
+            frame({ 250, 50 }, true);
+            frame({ 250, 300 }, true);
+            frame({ 250, 300 }, false); // dropped on nothing: back to Slot B
+            CHECK(at() == glm::vec2(220, 20));
+            for (int i = 0; i < 2; ++i)
+            {
+                frame({ 250, 50 }, true);
+                frame({ 250, 50 }, false);
+            }
+            CHECK(at() == glm::vec2(20, 20)); // double click: home
             rt->OnRuntimeStop();
         }
         // C# events: a label's script listens to another entity's UI Button (which has no script) and unsubscribes
@@ -13234,6 +13367,7 @@ int main(int argc, char** argv)
     if (argc > 1) g_Filter = argv[1];
     ComponentRegistry::RegisterBuiltins();
     ScriptRegistry::Register<ClickCounter>("ClickCounter");
+    ScriptRegistry::Register<PointerProbe>("PointerProbe");
     ScriptRegistry::Register<CoroutineProbe>("CoroutineProbe");
     ScriptRegistry::Register<CharacterProbe>("CharacterProbe");
     ScriptRegistry::Register<TimerProbe>("TimerProbe");
@@ -13294,6 +13428,7 @@ int main(int argc, char** argv)
     Run("Reflection JSON", TestReflectionJson);
     Run("Material round trip", TestMaterialRoundTrip);
     Run("UI layout and clicks", TestUI);
+    Run("UI pointer events", TestPointerEvents);
     Run("UI widgets", TestUIWidgets);
     Run("UI dropdown and scrollbar", TestUIDropdownAndScrollbar);
     Run("UI text editing", TestUITextEditing);

@@ -733,6 +733,13 @@ namespace Dimension
                                            nameof(Behaviour.OnMouseDown), nameof(Behaviour.OnMouseDrag), nameof(Behaviour.OnMouseUp),
                                            nameof(Behaviour.OnMouseUpAsButton) };
                         if (mouse.Any(Overrides)) w.WriteBoolean("mouseEvents", true);
+                        // UI pointer events, by PointerEventKind bit: only the overridden ones are sent.
+                        uint pointer = 0;
+                        for (int k = 0; k < PointerEventData.MethodNames.Length; ++k)
+                            if (type.GetMethod(PointerEventData.MethodNames[k], BindingFlags.Public | BindingFlags.Instance, new[] { typeof(PointerEventData) })
+                                    ?.DeclaringType != typeof(Behaviour))
+                                pointer |= 1u << k;
+                        if (pointer != 0) w.WriteNumber("pointerEvents", pointer);
                         w.WriteStartArray("contextMenu");
                         for (Type t = type; t != null && t != typeof(Behaviour); t = t.BaseType)
                             foreach (MethodInfo m in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
@@ -1084,6 +1091,43 @@ namespace Dimension
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }
+        }
+
+        // data: position xy, delta xy, press position xy, scroll, button, click count, dragging; ids: over, press, drag.
+        [UnmanagedCallersOnly]
+        internal static void InvokePointer(IntPtr handle, int kind, float* data, ulong* ids)
+        {
+            Behaviour b = null;
+            try
+            {
+                b = (Behaviour)GCHandle.FromIntPtr(handle).Target;
+                IntPtr scene = b.Entity.Scene;
+                Native.CurrentScene = scene;
+                Entity E(ulong id) => id == ulong.MaxValue ? Entity.Null : new Entity(scene, id);
+                var e = new PointerEventData
+                {
+                    Position = new Vector2(data[0], data[1]), Delta = new Vector2(data[2], data[3]),
+                    PressPosition = new Vector2(data[4], data[5]), ScrollDelta = data[6], Button = (int)data[7],
+                    ClickCount = (int)data[8], Dragging = data[9] != 0.0f,
+                    PointerEnter = E(ids[0]), PointerPress = E(ids[1]), PointerDrag = E(ids[2]),
+                };
+                switch (kind)
+                {
+                    case 0: b.OnPointerEnter(e); break;
+                    case 1: b.OnPointerExit(e); break;
+                    case 2: b.OnPointerDown(e); break;
+                    case 3: b.OnPointerUp(e); break;
+                    case 4: b.OnPointerClick(e); break;
+                    case 5: b.OnBeginDrag(e); break;
+                    case 6: b.OnDrag(e); break;
+                    case 7: b.OnEndDrag(e); break;
+                    case 8: b.OnDrop(e); break;
+                    case 9: b.OnSelect(e); break;
+                    case 10: b.OnDeselect(e); break;
+                    case 11: b.OnScroll(e); break;
+                }
+            }
+            catch (Exception ex) { Debug.LogError($"{b?.GetType().Name}: {ex}"); }
         }
 
         private static IntPtr s_FieldsBuffer; // the last GetFields result (native reads it before the next call)

@@ -57,7 +57,9 @@ namespace Dimension
 
         // The UI elements that take the pointer (widgets and images, not text) under a point (render-target pixels),
         // topmost first, as laid out now.
-        std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screenSize);
+        // `alsoTakes`: elements that take the pointer too (those with pointer-event scripts).
+        std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screenSize,
+                                       const std::function<bool(Entity)>& alsoTakes = {});
 
         void BuildDrawList(Scene& scene, const glm::vec2& screenSize, std::vector<DrawCommand>& out);
 

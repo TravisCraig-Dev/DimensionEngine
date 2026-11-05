@@ -887,6 +887,7 @@ namespace Dimension
             m_UIInjectedText.clear();
             m_UIInjectedBackspace = m_UIInjectedEnter = false;
             m_UIHovered = UI::Update(*this, pointer, m_UIScreen, unscaledDt); // menus work while the game is frozen
+            UpdatePointerEvents(m_UIPointer, m_UIDown, m_UIScroll);
             // A focused text field keeps the keys from gameplay (WASD while typing a name must not move the player).
             bool typing = false;
             for (auto [e, field] : m_Registry.ViewOf<UIInputFieldComponent>()) typing |= field.Focused;
@@ -1553,6 +1554,158 @@ namespace Dimension
             if (pressed == over) send(pressed, [](ScriptableEntity& s) { s.OnMouseUpAsButton(); });
         }
         m_MouseWasDown = down;
+    }
+
+    uint32_t Scene::PointerHandlers(Entity e)
+    {
+        if (!IsValid(e) || !IsActiveInHierarchy(e)) return 0;
+        auto* sc = m_Registry.TryGet<ScriptComponent>(e);
+        if (!sc) return 0;
+        uint32_t mask = 0;
+        for (auto& s : sc->Scripts)
+            if (s.Instance && s.Enabled) mask |= s.Instance->PointerEventMask();
+        return mask;
+    }
+
+    Entity Scene::PointerHandler(Entity from, PointerEventKind kind)
+    {
+        for (Entity e = from; IsValid(e); e = GetParent(e))
+            if (PointerHandlers(e) & (1u << (int)kind)) return e;
+        return Entity::Null();
+    }
+
+    void Scene::SendPointerEvent(Entity e, PointerEventKind kind, const PointerEventData& data)
+    {
+        if (!(PointerHandlers(e) & (1u << (int)kind))) return;
+        for (auto& inst : m_Registry.Get<ScriptComponent>(e).LiveInstances(true))
+            if (inst->PointerEventMask() & (1u << (int)kind)) inst->OnPointerEvent(kind, data);
+    }
+
+    Entity Scene::PointerEventTarget(const glm::vec2& point)
+    {
+        auto under = UI::ElementsAt(*this, point, m_UIScreen, [this](Entity e) { return PointerHandlers(e) != 0; });
+        return under.empty() ? Entity::Null() : under.front();
+    }
+
+    // Unity's EventSystem pointer events (see PointerEventKind). Events go to the target element or bubble to the
+    // nearest parent handling them; Enter / Exit go to each object the pointer came over or left (its parents too).
+    void Scene::UpdatePointerEvents(const glm::vec2& position, bool down, float scroll)
+    {
+        DIM_PROFILE_SCOPE("Pointer Events");
+        PointerTracking& p = m_Pointer;
+        bool any = false;
+        for (auto [e, sc] : m_Registry.ViewOf<ScriptComponent>())
+        {
+            for (auto& s : sc.Scripts) any |= s.Instance && s.Instance->PointerEventMask() != 0;
+            if (any) break;
+        }
+        if (!any)
+        {
+            p = PointerTracking{};
+            p.Selected = m_UISelected;
+            p.WasDown = down;
+            return;
+        }
+
+        PointerEventData data;
+        data.Position = position;
+        data.Delta = p.Started ? position - p.LastPosition : glm::vec2(0.0f);
+        data.PressPosition = p.PressPosition;
+        data.Scroll = scroll;
+        // While dragging, what is under the pointer beneath the dragged object (which usually follows the pointer), so
+        // slots see it come and Drop goes to them.
+        auto inDragged = [&](Entity e) {
+            for (; IsValid(e); e = GetParent(e))
+                if (e == p.DragTarget) return true;
+            return false;
+        };
+        for (Entity e : UI::ElementsAt(*this, position, m_UIScreen, [this](Entity e) { return PointerHandlers(e) != 0; }))
+            if (!p.Dragging || !inDragged(e)) { data.Over = e; break; }
+        data.Press = p.Press;
+        data.Drag = p.DragTarget;
+        data.Dragging = p.Dragging;
+        data.ClickCount = p.ClickCount;
+        p.Started = true;
+
+        // Enter / Exit: the objects under the pointer are the target and its parents.
+        std::vector<Entity> chain;
+        for (Entity e = data.Over; IsValid(e); e = GetParent(e)) chain.push_back(e);
+        std::vector<Entity> left, entered;
+        for (Entity e : p.Hovered)
+            if (std::find(chain.begin(), chain.end(), e) == chain.end()) left.push_back(e);
+        for (Entity e : chain)
+            if (std::find(p.Hovered.begin(), p.Hovered.end(), e) == p.Hovered.end()) entered.push_back(e);
+        p.Hovered = chain;
+        for (Entity e : left) SendPointerEvent(e, PointerEventKind::Exit, data);
+        for (auto it = entered.rbegin(); it != entered.rend(); ++it) SendPointerEvent(*it, PointerEventKind::Enter, data);
+
+        if (down && !p.WasDown)
+        {
+            // A second press on the same thing within 0.3 s counts as a double click.
+            Entity clickable = PointerHandler(data.Over, PointerEventKind::Click);
+            bool again = m_UnscaledTime - p.LastClickTime < 0.3f && !p.LastClick.IsNull() && clickable == p.LastClick;
+            p.ClickCount = again ? p.ClickCount + 1 : 1;
+            p.PressPosition = position;
+            p.ClickTarget = clickable;
+            p.Press = PointerHandler(data.Over, PointerEventKind::Down);
+            if (p.Press.IsNull()) p.Press = PointerHandler(data.Over, PointerEventKind::Up);
+            p.DragTarget = PointerHandler(data.Over, PointerEventKind::Drag);
+            if (p.DragTarget.IsNull()) p.DragTarget = PointerHandler(data.Over, PointerEventKind::BeginDrag);
+            p.Dragging = false;
+            data.PressPosition = position;
+            data.Press = p.Press;
+            data.Drag = p.DragTarget;
+            data.ClickCount = p.ClickCount;
+            SendPointerEvent(p.Press, PointerEventKind::Down, data);
+        }
+        if (down && IsValid(p.DragTarget))
+        {
+            if (!p.Dragging && glm::length(position - p.PressPosition) >= kDragThreshold)
+            {
+                // A drag begins: what was pressed (unless it is the dragged object) gets its Up, and there is no click.
+                p.Dragging = true;
+                data.Dragging = true;
+                if (p.Press != p.DragTarget)
+                {
+                    SendPointerEvent(p.Press, PointerEventKind::Up, data);
+                    p.Press = Entity::Null();
+                }
+                p.ClickTarget = Entity::Null();
+                data.Press = p.Press;
+                SendPointerEvent(p.DragTarget, PointerEventKind::BeginDrag, data);
+            }
+            if (p.Dragging && data.Delta != glm::vec2(0.0f)) SendPointerEvent(p.DragTarget, PointerEventKind::Drag, data);
+        }
+        if (!down && p.WasDown)
+        {
+            SendPointerEvent(p.Press, PointerEventKind::Up, data);
+            if (!p.ClickTarget.IsNull() && PointerHandler(data.Over, PointerEventKind::Click) == p.ClickTarget)
+            {
+                SendPointerEvent(p.ClickTarget, PointerEventKind::Click, data);
+                p.LastClick = p.ClickTarget;
+                p.LastClickTime = m_UnscaledTime;
+            }
+            if (p.Dragging)
+            {
+                SendPointerEvent(PointerHandler(data.Over, PointerEventKind::Drop), PointerEventKind::Drop, data);
+                data.Dragging = false;
+                SendPointerEvent(p.DragTarget, PointerEventKind::EndDrag, data);
+            }
+            p.Press = p.ClickTarget = p.DragTarget = Entity::Null();
+            p.Dragging = false;
+        }
+        if (scroll != 0.0f) SendPointerEvent(PointerHandler(data.Over, PointerEventKind::Scroll), PointerEventKind::Scroll, data);
+
+        // Select / Deselect as the UI selection changes (clicks, navigation, EventSystem.SetSelected).
+        if (m_UISelected != p.Selected)
+        {
+            Entity before = p.Selected;
+            p.Selected = m_UISelected;
+            SendPointerEvent(before, PointerEventKind::Deselect, data);
+            SendPointerEvent(p.Selected, PointerEventKind::Select, data);
+        }
+        p.WasDown = down;
+        p.LastPosition = position;
     }
 
     void Scene::SetUIInput(const glm::vec2& pointer, bool down, const glm::vec2& screenSize, bool valid, float scroll)

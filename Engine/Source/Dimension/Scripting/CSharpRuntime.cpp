@@ -319,6 +319,9 @@ namespace Dimension
             void (*InvokeCollision)(intptr_t, int, uint64_t, const float*, int);
             // Coroutines of the scene's scripts waiting for a point in the frame: 0 after a physics step, 1 its end.
             void (*CoroutinePhase)(void*, int);
+            // A UI pointer event (PointerEventKind): position xy, delta xy, press position xy, scroll, button, click
+            // count, dragging; the elements under the pointer, pressed and dragged (packed, ~0 none).
+            void (*InvokePointer)(intptr_t, int, const float*, const uint64_t*);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -530,6 +533,7 @@ namespace Dimension
             bool HasTriggerStay = false;      // overrides OnTriggerStay
             bool HasControllerHit = false;    // overrides OnControllerColliderHit (called for every move's hits)
             bool HasMouseEvents = false;      // overrides an OnMouse* callback
+            uint32_t PointerEvents = 0;       // the UI pointer events it overrides (bits of PointerEventKind)
             std::vector<std::string> ContextMenu;
         };
 
@@ -925,6 +929,16 @@ namespace Dimension
             void OnMouseUp() override { Mouse(15); }
             void OnMouseUpAsButton() override { Mouse(16); }
             void Mouse(int method) { if (m_Handle && m_Class->HasMouseEvents) s_Managed.Invoke(m_Handle, method, 0.0f); }
+            uint32_t PointerEventMask() const override { return m_Handle ? m_Class->PointerEvents : 0; }
+            void OnPointerEvent(PointerEventKind kind, const PointerEventData& d) override
+            {
+                if (!m_Handle) return;
+                float data[10] = { d.Position.x, d.Position.y, d.Delta.x, d.Delta.y, d.PressPosition.x, d.PressPosition.y,
+                                   d.Scroll, (float)d.Button, (float)d.ClickCount, d.Dragging ? 1.0f : 0.0f };
+                auto id = [this](Entity e) { return e.IsNull() || !GetScene().IsValid(e) ? ~0ull : Pack(e); };
+                uint64_t entities[3] = { id(d.Over), id(d.Press), id(d.Drag) };
+                s_Managed.InvokePointer(m_Handle, (int)kind, data, entities);
+            }
 
         private:
             const ManagedClass* m_Class;
@@ -945,6 +959,7 @@ namespace Dimension
                 cls.HasTriggerStay = j.value("triggerStay", false);
                 cls.HasControllerHit = j.value("controllerHit", false);
                 cls.HasMouseEvents = j.value("mouseEvents", false);
+                cls.PointerEvents = j.value("pointerEvents", 0u);
                 for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
                 for (auto& f : j.at("fields")) cls.Drawn.push_back(f.value("drawer", false));
 

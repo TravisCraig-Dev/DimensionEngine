@@ -2133,6 +2133,325 @@
       }
     },
     {
+      "guid": 850020,
+      "parent": 850010,
+      "components": {
+        "Tag": {
+          "Name": "Slot A",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            32,
+            -40
+          ],
+          "Size": [
+            100,
+            100
+          ]
+        },
+        "UI Image": {
+          "Image": 100041,
+          "Color": [
+            0.12,
+            0.13,
+            0.17,
+            0.85
+          ],
+          "Image Type": 1,
+          "Border": [
+            16,
+            16,
+            16,
+            16
+          ],
+          "Border Scale": 0.5
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.UIDropSlot",
+              "Fields": {
+                "Label": 850023,
+                "HoverColor": [
+                  0.35,
+                  0.55,
+                  0.9,
+                  1.0
+                ]
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 850021,
+      "parent": 850010,
+      "components": {
+        "Tag": {
+          "Name": "Slot B",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            152,
+            -40
+          ],
+          "Size": [
+            100,
+            100
+          ]
+        },
+        "UI Image": {
+          "Image": 100041,
+          "Color": [
+            0.12,
+            0.13,
+            0.17,
+            0.85
+          ],
+          "Image Type": 1,
+          "Border": [
+            16,
+            16,
+            16,
+            16
+          ],
+          "Border Scale": 0.5
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.UIDropSlot",
+              "Fields": {
+                "Label": 850023,
+                "HoverColor": [
+                  0.35,
+                  0.55,
+                  0.9,
+                  1.0
+                ]
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "guid": 850023,
+      "parent": 850010,
+      "components": {
+        "Tag": {
+          "Name": "Bag Label",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            32,
+            -150
+          ],
+          "Size": [
+            600,
+            40
+          ]
+        },
+        "UI Text": {
+          "Text": "Drag the crate between the slots (double-click: back)",
+          "Font": 0,
+          "Font Size": 24,
+          "Color": [
+            1,
+            1,
+            1,
+            0.8
+          ],
+          "Alignment": 0,
+          "Vertical Alignment": 0,
+          "Wrap": false
+        }
+      }
+    },
+    {
+      "guid": 850022,
+      "parent": 850010,
+      "components": {
+        "Tag": {
+          "Name": "Crate",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "UI Rect": {
+          "Anchor Min": [
+            0,
+            1
+          ],
+          "Anchor Max": [
+            0,
+            1
+          ],
+          "Pivot": [
+            0,
+            1
+          ],
+          "Position": [
+            52,
+            -60
+          ],
+          "Size": [
+            60,
+            60
+          ]
+        },
+        "UI Image": {
+          "Image": 100011,
+          "Color": [
+            0.85,
+            0.85,
+            0.85,
+            1
+          ],
+          "Image Type": 0,
+          "Border": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "Border Scale": 1.0
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Game.UIDragItem",
+              "Fields": {
+                "HoverColor": [
+                  1.0,
+                  0.9,
+                  0.5,
+                  1.0
+                ]
+              },
+              "Enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "guid": 850016,
       "parent": 850010,
       "components": {

@@ -65,6 +65,34 @@ namespace Dimension
         public virtual void OnMouseUpAsButton() { }
         /// <summary>Called when a UI Button on this entity is clicked.</summary>
         public virtual void OnClick() { }
+        // UI pointer events (Unity's IPointerEnterHandler, IDragHandler, ...) on this UI element, or bubbled up from its
+        // children to the nearest object handling them (Enter / Exit go to every object the pointer comes over or
+        // leaves). A UI Rect with such a script takes the pointer even without an image. While something is dragged the
+        // pointer is over what lies beneath it, so drop slots get Enter / Exit / Drop. Only overridden ones are sent.
+        /// <summary>The pointer came over this element (or one of its children).</summary>
+        public virtual void OnPointerEnter(PointerEventData e) { }
+        /// <summary>The pointer left this element and its children.</summary>
+        public virtual void OnPointerExit(PointerEventData e) { }
+        /// <summary>The button went down over it.</summary>
+        public virtual void OnPointerDown(PointerEventData e) { }
+        /// <summary>The button pressed on it was released (anywhere; at once when a drag of something else begins).</summary>
+        public virtual void OnPointerUp(PointerEventData e) { }
+        /// <summary>Pressed and released over it without dragging; e.ClickCount is 2 for a double click.</summary>
+        public virtual void OnPointerClick(PointerEventData e) { }
+        /// <summary>The pointer moved PointerEventData.DragThreshold pixels while held after pressing on it.</summary>
+        public virtual void OnBeginDrag(PointerEventData e) { }
+        /// <summary>Every frame the pointer moves while dragging it (e.Delta: how far).</summary>
+        public virtual void OnDrag(PointerEventData e) { }
+        /// <summary>The drag ended (released), after OnDrop on what it was released over.</summary>
+        public virtual void OnEndDrag(PointerEventData e) { }
+        /// <summary>Something dragged (e.PointerDrag) was released over it.</summary>
+        public virtual void OnDrop(PointerEventData e) { }
+        /// <summary>It became the selected UI element (click, navigation, EventSystem.SetSelected).</summary>
+        public virtual void OnSelect(PointerEventData e) { }
+        /// <summary>It stopped being the selected UI element.</summary>
+        public virtual void OnDeselect(PointerEventData e) { }
+        /// <summary>The mouse wheel turned over it (e.ScrollDelta notches, positive away from you).</summary>
+        public virtual void OnScroll(PointerEventData e) { }
         /// <summary>Called when a UI Slider (its value), UI Toggle (1 = on, 0 = off) or UI Dropdown (option index) on this entity changes.</summary>
         public virtual void OnValueChanged(float value) { }
         /// <summary>Called when a Joint or Joint 2D on this entity breaks (its Break Force/Torque was exceeded).</summary>
@@ -940,6 +968,37 @@ namespace Dimension
                 if (NameToLayer(n) is int layer and >= 0) mask |= 1u << layer;
             return mask;
         }
+    }
+
+    /// <summary>A UI pointer event's details (Unity's PointerEventData). Positions in pixels, top-left origin.</summary>
+    public sealed class PointerEventData
+    {
+        /// <summary>How far (pixels) the pointer moves while held before a drag begins.</summary>
+        public const float DragThreshold = 10.0f;
+        internal static readonly string[] MethodNames =
+        {
+            nameof(Behaviour.OnPointerEnter), nameof(Behaviour.OnPointerExit), nameof(Behaviour.OnPointerDown), nameof(Behaviour.OnPointerUp),
+            nameof(Behaviour.OnPointerClick), nameof(Behaviour.OnBeginDrag), nameof(Behaviour.OnDrag), nameof(Behaviour.OnEndDrag),
+            nameof(Behaviour.OnDrop), nameof(Behaviour.OnSelect), nameof(Behaviour.OnDeselect), nameof(Behaviour.OnScroll),
+        };
+
+        public Vector2 Position { get; init; }
+        /// <summary>How far it moved since last frame.</summary>
+        public Vector2 Delta { get; init; }
+        /// <summary>Where the button went down.</summary>
+        public Vector2 PressPosition { get; init; }
+        public float ScrollDelta { get; init; }
+        /// <summary>0: the left button.</summary>
+        public int Button { get; init; }
+        /// <summary>1 for a click, 2 for a double click (presses on the same thing within 0.3 s).</summary>
+        public int ClickCount { get; init; }
+        public bool Dragging { get; init; }
+        /// <summary>The topmost UI element under the pointer (while dragging: beneath the dragged object).</summary>
+        public Entity PointerEnter { get; init; }
+        /// <summary>What handled the press (OnPointerDown).</summary>
+        public Entity PointerPress { get; init; }
+        /// <summary>What is being dragged (in OnDrop: what was dropped).</summary>
+        public Entity PointerDrag { get; init; }
     }
 
     /// <summary>
