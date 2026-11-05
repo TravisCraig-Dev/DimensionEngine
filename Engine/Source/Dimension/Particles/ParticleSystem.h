@@ -76,6 +76,7 @@ namespace Dimension
         // of up to 262,144 particles); velocity over lifetime and acting as a sub emitter's source stay CPU-only (a GPU
         // system can be a sub emitter's target).
         bool SimulateOnGpu = false;
+        bool Lit = false; // the scene's lights shade it (ambient, the sun with its shadow, point and spot lights)
         bool GpuSorting = true; // GPU systems with Alpha blend draw back to front (a GPU sort per view)
 
         // Emission

@@ -63,6 +63,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Gp
     mat4 TerrainToWorld;
     uvec4 TerrainInfo;   // xy TerrainHeightsRef address, z samples per side, w 1 = on
     vec4 TerrainSize;    // xy size along X and Z
+    vec4 Lighting;       // x 1 = lit by the scene's lights (ParticleLighting.glsl)
 };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TerrainHeightsRef { float Heights[]; };
 // Collision decals: the frame's first impacts (count, then position, normal and color per hit), read back by the CPU.

@@ -348,6 +348,7 @@ namespace Dimension
             .Field("Simulation Space", &PS::SimulationSpace).Enum({ "Local", "World" })
             .Field("GPU Sorting", &PS::GpuSorting).Tooltip("Alpha-blended GPU particles draw back to front (sorted on the GPU for each view)")
             .Field("Simulate On GPU", &PS::SimulateOnGpu)
+            .Field("Lit", &PS::Lit).Tooltip("Shaded by the scene's lights: ambient, the sun and its shadow, point and spot lights (smoke, dust)")
                 .Tooltip("A compute shader simulates the particles (up to a million). Not on the GPU: Velocity over Lifetime,\n"
                          "World collision, Trails, and triggering a Sub Emitter")
             .Field("Rate Over Time", &PS::RateOverTime).Range(0.0f, 100000.0f).Speed(0.5f)

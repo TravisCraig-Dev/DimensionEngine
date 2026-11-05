@@ -146,6 +146,8 @@ namespace Dimension
         };
 
         glm::uvec2 SplitAddress(VkDeviceAddress a) { return { (uint32_t)a, (uint32_t)(a >> 32) }; }
+        // On a sprite vertex's texture index: the scene's lights shade it (lit CPU particles; see Sprite.vert).
+        constexpr uint32_t kLitSpriteBit = 0x20000000u;
         static_assert(sizeof(SceneUniforms) <= RenderDevice::kUniformBlockSize);
 
         struct MeshPush
@@ -3456,6 +3458,7 @@ namespace Dimension
             if (LayerCulled(scene, e)) continue;
             auto tex = ps.Texture.IsValid() ? AssetManager::GetTexture(ps.Texture) : nullptr;
             uint32_t texture = (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex();
+            if (ps.Lit) texture |= kLitSpriteBit; // Sprite.vert lights it
             bool local = ps.SimulationSpace == ParticleSpace::Local;
             float worldScale = local ? glm::length(glm::vec3(t.World[0])) : 1.0f;
             uint32_t trailTexture = AssetManager::GetParticleTexture()->GetBindlessIndex();
@@ -3747,6 +3750,7 @@ namespace Dimension
             glm::mat4 TerrainToLocal, TerrainToWorld;
             glm::uvec4 TerrainInfo;
             glm::vec4 TerrainSize;
+            glm::vec4 Lighting; // x 1 = lit
         };
         // Collision decal hits read back per GPU system: a ring of buffers, one per frame until the GPU is done with it.
         constexpr uint32_t kHitRing = kFramesInFlight + 1, kMaxHitsPerFrame = 128;
@@ -3860,6 +3864,7 @@ namespace Dimension
             p.Gravity = glm::vec4(toSim(glm::vec3(0.0f, -9.81f * ps.GravityModifier, 0.0f), ParticleSpace::World), ps.ForceOverLifetime ? 1.0f : 0.0f);
             p.Force = glm::vec4(toSim(ps.Force, ps.ForceSpace), 0.0f);
             p.Noise = glm::vec4(ps.NoiseStrength, ps.NoiseFrequency, ps.Noise ? 1.0f : 0.0f, 0.0f);
+            p.Lighting = glm::vec4(ps.Lit ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
             // World collision runs against the depth buffer this view rendered last frame.
             bool depthCollision = ps.Collision == ParticleCollision::World;
             if (depthCollision)

@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 #include "Common.glsl"
 #include "ParticleCommon.glsl"
+#include "ParticleLighting.glsl"
 
 // Draws GPU particles as camera-facing quads straight from the simulation buffer: four vertices per slot (indexed
 // with the shared quad indices), dead slots collapse to a point. Feeds Sprite.frag.
@@ -45,6 +46,7 @@ void main()
     vColor = p.Color * SampleColorLut(P, life);
     vec3 c0 = max(vColor.rgb, vec3(0.0)); // authored sRGB to linear, as the CPU path
     vColor.rgb = mix(c0 / 12.92, pow((c0 + 0.055) / 1.055, vec3(2.4)), greaterThan(c0, vec3(0.04045)));
+    if (P.Lighting.x > 0.5) vColor.rgb *= ParticleLight(pos);
     vec3 right = vec3(uScene.View[0][0], uScene.View[1][0], uScene.View[2][0]);
     vec3 up = vec3(uScene.View[0][1], uScene.View[1][1], uScene.View[2][1]);
     float c = cos(p.Misc.y), s = sin(p.Misc.y);
