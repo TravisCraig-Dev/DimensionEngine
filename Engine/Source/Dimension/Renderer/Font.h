@@ -15,6 +15,7 @@ namespace Dimension
         glm::vec2 UVMin{ 0.0f }, UVMax{ 0.0f };
         glm::vec2 Min{ 0.0f }, Max{ 0.0f }; // quad relative to the pen on the baseline, y down, at bake size
         float Advance = 0.0f;
+        bool Color = false; // a color glyph (emoji): UVs in the font's color atlas, drawn untinted
     };
 
     // One positioned glyph quad of laid-out text: pixel space, y down, relative to the block's top-left.
@@ -29,6 +30,7 @@ namespace Dimension
         float Skew = 0.0f;
         bool Solid = false;
         uint32_t Atlas = 0; // a fallback font's atlas (as GetAtlasIndex gives it) for a character this font lacks; 0: this font's
+        bool ColorGlyph = false; // an emoji from a color atlas (Atlas): HasColor is white so the text's color only fades it
     };
 
     // A character of rich text with the style its tags give it.
@@ -78,6 +80,10 @@ namespace Dimension
         static constexpr uint32_t kMultiChannelBit = 0x40000000u;
         static constexpr uint32_t kTextureIndexMask = 0x3FFFFFFFu;
         uint32_t GetAtlasIndex() const;
+        // Color glyphs (COLR/CPAL layered emoji, as Segoe UI Emoji has them) go in a second atlas of plain sRGB colors
+        // with alpha; its bindless index (no flag bits), 0 while the font has none.
+        uint32_t GetColorAtlasIndex() const;
+        bool HasColorGlyphs() const;
         float GetAscent() const { return m_Ascent; }   // pixels at bake size
         float GetDescent() const { return m_Descent; } // negative
         float GetLineHeight() const { return m_Ascent - m_Descent + m_LineGap; }
@@ -100,6 +106,7 @@ namespace Dimension
         struct Dynamic; // the font file, the atlas pixels and the glyphs baked since loading
         std::array<Glyph, kCharCount> m_Glyphs{};
         mutable Ref<Texture2D> m_Atlas;
+        mutable Ref<Texture2D> m_ColorAtlas;
         std::shared_ptr<Dynamic> m_Dynamic;
         bool m_Latin1Baked = true;
         float m_Ascent = 0, m_Descent = 0, m_LineGap = 0;

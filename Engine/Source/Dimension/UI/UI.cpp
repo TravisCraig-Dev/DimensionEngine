@@ -448,7 +448,8 @@ namespace Dimension::UI
             auto quads = font.Layout(text, pixelSize, 0.0f, TextAlign::Left, 0.0f, block);
             glm::vec2 o = origin + glm::vec2(0.0f, (boxHeight - block.y) * 0.5f);
             uint32_t atlas = font.GetAtlasIndex();
-            for (auto& q : quads) Emit(out, o + q.Min, o + q.Max, q.UVMin, q.UVMax, color, q.Atlas ? q.Atlas : atlas, clip);
+            for (auto& q : quads) // emoji keep their colors
+                Emit(out, o + q.Min, o + q.Max, q.UVMin, q.UVMax, q.ColorGlyph ? glm::vec4(glm::vec3(q.Color), q.Color.a * color.a) : color, q.Atlas ? q.Atlas : atlas, clip);
             return block.x;
         }
 

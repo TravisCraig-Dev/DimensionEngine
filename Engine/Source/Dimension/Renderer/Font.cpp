@@ -2,6 +2,8 @@
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Core/Log.h"
 #include <fstream>
+#include <climits>
+#include <cstring>
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
@@ -58,6 +60,69 @@ namespace Dimension
         }
     }
 
+    namespace
+    {
+        uint16_t ReadU16(const uint8_t* p) { return (uint16_t)(p[0] << 8 | p[1]); }
+        uint32_t ReadU32(const uint8_t* p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+
+        // A font's color glyph tables (COLR version 0 records, which COLR v1 fonts keep for older readers, and the first
+        // CPAL palette): each base glyph is drawn as a stack of plain glyphs, each filled with one palette color.
+        struct ColorTables
+        {
+            const uint8_t* Bases = nullptr; // BaseGlyphRecord: glyph, first layer, layer count (sorted by glyph)
+            const uint8_t* Layers = nullptr; // LayerRecord: glyph, palette index (0xFFFF: the text's color)
+            uint32_t BaseCount = 0, LayerCount = 0;
+            std::vector<uint32_t> Palette; // RGBA8 (sRGB), from CPAL's palette 0
+
+            bool Load(const uint8_t* data, size_t size, uint32_t fontStart)
+            {
+                if (fontStart + 12 > size) return false;
+                uint32_t colr = 0, cpal = 0, colrLength = 0, cpalLength = 0;
+                uint16_t tables = ReadU16(data + fontStart + 4);
+                for (uint16_t i = 0; i < tables; ++i)
+                {
+                    const uint8_t* rec = data + fontStart + 12 + 16 * i;
+                    if (rec + 16 > data + size) return false;
+                    if (!std::memcmp(rec, "COLR", 4)) colr = ReadU32(rec + 8), colrLength = ReadU32(rec + 12);
+                    if (!std::memcmp(rec, "CPAL", 4)) cpal = ReadU32(rec + 8), cpalLength = ReadU32(rec + 12);
+                }
+                if (!colr || !cpal || colr + 14 > size || cpal + 12 > size || colr + colrLength > size || cpal + cpalLength > size) return false;
+                const uint8_t* c = data + colr;
+                BaseCount = ReadU16(c + 2);
+                uint32_t baseOffset = ReadU32(c + 4), layerOffset = ReadU32(c + 8);
+                LayerCount = ReadU16(c + 12);
+                if (!BaseCount || baseOffset + BaseCount * 6ull > colrLength || layerOffset + LayerCount * 4ull > colrLength) return false;
+                Bases = c + baseOffset;
+                Layers = c + layerOffset;
+                const uint8_t* p = data + cpal;
+                uint16_t entries = ReadU16(p + 2), records = ReadU16(p + 6);
+                uint32_t recordsOffset = ReadU32(p + 8);
+                uint16_t first = ReadU16(p + 12);
+                if (recordsOffset + records * 4ull > cpalLength || first + entries > records) return false;
+                for (uint16_t i = 0; i < entries; ++i)
+                {
+                    const uint8_t* bgra = p + recordsOffset + (first + i) * 4;
+                    Palette.push_back((uint32_t)bgra[2] | (uint32_t)bgra[1] << 8 | (uint32_t)bgra[0] << 16 | (uint32_t)bgra[3] << 24);
+                }
+                return true;
+            }
+            // The layers of a glyph: (first, count), count 0 when it is not a color glyph.
+            std::pair<uint32_t, uint32_t> Find(int glyph) const
+            {
+                uint32_t lo = 0, hi = BaseCount;
+                while (lo < hi)
+                {
+                    uint32_t mid = (lo + hi) / 2;
+                    uint16_t g = ReadU16(Bases + mid * 6);
+                    if (g == glyph) return { ReadU16(Bases + mid * 6 + 2), ReadU16(Bases + mid * 6 + 4) };
+                    if (g < glyph) lo = mid + 1;
+                    else hi = mid;
+                }
+                return { 0, 0 };
+            }
+        };
+    }
+
     // The font file (stb_truetype reads it in place), the atlas pixels kept for glyphs baked later, and those glyphs.
     struct Font::Dynamic
     {
@@ -71,11 +136,89 @@ namespace Dimension
         bool Full = false, Dirty = false;
         std::unordered_map<uint32_t, Glyph> Glyphs;
         std::unordered_map<uint32_t, bool> Has;
+        // Color glyphs: their own atlas (allocated with the first one).
+        ColorTables Colors;
+        bool HasColors = false;
+        static constexpr int kColorSize = 1024;
+        std::vector<uint32_t> ColorRgba;
+        int ColorPenX = 1, ColorPenY = 1, ColorRowHeight = 0;
+        bool ColorFull = false, ColorDirty = false;
+
+        // Bakes a color glyph: its layers rasterized at the bake size and stacked in their palette colors. False when
+        // it is not one (or does not fit).
+        bool BakeColor(int glyph, Glyph& g)
+        {
+            auto [first, count] = Colors.Find(glyph);
+            if (count == 0 || first + count > Colors.LayerCount) return false;
+            int x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                int bx0, by0, bx1, by1;
+                stbtt_GetGlyphBitmapBox(&Info, ReadU16(Colors.Layers + (first + i) * 4), Scale, Scale, &bx0, &by0, &bx1, &by1);
+                if (bx1 <= bx0 || by1 <= by0) continue;
+                x0 = std::min(x0, bx0), y0 = std::min(y0, by0), x1 = std::max(x1, bx1), y1 = std::max(y1, by1);
+            }
+            if (x1 <= x0 || y1 <= y0) return false;
+            int w = x1 - x0 + 2, h = y1 - y0 + 2; // a pixel of clear border all round (filtering, mips)
+            if (ColorRgba.empty()) ColorRgba.assign(size_t(kColorSize) * kColorSize, 0u);
+            if (ColorPenX + w + 1 > kColorSize) { ColorPenX = 1; ColorPenY += ColorRowHeight + 1; ColorRowHeight = 0; }
+            if (ColorPenY + h + 1 > kColorSize) { ColorFull = true; return false; }
+            // Premultiplied sums while stacking, straight alpha in the atlas.
+            std::vector<float> sum(size_t(w) * h * 4, 0.0f);
+            std::vector<uint8_t> coverage;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                int layerGlyph = ReadU16(Colors.Layers + (first + i) * 4);
+                uint16_t paletteIndex = ReadU16(Colors.Layers + (first + i) * 4 + 2);
+                uint32_t rgba = paletteIndex < Colors.Palette.size() ? Colors.Palette[paletteIndex] : 0xFFFFFFFFu; // 0xFFFF: the text's color (white here)
+                float cr = (rgba & 255) / 255.0f, cg = (rgba >> 8 & 255) / 255.0f, cb = (rgba >> 16 & 255) / 255.0f, ca = (rgba >> 24) / 255.0f;
+                int bx0, by0, bx1, by1;
+                stbtt_GetGlyphBitmapBox(&Info, layerGlyph, Scale, Scale, &bx0, &by0, &bx1, &by1);
+                int lw = bx1 - bx0, lh = by1 - by0;
+                if (lw <= 0 || lh <= 0) continue;
+                coverage.assign(size_t(lw) * lh, 0);
+                stbtt_MakeGlyphBitmap(&Info, coverage.data(), lw, lh, lw, Scale, Scale, layerGlyph);
+                for (int y = 0; y < lh; ++y)
+                    for (int x = 0; x < lw; ++x)
+                    {
+                        float a = coverage[size_t(y) * lw + x] / 255.0f * ca;
+                        if (a <= 0.0f) continue;
+                        float* d = &sum[(size_t(by0 - y0 + 1 + y) * w + (bx0 - x0 + 1 + x)) * 4];
+                        d[0] = cr * a + d[0] * (1.0f - a);
+                        d[1] = cg * a + d[1] * (1.0f - a);
+                        d[2] = cb * a + d[2] * (1.0f - a);
+                        d[3] = a + d[3] * (1.0f - a);
+                    }
+            }
+            auto toByte = [](float v) { return (uint32_t)std::clamp((int)std::lround(v * 255.0f), 0, 255); };
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                {
+                    const float* d = &sum[(size_t(y) * w + x) * 4];
+                    float a = d[3], inv = a > 1e-6f ? 1.0f / a : 0.0f;
+                    ColorRgba[size_t(ColorPenY + y) * kColorSize + ColorPenX + x] =
+                        toByte(d[0] * inv) | toByte(d[1] * inv) << 8 | toByte(d[2] * inv) << 16 | toByte(a) << 24;
+                }
+            int advance, bearing;
+            stbtt_GetGlyphHMetrics(&Info, glyph, &advance, &bearing);
+            g.Advance = advance * Scale;
+            g.UVMin = { ColorPenX / (float)kColorSize, ColorPenY / (float)kColorSize };
+            g.UVMax = { (ColorPenX + w) / (float)kColorSize, (ColorPenY + h) / (float)kColorSize };
+            g.Min = { (float)(x0 - 1), (float)(y0 - 1) };
+            g.Max = { (float)(x1 + 1), (float)(y1 + 1) };
+            g.Color = true;
+            ColorPenX += w + 1;
+            ColorRowHeight = std::max(ColorRowHeight, h);
+            ColorDirty = true;
+            return true;
+        }
 
         // Bakes a glyph's multi-channel distance field into the atlas (shelf packing); false when it does not fit.
         bool Bake(uint32_t cp, Glyph& g)
         {
             constexpr int kWidthC = kWidth, kHeightC = kHeight;
+            if (HasColors)
+                if (int glyph = stbtt_FindGlyphIndex(&Info, (int)cp); glyph && BakeColor(glyph, g)) return true;
             auto toByte = [](float d) { return (uint32_t)std::clamp((int)std::lround(d * 255.0f), 0, 255); };
             int advance, bearing;
             stbtt_GetCodepointHMetrics(&Info, (int)cp, &advance, &bearing);
@@ -140,6 +283,7 @@ namespace Dimension
         // the outline with its corners kept sharp, alpha the true distance (for outlines and soft effects); 0.5 is on
         // the outline, with kSpread pixels of falloff each way at the bake size. Text stays crisp at any size.
         dyn->Rgba.assign(size_t(Dynamic::kWidth) * Dynamic::kHeight, 0u); // outside everywhere (the gutters too)
+        dyn->HasColors = dyn->Colors.Load(dyn->Data.data(), dyn->Data.size(), (uint32_t)stbtt_GetFontOffsetForIndex(dyn->Data.data(), 0));
         auto font = MakeRef<Font>();
         font->m_Dynamic = dyn;
         font->m_Latin1Baked = bakeLatin1;
@@ -168,6 +312,22 @@ namespace Dimension
             m_Dynamic->Dirty = false;
         }
         return m_Atlas ? (m_Atlas->GetBindlessIndex() | kDistanceFieldBit | kMultiChannelBit) : 0u;
+    }
+
+    bool Font::HasColorGlyphs() const { return m_Dynamic && m_Dynamic->HasColors; }
+
+    uint32_t Font::GetColorAtlasIndex() const
+    {
+        if (!m_Dynamic || m_Dynamic->ColorRgba.empty()) return 0u;
+        if (m_Dynamic->ColorDirty || !m_ColorAtlas)
+        {
+            TextureSettings settings;
+            settings.SRGB = true; // palette colors are sRGB
+            settings.GenerateMips = true;
+            m_ColorAtlas = MakeRef<Texture2D>(m_Dynamic->ColorRgba.data(), Dynamic::kColorSize, Dynamic::kColorSize, settings, (m_Dynamic->Name + " (color)").c_str());
+            m_Dynamic->ColorDirty = false;
+        }
+        return m_ColorAtlas->GetBindlessIndex();
     }
 
     Ref<Font> Font::LoadFromFile(const fs::path& path, bool bakeLatin1)
@@ -203,6 +363,12 @@ namespace Dimension
             {
                 Glyph g;
                 if (m_Dynamic->Bake(cp, g) || g.Advance > 0.0f) return m_Dynamic->Glyphs[cp] = g;
+                if (m_Dynamic->ColorFull)
+                {
+                    static bool colorWarned = false;
+                    if (!colorWarned) Log::Warn("Font '{}': its color atlas is full", m_Dynamic->Name);
+                    colorWarned = true;
+                }
                 static bool warned = false;
                 if (!warned) Log::Warn("Font '{}': its atlas is full; later characters show as '?'", m_Dynamic->Name);
                 warned = true;
@@ -246,7 +412,7 @@ namespace Dimension
             FallbacksSet() = true;
             std::vector<fs::path> candidates;
 #ifdef _WIN32
-            for (const char* name : { "segoeui.ttf", "seguisym.ttf", "msyh.ttc", "malgun.ttf", "Nirmala.ttf" })
+            for (const char* name : { "segoeui.ttf", "seguiemj.ttf", "seguisym.ttf", "msyh.ttc", "malgun.ttf", "Nirmala.ttf" })
                 candidates.push_back(fs::path("C:/Windows/Fonts") / name);
 #else
             for (const char* p : { "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -556,6 +722,8 @@ namespace Dimension
                 chars.push_back(c);
             }
 
+        // Emoji presentation selectors and joiners take no room (a joined sequence shows as its separate emoji).
+        std::erase_if(chars, [](const StyledChar& c) { return c.Codepoint == 0xFE0E || c.Codepoint == 0xFE0F || c.Codepoint == 0x200D; });
         ShapeArabic(chars);
         // Which font draws each character: this one, else the first fallback that has it.
         for (StyledChar& c : chars)
@@ -642,6 +810,13 @@ namespace Dimension
                     TextQuad q{ { x + g.Min.x * s, baseline + g.Min.y * s }, { x + g.Max.x * s, baseline + g.Max.y * s }, g.UVMin, g.UVMax };
                     q.Color = c->Color;
                     q.HasColor = c->HasColor;
+                    if (g.Color)
+                    {
+                        // Emoji keep their own colors; the text's (or a tag's) alpha still fades them.
+                        q.ColorGlyph = true;
+                        q.HasColor = true;
+                        q.Color = glm::vec4(1.0f, 1.0f, 1.0f, c->HasColor ? c->Color.a : 1.0f);
+                    }
                     q.Skew = c->Italic ? 0.2f : 0.0f;
                     // Renderers move the top edge right by Skew * height; shifting the quad back by the part below
                     // the baseline slants it around the baseline.
@@ -677,7 +852,8 @@ namespace Dimension
         }
         // Characters from fallback fonts: their atlases (after all the glyphs above were baked).
         for (size_t i = 0; i < quads.size(); ++i)
-            if (quadFonts[i] != this) quads[i].Atlas = quadFonts[i]->GetAtlasIndex();
+            if (quads[i].ColorGlyph) quads[i].Atlas = quadFonts[i]->GetColorAtlasIndex();
+            else if (quadFonts[i] != this) quads[i].Atlas = quadFonts[i]->GetAtlasIndex();
         return quads;
     }
 }
