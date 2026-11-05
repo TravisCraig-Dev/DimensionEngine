@@ -212,6 +212,7 @@ namespace Editor
         Scope<ProfilerPanel> m_Profiler;
 
         Scope<SceneRenderTarget> m_SceneTarget, m_GameTarget;
+        static constexpr float kSceneUIPixelsPerUnit = 100.0f;
         SceneRenderer m_SceneRenderer, m_GameRenderer;
         CameraStack m_GameCameras; // the Game view's other cameras (smaller viewports drawn over the primary)
         glm::uvec2 m_SceneViewSize{ 1280, 720 }, m_GameViewSize{ 1280, 720 };
@@ -307,6 +308,24 @@ namespace Editor
         // Edit mode: drag the selected UI Rect (move, or resize by its edges and corners) in the Game view, and click a
         // widget there to select it.
         void UpdateUIRectEditing(ImVec2 origin, ImVec2 size, bool hovered);
+        // The same editing where the canvas is shown some other way (the Scene view): canvas pixels to and from the
+        // screen, the area to clip to, and how many canvas pixels a 6-pixel handle covers there.
+        struct UIViewMapping
+        {
+            glm::vec2 Layout{ 0.0f }; // the canvas size laid out (the Game view's)
+            std::function<glm::vec2(ImVec2)> ToCanvas;
+            std::function<ImVec2(glm::vec2)> ToScreen;
+            ImVec2 ClipMin, ClipMax;
+            float HandleRadius = 6.0f;
+            int View = 0; // 0 the Game view, 1 the Scene view: a drag belongs to the view it started in
+        };
+        int m_UIRectDragView = 0;
+        void UpdateUIRectEditing(const UIViewMapping& map, bool hovered);
+        // Canvases in the Scene view: drawn into their own image (at the Game view's size) shown on the XY plane from
+        // the origin, 100 pixels a unit; selectable and editable there too.
+        Scope<SceneRenderTarget> m_SceneUITarget;
+        bool m_ShowUIInSceneView = true;
+        bool DrawSceneViewUI(ImVec2 origin, ImVec2 size); // true while it has the mouse (over a UI element, or dragging one)
         int m_UIRectDrag = -1; // -1 none, 0 move, 1..8 handles (see UpdateUIRectEditing)
         glm::vec2 m_UIRectDragStart{ 0.0f }, m_UIRectStartPosition{ 0.0f }, m_UIRectStartSize{ 0.0f };
         bool DeleteLinePoint(); // removes the picked point; false when no point is picked

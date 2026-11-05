@@ -832,6 +832,22 @@ namespace Editor
             }
         // Objects drawn only by handles (links, paths, obstacles): frame the handles.
         if (!scene.GetRegistry().Has<MeshRendererComponent>(m_Ctx.Selected)) HandleBounds(scene, m_Ctx.Selected, center, radius);
+        // UI: its rectangle where the Scene view shows the canvas (the XY plane from the origin; the whole canvas for one).
+        auto& reg = scene.GetRegistry();
+        if (m_ShowUIInSceneView && (reg.Has<UIRectComponent>(m_Ctx.Selected) || reg.Has<CanvasComponent>(m_Ctx.Selected)))
+        {
+            glm::vec2 layout = m_GameTarget ? glm::vec2((float)m_GameTarget->GetWidth(), (float)m_GameTarget->GetHeight()) : glm::vec2(1920.0f, 1080.0f);
+            Dimension::UI::ComputeLayout(scene, layout);
+            glm::vec2 mn(0.0f), mx = layout;
+            if (auto* r = reg.TryGet<UIRectComponent>(m_Ctx.Selected))
+            {
+                mn = r->ComputedMin;
+                mx = r->ComputedMax;
+            }
+            glm::vec2 c = (mn + mx) * 0.5f;
+            center = glm::vec3(c.x / kSceneUIPixelsPerUnit, (layout.y - c.y) / kSceneUIPixelsPerUnit, 0.0f);
+            radius = std::max(glm::length(mx - mn) * 0.5f / kSceneUIPixelsPerUnit, 0.2f);
+        }
         m_Camera.Focus(center, radius);
     }
 
@@ -1105,6 +1121,18 @@ namespace Editor
             int timer = RenderDevice::Get().BeginGpuTimer(cmd, "Scene View");
             m_SceneRenderer.Render(cmd, scene, cam, *m_SceneTarget, options);
             RenderDevice::Get().EndGpuTimer(cmd, timer);
+            // The canvases, for the Scene view to show on their plane (at the Game view's size).
+            bool canvases = false;
+            for (auto [ce, canvas, ct] : scene.GetRegistry().ViewOf<CanvasComponent, TransformComponent>()) canvases |= ct.ActiveInHierarchy;
+            if (m_ShowUIInSceneView && canvases)
+            {
+                uint32_t w = m_GameTarget ? m_GameTarget->GetWidth() : 1920u, h = m_GameTarget ? m_GameTarget->GetHeight() : 1080u;
+                if (!m_SceneUITarget) m_SceneUITarget = MakeScope<SceneRenderTarget>(w, h);
+                else m_SceneUITarget->Resize(w, h);
+                m_SceneRenderer.RenderUIOnly(cmd, scene, *m_SceneUITarget);
+            }
+            else
+                m_SceneUITarget.reset();
         }
         if (m_GameViewVisible)
         {
@@ -2856,6 +2884,11 @@ namespace Editor
             ImGui::SameLine();
             ImGui::Checkbox("Gizmos", &m_ShowGizmos);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scripts' gizmos (C# OnDrawGizmos) in the Scene view");
+            ImGui::SameLine();
+            ImGui::Checkbox("UI", &m_ShowUIInSceneView);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The canvases in the Scene view, on the XY plane from the origin (100 pixels a unit, the Game view's size):\n"
+                                  "click a UI element to select it, drag it or its handles to move and resize it");
             // The Scene view's draw mode.
             ImGui::SameLine();
             const char* modes[] = { "Shaded", "Wireframe", "Shaded Wireframe", "Unlit", "Overdraw" };
@@ -3042,8 +3075,11 @@ namespace Editor
         bool handles = !measuring && !tilePainting && !lineEditing && !vertexSnapping && UpdateScriptHandles(origin, avail);
 
         // Transform gizmo
-        bool gizmoHovered = measuring || lineEditing || vertexSnapping || handles;
-        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
+        bool uiEditing = !measuring && !tilePainting && !lineEditing && !vertexSnapping && !handles && DrawSceneViewUI(origin, avail);
+        bool gizmoHovered = measuring || lineEditing || vertexSnapping || handles || uiEditing;
+        // UI elements are moved by their rect handles on the canvas, not the transform gizmo.
+        bool uiSelected = m_SceneUITarget && m_Ctx.HasValidSelection() && scene.GetRegistry().Has<UIRectComponent>(m_Ctx.Selected);
+        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !uiSelected && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
             !measuring && m_HandleDrag == 0)
         {
             auto& reg = scene.GetRegistry();
@@ -3214,13 +3250,93 @@ namespace Editor
         ImGui::End();
     }
 
+    bool EditorLayer::DrawSceneViewUI(ImVec2 origin, ImVec2 size)
+    {
+        if (!m_SceneUITarget) return false;
+        glm::vec2 layout((float)m_SceneUITarget->GetWidth(), (float)m_SceneUITarget->GetHeight());
+        glm::mat4 viewProj = m_Camera.GetProjection(size.x / std::max(1.0f, size.y)) * m_Camera.GetView();
+        // The canvas lies on the XY plane from the origin, 100 pixels a unit, its top-left pixel at (0, height).
+        auto toWorld = [&](glm::vec2 px) { return glm::vec3(px.x / kSceneUIPixelsPerUnit, (layout.y - px.y) / kSceneUIPixelsPerUnit, 0.0f); };
+        bool behind = false;
+        auto toScreen = [&](glm::vec2 px) {
+            glm::vec4 c = viewProj * glm::vec4(toWorld(px), 1.0f);
+            if (c.w <= 1e-5f) { behind = true; c.w = 1e-5f; }
+            glm::vec2 ndc = glm::vec2(c) / c.w; // this view's ndc y = +1 is the top row
+            return ImVec2(origin.x + (ndc.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - ndc.y * 0.5f) * size.y);
+        };
+        glm::mat4 inv = glm::inverse(viewProj);
+        auto toCanvas = [&](ImVec2 mouse) {
+            glm::vec2 ndc((mouse.x - origin.x) / size.x * 2.0f - 1.0f, 1.0f - (mouse.y - origin.y) / size.y * 2.0f);
+            glm::vec4 a = inv * glm::vec4(ndc, 0.0f, 1.0f), b = inv * glm::vec4(ndc, 1.0f, 1.0f);
+            glm::vec3 p0 = glm::vec3(a) / a.w, p1 = glm::vec3(b) / b.w, d = p1 - p0;
+            if (std::abs(d.z) < 1e-8f) return glm::vec2(-1e6f);
+            glm::vec3 hit = p0 + d * (-p0.z / d.z);
+            return glm::vec2(hit.x * kSceneUIPixelsPerUnit, layout.y - hit.y * kSceneUIPixelsPerUnit);
+        };
+        // Drawn as a grid of pieces so a canvas partly behind the camera still shows the part in front.
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+        ImTextureRef image((ImTextureID)m_SceneUITarget->GetImGuiTexture());
+        constexpr int kCells = 16;
+        bool anyShown = false;
+        for (int y = 0; y < kCells; ++y)
+            for (int x = 0; x < kCells; ++x)
+            {
+                glm::vec2 f0((float)x / kCells, (float)y / kCells), f1((float)(x + 1) / kCells, (float)(y + 1) / kCells);
+                behind = false;
+                ImVec2 q[4] = { toScreen(f0 * layout), toScreen(glm::vec2(f1.x, f0.y) * layout), toScreen(f1 * layout), toScreen(glm::vec2(f0.x, f1.y) * layout) };
+                if (behind) continue;
+                dl->AddImageQuad(image, q[0], q[1], q[2], q[3], ImVec2(f0.x, f0.y), ImVec2(f1.x, f0.y), ImVec2(f1.x, f1.y), ImVec2(f0.x, f1.y));
+                anyShown = true;
+            }
+        behind = false;
+        ImVec2 corners[4] = { toScreen({ 0.0f, 0.0f }), toScreen({ layout.x, 0.0f }), toScreen(layout), toScreen({ 0.0f, layout.y }) };
+        if (!behind) dl->AddPolyline(corners, 4, IM_COL32(255, 255, 255, 90), ImDrawFlags_Closed, 1.0f); // the canvas's edge
+        dl->PopClipRect();
+        if (!anyShown) return false;
+        if (m_Ctx.IsPlaying()) return false;
+
+        // Editing, as in the Game view, through the plane.
+        UIViewMapping map;
+        map.Layout = layout;
+        map.ToCanvas = toCanvas;
+        map.ToScreen = toScreen;
+        map.ClipMin = origin;
+        map.ClipMax = ImVec2(origin.x + size.x, origin.y + size.y);
+        ImVec2 a = toScreen({ 0.0f, 0.0f }), b = toScreen({ 100.0f, 0.0f });
+        float screenPer100 = std::max(std::hypot(b.x - a.x, b.y - a.y), 1e-3f);
+        map.HandleRadius = 6.0f * 100.0f / screenPer100;
+        map.View = 1;
+        // It has the mouse over a UI element (clicks select and drag it) or while dragging one.
+        glm::vec2 m = toCanvas(ImGui::GetMousePos());
+        bool over = false;
+        if (m_SceneViewHovered && !m_Camera.IsControlling())
+            for (Entity e : Dimension::UI::ComputeLayout(m_Ctx.ActiveScene(), layout))
+                if (auto* r = m_Ctx.ActiveScene().GetRegistry().TryGet<UIRectComponent>(e);
+                    r && glm::all(glm::greaterThanEqual(m, r->ComputedMin - glm::vec2(map.HandleRadius))) && glm::all(glm::lessThanEqual(m, r->ComputedMax + glm::vec2(map.HandleRadius))) &&
+                    (m_Ctx.ActiveScene().GetRegistry().Has<UIImageComponent>(e) || m_Ctx.ActiveScene().GetRegistry().Has<UIButtonComponent>(e) || e == m_Ctx.Selected))
+                    over = true;
+        UpdateUIRectEditing(map, m_SceneViewHovered && !m_Camera.IsControlling() && over);
+        return over || (m_UIRectDrag >= 0 && m_UIRectDragView == 1);
+    }
+
     void EditorLayer::UpdateUIRectEditing(ImVec2 origin, ImVec2 size, bool hovered)
+    {
+        UIViewMapping map;
+        map.Layout = { size.x, size.y };
+        map.ToCanvas = [origin](ImVec2 p) { return glm::vec2(p.x - origin.x, p.y - origin.y); };
+        map.ToScreen = [origin](glm::vec2 p) { return ImVec2(origin.x + p.x, origin.y + p.y); };
+        map.ClipMin = origin;
+        map.ClipMax = ImVec2(origin.x + size.x, origin.y + size.y);
+        UpdateUIRectEditing(map, hovered);
+    }
+
+    void EditorLayer::UpdateUIRectEditing(const UIViewMapping& map, bool hovered)
     {
         Scene& scene = m_Ctx.ActiveScene();
         auto& reg = scene.GetRegistry();
-        auto order = Dimension::UI::ComputeLayout(scene, { size.x, size.y });
-        ImVec2 mouse = ImGui::GetMousePos();
-        glm::vec2 m(mouse.x - origin.x, mouse.y - origin.y);
+        auto order = Dimension::UI::ComputeLayout(scene, map.Layout);
+        glm::vec2 m = map.ToCanvas(ImGui::GetMousePos());
         Entity sel = m_Ctx.HasValidSelection() ? m_Ctx.Selected : Entity::Null();
         auto* rect = sel.IsNull() ? nullptr : reg.TryGet<UIRectComponent>(sel);
         bool visible = rect && reg.Get<TransformComponent>(sel).ActiveInHierarchy && std::find(order.begin(), order.end(), sel) != order.end();
@@ -3245,7 +3361,7 @@ namespace Editor
         if (editable && m_UIRectDrag < 0 && hovered)
         {
             for (int h = 1; h <= 8 && hot < 0; ++h)
-                if (glm::all(glm::lessThanEqual(glm::abs(m - handlePos(h)), glm::vec2(6.0f)))) hot = h;
+                if (glm::all(glm::lessThanEqual(glm::abs(m - handlePos(h)), glm::vec2(map.HandleRadius)))) hot = h;
             if (hot < 0 && topmost == sel) hot = 0; // dragging inside moves it (unless a child is on top: that selects it)
         }
 
@@ -3255,6 +3371,7 @@ namespace Editor
             {
                 m_Ctx.RecordUndo();
                 m_UIRectDrag = hot;
+                m_UIRectDragView = map.View;
                 m_UIRectDragStart = m;
                 m_UIRectStartPosition = rect->Position;
                 m_UIRectStartSize = rect->Size;
@@ -3262,7 +3379,7 @@ namespace Editor
             else if (!topmost.IsNull())
                 m_Ctx.Select(topmost);
         }
-        if (m_UIRectDrag >= 0)
+        if (m_UIRectDrag >= 0 && m_UIRectDragView == map.View)
         {
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !editable)
                 m_UIRectDrag = -1;
@@ -3288,18 +3405,24 @@ namespace Editor
 
         if (!visible) return;
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
-        auto screen = [&](glm::vec2 p) { return ImVec2(origin.x + p.x, origin.y + p.y); };
+        dl->PushClipRect(map.ClipMin, map.ClipMax, true);
+        auto screen = [&](glm::vec2 p) { return map.ToScreen(p); };
         const ImU32 blue = IM_COL32(80, 170, 255, 255), faint = IM_COL32(80, 170, 255, 120);
-        dl->AddRect(screen(rect->ComputedMin), screen(rect->ComputedMax), editable ? blue : faint, 0.0f, 0, 1.5f);
+        {
+            // The outline as four corners (a perspective view shows the rectangle as any quad).
+            glm::vec2 mn = rect->ComputedMin, mx = rect->ComputedMax;
+            ImVec2 q[4] = { screen(mn), screen({ mx.x, mn.y }), screen(mx), screen({ mn.x, mx.y }) };
+            dl->AddPolyline(q, 4, editable ? blue : faint, ImDrawFlags_Closed, 1.5f);
+        }
         if (editable)
         {
             for (int h = 1; h <= 8; ++h)
             {
                 glm::vec2 p = handlePos(h);
                 bool active = hot == h || m_UIRectDrag == h;
-                dl->AddRectFilled(screen(p - glm::vec2(4.0f)), screen(p + glm::vec2(4.0f)), active ? IM_COL32(255, 255, 255, 255) : blue);
-                dl->AddRect(screen(p - glm::vec2(4.0f)), screen(p + glm::vec2(4.0f)), IM_COL32(20, 40, 70, 255));
+                ImVec2 sp = screen(p);
+                dl->AddRectFilled(ImVec2(sp.x - 4.0f, sp.y - 4.0f), ImVec2(sp.x + 4.0f, sp.y + 4.0f), active ? IM_COL32(255, 255, 255, 255) : blue);
+                dl->AddRect(ImVec2(sp.x - 4.0f, sp.y - 4.0f), ImVec2(sp.x + 4.0f, sp.y + 4.0f), IM_COL32(20, 40, 70, 255));
             }
             // Pivot.
             glm::vec2 pivot = glm::mix(rect->ComputedMin, rect->ComputedMax, rect->Pivot);
@@ -3314,8 +3437,8 @@ namespace Editor
             {
                 char info[64];
                 std::snprintf(info, sizeof(info), "pos %.0f, %.0f   size %.0f x %.0f", rect->Position.x, rect->Position.y, rect->Size.x, rect->Size.y);
-                glm::vec2 at = rect->ComputedMax + glm::vec2(6.0f, 4.0f);
-                dl->AddText(screen(at), IM_COL32(255, 255, 255, 230), info);
+                ImVec2 at = screen(rect->ComputedMax);
+                dl->AddText(ImVec2(at.x + 6.0f, at.y + 4.0f), IM_COL32(255, 255, 255, 230), info);
             }
         }
         dl->PopClipRect();

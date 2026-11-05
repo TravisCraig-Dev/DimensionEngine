@@ -3686,6 +3686,34 @@ namespace Dimension
         m_Stats.Triangles += (uint32_t)count * 2;
     }
 
+    void SceneRenderer::RenderUIOnly(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target)
+    {
+        auto& device = RenderDevice::Get();
+        VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
+        const Image& out = target.GetOutput();
+        Vk::TransitionImage(cmd, out.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        att.imageView = out.GetView();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att.clearValue.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        info.renderArea = { { 0, 0 }, extent };
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cmd, &info);
+        VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
+        VkRect2D scissor{ { 0, 0 }, extent };
+        vkCmdSetViewport(cmd, 0, 1, &flat);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+        DrawUI(cmd, scene, extent);
+        vkCmdEndRendering(cmd);
+        Vk::TransitionImage(cmd, out.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
     void SceneRenderer::DrawUI(VkCommandBuffer cmd, Scene& scene, VkExtent2D extent)
     {
         std::vector<UI::DrawCommand> commands;

@@ -200,6 +200,7 @@ Projects/  Sandbox sample project (Demo3D and Demo2D scenes)
 - **Inspector**: reflected component fields, Add Component search, script class picker with public fields, texture import settings, model import settings (scale, whether to import animations and materials, and which clips; cached per setting), and a material editor.
 - **Scene view**: Unity-style camera, GPU picking, transform gizmos, and dropping assets in to create objects or instantiate prefabs.
 - **UI rect editing**: outside play mode, the selected UI Rect shows its outline, pivot and eight handles in the Game view. Drag inside to move it, drag an edge or corner to resize it (only that side moves, whatever the anchors and pivot; Ctrl snaps to 10 units), and click a widget there to select it. Changes are undoable and record prefab overrides; children of a layout group show their outline only.
+- **UI in the Scene view**: the canvases show in the Scene view (toolbar toggle **UI**) on the XY plane from the origin, 100 pixels a unit, at the Game view's size, drawn over the world as an image of the UI itself (exact colors). Click a UI element there to select it, drag it or its handles to move and resize it as in the Game view (undoable, recording prefab overrides); framing (F) a UI element or a Canvas frames its rectangle on that plane, and the transform gizmo stays off UI elements. C++: `SceneRenderer::RenderUIOnly`.
 - **Game view**: renders the primary camera. **Play/Pause/Step** run on a cloned scene, and edits made while playing are discarded on Stop.
 - **Project** browser: folder tree, thumbnails and material swatches, New Material/Scene/Folder, search, rename, move by drag, delete, and import by dropping files from Windows Explorer.
 - **Console** with level filters, collapsing and clear-on-play. Also **Scene Settings**, **Stats**, and **Project Settings**.
@@ -438,7 +439,7 @@ Done in this milestone: everything listed under Features. These are the largest 
 1. **Rendering:** occlusion culling that also holds while the camera moves (testing last frame's visible objects first, the rest against their depth), screen-space shore foam that also works in the editor and against moving objects, and impostors relit live (normal and depth atlases).
 2. **Rendering:** per-object motion blur (moving objects blurred along their own motion, from a velocity buffer written by the mesh pass with each object's last transform; skinned meshes and particles too), so fast objects look the ways Unity's do.
 3. **Animation:** humanoid avatars (retargeting across differently built rigs), and keyframe editing of skeletal animation clips.
-4. **UI system:** UI shown and edited in the Scene view.
+4. **UI system:** world-space canvases (UI placed on objects in the 3D world, drawn with depth and clicked through the camera's ray).
 5. **Scripting:** C# scripts in the built player without the .NET SDK (ahead-of-time compiled).
 6. **AI navigation:** navigation for large worlds (surfaces baked and streamed in tiles, rebaking only the tiles a change touches).
 7. **More audio:** audio from video files, and voice chat (encoding and sending microphone audio over the network).

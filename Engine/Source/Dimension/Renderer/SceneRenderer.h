@@ -175,6 +175,9 @@ namespace Dimension
 
         void Render(VkCommandBuffer cmd, Scene& scene, const CameraData& camera, SceneRenderTarget& target,
                     const SceneRenderOptions& options = {});
+        // Only the scene's screen-space UI, over a transparent image the size of the target (its output): the editor
+        // shows it in the Scene view.
+        void RenderUIOnly(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target);
 
         void DrawLine(const glm::vec3& a, const glm::vec3& b, const glm::vec4& color);
         void DrawWireBox(const glm::mat4& transform, const glm::vec3& center, const glm::vec3& halfExtents, const glm::vec4& color);
