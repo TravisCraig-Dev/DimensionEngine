@@ -407,6 +407,14 @@ namespace Dimension
             uint32_t SortPadded = 0;
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
+        // The terrain's height grid for GPU particle collision (made again when the terrain changes).
+        struct
+        {
+            uint64_t Key = 0;
+            Buffer Heights;
+            VkDeviceAddress Address = 0;
+            uint32_t Samples = 0;
+        } ParticleTerrain;
         // Mesh-shaped GPU emitters' spawn points (ParticleSystems::MeshSurfaceSamples), uploaded once per mesh.
         struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
@@ -3736,6 +3744,9 @@ namespace Dimension
             glm::vec4 Colliders[32 * 4]; // PARTICLE_COLLIDERS
             glm::uvec4 MeshSamples;
             glm::uvec4 DecalBuffer;
+            glm::mat4 TerrainToLocal, TerrainToWorld;
+            glm::uvec4 TerrainInfo;
+            glm::vec4 TerrainSize;
         };
         // Collision decal hits read back per GPU system: a ring of buffers, one per frame until the GPU is done with it.
         constexpr uint32_t kHitRing = kFramesInFlight + 1, kMaxHitsPerFrame = 128;
@@ -3756,6 +3767,39 @@ namespace Dimension
         bool depthValid = m_ParticleDepthKept && m_ParticleDepthSize == glm::uvec2(target.GetWidth(), target.GetHeight());
         uint32_t depthBindless = target.GetDepthBindless();
         m_ParticleDepthWanted = false;
+        // The scene's (first active) terrain: its heights on the GPU, for World collision to follow its shape anywhere.
+        const TerrainComponent* collideTerrain = nullptr;
+        glm::mat4 collideTerrainWorld(1.0f);
+        for (auto [te, tc, tt] : scene.GetRegistry().ViewOf<TerrainComponent, TransformComponent>())
+            if (tt.ActiveInHierarchy)
+            {
+                collideTerrain = &tc;
+                collideTerrainWorld = tt.World;
+                break;
+            }
+        if (collideTerrain)
+        {
+            auto& pt = res.ParticleTerrain;
+            uint64_t key = Terrain::SettingsKey(*collideTerrain) ^ (collideTerrain->EditHeights.empty() ? 0ull : (uint64_t)(uintptr_t)collideTerrain->EditHeights.data());
+            if (key != pt.Key || !pt.Heights.IsValid())
+            {
+                std::vector<float> heights = Terrain::GetHeights(*collideTerrain);
+                uint32_t n = (uint32_t)Terrain::SampleCount(*collideTerrain);
+                if (heights.size() == (size_t)n * n)
+                {
+                    pt.Heights = Buffer(heights.size() * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                        MemoryUsage::CpuToGpu, "ParticleTerrainHeights");
+                    std::memcpy(pt.Heights.GetMapped(), heights.data(), heights.size() * sizeof(float));
+                    VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+                    info.buffer = pt.Heights.GetHandle();
+                    pt.Address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                    pt.Samples = n;
+                    pt.Key = key;
+                }
+                else
+                    collideTerrain = nullptr;
+            }
+        }
         // One GPU system: its buffers, this frame's parameters, simulation (and sorting) and its draw. `salt` tells apart
         // several systems on one object (a Weather's rain and snow).
         auto simulateOne = [&](Entity e, ParticleSystemComponent& ps, const glm::mat4& emitterWorld, uint64_t salt) {
@@ -3825,6 +3869,13 @@ namespace Dimension
                 p.DepthInvViewProj = glm::inverse(m_ParticleDepthViewProj);
                 p.DepthInfo = glm::uvec4(depthBindless, depthValid ? 1u : 0u, 0u, 0u);
                 p.DepthParams = glm::vec4(0.6f + ps.CollisionRadius, ps.CollisionRadius, 0.0f, 0.0f);
+                if (collideTerrain)
+                {
+                    p.TerrainToWorld = collideTerrainWorld;
+                    p.TerrainToLocal = glm::inverse(collideTerrainWorld);
+                    p.TerrainInfo = glm::uvec4(SplitAddress(res.ParticleTerrain.Address), res.ParticleTerrain.Samples, 1u);
+                    p.TerrainSize = glm::vec4(collideTerrain->Size, 0.0f, 0.0f);
+                }
             }
             p.Collision = glm::vec4(ps.Collision == ParticleCollision::Plane ? 1.0f : depthCollision ? 2.0f : 0.0f, ps.CollisionPlaneHeight + ps.CollisionRadius, ps.Bounce,
                                     ps.CollisionDampen);

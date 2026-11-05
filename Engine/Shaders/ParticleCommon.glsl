@@ -58,7 +58,13 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Gp
     vec4 Colliders[PARTICLE_COLLIDERS * 4];
     uvec4 MeshSamples;   // Mesh shape: xy address of (position, normal) vec4 pairs, z count
     uvec4 DecalBuffer;   // collision decals: xy GpuHitsRef address, z capacity, w 1 = on
+    // The terrain's own shape (World collision): its height grid (samples per side, row by row, in its space).
+    mat4 TerrainToLocal;
+    mat4 TerrainToWorld;
+    uvec4 TerrainInfo;   // xy TerrainHeightsRef address, z samples per side, w 1 = on
+    vec4 TerrainSize;    // xy size along X and Z
 };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TerrainHeightsRef { float Heights[]; };
 // Collision decals: the frame's first impacts (count, then position, normal and color per hit), read back by the CPU.
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer GpuHitsRef { uint Count; uint Pad0, Pad1, Pad2; vec4 Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MeshSamplesRef { vec4 Items[]; };
