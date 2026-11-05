@@ -17,11 +17,16 @@ namespace Dimension
         float Vignette = 0.0f;
         float Saturation = 1.0f;          // 0 grey, 1 as is, above 1 more vivid
         float Contrast = 1.0f;            // around mid grey
-        glm::vec3 ColorFilter{ 1.0f };    // multiplies the image (linear)
+        glm::vec3 ColorFilter{ 1.0f };    // multiplies the image (sRGB as picked)
+        float Temperature = 0.0f, Tint = 0.0f; // white balance, -1..1
+        glm::vec3 Lift{ 0.0f }, Gamma{ 1.0f }, Gain{ 1.0f };
     };
 
     namespace PostProcess
     {
         PostProcessValues Evaluate(Scene& scene, const glm::vec3& cameraPosition, uint32_t cullingMask);
+        // White balance as per-channel gains (linear): warmer raises red and lowers blue, Tint trades green for
+        // magenta; the result keeps the image's brightness.
+        glm::vec3 WhiteBalance(float temperature, float tint);
     }
 }

@@ -1310,6 +1310,26 @@ namespace Dimension
                 if (value is { } c) SetVector3("Color Filter", new Vector3(c.R, c.G, c.B));
             }
         }
+        /// <summary>White balance (-1..1: cooler / warmer, greener / magenta); null: not overridden.</summary>
+        public (float Temperature, float Tint)? WhiteBalance
+        {
+            get => GetBool("Override White Balance") ? (GetFloat("Temperature"), GetFloat("Tint")) : null;
+            set
+            {
+                SetBool("Override White Balance", value.HasValue);
+                if (value is { } wb) { SetFloat("Temperature", wb.Temperature); SetFloat("Tint", wb.Tint); }
+            }
+        }
+        /// <summary>Lift (shadows, added), gamma (midtones) and gain (highlights, multiplied) per channel; null: not overridden.</summary>
+        public (Vector3 Lift, Vector3 Gamma, Vector3 Gain)? LiftGammaGain
+        {
+            get => GetBool("Override Lift Gamma Gain") ? (GetVector3("Lift"), GetVector3("Gamma"), GetVector3("Gain")) : null;
+            set
+            {
+                SetBool("Override Lift Gamma Gain", value.HasValue);
+                if (value is { } l) { SetVector3("Lift", l.Lift); SetVector3("Gamma", l.Gamma); SetVector3("Gain", l.Gain); }
+            }
+        }
         private float? Get(string flag, string field) => GetBool("Override " + flag) ? GetFloat(field) : null;
         private void Set(string flag, string field, float? value)
         {

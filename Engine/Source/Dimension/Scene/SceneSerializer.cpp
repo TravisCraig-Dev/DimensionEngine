@@ -180,6 +180,15 @@ namespace Dimension
                           { "skyHorizon", { s.SkyHorizon.r, s.SkyHorizon.g, s.SkyHorizon.b } },
                           { "skyGround", { s.SkyGround.r, s.SkyGround.g, s.SkyGround.b } },
                           { "tonemapping", s.Tonemapping },
+                          { "tonemapper", s.Tonemapper },
+                          { "temperature", s.Temperature },
+                          { "tint", s.Tint },
+                          { "saturation", s.Saturation },
+                          { "contrast", s.Contrast },
+                          { "colorFilter", { s.ColorFilter.r, s.ColorFilter.g, s.ColorFilter.b } },
+                          { "lift", { s.Lift.r, s.Lift.g, s.Lift.b } },
+                          { "gamma", { s.Gamma.r, s.Gamma.g, s.Gamma.b } },
+                          { "gain", { s.Gain.r, s.Gain.g, s.Gain.b } },
                           { "bloom", s.Bloom },
                           { "bloomIntensity", s.BloomIntensity },
                           { "bloomThreshold", s.BloomThreshold },
@@ -264,6 +273,15 @@ namespace Dimension
         if (js.contains("skyHorizon")) vec(js["skyHorizon"], &s.SkyHorizon.x, 3);
         if (js.contains("skyGround")) vec(js["skyGround"], &s.SkyGround.x, 3);
         s.Tonemapping = js.value("tonemapping", s.Tonemapping);
+        s.Tonemapper = js.value("tonemapper", s.Tonemapper);
+        s.Temperature = js.value("temperature", s.Temperature);
+        s.Tint = js.value("tint", s.Tint);
+        s.Saturation = js.value("saturation", s.Saturation);
+        s.Contrast = js.value("contrast", s.Contrast);
+        if (js.contains("colorFilter")) vec(js["colorFilter"], &s.ColorFilter.x, 3);
+        if (js.contains("lift")) vec(js["lift"], &s.Lift.x, 3);
+        if (js.contains("gamma")) vec(js["gamma"], &s.Gamma.x, 3);
+        if (js.contains("gain")) vec(js["gain"], &s.Gain.x, 3);
         s.Bloom = js.value("bloom", s.Bloom);
         s.BloomIntensity = js.value("bloomIntensity", s.BloomIntensity);
         s.BloomThreshold = js.value("bloomThreshold", s.BloomThreshold);

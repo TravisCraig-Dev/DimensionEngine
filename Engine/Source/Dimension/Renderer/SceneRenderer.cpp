@@ -205,7 +205,8 @@ namespace Dimension
             uint32_t DofTexture; // index + 1, 0 = none
             uint32_t AlphaFromHdr; // 1: alpha is the HDR image's (Depth Only cameras), else opaque
             float Saturation, Contrast;
-            float FilterR, FilterG, FilterB; // color filter (linear)
+            float FilterR, FilterG, FilterB; // color filter and white balance (linear)
+            float LiftR, LiftG, LiftB, GammaR, GammaG, GammaB, GainR, GainG, GainB;
         };
 
         struct DofPrefilterPush
@@ -1472,12 +1473,15 @@ namespace Dimension
         post.BloomIntensity = settings.BloomIntensity;
         post.Vignette = settings.Vignette;
         if (!options.ProbeCapture && !options.EditorOverlays) post = PostProcess::Evaluate(scene, camera.Position, camera.CullingMask);
-        glm::vec3 filter = ToLinear(glm::vec4(post.ColorFilter, 1.0f));
-        CompositePush push{ target.GetHdrBindless(), post.Exposure, settings.Tonemapping ? 1u : 0u,
+        glm::vec3 filter = ToLinear(post.ColorFilter) * PostProcess::WhiteBalance(post.Temperature, post.Tint);
+        glm::vec3 gamma = glm::max(post.Gamma, glm::vec3(0.01f));
+        uint32_t tonemap = settings.Tonemapping ? 1u + (uint32_t)std::clamp(settings.Tonemapper, 0, 2) : 0u;
+        CompositePush push{ target.GetHdrBindless(), post.Exposure, tonemap,
                             bloom ? target.GetBloomBindless(0) + 1 : 0u,
                             post.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), post.Vignette,
                             dof ? target.GetDofBindless(1) + 1 : 0u, camera.Transparent ? 1u : 0u,
-                            post.Saturation, post.Contrast, filter.r, filter.g, filter.b };
+                            post.Saturation, post.Contrast, filter.r, filter.g, filter.b,
+                            post.Lift.r, post.Lift.g, post.Lift.b, gamma.r, gamma.g, gamma.b, post.Gain.r, post.Gain.g, post.Gain.b };
         auto beginPass = [&](const Image& image) {
             Vk::TransitionImage(cmd, image.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };

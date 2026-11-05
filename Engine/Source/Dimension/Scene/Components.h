@@ -757,6 +757,10 @@ namespace Dimension
         float Contrast = 1.0f;
         bool OverrideColorFilter = false;
         glm::vec3 ColorFilter{ 1.0f }; // sRGB as picked; multiplies the image
+        bool OverrideWhiteBalance = false;
+        float Temperature = 0.0f, Tint = 0.0f; // -1..1
+        bool OverrideLiftGammaGain = false;
+        glm::vec3 Lift{ 0.0f }, Gamma{ 1.0f }, Gain{ 1.0f };
     };
 
     struct ReflectionProbeComponent

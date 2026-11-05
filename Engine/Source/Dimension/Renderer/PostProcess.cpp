@@ -14,6 +14,14 @@ namespace Dimension
             v.Exposure = settings.Exposure;
             v.BloomIntensity = settings.BloomIntensity;
             v.Vignette = settings.Vignette;
+            v.Saturation = settings.Saturation;
+            v.Contrast = settings.Contrast;
+            v.ColorFilter = settings.ColorFilter;
+            v.Temperature = settings.Temperature;
+            v.Tint = settings.Tint;
+            v.Lift = settings.Lift;
+            v.Gamma = settings.Gamma;
+            v.Gain = settings.Gain;
 
             auto& reg = scene.GetRegistry();
             std::vector<std::pair<float, Entity>> volumes;
@@ -47,8 +55,24 @@ namespace Dimension
                 blend(v.Saturation, vol.OverrideSaturation, vol.Saturation);
                 blend(v.Contrast, vol.OverrideContrast, vol.Contrast);
                 if (vol.OverrideColorFilter) v.ColorFilter += (vol.ColorFilter - v.ColorFilter) * w;
+                blend(v.Temperature, vol.OverrideWhiteBalance, vol.Temperature);
+                blend(v.Tint, vol.OverrideWhiteBalance, vol.Tint);
+                if (vol.OverrideLiftGammaGain)
+                {
+                    v.Lift += (vol.Lift - v.Lift) * w;
+                    v.Gamma += (vol.Gamma - v.Gamma) * w;
+                    v.Gain += (vol.Gain - v.Gain) * w;
+                }
             }
             return v;
+        }
+
+        glm::vec3 WhiteBalance(float temperature, float tint)
+        {
+            float t = std::clamp(temperature, -1.0f, 1.0f), g = std::clamp(tint, -1.0f, 1.0f);
+            glm::vec3 m(1.0f + 0.25f * t, 1.0f - 0.2f * g, 1.0f - 0.25f * t);
+            float luma = glm::dot(m, glm::vec3(0.2126f, 0.7152f, 0.0722f));
+            return m / std::max(luma, 1e-4f);
         }
     }
 }

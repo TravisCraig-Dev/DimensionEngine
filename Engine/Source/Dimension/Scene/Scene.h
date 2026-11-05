@@ -35,7 +35,14 @@ namespace Dimension
         glm::vec3 SkyHorizon{ 0.70f, 0.80f, 0.92f };
         glm::vec3 SkyGround{ 0.33f, 0.31f, 0.29f };
         float Exposure = 1.0f;
-        bool Tonemapping = false; // ACES filmic; off keeps 2D colors exactly as authored
+        bool Tonemapping = false; // filmic tonemapping (Tonemapper); off keeps 2D colors exactly as authored
+        int32_t Tonemapper = 0;   // 0 ACES, 1 Neutral (keeps hues; Khronos PBR Neutral), 2 AgX (soft highlights)
+        // Color grading (Post Process Volumes blend over these): white balance (-1..1: cooler / warmer, greener /
+        // magenta), saturation, contrast, a color filter, and lift / gamma / gain (shadows, midtones, highlights).
+        float Temperature = 0.0f, Tint = 0.0f;
+        float Saturation = 1.0f, Contrast = 1.0f;
+        glm::vec3 ColorFilter{ 1.0f };
+        glm::vec3 Lift{ 0.0f }, Gamma{ 1.0f }, Gain{ 1.0f };
         // Sky: 0 = procedural gradient, 1 = equirectangular texture (ideally .hdr) that also lights the scene.
         int32_t SkyMode = 0;
         AssetHandle SkyTexture = AssetHandle::None();

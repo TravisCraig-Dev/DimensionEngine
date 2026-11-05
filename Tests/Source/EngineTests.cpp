@@ -6289,6 +6289,14 @@ namespace
         CHECK(Near(PostProcess::Evaluate(scene, { 10, 0, 0 }, ~0u).Exposure, 2.0f));
         reg.Get<TagComponent>(b).Layer = 3; // a camera that does not draw layer 3 does not get it
         CHECK(Near(PostProcess::Evaluate(scene, { 10, 0, 0 }, ~(1u << 3)).Exposure, 1.0f));
+        // The scene's own grading is the base volumes blend over; white balance keeps brightness.
+        scene.GetSettings().Contrast = 1.3f;
+        scene.GetSettings().Temperature = 0.5f;
+        PostProcessValues base = PostProcess::Evaluate(scene, { 0, 0, 0 }, ~0u);
+        CHECK(Near(base.Contrast, 1.3f) && Near(base.Temperature, 0.5f));
+        glm::vec3 warm = PostProcess::WhiteBalance(0.5f, 0.0f);
+        CHECK(warm.r > 1.0f && warm.b < 1.0f && Near(glm::dot(warm, glm::vec3(0.2126f, 0.7152f, 0.0722f)), 1.0f));
+        CHECK(glm::length(PostProcess::WhiteBalance(0.0f, 0.0f) - glm::vec3(1.0f)) < 1e-5f);
     }
 
     // Camera stacking: other cameras draw over the primary only when their viewport is smaller than the screen, in

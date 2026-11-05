@@ -500,7 +500,14 @@ namespace Dimension
             .Field("Override Contrast", &PostProcessVolumeComponent::OverrideContrast)
             .Field("Contrast", &PostProcessVolumeComponent::Contrast).Range(0.0f, 3.0f).Speed(0.01f)
             .Field("Override Color Filter", &PostProcessVolumeComponent::OverrideColorFilter)
-            .Field("Color Filter", &PostProcessVolumeComponent::ColorFilter).As(FieldType::Color3);
+            .Field("Color Filter", &PostProcessVolumeComponent::ColorFilter).As(FieldType::Color3)
+            .Field("Override White Balance", &PostProcessVolumeComponent::OverrideWhiteBalance)
+            .Field("Temperature", &PostProcessVolumeComponent::Temperature).Range(-1.0f, 1.0f).Speed(0.01f).Tooltip("Cooler (-) or warmer (+)")
+            .Field("Tint", &PostProcessVolumeComponent::Tint).Range(-1.0f, 1.0f).Speed(0.01f).Tooltip("Greener (-) or magenta (+)")
+            .Field("Override Lift Gamma Gain", &PostProcessVolumeComponent::OverrideLiftGammaGain)
+            .Field("Lift", &PostProcessVolumeComponent::Lift).Speed(0.005f).Tooltip("Added to the shadows (per channel)")
+            .Field("Gamma", &PostProcessVolumeComponent::Gamma).Speed(0.005f).Tooltip("Midtones: above 1 brighter (per channel)")
+            .Field("Gain", &PostProcessVolumeComponent::Gain).Speed(0.005f).Tooltip("Multiplies the highlights (per channel)");
 
         Register<ReflectionProbeComponent>("Reflection Probe", "Rendering")
             .Field("Size", &ReflectionProbeComponent::Size).Speed(0.05f).Tooltip("Influence box: surfaces inside reflect this probe")
