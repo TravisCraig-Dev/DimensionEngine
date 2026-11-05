@@ -4,7 +4,21 @@ file(GLOB DIM_SHADERS CONFIGURE_DEPENDS Shaders/*.vert Shaders/*.frag Shaders/*.
 # The engine is a DLL so that the editor, the player and hot-reloadable game
 # modules all share a single copy of engine state (registries, input, assets, ImGui).
 add_library(DimensionEngine SHARED ${DIM_ENGINE_SOURCES} ${DIM_IMGUI_SOURCES})
-set_target_properties(DimensionEngine PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+# Every symbol is exported (the editor, player and game modules use the engine's classes directly), as
+# WINDOWS_EXPORT_ALL_SYMBOLS would, except lambdas' (over 11000, never used across modules): with them the import
+# library passes Windows' limit of 65535 symbols (LNK1189).
+if(MSVC)
+    set(DIM_ENGINE_DEF_DIR "${CMAKE_CURRENT_BINARY_DIR}/def")
+    file(GENERATE OUTPUT "${DIM_ENGINE_DEF_DIR}/objects-$<CONFIG>.txt" CONTENT "$<JOIN:$<TARGET_OBJECTS:DimensionEngine>,\n>\n")
+    add_custom_command(TARGET DimensionEngine PRE_LINK
+        COMMAND "${CMAKE_COMMAND}" -E __create_def "${DIM_ENGINE_DEF_DIR}/all-$<CONFIG>.def" "${DIM_ENGINE_DEF_DIR}/objects-$<CONFIG>.txt"
+        COMMAND "${CMAKE_COMMAND}" "-DIN=${DIM_ENGINE_DEF_DIR}/all-$<CONFIG>.def" "-DOUT=${DIM_ENGINE_DEF_DIR}/engine-$<CONFIG>.def"
+                -P "${CMAKE_SOURCE_DIR}/cmake/FilterExports.cmake"
+        VERBATIM)
+    target_link_options(DimensionEngine PRIVATE "/DEF:${DIM_ENGINE_DEF_DIR}/engine-$<CONFIG>.def")
+else()
+    set_target_properties(DimensionEngine PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 target_include_directories(DimensionEngine PUBLIC Source)
 
 # Public: headers only. Private: libraries whose state must exist exactly once (inside this DLL).

@@ -6243,6 +6243,62 @@
      "Cast Shadows": false
     }
    }
+  },
+  {
+   "guid": 6000124,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Map View Grading",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      0,
+      48,
+      6
+     ],
+     "Rotation": [
+      0,
+      0,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Post Process Volume": {
+     "Global": false,
+     "Size": [
+      8,
+      8,
+      8
+     ],
+     "Blend Distance": 2.0,
+     "Weight": 1.0,
+     "Priority": 0.0,
+     "Override Exposure": false,
+     "Exposure": 1.0,
+     "Override Bloom": false,
+     "Bloom Intensity": 1.0,
+     "Override Vignette": true,
+     "Vignette": 0.45,
+     "Override Saturation": true,
+     "Saturation": 0.25,
+     "Override Contrast": true,
+     "Contrast": 1.15,
+     "Override Color Filter": true,
+     "Color Filter": [
+      0.8,
+      0.92,
+      1.0
+     ]
+    }
+   }
   }
  ]
 }

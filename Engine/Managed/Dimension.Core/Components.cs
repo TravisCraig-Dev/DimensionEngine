@@ -1282,6 +1282,42 @@ namespace Dimension
         }
     }
 
+    /// <summary>
+    /// Post-processing for the cameras inside its box, or every camera when Global (Unity's Volume with its overrides),
+    /// blended over the scene's settings by Weight and, outside the box, fading over Blend Distance; higher Priority
+    /// volumes blend over lower ones, and a camera only sees volumes on the layers it draws. Set a value to override it.
+    /// </summary>
+    public unsafe class PostProcessVolume : Component
+    {
+        internal override string NativeName => "Post Process Volume";
+        public bool IsGlobal { get => GetBool("Global"); set => SetBool("Global", value); }
+        public Vector3 Size { get => GetVector3("Size"); set => SetVector3("Size", value); }
+        public float BlendDistance { get => GetFloat("Blend Distance"); set => SetFloat("Blend Distance", value); }
+        public float Weight { get => GetFloat("Weight"); set => SetFloat("Weight", value); }
+        public float Priority { get => GetFloat("Priority"); set => SetFloat("Priority", value); }
+        /// <summary>Overridden values (null: the volume leaves it as it is).</summary>
+        public float? Exposure { get => Get("Exposure", "Exposure"); set => Set("Exposure", "Exposure", value); }
+        public float? BloomIntensity { get => Get("Bloom", "Bloom Intensity"); set => Set("Bloom", "Bloom Intensity", value); }
+        public float? Vignette { get => Get("Vignette", "Vignette"); set => Set("Vignette", "Vignette", value); }
+        public float? Saturation { get => Get("Saturation", "Saturation"); set => Set("Saturation", "Saturation", value); }
+        public float? Contrast { get => Get("Contrast", "Contrast"); set => Set("Contrast", "Contrast", value); }
+        public Color? ColorFilter
+        {
+            get { if (!GetBool("Override Color Filter")) return null; Vector3 c = GetVector3("Color Filter"); return new Color(c.X, c.Y, c.Z); }
+            set
+            {
+                SetBool("Override Color Filter", value.HasValue);
+                if (value is { } c) SetVector3("Color Filter", new Vector3(c.R, c.G, c.B));
+            }
+        }
+        private float? Get(string flag, string field) => GetBool("Override " + flag) ? GetFloat(field) : null;
+        private void Set(string flag, string field, float? value)
+        {
+            SetBool("Override " + flag, value.HasValue);
+            if (value is { } v) SetFloat(field, v);
+        }
+    }
+
     /// <summary>9 spherical-harmonic coefficients of light from every direction (Unity's SphericalHarmonicsL2), as light
     /// probes hold them.</summary>
     public unsafe struct SphericalHarmonicsL2

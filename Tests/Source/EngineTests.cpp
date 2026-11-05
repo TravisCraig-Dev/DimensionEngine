@@ -13,6 +13,7 @@
 #include <Dimension/Renderer/Environment.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/CameraStack.h>
+#include <Dimension/Renderer/PostProcess.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/PathPlacer.h>
 #include <Dimension/Scene/SceneSearch.h>
@@ -6253,6 +6254,41 @@ namespace
         CHECK(scene.SampleLightProbes({ 0, 0, 20 }, sh) == 0.0f && sh[0] == glm::vec3(0.0f));
         v.Baked.clear(); // not baked: no probes
         CHECK(scene.SampleLightProbes({ 0, 0, 0 }, sh) == 0.0f);
+    }
+
+    // Post Process Volumes: a global one, a box fading in over its Blend Distance, priorities, weights, only the
+    // values overridden, and the camera's culling mask choosing which apply.
+    void TestPostProcessVolumes()
+    {
+        Scene scene("Post");
+        scene.GetSettings().Exposure = 1.0f;
+        auto& reg = scene.GetRegistry();
+        Entity g = scene.CreateEntity("Global");
+        auto& gv = reg.Emplace<PostProcessVolumeComponent>(g);
+        gv.Global = true;
+        gv.OverrideSaturation = true;
+        gv.Saturation = 0.5f;
+        Entity b = scene.CreateEntity("Box");
+        reg.Get<TransformComponent>(b).Position = { 10, 0, 0 };
+        auto& bv = reg.Emplace<PostProcessVolumeComponent>(b);
+        bv.Size = { 4, 4, 4 };
+        bv.BlendDistance = 2.0f;
+        bv.Priority = 1.0f;
+        bv.OverrideExposure = true;
+        bv.Exposure = 3.0f;
+        bv.OverrideSaturation = true;
+        bv.Saturation = 0.0f;
+        scene.UpdateTransforms();
+        PostProcessValues away = PostProcess::Evaluate(scene, { 0, 0, 0 }, ~0u);
+        CHECK(Near(away.Saturation, 0.5f) && Near(away.Exposure, 1.0f) && Near(away.Contrast, 1.0f));
+        PostProcessValues in = PostProcess::Evaluate(scene, { 10, 0, 0 }, ~0u);
+        CHECK(Near(in.Saturation, 0.0f) && Near(in.Exposure, 3.0f)); // the box (higher priority) over the global one
+        PostProcessValues edge = PostProcess::Evaluate(scene, { 13, 0, 0 }, ~0u); // 1 m outside: halfway in
+        CHECK(Near(edge.Exposure, 2.0f) && Near(edge.Saturation, 0.25f));
+        reg.Get<PostProcessVolumeComponent>(b).Weight = 0.5f;
+        CHECK(Near(PostProcess::Evaluate(scene, { 10, 0, 0 }, ~0u).Exposure, 2.0f));
+        reg.Get<TagComponent>(b).Layer = 3; // a camera that does not draw layer 3 does not get it
+        CHECK(Near(PostProcess::Evaluate(scene, { 10, 0, 0 }, ~(1u << 3)).Exposure, 1.0f));
     }
 
     // Camera stacking: other cameras draw over the primary only when their viewport is smaller than the screen, in
@@ -13854,6 +13890,7 @@ int main(int argc, char** argv)
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);
     Run("Camera stack", TestCameraStack);
+    Run("Post process volumes", TestPostProcessVolumes);
     Run("UI widgets", TestUIWidgets);
     Run("UI dropdown and scrollbar", TestUIDropdownAndScrollbar);
     Run("UI text editing", TestUITextEditing);

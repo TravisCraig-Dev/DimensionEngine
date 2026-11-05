@@ -13,6 +13,9 @@ layout(push_constant) uniform Push
     float Vignette;      // 0..1 darkening at the corners
     uint DofTexture;     // bindless index + 1 of the blurred half-resolution image (alpha = blend), 0 = off
     uint AlphaFromHdr;   // 1: alpha from the HDR image (a Depth Only camera: where it drew), else 1
+    float Saturation;    // color grading (Post Process Volumes): 1 = as is
+    float Contrast;
+    float FilterR, FilterG, FilterB;
 } pc;
 
 layout(location = 0) in vec2 vUV;
@@ -43,6 +46,11 @@ void main()
         hdr += texture(uTextures[nonuniformEXT(pc.BloomTexture - 1u)], vUV).rgb * pc.BloomIntensity;
     hdr *= pc.Exposure;
     vec3 mapped = pc.Tonemap == 1u ? ACESFilm(hdr) : hdr;
+    // Color grading: filter, saturation, then contrast around mid grey.
+    mapped *= vec3(pc.FilterR, pc.FilterG, pc.FilterB);
+    float luma = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
+    mapped = max(mix(vec3(luma), mapped, pc.Saturation), vec3(0.0));
+    mapped = max((mapped - 0.18) * pc.Contrast + 0.18, vec3(0.0));
     if (pc.Vignette > 0.0)
     {
         float d = length(vUV - 0.5) * 1.41421;

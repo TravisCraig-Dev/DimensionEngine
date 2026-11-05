@@ -736,6 +736,29 @@ namespace Dimension
 
     // Captures the surroundings at its position; meshes inside its box reflect that instead of the sky (Unity's
     // Reflection Probe). Baked when first rendered, when moved or resized, on request, or every frame (Realtime).
+    // A Post Process Volume (Unity's Volume with its overrides): post-processing for the cameras inside its box (or all,
+    // when Global), blended over the scene's settings (see Dimension/Renderer/PostProcess.h).
+    struct PostProcessVolumeComponent
+    {
+        bool Global = false;
+        glm::vec3 Size{ 10.0f };    // the box, centered on the object (its space)
+        float BlendDistance = 2.0f; // fades in over this distance outside the box
+        float Weight = 1.0f;
+        float Priority = 0.0f;      // higher ones blend over lower ones
+        bool OverrideExposure = false;
+        float Exposure = 1.0f;
+        bool OverrideBloom = false;
+        float BloomIntensity = 1.0f;
+        bool OverrideVignette = false;
+        float Vignette = 0.3f;
+        bool OverrideSaturation = false;
+        float Saturation = 1.0f;
+        bool OverrideContrast = false;
+        float Contrast = 1.0f;
+        bool OverrideColorFilter = false;
+        glm::vec3 ColorFilter{ 1.0f }; // sRGB as picked; multiplies the image
+    };
+
     struct ReflectionProbeComponent
     {
         glm::vec3 Size{ 10.0f, 5.0f, 10.0f }; // influence box, centered on the probe

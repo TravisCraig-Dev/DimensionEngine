@@ -1,4 +1,5 @@
 #include "Dimension/Renderer/SceneRenderer.h"
+#include "Dimension/Renderer/PostProcess.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/Material.h"
 #include "Dimension/Scene/LODGroup.h"
@@ -203,6 +204,8 @@ namespace Dimension
             float Vignette;
             uint32_t DofTexture; // index + 1, 0 = none
             uint32_t AlphaFromHdr; // 1: alpha is the HDR image's (Depth Only cameras), else opaque
+            float Saturation, Contrast;
+            float FilterR, FilterG, FilterB; // color filter (linear)
         };
 
         struct DofPrefilterPush
@@ -1463,10 +1466,18 @@ namespace Dimension
         if (dof) RenderDepthOfField(cmd, target, camera, settings);
 
         VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
-        CompositePush push{ target.GetHdrBindless(), settings.Exposure, settings.Tonemapping ? 1u : 0u,
+        // Post Process Volumes around this camera blend over the scene's settings (not in probe captures).
+        PostProcessValues post;
+        post.Exposure = settings.Exposure;
+        post.BloomIntensity = settings.BloomIntensity;
+        post.Vignette = settings.Vignette;
+        if (!options.ProbeCapture && !options.EditorOverlays) post = PostProcess::Evaluate(scene, camera.Position, camera.CullingMask);
+        glm::vec3 filter = ToLinear(glm::vec4(post.ColorFilter, 1.0f));
+        CompositePush push{ target.GetHdrBindless(), post.Exposure, settings.Tonemapping ? 1u : 0u,
                             bloom ? target.GetBloomBindless(0) + 1 : 0u,
-                            settings.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), settings.Vignette,
-                            dof ? target.GetDofBindless(1) + 1 : 0u, camera.Transparent ? 1u : 0u };
+                            post.BloomIntensity / (float)std::max(1u, target.GetBloomLevels()), post.Vignette,
+                            dof ? target.GetDofBindless(1) + 1 : 0u, camera.Transparent ? 1u : 0u,
+                            post.Saturation, post.Contrast, filter.r, filter.g, filter.b };
         auto beginPass = [&](const Image& image) {
             Vk::TransitionImage(cmd, image.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
