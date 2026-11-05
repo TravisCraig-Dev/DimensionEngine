@@ -41,6 +41,7 @@ namespace Dimension
             Scope<SceneRenderTarget> Target;
             Ref<class Texture2D> Texture; // a Render Texture it draws into
             uint64_t Frame = 0;
+            uint32_t Requests = 0;        // Manual Render: the Camera.Render() count it last drew for
         };
         std::unordered_map<uint64_t, View> m_Views;
         uint64_t m_Frame = 0;

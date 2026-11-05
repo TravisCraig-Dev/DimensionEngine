@@ -45,6 +45,7 @@ namespace Dimension
             {
                 uint32_t Width = 1, Height = 1;
                 bool SRGB = true, Point = false, Dirty = true;
+                bool RenderTarget = false; // a render texture: cameras draw into the GPU image; Pixels only seed it
                 std::vector<uint32_t> Pixels;
                 const void* Owner = nullptr;
             };
@@ -479,7 +480,7 @@ namespace Dimension
         {
             // Made (again) from its pixels when they changed; the old image is freed once the GPU is done with it.
             auto& r = rt->second;
-            if (r.Dirty || !s->Textures.contains(handle))
+            if ((r.Dirty && !r.RenderTarget) || !s->Textures.contains(handle))
             {
                 TextureSettings ts;
                 ts.GenerateMips = false;
@@ -780,6 +781,40 @@ namespace Dimension
 
     bool AssetManager::IsRuntimeTexture(AssetHandle handle) { return s && s->RuntimeTextures.contains(handle); }
 
+    AssetHandle AssetManager::CreateRuntimeRenderTexture(uint32_t width, uint32_t height, const void* owner)
+    {
+        AssetHandle h = CreateRuntimeTexture(width, height, true, false, owner);
+        if (h.IsValid())
+        {
+            auto& r = s->RuntimeTextures[h];
+            r.RenderTarget = true;
+            std::fill(r.Pixels.begin(), r.Pixels.end(), 0xFF000000u);
+        }
+        return h;
+    }
+
+    bool AssetManager::ReadTexturePixels(AssetHandle handle, std::vector<uint32_t>& out, glm::uvec2& size)
+    {
+        Ref<Texture2D> tex = GetTexture(handle);
+        if (!tex) return false;
+        VkFormat format = tex->GetImage().GetFormat();
+        if (format != VK_FORMAT_R8G8B8A8_SRGB && format != VK_FORMAT_R8G8B8A8_UNORM) return false;
+        size = { tex->GetWidth(), tex->GetHeight() };
+        Buffer staging((VkDeviceSize)size.x * size.y * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, MemoryUsage::GpuToCpu);
+        VkImage image = tex->GetImage().GetHandle();
+        RenderDevice::Get().ImmediateSubmit([&](VkCommandBuffer cmd) {
+            Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.imageExtent = { size.x, size.y, 1 };
+            vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.GetHandle(), 1, &copy);
+            Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        });
+        out.resize((size_t)size.x * size.y);
+        std::memcpy(out.data(), staging.GetMapped(), out.size() * 4);
+        return true;
+    }
+
     bool AssetManager::SetRuntimeTexturePixels(AssetHandle handle, const uint32_t* rgba8, size_t count)
     {
         auto it = s ? s->RuntimeTextures.find(handle) : decltype(s->RuntimeTextures)::iterator{};
@@ -917,6 +952,8 @@ namespace Dimension
 
     glm::uvec2 AssetManager::GetRenderTextureSize(AssetHandle handle)
     {
+        if (auto rt = s ? s->RuntimeTextures.find(handle) : decltype(s->RuntimeTextures)::iterator{}; s && rt != s->RuntimeTextures.end())
+            return rt->second.RenderTarget ? glm::uvec2(rt->second.Width, rt->second.Height) : glm::uvec2(0);
         auto* meta = GetMetadata(handle);
         if (!meta || meta->Type != AssetType::RenderTexture) return glm::uvec2(0);
         try

@@ -110,6 +110,68 @@ namespace Dimension
             Native.Api.TextureOp(Native.CurrentScene, 3, &guid, null, null, 0, 0);
             Guid = 0;
         }
+
+        /// <summary>
+        /// Copies another texture's pixels as the GPU holds them into this one (Unity's ReadPixels, from a texture rather
+        /// than the active render target): a render texture a camera drew (as of the last finished frame: a camera's
+        /// Render() shows here the frame after), or an RGBA8 image. The overlapping part is copied from the top-left;
+        /// call Apply to show the result. False when it cannot be read (another format).
+        /// </summary>
+        public bool ReadPixels(Texture source)
+        {
+            int w = source.Width, h = source.Height;
+            if (w <= 0 || h <= 0) return false;
+            var read = new Color32[w * h];
+            ulong guid = source.Guid;
+            int* size = stackalloc int[2] { w, h };
+            fixed (Color32* p = read)
+                if (Native.Api.TextureOp(Native.CurrentScene, 6, &guid, size, (uint*)p, read.Length, 0) == 0) return false;
+            for (int y = 0; y < Math.Min(h, Height); ++y)
+                Array.Copy(read, y * w, m_Pixels, y * Width, Math.Min(w, Width));
+            return true;
+        }
+
+        /// <summary>The pixels as a PNG file's bytes (File.WriteAllBytes to save it).</summary>
+        public byte[] EncodeToPNG()
+        {
+            int* size = stackalloc int[2] { Width, Height };
+            int n;
+            fixed (Color32* p = m_Pixels) n = Native.Api.TextureOp(IntPtr.Zero, 7, null, size, (uint*)p, m_Pixels.Length, 0);
+            if (n <= 0) return Array.Empty<byte>();
+            var bytes = new byte[n];
+            fixed (byte* b = bytes) Native.Api.TextureOp(IntPtr.Zero, 8, null, null, (uint*)b, n, 0);
+            return bytes;
+        }
+    }
+
+    /// <summary>
+    /// A render texture made by a script (Unity's RenderTexture): set it as a Camera's TargetTexture and show it
+    /// anywhere a texture goes. Black until a camera draws into it; it lasts until play stops or Destroy().
+    /// </summary>
+    public sealed unsafe class RenderTexture
+    {
+        public int Width { get; }
+        public int Height { get; }
+        public ulong Guid { get; private set; }
+        public Texture Texture => new(Guid);
+        public static implicit operator Texture(RenderTexture t) => t?.Texture ?? default;
+
+        public RenderTexture(int width, int height)
+        {
+            Width = Math.Clamp(width, 1, 8192);
+            Height = Math.Clamp(height, 1, 8192);
+            int* size = stackalloc int[2] { Width, Height };
+            ulong guid = 0;
+            Native.Api.TextureOp(Native.CurrentScene, 5, &guid, size, null, 0, 0);
+            Guid = guid;
+        }
+
+        public void Destroy()
+        {
+            ulong guid = Guid;
+            Native.Api.TextureOp(Native.CurrentScene, 3, &guid, null, null, 0, 0);
+            Guid = 0;
+        }
     }
 
     /// <summary>A color of four bytes (Unity's Color32), sRGB-encoded as texture pixels are.</summary>

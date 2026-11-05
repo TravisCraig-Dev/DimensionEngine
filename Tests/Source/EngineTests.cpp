@@ -9807,6 +9807,36 @@ namespace
             AssetManager::Shutdown();
             fs::remove_all(pdir);
         }
+        // C# PhotoBooth (Sandbox): its camera becomes Manual Render into a RenderTexture made by the script (a runtime render
+        // texture of its size), Camera.Render() asks for a frame, and EncodeToPNG writes a PNG.
+        {
+            fs::path bdir = fs::temp_directory_path() / "dimension_photo_cs";
+            fs::remove_all(bdir);
+            fs::create_directories(bdir / "Assets");
+            AssetManager::Init(bdir / "Assets");
+            Scene pb("Photo");
+            Entity cam = pb.CreateEntity("Photo Camera");
+            pb.GetRegistry().Emplace<CameraComponent>(cam).Primary = false;
+            auto& booth = pb.GetRegistry().Emplace<ScriptComponent>(cam).Add("Game.PhotoBooth");
+            booth.Fields["Interval"] = 0.0f; // photos only on request
+            auto rt = pb.Clone();
+            rt->OnRuntimeStart();
+            rt->OnUpdateRuntime(0.05f);
+            auto& c = rt->GetRegistry().Get<CameraComponent>(cam);
+            CHECK(c.ManualRender && c.RenderRequests == 0 && AssetManager::GetRenderTextureSize(c.TargetTexture) == glm::uvec2(256, 144));
+            bool gameInput = Input::IsGameInputEnabled();
+            Input::SetGameInputEnabled(true);
+            Input::SimulateKey(Key::N, true);
+            rt->OnUpdateRuntime(0.05f);
+            Input::SimulateKey(Key::N, false);
+            Input::SetGameInputEnabled(gameInput);
+            CHECK(rt->GetRegistry().Get<CameraComponent>(cam).RenderRequests == 1);
+            AssetHandle target = rt->GetRegistry().Get<CameraComponent>(cam).TargetTexture;
+            rt->OnRuntimeStop();
+            CHECK(!AssetManager::IsRuntimeTexture(target)); // released with the scene
+            AssetManager::Shutdown();
+            fs::remove_all(bdir);
+        }
         // C# Timeline control: the Sandbox's TimelineStatus hears Played (play on awake) / Paused / Stopped, its Opened()
         // is called by the timeline event of that name, and P pauses and resumes it.
         {

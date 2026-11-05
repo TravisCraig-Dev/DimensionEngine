@@ -6137,6 +6137,112 @@
      "Cast Shadows": false
     }
    }
+  },
+  {
+   "guid": 6000122,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Photo Camera",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -16,
+      9,
+      -16
+     ],
+     "Rotation": [
+      -0.42,
+      -2.356,
+      0
+     ],
+     "Scale": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Camera": {
+     "Projection": 0,
+     "Field Of View": 50,
+     "Orthographic Size": 5,
+     "Near Clip": 0.1,
+     "Far Clip": 200,
+     "Primary": false,
+     "Clear Flags": 1,
+     "Background": [
+      0.16,
+      0.18,
+      0.22,
+      1
+     ]
+    },
+    "Script": {
+     "Scripts": [
+      {
+       "Class": "Game.PhotoBooth",
+       "Fields": {
+        "Frame": 6000123,
+        "Interval": 3.0,
+        "Width": 256,
+        "Height": 144,
+        "Photos": 0
+       },
+       "Enabled": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "guid": 6000123,
+   "parent": 0,
+   "components": {
+    "Tag": {
+     "Name": "Photo Frame",
+     "Tag": "Untagged",
+     "Active": true,
+     "Layer": 0
+    },
+    "Transform": {
+     "Position": [
+      -5.5,
+      2.2,
+      16.5
+     ],
+     "Rotation": [
+      0.72,
+      0,
+      0
+     ],
+     "Scale": [
+      0.6,
+      1,
+      0.34
+     ]
+    },
+    "Mesh Renderer": {
+     "Mesh": 3,
+     "Material": 0,
+     "Albedo": 0,
+     "Color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "Tiling": [
+      1,
+      1
+     ],
+     "Smoothness": 0.2,
+     "Emission": 0.0,
+     "Cast Shadows": false
+    }
+   }
   }
  ]
 }

@@ -114,6 +114,8 @@ namespace Dimension
         // A Render Texture asset it draws into instead of the screen (at the texture's size; materials, sprites and UI
         // Images showing that texture show its view). None = the screen.
         AssetHandle TargetTexture = AssetHandle::None();
+        bool ManualRender = false;    // with a Target Texture: draws only when Camera.Render() asks (snapshots)
+        uint32_t RenderRequests = 0;  // runtime: bumped by Camera.Render()
 
         glm::mat4 GetProjection(float aspect) const;
     };

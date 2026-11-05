@@ -106,6 +106,11 @@ namespace Dimension
         static const std::vector<uint32_t>* GetRuntimeTexturePixels(AssetHandle handle, glm::uvec2* size = nullptr);
         static void DestroyRuntimeTexture(AssetHandle handle);
         static void ReleaseRuntimeTextures(const void* owner);
+        // A render texture made while playing (C# new RenderTexture): black until a camera draws into it.
+        static AssetHandle CreateRuntimeRenderTexture(uint32_t width, uint32_t height, const void* owner);
+        // A texture's pixels read back from the GPU (RGBA8 textures: render textures, scripts' and most images), rows
+        // from the top, as stored (sRGB-encoded for color textures). Waits for the GPU. False for other formats.
+        static bool ReadTexturePixels(AssetHandle handle, std::vector<uint32_t>& out, glm::uvec2& size);
         static Ref<Font> GetFont(AssetHandle handle); // falls back to the built-in font
         // Animator controllers are editable in place; call SaveAnimatorController after changing one.
         static Ref<AnimatorController> GetAnimatorController(AssetHandle handle);

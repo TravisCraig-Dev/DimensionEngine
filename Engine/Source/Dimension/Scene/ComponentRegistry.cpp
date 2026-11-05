@@ -112,7 +112,9 @@ namespace Dimension
                 .Tooltip("The layers it draws, as bits (bit n = layer n; -1 = everything). Scripts set it with LayerMask.GetMask.")
             .Field("Target Texture", &CameraComponent::TargetTexture).As(FieldType::Texture)
                 .Tooltip("A Render Texture it draws into instead of the screen (mirrors, monitors): materials, sprites and UI Images\n"
-                         "showing that texture show this camera's view. Create one in the Project window.");
+                         "showing that texture show this camera's view. Create one in the Project window.")
+            .Field("Manual Render", &CameraComponent::ManualRender)
+                .Tooltip("With a Target Texture: it draws only when a script calls Camera.Render() (a snapshot), not every frame");
 
         Register<TerrainComponent>("Terrain", "Rendering")
             .Field("Size", &TerrainComponent::Size).Speed(0.5f).Tooltip("Meters along X and Z, centered on the object")

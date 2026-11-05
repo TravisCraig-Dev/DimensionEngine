@@ -54,10 +54,14 @@ namespace Dimension
             uint32_t w = texture->GetWidth(), h = texture->GetHeight();
             uint64_t id = ((uint64_t)e.Generation << 32) | e.Index;
             View& view = m_Views[id];
+            view.Frame = m_Frame;
+            // Manual Render: only when Camera.Render() asked since it last drew (never before the first request).
+            if (cam.ManualRender && view.Texture == texture && view.Requests == cam.RenderRequests) continue;
+            if (cam.ManualRender && cam.RenderRequests == 0) continue;
+            view.Requests = cam.RenderRequests;
             if (!view.Renderer) view.Renderer = MakeScope<SceneRenderer>();
             if (!view.Target) view.Target = MakeScope<SceneRenderTarget>(w, h);
             else if (view.Target->GetWidth() != w || view.Target->GetHeight() != h) view.Target->Resize(w, h);
-            view.Frame = m_Frame;
             view.Texture = texture; // kept alive while the GPU may still copy into it
             CameraData data = CameraData::FromEntity(scene, e, view.Target->GetAspect());
             view.Renderer->Render(cmd, scene, data, *view.Target, {});

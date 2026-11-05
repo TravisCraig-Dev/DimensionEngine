@@ -27,6 +27,7 @@
 #include "Dimension/Animation/Timeline.h"
 #include "Dimension/Renderer/Environment.h"
 #include "Dimension/Renderer/Texture.h"
+#include <stb_image_write.h>
 #include "Dimension/Physics/Wind.h"
 #include <climits>
 #include <cmath>
@@ -302,9 +303,14 @@ namespace Dimension
             // weight at v[27]), 2 the wind at v xyz (out xyz), 3 evaluate SH: v 27 coefficients, normal at v[27..29] (out rgb).
             int (*EnvironmentOp)(void*, uint64_t, int, float*);
             // Textures made by scripts: 0 create (size w x h, flags 1 linear, 2 point filter; out the GUID), 1 set its
-            // pixels (count RGBA8), 2 get them, 3 destroy, 4 a texture's size (any texture; out w, h). 0 when it fails.
+            // pixels (count RGBA8), 2 get them, 3 destroy, 4 a texture's size (any texture; out w, h), 5 create a render
+            // texture (w x h; out the GUID), 6 read any RGBA8 texture's pixels from the GPU (count must be w * h), 7 encode
+            // pixels (w x h) as PNG (returns the byte count), 8 copy that PNG into pixels (count bytes), 9 Camera.Render()
+            // for the camera *guid (packed entity). 0 when it fails.
             int (*TextureOp)(void*, int, uint64_t*, int*, uint32_t*, int, int);
         };
+
+        std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
 
         // Background scene loads started from C#, by id.
         std::unordered_map<int, std::shared_ptr<SceneLoadOperation>> s_AsyncOps;
@@ -2210,6 +2216,44 @@ namespace Dimension
                     return 1;
                 }
                 case 3: AssetManager::DestroyRuntimeTexture(AssetHandle(*guid)); return 1;
+                case 5:
+                {
+                    AssetHandle h = AssetManager::CreateRuntimeRenderTexture((uint32_t)std::max(size[0], 1), (uint32_t)std::max(size[1], 1), s);
+                    *guid = (uint64_t)h;
+                    return h.IsValid() ? 1 : 0;
+                }
+                case 6:
+                {
+                    std::vector<uint32_t> read;
+                    glm::uvec2 sz(0);
+                    if (!AssetManager::ReadTexturePixels(AssetHandle(*guid), read, sz)) return 0;
+                    size[0] = (int)sz.x;
+                    size[1] = (int)sz.y;
+                    if ((size_t)count != read.size()) return 0;
+                    std::memcpy(pixels, read.data(), read.size() * 4);
+                    return 1;
+                }
+                case 7:
+                {
+                    s_PngBytes.clear();
+                    auto write = [](void* context, void* data, int n) {
+                        auto* out = static_cast<std::vector<uint8_t>*>(context);
+                        out->insert(out->end(), (uint8_t*)data, (uint8_t*)data + n);
+                    };
+                    if (!stbi_write_png_to_func(write, &s_PngBytes, size[0], size[1], 4, pixels, size[0] * 4)) return 0;
+                    return (int)s_PngBytes.size();
+                }
+                case 8:
+                    if ((size_t)count != s_PngBytes.size()) return 0;
+                    std::memcpy(pixels, s_PngBytes.data(), s_PngBytes.size());
+                    return 1;
+                case 9:
+                {
+                    auto* cam = Comp<CameraComponent>(s, *guid);
+                    if (!cam) return 0;
+                    ++cam->RenderRequests;
+                    return 1;
+                }
                 default:
                 {
                     glm::uvec2 sz(0);
