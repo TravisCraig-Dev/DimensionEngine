@@ -274,7 +274,9 @@ namespace Dimension
             .Field("Emission", &MeshRendererComponent::Emission).Range(0.0f, 100.0f).Speed(0.05f)
             .Field("Cast Shadows", &MeshRendererComponent::CastShadows)
             .Field("Tint", &MeshRendererComponent::Tint).As(FieldType::Color4)
-                .Tooltip("Multiplies the color of whatever it draws (the material asset's too), for this object only");
+                .Tooltip("Multiplies the color of whatever it draws (the material asset's too), for this object only")
+            .Field("Motion Vectors", &MeshRendererComponent::MotionVectors).Enum({ "Camera Motion Only", "Per Object Motion", "Force No Motion" })
+                .Tooltip("Per Object Motion: its own movement and animation blur it (motion blur) and steer TAA. Force No Motion keeps it sharp even as the camera moves");
 
         Register<AnimatorComponent>("Animator", "Animation")
             .Field("Controller", &AnimatorComponent::Controller).As(FieldType::AnimatorController)

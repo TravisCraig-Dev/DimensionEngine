@@ -2315,7 +2315,7 @@ namespace Editor
             ImGui::SetItemTooltip("A texture of smudges lit by the bloom (needs Bloom)");
             if (s.LensDirt.IsValid()) track(ImGui::DragFloat("Dirt Intensity", &s.LensDirtIntensity, 0.01f, 0.0f, 20.0f));
             track(ImGui::Checkbox("Motion Blur", &s.MotionBlur));
-            ImGui::SetItemTooltip("The image smeared along how the camera moved since the last frame");
+            ImGui::SetItemTooltip("The image smeared along how each pixel moved since the last frame: the camera's motion and moving objects' own (Mesh Renderer > Motion Vectors)");
             if (s.MotionBlur) track(ImGui::SliderFloat("Shutter", &s.MotionBlurIntensity, 0.0f, 1.0f));
             ImGui::TextDisabled("Game view and Player only.");
             ImGui::TreePop();

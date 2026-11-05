@@ -16,7 +16,7 @@ layout(push_constant) uniform Push
     uint HasHistory;
     vec2 Texel;
     float Feedback;    // weight of the current frame (lower = smoother, slower to respond)
-    float Pad;
+    uint Velocity;     // bindless velocity buffer + 1 (0 = reproject through the depth with PrevViewProj)
 } pc;
 
 layout(location = 0) in vec2 vUV;
@@ -56,11 +56,17 @@ void main()
     vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
     vec3 lo = mean - sigma * 1.25, hi = mean + sigma * 1.25;
 
-    // Where this pixel was last frame.
-    vec4 world = uScene.InvViewProj * vec4(nearestUV.x * 2.0 - 1.0, 1.0 - nearestUV.y * 2.0, nearest, 1.0);
-    world /= world.w;
-    vec4 prev = pc.PrevViewProj * vec4(world.xyz, 1.0);
-    vec2 prevUV = vec2(prev.x / prev.w * 0.5 + 0.5, 0.5 - prev.y / prev.w * 0.5) + (vUV - nearestUV);
+    // Where this pixel was last frame: by the velocity buffer (moving objects too), else as the camera moved.
+    vec2 prevUV;
+    if (pc.Velocity != 0u)
+        prevUV = vUV - textureLod(uTextures[nonuniformEXT(pc.Velocity - 1u)], nearestUV, 0.0).xy;
+    else
+    {
+        vec4 world = uScene.InvViewProj * vec4(nearestUV.x * 2.0 - 1.0, 1.0 - nearestUV.y * 2.0, nearest, 1.0);
+        world /= world.w;
+        vec4 prev = pc.PrevViewProj * vec4(world.xyz, 1.0);
+        prevUV = vec2(prev.x / prev.w * 0.5 + 0.5, 0.5 - prev.y / prev.w * 0.5) + (vUV - nearestUV);
+    }
     if (pc.HasHistory == 0u || any(lessThan(prevUV, vec2(0.0))) || any(greaterThan(prevUV, vec2(1.0))))
     {
         outColor = vec4(Expand(center), 1.0);

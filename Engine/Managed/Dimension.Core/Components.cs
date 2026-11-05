@@ -186,6 +186,8 @@ namespace Dimension
 
     /// <summary>How a body moves: not at all (Static), by physics (Dynamic), or where scripts put it (Kinematic).</summary>
     public enum RigidbodyType { Static = 0, Dynamic = 1, Kinematic = 2 }
+    /// <summary>What a renderer adds to the velocity buffer (see MeshRenderer.MotionVectors).</summary>
+    public enum MotionVectorGenerationMode { Camera = 0, Object = 1, ForceNoMotion = 2 }
 
     /// <summary>Discrete: checked where it is each step (thin walls can be passed at speed); Continuous: swept along its motion.</summary>
     public enum CollisionDetectionMode { Discrete = 0, Continuous = 1 }
@@ -528,6 +530,14 @@ namespace Dimension
     public unsafe class MeshRenderer : Component
     {
         internal override string NativeName => "Mesh Renderer";
+        /// <summary>What it adds to the velocity buffer that motion blur and TAA read (Unity's
+        /// <c>motionVectorGenerationMode</c>): its own movement and animation (Object, the default), only the camera's
+        /// (Camera), or none (ForceNoMotion: it stays sharp however the camera moves, e.g. a weapon held in view).</summary>
+        public MotionVectorGenerationMode MotionVectors
+        {
+            get => (MotionVectorGenerationMode)GetInt("Motion Vectors");
+            set => SetInt("Motion Vectors", (int)value);
+        }
         public Color Color
         {
             get { Color c; Native.Api.GetColor(Entity.Scene, Entity.Id, (float*)&c); return c; }

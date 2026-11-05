@@ -2,6 +2,7 @@
 #include "Dimension/ImGui/ImGuiLayer.h"
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 
 namespace Dimension
 {
@@ -26,6 +27,13 @@ namespace Dimension
         m_Scratch = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 1,
                             "SceneScratch" });
         Motion.Valid = false;
+        Motion.Objects.clear();
+        m_Velocity = Image({ m_Width, m_Height, kVelocityFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "Velocity" });
+        // Tiles as wide as half the longest blur (6% of the width), so the 3x3 tiles around a pixel see every motion
+        // that can reach it.
+        m_VelocityTileSize = std::max(8u, (uint32_t)std::ceil(m_Width * 0.03f));
+        m_VelocityTiles = Image({ (m_Width + m_VelocityTileSize - 1) / m_VelocityTileSize, (m_Height + m_VelocityTileSize - 1) / m_VelocityTileSize,
+                                  kVelocityFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "VelocityTiles" });
         for (int i = 0; i < 2; ++i)
             m_GiHistory[i] = Image({ m_Width, m_Height, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "SSGIHistory" });
         Gi.Valid = false;
@@ -71,6 +79,8 @@ namespace Dimension
         m_IndirectBindless = device.RegisterTexture(m_Indirect.GetView(), device.GetClampSampler());
         m_OitAccumBindless = device.RegisterTexture(m_OitAccum.GetView(), device.GetNearestClampSampler());
         m_OitRevealBindless = device.RegisterTexture(m_OitReveal.GetView(), device.GetNearestClampSampler());
+        m_VelocityBindless = device.RegisterTexture(m_Velocity.GetView(), device.GetNearestClampSampler());
+        m_VelocityTilesBindless = device.RegisterTexture(m_VelocityTiles.GetView(), device.GetNearestClampSampler());
         for (int i = 0; i < 2; ++i) m_TaaHistoryBindless[i] = device.RegisterTexture(m_TaaHistory[i].GetView(), device.GetClampSampler());
         for (int i = 0; i < 2; ++i) m_GiHistoryBindless[i] = device.RegisterTexture(m_GiHistory[i].GetView(), device.GetClampSampler());
         for (int i = 0; i < 2; ++i) m_AOBindless[i] = device.RegisterTexture(m_AO[i].GetView(), device.GetClampSampler());
@@ -81,7 +91,7 @@ namespace Dimension
         std::vector<VkImage> images{ m_Hdr.GetHandle(), m_Output.GetHandle(), m_Ldr.GetHandle(), m_AO[0].GetHandle(), m_AO[1].GetHandle(),
                                      m_Dof[0].GetHandle(), m_Dof[1].GetHandle(), m_Reflections.GetHandle(), m_Indirect.GetHandle(), m_TaaHistory[0].GetHandle(),
                                      m_TaaHistory[1].GetHandle(), m_Scratch.GetHandle(), m_OitAccum.GetHandle(), m_OitReveal.GetHandle(), m_GiHistory[0].GetHandle(),
-                                     m_GiHistory[1].GetHandle() };
+                                     m_GiHistory[1].GetHandle(), m_Velocity.GetHandle(), m_VelocityTiles.GetHandle() };
         for (auto& b : m_Bloom) images.push_back(b.GetHandle());
         device.ImmediateSubmit([&](VkCommandBuffer cmd) {
             for (VkImage image : images) Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -106,6 +116,10 @@ namespace Dimension
         m_TaaHistory[0] = Image();
         m_TaaHistory[1] = Image();
         m_Scratch = Image();
+        device.UnregisterTexture(m_VelocityBindless);
+        device.UnregisterTexture(m_VelocityTilesBindless);
+        m_Velocity = Image();
+        m_VelocityTiles = Image();
         for (uint32_t index : m_GiHistoryBindless) device.UnregisterTexture(index);
         m_GiHistory[0] = Image();
         m_GiHistory[1] = Image();

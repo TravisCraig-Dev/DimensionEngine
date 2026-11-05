@@ -334,6 +334,10 @@ namespace Dimension
         float Time = 0.0f; // runtime only
     };
 
+    // What a renderer adds to the velocity buffer (motion blur, TAA), as Unity's MotionVectorGenerationMode: only the
+    // camera's motion, its own movement and animation too, or none at all (it stays sharp, e.g. a first-person weapon).
+    enum class MotionVectorMode : int { Camera = 0, Object, ForceNoMotion };
+
     struct MeshRendererComponent
     {
         AssetHandle Mesh = AssetHandle::None();
@@ -348,6 +352,7 @@ namespace Dimension
         // Multiplies the color (and alpha) of whatever it draws, its material asset's too: a per-object recolor or a
         // script's flash without changing the shared material (like a Unity MaterialPropertyBlock's color).
         glm::vec4 Tint{ 1.0f };
+        MotionVectorMode MotionVectors = MotionVectorMode::Object;
         // Runtime: the copy of its material made for it alone (a script's MeshRenderer.Material), while it uses it.
         AssetHandle InstanceMaterial = AssetHandle::None();
     };

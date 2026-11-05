@@ -3,6 +3,8 @@
 #include "Dimension/Renderer/Buffer.h"
 #include "Dimension/Renderer/RenderDevice.h"
 #include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace Dimension
 {
@@ -22,6 +24,8 @@ namespace Dimension
         // Order-independent transparency: weighted color and alpha sums, and the product of (1 - alpha).
         static constexpr VkFormat kOitAccumFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
         static constexpr VkFormat kOitRevealFormat = VK_FORMAT_R16_SFLOAT;
+        // Screen motion per pixel since the last frame (UV units, this frame minus last), camera and objects.
+        static constexpr VkFormat kVelocityFormat = VK_FORMAT_R16G16_SFLOAT;
 
         SceneRenderTarget(uint32_t width, uint32_t height);
         ~SceneRenderTarget();
@@ -98,11 +102,27 @@ namespace Dimension
         const Image& GetTaaHistory(uint32_t i) const { return m_TaaHistory[i]; }
         uint32_t GetTaaHistoryBindless(uint32_t i) const { return m_TaaHistoryBindless[i]; }
         const Image& GetScratch() const { return m_Scratch; }
-        // Camera motion blur: last frame's unjittered view-projection (Valid once one frame was drawn).
+        // The velocity buffer (motion blur, TAA) and its tiles: the longest motion in each square of GetVelocityTileSize()
+        // pixels.
+        const Image& GetVelocity() const { return m_Velocity; }
+        uint32_t GetVelocityBindless() const { return m_VelocityBindless; }
+        const Image& GetVelocityTiles() const { return m_VelocityTiles; }
+        uint32_t GetVelocityTilesBindless() const { return m_VelocityTilesBindless; }
+        uint32_t GetVelocityTileSize() const { return m_VelocityTileSize; }
+        // Motion vectors: last frame's unjittered view-projection (Valid once one frame was drawn), and each moving
+        // object's last world matrix (and skinning matrices), by a key the renderer makes per drawn item.
+        struct ObjectMotion
+        {
+            glm::mat4 World{ 1.0f };
+            std::vector<glm::mat4> Joints;
+            uint64_t Frame = 0; // when it was last drawn (entries not drawn for a frame go)
+        };
         struct
         {
             glm::mat4 PrevViewProj{ 1.0f };
             bool Valid = false;
+            uint64_t Frame = 0;
+            std::unordered_map<uint64_t, ObjectMotion> Objects;
         } Motion;
         struct TemporalState
         {
@@ -126,6 +146,8 @@ namespace Dimension
         uint32_t m_OitAccumBindless = 0, m_OitRevealBindless = 0;
         Image m_TaaHistory[2];
         Image m_Scratch;               // full-size HDR scratch (motion blur's result, copied back)
+        Image m_Velocity, m_VelocityTiles;
+        uint32_t m_VelocityBindless = 0, m_VelocityTilesBindless = 0, m_VelocityTileSize = 16;
         uint32_t m_TaaHistoryBindless[2] = {};
         Image m_GiHistory[2];
         uint32_t m_GiHistoryBindless[2] = {};

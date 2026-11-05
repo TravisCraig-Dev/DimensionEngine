@@ -270,6 +270,8 @@ namespace Dimension
             bool CastShadows;          // the renderer's flag
             uint32_t Motion = 0;       // grass tufts: half floats (sway, bending), 0 = rigid
             uint32_t Fade = 0;         // LOD cross-fade: coverage (1-254) | side << 8, 0 = none (see LODGroups::Frame)
+            uint8_t MotionVectors = 0; // MotionVectorMode: 0 camera only (static things), 1 per object, 2 none
+            const std::vector<glm::mat4>* JointMatrices = nullptr; // skinned: this frame's pose (the Animator's)
             uint32_t FirstPart, PartCount;
         };
         std::vector<RenderItem> m_RenderItems;
@@ -434,6 +436,8 @@ namespace Dimension
         std::vector<DecalDraw> m_Decals;
         void CollectDecals(Scene& scene);
         void DrawDecals(VkCommandBuffer cmd, SceneRenderTarget& target);
+        // The velocity buffer: the camera's motion from the depth, then moving objects' own over it.
+        void RenderVelocity(VkCommandBuffer cmd, SceneRenderTarget& target, const glm::mat4& viewProj, const glm::mat4& unjitteredViewProj);
         // GPU particle systems: compute simulation before the main pass, then camera-facing quads in it.
         struct GpuParticleDraw
         {

@@ -77,6 +77,10 @@
 #include "shaders/SsrApply.frag.h"
 #include "shaders/Taa.frag.h"
 #include "shaders/MotionBlur.frag.h"
+#include "shaders/Velocity.vert.h"
+#include "shaders/Velocity.frag.h"
+#include "shaders/VelocityCamera.frag.h"
+#include "shaders/VelocityTiles.frag.h"
 #include "shaders/Fog.frag.h"
 #include "shaders/Underwater.frag.h"
 #include "shaders/Decal.vert.h"
@@ -160,6 +164,13 @@ namespace Dimension
             uint32_t EntityId;
             uint32_t Flags;  // bit 0: skinned, bit 1: instanced, bits 8-15: LOD cross-fade coverage, bit 16: its side
             uint32_t Motion; // grass tufts: half floats (sway, bending); 0 = rigid
+        };
+
+        // std430 mirror of VelocityObject in Velocity.vert.
+        struct VelocityGPU
+        {
+            glm::mat4 Model, PrevModel;
+            glm::uvec4 Joints; // xy this frame's skinning matrices, zw last frame's
         };
 
         // std430 mirror of MeshInstance in MeshCommon.glsl.
@@ -421,6 +432,7 @@ namespace Dimension
         struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
         Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater, MotionBlur;
+        Pipeline Velocity, VelocityCamera, VelocityTiles; // motion vectors
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline FramePreview;          // the frame debugger's target pictures
         Pipeline Decals[3]; // by DecalBlend
@@ -658,6 +670,23 @@ namespace Dimension
         post.FragmentSpirv = kMotionBlur_frag;
         post.DebugName = "MotionBlurPipeline";
         r.MotionBlur = Pipeline(post);
+        post.ColorAttachments = { { F::kVelocityFormat } };
+        post.FragmentSpirv = kVelocityCamera_frag;
+        post.DebugName = "VelocityCameraPipeline";
+        r.VelocityCamera = Pipeline(post);
+        post.FragmentSpirv = kVelocityTiles_frag;
+        post.DebugName = "VelocityTilesPipeline";
+        r.VelocityTiles = Pipeline(post);
+        {
+            GraphicsPipelineDesc velocity;
+            velocity.VertexSpirv = kVelocity_vert;
+            velocity.FragmentSpirv = kVelocity_frag;
+            velocity.VertexStride = sizeof(Vertex);
+            velocity.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Position) } };
+            velocity.ColorAttachments = { { F::kVelocityFormat } };
+            velocity.DebugName = "VelocityPipeline";
+            r.Velocity = Pipeline(velocity);
+        }
         post.FragmentSpirv = kFog_frag;
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Premultiplied } };
         post.DebugName = "FogPipeline";
@@ -863,6 +892,7 @@ namespace Dimension
             target.Temporal.CameraCuts = scene.GetCameraCuts();
             target.Temporal.Valid = false;
             target.Gi.Valid = false;
+            target.Motion.Valid = false;
         }
         if (taa)
         {
@@ -1293,7 +1323,16 @@ namespace Dimension
         bool dof = settings.DepthOfField && !camera.Orthographic && settings.BokehSize > 0.0f && !options.EditorOverlays && !options.ProbeCapture;
         // Passes after this one read the depth: depth of field, SSR, decals, fog and TAA (and next frame's GPU particle
         // collision).
-        bool readDepth = dof || surface || fog || underwaterFog || taa || !m_Decals.empty() || m_ParticleDepthWanted || occlusion;
+        // Post Process Volumes around this camera blend over the scene's settings (not in probe captures or the Scene view).
+        PostProcessValues post;
+        post.Exposure = settings.Exposure;
+        post.BloomIntensity = settings.BloomIntensity;
+        post.Vignette = settings.Vignette;
+        if (!options.ProbeCapture && !options.EditorOverlays) post = PostProcess::Evaluate(scene, camera.Position, camera.CullingMask);
+        // Motion blur and TAA read the velocity buffer (game views).
+        bool motionBlur = post.MotionBlur > 0.0f && !options.ProbeCapture && !options.EditorOverlays;
+        bool velocity = taa || motionBlur;
+        bool readDepth = dof || surface || fog || underwaterFog || velocity || !m_Decals.empty() || m_ParticleDepthWanted || occlusion;
         m_ParticleDepthKept = readDepth && !camera.Orthographic;
         m_ParticleDepthViewProj = camera.Projection * camera.View;
         m_ParticleDepthSize = glm::uvec2(target.GetWidth(), target.GetHeight());
@@ -1384,6 +1423,8 @@ namespace Dimension
             }
             device.BindUniforms(cmd, &u, sizeof(u));
         }
+        if (velocity) RenderVelocity(cmd, target, u.ViewProj, unjitteredViewProj);
+        else target.Motion.Valid = false;
         // HDR effects that need the finished opaque image: decals onto surfaces, reflections, fog, then TAA over all.
         if (!m_Decals.empty()) DrawDecals(cmd, target);
         if (surface)
@@ -1468,10 +1509,11 @@ namespace Dimension
                 glm::mat4 PrevViewProj;
                 uint32_t Current, History, Depth, HasHistory;
                 glm::vec2 Texel;
-                float Feedback, Pad;
+                float Feedback;
+                uint32_t Velocity;
             } push{ target.Temporal.PrevViewProj, target.GetHdrBindless(), target.GetTaaHistoryBindless(read), target.GetDepthBindless(),
                     target.Temporal.Valid ? 1u : 0u, glm::vec2(1.0f / extent.width, 1.0f / extent.height),
-                    std::clamp(settings.TAAFeedback, 0.01f, 1.0f), 0.0f };
+                    std::clamp(settings.TAAFeedback, 0.01f, 1.0f), target.GetVelocityBindless() + 1 };
             FullscreenPass(cmd, target.GetTaaHistory(write), false, res.Taa, &push, sizeof(push));
             VkImage hdr = target.GetHdr().GetHandle(), result = target.GetTaaHistory(write).GetHandle();
             Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -1487,24 +1529,19 @@ namespace Dimension
             target.Temporal.Valid = true;
             target.Temporal.PrevViewProj = unjitteredViewProj;
         }
-        // Post Process Volumes around this camera blend over the scene's settings (not in probe captures or the Scene view).
-        PostProcessValues post;
-        post.Exposure = settings.Exposure;
-        post.BloomIntensity = settings.BloomIntensity;
-        post.Vignette = settings.Vignette;
-        if (!options.ProbeCapture && !options.EditorOverlays) post = PostProcess::Evaluate(scene, camera.Position, camera.CullingMask);
-        // Camera motion blur: into the scratch image along each pixel's screen motion, then copied back.
-        if (post.MotionBlur > 0.0f && !options.ProbeCapture && !options.EditorOverlays)
+        // Motion blur: the velocity buffer's tiles, then the image blurred into the scratch image and copied back.
+        if (motionBlur)
         {
-            if (target.Motion.Valid)
             {
+                struct { uint32_t Velocity, Tile; } tiles{ target.GetVelocityBindless(), target.GetVelocityTileSize() };
+                FullscreenPass(cmd, target.GetVelocityTiles(), false, res.VelocityTiles, &tiles, sizeof(tiles));
                 struct
                 {
-                    glm::mat4 Reproject;
-                    uint32_t Hdr, Depth;
+                    uint32_t Hdr, Depth, Velocity, Tiles;
                     float Intensity, MaxLength;
-                } push{ target.Motion.PrevViewProj * glm::inverse(camera.Projection * camera.View), target.GetHdrBindless(), target.GetDepthBindless(),
-                        std::clamp(post.MotionBlur, 0.0f, 1.0f), 0.06f };
+                    uint32_t Frame, Pad;
+                } push{ target.GetHdrBindless(), target.GetDepthBindless(), target.GetVelocityBindless(), target.GetVelocityTilesBindless(),
+                        std::clamp(post.MotionBlur, 0.0f, 1.0f), 0.06f, (uint32_t)RenderDevice::Get().Frame().FrameNumber, 0u };
                 FullscreenPass(cmd, target.GetScratch(), false, res.MotionBlur, &push, sizeof(push));
                 VkImage hdr = target.GetHdr().GetHandle(), result = target.GetScratch().GetHandle();
                 Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -1517,11 +1554,7 @@ namespace Dimension
                 Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
-            target.Motion.PrevViewProj = camera.Projection * camera.View;
-            target.Motion.Valid = true;
         }
-        else
-            target.Motion.Valid = false;
         // Auto exposure: this frame's brightness is measured (read a few frames later) and the exposure adapts.
         float autoExposure = 1.0f;
         if (settings.AutoExposure && !options.ProbeCapture && !camera.Transparent)
@@ -2501,6 +2534,7 @@ namespace Dimension
             item.EntityId = e.Index + 1;
             item.CastShadows = mr.CastShadows;
             item.Fade = lodFade;
+            item.MotionVectors = (uint8_t)mr.MotionVectors;
             partSubMesh.clear();
             // Reflection probes are chosen and blended per pixel in the shader (item.Probe stays 0).
 
@@ -2517,6 +2551,7 @@ namespace Dimension
                     std::memcpy(joints.Data, animator->SkinMatrices.data(), bytes);
                     item.Joints = joints.Address;
                     item.Skin = mesh->GetSkinAddress();
+                    item.JointMatrices = &animator->SkinMatrices;
                 }
             }
 
@@ -4360,6 +4395,127 @@ namespace Dimension
             }
         }
         std::stable_sort(m_Decals.begin(), m_Decals.end(), [](const DecalDraw& a, const DecalDraw& b) { return a.Order < b.Order; });
+    }
+
+    void SceneRenderer::RenderVelocity(VkCommandBuffer cmd, SceneRenderTarget& target, const glm::mat4& viewProj, const glm::mat4& unjitteredViewProj)
+    {
+        auto& device = RenderDevice::Get();
+        auto& res = Renderer::Get();
+        auto& motion = target.Motion;
+        bool history = motion.Valid;
+        glm::mat4 prevViewProj = history ? motion.PrevViewProj : unjitteredViewProj;
+        uint64_t frame = ++motion.Frame;
+
+        // The camera's motion everywhere.
+        struct { glm::mat4 Reproject; uint32_t Depth, Pad; } cameraPush{ prevViewProj * glm::inverse(unjitteredViewProj), target.GetDepthBindless(), 0u };
+        FullscreenPass(cmd, target.GetVelocity(), false, res.VelocityCamera, &cameraPush, sizeof(cameraPush));
+
+        // Objects that moved or changed pose since the last frame (each item keyed by its entity and its place among
+        // that entity's items), and those never to blur; everything else moves only with the camera.
+        struct ObjectDraw { uint32_t Item, Object; };
+        std::vector<ObjectDraw> draws;
+        std::vector<VelocityGPU> objects;
+        std::unordered_map<uint32_t, uint32_t> occurrence;
+        Frustum frustum(viewProj);
+        for (size_t i = 0; i < m_RenderItems.size(); ++i)
+        {
+            const RenderItem& item = m_RenderItems[i];
+            if (item.MotionVectors == 0 || item.Vertices || item.Motion) continue; // simulated or swaying vertices: camera only
+            uint64_t key = ((uint64_t)item.EntityId << 32) | occurrence[item.EntityId]++;
+            auto& last = motion.Objects[key];
+            bool had = history && last.Frame + 1 == frame;
+            glm::mat4 prevWorld = had ? last.World : item.World;
+            bool posed = item.Joints && item.JointMatrices;
+            bool samePose = !posed || !had || last.Joints.size() != item.JointMatrices->size() ||
+                            std::memcmp(last.Joints.data(), item.JointMatrices->data(), last.Joints.size() * sizeof(glm::mat4)) == 0;
+            bool moved = had && (prevWorld != item.World || !samePose);
+            VelocityGPU gpu{ item.World, prevWorld, glm::uvec4(0u) };
+            if (item.MotionVectors == 2) gpu.PrevModel = item.World; // no motion of its own (the camera's is taken off below)
+            if (moved && posed && item.MotionVectors == 1)
+            {
+                size_t bytes = last.Joints.size() * sizeof(glm::mat4);
+                if (TransientAllocation joints = !samePose ? device.AllocateTransient(bytes, 16) : TransientAllocation{})
+                {
+                    std::memcpy(joints.Data, last.Joints.data(), bytes);
+                    glm::uvec2 now = SplitAddress(item.Joints), before = SplitAddress(joints.Address);
+                    gpu.Joints = glm::uvec4(now, before);
+                }
+                else
+                    gpu.Joints = glm::uvec4(SplitAddress(item.Joints), SplitAddress(item.Joints));
+            }
+            last.World = item.World;
+            if (posed) last.Joints = *item.JointMatrices;
+            else last.Joints.clear();
+            last.Frame = frame;
+            if (!moved && item.MotionVectors != 2) continue;
+            if (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId)) continue;
+            if (m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[i]) continue;
+            if (!item.AlwaysVisible && !frustum.IntersectsWorld(item.Center, item.Extents)) continue;
+            if (item.MotionVectors == 2)
+            {
+                // Force No Motion: last frame's matrices put it where the camera would have seen it then, so its
+                // velocity comes out zero.
+                gpu.PrevModel = glm::inverse(prevViewProj) * unjitteredViewProj * item.World;
+                if (item.Joints) gpu.Joints = glm::uvec4(SplitAddress(item.Joints), SplitAddress(item.Joints));
+            }
+            uint32_t object = (uint32_t)objects.size();
+            objects.push_back(gpu);
+            draws.push_back({ (uint32_t)i, object });
+        }
+        std::erase_if(motion.Objects, [frame](const auto& entry) { return entry.second.Frame != frame; });
+        motion.PrevViewProj = unjitteredViewProj;
+        motion.Valid = true;
+        if (draws.empty()) return;
+
+        TransientAllocation objectBlock = device.AllocateTransient(objects.size() * sizeof(VelocityGPU), 16);
+        TransientAllocation frameBlock = device.AllocateTransient(2 * sizeof(glm::mat4), 16);
+        if (!objectBlock || !frameBlock) return;
+        std::memcpy(objectBlock.Data, objects.data(), objects.size() * sizeof(VelocityGPU));
+        glm::mat4 matrices[2] = { unjitteredViewProj, prevViewProj };
+        std::memcpy(frameBlock.Data, matrices, sizeof(matrices));
+
+        VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
+        Vk::TransitionImage(cmd, target.GetVelocity().GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        att.imageView = target.GetVelocity().GetView();
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        info.renderArea = { { 0, 0 }, extent };
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &att;
+        vkCmdBeginRendering(cmd, &info);
+        VkViewport viewport{ 0.0f, (float)extent.height, (float)extent.width, -(float)extent.height, 0.0f, 1.0f }; // as the main pass
+        VkRect2D scissor{ { 0, 0 }, extent };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        res.Velocity.Bind(cmd);
+        Mesh* bound = nullptr;
+        for (const ObjectDraw& d : draws)
+        {
+            const RenderItem& item = m_RenderItems[d.Item];
+            if (!DebugDraw("Motion Vectors", "Velocity", item.MeshRef->GetName(), item.EntityId, 1, 0)) continue;
+            struct { VkDeviceAddress Objects, Skin, Frame; uint32_t Depth, Pad; } push{ objectBlock.Address, item.Joints ? item.Skin : 0,
+                                                                                        frameBlock.Address, target.GetDepthBindless(), 0u };
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            if (item.MeshRef.get() != bound)
+            {
+                item.MeshRef->Bind(cmd);
+                bound = item.MeshRef.get();
+            }
+            // Every part of the item, opaque ones only (transparent surfaces are not in the depth).
+            for (uint32_t p = item.FirstPart; p < item.FirstPart + item.PartCount; ++p)
+            {
+                const RenderPart& part = m_RenderParts[p];
+                if (part.Transparent) continue;
+                vkCmdDrawIndexed(cmd, part.IndexCount, 1, part.FirstIndex, 0, d.Object);
+                m_Stats.DrawCalls++;
+            }
+        }
+        vkCmdEndRendering(cmd);
+        Vk::TransitionImage(cmd, target.GetVelocity().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     void SceneRenderer::DrawDecals(VkCommandBuffer cmd, SceneRenderTarget& target)
