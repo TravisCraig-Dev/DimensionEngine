@@ -83,6 +83,7 @@
 #include "shaders/VelocityTiles.frag.h"
 #include "shaders/VelocitySprite.vert.h"
 #include "shaders/VelocitySprite.frag.h"
+#include "shaders/VelocityParticleGpu.vert.h"
 #include "shaders/Fog.frag.h"
 #include "shaders/Underwater.frag.h"
 #include "shaders/Decal.vert.h"
@@ -443,7 +444,7 @@ namespace Dimension
         struct MeshSampleBuffer { Buffer Data; VkDeviceAddress Address = 0; const std::vector<glm::vec4>* Source = nullptr; };
         std::unordered_map<uint64_t, MeshSampleBuffer> MeshSampleBuffers;
         Pipeline Ssr, SsrApply, Ssgi, SsgiTemporal, Taa, Fog, Underwater, MotionBlur;
-        Pipeline Velocity, VelocityCamera, VelocityTiles, VelocitySprite; // motion vectors
+        Pipeline Velocity, VelocityCamera, VelocityTiles, VelocitySprite, VelocityParticleGpu; // motion vectors
         Pipeline MeshOit, OitComposite; // order-independent transparency
         Pipeline FramePreview;          // the frame debugger's target pictures
         Pipeline Decals[3]; // by DecalBlend
@@ -708,6 +709,11 @@ namespace Dimension
                                     { 4, VK_FORMAT_R32_SFLOAT, offsetof(SV, Alpha) } };
             velocity.DebugName = "VelocitySpritePipeline";
             r.VelocitySprite = Pipeline(velocity);
+            velocity.VertexSpirv = kVelocityParticleGpu_vert;
+            velocity.VertexStride = 0;
+            velocity.Attributes = {};
+            velocity.DebugName = "VelocityParticleGpuPipeline";
+            r.VelocityParticleGpu = Pipeline(velocity);
         }
         post.FragmentSpirv = kFog_frag;
         post.ColorAttachments = { { F::kHdrFormat, BlendMode::Premultiplied } };
@@ -4546,7 +4552,7 @@ namespace Dimension
         std::erase_if(motion.Objects, [frame](const auto& entry) { return entry.second.Frame != frame; });
         motion.PrevViewProj = unjitteredViewProj;
         motion.Valid = true;
-        if (draws.empty() && spriteVertices.empty()) return;
+        if (draws.empty() && spriteVertices.empty() && m_GpuParticleDraws.empty()) return;
 
         TransientAllocation objectBlock = objects.empty() ? TransientAllocation{} : device.AllocateTransient(objects.size() * sizeof(VelocityGPU), 16);
         TransientAllocation frameBlock = device.AllocateTransient(2 * sizeof(glm::mat4), 16);
@@ -4615,6 +4621,30 @@ namespace Dimension
             vkCmdBindIndexBuffer(cmd, res.QuadIndices.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(cmd, (uint32_t)spriteCount * 6, 1, 0, 0, 0);
             m_Stats.DrawCalls++;
+        }
+        // GPU particles, from their simulation buffers.
+        if (!m_GpuParticleDraws.empty())
+        {
+            res.VelocityParticleGpu.Bind(cmd);
+            vkCmdBindIndexBuffer(cmd, res.QuadIndices.GetHandle(), 0, VK_INDEX_TYPE_UINT32);
+            for (const GpuParticleDraw& d : m_GpuParticleDraws)
+            {
+                if (!DebugDraw("Motion Vectors", "Velocity", "Particles", d.Entity, d.Capacity, d.Capacity * 2)) continue;
+                struct
+                {
+                    VkDeviceAddress Frame;
+                    uint32_t Depth, Pad;
+                    glm::uvec2 Particles, Params, Sorted;
+                    uint32_t Texture, Pad2;
+                } push{ frameBlock.Address, target.GetDepthBindless(), 0u, SplitAddress(d.Particles), SplitAddress(d.Params), SplitAddress(d.Sorted), d.Texture, 0u };
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                for (uint32_t firstQuad = 0; firstQuad < d.Capacity; firstQuad += kMaxQuadsPerDraw)
+                {
+                    uint32_t n = std::min(kMaxQuadsPerDraw, d.Capacity - firstQuad);
+                    vkCmdDrawIndexed(cmd, n * 6, 1, 0, (int32_t)(firstQuad * 4), 0);
+                    m_Stats.DrawCalls++;
+                }
+            }
         }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, target.GetVelocity().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
