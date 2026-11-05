@@ -456,7 +456,11 @@ namespace Dimension
         Register<CanvasComponent>("Canvas", "UI")
             .Field("Scale Mode", &CanvasComponent::ScaleMode).Enum({ "Constant Pixel Size", "Scale With Screen Size" })
             .Field("Reference Resolution", &CanvasComponent::ReferenceResolution).Speed(1.0f)
-            .Field("Sorting Order", &CanvasComponent::SortingOrder);
+            .Field("Sorting Order", &CanvasComponent::SortingOrder)
+            .Field("Render Mode", &CanvasComponent::RenderMode).Enum({ "Screen Space", "World Space" })
+                .Tooltip("World Space: a panel on this object in the 3D world (facing its +Z), drawn with depth and clicked through the main camera")
+            .Field("Pixel Size", &CanvasComponent::PixelSize).Speed(1.0f).Tooltip("World Space: the panel's layout size in pixels")
+            .Field("Pixels Per Unit", &CanvasComponent::PixelsPerUnit).Range(1.0f, 10000.0f).Speed(1.0f).Tooltip("World Space: pixels per meter");
         Register<UIRectComponent>("UI Rect", "UI")
             .Field("Anchor Min", &UIRectComponent::AnchorMin).Range(0.0f, 1.0f).Speed(0.005f)
             .Field("Anchor Max", &UIRectComponent::AnchorMax).Range(0.0f, 1.0f).Speed(0.005f)

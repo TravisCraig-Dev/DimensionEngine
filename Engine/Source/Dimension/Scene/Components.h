@@ -557,11 +557,20 @@ namespace Dimension
 
     enum class CanvasScaleMode : int32_t { ConstantPixelSize = 0, ScaleWithScreenSize = 1 };
 
+    // Screen Space: over the camera's image, laid out on the screen. World Space: a panel on its object in the 3D world
+    // (Pixel Size pixels, Pixels Per Unit of them a meter, centered on the object facing its +Z), drawn with depth and
+    // clicked through the main camera's pointer ray.
+    enum class CanvasRenderMode : int32_t { ScreenSpace = 0, WorldSpace = 1 };
+
     struct CanvasComponent
     {
         CanvasScaleMode ScaleMode = CanvasScaleMode::ScaleWithScreenSize;
         glm::vec2 ReferenceResolution{ 1920.0f, 1080.0f };
         int32_t SortingOrder = 0;
+        CanvasRenderMode RenderMode = CanvasRenderMode::ScreenSpace;
+        glm::vec2 PixelSize{ 800.0f, 600.0f }; // World Space: the panel's layout size in pixels
+        float PixelsPerUnit = 400.0f;          // World Space: pixels per meter (800 x 600 is 2 x 1.5 m)
+        glm::vec2 WorldSize() const { return PixelSize / std::max(PixelsPerUnit, 1e-3f); }
     };
 
     // Unity-style RectTransform: anchors are fractions of the parent rect (0,0 = top-left).

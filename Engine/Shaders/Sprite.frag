@@ -29,7 +29,15 @@ void main()
         t = vec4(1.0, 1.0, 1.0, DistanceAlpha((vTexture & 0x40000000u) != 0u ? Median(field.rgb) : field.a));
     }
     else
-        t = SampleTexture(vTexture, vUV);
+    {
+        t = SampleTexture(vTexture & 0x0FFFFFFFu, vUV);
+        // Bit 28: an image of display values (a World Space canvas's UI): to linear like the rest of the scene.
+        if ((vTexture & 0x10000000u) != 0u)
+        {
+            vec3 c = clamp(t.rgb, 0.0, 1.0);
+            t.rgb = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+        }
+    }
     vec4 color = t * vColor;
     if (color.a < 0.01) discard; // keeps fully transparent texels out of picking
     outColor = color;

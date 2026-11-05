@@ -488,6 +488,18 @@ namespace Dimension
     private:
         // The camera's culling mask for this Render: objects on other layers are not drawn.
         uint32_t m_CullingMask = ~0u;
+        // World Space canvases: each drawn into its own image, shown as a quad on its object (see CollectSprites).
+        struct WorldCanvasImage
+        {
+            Image Img;
+            uint32_t Bindless = 0;
+            glm::uvec2 Size{ 0 };
+            bool Initialized = false;
+            uint64_t Frame = 0;
+        };
+        std::unordered_map<uint64_t, WorldCanvasImage> m_WorldCanvases;
+        void RenderWorldCanvases(VkCommandBuffer cmd, Scene& scene);
+        void RenderUIInto(VkCommandBuffer cmd, Scene& scene, const Image& image, VkExtent2D extent, Entity canvas, bool firstUse);
         bool LayerCulled(Scene& scene, Entity e) const;
         Scope<Image> m_PointShadowMap;
         uint32_t m_PointShadowBindless = 0;

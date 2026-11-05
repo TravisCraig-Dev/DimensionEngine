@@ -891,6 +891,24 @@ namespace Dimension
             m_UIInjectedText.clear();
             m_UIInjectedBackspace = m_UIInjectedEnter = false;
             m_UIHovered = UI::Update(*this, pointer, m_UIScreen, unscaledDt); // menus work while the game is frozen
+            // World Space canvases: the pointer where the main camera's ray meets each panel, in its pixels (keys and
+            // navigation stay with the screen's UI).
+            std::vector<Entity> worldCanvases;
+            for (auto [ce, canvas, ct] : m_Registry.ViewOf<CanvasComponent, TransformComponent>())
+                if (ct.ActiveInHierarchy && canvas.RenderMode == CanvasRenderMode::WorldSpace) worldCanvases.push_back(ce);
+            for (Entity ce : worldCanvases)
+            {
+                if (!IsValid(ce)) continue;
+                glm::vec2 pixel(-1e6f);
+                bool hit = m_UIHovered.IsNull() && UI::WorldCanvasPoint(*this, ce, m_UIPointer, m_UIScreen, pixel);
+                UI::PointerState p = pointer;
+                p.Position = hit ? pixel : glm::vec2(-1e6f);
+                p.Pressed = pointer.Pressed && hit;
+                p.Scroll = hit ? pointer.Scroll : 0.0f;
+                p.NavUp = p.NavDown = p.NavLeft = p.NavRight = p.Submit = p.Cancel = false;
+                Entity over = UI::Update(*this, p, m_Registry.Get<CanvasComponent>(ce).PixelSize, unscaledDt, ce);
+                if (m_UIHovered.IsNull() && hit) m_UIHovered = over;
+            }
             UpdatePointerEvents(m_UIPointer, m_UIDown, m_UIScroll);
             // A focused text field keeps the keys from gameplay (WASD while typing a name must not move the player).
             bool typing = false;

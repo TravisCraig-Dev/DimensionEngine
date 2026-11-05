@@ -6454,6 +6454,50 @@ namespace
         scene.OnRuntimeStop();
     }
 
+    // World Space canvases: a panel 4 x 3 m in front of the camera; a click at the screen's middle reaches the button in
+    // its middle (through the camera's ray), the screen-space layout leaves it out, and the pointer counts as over UI.
+    void TestWorldSpaceCanvas()
+    {
+        Scene scene("World UI");
+        auto& reg = scene.GetRegistry();
+        Entity cam = scene.CreateEntity("Camera");
+        reg.Get<TransformComponent>(cam).Position = { 0, 0, 5 };
+        reg.Emplace<CameraComponent>(cam);
+        Entity panel = scene.CreateEntity("Panel");
+        auto& canvas = reg.Emplace<CanvasComponent>(panel);
+        canvas.RenderMode = CanvasRenderMode::WorldSpace;
+        canvas.PixelSize = { 400, 300 };
+        canvas.PixelsPerUnit = 100.0f;
+        Entity button = scene.CreateEntity("Button", panel);
+        {
+            auto& r = reg.Emplace<UIRectComponent>(button);
+            r.AnchorMin = r.AnchorMax = r.Pivot = { 0.5f, 0.5f };
+            r.Size = { 100, 50 };
+        }
+        reg.Emplace<UIImageComponent>(button);
+        reg.Emplace<UIButtonComponent>(button);
+        reg.Emplace<ScriptComponent>(button).Add("ClickCounter");
+        scene.UpdateTransforms();
+        CHECK(UI::ComputeLayout(scene, { 800, 600 }).empty()); // not a screen canvas
+        glm::vec2 px;
+        CHECK(UI::WorldCanvasPoint(scene, panel, { 400, 300 }, { 800, 600 }, px) && Near(px, glm::vec2(200, 150), 0.5f));
+        CHECK(!UI::WorldCanvasPoint(scene, panel, { 10, 10 }, { 800, 600 }, px)); // beside the panel
+        scene.OnRuntimeStart();
+        ClickCounter::Clicks = 0;
+        scene.SetUIInput({ 400, 300 }, false, { 800, 600 });
+        scene.OnUpdateRuntime(0.016f);
+        CHECK(scene.IsPointerOverUI());
+        scene.SetUIInput({ 400, 300 }, true, { 800, 600 });
+        scene.OnUpdateRuntime(0.016f);
+        scene.SetUIInput({ 400, 300 }, false, { 800, 600 });
+        scene.OnUpdateRuntime(0.016f);
+        CHECK(ClickCounter::Clicks == 1);
+        scene.SetUIInput({ 50, 50 }, false, { 800, 600 });
+        scene.OnUpdateRuntime(0.016f);
+        CHECK(!scene.IsPointerOverUI());
+        scene.OnRuntimeStop();
+    }
+
     void TestUI()
     {
         Scene scene("UI");
@@ -13980,6 +14024,7 @@ int main(int argc, char** argv)
     Run("Reflection JSON", TestReflectionJson);
     Run("Material round trip", TestMaterialRoundTrip);
     Run("UI layout and clicks", TestUI);
+    Run("World space canvases", TestWorldSpaceCanvas);
     Run("UI pointer events", TestPointerEvents);
     Run("Late update", TestLateUpdate);
     Run("Light probe sampling", TestLightProbeSampling);

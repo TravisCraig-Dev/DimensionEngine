@@ -54,10 +54,13 @@ namespace Dimension
 
         // Resolves every UI Rect under a Canvas to screen pixels (layout groups, scroll offsets, clip rects).
         // Returns entities in draw order.
-        std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screenSize);
+        // `canvas`: Null lays out the screen-space canvases on the screen; a World Space canvas lays out just that one,
+        // `screenSize` being its Pixel Size.
+        std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screenSize, Entity canvas = Entity::Null());
 
         // Pointer/keyboard handling for all widgets; dispatches script events. Returns the topmost UI element under the pointer.
-        Entity Update(Scene& scene, const PointerState& pointer, const glm::vec2& screenSize, float dt = 0.0f);
+        // (`canvas` as ComputeLayout's: only those canvases' widgets are touched.)
+        Entity Update(Scene& scene, const PointerState& pointer, const glm::vec2& screenSize, float dt = 0.0f, Entity canvas = Entity::Null());
 
         // The UI elements that take the pointer (widgets and images, not text) under a point (render-target pixels),
         // topmost first, as laid out now.
@@ -65,7 +68,10 @@ namespace Dimension
         std::vector<Entity> ElementsAt(Scene& scene, const glm::vec2& point, const glm::vec2& screenSize,
                                        const std::function<bool(Entity)>& alsoTakes = {});
 
-        void BuildDrawList(Scene& scene, const glm::vec2& screenSize, std::vector<DrawCommand>& out);
+        void BuildDrawList(Scene& scene, const glm::vec2& screenSize, std::vector<DrawCommand>& out, Entity canvas = Entity::Null());
+        // Where the main camera's pointer ray (screen point) meets a World Space canvas, in its pixels; false when it
+        // misses the panel (or the canvas is not World Space).
+        bool WorldCanvasPoint(Scene& scene, Entity canvas, const glm::vec2& screenPoint, const glm::vec2& screenSize, glm::vec2& pixel);
 
         // Where keyboard/gamepad navigation goes from each reachable widget in each direction (explicit links and
         // the automatic nearest widget), for the editor's Visualize Navigation overlay. Rects are in layout pixels.

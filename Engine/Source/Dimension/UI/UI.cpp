@@ -1,4 +1,5 @@
 #include "Dimension/UI/UI.h"
+#include "Dimension/Scene/CameraProjection.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Project/Localization.h"
@@ -706,12 +707,17 @@ namespace Dimension::UI
         return links;
     }
 
-    std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screen)
+    std::vector<Entity> ComputeLayout(Scene& scene, const glm::vec2& screen, Entity only)
     {
         auto& reg = scene.GetRegistry();
         std::vector<std::pair<int32_t, Entity>> canvases;
         for (auto [e, canvas, t] : reg.ViewOf<CanvasComponent, TransformComponent>())
-            if (t.ActiveInHierarchy) canvases.emplace_back(canvas.SortingOrder, e);
+        {
+            if (!t.ActiveInHierarchy) continue;
+            bool world = canvas.RenderMode == CanvasRenderMode::WorldSpace;
+            if (only.IsNull() ? world : e != only) continue;
+            canvases.emplace_back(canvas.SortingOrder, e);
+        }
         std::stable_sort(canvases.begin(), canvases.end(), [](auto& a, auto& b) { return a.first < b.first; });
 
         std::vector<Entity> order;
@@ -719,7 +725,8 @@ namespace Dimension::UI
         {
             auto& canvas = reg.Get<CanvasComponent>(e);
             float scale = 1.0f;
-            if (canvas.ScaleMode == CanvasScaleMode::ScaleWithScreenSize && canvas.ReferenceResolution.x > 0 && canvas.ReferenceResolution.y > 0)
+            if (canvas.RenderMode == CanvasRenderMode::ScreenSpace && canvas.ScaleMode == CanvasScaleMode::ScaleWithScreenSize &&
+                canvas.ReferenceResolution.x > 0 && canvas.ReferenceResolution.y > 0)
                 scale = std::min(screen.x / canvas.ReferenceResolution.x, screen.y / canvas.ReferenceResolution.y);
             LayoutContext ctx{ scene, scale, order };
             LayoutNode(ctx, e, glm::vec2(0.0f), screen, glm::vec2(0.0f), screen, nullptr, nullptr);
@@ -737,10 +744,18 @@ namespace Dimension::UI
         return under;
     }
 
-    Entity Update(Scene& scene, const PointerState& pointer, const glm::vec2& screen, float dt)
+    Entity Update(Scene& scene, const PointerState& pointer, const glm::vec2& screen, float dt, Entity only)
     {
         auto& reg = scene.GetRegistry();
-        auto order = ComputeLayout(scene, screen);
+        auto order = ComputeLayout(scene, screen, only);
+        // Only this call's canvases' widgets (a World Space canvas is updated on its own, with its own pointer).
+        std::vector<bool> inLayout;
+        for (Entity e : order)
+        {
+            if (e.Index >= inLayout.size()) inLayout.resize(e.Index + 1, false);
+            inLayout[e.Index] = true;
+        }
+        auto mine = [&](Entity e) { return e.Index < inLayout.size() && inLayout[e.Index]; };
 
         // Events are collected and dispatched after iteration: scripts may change the scene.
         std::vector<Entity> clicked;
@@ -753,6 +768,7 @@ namespace Dimension::UI
         Entity captured = Entity::Null();
         for (auto [e, dd] : reg.ViewOf<UIDropdownComponent>())
         {
+            if (!mine(e)) continue;
             if (!dd.Open) continue;
             auto* r = reg.TryGet<UIRectComponent>(e);
             if (!captured.IsNull() || !r || !reg.Get<TransformComponent>(e).ActiveInHierarchy || !dd.Interactable || dd.Options.empty())
@@ -811,6 +827,7 @@ namespace Dimension::UI
             }
         for (auto [e, view] : reg.ViewOf<UIScrollViewComponent>())
         {
+            if (!mine(e)) continue;
             if (!pointer.Down) view.DraggingScrollbar = false;
             if (!view.DraggingScrollbar) continue;
             auto* r = reg.TryGet<UIRectComponent>(e);
@@ -854,6 +871,7 @@ namespace Dimension::UI
 
         for (auto [e, dd] : reg.ViewOf<UIDropdownComponent>())
         {
+            if (!mine(e)) continue;
             int n = (int)dd.Options.size();
             dd.Value = std::clamp(dd.Value, 0, std::max(0, n - 1));
             if (dd.Open) continue;
@@ -874,6 +892,7 @@ namespace Dimension::UI
 
         for (auto [e, button] : reg.ViewOf<UIButtonComponent>())
         {
+            if (!mine(e)) continue;
             button.Hovered = e == hovered && button.Interactable;
             if (input.Pressed && button.Hovered) button.Pressed = true;
             if (input.Released)
@@ -885,6 +904,7 @@ namespace Dimension::UI
 
         for (auto [e, slider] : reg.ViewOf<UISliderComponent>())
         {
+            if (!mine(e)) continue;
             if (input.Pressed && e == hovered && slider.Interactable) slider.Dragging = true;
             if (!pointer.Down) slider.Dragging = false;
             if (!slider.Dragging) continue;
@@ -903,6 +923,7 @@ namespace Dimension::UI
 
         for (auto [e, toggle] : reg.ViewOf<UIToggleComponent>())
         {
+            if (!mine(e)) continue;
             bool over = e == hovered && toggle.Interactable;
             if (input.Pressed && over) toggle.Pressed = true;
             if (input.Released)
@@ -924,6 +945,7 @@ namespace Dimension::UI
         bool tabBackwards = false;
         for (auto [e, field] : reg.ViewOf<UIInputFieldComponent>())
         {
+            if (!mine(e)) continue;
             auto* rect = reg.TryGet<UIRectComponent>(e);
             if (!rect) continue;
             std::string& text = field.Text;
@@ -1148,10 +1170,30 @@ namespace Dimension::UI
         return hovered;
     }
 
-    void BuildDrawList(Scene& scene, const glm::vec2& screen, std::vector<DrawCommand>& out)
+    bool WorldCanvasPoint(Scene& scene, Entity canvasEntity, const glm::vec2& screenPoint, const glm::vec2& screenSize, glm::vec2& pixel)
     {
         auto& reg = scene.GetRegistry();
-        auto order = ComputeLayout(scene, screen);
+        auto* canvas = reg.TryGet<CanvasComponent>(canvasEntity);
+        Entity camera = scene.GetPrimaryCamera();
+        if (!canvas || canvas->RenderMode != CanvasRenderMode::WorldSpace || camera.IsNull()) return false;
+        glm::vec3 origin, direction;
+        CameraProjection::ScreenPointToRay(scene, camera, screenPoint, screenSize, origin, direction);
+        glm::mat4 inv = glm::inverse(reg.Get<TransformComponent>(canvasEntity).World);
+        glm::vec3 o = glm::vec3(inv * glm::vec4(origin, 1.0f)), d = glm::vec3(inv * glm::vec4(direction, 0.0f));
+        if (std::abs(d.z) < 1e-8f) return false;
+        float t = -o.z / d.z;
+        if (t <= 0.0f) return false;
+        glm::vec3 hit = o + d * t; // the panel's plane (local z = 0), centered, +Y up
+        glm::vec2 size = canvas->WorldSize();
+        glm::vec2 f(hit.x / size.x + 0.5f, 0.5f - hit.y / size.y);
+        pixel = f * canvas->PixelSize;
+        return f.x >= 0.0f && f.y >= 0.0f && f.x <= 1.0f && f.y <= 1.0f;
+    }
+
+    void BuildDrawList(Scene& scene, const glm::vec2& screen, std::vector<DrawCommand>& out, Entity only)
+    {
+        auto& reg = scene.GetRegistry();
+        auto order = ComputeLayout(scene, screen, only);
         uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
         Entity navSelected = scene.IsUINavigating() ? scene.GetUISelected() : Entity::Null();
 

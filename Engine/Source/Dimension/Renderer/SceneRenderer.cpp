@@ -1166,6 +1166,8 @@ namespace Dimension
         // GPU particles: simulate (once per frame, whichever view renders first) and list their draws.
         SimulateGpuParticles(cmd, scene, target, camera.View);
 
+        // World Space canvases into their images (shown as quads by CollectSprites).
+        if (!options.ProbeCapture) RenderWorldCanvases(cmd, scene);
         // Prepare CPU-side draw lists (the camera's layers: nested probe captures above drew everything)
         m_CullingMask = view.CullingMask;
         CollectSprites(scene, camera);
@@ -1949,6 +1951,8 @@ namespace Dimension
         if (m_PointShadowMap) RenderDevice::Get().UnregisterTexture(m_PointShadowBindless);
         for (auto& [key, impostor] : m_Impostors)
             if (impostor.Bindless) RenderDevice::Get().UnregisterTexture(impostor.Bindless);
+        for (auto& [key, canvas] : m_WorldCanvases)
+            if (canvas.Bindless) RenderDevice::Get().UnregisterTexture(canvas.Bindless);
     }
 
     namespace
@@ -3319,6 +3323,25 @@ namespace Dimension
     void SceneRenderer::CollectSprites(Scene& scene, const CameraData& camera)
     {
         uint32_t white = AssetManager::GetWhiteTexture()->GetBindlessIndex();
+        // World Space canvases: their UI images as panels on their objects (the images hold display values: bit 28).
+        for (auto [e, canvas, t] : scene.GetRegistry().ViewOf<CanvasComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || canvas.RenderMode != CanvasRenderMode::WorldSpace || LayerCulled(scene, e)) continue;
+            uint64_t key = (uint64_t)(uintptr_t)&scene * 1000003ull ^ (((uint64_t)e.Generation << 32) | e.Index);
+            auto it = m_WorldCanvases.find(key);
+            if (it == m_WorldCanvases.end() || !it->second.Initialized) continue;
+            SpriteDraw d{};
+            glm::vec2 size = canvas.WorldSize();
+            d.Transform = t.World * glm::scale(glm::mat4(1.0f), glm::vec3(size, 1.0f));
+            d.Color = glm::vec4(1.0f);
+            d.UVMin = { 0.0f, 1.0f };
+            d.UVMax = { 1.0f, 0.0f };
+            d.Texture = it->second.Bindless | 0x10000000u;
+            d.Entity = e.Index + 1;
+            d.Order = canvas.SortingOrder;
+            d.Depth = (camera.View * t.World[3]).z;
+            m_Sprites.push_back(d);
+        }
         for (auto [e, sr, t] : scene.GetRegistry().ViewOf<SpriteRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
@@ -3688,10 +3711,49 @@ namespace Dimension
 
     void SceneRenderer::RenderUIOnly(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target)
     {
+        RenderUIInto(cmd, scene, target.GetOutput(), { target.GetWidth(), target.GetHeight() }, Entity::Null(), false);
+    }
+
+    void SceneRenderer::RenderWorldCanvases(VkCommandBuffer cmd, Scene& scene)
+    {
         auto& device = RenderDevice::Get();
-        VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
-        const Image& out = target.GetOutput();
-        Vk::TransitionImage(cmd, out.GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        uint64_t frame = device.Frame().FrameNumber;
+        for (auto [e, canvas, t] : scene.GetRegistry().ViewOf<CanvasComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || canvas.RenderMode != CanvasRenderMode::WorldSpace) continue;
+            glm::uvec2 size = glm::clamp(glm::uvec2(glm::round(canvas.PixelSize)), glm::uvec2(1), glm::uvec2(4096));
+            uint64_t key = (uint64_t)(uintptr_t)&scene * 1000003ull ^ (((uint64_t)e.Generation << 32) | e.Index);
+            auto& img = m_WorldCanvases[key];
+            if (img.Size != size || !img.Bindless)
+            {
+                if (img.Bindless) device.UnregisterTexture(img.Bindless);
+                img.Img = Image({ size.x, size.y, SceneRenderTarget::kOutputFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1,
+                                  "WorldCanvas" });
+                img.Bindless = device.RegisterTexture(img.Img.GetView(), device.GetLinearSampler());
+                img.Size = size;
+                img.Initialized = false;
+            }
+            img.Frame = frame;
+            RenderUIInto(cmd, scene, img.Img, { size.x, size.y }, e, !img.Initialized);
+            img.Initialized = true;
+        }
+        for (auto it = m_WorldCanvases.begin(); it != m_WorldCanvases.end();)
+        {
+            if (it->second.Frame + 8 < frame)
+            {
+                if (it->second.Bindless) device.UnregisterTexture(it->second.Bindless);
+                it = m_WorldCanvases.erase(it);
+            }
+            else
+                ++it;
+        }
+    }
+
+    void SceneRenderer::RenderUIInto(VkCommandBuffer cmd, Scene& scene, const Image& out, VkExtent2D extent, Entity canvas, bool firstUse)
+    {
+        auto& device = RenderDevice::Get();
+        Vk::TransitionImage(cmd, out.GetHandle(), firstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         att.imageView = out.GetView();
         att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -3709,7 +3771,11 @@ namespace Dimension
         vkCmdSetViewport(cmd, 0, 1, &flat);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
-        DrawUI(cmd, scene, extent);
+        {
+            std::vector<UI::DrawCommand> commands;
+            UI::BuildDrawList(scene, { (float)extent.width, (float)extent.height }, commands, canvas);
+            DrawQuads(cmd, commands, extent);
+        }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, out.GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
