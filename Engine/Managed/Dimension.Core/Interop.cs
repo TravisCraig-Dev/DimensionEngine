@@ -195,6 +195,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, ulong*, int*, uint*, int, int, int> TextureOp;  // see Texture2D in Assets.cs
         public delegate* unmanaged<int, byte*, ulong*, byte*> BundleOp;  // see AssetBundle in Assets.cs
         public delegate* unmanaged<IntPtr, ulong, int, float*, ulong*, int> VideoOp;  // see VideoPlayer in Components.cs
+        public delegate* unmanaged<int, float*, byte*, int> VoiceOp;  // see VoiceChat in Components.cs
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

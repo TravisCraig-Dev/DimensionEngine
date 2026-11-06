@@ -147,6 +147,25 @@ namespace Dimension
         return count;
     }
 
+    size_t Microphone::ReadSince(uint64_t& cursor, std::vector<float>& out)
+    {
+        out.clear();
+        if (!s_Recorder) return 0;
+        const auto& buf = s_Recorder->Buffer;
+        uint64_t written = s_Recorder->Written.load(std::memory_order_acquire);
+        size_t size = buf.size();
+        if (size == 0 || cursor >= written)
+        {
+            cursor = std::min(cursor, written);
+            return 0;
+        }
+        if (written - cursor > size) cursor = written - size; // overwritten since: from the oldest still kept
+        out.resize((size_t)(written - cursor));
+        for (size_t i = 0; i < out.size(); ++i) out[i] = buf[(size_t)((cursor + i) % size)];
+        cursor = written;
+        return out.size();
+    }
+
     bool Microphone::SaveWav(const fs::path& path)
     {
         std::vector<float> samples;

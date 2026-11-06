@@ -57,6 +57,7 @@
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Audio/Microphone.h>
+#include <Dimension/Audio/VoiceChat.h>
 #include <Dimension/Physics/Water.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
@@ -4755,6 +4756,78 @@ namespace
         rt.reset();
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path(), ec);
+    }
+
+    void TestVoiceChat()
+    {
+        AudioEngine::Init();
+        // Two links in one process, each the other's peer on this machine.
+        VoiceChat a, b;
+        VoiceChat::Options options;
+        options.UseMicrophone = false; // what Submit gives
+        options.Playback = false;      // ReadReceived takes it
+        CHECK(a.Start(47811, "127.0.0.1", 47812, options));
+        CHECK(b.Start(47812, "localhost", 47811, options));
+        CHECK(a.IsRunning() && b.IsRunning());
+        // One second of a 440 Hz tone from A, then B's side of it.
+        std::vector<float> tone(VoiceChat::kSampleRate);
+        for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.5f * (float)std::sin(2.0 * 3.14159265358979 * 440.0 * (double)i / VoiceChat::kSampleRate);
+        std::vector<float> heard;
+        size_t submitted = 0;
+        auto start = std::chrono::steady_clock::now();
+        while (heard.size() < tone.size() && std::chrono::steady_clock::now() - start < std::chrono::seconds(3))
+        {
+            // As a microphone would: 20 ms at a time.
+            if (submitted < tone.size())
+            {
+                a.Submit(tone.data() + submitted, VoiceChat::kFrameSamples);
+                submitted += VoiceChat::kFrameSamples;
+            }
+            float chunk[4800];
+            size_t n = b.ReadReceived(chunk, 4800);
+            heard.insert(heard.end(), chunk, chunk + n);
+            if (!n) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        VoiceChat::Stats sent = a.GetStats(), got = b.GetStats();
+        CHECK(sent.PacketsSent == 50); // 20 ms each
+        CHECK(got.PacketsReceived == 50 && got.PacketsLost == 0);
+        CHECK(heard.size() == tone.size());
+        // The same tone (past the codec's start-up): its level and pitch (zero crossings).
+        size_t from = heard.size() / 5;
+        double sum = 0.0;
+        int crossings = 0;
+        for (size_t i = from; i < heard.size(); ++i)
+        {
+            sum += (double)heard[i] * heard[i];
+            if (i > from && (heard[i - 1] < 0.0f) != (heard[i] < 0.0f)) ++crossings;
+        }
+        double seconds = (double)(heard.size() - from) / VoiceChat::kSampleRate;
+        double rms = std::sqrt(sum / (double)(heard.size() - from)), hz = crossings / 2.0 / seconds;
+        CHECK(rms > 0.25 && rms < 0.45);
+        CHECK(std::abs(hz - 440.0) < 15.0);
+        CHECK(got.RemoteLevel > 0.2f && sent.LocalLevel > 0.2f);
+        // The other way, with push to talk off at first: nothing goes until it is on.
+        b.SetTransmitting(false);
+        b.Submit(tone.data(), 9600);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        CHECK(b.GetStats().PacketsSent == 0 && a.GetStats().PacketsReceived == 0);
+        b.SetTransmitting(true);
+        // Voice activation: quiet frames stay home, loud ones go.
+        b.SetActivationThreshold(0.1f);
+        std::vector<float> quiet(9600, 0.001f);
+        b.Submit(quiet.data(), quiet.size());
+        b.Submit(tone.data(), 9600);
+        start = std::chrono::steady_clock::now();
+        while (a.GetStats().PacketsReceived < 10 && std::chrono::steady_clock::now() - start < std::chrono::seconds(2))
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(b.GetStats().PacketsSent == 10 && a.GetStats().PacketsReceived == 10);
+        a.Stop();
+        b.Stop();
+        CHECK(!a.IsRunning() && !b.IsRunning());
+        // A port in use cannot be opened twice.
+        VoiceChat c, d;
+        CHECK(c.Start(47813, "127.0.0.1", 47814, options));
+        CHECK(!d.Start(47813, "127.0.0.1", 47814, options));
     }
 
     void TestOcclusionTest()
@@ -15240,6 +15313,7 @@ int main(int argc, char** argv)
     Run("Occlusion test", TestOcclusionTest);
     Run("Video decoder", TestVideoDecoder);
     Run("Video player", TestVideoPlayer);
+    Run("Voice chat", TestVoiceChat);
     Run("Profiler", TestProfiler);
     Run("LOD fade and generated", TestLODFadeAndGenerated);
     Run("NavMesh obstacles", TestNavMeshObstacles);

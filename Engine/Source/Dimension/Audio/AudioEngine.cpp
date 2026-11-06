@@ -1,5 +1,6 @@
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Audio/Convolver.h"
+#include "Dimension/Audio/VoiceChat.h"
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Asset/AssetManager.h"
@@ -718,6 +719,7 @@ namespace Dimension
 
     void AudioEngine::Shutdown()
     {
+        VoiceChat::Default().Stop(); // its sound and thread, before the engine goes
         PreviewStop();
         AudioMixer::Shutdown();
         if (!s_Engine) return;

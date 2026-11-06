@@ -10,6 +10,7 @@
 #include "Dimension/Scene/SceneManager.h"
 #include <unordered_map>
 #include "Dimension/Audio/AudioEngine.h"
+#include "Dimension/Audio/VoiceChat.h"
 #include "Dimension/Video/VideoPlayer.h"
 #include "Dimension/Audio/Microphone.h"
 #include "Dimension/Terrain/Terrain.h"
@@ -318,6 +319,11 @@ namespace Dimension
             // length, width, height, pictures shown, frame rate; 4 its picture's texture GUID into *guid (0 until
             // prepared); 5 jump to v[0] seconds; 6 step to the next picture (paused).
             int (*VideoOp)(void*, uint64_t, int, float*, uint64_t*);
+            // Voice chat (VoiceChat::Default): 0 start (v: local port, remote port, use the microphone; host), 1 stop,
+            // 2 its state into v: running, transmitting, activation threshold, volume, local level, remote level,
+            // packets sent, received, lost; 3 transmitting = v[0], 4 threshold = v[0], 5 volume = v[0]; 6 submit
+            // count = v[0] samples from v + 1.
+            int (*VoiceOp)(int, float*, const char*);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -2269,6 +2275,39 @@ namespace Dimension
                     return 1;
                 case 5: return Video::SetTime(scene, ent, (double)v[0]) ? 1 : 0;
                 case 6: Video::StepForward(scene, ent); return 1;
+                default: return 0;
+                }
+            };
+            a.VoiceOp = [](int op, float* v, const char* host) -> int {
+                VoiceChat& chat = VoiceChat::Default();
+                switch (op)
+                {
+                case 0:
+                {
+                    VoiceChat::Options options;
+                    options.UseMicrophone = v[2] != 0.0f;
+                    return chat.Start((uint16_t)v[0], host ? host : "", (uint16_t)v[1], options) ? 1 : 0;
+                }
+                case 1: chat.Stop(); return 1;
+                case 2:
+                {
+                    VoiceChat::Stats st = chat.GetStats();
+                    bool running = chat.IsRunning();
+                    v[0] = running ? 1.0f : 0.0f;
+                    v[1] = chat.IsTransmitting() ? 1.0f : 0.0f;
+                    v[2] = chat.GetActivationThreshold();
+                    v[3] = chat.GetVolume();
+                    v[4] = st.LocalLevel;
+                    v[5] = st.RemoteLevel;
+                    v[6] = (float)st.PacketsSent;
+                    v[7] = (float)st.PacketsReceived;
+                    v[8] = (float)st.PacketsLost;
+                    return 1;
+                }
+                case 3: chat.SetTransmitting(v[0] != 0.0f); return 1;
+                case 4: chat.SetActivationThreshold(v[0]); return 1;
+                case 5: chat.SetVolume(v[0]); return 1;
+                case 6: chat.Submit(v + 1, (size_t)v[0]); return 1;
                 default: return 0;
                 }
             };

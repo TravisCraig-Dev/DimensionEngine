@@ -22,6 +22,9 @@ namespace Dimension
         static size_t GetBufferFrames();
         // Copies recorded samples in order (oldest first, at most the buffer's length); returns the count.
         static size_t GetSamples(std::vector<float>& out);
+        // The samples recorded since `cursor` (a count of frames recorded, as GetPosition gives; it moves on to now).
+        // Anything older than the buffer's length is gone: reading skips ahead to what is still there.
+        static size_t ReadSince(uint64_t& cursor, std::vector<float>& out);
         // RMS of the last ~50 ms (0-1), and its peak.
         static float GetLevel();
         static float GetPeak();

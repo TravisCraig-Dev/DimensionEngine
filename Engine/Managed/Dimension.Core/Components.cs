@@ -2428,6 +2428,58 @@ namespace Dimension
     }
 
     /// <summary>Microphone input: record, read the level (voice activation), save the recording as a clip.</summary>
+    /// <summary>
+    /// Voice chat between two players over UDP, with no server: <see cref="Start"/> on each side, pointed at the other
+    /// (its address and port). What this side's microphone picks up goes out in 20 ms Opus packets (while
+    /// <see cref="Transmitting"/>: push to talk; frames quieter than <see cref="ActivationThreshold"/> stay home), and
+    /// what arrives plays through the audio engine (lost packets concealed). It keeps running across scenes until
+    /// <see cref="Stop"/>.
+    /// </summary>
+    public static unsafe class VoiceChat
+    {
+        public static bool Start(int localPort, string remoteHost, int remotePort, bool useMicrophone = true)
+        {
+            float* v = stackalloc float[3] { localPort, remotePort, useMicrophone ? 1.0f : 0.0f };
+            byte[] host = System.Text.Encoding.UTF8.GetBytes(remoteHost + "\0");
+            fixed (byte* h = host) return Native.Api.VoiceOp(0, v, h) != 0;
+        }
+        public static void Stop() => Native.Api.VoiceOp(1, null, null);
+
+        private static float State(int index)
+        {
+            float* v = stackalloc float[9];
+            Native.Api.VoiceOp(2, v, null);
+            return v[index];
+        }
+        private static void Set(int op, float value)
+        {
+            float* v = stackalloc float[1] { value };
+            Native.Api.VoiceOp(op, v, null);
+        }
+        public static bool IsRunning => State(0) != 0.0f;
+        /// <summary>Push to talk: nothing is sent while false (true at start).</summary>
+        public static bool Transmitting { get => State(1) != 0.0f; set => Set(3, value ? 1.0f : 0.0f); }
+        /// <summary>Voice activation: 20 ms frames quieter than this RMS (0-1) are not sent (0: everything is).</summary>
+        public static float ActivationThreshold { get => State(2); set => Set(4, value); }
+        /// <summary>How loud the other side plays.</summary>
+        public static float Volume { get => State(3); set => Set(5, value); }
+        /// <summary>RMS (0-1) of what was last sent / last received: meters, "is talking" icons.</summary>
+        public static float LocalLevel => State(4);
+        public static float RemoteLevel => State(5);
+        public static long PacketsSent => (long)State(6);
+        public static long PacketsReceived => (long)State(7);
+        public static long PacketsLost => (long)State(8);
+        /// <summary>Mono samples at 48 kHz to send as if spoken (generated voices, recordings).</summary>
+        public static void Submit(float[] samples)
+        {
+            if (samples == null || samples.Length == 0) return;
+            float[] packed = new float[samples.Length + 1];
+            packed[0] = samples.Length;
+            System.Array.Copy(samples, 0, packed, 1, samples.Length);
+            fixed (float* p = packed) Native.Api.VoiceOp(6, p, null);
+        }
+    }
+
     public static unsafe class Microphone
     {
         public static string[] Devices =>
