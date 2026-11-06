@@ -79,6 +79,8 @@ namespace Dimension
         // With it: a multi-channel field (the median of RGB is the distance; alpha the plain one).
         static constexpr uint32_t kMultiChannelBit = 0x40000000u;
         static constexpr uint32_t kTextureIndexMask = 0x3FFFFFFFu;
+        // A StyledChar codepoint with this bit is a glyph index of its Source font (shaped emoji sequences).
+        static constexpr uint32_t kGlyphIndexBit = 0x80000000u;
         uint32_t GetAtlasIndex() const;
         // Color glyphs (COLR/CPAL layered emoji, as Segoe UI Emoji has them) go in a second atlas of plain sRGB colors
         // with alpha; its bindless index (no flag bits), 0 while the font has none.

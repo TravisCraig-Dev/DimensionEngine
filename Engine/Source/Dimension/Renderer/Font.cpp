@@ -15,10 +15,10 @@ namespace Dimension
     namespace
     {
         // A glyph's outline as an msdfgen shape (font units, y up); false for glyphs without one (space).
-        bool GlyphShape(const stbtt_fontinfo& info, int codepoint, msdfgen::Shape& shape)
+        bool GlyphShape(const stbtt_fontinfo& info, int glyph, msdfgen::Shape& shape)
         {
             stbtt_vertex* v = nullptr;
-            int count = stbtt_GetCodepointShape(&info, codepoint, &v);
+            int count = stbtt_GetGlyphShape(&info, glyph, &v);
             if (count <= 0) return false;
             msdfgen::Contour* contour = nullptr;
             msdfgen::Point2 at;
@@ -123,6 +123,168 @@ namespace Dimension
         };
     }
 
+    namespace
+    {
+        // Glyph substitution (GSUB) as emoji fonts use it: the lookups of the ccmp, liga, rlig, calt and clig features, in
+        // order, each over the whole run; single substitutions, ligatures (a skin tone, a profession, a rainbow flag)
+        // and chaining contexts by coverage (a family's members turned into the narrower forms that overlap), through
+        // extension lookups too. Other lookup kinds are skipped.
+        struct GlyphSubstitution
+        {
+            const uint8_t* Table = nullptr;
+            size_t Size = 0;
+            std::vector<uint16_t> Lookups; // the features' lookups, in order
+
+            bool In(const uint8_t* p, size_t bytes) const { return Table && p >= Table && p + bytes <= Table + Size; }
+            uint16_t U16(const uint8_t* p) const { return In(p, 2) ? ReadU16(p) : 0; }
+            uint32_t U32(const uint8_t* p) const { return In(p, 4) ? ReadU32(p) : 0; }
+
+            void Load(const uint8_t* data, size_t size, uint32_t fontStart)
+            {
+                if (fontStart + 12 > size) return;
+                uint16_t tables = ReadU16(data + fontStart + 4);
+                for (uint16_t i = 0; i < tables; ++i)
+                {
+                    const uint8_t* rec = data + fontStart + 12 + 16 * i;
+                    if (rec + 16 > data + size) return;
+                    if (std::memcmp(rec, "GSUB", 4)) continue;
+                    uint32_t offset = ReadU32(rec + 8), length = ReadU32(rec + 12);
+                    if (offset + (size_t)length > size || length < 10) return;
+                    Table = data + offset;
+                    Size = length;
+                }
+                if (!Table) return;
+                const uint8_t* features = Table + U16(Table + 6);
+                std::vector<uint16_t> lookups;
+                for (uint16_t i = 0, n = U16(features); i < n; ++i)
+                {
+                    const uint8_t* rec = features + 2 + 6 * i;
+                    if (!In(rec, 6)) break;
+                    if (std::memcmp(rec, "ccmp", 4) && std::memcmp(rec, "liga", 4) && std::memcmp(rec, "rlig", 4) && std::memcmp(rec, "calt", 4) &&
+                        std::memcmp(rec, "clig", 4))
+                        continue;
+                    const uint8_t* feature = features + U16(rec + 4);
+                    for (uint16_t k = 0, m = U16(feature + 2); k < m; ++k) lookups.push_back(U16(feature + 4 + 2 * k));
+                }
+                std::sort(lookups.begin(), lookups.end());
+                lookups.erase(std::unique(lookups.begin(), lookups.end()), lookups.end());
+                Lookups = std::move(lookups);
+            }
+
+            int Coverage(const uint8_t* c, uint16_t glyph) const
+            {
+                uint16_t format = U16(c), count = U16(c + 2);
+                if (format == 1)
+                {
+                    for (uint16_t i = 0; i < count; ++i)
+                        if (U16(c + 4 + 2 * i) == glyph) return i;
+                }
+                else if (format == 2)
+                    for (uint16_t i = 0; i < count; ++i)
+                    {
+                        const uint8_t* r = c + 4 + 6 * i;
+                        uint16_t first = U16(r), last = U16(r + 2);
+                        if (glyph >= first && glyph <= last) return U16(r + 4) + glyph - first;
+                    }
+                return -1;
+            }
+
+            // Applies lookup `index` at `pos`: true when something was substituted there (`consumed`: input glyphs it
+            // covered, the run past them is next).
+            bool ApplyAt(uint16_t index, std::vector<uint16_t>& glyphs, size_t pos, size_t& consumed, int depth = 0) const
+            {
+                if (depth > 4 || pos >= glyphs.size()) return false;
+                const uint8_t* list = Table + U16(Table + 8);
+                if (index >= U16(list)) return false;
+                const uint8_t* lookup = list + U16(list + 2 + 2 * index);
+                uint16_t type = U16(lookup), subtables = U16(lookup + 4);
+                for (uint16_t j = 0; j < subtables; ++j)
+                {
+                    const uint8_t* st = lookup + U16(lookup + 6 + 2 * j);
+                    uint16_t kind = type;
+                    if (type == 7) // extension: the real subtable further away
+                    {
+                        kind = U16(st + 2);
+                        st = st + U32(st + 4);
+                    }
+                    if (!In(st, 4)) continue;
+                    if (kind == 1)
+                    {
+                        int ci = Coverage(st + U16(st + 2), glyphs[pos]);
+                        if (ci < 0) continue;
+                        glyphs[pos] = U16(st) == 1 ? (uint16_t)(glyphs[pos] + (int16_t)U16(st + 4)) : U16(st + 6 + 2 * ci);
+                        consumed = 1;
+                        return true;
+                    }
+                    if (kind == 4)
+                    {
+                        int ci = Coverage(st + U16(st + 2), glyphs[pos]);
+                        if (ci < 0) continue;
+                        const uint8_t* set = st + U16(st + 6 + 2 * ci);
+                        uint16_t best = 0, bestCount = 0;
+                        for (uint16_t k = 0, n = U16(set); k < n; ++k)
+                        {
+                            const uint8_t* lig = set + U16(set + 2 + 2 * k);
+                            uint16_t count = U16(lig + 2);
+                            if (count <= bestCount || pos + count > glyphs.size()) continue;
+                            bool match = true;
+                            for (uint16_t m = 1; m < count && match; ++m) match = glyphs[pos + m] == U16(lig + 4 + 2 * (m - 1));
+                            if (match)
+                            {
+                                best = U16(lig);
+                                bestCount = count;
+                            }
+                        }
+                        if (!bestCount) continue;
+                        glyphs[pos] = best;
+                        glyphs.erase(glyphs.begin() + pos + 1, glyphs.begin() + pos + bestCount);
+                        consumed = 1;
+                        return true;
+                    }
+                    if (kind == 6 && U16(st) == 3)
+                    {
+                        const uint8_t* p = st + 2;
+                        uint16_t backCount = U16(p);
+                        const uint8_t* back = p + 2;
+                        p += 2 + 2 * backCount;
+                        uint16_t inputCount = U16(p);
+                        const uint8_t* input = p + 2;
+                        p += 2 + 2 * inputCount;
+                        uint16_t aheadCount = U16(p);
+                        const uint8_t* ahead = p + 2;
+                        p += 2 + 2 * aheadCount;
+                        uint16_t records = U16(p);
+                        if (inputCount == 0 || pos < backCount || pos + inputCount + aheadCount > glyphs.size()) continue;
+                        bool match = true;
+                        for (uint16_t k = 0; k < inputCount && match; ++k) match = Coverage(st + U16(input + 2 * k), glyphs[pos + k]) >= 0;
+                        for (uint16_t k = 0; k < backCount && match; ++k) match = Coverage(st + U16(back + 2 * k), glyphs[pos - 1 - k]) >= 0;
+                        for (uint16_t k = 0; k < aheadCount && match; ++k) match = Coverage(st + U16(ahead + 2 * k), glyphs[pos + inputCount + k]) >= 0;
+                        if (!match) continue;
+                        for (uint16_t r = 0; r < records; ++r)
+                        {
+                            size_t used = 0;
+                            ApplyAt(U16(p + 4 + 4 * r), glyphs, pos + U16(p + 2 + 4 * r), used, depth + 1);
+                        }
+                        consumed = inputCount;
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            void Shape(std::vector<uint16_t>& glyphs) const
+            {
+                if (!Table) return;
+                for (uint16_t index : Lookups)
+                    for (size_t pos = 0; pos < glyphs.size();)
+                    {
+                        size_t consumed = 0;
+                        pos += ApplyAt(index, glyphs, pos, consumed) ? std::max<size_t>(consumed, 1) : 1;
+                    }
+            }
+        };
+    }
+
     // The font file (stb_truetype reads it in place), the atlas pixels kept for glyphs baked later, and those glyphs.
     struct Font::Dynamic
     {
@@ -139,6 +301,7 @@ namespace Dimension
         // Color glyphs: their own atlas (allocated with the first one).
         ColorTables Colors;
         bool HasColors = false;
+        GlyphSubstitution Substitution; // (color fonts: joined emoji sequences)
         static constexpr int kColorSize = 1024;
         std::vector<uint32_t> ColorRgba;
         int ColorPenX = 1, ColorPenY = 1, ColorRowHeight = 0;
@@ -214,23 +377,24 @@ namespace Dimension
         }
 
         // Bakes a glyph's multi-channel distance field into the atlas (shelf packing); false when it does not fit.
+        // A codepoint, or a glyph by its index (kGlyphIndexBit set: shaped emoji sequences).
         bool Bake(uint32_t cp, Glyph& g)
         {
             constexpr int kWidthC = kWidth, kHeightC = kHeight;
-            if (HasColors)
-                if (int glyph = stbtt_FindGlyphIndex(&Info, (int)cp); glyph && BakeColor(glyph, g)) return true;
+            int glyph = (cp & kGlyphIndexBit) ? (int)(cp & 0xFFFFu) : stbtt_FindGlyphIndex(&Info, (int)cp);
+            if (HasColors && glyph && BakeColor(glyph, g)) return true;
             auto toByte = [](float d) { return (uint32_t)std::clamp((int)std::lround(d * 255.0f), 0, 255); };
             int advance, bearing;
-            stbtt_GetCodepointHMetrics(&Info, (int)cp, &advance, &bearing);
+            stbtt_GetGlyphHMetrics(&Info, glyph, &advance, &bearing);
             g.Advance = advance * Scale;
             int x0, y0, x1, y1;
-            stbtt_GetCodepointBitmapBox(&Info, (int)cp, Scale, Scale, &x0, &y0, &x1, &y1);
+            stbtt_GetGlyphBitmapBox(&Info, glyph, Scale, Scale, &x0, &y0, &x1, &y1);
             if (x1 <= x0 || y1 <= y0) return true; // blank (a space)
             int w = x1 - x0 + 2 * kSpread, h = y1 - y0 + 2 * kSpread, xoff = x0 - kSpread, yoff = y0 - kSpread;
             if (PenX + w + 1 > kWidthC) { PenX = 1; PenY += RowHeight + 1; RowHeight = 0; }
             if (PenY + h + 1 > kHeightC) { Full = true; return false; }
             msdfgen::Shape shape;
-            if (GlyphShape(Info, (int)cp, shape))
+            if (GlyphShape(Info, glyph, shape))
             {
                 // Pixel (x, row from the bottom) <- font units: x = scale * (fx + tx), row = scale * (fy + ty).
                 msdfgen::Bitmap<float, 4> field(w, h);
@@ -247,7 +411,7 @@ namespace Dimension
             {
                 // No outline msdfgen can use: stb_truetype's single-channel field in all four channels.
                 int sw = 0, sh = 0, sx = 0, sy = 0;
-                unsigned char* sdf = stbtt_GetCodepointSDF(&Info, Scale, (int)cp, kSpread, 128, 128.0f / kSpread, &sw, &sh, &sx, &sy);
+                unsigned char* sdf = stbtt_GetGlyphSDF(&Info, Scale, glyph, kSpread, 128, 128.0f / kSpread, &sw, &sh, &sx, &sy);
                 if (!sdf) return true;
                 for (int y = 0; y < std::min(sh, h); ++y)
                     for (int x = 0; x < std::min(sw, w); ++x)
@@ -284,6 +448,7 @@ namespace Dimension
         // the outline, with kSpread pixels of falloff each way at the bake size. Text stays crisp at any size.
         dyn->Rgba.assign(size_t(Dynamic::kWidth) * Dynamic::kHeight, 0u); // outside everywhere (the gutters too)
         dyn->HasColors = dyn->Colors.Load(dyn->Data.data(), dyn->Data.size(), (uint32_t)stbtt_GetFontOffsetForIndex(dyn->Data.data(), 0));
+        if (dyn->HasColors) dyn->Substitution.Load(dyn->Data.data(), dyn->Data.size(), (uint32_t)stbtt_GetFontOffsetForIndex(dyn->Data.data(), 0));
         auto font = MakeRef<Font>();
         font->m_Dynamic = dyn;
         font->m_Latin1Baked = bakeLatin1;
@@ -345,6 +510,7 @@ namespace Dimension
     bool Font::HasGlyph(uint32_t cp) const
     {
         if (cp == ' ' || cp == '\t') return true;
+        if (cp & kGlyphIndexBit) return m_Dynamic != nullptr; // a shaped glyph of this font
         if (!m_Dynamic) return cp >= kFirstChar && cp < kFirstChar + kCharCount;
         auto it = m_Dynamic->Has.find(cp);
         if (it != m_Dynamic->Has.end()) return it->second;
@@ -722,16 +888,69 @@ namespace Dimension
                 chars.push_back(c);
             }
 
-        // Emoji presentation selectors and joiners take no room (a joined sequence shows as its separate emoji).
-        std::erase_if(chars, [](const StyledChar& c) { return c.Codepoint == 0xFE0E || c.Codepoint == 0xFE0F || c.Codepoint == 0x200D; });
         ShapeArabic(chars);
-        // Which font draws each character: this one, else the first fallback that has it.
-        for (StyledChar& c : chars)
+        // Which font draws each character: this one, else the first fallback that has it. Joiners and variation
+        // selectors go with the emoji before them.
+        auto joiner = [](uint32_t cp) { return cp == 0x200D || cp == 0xFE0E || cp == 0xFE0F; };
+        for (size_t i = 0; i < chars.size(); ++i)
         {
+            StyledChar& c = chars[i];
             c.Source = this;
+            if (joiner(c.Codepoint) && i > 0 && chars[i - 1].Source->HasColorGlyphs())
+            {
+                c.Source = chars[i - 1].Source;
+                continue;
+            }
             if (c.Codepoint < 0x100 || c.Codepoint == '\n' || HasGlyph(c.Codepoint)) continue;
             for (const Ref<Font>& f : GetFallbackFonts())
                 if (f && f->HasGlyph(c.Codepoint)) { c.Source = f.get(); break; }
+        }
+        // Emoji runs shaped by their font: skin tones, professions, families and the like become the glyphs it joins
+        // them into (drawn by glyph index); selectors and leftover joiners take no room.
+        {
+            std::vector<StyledChar> shaped;
+            shaped.reserve(chars.size());
+            for (size_t i = 0; i < chars.size();)
+            {
+                const Font* source = chars[i].Source;
+                if (!source->HasColorGlyphs() || !source->m_Dynamic->Substitution.Table)
+                {
+                    if (!joiner(chars[i].Codepoint)) shaped.push_back(chars[i]);
+                    ++i;
+                    continue;
+                }
+                size_t end = i;
+                std::vector<uint16_t> glyphs;
+                std::vector<size_t> origin; // the char each glyph came from (its style)
+                for (; end < chars.size() && chars[end].Source == source && chars[end].Codepoint != '\n' && chars[end].Codepoint != ' '; ++end)
+                {
+                    uint32_t cp = chars[end].Codepoint;
+                    if (cp == 0xFE0E || cp == 0xFE0F) continue;
+                    glyphs.push_back((uint16_t)stbtt_FindGlyphIndex(&source->m_Dynamic->Info, (int)cp));
+                    origin.push_back(end);
+                }
+                if (end == i) end = i + 1;
+                std::vector<uint16_t> before = glyphs;
+                source->m_Dynamic->Substitution.Shape(glyphs);
+                // Joiners the font did not join take no room (and draw nothing), as shapers treat them.
+                uint16_t zwj = (uint16_t)stbtt_FindGlyphIndex(&source->m_Dynamic->Info, 0x200D);
+                if (zwj) std::erase(glyphs, zwj);
+                if (glyphs == before)
+                {
+                    // Nothing joined: the characters as they were.
+                    for (size_t k = i; k < end; ++k)
+                        if (!joiner(chars[k].Codepoint)) shaped.push_back(chars[k]);
+                }
+                else
+                    for (uint16_t g : glyphs)
+                    {
+                        StyledChar c = chars[origin.front()];
+                        c.Codepoint = kGlyphIndexBit | g;
+                        shaped.push_back(c);
+                    }
+                i = end;
+            }
+            chars = std::move(shaped);
         }
         // Pixel size of a character: <size=N> is in the text's size units, <size=N%> scales.
         auto charPx = [&](const StyledChar& c) { return (c.Size > 0.0f ? c.Size * sizeUnit : pixelSize) * c.SizeScale; };
