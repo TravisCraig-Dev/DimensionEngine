@@ -1505,14 +1505,27 @@ namespace Dimension
 
         private float State(int index)
         {
-            float* v = stackalloc float[8];
+            float* v = stackalloc float[9];
             return Native.Api.VideoOp(Entity.Scene, Entity.Id, 3, v, null) != 0 ? v[index] : 0.0f;
         }
         public bool IsPlaying => State(0) != 0.0f;
         public bool IsPaused => State(1) != 0.0f;
         public bool IsPrepared => State(2) != 0.0f;
-        /// <summary>Seconds into the clip (from 0 again each loop).</summary>
-        public double Time => State(3);
+        /// <summary>Seconds into the clip (from 0 again each loop). Setting it jumps there: the picture there shows (paused
+        /// too) and playing goes on from it; a player not started opens paused there.</summary>
+        public double Time
+        {
+            get => State(3);
+            set
+            {
+                float* v = stackalloc float[1] { (float)value };
+                Native.Api.VideoOp(Entity.Scene, Entity.Id, 5, v, null);
+            }
+        }
+        /// <summary>Pauses and shows the next picture.</summary>
+        public void StepForward() => Native.Api.VideoOp(Entity.Scene, Entity.Id, 6, null, null);
+        /// <summary>Pictures per second (0 until prepared).</summary>
+        public float FrameRate => State(8);
         /// <summary>The clip's length in seconds (0 until prepared).</summary>
         public double Length => State(4);
         public int Width => (int)State(5);

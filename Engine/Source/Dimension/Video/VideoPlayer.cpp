@@ -51,6 +51,13 @@ namespace Dimension
             ma_pcm_rb Ring{};
             bool RingReady = false;
             std::atomic<uint64_t> Played{ 0 };
+            // Seeking: the main thread sets the target and a new generation; the decoding thread jumps there, empties
+            // what it had ready and reports the generation done. While Flushing, the sound reads silence (Reading counts
+            // reads in progress, so the ring is only emptied once none is).
+            double SeekTarget = 0.0;
+            std::atomic<uint32_t> SeekGen{ 0 }, SeekDone{ 0 };
+            std::atomic<bool> Flushing{ false };
+            std::atomic<int> Reading{ 0 };
             SoundSource Source;
             ma_sound Sound{};
             bool SoundReady = false;
@@ -71,7 +78,8 @@ namespace Dimension
             uint32_t channels = s.Info.Channels;
             auto* dst = static_cast<float*>(out);
             ma_uint64 done = 0;
-            while (done < frameCount)
+            ++s.Reading;
+            while (!s.Flushing && done < frameCount)
             {
                 ma_uint32 n = (ma_uint32)std::min<ma_uint64>(frameCount - done, 1u << 20);
                 void* buffer = nullptr;
@@ -81,6 +89,7 @@ namespace Dimension
                 done += n;
             }
             s.Played += done;
+            --s.Reading;
             if (done < frameCount) std::memset(dst + done * channels, 0, (size_t)(frameCount - done) * channels * sizeof(float));
             if (framesRead) *framesRead = frameCount;
             return MA_SUCCESS;
@@ -129,10 +138,41 @@ namespace Dimension
             double videoLoop = 0.0, audioLoop = 0.0;
             std::vector<float> pending;
             size_t pendingAt = 0;
+            double skipUntil = -1.0; // after a seek: sound before the target is dropped
+            uint32_t handled = 0;
             (void)audioLoop;
             while (!s.Quit)
             {
                 bool busy = false;
+                if (uint32_t gen = s.SeekGen; gen != handled)
+                {
+                    double target = s.SeekTarget;
+                    decoder->SeekVideo(target);
+                    decoder->SeekAudio(target);
+                    videoLoop = 0.0;
+                    {
+                        std::lock_guard lock(s.Mutex);
+                        s.Frames.clear();
+                    }
+                    s.VideoEnded = false;
+                    s.AudioEnded = false;
+                    pending.clear();
+                    pendingAt = 0;
+                    skipUntil = target;
+                    if (s.RingReady)
+                    {
+                        s.Flushing = true;
+                        while (s.Reading > 0) std::this_thread::yield();
+                        ma_pcm_rb_reset(&s.Ring);
+                        s.Played = 0;
+                        s.Flushing = false;
+                    }
+                    else
+                        s.Played = 0;
+                    handled = gen;
+                    s.SeekDone = gen;
+                    busy = true;
+                }
                 if (s.Info.HasVideo && !s.VideoEnded)
                 {
                     size_t queued;
@@ -172,6 +212,13 @@ namespace Dimension
                             if (s.Loop) decoder->RewindAudio();
                             else s.AudioEnded = true;
                         }
+                        else if (skipUntil >= 0.0)
+                        {
+                            // Just sought: the sound starts at the target (whole samples before it are left out).
+                            double cut = (skipUntil - t) * s.Info.SampleRate;
+                            if (cut > 0.0) pendingAt = std::min(pending.size(), (size_t)cut * channels);
+                            if (pendingAt < pending.size()) skipUntil = -1.0;
+                        }
                         busy = true;
                     }
                     while (pendingAt < pending.size())
@@ -196,7 +243,10 @@ namespace Dimension
             AssetHandle Texture = AssetHandle::None();
             bool Playing = false, Paused = false, Bound = false, Seen = false;
             double Clock = 0.0;     // seconds of clip played (without sound; with sound the sound's clock)
-            double Length = 0.0;
+            double SeekBase = 0.0;  // the clock where the sound's count started (the last seek)
+            uint32_t SeekWait = 0;  // a seek the decoding thread has not done yet
+            bool ShowNext = false;  // show the picture at the clock even while paused (after a seek)
+            double Length = 0.0, FrameRate = 0.0;
             glm::uvec2 Size{ 0 };
             uint64_t Shown = 0;
             AssetHandle Clip = AssetHandle::None();
@@ -224,6 +274,9 @@ namespace Dimension
             p.S->WantAudio = vp.PlayAudio && AudioEngine::IsAvailable();
             p.S->Source.Owner = p.S.get();
             p.Clock = 0.0;
+            p.SeekBase = 0.0;
+            p.SeekWait = 0;
+            p.ShowNext = false;
             p.Clip = vp.Clip;
             Stream* raw = p.S.get();
             p.S->Thread = std::thread([raw] { Decode(*raw); });
@@ -313,6 +366,7 @@ namespace Dimension
                 {
                     // Prepared: the picture's texture and the sound.
                     p.Length = s.Info.Duration;
+                    p.FrameRate = s.Info.FrameRate;
                     p.Size = { s.Info.Width, s.Info.Height };
                     if (s.Info.HasVideo && !p.Texture.IsValid())
                         p.Texture = AssetManager::CreateRuntimeTexture(s.Info.Width, s.Info.Height, true, false, &scene);
@@ -325,10 +379,20 @@ namespace Dimension
                     ma_sound_set_volume(&s.Sound, std::max(vp.Volume, 0.0f));
                     ma_sound_set_pitch(&s.Sound, std::clamp(vp.PlaybackSpeed, 0.01f, 10.0f));
                 }
-                if (!p.Playing || p.Paused) continue;
+                if (p.SeekWait)
+                {
+                    if (s.SeekDone < p.SeekWait) continue; // still jumping there
+                    p.SeekWait = 0;
+                    if (s.SoundReady && p.Playing && !p.Paused) ma_sound_start(&s.Sound);
+                }
+                bool running = p.Playing && !p.Paused;
+                if (!running && !p.ShowNext) continue;
                 // The clock: the sound's when it has one, else real time at the playback speed.
-                if (s.SoundReady) p.Clock = (double)s.Played.load() / (double)s.Info.SampleRate;
-                else p.Clock += (double)unscaledDt * std::max(vp.PlaybackSpeed, 0.0f);
+                if (running)
+                {
+                    if (s.SoundReady) p.Clock = p.SeekBase + (double)s.Played.load() / (double)s.Info.SampleRate;
+                    else p.Clock += (double)unscaledDt * std::max(vp.PlaybackSpeed, 0.0f);
+                }
                 // The newest picture due by now.
                 bool got = false;
                 Stream::Frame frame;
@@ -336,16 +400,25 @@ namespace Dimension
                     std::lock_guard lock(s.Mutex);
                     while (!s.Frames.empty() && s.Frames.front().Time <= p.Clock + 1e-4)
                     {
+                        // After a seek, decoding starts at the key picture before the target: only the last picture at
+                        // or before it is shown, known once the one after it has come (or the video has ended).
+                        if (p.ShowNext && s.Frames.size() == 1 && !s.VideoEnded) break;
                         frame = std::move(s.Frames.front());
                         s.Frames.pop_front();
                         got = true;
                     }
+                    // Not settled yet (the picture after the one popped is not here, or is due too): an earlier picture
+                    // on the way to the target, not shown.
+                    bool settled = s.Frames.empty() ? s.VideoEnded.load() : s.Frames.front().Time > p.Clock + 1e-4;
+                    if (got && p.ShowNext && !settled) got = false;
                 }
                 if (got && p.Texture.IsValid())
                 {
                     AssetManager::SetRuntimeTexturePixels(p.Texture, frame.Pixels.data(), frame.Pixels.size());
                     ++p.Shown;
+                    p.ShowNext = false;
                 }
+                if (!running) continue;
                 // The end (not looping): every picture shown and the sound played out.
                 bool framesLeft;
                 {
@@ -450,6 +523,52 @@ namespace Dimension
         {
             Player* p = Find(scene, e);
             return p ? p->Shown : 0;
+        }
+
+        double GetFrameRate(Scene& scene, Entity e)
+        {
+            Player* p = Find(scene, e);
+            return p ? p->FrameRate : 0.0;
+        }
+
+        bool SetTime(Scene& scene, Entity e, double seconds)
+        {
+            auto* vp = scene.IsValid(e) ? scene.GetRegistry().TryGet<VideoPlayerComponent>(e) : nullptr;
+            if (!vp || !vp->Clip.IsValid()) return false;
+            Player& p = s_Players[&scene][KeyOf(e)];
+            if (!p.S || p.Clip != vp->Clip)
+            {
+                // Not started: opened paused, showing that time (Play goes on from there).
+                Start(p, *vp);
+                if (!p.S) return false;
+                p.Bound = false;
+                p.Playing = true;
+                p.Paused = true;
+            }
+            if (p.Length > 0.0) seconds = std::clamp(seconds, 0.0, p.Length);
+            seconds = std::max(seconds, 0.0);
+            Stream& s = *p.S;
+            if (s.SoundReady) ma_sound_stop(&s.Sound);
+            s.SeekTarget = seconds;
+            p.SeekWait = ++s.SeekGen;
+            p.SeekBase = p.Clock = seconds;
+            p.ShowNext = true;
+            if (!p.Playing) // played out: playing again from there
+            {
+                p.Playing = true;
+                p.Paused = false;
+            }
+            return true;
+        }
+
+        void StepForward(Scene& scene, Entity e)
+        {
+            Player* p = Find(scene, e);
+            double rate = p && p->FrameRate > 0.0 ? p->FrameRate : 30.0;
+            double next = GetTime(scene, e) + 1.0 / rate;
+            if (!p || !p->S) return;
+            Pause(scene, e);
+            SetTime(scene, e, next);
         }
     }
 }

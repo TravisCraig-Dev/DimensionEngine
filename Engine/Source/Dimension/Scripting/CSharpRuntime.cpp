@@ -315,7 +315,8 @@ namespace Dimension
             // line), 2 an asset's GUID by its Assets-relative path (into *guid; returns "1" or "").
             const char* (*BundleOp)(int, const char*, uint64_t*);
             // Video Players: 0 Play (1 if it can), 1 Pause, 2 Stop, 3 its state into v: playing, paused, prepared, time,
-            // length, width, height, pictures shown; 4 its picture's texture GUID into *guid (0 until prepared).
+            // length, width, height, pictures shown, frame rate; 4 its picture's texture GUID into *guid (0 until
+            // prepared); 5 jump to v[0] seconds; 6 step to the next picture (paused).
             int (*VideoOp)(void*, uint64_t, int, float*, uint64_t*);
         };
 
@@ -2260,11 +2261,14 @@ namespace Dimension
                     v[5] = (float)size.x;
                     v[6] = (float)size.y;
                     v[7] = (float)Video::GetFrameCount(scene, ent);
+                    v[8] = (float)Video::GetFrameRate(scene, ent);
                     return 1;
                 }
                 case 4:
                     if (guid) *guid = (uint64_t)Video::GetTexture(scene, ent);
                     return 1;
+                case 5: return Video::SetTime(scene, ent, (double)v[0]) ? 1 : 0;
+                case 6: Video::StepForward(scene, ent); return 1;
                 default: return 0;
                 }
             };

@@ -68,13 +68,13 @@ namespace Dimension
             return reader;
         }
 
-        void Rewind(IMFSourceReader* reader)
+        void Rewind(IMFSourceReader* reader, double seconds = 0.0)
         {
             if (!reader) return;
             PROPVARIANT start;
             PropVariantInit(&start);
             start.vt = VT_I8;
-            start.hVal.QuadPart = 0;
+            start.hVal.QuadPart = (LONGLONG)(std::max(seconds, 0.0) * 1e7);
             reader->SetCurrentPosition(GUID_NULL, start);
             PropVariantClear(&start);
         }
@@ -265,6 +265,8 @@ namespace Dimension
 
     void VideoDecoder::RewindVideo() { Rewind(m_Native->Video); }
     void VideoDecoder::RewindAudio() { Rewind(m_Native->Audio); }
+    void VideoDecoder::SeekVideo(double seconds) { Rewind(m_Native->Video, seconds); }
+    void VideoDecoder::SeekAudio(double seconds) { Rewind(m_Native->Audio, seconds); }
 }
 
 #else
@@ -279,6 +281,8 @@ namespace Dimension
     bool VideoDecoder::NextAudio(double&, std::vector<float>&) { return false; }
     void VideoDecoder::RewindVideo() {}
     void VideoDecoder::RewindAudio() {}
+    void VideoDecoder::SeekVideo(double) {}
+    void VideoDecoder::SeekAudio(double) {}
 }
 
 #endif

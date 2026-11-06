@@ -4699,6 +4699,31 @@ namespace
         Video::Stop(*rt, later);
         CHECK(!Video::IsPlaying(*rt, later) && Video::GetTime(*rt, later) == 0.0);
 
+        // Seeking: stopped, it opens paused at that time and shows the picture there; stepping shows the next one.
+        auto settle = [&] {
+            for (int i = 0; i < 100; ++i)
+            {
+                rt->OnUpdateRuntime(0.0f);
+                wait(10);
+            }
+        };
+        CHECK(Video::SetTime(*rt, later, 1.5));
+        settle();
+        CHECK(Video::IsPaused(*rt, later) && std::abs(Video::GetTime(*rt, later) - 1.5) < 1e-6);
+        texture = Video::GetTexture(*rt, later);
+        CHECK(close(pixel(160, 60), 0, 255, 0)); // the second half: green
+        Video::SetTime(*rt, later, 0.3);
+        settle();
+        CHECK(close(pixel(160, 60), 255, 0, 0)); // back in the first half: red
+        uint64_t before = Video::GetFrameCount(*rt, later);
+        Video::StepForward(*rt, later);
+        settle();
+        CHECK(std::abs(Video::GetTime(*rt, later) - (0.3 + 1.0 / fps)) < 1e-3 && Video::GetFrameCount(*rt, later) == before + 1);
+        Video::Play(*rt, later);
+        run(0.5f);
+        CHECK(Video::IsPlaying(*rt, later) && std::abs(Video::GetTime(*rt, later) - (0.3 + 1.0 / fps + 0.5)) < 0.05);
+        Video::Stop(*rt, later);
+
         // With its sound (a device here): the pictures follow the sound's clock, in real time.
         if (AudioEngine::IsAvailable())
         {
@@ -4713,6 +4738,16 @@ namespace
             CHECK(Video::GetFrameCount(*rt, loud) >= 25);
             double t = Video::GetTime(*rt, loud); // 2.6 s less what the decoder took to start, from 0 again after 2 s
             CHECK(t > 0.1 && t < 0.8);
+            // A jump while playing: the sound and pictures go on from there.
+            Video::SetTime(*rt, loud, 1.2);
+            start = std::chrono::steady_clock::now();
+            while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(400))
+            {
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                wait(8);
+            }
+            t = Video::GetTime(*rt, loud);
+            CHECK(t > 1.3 && t < 1.65 && Video::IsPlaying(*rt, loud));
         }
         else
             std::printf("  (sound skipped: no audio device)\n");

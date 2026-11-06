@@ -34,6 +34,10 @@ namespace Dimension
         // Back to the start (each stream on its own).
         void RewindVideo();
         void RewindAudio();
+        // To a time (seconds): reading goes on from the key picture at or before it (the pictures up to it come first)
+        // and from about that time in the sound.
+        void SeekVideo(double seconds);
+        void SeekAudio(double seconds);
 
         // What a file holds without decoding it (Inspector, tests).
         static bool Probe(const fs::path& file, VideoInfo& info);

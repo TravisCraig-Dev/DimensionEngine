@@ -29,5 +29,11 @@ namespace Dimension
         glm::uvec2 GetSize(Scene& scene, Entity e);
         AssetHandle GetTexture(Scene& scene, Entity e); // the picture (a runtime texture), None until prepared
         uint64_t GetFrameCount(Scene& scene, Entity e); // pictures shown so far (tests)
+        double GetFrameRate(Scene& scene, Entity e);
+        // Jumps to a time (seconds, clamped to the clip): the picture there shows (paused too) and playing goes on from
+        // it. A player not started opens paused there. False without a clip.
+        bool SetTime(Scene& scene, Entity e, double seconds);
+        // Pauses and shows the next picture.
+        void StepForward(Scene& scene, Entity e);
     }
 }
