@@ -911,6 +911,24 @@ namespace Dimension
     // 1/distance (Logarithmic, the natural fall-off), or straight down to silence at Max Distance (Linear).
     enum class AudioRolloff : int32_t { Logarithmic = 0, Linear = 1 };
 
+    // How a Video Player shows its pictures (Unity's VideoRenderMode): on its own object (Material Override: its UI Image,
+    // Sprite Renderer or Mesh Renderer's material), or only for scripts (VideoPlayer.Texture).
+    enum class VideoRenderMode : int { MaterialOverride = 0, APIOnly };
+
+    // Plays a video file (MP4, MOV, WMV...) while the scene plays, with its sound (see Video::Update).
+    struct VideoPlayerComponent
+    {
+        AssetHandle Clip = AssetHandle::None();
+        bool PlayOnAwake = true;
+        bool Loop = true;
+        float PlaybackSpeed = 1.0f;
+        VideoRenderMode RenderMode = VideoRenderMode::MaterialOverride;
+        float Emission = 0.0f;   // Material Override on a Mesh Renderer: the picture glows this much (a screen in the dark)
+        bool PlayAudio = true;   // the clip's sound, through the audio engine
+        float Volume = 1.0f;
+        std::string Output;      // Audio Mixer group; empty = Master
+    };
+
     struct AudioSourceComponent
     {
         AssetHandle Clip = AssetHandle::None();

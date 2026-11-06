@@ -390,4 +390,11 @@ namespace Dimension
         public bool IsValid => Guid != 0;
         public static implicit operator ulong(AudioClip a) => a.Guid;
     }
+
+    /// <summary>A video file asset (MP4, MOV, WMV...), as a Video Player plays it.</summary>
+    public readonly record struct VideoClip(ulong Guid) : IAssetReference
+    {
+        public bool IsValid => Guid != 0;
+        public static implicit operator ulong(VideoClip a) => a.Guid;
+    }
 }

@@ -71,6 +71,15 @@
 #include <Dimension/Physics/Rope.h>
 #include <set>
 #include <windows.h>
+#include <mfapi.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
+#include <Dimension/Video/VideoDecoder.h>
+#include <Dimension/Video/VideoPlayer.h>
+#undef small // rpcndr.h (through the Media Foundation headers) defines it
+#pragma comment(lib, "mfplat.lib")
+#pragma comment(lib, "mfreadwrite.lib")
+#pragma comment(lib, "mfuuid.lib")
 
 namespace
 {
@@ -4419,6 +4428,298 @@ namespace
         CHECK(Profiler::History().size() == 1);
         Profiler::SetPaused(false);
         Profiler::Clear();
+    }
+
+    // Writes a test clip with Windows' own encoders (H.264 and AAC in MP4): the top half red for the first half of the
+    // frames and green after, the bottom half blue throughout, and a 440 Hz tone.
+    bool WriteTestVideo(const std::filesystem::path& file, uint32_t w, uint32_t h, int frames, int fps)
+    {
+        if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET))) return false;
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        IMFSinkWriter* writer = nullptr;
+        std::filesystem::remove(file);
+        if (FAILED(MFCreateSinkWriterFromURL(file.wstring().c_str(), nullptr, nullptr, &writer))) return false;
+        auto videoType = [&](const GUID& subtype, bool input) {
+            IMFMediaType* t = nullptr;
+            MFCreateMediaType(&t);
+            t->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+            t->SetGUID(MF_MT_SUBTYPE, subtype);
+            t->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+            MFSetAttributeSize(t, MF_MT_FRAME_SIZE, w, h);
+            MFSetAttributeRatio(t, MF_MT_FRAME_RATE, fps, 1);
+            MFSetAttributeRatio(t, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+            if (input) t->SetUINT32(MF_MT_DEFAULT_STRIDE, w * 4); // rows from the top
+            else t->SetUINT32(MF_MT_AVG_BITRATE, 2000000);
+            return t;
+        };
+        auto audioType = [&](const GUID& subtype, bool input) {
+            IMFMediaType* t = nullptr;
+            MFCreateMediaType(&t);
+            t->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+            t->SetGUID(MF_MT_SUBTYPE, subtype);
+            t->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+            t->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100);
+            t->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
+            if (input)
+            {
+                t->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 4);
+                t->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 44100 * 4);
+            }
+            else t->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 16000);
+            return t;
+        };
+        DWORD video = 0, audio = 0;
+        IMFMediaType* t = videoType(MFVideoFormat_H264, false);
+        bool ok = SUCCEEDED(writer->AddStream(t, &video));
+        t->Release();
+        t = videoType(MFVideoFormat_RGB32, true);
+        ok = ok && SUCCEEDED(writer->SetInputMediaType(video, t, nullptr));
+        t->Release();
+        t = audioType(MFAudioFormat_AAC, false);
+        ok = ok && SUCCEEDED(writer->AddStream(t, &audio));
+        t->Release();
+        t = audioType(MFAudioFormat_PCM, true);
+        ok = ok && SUCCEEDED(writer->SetInputMediaType(audio, t, nullptr));
+        t->Release();
+        ok = ok && SUCCEEDED(writer->BeginWriting());
+        const int samplesPerFrame = 44100 / fps;
+        int64_t sampleIndex = 0;
+        for (int k = 0; k < frames && ok; ++k)
+        {
+            LONGLONG start = (LONGLONG)k * 10000000 / fps, length = 10000000 / fps;
+            IMFMediaBuffer* buffer = nullptr;
+            MFCreateMemoryBuffer(w * h * 4, &buffer);
+            BYTE* data = nullptr;
+            buffer->Lock(&data, nullptr, nullptr);
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x)
+                {
+                    BYTE* p = data + ((size_t)y * w + x) * 4; // B G R X
+                    bool top = y < h / 2, early = k < frames / 2;
+                    p[0] = top ? 0 : 255;
+                    p[1] = top && !early ? 255 : 0;
+                    p[2] = top && early ? 255 : 0;
+                    p[3] = 255;
+                }
+            buffer->Unlock();
+            buffer->SetCurrentLength(w * h * 4);
+            IMFSample* sample = nullptr;
+            MFCreateSample(&sample);
+            sample->AddBuffer(buffer);
+            sample->SetSampleTime(start);
+            sample->SetSampleDuration(length);
+            ok = SUCCEEDED(writer->WriteSample(video, sample));
+            sample->Release();
+            buffer->Release();
+            // The tone for this frame's time.
+            MFCreateMemoryBuffer(samplesPerFrame * 4, &buffer);
+            buffer->Lock(&data, nullptr, nullptr);
+            auto* pcm = (int16_t*)data;
+            for (int i = 0; i < samplesPerFrame; ++i, ++sampleIndex)
+            {
+                auto v = (int16_t)(std::sin(2.0 * 3.14159265358979 * 440.0 * (double)sampleIndex / 44100.0) * 0.5 * 32767.0);
+                pcm[i * 2] = pcm[i * 2 + 1] = v;
+            }
+            buffer->Unlock();
+            buffer->SetCurrentLength(samplesPerFrame * 4);
+            MFCreateSample(&sample);
+            sample->AddBuffer(buffer);
+            sample->SetSampleTime(start);
+            sample->SetSampleDuration(length);
+            ok = ok && SUCCEEDED(writer->WriteSample(audio, sample));
+            sample->Release();
+            buffer->Release();
+        }
+        ok = ok && SUCCEEDED(writer->Finalize());
+        writer->Release();
+        return ok;
+    }
+
+    void TestVideoDecoder()
+    {
+        auto file = std::filesystem::temp_directory_path() / "DimensionTestVideo.mp4";
+        const int frames = 30, fps = 15;
+        if (!WriteTestVideo(file, 320, 240, frames, fps))
+        {
+            std::printf("  (skipped: no H.264 / AAC encoder)\n");
+            return;
+        }
+        VideoInfo info;
+        CHECK(VideoDecoder::Probe(file, info));
+        CHECK(info.HasVideo && info.HasAudio);
+        CHECK(info.Width == 320 && info.Height == 240);
+        CHECK(std::abs(info.Duration - (double)frames / fps) < 0.15);
+        CHECK(std::abs(info.FrameRate - fps) < 0.5);
+        CHECK(info.SampleRate == 44100 && info.Channels == 2);
+        auto decoder = VideoDecoder::Open(file);
+        CHECK(decoder != nullptr);
+        if (!decoder) return;
+        auto close = [](uint32_t c, uint32_t r, uint32_t g, uint32_t b) {
+            auto d = [](uint32_t a, uint32_t e) { return std::abs((int)a - (int)e) <= 40; };
+            return d(c & 255, r) && d(c >> 8 & 255, g) && d(c >> 16 & 255, b) && (c >> 24) == 255;
+        };
+        std::vector<uint32_t> pixels;
+        double time = -1.0, last = -1.0;
+        int count = 0;
+        bool earlyRight = true, lateRight = true, ordered = true;
+        while (decoder->NextFrame(time, pixels))
+        {
+            ordered &= time > last;
+            last = time;
+            uint32_t top = pixels[(size_t)60 * 320 + 160], bottom = pixels[(size_t)180 * 320 + 160];
+            if (time < (frames / 2 - 1) / (double)fps) earlyRight &= close(top, 255, 0, 0) && close(bottom, 0, 0, 255);
+            if (time > (frames / 2 + 1) / (double)fps) lateRight &= close(top, 0, 255, 0) && close(bottom, 0, 0, 255);
+            ++count;
+        }
+        CHECK(pixels.size() == 320u * 240u);
+        CHECK(std::abs(count - frames) <= 1);
+        CHECK(ordered);
+        CHECK(earlyRight); // rows from the top, red over blue
+        CHECK(lateRight);  // then green over blue
+        // The tone: about the clip's length of samples, at its level.
+        std::vector<float> samples;
+        size_t total = 0;
+        double sumSquares = 0.0;
+        while (decoder->NextAudio(time, samples))
+        {
+            total += samples.size();
+            for (float s : samples) sumSquares += (double)s * s;
+        }
+        double seconds = (double)total / (2.0 * 44100.0);
+        CHECK(std::abs(seconds - (double)frames / fps) < 0.25);
+        double rms = total ? std::sqrt(sumSquares / (double)total) : 0.0;
+        CHECK(rms > 0.25 && rms < 0.45); // 0.5 amplitude: 0.354
+        // Rewound, it starts over.
+        decoder->RewindVideo();
+        CHECK(decoder->NextFrame(time, pixels) && time < 0.05);
+        decoder->RewindAudio();
+        CHECK(decoder->NextAudio(time, samples) && time < 0.05);
+        decoder.reset();
+        std::filesystem::remove(file);
+    }
+
+    void TestVideoPlayer()
+    {
+        AudioEngine::Init();
+        std::error_code ec;
+        fs::path assets = fs::temp_directory_path() / "dimension_video" / "Assets";
+        fs::remove_all(assets.parent_path(), ec);
+        fs::create_directories(assets);
+        const int frames = 30, fps = 15; // 2 s: red over blue for the first second, then green over blue
+        if (!WriteTestVideo(assets / "Clip.mp4", 320, 240, frames, fps))
+        {
+            std::printf("  (skipped: no H.264 / AAC encoder)\n");
+            return;
+        }
+        AssetManager::Init(assets);
+        AssetHandle clip = AssetManager::GetHandle(assets / "Clip.mp4");
+        const AssetMetadata* meta = AssetManager::GetMetadata(clip);
+        CHECK(meta && meta->Type == AssetType::VideoClip);
+        Scene scene("Video");
+        Entity tv = scene.CreateEntity("TV"), later = scene.CreateEntity("Later"), loud = scene.CreateEntity("Loud");
+        auto& reg = scene.GetRegistry();
+        {
+            auto& a = reg.Emplace<VideoPlayerComponent>(tv);
+            a.Clip = clip;
+            a.PlayAudio = false; // real time from the updates' steps
+            a.Loop = false;
+            a.RenderMode = VideoRenderMode::APIOnly;
+        }
+        {
+            auto& b = reg.Emplace<VideoPlayerComponent>(later);
+            b.Clip = clip;
+            b.PlayAudio = false;
+            b.PlayOnAwake = false;
+            b.RenderMode = VideoRenderMode::APIOnly;
+        }
+        {
+            auto& c = reg.Emplace<VideoPlayerComponent>(loud);
+            c.Clip = clip;
+            c.PlayOnAwake = false;
+            c.Volume = 0.05f;
+            c.RenderMode = VideoRenderMode::APIOnly;
+        }
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto wait = [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
+        // Steps of the game: each a 60th of a second of clip, with a moment for the decoding thread.
+        auto run = [&](float seconds) {
+            for (int i = 0; i < (int)std::lround(seconds * 60.0f); ++i)
+            {
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                wait(4);
+            }
+        };
+        for (int i = 0; i < 300 && !Video::IsPrepared(*rt, tv); ++i)
+        {
+            rt->OnUpdateRuntime(0.0f);
+            wait(10);
+        }
+        CHECK(Video::IsPrepared(*rt, tv) && Video::IsPlaying(*rt, tv));
+        CHECK(Video::GetSize(*rt, tv) == glm::uvec2(320, 240));
+        CHECK(std::abs(Video::GetLength(*rt, tv) - 2.0) < 0.15);
+        AssetHandle texture = Video::GetTexture(*rt, tv);
+        CHECK(texture.IsValid() && AssetManager::IsRuntimeTexture(texture));
+        auto pixel = [&](uint32_t x, uint32_t y) {
+            const std::vector<uint32_t>* px = AssetManager::GetRuntimeTexturePixels(texture);
+            return px && px->size() == 320u * 240u ? (*px)[(size_t)y * 320 + x] : 0u;
+        };
+        auto close = [](uint32_t c, uint32_t r, uint32_t g, uint32_t b) {
+            auto d = [](uint32_t a, uint32_t e) { return std::abs((int)a - (int)e) <= 40; };
+            return d(c & 255, r) && d(c >> 8 & 255, g) && d(c >> 16 & 255, b);
+        };
+        run(0.5f);
+        CHECK(close(pixel(160, 60), 255, 0, 0) && close(pixel(160, 180), 0, 0, 255));
+        CHECK(std::abs(Video::GetTime(*rt, tv) - 0.5) < 0.1);
+        uint64_t shown = Video::GetFrameCount(*rt, tv);
+        CHECK(shown >= 6 && shown <= 9); // about 15 a second
+        run(1.0f);
+        CHECK(close(pixel(160, 60), 0, 255, 0));
+        run(1.0f);
+        CHECK(!Video::IsPlaying(*rt, tv)); // played out (no Loop)
+        CHECK(Video::GetFrameCount(*rt, tv) >= frames - 2);
+
+        // Not on awake: waits for Play; Pause holds the time.
+        CHECK(!Video::IsPlaying(*rt, later) && !Video::GetTexture(*rt, later).IsValid());
+        CHECK(Video::Play(*rt, later));
+        for (int i = 0; i < 300 && !Video::IsPrepared(*rt, later); ++i)
+        {
+            rt->OnUpdateRuntime(0.0f);
+            wait(10);
+        }
+        run(0.4f);
+        Video::Pause(*rt, later);
+        double held = Video::GetTime(*rt, later);
+        CHECK(Video::IsPaused(*rt, later) && !Video::IsPlaying(*rt, later) && held > 0.3);
+        run(0.3f);
+        CHECK(std::abs(Video::GetTime(*rt, later) - held) < 1e-6);
+        Video::Play(*rt, later);
+        run(0.2f);
+        CHECK(Video::IsPlaying(*rt, later) && Video::GetTime(*rt, later) > held + 0.1);
+        Video::Stop(*rt, later);
+        CHECK(!Video::IsPlaying(*rt, later) && Video::GetTime(*rt, later) == 0.0);
+
+        // With its sound (a device here): the pictures follow the sound's clock, in real time.
+        if (AudioEngine::IsAvailable())
+        {
+            Video::Play(*rt, loud);
+            auto start = std::chrono::steady_clock::now();
+            while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(2600)) // past the end: it loops
+            {
+                rt->OnUpdateRuntime(1.0f / 60.0f);
+                wait(8);
+            }
+            CHECK(Video::IsPlaying(*rt, loud));
+            CHECK(Video::GetFrameCount(*rt, loud) >= 25);
+            double t = Video::GetTime(*rt, loud); // 2.6 s less what the decoder took to start, from 0 again after 2 s
+            CHECK(t > 0.1 && t < 0.8);
+        }
+        else
+            std::printf("  (sound skipped: no audio device)\n");
+        rt->OnRuntimeStop();
+        rt.reset();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path(), ec);
     }
 
     void TestOcclusionTest()
@@ -14902,6 +15203,8 @@ int main(int argc, char** argv)
     Run("LOD impostor", TestLODImpostor);
     Run("Mesh simplify", TestMeshSimplify);
     Run("Occlusion test", TestOcclusionTest);
+    Run("Video decoder", TestVideoDecoder);
+    Run("Video player", TestVideoPlayer);
     Run("Profiler", TestProfiler);
     Run("LOD fade and generated", TestLODFadeAndGenerated);
     Run("NavMesh obstacles", TestNavMeshObstacles);

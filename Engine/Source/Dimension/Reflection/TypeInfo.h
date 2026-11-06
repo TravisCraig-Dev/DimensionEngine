@@ -30,6 +30,7 @@ namespace Dimension
         Struct,           // a nested struct: Elements are its fields (Access relative to the field's address)
         DataAsset,        // AssetHandle of a data asset (.asset) whose class is AssetClass or derives from it
         UIStyleSheet,     // AssetHandle of a UI style sheet (.uistyle)
+        VideoClip,        // AssetHandle of a video file
     };
 
     struct FieldInfo

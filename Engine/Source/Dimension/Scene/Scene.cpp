@@ -1,5 +1,6 @@
 #include "Dimension/Scene/DebugDraw.h"
 #include "Dimension/Scene/Scene.h"
+#include "Dimension/Video/VideoPlayer.h"
 #include "Dimension/Scene/SceneSerializer.h"
 #include "Dimension/Scripting/ScriptableEntity.h"
 #include "Dimension/Scripting/ScriptRegistry.h"
@@ -823,6 +824,7 @@ namespace Dimension
         for (auto& sys : m_Systems) sys->OnStop(*this);
         m_Systems.clear();
         if (s_EventHook) s_EventHook(*this, Entity::Null(), EventKind::Stopped, 0.0f, Entity::Null(), nullptr);
+        Video::OnRuntimeStop(*this);
         m_Audio.reset();
         m_Physics3D.reset();
         m_Physics2D.reset();
@@ -1090,6 +1092,10 @@ namespace Dimension
             DIM_PROFILE_SCOPE("Audio");
             AudioMixer::Update(dt);
             m_Audio->Update(dt);
+        }
+        {
+            DIM_PROFILE_SCOPE("Video");
+            Video::Update(*this, m_UnscaledDeltaTime);
         }
         if (s_CoroutinePhaseHook) s_CoroutinePhaseHook(*this, 1); // WaitForEndOfFrame
         FlushDeferredDestroys();

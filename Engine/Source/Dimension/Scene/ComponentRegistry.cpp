@@ -905,6 +905,19 @@ namespace Dimension
             .Field("Brake", &VehicleComponent::Brake).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Hand Brake", &VehicleComponent::HandBrake).Range(0.0f, 1.0f).Speed(0.01f);
 
+        Register<VideoPlayerComponent>("Video Player", "Video")
+            .Field("Clip", &VideoPlayerComponent::Clip).As(FieldType::VideoClip).Tooltip("A video file (MP4, MOV, WMV, AVI...)")
+            .Field("Play On Awake", &VideoPlayerComponent::PlayOnAwake)
+            .Field("Loop", &VideoPlayerComponent::Loop)
+            .Field("Playback Speed", &VideoPlayerComponent::PlaybackSpeed).Range(0.1f, 4.0f).Speed(0.01f)
+            .Field("Render Mode", &VideoPlayerComponent::RenderMode).Enum({ "Material Override", "API Only" })
+                .Tooltip("Material Override: shown on this object's UI Image, Sprite Renderer or Mesh Renderer. API Only: scripts take VideoPlayer.Texture")
+            .Field("Emission", &VideoPlayerComponent::Emission).Range(0.0f, 20.0f).Speed(0.05f)
+                .Tooltip("Mesh Renderers: the picture glows this much, like a screen (0: lit like paint)")
+            .Field("Play Audio", &VideoPlayerComponent::PlayAudio).Tooltip("The clip's sound (the pictures follow its clock)")
+            .Field("Volume", &VideoPlayerComponent::Volume).Range(0.0f, 1.0f).Speed(0.01f)
+            .Field("Output", &VideoPlayerComponent::Output).Tooltip("Audio Mixer group (Window > Audio Mixer); empty = Master");
+
         Register<AudioSourceComponent>("Audio Source", "Audio")
             .Field("Clip", &AudioSourceComponent::Clip).As(FieldType::Audio)
             .Field("Volume", &AudioSourceComponent::Volume).Range(0.0f, 1.0f).Speed(0.01f)

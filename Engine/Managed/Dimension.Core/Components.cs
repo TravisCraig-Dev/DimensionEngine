@@ -1477,6 +1477,60 @@ namespace Dimension
         }
     }
 
+    /// <summary>How a Video Player shows its pictures (Unity's VideoRenderMode): on its own object's UI Image, Sprite
+    /// Renderer or Mesh Renderer material, or only through <see cref="VideoPlayer.Texture"/>.</summary>
+    public enum VideoRenderMode { MaterialOverride = 0, APIOnly = 1 }
+
+    /// <summary>
+    /// Plays a video file with its sound (Unity's VideoPlayer). The clip opens on a thread of its own: until
+    /// <see cref="IsPrepared"/> its size and length are 0. The pictures follow the sound's clock (without sound, real
+    /// time), and <see cref="Texture"/> holds the one shown now, for a UI Image, a material or anything else.
+    /// </summary>
+    public unsafe class VideoPlayer : Component
+    {
+        internal override string NativeName => "Video Player";
+        public VideoClip Clip { get => new(GetAssetGuid("Clip")); set => SetAssetGuid("Clip", value.Guid); }
+        public bool PlayOnAwake { get => GetBool("Play On Awake"); set => SetBool("Play On Awake", value); }
+        public bool IsLooping { get => GetBool("Loop"); set => SetBool("Loop", value); }
+        public float PlaybackSpeed { get => GetFloat("Playback Speed"); set => SetFloat("Playback Speed", value); }
+        public VideoRenderMode RenderMode { get => (VideoRenderMode)GetInt("Render Mode"); set => SetInt("Render Mode", (int)value); }
+        public float Volume { get => GetFloat("Volume"); set => SetFloat("Volume", value); }
+        public bool PlayAudio { get => GetBool("Play Audio"); set => SetBool("Play Audio", value); }
+
+        /// <summary>From where it paused, else from the start (false: no clip, or it cannot be opened).</summary>
+        public bool Play() => Native.Api.VideoOp(Entity.Scene, Entity.Id, 0, null, null) != 0;
+        public void Pause() => Native.Api.VideoOp(Entity.Scene, Entity.Id, 1, null, null);
+        /// <summary>Stops and goes back to the start (the last picture stays shown).</summary>
+        public void Stop() => Native.Api.VideoOp(Entity.Scene, Entity.Id, 2, null, null);
+
+        private float State(int index)
+        {
+            float* v = stackalloc float[8];
+            return Native.Api.VideoOp(Entity.Scene, Entity.Id, 3, v, null) != 0 ? v[index] : 0.0f;
+        }
+        public bool IsPlaying => State(0) != 0.0f;
+        public bool IsPaused => State(1) != 0.0f;
+        public bool IsPrepared => State(2) != 0.0f;
+        /// <summary>Seconds into the clip (from 0 again each loop).</summary>
+        public double Time => State(3);
+        /// <summary>The clip's length in seconds (0 until prepared).</summary>
+        public double Length => State(4);
+        public int Width => (int)State(5);
+        public int Height => (int)State(6);
+        /// <summary>Pictures shown since it started.</summary>
+        public long FrameCount => (long)State(7);
+        /// <summary>The picture shown now, as a texture (invalid until prepared).</summary>
+        public Texture Texture
+        {
+            get
+            {
+                ulong guid = 0;
+                Native.Api.VideoOp(Entity.Scene, Entity.Id, 4, null, &guid);
+                return new Texture(guid);
+            }
+        }
+    }
+
     /// <summary>What a Timeline does at its end without Loop (Unity's DirectorWrapMode): Hold the last frame, Loop, or
     /// None (stop and go back to the start).</summary>
     public enum TimelineWrapMode { Hold, Loop, None }

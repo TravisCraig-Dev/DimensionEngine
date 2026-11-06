@@ -10,6 +10,7 @@
 #include "Dimension/Scene/SceneManager.h"
 #include <unordered_map>
 #include "Dimension/Audio/AudioEngine.h"
+#include "Dimension/Video/VideoPlayer.h"
 #include "Dimension/Audio/Microphone.h"
 #include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Navigation/NavMesh.h"
@@ -313,6 +314,9 @@ namespace Dimension
             // Asset bundles: 0 load a pack (path; returns its Assets-relative folder, "" failed), 1 its assets (one per
             // line), 2 an asset's GUID by its Assets-relative path (into *guid; returns "1" or "").
             const char* (*BundleOp)(int, const char*, uint64_t*);
+            // Video Players: 0 Play (1 if it can), 1 Pause, 2 Stop, 3 its state into v: playing, paused, prepared, time,
+            // length, width, height, pictures shown; 4 its picture's texture GUID into *guid (0 until prepared).
+            int (*VideoOp)(void*, uint64_t, int, float*, uint64_t*);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -587,7 +591,7 @@ namespace Dimension
             const std::pair<const char*, FieldType> assets[] = { { "Prefab", FieldType::Prefab }, { "Texture", FieldType::Texture },
                                                                  { "Material", FieldType::Material }, { "Mesh", FieldType::Mesh },
                                                                  { "Audio", FieldType::Audio }, { "AnimatorController", FieldType::AnimatorController },
-                                                                 { "Timeline", FieldType::Timeline } };
+                                                                 { "Timeline", FieldType::Timeline }, { "VideoClip", FieldType::VideoClip } };
             for (auto& a : assets)
                 if (type == a.first)
                 {
@@ -2235,6 +2239,34 @@ namespace Dimension
                     if (h.IsValid()) s_StringReturn = "1";
                 }
                 return s_StringReturn.c_str();
+            };
+            a.VideoOp = [](void* s, uint64_t e, int op, float* v, uint64_t* guid) -> int {
+                if (!s || !Comp<VideoPlayerComponent>(s, e)) return 0;
+                Scene& scene = S(s);
+                Entity ent = Unpack(e);
+                switch (op)
+                {
+                case 0: return Video::Play(scene, ent) ? 1 : 0;
+                case 1: Video::Pause(scene, ent); return 1;
+                case 2: Video::Stop(scene, ent); return 1;
+                case 3:
+                {
+                    glm::uvec2 size = Video::GetSize(scene, ent);
+                    v[0] = Video::IsPlaying(scene, ent) ? 1.0f : 0.0f;
+                    v[1] = Video::IsPaused(scene, ent) ? 1.0f : 0.0f;
+                    v[2] = Video::IsPrepared(scene, ent) ? 1.0f : 0.0f;
+                    v[3] = (float)Video::GetTime(scene, ent);
+                    v[4] = (float)Video::GetLength(scene, ent);
+                    v[5] = (float)size.x;
+                    v[6] = (float)size.y;
+                    v[7] = (float)Video::GetFrameCount(scene, ent);
+                    return 1;
+                }
+                case 4:
+                    if (guid) *guid = (uint64_t)Video::GetTexture(scene, ent);
+                    return 1;
+                default: return 0;
+                }
             };
             a.TextureOp = [](void* s, int op, uint64_t* guid, int* size, uint32_t* pixels, int count, int flags) -> int {
                 switch (op)
