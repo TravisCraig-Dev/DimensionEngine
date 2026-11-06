@@ -42,6 +42,8 @@ namespace Dimension
         // New pixels for an RGBA8 texture without mips (same size), copied in by `cmd` (recorded outside render passes;
         // the GPU's earlier reads finish first). False when it does not fit that.
         bool Update(VkCommandBuffer cmd, const void* rgba8, uint32_t width, uint32_t height);
+        // Copies another texture's top level onto this one's, scaled to fit (both in SHADER_READ_ONLY between frames).
+        void BlitFrom(VkCommandBuffer cmd, const Texture2D& source);
 
         // ImGui texture id for this texture (created on first use; editor thumbnails).
         uint64_t GetImGuiId();

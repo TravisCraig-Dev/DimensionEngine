@@ -1479,7 +1479,7 @@ namespace Dimension
 
     /// <summary>How a Video Player shows its pictures (Unity's VideoRenderMode): on its own object's UI Image, Sprite
     /// Renderer or Mesh Renderer material, or only through <see cref="VideoPlayer.Texture"/>.</summary>
-    public enum VideoRenderMode { MaterialOverride = 0, APIOnly = 1 }
+    public enum VideoRenderMode { MaterialOverride = 0, APIOnly = 1, RenderTexture = 2 }
 
     /// <summary>
     /// Plays a video file with its sound (Unity's VideoPlayer). The clip opens on a thread of its own: until
@@ -1494,6 +1494,8 @@ namespace Dimension
         public bool IsLooping { get => GetBool("Loop"); set => SetBool("Loop", value); }
         public float PlaybackSpeed { get => GetFloat("Playback Speed"); set => SetFloat("Playback Speed", value); }
         public VideoRenderMode RenderMode { get => (VideoRenderMode)GetInt("Render Mode"); set => SetInt("Render Mode", (int)value); }
+        /// <summary>Render Texture mode: the render texture it plays into (scaled to its size).</summary>
+        public Texture TargetTexture { get => new(GetAssetGuid("Target Texture")); set => SetAssetGuid("Target Texture", value.Guid); }
         public float Volume { get => GetFloat("Volume"); set => SetFloat("Volume", value); }
         public bool PlayAudio { get => GetBool("Play Audio"); set => SetBool("Play Audio", value); }
 

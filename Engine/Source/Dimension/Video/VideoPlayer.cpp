@@ -4,6 +4,8 @@
 #include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Audio/AudioMixer.h"
 #include "Dimension/Renderer/Material.h"
+#include "Dimension/Renderer/RenderDevice.h"
+#include "Dimension/Renderer/Texture.h"
 #include "Dimension/Scene/Scene.h"
 #include "Dimension/Core/Log.h"
 #define MA_NO_ENCODING // as where the implementation is built (AudioEngine.cpp)
@@ -415,6 +417,15 @@ namespace Dimension
                 if (got && p.Texture.IsValid())
                 {
                     AssetManager::StreamRuntimeTexturePixels(p.Texture, frame.Pixels.data(), frame.Pixels.size());
+                    // Render Texture mode: the picture scaled into the target (a render texture, or any RGBA8 texture
+                    // without mips), through this frame's commands.
+                    if (vp.RenderMode == VideoRenderMode::RenderTexture && vp.TargetTexture.IsValid() && RenderDevice::Exists() &&
+                        RenderDevice::Get().IsRecordingFrame())
+                    {
+                        Ref<Texture2D> source = AssetManager::GetTexture(p.Texture), target = AssetManager::GetTexture(vp.TargetTexture);
+                        if (source && target && source != target && target->GetMipLevels() == 1 && !target->IsHDR())
+                            target->BlitFrom(RenderDevice::Get().Frame().Cmd, *source);
+                    }
                     ++p.Shown;
                     p.ShowNext = false;
                 }

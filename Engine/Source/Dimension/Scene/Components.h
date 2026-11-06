@@ -912,8 +912,9 @@ namespace Dimension
     enum class AudioRolloff : int32_t { Logarithmic = 0, Linear = 1 };
 
     // How a Video Player shows its pictures (Unity's VideoRenderMode): on its own object (Material Override: its UI Image,
-    // Sprite Renderer or Mesh Renderer's material), or only for scripts (VideoPlayer.Texture).
-    enum class VideoRenderMode : int { MaterialOverride = 0, APIOnly };
+    // Sprite Renderer or Mesh Renderer's material), only for scripts (VideoPlayer.Texture), or copied into a Render
+    // Texture (Target Texture, scaled to its size) that anything can show.
+    enum class VideoRenderMode : int { MaterialOverride = 0, APIOnly, RenderTexture };
 
     // Plays a video file (MP4, MOV, WMV...) while the scene plays, with its sound (see Video::Update).
     struct VideoPlayerComponent
@@ -923,6 +924,7 @@ namespace Dimension
         bool Loop = true;
         float PlaybackSpeed = 1.0f;
         VideoRenderMode RenderMode = VideoRenderMode::MaterialOverride;
+        AssetHandle TargetTexture = AssetHandle::None(); // Render Texture mode: the render texture it plays into
         float Emission = 0.0f;   // Material Override on a Mesh Renderer: the picture glows this much (a screen in the dark)
         bool PlayAudio = true;   // the clip's sound, through the audio engine
         float Volume = 1.0f;
