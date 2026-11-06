@@ -283,6 +283,7 @@ namespace Dimension
             uint8_t MotionVectors = 0; // MotionVectorMode: 0 camera only (static things), 1 per object, 2 none
             const std::vector<glm::mat4>* JointMatrices = nullptr; // skinned: this frame's pose (the Animator's)
             int32_t SimPositions = -1; // simulated vertices: their positions in m_SimPositions (-1 = the mesh's own)
+            bool ShadowOnly = false;   // drawn only into shadow maps (an impostor's cutout turned to the sun)
             uint32_t FirstPart, PartCount;
         };
         std::vector<RenderItem> m_RenderItems;

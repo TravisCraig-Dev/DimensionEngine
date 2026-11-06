@@ -2768,6 +2768,17 @@ namespace Dimension
         // Impostors: a quad turned to the camera (about the vertical), showing the atlas tile of the side nearest the
         // camera's, cut out where nothing was and lit live: the tile's normals (in that side's view, which is the
         // quad's tangent frame) are its normal map.
+        // Their shadows: a second quad, turned to the sun and showing the side nearest it, drawn only into shadow maps.
+        bool impostorShadows = false;
+        glm::vec3 toSun(0.0f, 1.0f, 0.0f);
+        if (!lods.Impostors.empty())
+            for (auto [e, light, t] : reg.ViewOf<DirectionalLightComponent, TransformComponent>())
+                if (t.ActiveInHierarchy)
+                {
+                    impostorShadows = light.CastShadows;
+                    toSun = -t.Forward();
+                    break;
+                }
         if (!lods.Impostors.empty())
             if (Ref<Mesh> quad = AssetManager::GetMesh(AssetManager::kQuad))
                 for (const auto& [g, fade] : lods.Impostors)
@@ -2811,7 +2822,24 @@ namespace Dimension
                     m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, false, true, false, (uint32_t)m_RenderItems.size(), batch });
                     item.PartCount = 1;
                     item.MeshRef = quad;
+                    RenderItem shadow = item;
                     m_RenderItems.push_back(std::move(item));
+                    if (!impostorShadows || glm::length(glm::vec2(toSun.x, toSun.z)) < 1e-3f) continue; // (sun straight overhead: no side)
+                    float sunYaw = std::atan2(toSun.x, toSun.z);
+                    float sunLocal = sunYaw - std::atan2(forward.x, forward.z);
+                    int sunSide = ((int)std::lround(sunLocal / (glm::two_pi<float>() / kImpostorSides)) % (int)kImpostorSides + (int)kImpostorSides) %
+                                  (int)kImpostorSides;
+                    shadow.World = glm::translate(glm::mat4(1.0f), center) * glm::rotate(glm::mat4(1.0f), sunYaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                   glm::scale(glm::mat4(1.0f), glm::vec3(radius * 2.0f, radius * 2.0f, 1.0f));
+                    shadow.CastShadows = true;
+                    shadow.ShadowOnly = true;
+                    gpu.TilingOffset.z = (float)sunSide / kImpostorSides;
+                    VkDeviceAddress shadowAddress = uploadMaterialGPU(dim(gpu, dimmed(g)));
+                    if (!shadowAddress) continue;
+                    shadow.FirstPart = (uint32_t)m_RenderParts.size();
+                    uint32_t shadowBatch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, shadowAddress, true, 0u }, !fade);
+                    m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, shadowAddress, false, true, true, (uint32_t)m_RenderItems.size(), shadowBatch });
+                    m_RenderItems.push_back(std::move(shadow));
                 }
 
         // Terrain details: an instance of the tree or grass mesh wherever one was scattered (they batch into
@@ -3046,6 +3074,7 @@ namespace Dimension
         {
             if (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId)) continue; // hidden in the Scene view
             if (shadowPass && !item.CastShadows) continue;
+            if (!shadowPass && item.ShadowOnly) continue;
             // Hidden behind others (occlusion culling): not drawn in the view, but it still casts its shadow.
             if (!shadowPass && m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[&item - m_RenderItems.data()])
             {
