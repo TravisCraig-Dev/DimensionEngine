@@ -19,6 +19,24 @@ namespace Dimension
         Create(rgba8, 4, settings.SRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, width, height, settings, debugName);
     }
 
+    bool Texture2D::Update(VkCommandBuffer cmd, const void* rgba8, uint32_t width, uint32_t height)
+    {
+        if (!cmd || width != GetWidth() || height != GetHeight() || m_Image.GetMipLevels() != 1 || IsHDR()) return false;
+        VkDeviceSize size = VkDeviceSize(width) * height * 4;
+        TransientAllocation staging = RenderDevice::Get().AllocateTransient(size, 16);
+        if (!staging) return false;
+        std::memcpy(staging.Data, rgba8, size);
+        VkImage image = m_Image.GetHandle();
+        Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkBufferImageCopy copy{};
+        copy.bufferOffset = staging.Offset;
+        copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.imageExtent = { width, height, 1 };
+        vkCmdCopyBufferToImage(cmd, staging.Buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        return true;
+    }
+
     Texture2D::Texture2D(const float* rgba32f, uint32_t width, uint32_t height, const TextureSettings& settings, const char* debugName)
     {
         std::vector<uint16_t> half(size_t(width) * height * 4);

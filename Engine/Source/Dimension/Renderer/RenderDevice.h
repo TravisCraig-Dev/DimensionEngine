@@ -58,6 +58,8 @@ namespace Dimension
         bool BeginFrame();
         void EndFrame();
         const FrameContext& Frame() const { return m_Frame; }
+        // Between a successful BeginFrame and EndFrame: Frame().Cmd records, so uploads can go into it (outside passes).
+        bool IsRecordingFrame() const { return m_Recording; }
         // GPU timing (the Profiler's GPU sections): spans of this frame's commands timed by timestamp queries, read
         // back once the frame is done. Begin returns a timer to end (-1: no timers left or none supported).
         int BeginGpuTimer(VkCommandBuffer cmd, const char* name);
@@ -163,6 +165,7 @@ namespace Dimension
         std::vector<GpuTiming> m_GpuTimings;
         PerFrame m_Frames[kFramesInFlight];
         FrameContext m_Frame;
+        bool m_Recording = false;
         uint32_t m_ImageIndex = 0;
         uint64_t m_FrameNumber = 0;
         uint64_t m_CompletedFrame = 0;

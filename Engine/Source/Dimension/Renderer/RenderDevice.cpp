@@ -361,7 +361,7 @@ namespace Dimension
             f.Transient = Buffer(kTransientSize,
                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, // (uploads to images)
                                  MemoryUsage::CpuToGpu, "TransientRing");
             VkBufferDeviceAddressInfo addressInfo{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
             addressInfo.buffer = f.Transient.GetHandle();
@@ -532,6 +532,7 @@ namespace Dimension
         m_Frame.SwapchainImage = m_SwapchainImages[m_ImageIndex];
         m_Frame.SwapchainView = m_SwapchainViews[m_ImageIndex];
         m_Frame.SwapchainExtent = m_SwapchainExtent;
+        m_Recording = true;
         return true;
     }
 
@@ -560,6 +561,7 @@ namespace Dimension
 
     void RenderDevice::EndFrame()
     {
+        m_Recording = false;
         PerFrame& f = m_Frames[m_FrameNumber % kFramesInFlight];
         if (f.FrameTimer >= 0) EndGpuTimer(f.Cmd, f.FrameTimer);
         f.FrameTimer = -1;

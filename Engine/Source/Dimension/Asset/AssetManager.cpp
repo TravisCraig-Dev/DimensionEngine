@@ -829,6 +829,20 @@ namespace Dimension
         return true;
     }
 
+    bool AssetManager::StreamRuntimeTexturePixels(AssetHandle handle, const uint32_t* rgba8, size_t count)
+    {
+        auto it = s ? s->RuntimeTextures.find(handle) : decltype(s->RuntimeTextures)::iterator{};
+        if (!s || it == s->RuntimeTextures.end() || count != it->second.Pixels.size()) return false;
+        auto& r = it->second;
+        std::memcpy(r.Pixels.data(), rgba8, count * 4); // kept for reading back
+        if (!r.Dirty && !r.RenderTarget && RenderDevice::Exists() && RenderDevice::Get().IsRecordingFrame())
+            if (auto tex = s->Textures.find(handle); tex != s->Textures.end() && tex->second &&
+                                                     tex->second->Update(RenderDevice::Get().Frame().Cmd, rgba8, r.Width, r.Height))
+                return true;
+        r.Dirty = true;
+        return true;
+    }
+
     const std::vector<uint32_t>* AssetManager::GetRuntimeTexturePixels(AssetHandle handle, glm::uvec2* size)
     {
         auto it = s ? s->RuntimeTextures.find(handle) : decltype(s->RuntimeTextures)::iterator{};

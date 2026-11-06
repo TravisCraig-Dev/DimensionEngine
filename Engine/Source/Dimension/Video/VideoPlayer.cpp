@@ -414,7 +414,7 @@ namespace Dimension
                 }
                 if (got && p.Texture.IsValid())
                 {
-                    AssetManager::SetRuntimeTexturePixels(p.Texture, frame.Pixels.data(), frame.Pixels.size());
+                    AssetManager::StreamRuntimeTexturePixels(p.Texture, frame.Pixels.data(), frame.Pixels.size());
                     ++p.Shown;
                     p.ShowNext = false;
                 }

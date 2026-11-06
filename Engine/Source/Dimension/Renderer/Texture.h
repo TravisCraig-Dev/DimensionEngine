@@ -39,6 +39,10 @@ namespace Dimension
         uint32_t GetHeight() const { return m_Image.GetHeight(); }
         const Image& GetImage() const { return m_Image; }
 
+        // New pixels for an RGBA8 texture without mips (same size), copied in by `cmd` (recorded outside render passes;
+        // the GPU's earlier reads finish first). False when it does not fit that.
+        bool Update(VkCommandBuffer cmd, const void* rgba8, uint32_t width, uint32_t height);
+
         // ImGui texture id for this texture (created on first use; editor thumbnails).
         uint64_t GetImGuiId();
 
