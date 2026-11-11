@@ -64,11 +64,21 @@ namespace Dimension
     };
 
     // CPU-side mesh as imported from a file (no GPU resources; usable in tools and tests).
+    // A blend shape (glTF morph target, Unity's blend shape): per vertex, how far its position and normal move at full
+    // weight.
+    struct BlendShape
+    {
+        std::string Name;
+        std::vector<glm::vec3> Positions, Normals; // one per vertex
+        float DefaultWeight = 0.0f;                // the file's own weight for it (0..1)
+    };
+
     struct MeshData
     {
         std::vector<Vertex> Vertices;
         std::vector<uint32_t> Indices;
         std::vector<SkinVertex> Skin;     // empty for static meshes
+        std::vector<BlendShape> BlendShapes;
         Ref<Skeleton> SkeletonData;       // null for static meshes
         std::vector<AnimationClip> Clips;
         std::string Name;
@@ -77,6 +87,11 @@ namespace Dimension
         std::vector<ImportedImage> Images;
 
         static bool LoadFromFile(const fs::path& path, MeshData& out, const MeshImportSettings& settings = {});
+        // The vertices with blend shapes applied (`weights` 0..1 by shape index, `count` of them; the rest count 0):
+        // positions and normals move, tangents follow the normals. Writes each of Vertices.size() vertices once (so
+        // `out` may be mapped GPU memory) and returns their bounds.
+        AABB ApplyBlendShapes(const float* weights, size_t count, Vertex* out) const;
+        int FindBlendShape(const std::string& name) const; // -1 = none
         // Applies import settings to freshly imported data.
         void ApplyImportSettings(const MeshImportSettings& settings);
         static MeshData FromArrays(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name);
@@ -115,6 +130,7 @@ namespace Dimension
         const std::vector<SubMesh>& GetSubMeshes() const { return m_SubMeshes; }
 
         bool IsSkinned() const { return m_Skeleton != nullptr; }
+        uint32_t GetBlendShapeCount() const { return m_BlendShapeCount; }
         const Skeleton* GetSkeleton() const { return m_Skeleton.get(); }
         const std::vector<AnimationClip>& GetClips() const { return m_Clips; }
         VkDeviceAddress GetSkinAddress() const { return m_SkinAddress; }
@@ -123,6 +139,7 @@ namespace Dimension
         void Upload(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
 
         Buffer m_VertexBuffer, m_IndexBuffer, m_SkinBuffer;
+        uint32_t m_BlendShapeCount = 0;
         VkDeviceAddress m_SkinAddress = 0;
         uint32_t m_IndexCount = 0, m_VertexCount = 0;
         AABB m_Bounds;

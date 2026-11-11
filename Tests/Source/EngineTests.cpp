@@ -6849,6 +6849,68 @@ namespace
         fs::remove_all(assets.parent_path());
     }
 
+    void TestBlendShapes()
+    {
+        // A glTF grid with morph targets "Bulge" (the center up 1 m, its normal leaning) and "Lift" (all up 0.5 m).
+        MeshData grid;
+        CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Tests/Data/MorphTest.gltf", grid));
+        CHECK(grid.BlendShapes.size() == 2 && grid.FindBlendShape("Bulge") == 0 && grid.FindBlendShape("Lift") == 1 && grid.FindBlendShape("Smile") < 0);
+        if (grid.BlendShapes.size() != 2) return;
+        CHECK(Near(grid.BlendShapes[0].DefaultWeight, 0.0f) && Near(grid.BlendShapes[1].DefaultWeight, 0.25f));
+        CHECK(grid.BlendShapes[0].Positions.size() == grid.Vertices.size() && grid.BlendShapes[1].Normals.size() == grid.Vertices.size());
+        int center = -1, corner = -1;
+        for (size_t i = 0; i < grid.Vertices.size(); ++i)
+        {
+            if (Near(grid.Vertices[i].Position, glm::vec3(0.0f))) center = (int)i;
+            if (Near(grid.Vertices[i].Position, glm::vec3(1.0f, 0.0f, 1.0f))) corner = (int)i;
+        }
+        CHECK(center >= 0 && corner >= 0 && Near(grid.BlendShapes[0].Positions[center], glm::vec3(0, 1, 0)) && Near(grid.BlendShapes[1].Positions[corner], glm::vec3(0, 0.5f, 0)));
+        // Applied: positions move by weight, normals lean and stay unit length, the bounds follow.
+        std::vector<Vertex> shaped(grid.Vertices.size());
+        float weights[2] = { 1.0f, 0.5f };
+        AABB bounds = grid.ApplyBlendShapes(weights, 2, shaped.data());
+        CHECK(Near(shaped[center].Position.y, 1.25f) && Near(shaped[corner].Position.y, 0.25f) && Near(bounds.Max.y, 1.25f) && Near(bounds.Min.y, 0.25f));
+        CHECK(Near(shaped[center].Normal, glm::normalize(glm::vec3(0.3f, 1.0f, 0.0f)), 1e-4f) && Near(shaped[corner].Normal, glm::vec3(0, 1, 0)));
+        CHECK(Near(glm::dot(glm::vec3(shaped[center].Tangent), shaped[center].Normal), 0.0f, 1e-4f));
+        float none[1] = { 0.0f };
+        grid.ApplyBlendShapes(none, 1, shaped.data());
+        CHECK(Near(shaped[center].Position, glm::vec3(0.0f)) && Near(shaped[center].Normal, glm::vec3(0, 1, 0)));
+        // Scaled on import: the shapes too.
+        MeshData big;
+        MeshImportSettings twice;
+        twice.Scale = 2.0f;
+        CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Tests/Data/MorphTest.gltf", big, twice) && big.BlendShapes.size() == 2 &&
+              Near(big.BlendShapes[0].Positions[center], glm::vec3(0, 2, 0)));
+
+        // The file's animation of the weights: a clip with a weight channel per shape (Bulge 0 -> 1, Lift held at 0).
+        CHECK(grid.Clips.size() == 1 && grid.Clips[0].Name == "Pulse" && grid.Clips[0].WeightChannels.size() == 2 && Near(grid.Clips[0].Duration, 1.0f));
+        if (grid.Clips.empty() || !grid.SkeletonData) return;
+        Pose pose, other, mixed;
+        Animation::Sample(*grid.SkeletonData, grid.Clips[0], 0.5f, pose);
+        CHECK(pose.Weights.size() == 2 && Near(pose.Weights[0], 0.5f) && Near(pose.Weights[1], 0.0f));
+        // Blending: where both animate a shape it mixes, where one does that one wins (NaN: not animated).
+        other.SetBindPose(*grid.SkeletonData);
+        other.Weights = { 1.0f, std::numeric_limits<float>::quiet_NaN(), 0.8f };
+        Animation::Blend(pose, other, 0.5f, mixed);
+        CHECK(mixed.Weights.size() == 3 && Near(mixed.Weights[0], 0.75f) && Near(mixed.Weights[1], 0.0f) && Near(mixed.Weights[2], 0.8f));
+        std::vector<float> mask(grid.SkeletonData->Joints.size(), 1.0f);
+        Animation::LayerOverride(pose, other, mask, 0.5f);
+        CHECK(Near(pose.Weights[0], 0.75f) && Near(pose.Weights[1], 0.0f) && pose.Weights.size() == 3 && Near(pose.Weights[2], 0.8f));
+        other.SetBindPose(*grid.SkeletonData);
+        CHECK(other.Weights.empty());
+
+        // The renderer's weights (0..100) are saved with the scene.
+        Scene scene("Shapes");
+        Entity e = scene.CreateEntity("Face");
+        scene.GetRegistry().Emplace<MeshRendererComponent>(e).BlendShapeWeights = { 10.0f, 62.5f };
+        nlohmann::json saved = SceneSerializer::Serialize(scene);
+        Ref<Scene> loaded = SceneSerializer::Deserialize(saved);
+        bool found = false;
+        for (auto [le, mr] : loaded->GetRegistry().ViewOf<MeshRendererComponent>())
+            found = mr.BlendShapeWeights.size() == 2 && Near(mr.BlendShapeWeights[1], 62.5f);
+        CHECK(found);
+    }
+
     void TestManagedBuild()
     {
         // Assembly references read from metadata; native DLLs are not assemblies.
@@ -15875,6 +15937,7 @@ int main(int argc, char** argv)
     Run("Animation clip assets", TestAnimationClipAssets);
     Run("COLR v1 color glyphs", TestColrV1);
     Run("Managed build (ReadyToRun, framework closure)", TestManagedBuild);
+    Run("Blend shapes", TestBlendShapes);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);

@@ -2,6 +2,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace Dimension
 {
@@ -33,6 +35,11 @@ namespace Dimension
 
         void LayerOverride(Pose& base, const Pose& layer, const std::vector<float>& mask, float weight)
         {
+            // Blend shapes the layer animates move toward its weights (masks are by joint: they do not apply).
+            if (base.Weights.size() < layer.Weights.size()) base.Weights.resize(layer.Weights.size(), std::numeric_limits<float>::quiet_NaN());
+            for (size_t i = 0; i < layer.Weights.size() && weight > 0.0f; ++i)
+                if (!std::isnan(layer.Weights[i]))
+                    base.Weights[i] = std::isnan(base.Weights[i]) ? layer.Weights[i] : glm::mix(base.Weights[i], layer.Weights[i], std::min(weight, 1.0f));
             size_t n = std::min({ base.Rotations.size(), layer.Rotations.size(), mask.size() });
             for (size_t j = 0; j < n; ++j)
             {
@@ -46,6 +53,10 @@ namespace Dimension
 
         void LayerAdditive(Pose& base, const Pose& layer, const Pose& reference, const std::vector<float>& mask, float weight)
         {
+            if (base.Weights.size() < layer.Weights.size()) base.Weights.resize(layer.Weights.size(), std::numeric_limits<float>::quiet_NaN());
+            for (size_t i = 0; i < layer.Weights.size() && i < reference.Weights.size() && weight > 0.0f; ++i)
+                if (!std::isnan(layer.Weights[i]) && !std::isnan(reference.Weights[i]))
+                    base.Weights[i] = (std::isnan(base.Weights[i]) ? 0.0f : base.Weights[i]) + (layer.Weights[i] - reference.Weights[i]) * weight;
             size_t n = std::min({ base.Rotations.size(), layer.Rotations.size(), reference.Rotations.size(), mask.size() });
             for (size_t j = 0; j < n; ++j)
             {
@@ -83,6 +94,7 @@ namespace Dimension
         Translations.resize(n);
         Rotations.resize(n);
         Scales.resize(n);
+        Weights.clear();
         for (size_t i = 0; i < n; ++i)
         {
             Translations[i] = skeleton.Joints[i].Translation;
@@ -215,6 +227,12 @@ namespace Dimension
                 case AnimationPath::Scale: out.Scales[ch.Joint] = glm::vec3(value); break;
                 }
             }
+            for (const auto& ch : clip.WeightChannels)
+            {
+                if (ch.Times.empty() || ch.Joint < 0 || ch.Joint > 4096) continue;
+                if (out.Weights.size() <= (size_t)ch.Joint) out.Weights.resize(ch.Joint + 1, std::numeric_limits<float>::quiet_NaN());
+                out.Weights[ch.Joint] = SampleChannel(ch, time).x;
+            }
         }
 
         void Blend(const Pose& a, const Pose& b, float t, Pose& out)
@@ -228,6 +246,14 @@ namespace Dimension
                 out.Translations[i] = glm::mix(a.Translations[i], b.Translations[i], t);
                 out.Rotations[i] = glm::slerp(a.Rotations[i], b.Rotations[i], t);
                 out.Scales[i] = glm::mix(a.Scales[i], b.Scales[i], t);
+            }
+            // Blend shapes: mixed where both animate one, else the one that does.
+            out.Weights.assign(std::max(a.Weights.size(), b.Weights.size()), std::numeric_limits<float>::quiet_NaN());
+            for (size_t i = 0; i < out.Weights.size(); ++i)
+            {
+                float wa = i < a.Weights.size() ? a.Weights[i] : std::numeric_limits<float>::quiet_NaN();
+                float wb = i < b.Weights.size() ? b.Weights[i] : std::numeric_limits<float>::quiet_NaN();
+                out.Weights[i] = std::isnan(wa) ? wb : std::isnan(wb) ? wa : glm::mix(wa, wb, t);
             }
         }
 

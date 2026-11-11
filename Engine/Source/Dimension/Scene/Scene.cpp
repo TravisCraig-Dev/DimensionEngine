@@ -1311,6 +1311,25 @@ namespace Dimension
             Ref<AnimatorController> controller = AssetManager::GetAnimatorController(anim.Controller);
             if (controller) controller->LinkLayers();
 
+            // Blend shape weights the pose animates, onto the renderer (the rest keep theirs).
+            auto applyBlendShapes = [&]() {
+                if (current.Weights.empty()) return;
+                auto& weights = mr.BlendShapeWeights;
+                bool animated = false;
+                for (float w : current.Weights) animated |= !std::isnan(w);
+                if (!animated) return;
+                if (weights.size() < current.Weights.size())
+                {
+                    // Shapes not given a weight yet start from the model's own.
+                    auto data = mesh->GetBlendShapeCount() ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
+                    size_t from = weights.size();
+                    weights.resize(current.Weights.size(), 0.0f);
+                    for (size_t i = from; data && i < weights.size() && i < data->BlendShapes.size(); ++i) weights[i] = data->BlendShapes[i].DefaultWeight * 100.0f;
+                }
+                for (size_t i = 0; i < current.Weights.size(); ++i)
+                    if (!std::isnan(current.Weights[i])) weights[i] = current.Weights[i] * 100.0f;
+            };
+
             // IK goals of this Animator for one layer (-1: the final pass, also taking layers past the last one).
             int layerCount = controller ? (int)controller->Layers.size() : 0;
             auto applyIK = [&](int layer, float layerWeight) {
@@ -1556,6 +1575,7 @@ namespace Dimension
                 applyIK(0, 1.0f);
                 applyIK(-1, 1.0f);
                 Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
+                applyBlendShapes();
                 blendGetUp();
                 continue;
             }
@@ -1728,6 +1748,7 @@ namespace Dimension
             }
             applyIK(-1, 1.0f);
             Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
+            applyBlendShapes();
             blendGetUp();
         }
         // After iteration: scripts may change the registry.

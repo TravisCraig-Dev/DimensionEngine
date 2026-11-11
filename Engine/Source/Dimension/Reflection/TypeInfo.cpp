@@ -78,6 +78,7 @@ namespace Dimension
             return list;
         }
         case FieldType::StringList: return *(const std::vector<std::string>*)p;
+        case FieldType::FloatList: return *(const std::vector<float>*)p;
         case FieldType::MaterialList:
         {
             json list = json::array();
@@ -188,6 +189,15 @@ namespace Dimension
                 list.clear();
                 for (auto& k : v)
                     if (k.is_array() && k.size() >= 3) list.push_back({ k[0].get<float>(), k[1].get<float>(), k[2].get<float>() });
+                break;
+            }
+            case FieldType::FloatList:
+            {
+                if (!v.is_array()) break;
+                auto& list = *(std::vector<float>*)p;
+                list.clear();
+                for (auto& k : v)
+                    if (k.is_number()) list.push_back(k.get<float>());
                 break;
             }
             case FieldType::StringList:

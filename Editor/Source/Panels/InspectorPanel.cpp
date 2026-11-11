@@ -783,6 +783,49 @@ namespace Editor
                         ImGui::SameLine();
                         ImGui::TextDisabled("%zu trees, %zu grass tufts", details.Trees.size(), details.Grass.size());
                     }
+                    if (info.TypeId == GetComponentTypeId<MeshRendererComponent>())
+                    {
+                        // Blend shapes (like Unity's SkinnedMeshRenderer): a weight per shape of the model, 0..100.
+                        auto& mr = *static_cast<MeshRendererComponent*>(info.Get(scene, e));
+                        Ref<Mesh> model = AssetManager::GetMesh(mr.Mesh);
+                        auto shapes = model && model->GetBlendShapeCount() > 0 ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
+                        if (shapes && !shapes->BlendShapes.empty() && ImGui::TreeNodeEx("Blend Shapes", ImGuiTreeNodeFlags_DefaultOpen))
+                        {
+                            if (UI::BeginProperties("##blendshapes"))
+                            {
+                                for (size_t s = 0; s < shapes->BlendShapes.size(); ++s)
+                                {
+                                    ImGui::PushID((int)s);
+                                    UI::PropertyLabel(shapes->BlendShapes[s].Name.c_str(), "Weight (0..100); an Animator's clip that animates it sets it while playing");
+                                    float before = s < mr.BlendShapeWeights.size() ? mr.BlendShapeWeights[s] : shapes->BlendShapes[s].DefaultWeight * 100.0f;
+                                    float w = before;
+                                    ImGui::SetNextItemWidth(-FLT_MIN);
+                                    bool changed = ImGui::SliderFloat("##weight", &w, 0.0f, 100.0f, "%.1f");
+                                    if (ImGui::IsItemActivated()) m_Ctx.RecordUndo("Blend Shape Weight"); // (the value before: it is set below)
+                                    if (changed)
+                                    {
+                                        size_t had = mr.BlendShapeWeights.size();
+                                        if (had <= s)
+                                        {
+                                            mr.BlendShapeWeights.resize(s + 1);
+                                            for (size_t k = had; k < s; ++k) mr.BlendShapeWeights[k] = shapes->BlendShapes[k].DefaultWeight * 100.0f;
+                                        }
+                                        mr.BlendShapeWeights[s] = w;
+                                        m_Ctx.MarkDirty();
+                                    }
+                                    ImGui::PopID();
+                                }
+                                UI::EndProperties();
+                            }
+                            if (!mr.BlendShapeWeights.empty() && ImGui::SmallButton("Reset Weights"))
+                            {
+                                m_Ctx.RecordUndo("Reset Blend Shapes");
+                                mr.BlendShapeWeights.clear(); // the model's own
+                                m_Ctx.MarkDirty();
+                            }
+                            ImGui::TreePop();
+                        }
+                    }
                     if (info.TypeId == GetComponentTypeId<TerrainPathComponent>())
                     {
                         // Bake the road or river into its terrain (one undo step).

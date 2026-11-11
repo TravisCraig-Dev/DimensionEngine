@@ -16,7 +16,7 @@ namespace Dimension::ImportCache
     namespace
     {
         // Bump when an importer's output changes, so old entries are not read back.
-        constexpr uint32_t kImageVersion = 1, kMeshVersion = 3; // 2: OBJ materials; 3: cubic spline tangents
+        constexpr uint32_t kImageVersion = 1, kMeshVersion = 4; // 2: OBJ materials; 3: cubic spline tangents; 4: blend shapes
         std::atomic<bool> s_Enabled{ true };
 
         uint64_t Hash(const void* data, size_t size, uint64_t h = 1469598103934665603ull)
@@ -219,6 +219,28 @@ namespace Dimension::ImportCache
             else im.File = Utf8Path(stored);
             r.Vec(im.Bytes);
         }
+        m.BlendShapes.resize(r.Count(1));
+        for (BlendShape& shape : m.BlendShapes)
+        {
+            r.Str(shape.Name);
+            r.Vec(shape.Positions);
+            r.Vec(shape.Normals);
+            r.Pod(shape.DefaultWeight);
+        }
+        for (AnimationClip& c : m.Clips)
+        {
+            c.WeightChannels.resize(r.Count(1));
+            for (AnimationChannel& ch : c.WeightChannels)
+            {
+                r.Pod(ch.Joint);
+                r.Pod(ch.Path);
+                r.Pod(ch.Interpolation);
+                r.Vec(ch.Times);
+                r.Vec(ch.Values);
+                r.Vec(ch.InTangents);
+                r.Vec(ch.OutTangents);
+            }
+        }
         if (!r.Ok || r.P != r.End) return false;
         out = std::move(m);
         return true;
@@ -284,6 +306,28 @@ namespace Dimension::ImportCache
             std::string path = im.File.empty() ? std::string() : KeyPath(im.File); // relative to Assets when inside it
             w.Str(path);
             w.Vec(im.Bytes);
+        }
+        w.Pod((uint64_t)m.BlendShapes.size());
+        for (const BlendShape& shape : m.BlendShapes)
+        {
+            w.Str(shape.Name);
+            w.Vec(shape.Positions);
+            w.Vec(shape.Normals);
+            w.Pod(shape.DefaultWeight);
+        }
+        for (const AnimationClip& c : m.Clips)
+        {
+            w.Pod((uint64_t)c.WeightChannels.size());
+            for (const AnimationChannel& ch : c.WeightChannels)
+            {
+                w.Pod(ch.Joint);
+                w.Pod(ch.Path);
+                w.Pod(ch.Interpolation);
+                w.Vec(ch.Times);
+                w.Vec(ch.Values);
+                w.Vec(ch.InTangents);
+                w.Vec(ch.OutTangents);
+            }
         }
         WriteFile(file, w.Bytes);
     }

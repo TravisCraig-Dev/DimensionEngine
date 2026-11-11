@@ -2589,6 +2589,39 @@ namespace Dimension
                         item.IndexCount = (uint32_t)cloth->TornIndices.size();
                     }
             }
+            // Blend shapes: the model's vertices moved by the weighted shapes (skinning still applies on top).
+            if (!item.Vertices && mesh->GetBlendShapeCount() > 0)
+                if (auto shaped = AssetManager::GetMeshData(mr.Mesh); shaped && shaped->Vertices.size() == mesh->GetVertexCount())
+                {
+                    m_BlendWeights.resize(shaped->BlendShapes.size());
+                    bool any = false;
+                    for (size_t s = 0; s < m_BlendWeights.size(); ++s)
+                    {
+                        m_BlendWeights[s] = s < mr.BlendShapeWeights.size() ? mr.BlendShapeWeights[s] * 0.01f : shaped->BlendShapes[s].DefaultWeight;
+                        any |= m_BlendWeights[s] != 0.0f;
+                    }
+                    if (any)
+                        if (TransientAllocation block = device.AllocateTransient(shaped->Vertices.size() * sizeof(Vertex), 16))
+                        {
+                            AABB moved;
+                            if (mesh->IsSkinned())
+                                moved = shaped->ApplyBlendShapes(m_BlendWeights.data(), m_BlendWeights.size(), (Vertex*)block.Data);
+                            else
+                            {
+                                // Unskinned: its moved positions also give its motion vectors (as simulated vertices do).
+                                m_BlendVertices.resize(shaped->Vertices.size());
+                                moved = shaped->ApplyBlendShapes(m_BlendWeights.data(), m_BlendWeights.size(), m_BlendVertices.data());
+                                std::memcpy(block.Data, m_BlendVertices.data(), m_BlendVertices.size() * sizeof(Vertex));
+                                item.SimPositions = (int32_t)m_SimPositions.size();
+                                auto& positions = m_SimPositions.emplace_back(m_BlendVertices.size());
+                                for (size_t i = 0; i < m_BlendVertices.size(); ++i) positions[i] = m_BlendVertices[i].Position;
+                            }
+                            item.Vertices = block.Buffer;
+                            item.VertexOffset = block.Offset;
+                            bounds.Min = glm::min(bounds.Min, moved.Min); // (the bind pose's too: skinning keeps its own bounds)
+                            bounds.Max = glm::max(bounds.Max, moved.Max);
+                        }
+                }
             glm::mat3 m(t.World);
             glm::vec3 ext = bounds.Extents();
             item.Center = glm::vec3(t.World * glm::vec4(bounds.Center(), 1.0f));

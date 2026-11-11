@@ -45,6 +45,10 @@ namespace Dimension
         std::string Name;
         float Duration = 0.0f;
         std::vector<AnimationChannel> Channels;
+        // Blend shape weights (glTF morph target animations): one channel per shape, Joint = the shape's index in the
+        // model's blend shapes, Values[k].x its weight (0..1), Path Translation (plain values). Kept apart from the
+        // joint channels.
+        std::vector<AnimationChannel> WeightChannels;
     };
 
     // Local joint transforms.
@@ -53,6 +57,8 @@ namespace Dimension
         std::vector<glm::vec3> Translations;
         std::vector<glm::quat> Rotations;
         std::vector<glm::vec3> Scales;
+        // Blend shape weights (0..1) by shape index; NaN = not animated (the renderer's own weight stays).
+        std::vector<float> Weights;
 
         void SetBindPose(const Skeleton& skeleton);
     };

@@ -124,6 +124,47 @@ namespace Dimension
                 for (cgltf_size i = 0; i < pos->count; ++i) out.Indices.push_back(base + (uint32_t)i);
         }
 
+        // A primitive's morph targets (its vertices from `base` on) as blend shapes, matched across primitives by name
+        // (the mesh's target names, else "Shape N"). `shapeOf` gets the blend shape of each target.
+        void ReadTargets(const cgltf_primitive& prim, const cgltf_mesh& mesh, const glm::mat4& transform, size_t base, MeshData& out,
+                         std::vector<int>& shapeOf)
+        {
+            glm::mat3 linear(transform), normalMatrix = glm::transpose(glm::inverse(linear));
+            shapeOf.assign(prim.targets_count, -1);
+            for (cgltf_size t = 0; t < prim.targets_count; ++t)
+            {
+                std::string name = t < mesh.target_names_count && mesh.target_names[t] && *mesh.target_names[t] ? mesh.target_names[t]
+                                                                                                                 : "Shape " + std::to_string(t);
+                int index = out.FindBlendShape(name);
+                if (index < 0)
+                {
+                    BlendShape shape;
+                    shape.Name = name;
+                    shape.DefaultWeight = t < mesh.weights_count ? mesh.weights[t] : 0.0f;
+                    out.BlendShapes.push_back(std::move(shape));
+                    index = (int)out.BlendShapes.size() - 1;
+                }
+                shapeOf[t] = index;
+                BlendShape& shape = out.BlendShapes[index];
+                shape.Positions.resize(out.Vertices.size(), glm::vec3(0.0f));
+                shape.Normals.resize(out.Vertices.size(), glm::vec3(0.0f));
+                const cgltf_morph_target& target = prim.targets[t];
+                for (cgltf_size a = 0; a < target.attributes_count; ++a)
+                {
+                    const cgltf_attribute& attr = target.attributes[a];
+                    bool position = attr.type == cgltf_attribute_type_position, normal = attr.type == cgltf_attribute_type_normal;
+                    if (!position && !normal) continue;
+                    for (cgltf_size i = 0; i < attr.data->count && base + i < out.Vertices.size(); ++i)
+                    {
+                        glm::vec3 d(0.0f);
+                        cgltf_accessor_read_float(attr.data, i, glm::value_ptr(d), 3);
+                        if (position) shape.Positions[base + i] = linear * d;
+                        else shape.Normals[base + i] = normalMatrix * d;
+                    }
+                }
+            }
+        }
+
         // Builds the skeleton (joint hierarchy, bind pose, inverse bind matrices) of a glTF skin.
         Ref<Skeleton> ReadSkeleton(const cgltf_skin& skin, std::unordered_map<const cgltf_node*, int>& jointOf)
         {
@@ -165,7 +206,8 @@ namespace Dimension
             return skeleton;
         }
 
-        void ReadAnimations(const cgltf_data* data, const std::unordered_map<const cgltf_node*, int>& jointOf, MeshData& out)
+        void ReadAnimations(const cgltf_data* data, const std::unordered_map<const cgltf_node*, int>& jointOf,
+                            const std::unordered_map<const cgltf_mesh*, std::vector<int>>& meshShapes, MeshData& out)
         {
             for (cgltf_size a = 0; a < data->animations_count; ++a)
             {
@@ -175,6 +217,48 @@ namespace Dimension
                 for (cgltf_size c = 0; c < anim.channels_count; ++c)
                 {
                     const cgltf_animation_channel& ch = anim.channels[c];
+                    if (ch.target_path == cgltf_animation_path_type_weights)
+                    {
+                        // Morph target weights of a mesh node: a channel per blend shape (the output holds every
+                        // target's weight per key, in target order).
+                        auto shapes = ch.target_node && ch.target_node->mesh ? meshShapes.find(ch.target_node->mesh) : meshShapes.end();
+                        if (shapes == meshShapes.end() || !ch.sampler || shapes->second.empty()) continue;
+                        const cgltf_animation_sampler& s = *ch.sampler;
+                        bool cubic = s.interpolation == cgltf_interpolation_type_cubic_spline;
+                        size_t targets = shapes->second.size();
+                        for (size_t t = 0; t < targets; ++t)
+                        {
+                            int shape = shapes->second[t];
+                            bool seen = shape < 0;
+                            for (const AnimationChannel& w : clip.WeightChannels) seen |= w.Joint == shape;
+                            if (seen) continue;
+                            AnimationChannel w;
+                            w.Joint = shape;
+                            w.Path = AnimationPath::Translation; // (plain values: mixed, not turned)
+                            w.Interpolation = s.interpolation == cgltf_interpolation_type_step ? AnimationInterpolation::Step
+                                              : cubic ? AnimationInterpolation::CubicSpline : AnimationInterpolation::Linear;
+                            auto read = [&](size_t element) {
+                                float v = 0.0f;
+                                cgltf_accessor_read_float(s.output, element, &v, 1);
+                                return glm::vec4(v, 0.0f, 0.0f, 0.0f);
+                            };
+                            for (cgltf_size k = 0; k < s.input->count; ++k)
+                            {
+                                float time = 0.0f;
+                                cgltf_accessor_read_float(s.input, k, &time, 1);
+                                w.Times.push_back(time);
+                                w.Values.push_back(read(cubic ? (k * 3 + 1) * targets + t : k * targets + t));
+                                if (cubic)
+                                {
+                                    w.InTangents.push_back(read(k * 3 * targets + t));
+                                    w.OutTangents.push_back(read((k * 3 + 2) * targets + t));
+                                }
+                                clip.Duration = std::max(clip.Duration, time);
+                            }
+                            clip.WeightChannels.push_back(std::move(w));
+                        }
+                        continue;
+                    }
                     auto it = jointOf.find(ch.target_node);
                     if (it == jointOf.end() || !ch.sampler) continue;
                     AnimationChannel channel;
@@ -208,7 +292,7 @@ namespace Dimension
                     }
                     clip.Channels.push_back(std::move(channel));
                 }
-                if (!clip.Channels.empty()) out.Clips.push_back(std::move(clip));
+                if (!clip.Channels.empty() || !clip.WeightChannels.empty()) out.Clips.push_back(std::move(clip));
             }
         }
 
@@ -324,6 +408,7 @@ namespace Dimension
 
             bool needNormals = false;
             size_t skipped = 0;
+            std::unordered_map<const cgltf_mesh*, std::vector<int>> meshShapes; // blend shape of each morph target
             for (cgltf_size n = 0; n < data->nodes_count; ++n)
             {
                 const cgltf_node* node = &data->nodes[n];
@@ -341,7 +426,14 @@ namespace Dimension
                     SubMesh sub;
                     sub.IndexOffset = (uint32_t)out.Indices.size();
                     sub.MaterialSlot = prim.material ? (int32_t)(prim.material - data->materials) : -1;
+                    size_t firstVertex = out.Vertices.size();
                     ReadPrimitive(prim, transform, out, needNormals, skin ? &identity : nullptr);
+                    if (prim.targets_count > 0)
+                    {
+                        std::vector<int> shapeOf;
+                        ReadTargets(prim, *node->mesh, transform, firstVertex, out, shapeOf);
+                        meshShapes.try_emplace(node->mesh, shapeOf);
+                    }
                     sub.IndexCount = (uint32_t)out.Indices.size() - sub.IndexOffset;
                     // Consecutive primitives with the same material share one draw.
                     if (!out.SubMeshes.empty() && out.SubMeshes.back().MaterialSlot == sub.MaterialSlot &&
@@ -351,7 +443,12 @@ namespace Dimension
                         out.SubMeshes.push_back(sub);
                 }
             }
-            if (skin) ReadAnimations(data, jointOf, out);
+            for (BlendShape& shape : out.BlendShapes) // (zero for the vertices of meshes without it)
+            {
+                shape.Positions.resize(out.Vertices.size(), glm::vec3(0.0f));
+                shape.Normals.resize(out.Vertices.size(), glm::vec3(0.0f));
+            }
+            if (skin) ReadAnimations(data, jointOf, meshShapes, out);
             ReadMaterials(data, options, path, out);
             cgltf_free(data);
 
@@ -540,6 +637,8 @@ namespace Dimension
         // A uniform scale of the whole model: positions and every translation (joint offsets, the bind pose's
         // translation, animated translations, the root transform) grow by s; rotations and scales stay.
         for (auto& v : Vertices) v.Position *= s;
+        for (auto& shape : BlendShapes)
+            for (auto& d : shape.Positions) d *= s;
         if (SkeletonData)
         {
             SkeletonData->RootTransform[3] = glm::vec4(glm::vec3(SkeletonData->RootTransform[3]) * s, 1.0f);
@@ -574,6 +673,43 @@ namespace Dimension
             ImportCache::StoreMesh(path, settings.Key(), out);
         }
         return ok;
+    }
+
+    int MeshData::FindBlendShape(const std::string& name) const
+    {
+        for (size_t i = 0; i < BlendShapes.size(); ++i)
+            if (BlendShapes[i].Name == name) return (int)i;
+        return -1;
+    }
+
+    AABB MeshData::ApplyBlendShapes(const float* weights, size_t count, Vertex* out) const
+    {
+        // Only the shapes with weight count.
+        std::vector<std::pair<const BlendShape*, float>> active;
+        for (size_t s = 0; s < count && s < BlendShapes.size(); ++s)
+            if (weights[s] != 0.0f && BlendShapes[s].Positions.size() == Vertices.size()) active.push_back({ &BlendShapes[s], weights[s] });
+        AABB bounds;
+        for (size_t i = 0; i < Vertices.size(); ++i)
+        {
+            Vertex v = Vertices[i];
+            glm::vec3 n = v.Normal;
+            for (const auto& [shape, w] : active)
+            {
+                v.Position += shape->Positions[i] * w;
+                n += shape->Normals[i] * w;
+            }
+            if (!active.empty() && glm::dot(n, n) > 1e-12f)
+            {
+                v.Normal = glm::normalize(n);
+                glm::vec3 t = glm::vec3(v.Tangent) - v.Normal * glm::dot(v.Normal, glm::vec3(v.Tangent));
+                if (v.Tangent.w != 0.0f && glm::dot(t, t) > 1e-12f) v.Tangent = glm::vec4(glm::normalize(t), v.Tangent.w);
+            }
+            out[i] = v;
+            if (i == 0) bounds.Min = bounds.Max = v.Position;
+            bounds.Min = glm::min(bounds.Min, v.Position);
+            bounds.Max = glm::max(bounds.Max, v.Position);
+        }
+        return bounds;
     }
 
     void MeshData::GenerateTangents()
@@ -629,6 +765,12 @@ namespace Dimension
                     mirrorCopy[index] = (uint32_t)Vertices.size();
                     Vertices.push_back(Vertices[index]);
                     if (!Skin.empty()) Skin.push_back(Skin[index]);
+                    for (BlendShape& shape : BlendShapes)
+                    {
+                        glm::vec3 p = shape.Positions[index], n = shape.Normals[index];
+                        shape.Positions.push_back(p);
+                        shape.Normals.push_back(n);
+                    }
                 }
                 index = mirrorCopy[index];
             }
@@ -659,6 +801,7 @@ namespace Dimension
         : m_Name(std::move(data.Name)), m_Skeleton(std::move(data.SkeletonData)), m_Clips(std::move(data.Clips)), m_SubMeshes(std::move(data.SubMeshes))
     {
         Upload(data.Vertices, data.Indices);
+        m_BlendShapeCount = (uint32_t)data.BlendShapes.size();
         if (m_SubMeshes.empty()) m_SubMeshes.push_back({ 0, m_IndexCount, -1 });
         if (m_Skeleton && data.Skin.size() == data.Vertices.size())
         {

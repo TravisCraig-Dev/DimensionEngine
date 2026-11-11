@@ -32,6 +32,7 @@ namespace Dimension
         UIStyleSheet,     // AssetHandle of a UI style sheet (.uistyle)
         VideoClip,        // AssetHandle of a video file
         NavMeshData,      // AssetHandle of baked navigation (.navmesh)
+        FloatList,        // std::vector<float>
     };
 
     struct FieldInfo
@@ -80,6 +81,7 @@ namespace Dimension
         else if constexpr (std::is_same_v<M, Gradient>) return FieldType::Gradient;
         else if constexpr (std::is_same_v<M, std::vector<glm::vec3>>) return FieldType::Vec3List;
         else if constexpr (std::is_same_v<M, std::vector<std::string>>) return FieldType::StringList;
+        else if constexpr (std::is_same_v<M, std::vector<float>>) return FieldType::FloatList;
         else if constexpr (std::is_same_v<M, std::vector<Guid>>) return FieldType::MaterialList;
         else if constexpr (std::is_same_v<M, Guid>) return FieldType::Texture; // override with .As()
         else static_assert(sizeof(M) == 0, "Unsupported reflected field type");

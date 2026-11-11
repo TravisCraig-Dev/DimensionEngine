@@ -296,6 +296,8 @@ namespace Dimension
         };
         std::vector<RenderItem> m_RenderItems;
         std::vector<std::vector<glm::vec3>> m_SimPositions; // this frame's simulated vertex positions, for motion vectors
+        std::vector<float> m_BlendWeights;                  // (scratch: a renderer's blend shape weights, 0..1)
+        std::vector<Vertex> m_BlendVertices;                // (scratch: blend-shaped vertices of an unskinned mesh)
         std::vector<RenderPart> m_RenderParts;
         std::vector<uint8_t> m_BatchInstanceable;       // per batch: false for skinned parts (one draw each)
         std::vector<uint32_t> m_BatchStart, m_BatchFill; // per-pass scratch for the counting sort

@@ -275,6 +275,7 @@ namespace Dimension
             .Field("Cast Shadows", &MeshRendererComponent::CastShadows)
             .Field("Tint", &MeshRendererComponent::Tint).As(FieldType::Color4)
                 .Tooltip("Multiplies the color of whatever it draws (the material asset's too), for this object only")
+            .Field("Blend Shape Weights", &MeshRendererComponent::BlendShapeWeights).HideInInspector()
             .Field("Motion Vectors", &MeshRendererComponent::MotionVectors).Enum({ "Camera Motion Only", "Per Object Motion", "Force No Motion" })
                 .Tooltip("Per Object Motion: its own movement and animation blur it (motion blur) and steer TAA. Force No Motion keeps it sharp even as the camera moves");
 

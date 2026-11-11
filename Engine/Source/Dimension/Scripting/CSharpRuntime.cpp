@@ -326,6 +326,9 @@ namespace Dimension
             // packets sent, received, lost; 3 transmitting = v[0], 4 threshold = v[0], 5 volume = v[0]; 6 submit
             // count = v[0] samples from v + 1.
             int (*VoiceOp)(int, float*, const char*);
+            // A Mesh Renderer's blend shapes: 0 count, 1 a weight, 2 set a weight (0..100), 3 the index of a name (-1).
+            float (*BlendShapeOp)(void*, uint64_t, int, int, float, const char*);
+            const char* (*BlendShapeName)(void*, uint64_t, int);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -2279,6 +2282,37 @@ namespace Dimension
                 case 6: Video::StepForward(scene, ent); return 1;
                 default: return 0;
                 }
+            };
+            a.BlendShapeOp = [](void* s, uint64_t e, int op, int index, float value, const char* name) -> float {
+                auto* mr = Comp<MeshRendererComponent>(s, e);
+                auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
+                if (!data) return op == 3 ? -1.0f : 0.0f;
+                const auto& shapes = data->BlendShapes;
+                auto& weights = mr->BlendShapeWeights;
+                bool valid = index >= 0 && index < (int)shapes.size();
+                switch (op)
+                {
+                case 0: return (float)shapes.size();
+                case 1: return !valid ? 0.0f : index < (int)weights.size() ? weights[index] : shapes[index].DefaultWeight * 100.0f;
+                case 2:
+                    if (!valid) return 0.0f;
+                    if ((int)weights.size() <= index)
+                    {
+                        size_t had = weights.size();
+                        weights.resize(index + 1);
+                        for (size_t k = had; k < (size_t)index; ++k) weights[k] = shapes[k].DefaultWeight * 100.0f;
+                    }
+                    weights[index] = value;
+                    return 1.0f;
+                case 3: return name ? (float)data->FindBlendShape(name) : -1.0f;
+                default: return 0.0f;
+                }
+            };
+            a.BlendShapeName = [](void* s, uint64_t e, int index) -> const char* {
+                auto* mr = Comp<MeshRendererComponent>(s, e);
+                auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
+                s_StringReturn = data && index >= 0 && index < (int)data->BlendShapes.size() ? data->BlendShapes[index].Name : std::string();
+                return s_StringReturn.c_str();
             };
             a.VoiceOp = [](int op, float* v, const char* host) -> int {
                 VoiceChat& chat = VoiceChat::Default();

@@ -353,6 +353,9 @@ namespace Dimension
         // script's flash without changing the shared material (like a Unity MaterialPropertyBlock's color).
         glm::vec4 Tint{ 1.0f };
         MotionVectorMode MotionVectors = MotionVectorMode::Object;
+        // Blend shape weights (0..100, like Unity's) by the model's shape index; shapes past the end use the model's
+        // own weight. An Animator playing a clip that animates a shape sets its weight.
+        std::vector<float> BlendShapeWeights;
         // Runtime: the copy of its material made for it alone (a script's MeshRenderer.Material), while it uses it.
         AssetHandle InstanceMaterial = AssetHandle::None();
     };

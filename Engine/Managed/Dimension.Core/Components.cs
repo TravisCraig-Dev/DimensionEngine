@@ -581,6 +581,23 @@ namespace Dimension
         /// <summary>Overrides one material slot of a model with several (none puts its own back).</summary>
         public void SetMaterial(int slot, Material material) => Slots(2, slot, material.Guid);
         public void ClearMaterialOverrides() => Slots(3);
+
+        // Blend shapes (like Unity's SkinnedMeshRenderer): ops 0 count, 1 get, 2 set, 3 index of a name.
+        private float Shapes(int op, int index = 0, float value = 0.0f, byte* name = null) => Native.Api.BlendShapeOp(Entity.Scene, Entity.Id, op, index, value, name);
+        /// <summary>How many blend shapes (morph targets) the model has.</summary>
+        public int BlendShapeCount => (int)Shapes(0);
+        /// <summary>A blend shape's weight, 0..100 (the model's own until set).</summary>
+        public float GetBlendShapeWeight(int index) => Shapes(1, index);
+        /// <summary>Sets a blend shape's weight, 0..100 (a smile, a blink; an Animator clip animating it sets it too).</summary>
+        public void SetBlendShapeWeight(int index, float weight) => Shapes(2, index, weight);
+        public string GetBlendShapeName(int index) => Native.FromUtf8(Native.Api.BlendShapeName(Entity.Scene, Entity.Id, index));
+        /// <summary>The index of the blend shape with that name (-1 when the model has none).</summary>
+        public int GetBlendShapeIndex(string name)
+        {
+            int result = -1;
+            Native.WithUtf8(name ?? "", p => result = (int)Shapes(3, 0, 0.0f, (byte*)p));
+            return result;
+        }
     }
 
     public enum DecalBlend { Alpha = 0, Multiply = 1, Additive = 2 }

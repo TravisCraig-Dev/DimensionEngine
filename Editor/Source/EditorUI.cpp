@@ -809,6 +809,10 @@ namespace Editor::UI
             mixedNote();
             r = GradientEditor("##gradient", *(Gradient*)p);
             break;
+        case FieldType::FloatList:
+            PropertyLabel(label, f.Tooltip.c_str());
+            ImGui::TextDisabled("%d values", (int)((std::vector<float>*)p)->size());
+            break;
         case FieldType::StringList:
         {
             auto& list = *(std::vector<std::string>*)p;
