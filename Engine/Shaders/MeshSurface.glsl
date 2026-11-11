@@ -77,7 +77,8 @@ vec3 TerrainNormal(uint map, vec3 world, float tiling, float strength, bool trip
     return n;
 }
 
-layout(location = 0) in vec3 vWorldPos;
+layout(location = 0) in vec3 vWorldPosIn;
+vec3 vWorldPos; // where the surface is: the vertex shader's point (an impostor's moved to its texel's depth)
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vUV;
 layout(location = 3) flat in uint vEntity;
@@ -232,6 +233,11 @@ void main()
     if (LodFadeDiscard(gl_FragCoord.xy)) discard;
     MaterialRef m = pc.Material;
     vec2 uv = vUV * m.TilingOffset.xy + m.TilingOffset.zw;
+    vWorldPos = vWorldPosIn;
+#ifdef DIM_IMPOSTOR
+    vWorldPos = ImpostorPoint(m, uv, vWorldPosIn);
+    gl_FragDepth = ImpostorDepth(vWorldPos);
+#endif
     vec4 base;
     vec3 terrainNormal = vec3(0.0); // terrain: its layers' normals blended (world space)
     if (m.Flags.z == 1u)
@@ -387,12 +393,18 @@ void main()
     vec3 R = reflect(-V, N);
 #ifndef DIM_OIT
     // The Scene view's Unlit draw mode: the surface's own color (and emission), no lights. Impostor captures write the
-    // normal in the view's space (2), the color alone (3) or the roughness and metallic (4, as a metallic-roughness map).
+    // normal in the view's space (2), the color alone (3) or the roughness and metallic (4, as a metallic-roughness map,
+    // with the depth in its red channel).
     if (uScene.CascadeParams.w > 0.5)
     {
         vec3 own = albedo;
         if (uScene.CascadeParams.w > 1.5 && uScene.CascadeParams.w < 2.5) own = normalize(mat3(uScene.View) * N) * 0.5 + 0.5;
-        else if (uScene.CascadeParams.w > 3.5) own = vec3(0.0, roughness, metallic);
+        else if (uScene.CascadeParams.w > 3.5)
+        {
+            // With the depth behind the capture's center plane in radii (the camera is 3 radii out; Proj[0][0] = 1 / radius).
+            float behind = -(uScene.View * vec4(vWorldPos, 1.0)).z * uScene.Proj[0][0] - 3.0;
+            own = vec3(behind, roughness, metallic);
+        }
         else if (m.Flags.z != 1u && uScene.CascadeParams.w < 1.5) own += m.Emission.rgb * SampleTexture(m.Maps.w, uv).rgb;
         outColor = vec4(own, m.Flags.x == 2u ? base.a : 1.0);
         outEntity = vEntity;
@@ -431,9 +443,17 @@ void main()
     outSurface = uvec4(packHalf2x16(OctEncode(N)), packUnorm4x8(vec4(clamp(envBRDF * envOcclusion, 0.0, 1.0), roughness)),
                        packUnorm4x8(vec4(clamp(albedo * (1.0 - metallic), 0.0, 1.0), 1.0)), 0u);
 
+#ifdef DIM_IMPOSTOR
+    // An impostor's surface is known only to within its atlases' texels, and its shadow is the cutout of another side
+    // (the one facing the sun): look the shadow up a fifth of its size toward the sun, offset along the pictured
+    // normal, so it does not shadow itself.
+    vec3 shadowPos = vWorldPos + normalize(-uScene.LightDirection.xyz) * (0.2 * m.Layers[0].x), shadowNormal = N;
+#else
+    vec3 shadowPos = vWorldPos, shadowNormal = normalize(vNormal);
+#endif
     if (uScene.LightDirection.w > 0.5)
         color += DirectLight(N, V, normalize(-uScene.LightDirection.xyz), uScene.LightColor.rgb, albedo, metallic, roughness) *
-                 DirectionalShadow(vWorldPos, normalize(vNormal)) * CloudShadow(vWorldPos) * (m.Flags.x != 2u ? UnderwaterSun(vWorldPos) : 1.0);
+                 DirectionalShadow(shadowPos, shadowNormal) * CloudShadow(vWorldPos) * (m.Flags.x != 2u ? UnderwaterSun(vWorldPos) : 1.0);
 
     // The point and spot lights of this pixel's cluster.
     uvec2 cell = uvec2(0u);

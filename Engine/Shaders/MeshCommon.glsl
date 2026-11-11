@@ -86,3 +86,31 @@ bool FurDiscard(MaterialRef m, vec2 uv, float shell)
     float radius = 0.5 * m.Layers[0].y * (1.0 - shell / height);
     return length(fract(cell) - center) > radius;
 }
+
+// Impostors: the point a pixel of the quad stands for, moved along the view ray by the depth its texel had when the
+// mesh was captured (the surface atlas's red channel: how far behind the impostor's center plane, in radii; Layers[0].x
+// is the radius in the world).
+vec3 ImpostorPointAlong(MaterialRef m, vec2 uv, vec3 world, vec3 ray)
+{
+    return world + ray * (SampleTexture(m.Maps.z, uv).r * m.Layers[0].x);
+}
+vec3 ImpostorPoint(MaterialRef m, vec2 uv, vec3 world)
+{
+    vec3 ray = uScene.Proj[3][3] > 0.5 ? -vec3(uScene.View[0][2], uScene.View[1][2], uScene.View[2][2]) : normalize(world - uScene.CameraPosition.xyz);
+    return ImpostorPointAlong(m, uv, world, ray);
+}
+// In a shadow map (only ViewProj is the light's): the direction away from the light, for an orthographic (sun) view;
+// none for a point light's perspective faces.
+vec3 ImpostorLightRay()
+{
+    mat4 vp = uScene.ViewProj;
+    if (abs(vp[0][3]) + abs(vp[1][3]) + abs(vp[2][3]) > 1e-6) return vec3(0.0);
+    vec3 x = vec3(vp[0][0], vp[1][0], vp[2][0]), y = vec3(vp[0][1], vp[1][1], vp[2][1]), z = vec3(vp[0][2], vp[1][2], vp[2][2]);
+    vec3 d = normalize(cross(x, y));
+    return dot(z, d) < 0.0 ? -d : d;
+}
+float ImpostorDepth(vec3 world)
+{
+    vec4 clip = uScene.ViewProj * vec4(world, 1.0);
+    return clamp(clip.z / clip.w, 0.0, 1.0);
+}

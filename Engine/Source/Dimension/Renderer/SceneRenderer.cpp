@@ -35,6 +35,9 @@
 #include "shaders/MeshWireOverlay.frag.h"
 #include "shaders/MeshOverdraw.frag.h"
 #include "shaders/MeshOit.frag.h"
+#include "shaders/MeshImpostor.frag.h"
+#include "shaders/DepthImpostor.frag.h"
+#include "shaders/ShadowImpostor.frag.h"
 #include "shaders/OitComposite.frag.h"
 #include "shaders/Sprite.vert.h"
 #include "shaders/Sprite.frag.h"
@@ -401,7 +404,8 @@ namespace Dimension
     struct MainPipelines
     {
         enum Kind { Mesh, MeshDoubleSided, MeshTransparent, DepthPrepass, DepthPrepassDoubleSided, Sky, Sprite, SpriteAdditive, Line,
-                    GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive, MeshWire, MeshWireOverlay, MeshOverdraw, Count };
+                    GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive, MeshWire, MeshWireOverlay, MeshOverdraw, MeshImpostor,
+                    DepthPrepassImpostor, Count };
         Pipeline Pipelines[Count];
         const Pipeline& operator[](Kind k) const { return Pipelines[k]; }
     };
@@ -410,6 +414,7 @@ namespace Dimension
     {
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
         Pipeline MeshWire, MeshWireOverlay, MeshOverdraw; // Scene view draw modes
+        Pipeline MeshImpostor, DepthPrepassImpostor, ShadowImpostor; // impostors: pixels at their depth on the mesh
         // Descriptions of the main-pass pipelines (single-sampled above) and their multisampled builds, made on demand.
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
@@ -483,6 +488,11 @@ namespace Dimension
         meshTwoSided.DebugName = "MeshDoubleSidedPipeline";
         r.MeshDoubleSided = Pipeline(meshTwoSided);
         r.MainDescs[MainPipelines::MeshDoubleSided] = meshTwoSided;
+        GraphicsPipelineDesc meshImpostor = meshTwoSided;
+        meshImpostor.FragmentSpirv = kMeshImpostor_frag;
+        meshImpostor.DebugName = "MeshImpostorPipeline";
+        r.MeshImpostor = Pipeline(meshImpostor);
+        r.MainDescs[MainPipelines::MeshImpostor] = meshImpostor;
         GraphicsPipelineDesc meshTransparent = meshTwoSided;
         meshTransparent.DepthWrite = false;
         meshTransparent.ColorAttachments = { { F::kHdrFormat, BlendMode::Alpha }, { F::kIdFormat }, { F::kSurfaceFormat, BlendMode::Opaque, false } };
@@ -526,6 +536,10 @@ namespace Dimension
         shadow.DepthBias = true;
         shadow.DebugName = "ShadowPipeline";
         r.Shadow = Pipeline(shadow);
+        GraphicsPipelineDesc shadowImpostor = shadow;
+        shadowImpostor.FragmentSpirv = kShadowImpostor_frag;
+        shadowImpostor.DebugName = "ShadowImpostorPipeline";
+        r.ShadowImpostor = Pipeline(shadowImpostor);
         // Depth prepass for SSAO: same culling as the main pass so it never hides what the main pass would draw.
         GraphicsPipelineDesc prepass = shadow;
         prepass.CullMode = VK_CULL_MODE_BACK_BIT;
@@ -537,6 +551,10 @@ namespace Dimension
         prepass.DebugName = "DepthPrepassDoubleSidedPipeline";
         r.DepthPrepassDoubleSided = Pipeline(prepass);
         r.MainDescs[MainPipelines::DepthPrepassDoubleSided] = prepass;
+        prepass.FragmentSpirv = kDepthImpostor_frag;
+        prepass.DebugName = "DepthPrepassImpostorPipeline";
+        r.DepthPrepassImpostor = Pipeline(prepass);
+        r.MainDescs[MainPipelines::DepthPrepassImpostor] = prepass;
 
         GraphicsPipelineDesc sky;
         sky.VertexSpirv = kSky_vert;
@@ -2035,7 +2053,10 @@ namespace Dimension
 
     namespace
     {
-        constexpr uint32_t kImpostorTile = 256, kImpostorSides = 8;
+        constexpr uint32_t kImpostorTile = 256, kImpostorSides = 8, kImpostorRows = 2;
+        // The rows of sides: seen a little from above, and from high up (picked by how steeply they are looked at).
+        constexpr float kImpostorElevations[kImpostorRows] = { 15.0f, 55.0f };
+        uint32_t ImpostorRow(float elevationDegrees) { return elevationDegrees > 35.0f ? 1u : 0u; }
 
         uint64_t ImpostorKey(Entity e) { return ((uint64_t)e.Index << 32) | e.Generation; }
 
@@ -2142,9 +2163,9 @@ namespace Dimension
         impostor.Center = (lo + hi) * 0.5f;
         impostor.Radius = std::max(glm::length(hi - lo) * 0.5f, 1e-3f);
 
-        // The atlas: a tile per side, then its mips.
-        uint32_t width = kImpostorTile * kImpostorSides, height = kImpostorTile;
-        uint32_t mips = (uint32_t)std::floor(std::log2((float)height)) + 1;
+        // The atlas: a tile per side, a row per elevation, then its mips (down to a texel a tile).
+        uint32_t width = kImpostorTile * kImpostorSides, height = kImpostorTile * kImpostorRows;
+        uint32_t mips = (uint32_t)std::floor(std::log2((float)kImpostorTile)) + 1;
         if (!impostor.Atlas.IsValid())
         {
             impostor.Atlas = Image(ImageDesc{ width, height, SceneRenderTarget::kHdrFormat,
@@ -2170,17 +2191,17 @@ namespace Dimension
         SceneRenderOptions capture;
         capture.ProbeCapture = true;
         float r = impostor.Radius;
-        for (uint32_t pass = 0; pass < kImpostorSides * 3; ++pass)
+        for (uint32_t pass = 0; pass < kImpostorSides * kImpostorRows * 3; ++pass)
         {
             // Each side three times: its surface colors, its normals (cleared to "facing the viewer" so the mips' edges
             // do not lean; 0.7354 is the sRGB value of linear 0.5), and its roughness and metallic.
-            uint32_t side = pass / 3, channel = pass % 3;
+            uint32_t side = pass / 3 % kImpostorSides, row = pass / 3 / kImpostorSides, channel = pass % 3;
             bool normals = channel == 1;
             VkImage atlas = atlases[channel];
             const int channels[3] = { 3, 2, 4 };
             capture.CaptureChannel = channels[channel];
             // Seen a little from above, from all round: side k from the direction yaw = k * 45 degrees (+Z at 0).
-            float yaw = glm::two_pi<float>() * side / kImpostorSides, elevation = glm::radians(15.0f);
+            float yaw = glm::two_pi<float>() * side / kImpostorSides, elevation = glm::radians(kImpostorElevations[row]);
             glm::vec3 from(std::sin(yaw) * std::cos(elevation), std::sin(elevation), std::cos(yaw) * std::cos(elevation));
             CameraData cam;
             cam.Position = impostor.Center + from * (r * 3.0f);
@@ -2188,13 +2209,15 @@ namespace Dimension
             cam.Projection = glm::ortho(-r, r, -r, r, 0.01f, r * 6.0f);
             cam.Orthographic = true;
             cam.Skybox = false;
-            cam.ClearColor = normals ? glm::vec4(0.7354f, 0.7354f, 1.0f, 0.0f) : channel == 2 ? glm::vec4(0.0f, 1.0f, 0.0f, 0.0f) // rough at the edges
+            // The surface atlas's depth (red) is cleared to a radius behind the center: the edges' texels blend toward
+            // the back, so a cutout never reaches toward the viewer (or the sun) past its picture.
+            cam.ClearColor = normals ? glm::vec4(0.7354f, 0.7354f, 1.0f, 0.0f) : channel == 2 ? glm::vec4(1.0f, 1.0f, 0.0f, 0.0f) // rough at the edges
                                                                                        : glm::vec4(0.0f); // alpha 0 where nothing is
             Render(cmd, stage, cam, *m_ImpostorTarget, capture);
             VkImageCopy copy{};
             copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
             copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            copy.dstOffset = { (int32_t)(side * kImpostorTile), 0, 0 };
+            copy.dstOffset = { (int32_t)(side * kImpostorTile), (int32_t)(row * kImpostorTile), 0 };
             copy.extent = { kImpostorTile, kImpostorTile, 1 };
             vkCmdCopyImage(cmd, m_ImpostorTarget->GetHdr().GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             Vk::TransitionImage(cmd, m_ImpostorTarget->GetHdr().GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -2800,11 +2823,16 @@ namespace Dimension
                     float radius = impostor.Radius * s;
                     glm::vec3 toCamera = camera.Position - center;
                     float yaw = std::atan2(toCamera.x, toCamera.z);
+                    // Tilted up toward a camera looking down on it (the picture from the row nearest its elevation).
+                    float elevation = std::atan2(toCamera.y, std::max(glm::length(glm::vec2(toCamera.x, toCamera.z)), 1e-4f));
+                    elevation = std::clamp(elevation, 0.0f, glm::radians(80.0f));
+                    uint32_t row = ImpostorRow(glm::degrees(elevation));
                     glm::vec3 forward = glm::vec3(t.World[2]);
                     float local = yaw - std::atan2(forward.x, forward.z);
                     int side = ((int)std::lround(local / (glm::two_pi<float>() / kImpostorSides)) % (int)kImpostorSides + (int)kImpostorSides) % (int)kImpostorSides;
                     RenderItem item;
                     item.World = glm::translate(glm::mat4(1.0f), center) * glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                 glm::rotate(glm::mat4(1.0f), -elevation, glm::vec3(1.0f, 0.0f, 0.0f)) *
                                  glm::scale(glm::mat4(1.0f), glm::vec3(radius * 2.0f, radius * 2.0f, 1.0f));
                     item.Center = center;
                     item.Extents = glm::vec3(radius);
@@ -2817,34 +2845,41 @@ namespace Dimension
                     gpu.BaseColor = glm::vec4(1.0f);
                     gpu.Emission = glm::vec4(0.0f);
                     gpu.Params = glm::vec4(1.0f, 1.0f, 0.5f, 1.0f); // metallic and roughness from the surface atlas
-                    gpu.TilingOffset = glm::vec4(1.0f / kImpostorSides, 1.0f, (float)side / kImpostorSides, 0.0f);
+                    gpu.TilingOffset = glm::vec4(1.0f / kImpostorSides, 1.0f / kImpostorRows, (float)side / kImpostorSides, (float)row / kImpostorRows);
                     gpu.Maps = glm::uvec4(impostor.Bindless, impostor.NormalBindless, impostor.SurfaceBindless, white);
                     gpu.Flags = glm::uvec4(1u, 1u, 0u, 0u); // cutout, normal map
+                    gpu.Layers[0] = glm::vec4(radius, 0.0f, 0.0f, 0.0f); // the depth atlas's unit (MeshImpostor.frag)
                     VkDeviceAddress address = uploadMaterialGPU(dim(gpu, dimmed(g)));
                     if (!address) continue;
                     const SubMesh& sub = quad->GetSubMeshes()[0];
                     item.FirstPart = (uint32_t)m_RenderParts.size();
                     uint32_t batch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, address, true, 0u }, !fade);
                     m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, false, true, false, (uint32_t)m_RenderItems.size(), batch });
+                    m_RenderParts.back().Impostor = true;
                     item.PartCount = 1;
                     item.MeshRef = quad;
                     RenderItem shadow = item;
                     m_RenderItems.push_back(std::move(item));
-                    if (!impostorShadows || glm::length(glm::vec2(toSun.x, toSun.z)) < 1e-3f) continue; // (sun straight overhead: no side)
-                    float sunYaw = std::atan2(toSun.x, toSun.z);
+                    if (!impostorShadows) continue;
+                    float sunYaw = std::atan2(toSun.x, toSun.z); // (0 with the sun straight overhead: any side does)
+                    float sunElevation = std::clamp(std::atan2(toSun.y, glm::length(glm::vec2(toSun.x, toSun.z))), 0.0f, glm::radians(80.0f));
+                    uint32_t sunRow = ImpostorRow(glm::degrees(sunElevation));
                     float sunLocal = sunYaw - std::atan2(forward.x, forward.z);
                     int sunSide = ((int)std::lround(sunLocal / (glm::two_pi<float>() / kImpostorSides)) % (int)kImpostorSides + (int)kImpostorSides) %
                                   (int)kImpostorSides;
                     shadow.World = glm::translate(glm::mat4(1.0f), center) * glm::rotate(glm::mat4(1.0f), sunYaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                   glm::rotate(glm::mat4(1.0f), -sunElevation, glm::vec3(1.0f, 0.0f, 0.0f)) *
                                    glm::scale(glm::mat4(1.0f), glm::vec3(radius * 2.0f, radius * 2.0f, 1.0f));
                     shadow.CastShadows = true;
                     shadow.ShadowOnly = true;
                     gpu.TilingOffset.z = (float)sunSide / kImpostorSides;
+                    gpu.TilingOffset.w = (float)sunRow / kImpostorRows;
                     VkDeviceAddress shadowAddress = uploadMaterialGPU(dim(gpu, dimmed(g)));
                     if (!shadowAddress) continue;
                     shadow.FirstPart = (uint32_t)m_RenderParts.size();
                     uint32_t shadowBatch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, shadowAddress, true, 0u }, !fade);
                     m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, shadowAddress, false, true, true, (uint32_t)m_RenderItems.size(), shadowBatch });
+                    m_RenderParts.back().Impostor = true;
                     m_RenderItems.push_back(std::move(shadow));
                 }
 
@@ -3064,11 +3099,13 @@ namespace Dimension
             d.VertexOffset = item.VertexOffset;
             d.Indices = item.Indices;
             d.IndexOffset = item.IndexOffset;
-            d.Pipe = shadowPass  ? &res.Shadow
+            d.Pipe = shadowPass  ? (part.Impostor ? &res.ShadowImpostor : &res.Shadow)
                    : oitPass     ? &res.MeshOit
-                   : depthPass   ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
+                   : depthPass   ? &MainPipeline(part.Impostor ? MainPipelines::DepthPrepassImpostor
+                                                   : part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
                    : modePipe    ? modePipe
-                   : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
+                   : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.Impostor ? MainPipelines::MeshImpostor
+                                   : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
             return d;
         };
 
@@ -3224,6 +3261,8 @@ namespace Dimension
             case MainPipelines::MeshWire: return r.MeshWire;
             case MainPipelines::MeshWireOverlay: return r.MeshWireOverlay;
             case MainPipelines::MeshOverdraw: return r.MeshOverdraw;
+            case MainPipelines::MeshImpostor: return r.MeshImpostor;
+            case MainPipelines::DepthPrepassImpostor: return r.DepthPrepassImpostor;
             default: return r.Line;
             }
         auto& set = r.Multisampled[m_Samples];

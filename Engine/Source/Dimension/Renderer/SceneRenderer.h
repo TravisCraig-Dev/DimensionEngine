@@ -266,6 +266,7 @@ namespace Dimension
             uint32_t Item;  // owning RenderItem
             uint32_t Batch; // parts with the same batch share mesh, range, material and culling: one instanced draw
             bool Water = false; // a water surface: left out of the depth prepass (it foams against the depth under it)
+            bool Impostor = false; // an impostor's quad: its pixels at their depth on the mesh (MeshImpostor.frag)
         };
         struct RenderItem
         {
