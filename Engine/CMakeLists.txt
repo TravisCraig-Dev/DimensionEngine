@@ -57,7 +57,9 @@ if(DIM_NETHOST_DIR AND EXISTS "${DIM_NETHOST_DIR}/nethost.h")
     add_custom_target(DimensionManaged ALL
         COMMAND "${DIM_DOTNET_EXE}" build "${CMAKE_SOURCE_DIR}/Engine/Managed/Dimension.Core/Dimension.Core.csproj"
                 -c $<IF:$<CONFIG:Debug>,Debug,Release> -o "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/managed" --nologo -v q
-        COMMENT "Building Dimension.Core (C# API)"
+        COMMAND "${DIM_DOTNET_EXE}" build "${CMAKE_SOURCE_DIR}/Engine/Managed/Dimension.Analyzers/Dimension.Analyzers.csproj"
+                -c $<IF:$<CONFIG:Debug>,Debug,Release> -o "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/managed" --nologo -v q
+        COMMENT "Building Dimension.Core (C# API) and the scripts' analyzers"
         VERBATIM)
     add_dependencies(DimensionEngine DimensionManaged)
 else()

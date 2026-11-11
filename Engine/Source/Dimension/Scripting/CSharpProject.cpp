@@ -29,6 +29,10 @@ namespace Dimension::CSharpProject
                  "    <DimensionManagedDir>" << fs::absolute(managedDir).string() << "</DimensionManagedDir>\n"
                  "    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\\.dimension\\obj\\</BaseIntermediateOutputPath>\n"
                  "  </PropertyGroup>\n"
+                 "  <!-- The engine's checks of scripts (DIM001...: callbacks never called, containers not disposed, engine use in jobs). -->\n"
+                 "  <ItemGroup Condition=\"Exists('$(DimensionManagedDir)\\Dimension.Analyzers.dll')\">\n"
+                 "    <Analyzer Include=\"$(DimensionManagedDir)\\Dimension.Analyzers.dll\" />\n"
+                 "  </ItemGroup>\n"
                  "</Project>\n";
 
         if (!fs::exists(ProjectFile(projectDir)))
@@ -256,6 +260,8 @@ namespace Dimension::CSharpProject
             // The scripts' NuGet packages are there for every assembly (as Unity's plugins are).
             for (const PackageReference& p : packages)
                 text += "    <PackageReference Include=\"" + Xml(p.Id) + "\"" + (p.Version.empty() ? std::string() : " Version=\"" + Xml(p.Version) + "\"") + " />\n";
+            if (fs::exists(managedDir / "Dimension.Analyzers.dll"))
+                text += "    <Analyzer Include=\"$(DimensionManagedDir)\\Dimension.Analyzers.dll\" />\n";
             text += "  </ItemGroup>\n</Project>\n";
             WriteIfChanged(GeneratedProject(projectDir, a.Name), text);
         }

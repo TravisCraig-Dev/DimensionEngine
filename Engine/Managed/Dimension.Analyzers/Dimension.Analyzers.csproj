@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Roslyn analyzers for game scripts (engine-specific warnings in the IDE and the editor's Console). Built against the
+       compiler that ships with the installed .NET SDK, so nothing is downloaded; that compiler runs on .NET 10, so this
+       does too (dotnet build and Rider load it; a .NET Framework IDE host would not). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <RoslynDir>$(NetCoreRoot)sdk\$(NETCoreSdkVersion)\Roslyn\bincore\</RoslynDir>
+    <NoWarn>RS1036;RS2008;RS1041</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>$(RoslynDir)Microsoft.CodeAnalysis.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>$(RoslynDir)Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
