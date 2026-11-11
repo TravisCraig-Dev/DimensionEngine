@@ -12,6 +12,7 @@
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Animation/Timeline.h"
+#include "Dimension/Animation/ClipAsset.h"
 #include "Dimension/Renderer/SpriteAtlas.h"
 #include "Dimension/Asset/ImportDefaults.h"
 #include "Dimension/Project/Project.h"
@@ -54,6 +55,10 @@ namespace Dimension
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
             std::unordered_map<AssetHandle, Ref<AnimatorOverrideController>> Overrides;
             std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
+            std::unordered_map<AssetHandle, Ref<AnimationClipAsset>> AnimationClips;
+            std::unordered_map<AssetHandle, std::vector<AssetHandle>> ClipsByModel; // .anim clips per model (rebuilt when stale)
+            bool ClipIndexDirty = true;
+            uint64_t ClipVersion = 1;
             std::unordered_map<AssetHandle, Ref<SpriteAtlas>> SpriteAtlases;
             std::unordered_map<AssetHandle, std::vector<SpriteRect>> SpriteRects; // parsed from textures' import settings
             // Sprite texture -> (atlas, region), rebuilt when assets or atlases change.
@@ -101,6 +106,11 @@ namespace Dimension
         void Register(AssetMetadata m)
         {
             s->AtlasIndexDirty = true;
+            if (m.Type == AssetType::AnimationClip)
+            {
+                s->ClipIndexDirty = true;
+                ++s->ClipVersion;
+            }
             if (m.Type == AssetType::StringTable) Localization::Invalidate();
             s->PathToHandle[Key(m.Path)] = m.Handle;
             s->Assets[m.Handle] = std::move(m);
@@ -141,6 +151,11 @@ namespace Dimension
             for (auto& [o, ov] : s->Overrides)
                 if (ov && ov->Controller == h) s->Controllers.erase(o);
             s->Timelines.erase(h);
+            if (s->AnimationClips.erase(h) || (s->Assets.contains(h) && s->Assets[h].Type == AssetType::AnimationClip))
+            {
+                s->ClipIndexDirty = true;
+                ++s->ClipVersion;
+            }
         }
     }
 
@@ -165,6 +180,7 @@ namespace Dimension
         case AssetType::RenderTexture: return "Render Texture";
         case AssetType::UIStyleSheet: return "UI Style Sheet";
         case AssetType::VideoClip: return "Video Clip";
+        case AssetType::AnimationClip: return "Animation Clip";
         default: return "None";
         }
     }
@@ -295,6 +311,7 @@ namespace Dimension
         if (ext == ".overridecontroller") return AssetType::AnimatorOverride;
         if (ext == ".rendertexture") return AssetType::RenderTexture;
         if (ext == ".timeline") return AssetType::Timeline;
+        if (ext == ".anim") return AssetType::AnimationClip;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;
@@ -1060,6 +1077,60 @@ namespace Dimension
         TimelineAsset timeline;
         if (!timeline.Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
+    }
+
+    Ref<AnimationClipAsset> AssetManager::GetAnimationClip(AssetHandle handle)
+    {
+        if (!handle.IsValid() || !s) return nullptr;
+        if (auto it = s->AnimationClips.find(handle); it != s->AnimationClips.end()) return it->second;
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::AnimationClip) return nullptr;
+        auto clip = AnimationClipAsset::Load(s->AssetsDir / meta->Path);
+        s->AnimationClips[handle] = clip;
+        return clip;
+    }
+
+    void AssetManager::SaveAnimationClip(AssetHandle handle)
+    {
+        auto it = s->AnimationClips.find(handle);
+        auto* meta = GetMetadata(handle);
+        if (it == s->AnimationClips.end() || !it->second || !meta) return;
+        fs::path path = s->AssetsDir / meta->Path;
+        it->second->Save(path);
+        std::error_code ec;
+        s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
+        s->ClipIndexDirty = true; // (its model may have changed)
+        ++s->ClipVersion;
+    }
+
+    AssetHandle AssetManager::CreateAnimationClip(const fs::path& absolutePath, const AnimationClipAsset& clip)
+    {
+        if (!clip.Save(absolutePath)) return AssetHandle::None();
+        return Import(absolutePath);
+    }
+
+    const std::vector<AssetHandle>& AssetManager::ClipsFor(AssetHandle model)
+    {
+        static const std::vector<AssetHandle> none;
+        if (!s || !model.IsValid()) return none;
+        if (s->ClipIndexDirty)
+        {
+            s->ClipsByModel.clear();
+            for (AssetHandle h : GetAssetsOfType(AssetType::AnimationClip))
+                if (auto clip = GetAnimationClip(h); clip && clip->Model.IsValid()) s->ClipsByModel[clip->Model].push_back(h);
+            s->ClipIndexDirty = false;
+        }
+        auto it = s->ClipsByModel.find(model);
+        return it == s->ClipsByModel.end() ? none : it->second;
+    }
+
+    uint64_t AssetManager::ClipsVersion() { return s ? s->ClipVersion : 0; }
+
+    void AssetManager::TouchAnimationClips()
+    {
+        if (!s) return;
+        s->ClipIndexDirty = true;
+        ++s->ClipVersion;
     }
 
     Ref<SpriteAtlas> AssetManager::GetSpriteAtlas(AssetHandle handle)

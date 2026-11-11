@@ -15,10 +15,11 @@ namespace Dimension
     struct AnimatorController;
     struct AnimatorOverrideController;
     struct TimelineAsset;
+    struct AnimationClipAsset;
     struct SpriteAtlas;
     struct SpriteRect;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip, AnimationClip };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -135,6 +136,15 @@ namespace Dimension
         static Ref<TimelineAsset> GetTimeline(AssetHandle handle);
         static void SaveTimeline(AssetHandle handle);
         static AssetHandle CreateTimeline(const fs::path& absolutePath);
+        // Skeletal animation clips (.anim) are editable in place too: SaveAnimationClip writes the changes, and
+        // TouchAnimationClips tells Animators to take edits (made in memory) up. ClipsFor lists the .anim clips made
+        // for a model; ClipsVersion changes whenever any .anim does (created, edited, removed).
+        static Ref<AnimationClipAsset> GetAnimationClip(AssetHandle handle);
+        static void SaveAnimationClip(AssetHandle handle);
+        static AssetHandle CreateAnimationClip(const fs::path& absolutePath, const AnimationClipAsset& clip);
+        static const std::vector<AssetHandle>& ClipsFor(AssetHandle model);
+        static uint64_t ClipsVersion();
+        static void TouchAnimationClips();
         // Sprite atlases (.spriteatlas): packed when first asked for (and again after a sprite or the atlas changes);
         // SaveSpriteAtlas writes changes and packs again. CreateSpriteAtlas packs the given textures.
         static Ref<SpriteAtlas> GetSpriteAtlas(AssetHandle handle);

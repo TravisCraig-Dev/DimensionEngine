@@ -1,5 +1,6 @@
 #include "Dimension/Scene/DebugDraw.h"
 #include "Dimension/Scene/Scene.h"
+#include "Dimension/Animation/ClipAsset.h"
 #include "Dimension/Video/VideoPlayer.h"
 #include "Dimension/Scene/SceneSerializer.h"
 #include "Dimension/Scripting/ScriptableEntity.h"
@@ -1147,29 +1148,44 @@ namespace Dimension
 
     namespace
     {
-        // The clips an Animator plays: its mesh's own, or its Animation Source's retargeted onto the mesh's skeleton
-        // (cached per source and target mesh and retargeting, and rebuilt when either is reloaded).
-        const std::vector<AnimationClip>& AnimatorClips(const AnimatorComponent& anim, const Ref<Mesh>& mesh)
+        // The clips an Animator plays: its mesh's own, or its Animation Source's retargeted onto the mesh's skeleton, and
+        // the .anim clips made for that model (one named as a model clip replaces it). Cached per source and target
+        // mesh and retargeting, and made again when either is reloaded or any .anim changes.
+        const std::vector<AnimationClip>& AnimatorClips(const AnimatorComponent& anim, AssetHandle meshHandle, const Ref<Mesh>& mesh)
         {
-            if (!anim.ClipSource.IsValid()) return mesh->GetClips();
-            Ref<Mesh> source = AssetManager::GetMesh(anim.ClipSource);
-            if (!source || !source->GetSkeleton() || source == mesh) return mesh->GetClips();
+            Ref<Mesh> source = anim.ClipSource.IsValid() ? AssetManager::GetMesh(anim.ClipSource) : nullptr;
+            if (source && (!source->GetSkeleton() || source == mesh)) source = nullptr;
+            const std::vector<AssetHandle>& extra = AssetManager::ClipsFor(source ? anim.ClipSource : meshHandle);
+            if (!source && extra.empty()) return mesh->GetClips();
             struct Entry
             {
                 std::weak_ptr<Mesh> Source, Target;
+                uint64_t Version = 0;
                 std::vector<AnimationClip> Clips;
             };
             static std::map<std::tuple<const Mesh*, const Mesh*, AnimatorRetargeting>, Entry> cache;
             Entry& entry = cache[{ source.get(), mesh.get(), anim.Retargeting }];
-            if (entry.Source.lock() != source || entry.Target.lock() != mesh)
+            uint64_t version = AssetManager::ClipsVersion();
+            if ((source && entry.Source.lock() != source) || entry.Target.lock() != mesh || entry.Version != version)
             {
                 entry.Source = source;
                 entry.Target = mesh;
+                entry.Version = version;
                 entry.Clips.clear();
-                for (const AnimationClip& clip : source->GetClips())
-                    entry.Clips.push_back(anim.Retargeting == AnimatorRetargeting::Humanoid
-                                              ? Animation::RetargetHumanoid(*source->GetSkeleton(), *mesh->GetSkeleton(), clip)
-                                              : Animation::RetargetClip(*source->GetSkeleton(), *mesh->GetSkeleton(), clip));
+                const Skeleton* from = source ? source->GetSkeleton() : mesh->GetSkeleton();
+                auto add = [&](const AnimationClip& clip) {
+                    AnimationClip made = !source ? clip
+                                         : anim.Retargeting == AnimatorRetargeting::Humanoid
+                                             ? Animation::RetargetHumanoid(*source->GetSkeleton(), *mesh->GetSkeleton(), clip)
+                                             : Animation::RetargetClip(*source->GetSkeleton(), *mesh->GetSkeleton(), clip);
+                    auto same = std::find_if(entry.Clips.begin(), entry.Clips.end(), [&](const AnimationClip& c) { return c.Name == made.Name; });
+                    if (same != entry.Clips.end()) *same = std::move(made);
+                    else entry.Clips.push_back(std::move(made));
+                };
+                for (const AnimationClip& clip : (source ? source : mesh)->GetClips()) add(clip);
+                if (from)
+                    for (AssetHandle h : extra)
+                        if (auto asset = AssetManager::GetAnimationClip(h)) add(asset->ToClip(*from));
             }
             return entry.Clips;
         }
@@ -1277,7 +1293,7 @@ namespace Dimension
                     if (anim.Culled) continue;
                 }
             }
-            const auto& clips = AnimatorClips(anim, mesh);
+            const auto& clips = AnimatorClips(anim, mr.Mesh, mesh);
             auto duration = [&](const std::string& name) {
                 const AnimationClip* c = Animation::FindClip(clips, name);
                 return c ? c->Duration : 0.0f;

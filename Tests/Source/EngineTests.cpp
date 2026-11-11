@@ -56,6 +56,7 @@
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
+#include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Audio/Microphone.h>
 #include <Dimension/Audio/VoiceChat.h>
 #include <Dimension/Physics/Water.h>
@@ -6527,6 +6528,68 @@ namespace
         CHECK(curled);
         // Without avatars on both sides it is plain retargeting by name (nothing matches here).
         CHECK(Animation::RetargetHumanoid(source, tail, clip).Channels.empty() && Animation::RetargetClip(source, tail, clip).Channels.empty());
+    }
+
+    void TestAnimationClipAssets()
+    {
+        MeshData tentacle;
+        CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Tentacle.gltf", tentacle));
+        if (!tentacle.SkeletonData || tentacle.Clips.empty()) return;
+        const Skeleton& skeleton = *tentacle.SkeletonData;
+        const AnimationClip& wave = tentacle.Clips[0];
+
+        // Extracted from a model clip, the asset names joints; back as a clip it samples the same poses.
+        AnimationClipAsset asset = AnimationClipAsset::FromClip(skeleton, wave);
+        CHECK(asset.Name == wave.Name && Near(asset.Duration, wave.Duration) && asset.Channels.size() == wave.Channels.size());
+        AnimationClip back = asset.ToClip(skeleton);
+        Pose a, b;
+        bool same = true;
+        for (float t : { 0.0f, wave.Duration * 0.4f, wave.Duration })
+        {
+            Animation::Sample(skeleton, wave, t, a);
+            Animation::Sample(skeleton, back, t, b);
+            for (size_t j = 0; j < a.Rotations.size(); ++j) same &= std::abs(std::abs(glm::dot(a.Rotations[j], b.Rotations[j])) - 1.0f) < 1e-5f;
+        }
+        CHECK(same);
+
+        // Editing keys: set (replacing one at the same time, in time order), move, remove.
+        std::string joint = skeleton.Joints[1].Name;
+        AnimationClipAsset edit;
+        edit.Duration = 2.0f;
+        edit.SetKey(joint, AnimationPath::Rotation, 1.0f, { 0, 0, 0, 1 });
+        edit.SetKey(joint, AnimationPath::Rotation, 0.0f, { 0, 0, 0, 1 });
+        edit.SetKey(joint, AnimationPath::Rotation, 1.002f, { 0, 0.7071f, 0, 0.7071f }); // the same key (within half a frame)
+        auto* ch = edit.FindChannel(joint, AnimationPath::Rotation);
+        CHECK(ch && ch->Times.size() == 2 && Near(ch->Times[0], 0.0f) && Near(ch->Values[1].y, 0.7071f) && edit.HasKey(joint, 1.0f));
+        CHECK(edit.MoveKeys(joint, 1.0f, 1.5f) && !edit.HasKey(joint, 1.0f) && edit.HasKey(joint, 1.5f));
+        CHECK(edit.RemoveKeys(joint, 0.0f) && edit.FindChannel(joint, AnimationPath::Rotation)->Times.size() == 1);
+        CHECK(edit.RemoveKeys(joint, 1.5f) && edit.Channels.empty()); // its last key: the channel goes
+
+        // As project assets: saved and loaded, listed for their model, and a version that changes with every edit.
+        fs::path assets = fs::temp_directory_path() / "dimension_clip_assets" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        AssetHandle model(uint64_t(777001)), other(uint64_t(777002));
+        asset.Model = model;
+        asset.Name = "Wave Edited";
+        uint64_t before = AssetManager::ClipsVersion();
+        AssetHandle h = AssetManager::CreateAnimationClip(assets / "WaveEdited.anim", asset);
+        CHECK(h.IsValid() && AssetManager::GetMetadata(h) && AssetManager::GetMetadata(h)->Type == AssetType::AnimationClip);
+        CHECK(AssetManager::ClipsVersion() != before && AssetManager::ClipsFor(model).size() == 1 && AssetManager::ClipsFor(other).empty());
+        auto loaded = AssetManager::GetAnimationClip(h);
+        CHECK(loaded && loaded->Name == "Wave Edited" && loaded->Model == model && loaded->Channels.size() == asset.Channels.size());
+        bool keysKept = loaded && loaded->Channels.size() == asset.Channels.size();
+        for (size_t c = 0; keysKept && c < asset.Channels.size(); ++c)
+            keysKept &= loaded->Channels[c].Joint == asset.Channels[c].Joint && loaded->Channels[c].Times.size() == asset.Channels[c].Times.size() &&
+                        Near(glm::vec3(loaded->Channels[c].Values.back()), glm::vec3(asset.Channels[c].Values.back()), 1e-5f);
+        CHECK(keysKept);
+        uint64_t edited = AssetManager::ClipsVersion();
+        loaded->Model = other;
+        AssetManager::SaveAnimationClip(h);
+        CHECK(AssetManager::ClipsVersion() != edited && AssetManager::ClipsFor(model).empty() && AssetManager::ClipsFor(other).size() == 1);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
     }
 
     void TestConvolutionReverb()
@@ -15473,6 +15536,7 @@ int main(int argc, char** argv)
     Run("Convolution reverb", TestConvolutionReverb);
     Run("Animation retargeting", TestRetargeting);
     Run("Humanoid retargeting", TestHumanoidRetargeting);
+    Run("Animation clip assets", TestAnimationClipAssets);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);
