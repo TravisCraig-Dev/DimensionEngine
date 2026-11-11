@@ -227,29 +227,63 @@ namespace Editor
 
         std::string pendingRemove;
         float removeAt = 0.0f;
+        // Selection: a click selects one joint, Ctrl adds or removes one, Shift adds the rows from the last one.
+        std::erase_if(m_Selected, [&](int j) { return j < 0 || j >= (int)skeleton.Joints.size(); });
+        if (m_Joint >= 0 && std::find(m_Selected.begin(), m_Selected.end(), m_Joint) == m_Selected.end()) m_Selected = { m_Joint };
+        auto isSelected = [&](int j) { return std::find(m_Selected.begin(), m_Selected.end(), j) != m_Selected.end(); };
+        auto select = [&](int j) {
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.KeyCtrl)
+            {
+                if (isSelected(j) && m_Selected.size() > 1)
+                {
+                    std::erase(m_Selected, j);
+                    if (m_Joint == j) m_Joint = m_Selected.back();
+                    return;
+                }
+                if (!isSelected(j)) m_Selected.push_back(j);
+            }
+            else if (io.KeyShift && m_Joint >= 0)
+            {
+                auto from = std::find(skeleton.Order.begin(), skeleton.Order.end(), m_Joint), to = std::find(skeleton.Order.begin(), skeleton.Order.end(), j);
+                if (from > to) std::swap(from, to);
+                for (auto it = from; it != skeleton.Order.end() && it <= to; ++it)
+                    if (!isSelected(*it)) m_Selected.push_back(*it);
+            }
+            else
+                m_Selected = { j };
+            m_Joint = j;
+        };
+        auto selectedNames = [&]() {
+            std::vector<std::string> names;
+            for (int j : m_Selected) names.push_back(skeleton.Joints[j].Name);
+            return names;
+        };
         for (int j : skeleton.Order)
         {
             const std::string& name = skeleton.Joints[j].Name;
             ImGui::PushID(j);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + Depth(skeleton, j) * 10.0f);
             ImVec2 labelAt = ImGui::GetCursorScreenPos();
-            if (ImGui::Selectable(name.c_str(), m_Joint == j, 0, ImVec2(std::max(labelW - 12.0f - (labelAt.x - ImGui::GetWindowPos().x), 20.0f), rowH)))
-                m_Joint = j;
+            if (ImGui::Selectable(name.c_str(), isSelected(j), 0, ImVec2(std::max(labelW - 12.0f - (labelAt.x - ImGui::GetWindowPos().x), 20.0f), rowH)))
+                select(j);
             ImGui::SameLine(labelW);
             ImVec2 p0 = ImGui::GetCursorScreenPos();
             ImGui::InvisibleButton("##strip", ImVec2(stripW, rowH));
             bool hovered = ImGui::IsItemHovered();
-            dl->AddRectFilled(p0, ImVec2(p0.x + stripW, p0.y + rowH), m_Joint == j ? IM_COL32(44, 52, 66, 255) : IM_COL32(34, 35, 40, 255), 3.0f);
+            dl->AddRectFilled(p0, ImVec2(p0.x + stripW, p0.y + rowH), isSelected(j) ? IM_COL32(44, 52, 66, 255) : IM_COL32(34, 35, 40, 255), 3.0f);
             float hit = -1.0f;
             for (float t : KeyTimes(asset, &name))
             {
                 float x = timeToX(p0.x, t);
-                bool sel = m_Joint == j && m_KeyTime >= 0.0f && std::abs(m_KeyTime - t) <= AnimationClipAsset::kKeyTolerance * 0.5f;
+                bool sel = isSelected(j) && m_KeyTime >= 0.0f && std::abs(m_KeyTime - t) <= AnimationClipAsset::kKeyTolerance * 0.5f;
                 diamond(x, p0.y + rowH * 0.5f, sel ? IM_COL32(255, 210, 90, 255) : IM_COL32(200, 200, 210, 255));
                 if (hovered && std::abs(mouseX - x) < 6.0f) hit = t;
             }
             if (ImGui::IsItemClicked())
             {
+                // A key on a selected row keeps the selection (dragging moves every selected joint's keys there).
+                if (!(hit >= 0.0f && isSelected(j) && !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift)) select(j);
                 m_Joint = j;
                 m_KeyTime = hit;
                 m_Dragging = hit >= 0.0f && !playing;
@@ -263,11 +297,16 @@ namespace Editor
             if (m_Dragging && m_Joint == j && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f))
             {
                 float to = xToTime(p0.x, mouseX);
-                if (std::abs(to - m_KeyTime) > AnimationClipAsset::kKeyTolerance && asset.MoveKeys(name, m_KeyTime, to))
+                if (std::abs(to - m_KeyTime) > AnimationClipAsset::kKeyTolerance)
                 {
-                    m_KeyTime = to;
-                    m_Time = to;
-                    changed = true;
+                    bool moved = false;
+                    for (const std::string& n : selectedNames()) moved |= asset.MoveKeys(n, m_KeyTime, to);
+                    if (moved)
+                    {
+                        m_KeyTime = to;
+                        m_Time = to;
+                        changed = true;
+                    }
                 }
             }
             if (ImGui::IsItemDeactivated() && m_Dragging)
@@ -323,21 +362,35 @@ namespace Editor
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
             ImGui::SetCursorPosX(labelW);
-            if (ImGui::Button("Key"))
-            {
-                // The joint's current pose (rotation, and position where it is animated) keyed at this time.
-                glm::quat r = pose.Rotations[m_Joint];
-                asset.SetKey(name, AnimationPath::Rotation, m_Time, glm::vec4(r.x, r.y, r.z, r.w));
-                if (asset.FindChannel(name, AnimationPath::Translation)) asset.SetKey(name, AnimationPath::Translation, m_Time, glm::vec4(pose.Translations[m_Joint], 0.0f));
+            // Keys the joints as they are posed now at the current time (rotation, and position where it is animated).
+            auto keyPose = [&](const std::vector<int>& joints) {
+                for (int k : joints)
+                {
+                    const std::string& n = skeleton.Joints[k].Name;
+                    glm::quat r = pose.Rotations[k];
+                    asset.SetKey(n, AnimationPath::Rotation, m_Time, glm::vec4(r.x, r.y, r.z, r.w));
+                    if (asset.FindChannel(n, AnimationPath::Translation)) asset.SetKey(n, AnimationPath::Translation, m_Time, glm::vec4(pose.Translations[k], 0.0f));
+                }
                 m_KeyTime = m_Time;
                 changed = commit = true;
-            }
-            ImGui::SetItemTooltip("Key the joint as it is posed now at the current time");
+            };
+            if (ImGui::Button(m_Selected.size() > 1 ? "Key Selected" : "Key")) keyPose(m_Selected);
+            ImGui::SetItemTooltip("Key the selected joints as they are posed now at the current time");
             ImGui::SameLine();
-            bool keyed = asset.HasKey(name, m_Time);
-            if (!keyed) ImGui::BeginDisabled();
-            if (ImGui::Button("Delete Key") && asset.RemoveKeys(name, m_Time))
+            if (ImGui::Button("Key All"))
             {
+                std::vector<int> all(skeleton.Joints.size());
+                for (size_t k = 0; k < all.size(); ++k) all[k] = (int)k;
+                keyPose(all);
+            }
+            ImGui::SetItemTooltip("Key every joint as it is posed now at the current time (a whole pose)");
+            ImGui::SameLine();
+            bool keyed = false;
+            for (const std::string& n : selectedNames()) keyed |= asset.HasKey(n, m_Time);
+            if (!keyed) ImGui::BeginDisabled();
+            if (ImGui::Button("Delete Key"))
+            {
+                for (const std::string& n : selectedNames()) asset.RemoveKeys(n, m_Time);
                 m_KeyTime = -1.0f;
                 changed = commit = true;
             }
@@ -365,7 +418,7 @@ namespace Editor
             if (mode >= 0) ImGui::SetItemTooltip("How the joint's keys are joined: straight lines, held until the next key, or smooth curves");
             if (playing) ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::TextDisabled("Drag keys along a row to move them; right-click one to delete it.");
+            ImGui::TextDisabled("Ctrl / Shift click rows to select several; drag keys to move them, right-click one to delete it.");
 
             // The joint's curves over the clip: rotation (degrees, unwrapped) and position, each set scaled to fit,
             // keys as dots, the current time as a line.

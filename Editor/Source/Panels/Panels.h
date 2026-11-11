@@ -307,7 +307,8 @@ namespace Editor
         EditorContext& m_Ctx;
         AssetHandle m_Clip = AssetHandle::None();
         float m_Time = 0.0f, m_KeyTime = -1.0f; // the current time; the selected key's (-1 = none)
-        int m_Joint = -1;
+        int m_Joint = -1;              // the selected joint (the one whose values show)
+        std::vector<int> m_Selected;   // every selected joint (Ctrl / Shift click adds): keys, deletes and moves apply to all
         bool m_Dragging = false, m_GizmoUsing = false;
         // Preview: the object posed by the clip, and its Animator's settings to put back.
         Entity m_PreviewEntity = Entity::Null();
