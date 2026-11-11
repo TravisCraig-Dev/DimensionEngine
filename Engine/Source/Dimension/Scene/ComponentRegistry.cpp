@@ -697,7 +697,9 @@ namespace Dimension
             .Field("Thickness", &ClothComponent::Thickness).Range(0.0f, 1.0f).Speed(0.001f).Tooltip("How far it stays from what it touches")
             .Field("Wind", &ClothComponent::Wind).Speed(0.05f).Tooltip("World-space acceleration (m/s^2) on the free vertices")
             .Field("Attach To", &ClothComponent::AttachTo)
-                .Tooltip("The pinned vertices hold on to this object (None = the cloth's own), and the cloth pulls on its Rigidbody");
+                .Tooltip("The pinned vertices hold on to this object (None = the cloth's own), and the cloth pulls on its Rigidbody")
+            .Field("Interpolation", &ClothComponent::Interpolation).Enum({ "None", "Interpolate" })
+                .Tooltip("Interpolate: drawn smoothly between physics steps (a step behind), so it moves and blurs evenly at any frame rate");
         Register<RagdollComponent>("Ragdoll", "Physics")
             .Field("Simulate", &RagdollComponent::Simulate).Tooltip("On: limp under physics. Off: the capsules follow the animation (scripts switch it)")
             .Field("Mass", &RagdollComponent::Mass).Range(0.01f, 10000.0f).Speed(0.1f).Tooltip("Whole body, shared by the capsules' volumes")
@@ -780,7 +782,9 @@ namespace Dimension
             .Field("Friction", &SoftBodyComponent::Friction).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Bounciness", &SoftBodyComponent::Restitution).Range(0.0f, 1.0f).Speed(0.01f)
             .Field("Iterations", &SoftBodyComponent::Iterations).Range(1, 64)
-            .Field("Thickness", &SoftBodyComponent::Thickness).Range(0.0f, 1.0f).Speed(0.001f);
+            .Field("Thickness", &SoftBodyComponent::Thickness).Range(0.0f, 1.0f).Speed(0.001f)
+            .Field("Interpolation", &SoftBodyComponent::Interpolation).Enum({ "None", "Interpolate" })
+                .Tooltip("Interpolate: drawn smoothly between physics steps (a step behind), so it moves and blurs evenly at any frame rate");
         Register<AudioOccluderComponent>("Audio Occluder", "Audio")
             .Field("Occlusion", &AudioOccluderComponent::Occlusion).Range(0.0f, 1.0f).Speed(0.01f)
                 .Tooltip("How much this collider blocks occluding Audio Sources (0 = not at all, 1 = fully; colliders without this component block fully). Several along the line add up.");

@@ -505,11 +505,15 @@ namespace Dimension
         {
             c.SimulatedPositions.clear();
             c.SimulatedNormals.clear();
+            c.PreviousPositions.clear();
+            c.CurrentPositions.clear();
         }
         for (auto [e, c] : m_Scene.GetRegistry().ViewOf<SoftBodyComponent>())
         {
             c.SimulatedPositions.clear();
             c.SimulatedNormals.clear();
+            c.PreviousPositions.clear();
+            c.CurrentPositions.clear();
         }
         for (auto [e, cc] : m_Scene.GetRegistry().ViewOf<CharacterControllerComponent>()) cc.Runtime.reset();
         auto& bi = m_Impl->System.GetBodyInterface();
@@ -972,6 +976,45 @@ namespace Dimension
         m_Impl->Cloths.push_back(std::move(body));
     }
 
+    // Interpolating cloth and soft bodies: a step's shape (just written to SimulatedPositions) becomes the latest of
+    // the two drawn between; false when there was no earlier one of the same size (both are this one).
+    template <typename T>
+    static bool KeepStep(T& c)
+    {
+        bool had = c.CurrentPositions.size() == c.SimulatedPositions.size();
+        if (had)
+        {
+            c.PreviousPositions.swap(c.CurrentPositions);
+            c.PreviousNormals.swap(c.CurrentNormals);
+        }
+        c.CurrentPositions = c.SimulatedPositions;
+        c.CurrentNormals = c.SimulatedNormals;
+        if (!had)
+        {
+            c.PreviousPositions = c.CurrentPositions;
+            c.PreviousNormals = c.CurrentNormals;
+        }
+        return had;
+    }
+
+    // SimulatedPositions (and normals) as far from the previous step's shape to the current one as alpha says.
+    template <typename T>
+    static bool BlendSteps(T& c, float alpha)
+    {
+        size_t n = c.CurrentPositions.size();
+        if (n == 0 || c.PreviousPositions.size() != n || c.CurrentNormals.size() != n || c.PreviousNormals.size() != n) return false;
+        c.SimulatedPositions.resize(n);
+        c.SimulatedNormals.resize(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            c.SimulatedPositions[i] = glm::mix(c.PreviousPositions[i], c.CurrentPositions[i], alpha);
+            glm::vec3 normal = glm::mix(c.PreviousNormals[i], c.CurrentNormals[i], alpha);
+            float len = glm::length(normal);
+            c.SimulatedNormals[i] = len > 1e-12f ? normal / len : c.CurrentNormals[i];
+        }
+        return true;
+    }
+
     void Physics3DWorld::UpdateCloths(float dt, bool afterStep)
     {
         auto& reg = m_Scene.GetRegistry();
@@ -1030,6 +1073,12 @@ namespace Dimension
                     sb->SimulatedPositions[i] = pos[w];
                     float len = glm::length(normal[w]);
                     sb->SimulatedNormals[i] = len > 1e-12f ? normal[w] / len : c.Template[i].Normal;
+                }
+                if (sb->Interpolation != RigidbodyInterpolation::None)
+                {
+                    bool had = KeepStep(*sb);
+                    sb->PreviousPosition = had ? sb->CurrentPosition : t.Position;
+                    sb->CurrentPosition = t.Position;
                 }
                 continue;
             }
@@ -1129,6 +1178,7 @@ namespace Dimension
                 cloth->SimulatedPositions[i] = shaped[i].Position;
                 cloth->SimulatedNormals[i] = shaped[i].Normal;
             }
+            if (cloth->Interpolation != RigidbodyInterpolation::None) KeepStep(*cloth);
         }
         auto& bi = m_Impl->System.GetBodyInterface();
         for (auto& r : rebuilds)
@@ -2468,6 +2518,13 @@ namespace Dimension
     void Physics3DWorld::Interpolate(float alpha)
     {
         alpha = std::clamp(alpha, 0.0f, 1.0f);
+        // Cloth and soft bodies: their shapes between the last two steps' (soft bodies' objects too).
+        auto& reg = m_Scene.GetRegistry();
+        for (auto [e, c] : reg.ViewOf<ClothComponent>())
+            if (c.Interpolation != RigidbodyInterpolation::None) BlendSteps(c, alpha);
+        for (auto [e, sb, t] : reg.ViewOf<SoftBodyComponent, TransformComponent>())
+            if (sb.Interpolation != RigidbodyInterpolation::None && BlendSteps(sb, alpha) && m_Scene.GetParent(e).IsNull())
+                t.Position = glm::mix(sb.PreviousPosition, sb.CurrentPosition, alpha);
         for (auto [e, rb, t] : m_Scene.GetRegistry().ViewOf<RigidbodyComponent, TransformComponent>())
         {
             if (rb.Interpolation == RigidbodyInterpolation::None || !rb.HasPose || rb.Type != BodyType::Dynamic || rb.RuntimeBody == 0xFFFFFFFF) continue;

@@ -1313,6 +1313,12 @@ namespace Dimension
         public float TearStretch { get => GetFloat("Tear Stretch"); set => SetFloat("Tear Stretch", value); }
         /// <summary>The object the pinned vertices hold on to (Null: the cloth's own).</summary>
         public Entity AttachTo { get => GetEntity("Attach To"); set => SetEntity("Attach To", value); }
+        /// <summary>Interpolate: drawn smoothly between physics steps (a step behind), as a Rigidbody's.</summary>
+        public RigidbodyInterpolation Interpolation
+        {
+            get => (RigidbodyInterpolation)GetInt("Interpolation");
+            set => SetInt("Interpolation", (int)value);
+        }
     }
 
     /// <summary>
@@ -1701,6 +1707,12 @@ namespace Dimension
         internal override string NativeName => "Soft Body";
         /// <summary>Inflation; applied live (0 = limp).</summary>
         public float Pressure { get => GetFloat("Pressure"); set => SetFloat("Pressure", value); }
+        /// <summary>Interpolate: drawn smoothly between physics steps (a step behind), its object too.</summary>
+        public RigidbodyInterpolation Interpolation
+        {
+            get => (RigidbodyInterpolation)GetInt("Interpolation");
+            set => SetInt("Interpolation", (int)value);
+        }
     }
 
     public unsafe class UIDropdown : Component

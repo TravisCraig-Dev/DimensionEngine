@@ -1410,10 +1410,15 @@ namespace Dimension
         // Attach To: the pinned vertices hold on to this object instead of the cloth's own (a cape on a character, a
         // sail on a boat), and the cloth's pull (its weight, swing and wind load) acts back on its Rigidbody.
         Entity AttachTo = Entity::Null();
+        // Interpolate: drawn between the last two physics steps' shapes, as far along as the time is (smooth motion
+        // and motion blur at any frame rate, a step behind), as a Rigidbody's Interpolate moves its object.
+        RigidbodyInterpolation Interpolation = RigidbodyInterpolation::None;
 
         // Runtime: the simulated grid in the object's space (empty = the flat rest shape), and once it has torn, the
         // triangles still attached (empty = all of them) and how many edges broke.
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
+        // Runtime, Interpolate: the last two steps' shapes (SimulatedPositions is drawn between them).
+        std::vector<glm::vec3> PreviousPositions, CurrentPositions, PreviousNormals, CurrentNormals;
         std::vector<uint32_t> TornIndices;
         int32_t TornEdges = 0;
     };
@@ -1555,9 +1560,14 @@ namespace Dimension
         float Restitution = 0.0f;
         int32_t Iterations = 8;
         float Thickness = 0.02f;
+        // Interpolate: drawn between the last two physics steps' shapes (and the object between their positions).
+        RigidbodyInterpolation Interpolation = RigidbodyInterpolation::None;
 
         // Runtime: the simulated mesh vertices in the object's space (empty = the mesh as it is).
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
+        // Runtime, Interpolate: the last two steps' shapes and object positions.
+        std::vector<glm::vec3> PreviousPositions, CurrentPositions, PreviousNormals, CurrentNormals;
+        glm::vec3 PreviousPosition{ 0.0f }, CurrentPosition{ 0.0f };
     };
 
     enum class VehicleDrive : int32_t { RearWheel = 0, FrontWheel = 1, AllWheel = 2, Unpowered = 3 }; // Unpowered: trailers

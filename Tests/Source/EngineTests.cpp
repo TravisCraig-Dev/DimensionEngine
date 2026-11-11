@@ -2273,6 +2273,48 @@ namespace
             }
             rt->OnRuntimeStop();
         }
+        // Interpolate: between steps the drawn shape lies between the last two steps' shapes, as far along as the time
+        // is (frames at a quarter step: the second frame after a step is halfway); without it, the latest step's.
+        for (bool smooth : { false, true })
+        {
+            Scene scene("Smooth");
+            auto& reg = scene.GetRegistry();
+            Entity e = scene.CreateEntity("Flag");
+            reg.Get<TransformComponent>(e).Position = { 0, 3, 0 };
+            auto& c = reg.Emplace<ClothComponent>(e);
+            c.Resolution = 6;
+            c.Pin = ClothPin::TopCorners;
+            c.Interpolation = smooth ? RigidbodyInterpolation::Interpolate : RigidbodyInterpolation::None;
+            reg.Emplace<MeshRendererComponent>(e);
+            scene.UpdateTransforms();
+            auto rt = scene.Clone();
+            rt->OnRuntimeStart();
+            float quarter = rt->GetFixedTimestep() * 0.25f;
+            for (int i = 0; i < 40; ++i) rt->OnUpdateRuntime(quarter); // 10 steps: falling and swinging
+            auto& sim = rt->GetRegistry().Get<ClothComponent>(e);
+            for (int i = 0; i < 5; ++i) // up to the next step
+            {
+                float before = rt->GetFixedTime();
+                rt->OnUpdateRuntime(quarter);
+                if (rt->GetFixedTime() != before) break;
+            }
+            rt->OnUpdateRuntime(quarter);
+            rt->OnUpdateRuntime(quarter);
+            if (!smooth)
+                CHECK(sim.PreviousPositions.empty() && sim.CurrentPositions.empty() && sim.SimulatedPositions.size() == 49);
+            else
+            {
+                bool between = sim.SimulatedPositions.size() == 49 && sim.PreviousPositions.size() == 49 && sim.CurrentPositions.size() == 49;
+                float moved = 0.0f, error = 0.0f;
+                for (size_t i = 0; between && i < 49; ++i)
+                {
+                    moved = std::max(moved, glm::distance(sim.PreviousPositions[i], sim.CurrentPositions[i]));
+                    error = std::max(error, glm::distance(sim.SimulatedPositions[i], glm::mix(sim.PreviousPositions[i], sim.CurrentPositions[i], 0.5f)));
+                }
+                CHECK(between && moved > 1e-3f && error < 1e-4f);
+            }
+            rt->OnRuntimeStop();
+        }
         // Attach To: a 10 kg box without gravity holding a 2 kg banner by its top edge is pulled down by it (together
         // they fall at about 2/12 g), and the banner's top edge travels with the box. Unattached, the box stays put.
         for (bool attached : { false, true })
