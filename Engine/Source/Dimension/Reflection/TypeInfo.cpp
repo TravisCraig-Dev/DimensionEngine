@@ -85,9 +85,9 @@ namespace Dimension
         }
         case FieldType::Struct:
         {
-            json object = json::object();
-            for (const FieldInfo& sub : field.Elements) object[sub.Name] = FieldToJson(sub, const_cast<void*>(p), resolver);
-            return object;
+            json fields = json::object();
+            for (const FieldInfo& sub : field.Elements) fields[sub.Name] = FieldToJson(sub, const_cast<void*>(p), resolver);
+            return fields;
         }
         case FieldType::StructList:
         {

@@ -214,8 +214,8 @@ namespace Editor
         m_SceneTarget = MakeScope<SceneRenderTarget>(m_SceneViewSize.x, m_SceneViewSize.y);
         m_GameTarget = MakeScope<SceneRenderTarget>(m_GameViewSize.x, m_GameViewSize.y);
 
-        fs::path start = !m_Options.ScenePath.empty() ? fs::path(m_Options.ScenePath) : AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
-        if (!start.empty() && fs::exists(start)) OpenScene(start);
+        fs::path startScene = !m_Options.ScenePath.empty() ? fs::path(m_Options.ScenePath) : AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
+        if (!startScene.empty() && fs::exists(startScene)) OpenScene(startScene);
         else NewScene();
 
         Log::Info("Editor ready. Scene view: RMB+WASD fly, Alt+LMB orbit, MMB pan, wheel zoom, F frame, W/E/R gizmos.");
@@ -3965,7 +3965,6 @@ namespace Editor
     {
         ImGuiIO& io = ImGui::GetIO();
         if (io.WantTextInput) return;
-        bool ctrl = io.KeyCtrl, shift = io.KeyShift;
 
         // The keys are the Shortcuts window's (Shortcuts::Pressed).
         if (m_RebindingShortcut >= 0) return; // the Shortcuts window is listening for a new key
@@ -4482,7 +4481,7 @@ namespace Editor
                     int side = (i / 12) % 4;
                     float f = (i % 12) / 12.0f * 2.0f - 1.0f;
                     glm::vec2 q = side == 0 ? glm::vec2(f, -1) : side == 1 ? glm::vec2(1, f) : side == 2 ? glm::vec2(-f, 1) : glm::vec2(-1, -f);
-                    float a = glm::radians(m_Ctx.TerrainStamp.Rotation), c = std::cos(a), s = std::sin(a);
+                    float turn = glm::radians(m_Ctx.TerrainStamp.Rotation), c = std::cos(turn), s = std::sin(turn);
                     q *= radius;
                     p = glm::vec2(local.x + c * q.x - s * q.y, local.z + s * q.x + c * q.y);
                 }

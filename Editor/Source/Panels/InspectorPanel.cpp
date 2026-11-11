@@ -787,10 +787,10 @@ namespace Editor
                     {
                         // Bake the road or river into its terrain (one undo step).
                         auto& path = *static_cast<TerrainPathComponent*>(info.Get(scene, e));
-                        auto& reg = scene.GetRegistry();
                         Entity target = !path.Terrain.IsNull() && scene.IsValid(path.Terrain) && reg.Has<TerrainComponent>(path.Terrain) ? path.Terrain : Entity::Null();
                         if (target.IsNull())
-                            for (auto [te, tc] : reg.ViewOf<TerrainComponent>()) { target = te; break; }
+                            for (auto [te, tc] : reg.ViewOf<TerrainComponent>())
+                                if (target.IsNull()) target = te; // the first terrain
                         ImGui::BeginDisabled(target.IsNull());
                         if (ImGui::Button("Apply to Terrain"))
                         {
@@ -1184,9 +1184,9 @@ namespace Editor
                             if (ImGui::Selectable(s.Name.c_str(), s.Name == script.ClassName) && s.Name != script.ClassName)
                             {
                                 structural();
-                                auto& target = reg.Get<ScriptComponent>(e).Scripts[i];
-                                target.ClassName = s.Name;
-                                target.Fields = nlohmann::json::object();
+                                auto& slot = reg.Get<ScriptComponent>(e).Scripts[i];
+                                slot.ClassName = s.Name;
+                                slot.Fields = nlohmann::json::object();
                                 AddRequiredComponents(scene, e, s.Name);
                             }
                         ImGui::EndCombo();

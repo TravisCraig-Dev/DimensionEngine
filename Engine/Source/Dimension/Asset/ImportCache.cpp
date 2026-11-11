@@ -215,8 +215,8 @@ namespace Dimension::ImportCache
             std::string file;
             r.Str(im.Name);
             r.Str(file);
-            if (file.starts_with("assets:")) im.File = Project::GetAssetsDirectory() / fs::u8path(file.substr(7));
-            else im.File = fs::u8path(file);
+            if (file.starts_with("assets:")) im.File = Project::GetAssetsDirectory() / Utf8Path(file.substr(7));
+            else im.File = Utf8Path(file);
             r.Vec(im.Bytes);
         }
         if (!r.Ok || r.P != r.End) return false;

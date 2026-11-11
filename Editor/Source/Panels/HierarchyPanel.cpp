@@ -70,7 +70,7 @@ namespace Editor
                                                                                        : m_SectionDirty[i];
             std::string header = added.Name + (dirty ? "*" : "");
             ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-            bool open = ImGui::TreeNodeEx("##section", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", header.c_str());
+            bool expanded = ImGui::TreeNodeEx("##section", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", header.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", added.Path.filename().string().c_str());
             if (ImGui::BeginDragDropTarget())
             {
@@ -90,7 +90,7 @@ namespace Editor
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
-            if (open)
+            if (expanded)
             {
                 for (Entity e : sections.Roots(scene, i)) DrawNode(scene, e);
                 ImGui::TreePop();

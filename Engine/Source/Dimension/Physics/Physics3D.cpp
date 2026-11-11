@@ -3103,7 +3103,7 @@ namespace Dimension
         }
         // A mesh collider follows the dents.
         if (moved > 0 && reg.Has<MeshColliderComponent>(e))
-            if (Physics3DWorld* world = scene.GetPhysics3D()) world->RefreshShape(e);
+            if (Physics3DWorld* physics = scene.GetPhysics3D()) physics->RefreshShape(e);
         return moved;
     }
 

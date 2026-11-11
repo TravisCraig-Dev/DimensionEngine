@@ -151,7 +151,7 @@ namespace Dimension
 
             glm::vec3 from = local ? glm::vec3(world * glm::vec4(previous, 1.0f)) : previous;
             glm::vec3 to = local ? glm::vec3(world * glm::vec4(p.Position, 1.0f)) : p.Position;
-            glm::vec3 hitPoint, normal;
+            glm::vec3 hitPoint(0.0f), normal(0.0f, 1.0f, 0.0f);
             bool hit = false;
             if (ps.Collision == ParticleCollision::Plane)
             {
@@ -198,8 +198,8 @@ namespace Dimension
             if (ps.CollisionDecals && !p.LeftDecal && vn < -0.3f && ps.MaxDecals > 0)
             {
                 if ((int32_t)ps.Decals.size() >= ps.MaxDecals) ps.Decals.erase(ps.Decals.begin());
-                float life = std::clamp(p.Age / std::max(p.Lifetime, 1e-4f), 0.0f, 1.0f);
-                glm::vec4 color = p.Color * ps.ColorOverLifetime.Evaluate(life);
+                float age = std::clamp(p.Age / std::max(p.Lifetime, 1e-4f), 0.0f, 1.0f);
+                glm::vec4 color = p.Color * ps.ColorOverLifetime.Evaluate(age);
                 color.a = std::max(p.Color.a, 0.0f);
                 ps.Decals.push_back({ hitPoint - normal * ps.CollisionRadius, normal, color, std::max(ps.DecalSize, 0.001f) * glm::mix(0.8f, 1.2f, Random01(ps.RandomState)),
                                       0.0f, Random01(ps.RandomState) * glm::two_pi<float>() });

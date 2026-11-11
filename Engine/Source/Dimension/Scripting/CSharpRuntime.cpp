@@ -2238,12 +2238,12 @@ namespace Dimension
             a.BundleOp = [](int op, const char* path, uint64_t* guid) -> const char* {
                 s_StringReturn.clear();
                 std::string p = path ? path : "";
-                if (op == 0) s_StringReturn = AssetPack::LoadBundle(fs::u8path(p));
+                if (op == 0) s_StringReturn = AssetPack::LoadBundle(Utf8Path(p));
                 else if (op == 1)
-                    for (auto& a : AssetPack::BundleAssets(fs::u8path(p))) s_StringReturn += a + "\n";
+                    for (auto& a : AssetPack::BundleAssets(Utf8Path(p))) s_StringReturn += a + "\n";
                 else
                 {
-                    AssetHandle h = AssetManager::GetHandle(fs::u8path(p));
+                    AssetHandle h = AssetManager::GetHandle(Utf8Path(p));
                     if (guid) *guid = (uint64_t)h;
                     if (h.IsValid()) s_StringReturn = "1";
                 }
@@ -2591,7 +2591,7 @@ namespace Dimension
             };
             a.MicrophoneSave = [](const char* path) -> int {
                 // Relative paths are inside the project's Assets folder (so the recording can be used as a clip).
-                fs::path p = fs::u8path(path ? path : "");
+                fs::path p = Utf8Path(path ? path : "");
                 if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
                 bool ok = Microphone::SaveWav(p);
                 if (ok) AssetManager::Import(p);

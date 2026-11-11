@@ -33,7 +33,8 @@ namespace Editor
             if (parent.IsNull() || !underCanvas(parent))
             {
                 parent = Entity::Null();
-                for (auto [ce, c] : r.ViewOf<CanvasComponent>()) { parent = ce; break; }
+                for (auto [ce, c] : r.ViewOf<CanvasComponent>())
+                    if (parent.IsNull()) parent = ce; // the first canvas
                 if (parent.IsNull())
                 {
                     parent = scene.CreateEntity("Canvas");

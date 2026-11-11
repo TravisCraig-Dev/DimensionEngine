@@ -17,6 +17,8 @@ namespace Dimension
     template <class T, class... Args> Ref<T> MakeRef(Args&&... args) { return std::make_shared<T>(std::forward<Args>(args)...); }
 
     namespace fs = std::filesystem;
+    // A path from UTF-8 text (std::filesystem::u8path is deprecated in C++20).
+    inline fs::path Utf8Path(std::string_view text) { return fs::path(std::u8string_view((const char8_t*)text.data(), text.size())); }
 
     [[noreturn]] void FatalError(std::string_view message, const char* file, int line);
 }

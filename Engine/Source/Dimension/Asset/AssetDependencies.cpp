@@ -47,7 +47,7 @@ namespace Dimension::AssetDependencies
                     for (const auto& item : j.value(key, json::array()))
                     {
                         std::string uri = item.value("uri", std::string());
-                        if (!uri.empty() && uri.rfind("data:", 0) != 0) out.push_back((folder / fs::u8path(uri)).lexically_normal());
+                        if (!uri.empty() && uri.rfind("data:", 0) != 0) out.push_back((folder / Utf8Path(uri)).lexically_normal());
                     }
             }
             catch (const std::exception& e)

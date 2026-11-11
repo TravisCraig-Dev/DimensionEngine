@@ -198,11 +198,11 @@ namespace Dimension
                         channel.Values.push_back(v);
                         if (cubic)
                         {
-                            glm::vec4 in(0.0f), out(0.0f);
-                            cgltf_accessor_read_float(s.output, k * 3, glm::value_ptr(in), comps);
-                            cgltf_accessor_read_float(s.output, k * 3 + 2, glm::value_ptr(out), comps);
-                            channel.InTangents.push_back(in);
-                            channel.OutTangents.push_back(out);
+                            glm::vec4 inTangent(0.0f), outTangent(0.0f);
+                            cgltf_accessor_read_float(s.output, k * 3, glm::value_ptr(inTangent), comps);
+                            cgltf_accessor_read_float(s.output, k * 3 + 2, glm::value_ptr(outTangent), comps);
+                            channel.InTangents.push_back(inTangent);
+                            channel.OutTangents.push_back(outTangent);
                         }
                         clip.Duration = std::max(clip.Duration, t);
                     }
@@ -253,7 +253,7 @@ namespace Dimension
                     std::string uri = image.uri;
                     cgltf_decode_uri(uri.data());
                     uri.resize(std::strlen(uri.c_str()));
-                    im.File = (path.parent_path() / fs::u8path(uri)).lexically_normal();
+                    im.File = (path.parent_path() / Utf8Path(uri)).lexically_normal();
                     if (!image.name || !*image.name) im.Name = im.File.stem().string();
                 }
                 out.Images.push_back(std::move(im));
@@ -383,8 +383,8 @@ namespace Dimension
                     else ss >> std::ws;
                 if (rest.empty()) return -1;
                 ImportedImage im;
-                im.Name = fs::u8path(rest).stem().string();
-                im.File = (file.parent_path() / fs::u8path(rest)).lexically_normal();
+                im.Name = Utf8Path(rest).stem().string();
+                im.File = (file.parent_path() / Utf8Path(rest)).lexically_normal();
                 out.Images.push_back(std::move(im));
                 return (int32_t)out.Images.size() - 1;
             };
@@ -485,7 +485,7 @@ namespace Dimension
                     std::string file;
                     std::getline(ss >> std::ws, file);
                     while (!file.empty() && (file.back() == '\r' || file.back() == ' ')) file.pop_back();
-                    for (auto& [name, slot] : LoadMtl(path.parent_path() / fs::u8path(file), out)) library[name] = slot;
+                    for (auto& [name, slot] : LoadMtl(path.parent_path() / Utf8Path(file), out)) library[name] = slot;
                 }
                 else if (tag == "usemtl")
                 {
