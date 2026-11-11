@@ -289,6 +289,33 @@ namespace Editor
         std::string m_AddComponent, m_AddField;
     };
 
+    // Window > Animation: keys of the selected Animator's skeletal clips (.anim made for its model), joint by joint.
+    class AnimationPanel
+    {
+    public:
+        explicit AnimationPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open);
+        // Puts the previewed Animator back (before play starts or the scene is saved).
+        void StopPreview();
+
+    private:
+        EditorContext& m_Ctx;
+        AssetHandle m_Clip = AssetHandle::None();
+        float m_Time = 0.0f, m_KeyTime = -1.0f; // the current time; the selected key's (-1 = none)
+        int m_Joint = -1;
+        bool m_Dragging = false;
+        // Preview: the object posed by the clip, and its Animator's settings to put back.
+        Entity m_PreviewEntity = Entity::Null();
+        AssetHandle m_SavedController = AssetHandle::None();
+        std::string m_SavedClip;
+        float m_SavedTime = 0.0f;
+        bool m_SavedPlaying = true;
+        // The selected joint's rotation as edited (degrees), kept while it is dragged.
+        glm::vec3 m_Euler{ 0.0f };
+        int m_EulerJoint = -1;
+        float m_EulerTime = -1.0f;
+    };
+
     class SceneSettingsPanel
     {
     public:

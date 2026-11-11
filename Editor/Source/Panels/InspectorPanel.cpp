@@ -25,6 +25,7 @@
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Renderer/Texture.h>
 #include <Dimension/Animation/AnimatorController.h>
+#include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Project/Localization.h>
 #include <Dimension/Asset/DataAsset.h>
 #include <imgui.h>
@@ -1830,6 +1831,31 @@ namespace Editor
                 float aspect = (float)tex->GetHeight() / std::max(1u, tex->GetWidth());
                 ImGui::Image(ImTextureRef((ImTextureID)tex->GetImGuiId()), ImVec2(avail, avail * aspect));
                 ImGui::TextDisabled("%u x %u", tex->GetWidth(), tex->GetHeight());
+            }
+        }
+        else if (meta->Type == AssetType::AnimationClip)
+        {
+            // A skeletal clip: the model it was made for (Animators on that model play it by its name); its keys are
+            // edited in Window > Animation.
+            if (auto clip = AssetManager::GetAnimationClip(handle))
+            {
+                bool changed = false;
+                if (UI::BeginProperties("##clipModel"))
+                {
+                    if (UI::AssetField("Model", clip->Model, AssetType::Mesh).Changed) changed = true;
+                    ImGui::SetItemTooltip("The model whose skeleton the keys name; Animators on it (or using it as Animation Source) play this clip");
+                    UI::EndProperties();
+                }
+                if (ImGui::InputText("Name", &clip->Name)) AssetManager::TouchAnimationClips();
+                if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
+                if (ImGui::DragFloat("Length", &clip->Duration, 0.01f, 0.05f, 600.0f, "%.2f s")) AssetManager::TouchAnimationClips();
+                if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
+                size_t keys = 0;
+                for (const auto& c : clip->Channels) keys += c.Times.size();
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextDisabled("%zu channels, %zu keys. Edit them in Window > Animation (select an object playing the model).", clip->Channels.size(), keys);
+                ImGui::PopTextWrapPos();
+                if (changed) AssetManager::SaveAnimationClip(handle);
             }
         }
         else if (meta->Type == AssetType::Mesh)

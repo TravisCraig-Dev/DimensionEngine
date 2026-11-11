@@ -145,6 +145,7 @@ namespace Editor::UI
         case AssetType::RenderTexture: return { 0.95f, 0.45f, 0.35f, 1 };
         case AssetType::UIStyleSheet: return { 0.45f, 0.8f, 0.95f, 1 };
         case AssetType::VideoClip: return { 0.95f, 0.75f, 0.3f, 1 };
+        case AssetType::AnimationClip: return { 0.55f, 0.9f, 0.6f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -168,6 +169,7 @@ namespace Editor::UI
         case AssetType::DataAsset: return "DATA";
         case AssetType::AnimatorOverride: return "OVRD";
         case AssetType::RenderTexture: return "RT";
+        case AssetType::AnimationClip: return "CLIP";
         case AssetType::UIStyleSheet: return "USS";
         case AssetType::VideoClip: return "VIDEO";
         default: return "FILE";

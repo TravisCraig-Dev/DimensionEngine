@@ -150,6 +150,7 @@ namespace Editor
         m_SceneSettings = MakeScope<SceneSettingsPanel>(m_Ctx);
         m_Animator = MakeScope<AnimatorPanel>(m_Ctx);
         m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
+        m_Animation = MakeScope<AnimationPanel>(m_Ctx);
         m_Navigation = MakeScope<NavigationPanel>(m_Ctx);
         m_Profiler = MakeScope<ProfilerPanel>();
         m_FrameDebugger = MakeScope<FrameDebuggerPanel>(m_Ctx);
@@ -176,6 +177,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Project Settings") m_ShowProjectSettings = true;
         else if (m_Options.OpenWindow == "Audio Mixer") m_ShowAudioMixer = true;
         else if (m_Options.OpenWindow == "Timeline") m_ShowTimeline = true;
+        else if (m_Options.OpenWindow == "Animation") m_ShowAnimation = true;
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
@@ -382,6 +384,7 @@ namespace Editor
 
     bool EditorLayer::SaveScene()
     {
+        m_Animation->StopPreview(); // saved as it was, not posed by the Animation window
         if (m_Ctx.IsPlaying())
         {
             Log::Warn("Exit play mode before saving the scene");
@@ -497,6 +500,7 @@ namespace Editor
     {
         if (m_Ctx.IsPlaying()) return;
         if (m_Ctx.InPrefabMode() && !LeavePrefabMode()) return; // play always runs the scene
+        m_Animation->StopPreview(); // the Animator as it was, not posed by the Animation window
         if (EditorPreferences::Get().SaveSceneBeforePlay && m_Ctx.Dirty && !m_Ctx.ScenePath.empty()) SaveScene();
         if (m_Console->ClearOnPlay) m_Console->Clear();
         SceneManager::CancelPendingLoad();
@@ -1399,7 +1403,7 @@ namespace Editor
     {
         return { { "Hierarchy", &m_ShowHierarchy }, { "Inspector", &m_ShowInspector }, { "Project", &m_ShowContent }, { "Console", &m_ShowConsole },
                  { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator },
-                 { "Timeline", &m_ShowTimeline }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
+                 { "Timeline", &m_ShowTimeline }, { "Animation", &m_ShowAnimation }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
                  { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings },
                  { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
                  { "Shortcuts", &m_ShowShortcuts }, { "Undo History", &m_ShowUndoHistory } };
@@ -2586,6 +2590,8 @@ namespace Editor
         if (m_ShowSceneSettings) m_SceneSettings->OnImGui(&m_ShowSceneSettings);
         if (m_ShowAnimator) m_Animator->OnImGui(&m_ShowAnimator);
         if (m_ShowTimeline) m_Timeline->OnImGui(&m_ShowTimeline);
+        if (m_ShowAnimation) m_Animation->OnImGui(&m_ShowAnimation);
+        else m_Animation->StopPreview();
         if (m_ShowNavigation) m_Navigation->OnImGui(&m_ShowNavigation);
         if (m_ShowProfiler) m_Profiler->OnImGui(&m_ShowProfiler);
         if (m_Ctx.OpenSpriteEditor)
@@ -2691,6 +2697,7 @@ namespace Editor
         ImGui::DockBuilderDockWindow("Animator", bottom);
         ImGui::DockBuilderDockWindow("Audio Mixer", bottom);
         ImGui::DockBuilderDockWindow("Timeline", bottom);
+        ImGui::DockBuilderDockWindow("Animation", bottom);
         ImGui::DockBuilderDockWindow("Profiler", bottom);
         ImGui::DockBuilderFinish(id);
     }
@@ -2831,6 +2838,7 @@ namespace Editor
             ImGui::MenuItem("Scene Settings", nullptr, &m_ShowSceneSettings);
             ImGui::MenuItem("Animator", nullptr, &m_ShowAnimator);
             ImGui::MenuItem("Timeline", nullptr, &m_ShowTimeline);
+            ImGui::MenuItem("Animation", nullptr, &m_ShowAnimation);
             ImGui::MenuItem("Navigation", nullptr, &m_ShowNavigation);
             ImGui::MenuItem("Profiler", nullptr, &m_ShowProfiler);
             ImGui::MenuItem("Frame Debugger", nullptr, &m_ShowFrameDebugger);

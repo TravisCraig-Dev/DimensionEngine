@@ -208,6 +208,7 @@ namespace Editor
         Scope<SceneSettingsPanel> m_SceneSettings;
         Scope<AnimatorPanel> m_Animator;
         Scope<TimelinePanel> m_Timeline;
+        Scope<AnimationPanel> m_Animation;
         Scope<NavigationPanel> m_Navigation;
         Scope<ProfilerPanel> m_Profiler;
 
@@ -351,6 +352,7 @@ namespace Editor
         bool m_ShowHierarchy = true, m_ShowInspector = true, m_ShowContent = true, m_ShowConsole = true;
         bool m_ShowAnimator = true;
         bool m_ShowTimeline = false;
+        bool m_ShowAnimation = false;
         bool m_ShowNavigation = false;
         bool m_ShowFrameDebugger = false;
         bool m_ShowSpriteEditor = false;
