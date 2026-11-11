@@ -329,6 +329,9 @@ namespace Dimension
             // A Mesh Renderer's blend shapes: 0 count, 1 a weight, 2 set a weight (0..100), 3 the index of a name (-1).
             float (*BlendShapeOp)(void*, uint64_t, int, int, float, const char*);
             const char* (*BlendShapeName)(void*, uint64_t, int);
+            // A constraint's sources (kind 0 Position, 1 Rotation, 2 Scale, 3 Parent, 4 Aim): op 0 count, 1 get (the source,
+            // its weight in *w), 2 set (index == count adds), 3 remove.
+            uint64_t (*ConstraintOp)(void*, uint64_t, int, int, int, uint64_t, float*);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -2313,6 +2316,38 @@ namespace Dimension
                 auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
                 s_StringReturn = data && index >= 0 && index < (int)data->BlendShapes.size() ? data->BlendShapes[index].Name : std::string();
                 return s_StringReturn.c_str();
+            };
+            a.ConstraintOp = [](void* s, uint64_t e, int kind, int op, int index, uint64_t source, float* w) -> uint64_t {
+                std::vector<ConstraintSource>* list = nullptr;
+                switch (kind)
+                {
+                case 0: if (auto* c = Comp<PositionConstraintComponent>(s, e)) list = &c->Sources; break;
+                case 1: if (auto* c = Comp<RotationConstraintComponent>(s, e)) list = &c->Sources; break;
+                case 2: if (auto* c = Comp<ScaleConstraintComponent>(s, e)) list = &c->Sources; break;
+                case 3: if (auto* c = Comp<ParentConstraintComponent>(s, e)) list = &c->Sources; break;
+                case 4: if (auto* c = Comp<AimConstraintComponent>(s, e)) list = &c->Sources; break;
+                default: break;
+                }
+                if (!list) return 0;
+                bool valid = index >= 0 && index < (int)list->size();
+                switch (op)
+                {
+                case 0: return list->size();
+                case 1:
+                    if (!valid) return 0;
+                    if (w) *w = (*list)[index].Weight;
+                    return (*list)[index].Source.IsNull() ? 0 : Pack((*list)[index].Source);
+                case 2:
+                    if (index == (int)list->size()) list->push_back({});
+                    else if (!valid) return 0;
+                    (*list)[index] = { source ? Unpack(source) : Entity::Null(), w ? *w : 1.0f };
+                    return 1;
+                case 3:
+                    if (!valid) return 0;
+                    list->erase(list->begin() + index);
+                    return 1;
+                default: return 0;
+                }
             };
             a.VoiceOp = [](int op, float* v, const char* host) -> int {
                 VoiceChat& chat = VoiceChat::Default();

@@ -2288,19 +2288,45 @@ namespace Dimension
     }
 
     /// <summary>The settings every constraint has (Position, Rotation, Scale, Parent and Aim Constraint).</summary>
-    public abstract class ConstraintBase : Component
+    public abstract unsafe class ConstraintBase : Component
     {
         /// <summary>Applied each frame while playing.</summary>
         public bool ConstraintActive { get => GetBool("Constraint Active"); set => SetBool("Constraint Active", value); }
         /// <summary>0: where the object rests; 1: fully constrained.</summary>
         public float Weight { get => GetFloat("Weight"); set => SetFloat("Weight", value); }
         public bool MaintainOffset { get => GetBool("Maintain Offset"); set => SetBool("Maintain Offset", value); }
+
+        internal abstract int Kind { get; }
+        private unsafe ulong Op(int op, int index = 0, ulong source = 0, float* weight = null) => Native.Api.ConstraintOp(Entity.Scene, Entity.Id, Kind, op, index, source, weight);
+        /// <summary>How many sources it follows.</summary>
+        public int SourceCount => (int)Op(0);
+        /// <summary>A source: the object and its weight.</summary>
+        public unsafe (Entity Source, float Weight) GetSource(int index)
+        {
+            float w = 0.0f;
+            ulong id = Op(1, index, 0, &w);
+            return (new Entity(Entity.Scene, id), w);
+        }
+        /// <summary>Changes a source (an index of SourceCount adds one), like Unity's SetSource.</summary>
+        public unsafe void SetSource(int index, Entity source, float weight)
+        {
+            float w = weight;
+            Op(2, index, source.IsValid ? source.Id : 0, &w);
+        }
+        /// <summary>Adds a source; returns its index.</summary>
+        public int AddSource(Entity source, float weight = 1.0f)
+        {
+            int index = SourceCount;
+            SetSource(index, source, weight);
+            return index;
+        }
+        public void RemoveSource(int index) => Op(3, index);
     }
-    public sealed class PositionConstraint : ConstraintBase { internal override string NativeName => "Position Constraint"; }
-    public sealed class RotationConstraint : ConstraintBase { internal override string NativeName => "Rotation Constraint"; }
-    public sealed class ScaleConstraint : ConstraintBase { internal override string NativeName => "Scale Constraint"; }
-    public sealed class ParentConstraint : ConstraintBase { internal override string NativeName => "Parent Constraint"; }
-    public sealed class AimConstraint : ConstraintBase { internal override string NativeName => "Aim Constraint"; }
+    public sealed class PositionConstraint : ConstraintBase { internal override string NativeName => "Position Constraint"; internal override int Kind => 0; }
+    public sealed class RotationConstraint : ConstraintBase { internal override string NativeName => "Rotation Constraint"; internal override int Kind => 1; }
+    public sealed class ScaleConstraint : ConstraintBase { internal override string NativeName => "Scale Constraint"; internal override int Kind => 2; }
+    public sealed class ParentConstraint : ConstraintBase { internal override string NativeName => "Parent Constraint"; internal override int Kind => 3; }
+    public sealed class AimConstraint : ConstraintBase { internal override string NativeName => "Aim Constraint"; internal override int Kind => 4; }
 
     public unsafe class NavMeshAgent : Component
     {

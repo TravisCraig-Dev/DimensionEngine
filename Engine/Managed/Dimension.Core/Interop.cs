@@ -198,6 +198,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, float*, byte*, int> VoiceOp;  // see VoiceChat in Components.cs
         public delegate* unmanaged<IntPtr, ulong, int, int, float, byte*, float> BlendShapeOp;  // see MeshRenderer in Components.cs
         public delegate* unmanaged<IntPtr, ulong, int, byte*> BlendShapeName;
+        public delegate* unmanaged<IntPtr, ulong, int, int, int, ulong, float*, ulong> ConstraintOp;  // see ConstraintBase in Components.cs
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.
