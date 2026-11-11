@@ -802,6 +802,28 @@ namespace Dimension
     {
         Upload(data.Vertices, data.Indices);
         m_BlendShapeCount = (uint32_t)data.BlendShapes.size();
+        if (m_BlendShapeCount > 0)
+        {
+            // The shapes' deltas for the GPU, and each one's reach (for the moved mesh's bounds).
+            size_t v = data.Vertices.size();
+            std::vector<glm::vec4> deltas(v * 2 * m_BlendShapeCount, glm::vec4(0.0f));
+            m_BlendReach.assign(m_BlendShapeCount, glm::vec3(0.0f));
+            for (size_t s = 0; s < m_BlendShapeCount; ++s)
+            {
+                const BlendShape& shape = data.BlendShapes[s];
+                for (size_t i = 0; i < v && i < shape.Positions.size() && i < shape.Normals.size(); ++i)
+                {
+                    deltas[(s * v + i) * 2] = glm::vec4(shape.Positions[i], 0.0f);
+                    deltas[(s * v + i) * 2 + 1] = glm::vec4(shape.Normals[i], 0.0f);
+                    m_BlendReach[s] = glm::max(m_BlendReach[s], glm::abs(shape.Positions[i]));
+                }
+            }
+            m_BlendBuffer = Buffer::CreateWithData(deltas.data(), deltas.size() * sizeof(glm::vec4),
+                                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, "BlendShapes");
+            VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+            info.buffer = m_BlendBuffer.GetHandle();
+            m_BlendAddress = vkGetBufferDeviceAddress(RenderDevice::Get().GetDevice(), &info);
+        }
         if (m_SubMeshes.empty()) m_SubMeshes.push_back({ 0, m_IndexCount, -1 });
         if (m_Skeleton && data.Skin.size() == data.Vertices.size())
         {
@@ -826,7 +848,13 @@ namespace Dimension
             m_Bounds.Min = glm::min(m_Bounds.Min, v.Position);
             m_Bounds.Max = glm::max(m_Bounds.Max, v.Position);
         }
-        m_VertexBuffer = Buffer::CreateWithData(vertices.data(), vertices.size() * sizeof(Vertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, m_Name.c_str());
+        // (also read by the blend shape compute pass, by address)
+        m_VertexBuffer = Buffer::CreateWithData(vertices.data(), vertices.size() * sizeof(Vertex),
+                                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                m_Name.c_str());
+        VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+        info.buffer = m_VertexBuffer.GetHandle();
+        m_VertexAddress = vkGetBufferDeviceAddress(RenderDevice::Get().GetDevice(), &info);
         m_IndexBuffer = Buffer::CreateWithData(indices.data(), indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, m_Name.c_str());
     }
 

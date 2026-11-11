@@ -131,6 +131,11 @@ namespace Dimension
 
         bool IsSkinned() const { return m_Skeleton != nullptr; }
         uint32_t GetBlendShapeCount() const { return m_BlendShapeCount; }
+        // GPU blend shapes: the vertex buffer's address, the shapes' deltas (two vec4 per vertex per shape: position,
+        // normal; shape by shape), and how far each shape moves any vertex along each axis at full weight (bounds).
+        VkDeviceAddress GetVertexAddress() const { return m_VertexAddress; }
+        VkDeviceAddress GetBlendShapeAddress() const { return m_BlendAddress; }
+        const std::vector<glm::vec3>& GetBlendShapeReach() const { return m_BlendReach; }
         const Skeleton* GetSkeleton() const { return m_Skeleton.get(); }
         const std::vector<AnimationClip>& GetClips() const { return m_Clips; }
         VkDeviceAddress GetSkinAddress() const { return m_SkinAddress; }
@@ -138,8 +143,10 @@ namespace Dimension
     private:
         void Upload(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
 
-        Buffer m_VertexBuffer, m_IndexBuffer, m_SkinBuffer;
+        Buffer m_VertexBuffer, m_IndexBuffer, m_SkinBuffer, m_BlendBuffer;
         uint32_t m_BlendShapeCount = 0;
+        VkDeviceAddress m_VertexAddress = 0, m_BlendAddress = 0;
+        std::vector<glm::vec3> m_BlendReach;
         VkDeviceAddress m_SkinAddress = 0;
         uint32_t m_IndexCount = 0, m_VertexCount = 0;
         AABB m_Bounds;

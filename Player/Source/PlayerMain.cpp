@@ -5,6 +5,7 @@
 //        [--no-instancing] [--no-vsync]           draw every mesh separately / uncapped frame rate (for comparisons)
 //        [--no-clusters]                          shade every light at every pixel (for comparisons)
 //        [--cpu-light-culling]                    build the light clusters on the CPU instead of in a compute shader
+//        [--cpu-blend-shapes]                     apply skinned models' blend shapes on the CPU instead of in a compute shader
 //        [--no-occlusion]                         draw meshes hidden behind others too (for comparisons)
 //        [--fixed-dt seconds]                     every frame advances the game by this step (repeatable runs)
 //        [--wait-for-debugger]                    wait up to 60 s for a C# debugger to attach
@@ -220,6 +221,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--no-instancing")) SceneRenderer::SetInstancingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-clusters")) SceneRenderer::SetLightClusteringEnabled(false);
         else if (!std::strcmp(argv[i], "--cpu-light-culling")) SceneRenderer::SetGpuLightCullingEnabled(false);
+        else if (!std::strcmp(argv[i], "--cpu-blend-shapes")) SceneRenderer::SetGpuBlendShapesEnabled(false);
         else if (!std::strcmp(argv[i], "--no-occlusion")) SceneRenderer::SetOcclusionCullingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-vsync")) noVSync = true;
         else if (!std::strcmp(argv[i], "--fixed-dt") && i + 1 < argc) s_FixedDt = (float)std::atof(argv[++i]);

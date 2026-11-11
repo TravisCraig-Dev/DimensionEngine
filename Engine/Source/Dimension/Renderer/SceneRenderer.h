@@ -205,6 +205,9 @@ namespace Dimension
         static void SetLightClusteringEnabled(bool enabled); // false: every light in every cluster (comparisons)
         // Light culling runs in a compute shader by default; false builds the clusters on the CPU (comparisons).
         static void SetGpuLightCullingEnabled(bool enabled);
+        // Blend shapes of skinned models are applied in a compute shader by default; false does it on the CPU
+        // (comparisons). Unskinned models always use the CPU (their moved vertices give their motion vectors).
+        static void SetGpuBlendShapesEnabled(bool enabled);
         // Occlusion culling (also per scene: Scene Settings); false draws everything in view (comparisons).
         static void SetOcclusionCullingEnabled(bool enabled);
         static bool IsGpuLightCullingEnabled();
@@ -297,6 +300,13 @@ namespace Dimension
         std::vector<RenderItem> m_RenderItems;
         std::vector<std::vector<glm::vec3>> m_SimPositions; // this frame's simulated vertex positions, for motion vectors
         std::vector<float> m_BlendWeights;                  // (scratch: a renderer's blend shape weights, 0..1)
+        // Blend shape compute work for this view's render list (dispatched before its passes).
+        struct BlendJob
+        {
+            VkDeviceAddress Base, Deltas, Out, List;
+            uint32_t VertexCount, ShapeCount;
+        };
+        std::vector<BlendJob> m_BlendJobs;
         std::vector<Vertex> m_BlendVertices;                // (scratch: blend-shaped vertices of an unskinned mesh)
         std::vector<RenderPart> m_RenderParts;
         std::vector<uint8_t> m_BatchInstanceable;       // per batch: false for skinned parts (one draw each)

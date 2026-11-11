@@ -67,6 +67,7 @@
 #include "shaders/ProbeEquirect.frag.h"
 #include "shaders/ProbePrefilter.frag.h"
 #include "shaders/LightCull.comp.h"
+#include "shaders/BlendShapes.comp.h"
 #include "shaders/DepthReduce.comp.h"
 #include "shaders/LuminanceReduce.comp.h"
 #include "shaders/ParticleSim.comp.h"
@@ -200,6 +201,7 @@ namespace Dimension
         bool s_InstancingEnabled = true;
         bool s_ClusterCulling = true;
         bool s_GpuLightCulling = true;
+        bool s_GpuBlendShapes = true;
         bool s_OcclusionCulling = true;
         uint64_t s_ProbeBakeGeneration = 0;
         constexpr uint32_t kMaxInstancesPerDraw = 16384;
@@ -419,7 +421,7 @@ namespace Dimension
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
-        Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort, DepthReduce, LuminanceReduce; // compute
+        Pipeline LightCull, ParticleSim, ParticleSortKeys, ParticleSort, DepthReduce, LuminanceReduce, BlendShapes; // compute
         Pipeline GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive;
         // GPU particle systems' simulation buffers, per (scene, entity); dropped when unused for a while.
         struct GpuParticleState
@@ -770,6 +772,7 @@ namespace Dimension
             }
         }
         r.LightCull = Pipeline::Compute(kLightCull_comp, "LightCullPipeline");
+        r.BlendShapes = Pipeline::Compute(kBlendShapes_comp, "BlendShapesPipeline");
         r.DepthReduce = Pipeline::Compute(kDepthReduce_comp, "DepthReducePipeline");
         r.LuminanceReduce = Pipeline::Compute(kLuminanceReduce_comp, "LuminanceReducePipeline");
         r.ParticleSim = Pipeline::Compute(kParticleSim_comp, "ParticleSimPipeline");
@@ -1261,6 +1264,23 @@ namespace Dimension
         {
             DIM_PROFILE_SCOPE("Render List");
             BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
+        }
+        if (!m_BlendJobs.empty())
+        {
+            // Blend shapes into this list's vertex streams, before any pass draws them.
+            auto& device = RenderDevice::Get();
+            Renderer::Get().BlendShapes.Bind(cmd);
+            device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
+            for (const BlendJob& job : m_BlendJobs)
+            {
+                struct { glm::uvec2 Base, Delta, Out, List; uint32_t VertexCount, ShapeCount; } push{
+                    SplitAddress(job.Base), SplitAddress(job.Deltas), SplitAddress(job.Out), SplitAddress(job.List), job.VertexCount, job.ShapeCount };
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                vkCmdDispatch(cmd, (job.VertexCount + 63) / 64, 1, 1);
+            }
+            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT,
+                              VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT);
+            m_BlendJobs.clear();
         }
         // Occlusion culling: render items hidden behind what an earlier frame drew.
         bool occlusion = s_OcclusionCulling && scene.GetSettings().OcclusionCulling && !options.ProbeCapture;
@@ -1781,6 +1801,7 @@ namespace Dimension
     void SceneRenderer::SetInstancingEnabled(bool enabled) { s_InstancingEnabled = enabled; }
     void SceneRenderer::SetLightClusteringEnabled(bool enabled) { s_ClusterCulling = enabled; }
     void SceneRenderer::SetGpuLightCullingEnabled(bool enabled) { s_GpuLightCulling = enabled; }
+    void SceneRenderer::SetGpuBlendShapesEnabled(bool enabled) { s_GpuBlendShapes = enabled; }
     void SceneRenderer::SetOcclusionCullingEnabled(bool enabled) { s_OcclusionCulling = enabled; }
 
     void SceneRenderer::ChooseOccluder(const CameraData& camera)
@@ -2350,6 +2371,7 @@ namespace Dimension
         m_RenderItems.clear();
         m_RenderParts.clear();
         m_SimPositions.clear();
+        m_BlendJobs.clear();
         m_OceanFrame = {};
         m_FrameRefracts = false;
         m_FrameHasWater = false;
@@ -2600,7 +2622,35 @@ namespace Dimension
                         m_BlendWeights[s] = s < mr.BlendShapeWeights.size() ? mr.BlendShapeWeights[s] * 0.01f : shaped->BlendShapes[s].DefaultWeight;
                         any |= m_BlendWeights[s] != 0.0f;
                     }
-                    if (any)
+                    if (any && s_GpuBlendShapes && mesh->IsSkinned() && mesh->GetBlendShapeAddress())
+                    {
+                        // On the GPU (a compute pass before the passes): the active shapes as (index, weight) pairs.
+                        uint32_t active = 0;
+                        for (float w : m_BlendWeights) active += w != 0.0f;
+                        TransientAllocation out = device.AllocateTransient(shaped->Vertices.size() * sizeof(Vertex), 16);
+                        TransientAllocation list = device.AllocateTransient(active * sizeof(glm::uvec2), 16);
+                        if (out && list)
+                        {
+                            auto* pairs = (glm::uvec2*)list.Data;
+                            uint32_t k = 0;
+                            glm::vec3 reach(0.0f);
+                            for (size_t s = 0; s < m_BlendWeights.size(); ++s)
+                                if (m_BlendWeights[s] != 0.0f)
+                                {
+                                    float w = m_BlendWeights[s];
+                                    uint32_t bits;
+                                    std::memcpy(&bits, &w, sizeof(bits));
+                                    pairs[k++] = glm::uvec2((uint32_t)s, bits);
+                                    if (s < mesh->GetBlendShapeReach().size()) reach += mesh->GetBlendShapeReach()[s] * std::abs(w);
+                                }
+                            m_BlendJobs.push_back({ mesh->GetVertexAddress(), mesh->GetBlendShapeAddress(), out.Address, list.Address, mesh->GetVertexCount(), active });
+                            item.Vertices = out.Buffer;
+                            item.VertexOffset = out.Offset;
+                            bounds.Min -= reach; // (as far as the shapes could move it)
+                            bounds.Max += reach;
+                        }
+                    }
+                    else if (any)
                         if (TransientAllocation block = device.AllocateTransient(shaped->Vertices.size() * sizeof(Vertex), 16))
                         {
                             AABB moved;

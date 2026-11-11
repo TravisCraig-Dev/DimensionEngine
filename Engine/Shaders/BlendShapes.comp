@@ -1,0 +1,54 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+// Blend shapes on the GPU: one invocation per vertex adds the weighted shapes' position and normal deltas to the
+// model's vertex and writes it to the frame's vertex stream (skinning then applies on top, in the vertex shader).
+// Vertices are 12 floats (position, normal, UV, tangent: the C++ Vertex, tightly packed); the deltas are two vec4 per
+// vertex per shape (position, normal), shape by shape; the list holds (shape index, weight bits) pairs.
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer VerticesIn { float F[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer VerticesOut { float F[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Deltas { vec4 D[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer ShapeList { uvec2 S[]; };
+
+layout(push_constant) uniform Push
+{
+    uvec2 Base, Delta, Out, List;
+    uint VertexCount, ShapeCount;
+} uPush;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uPush.VertexCount) return;
+    VerticesIn base = VerticesIn(uPush.Base);
+    uint o = i * 12u;
+    vec3 p = vec3(base.F[o], base.F[o + 1u], base.F[o + 2u]);
+    vec3 n = vec3(base.F[o + 3u], base.F[o + 4u], base.F[o + 5u]);
+    vec2 uv = vec2(base.F[o + 6u], base.F[o + 7u]);
+    vec4 t = vec4(base.F[o + 8u], base.F[o + 9u], base.F[o + 10u], base.F[o + 11u]);
+    Deltas deltas = Deltas(uPush.Delta);
+    ShapeList list = ShapeList(uPush.List);
+    vec3 sum = n;
+    for (uint k = 0u; k < uPush.ShapeCount; ++k)
+    {
+        uvec2 entry = list.S[k];
+        float w = uintBitsToFloat(entry.y);
+        uint at = (entry.x * uPush.VertexCount + i) * 2u;
+        p += deltas.D[at].xyz * w;
+        sum += deltas.D[at + 1u].xyz * w;
+    }
+    if (uPush.ShapeCount > 0u && dot(sum, sum) > 1e-12)
+    {
+        n = normalize(sum);
+        vec3 tt = t.xyz - n * dot(n, t.xyz);
+        if (t.w != 0.0 && dot(tt, tt) > 1e-12) t.xyz = normalize(tt);
+    }
+    VerticesOut outV = VerticesOut(uPush.Out);
+    outV.F[o] = p.x; outV.F[o + 1u] = p.y; outV.F[o + 2u] = p.z;
+    outV.F[o + 3u] = n.x; outV.F[o + 4u] = n.y; outV.F[o + 5u] = n.z;
+    outV.F[o + 6u] = uv.x; outV.F[o + 7u] = uv.y;
+    outV.F[o + 8u] = t.x; outV.F[o + 9u] = t.y; outV.F[o + 10u] = t.z; outV.F[o + 11u] = t.w;
+}
