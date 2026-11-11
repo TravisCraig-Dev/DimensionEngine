@@ -357,7 +357,10 @@ namespace Dimension
             uint64_t Signature = 0, LastUsed = 0;
             const Scene* Owner = nullptr;
         };
-        std::unordered_map<uint64_t, Impostor> m_Impostors; // by group entity (index, generation)
+        // By what they picture (and the scene): LOD Groups with the same contents in their own space (a row of the same
+        // statue, turned any way) share one; m_ImpostorOf finds a group's (entity index and generation to its key).
+        std::unordered_map<uint64_t, Impostor> m_Impostors;
+        std::unordered_map<uint64_t, uint64_t> m_ImpostorOf;
         Scope<SceneRenderTarget> m_ImpostorTarget;
         void PrepareImpostors(VkCommandBuffer cmd, Scene& scene);
         void CaptureImpostor(VkCommandBuffer cmd, Scene& scene, Entity group, Impostor& impostor);

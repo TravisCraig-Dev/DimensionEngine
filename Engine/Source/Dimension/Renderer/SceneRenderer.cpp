@@ -2060,8 +2060,9 @@ namespace Dimension
 
         uint64_t ImpostorKey(Entity e) { return ((uint64_t)e.Index << 32) | e.Generation; }
 
-        // What the impostor pictures, as a number: the meshes, materials and places of LOD 0 (not the lights: impostors
-        // are lit live).
+        // What the impostor pictures, as a number: the meshes, materials and places of LOD 0 in the group's space (not the
+        // lights: impostors are lit live; not the group's own place or turn: it is drawn turned to the camera, showing
+        // the side the camera sees).
         uint64_t ImpostorSignature(Scene& scene, Entity group)
         {
             auto& reg = scene.GetRegistry();
@@ -2096,8 +2097,6 @@ namespace Dimension
             }
             else if (!scene.GetChildren(group).empty())
                 walk(scene.GetChildren(group)[0]);
-            glm::mat3 groupRotation(reg.Get<TransformComponent>(group).World);
-            mix(&groupRotation, sizeof(groupRotation));
             return h;
         }
     }
@@ -2113,9 +2112,11 @@ namespace Dimension
             if (lod.Impostor && t.ActiveInHierarchy) groups.push_back(e);
         for (Entity g : groups)
         {
-            Impostor& impostor = m_Impostors[ImpostorKey(g)];
-            impostor.LastUsed = frame;
             uint64_t signature = ImpostorSignature(scene, g);
+            uint64_t key = signature ^ ((uint64_t)(uintptr_t)&scene * 0x9e3779b97f4a7c15ull);
+            m_ImpostorOf[ImpostorKey(g)] = key;
+            Impostor& impostor = m_Impostors[key];
+            impostor.LastUsed = frame;
             if (impostor.Owner == &scene && impostor.Signature == signature) continue;
             if (captured) continue;
             CaptureImpostor(cmd, scene, g, impostor);
@@ -2134,6 +2135,7 @@ namespace Dimension
             }
             else
                 ++it;
+        std::erase_if(m_ImpostorOf, [this](const auto& entry) { return !m_Impostors.contains(entry.second); });
     }
 
     void SceneRenderer::CaptureImpostor(VkCommandBuffer cmd, Scene& scene, Entity group, Impostor& impostor)
@@ -2812,7 +2814,8 @@ namespace Dimension
             if (Ref<Mesh> quad = AssetManager::GetMesh(AssetManager::kQuad))
                 for (const auto& [g, fade] : lods.Impostors)
                 {
-                    auto it = m_Impostors.find(ImpostorKey(g));
+                    auto of = m_ImpostorOf.find(ImpostorKey(g));
+                    auto it = of == m_ImpostorOf.end() ? m_Impostors.end() : m_Impostors.find(of->second);
                     if (it == m_Impostors.end() || !it->second.Bindless || !it->second.NormalBindless || !it->second.SurfaceBindless || it->second.Radius <= 0.0f ||
                         it->second.Owner != &scene)
                         continue;
