@@ -57,6 +57,7 @@
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Animation/ClipAsset.h>
+#include <Dimension/Renderer/ColrV1.h>
 #include <Dimension/Audio/Microphone.h>
 #include <Dimension/Audio/VoiceChat.h>
 #include <Dimension/Physics/Water.h>
@@ -6627,6 +6628,31 @@ namespace
         CHECK(AssetManager::ClipsVersion() != edited && AssetManager::ClipsFor(model).size() == 1 && AssetManager::ClipsFor(other).size() == 1);
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path());
+    }
+
+    void TestColrV1()
+    {
+        // COLR v1 paints from the system's emoji font (Windows 11's Segoe UI Emoji): a heart renders as a gradient (many
+        // colors, not the flat layers of COLR v0), inside a clear border; a plain letter has no paint.
+        std::ifstream in("C:/Windows/Fonts/seguiemj.ttf", std::ios::binary);
+        if (!in) return;
+        std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::vector<uint32_t> image;
+        int w = 0, h = 0;
+        if (!ColrV1::RenderCodepoint(data.data(), data.size(), 0x2764, 64.0f, image, w, h)) return; // a COLR v0 font (older Windows)
+        CHECK(w > 40 && h > 40 && image.size() == size_t(w) * h);
+        std::set<uint32_t> colors;
+        bool border = true;
+        size_t opaque = 0;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+            {
+                uint32_t p = image[size_t(y) * w + x];
+                if ((x == 0 || y == 0 || x == w - 1 || y == h - 1) && (p >> 24) != 0) border = false;
+                if ((p >> 24) == 255) colors.insert(p & 0xFCFCFC), ++opaque;
+            }
+        CHECK(border && opaque > size_t(w) * h / 4 && colors.size() > 30);
+        CHECK(!ColrV1::RenderCodepoint(data.data(), data.size(), 'A', 64.0f, image, w, h));
     }
 
     void TestConvolutionReverb()
@@ -15574,6 +15600,7 @@ int main(int argc, char** argv)
     Run("Animation retargeting", TestRetargeting);
     Run("Humanoid retargeting", TestHumanoidRetargeting);
     Run("Animation clip assets", TestAnimationClipAssets);
+    Run("COLR v1 color glyphs", TestColrV1);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);

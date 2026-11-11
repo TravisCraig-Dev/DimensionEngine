@@ -7,6 +7,7 @@
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
+#include "Dimension/Renderer/ColrV1.h"
 #include <unordered_map>
 #include <msdfgen.h>
 
@@ -73,6 +74,8 @@ namespace Dimension
             const uint8_t* Layers = nullptr; // LayerRecord: glyph, palette index (0xFFFF: the text's color)
             uint32_t BaseCount = 0, LayerCount = 0;
             std::vector<uint32_t> Palette; // RGBA8 (sRGB), from CPAL's palette 0
+            ColrV1::Table V1;               // COLR version 1 paints (gradients), used before the version 0 layers
+            bool HasV1 = false;
 
             bool Load(const uint8_t* data, size_t size, uint32_t fontStart)
             {
@@ -88,10 +91,12 @@ namespace Dimension
                 }
                 if (!colr || !cpal || colr + 14 > size || cpal + 12 > size || colr + colrLength > size || cpal + cpalLength > size) return false;
                 const uint8_t* c = data + colr;
+                HasV1 = V1.Load(c, colrLength);
                 BaseCount = ReadU16(c + 2);
                 uint32_t baseOffset = ReadU32(c + 4), layerOffset = ReadU32(c + 8);
                 LayerCount = ReadU16(c + 12);
-                if (!BaseCount || baseOffset + BaseCount * 6ull > colrLength || layerOffset + LayerCount * 4ull > colrLength) return false;
+                if (baseOffset + BaseCount * 6ull > colrLength || layerOffset + LayerCount * 4ull > colrLength) BaseCount = LayerCount = 0;
+                if (!BaseCount && !HasV1) return false;
                 Bases = c + baseOffset;
                 Layers = c + layerOffset;
                 const uint8_t* p = data + cpal;
@@ -311,6 +316,32 @@ namespace Dimension
         // it is not one (or does not fit).
         bool BakeColor(int glyph, Glyph& g)
         {
+            // COLR v1: the paint graph rendered (gradients and all).
+            if (Colors.HasV1)
+            {
+                std::vector<uint32_t> image;
+                int ix, iy, w, h;
+                if (ColrV1::Render(Colors.V1, Info, Scale, (uint16_t)glyph, Colors.Palette, image, ix, iy, w, h))
+                {
+                    if (ColorRgba.empty()) ColorRgba.assign(size_t(kColorSize) * kColorSize, 0u);
+                    if (ColorPenX + w + 1 > kColorSize) { ColorPenX = 1; ColorPenY += ColorRowHeight + 1; ColorRowHeight = 0; }
+                    if (ColorPenY + h + 1 > kColorSize) { ColorFull = true; return false; }
+                    for (int y = 0; y < h; ++y)
+                        std::copy(image.begin() + size_t(y) * w, image.begin() + size_t(y + 1) * w, ColorRgba.begin() + size_t(ColorPenY + y) * kColorSize + ColorPenX);
+                    int advance, bearing;
+                    stbtt_GetGlyphHMetrics(&Info, glyph, &advance, &bearing);
+                    g.Advance = advance * Scale;
+                    g.UVMin = { ColorPenX / (float)kColorSize, ColorPenY / (float)kColorSize };
+                    g.UVMax = { (ColorPenX + w) / (float)kColorSize, (ColorPenY + h) / (float)kColorSize };
+                    g.Min = { (float)ix, (float)iy };
+                    g.Max = { (float)(ix + w), (float)(iy + h) };
+                    g.Color = true;
+                    ColorPenX += w + 1;
+                    ColorRowHeight = std::max(ColorRowHeight, h);
+                    ColorDirty = true;
+                    return true;
+                }
+            }
             auto [first, count] = Colors.Find(glyph);
             if (count == 0 || first + count > Colors.LayerCount) return false;
             int x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
