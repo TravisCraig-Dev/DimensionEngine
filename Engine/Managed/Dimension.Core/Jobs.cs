@@ -185,16 +185,17 @@ namespace Dimension
 
     /// <summary>A fixed-length array of unmanaged values in native memory, to share with jobs (like Unity's). Copies of
     /// the struct share the same memory; Dispose frees it (Dispose(handle) once a job is done with it).</summary>
-    public unsafe struct NativeArray<T> : IEnumerable<T>, IDisposable, INativeContainer, IEquatable<NativeArray<T>> where T : unmanaged
+    public readonly unsafe struct NativeArray<T> : IEnumerable<T>, IDisposable, INativeContainer, IEquatable<NativeArray<T>> where T : unmanaged
     {
-        private NativeSafety m_Safety;
-        private bool m_ReadOnly; // (the copy a job gets for a [ReadOnly] field)
-        private bool m_View;     // (NativeList.AsArray: the list's memory, disposed with it)
+        // (readonly: copies share the state, so `using var` and readonly fields work as with any handle)
+        private readonly NativeSafety m_Safety;
+        private readonly bool m_ReadOnly; // (the copy a job gets for a [ReadOnly] field)
+        private readonly bool m_View;     // (NativeList.AsArray: the list's memory, disposed with it)
 
-        internal NativeArray(NativeSafety state, bool view)
+        internal NativeArray(NativeSafety state, bool view, bool readOnly = false)
         {
             m_Safety = state;
-            m_ReadOnly = false;
+            m_ReadOnly = readOnly;
             m_View = view;
         }
 
@@ -292,12 +293,7 @@ namespace Dimension
         private void CheckWrite() => (m_Safety ?? throw new ObjectDisposedException("The NativeArray was never created")).CheckWrite(m_ReadOnly);
 
         NativeSafety INativeContainer.Safety => m_Safety;
-        object INativeContainer.AsReadOnly()
-        {
-            NativeArray<T> copy = this;
-            copy.m_ReadOnly = true;
-            return copy;
-        }
+        object INativeContainer.AsReadOnly() => new NativeArray<T>(m_Safety, m_View, readOnly: true);
 
         public IEnumerator<T> GetEnumerator()
         {

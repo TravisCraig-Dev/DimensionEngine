@@ -19,10 +19,16 @@ namespace Dimension
 
     /// <summary>A growable list of unmanaged values in native memory (like Unity's NativeList). Add in a job writing it
     /// alone, or AddNoResize through AsParallelWriter() from a parallel job (up to Capacity).</summary>
-    public unsafe struct NativeList<T> : IEnumerable<T>, IDisposable, INativeContainer where T : unmanaged
+    public readonly unsafe struct NativeList<T> : IEnumerable<T>, IDisposable, INativeContainer where T : unmanaged
     {
-        private NativeListState m_State;
-        private bool m_ReadOnly;
+        private readonly NativeListState m_State;
+        private readonly bool m_ReadOnly;
+
+        private NativeList(NativeListState state, bool readOnly)
+        {
+            m_State = state;
+            m_ReadOnly = readOnly;
+        }
 
         public NativeList(Allocator allocator) : this(8, allocator) { }
 
@@ -179,12 +185,7 @@ namespace Dimension
         }
 
         NativeSafety INativeContainer.Safety => m_State;
-        object INativeContainer.AsReadOnly()
-        {
-            NativeList<T> copy = this;
-            copy.m_ReadOnly = true;
-            return copy;
-        }
+        object INativeContainer.AsReadOnly() => new NativeList<T>(m_State, true);
 
         public IEnumerator<T> GetEnumerator()
         {
@@ -193,7 +194,7 @@ namespace Dimension
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
         /// <summary>Adds from many threads at once, within the list's Capacity.</summary>
-        public struct ParallelWriter : INativeContainer
+        public readonly struct ParallelWriter : INativeContainer
         {
             private readonly NativeListState m_State;
             internal ParallelWriter(NativeListState state) { m_State = state; }
@@ -224,11 +225,17 @@ namespace Dimension
 
     /// <summary>Unmanaged keys to unmanaged values (like Unity's NativeHashMap), usable in jobs: written by one job, or
     /// added to from a parallel job through AsParallelWriter(). (Its table is kept by the .NET runtime.)</summary>
-    public struct NativeHashMap<TKey, TValue> : IDisposable, INativeContainer, IEnumerable<KeyValuePair<TKey, TValue>>
+    public readonly struct NativeHashMap<TKey, TValue> : IDisposable, INativeContainer, IEnumerable<KeyValuePair<TKey, TValue>>
         where TKey : unmanaged, IEquatable<TKey> where TValue : unmanaged
     {
-        private NativeHashMapState<TKey, TValue> m_State;
-        private bool m_ReadOnly;
+        private readonly NativeHashMapState<TKey, TValue> m_State;
+        private readonly bool m_ReadOnly;
+
+        private NativeHashMap(NativeHashMapState<TKey, TValue> state, bool readOnly)
+        {
+            m_State = state;
+            m_ReadOnly = readOnly;
+        }
 
         public NativeHashMap(int initialCapacity, Allocator allocator)
         {
@@ -333,12 +340,7 @@ namespace Dimension
         private void Write() => State.CheckWrite(m_ReadOnly);
 
         NativeSafety INativeContainer.Safety => m_State;
-        object INativeContainer.AsReadOnly()
-        {
-            var copy = this;
-            copy.m_ReadOnly = true;
-            return copy;
-        }
+        object INativeContainer.AsReadOnly() => new NativeHashMap<TKey, TValue>(m_State, true);
 
         public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator()
         {
@@ -348,7 +350,7 @@ namespace Dimension
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
         /// <summary>Adds from many threads at once.</summary>
-        public struct ParallelWriter : INativeContainer
+        public readonly struct ParallelWriter : INativeContainer
         {
             private readonly NativeHashMapState<TKey, TValue> m_State;
             internal ParallelWriter(NativeHashMapState<TKey, TValue> state) { m_State = state; }
@@ -372,10 +374,16 @@ namespace Dimension
 
     /// <summary>A first-in first-out queue of unmanaged values (like Unity's NativeQueue), usable in jobs; a parallel job
     /// enqueues from every batch through AsParallelWriter().</summary>
-    public struct NativeQueue<T> : IDisposable, INativeContainer where T : unmanaged
+    public readonly struct NativeQueue<T> : IDisposable, INativeContainer where T : unmanaged
     {
-        private NativeQueueState<T> m_State;
-        private bool m_ReadOnly;
+        private readonly NativeQueueState<T> m_State;
+        private readonly bool m_ReadOnly;
+
+        private NativeQueue(NativeQueueState<T> state, bool readOnly)
+        {
+            m_State = state;
+            m_ReadOnly = readOnly;
+        }
 
         public NativeQueue(Allocator allocator)
         {
@@ -441,15 +449,10 @@ namespace Dimension
         private NativeQueueState<T> State => m_State ?? throw new ObjectDisposedException("The NativeQueue was never created");
 
         NativeSafety INativeContainer.Safety => m_State;
-        object INativeContainer.AsReadOnly()
-        {
-            var copy = this;
-            copy.m_ReadOnly = true;
-            return copy;
-        }
+        object INativeContainer.AsReadOnly() => new NativeQueue<T>(m_State, true);
 
         /// <summary>Enqueues from many threads at once.</summary>
-        public struct ParallelWriter : INativeContainer
+        public readonly struct ParallelWriter : INativeContainer
         {
             private readonly NativeQueueState<T> m_State;
             internal ParallelWriter(NativeQueueState<T> state) { m_State = state; }
@@ -474,9 +477,9 @@ namespace Dimension
     }
 
     /// <summary>The objects a transform job moves (like Unity's TransformAccessArray). Dispose it when done.</summary>
-    public struct TransformAccessArray : IDisposable, INativeContainer
+    public readonly struct TransformAccessArray : IDisposable, INativeContainer
     {
-        private TransformArrayState m_State;
+        private readonly TransformArrayState m_State;
 
         public TransformAccessArray(int capacity, int desiredJobCount = -1)
         {

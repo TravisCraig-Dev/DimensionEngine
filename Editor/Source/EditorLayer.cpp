@@ -4864,11 +4864,12 @@ namespace Editor
         {
             fs::copy_file(ExecutableDirectory() / "nethost.dll", folder / "nethost.dll", fs::copy_options::overwrite_existing, ec);
             fs::copy(ExecutableDirectory() / "managed", folder / "managed", fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
-            for (const char* editorOnly : { "Dimension.Analyzers.dll", "Dimension.Analyzers.pdb", "Dimension.Analyzers.deps.json" }) // (the IDE's)
-            {
-                std::error_code re;
-                fs::remove(folder / "managed" / editorOnly, re);
-            }
+            for (const char* editorOnly : { "Dimension.Analyzers", "Dimension.Analyzers.CodeFixes" }) // (the IDE's)
+                for (const char* ext : { ".dll", ".pdb", ".deps.json" })
+                {
+                    std::error_code re;
+                    fs::remove(folder / "managed" / (std::string(editorOnly) + ext), re);
+                }
             // The .NET runtime itself, so C# runs without .NET installed (or the machine's is used).
             std::error_code re;
             if (config.BundleDotNet)

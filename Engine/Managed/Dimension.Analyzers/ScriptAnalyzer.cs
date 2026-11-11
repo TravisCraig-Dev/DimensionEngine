@@ -73,15 +73,18 @@ namespace Dimension.Analyzers
             string[] callbacks = behaviour.GetMembers().OfType<IMethodSymbol>()
                 .Where(m => m.IsVirtual && m.Name.StartsWith("On", StringComparison.Ordinal)).Select(m => m.Name).Distinct().ToArray();
             string name = method.Name;
-            string reason = null;
+            string reason = null, callback = name;
             if (callbacks.Contains(name))
                 reason = $"it hides Behaviour.{name}; declare it 'public override'";
             else if (name.StartsWith("On", StringComparison.Ordinal))
             {
                 string near = callbacks.FirstOrDefault(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase) || Distance(c, name) <= 2);
                 if (near != null) reason = $"did you mean the callback {near}?";
+                callback = near;
             }
-            if (reason != null) context.ReportDiagnostic(Diagnostic.Create(Callback, method.Locations[0], name, reason));
+            // (the callback meant, for the quick fix)
+            var properties = ImmutableDictionary<string, string>.Empty.Add("Callback", callback);
+            if (reason != null) context.ReportDiagnostic(Diagnostic.Create(Callback, method.Locations[0], properties, name, reason));
         }
 
         private static int Distance(string a, string b)
