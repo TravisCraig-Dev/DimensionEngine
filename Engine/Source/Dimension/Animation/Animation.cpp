@@ -539,6 +539,68 @@ namespace Dimension
                 for (int c = 0; c < 3; ++c) r[c] /= std::max(glm::length(r[c]), 1e-8f);
                 return glm::normalize(glm::quat_cast(r));
             }
+
+            // A humanoid rig's T-pose: each joint's model-space rotation once its human bones are turned to point as a
+            // T-posed figure's do (arms straight out to the sides, spine and neck up, legs down, feet forward), in the
+            // rig's own frame (its left from the upper arms, up the model's +Y). Rigs bound in an A-pose (or any other)
+            // then share a reference: motion is measured from it, not from the pose they were bound in.
+            std::vector<glm::quat> TPoseRotations(const Skeleton& s, const HumanoidMap& map, const std::vector<glm::mat4>& bind)
+            {
+                size_t n = s.Joints.size();
+                std::vector<glm::quat> delta(n, glm::quat(1, 0, 0, 0)), out(n);
+                auto pos = [&](HumanBone b) { return glm::vec3(bind[map[b]][3]); };
+                glm::vec3 left = pos(HumanBone::LeftUpperArm) - pos(HumanBone::RightUpperArm);
+                left.y = 0.0f;
+                left = glm::length(left) > 1e-6f ? glm::normalize(left) : glm::vec3(1, 0, 0);
+                glm::vec3 up(0, 1, 0), forward = glm::normalize(glm::cross(left, up));
+                // Each bone, the human bone it points at, and the way that is in a T-pose.
+                struct Bone { HumanBone From, To, To2; glm::vec3 Dir; };
+                const Bone bones[] = {
+                    { HumanBone::Spine, HumanBone::Chest, HumanBone::Neck, up },
+                    { HumanBone::Chest, HumanBone::UpperChest, HumanBone::Neck, up },
+                    { HumanBone::UpperChest, HumanBone::Neck, HumanBone::Neck, up },
+                    { HumanBone::Neck, HumanBone::Head, HumanBone::Head, up },
+                    { HumanBone::LeftShoulder, HumanBone::LeftUpperArm, HumanBone::LeftUpperArm, left },
+                    { HumanBone::LeftUpperArm, HumanBone::LeftLowerArm, HumanBone::LeftLowerArm, left },
+                    { HumanBone::LeftLowerArm, HumanBone::LeftHand, HumanBone::LeftHand, left },
+                    { HumanBone::RightShoulder, HumanBone::RightUpperArm, HumanBone::RightUpperArm, -left },
+                    { HumanBone::RightUpperArm, HumanBone::RightLowerArm, HumanBone::RightLowerArm, -left },
+                    { HumanBone::RightLowerArm, HumanBone::RightHand, HumanBone::RightHand, -left },
+                    { HumanBone::LeftUpperLeg, HumanBone::LeftLowerLeg, HumanBone::LeftLowerLeg, -up },
+                    { HumanBone::LeftLowerLeg, HumanBone::LeftFoot, HumanBone::LeftFoot, -up },
+                    { HumanBone::LeftFoot, HumanBone::LeftToes, HumanBone::LeftToes, forward },
+                    { HumanBone::RightUpperLeg, HumanBone::RightLowerLeg, HumanBone::RightLowerLeg, -up },
+                    { HumanBone::RightLowerLeg, HumanBone::RightFoot, HumanBone::RightFoot, -up },
+                    { HumanBone::RightFoot, HumanBone::RightToes, HumanBone::RightToes, forward },
+                };
+                std::vector<int> target(n, -1);
+                std::vector<glm::vec3> wanted(n);
+                for (const Bone& b : bones)
+                {
+                    int from = map[b.From], to = map[b.To] >= 0 ? map[b.To] : map[b.To2];
+                    if (from < 0 || to < 0 || from == to) continue;
+                    target[from] = to;
+                    wanted[from] = b.Dir;
+                }
+                for (int j : s.Order)
+                {
+                    int parent = s.Joints[j].Parent;
+                    glm::quat inherited = parent >= 0 ? delta[parent] : glm::quat(1, 0, 0, 0);
+                    delta[j] = inherited;
+                    if (target[j] >= 0)
+                    {
+                        // The bone as its ancestors' turns left it, turned on to the T-pose's way.
+                        glm::vec3 d = glm::vec3(bind[target[j]][3]) - glm::vec3(bind[j][3]);
+                        if (glm::dot(d, d) > 1e-12f)
+                        {
+                            glm::vec3 now = glm::normalize(inherited * d);
+                            delta[j] = glm::rotation(now, wanted[j]) * inherited;
+                        }
+                    }
+                    out[j] = glm::normalize(delta[j] * RotationOf(bind[j]));
+                }
+                return out;
+            }
         }
 
         const char* HumanBoneName(HumanBone bone)
@@ -630,6 +692,8 @@ namespace Dimension
             float sourceHeight = std::abs(sourceBindG[sourceHips][3].y), targetHeight = std::abs(targetBindG[targetHips][3].y);
             float scale = sourceHeight > 1e-4f && targetHeight > 1e-4f ? targetHeight / sourceHeight : 1.0f;
             glm::quat rootRotation = RotationOf(target.RootTransform);
+            // Motion is measured from each rig's T-pose (so an A-pose rig and a T-pose rig retarget alike).
+            std::vector<glm::quat> sourceT = TPoseRotations(source, from, sourceBindG), targetT = TPoseRotations(target, to, targetBindG);
 
             int frames = std::max(2, (int)std::ceil(clip.Duration * 30.0f) + 1);
             std::vector<AnimationChannel> channels(target.Joints.size());
@@ -651,8 +715,8 @@ namespace Dimension
                     if (int s = sourceOf[j]; s >= 0)
                     {
                         // The source bone's turn from its bind pose (model space), on the target bone's bind pose.
-                        glm::quat turn = RotationOf(sourceG[s]) * glm::inverse(RotationOf(sourceBindG[s]));
-                        world[j] = glm::normalize(turn * RotationOf(targetBindG[j]));
+                        glm::quat turn = RotationOf(sourceG[s]) * glm::inverse(sourceT[s]);
+                        world[j] = glm::normalize(turn * targetT[j]);
                         pose.Rotations[j] = glm::normalize(glm::inverse(parentWorld) * world[j]);
                     }
                     else

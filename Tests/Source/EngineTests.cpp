@@ -6527,6 +6527,52 @@ namespace
         bool curled = false;
         for (const AnimationChannel& ch : mapped.Channels) curled |= ch.Joint == target.FindJoint("LeftHandIndex1") && ch.Path == AnimationPath::Rotation;
         CHECK(curled);
+        // An A-pose source (arms bound 45 degrees down) raising its left arm to the horizontal: on the T-pose target the
+        // arm starts 45 degrees down too and ends horizontal (motion is measured from each rig's T-pose, not its bind).
+        {
+            std::vector<RigJoint> apose = src;
+            const float c = std::cos(glm::radians(45.0f)), sn = std::sin(glm::radians(45.0f));
+            auto place = [&](const char* name, glm::vec3 p) {
+                for (RigJoint& j : apose)
+                    if (std::string(j.Name) == mixamo(name)) j.Position = p;
+            };
+            for (int side : { 1, -1 })
+            {
+                glm::vec3 shoulder(0.15f * side, 1.5f, 0.0f), down(c * side, -sn, 0.0f);
+                place(side > 0 ? "LeftForeArm" : "RightForeArm", shoulder + down * 0.25f);
+                place(side > 0 ? "LeftHand" : "RightHand", shoulder + down * 0.5f);
+                if (side > 0) place("LeftHandIndex1", shoulder + down * 0.57f);
+            }
+            Skeleton aSource = BuildRig(apose);
+            int arm = aSource.FindJoint(mixamo("LeftArm"));
+            AnimationClip raise;
+            raise.Name = "Raise";
+            raise.Duration = 1.0f;
+            AnimationChannel ch;
+            ch.Joint = arm;
+            ch.Path = AnimationPath::Rotation;
+            ch.Times = { 0.0f, 1.0f };
+            glm::quat a0 = aSource.Joints[arm].Rotation, a1 = turn(45, { 0, 0, 1 }) * aSource.Joints[arm].Rotation;
+            ch.Values = { { a0.x, a0.y, a0.z, a0.w }, { a1.x, a1.y, a1.z, a1.w } };
+            raise.Channels.push_back(ch);
+            AnimationClip raised = Animation::RetargetHumanoid(aSource, target, raise);
+            Pose pa, pb;
+            std::vector<glm::mat4> ga, gb;
+            bool follows = true;
+            for (float t : { 0.0f, 1.0f })
+            {
+                Animation::Sample(aSource, raise, t, pa);
+                Animation::Sample(target, raised, t, pb);
+                Animation::JointGlobals(aSource, pa, ga);
+                Animation::JointGlobals(target, pb, gb);
+                glm::vec3 s = direction(ga, arm, aSource.FindJoint(mixamo("LeftForeArm")));
+                glm::vec3 d = direction(gb, target.FindJoint("upperarm_l"), target.FindJoint("lowerarm_l"));
+                follows &= glm::dot(s, d) > 0.995f;
+                // The legs, untouched in both, stay as the target's T-pose has them (straight down).
+                follows &= glm::dot(direction(gb, target.FindJoint("thigh_l"), target.FindJoint("calf_l")), glm::vec3(0, -1, 0)) > 0.995f;
+            }
+            CHECK(follows);
+        }
         // Without avatars on both sides it is plain retargeting by name (nothing matches here).
         CHECK(Animation::RetargetHumanoid(source, tail, clip).Channels.empty() && Animation::RetargetClip(source, tail, clip).Channels.empty());
     }
