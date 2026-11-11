@@ -1117,6 +1117,11 @@ namespace Dimension
         // Streamed (large worlds): while playing, only the tiles (Tile Size meters square) within Stream Radius of the
         // agents and the main camera are baked, a tile a frame, nearest first; tiles a tile farther off are dropped.
         bool Streamed = false;
+        // Use Geometry (like Unity's): Physics Colliders, or Render Meshes (what is drawn: the Mesh Renderers' meshes,
+        // colliders left out but terrains', so invisible blockers do not count and decor without colliders does).
+        // Streamed surfaces always use colliders.
+        enum class Geometry : int32_t { PhysicsColliders = 0, RenderMeshes = 1 };
+        Geometry UseGeometry = Geometry::PhysicsColliders;
         // Agent Type (the project's, Window > Navigation): its sizes replace Agent Radius / Height / Step Height / Max
         // Slope, and only agents of that type (or of Any) walk it. 0 = Any: its own settings, for every agent.
         int32_t AgentType = 0;

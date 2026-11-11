@@ -3551,6 +3551,48 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    void TestNavMeshRenderMeshes()
+    {
+        // Drawn ground (a Mesh Renderer cube, also a collider), a drawn platform without a collider, and an invisible
+        // wall (a collider, nothing drawn). (Built-in meshes' data comes through the asset manager.)
+        fs::path assets = fs::temp_directory_path() / "dimension_nav_drawn" / "Assets";
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        Scene scene("Drawn");
+        auto& reg = scene.GetRegistry();
+        Entity ground = scene.CreateEntity("Ground");
+        reg.Get<TransformComponent>(ground).Position = { 0.0f, -0.5f, 0.0f };
+        reg.Get<TransformComponent>(ground).Scale = { 30.0f, 1.0f, 30.0f };
+        reg.Emplace<MeshRendererComponent>(ground).Mesh = AssetManager::kCube;
+        reg.Emplace<BoxColliderComponent>(ground);
+        Entity platform = scene.CreateEntity("Platform");
+        reg.Get<TransformComponent>(platform).Position = { 6.0f, 0.5f, 6.0f };
+        reg.Get<TransformComponent>(platform).Scale = { 4.0f, 1.0f, 4.0f };
+        reg.Emplace<MeshRendererComponent>(platform).Mesh = AssetManager::kCube;
+        Entity wall = scene.CreateEntity("Invisible Wall");
+        reg.Get<TransformComponent>(wall).Position = { -6.0f, 1.5f, 0.0f };
+        reg.Emplace<BoxColliderComponent>(wall).Size = { 0.6f, 3.0f, 10.0f };
+        Entity surface = scene.CreateEntity("Navigation");
+        auto& s = reg.Emplace<NavMeshSurfaceComponent>(surface);
+        s.Size = { 30.0f, 10.0f, 30.0f };
+        scene.UpdateTransforms();
+        // Colliders: the wall is there, the platform is not.
+        auto colliders = Navigation::Bake(scene, surface);
+        CHECK(colliders && Navigation::Nearest(*colliders, { -6.0f, 0.0f, 0.0f }, 0.3f) < 0 && Navigation::Nearest(*colliders, { 6.0f, 1.0f, 6.0f }, 0.3f) < 0);
+        uint64_t colliderKey = Navigation::SettingsKey(scene, surface);
+        // Render meshes: the platform is ground to stand on, the invisible wall is not there.
+        reg.Get<NavMeshSurfaceComponent>(surface).UseGeometry = NavMeshSurfaceComponent::Geometry::RenderMeshes;
+        auto drawn = Navigation::Bake(scene, surface);
+        CHECK(drawn && Navigation::Nearest(*drawn, { -6.0f, 0.0f, 0.0f }, 0.3f) >= 0);
+        int top = drawn ? Navigation::Nearest(*drawn, { 6.0f, 1.0f, 6.0f }, 0.3f) : -1;
+        CHECK(top >= 0 && Near(drawn->Heights[top], 1.0f, 0.02f));
+        // The scene itself is untouched (its colliders, no physics while editing), and the key tells the bakes apart.
+        CHECK(reg.Has<BoxColliderComponent>(wall) && !reg.Has<MeshColliderComponent>(platform) && scene.GetPhysics3D() == nullptr);
+        CHECK(Navigation::SettingsKey(scene, surface) != colliderKey);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     void TestNavMeshAgentTypes()
     {
         // Project agent types: "Small" (radius 0.25) and "Large" (radius 1.5, step 0.1). Two surfaces over the same
@@ -16128,6 +16170,7 @@ int main(int argc, char** argv)
     Run("NavMesh modifiers", TestNavMeshModifiers);
     Run("NavMesh wide links", TestNavMeshWideLinks);
     Run("NavMesh agent types", TestNavMeshAgentTypes);
+    Run("NavMesh from render meshes", TestNavMeshRenderMeshes);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);

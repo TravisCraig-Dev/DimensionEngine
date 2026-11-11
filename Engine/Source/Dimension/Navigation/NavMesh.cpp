@@ -1119,8 +1119,40 @@ namespace Dimension
             }
         }
 
+        namespace
+        {
+            // A copy of the scene whose physics is what is drawn: the Mesh Renderers' meshes as static mesh colliders,
+            // the colliders gone (terrains keep theirs), for surfaces baked from Render Meshes.
+            Ref<Scene> RenderMeshScene(Scene& scene)
+            {
+                Ref<Scene> copy = scene.Clone();
+                auto& reg = copy->GetRegistry();
+                std::vector<Entity> drawn;
+                for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
+                    if (t.ActiveInHierarchy && mr.Mesh.IsValid()) drawn.push_back(e);
+                std::vector<Entity> solid;
+                for (auto [e, c] : reg.ViewOf<BoxColliderComponent>()) solid.push_back(e);
+                for (auto [e, c] : reg.ViewOf<SphereColliderComponent>()) solid.push_back(e);
+                for (auto [e, c] : reg.ViewOf<CapsuleColliderComponent>()) solid.push_back(e);
+                for (auto [e, c] : reg.ViewOf<MeshColliderComponent>()) solid.push_back(e);
+                for (Entity e : solid)
+                {
+                    reg.Remove<BoxColliderComponent>(e);
+                    reg.Remove<SphereColliderComponent>(e);
+                    reg.Remove<CapsuleColliderComponent>(e);
+                    reg.Remove<MeshColliderComponent>(e);
+                }
+                for (Entity e : drawn) reg.Emplace<MeshColliderComponent>(e); // (its renderer's mesh)
+                copy->StartQueryPhysics();
+                return copy;
+            }
+
+            bool FromRenderMeshes(const NavMeshSurfaceComponent& s) { return s.UseGeometry == NavMeshSurfaceComponent::Geometry::RenderMeshes && !s.Streamed; }
+        }
+
         int UpdateArea(Scene& scene, const glm::vec3& lo, const glm::vec3& hi)
         {
+            Ref<Scene> drawnCopy; // (for surfaces baked from render meshes)
             auto& reg = scene.GetRegistry();
             scene.UpdateTransforms();
             Ref<Scene> copy; // editing: the colliders in a physics world of a copy
@@ -1147,7 +1179,12 @@ namespace Dimension
                 glm::ivec2 a = CellOf(grid, { lo.x, lo.z }) - glm::ivec2(1), b = CellOf(grid, { hi.x, hi.z }) + glm::ivec2(1);
                 glm::ivec4 region(std::max(a.x, 0), std::max(a.y, 0), std::min(b.x, grid.Width - 1), std::min(b.y, grid.Depth - 1));
                 Scene* sampled = &scene;
-                if (!scene.GetPhysics3D())
+                if (FromRenderMeshes(s))
+                {
+                    if (!drawnCopy) drawnCopy = RenderMeshScene(scene);
+                    sampled = drawnCopy.get();
+                }
+                else if (!scene.GetPhysics3D())
                 {
                     if (!copy)
                     {
@@ -1259,7 +1296,13 @@ namespace Dimension
             }
             std::shared_ptr<NavMeshData> data;
             BakeScope scope = ScopeOf(scene, e);
-            if (scene.GetPhysics3D())
+            if (FromRenderMeshes(*surface))
+            {
+                // What is drawn, in a copy (the scene's own physics is left alone).
+                Ref<Scene> drawn = RenderMeshScene(scene);
+                data = BakeIn(*drawn, *surface, center, scope);
+            }
+            else if (scene.GetPhysics3D())
                 data = BakeIn(scene, *surface, center, scope);
             else
             {
@@ -1302,6 +1345,7 @@ namespace Dimension
             for (float v : { s->CellSize, s->AgentRadius, s->AgentHeight, s->MaxSlope, s->StepHeight, s->DropHeight, s->JumpDistance }) add(v);
             add(s->GenerateLinks ? 1.0f : 0.0f);
             add(s->Moving ? 1.0f : 0.0f);
+            if (s->UseGeometry != NavMeshSurfaceComponent::Geometry::PhysicsColliders) add(100.0f + (float)s->UseGeometry); // (keys of collider bakes as before)
             const glm::mat4& world = reg.Get<TransformComponent>(e).World;
             for (int c = 0; c < 4; ++c)
                 for (int r = 0; r < 4; ++r) add(world[c][r]);

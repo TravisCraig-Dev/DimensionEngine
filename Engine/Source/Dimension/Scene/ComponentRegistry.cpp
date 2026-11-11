@@ -835,6 +835,8 @@ namespace Dimension
             .Field("Jump Distance", &NavMeshSurfaceComponent::JumpDistance).Range(0.0f, 20.0f).Speed(0.05f).Tooltip("Widest gap agents jump across")
             .Field("Moving", &NavMeshSurfaceComponent::Moving)
                 .Tooltip("Rides on its object (a boat, a lift): baked from its own colliders, carrying agents on it along")
+            .Field("Use Geometry", &NavMeshSurfaceComponent::UseGeometry).Enum({ "Physics Colliders", "Render Meshes" })
+                .Tooltip("What the bake walks on: the colliders, or the Mesh Renderers' meshes (what is drawn; terrains either way)")
             .Field("Agent Type", &NavMeshSurfaceComponent::AgentType).Enum({ "Any", "Humanoid" })
                 .Tooltip("A project agent type (Window > Navigation): baked with its sizes, walked only by agents of that type.\nAny: its own settings, for every agent")
             .Field("Streamed", &NavMeshSurfaceComponent::Streamed)
