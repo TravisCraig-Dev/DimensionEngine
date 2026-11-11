@@ -7,6 +7,8 @@
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
+#include <bit>
+#include <unordered_map>
 #include "Dimension/Renderer/ColrV1.h"
 #include <unordered_map>
 #include <msdfgen.h>
@@ -290,6 +292,198 @@ namespace Dimension
         };
     }
 
+    namespace
+    {
+        // Glyph positioning (GPOS) as text layout needs it: the pair adjustments of the kern feature (glyph pairs and
+        // class pairs) and the mark-to-base attachments of the mark feature (an accent, a vowel sign or an emoji
+        // modifier placed on its base by the font's anchors), through extension lookups too.
+        struct GlyphPositioning
+        {
+            const uint8_t* Table = nullptr;
+            size_t Size = 0;
+            std::vector<uint16_t> KernLookups, MarkLookups;
+
+            bool In(const uint8_t* p, size_t bytes) const { return Table && p >= Table && p + bytes <= Table + Size; }
+            uint16_t U16(const uint8_t* p) const { return In(p, 2) ? ReadU16(p) : 0; }
+            int16_t S16(const uint8_t* p) const { return (int16_t)U16(p); }
+            uint32_t U32(const uint8_t* p) const { return In(p, 4) ? ReadU32(p) : 0; }
+
+            void Load(const uint8_t* data, size_t size, uint32_t fontStart)
+            {
+                if (fontStart + 12 > size) return;
+                uint16_t tables = ReadU16(data + fontStart + 4);
+                for (uint16_t i = 0; i < tables; ++i)
+                {
+                    const uint8_t* rec = data + fontStart + 12 + 16 * i;
+                    if (rec + 16 > data + size) return;
+                    if (std::memcmp(rec, "GPOS", 4)) continue;
+                    uint32_t offset = ReadU32(rec + 8), length = ReadU32(rec + 12);
+                    if (offset + (size_t)length > size || length < 10) return;
+                    Table = data + offset;
+                    Size = length;
+                }
+                if (!Table) return;
+                const uint8_t* features = Table + U16(Table + 6);
+                for (uint16_t i = 0, n = U16(features); i < n; ++i)
+                {
+                    const uint8_t* rec = features + 2 + 6 * i;
+                    if (!In(rec, 6)) break;
+                    std::vector<uint16_t>* into = !std::memcmp(rec, "kern", 4) ? &KernLookups : !std::memcmp(rec, "mark", 4) ? &MarkLookups : nullptr;
+                    if (!into) continue;
+                    const uint8_t* feature = features + U16(rec + 4);
+                    for (uint16_t k = 0, m = U16(feature + 2); k < m; ++k) into->push_back(U16(feature + 4 + 2 * k));
+                }
+                for (auto* list : { &KernLookups, &MarkLookups })
+                {
+                    std::sort(list->begin(), list->end());
+                    list->erase(std::unique(list->begin(), list->end()), list->end());
+                }
+            }
+
+            int Coverage(const uint8_t* c, uint16_t glyph) const
+            {
+                uint16_t format = U16(c), count = U16(c + 2);
+                if (format == 1)
+                {
+                    uint16_t lo = 0, hi = count; // sorted glyphs
+                    while (lo < hi)
+                    {
+                        uint16_t mid = (uint16_t)((lo + hi) / 2), g = U16(c + 4 + 2 * mid);
+                        if (g == glyph) return mid;
+                        if (g < glyph) lo = mid + 1;
+                        else hi = mid;
+                    }
+                }
+                else if (format == 2)
+                    for (uint16_t i = 0; i < count; ++i)
+                    {
+                        const uint8_t* r = c + 4 + 6 * i;
+                        uint16_t first = U16(r), last = U16(r + 2);
+                        if (glyph >= first && glyph <= last) return U16(r + 4) + glyph - first;
+                    }
+                return -1;
+            }
+
+            int ClassOf(const uint8_t* cd, uint16_t glyph) const
+            {
+                uint16_t format = U16(cd);
+                if (format == 1)
+                {
+                    uint16_t start = U16(cd + 2), count = U16(cd + 4);
+                    return glyph >= start && glyph < start + count ? U16(cd + 6 + 2 * (glyph - start)) : 0;
+                }
+                if (format == 2)
+                    for (uint16_t i = 0, n = U16(cd + 2); i < n; ++i)
+                    {
+                        const uint8_t* r = cd + 4 + 6 * i;
+                        if (glyph >= U16(r) && glyph <= U16(r + 2)) return U16(r + 4);
+                    }
+                return 0;
+            }
+
+            // Each subtable of a lookup (extensions resolved) until `f` says it applied.
+            template <typename F>
+            void Subtables(uint16_t index, F&& f) const
+            {
+                const uint8_t* list = Table + U16(Table + 8);
+                if (index >= U16(list)) return;
+                const uint8_t* lookup = list + U16(list + 2 + 2 * index);
+                uint16_t type = U16(lookup), count = U16(lookup + 4);
+                for (uint16_t j = 0; j < count; ++j)
+                {
+                    const uint8_t* st = lookup + U16(lookup + 6 + 2 * j);
+                    uint16_t kind = type;
+                    if (type == 9) // extension: the real subtable further away
+                    {
+                        kind = U16(st + 2);
+                        st = st + U32(st + 4);
+                    }
+                    if (In(st, 4) && f(kind, st)) return;
+                }
+            }
+
+            static int ValueSize(uint16_t format) { return 2 * std::popcount((unsigned)(format & 0xFF)); }
+            static int XAdvanceAt(uint16_t format) { return format & 4 ? 2 * std::popcount((unsigned)(format & 3)) : -1; }
+
+            bool HasKerning() const { return !KernLookups.empty(); }
+
+            // The pair's advance adjustment (font units) for the first glyph.
+            int Kern(uint16_t a, uint16_t b) const
+            {
+                int total = 0;
+                for (uint16_t index : KernLookups)
+                    Subtables(index, [&](uint16_t kind, const uint8_t* st) {
+                        if (kind != 2) return false;
+                        int ci = Coverage(st + U16(st + 2), a);
+                        if (ci < 0) return false;
+                        uint16_t f1 = U16(st + 4), f2 = U16(st + 6);
+                        int x = XAdvanceAt(f1), size1 = ValueSize(f1), size2 = ValueSize(f2);
+                        if (U16(st) == 1)
+                        {
+                            const uint8_t* set = st + U16(st + 10 + 2 * ci);
+                            int lo = 0, hi = U16(set), stride = 2 + size1 + size2; // pairs sorted by the second glyph
+                            while (lo < hi)
+                            {
+                                int mid = (lo + hi) / 2;
+                                const uint8_t* rec = set + 2 + mid * stride;
+                                uint16_t g = U16(rec);
+                                if (g == b)
+                                {
+                                    if (x >= 0) total += S16(rec + 2 + x);
+                                    return true;
+                                }
+                                if (g < b) lo = mid + 1;
+                                else hi = mid;
+                            }
+                            return false;
+                        }
+                        if (U16(st) == 2)
+                        {
+                            int c1 = ClassOf(st + U16(st + 8), a), c2 = ClassOf(st + U16(st + 10), b);
+                            uint16_t count1 = U16(st + 12), count2 = U16(st + 14);
+                            if (c1 >= count1 || c2 >= count2) return false;
+                            const uint8_t* rec = st + 16 + (size_t(c1) * count2 + c2) * (size1 + size2);
+                            if (x >= 0) total += S16(rec + x);
+                            return true;
+                        }
+                        return false;
+                    });
+                return total;
+            }
+
+            // Where a mark goes on its base: the base's anchor less the mark's (font units, y up). False when the
+            // font does not attach them.
+            bool Attach(uint16_t base, uint16_t mark, int& dx, int& dy) const
+            {
+                bool found = false;
+                for (uint16_t index : MarkLookups)
+                {
+                    Subtables(index, [&](uint16_t kind, const uint8_t* st) {
+                        if (kind != 4 || U16(st) != 1) return false;
+                        int mi = Coverage(st + U16(st + 2), mark), bi = Coverage(st + U16(st + 4), base);
+                        if (mi < 0 || bi < 0) return false;
+                        uint16_t classes = U16(st + 6);
+                        const uint8_t* marks = st + U16(st + 8);
+                        const uint8_t* bases = st + U16(st + 10);
+                        const uint8_t* record = marks + 2 + 4 * mi;
+                        uint16_t markClass = U16(record);
+                        if (markClass >= classes) return false;
+                        uint16_t baseAnchor = U16(bases + 2 + (size_t(bi) * classes + markClass) * 2);
+                        if (!baseAnchor) return false;
+                        const uint8_t* ba = bases + baseAnchor;
+                        const uint8_t* ma = marks + U16(record + 2);
+                        dx = S16(ba + 2) - S16(ma + 2);
+                        dy = S16(ba + 4) - S16(ma + 4);
+                        found = true;
+                        return true;
+                    });
+                    if (found) return true;
+                }
+                return false;
+            }
+        };
+    }
+
     // The font file (stb_truetype reads it in place), the atlas pixels kept for glyphs baked later, and those glyphs.
     struct Font::Dynamic
     {
@@ -307,6 +501,8 @@ namespace Dimension
         ColorTables Colors;
         bool HasColors = false;
         GlyphSubstitution Substitution; // (color fonts: joined emoji sequences)
+        GlyphPositioning Positioning;   // kerning and marks
+        mutable std::unordered_map<uint32_t, float> KernCache; // first << 16 | second -> bake pixels
         static constexpr int kColorSize = 1024;
         std::vector<uint32_t> ColorRgba;
         int ColorPenX = 1, ColorPenY = 1, ColorRowHeight = 0;
@@ -480,6 +676,7 @@ namespace Dimension
         dyn->Rgba.assign(size_t(Dynamic::kWidth) * Dynamic::kHeight, 0u); // outside everywhere (the gutters too)
         dyn->HasColors = dyn->Colors.Load(dyn->Data.data(), dyn->Data.size(), (uint32_t)stbtt_GetFontOffsetForIndex(dyn->Data.data(), 0));
         if (dyn->HasColors) dyn->Substitution.Load(dyn->Data.data(), dyn->Data.size(), (uint32_t)stbtt_GetFontOffsetForIndex(dyn->Data.data(), 0));
+        dyn->Positioning.Load(dyn->Data.data(), dyn->Data.size(), (uint32_t)stbtt_GetFontOffsetForIndex(dyn->Data.data(), 0));
         auto font = MakeRef<Font>();
         font->m_Dynamic = dyn;
         font->m_Latin1Baked = bakeLatin1;
@@ -511,6 +708,16 @@ namespace Dimension
     }
 
     bool Font::HasColorGlyphs() const { return m_Dynamic && m_Dynamic->HasColors; }
+
+    float Font::KernPx(int first, int second) const
+    {
+        if (!m_Dynamic || first <= 0 || second <= 0) return 0.0f;
+        uint32_t key = (uint32_t)first << 16 | (uint32_t)(second & 0xFFFF);
+        if (auto it = m_Dynamic->KernCache.find(key); it != m_Dynamic->KernCache.end()) return it->second;
+        int units = m_Dynamic->Positioning.HasKerning() ? m_Dynamic->Positioning.Kern((uint16_t)first, (uint16_t)second)
+                                                         : stbtt_GetGlyphKernAdvance(&m_Dynamic->Info, first, second);
+        return m_Dynamic->KernCache[key] = units * m_Dynamic->Scale;
+    }
 
     uint32_t Font::GetColorAtlasIndex() const
     {
@@ -935,6 +1142,22 @@ namespace Dimension
             if (c.Codepoint < 0x100 || c.Codepoint == '\n' || HasGlyph(c.Codepoint)) continue;
             for (const Ref<Font>& f : GetFallbackFonts())
                 if (f && f->HasGlyph(c.Codepoint)) { c.Source = f.get(); break; }
+            // A combining mark from another font than its base's: the base (and the marks between) from that font too
+            // when it has them, so the font's anchors can place the mark.
+            auto combining = [](uint32_t cp) {
+                return (cp >= 0x300 && cp < 0x370) || (cp >= 0x1AB0 && cp < 0x1B00) || (cp >= 0x1DC0 && cp < 0x1E00) || (cp >= 0x20D0 && cp < 0x2100) ||
+                       (cp >= 0xFE20 && cp < 0xFE30);
+            };
+            if (combining(c.Codepoint) && c.Source != this && i > 0)
+            {
+                size_t first = i;
+                while (first > 0 && i - first < 4 && combining(chars[first - 1].Codepoint)) --first;
+                if (first > 0 && chars[first - 1].Codepoint != ' ' && chars[first - 1].Codepoint != '\n') --first; // the base
+                bool all = first < i;
+                for (size_t k = first; k < i && all; ++k) all = c.Source->HasGlyph(chars[k].Codepoint);
+                if (all)
+                    for (size_t k = first; k < i; ++k) chars[k].Source = c.Source;
+            }
         }
         // Emoji runs shaped by their font: skin tones, professions, families and the like become the glyphs it joins
         // them into (drawn by glyph index); selectors and leftover joiners take no room.
@@ -983,10 +1206,60 @@ namespace Dimension
             }
             chars = std::move(shaped);
         }
+        // Positioning from the fonts' GPOS: marks (an accent, a vowel sign) placed on their base by its anchors, taking
+        // no room, then kerning between neighbouring glyphs of one font at one size (marks between them skipped).
+        {
+            auto glyphOf = [](const StyledChar& c) -> int {
+                if (!c.Source || !c.Source->m_Dynamic) return 0;
+                return (c.Codepoint & kGlyphIndexBit) ? (int)(c.Codepoint & 0xFFFFu) : stbtt_FindGlyphIndex(&c.Source->m_Dynamic->Info, (int)c.Codepoint);
+            };
+            auto sameRun = [](const StyledChar& a, const StyledChar& b) {
+                return a.Source == b.Source && a.Size == b.Size && a.SizeScale == b.SizeScale && a.Bold == b.Bold;
+            };
+            std::vector<int> glyph(chars.size());
+            std::vector<int> baseOf(chars.size(), -1);
+            int base = -1;
+            for (size_t i = 0; i < chars.size(); ++i)
+            {
+                StyledChar& c = chars[i];
+                glyph[i] = glyphOf(c);
+                if (c.Codepoint == '\n' || c.Codepoint == ' ' || !glyph[i])
+                {
+                    base = -1;
+                    continue;
+                }
+                int dx, dy;
+                if (base >= 0 && sameRun(chars[base], c) && c.Source->m_Dynamic->Positioning.Attach((uint16_t)glyph[base], (uint16_t)glyph[i], dx, dy))
+                {
+                    c.Mark = true;
+                    c.MarkOffset = { dx * c.Source->m_Dynamic->Scale, -dy * c.Source->m_Dynamic->Scale };
+                    baseOf[i] = base;
+                    continue;
+                }
+                base = (int)i;
+            }
+            int last = -1; // the last glyph that is not a mark
+            for (size_t i = 0; i < chars.size(); ++i)
+            {
+                if (chars[i].Mark) continue;
+                if (last >= 0 && glyph[last] && glyph[i] && chars[i].Codepoint != ' ' && chars[last].Codepoint != ' ' && sameRun(chars[last], chars[i]))
+                    chars[last].Kern = chars[last].Source->KernPx(glyph[last], glyph[i]);
+                last = chars[i].Codepoint == '\n' ? -1 : (int)i;
+            }
+            // A mark's offset from its own pen: back over its base's advance (and kerning) to the base's origin.
+            for (size_t i = 0; i < chars.size(); ++i)
+                if (chars[i].Mark)
+                {
+                    const StyledChar& b = chars[baseOf[i]];
+                    chars[i].MarkOffset.x -= b.Source->GetGlyph(b.Codepoint).Advance + b.Kern;
+                }
+        }
         // Pixel size of a character: <size=N> is in the text's size units, <size=N%> scales.
         auto charPx = [&](const StyledChar& c) { return (c.Size > 0.0f ? c.Size * sizeUnit : pixelSize) * c.SizeScale; };
         auto boldOffset = [&](const StyledChar& c) { return c.Bold ? charPx(c) * 0.045f : 0.0f; };
-        auto advance = [&](const StyledChar& c) { return c.Source->GetGlyph(c.Codepoint).Advance * charPx(c) / kBakeSize + boldOffset(c); };
+        auto advance = [&](const StyledChar& c) {
+            return c.Mark ? 0.0f : (c.Source->GetGlyph(c.Codepoint).Advance + c.Kern) * charPx(c) / kBakeSize + boldOffset(c);
+        };
         struct Line
         {
             std::vector<StyledChar*> Chars;
@@ -1057,7 +1330,8 @@ namespace Dimension
                 float s = charPx(*c) / kBakeSize, adv = advance(*c);
                 if (g.Max.x > g.Min.x && c->Codepoint != ' ')
                 {
-                    TextQuad q{ { x + g.Min.x * s, baseline + g.Min.y * s }, { x + g.Max.x * s, baseline + g.Max.y * s }, g.UVMin, g.UVMax };
+                    float ox = c->MarkOffset.x * s, oy = c->MarkOffset.y * s;
+                    TextQuad q{ { x + ox + g.Min.x * s, baseline + oy + g.Min.y * s }, { x + ox + g.Max.x * s, baseline + oy + g.Max.y * s }, g.UVMin, g.UVMax };
                     q.Color = c->Color;
                     q.HasColor = c->HasColor;
                     if (g.Color)

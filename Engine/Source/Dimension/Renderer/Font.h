@@ -43,6 +43,11 @@ namespace Dimension
         float SizeScale = 1.0f; // <size=N%>, multiplied in
         bool Bold = false, Italic = false, Underline = false, Strikethrough = false;
         const class Font* Source = nullptr; // Layout: the font that draws it (this one or a fallback)
+        // Layout, from the font's positioning (bake pixels): kerning added to its advance, and a mark's place on its
+        // base relative to its own pen (a mark takes no room).
+        float Kern = 0.0f;
+        glm::vec2 MarkOffset{ 0.0f };
+        bool Mark = false;
     };
 
     // TrueType font baked into a texture atlas with stb_truetype and msdfgen: Latin-1 (codepoints 32..255) up front,
@@ -111,6 +116,8 @@ namespace Dimension
         mutable Ref<Texture2D> m_ColorAtlas;
         std::shared_ptr<Dynamic> m_Dynamic;
         bool m_Latin1Baked = true;
+        // Kerning between two of the font's glyphs, in bake pixels (GPOS pairs, else the kern table).
+        float KernPx(int first, int second) const;
         float m_Ascent = 0, m_Descent = 0, m_LineGap = 0;
     };
 }
