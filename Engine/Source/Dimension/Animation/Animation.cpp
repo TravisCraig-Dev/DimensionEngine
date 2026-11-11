@@ -5,6 +5,18 @@
 
 namespace Dimension
 {
+    int HumanoidMap::Mapped() const { return (int)std::count_if(Joints.begin(), Joints.end(), [](int j) { return j >= 0; }); }
+
+    bool HumanoidMap::IsHumanoid() const
+    {
+        for (HumanBone b : { HumanBone::Hips, HumanBone::Spine, HumanBone::Head, HumanBone::LeftUpperArm, HumanBone::LeftLowerArm,
+                             HumanBone::LeftHand, HumanBone::RightUpperArm, HumanBone::RightLowerArm, HumanBone::RightHand,
+                             HumanBone::LeftUpperLeg, HumanBone::LeftLowerLeg, HumanBone::LeftFoot, HumanBone::RightUpperLeg,
+                             HumanBone::RightLowerLeg, HumanBone::RightFoot })
+            if ((*this)[b] < 0) return false;
+        return true;
+    }
+
     namespace Animation
     {
         void BuildMask(const Skeleton& skeleton, const std::vector<std::string>& joints, std::vector<float>& weights)
@@ -406,6 +418,250 @@ namespace Dimension
                     continue; // scale animation stays with the source
                 out.Channels.push_back(std::move(mapped));
             }
+            return out;
+        }
+
+        // ---- Humanoid avatars
+
+        namespace
+        {
+            // A joint name as lower-case words (split at separators, case changes and digits), its side (-1 none,
+            // 0 left, 1 right) taken out, and the letters left joined into one word.
+            struct NameParts
+            {
+                std::string Core;  // e.g. "upleg" for "mixamorig:LeftUpLeg", "bipthigh" for "Bip01 L Thigh"
+                int Side = -1;
+            };
+
+            NameParts SplitName(const std::string& name)
+            {
+                size_t cut = name.find_last_of(":|");
+                std::string s = cut == std::string::npos ? name : name.substr(cut + 1);
+                std::vector<std::string> words;
+                std::string word;
+                auto flush = [&]() {
+                    if (!word.empty()) words.push_back(word);
+                    word.clear();
+                };
+                for (size_t i = 0; i < s.size(); ++i)
+                {
+                    char c = s[i];
+                    if (!std::isalnum((unsigned char)c))
+                    {
+                        flush();
+                        continue;
+                    }
+                    bool upper = std::isupper((unsigned char)c) != 0, digit = std::isdigit((unsigned char)c) != 0;
+                    // A new word at a lower-to-upper change ("LeftArm") and between letters and digits ("Toe0").
+                    if (!word.empty())
+                    {
+                        char last = s[i - 1];
+                        if ((upper && std::islower((unsigned char)last)) || digit != (std::isdigit((unsigned char)last) != 0)) flush();
+                    }
+                    word += (char)std::tolower((unsigned char)c);
+                }
+                flush();
+                NameParts parts;
+                for (const std::string& w : words)
+                {
+                    if (w == "l" || w == "left" || w == "lf" || w == "lft") parts.Side = 0;
+                    else if (w == "r" || w == "right" || w == "rt" || w == "rgt") parts.Side = 1;
+                    else if (!std::isdigit((unsigned char)w[0])) parts.Core += w;
+                }
+                return parts;
+            }
+
+            bool Has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
+
+            // Which human bone a joint's name says (spine joints come back as Spine and are ordered later), or Count.
+            HumanBone Classify(const NameParts& n)
+            {
+                const std::string& c = n.Core;
+                // Helpers that sit beside or past the real bones.
+                for (const char* skip : { "twist", "roll", "end", "nub", "tip", "ik", "pole", "target", "helper", "dummy", "socket", "prop",
+                                          "thumb", "index", "middle", "ring", "pinky", "little", "finger", "eye", "jaw", "tongue", "teeth",
+                                          "breast", "weapon", "attach", "corrective", "adjust" })
+                    if (Has(c, skip)) return HumanBone::Count;
+                auto sided = [&](HumanBone left, HumanBone right) { return n.Side == 0 ? left : n.Side == 1 ? right : HumanBone::Count; };
+                if (Has(c, "toe") || Has(c, "ball")) return sided(HumanBone::LeftToes, HumanBone::RightToes);
+                if (Has(c, "foot") || Has(c, "ankle")) return sided(HumanBone::LeftFoot, HumanBone::RightFoot);
+                if (Has(c, "upleg") || Has(c, "thigh") || Has(c, "upperleg")) return sided(HumanBone::LeftUpperLeg, HumanBone::RightUpperLeg);
+                if (Has(c, "calf") || Has(c, "shin") || Has(c, "lowerleg") || Has(c, "knee") || Has(c, "leg"))
+                    return sided(HumanBone::LeftLowerLeg, HumanBone::RightLowerLeg);
+                if (Has(c, "hand") || Has(c, "wrist")) return sided(HumanBone::LeftHand, HumanBone::RightHand);
+                if (Has(c, "forearm") || Has(c, "lowerarm") || Has(c, "elbow")) return sided(HumanBone::LeftLowerArm, HumanBone::RightLowerArm);
+                if (Has(c, "clavicle") || Has(c, "shoulder") || Has(c, "collar")) return sided(HumanBone::LeftShoulder, HumanBone::RightShoulder);
+                if (Has(c, "arm") && !Has(c, "armature")) return sided(HumanBone::LeftUpperArm, HumanBone::RightUpperArm);
+                if (n.Side >= 0) return HumanBone::Count;
+                if (Has(c, "hips") || Has(c, "pelvis") || c == "hip") return HumanBone::Hips;
+                if (Has(c, "neck")) return HumanBone::Neck;
+                if (Has(c, "head") && !Has(c, "top")) return HumanBone::Head;
+                if (Has(c, "upperchest")) return HumanBone::UpperChest;
+                if (Has(c, "chest") || Has(c, "torso") || Has(c, "spine") || Has(c, "abdomen") || Has(c, "waist")) return HumanBone::Spine;
+                return HumanBone::Count;
+            }
+
+            glm::quat RotationOf(const glm::mat4& m)
+            {
+                glm::mat3 r(m);
+                for (int c = 0; c < 3; ++c) r[c] /= std::max(glm::length(r[c]), 1e-8f);
+                return glm::normalize(glm::quat_cast(r));
+            }
+        }
+
+        const char* HumanBoneName(HumanBone bone)
+        {
+            static const char* names[] = { "Hips", "Spine", "Chest", "Upper Chest", "Neck", "Head",
+                                           "Left Shoulder", "Left Upper Arm", "Left Lower Arm", "Left Hand",
+                                           "Right Shoulder", "Right Upper Arm", "Right Lower Arm", "Right Hand",
+                                           "Left Upper Leg", "Left Lower Leg", "Left Foot", "Left Toes",
+                                           "Right Upper Leg", "Right Lower Leg", "Right Foot", "Right Toes" };
+            size_t i = (size_t)bone;
+            return i < std::size(names) ? names[i] : "";
+        }
+
+        HumanoidMap MapHumanoid(const Skeleton& skeleton)
+        {
+            HumanoidMap map;
+            std::vector<int> order = skeleton.Order;
+            if (order.size() != skeleton.Joints.size())
+            {
+                order.clear(); // parents first by depth
+                for (int i = 0; i < (int)skeleton.Joints.size(); ++i) order.push_back(i);
+                auto depth = [&](int j) {
+                    int d = 0;
+                    for (int p = skeleton.Joints[j].Parent; p >= 0 && d < 1024; p = skeleton.Joints[p].Parent) ++d;
+                    return d;
+                };
+                std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return depth(a) < depth(b); });
+            }
+            // The shallowest joint for each bone (helpers deeper down with the same words lose); spine joints in order.
+            std::vector<int> spine;
+            int chest = -1;
+            for (int j : order)
+            {
+                NameParts parts = SplitName(skeleton.Joints[j].Name);
+                HumanBone bone = Classify(parts);
+                if (bone == HumanBone::Count) continue;
+                if (bone == HumanBone::Spine)
+                {
+                    if (Has(parts.Core, "chest") && chest < 0) chest = j;
+                    else if (!Has(parts.Core, "chest")) spine.push_back(j);
+                    continue;
+                }
+                int& slot = map.Joints[(size_t)bone];
+                if (slot < 0) slot = j;
+            }
+            // Spine joints below the hips (a rig's "Spine" can also be its root above them).
+            int hips = map[HumanBone::Hips];
+            auto below = [&](int j, int ancestor) {
+                for (int p = skeleton.Joints[j].Parent; p >= 0; p = skeleton.Joints[p].Parent)
+                    if (p == ancestor) return true;
+                return false;
+            };
+            if (hips >= 0) std::erase_if(spine, [&](int j) { return !below(j, hips); });
+            if (hips < 0 && !spine.empty())
+            {
+                // No hips by name (Blender's rigs call it "spine"): the first spine joint with legs below it is.
+                for (size_t k = 0; k < spine.size() && hips < 0; ++k)
+                    if (map[HumanBone::LeftUpperLeg] >= 0 && below(map[HumanBone::LeftUpperLeg], spine[k])) hips = spine[k];
+                if (hips >= 0)
+                {
+                    map.Joints[(size_t)HumanBone::Hips] = hips;
+                    std::erase_if(spine, [&](int j) { return j == hips || !below(j, hips); });
+                }
+            }
+            if (!spine.empty()) map.Joints[(size_t)HumanBone::Spine] = spine[0];
+            if (chest >= 0) map.Joints[(size_t)HumanBone::Chest] = chest;
+            else if (spine.size() >= 2) map.Joints[(size_t)HumanBone::Chest] = spine[1];
+            if (spine.size() >= 3 && map[HumanBone::UpperChest] < 0) map.Joints[(size_t)HumanBone::UpperChest] = spine.back();
+            return map;
+        }
+
+        AnimationClip RetargetHumanoid(const Skeleton& source, const Skeleton& target, const AnimationClip& clip)
+        {
+            HumanoidMap from = MapHumanoid(source), to = MapHumanoid(target);
+            if (!from.IsHumanoid() || !to.IsHumanoid()) return RetargetClip(source, target, clip);
+
+            // Bind poses in model space.
+            Pose sourceBind, targetBind;
+            sourceBind.SetBindPose(source);
+            targetBind.SetBindPose(target);
+            std::vector<glm::mat4> sourceBindG, targetBindG, sourceG, targetG;
+            JointGlobals(source, sourceBind, sourceBindG);
+            JointGlobals(target, targetBind, targetBindG);
+            // Each target joint's human bone source (bones both have), and the turn from its bind pose it takes.
+            std::vector<int> sourceOf(target.Joints.size(), -1);
+            for (size_t b = 0; b < (size_t)HumanBone::Count; ++b)
+                if (from.Joints[b] >= 0 && to.Joints[b] >= 0) sourceOf[to.Joints[b]] = from.Joints[b];
+            int sourceHips = from[HumanBone::Hips], targetHips = to[HumanBone::Hips];
+            float sourceHeight = std::abs(sourceBindG[sourceHips][3].y), targetHeight = std::abs(targetBindG[targetHips][3].y);
+            float scale = sourceHeight > 1e-4f && targetHeight > 1e-4f ? targetHeight / sourceHeight : 1.0f;
+            glm::quat rootRotation = RotationOf(target.RootTransform);
+
+            int frames = std::max(2, (int)std::ceil(clip.Duration * 30.0f) + 1);
+            std::vector<AnimationChannel> channels(target.Joints.size());
+            AnimationChannel hipsTravel;
+            hipsTravel.Joint = targetHips;
+            hipsTravel.Path = AnimationPath::Translation;
+            std::vector<glm::quat> world(target.Joints.size());
+            Pose sourcePose, pose;
+            for (int f = 0; f < frames; ++f)
+            {
+                float time = clip.Duration * (float)f / (float)(frames - 1);
+                Sample(source, clip, time, sourcePose);
+                JointGlobals(source, sourcePose, sourceG);
+                pose = targetBind;
+                for (int j : target.Order)
+                {
+                    int parent = target.Joints[j].Parent;
+                    glm::quat parentWorld = parent >= 0 ? world[parent] : rootRotation;
+                    if (int s = sourceOf[j]; s >= 0)
+                    {
+                        // The source bone's turn from its bind pose (model space), on the target bone's bind pose.
+                        glm::quat turn = RotationOf(sourceG[s]) * glm::inverse(RotationOf(sourceBindG[s]));
+                        world[j] = glm::normalize(turn * RotationOf(targetBindG[j]));
+                        pose.Rotations[j] = glm::normalize(glm::inverse(parentWorld) * world[j]);
+                    }
+                    else
+                        world[j] = parentWorld * pose.Rotations[j];
+                }
+                // The hips travel as the source's do, scaled to the target's height.
+                JointGlobals(target, pose, targetG);
+                glm::vec3 place = glm::vec3(targetBindG[targetHips][3]) + (glm::vec3(sourceG[sourceHips][3]) - glm::vec3(sourceBindG[sourceHips][3])) * scale;
+                int hipsParent = target.Joints[targetHips].Parent;
+                glm::mat4 parentM = hipsParent >= 0 ? targetG[hipsParent] : target.RootTransform;
+                hipsTravel.Times.push_back(time);
+                hipsTravel.Values.push_back(glm::vec4(glm::vec3(glm::inverse(parentM) * glm::vec4(place, 1.0f)), 0.0f));
+                for (size_t j = 0; j < target.Joints.size(); ++j)
+                {
+                    if (sourceOf[j] < 0) continue;
+                    AnimationChannel& ch = channels[j];
+                    glm::quat q = pose.Rotations[j];
+                    if (!ch.Values.empty())
+                    {
+                        glm::vec4 last = ch.Values.back();
+                        if (glm::dot(glm::quat(last.w, last.x, last.y, last.z), q) < 0.0f) q = -q; // keep to the short way round
+                    }
+                    ch.Times.push_back(time);
+                    ch.Values.push_back(glm::vec4(q.x, q.y, q.z, q.w));
+                }
+            }
+
+            AnimationClip out;
+            out.Name = clip.Name;
+            out.Duration = clip.Duration;
+            for (size_t j = 0; j < channels.size(); ++j)
+                if (sourceOf[j] >= 0)
+                {
+                    channels[j].Joint = (int)j;
+                    channels[j].Path = AnimationPath::Rotation;
+                    out.Channels.push_back(std::move(channels[j]));
+                }
+            out.Channels.push_back(std::move(hipsTravel));
+            // Joints that are no human bone (fingers, tails, props) by name, as plain retargeting does.
+            for (AnimationChannel& ch : RetargetClip(source, target, clip).Channels)
+                if (sourceOf[ch.Joint] < 0 && ch.Joint != targetHips && ch.Path == AnimationPath::Rotation) out.Channels.push_back(std::move(ch));
             return out;
         }
     }

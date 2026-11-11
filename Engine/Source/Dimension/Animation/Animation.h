@@ -2,6 +2,7 @@
 #include "Dimension/Core/Base.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <array>
 
 namespace Dimension
 {
@@ -64,6 +65,25 @@ namespace Dimension
         float LastYaw = 0.0f;       // the root's heading last frame (radians, model space), when turning is taken too
     };
 
+    // The standard human bones (as Unity's HumanBodyBones, without fingers, eyes and jaw).
+    enum class HumanBone : int32_t
+    {
+        Hips, Spine, Chest, UpperChest, Neck, Head,
+        LeftShoulder, LeftUpperArm, LeftLowerArm, LeftHand, RightShoulder, RightUpperArm, RightLowerArm, RightHand,
+        LeftUpperLeg, LeftLowerLeg, LeftFoot, LeftToes, RightUpperLeg, RightLowerLeg, RightFoot, RightToes,
+        Count
+    };
+
+    // A skeleton's joint for each human bone (-1 = none): its avatar.
+    struct HumanoidMap
+    {
+        std::array<int, (size_t)HumanBone::Count> Joints;
+        HumanoidMap() { Joints.fill(-1); }
+        int operator[](HumanBone bone) const { return Joints[(size_t)bone]; }
+        int Mapped() const;      // how many human bones it has
+        bool IsHumanoid() const; // hips, spine, head, arms and legs (upper, lower, hand / foot) all found
+    };
+
     namespace Animation
     {
         // Root motion: takes the horizontal (model XZ) movement of the root joint out of the pose, pinning it at the
@@ -106,6 +126,20 @@ namespace Dimension
         // target lacks are skipped.
         int MatchJoint(const Skeleton& skeleton, const std::string& name);
         AnimationClip RetargetClip(const Skeleton& source, const Skeleton& target, const AnimationClip& clip);
+
+        // Humanoid avatars: a skeleton's joints matched to the standard human bones by their names, whatever the rig's
+        // naming convention (Mixamo "LeftUpLeg", Unreal "thigh_l", Blender "thigh.L", 3ds Max "Bip01 L Thigh", ...):
+        // twist, roll, end and finger joints are left out, and spine joints are taken in order (Spine, Chest, Upper
+        // Chest). A skeleton is humanoid when it has hips, a spine, a head and both arms and legs (shoulders, chest,
+        // upper chest, neck and toes are optional).
+        HumanoidMap MapHumanoid(const Skeleton& skeleton);
+        const char* HumanBoneName(HumanBone bone);
+        // Retargeting between humanoids built differently (other names, joint axes, proportions, extra joints): each
+        // human bone turns in the model's space as the source's turns from its bind pose, the hips travel scaled by the
+        // ratio of the hips' heights, and the clip is resampled at 30 frames a second. Joints that are no human bone
+        // (fingers, tails) carry over by name as RetargetClip does. Falls back to RetargetClip when either skeleton is
+        // not humanoid.
+        AnimationClip RetargetHumanoid(const Skeleton& source, const Skeleton& target, const AnimationClip& clip);
 
         // Animator layers. A mask gives each joint a weight: 1 for the listed joints and all their descendants,
         // 0 elsewhere (an empty list covers the whole skeleton).

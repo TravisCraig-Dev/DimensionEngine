@@ -295,7 +295,10 @@ namespace Dimension
             .Field("Culling Mode", &AnimatorComponent::CullingMode).Enum({ "Always Animate", "Cull Completely" })
                 .Tooltip("Cull Completely: no animation while the object is off screen (the main camera's view); it goes on where it was when seen again")
             .Field("Animation Source", &AnimatorComponent::ClipSource).As(FieldType::Mesh)
-                .Tooltip("Play the clips of another model, retargeted onto this skeleton by joint name (None = this mesh's own)");
+                .Tooltip("Play the clips of another model, retargeted onto this skeleton (None = this mesh's own)")
+            .Field("Retargeting", &AnimatorComponent::Retargeting).Enum({ "Humanoid", "By Joint Name" })
+                .Tooltip("Humanoid: through the human bones when both models are humanoid (any joint names, axes and proportions;\n"
+                         "otherwise by name). By Joint Name: joints with the same names, rotations as changes from each bind pose");
 
         Register<LightProbeVolumeComponent>("Light Probe Volume", "Rendering")
             .Field("Size", &LightProbeVolumeComponent::Size).Speed(0.05f).Tooltip("Box centered on the object")

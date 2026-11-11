@@ -6349,6 +6349,186 @@ namespace
         CHECK(same);
     }
 
+    // A skeleton from joints given by name, parent name, model-space position and bind rotation (local rotations follow
+    // from the parents'; translations put each joint at its position).
+    struct RigJoint
+    {
+        const char* Name;
+        const char* Parent;
+        glm::vec3 Position;
+        glm::quat Rotation; // model space
+    };
+    Skeleton BuildRig(const std::vector<RigJoint>& joints)
+    {
+        Skeleton s;
+        for (const RigJoint& rj : joints)
+        {
+            Joint j;
+            j.Name = rj.Name;
+            j.Parent = rj.Parent ? s.FindJoint(rj.Parent) : -1;
+            glm::vec3 parentPos = j.Parent >= 0 ? joints[j.Parent].Position : glm::vec3(0.0f);
+            glm::quat parentRot = j.Parent >= 0 ? joints[j.Parent].Rotation : glm::quat(1, 0, 0, 0);
+            j.Translation = glm::inverse(parentRot) * (rj.Position - parentPos);
+            j.Rotation = glm::normalize(glm::inverse(parentRot) * rj.Rotation);
+            s.Joints.push_back(j);
+        }
+        s.ComputeOrder();
+        return s;
+    }
+
+    void TestHumanoidRetargeting()
+    {
+        // Avatars from the common naming conventions.
+        auto names = [](std::initializer_list<std::pair<const char*, const char*>> list) {
+            std::vector<RigJoint> joints;
+            for (auto [name, parent] : list) joints.push_back({ name, parent, glm::vec3(0.0f), glm::quat(1, 0, 0, 0) });
+            return BuildRig(joints);
+        };
+        Skeleton biped = names({ { "Bip01", nullptr }, { "Bip01 Pelvis", "Bip01" }, { "Bip01 Spine", "Bip01 Pelvis" }, { "Bip01 Spine1", "Bip01 Spine" },
+                                 { "Bip01 Neck", "Bip01 Spine1" }, { "Bip01 Head", "Bip01 Neck" }, { "Bip01 HeadNub", "Bip01 Head" },
+                                 { "Bip01 L Clavicle", "Bip01 Neck" }, { "Bip01 L UpperArm", "Bip01 L Clavicle" }, { "Bip01 L Forearm", "Bip01 L UpperArm" },
+                                 { "Bip01 L Hand", "Bip01 L Forearm" }, { "Bip01 L Finger0", "Bip01 L Hand" },
+                                 { "Bip01 R Clavicle", "Bip01 Neck" }, { "Bip01 R UpperArm", "Bip01 R Clavicle" }, { "Bip01 R Forearm", "Bip01 R UpperArm" },
+                                 { "Bip01 R Hand", "Bip01 R Forearm" }, { "Bip01 L Thigh", "Bip01 Pelvis" }, { "Bip01 L Calf", "Bip01 L Thigh" },
+                                 { "Bip01 L Foot", "Bip01 L Calf" }, { "Bip01 L Toe0", "Bip01 L Foot" }, { "Bip01 R Thigh", "Bip01 Pelvis" },
+                                 { "Bip01 R Calf", "Bip01 R Thigh" }, { "Bip01 R Foot", "Bip01 R Calf" }, { "Bip01 R Toe0", "Bip01 R Foot" } });
+        HumanoidMap bipedMap = Animation::MapHumanoid(biped);
+        CHECK(bipedMap.IsHumanoid() && bipedMap.Mapped() == 21); // all but the upper chest
+        CHECK(bipedMap[HumanBone::Hips] == biped.FindJoint("Bip01 Pelvis") && bipedMap[HumanBone::Chest] == biped.FindJoint("Bip01 Spine1") &&
+              bipedMap[HumanBone::Head] == biped.FindJoint("Bip01 Head") && bipedMap[HumanBone::LeftHand] == biped.FindJoint("Bip01 L Hand") &&
+              bipedMap[HumanBone::RightToes] == biped.FindJoint("Bip01 R Toe0") && bipedMap[HumanBone::UpperChest] == -1);
+        Skeleton blender = names({ { "Armature", nullptr }, { "spine", "Armature" }, { "spine.001", "spine" }, { "chest", "spine.001" }, { "neck", "chest" },
+                                   { "head", "neck" }, { "shoulder.L", "chest" }, { "upper_arm.L", "shoulder.L" }, { "forearm.L", "upper_arm.L" },
+                                   { "hand.L", "forearm.L" }, { "shoulder.R", "chest" }, { "upper_arm.R", "shoulder.R" }, { "forearm.R", "upper_arm.R" },
+                                   { "hand.R", "forearm.R" }, { "thigh.L", "spine" }, { "shin.L", "thigh.L" }, { "foot.L", "shin.L" }, { "toe.L", "foot.L" },
+                                   { "thigh.R", "spine" }, { "shin.R", "thigh.R" }, { "foot.R", "shin.R" }, { "toe.R", "foot.R" } });
+        HumanoidMap blenderMap = Animation::MapHumanoid(blender);
+        CHECK(blenderMap.IsHumanoid() && blenderMap[HumanBone::Hips] == blender.FindJoint("spine") &&
+              blenderMap[HumanBone::Spine] == blender.FindJoint("spine.001") && blenderMap[HumanBone::Chest] == blender.FindJoint("chest") &&
+              blenderMap[HumanBone::LeftUpperArm] == blender.FindJoint("upper_arm.L") && blenderMap[HumanBone::RightLowerLeg] == blender.FindJoint("shin.R"));
+        Skeleton tail = names({ { "Root", nullptr }, { "Tail1", "Root" }, { "Tail2", "Tail1" } });
+        CHECK(!Animation::MapHumanoid(tail).IsHumanoid());
+
+        // Two rigs of the same figure built differently: a Mixamo-style source (joint axes along the model's, legs 0.9 m)
+        // and an Unreal-style target (a root under the pelvis, bones along their own X axis turned every which way,
+        // extra twist joints, legs 1 m and hips 1.1 m up).
+        auto mixamo = [](const char* n) { return std::string("mixamorig:") + n; };
+        std::vector<std::string> keep; // names outlive the RigJoints
+        auto J = [&](const std::string& n) { keep.push_back(n); return keep.back().c_str(); };
+        keep.reserve(64);
+        glm::quat I(1, 0, 0, 0);
+        std::vector<RigJoint> src = {
+            { J(mixamo("Hips")), nullptr, { 0, 1.0f, 0 }, I }, { J(mixamo("Spine")), J(mixamo("Hips")), { 0, 1.1f, 0 }, I },
+            { J(mixamo("Spine1")), J(mixamo("Spine")), { 0, 1.25f, 0 }, I }, { J(mixamo("Spine2")), J(mixamo("Spine1")), { 0, 1.4f, 0 }, I },
+            { J(mixamo("Neck")), J(mixamo("Spine2")), { 0, 1.55f, 0 }, I }, { J(mixamo("Head")), J(mixamo("Neck")), { 0, 1.65f, 0 }, I },
+            { J(mixamo("LeftShoulder")), J(mixamo("Spine2")), { 0.05f, 1.5f, 0 }, I }, { J(mixamo("LeftArm")), J(mixamo("LeftShoulder")), { 0.15f, 1.5f, 0 }, I },
+            { J(mixamo("LeftForeArm")), J(mixamo("LeftArm")), { 0.4f, 1.5f, 0 }, I }, { J(mixamo("LeftHand")), J(mixamo("LeftForeArm")), { 0.65f, 1.5f, 0 }, I },
+            { J(mixamo("LeftHandIndex1")), J(mixamo("LeftHand")), { 0.72f, 1.5f, 0 }, I },
+            { J(mixamo("RightShoulder")), J(mixamo("Spine2")), { -0.05f, 1.5f, 0 }, I }, { J(mixamo("RightArm")), J(mixamo("RightShoulder")), { -0.15f, 1.5f, 0 }, I },
+            { J(mixamo("RightForeArm")), J(mixamo("RightArm")), { -0.4f, 1.5f, 0 }, I }, { J(mixamo("RightHand")), J(mixamo("RightForeArm")), { -0.65f, 1.5f, 0 }, I },
+            { J(mixamo("LeftUpLeg")), J(mixamo("Hips")), { 0.1f, 0.95f, 0 }, I }, { J(mixamo("LeftLeg")), J(mixamo("LeftUpLeg")), { 0.1f, 0.5f, 0 }, I },
+            { J(mixamo("LeftFoot")), J(mixamo("LeftLeg")), { 0.1f, 0.05f, 0 }, I }, { J(mixamo("LeftToeBase")), J(mixamo("LeftFoot")), { 0.1f, 0.0f, 0.12f }, I },
+            { J(mixamo("RightUpLeg")), J(mixamo("Hips")), { -0.1f, 0.95f, 0 }, I }, { J(mixamo("RightLeg")), J(mixamo("RightUpLeg")), { -0.1f, 0.5f, 0 }, I },
+            { J(mixamo("RightFoot")), J(mixamo("RightLeg")), { -0.1f, 0.05f, 0 }, I }, { J(mixamo("RightToeBase")), J(mixamo("RightFoot")), { -0.1f, 0.0f, 0.12f }, I },
+        };
+        auto turn = [](float degrees, glm::vec3 axis) { return glm::angleAxis(glm::radians(degrees), glm::normalize(axis)); };
+        std::vector<RigJoint> dst = {
+            { "root", nullptr, { 0, 0, 0 }, turn(90, { 1, 0, 0 }) }, { "pelvis", "root", { 0, 1.1f, 0 }, turn(-90, { 0, 0, 1 }) },
+            { "spine_01", "pelvis", { 0, 1.22f, 0.01f }, turn(80, { 0, 0, 1 }) }, { "spine_02", "spine_01", { 0, 1.35f, 0.01f }, turn(85, { 0, 0, 1 }) },
+            { "spine_03", "spine_02", { 0, 1.5f, 0 }, turn(95, { 0, 0, 1 }) }, { "neck_01", "spine_03", { 0, 1.65f, 0 }, turn(100, { 0, 0, 1 }) },
+            { "head", "neck_01", { 0, 1.75f, 0 }, turn(90, { 0, 0, 1 }) },
+            { "clavicle_l", "spine_03", { 0.05f, 1.6f, 0 }, turn(10, { 0, 1, 0 }) }, { "upperarm_l", "clavicle_l", { 0.17f, 1.6f, 0 }, turn(-20, { 1, 0, 0 }) },
+            { "upperarm_twist_01_l", "upperarm_l", { 0.3f, 1.6f, 0 }, turn(-20, { 1, 0, 0 }) }, { "lowerarm_l", "upperarm_l", { 0.45f, 1.6f, 0 }, turn(30, { 1, 0, 0 }) },
+            { "hand_l", "lowerarm_l", { 0.72f, 1.6f, 0 }, turn(45, { 1, 0, 0 }) }, { "LeftHandIndex1", "hand_l", { 0.8f, 1.6f, 0 }, turn(45, { 1, 0, 0 }) },
+            { "clavicle_r", "spine_03", { -0.05f, 1.6f, 0 }, turn(170, { 0, 1, 0 }) }, { "upperarm_r", "clavicle_r", { -0.17f, 1.6f, 0 }, turn(180, { 0, 1, 0 }) },
+            { "lowerarm_r", "upperarm_r", { -0.45f, 1.6f, 0 }, turn(180, { 0, 1, 0 }) }, { "hand_r", "lowerarm_r", { -0.72f, 1.6f, 0 }, turn(180, { 0, 1, 0 }) },
+            { "thigh_l", "pelvis", { 0.12f, 1.05f, 0 }, turn(-90, { 0, 0, 1 }) * turn(30, { 1, 0, 0 }) },
+            { "thigh_twist_01_l", "thigh_l", { 0.12f, 0.8f, 0 }, turn(-90, { 0, 0, 1 }) }, { "calf_l", "thigh_l", { 0.12f, 0.55f, 0 }, turn(-90, { 0, 0, 1 }) * turn(-40, { 1, 0, 0 }) },
+            { "foot_l", "calf_l", { 0.12f, 0.05f, 0 }, turn(-90, { 0, 0, 1 }) }, { "ball_l", "foot_l", { 0.12f, 0.0f, 0.13f }, turn(15, { 0, 1, 0 }) },
+            { "thigh_r", "pelvis", { -0.12f, 1.05f, 0 }, turn(90, { 0, 0, 1 }) }, { "calf_r", "thigh_r", { -0.12f, 0.55f, 0 }, turn(90, { 0, 0, 1 }) },
+            { "foot_r", "calf_r", { -0.12f, 0.05f, 0 }, turn(90, { 0, 0, 1 }) }, { "ball_r", "foot_r", { -0.12f, 0.0f, 0.13f }, turn(90, { 0, 0, 1 }) },
+        };
+        Skeleton source = BuildRig(src), target = BuildRig(dst);
+        HumanoidMap targetMap = Animation::MapHumanoid(target);
+        CHECK(Animation::MapHumanoid(source).Mapped() == 22 && targetMap.IsHumanoid() && targetMap[HumanBone::Hips] == target.FindJoint("pelvis") &&
+              targetMap[HumanBone::LeftUpperArm] == target.FindJoint("upperarm_l") && targetMap[HumanBone::LeftUpperLeg] == target.FindJoint("thigh_l") &&
+              targetMap[HumanBone::UpperChest] == target.FindJoint("spine_03"));
+
+        // A second of the source: the left thigh swings 60 degrees forward (model X), the left forearm bends 90
+        // degrees up (model -Y... about the model's Z), the hips travel half a meter ahead, and the index finger curls.
+        int hips = source.FindJoint(mixamo("Hips")), thigh = source.FindJoint(mixamo("LeftUpLeg")), fore = source.FindJoint(mixamo("LeftForeArm"));
+        int finger = source.FindJoint(mixamo("LeftHandIndex1"));
+        AnimationClip clip;
+        clip.Name = "Stride";
+        clip.Duration = 1.0f;
+        auto rotation = [&](int joint, glm::quat end) {
+            AnimationChannel ch;
+            ch.Joint = joint;
+            ch.Path = AnimationPath::Rotation;
+            ch.Times = { 0.0f, 1.0f };
+            glm::quat a = source.Joints[joint].Rotation, b = end * source.Joints[joint].Rotation;
+            ch.Values = { { a.x, a.y, a.z, a.w }, { b.x, b.y, b.z, b.w } };
+            clip.Channels.push_back(ch);
+        };
+        rotation(thigh, turn(-60, { 1, 0, 0 }));
+        rotation(fore, turn(90, { 0, 0, 1 }));
+        rotation(finger, turn(50, { 0, 0, 1 }));
+        AnimationChannel travel;
+        travel.Joint = hips;
+        travel.Path = AnimationPath::Translation;
+        travel.Times = { 0.0f, 1.0f };
+        travel.Values = { glm::vec4(0, 1.0f, 0, 0), glm::vec4(0, 1.0f, 0.5f, 0) };
+        clip.Channels.push_back(travel);
+
+        AnimationClip mapped = Animation::RetargetHumanoid(source, target, clip);
+        CHECK(mapped.Name == "Stride" && Near(mapped.Duration, 1.0f));
+        // Bones point where the source's point (model space), with the target's own lengths; the hips travel 0.55 m.
+        auto direction = [](const std::vector<glm::mat4>& g, int a, int b) { return glm::normalize(glm::vec3(g[b][3]) - glm::vec3(g[a][3])); };
+        Pose ps, pt;
+        std::vector<glm::mat4> gs, gt;
+        bool aligned = true;
+        for (float t : { 0.0f, 0.5f, 1.0f })
+        {
+            Animation::Sample(source, clip, t, ps);
+            Animation::Sample(target, mapped, t, pt);
+            Animation::JointGlobals(source, ps, gs);
+            Animation::JointGlobals(target, pt, gt);
+            auto same = [&](const char* sa, const char* sb, const char* ta, const char* tb) {
+                glm::vec3 a = direction(gs, source.FindJoint(mixamo(sa)), source.FindJoint(mixamo(sb)));
+                glm::vec3 b = direction(gt, target.FindJoint(ta), target.FindJoint(tb));
+                return glm::dot(a, b) > 0.995f;
+            };
+            // (The target's bind directions differ a little from the source's: compare the turns, not the directions.)
+            auto turned = [&](const char* sa, const char* sb, const char* ta, const char* tb) {
+                Pose sb0, tb0;
+                sb0.SetBindPose(source);
+                tb0.SetBindPose(target);
+                std::vector<glm::mat4> gsb, gtb;
+                Animation::JointGlobals(source, sb0, gsb);
+                Animation::JointGlobals(target, tb0, gtb);
+                glm::quat rs = glm::rotation(direction(gsb, source.FindJoint(mixamo(sa)), source.FindJoint(mixamo(sb))),
+                                             direction(gs, source.FindJoint(mixamo(sa)), source.FindJoint(mixamo(sb))));
+                glm::vec3 expected = rs * direction(gtb, target.FindJoint(ta), target.FindJoint(tb));
+                return glm::dot(expected, direction(gt, target.FindJoint(ta), target.FindJoint(tb))) > 0.995f;
+            };
+            aligned &= same("LeftUpLeg", "LeftLeg", "thigh_l", "calf_l") && same("LeftLeg", "LeftFoot", "calf_l", "foot_l");
+            aligned &= same("RightUpLeg", "RightLeg", "thigh_r", "calf_r") && same("LeftArm", "LeftForeArm", "upperarm_l", "lowerarm_l");
+            aligned &= turned("LeftForeArm", "LeftHand", "lowerarm_l", "hand_l") && same("Spine2", "Neck", "spine_03", "neck_01");
+            float travelled = gt[target.FindJoint("pelvis")][3].z - 0.0f;
+            aligned &= Near(travelled, 0.55f * t, 1e-3f) && Near(gt[target.FindJoint("pelvis")][3].y, 1.1f, 1e-3f);
+            aligned &= Near(glm::distance(glm::vec3(gt[target.FindJoint("thigh_l")][3]), glm::vec3(gt[target.FindJoint("calf_l")][3])), 0.5f, 1e-3f);
+        }
+        CHECK(aligned);
+        // At the end the thigh points 60 degrees forward of straight down; the finger (no human bone) curls by name.
+        glm::vec3 leg = direction(gt, target.FindJoint("thigh_l"), target.FindJoint("calf_l"));
+        CHECK(Near(leg, glm::vec3(0.0f, -0.5f, 0.866f), 0.02f));
+        bool curled = false;
+        for (const AnimationChannel& ch : mapped.Channels) curled |= ch.Joint == target.FindJoint("LeftHandIndex1") && ch.Path == AnimationPath::Rotation;
+        CHECK(curled);
+        // Without avatars on both sides it is plain retargeting by name (nothing matches here).
+        CHECK(Animation::RetargetHumanoid(source, tail, clip).Channels.empty() && Animation::RetargetClip(source, tail, clip).Channels.empty());
+    }
+
     void TestConvolutionReverb()
     {
         // FFT round trip.
@@ -15292,6 +15472,7 @@ int main(int argc, char** argv)
     Run("Reverb zones", TestReverbZones);
     Run("Convolution reverb", TestConvolutionReverb);
     Run("Animation retargeting", TestRetargeting);
+    Run("Humanoid retargeting", TestHumanoidRetargeting);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);

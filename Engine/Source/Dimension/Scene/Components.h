@@ -433,6 +433,9 @@ namespace Dimension
     // Whether an Animator runs while its object is off screen (Unity's AnimatorCullingMode): always, or not at all
     // (time, state machine and pose wait until the object's bounds are in the main camera's view again).
     enum class AnimatorCullingMode : int { AlwaysAnimate = 0, CullCompletely };
+    // How an Animation Source's clips reach this skeleton: Humanoid through the human bones when both rigs are humanoid
+    // (any names and joint axes; else by name), By Joint Name always by matching names.
+    enum class AnimatorRetargeting : int { Humanoid = 0, ByJointName };
 
     // Animator.MatchTarget: between two normalized times of the base layer's current state, the object is moved so
     // that a joint reaches Position at the end (each axis by Weight: 0 leaves that axis to the animation).
@@ -463,6 +466,7 @@ namespace Dimension
         // Animation Source: another model whose clips this one plays, retargeted onto its own skeleton by joint name
         // (None = the clips of its own mesh).
         AssetHandle ClipSource = AssetHandle::None();
+        AnimatorRetargeting Retargeting = AnimatorRetargeting::Humanoid;
 
         // Root motion (runtime): movement applied this frame, world space.
         glm::vec3 RootMotionDelta{ 0.0f };

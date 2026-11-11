@@ -1148,7 +1148,7 @@ namespace Dimension
     namespace
     {
         // The clips an Animator plays: its mesh's own, or its Animation Source's retargeted onto the mesh's skeleton
-        // (cached per source and target mesh, and rebuilt when either is reloaded).
+        // (cached per source and target mesh and retargeting, and rebuilt when either is reloaded).
         const std::vector<AnimationClip>& AnimatorClips(const AnimatorComponent& anim, const Ref<Mesh>& mesh)
         {
             if (!anim.ClipSource.IsValid()) return mesh->GetClips();
@@ -1159,15 +1159,17 @@ namespace Dimension
                 std::weak_ptr<Mesh> Source, Target;
                 std::vector<AnimationClip> Clips;
             };
-            static std::map<std::pair<const Mesh*, const Mesh*>, Entry> cache;
-            Entry& entry = cache[{ source.get(), mesh.get() }];
+            static std::map<std::tuple<const Mesh*, const Mesh*, AnimatorRetargeting>, Entry> cache;
+            Entry& entry = cache[{ source.get(), mesh.get(), anim.Retargeting }];
             if (entry.Source.lock() != source || entry.Target.lock() != mesh)
             {
                 entry.Source = source;
                 entry.Target = mesh;
                 entry.Clips.clear();
                 for (const AnimationClip& clip : source->GetClips())
-                    entry.Clips.push_back(Animation::RetargetClip(*source->GetSkeleton(), *mesh->GetSkeleton(), clip));
+                    entry.Clips.push_back(anim.Retargeting == AnimatorRetargeting::Humanoid
+                                              ? Animation::RetargetHumanoid(*source->GetSkeleton(), *mesh->GetSkeleton(), clip)
+                                              : Animation::RetargetClip(*source->GetSkeleton(), *mesh->GetSkeleton(), clip));
             }
             return entry.Clips;
         }

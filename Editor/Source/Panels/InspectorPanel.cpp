@@ -1876,6 +1876,36 @@ namespace Editor
                     ImGui::TreePop();
                 }
             }
+            // The avatar: the model's joints for the human bones (humanoid retargeting uses them).
+            if (auto mesh = AssetManager::GetMesh(handle); mesh && mesh->GetSkeleton())
+            {
+                HumanoidMap avatar = Animation::MapHumanoid(*mesh->GetSkeleton());
+                const Skeleton& skeleton = *mesh->GetSkeleton();
+                std::string label = avatar.IsHumanoid() ? "Avatar: Humanoid (" + std::to_string(avatar.Mapped()) + " of " +
+                                                              std::to_string((int)HumanBone::Count) + " bones)###Avatar"
+                                                        : std::string("Avatar: Generic (not humanoid)###Avatar");
+                bool open = ImGui::TreeNodeEx(label.c_str(), 0);
+                ImGui::SetItemTooltip("Joints found for the human bones by their names. With two humanoid models, an Animator's\n"
+                                      "Animation Source retargets through them (Retargeting: Humanoid)");
+                if (open)
+                {
+                    if (ImGui::BeginTable("##avatar", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+                    {
+                        for (int b = 0; b < (int)HumanBone::Count; ++b)
+                        {
+                            int j = avatar.Joints[b];
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::TextUnformatted(Animation::HumanBoneName((HumanBone)b));
+                            ImGui::TableNextColumn();
+                            if (j >= 0) ImGui::TextUnformatted(skeleton.Joints[j].Name.c_str());
+                            else ImGui::TextDisabled("None");
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TreePop();
+                }
+            }
             if (changed) AssetManager::SetImportSettings(handle, settings);
             DrawImportDefault(handle);
             if (auto mesh = AssetManager::GetMesh(handle))
