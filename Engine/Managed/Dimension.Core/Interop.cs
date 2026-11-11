@@ -241,6 +241,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, int, int, byte*, byte*, byte*, float*, void> InvokeStateBehaviour;
         // A script's property or method by name for UI Bindings (see ScriptHost.MemberOp).
         public delegate* unmanaged<IntPtr, int, byte*, byte*, byte*> MemberOp;
+        // The Test Runner (see ScriptHost.RunTests).
+        public delegate* unmanaged<int, byte*, byte*> RunTests;
     }
 
     internal static unsafe class Native
@@ -306,6 +308,7 @@ namespace Dimension.Interop
                 api->InvokePointer = &ScriptHost.InvokePointer;
                 api->InvokeStateBehaviour = &ScriptHost.InvokeStateBehaviour;
                 api->MemberOp = &ScriptHost.MemberOp;
+                api->RunTests = &ScriptHost.RunTests;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version}, {System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()})");
                 return 1;
             }

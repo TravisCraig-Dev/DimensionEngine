@@ -370,6 +370,30 @@ namespace Editor
         int m_JobKind = 0; // 1 search, 2 add / remove
     };
 
+    // Window > Test Runner (like Unity's, edit mode): the C# scripts' [Test] methods, run all, the failed ones or one,
+    // with each result, its time and why it failed.
+    class TestRunnerPanel
+    {
+    public:
+        explicit TestRunnerPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open);
+        void RequestRun() { m_RunRequested = true; } // (automation: --run-tests)
+
+    private:
+        struct Test
+        {
+            std::string Name, Message;
+            int State = 0; // 0 not run, 1 passed, 2 failed
+            float Milliseconds = 0.0f;
+        };
+        void Refresh();
+        void Run(const std::string& filter);
+        EditorContext& m_Ctx;
+        std::vector<Test> m_Tests;
+        fs::path m_ScriptsPath;
+        bool m_Listed = false, m_RunRequested = false;
+    };
+
     class SceneSettingsPanel
     {
     public:

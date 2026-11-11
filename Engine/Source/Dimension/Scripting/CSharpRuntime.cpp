@@ -380,6 +380,8 @@ namespace Dimension
             // with no parameters (its value as JSON, null when there is no such member), 1 writes a property / calls a
             // method with one parameter ("true", or null).
             const char* (*MemberOp)(intptr_t, int, const char*, const char*);
+            // The Test Runner: 0 list the scripts' [Test] methods, 1 run those starting with the filter; JSON.
+            const char* (*RunTests)(int, const char*);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -3026,6 +3028,13 @@ namespace Dimension
 
     bool CSharpRuntime::IsAvailable() { return s_Available; }
 
+    std::string CSharpRuntime::RunTests(bool run, const std::string& filter)
+    {
+        if (!s_Available || !s_Managed.RunTests) return "[]";
+        const char* json = s_Managed.RunTests(run ? 1 : 0, filter.c_str());
+        return json ? json : "[]";
+    }
+
     bool CSharpRuntime::LoadScripts(const fs::path& assemblyPath, bool reloadable)
     {
         if (!s_Available) return false;
@@ -3199,6 +3208,7 @@ namespace Dimension
     bool CSharpRuntime::IsAvailable() { return false; }
     bool CSharpRuntime::LoadScripts(const fs::path&, bool) { return false; }
     void CSharpRuntime::UnloadScripts() {}
+    std::string CSharpRuntime::RunTests(bool, const std::string&) { return "[]"; }
     const fs::path& CSharpRuntime::GetScriptsPath() { static fs::path p; return p; }
     bool CSharpRuntime::ScriptsChangedOnDisk() { return false; }
     size_t CSharpRuntime::GetScriptCount() { return 0; }

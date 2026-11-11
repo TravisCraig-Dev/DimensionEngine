@@ -36,6 +36,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--anim-key") && i + 1 < argc) options.AnimKey = argv[++i];
         else if (!std::strcmp(argv[i], "--anim-record")) options.AnimRecord = true;
         else if (!std::strcmp(argv[i], "--package-search") && i + 1 < argc) options.PackageSearch = argv[++i];
+        else if (!std::strcmp(argv[i], "--run-tests")) options.RunTests = true;
         else if (!std::strcmp(argv[i], "--anim-onion")) options.AnimOnion = true;
         else if (!std::strcmp(argv[i], "--frame-event") && i + 1 < argc) options.FrameEvent = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--menu") && i + 1 < argc) options.MenuCommand = argv[++i];

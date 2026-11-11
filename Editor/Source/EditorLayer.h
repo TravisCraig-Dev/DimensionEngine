@@ -33,6 +33,7 @@ namespace Editor
         int Theme = -1;           // --theme dark|light|midnight: this session only (preferences stay unchanged)
         int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
         std::string PackageSearch; // --package-search "term": with --open Packages, that search run
+        bool RunTests = false;     // --run-tests: with --open "Test Runner", every test run once the scripts load
         std::string AnimKey;      // --anim-key "Joint,rotation|position,axis,key": with --open Animation, that curve key selected
         bool AnimRecord = false;  // --anim-record: with --open Animation, record mode on from the start
         bool AnimOnion = false;   // --anim-onion: with --open Animation, a preview with onion skin
@@ -217,6 +218,7 @@ namespace Editor
         Scope<TimelinePanel> m_Timeline;
         Scope<AnimationPanel> m_Animation;
         Scope<PackagesPanel> m_Packages;
+        Scope<TestRunnerPanel> m_TestRunner;
         Scope<NavigationPanel> m_Navigation;
         Scope<ProfilerPanel> m_Profiler;
 
@@ -280,6 +282,7 @@ namespace Editor
         bool m_VertexDrag = false;
         bool m_ShowSnapSettings = false;
         bool m_ShowPackages = false;
+        bool m_ShowTestRunner = false;
         // Window > Lighting, and the Search window (Ctrl+K).
         bool m_ShowLighting = false, m_ShowSearch = false, m_SearchFocus = false;
         std::string m_SearchQuery;

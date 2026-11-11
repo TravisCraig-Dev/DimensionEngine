@@ -58,6 +58,7 @@ namespace Dimension
         }
 
         private static ScriptLoadContext s_Context;
+        private static Assembly s_ScriptsAssembly; // the loaded scripts (their [Test] methods for the Test Runner)
         private static readonly Dictionary<string, ScriptClass> s_Classes = new();
         // DataAsset classes (made into .asset files) and the objects made from assets so far, by GUID: one per asset,
         // shared by every field referring to it, made again when play starts.
@@ -730,6 +731,7 @@ namespace Dimension
                     using var symbols = File.Exists(pdb) ? new MemoryStream(File.ReadAllBytes(pdb)) : null;
                     assembly = s_Context.LoadFromStream(dll, symbols);
                 }
+                s_ScriptsAssembly = assembly;
                 RegisterDrawers(assembly); // before the classes: their fields say which have one
                 foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(StateMachineBehaviour))))
                 {
@@ -1244,6 +1246,70 @@ namespace Dimension
         private static IntPtr s_FieldsBuffer; // the last GetFields result (native reads it before the next call)
 
         // Current values of a script's serialized fields, in registration order (entities as packed ids).
+        // The Test Runner: op 0 lists the scripts' [Test] methods, op 1 runs those whose full name starts with the filter
+        // ("" all). JSON array of { name, passed, ms, message } (list: names only).
+        [UnmanagedCallersOnly]
+        internal static byte* RunTests(int op, byte* filterUtf8)
+        {
+            try
+            {
+                string filter = Marshal.PtrToStringUTF8((IntPtr)filterUtf8) ?? "";
+                var tests = new List<MethodInfo>();
+                if (s_ScriptsAssembly != null)
+                    foreach (Type type in s_ScriptsAssembly.GetTypes())
+                        foreach (MethodInfo m in type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                            if (m.IsDefined(typeof(TestAttribute), false) && m.GetParameters().Length == 0) tests.Add(m);
+                tests.Sort((a, b) => string.CompareOrdinal(TestName(a), TestName(b)));
+                using var stream = new MemoryStream();
+                using (var w = new Utf8JsonWriter(stream))
+                {
+                    w.WriteStartArray();
+                    foreach (MethodInfo m in tests)
+                    {
+                        string name = TestName(m);
+                        if (op == 1 && !name.StartsWith(filter, StringComparison.Ordinal)) continue;
+                        w.WriteStartObject();
+                        w.WriteString("name", name);
+                        if (op == 1)
+                        {
+                            var watch = System.Diagnostics.Stopwatch.StartNew();
+                            string message = "";
+                            bool passed = true;
+                            try
+                            {
+                                object target = m.IsStatic ? null : Activator.CreateInstance(m.DeclaringType);
+                                m.Invoke(target, null);
+                            }
+                            catch (TargetInvocationException e) when (e.InnerException != null)
+                            {
+                                passed = false;
+                                message = e.InnerException is AssertionException ? e.InnerException.Message
+                                                                                   : $"{e.InnerException.GetType().Name}: {e.InnerException.Message}";
+                            }
+                            catch (Exception e)
+                            {
+                                passed = false;
+                                message = $"{e.GetType().Name}: {e.Message}";
+                            }
+                            w.WriteBoolean("passed", passed);
+                            w.WriteNumber("ms", watch.Elapsed.TotalMilliseconds);
+                            w.WriteString("message", message);
+                        }
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                }
+                return Utf8Result(stream.ToArray());
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Running C# tests failed: {e.Message}");
+                return null;
+            }
+        }
+
+        private static string TestName(MethodInfo m) => $"{m.DeclaringType.FullName}.{m.Name}";
+
         [UnmanagedCallersOnly]
         internal static byte* GetFields(IntPtr handle)
         {

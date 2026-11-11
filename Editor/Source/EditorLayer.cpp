@@ -153,6 +153,7 @@ namespace Editor
         m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
         m_Animation = MakeScope<AnimationPanel>(m_Ctx);
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
+        m_TestRunner = MakeScope<TestRunnerPanel>(m_Ctx);
         m_Navigation = MakeScope<NavigationPanel>(m_Ctx);
         m_Profiler = MakeScope<ProfilerPanel>();
         m_FrameDebugger = MakeScope<FrameDebuggerPanel>(m_Ctx);
@@ -188,6 +189,8 @@ namespace Editor
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
         else if (m_Options.OpenWindow == "Snap Settings") m_ShowSnapSettings = true;
         else if (m_Options.OpenWindow == "Packages") m_ShowPackages = true;
+        else if (m_Options.OpenWindow == "Test Runner") m_ShowTestRunner = true;
+        if (m_Options.RunTests) m_TestRunner->RequestRun();
         if (!m_Options.PackageSearch.empty()) m_Packages->Search(m_Options.PackageSearch);
         else if (m_Options.OpenWindow == "Lighting") m_ShowLighting = true;
         else if (m_Options.OpenWindow == "Shortcuts") m_ShowShortcuts = true;
@@ -1411,7 +1414,7 @@ namespace Editor
         return { { "Hierarchy", &m_ShowHierarchy }, { "Inspector", &m_ShowInspector }, { "Project", &m_ShowContent }, { "Console", &m_ShowConsole },
                  { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator },
                  { "Timeline", &m_ShowTimeline }, { "Animation", &m_ShowAnimation }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
-                 { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings }, { "Packages", &m_ShowPackages },
+                 { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings }, { "Packages", &m_ShowPackages }, { "Test Runner", &m_ShowTestRunner },
                  { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
                  { "Shortcuts", &m_ShowShortcuts }, { "Undo History", &m_ShowUndoHistory } };
     }
@@ -2618,6 +2621,7 @@ namespace Editor
         if (m_ShowSpriteEditor) m_SpriteEditor->OnImGui(&m_ShowSpriteEditor);
         if (m_ShowSnapSettings) DrawSnapSettings();
         if (m_ShowPackages) m_Packages->OnImGui(&m_ShowPackages);
+        if (m_ShowTestRunner) m_TestRunner->OnImGui(&m_ShowTestRunner);
         if (m_ShowSearch) DrawSearchWindow();
         if (m_ShowLighting) DrawLightingWindow();
         if (m_ShowShortcuts) DrawShortcutsWindow();
@@ -2866,6 +2870,7 @@ namespace Editor
             ImGui::MenuItem("Sprite Editor", nullptr, &m_ShowSpriteEditor);
             ImGui::MenuItem("Snap Settings", nullptr, &m_ShowSnapSettings);
             ImGui::MenuItem("Packages", nullptr, &m_ShowPackages);
+            ImGui::MenuItem("Test Runner", nullptr, &m_ShowTestRunner);
             ImGui::MenuItem("Lighting", nullptr, &m_ShowLighting);
             ImGui::MenuItem("Shortcuts", nullptr, &m_ShowShortcuts);
             if (ImGui::MenuItem("Search", Shortcuts::Label("edit.search").c_str(), m_ShowSearch)) OpenSearch(!m_ShowSearch);

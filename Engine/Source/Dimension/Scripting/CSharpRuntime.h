@@ -84,6 +84,9 @@ namespace Dimension
             std::function<int(int, float*, int, const char*)> Handle;
         };
         static void SetEditorHooks(const EditorHooks& hooks);
+        // The scripts' unit tests ([Test] methods; Window > Test Runner): listed, or run (those whose full name starts
+        // with `filter`). JSON array of { name, passed, ms, message }.
+        static std::string RunTests(bool run, const std::string& filter = {});
 
         // `managedDir` contains Dimension.Core.dll and its runtimeconfig.json.
         // Starts .NET: a runtime shipped beside the game (`<managedDir>/../dotnet`, see BundleRuntime) when there is one,
