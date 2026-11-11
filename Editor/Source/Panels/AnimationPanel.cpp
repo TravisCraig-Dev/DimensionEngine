@@ -49,6 +49,47 @@ namespace Editor
             return merged;
         }
 
+        // Every numeric field of an object and the objects under it, by property channel name: [0] the count, then the
+        // values. For recording: the Animator's own fields are left out (previews set them).
+        void ReadFields(Scene& scene, Entity root, std::map<std::string, std::array<float, 5>>& out)
+        {
+            out.clear();
+            std::function<void(Entity, const std::string&)> visit = [&](Entity e, const std::string& path) {
+                for (const ComponentInfo& info : ComponentRegistry::All())
+                {
+                    if (info.Hidden || info.Name == "Animator" || !info.Has(scene, e)) continue;
+                    void* data = info.Get(scene, e);
+                    for (const FieldInfo& f : info.Fields)
+                    {
+                        if (f.Hidden) continue;
+                        std::array<float, 5> v{};
+                        int n = FieldToFloats(f, f.Access(data), &v[1]);
+                        if (n <= 0) continue;
+                        v[0] = (float)n;
+                        out[AnimationClipAsset::PropertyChannel(path, info.Name, f.Name)] = v;
+                    }
+                }
+                for (Entity c : scene.GetChildren(e)) visit(c, (path.empty() ? std::string() : path + "/") + scene.GetRegistry().Get<TagComponent>(c).Name);
+            };
+            visit(root, "");
+        }
+
+        // Writes a property channel's values (up to four floats) to its object's field.
+        void WriteField(Scene& scene, Entity root, const std::string& channel, const float* values)
+        {
+            std::string path, component, field;
+            if (!AnimationClipAsset::ParseProperty(channel, path, component, field)) return;
+            Entity target = Timeline::ResolvePath(scene, root, path);
+            const ComponentInfo* info = target.IsNull() ? nullptr : ComponentRegistry::Find(component);
+            if (!info || !info->Has(scene, target)) return;
+            for (const FieldInfo& f : info->Fields)
+                if (f.Name == field)
+                {
+                    FieldFromFloats(f, f.Access(info->Get(scene, target)), values, 4);
+                    return;
+                }
+        }
+
         // A rotation key as the curve view shows it: Euler angles in degrees.
         glm::vec3 EulerDegrees(const glm::vec4& v)
         {
@@ -81,8 +122,20 @@ namespace Editor
         }
     }
 
+    void AnimationPanel::StopRecording()
+    {
+        if (!m_Recording) return;
+        m_Recording = false;
+        // The objects as they were before recording (their changes are keyed in the clip).
+        if (m_PreviewEntity.IsNull() || !m_Ctx.EditorScene || !m_Ctx.EditorScene->IsValid(m_PreviewEntity)) return;
+        for (const auto& [channel, v] : m_RecordRest) WriteField(*m_Ctx.EditorScene, m_PreviewEntity, channel, &v[1]);
+        m_RecordRest.clear();
+        m_RecordLast.clear();
+    }
+
     void AnimationPanel::StopPreview()
     {
+        StopRecording();
         if (m_PreviewEntity.IsNull() || !m_Ctx.EditorScene) return;
         Scene& scene = *m_Ctx.EditorScene; // (previews run in edit mode only)
         auto& reg = scene.GetRegistry();
@@ -194,21 +247,45 @@ namespace Editor
         ImGui::SameLine();
         if (playing) ImGui::BeginDisabled();
         bool previewing = !m_PreviewEntity.IsNull();
+        auto startPreview = [&] {
+            m_PreviewEntity = entity;
+            m_SavedController = anim->Controller;
+            m_SavedClip = anim->Clip;
+            m_SavedTime = anim->Time;
+            m_SavedPlaying = anim->Playing;
+            m_SavedWeights = mr->BlendShapeWeights;
+        };
         if (ImGui::Checkbox("Preview", &previewing))
         {
-            if (previewing)
-            {
-                m_PreviewEntity = entity;
-                m_SavedController = anim->Controller;
-                m_SavedClip = anim->Clip;
-                m_SavedTime = anim->Time;
-                m_SavedPlaying = anim->Playing;
-                m_SavedWeights = mr->BlendShapeWeights;
-            }
-            else
-                StopPreview();
+            if (previewing) startPreview();
+            else StopPreview();
         }
         ImGui::SetItemTooltip("Pose the object at the clip's current time (its Animator is put back when the preview ends)");
+        ImGui::SameLine();
+        bool recording = m_Recording, red = m_Recording;
+        if (red)
+        {
+            ImGui::PushStyleColor(ImGuiCol_CheckMark, IM_COL32(240, 70, 60, 255));
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(250, 110, 100, 255));
+        }
+        bool toggled = ImGui::Checkbox("Record", &recording);
+        // (automation: after the startup frames, when the scene may still be made again as scripts load)
+        if (m_RecordRequested && !playing && !m_Recording && ImGui::GetFrameCount() >= 50) toggled = recording = true, m_RecordRequested = false;
+        if (toggled)
+        {
+            if (recording)
+            {
+                if (m_PreviewEntity.IsNull()) startPreview();
+                ReadFields(scene, entity, m_RecordRest);
+                m_RecordLast = m_RecordRest;
+                m_Recording = true;
+            }
+            else
+                StopRecording();
+        }
+        if (red) ImGui::PopStyleColor(2);
+        ImGui::SetItemTooltip("Record: changes to the object and the objects under it (Inspector, Scene view) are keyed at the\n"
+                              "current time, and the clip's properties show on them; they are put back when recording ends");
         if (playing) ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220);
@@ -233,6 +310,42 @@ namespace Editor
 
         // The pose at the current time (the selected joint's values come from it).
         AnimationClip sampled = asset.ToClip(skeleton, &shapeNames);
+        if (m_Recording && (playing || m_PreviewEntity != entity)) StopRecording();
+        if (m_Recording)
+        {
+            // What changed since last frame (an Inspector edit, a gizmo drag) is keyed at the current time...
+            std::map<std::string, std::array<float, 5>> now;
+            ReadFields(scene, entity, now);
+            bool keyed = false;
+            for (const auto& [channel, v] : now)
+            {
+                auto it = m_RecordLast.find(channel);
+                if (it == m_RecordLast.end()) continue; // (a component added meanwhile: from now on)
+                bool differs = false;
+                for (int k = 1; k <= (int)v[0]; ++k) differs |= std::abs(v[k] - it->second[k]) > 1e-5f;
+                if (!differs) continue;
+                asset.SetKey(channel, AnimationPath::Translation, m_Time, glm::vec4(v[1], v[2], v[3], v[4]));
+                keyed = true;
+            }
+            if (keyed)
+            {
+                sampled = asset.ToClip(skeleton, &shapeNames);
+                changed = true;
+                m_RecordDirty = true;
+            }
+            // ... then the clip's properties at the current time go onto the objects (what they show while recording).
+            for (const auto& pc : sampled.PropertyChannels)
+            {
+                glm::vec4 value = Animation::SampleChannel(pc.Curve, m_Time);
+                WriteField(scene, entity, AnimationClipAsset::PropertyChannel(pc.Path, pc.Component, pc.Field), &value.x);
+            }
+            ReadFields(scene, entity, m_RecordLast);
+            if (m_RecordDirty && !ImGui::IsAnyItemActive())
+            {
+                commit = true; // (the file once a drag ends)
+                m_RecordDirty = false;
+            }
+        }
         Pose pose;
         Animation::Sample(skeleton, sampled, m_Time, pose);
         if (m_Joint >= (int)skeleton.Joints.size()) m_Joint = -1;

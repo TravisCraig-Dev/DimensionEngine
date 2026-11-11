@@ -33,6 +33,7 @@ namespace Editor
         int Theme = -1;           // --theme dark|light|midnight: this session only (preferences stay unchanged)
         int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
         std::string AnimKey;      // --anim-key "Joint,rotation|position,axis,key": with --open Animation, that curve key selected
+        bool AnimRecord = false;  // --anim-record: with --open Animation, record mode on from the start
         int FrameEvent = -1;      // --frame-event N: with --open "Frame Debugger", step the Scene view to draw N (0-based)
         std::string MenuCommand;  // --menu "Tools/Item": run a C# extension's menu item once the scripts have loaded
         std::string Search;       // --search "query": start with this Hierarchy search
@@ -49,7 +50,7 @@ namespace Editor
         bool ViewGiven = false;
         std::string Measure;          // --measure "x,y,z;x,y,z": the measuring tool on with that measurement
         int SelectionSet = 0;         // --selection-set N: select saved selection N
-        std::string Press;            // --press "edit.group": that shortcut's command, once, at frame 40
+        std::string Press;            // --press "edit.group" (or "edit.group@120"): that shortcut's command, once, at frame 40 (or that frame)
         std::string Grid;             // --grid "plane=1,cell=0.5,opacity=0.6,follow": grid settings for the session
         bool NewInspector = false;    // --new-inspector: another Inspector, locked to the --select selection
         bool LockInspector = false;   // --lock-inspector: the Inspector locked to the --select selection

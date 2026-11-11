@@ -11,6 +11,7 @@
 #include <Dimension/Core/Profiler.h>
 #include <optional>
 #include <imgui.h>
+#include <array>
 #include <map>
 #include <mutex>
 
@@ -302,6 +303,9 @@ namespace Editor
         // object's transform gizmo makes way.
         bool UpdateSceneView(ImVec2 origin, ImVec2 size, const glm::mat4& view, const glm::mat4& proj, bool orthographic, bool hovered);
         bool IsPosing() const;
+        // Leaves record mode, putting the recorded objects' values back as they were before.
+        void StopRecording();
+        void RequestRecording() { m_RecordRequested = true; } // (automation: --anim-record)
         // Automation (--anim-key "Joint,rotation|position,axis,key"): that joint selected and that key of its curve.
         void SelectCurveKey(const std::string& spec);
 
@@ -314,6 +318,9 @@ namespace Editor
         int m_Event = -1;              // or the selected event (index in the clip's)
         int m_Property = -1;           // or the selected property row (of the clip's property channels, in order)
         std::string m_PropertyPick;    // a property just added (selected next frame)
+        // Record mode: the object's fields before recording (put back after) and as of last frame (changes get keyed).
+        bool m_Recording = false, m_RecordDirty = false, m_RecordRequested = false;
+        std::map<std::string, std::array<float, 5>> m_RecordRest, m_RecordLast;
         bool m_EventDragging = false;
         std::vector<int> m_Selected;   // every selected joint (Ctrl / Shift click adds): keys, deletes and moves apply to all
         bool m_Dragging = false, m_GizmoUsing = false;

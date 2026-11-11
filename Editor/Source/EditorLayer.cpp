@@ -180,6 +180,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Timeline") m_ShowTimeline = true;
         else if (m_Options.OpenWindow == "Animation") m_ShowAnimation = true;
         if (!m_Options.AnimKey.empty()) m_Animation->SelectCurveKey(m_Options.AnimKey);
+        if (m_Options.AnimRecord) m_Animation->RequestRecording();
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
@@ -2669,7 +2670,12 @@ namespace Editor
         if (m_ShowAbout) DrawAbout();
         if (m_ShowImGuiDemo) ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
         m_SelectionHistory.Record(CaptureSelection()); // each new selection (Back and Forward step through them)
-        if (!m_Options.Press.empty() && ImGui::GetFrameCount() == 40) Shortcuts::Press(m_Options.Press); // --press (automation)
+        if (!m_Options.Press.empty()) // --press (automation): at frame 40, or the frame after '@'
+        {
+            size_t at = m_Options.Press.find('@');
+            int frame = at == std::string::npos ? 40 : std::atoi(m_Options.Press.c_str() + at + 1);
+            if (ImGui::GetFrameCount() == frame) Shortcuts::Press(m_Options.Press.substr(0, at));
+        }
         HandleShortcuts();
         if (!m_Options.BuildFolder.empty() && !m_BatchBuildDone)
         {
