@@ -7044,6 +7044,29 @@ namespace
         walk.EventsBetween(1.9f, 0.55f, false, passed); // (not looping: going back passes nothing)
         CHECK(passed.empty());
 
+        // Object properties: channels named by path, component and field, built into the clip's property curves (any
+        // model: they go by the object's own paths), kept through saving and retargeting.
+        std::string path, component, field;
+        std::string lamp = AnimationClipAsset::PropertyChannel("Lamp/Bulb", "Point Light", "Intensity");
+        CHECK(AnimationClipAsset::ParseProperty(lamp, path, component, field) && path == "Lamp/Bulb" && component == "Point Light" && field == "Intensity");
+        CHECK(AnimationClipAsset::ParseProperty(AnimationClipAsset::PropertyChannel("", "Mesh Renderer", "Color"), path, component, field) && path.empty());
+        CHECK(!AnimationClipAsset::ParseProperty("property:broken", path, component, field) && !AnimationClipAsset::IsProperty("Bone1"));
+        AnimationClipAsset glowing;
+        glowing.Duration = 2.0f;
+        glowing.SetKey(lamp, AnimationPath::Translation, 0.0f, glm::vec4(1.0f, 0, 0, 0));
+        glowing.SetKey(lamp, AnimationPath::Translation, 2.0f, glm::vec4(5.0f, 0, 0, 0));
+        glowing.SetKey(joint, AnimationPath::Rotation, 0.0f, { 0, 0, 0, 1 });
+        fs::path glowFile = fs::temp_directory_path() / "dimension_glow.anim";
+        CHECK(glowing.Save(glowFile));
+        auto glowBack = AnimationClipAsset::Load(glowFile);
+        fs::remove(glowFile);
+        AnimationClip glow = glowBack->ToClip(skeleton);
+        CHECK(glow.PropertyChannels.size() == 1 && glow.Channels.size() == 1 && glow.PropertyChannels[0].Component == "Point Light" &&
+              Near(Animation::SampleChannel(glow.PropertyChannels[0].Curve, 1.0f).x, 3.0f));
+        CHECK(Animation::RetargetClip(skeleton, skeleton, glow).PropertyChannels.size() == 1);
+        AnimationClipAsset again = AnimationClipAsset::FromClip(skeleton, glow);
+        CHECK(again.FindChannel(lamp, AnimationPath::Translation) && again.FindChannel(lamp, AnimationPath::Translation)->Times.size() == 2);
+
         // As project assets: saved and loaded, listed for their model, and a version that changes with every edit.
         fs::path assets = fs::temp_directory_path() / "dimension_clip_assets" / "Assets";
         fs::remove_all(assets.parent_path());

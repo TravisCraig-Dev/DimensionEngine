@@ -1,6 +1,9 @@
 #include "Panels.h"
 #include "../EditorUI.h"
 #include <Dimension/Animation/ClipAsset.h>
+#include <Dimension/Animation/Timeline.h>
+#include <Dimension/Scene/ComponentRegistry.h>
+#include <functional>
 #include <Dimension/Renderer/Mesh.h>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -241,7 +244,7 @@ namespace Editor
         const float labelW = 220.0f, rowH = ImGui::GetFrameHeight(), inset = 8.0f;
         const float curveH = 120.0f;
         float detailH = m_Joint >= 0 ? ImGui::GetFrameHeightWithSpacing() * 3.0f + curveH + 12.0f
-                                     : ImGui::GetFrameHeightWithSpacing() * (m_Shape >= 0 || m_Event >= 0 ? 2.0f : 1.0f) + 4.0f;
+                                     : ImGui::GetFrameHeightWithSpacing() * (m_Shape >= 0 || m_Event >= 0 || m_Property >= 0 ? 2.0f : 1.0f) + 4.0f;
         ImGui::BeginChild("##sheet", ImVec2(0, -detailH), ImGuiChildFlags_Borders);
         float stripW = std::max(ImGui::GetContentRegionAvail().x - labelW - 6.0f, 80.0f);
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -275,7 +278,7 @@ namespace Editor
             if (ImGui::SmallButton("+ Event"))
             {
                 m_Event = asset.AddEvent(m_Time, "OnEvent");
-                m_Joint = m_Shape = -1;
+                m_Joint = m_Shape = m_Property = -1;
                 m_Selected.clear();
                 changed = commit = true;
             }
@@ -301,7 +304,7 @@ namespace Editor
                 m_EventDragging = hit >= 0 && !playing;
                 if (hit >= 0)
                 {
-                    m_Joint = m_Shape = -1;
+                    m_Joint = m_Shape = m_Property = -1;
                     m_Selected.clear();
                     m_Time = asset.Events[hit].Time;
                 }
@@ -362,6 +365,7 @@ namespace Editor
             m_Joint = j;
             m_Shape = -1;
             m_Event = -1;
+            m_Property = -1;
         };
         auto selectedNames = [&]() {
             std::vector<std::string> names;
@@ -435,7 +439,7 @@ namespace Editor
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
             if (ImGui::Selectable(shapeNames[s].c_str(), selected, 0, ImVec2(labelW - 22.0f, rowH)))
             {
-                m_Event = -1;
+                m_Event = m_Property = -1;
                 m_Shape = s;
                 m_Joint = -1;
                 m_Selected.clear();
@@ -478,6 +482,123 @@ namespace Editor
                 }
             }
             if (ImGui::IsItemDeactivated() && m_Dragging && m_Shape == s)
+            {
+                m_Dragging = false;
+                commit = true;
+            }
+            ImGui::PopID();
+        }
+        // Object properties: a row per keyed property (from the clip), and + Property to key one more.
+        std::vector<std::string> properties;
+        for (const auto& c : asset.Channels)
+            if (AnimationClipAsset::IsProperty(c.Joint) && std::find(properties.begin(), properties.end(), c.Joint) == properties.end())
+                properties.push_back(c.Joint);
+        if (m_Property >= (int)properties.size()) m_Property = -1;
+        auto propertyLabel = [](const std::string& channel) {
+            std::string path, component, field;
+            AnimationClipAsset::ParseProperty(channel, path, component, field);
+            return (path.empty() ? std::string() : path + "/") + component + "." + field;
+        };
+        if (playing) ImGui::BeginDisabled();
+        if (ImGui::SmallButton("+ Property")) ImGui::OpenPopup("##addProperty");
+        if (playing) ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Key a component's value on this object or one under it (a light's intensity, a color, a position)");
+        if (ImGui::BeginPopup("##addProperty"))
+        {
+            // The object and everything under it, each with its components' numeric fields.
+            std::function<void(Entity, const std::string&)> object = [&](Entity target, const std::string& path) {
+                const std::string& label = path.empty() ? reg.Get<TagComponent>(target).Name : path;
+                if (ImGui::BeginMenu(label.c_str()))
+                {
+                    for (const ComponentInfo& info : ComponentRegistry::All())
+                    {
+                        if (info.Hidden || !info.Has(scene, target)) continue;
+                        void* data = info.Get(scene, target);
+                        bool any = false;
+                        for (const FieldInfo& f : info.Fields)
+                        {
+                            float probe[4];
+                            if (f.Hidden || FieldToFloats(f, f.Access(data), probe) == 0) continue;
+                            if (!any && !ImGui::BeginMenu(info.Name.c_str())) break;
+                            any = true;
+                            if (ImGui::MenuItem(f.Name.c_str()))
+                            {
+                                float value[4] = { 0, 0, 0, 0 };
+                                FieldToFloats(f, f.Access(data), value);
+                                std::string channel = AnimationClipAsset::PropertyChannel(path, info.Name, f.Name);
+                                asset.SetKey(channel, AnimationPath::Translation, m_Time, glm::vec4(value[0], value[1], value[2], value[3]));
+                                changed = commit = true;
+                                m_Joint = m_Shape = m_Event = -1;
+                                m_Selected.clear();
+                                m_PropertyPick = channel;
+                            }
+                        }
+                        if (any) ImGui::EndMenu();
+                    }
+                    ImGui::EndMenu();
+                }
+                for (Entity child : scene.GetChildren(target))
+                    object(child, (path.empty() ? std::string() : path + "/") + reg.Get<TagComponent>(child).Name);
+            };
+            object(entity, "");
+            ImGui::EndPopup();
+        }
+        if (!m_PropertyPick.empty())
+        {
+            auto it = std::find(properties.begin(), properties.end(), m_PropertyPick);
+            if (it != properties.end()) m_Property = (int)(it - properties.begin());
+            m_PropertyPick.clear();
+        }
+        for (int i = 0; i < (int)properties.size(); ++i)
+        {
+            const std::string& channel = properties[i];
+            ImGui::PushID(200000 + i);
+            bool selected = m_Property == i;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
+            if (ImGui::Selectable(propertyLabel(channel).c_str(), selected, 0, ImVec2(labelW - 22.0f, rowH)))
+            {
+                m_Property = i;
+                m_Joint = m_Shape = m_Event = -1;
+                m_Selected.clear();
+            }
+            ImGui::SameLine(labelW);
+            ImVec2 p0 = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##strip", ImVec2(stripW, rowH));
+            bool hovered = ImGui::IsItemHovered();
+            dl->AddRectFilled(p0, ImVec2(p0.x + stripW, p0.y + rowH), selected ? IM_COL32(44, 60, 52, 255) : IM_COL32(34, 35, 40, 255), 3.0f);
+            float hit = -1.0f;
+            for (float t : KeyTimes(asset, &channel))
+            {
+                float x = timeToX(p0.x, t);
+                bool sel = selected && m_KeyTime >= 0.0f && std::abs(m_KeyTime - t) <= AnimationClipAsset::kKeyTolerance * 0.5f;
+                diamond(x, p0.y + rowH * 0.5f, sel ? IM_COL32(255, 210, 90, 255) : IM_COL32(140, 215, 160, 255));
+                if (hovered && std::abs(mouseX - x) < 6.0f) hit = t;
+            }
+            if (ImGui::IsItemClicked())
+            {
+                m_Property = i;
+                m_Joint = m_Shape = m_Event = -1;
+                m_Selected.clear();
+                m_KeyTime = hit;
+                m_Dragging = hit >= 0.0f && !playing;
+                m_Time = hit >= 0.0f ? hit : xToTime(p0.x, mouseX);
+            }
+            if (hovered && hit >= 0.0f && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            {
+                pendingRemove = channel;
+                removeAt = hit;
+            }
+            if (m_Dragging && m_Property == i && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f))
+            {
+                float to = xToTime(p0.x, mouseX);
+                if (std::abs(to - m_KeyTime) > AnimationClipAsset::kKeyTolerance && asset.MoveKeys(channel, m_KeyTime, to))
+                {
+                    m_KeyTime = to;
+                    m_Time = to;
+                    changed = true;
+                }
+            }
+            if (ImGui::IsItemDeactivated() && m_Dragging && m_Property == i)
             {
                 m_Dragging = false;
                 commit = true;
@@ -815,6 +936,59 @@ namespace Editor
             }
             if (playing) ImGui::EndDisabled();
         }
+        else if (m_Property >= 0 && m_Property < (int)properties.size())
+        {
+            // The selected property at the current time (from the clip): editing it keys it there.
+            const std::string& channel = properties[m_Property];
+            std::string path, component, field;
+            AnimationClipAsset::ParseProperty(channel, path, component, field);
+            glm::vec4 value(0.0f);
+            for (const auto& pc : sampled.PropertyChannels)
+                if (pc.Path == path && pc.Component == component && pc.Field == field) value = Animation::SampleChannel(pc.Curve, m_Time);
+            // How many numbers the field has (four when the object or component is not there).
+            int count = 4;
+            Entity target = Timeline::ResolvePath(scene, entity, path);
+            if (const ComponentInfo* info = target.IsNull() ? nullptr : ComponentRegistry::Find(component); info && info->Has(scene, target))
+                for (const FieldInfo& f : info->Fields)
+                    if (f.Name == field)
+                    {
+                        float probe[4];
+                        count = std::max(FieldToFloats(f, f.Access(info->Get(scene, target)), probe), 1);
+                    }
+            ImGui::TextUnformatted(propertyLabel(channel).c_str());
+            ImGui::SameLine(labelW);
+            if (playing) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(70.0f * count);
+            bool edited = count == 1 ? ImGui::DragFloat("Value", &value.x, 0.01f) : count == 2 ? ImGui::DragFloat2("Value", &value.x, 0.01f)
+                        : count == 3 ? ImGui::DragFloat3("Value", &value.x, 0.01f) : ImGui::DragFloat4("Value", &value.x, 0.01f);
+            if (edited)
+            {
+                asset.SetKey(channel, AnimationPath::Translation, m_Time, value);
+                changed = true;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
+            ImGui::SetItemTooltip("The value at the current time; changing it keys it there (played while the game runs)");
+            ImGui::SameLine();
+            bool keyed = asset.HasKey(channel, m_Time);
+            if (!keyed) ImGui::BeginDisabled();
+            if (ImGui::Button("Delete Key"))
+            {
+                asset.RemoveKeys(channel, m_Time);
+                m_KeyTime = -1.0f;
+                changed = commit = true;
+            }
+            if (!keyed) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Remove"))
+            {
+                std::erase_if(asset.Channels, [&](const AnimationClipAsset::Channel& c) { return c.Joint == channel; });
+                ++asset.Version;
+                m_Property = -1;
+                changed = commit = true;
+            }
+            ImGui::SetItemTooltip("Stop animating this property (every key of it)");
+            if (playing) ImGui::EndDisabled();
+        }
         else if (m_Shape >= 0)
         {
             // The selected blend shape's weight at the current time (0..100): editing it keys it there.
@@ -851,7 +1025,7 @@ namespace Editor
             if (playing) ImGui::EndDisabled();
         }
         else
-            ImGui::TextDisabled("Select a joint to key its rotation and position, a blend shape its weight, or an event to name it (+ Event adds one).");
+            ImGui::TextDisabled("Select a joint to key its rotation and position, a blend shape or property its value, or an event to name it.");
 
         if (changed)
         {

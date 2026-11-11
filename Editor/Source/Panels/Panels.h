@@ -312,6 +312,8 @@ namespace Editor
         int m_Joint = -1;              // the selected joint (the one whose values show)
         int m_Shape = -1;              // or the selected blend shape (its weight shows)
         int m_Event = -1;              // or the selected event (index in the clip's)
+        int m_Property = -1;           // or the selected property row (of the clip's property channels, in order)
+        std::string m_PropertyPick;    // a property just added (selected next frame)
         bool m_EventDragging = false;
         std::vector<int> m_Selected;   // every selected joint (Ctrl / Shift click adds): keys, deletes and moves apply to all
         bool m_Dragging = false, m_GizmoUsing = false;

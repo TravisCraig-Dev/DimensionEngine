@@ -49,6 +49,14 @@ namespace Dimension
         // model's blend shapes, Values[k].x its weight (0..1), Path Translation (plain values). Kept apart from the
         // joint channels.
         std::vector<AnimationChannel> WeightChannels;
+        // Object properties (like Unity's clips keying any component field): a component's numeric field on the
+        // Animator's object, or on one under it by name path ("Lamp/Bulb"), as up to four floats (Curve.Values).
+        struct PropertyChannel
+        {
+            std::string Path, Component, Field;
+            AnimationChannel Curve; // (Path Translation: plain values)
+        };
+        std::vector<PropertyChannel> PropertyChannels;
         // Animation events (like Unity's on a clip): at a time (seconds), the function scripts get in OnAnimationEvent.
         struct Event
         {

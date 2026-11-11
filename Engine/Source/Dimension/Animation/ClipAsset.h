@@ -45,6 +45,15 @@ namespace Dimension
         AnimationClip ToClip(const Skeleton& skeleton, const std::vector<std::string>* shapes = nullptr) const;
         static constexpr const char* kBlendShape = "blendShape:";
         static bool IsBlendShape(const std::string& channel) { return channel.rfind(kBlendShape, 0) == 0; }
+        // Object properties are channels named kProperty + "path|Component|Field" (path from the Animator's object,
+        // empty for itself), their values up to four floats.
+        static constexpr const char* kProperty = "property:";
+        static bool IsProperty(const std::string& channel) { return channel.rfind(kProperty, 0) == 0; }
+        static std::string PropertyChannel(const std::string& path, const std::string& component, const std::string& field)
+        {
+            return kProperty + path + "|" + component + "|" + field;
+        }
+        static bool ParseProperty(const std::string& channel, std::string& path, std::string& component, std::string& field);
 
         // Editing: the channel of a joint's path (null when none / created), and keys set (replacing one within half
         // a frame of `time`, kept in time order) or removed. Keys at a time: whether any channel of the joint has one.

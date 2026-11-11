@@ -1466,6 +1466,21 @@ namespace Dimension
                     }
                     if (clip) Animation::Sample(*skeleton, *clip, pb.Time, out);
                     else out.SetBindPose(*skeleton);
+                    // The clip's object properties (while playing: previews leave the scene's values alone).
+                    if (clip && m_Running)
+                        for (const AnimationClip::PropertyChannel& p : clip->PropertyChannels)
+                        {
+                            Entity target = Timeline::ResolvePath(*this, e, p.Path);
+                            const ComponentInfo* info = target.IsNull() ? nullptr : ComponentRegistry::Find(p.Component);
+                            if (!info || !info->Has(*this, target)) continue;
+                            for (const FieldInfo& f : info->Fields)
+                                if (f.Name == p.Field)
+                                {
+                                    glm::vec4 v = Animation::SampleChannel(p.Curve, pb.Time);
+                                    FieldFromFloats(f, f.Access(info->Get(*this, target)), &v.x, 4);
+                                    break;
+                                }
+                        }
                 }
                 // How far the state has played, for scripts (Animator.NormalizedTime).
                 pb.NormalizedTime = machine && pb.Runtime.State >= 0 ? AnimatorStateMachine::NormalizedTime(*machine, pb.Runtime, duration)

@@ -124,6 +124,19 @@ namespace Dimension
             c.OutTangents = ch.OutTangents;
             a.Channels.push_back(std::move(c));
         }
+        // Object properties.
+        for (const AnimationClip::PropertyChannel& p : clip.PropertyChannels)
+        {
+            Channel c;
+            c.Joint = PropertyChannel(p.Path, p.Component, p.Field);
+            c.Path = AnimationPath::Translation;
+            c.Interpolation = p.Curve.Interpolation;
+            c.Times = p.Curve.Times;
+            c.Values = p.Curve.Values;
+            c.InTangents = p.Curve.InTangents;
+            c.OutTangents = p.Curve.OutTangents;
+            a.Channels.push_back(std::move(c));
+        }
         // Blend shape weights, by the shapes' names.
         for (const AnimationChannel& ch : clip.WeightChannels)
         {
@@ -149,6 +162,20 @@ namespace Dimension
         clip.Events = Events;
         for (const Channel& c : Channels)
         {
+            if (IsProperty(c.Joint))
+            {
+                AnimationClip::PropertyChannel p;
+                if (c.Times.empty() || c.Times.size() != c.Values.size() || !ParseProperty(c.Joint, p.Path, p.Component, p.Field)) continue;
+                p.Curve.Path = AnimationPath::Translation;
+                p.Curve.Interpolation = c.Interpolation;
+                p.Curve.Times = c.Times;
+                p.Curve.Values = c.Values;
+                p.Curve.InTangents = c.InTangents;
+                p.Curve.OutTangents = c.OutTangents;
+                if (c.Smooth) Animation::AutoTangents(p.Curve);
+                clip.PropertyChannels.push_back(std::move(p));
+                continue;
+            }
             if (IsBlendShape(c.Joint))
             {
                 // A blend shape weight: the model's shape of that name.
@@ -369,6 +396,18 @@ namespace Dimension
         }
         if (moved) ++Version;
         return moved;
+    }
+
+    bool AnimationClipAsset::ParseProperty(const std::string& channel, std::string& path, std::string& component, std::string& field)
+    {
+        if (!IsProperty(channel)) return false;
+        std::string rest = channel.substr(std::strlen(kProperty));
+        size_t a = rest.find('|'), b = a == std::string::npos ? a : rest.find('|', a + 1);
+        if (b == std::string::npos) return false;
+        path = rest.substr(0, a);
+        component = rest.substr(a + 1, b - a - 1);
+        field = rest.substr(b + 1);
+        return !component.empty() && !field.empty();
     }
 
     int AnimationClipAsset::AddEvent(float time, const std::string& function)

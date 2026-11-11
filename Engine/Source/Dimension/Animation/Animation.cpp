@@ -461,6 +461,7 @@ namespace Dimension
             out.Name = clip.Name;
             out.Duration = clip.Duration;
             out.Events = clip.Events;
+            out.PropertyChannels = clip.PropertyChannels; // (by the object's own paths: they carry over)
             for (const AnimationChannel& ch : clip.Channels)
             {
                 if (ch.Joint < 0 || ch.Joint >= (int)source.Joints.size()) continue;
@@ -939,6 +940,7 @@ namespace Dimension
             out.Name = clip.Name;
             out.Duration = clip.Duration;
             out.Events = clip.Events;
+            out.PropertyChannels = clip.PropertyChannels;
             for (size_t j = 0; j < channels.size(); ++j)
                 if (sourceOf[j] >= 0)
                 {
