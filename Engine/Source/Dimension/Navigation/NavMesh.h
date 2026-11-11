@@ -42,6 +42,9 @@ namespace Dimension
         // update re-samples only the columns that changed and keeps the rest.
         std::vector<uint32_t> RawStart;
         std::vector<float> RawHeights;
+        // Per raw surface: the area and cost a NavMesh Modifier on what it lies on gives it (255 = none).
+        std::vector<uint8_t> RawAreas;
+        std::vector<float> RawCosts;
 
         int NodeCount() const { return (int)Heights.size(); }
         bool IsBlocked(int node) const { return !Blocked.empty() && Blocked[node]; }

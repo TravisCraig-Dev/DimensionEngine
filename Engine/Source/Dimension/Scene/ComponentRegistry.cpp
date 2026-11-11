@@ -848,6 +848,13 @@ namespace Dimension
             .Field("Size", &NavMeshModifierVolumeComponent::Size).Speed(0.05f)
             .Field("Area", &NavMeshModifierVolumeComponent::Area).Enum({ "Walkable", "Not Walkable", "Road", "Grass", "Mud", "Water", "Area 6", "Area 7" })
             .Field("Cost", &NavMeshModifierVolumeComponent::Cost).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Walking here counts this many times (below 1: preferred; 0 = the area's cost, Window > Navigation)");
+        Register<NavMeshModifierComponent>("NavMesh Modifier", "Navigation")
+            .Field("Ignore From Build", &NavMeshModifierComponent::IgnoreFromBuild)
+                .Tooltip("Bakes leave its colliders out: agents neither walk on them nor go around them")
+            .Field("Override Area", &NavMeshModifierComponent::OverrideArea).Tooltip("The ground its colliders give is of Area")
+            .Field("Area", &NavMeshModifierComponent::Area).Enum({ "Walkable", "Not Walkable", "Road", "Grass", "Mud", "Water", "Area 6", "Area 7" })
+            .Field("Cost", &NavMeshModifierComponent::Cost).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Walking here counts this many times (0 = the area's cost, Window > Navigation)")
+            .Field("Apply To Children", &NavMeshModifierComponent::ApplyToChildren).Tooltip("Its children's colliders too (unless they have a modifier of their own)");
         Register<NavMeshObstacleComponent>("NavMesh Obstacle", "Navigation")
             .Field("Shape", &NavMeshObstacleComponent::Shape).Enum({ "Box", "Capsule" })
             .Field("Center", &NavMeshObstacleComponent::Center).Speed(0.01f)

@@ -3551,6 +3551,68 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    void TestNavMeshModifiers()
+    {
+        // The yard with modifiers: the wall left out of the bake, a road slab (Road, cost 0.5) with a child slab that
+        // shares it, a crate stack whose top is Not Walkable, and a slab whose child keeps its own (no Apply To
+        // Children).
+        Scene scene("Yard");
+        Entity surface = BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        auto box = [&](const char* name, glm::vec3 at, glm::vec3 size, Entity parent = Entity::Null()) {
+            Entity e = scene.CreateEntity(name);
+            if (!parent.IsNull()) scene.SetParent(e, parent, false);
+            reg.Get<TransformComponent>(e).Position = at;
+            reg.Emplace<BoxColliderComponent>(e).Size = size;
+            return e;
+        };
+        Entity wall = scene.FindEntityByName("Wall");
+        reg.Emplace<NavMeshModifierComponent>(wall).IgnoreFromBuild = true;
+        Entity road = box("Road", { -8.0f, 0.05f, -8.0f }, { 6.0f, 0.1f, 6.0f });
+        auto& roadMod = reg.Emplace<NavMeshModifierComponent>(road);
+        roadMod.Area = NavArea::Road;
+        roadMod.Cost = 0.5f;
+        box("Road Extension", { 6.0f, 0.0f, 0.0f }, { 6.0f, 0.1f, 6.0f }, road); // at x = -2, under the road's modifier
+        Entity stack = box("Stack", { 8.0f, 1.0f, -8.0f }, { 4.0f, 2.0f, 4.0f });
+        reg.Emplace<NavMeshModifierComponent>(stack); // (Override Area, Not Walkable: the defaults)
+        Entity slab = box("Slab", { 5.0f, 0.05f, 5.0f }, { 3.0f, 0.1f, 3.0f });
+        auto& slabMod = reg.Emplace<NavMeshModifierComponent>(slab);
+        slabMod.Area = NavArea::Mud;
+        slabMod.ApplyToChildren = false;
+        box("Slab Child", { 0.0f, 0.0f, 3.0f }, { 3.0f, 0.1f, 3.0f }, slab); // at z = 8: its own (none)
+        scene.UpdateTransforms();
+        auto mesh = Navigation::Bake(scene, surface);
+        CHECK(mesh);
+        if (!mesh) return;
+        const NavMeshData& m = *mesh;
+        auto areaAt = [&](glm::vec3 p) {
+            int node = Navigation::Nearest(m, p, 0.2f);
+            return node < 0 ? -1 : (int)m.Areas[node];
+        };
+        // The wall is gone: its line is walkable, and the two sides are one area.
+        int a = Navigation::Nearest(m, { -5.0f, 0.0f, -2.0f }, 0.2f), b = Navigation::Nearest(m, { -5.0f, 0.0f, 2.0f }, 0.2f);
+        CHECK(Navigation::Nearest(m, { -4.0f, 0.0f, 0.0f }, 0.2f) >= 0 && a >= 0 && b >= 0 && m.Islands[a] == m.Islands[b]);
+        // The road and its child are Road (cost 0.5); the ground beside them stays Walkable.
+        int onRoad = Navigation::Nearest(m, { -8.0f, 0.1f, -8.0f }, 0.2f);
+        CHECK(onRoad >= 0 && m.Areas[onRoad] == (int)NavArea::Road && Near(m.Costs[onRoad], 0.5f) && Near(m.Heights[onRoad], 0.1f, 0.01f));
+        CHECK(areaAt({ -2.0f, 0.1f, -8.0f }) == (int)NavArea::Road && areaAt({ -12.0f, 0.0f, 3.0f }) == 0);
+        // The stack's top is no spot at all; the mud slab is Mud but its child (no Apply To Children) is not.
+        CHECK(Navigation::Nearest(m, { 8.0f, 2.0f, -8.0f }, 0.3f) < 0);
+        CHECK(areaAt({ 5.0f, 0.1f, 5.0f }) == (int)NavArea::Mud && areaAt({ 5.0f, 0.1f, 8.0f }) == 0);
+        // Paths prefer the cheap road.
+        CHECK(m.MinCost <= 0.5f);
+        // A saved bake keeps them (format 2), and the raw areas survive an area update elsewhere.
+        fs::path file = fs::temp_directory_path() / "dimension_nav_modifiers.navmesh";
+        CHECK(Navigation::WriteData(file, m, 1, glm::mat4(1.0f)));
+        auto read = Navigation::ReadData(file);
+        CHECK(read && read->RawAreas == m.RawAreas && read->Areas == m.Areas && read->Costs == m.Costs);
+        fs::remove(file);
+        CHECK(Navigation::UpdateArea(scene, { 10.0f, -1.0f, 10.0f }, { 12.0f, 3.0f, 12.0f }) == 1);
+        const NavMeshData& updated = *reg.Get<NavMeshSurfaceComponent>(surface).Baked;
+        int stillRoad = Navigation::Nearest(updated, { -8.0f, 0.1f, -8.0f }, 0.2f);
+        CHECK(stillRoad >= 0 && updated.Areas[stillRoad] == (int)NavArea::Road);
+    }
+
     void TestNavMeshSaved()
     {
         // A bake saved beside the scene (Assets/Scenes/Yard/NavMesh-Navigation.navmesh) as a NavMesh Data asset.
@@ -15961,6 +16023,7 @@ int main(int argc, char** argv)
     Run("Terrain crater", TestTerrainCrater);
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh saved with the scene", TestNavMeshSaved);
+    Run("NavMesh modifiers", TestNavMeshModifiers);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);

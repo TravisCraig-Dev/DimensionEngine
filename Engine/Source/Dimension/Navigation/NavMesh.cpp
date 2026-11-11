@@ -46,6 +46,16 @@ namespace Dimension
                 return false;
             }
 
+            // The NavMesh Modifier that decides for a collider's object: its own, else the nearest ancestor's with Apply
+            // To Children (an ancestor's without it stops the search).
+            const NavMeshModifierComponent* ModifierOf(Scene& scene, Entity e)
+            {
+                auto& reg = scene.GetRegistry();
+                for (Entity x = e; !x.IsNull() && scene.IsValid(x); x = scene.GetParent(x))
+                    if (auto* m = reg.TryGet<NavMeshModifierComponent>(x)) return x == e || m->ApplyToChildren ? m : nullptr;
+                return nullptr;
+            }
+
             bool Ignored(Scene& scene, Entity e, const BakeScope& scope)
             {
                 auto& reg = scene.GetRegistry();
@@ -66,6 +76,7 @@ namespace Dimension
                 if (auto* c = reg.TryGet<SphereColliderComponent>(e); c && c->IsTrigger) return true;
                 if (auto* c = reg.TryGet<CapsuleColliderComponent>(e); c && c->IsTrigger) return true;
                 if (auto* c = reg.TryGet<MeshColliderComponent>(e); c && c->IsTrigger) return true;
+                if (const NavMeshModifierComponent* m = ModifierOf(scene, e); m && m->IgnoreFromBuild) return true;
                 return false;
             }
 
@@ -313,8 +324,14 @@ namespace Dimension
                         if (previous && (x < region.x || z < region.y || x > region.z || z > region.w))
                         {
                             int col = z * m->Width + x;
-                            m->RawHeights.insert(m->RawHeights.end(), previous->RawHeights.begin() + previous->RawStart[col],
-                                                 previous->RawHeights.begin() + previous->RawStart[col + 1]);
+                            uint32_t from = previous->RawStart[col], to = previous->RawStart[col + 1];
+                            m->RawHeights.insert(m->RawHeights.end(), previous->RawHeights.begin() + from, previous->RawHeights.begin() + to);
+                            bool areas = previous->RawAreas.size() == previous->RawHeights.size() && previous->RawCosts.size() == previous->RawHeights.size();
+                            for (uint32_t k = from; k < to; ++k)
+                            {
+                                m->RawAreas.push_back(areas ? previous->RawAreas[k] : 255);
+                                m->RawCosts.push_back(areas ? previous->RawCosts[k] : 1.0f);
+                            }
                             continue;
                         }
                         if (clear) continue; // a dropped tile: nothing there
@@ -336,7 +353,18 @@ namespace Dimension
                                     break;
                                 }
                             if (blocked || notWalkable(h.Point)) continue;
+                            // The ground's own area, from a NavMesh Modifier on what it lies on.
+                            uint8_t area = 255;
+                            float cost = 1.0f;
+                            if (const NavMeshModifierComponent* mod = ModifierOf(scene, h.Hit); mod && mod->OverrideArea)
+                            {
+                                area = (uint8_t)std::clamp((int)mod->Area, 0, kAreaCount - 1);
+                                if (area == kNotWalkable) continue;
+                                cost = std::max(mod->Cost > 0.0f ? mod->Cost : Project::GetConfig().NavAreaCosts[area], 0.01f);
+                            }
                             m->RawHeights.push_back(y);
+                            m->RawAreas.push_back(area);
+                            m->RawCosts.push_back(cost);
                         }
                     }
                 m->RawStart.push_back((uint32_t)m->RawHeights.size());
@@ -360,16 +388,34 @@ namespace Dimension
                             break;
                         }
                 Spread(*m, m->Clearance);
+                // Each spot's area from its ground's modifier (kept in step with the spots compacted below).
+                std::vector<uint8_t> nodeAreas = m->RawAreas;
+                std::vector<float> nodeCosts = m->RawCosts;
                 if (m->AgentRadius > 0.0f && n > 0)
                 {
                     std::vector<uint8_t> keep(n);
                     for (int a = 0; a < n; ++a) keep[a] = m->Clearance[a] >= m->AgentRadius - 1e-4f;
                     Compact(*m, keep);
+                    if (nodeAreas.size() == keep.size())
+                    {
+                        size_t w = 0;
+                        for (size_t a = 0; a < keep.size(); ++a)
+                            if (keep[a]) nodeAreas[w] = nodeAreas[a], nodeCosts[w] = nodeCosts[a], ++w;
+                        nodeAreas.resize(w);
+                        nodeCosts.resize(w);
+                    }
                 }
                 n = m->NodeCount();
-                // Areas and costs from the modifier volumes (the last one containing a spot wins).
+                // Areas and costs: the ground's modifier's, then the modifier volumes' (the last one containing a spot wins).
                 m->Areas.assign(n, 0);
                 m->Costs.assign(n, 1.0f);
+                if (nodeAreas.size() == (size_t)n && nodeCosts.size() == (size_t)n)
+                    for (int a = 0; a < n; ++a)
+                        if (nodeAreas[a] != 255)
+                        {
+                            m->Areas[a] = nodeAreas[a];
+                            m->Costs[a] = nodeCosts[a];
+                        }
                 for (int a = 0; a < n; ++a)
                     for (const Volume& v : volumes)
                         if (v.Area != kNotWalkable && v.Contains(m->NodePosition(a) + glm::vec3(0.0f, 0.05f, 0.0f)))
@@ -1230,7 +1276,7 @@ namespace Dimension
         namespace
         {
             constexpr uint32_t kNavMagic = 0x56414E44; // "DNAV"
-            constexpr uint32_t kNavVersion = 1;
+            constexpr uint32_t kNavVersion = 2; // 2: raw areas and costs (NavMesh Modifiers)
 
             template <typename T> void Put(std::ofstream& out, const T& v) { out.write((const char*)&v, sizeof(T)); }
             template <typename T> void PutList(std::ofstream& out, const std::vector<T>& v)
@@ -1280,6 +1326,8 @@ namespace Dimension
             }
             PutList(out, m.RawStart);
             PutList(out, m.RawHeights);
+            PutList(out, m.RawAreas);
+            PutList(out, m.RawCosts);
             return (bool)out;
         }
 
@@ -1290,7 +1338,7 @@ namespace Dimension
             uint64_t k = 0;
             glm::mat4 at(1.0f);
             auto m = std::make_shared<NavMeshData>();
-            if (!in || !Take(in, magic) || magic != kNavMagic || !Take(in, version) || version != kNavVersion || !Take(in, k) || !Take(in, at))
+            if (!in || !Take(in, magic) || magic != kNavMagic || !Take(in, version) || version < 1 || version > kNavVersion || !Take(in, k) || !Take(in, at))
                 return nullptr;
             bool ok = Take(in, m->Origin) && Take(in, m->CellSize) && Take(in, m->Width) && Take(in, m->Depth) && Take(in, m->AgentRadius) &&
                       Take(in, m->AgentHeight) && Take(in, m->StepHeight) && Take(in, m->MinCost) && TakeList(in, m->ColumnStart) &&
@@ -1307,6 +1355,7 @@ namespace Dimension
                 m->AutoLinks.push_back(l);
             }
             ok = ok && TakeList(in, m->RawStart) && TakeList(in, m->RawHeights);
+            if (version >= 2) ok = ok && TakeList(in, m->RawAreas) && TakeList(in, m->RawCosts);
             // Consistent sizes, or it is not used.
             size_t nodes = m->Heights.size();
             ok = ok && m->Width >= 0 && m->Depth >= 0 && m->ColumnStart.size() == (size_t)m->Width * m->Depth + 1 && m->Columns.size() == nodes &&
@@ -1348,7 +1397,8 @@ namespace Dimension
             std::ifstream in(AssetManager::GetAbsolutePath(s->BakedData), std::ios::binary);
             uint32_t magic = 0, version = 0;
             uint64_t key = 0;
-            return in && Take(in, magic) && magic == kNavMagic && Take(in, version) && version == kNavVersion && Take(in, key) && key == SettingsKey(scene, e);
+            return in && Take(in, magic) && magic == kNavMagic && Take(in, version) && version >= 1 && version <= kNavVersion && Take(in, key) &&
+                   key == SettingsKey(scene, e);
         }
 
         bool LoadSaved(Scene& scene, Entity e)
@@ -1607,9 +1657,10 @@ namespace Dimension
         void ApplyAreaNames()
         {
             // The Area dropdown shows the project's names.
-            if (ComponentInfo* info = ComponentRegistry::FindMutable("NavMesh Modifier Volume"))
-                for (FieldInfo& f : info->Fields)
-                    if (f.Name == "Area") f.EnumNames.assign(Project::GetConfig().NavAreaNames.begin(), Project::GetConfig().NavAreaNames.end());
+            for (const char* component : { "NavMesh Modifier Volume", "NavMesh Modifier" })
+                if (ComponentInfo* info = ComponentRegistry::FindMutable(component))
+                    for (FieldInfo& f : info->Fields)
+                        if (f.Name == "Area") f.EnumNames.assign(Project::GetConfig().NavAreaNames.begin(), Project::GetConfig().NavAreaNames.end());
         }
 
         glm::mat4 MeshFrame(Scene& scene, const NavMeshData* mesh)

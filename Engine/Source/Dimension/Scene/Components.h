@@ -1167,6 +1167,19 @@ namespace Dimension
         float Cost = 0.0f; // 0 = the area's cost in the project (Window > Navigation)
     };
 
+    // A NavMesh Modifier (like Unity's): how bakes treat its object's colliders, and its children's with Apply To
+    // Children (a child's own modifier wins): Ignore From Build leaves them out (they neither carry agents nor block
+    // them), Override Area makes the ground they give an Area with a Cost (Not Walkable takes it out of the mesh).
+    // NavMesh Modifier Volumes still win where they cover it.
+    struct NavMeshModifierComponent
+    {
+        bool IgnoreFromBuild = false;
+        bool OverrideArea = true;
+        NavArea Area = NavArea::NotWalkable;
+        float Cost = 0.0f; // 0 = the area's cost in the project (Window > Navigation)
+        bool ApplyToChildren = true;
+    };
+
     // An Off-Mesh Link (like Unity's): a way between two points of the navigation mesh that is not walked on it (a
     // jump across a gap or down a ledge, a ladder). Start and End are in the object's space; agents route through it
     // and cross it in a jump Arc Height high (0 = straight, as on a ladder). Its length counts Cost Modifier times
