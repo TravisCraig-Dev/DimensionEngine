@@ -336,7 +336,7 @@ namespace Dimension
 
         struct ManagedApi
         {
-            int (*LoadScripts)(const char*);
+            int (*LoadScripts)(const char*, int); // path, 1 = fixed (no reloads: ahead-of-time code is used)
             void (*UnloadScripts)();
             intptr_t (*CreateInstance)(const char*, void*, uint64_t);
             void (*SetField)(intptr_t, int, const void*);
@@ -2779,6 +2779,28 @@ namespace Dimension
 
     const char* CSharpRuntime::RuntimeSource() { return s_RuntimeSource; }
 
+    fs::path CSharpRuntime::InstalledFramework()
+    {
+        char_t hostfxrPath[MAX_PATH];
+        size_t size = MAX_PATH;
+        if (get_hostfxr_path(hostfxrPath, &size, nullptr) != 0) return {};
+        fs::path root = fs::path(hostfxrPath).parent_path().parent_path().parent_path().parent_path();
+        fs::path frameworks = root / "shared" / "Microsoft.NETCore.App", framework;
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(frameworks, ec))
+        {
+            std::string name = entry.path().filename().string();
+            if (!entry.is_directory() || name.rfind("10.", 0) != 0) continue;
+            auto version = [](const std::string& v) {
+                std::array<int, 3> n{};
+                std::sscanf(v.c_str(), "%d.%d.%d", &n[0], &n[1], &n[2]);
+                return n;
+            };
+            if (framework.empty() || version(name) > version(framework.filename().string())) framework = entry.path();
+        }
+        return framework;
+    }
+
     bool CSharpRuntime::BundleRuntime(const fs::path& dotnetDir, uintmax_t* bytes)
     {
         // The installed runtime: hostfxr is <root>/host/fxr/<version>/hostfxr.dll.
@@ -2907,7 +2929,7 @@ namespace Dimension
 
     bool CSharpRuntime::IsAvailable() { return s_Available; }
 
-    bool CSharpRuntime::LoadScripts(const fs::path& assemblyPath)
+    bool CSharpRuntime::LoadScripts(const fs::path& assemblyPath, bool reloadable)
     {
         if (!s_Available) return false;
         UnloadScripts();
@@ -2915,7 +2937,7 @@ namespace Dimension
         std::error_code ec;
         if (!fs::exists(assemblyPath)) return false;
         s_ScriptsTime = fs::last_write_time(assemblyPath, ec);
-        int count = s_Managed.LoadScripts(assemblyPath.string().c_str());
+        int count = s_Managed.LoadScripts(assemblyPath.string().c_str(), reloadable ? 0 : 1);
         Log::Info("Loaded {} C# script class(es) from '{}'", count, assemblyPath.filename().string());
         return count >= 0;
     }
@@ -3078,7 +3100,7 @@ namespace Dimension
     bool CSharpRuntime::WaitForDebugger(float) { return false; }
     bool CSharpRuntime::Init(const fs::path&) { return false; }
     bool CSharpRuntime::IsAvailable() { return false; }
-    bool CSharpRuntime::LoadScripts(const fs::path&) { return false; }
+    bool CSharpRuntime::LoadScripts(const fs::path&, bool) { return false; }
     void CSharpRuntime::UnloadScripts() {}
     const fs::path& CSharpRuntime::GetScriptsPath() { static fs::path p; return p; }
     bool CSharpRuntime::ScriptsChangedOnDisk() { return false; }

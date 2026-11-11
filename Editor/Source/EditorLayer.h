@@ -5,6 +5,7 @@
 #include <Dimension/Scene/SelectionHistory.h>
 #include "Panels/Panels.h"
 #include <Dimension/Core/Application.h>
+#include <Dimension/Project/Project.h>
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/CameraStack.h>
 #include "AssetPreviews.h"
@@ -169,6 +170,7 @@ namespace Editor
         void BuildDefaultLayout(unsigned int dockspaceId);
         // Builds the game into `folder` (asks for one when empty); optionally runs it afterwards.
         bool BuildGame(bool run = false, fs::path folder = {});
+        void PrepareManagedCode(const ProjectConfig& config, const fs::path& folder, const fs::path& scriptsDll);
         void FocusSelected();
         void LoadGameModule();
         void ReloadGameModule();

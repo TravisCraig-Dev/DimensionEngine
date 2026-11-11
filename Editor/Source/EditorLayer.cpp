@@ -37,6 +37,7 @@
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/EditModeScripts.h>
 #include <Dimension/Scripting/CSharpProject.h>
+#include <Dimension/Scripting/ManagedBuild.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
 #include <Dimension/UI/UI.h>
 #include <Dimension/Asset/ImportCache.h>
@@ -4699,6 +4700,18 @@ namespace Editor
         ImGui::SameLine();
         UI::HelpMarker("Ships the .NET runtime with the game (about 70 MB), so its C# scripts run on machines without .NET "
                        "installed. Off: players need the .NET 10 runtime.");
+        if (!config.BundleDotNet) ImGui::BeginDisabled();
+        ImGui::Indent();
+        changed |= ImGui::Checkbox("Trim .NET Runtime", &config.TrimDotNet);
+        ImGui::SameLine();
+        UI::HelpMarker("Ships only the framework assemblies the C# scripts and the engine can reach through their references "
+                       "(about a third of the runtime). Turn it off for scripts that load framework assemblies by name at run time.");
+        ImGui::Unindent();
+        if (!config.BundleDotNet) ImGui::EndDisabled();
+        changed |= ImGui::Checkbox("Ahead-of-Time C#", &config.AheadOfTimeScripts);
+        ImGui::SameLine();
+        UI::HelpMarker("Compiles the game's C# scripts and the engine's C# API to native code when building (ReadyToRun, with "
+                       "crossgen2), so the game does not compile them when it starts. The first build may download crossgen2.");
         changed |= ImGui::Checkbox("Pack Assets", &config.PackAssets);
         ImGui::SameLine();
         UI::HelpMarker("Ships the assets as one Assets.pak instead of a folder of files. The game unpacks it once per version "
@@ -4860,6 +4873,7 @@ namespace Editor
             fs::create_directories((projectOut / rel).parent_path(), ec);
             fs::copy_file(scripts, projectOut / rel, fs::copy_options::overwrite_existing, ec);
         }
+        if (!ec && fs::exists(folder / "managed" / "Dimension.Core.dll")) PrepareManagedCode(config, folder, projectOut / scripts.lexically_relative(Project::GetDirectory()));
         if (ec)
         {
             Log::Error("Copying assets failed: {}", ec.message());
@@ -4869,6 +4883,53 @@ namespace Editor
         if (run) FileDialogs::OpenWithDefaultApp(exe);
         else if (!batch) FileDialogs::OpenWithDefaultApp(folder);
         return true;
+    }
+
+    // The build's C#: the engine API and the game's scripts compiled ahead of time (ReadyToRun), and a bundled runtime
+    // trimmed to the framework assemblies they reach. Failures only cost start-up time, so they warn.
+    void EditorLayer::PrepareManagedCode(const ProjectConfig& config, const fs::path& folder, const fs::path& scriptsDll)
+    {
+        fs::path managed = folder / "managed", framework;
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(folder / "dotnet" / "shared" / "Microsoft.NETCore.App", ec))
+            if (entry.is_directory()) framework = entry.path();
+        if (framework.empty()) framework = CSharpRuntime::InstalledFramework();
+        if (framework.empty()) return;
+        std::vector<fs::path> assemblies = { managed / "Dimension.Core.dll" };
+        if (fs::exists(scriptsDll)) assemblies.push_back(scriptsDll);
+        if (config.AheadOfTimeScripts)
+        {
+            auto start = std::chrono::steady_clock::now();
+            fs::path crossgen = ManagedBuild::FindCrossgen(framework.filename().string(), true);
+            int compiled = 0;
+            for (const fs::path& dll : assemblies)
+            {
+                if (crossgen.empty()) break;
+                std::string log;
+                std::vector<fs::path> references = { framework };
+                if (dll != assemblies[0]) references.push_back(assemblies[0]);
+                if (ManagedBuild::CompileReadyToRun(crossgen, dll, dll, references, &log)) ++compiled;
+                else Log::Warn("Ahead-of-time compiling {} failed (it is compiled when the game starts): {}", dll.filename().string(), log);
+            }
+            if (crossgen.empty()) Log::Warn("crossgen2 was not found (the .NET SDK could not restore it): C# is compiled when the game starts");
+            else
+                Log::Info("Compiled {} C# assembl{} ahead of time ({:.1f} s)", compiled, compiled == 1 ? "y" : "ies",
+                          std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count());
+        }
+        if (config.BundleDotNet && config.TrimDotNet && framework.parent_path().parent_path().parent_path() == folder / "dotnet")
+        {
+            uintmax_t removed = 0, kept = 0;
+            int files = 0;
+            if (ManagedBuild::TrimFramework(framework, assemblies, &removed, &files))
+            {
+                for (const auto& entry : fs::recursive_directory_iterator(folder / "dotnet", ec))
+                    if (entry.is_regular_file()) kept += entry.file_size();
+                Log::Info("Trimmed the .NET runtime: left out {} assemblies the C# does not reach ({:.1f} MB), shipping {:.1f} MB", files,
+                          removed / 1048576.0, kept / 1048576.0);
+            }
+            else
+                Log::Warn("Trimming the .NET runtime failed: the whole runtime ships");
+        }
     }
 
     // ---- Game module (hot reload) ------------------------------------------------------------

@@ -19,7 +19,7 @@ namespace Dimension
     {
         private sealed class ScriptLoadContext : AssemblyLoadContext
         {
-            public ScriptLoadContext() : base("DimensionScripts", isCollectible: true) { }
+            public ScriptLoadContext(bool collectible) : base("DimensionScripts", isCollectible: collectible) { }
 
             protected override Assembly Load(AssemblyName name)
             {
@@ -685,19 +685,30 @@ namespace Dimension
         }
 
         [UnmanagedCallersOnly]
-        internal static int LoadScripts(byte* pathUtf8)
+        internal static int LoadScripts(byte* pathUtf8, int fixedLoad)
         {
             try
             {
                 UnloadInternal();
                 string path = Native.FromUtf8(pathUtf8);
                 if (!File.Exists(path)) return 0;
-                s_Context = new ScriptLoadContext();
-                // Load from memory so the compiler can overwrite the file while we run.
-                string pdb = Path.ChangeExtension(path, ".pdb");
-                using var dll = new MemoryStream(File.ReadAllBytes(path));
-                using var symbols = File.Exists(pdb) ? new MemoryStream(File.ReadAllBytes(pdb)) : null;
-                Assembly assembly = s_Context.LoadFromStream(dll, symbols);
+                Assembly assembly;
+                if (fixedLoad != 0)
+                {
+                    // A built game: loaded once from the file, in a context that stays, so its ahead-of-time
+                    // (ReadyToRun) code runs instead of being compiled again (collectible and in-memory loads skip it).
+                    s_Context = new ScriptLoadContext(collectible: false);
+                    assembly = s_Context.LoadFromAssemblyPath(Path.GetFullPath(path));
+                }
+                else
+                {
+                    s_Context = new ScriptLoadContext(collectible: true);
+                    // Load from memory so the compiler can overwrite the file while we run.
+                    string pdb = Path.ChangeExtension(path, ".pdb");
+                    using var dll = new MemoryStream(File.ReadAllBytes(path));
+                    using var symbols = File.Exists(pdb) ? new MemoryStream(File.ReadAllBytes(pdb)) : null;
+                    assembly = s_Context.LoadFromStream(dll, symbols);
+                }
                 RegisterDrawers(assembly); // before the classes: their fields say which have one
                 foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(StateMachineBehaviour))))
                 {
@@ -912,7 +923,7 @@ namespace Dimension
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);
-            s_Context.Unload();
+            if (s_Context.IsCollectible) s_Context.Unload(); // (a built game's stays until exit)
             s_Context = null;
             return weak;
         }

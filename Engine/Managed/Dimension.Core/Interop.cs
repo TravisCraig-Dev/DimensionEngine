@@ -202,7 +202,7 @@ namespace Dimension.Interop
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe struct ManagedApi
     {
-        public delegate* unmanaged<byte*, int> LoadScripts;
+        public delegate* unmanaged<byte*, int, int> LoadScripts; // path, 1 = fixed (a built game: no reloads)
         public delegate* unmanaged<void> UnloadScripts;
         public delegate* unmanaged<byte*, IntPtr, ulong, IntPtr> CreateInstance;
         public delegate* unmanaged<IntPtr, int, void*, void> SetField;

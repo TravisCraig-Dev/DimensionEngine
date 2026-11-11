@@ -47,6 +47,8 @@ namespace Dimension
                 s_Config.StripUnusedAssets = j.value("stripUnusedAssets", true);
                 s_Config.PackAssets = j.value("packAssets", false);
                 s_Config.BundleDotNet = j.value("bundleDotNet", true);
+                s_Config.AheadOfTimeScripts = j.value("aheadOfTimeScripts", true);
+                s_Config.TrimDotNet = j.value("trimDotNet", true);
                 if (j.contains("audioMixer") && j["audioMixer"].is_array() && !j["audioMixer"].empty())
                 {
                     s_Config.MixerGroups.clear();
@@ -206,6 +208,8 @@ namespace Dimension
                           { "stripUnusedAssets", s_Config.StripUnusedAssets },
                           { "packAssets", s_Config.PackAssets },
                           { "bundleDotNet", s_Config.BundleDotNet },
+                          { "aheadOfTimeScripts", s_Config.AheadOfTimeScripts },
+                          { "trimDotNet", s_Config.TrimDotNet },
                           { "physicsLayers", s_Config.PhysicsLayers },
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "navAreas", navAreas },

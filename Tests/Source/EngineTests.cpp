@@ -63,6 +63,7 @@
 #include <Dimension/Physics/Water.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
+#include <Dimension/Scripting/ManagedBuild.h>
 #include <Dimension/Platform/AppIcon.h>
 #include <Dimension/Asset/AssetDependencies.h>
 #include <Dimension/Asset/AssetPrefetch.h>
@@ -6781,6 +6782,43 @@ namespace
         CHECK(AssetManager::ClipsVersion() != edited && AssetManager::ClipsFor(model).size() == 1 && AssetManager::ClipsFor(other).size() == 1);
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path());
+    }
+
+    void TestManagedBuild()
+    {
+        // Assembly references read from metadata; native DLLs are not assemblies.
+        fs::path core = ExecutableDir() / "managed" / "Dimension.Core.dll";
+        if (!fs::exists(core)) return;
+        std::vector<std::string> refs;
+        CHECK(ManagedBuild::ReadAssemblyReferences(core, refs) && std::find(refs.begin(), refs.end(), "System.Runtime") != refs.end());
+        CHECK(!ManagedBuild::ReadAssemblyReferences(ExecutableDir() / "DimensionEngine.dll", refs));
+        // The installed framework (the editor's runtime): its assemblies are ReadyToRun, the engine's Debug build is not.
+        fs::path framework;
+        for (const char* root : { "C:/Program Files/dotnet/shared/Microsoft.NETCore.App" })
+        {
+            std::error_code ec;
+            for (const auto& e : fs::directory_iterator(root, ec))
+                if (e.path().filename().string().rfind("10.", 0) == 0) framework = e.path();
+        }
+        if (framework.empty()) return;
+        CHECK(ManagedBuild::IsReadyToRun(framework / "System.Private.CoreLib.dll") && !ManagedBuild::IsReadyToRun(core));
+        // The closure from the engine's API: CoreLib and what it uses, but not the XML or networking stacks.
+        std::set<std::string> closure = ManagedBuild::FrameworkClosure({ core }, framework);
+        CHECK(closure.count("System.Private.CoreLib") && closure.count("System.Runtime") && closure.count("System.Text.Json") &&
+              closure.count("System.Reflection.Metadata"));
+        CHECK(!closure.count("System.Private.Xml") && !closure.count("System.Net.Http") && closure.size() < 60);
+        // Ahead-of-time compiled with crossgen2 (when the NuGet cache has it; no download in tests).
+        fs::path crossgen = ManagedBuild::FindCrossgen(framework.filename().string(), false);
+        if (crossgen.empty()) return;
+        fs::path out = fs::temp_directory_path() / "dimension_r2r_test";
+        fs::remove_all(out);
+        fs::create_directories(out);
+        fs::copy_file(core, out / "Dimension.Core.dll");
+        std::string log;
+        CHECK(ManagedBuild::CompileReadyToRun(crossgen, out / "Dimension.Core.dll", out / "Dimension.Core.dll", { framework }, &log));
+        CHECK(ManagedBuild::IsReadyToRun(out / "Dimension.Core.dll") && ManagedBuild::ReadAssemblyReferences(out / "Dimension.Core.dll", refs));
+        if (!log.empty() && !ManagedBuild::IsReadyToRun(out / "Dimension.Core.dll")) std::printf("%s", log.c_str());
+        fs::remove_all(out);
     }
 
     void TestColrV1()
@@ -15771,6 +15809,7 @@ int main(int argc, char** argv)
     Run("Humanoid retargeting", TestHumanoidRetargeting);
     Run("Animation clip assets", TestAnimationClipAssets);
     Run("COLR v1 color glyphs", TestColrV1);
+    Run("Managed build (ReadyToRun, framework closure)", TestManagedBuild);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);

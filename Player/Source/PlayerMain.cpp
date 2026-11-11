@@ -304,7 +304,7 @@ int main(int argc, char** argv)
         if (CSharpRuntime::Init(ExecutableDirectory() / "managed"))
         {
             if (waitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);
-            CSharpRuntime::LoadScripts(CSharpProject::AssemblyPath(Project::GetDirectory()));
+            CSharpRuntime::LoadScripts(CSharpProject::AssemblyPath(Project::GetDirectory()), false);
         }
 
         auto buildScenes = SceneManager::GetBuildScenes();

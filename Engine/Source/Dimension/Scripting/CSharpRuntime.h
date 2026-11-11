@@ -92,12 +92,16 @@ namespace Dimension
         // Copies the installed .NET runtime this engine runs on (hostfxr and the Microsoft.NETCore.App framework, in the
         // dotnet folder layout) into `dotnetDir`, so a built game runs C# without .NET installed. False when none.
         static bool BundleRuntime(const fs::path& dotnetDir, uintmax_t* bytes = nullptr);
+        // The installed Microsoft.NETCore.App framework folder the engine runs on (its newest .NET 10); empty when none.
+        static fs::path InstalledFramework();
         // Where the runtime in use came from: "bundled" or "installed" (empty before Init).
         static const char* RuntimeSource();
         static bool IsAvailable();
 
-        // Loads (or reloads) a user scripts assembly. No script instances may be alive.
-        static bool LoadScripts(const fs::path& assembly);
+        // Loads (or reloads) a user scripts assembly. No script instances may be alive. Not reloadable (a built
+        // game): loaded once from the file and kept, so its ReadyToRun code is used (hot reload needs a collectible
+        // in-memory load, which compiles everything again).
+        static bool LoadScripts(const fs::path& assembly, bool reloadable = true);
         static void UnloadScripts();
         static const fs::path& GetScriptsPath();
         // True when the assembly on disk is newer than the loaded one.

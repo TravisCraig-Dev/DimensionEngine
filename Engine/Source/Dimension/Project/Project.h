@@ -30,6 +30,8 @@ namespace Dimension
         bool StripUnusedAssets = true;        // Build copies only assets the build scenes reach (plus Assets/Resources)
         bool PackAssets = false;              // Build packs the shipped assets into one Assets.pak (see AssetPack)
         bool BundleDotNet = true;             // Build ships the .NET runtime (C# runs without .NET installed)
+        bool AheadOfTimeScripts = true;       // Build compiles C# to ReadyToRun code (crossgen2): no JIT at start
+        bool TrimDotNet = true;               // a bundled runtime keeps only the framework assemblies scripts can reach
 
         std::vector<AudioMixerGroup> MixerGroups = AudioMixer::DefaultGroups();
         std::vector<AudioMixerSnapshot> MixerSnapshots;
