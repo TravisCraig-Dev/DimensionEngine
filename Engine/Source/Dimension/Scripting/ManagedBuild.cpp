@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <functional>
+#include <memory>
+#include <unordered_map>
 #include <fstream>
 #include <initializer_list>
 
@@ -52,9 +55,21 @@ namespace Dimension::ManagedBuild
             }
         };
 
-        // The AssemblyRef names in an assembly's metadata tables (ECMA-335 II.22, II.24).
-        bool AssemblyRefs(const PeImage& pe, std::vector<std::string>& out)
+        // What the closure needs from an assembly's metadata tables (ECMA-335 II.22, II.24): the assemblies it
+        // references, the types it uses from each (TypeRefs), and, for a facade, where its types are forwarded.
+        struct AssemblyMeta
         {
+            std::vector<std::string> References;               // AssemblyRef names
+            std::vector<std::pair<int, std::string>> TypeRefs; // (AssemblyRef index, "Namespace.Name")
+            std::unordered_map<std::string, int> Forwards;     // ExportedType "Namespace.Name" -> AssemblyRef index
+            uint32_t TypeDefs = 0;
+            // Only forwards types (no types of its own but <Module>): netstandard, mscorlib, System.Runtime...
+            bool IsFacade() const { return TypeDefs <= 1 && !Forwards.empty(); }
+        };
+
+        bool ReadMeta(const PeImage& pe, AssemblyMeta& meta)
+        {
+            std::vector<std::string>& out = meta.References;
             if (!pe.CliRva) return false;
             size_t cli = pe.Offset(pe.CliRva);
             if (cli == SIZE_MAX) return false;
@@ -120,15 +135,45 @@ namespace Dimension::ManagedBuild
                 4 + 8 + 4 + blob + str * 2,                                  // Assembly
                 4, 12,                                                       // AssemblyProcessor, AssemblyOS
             };
-            for (int t = 0; t < 0x23; ++t) p += sizes[t] * rows[t];
-            const size_t row = 8 + 4 + blob + str * 2 + blob;
-            for (uint32_t r = 0; r < rows[0x23]; ++r, p += row)
+            auto read = [&](size_t at, size_t bytes) -> uint32_t { return bytes == 4 ? pe.Get<uint32_t>(at) : pe.Get<uint16_t>(at); };
+            auto text = [&](uint32_t offset) {
+                if (strings + offset >= pe.Data.size()) return std::string();
+                const char* s = (const char*)pe.Data.data() + strings + offset;
+                return std::string(s, strnlen(s, pe.Data.size() - strings - offset));
+            };
+            std::array<size_t, 0x24> start{};
+            for (int t = 0; t < 0x23; ++t) start[t] = p, p += sizes[t] * rows[t];
+            start[0x23] = p;
+            meta.TypeDefs = rows[2];
+            // TypeRefs scoped to an AssemblyRef (tag 2); nested ones go by their outer type.
+            for (uint32_t r = 0; r < rows[1]; ++r)
             {
-                size_t name = str == 4 ? pe.Get<uint32_t>(p + 12 + blob) : pe.Get<uint16_t>(p + 12 + blob);
-                if (strings + name >= pe.Data.size()) return false;
-                const char* text = (const char*)pe.Data.data() + strings + name;
-                out.emplace_back(text, strnlen(text, pe.Data.size() - strings - name));
+                size_t ref = start[1] + r * sizes[1];
+                uint32_t scope = read(ref, resolutionScope);
+                if ((scope & 3) != 2 || (scope >> 2) == 0) continue;
+                std::string name = text(read(ref + resolutionScope, str)), space = text(read(ref + resolutionScope + str, str));
+                meta.TypeRefs.push_back({ (int)(scope >> 2) - 1, space.empty() ? name : space + "." + name });
             }
+            const size_t row = 8 + 4 + blob + str * 2 + blob;
+            for (uint32_t r = 0; r < rows[0x23]; ++r, p += row) out.push_back(text(read(p + 12 + blob, str)));
+            // Then AssemblyRefProcessor, AssemblyRefOS and File, before ExportedType (0x27): type forwarders.
+            p += (4 + index(0x23)) * rows[0x24] + (12 + index(0x23)) * rows[0x25] + (4 + str + blob) * rows[0x26];
+            const size_t implementation = coded({ 0x26, 0x23, 0x27 }, 2), exportedRow = 4 + 4 + str * 2 + implementation;
+            for (uint32_t r = 0; r < rows[0x27]; ++r, p += exportedRow)
+            {
+                uint32_t impl = read(p + 8 + str * 2, implementation);
+                if ((impl & 3) != 1 || (impl >> 2) == 0) continue; // (to an AssemblyRef; nested ones follow their outer type)
+                std::string name = text(read(p + 8, str)), space = text(read(p + 8 + str, str));
+                meta.Forwards[space.empty() ? name : space + "." + name] = (int)(impl >> 2) - 1;
+            }
+            return true;
+        }
+
+        bool AssemblyRefs(const PeImage& pe, std::vector<std::string>& out)
+        {
+            AssemblyMeta meta;
+            if (!ReadMeta(pe, meta)) return false;
+            out = std::move(meta.References);
             return true;
         }
 
@@ -179,28 +224,73 @@ namespace Dimension::ManagedBuild
 
     std::set<std::string> FrameworkClosure(const std::vector<fs::path>& roots, const fs::path& frameworkDir)
     {
+        // Framework assemblies' metadata, read once each.
+        std::unordered_map<std::string, std::unique_ptr<AssemblyMeta>> cache;
+        auto metaOf = [&](const std::string& name) -> const AssemblyMeta* {
+            auto it = cache.find(name);
+            if (it != cache.end()) return it->second.get();
+            PeImage pe;
+            auto meta = std::make_unique<AssemblyMeta>();
+            if (!pe.Load(frameworkDir / (name + ".dll")) || !ReadMeta(pe, *meta)) meta.reset();
+            return (cache[name] = std::move(meta)).get();
+        };
+        std::set<std::string> found, walked;
+        std::deque<std::string> queue; // framework assemblies whose references are followed whole
+        auto take = [&](const std::string& name) {
+            if (found.insert(name).second) queue.push_back(name);
+        };
+        // A type used from a framework assembly: through facades (netstandard, mscorlib, System.Runtime forward
+        // their types elsewhere) to the assembly that has it. A facade itself ships (it is referenced) but only the
+        // forwards that are used bring their assemblies, not everything the facade could forward to.
+        std::function<void(const std::string&, const std::string&, int)> useType = [&](const std::string& assembly, const std::string& type, int depth) {
+            const AssemblyMeta* meta = metaOf(assembly);
+            if (!meta) return;
+            found.insert(assembly);
+            if (!meta->IsFacade())
+            {
+                take(assembly);
+                return;
+            }
+            auto forward = meta->Forwards.find(type);
+            if (forward != meta->Forwards.end() && forward->second < (int)meta->References.size() && depth < 8)
+                useType(meta->References[forward->second], type, depth + 1);
+            else if (forward == meta->Forwards.end())
+                take(assembly); // (a type it does not forward: keep everything it references, to be safe)
+        };
+        // The references of an assembly: whole for ordinary ones, by the types used for facades.
+        auto follow = [&](const AssemblyMeta& meta) {
+            for (size_t r = 0; r < meta.References.size(); ++r)
+            {
+                const std::string& name = meta.References[r];
+                const AssemblyMeta* target = metaOf(name);
+                if (!target) continue; // not in the framework (the engine API, a package beside the scripts)
+                if (!target->IsFacade())
+                {
+                    take(name);
+                    continue;
+                }
+                found.insert(name);
+                for (const auto& [scope, type] : meta.TypeRefs)
+                    if (scope == (int)r) useType(name, type, 0);
+            }
+        };
         // What the runtime loads without a reference: CoreLib, and the stack trace helpers (line numbers in
         // exception traces come from portable PDBs read through System.Reflection.Metadata).
-        std::set<std::string> found;
-        std::deque<fs::path> queue(roots.begin(), roots.end());
         for (const char* name : { "System.Private.CoreLib", "System.Runtime", "System.Diagnostics.StackTrace", "System.Reflection.Metadata",
                                   "System.Collections.Immutable", "System.Runtime.InteropServices", "System.Runtime.Loader" })
-            if (fs::exists(frameworkDir / (std::string(name) + ".dll")) && found.insert(name).second) queue.push_back(frameworkDir / (std::string(name) + ".dll"));
-        std::vector<std::string> references;
+            if (metaOf(name)) take(name);
+        for (const fs::path& root : roots)
+        {
+            PeImage pe;
+            AssemblyMeta meta;
+            if (pe.Load(root) && ReadMeta(pe, meta)) follow(meta);
+        }
         while (!queue.empty())
         {
-            fs::path dll = queue.front();
+            std::string name = queue.front();
             queue.pop_front();
-            if (!ReadAssemblyReferences(dll, references)) continue;
-            for (const std::string& name : references)
-            {
-                fs::path candidate = frameworkDir / (name + ".dll");
-                if (!found.count(name) && fs::exists(candidate))
-                {
-                    found.insert(name);
-                    queue.push_back(candidate);
-                }
-            }
+            if (!walked.insert(name).second) continue;
+            if (const AssemblyMeta* meta = metaOf(name)) follow(*meta);
         }
         return found;
     }

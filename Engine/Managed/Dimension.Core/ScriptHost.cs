@@ -19,13 +19,34 @@ namespace Dimension
     {
         private sealed class ScriptLoadContext : AssemblyLoadContext
         {
-            public ScriptLoadContext(bool collectible) : base("DimensionScripts", isCollectible: collectible) { }
+            private readonly AssemblyDependencyResolver m_Resolver;
+            private readonly bool m_Collectible;
+
+            public ScriptLoadContext(string scriptsPath, bool collectible) : base("DimensionScripts", isCollectible: collectible)
+            {
+                m_Collectible = collectible;
+                // The scripts' own dependencies (NuGet packages, libraries beside them) as their .deps.json lists them.
+                try { m_Resolver = new AssemblyDependencyResolver(scriptsPath); }
+                catch (Exception) { m_Resolver = null; } // (no .deps.json: only the framework and the engine)
+            }
 
             protected override Assembly Load(AssemblyName name)
             {
                 // Share the engine API assembly so Behaviour etc. have one type identity.
                 if (name.Name == typeof(Behaviour).Assembly.GetName().Name) return typeof(Behaviour).Assembly;
-                return null; // framework assemblies resolve from the default context
+                string path = m_Resolver?.ResolveAssemblyToPath(name);
+                if (path == null) return null; // framework assemblies resolve from the default context
+                if (!m_Collectible) return LoadFromAssemblyPath(path);
+                // Hot-reloadable: from memory, so a rebuild can write the file again.
+                using var dll = new MemoryStream(File.ReadAllBytes(path));
+                return LoadFromStream(dll);
+            }
+
+            protected override IntPtr LoadUnmanagedDll(string name)
+            {
+                // A package's native library (runtimes/<platform>/native).
+                string path = m_Resolver?.ResolveUnmanagedDllToPath(name);
+                return path != null ? LoadUnmanagedDllFromPath(path) : IntPtr.Zero;
             }
         }
 
@@ -697,12 +718,12 @@ namespace Dimension
                 {
                     // A built game: loaded once from the file, in a context that stays, so its ahead-of-time
                     // (ReadyToRun) code runs instead of being compiled again (collectible and in-memory loads skip it).
-                    s_Context = new ScriptLoadContext(collectible: false);
+                    s_Context = new ScriptLoadContext(Path.GetFullPath(path), collectible: false);
                     assembly = s_Context.LoadFromAssemblyPath(Path.GetFullPath(path));
                 }
                 else
                 {
-                    s_Context = new ScriptLoadContext(collectible: true);
+                    s_Context = new ScriptLoadContext(Path.GetFullPath(path), collectible: true);
                     // Load from memory so the compiler can overwrite the file while we run.
                     string pdb = Path.ChangeExtension(path, ".pdb");
                     using var dll = new MemoryStream(File.ReadAllBytes(path));

@@ -6934,6 +6934,15 @@ namespace
         CHECK(closure.count("System.Private.CoreLib") && closure.count("System.Runtime") && closure.count("System.Text.Json") &&
               closure.count("System.Reflection.Metadata"));
         CHECK(!closure.count("System.Private.Xml") && !closure.count("System.Net.Http") && closure.size() < 60);
+        // A .NET Standard library references the netstandard facade, which forwards to the whole framework: only the
+        // forwards it uses count (Crc32.NET from the NuGet cache, when there).
+        if (const char* home = std::getenv("USERPROFILE"))
+            if (fs::path crc = fs::path(home) / ".nuget/packages/crc32.net/1.2.0/lib/netstandard2.0/Crc32.NET.dll"; fs::exists(crc))
+            {
+                std::set<std::string> small = ManagedBuild::FrameworkClosure({ crc }, framework);
+                CHECK(small.count("netstandard") && small.count("System.Private.CoreLib") && !small.count("System.Private.Xml") &&
+                      !small.count("System.Net.Http") && small.size() < 40);
+            }
         // Ahead-of-time compiled with crossgen2 (when the NuGet cache has it; no download in tests).
         fs::path crossgen = ManagedBuild::FindCrossgen(framework.filename().string(), false);
         if (crossgen.empty()) return;

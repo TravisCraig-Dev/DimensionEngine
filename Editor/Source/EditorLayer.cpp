@@ -4878,9 +4878,26 @@ namespace Editor
         fs::path scripts = CSharpProject::AssemblyPath(Project::GetDirectory());
         if (fs::exists(scripts))
         {
-            fs::path rel = scripts.lexically_relative(Project::GetDirectory());
-            fs::create_directories((projectOut / rel).parent_path(), ec);
-            fs::copy_file(scripts, projectOut / rel, fs::copy_options::overwrite_existing, ec);
+            // The scripts with what they load beside them: NuGet packages and other libraries (as their .deps.json
+            // lists them), and those packages' native libraries for Windows x64.
+            fs::path from = scripts.parent_path(), to = projectOut / scripts.lexically_relative(Project::GetDirectory()).parent_path();
+            fs::create_directories(to, ec);
+            for (const auto& entry : fs::recursive_directory_iterator(from, fs::directory_options::skip_permission_denied, ec))
+            {
+                if (!entry.is_regular_file()) continue;
+                fs::path rel = entry.path().lexically_relative(from);
+                std::string first = rel.begin()->string();
+                if (first == "runtimes")
+                {
+                    auto it = std::next(rel.begin());
+                    std::string rid = it != rel.end() ? it->string() : std::string();
+                    if (rid != "win-x64" && rid != "win") continue;
+                }
+                std::error_code ce;
+                fs::create_directories((to / rel).parent_path(), ce);
+                fs::copy_file(entry.path(), to / rel, fs::copy_options::overwrite_existing, ce);
+                if (ce) ec = ce;
+            }
         }
         if (!ec && fs::exists(folder / "managed" / "Dimension.Core.dll")) PrepareManagedCode(config, folder, projectOut / scripts.lexically_relative(Project::GetDirectory()));
         if (ec)
@@ -4904,8 +4921,16 @@ namespace Editor
             if (entry.is_directory()) framework = entry.path();
         if (framework.empty()) framework = CSharpRuntime::InstalledFramework();
         if (framework.empty()) return;
+        // The engine API first, then the scripts and the managed libraries beside them (NuGet packages).
         std::vector<fs::path> assemblies = { managed / "Dimension.Core.dll" };
-        if (fs::exists(scriptsDll)) assemblies.push_back(scriptsDll);
+        std::vector<std::string> refs;
+        if (fs::exists(scriptsDll))
+        {
+            assemblies.push_back(scriptsDll);
+            for (const auto& entry : fs::directory_iterator(scriptsDll.parent_path(), ec))
+                if (entry.path().extension() == ".dll" && entry.path() != scriptsDll && ManagedBuild::ReadAssemblyReferences(entry.path(), refs))
+                    assemblies.push_back(entry.path());
+        }
         if (config.AheadOfTimeScripts)
         {
             auto start = std::chrono::steady_clock::now();
@@ -4914,9 +4939,11 @@ namespace Editor
             for (const fs::path& dll : assemblies)
             {
                 if (crossgen.empty()) break;
+                if (ManagedBuild::IsReadyToRun(dll)) continue; // (a package shipped precompiled)
                 std::string log;
                 std::vector<fs::path> references = { framework };
-                if (dll != assemblies[0]) references.push_back(assemblies[0]);
+                for (const fs::path& other : assemblies)
+                    if (other != dll) references.push_back(other);
                 if (ManagedBuild::CompileReadyToRun(crossgen, dll, dll, references, &log)) ++compiled;
                 else Log::Warn("Ahead-of-time compiling {} failed (it is compiled when the game starts): {}", dll.filename().string(), log);
             }
