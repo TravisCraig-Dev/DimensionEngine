@@ -17,6 +17,7 @@ function(dim_compile_shaders target)
                     -I${CMAKE_CURRENT_SOURCE_DIR}/Shaders --vn ${var} -o ${header} ${src}
             DEPENDS ${src} glslang-standalone ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Common.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/MeshCommon.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/MeshSurface.glsl
                     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ParticleCommon.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Clouds.glsl
+                    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Sway.glsl
             COMMENT "Compiling shader ${name}.${stage}"
             VERBATIM)
         list(APPEND headers ${header})

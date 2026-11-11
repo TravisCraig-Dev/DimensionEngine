@@ -175,7 +175,7 @@ namespace Dimension
         {
             glm::mat4 Model, PrevModel;
             glm::uvec4 Joints; // xy this frame's skinning matrices, zw last frame's
-            glm::uvec4 Extra;  // xy last frame's simulated vertex positions (packed xyz)
+            glm::uvec4 Extra;  // xy last frame's simulated vertex positions (packed xyz); z grass/fur Motion; w FurWind
         };
         // Vertex of the sprites' motion vector pass (VelocitySprite.vert).
         struct VelocitySpriteVertex
@@ -700,7 +700,8 @@ namespace Dimension
             velocity.VertexSpirv = kVelocity_vert;
             velocity.FragmentSpirv = kVelocity_frag;
             velocity.VertexStride = sizeof(Vertex);
-            velocity.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Position) } };
+            velocity.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Position) },
+                                    { 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Normal) } };
             velocity.ColorAttachments = { { F::kVelocityFormat } };
             velocity.DebugName = "VelocityPipeline";
             r.Velocity = Pipeline(velocity);
@@ -1461,7 +1462,7 @@ namespace Dimension
             }
             device.BindUniforms(cmd, &u, sizeof(u));
         }
-        if (velocity) RenderVelocity(cmd, target, u.ViewProj, unjitteredViewProj);
+        if (velocity) RenderVelocity(cmd, target, u.ViewProj, unjitteredViewProj, u.Wind);
         else target.Motion.Valid = false;
         // HDR effects that need the finished opaque image: decals onto surfaces, reflections, fog, then TAA over all.
         if (!m_Decals.empty()) DrawDecals(cmd, target);
@@ -2727,6 +2728,7 @@ namespace Dimension
                 {
                     RenderItem shell = m_RenderItems.back();
                     shell.Motion = glm::packHalf2x16(glm::vec2(fur->Length, -(float)k / shells));
+                    shell.FurWind = glm::packHalf2x16(glm::vec2(std::max(fur->Droop, 0.0f), fur->WindResponse));
                     shell.Extents += glm::vec3(fur->Length * 2.0f);
                     shell.FirstPart = (uint32_t)m_RenderParts.size();
                     for (uint32_t p = 0; p < shell.PartCount; ++p)
@@ -4500,7 +4502,8 @@ namespace Dimension
         std::stable_sort(m_Decals.begin(), m_Decals.end(), [](const DecalDraw& a, const DecalDraw& b) { return a.Order < b.Order; });
     }
 
-    void SceneRenderer::RenderVelocity(VkCommandBuffer cmd, SceneRenderTarget& target, const glm::mat4& viewProj, const glm::mat4& unjitteredViewProj)
+    void SceneRenderer::RenderVelocity(VkCommandBuffer cmd, SceneRenderTarget& target, const glm::mat4& viewProj, const glm::mat4& unjitteredViewProj,
+                                       const glm::vec4& wind)
     {
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
@@ -4520,11 +4523,34 @@ namespace Dimension
         std::vector<VelocityGPU> objects;
         std::unordered_map<uint32_t, uint32_t> occurrence;
         Frustum frustum(viewProj);
+        // Grass tufts swaying in the wind: every visible one, grouped by mesh into instanced draws.
+        struct GrassGroup
+        {
+            uint32_t Item;
+            std::vector<VelocityGPU> Entries;
+        };
+        std::map<std::tuple<const Mesh*, uint32_t, uint32_t>, GrassGroup> grass;
+        float windTime = wind.w, prevWind = history ? motion.PrevWindTime : windTime;
+        bool windMoves = prevWind != windTime && glm::vec3(wind) != glm::vec3(0.0f);
         for (size_t i = 0; i < m_RenderItems.size(); ++i)
         {
             const RenderItem& item = m_RenderItems[i];
-            // Swaying grass and fur, and vertices made each frame that are not simulated (the ocean): camera only.
-            if (item.MotionVectors == 0 || item.Motion || (item.Vertices && item.SimPositions < 0)) continue;
+            if (item.Motion && !item.Vertices && !item.Joints && glm::unpackHalf2x16(item.Motion).y >= 0.0f)
+            {
+                if (item.ShadowOnly || (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId))) continue;
+                if (m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[i]) continue;
+                if (!item.AlwaysVisible && !frustum.IntersectsWorld(item.Center, item.Extents)) continue;
+                const RenderPart& first = m_RenderParts[item.FirstPart];
+                GrassGroup& group = grass[{ item.MeshRef.get(), first.FirstIndex, item.PartCount }];
+                if (group.Entries.empty()) group.Item = (uint32_t)i;
+                group.Entries.push_back({ item.World, item.World, glm::uvec4(0u), glm::uvec4(0u, 0u, item.Motion, 0u) });
+                continue;
+            }
+            // Vertices made each frame that are not simulated (the ocean): camera only. Fur shells follow their
+            // object, and sway in the wind on their own.
+            bool shell = item.Motion && item.FurWind;
+            bool swaying = shell && windMoves && glm::unpackHalf2x16(item.FurWind).y != 0.0f;
+            if ((item.MotionVectors == 0 && !swaying) || (item.Motion && !shell) || item.ShadowOnly || (item.Vertices && item.SimPositions < 0)) continue;
             uint64_t key = ((uint64_t)item.EntityId << 32) | occurrence[item.EntityId]++;
             auto& last = motion.Objects[key];
             bool had = history && last.Frame + 1 == frame;
@@ -4535,13 +4561,14 @@ namespace Dimension
             const std::vector<glm::vec3>* positions = item.SimPositions >= 0 ? &m_SimPositions[item.SimPositions] : nullptr;
             bool samePositions = !positions || !had || last.Positions.size() != positions->size() ||
                                  std::memcmp(last.Positions.data(), positions->data(), positions->size() * sizeof(glm::vec3)) == 0;
-            bool moved = had && (prevWorld != item.World || !samePose || !samePositions);
+            bool moved = had && (prevWorld != item.World || !samePose || !samePositions || swaying);
             VelocityGPU gpu{ item.World, prevWorld, glm::uvec4(0u), glm::uvec4(0u) };
+            if (shell) gpu.Extra.z = item.Motion, gpu.Extra.w = item.FurWind;
             if (moved && !samePositions && item.MotionVectors == 1)
                 if (TransientAllocation block = device.AllocateTransient(last.Positions.size() * sizeof(glm::vec3), 16))
                 {
                     std::memcpy(block.Data, last.Positions.data(), last.Positions.size() * sizeof(glm::vec3));
-                    gpu.Extra = glm::uvec4(SplitAddress(block.Address), 0u, 0u);
+                    gpu.Extra = glm::uvec4(SplitAddress(block.Address), gpu.Extra.z, gpu.Extra.w);
                 }
             if (item.MotionVectors == 2) gpu.PrevModel = item.World; // no motion of its own (the camera's is taken off below)
             if (moved && posed && item.MotionVectors == 1)
@@ -4611,18 +4638,28 @@ namespace Dimension
         }
         std::erase_if(motion.Objects, [frame](const auto& entry) { return entry.second.Frame != frame; });
         motion.PrevViewProj = unjitteredViewProj;
+        motion.PrevWindTime = windTime;
         motion.Valid = true;
-        if (draws.empty() && spriteVertices.empty() && m_GpuParticleDraws.empty()) return;
+        struct GrassDraw { uint32_t Item, First, Count; };
+        std::vector<GrassDraw> grassDraws;
+        for (auto& [key, group] : grass)
+        {
+            grassDraws.push_back({ group.Item, (uint32_t)objects.size(), (uint32_t)group.Entries.size() });
+            objects.insert(objects.end(), group.Entries.begin(), group.Entries.end());
+        }
+        if (draws.empty() && spriteVertices.empty() && m_GpuParticleDraws.empty() && grassDraws.empty()) return;
 
         TransientAllocation objectBlock = objects.empty() ? TransientAllocation{} : device.AllocateTransient(objects.size() * sizeof(VelocityGPU), 16);
-        TransientAllocation frameBlock = device.AllocateTransient(2 * sizeof(glm::mat4), 16);
+        TransientAllocation frameBlock = device.AllocateTransient(2 * sizeof(glm::mat4) + sizeof(glm::vec4), 16);
         size_t spriteCount = std::min(spriteVertices.size() / 4, (size_t)kMaxQuadsPerDraw);
         TransientAllocation spriteBlock = spriteCount ? device.AllocateTransient(spriteCount * 4 * sizeof(VelocitySpriteVertex), 16) : TransientAllocation{};
         if ((!objects.empty() && !objectBlock) || !frameBlock) return;
         if (objectBlock) std::memcpy(objectBlock.Data, objects.data(), objects.size() * sizeof(VelocityGPU));
         if (spriteBlock) std::memcpy(spriteBlock.Data, spriteVertices.data(), spriteCount * 4 * sizeof(VelocitySpriteVertex));
         glm::mat4 matrices[2] = { unjitteredViewProj, prevViewProj };
+        glm::vec4 frameParams(prevWind, 0.0f, 0.0f, 0.0f);
         std::memcpy(frameBlock.Data, matrices, sizeof(matrices));
+        std::memcpy((char*)frameBlock.Data + sizeof(matrices), &frameParams, sizeof(frameParams));
 
         VkExtent2D extent{ target.GetWidth(), target.GetHeight() };
         Vk::TransitionImage(cmd, target.GetVelocity().GetHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -4641,7 +4678,7 @@ namespace Dimension
         VkRect2D scissor{ { 0, 0 }, extent };
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
-        if (!draws.empty()) res.Velocity.Bind(cmd);
+        if (!draws.empty() || !grassDraws.empty()) res.Velocity.Bind(cmd);
         Mesh* bound = nullptr;
         for (const ObjectDraw& d : draws)
         {
@@ -4669,6 +4706,28 @@ namespace Dimension
                 if (part.Transparent) continue;
                 vkCmdDrawIndexed(cmd, part.IndexCount, 1, part.FirstIndex, 0, d.Object);
                 m_Stats.DrawCalls++;
+            }
+        }
+        for (const GrassDraw& d : grassDraws)
+        {
+            const RenderItem& item = m_RenderItems[d.Item];
+            if (!DebugDraw("Motion Vectors", "Velocity", "Grass", item.EntityId, d.Count, 0)) continue;
+            struct { VkDeviceAddress Objects, Skin, Frame; uint32_t Depth, Pad; } push{ objectBlock.Address, 0, frameBlock.Address, target.GetDepthBindless(), 0u };
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+            if (item.MeshRef.get() != bound)
+            {
+                item.MeshRef->Bind(cmd);
+                bound = item.MeshRef.get();
+            }
+            for (uint32_t p = item.FirstPart; p < item.FirstPart + item.PartCount; ++p)
+            {
+                const RenderPart& part = m_RenderParts[p];
+                if (part.Transparent) continue;
+                for (uint32_t done = 0; done < d.Count; done += kMaxInstancesPerDraw)
+                {
+                    vkCmdDrawIndexed(cmd, part.IndexCount, std::min(kMaxInstancesPerDraw, d.Count - done), part.FirstIndex, 0, d.First + done);
+                    m_Stats.DrawCalls++;
+                }
             }
         }
         if (spriteBlock && DebugDraw("Motion Vectors", "Velocity", "Sprites", 0, 1, (uint32_t)spriteCount * 2))

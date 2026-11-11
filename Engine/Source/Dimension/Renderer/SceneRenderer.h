@@ -278,7 +278,8 @@ namespace Dimension
             uint32_t IndexCount = 0;
             bool AlwaysVisible;        // skinned: animated bounds are unknown
             bool CastShadows;          // the renderer's flag
-            uint32_t Motion = 0;       // grass tufts: half floats (sway, bending), 0 = rigid
+            uint32_t Motion = 0;       // grass tufts: half floats (sway, bending); fur shells: (length, -height); 0 = rigid
+            uint32_t FurWind = 0;      // fur shells: half floats (droop, wind response), for their motion vectors
             uint32_t Fade = 0;         // LOD cross-fade: coverage (1-254) | side << 8, 0 = none (see LODGroups::Frame)
             uint8_t MotionVectors = 0; // MotionVectorMode: 0 camera only (static things), 1 per object, 2 none
             const std::vector<glm::mat4>* JointMatrices = nullptr; // skinned: this frame's pose (the Animator's)
@@ -452,7 +453,7 @@ namespace Dimension
         void CollectDecals(Scene& scene);
         void DrawDecals(VkCommandBuffer cmd, SceneRenderTarget& target);
         // The velocity buffer: the camera's motion from the depth, then moving objects' own over it.
-        void RenderVelocity(VkCommandBuffer cmd, SceneRenderTarget& target, const glm::mat4& viewProj, const glm::mat4& unjitteredViewProj);
+        void RenderVelocity(VkCommandBuffer cmd, SceneRenderTarget& target, const glm::mat4& viewProj, const glm::mat4& unjitteredViewProj, const glm::vec4& wind);
         // GPU particle systems: compute simulation before the main pass, then camera-facing quads in it.
         struct GpuParticleDraw
         {

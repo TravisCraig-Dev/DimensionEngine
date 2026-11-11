@@ -126,6 +126,7 @@ namespace Dimension
             glm::mat4 PrevViewProj{ 1.0f };
             bool Valid = false;
             uint64_t Frame = 0;
+            float PrevWindTime = 0.0f; // the wind's clock last frame (grass sway)
             std::unordered_map<uint64_t, ObjectMotion> Objects;
         } Motion;
         struct TemporalState
