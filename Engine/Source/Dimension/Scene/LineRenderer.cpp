@@ -161,8 +161,15 @@ namespace Dimension
                 float lifetime = std::max(trail.Time, 1e-3f);
                 auto expired = std::find_if(pts.begin(), pts.end(), [&](const auto& p) { return time - p.Time <= lifetime; });
                 pts.erase(pts.begin(), expired);
-                if (!trail.Emitting || !t.ActiveInHierarchy) continue;
+                if (!trail.Emitting || !t.ActiveInHierarchy)
+                {
+                    trail.HasHead = false;
+                    continue;
+                }
                 glm::vec3 head = t.GetWorldPosition();
+                trail.PreviousHead = trail.HasHead ? trail.Head : head;
+                trail.Head = head;
+                trail.HasHead = true;
                 if (pts.empty() || glm::distance(pts.back().Position, head) >= std::max(trail.MinVertexDistance, 1e-4f))
                     pts.push_back({ head, time });
             }

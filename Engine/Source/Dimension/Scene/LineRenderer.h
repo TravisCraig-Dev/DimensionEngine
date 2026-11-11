@@ -50,7 +50,10 @@ namespace Dimension
         // Runtime state (not serialized): oldest first.
         struct Point { glm::vec3 Position; float Time; };
         std::vector<Point> Points;
-        void Clear() { Points.clear(); }
+        // Runtime: the head (the object's position) this frame and the last, for motion vectors.
+        glm::vec3 Head{ 0.0f }, PreviousHead{ 0.0f };
+        bool HasHead = false;
+        void Clear() { Points.clear(); HasHead = false; }
     };
 
     // One point of a ribbon after width and color are resolved.

@@ -3656,6 +3656,15 @@ namespace Dimension
                                 seg.Depth = (camera.View * glm::vec4(mid, 1.0f)).z;
                                 seg.Additive = ps.Blend == ParticleBlend::Additive;
                                 seg.MotionKind = 2;
+                                if (k == 0)
+                                {
+                                    // The segment at the particle: that end moved with it (the history points stay put).
+                                    glm::vec3 moved = (local ? glm::vec3(t.World * glm::vec4(p.Velocity, 0.0f)) : p.Velocity) * dt;
+                                    static const glm::vec4 kCorners[4] = { { -0.5f, -0.5f, 0, 1 }, { 0.5f, -0.5f, 0, 1 }, { 0.5f, 0.5f, 0, 1 }, { -0.5f, 0.5f, 0, 1 } };
+                                    for (int i = 0; i < 4; ++i)
+                                        seg.Before[i] = glm::vec3(seg.Transform * kCorners[i]) - (kCorners[i].x < 0.0f ? moved : glm::vec3(0.0f));
+                                    seg.MotionKind = moved == glm::vec3(0.0f) ? 2 : 3;
+                                }
                                 m_Sprites.push_back(seg);
                             }
                         }
@@ -3693,16 +3702,23 @@ namespace Dimension
             return tex ? tex->GetBindlessIndex() : white;
         };
         std::vector<RibbonPoint> points;
-        auto emit = [&](const std::vector<RibbonQuad>& quads, uint32_t texture, Entity e, int32_t order, bool additive) {
-            for (const RibbonQuad& q : quads)
+        // Motion vectors: `object` (local-space lines) moves the corners with that world matrix; `before` (a trail
+        // whose head moved) gives every corner's last position; neither: still.
+        auto emit = [&](const std::vector<RibbonQuad>& quads, uint32_t texture, Entity e, int32_t order, bool additive,
+                        const glm::mat4* object = nullptr, const std::vector<RibbonQuad>* before = nullptr) {
+            for (size_t k = 0; k < quads.size(); ++k)
             {
+                const RibbonQuad& q = quads[k];
                 SpriteDraw d;
                 d.HasCorners = true;
+                d.MotionKind = object ? 0 : before ? 3 : 2;
+                if (object) d.Transform = *object;
                 for (int i = 0; i < 4; ++i)
                 {
                     d.P[i] = q.P[i];
                     d.C[i] = q.C[i];
                     d.UV[i] = q.UV[i];
+                    if (before) d.Before[i] = (*before)[k].P[i];
                 }
                 d.Texture = texture;
                 d.Entity = e.Index + 1;
@@ -3732,7 +3748,8 @@ namespace Dimension
             params.TextureMode = line.TextureMode;
             params.CornerVertices = line.CornerVertices;
             params.CapVertices = line.EndCapVertices;
-            emit(BuildRibbon(points, params), textureIndex(line.Texture), e, line.SortingOrder, line.Blend == LineBlend::Additive);
+            emit(BuildRibbon(points, params), textureIndex(line.Texture), e, line.SortingOrder, line.Blend == LineBlend::Additive,
+                 line.UseWorldSpace ? nullptr : &t.World);
         }
 
         float now = scene.GetTime();
@@ -3747,14 +3764,24 @@ namespace Dimension
             };
             // Head first, so normalized position 0 is the newest point.
             points.clear();
-            if (trail.Emitting && t.ActiveInHierarchy) add(t.GetWorldPosition(), 0.0f);
+            bool head = trail.Emitting && t.ActiveInHierarchy;
+            if (head) add(t.GetWorldPosition(), 0.0f);
             for (auto it = trail.Points.rbegin(); it != trail.Points.rend(); ++it) add(it->Position, now - it->Time);
             params.FaceCamera = true;
             params.Loop = false;
             params.TextureMode = trail.TextureMode;
             params.CornerVertices = trail.CornerVertices;
             params.CapVertices = trail.EndCapVertices;
-            emit(BuildRibbon(points, params), textureIndex(trail.Texture), e, trail.SortingOrder, trail.Blend == LineBlend::Additive);
+            std::vector<RibbonQuad> quads = BuildRibbon(points, params), before;
+            // The head moved since the last frame (the recorded points stay put): the ribbon as it was, with the head
+            // where it was, gives each corner's motion.
+            if (head && trail.HasHead && trail.PreviousHead != points[0].Position)
+            {
+                points[0].Position = trail.PreviousHead;
+                before = BuildRibbon(points, params);
+            }
+            emit(quads, textureIndex(trail.Texture), e, trail.SortingOrder, trail.Blend == LineBlend::Additive, nullptr,
+                 before.size() == quads.size() && !before.empty() ? &before : nullptr);
         }
     }
 
@@ -4629,7 +4656,18 @@ namespace Dimension
         const glm::vec4 corners[4] = { { -0.5f, -0.5f, 0, 1 }, { 0.5f, -0.5f, 0, 1 }, { 0.5f, 0.5f, 0, 1 }, { -0.5f, 0.5f, 0, 1 } };
         for (const SpriteDraw& s : m_Sprites)
         {
-            if (s.HasCorners || s.MotionKind == 2) continue;
+            if (s.MotionKind == 2) continue;
+            if (s.MotionKind == 3)
+            {
+                // Corners with their own last positions (a trail's head).
+                for (int i = 0; i < 4; ++i)
+                {
+                    glm::vec3 p = s.HasCorners ? s.P[i] : glm::vec3(s.Transform * corners[i]);
+                    glm::vec2 uv = s.HasCorners ? s.UV[i] : glm::vec2(i == 0 || i == 3 ? s.UVMin.x : s.UVMax.x, i < 2 ? s.UVMin.y : s.UVMax.y);
+                    spriteVertices.push_back({ p, s.Before[i], uv, s.Texture, s.HasCorners ? s.C[i].a : s.Color.a });
+                }
+                continue;
+            }
             glm::mat4 prevTransform = s.Transform;
             glm::vec3 displacement(0.0f);
             if (s.MotionKind == 0)
@@ -4646,6 +4684,13 @@ namespace Dimension
             {
                 displacement = s.Displacement;
                 if (displacement == glm::vec3(0.0f)) continue;
+            }
+            if (s.HasCorners)
+            {
+                // A local-space line's corners, carried by its object's last transform.
+                glm::mat4 back = prevTransform * glm::inverse(s.Transform);
+                for (int i = 0; i < 4; ++i) spriteVertices.push_back({ s.P[i], glm::vec3(back * glm::vec4(s.P[i], 1.0f)), s.UV[i], s.Texture, s.C[i].a });
+                continue;
             }
             glm::vec2 uvs[4] = { { s.UVMin.x, s.UVMin.y }, { s.UVMax.x, s.UVMin.y }, { s.UVMax.x, s.UVMax.y }, { s.UVMin.x, s.UVMax.y } };
             for (int i = 0; i < 4; ++i)

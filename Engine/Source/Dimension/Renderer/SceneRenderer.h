@@ -244,10 +244,13 @@ namespace Dimension
             glm::vec3 P[4];
             glm::vec4 C[4];
             glm::vec2 UV[4];
-            // Motion vectors: 0 by its object's last transform (sprites, text, tilemaps), 1 moved by Displacement
-            // since the last frame (particles), 2 only the camera's motion (ribbons, trails).
+            // Motion vectors: 0 by its object's last transform (sprites, text, tilemaps; with corners, Transform is
+            // the object's world matrix and the corners move with it: local-space lines), 1 moved by Displacement
+            // since the last frame (particles), 2 only the camera's motion (still trail segments, world-space lines),
+            // 3 each corner from Before (the head of a trail).
             uint8_t MotionKind = 0;
             glm::vec3 Displacement{ 0.0f };
+            glm::vec3 Before[4];
             uint32_t Occurrence = 0; // its place among its object's sprites (set before sorting)
         };
 
