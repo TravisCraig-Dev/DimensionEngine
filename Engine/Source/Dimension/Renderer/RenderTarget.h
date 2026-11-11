@@ -127,6 +127,7 @@ namespace Dimension
             bool Valid = false;
             uint64_t Frame = 0;
             float PrevWindTime = 0.0f; // the wind's clock last frame (grass sway)
+            float PrevOceanTime = 0.0f; // the ocean's wave time last frame
             std::unordered_map<uint64_t, ObjectMotion> Objects;
         } Motion;
         struct TemporalState

@@ -15,6 +15,7 @@
 namespace Dimension
 {
     class Scene;
+    struct WaterVolumeComponent;
     class Texture2D;
     struct NavMeshData;
     struct SceneSettings;
@@ -285,6 +286,7 @@ namespace Dimension
             const std::vector<glm::mat4>* JointMatrices = nullptr; // skinned: this frame's pose (the Animator's)
             int32_t SimPositions = -1; // simulated vertices: their positions in m_SimPositions (-1 = the mesh's own)
             bool ShadowOnly = false;   // drawn only into shadow maps (an impostor's cutout turned to the sun)
+            bool Ocean = false;        // the ocean's rings (m_OceanFrame)
             uint32_t FirstPart, PartCount;
         };
         std::vector<RenderItem> m_RenderItems;
@@ -329,6 +331,15 @@ namespace Dimension
         OccluderDepth m_Occluder;
         std::vector<uint8_t> m_ItemOccluded;
         std::vector<Vertex> m_OceanVertices; // this frame's ocean surface (reused)
+        // The ocean drawn this frame, so its motion vectors can ask where the same ring vertices were at the last
+        // frame's wave time (the rings follow the camera: last frame's vertices were elsewhere).
+        struct OceanFrame
+        {
+            const WaterVolumeComponent* Volume = nullptr;
+            glm::vec2 Center{ 0.0f };
+            float Radius = 0.0f, Time = 0.0f;
+        } m_OceanFrame;
+        std::vector<Vertex> m_OceanPrevVertices;
         // Impostors (LOD Groups' farthest level): LOD 0 seen from 8 sides around it, rendered once into an atlas (one
         // tile per side, with mips; alpha = covered) and kept while it stays the same.
         struct Impostor

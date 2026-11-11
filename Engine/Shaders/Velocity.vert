@@ -43,7 +43,7 @@ layout(push_constant) uniform Push
     SkinRef Skin;       // the mesh's skin weights (skinned objects)
     FrameRef Frame;
     uint Depth;         // bindless: the scene depth
-    uint Pad;
+    uint Flags;         // 1: a water surface (Velocity.frag)
 } pc;
 
 layout(location = 0) out vec4 vCurrent;

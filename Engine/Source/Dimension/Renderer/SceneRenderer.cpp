@@ -2325,6 +2325,7 @@ namespace Dimension
         m_RenderItems.clear();
         m_RenderParts.clear();
         m_SimPositions.clear();
+        m_OceanFrame = {};
         m_FrameRefracts = false;
         m_FrameHasWater = false;
         Material scratch;
@@ -2468,7 +2469,10 @@ namespace Dimension
                 float farPlane = camera.Orthographic ? 2000.0f : camera.Projection[3][2] / (camera.Projection[2][2] + 1.0f);
                 float scale = std::max(glm::length(glm::vec3(t.World[0])), glm::length(glm::vec3(t.World[2])));
                 glm::vec2 center = glm::floor(glm::vec2(eye.x, eye.z) * 0.5f) * 2.0f; // in steps, so the rings do not slide along
-                Water::OceanVertices(*ocean, center, std::max(farPlane, 1.0f) * 0.98f / std::max(scale, 1e-4f), scene.GetDisplayTime(), m_OceanVertices);
+                float radius = std::max(farPlane, 1.0f) * 0.98f / std::max(scale, 1e-4f);
+                Water::OceanVertices(*ocean, center, radius, scene.GetDisplayTime(), m_OceanVertices);
+                m_OceanFrame = { ocean, center, radius, scene.GetDisplayTime() };
+                item.Ocean = true;
                 // Shore foam from the ground's depth under the water near the camera, measured per vertex while the
                 // rings stay put (a hundred new rays a frame at most: the cells fill in over a few frames, and are kept).
                 if (ocean->ShoreFoam > 0.0f && scene.GetPhysics3D())
@@ -4550,7 +4554,10 @@ namespace Dimension
             // object, and sway in the wind on their own.
             bool shell = item.Motion && item.FurWind;
             bool swaying = shell && windMoves && glm::unpackHalf2x16(item.FurWind).y != 0.0f;
-            if ((item.MotionVectors == 0 && !swaying) || (item.Motion && !shell) || item.ShadowOnly || (item.Vertices && item.SimPositions < 0)) continue;
+            // The ocean: its waves move every vertex while time runs (where they were comes from the wave time).
+            bool waves = item.Ocean && m_OceanFrame.Volume && history && motion.PrevOceanTime != m_OceanFrame.Time;
+            swaying |= waves;
+            if ((item.MotionVectors == 0 && !swaying) || (item.Motion && !shell) || item.ShadowOnly || (item.Vertices && item.SimPositions < 0 && !item.Ocean)) continue;
             uint64_t key = ((uint64_t)item.EntityId << 32) | occurrence[item.EntityId]++;
             auto& last = motion.Objects[key];
             bool had = history && last.Frame + 1 == frame;
@@ -4564,6 +4571,18 @@ namespace Dimension
             bool moved = had && (prevWorld != item.World || !samePose || !samePositions || swaying);
             VelocityGPU gpu{ item.World, prevWorld, glm::uvec4(0u), glm::uvec4(0u) };
             if (shell) gpu.Extra.z = item.Motion, gpu.Extra.w = item.FurWind;
+            if (waves && item.MotionVectors != 2)
+            {
+                const OceanFrame& o = m_OceanFrame;
+                Water::OceanVertices(*o.Volume, o.Center, o.Radius, motion.PrevOceanTime, m_OceanPrevVertices);
+                if (TransientAllocation block = device.AllocateTransient(m_OceanPrevVertices.size() * sizeof(glm::vec3), 16))
+                {
+                    auto* out = (glm::vec3*)block.Data; // written once (mapped GPU memory)
+                    for (size_t v = 0; v < m_OceanPrevVertices.size(); ++v) out[v] = m_OceanPrevVertices[v].Position;
+                    gpu.Extra.x = SplitAddress(block.Address).x;
+                    gpu.Extra.y = SplitAddress(block.Address).y;
+                }
+            }
             if (moved && !samePositions && item.MotionVectors == 1)
                 if (TransientAllocation block = device.AllocateTransient(last.Positions.size() * sizeof(glm::vec3), 16))
                 {
@@ -4639,6 +4658,7 @@ namespace Dimension
         std::erase_if(motion.Objects, [frame](const auto& entry) { return entry.second.Frame != frame; });
         motion.PrevViewProj = unjitteredViewProj;
         motion.PrevWindTime = windTime;
+        if (m_OceanFrame.Volume) motion.PrevOceanTime = m_OceanFrame.Time;
         motion.Valid = true;
         struct GrassDraw { uint32_t Item, First, Count; };
         std::vector<GrassDraw> grassDraws;
@@ -4680,12 +4700,16 @@ namespace Dimension
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         if (!draws.empty() || !grassDraws.empty()) res.Velocity.Bind(cmd);
         Mesh* bound = nullptr;
+        // Water last: its surface covers whatever under it moved (it is not in the depth to hide them).
+        std::stable_partition(draws.begin(), draws.end(), [this](const ObjectDraw& d)
+                              { const RenderItem& it = m_RenderItems[d.Item]; return !(it.PartCount && m_RenderParts[it.FirstPart].Water); });
         for (const ObjectDraw& d : draws)
         {
             const RenderItem& item = m_RenderItems[d.Item];
             if (!DebugDraw("Motion Vectors", "Velocity", item.MeshRef->GetName(), item.EntityId, 1, 0)) continue;
-            struct { VkDeviceAddress Objects, Skin, Frame; uint32_t Depth, Pad; } push{ objectBlock.Address, item.Joints ? item.Skin : 0,
-                                                                                        frameBlock.Address, target.GetDepthBindless(), 0u };
+            bool water = item.PartCount && m_RenderParts[item.FirstPart].Water;
+            struct { VkDeviceAddress Objects, Skin, Frame; uint32_t Depth, Flags; } push{ objectBlock.Address, item.Joints ? item.Skin : 0,
+                                                                                          frameBlock.Address, target.GetDepthBindless(), water ? 1u : 0u };
             vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
             if (item.MeshRef.get() != bound)
             {
@@ -4699,11 +4723,11 @@ namespace Dimension
                 if (item.Indices) vkCmdBindIndexBuffer(cmd, item.Indices, item.IndexOffset, VK_INDEX_TYPE_UINT32);
                 bound = nullptr;
             }
-            // Every part of the item, opaque ones only (transparent surfaces are not in the depth).
+            // Every part of the item, opaque ones only (transparent surfaces are not in the depth), and water.
             for (uint32_t p = item.FirstPart; p < item.FirstPart + item.PartCount; ++p)
             {
                 const RenderPart& part = m_RenderParts[p];
-                if (part.Transparent) continue;
+                if (part.Transparent && !part.Water) continue;
                 vkCmdDrawIndexed(cmd, part.IndexCount, 1, part.FirstIndex, 0, d.Object);
                 m_Stats.DrawCalls++;
             }
