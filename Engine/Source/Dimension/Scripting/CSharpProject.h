@@ -21,5 +21,24 @@ namespace Dimension
         fs::file_time_type LatestSourceTime(const fs::path& projectDir);
         // Command line that builds the scripts assembly (stderr merged into stdout).
         std::string BuildCommand(const fs::path& projectDir);
+
+        // NuGet packages of the scripts (the Packages window): those the project references (its PackageReference
+        // items), nuget.org search results, and the .NET SDK commands that search, add (or update) and remove them.
+        struct PackageReference
+        {
+            std::string Id, Version;
+        };
+        std::vector<PackageReference> ListPackages(const fs::path& projectDir);
+        struct PackageInfo
+        {
+            std::string Id, LatestVersion, Owners;
+            uint64_t Downloads = 0;
+        };
+        std::vector<PackageInfo> ParseSearchResults(const std::string& json); // `dotnet package search --format json`
+        std::string SearchCommand(const std::string& term, int take = 20);
+        std::string AddPackageCommand(const fs::path& projectDir, const std::string& id, const std::string& version = {});
+        std::string RemovePackageCommand(const fs::path& projectDir, const std::string& id);
+        // Runs a command (stderr merged in); returns its exit code and output.
+        int RunCommand(const std::string& command, std::string& output);
     }
 }

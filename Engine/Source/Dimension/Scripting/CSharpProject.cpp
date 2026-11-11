@@ -1,6 +1,11 @@
 #include "Dimension/Scripting/CSharpProject.h"
 #include "Dimension/Core/Log.h"
+#include <nlohmann/json.hpp>
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <fstream>
+#include <regex>
 
 namespace Dimension::CSharpProject
 {
@@ -86,4 +91,90 @@ namespace Dimension::CSharpProject
         return "\"dotnet build \"" + ProjectFile(projectDir).string() + "\" -c Debug -o \"" + out.string() +
                "\" --nologo -v q -clp:NoSummary 2>&1\"";
     }
+
+        std::vector<PackageReference> ListPackages(const fs::path& projectDir)
+        {
+            std::vector<PackageReference> out;
+            std::ifstream in(ProjectFile(projectDir));
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            // <PackageReference Include="Id" Version="1.2.3" /> (or the version as a child element).
+            std::regex item(R"(<PackageReference\s+([^>]*?)(/>|>([\s\S]*?)</PackageReference>))");
+            std::regex include(R"re(Include\s*=\s*"([^"]+)")re"), version(R"re(Version\s*=\s*"([^"]+)")re"), child(R"re(<Version>([^<]+)</Version>)re");
+            for (auto it = std::sregex_iterator(text.begin(), text.end(), item); it != std::sregex_iterator(); ++it)
+            {
+                std::string attributes = (*it)[1], body = (*it)[3];
+                std::smatch m;
+                PackageReference ref;
+                if (std::regex_search(attributes, m, include)) ref.Id = m[1];
+                if (std::regex_search(attributes, m, version)) ref.Version = m[1];
+                else if (std::regex_search(body, m, child)) ref.Version = m[1];
+                if (!ref.Id.empty()) out.push_back(ref);
+            }
+            return out;
+        }
+
+        std::vector<PackageInfo> ParseSearchResults(const std::string& json)
+        {
+            std::vector<PackageInfo> out;
+            size_t start = json.find('{');
+            if (start == std::string::npos) return out;
+            try
+            {
+                nlohmann::json j = nlohmann::json::parse(json.substr(start));
+                for (const auto& source : j.value("searchResult", nlohmann::json::array()))
+                    for (const auto& p : source.value("packages", nlohmann::json::array()))
+                    {
+                        PackageInfo info;
+                        info.Id = p.value("id", std::string());
+                        info.LatestVersion = p.value("latestVersion", std::string());
+                        info.Owners = p.value("owners", std::string());
+                        info.Downloads = p.value("totalDownloads", (uint64_t)0);
+                        if (!info.Id.empty() && std::none_of(out.begin(), out.end(), [&](const PackageInfo& o) { return o.Id == info.Id; }))
+                            out.push_back(info);
+                    }
+            }
+            catch (const std::exception&)
+            {
+            }
+            return out;
+        }
+
+        namespace
+        {
+            // A term for the command line: characters a package id or version can have only.
+            std::string Safe(const std::string& text, bool spaces = false)
+            {
+                std::string out;
+                for (char c : text)
+                    if (std::isalnum((unsigned char)c) || c == '.' || c == '-' || c == '_' || (spaces && c == ' ')) out += c;
+                return out;
+            }
+        }
+
+        std::string SearchCommand(const std::string& term, int take)
+        {
+            return "dotnet package search \"" + Safe(term, true) + "\" --take " + std::to_string(std::clamp(take, 1, 100)) + " --format json";
+        }
+
+        std::string AddPackageCommand(const fs::path& projectDir, const std::string& id, const std::string& version)
+        {
+            std::string command = "dotnet add \"" + ProjectFile(projectDir).string() + "\" package " + Safe(id);
+            if (!version.empty()) command += " --version " + Safe(version);
+            return command;
+        }
+
+        std::string RemovePackageCommand(const fs::path& projectDir, const std::string& id)
+        {
+            return "dotnet remove \"" + ProjectFile(projectDir).string() + "\" package " + Safe(id);
+        }
+
+        int RunCommand(const std::string& command, std::string& output)
+        {
+            // Outer quotes are stripped by cmd /c (used by _popen).
+            FILE* pipe = _popen(("\"" + command + " 2>&1\"").c_str(), "r");
+            if (!pipe) return -1;
+            char buffer[512];
+            while (std::fgets(buffer, sizeof(buffer), pipe)) output += buffer;
+            return _pclose(pipe);
+        }
 }

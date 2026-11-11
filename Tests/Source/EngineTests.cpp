@@ -64,6 +64,7 @@
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/ManagedBuild.h>
+#include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Platform/AppIcon.h>
 #include <Dimension/Asset/AssetDependencies.h>
 #include <Dimension/Asset/AssetPrefetch.h>
@@ -7533,6 +7534,43 @@ namespace
         for (auto [le, mr] : loaded->GetRegistry().ViewOf<MeshRendererComponent>())
             found = mr.BlendShapeWeights.size() == 2 && Near(mr.BlendShapeWeights[1], 62.5f);
         CHECK(found);
+    }
+
+    void TestScriptPackages()
+    {
+        // The scripts project's packages, in both ways of writing a version.
+        fs::path project = fs::temp_directory_path() / "dimension_packages";
+        fs::remove_all(project);
+        fs::create_directories(project / "Scripts");
+        {
+            std::ofstream(project / "Scripts" / "GameScripts.csproj") << R"(<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Crc32.NET" Version="1.2.0" />
+    <PackageReference Include="Blake3">
+      <Version>2.2.1</Version>
+    </PackageReference>
+    <Reference Include="Dimension.Core" />
+  </ItemGroup>
+</Project>)";
+        }
+        auto packages = CSharpProject::ListPackages(project);
+        CHECK(packages.size() == 2 && packages[0].Id == "Crc32.NET" && packages[0].Version == "1.2.0" && packages[1].Id == "Blake3" && packages[1].Version == "2.2.1");
+        // Search results (dotnet package search --format json), one entry per id across sources.
+        auto results = CSharpProject::ParseSearchResults(R"(Some text first
+{ "version": 2, "problems": [], "searchResult": [
+  { "sourceName": "Offline", "packages": [ { "id": "Crc32.NET", "latestVersion": "2.0.0" } ] },
+  { "sourceName": "nuget.org", "packages": [
+    { "id": "Crc32.NET", "latestVersion": "2.1.0", "totalDownloads": 40041490, "owners": "force" },
+    { "id": "Crc32C.NET", "latestVersion": "1.0.5", "totalDownloads": 10398651, "owners": "robertvazan" } ] } ] })");
+        CHECK(results.size() == 2 && results[1].Id == "Crc32C.NET" && results[1].Downloads == 10398651 && results[1].Owners == "robertvazan");
+        CHECK(CSharpProject::ParseSearchResults("not json").empty());
+        // Commands keep to what ids and versions can hold (no shell characters through).
+        std::string add = CSharpProject::AddPackageCommand(project, "Bad&del *.*", "1.0|x");
+        CHECK(add.find('&') == std::string::npos && add.find('|') == std::string::npos && add.find("package Baddel. ") != std::string::npos &&
+              add.find("--version 1.0x") != std::string::npos);
+        CHECK(CSharpProject::SearchCommand("json", 500).find("--take 100") != std::string::npos &&
+              CSharpProject::RemovePackageCommand(project, "Blake3").find("remove") != std::string::npos);
+        fs::remove_all(project);
     }
 
     void TestManagedBuild()
@@ -16571,6 +16609,7 @@ int main(int argc, char** argv)
     Run("Humanoid IK goals", TestHumanoidIK);
     Run("COLR v1 color glyphs", TestColrV1);
     Run("Managed build (ReadyToRun, framework closure)", TestManagedBuild);
+    Run("Script packages (NuGet)", TestScriptPackages);
     Run("Blend shapes", TestBlendShapes);
     Run("Generic Animators (no skeleton)", TestGenericAnimator);
     Run("Avatar Masks", TestAvatarMasks);

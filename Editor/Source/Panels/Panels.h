@@ -13,6 +13,8 @@
 #include <imgui.h>
 #include <array>
 #include <map>
+#include <future>
+#include <Dimension/Scripting/CSharpProject.h>
 #include <mutex>
 
 namespace Editor
@@ -348,6 +350,24 @@ namespace Editor
         bool m_CurveScrub = false;
         float m_CurveLo[2]{}, m_CurveHi[2]{};
         struct AutoCurveKey { std::string Joint; int Set = 0, Axis = 0, Key = -1; } m_AutoCurve;
+    };
+
+    // Window > Packages: the NuGet packages the C# scripts use, and nuget.org search to add or update them (through the
+    // .NET SDK's commands, in the background; the scripts build again when the project changes).
+    class PackagesPanel
+    {
+    public:
+        explicit PackagesPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open);
+        void Search(const std::string& term); // (also automation: --package-search)
+
+    private:
+        void Run(int kind, const std::string& label, const std::string& command);
+        EditorContext& m_Ctx;
+        std::string m_Query, m_Status;
+        std::vector<CSharpProject::PackageInfo> m_Results;
+        std::future<std::pair<int, std::string>> m_Job;
+        int m_JobKind = 0; // 1 search, 2 add / remove
     };
 
     class SceneSettingsPanel
