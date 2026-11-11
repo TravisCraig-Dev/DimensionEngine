@@ -38,9 +38,6 @@ namespace Dimension
         void OceanVertices(const WaterVolumeComponent& water, glm::vec2 center, float radius, float time, std::vector<Vertex>& out);
         // Foam on the crests at a rest point (0-1, before the volume's Foam): where the waves bunch the surface up.
         float CrestFoam(const WaterVolumeComponent& water, glm::vec2 rest, float time);
-        // Shore foam (0-1) at a world point on a playing scene's water surface: from the depth of the ground under it
-        // (one ray down per 1 m cell, kept). False when that cell is not measured yet and `budget` (new rays) is spent.
-        bool ShoreFoamAt(Scene& scene, Entity water, const glm::vec3& surfacePoint, int& budget, float& foam);
         // Fills every Water Volume's SimulatedPositions/Normals for `time` (flat water and oceans leave them empty).
         void Update(Scene& scene, float time);
         void ReleaseMeshes();

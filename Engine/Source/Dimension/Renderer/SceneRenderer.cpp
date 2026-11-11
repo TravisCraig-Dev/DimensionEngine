@@ -2455,6 +2455,16 @@ namespace Dimension
         std::vector<uint32_t> partSubMesh; // per part of the current item: its sub-mesh
 
         auto culled = [&](Entity e) { return LayerCulled(scene, e); };
+        // Water: the shallows foam where the ground is near the surface, not around floating things (dynamic bodies),
+        // whose boxes go to the water shader (filled once every item is known).
+        constexpr uint32_t kMaxFloating = 64;
+        bool anyWater = reg.ViewOf<WaterVolumeComponent>().SizeHint() > 0;
+        TransientAllocation floatingBlock;
+        auto floats = [&](Entity e) {
+            for (int depth = 0; !e.IsNull() && depth < 64; ++depth, e = scene.GetParent(e))
+                if (const auto* rb = reg.TryGet<RigidbodyComponent>(e)) return rb->Type == BodyType::Dynamic;
+            return false;
+        };
         for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy || (e.Index < lods.Hidden.size() && lods.Hidden[e.Index]) || culled(e)) continue;
@@ -2485,6 +2495,7 @@ namespace Dimension
             if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
+            item.Floating = anyWater && floats(e);
             AABB bounds = mesh->GetBounds();
             if (ocean)
             {
@@ -2498,42 +2509,6 @@ namespace Dimension
                 Water::OceanVertices(*ocean, center, radius, scene.GetDisplayTime(), m_OceanVertices);
                 m_OceanFrame = { ocean, center, radius, scene.GetDisplayTime() };
                 item.Ocean = true;
-                // Shore foam from the ground's depth under the water near the camera, measured per vertex while the
-                // rings stay put (a hundred new rays a frame at most: the cells fill in over a few frames, and are kept).
-                if (ocean->ShoreFoam > 0.0f && scene.GetPhysics3D())
-                {
-                    if (center != m_OceanShoreCenter || e.Index != m_OceanShoreEntity || m_OceanShore.size() != m_OceanVertices.size())
-                    {
-                        // The rings moved: every vertex near the camera looks its cell up again.
-                        m_OceanShore.assign(m_OceanVertices.size(), 0.0f);
-                        m_OceanShorePending.clear();
-                        float reach = 120.0f / std::max(scale, 1e-4f);
-                        for (size_t i = 0; i < m_OceanVertices.size(); ++i)
-                            if (glm::distance(glm::vec2(m_OceanVertices[i].Position.x, m_OceanVertices[i].Position.z), center) <= reach)
-                                m_OceanShorePending.push_back((uint32_t)i);
-                        m_OceanShoreCenter = center;
-                        m_OceanShoreEntity = e.Index;
-                    }
-                    if (!m_OceanShorePending.empty())
-                    {
-                        int rays = 100;
-                        size_t kept = 0;
-                        for (uint32_t i : m_OceanShorePending)
-                        {
-                            glm::vec3 p = m_OceanVertices[i].Position;
-                            if (!Water::ShoreFoamAt(scene, e, glm::vec3(t.World * glm::vec4(p.x, ocean->Size.y * 0.5f, p.z, 1.0f)), rays, m_OceanShore[i]))
-                                m_OceanShorePending[kept++] = i; // its ray next frame
-                        }
-                        m_OceanShorePending.resize(kept);
-                    }
-                    for (size_t i = 0; i < m_OceanVertices.size(); ++i)
-                        if (m_OceanShore[i] > 0.0f)
-                        {
-                            glm::vec3& n = m_OceanVertices[i].Normal;
-                            float crest = glm::length(n) - 1.0f;
-                            n = glm::normalize(n) * (1.0f + std::max(crest, m_OceanShore[i]));
-                        }
-                }
                 if (TransientAllocation block = device.AllocateTransient(m_OceanVertices.size() * sizeof(Vertex), 16))
                 {
                     std::memcpy(block.Data, m_OceanVertices.data(), m_OceanVertices.size() * sizeof(Vertex));
@@ -2715,6 +2690,12 @@ namespace Dimension
                     MaterialGPU gpu = BuildMaterialGPU(mat);
                     gpu.Flags.w = 2u;
                     gpu.Layers[0] = glm::vec4(std::max(water->ShoreFoam, 0.0f), 0.0f, 0.0f, 0.0f); // shore foam reach (m)
+                    if (!floatingBlock) floatingBlock = device.AllocateTransient(sizeof(glm::uvec4) + kMaxFloating * sizeof(glm::mat4), 16);
+                    if (floatingBlock)
+                    {
+                        std::memset(floatingBlock.Data, 0, sizeof(glm::uvec4)); // none until filled
+                        gpu.Maps2 = glm::uvec4((uint32_t)floatingBlock.Address, (uint32_t)(floatingBlock.Address >> 32), 0u, 0u);
+                    }
                     address = uploadMaterialGPU(dim(gpu, dark));
                     m_FrameHasWater = true;
                 }
@@ -2794,6 +2775,28 @@ namespace Dimension
                     next.MeshRef = std::move(nextMesh);
                     m_RenderItems.push_back(std::move(next));
                 }
+        }
+
+        // The floating things' boxes for the water shader: the nearest to the camera first.
+        if (floatingBlock)
+        {
+            std::vector<std::pair<float, uint32_t>> floating;
+            for (uint32_t i = 0; i < (uint32_t)m_RenderItems.size(); ++i)
+                if (m_RenderItems[i].Floating && !m_RenderItems[i].Vertices && m_RenderItems[i].MeshRef)
+                    floating.push_back({ glm::distance(m_RenderItems[i].Center, camera.Position), i });
+            size_t count = std::min<size_t>(floating.size(), kMaxFloating);
+            std::partial_sort(floating.begin(), floating.begin() + count, floating.end());
+            auto* boxes = (glm::mat4*)((char*)floatingBlock.Data + sizeof(glm::uvec4));
+            for (size_t k = 0; k < count; ++k)
+            {
+                // World points into the mesh's box, grown a little (so its surface counts as inside), from -1 to 1.
+                const RenderItem& item = m_RenderItems[floating[k].second];
+                AABB local = item.MeshRef->GetBounds();
+                glm::vec3 half = glm::max(local.Extents() * 1.05f + 0.05f, glm::vec3(1e-3f));
+                boxes[k] = glm::inverse(item.World * glm::translate(glm::mat4(1.0f), local.Center()) * glm::scale(glm::mat4(1.0f), half));
+            }
+            glm::uvec4 header((uint32_t)count, 0u, 0u, 0u);
+            std::memcpy(floatingBlock.Data, &header, sizeof(header));
         }
 
         // Impostors: a quad turned to the camera (about the vertical), showing the atlas tile of the side nearest the

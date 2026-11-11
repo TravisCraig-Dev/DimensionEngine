@@ -1056,14 +1056,8 @@ namespace Dimension
         float Caustics = 1.0f;
         float CausticsScale = 1.5f;
         // Runtime: the surface grid's displaced vertices and normals (object space) this frame; the normals' length is
-        // 1 + foam. Depths to the ground under the grid's points (and, for an ocean, under 1 m cells as they are seen).
+        // 1 + crest foam (shore foam is the water shader's, from the depth buffer).
         std::vector<glm::vec3> SimulatedPositions, SimulatedNormals;
-        std::vector<float> ShoreDepths;
-        std::unordered_map<int64_t, std::vector<float>> ShoreTiles; // 32 x 32 cells of 1 m each (NaN = not measured yet)
-        // The last tile looked up (valid only for the component that set it: a copy looks again).
-        const void* ShoreLastOwner = nullptr;
-        int64_t ShoreLastKey = 0;
-        std::vector<float>* ShoreLastTile = nullptr;
     };
 
     // A Wind Zone (like Unity's): Directional blows along the object's forward (-Z) everywhere; Spherical blows out

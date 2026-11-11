@@ -3774,8 +3774,8 @@ namespace
         sea.WaveHeight = 0.0f;
         CHECK(steep > 0.5f && gentle < steep && most(0.9f) == 0.0f);
 
-        // Shore foam while playing: around an islet standing in a calm pond, not out in the open (the normals' length
-        // carries it to the shader).
+        // Shore foam is the water shader's (from the depth under the surface): a calm pond with an islet in it needs no
+        // rays and no per-frame surface while playing.
         Scene scene("Pond");
         auto& reg = scene.GetRegistry();
         Entity pond = scene.CreateEntity("Pond");
@@ -3795,17 +3795,7 @@ namespace
         rt->OnRuntimeStart();
         rt->OnUpdateRuntime(1.0f / 60.0f);
         auto& rw = rt->GetRegistry().Get<WaterVolumeComponent>(pond);
-        const auto& rest = Water::SurfaceVertices(rw);
-        CHECK(rw.SimulatedNormals.size() == rest.size() && !rest.empty());
-        float nearIslet = 0.0f, open = 0.0f;
-        for (size_t i = 0; i < rw.SimulatedNormals.size() && i < rest.size(); ++i)
-        {
-            float foam = glm::length(rw.SimulatedNormals[i]) - 1.0f;
-            glm::vec2 at(rest[i].Position.x, rest[i].Position.z);
-            if (glm::distance(at, glm::vec2(4.0f, 0.0f)) < 2.0f) nearIslet = std::max(nearIslet, foam);
-            if (glm::distance(at, glm::vec2(-5.0f, 0.0f)) < 2.0f) open = std::max(open, foam);
-        }
-        CHECK(nearIslet > 0.9f && open < 0.01f);
+        CHECK(rw.SimulatedPositions.empty() && rw.SimulatedNormals.empty());
         rt->OnRuntimeStop();
     }
 

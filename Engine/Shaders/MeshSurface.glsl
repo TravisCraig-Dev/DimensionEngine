@@ -329,7 +329,8 @@ void main()
     {
         // Contact foam: a band where the opaque scene (a shore, rocks, a hull, a wading leg) meets the surface, from
         // the depth drawn before the water: how far the view goes on through the water before it hits something,
-        // foaming within a quarter of Shore Foam (the shallows' wider foam comes from rays while playing).
+        // foaming within a quarter of Shore Foam. The shallows foam wider: where what the view meets is ground less
+        // than Shore Foam under the surface (not a floating thing's underside).
         uint depthTexture = uint(uScene.Refraction.w) - 1u;
         ivec2 size = textureSize(uTextures[nonuniformEXT(depthTexture)], 0);
         float d = texelFetch(uTextures[nonuniformEXT(depthTexture)], ivec2(gl_FragCoord.xy), 0).r;
@@ -340,6 +341,15 @@ void main()
             vec3 under = p.xyz / p.w;
             float gap = distance(vWorldPos, under);
             foam = max(foam, 1.0 - smoothstep(0.0, m.Layers[0].x * 0.25, gap));
+            float below = vWorldPos.y - under.y;
+            bool floating = false;
+            if (m.Maps2.x != 0u || m.Maps2.y != 0u)
+            {
+                FloatingRef boxes = FloatingRef(m.Maps2.xy);
+                for (uint k = 0u; k < min(boxes.Count.x, 64u) && !floating; ++k)
+                    floating = all(lessThanEqual(abs((boxes.Boxes[k] * vec4(under, 1.0)).xyz), vec3(1.0)));
+            }
+            if (!floating) foam = max(foam, clamp(1.0 - below / m.Layers[0].x, 0.0, 1.0));
         }
     }
     if (foam > 0.002)

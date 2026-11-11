@@ -11,7 +11,16 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Ma
     uvec4 Maps;         // bindless: base, normal, metallic-roughness, emission
     uvec4 Flags;        // x blend mode (0 opaque, 1 cutout, 2 transparent), y has normal map, z 1 = terrain, w 1 = fur shell
     vec4 Layers[2];     // fur: [0] density, thickness, droop, wind response; [1] tip color (rgb), root shade
-    uvec4 Maps2;        // terrain: xy its layers' address (TerrainLayersRef), z their count, w height blend (float bits)
+    uvec4 Maps2;        // terrain: xy its layers' address (TerrainLayersRef), z their count, w height blend (float bits);
+                        // water: xy the floating things' boxes (FloatingRef, 0 = none)
+};
+
+// Water: the boxes of the floating things in it this frame (FloatingGPU in SceneRenderer.cpp), each as the matrix
+// taking world points into a box from -1 to 1.
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer FloatingRef
+{
+    uvec4 Count;
+    mat4 Boxes[];
 };
 
 // A terrain's surface layers (TerrainLayerGPU in SceneRenderer.cpp).

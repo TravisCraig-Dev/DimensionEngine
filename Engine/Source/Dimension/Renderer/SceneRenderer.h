@@ -291,6 +291,7 @@ namespace Dimension
             int32_t SimPositions = -1; // simulated vertices: their positions in m_SimPositions (-1 = the mesh's own)
             bool ShadowOnly = false;   // drawn only into shadow maps (an impostor's cutout turned to the sun)
             bool Ocean = false;        // the ocean's rings (m_OceanFrame)
+            bool Floating = false;     // part of a dynamic body, with water in the scene (left out of the shallows' foam)
             uint32_t FirstPart, PartCount;
         };
         std::vector<RenderItem> m_RenderItems;
@@ -364,11 +365,6 @@ namespace Dimension
         Scope<SceneRenderTarget> m_ImpostorTarget;
         void PrepareImpostors(VkCommandBuffer cmd, Scene& scene);
         void CaptureImpostor(VkCommandBuffer cmd, Scene& scene, Entity group, Impostor& impostor);
-        // Shore foam per ocean vertex, kept while the rings stay put (their center, the ocean, all cells measured).
-        std::vector<float> m_OceanShore;
-        std::vector<uint32_t> m_OceanShorePending; // vertices whose cell waits for its ray
-        glm::vec2 m_OceanShoreCenter{ 1e30f };
-        uint32_t m_OceanShoreEntity = UINT32_MAX;
         void ChooseOccluder(const CameraData& camera);
         void ReduceDepth(VkCommandBuffer cmd, SceneRenderTarget& target, const CameraData& camera);
         void BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options);
