@@ -91,6 +91,8 @@ namespace Editor
                 anim->Time = m_SavedTime;
                 anim->Playing = m_SavedPlaying;
             }
+        if (scene.IsValid(m_PreviewEntity))
+            if (auto* mr = reg.TryGet<MeshRendererComponent>(m_PreviewEntity)) mr->BlendShapeWeights = m_SavedWeights; // (the clip set them)
         m_PreviewEntity = Entity::Null();
     }
 
@@ -120,6 +122,11 @@ namespace Editor
         }
         const Skeleton& skeleton = *model->GetSkeleton();
         bool playing = m_Ctx.IsPlaying();
+        // The model's blend shapes (rows after the joints; their keys are channels named after them).
+        std::vector<std::string> shapeNames;
+        if (auto data = model->GetBlendShapeCount() ? AssetManager::GetMeshData(modelHandle) : nullptr)
+            for (const BlendShape& b : data->BlendShapes) shapeNames.push_back(b.Name);
+        if (m_Shape >= (int)shapeNames.size()) m_Shape = -1;
         if (playing) StopPreview();
         const std::vector<AssetHandle>& clips = AssetManager::ClipsFor(modelHandle);
         if (std::find(clips.begin(), clips.end(), m_Clip) == clips.end()) m_Clip = clips.empty() ? AssetHandle::None() : clips.front();
@@ -157,7 +164,7 @@ namespace Editor
             for (const AnimationClip& c : model->GetClips())
                 if (ImGui::Selectable(c.Name.c_str()))
                 {
-                    AnimationClipAsset made = AnimationClipAsset::FromClip(skeleton, c);
+                    AnimationClipAsset made = AnimationClipAsset::FromClip(skeleton, c, &shapeNames);
                     made.Model = modelHandle;
                     created(AssetManager::CreateAnimationClip(NewClipPath(folder, c.Name), made));
                 }
@@ -193,6 +200,7 @@ namespace Editor
                 m_SavedClip = anim->Clip;
                 m_SavedTime = anim->Time;
                 m_SavedPlaying = anim->Playing;
+                m_SavedWeights = mr->BlendShapeWeights;
             }
             else
                 StopPreview();
@@ -221,7 +229,7 @@ namespace Editor
         }
 
         // The pose at the current time (the selected joint's values come from it).
-        AnimationClip sampled = asset.ToClip(skeleton);
+        AnimationClip sampled = asset.ToClip(skeleton, &shapeNames);
         Pose pose;
         Animation::Sample(skeleton, sampled, m_Time, pose);
         if (m_Joint >= (int)skeleton.Joints.size()) m_Joint = -1;
@@ -232,7 +240,7 @@ namespace Editor
         // ---- Joints and their keys (a dope sheet), then the selected joint's values ----
         const float labelW = 220.0f, rowH = ImGui::GetFrameHeight(), inset = 8.0f;
         const float curveH = 120.0f;
-        float detailH = m_Joint >= 0 ? ImGui::GetFrameHeightWithSpacing() * 3.0f + curveH + 12.0f : ImGui::GetFrameHeightWithSpacing() + 4.0f;
+        float detailH = m_Joint >= 0 ? ImGui::GetFrameHeightWithSpacing() * 3.0f + curveH + 12.0f : ImGui::GetFrameHeightWithSpacing() * (m_Shape >= 0 ? 2.0f : 1.0f) + 4.0f;
         ImGui::BeginChild("##sheet", ImVec2(0, -detailH), ImGuiChildFlags_Borders);
         float stripW = std::max(ImGui::GetContentRegionAvail().x - labelW - 6.0f, 80.0f);
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -287,6 +295,7 @@ namespace Editor
             else
                 m_Selected = { j };
             m_Joint = j;
+            m_Shape = -1;
         };
         auto selectedNames = [&]() {
             std::vector<std::string> names;
@@ -344,6 +353,64 @@ namespace Editor
                 }
             }
             if (ImGui::IsItemDeactivated() && m_Dragging)
+            {
+                m_Dragging = false;
+                commit = true;
+            }
+            ImGui::PopID();
+        }
+        // Blend shapes: a row each, keys as the joints' (a click selects it; drag keys to move them, right-click to delete).
+        if (!shapeNames.empty()) ImGui::TextDisabled("Blend Shapes");
+        for (int s = 0; s < (int)shapeNames.size(); ++s)
+        {
+            std::string channel = AnimationClipAsset::kBlendShape + shapeNames[s];
+            ImGui::PushID(100000 + s);
+            bool selected = m_Shape == s;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
+            if (ImGui::Selectable(shapeNames[s].c_str(), selected, 0, ImVec2(labelW - 22.0f, rowH)))
+            {
+                m_Shape = s;
+                m_Joint = -1;
+                m_Selected.clear();
+            }
+            ImGui::SameLine(labelW);
+            ImVec2 p0 = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##strip", ImVec2(stripW, rowH));
+            bool hovered = ImGui::IsItemHovered();
+            dl->AddRectFilled(p0, ImVec2(p0.x + stripW, p0.y + rowH), selected ? IM_COL32(52, 48, 66, 255) : IM_COL32(34, 35, 40, 255), 3.0f);
+            float hit = -1.0f;
+            for (float t : KeyTimes(asset, &channel))
+            {
+                float x = timeToX(p0.x, t);
+                bool sel = selected && m_KeyTime >= 0.0f && std::abs(m_KeyTime - t) <= AnimationClipAsset::kKeyTolerance * 0.5f;
+                diamond(x, p0.y + rowH * 0.5f, sel ? IM_COL32(255, 210, 90, 255) : IM_COL32(200, 170, 230, 255));
+                if (hovered && std::abs(mouseX - x) < 6.0f) hit = t;
+            }
+            if (ImGui::IsItemClicked())
+            {
+                m_Shape = s;
+                m_Joint = -1;
+                m_Selected.clear();
+                m_KeyTime = hit;
+                m_Dragging = hit >= 0.0f && !playing;
+                m_Time = hit >= 0.0f ? hit : xToTime(p0.x, mouseX);
+            }
+            if (hovered && hit >= 0.0f && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            {
+                pendingRemove = channel;
+                removeAt = hit;
+            }
+            if (m_Dragging && m_Shape == s && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f))
+            {
+                float to = xToTime(p0.x, mouseX);
+                if (std::abs(to - m_KeyTime) > AnimationClipAsset::kKeyTolerance && asset.MoveKeys(channel, m_KeyTime, to))
+                {
+                    m_KeyTime = to;
+                    m_Time = to;
+                    changed = true;
+                }
+            }
+            if (ImGui::IsItemDeactivated() && m_Dragging && m_Shape == s)
             {
                 m_Dragging = false;
                 commit = true;
@@ -650,8 +717,43 @@ namespace Editor
             if (!keyInfo.empty()) cdl->AddText(ImVec2(c0.x + 6, c0.y + curveH - ImGui::GetFontSize() - 3), IM_COL32(210, 210, 220, 255), keyInfo.c_str());
             cdl->PopClipRect();
         }
+        else if (m_Shape >= 0)
+        {
+            // The selected blend shape's weight at the current time (0..100): editing it keys it there.
+            std::string channel = AnimationClipAsset::kBlendShape + shapeNames[m_Shape];
+            float weight = m_Shape < (int)pose.Weights.size() && !std::isnan(pose.Weights[m_Shape]) ? pose.Weights[m_Shape] * 100.0f
+                         : m_Shape < (int)mr->BlendShapeWeights.size() ? mr->BlendShapeWeights[m_Shape] : 0.0f;
+            ImGui::TextUnformatted(shapeNames[m_Shape].c_str());
+            ImGui::SameLine(labelW);
+            if (playing) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(260);
+            if (ImGui::SliderFloat("Weight", &weight, 0.0f, 100.0f, "%.1f"))
+            {
+                asset.SetKey(channel, AnimationPath::Translation, m_Time, glm::vec4(weight * 0.01f, 0.0f, 0.0f, 0.0f));
+                changed = true;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
+            ImGui::SetItemTooltip("The shape's weight at the current time; changing it keys it there");
+            ImGui::SameLine();
+            bool keyed = asset.HasKey(channel, m_Time);
+            if (ImGui::Button("Key"))
+            {
+                asset.SetKey(channel, AnimationPath::Translation, m_Time, glm::vec4(weight * 0.01f, 0.0f, 0.0f, 0.0f));
+                changed = commit = true;
+            }
+            ImGui::SameLine();
+            if (!keyed) ImGui::BeginDisabled();
+            if (ImGui::Button("Delete Key"))
+            {
+                asset.RemoveKeys(channel, m_Time);
+                m_KeyTime = -1.0f;
+                changed = commit = true;
+            }
+            if (!keyed) ImGui::EndDisabled();
+            if (playing) ImGui::EndDisabled();
+        }
         else
-            ImGui::TextDisabled("Select a joint to see and key its rotation and position at the current time.");
+            ImGui::TextDisabled("Select a joint to see and key its rotation and position, or a blend shape its weight, at the current time.");
 
         if (changed)
         {
@@ -699,7 +801,7 @@ namespace Editor
 
         // The pose at the current time, in the world.
         Pose pose;
-        Animation::Sample(skeleton, clip->ToClip(skeleton), m_Time, pose);
+        Animation::Sample(skeleton, clip->ToClip(skeleton), m_Time, pose); // (joints only: no shapes needed here)
         std::vector<glm::mat4> globals;
         Animation::JointGlobals(skeleton, pose, globals);
         auto worldOf = [&](int j) { return world * globals[j]; };

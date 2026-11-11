@@ -1,6 +1,7 @@
 #include "Dimension/Animation/ClipAsset.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <fstream>
 
@@ -95,7 +96,7 @@ namespace Dimension
         return (bool)out;
     }
 
-    AnimationClipAsset AnimationClipAsset::FromClip(const Skeleton& skeleton, const AnimationClip& clip)
+    AnimationClipAsset AnimationClipAsset::FromClip(const Skeleton& skeleton, const AnimationClip& clip, const std::vector<std::string>* shapes)
     {
         AnimationClipAsset a;
         a.Name = clip.Name;
@@ -113,16 +114,48 @@ namespace Dimension
             c.OutTangents = ch.OutTangents;
             a.Channels.push_back(std::move(c));
         }
+        // Blend shape weights, by the shapes' names.
+        for (const AnimationChannel& ch : clip.WeightChannels)
+        {
+            if (!shapes || ch.Joint < 0 || ch.Joint >= (int)shapes->size()) continue;
+            Channel c;
+            c.Joint = kBlendShape + (*shapes)[ch.Joint];
+            c.Path = AnimationPath::Translation;
+            c.Interpolation = ch.Interpolation;
+            c.Times = ch.Times;
+            c.Values = ch.Values;
+            c.InTangents = ch.InTangents;
+            c.OutTangents = ch.OutTangents;
+            a.Channels.push_back(std::move(c));
+        }
         return a;
     }
 
-    AnimationClip AnimationClipAsset::ToClip(const Skeleton& skeleton) const
+    AnimationClip AnimationClipAsset::ToClip(const Skeleton& skeleton, const std::vector<std::string>* shapes) const
     {
         AnimationClip clip;
         clip.Name = Name;
         clip.Duration = Duration;
         for (const Channel& c : Channels)
         {
+            if (IsBlendShape(c.Joint))
+            {
+                // A blend shape weight: the model's shape of that name.
+                if (!shapes || c.Times.empty() || c.Times.size() != c.Values.size()) continue;
+                auto it = std::find(shapes->begin(), shapes->end(), c.Joint.substr(std::strlen(kBlendShape)));
+                if (it == shapes->end()) continue;
+                AnimationChannel w;
+                w.Joint = (int)(it - shapes->begin());
+                w.Path = AnimationPath::Translation; // (plain values)
+                w.Interpolation = c.Interpolation;
+                w.Times = c.Times;
+                w.Values = c.Values;
+                w.InTangents = c.InTangents;
+                w.OutTangents = c.OutTangents;
+                if (c.Smooth) Animation::AutoTangents(w);
+                clip.WeightChannels.push_back(std::move(w));
+                continue;
+            }
             int joint = Animation::MatchJoint(skeleton, c.Joint);
             if (joint < 0 || c.Times.empty() || c.Times.size() != c.Values.size()) continue;
             AnimationChannel ch;

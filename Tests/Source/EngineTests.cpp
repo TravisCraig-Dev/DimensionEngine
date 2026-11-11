@@ -7105,6 +7105,24 @@ namespace
         other.SetBindPose(*grid.SkeletonData);
         CHECK(other.Weights.empty());
 
+        // In .anim clips: shape weights are channels named after the shapes, so a clip extracted from the model keeps
+        // them, keys can be set on them, and they come back by name (shapes the model lacks are left out).
+        std::vector<std::string> names = { "Bulge", "Lift" };
+        AnimationClipAsset pulse = AnimationClipAsset::FromClip(*grid.SkeletonData, grid.Clips[0], &names);
+        CHECK(pulse.FindChannel("blendShape:Bulge", AnimationPath::Translation) && AnimationClipAsset::IsBlendShape("blendShape:Lift"));
+        pulse.SetKey("blendShape:Lift", AnimationPath::Translation, 0.5f, glm::vec4(0.8f, 0, 0, 0));
+        fs::path animFile = fs::temp_directory_path() / "dimension_shapes.anim";
+        CHECK(pulse.Save(animFile));
+        auto reloaded = AnimationClipAsset::Load(animFile);
+        fs::remove(animFile);
+        AnimationClip rebuilt = reloaded->ToClip(*grid.SkeletonData, &names);
+        Pose keyed;
+        Animation::Sample(*grid.SkeletonData, rebuilt, 0.5f, keyed);
+        CHECK(rebuilt.WeightChannels.size() == 2 && keyed.Weights.size() == 2 && Near(keyed.Weights[0], 0.5f) && Near(keyed.Weights[1], 0.8f));
+        std::vector<std::string> other2 = { "Smile", "Bulge" }; // another model: Bulge is its shape 1, Lift it lacks
+        AnimationClip mapped = reloaded->ToClip(*grid.SkeletonData, &other2);
+        CHECK(mapped.WeightChannels.size() == 1 && mapped.WeightChannels[0].Joint == 1 && reloaded->ToClip(*grid.SkeletonData).WeightChannels.empty());
+
         // The renderer's weights (0..100) are saved with the scene.
         Scene scene("Shapes");
         Entity e = scene.CreateEntity("Face");

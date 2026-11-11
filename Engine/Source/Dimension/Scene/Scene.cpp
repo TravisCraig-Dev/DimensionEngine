@@ -1193,9 +1193,13 @@ namespace Dimension
                     else entry.Clips.push_back(std::move(made));
                 };
                 for (const AnimationClip& clip : (source ? source : mesh)->GetClips()) add(clip);
+                // (.anim blend shape keys go to the model's shapes by name)
+                std::vector<std::string> shapes;
+                if (auto data = (source ? source : mesh)->GetBlendShapeCount() ? AssetManager::GetMeshData(source ? anim.ClipSource : meshHandle) : nullptr)
+                    for (const BlendShape& b : data->BlendShapes) shapes.push_back(b.Name);
                 if (from)
                     for (AssetHandle h : extra)
-                        if (auto asset = AssetManager::GetAnimationClip(h)) add(asset->ToClip(*from));
+                        if (auto asset = AssetManager::GetAnimationClip(h)) add(asset->ToClip(*from, &shapes));
             }
             return entry.Clips;
         }

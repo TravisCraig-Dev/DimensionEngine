@@ -310,6 +310,7 @@ namespace Editor
         AssetHandle m_Clip = AssetHandle::None();
         float m_Time = 0.0f, m_KeyTime = -1.0f; // the current time; the selected key's (-1 = none)
         int m_Joint = -1;              // the selected joint (the one whose values show)
+        int m_Shape = -1;              // or the selected blend shape (its weight shows)
         std::vector<int> m_Selected;   // every selected joint (Ctrl / Shift click adds): keys, deletes and moves apply to all
         bool m_Dragging = false, m_GizmoUsing = false;
         // Preview: the object posed by the clip, and its Animator's settings to put back.
@@ -318,6 +319,7 @@ namespace Editor
         std::string m_SavedClip;
         float m_SavedTime = 0.0f;
         bool m_SavedPlaying = true;
+        std::vector<float> m_SavedWeights; // its renderer's blend shape weights (the previewed clip sets them)
         // The selected joint's rotation as edited (degrees), kept while it is dragged.
         glm::vec3 m_Euler{ 0.0f };
         int m_EulerJoint = -1;
