@@ -78,6 +78,15 @@ namespace Dimension
         // Bakes a NavMesh Surface from the scene's colliders (it needs physics: a playing scene's, or else a temporary
         // one is built). Stores and returns the result (nullptr when the object has no surface).
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity surface);
+        // Bakes a surface on a worker thread (Unity's UpdateNavMesh): the level is copied now, sampled in the background
+        // while the game runs on, and the mesh installed by a later FinishBakes (Update calls it); agents keep the old
+        // mesh meanwhile. Streamed and Moving surfaces bake at once instead. False when it has no surface.
+        bool BakeAsync(Scene& scene, Entity surface);
+        int BakeAllAsync(Scene& scene); // every surface; returns how many started
+        bool IsBaking(Scene& scene, Entity surface);
+        bool IsBaking(Scene& scene); // any
+        // Installs the background bakes that have finished (all of them with `wait`); returns how many.
+        int FinishBakes(Scene& scene, bool wait = false);
         // Bakes every surface (all, or only those not baked yet). Agents find their mesh again. `useSaved`: surfaces
         // whose saved bake (NavMesh Data) is up to date load it instead (play start).
         void BakeAll(Scene& scene, bool onlyMissing = false, bool useSaved = false);

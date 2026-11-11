@@ -2508,6 +2508,11 @@ namespace Dimension
         }
         /// <summary>Bakes every NavMesh Surface again from the colliders as they are now (after the level changed).</summary>
         public static void Build() => Native.Api.NavQuery(Native.CurrentScene, 2, null, null, 0.0f, null, 0);
+        /// <summary>Bakes every NavMesh Surface again on a worker thread (Unity's UpdateNavMesh): the game runs on and
+        /// agents keep the old meshes until the new ones are ready (IsBuilding false). Returns how many started.</summary>
+        public static int BuildAsync() => Native.Api.NavQuery(Native.CurrentScene, 7, null, null, 0.0f, null, 0);
+        /// <summary>Whether background bakes (BuildAsync) are still running.</summary>
+        public static bool IsBuilding => Native.Api.NavQuery(Native.CurrentScene, 8, null, null, 0.0f, null, 0) != 0;
         /// <summary>After the level changed inside a box (a wall knocked down, a bridge built): the meshes over it sample
         /// the ground there again, keeping the rest. Returns how many surfaces changed.</summary>
         public static int UpdateArea(Vector3 center, Vector3 size) =>

@@ -3551,6 +3551,37 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    void TestNavMeshAsync()
+    {
+        // A background bake: started at once (the main thread goes on), the old mesh kept until it is installed, and
+        // the result the same as a bake on the spot.
+        Scene scene("Yard");
+        Entity surface = BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        auto now = Navigation::Bake(scene, surface);
+        CHECK(now);
+        if (!now) return;
+        // The wall goes: the background bake sees the level as it was when it started.
+        auto t0 = std::chrono::steady_clock::now();
+        CHECK(Navigation::BakeAsync(scene, surface) && Navigation::IsBaking(scene, surface) && Navigation::IsBaking(scene));
+        float startMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        reg.Remove<BoxColliderComponent>(scene.FindEntityByName("Wall"));
+        CHECK(reg.Get<NavMeshSurfaceComponent>(surface).Baked == now); // (the old mesh meanwhile)
+        int installed = 0;
+        for (int i = 0; i < 2000 && !installed; ++i)
+        {
+            installed = Navigation::FinishBakes(scene);
+            if (!installed) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        auto later = reg.Get<NavMeshSurfaceComponent>(surface).Baked;
+        std::printf("    background bake: %.1f ms to start\n", startMs);
+        CHECK(installed == 1 && !Navigation::IsBaking(scene) && later && later != now && later->NodeCount() == now->NodeCount() &&
+              later->Heights == now->Heights && later->Links == now->Links);
+        // A new bake sees the wall gone.
+        CHECK(Navigation::BakeAllAsync(scene) == 1 && Navigation::FinishBakes(scene, true) == 1);
+        CHECK(reg.Get<NavMeshSurfaceComponent>(surface).Baked->NodeCount() > now->NodeCount());
+    }
+
     void TestNavMeshRenderMeshes()
     {
         // Drawn ground (a Mesh Renderer cube, also a collider), a drawn platform without a collider, and an invisible
@@ -16562,6 +16593,7 @@ int main(int argc, char** argv)
     Run("NavMesh wide links", TestNavMeshWideLinks);
     Run("NavMesh agent types", TestNavMeshAgentTypes);
     Run("NavMesh from render meshes", TestNavMeshRenderMeshes);
+    Run("NavMesh background bakes", TestNavMeshAsync);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);

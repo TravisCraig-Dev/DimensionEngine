@@ -6,6 +6,7 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Core/Log.h"
 #include <fstream>
+#include <future>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -1318,6 +1319,91 @@ namespace Dimension
             return data;
         }
 
+        namespace
+        {
+            // Background bakes, per scene and surface: the copy of the level they sample (kept alive while they run).
+            struct PendingBake
+            {
+                Ref<Scene> Level;
+                std::future<std::shared_ptr<NavMeshData>> Result;
+                glm::mat4 BakedAt{ 1.0f };
+            };
+            std::map<std::pair<const Scene*, uint64_t>, PendingBake>& Pending()
+            {
+                static std::map<std::pair<const Scene*, uint64_t>, PendingBake> pending;
+                return pending;
+            }
+            uint64_t KeyOf(Entity e) { return (uint64_t(e.Generation) << 32) | e.Index; }
+        }
+
+        bool BakeAsync(Scene& scene, Entity e)
+        {
+            auto& reg = scene.GetRegistry();
+            auto* surface = scene.IsValid(e) ? reg.TryGet<NavMeshSurfaceComponent>(e) : nullptr;
+            if (!surface) return false;
+            if (surface->Streamed || surface->Moving) return Bake(scene, e) != nullptr; // (these follow the scene as it runs)
+            scene.UpdateTransforms();
+            auto key = std::make_pair((const Scene*)&scene, KeyOf(e));
+            if (Pending().count(key)) FinishBakes(scene, true); // (one at a time per surface: the earlier one first)
+            // The level as it is now, with its own physics to sample (the scene's own runs on meanwhile).
+            PendingBake job;
+            job.Level = FromRenderMeshes(*surface) ? RenderMeshScene(scene) : scene.Clone();
+            if (!job.Level->GetPhysics3D()) job.Level->StartQueryPhysics();
+            job.BakedAt = reg.Get<TransformComponent>(e).World;
+            NavMeshSurfaceComponent settings = *surface;
+            glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
+            BakeScope scope = ScopeOf(scene, e);
+            Scene* level = job.Level.get();
+            job.Result = std::async(std::launch::async, [level, settings, center, scope] { return BakeIn(*level, settings, center, scope); });
+            Pending()[key] = std::move(job);
+            return true;
+        }
+
+        int BakeAllAsync(Scene& scene)
+        {
+            std::vector<Entity> surfaces;
+            for (auto [e, s] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent>()) surfaces.push_back(e);
+            int started = 0;
+            for (Entity e : surfaces) started += BakeAsync(scene, e) ? 1 : 0;
+            return started;
+        }
+
+        bool IsBaking(Scene& scene, Entity e) { return Pending().count({ &scene, KeyOf(e) }) > 0; }
+
+        bool IsBaking(Scene& scene)
+        {
+            for (const auto& [key, job] : Pending())
+                if (key.first == &scene) return true;
+            return false;
+        }
+
+        int FinishBakes(Scene& scene, bool wait)
+        {
+            int installed = 0;
+            auto& pending = Pending();
+            for (auto it = pending.begin(); it != pending.end();)
+            {
+                if (it->first.first != &scene ||
+                    (!wait && it->second.Result.wait_for(std::chrono::seconds(0)) != std::future_status::ready))
+                {
+                    ++it;
+                    continue;
+                }
+                std::shared_ptr<NavMeshData> data = it->second.Result.get();
+                Entity e{ uint32_t(it->first.second & 0xFFFFFFFFu), uint32_t(it->first.second >> 32) };
+                if (data && scene.IsValid(e))
+                    if (auto* s = scene.GetRegistry().TryGet<NavMeshSurfaceComponent>(e))
+                    {
+                        Install(scene, *s, data);
+                        s->BakedAt = it->second.BakedAt;
+                        s->Frame = s->FrameInverse = glm::mat4(1.0f);
+                        ++installed;
+                    }
+                it = pending.erase(it);
+            }
+            return installed;
+        }
+
         void BakeAll(Scene& scene, bool onlyMissing, bool useSaved)
         {
             std::vector<Entity> surfaces;
@@ -1796,6 +1882,7 @@ namespace Dimension
 
         void Update(Scene& scene, float dt)
         {
+            FinishBakes(scene); // (background bakes that are done)
             if (dt <= 0.0f) return;
             auto& reg = scene.GetRegistry();
             FollowPlatforms(scene);

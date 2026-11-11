@@ -2775,6 +2775,8 @@ namespace Dimension
                     return status == NavPathStatus::Partial ? -n : n;
                 }
                 if (op == 2) Navigation::BakeAll(scene);
+                if (op == 7) return Navigation::BakeAllAsync(scene);
+                if (op == 8) return Navigation::IsBaking(scene) ? 1 : 0;
                 if (op == 3) return Navigation::UpdateArea(scene, glm::vec3(pa[0], pa[1], pa[2]) - glm::vec3(pb[0], pb[1], pb[2]) * 0.5f,
                                                            glm::vec3(pa[0], pa[1], pa[2]) + glm::vec3(pb[0], pb[1], pb[2]) * 0.5f);
                 return 0;
