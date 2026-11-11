@@ -11,6 +11,7 @@ Engine/Managed/**/bin/
 Engine/Managed/**/obj/
 Projects/*/Scripts/bin/
 Projects/*/Scripts/obj/
+Projects/*/Scripts/Directory.Build.targets
 
 # Local tool settings
 .claude/settings.local.json

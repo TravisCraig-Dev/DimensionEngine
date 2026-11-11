@@ -7605,6 +7605,74 @@ namespace
         fs::remove_all(project);
     }
 
+    void TestScriptAssemblies()
+    {
+        // .asmdef folders: found with their settings, checked, and turned into projects GameScripts leaves them to.
+        fs::path project = fs::temp_directory_path() / "dimension_asmdef";
+        fs::remove_all(project);
+        fs::path scripts = project / "Scripts";
+        auto write = [&](const fs::path& rel, const std::string& text) {
+            fs::create_directories((scripts / rel).parent_path());
+            std::ofstream(scripts / rel) << text;
+        };
+        write("GameScripts.csproj", R"(<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Crc32.NET" Version="1.2.0" /></ItemGroup></Project>)");
+        write("Core/Game.Core.asmdef", R"({ "name": "Game.Core" })");
+        write("Core/AI/Game.AI.asmdef", R"({ "name": "Game.AI", "references": [ "Game.Core" ], "autoReferenced": false })");
+        write("Tests/Game.Tests.asmdef", R"({ "name": "Game.Tests", "references": [ "GameScripts", "Game.AI" ], "includePlatforms": [ "Editor" ] })");
+        std::vector<std::string> errors;
+        auto found = CSharpProject::FindAssemblies(project, &errors);
+        CHECK(errors.empty() && found.size() == 3);
+        auto get = [&](const std::string& n) { return *std::find_if(found.begin(), found.end(), [&](const auto& a) { return a.Name == n; }); };
+        CHECK(get("Game.Tests").EditorOnly && !get("Game.Core").EditorOnly && !get("Game.AI").AutoReferenced && get("Game.AI").References.size() == 1);
+        fs::path managed = project / "managed";
+        CHECK(CSharpProject::GenerateAssemblyProjects(project, managed, errors));
+        auto read = [](const fs::path& p) {
+            std::ifstream in(p);
+            return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        };
+        std::string targets = read(scripts / "Directory.Build.targets");
+        // GameScripts: all three folders out; references the auto-referenced build assembly only.
+        CHECK(targets.find("Remove=\"Core\\**\"") != std::string::npos && targets.find("Remove=\"Tests\\**\"") != std::string::npos &&
+              targets.find("Game.Core.csproj") != std::string::npos && targets.find("Game.AI.csproj") == std::string::npos &&
+              targets.find("Game.Tests.csproj") == std::string::npos);
+        // Game.Core leaves its AI subfolder to Game.AI; every assembly gets the scripts' packages.
+        std::string core = read(project / ".dimension" / "ScriptProjects" / "Game.Core" / "Game.Core.csproj");
+        CHECK(core.find((scripts / "Core" / "AI" / "**").string()) != std::string::npos && core.find("Crc32.NET") != std::string::npos);
+        std::string tests = read(project / ".dimension" / "ScriptProjects" / "Game.Tests" / "Game.Tests.csproj");
+        CHECK(tests.find("GameScripts.csproj") != std::string::npos && tests.find("Game.AI.csproj") != std::string::npos);
+        fs::path out = CSharpProject::AssemblyPath(project).parent_path();
+        auto editorOnly = CSharpProject::EditorOnlyAssemblies(out);
+        CHECK(editorOnly.size() == 1 && editorOnly[0] == "Game.Tests");
+        // The editor-only one builds after GameScripts.
+        std::string command = CSharpProject::BuildCommand(project);
+        CHECK(command.find("GameScripts.csproj") < command.find("Game.Tests.csproj") && command.find("Game.Core.csproj") == std::string::npos);
+        // A removed assembly's outputs go with the next generation.
+        std::ofstream(out / "Game.AI.dll") << "x";
+        fs::remove(scripts / "Core" / "AI" / "Game.AI.asmdef");
+        write("Tests/Game.Tests.asmdef", R"({ "name": "Game.Tests", "references": [ "GameScripts" ], "editorOnly": true })");
+        CHECK(CSharpProject::GenerateAssemblyProjects(project, managed, errors) && !fs::exists(out / "Game.AI.dll"));
+
+        // Problems: unknown references, a build assembly using an editor-only one or GameScripts, cycles, duplicates.
+        auto problems = [&](const std::string& core2, const std::string& tests2) {
+            write("Core/Game.Core.asmdef", core2);
+            write("Tests/Game.Tests.asmdef", tests2);
+            std::vector<std::string> e;
+            CSharpProject::FindAssemblies(project, &e);
+            CHECK(!CSharpProject::GenerateAssemblyProjects(project, managed, errors));
+            return e.empty() ? std::string() : e[0];
+        };
+        CHECK(problems(R"({ "name": "Game.Core", "references": [ "Nope" ] })", R"({ "name": "Game.Tests" })").find("no assembly named Nope") != std::string::npos);
+        CHECK(problems(R"({ "name": "Game.Core", "references": [ "Game.Tests" ] })", R"({ "name": "Game.Tests", "editorOnly": true })").find("editor-only") !=
+              std::string::npos);
+        CHECK(problems(R"({ "name": "Game.Core", "references": [ "GameScripts" ] })", R"({ "name": "Game.Tests" })").find("uses GameScripts") != std::string::npos);
+        CHECK(problems(R"({ "name": "Game.Core", "references": [ "Game.Tests" ] })", R"({ "name": "Game.Tests", "references": [ "Game.Core" ] })").find("circle") !=
+              std::string::npos);
+        CHECK(problems(R"({ "name": "Game.Core" })", R"({ "name": "Game.Core" })").find("another .asmdef is named") != std::string::npos);
+        CHECK(problems(R"({ "name": "GameScripts" })", R"({ "name": "Game.Tests" })").find("taken") != std::string::npos);
+        CHECK(problems(R"({ "name": "Bad Name" })", R"({ "name": "Game.Tests" })").find("must be") != std::string::npos);
+        fs::remove_all(project);
+    }
+
     void TestManagedBuild()
     {
         // Assembly references read from metadata; native DLLs are not assemblies.
@@ -16552,6 +16620,7 @@ int main(int argc, char** argv)
     Run("Camera projection", TestCameraProjection);
     Run("Time scale and cursor", TestTimeScaleAndCursor);
     Run("Runtime AddComponent", TestRuntimeAddComponent);
+    Run("Script assemblies", TestScriptAssemblies);
     Run("2D physics queries", TestPhysics2DQueries);
     Run("3D shape casts and spin", TestPhysics3DCasts);
     Run("Collision details", TestCollisionDetails);

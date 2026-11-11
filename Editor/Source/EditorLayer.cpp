@@ -4936,13 +4936,20 @@ namespace Editor
         {
             // The scripts with what they load beside them: NuGet packages and other libraries (as their .deps.json
             // lists them), and those packages' native libraries for Windows x64.
+            // Editor-only script assemblies (.asmdef: editor tools, tests) stay out.
             fs::path from = scripts.parent_path(), to = projectOut / scripts.lexically_relative(Project::GetDirectory()).parent_path();
             fs::create_directories(to, ec);
+            std::vector<std::string> editorOnly = CSharpProject::EditorOnlyAssemblies(from);
             for (const auto& entry : fs::recursive_directory_iterator(from, fs::directory_options::skip_permission_denied, ec))
             {
                 if (!entry.is_regular_file()) continue;
                 fs::path rel = entry.path().lexically_relative(from);
                 std::string first = rel.begin()->string();
+                std::string file = entry.path().filename().string();
+                auto isEditorOnly = [&](const std::string& n) {
+                    return file == n + ".dll" || file == n + ".pdb" || file == n + ".deps.json" || file == n + ".runtimeconfig.json" || file == n + ".xml";
+                };
+                if (!rel.has_parent_path() && std::any_of(editorOnly.begin(), editorOnly.end(), isEditorOnly)) continue;
                 if (first == "runtimes")
                 {
                     auto it = std::next(rel.begin());
@@ -5562,6 +5569,14 @@ namespace Editor
         if (!CSharpRuntime::IsAvailable() || (m_CSharpBuild && m_CSharpBuild->load() == 1)) return;
         fs::path project = Project::GetDirectory();
         m_CSharpBuiltSources = CSharpProject::LatestSourceTime(project);
+        // The .asmdef assemblies' projects first (their folders leave GameScripts).
+        std::vector<std::string> problems;
+        if (!CSharpProject::GenerateAssemblyProjects(project, ExecutableDirectory() / "managed", problems))
+        {
+            for (const std::string& p : problems) Log::Error("Script assemblies: {}", p);
+            m_CSharpBuild = std::make_shared<std::atomic<int>>(3);
+            return;
+        }
         m_CSharpBuild = std::make_shared<std::atomic<int>>(1);
         std::string command = CSharpProject::BuildCommand(project);
         Log::Info("Compiling C# scripts...");

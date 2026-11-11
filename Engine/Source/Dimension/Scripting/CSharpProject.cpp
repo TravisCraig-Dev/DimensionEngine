@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <functional>
+#include <map>
 #include <regex>
 
 namespace Dimension::CSharpProject
@@ -51,6 +53,266 @@ namespace Dimension::CSharpProject
                       "</Project>\n";
             Log::Info("Created C# project {}", ProjectFile(projectDir).string());
         }
+        std::vector<std::string> errors;
+        if (!GenerateAssemblyProjects(projectDir, managedDir, errors))
+            for (const std::string& e : errors) Log::Error("Script assemblies: {}", e);
+    }
+
+    namespace
+    {
+        bool ValidName(const std::string& name)
+        {
+            if (name.empty()) return false;
+            for (char c : name)
+                if (!std::isalnum((unsigned char)c) && c != '.' && c != '_' && c != '-') return false;
+            return true;
+        }
+
+        // Writes a file only when its text changes (MSBuild rebuilds what has newer inputs).
+        void WriteIfChanged(const fs::path& path, const std::string& text)
+        {
+            {
+                std::ifstream in(path, std::ios::binary);
+                std::string old((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                if (in.is_open() && old == text) return;
+            }
+            std::error_code ec;
+            fs::create_directories(path.parent_path(), ec);
+            std::ofstream(path, std::ios::binary) << text;
+        }
+
+        std::string Xml(const std::string& text)
+        {
+            std::string out;
+            for (char c : text)
+            {
+                if (c == '&') out += "&amp;";
+                else if (c == '<') out += "&lt;";
+                else if (c == '>') out += "&gt;";
+                else if (c == '"') out += "&quot;";
+                else out += c;
+            }
+            return out;
+        }
+
+        fs::path GeneratedProject(const fs::path& projectDir, const std::string& name)
+        {
+            return projectDir / ".dimension" / "ScriptProjects" / name / (name + ".csproj");
+        }
+    }
+
+    std::vector<ScriptAssembly> FindAssemblies(const fs::path& projectDir, std::vector<std::string>* errors)
+    {
+        std::vector<ScriptAssembly> found;
+        std::vector<std::string> problems;
+        std::error_code ec;
+        fs::path dir = ScriptsDirectory(projectDir);
+        if (errors) errors->clear();
+        if (!fs::exists(dir)) return found;
+        std::vector<fs::path> files;
+        for (auto it = fs::recursive_directory_iterator(dir, ec); it != fs::recursive_directory_iterator(); it.increment(ec))
+        {
+            if (ec) break;
+            if (it->is_directory() && (it->path().filename() == "bin" || it->path().filename() == "obj"))
+            {
+                it.disable_recursion_pending();
+                continue;
+            }
+            if (it->is_regular_file() && it->path().extension() == ".asmdef") files.push_back(it->path());
+        }
+        std::sort(files.begin(), files.end());
+        for (const fs::path& file : files)
+        {
+            std::string where = file.lexically_relative(dir).generic_string();
+            ScriptAssembly a;
+            a.File = file;
+            a.Directory = file.parent_path();
+            try
+            {
+                std::ifstream in(file);
+                nlohmann::json j = nlohmann::json::parse(in);
+                a.Name = j.value("name", std::string());
+                for (const auto& r : j.value("references", nlohmann::json::array()))
+                    if (r.is_string()) a.References.push_back(r.get<std::string>());
+                a.EditorOnly = j.value("editorOnly", false);
+                for (const auto& p : j.value("includePlatforms", nlohmann::json::array()))
+                    if (p.is_string() && p.get<std::string>() == "Editor") a.EditorOnly = true;
+                a.AutoReferenced = j.value("autoReferenced", true);
+            }
+            catch (const std::exception& e)
+            {
+                problems.push_back(where + ": " + e.what());
+                continue;
+            }
+            if (!ValidName(a.Name))
+            {
+                problems.push_back(where + ": \"name\" must be letters, digits, '.', '_' or '-'");
+                continue;
+            }
+            if (a.Name == "GameScripts" || a.Name == "Dimension.Core")
+            {
+                problems.push_back(where + ": the name " + a.Name + " is taken");
+                continue;
+            }
+            auto same = std::find_if(found.begin(), found.end(), [&](const ScriptAssembly& o) { return o.Name == a.Name || o.Directory == a.Directory; });
+            if (same != found.end())
+            {
+                problems.push_back(where + (same->Name == a.Name ? ": another .asmdef is named " + a.Name : std::string(": its folder already has an .asmdef")));
+                continue;
+            }
+            found.push_back(a);
+        }
+        auto byName = [&](const std::string& n) -> const ScriptAssembly* {
+            for (const auto& a : found)
+                if (a.Name == n) return &a;
+            return nullptr;
+        };
+        for (const auto& a : found)
+            for (const std::string& r : a.References)
+            {
+                const ScriptAssembly* target = byName(r);
+                if (r == "GameScripts")
+                {
+                    if (!a.EditorOnly && a.AutoReferenced)
+                        problems.push_back(a.Name + ": uses GameScripts, which uses it (make it editor-only or \"autoReferenced\": false)");
+                }
+                else if (!target) problems.push_back(a.Name + ": no assembly named " + r);
+                else if (target->EditorOnly && !a.EditorOnly) problems.push_back(a.Name + ": uses the editor-only " + r + " (it is left out of builds)");
+            }
+        // Cycles (depth-first: 1 visiting, 2 done).
+        std::map<std::string, int> state;
+        std::function<bool(const ScriptAssembly&, std::vector<std::string>&)> visit = [&](const ScriptAssembly& a, std::vector<std::string>& path) {
+            state[a.Name] = 1;
+            path.push_back(a.Name);
+            for (const std::string& r : a.References)
+                if (const ScriptAssembly* t = byName(r))
+                {
+                    if (state[t->Name] == 1)
+                    {
+                        path.push_back(t->Name);
+                        return true;
+                    }
+                    if (state[t->Name] == 0 && visit(*t, path)) return true;
+                }
+            path.pop_back();
+            state[a.Name] = 2;
+            return false;
+        };
+        for (const auto& a : found)
+        {
+            std::vector<std::string> path;
+            if (state[a.Name] == 0 && visit(a, path))
+            {
+                std::string text;
+                for (const std::string& p : path) text += (text.empty() ? "" : " -> ") + p;
+                problems.push_back("references go round in a circle: " + text);
+                break;
+            }
+        }
+        if (errors) *errors = problems;
+        return found;
+    }
+
+    bool GenerateAssemblyProjects(const fs::path& projectDir, const fs::path& managedDir, std::vector<std::string>& errors)
+    {
+        std::vector<ScriptAssembly> assemblies = FindAssemblies(projectDir, &errors);
+        if (!errors.empty()) return false;
+        fs::path scripts = ScriptsDirectory(projectDir), out = AssemblyPath(projectDir).parent_path();
+        std::vector<PackageReference> packages = ListPackages(projectDir);
+        std::error_code ec;
+
+        for (const ScriptAssembly& a : assemblies)
+        {
+            // Its folder's sources, minus subfolders that are assemblies of their own.
+            std::string excludes = (a.Directory / "bin" / "**").string() + ";" + (a.Directory / "obj" / "**").string();
+            for (const ScriptAssembly& o : assemblies)
+                if (&o != &a && o.Directory.string().starts_with(a.Directory.string() + (char)fs::path::preferred_separator))
+                    excludes += ";" + (o.Directory / "**").string();
+            std::string text = "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+                               "  <!-- Generated by the Dimension editor from Scripts/" + Xml(a.File.lexically_relative(scripts).generic_string()) + "; do not edit. -->\n"
+                               "  <PropertyGroup>\n"
+                               "    <TargetFramework>net10.0</TargetFramework>\n"
+                               "    <AssemblyName>" + a.Name + "</AssemblyName>\n"
+                               "    <RootNamespace>Game</RootNamespace>\n"
+                               "    <ImplicitUsings>enable</ImplicitUsings>\n"
+                               "    <Nullable>disable</Nullable>\n"
+                               "    <EnableDynamicLoading>true</EnableDynamicLoading>\n"
+                               "    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>\n"
+                               "    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n"
+                               "    <DimensionManagedDir>" + Xml(fs::absolute(managedDir).string()) + "</DimensionManagedDir>\n"
+                               "  </PropertyGroup>\n"
+                               "  <ItemGroup>\n"
+                               "    <Compile Include=\"" + Xml((a.Directory / "**" / "*.cs").string()) + "\" Exclude=\"" + Xml(excludes) + "\" />\n"
+                               "    <None Include=\"" + Xml(a.File.string()) + "\" />\n"
+                               "    <Reference Include=\"Dimension.Core\">\n"
+                               "      <HintPath>$(DimensionManagedDir)\\Dimension.Core.dll</HintPath>\n"
+                               "      <Private>false</Private>\n"
+                               "    </Reference>\n";
+            for (const std::string& r : a.References)
+            {
+                fs::path target = r == "GameScripts" ? ProjectFile(projectDir) : GeneratedProject(projectDir, r);
+                text += "    <ProjectReference Include=\"" + Xml(target.string()) + "\" />\n";
+            }
+            // The scripts' NuGet packages are there for every assembly (as Unity's plugins are).
+            for (const PackageReference& p : packages)
+                text += "    <PackageReference Include=\"" + Xml(p.Id) + "\"" + (p.Version.empty() ? std::string() : " Version=\"" + Xml(p.Version) + "\"") + " />\n";
+            text += "  </ItemGroup>\n</Project>\n";
+            WriteIfChanged(GeneratedProject(projectDir, a.Name), text);
+        }
+
+        // GameScripts: without the assemblies' folders, using the ones it may.
+        std::string targets = "<Project>\n"
+                              "  <!-- Generated by the Dimension editor from the .asmdef files; do not edit. -->\n"
+                              "  <ItemGroup Condition=\"'$(MSBuildProjectFile)' == 'GameScripts.csproj'\">\n";
+        for (const ScriptAssembly& a : assemblies)
+        {
+            targets += "    <Compile Remove=\"" + Xml((a.Directory.lexically_relative(scripts) / "**").string()) + "\" />\n";
+            if (!a.EditorOnly && a.AutoReferenced)
+                targets += "    <ProjectReference Include=\"" + Xml(GeneratedProject(projectDir, a.Name).string()) + "\" />\n";
+        }
+        targets += "  </ItemGroup>\n</Project>\n";
+        if (!assemblies.empty() || fs::exists(scripts / "Directory.Build.targets")) // (none written for projects without any)
+            WriteIfChanged(scripts / "Directory.Build.targets", targets);
+
+        // The manifest; outputs of assemblies that are gone are deleted (they would load and ship).
+        fs::path manifestPath = out / "ScriptAssemblies.json";
+        try
+        {
+            std::ifstream in(manifestPath);
+            if (in.is_open())
+                for (const auto& old : nlohmann::json::parse(in))
+                {
+                    std::string name = old.value("name", std::string());
+                    if (!ValidName(name) || std::any_of(assemblies.begin(), assemblies.end(), [&](const ScriptAssembly& a) { return a.Name == name; })) continue;
+                    for (const char* ext : { ".dll", ".pdb", ".deps.json", ".xml" }) fs::remove(out / (name + ext), ec);
+                    fs::remove_all(projectDir / ".dimension" / "ScriptProjects" / name, ec);
+                }
+        }
+        catch (const std::exception&)
+        {
+        }
+        if (assemblies.empty() && !fs::exists(manifestPath)) return true;
+        nlohmann::json manifest = nlohmann::json::array();
+        for (const ScriptAssembly& a : assemblies) manifest.push_back({ { "name", a.Name }, { "editorOnly", a.EditorOnly } });
+        fs::create_directories(out, ec);
+        WriteIfChanged(manifestPath, manifest.dump(2) + "\n");
+        return true;
+    }
+
+    std::vector<std::string> EditorOnlyAssemblies(const fs::path& scriptAssembliesDir)
+    {
+        std::vector<std::string> names;
+        try
+        {
+            std::ifstream in(scriptAssembliesDir / "ScriptAssemblies.json");
+            if (in.is_open())
+                for (const auto& a : nlohmann::json::parse(in))
+                    if (a.value("editorOnly", false)) names.push_back(a.value("name", std::string()));
+        }
+        catch (const std::exception&)
+        {
+        }
+        return names;
     }
 
     bool HasSources(const fs::path& projectDir)
@@ -79,7 +341,7 @@ namespace Dimension::CSharpProject
                 continue;
             }
             auto ext = path.extension();
-            if (ext == ".cs" || ext == ".csproj") latest = std::max(latest, fs::last_write_time(path, ec));
+            if (ext == ".cs" || ext == ".csproj" || ext == ".asmdef") latest = std::max(latest, fs::last_write_time(path, ec));
         }
         return latest;
     }
@@ -87,9 +349,15 @@ namespace Dimension::CSharpProject
     std::string BuildCommand(const fs::path& projectDir)
     {
         fs::path out = AssemblyPath(projectDir).parent_path();
+        auto build = [&](const fs::path& project) {
+            return "dotnet build \"" + project.string() + "\" -c Debug -o \"" + out.string() + "\" --nologo -v q -clp:NoSummary";
+        };
+        // GameScripts brings the assemblies it uses; the editor-only ones (nothing in it uses them) come after.
+        std::string command = build(ProjectFile(projectDir));
+        for (const ScriptAssembly& a : FindAssemblies(projectDir))
+            if (a.EditorOnly) command += " && " + build(GeneratedProject(projectDir, a.Name));
         // Outer quotes are stripped by cmd /c (used by _popen).
-        return "\"dotnet build \"" + ProjectFile(projectDir).string() + "\" -c Debug -o \"" + out.string() +
-               "\" --nologo -v q -clp:NoSummary 2>&1\"";
+        return "\"" + command + " 2>&1\"";
     }
 
         std::vector<PackageReference> ListPackages(const fs::path& projectDir)

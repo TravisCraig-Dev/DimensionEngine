@@ -35,6 +35,10 @@ namespace Dimension
                 // Share the engine API assembly so Behaviour etc. have one type identity.
                 if (name.Name == typeof(Behaviour).Assembly.GetName().Name) return typeof(Behaviour).Assembly;
                 string path = m_Resolver?.ResolveAssemblyToPath(name);
+                // Another script assembly beside them (one GameScripts does not reference: an editor-only assembly's
+                // references).
+                if (path == null && s_Directory != null && name.Name != null && File.Exists(Path.Combine(s_Directory, name.Name + ".dll")))
+                    path = Path.Combine(s_Directory, name.Name + ".dll");
                 if (path == null) return null; // framework assemblies resolve from the default context
                 if (!m_Collectible) return LoadFromAssemblyPath(path);
                 // Hot-reloadable: from memory, so a rebuild can write the file again.
@@ -58,7 +62,51 @@ namespace Dimension
         }
 
         private static ScriptLoadContext s_Context;
-        private static Assembly s_ScriptsAssembly; // the loaded scripts (their [Test] methods for the Test Runner)
+        // The loaded script assemblies: GameScripts, then those split off by folder (.asmdef) that the manifest beside it
+        // lists; and their folder.
+        private static readonly List<Assembly> s_ScriptAssemblies = new();
+        private static string s_Directory;
+
+        // Every type of the script assemblies (the loadable ones, when an assembly has broken types).
+        private static IEnumerable<Type> ScriptTypes()
+        {
+            foreach (Assembly a in s_ScriptAssemblies)
+            {
+                Type[] types;
+                try { types = a.GetTypes(); }
+                catch (ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
+                foreach (Type t in types) yield return t;
+            }
+        }
+
+        // The script assemblies split off by folder that ScriptAssemblies.json (written with each build) lists, beside
+        // GameScripts: those GameScripts does not load through its references (editor-only ones, unreferenced ones).
+        private static void LoadSplitAssemblies(string mainPath, bool fixedLoad)
+        {
+            string manifest = Path.Combine(Path.GetDirectoryName(mainPath)!, "ScriptAssemblies.json");
+            if (!File.Exists(manifest)) return;
+            using var doc = JsonDocument.Parse(File.ReadAllText(manifest));
+            foreach (JsonElement entry in doc.RootElement.EnumerateArray())
+            {
+                string name = entry.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (string.IsNullOrEmpty(name)) continue;
+                string dll = Path.Combine(s_Directory, name + ".dll");
+                if (!File.Exists(dll)) continue; // (an editor-only assembly: not in a built game)
+                Assembly loaded = s_Context.Assemblies.FirstOrDefault(a => a.GetName().Name == name);
+                if (loaded == null)
+                {
+                    if (fixedLoad) loaded = s_Context.LoadFromAssemblyPath(dll);
+                    else
+                    {
+                        string pdb = Path.ChangeExtension(dll, ".pdb");
+                        using var stream = new MemoryStream(File.ReadAllBytes(dll));
+                        using var symbols = File.Exists(pdb) ? new MemoryStream(File.ReadAllBytes(pdb)) : null;
+                        loaded = s_Context.LoadFromStream(stream, symbols);
+                    }
+                }
+                if (!s_ScriptAssemblies.Contains(loaded)) s_ScriptAssemblies.Add(loaded);
+            }
+        }
         private static readonly Dictionary<string, ScriptClass> s_Classes = new();
         // DataAsset classes (made into .asset files) and the objects made from assets so far, by GUID: one per asset,
         // shared by every field referring to it, made again when play starts.
@@ -78,9 +126,9 @@ namespace Dimension
         // Property drawers by the attribute or field type they draw.
         private static readonly Dictionary<Type, PropertyDrawer> s_Drawers = new();
 
-        private static void RegisterDrawers(Assembly assembly)
+        private static void RegisterDrawers()
         {
-            foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(PropertyDrawer))).OrderBy(t => t.FullName))
+            foreach (Type type in ScriptTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(PropertyDrawer))).OrderBy(t => t.FullName))
                 if (type.GetCustomAttribute<CustomPropertyDrawerAttribute>() is { Target: not null } target)
                     s_Drawers[target.Target] = (PropertyDrawer)Activator.CreateInstance(type);
         }
@@ -101,9 +149,9 @@ namespace Dimension
             return byType;
         }
 
-        private static void RegisterEditorItems(Assembly assembly)
+        private static void RegisterEditorItems()
         {
-            foreach (Type type in assembly.GetTypes().OrderBy(t => t.FullName))
+            foreach (Type type in ScriptTypes().OrderBy(t => t.FullName))
             {
                 foreach (MethodInfo m in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
                     if (m.GetCustomAttribute<MenuItemAttribute>() is { } item && m.GetParameters().Length == 0)
@@ -731,15 +779,22 @@ namespace Dimension
                     using var symbols = File.Exists(pdb) ? new MemoryStream(File.ReadAllBytes(pdb)) : null;
                     assembly = s_Context.LoadFromStream(dll, symbols);
                 }
-                s_ScriptsAssembly = assembly;
-                RegisterDrawers(assembly); // before the classes: their fields say which have one
-                foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(StateMachineBehaviour))))
+                s_Directory = Path.GetDirectoryName(Path.GetFullPath(path));
+                s_ScriptAssemblies.Clear();
+                s_ScriptAssemblies.Add(assembly);
+                LoadSplitAssemblies(path, fixedLoad != 0);
+                // (those GameScripts referenced and loaded already count too)
+                foreach (Assembly a in s_Context.Assemblies)
+                    if (!s_ScriptAssemblies.Contains(a) && a.GetReferencedAssemblies().Any(r => r.Name == typeof(Behaviour).Assembly.GetName().Name))
+                        s_ScriptAssemblies.Add(a);
+                RegisterDrawers(); // before the classes: their fields say which have one
+                foreach (Type type in ScriptTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(StateMachineBehaviour))))
                 {
                     s_StateBehaviourTypes[type.FullName] = type;
                     s_StateBehaviourTypes.TryAdd(type.Name, type); // the short name works too while it is unique
                 }
 
-                foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(Behaviour))).OrderBy(t => t.FullName))
+                foreach (Type type in ScriptTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(Behaviour))).OrderBy(t => t.FullName))
                 {
                     var cls = new ScriptClass { Type = type };
                     object defaults = null;
@@ -819,8 +874,8 @@ namespace Dimension
                     Array.Copy(json, withNul, json.Length);
                     fixed (byte* q = withNul) Native.Api.RegisterScriptClass(q);
                 }
-                RegisterDataClasses(assembly);
-                RegisterEditorItems(assembly);
+                RegisterDataClasses();
+                RegisterEditorItems();
                 return s_Classes.Count;
             }
             catch (Exception e)
@@ -832,9 +887,9 @@ namespace Dimension
 
         // DataAsset classes: their fields (not entities: an asset belongs to no scene) and the data classes they derive
         // from (fields of those take them too).
-        private static void RegisterDataClasses(Assembly assembly)
+        private static void RegisterDataClasses()
         {
-            foreach (Type type in assembly.GetTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(DataAsset))).OrderBy(t => t.FullName))
+            foreach (Type type in ScriptTypes().Where(t => !t.IsAbstract && t.IsSubclassOf(typeof(DataAsset))).OrderBy(t => t.FullName))
             {
                 var cls = new ScriptClass { Type = type };
                 object defaults = null;
@@ -947,6 +1002,8 @@ namespace Dimension
             s_MissingStateBehaviours.Clear();
             s_EventMethods.Clear();
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
+            s_ScriptAssemblies.Clear(); // (holding them would keep the old context alive)
+            PlayTestDriver.Current = null;
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);
             if (s_Context.IsCollectible) s_Context.Unload(); // (a built game's stays until exit)
@@ -1254,7 +1311,7 @@ namespace Dimension
             try
             {
                 string filter = Marshal.PtrToStringUTF8((IntPtr)filterUtf8) ?? "";
-                List<MethodInfo> tests = TestRunner.Find(s_ScriptsAssembly);
+                List<MethodInfo> tests = TestRunner.Find(s_ScriptAssemblies);
                 using var stream = new MemoryStream();
                 using (var w = new Utf8JsonWriter(stream))
                 {
@@ -1301,7 +1358,7 @@ namespace Dimension
                 if (op == 0)
                 {
                     string name = Marshal.PtrToStringUTF8((IntPtr)nameUtf8) ?? "";
-                    MethodInfo method = TestRunner.Find(s_ScriptsAssembly).Find(m => TestRunner.IsPlay(m) && TestRunner.Name(m) == name);
+                    MethodInfo method = TestRunner.Find(s_ScriptAssemblies).Find(m => TestRunner.IsPlay(m) && TestRunner.Name(m) == name);
                     if (method == null)
                     {
                         PlayTestDriver.Current = null;

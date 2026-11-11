@@ -78,13 +78,13 @@ namespace Dimension
     {
         public static string Name(System.Reflection.MethodInfo m) => $"{m.DeclaringType.FullName}.{m.Name}";
 
-        public static List<System.Reflection.MethodInfo> Find(System.Reflection.Assembly assembly)
+        public static List<System.Reflection.MethodInfo> Find(IEnumerable<System.Reflection.Assembly> assemblies)
         {
             var tests = new List<System.Reflection.MethodInfo>();
-            if (assembly == null) return tests;
-            Type[] types;
-            try { types = assembly.GetTypes(); }
-            catch (System.Reflection.ReflectionTypeLoadException e) { types = Array.FindAll(e.Types, t => t != null); }
+            var types = new List<Type>();
+            foreach (var assembly in assemblies)
+                try { types.AddRange(assembly.GetTypes()); }
+                catch (System.Reflection.ReflectionTypeLoadException e) { types.AddRange(Array.FindAll(e.Types, t => t != null)); }
             const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static |
                                                          System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly;
             foreach (Type type in types)
