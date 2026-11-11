@@ -342,7 +342,8 @@ namespace Editor
         float m_EulerTime = -1.0f;
         // The curve view: its selected key (set 0 rotation / 1 position, axis, key; -1 none), the tangent handle being
         // dragged (1 in, 2 out) with the scale held while it is, and whether a click there scrubs the time.
-        int m_CurveJoint = -1, m_CurveSet = 0, m_CurveAxis = 0, m_CurveKey = -1, m_CurveDrag = 0;
+        int m_CurveSet = 0, m_CurveAxis = 0, m_CurveKey = -1, m_CurveDrag = 0;
+        std::string m_CurveOwner; // the clip channel the curve view shows (a joint's name, property:..., blendShape:...)
         AssetHandle m_CurveClip = AssetHandle::None();
         bool m_CurveScrub = false;
         float m_CurveLo[2]{}, m_CurveHi[2]{};
