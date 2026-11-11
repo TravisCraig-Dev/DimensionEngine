@@ -306,6 +306,7 @@ namespace Editor
         // Leaves record mode, putting the recorded objects' values back as they were before.
         void StopRecording();
         void RequestRecording() { m_RecordRequested = true; } // (automation: --anim-record)
+        void RequestOnionSkin() { m_OnionRequested = true; }  // (automation: --anim-onion: preview with onion skin)
         // Automation (--anim-key "Joint,rotation|position,axis,key"): that joint selected and that key of its curve.
         void SelectCurveKey(const std::string& spec);
 
@@ -320,6 +321,10 @@ namespace Editor
         std::string m_PropertyPick;    // a property just added (selected next frame)
         // Record mode: the object's fields before recording (put back after) and as of last frame (changes get keyed).
         bool m_Recording = false, m_RecordDirty = false, m_RecordRequested = false;
+        // Onion skin: ghosts of the skeleton m_OnionStep seconds apart, m_OnionCount on each side of the current time.
+        bool m_OnionSkin = false, m_OnionRequested = false;
+        float m_OnionStep = 0.1f;
+        int m_OnionCount = 2;
         std::map<std::string, std::array<float, 5>> m_RecordRest, m_RecordLast;
         bool m_EventDragging = false;
         std::vector<int> m_Selected;   // every selected joint (Ctrl / Shift click adds): keys, deletes and moves apply to all

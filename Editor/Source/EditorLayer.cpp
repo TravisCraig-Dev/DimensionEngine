@@ -181,6 +181,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Animation") m_ShowAnimation = true;
         if (!m_Options.AnimKey.empty()) m_Animation->SelectCurveKey(m_Options.AnimKey);
         if (m_Options.AnimRecord) m_Animation->RequestRecording();
+        if (m_Options.AnimOnion) m_Animation->RequestOnionSkin();
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;

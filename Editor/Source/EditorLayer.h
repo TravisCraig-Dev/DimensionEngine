@@ -34,6 +34,7 @@ namespace Editor
         int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
         std::string AnimKey;      // --anim-key "Joint,rotation|position,axis,key": with --open Animation, that curve key selected
         bool AnimRecord = false;  // --anim-record: with --open Animation, record mode on from the start
+        bool AnimOnion = false;   // --anim-onion: with --open Animation, a preview with onion skin
         int FrameEvent = -1;      // --frame-event N: with --open "Frame Debugger", step the Scene view to draw N (0-based)
         std::string MenuCommand;  // --menu "Tools/Item": run a C# extension's menu item once the scripts have loaded
         std::string Search;       // --search "query": start with this Hierarchy search

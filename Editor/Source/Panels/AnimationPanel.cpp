@@ -286,6 +286,26 @@ namespace Editor
         if (red) ImGui::PopStyleColor(2);
         ImGui::SetItemTooltip("Record: changes to the object and the objects under it (Inspector, Scene view) are keyed at the\n"
                               "current time, and the clip's properties show on them; they are put back when recording ends");
+        ImGui::SameLine();
+        if (m_OnionRequested && ImGui::GetFrameCount() >= 50 && !playing) // (automation: --anim-onion)
+        {
+            if (m_PreviewEntity.IsNull()) startPreview();
+            m_OnionSkin = true;
+            m_OnionRequested = false;
+        }
+        ImGui::Checkbox("Onion Skin", &m_OnionSkin);
+        ImGui::SetItemTooltip("While previewing, the Scene view also draws the skeleton a few steps before (red) and after (green) the current time");
+        if (m_OnionSkin)
+        {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(60);
+            ImGui::DragFloat("##onionStep", &m_OnionStep, 0.005f, 0.01f, 1.0f, "%.2f s");
+            ImGui::SetItemTooltip("Time between the ghosts");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(50);
+            ImGui::SliderInt("##onionCount", &m_OnionCount, 1, 5);
+            ImGui::SetItemTooltip("Ghosts on each side");
+        }
         if (playing) ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220);
@@ -1197,8 +1217,35 @@ namespace Editor
             return ImVec2(origin.x + (ndc.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - ndc.y * 0.5f) * size.y);
         };
 
-        // The skeleton: bones from each joint to its parent, the joints as dots (click one to select it).
         ImDrawList* dl = ImGui::GetWindowDrawList();
+        // Onion skin: the skeleton a few steps before (red) and after (green) the current time, fainter farther off.
+        if (m_OnionSkin)
+        {
+            AnimationClip ghostClip = clip->ToClip(skeleton);
+            for (int k : { -m_OnionCount, m_OnionCount })
+                for (int step = 1; step <= std::abs(k); ++step)
+                {
+                    float t = m_Time + (k < 0 ? -1.0f : 1.0f) * step * std::max(m_OnionStep, 0.005f);
+                    float d = std::max(clip->Duration, 0.01f);
+                    t = clip->Loop ? std::fmod(std::fmod(t, d) + d, d) : std::clamp(t, 0.0f, d);
+                    Pose ghost;
+                    Animation::Sample(skeleton, ghostClip, t, ghost);
+                    std::vector<glm::mat4> ghostGlobals;
+                    Animation::JointGlobals(skeleton, ghost, ghostGlobals);
+                    int alpha = (int)(170.0f * (1.0f - (step - 1) / (float)std::max(std::abs(k), 1)) + 30.0f);
+                    ImU32 col = k < 0 ? IM_COL32(255, 110, 90, alpha) : IM_COL32(110, 230, 120, alpha);
+                    for (int j = 0; j < (int)skeleton.Joints.size(); ++j)
+                    {
+                        int parent = skeleton.Joints[j].Parent;
+                        if (parent < 0) continue;
+                        bool va, vb;
+                        ImVec2 a = screenOf(glm::vec3((world * ghostGlobals[j])[3]), va), b = screenOf(glm::vec3((world * ghostGlobals[parent])[3]), vb);
+                        if (va && vb) dl->AddLine(a, b, col, 1.5f);
+                    }
+                }
+        }
+
+        // The skeleton: bones from each joint to its parent, the joints as dots (click one to select it).
         ImVec2 mouse = ImGui::GetMousePos();
         int closest = -1;
         float best = 8.0f;
