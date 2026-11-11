@@ -147,6 +147,7 @@ namespace Editor::UI
         case AssetType::VideoClip: return { 0.95f, 0.75f, 0.3f, 1 };
         case AssetType::AnimationClip: return { 0.55f, 0.9f, 0.6f, 1 };
         case AssetType::NavMeshData: return { 0.35f, 0.75f, 0.95f, 1 };
+        case AssetType::AvatarMask: return { 0.85f, 0.6f, 0.95f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -172,6 +173,7 @@ namespace Editor::UI
         case AssetType::RenderTexture: return "RT";
         case AssetType::AnimationClip: return "CLIP";
         case AssetType::NavMeshData: return "NAV";
+        case AssetType::AvatarMask: return "MASK";
         case AssetType::UIStyleSheet: return "USS";
         case AssetType::VideoClip: return "VIDEO";
         default: return "FILE";

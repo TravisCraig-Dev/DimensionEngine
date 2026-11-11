@@ -7,6 +7,31 @@
 
 namespace Dimension
 {
+    Ref<AvatarMaskAsset> AvatarMaskAsset::Load(const fs::path& path)
+    {
+        auto mask = MakeRef<AvatarMaskAsset>();
+        std::ifstream in(path);
+        if (!in) return mask;
+        try
+        {
+            nlohmann::json j = nlohmann::json::parse(in);
+            for (auto& name : j.value("joints", nlohmann::json::array()))
+                if (name.is_string()) mask->Joints.push_back(name.get<std::string>());
+        }
+        catch (const std::exception&)
+        {
+        }
+        return mask;
+    }
+
+    bool AvatarMaskAsset::Save(const fs::path& path) const
+    {
+        std::ofstream out(path);
+        if (!out) return false;
+        out << nlohmann::json{ { "joints", Joints } }.dump(1);
+        return (bool)out;
+    }
+
     using json = nlohmann::json;
 
     int AnimatorController::FindState(const std::string& name) const
@@ -338,6 +363,7 @@ namespace Dimension
                 layer.SyncedLayer = l.value("sync", -1);
                 for (auto& m : l.value("mask", json::array()))
                     if (m.is_string()) layer.Mask.push_back(m.get<std::string>());
+                layer.MaskAsset = AssetHandle(l.value("maskAsset", (uint64_t)0));
                 ReadMachine(l, layer.Machine);
                 c->Layers.push_back(std::move(layer));
             }
@@ -364,6 +390,7 @@ namespace Dimension
             {
                 json l{ { "name", layer.Name }, { "weight", layer.Weight }, { "blending", (int)layer.Blending }, { "mask", layer.Mask } };
                 if (layer.SyncedLayer >= 0) l["sync"] = layer.SyncedLayer;
+                if (layer.MaskAsset.IsValid()) l["maskAsset"] = (uint64_t)layer.MaskAsset;
                 WriteMachine(layer.Machine, l);
                 j["layers"].push_back(std::move(l));
             }

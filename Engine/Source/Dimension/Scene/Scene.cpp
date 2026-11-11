@@ -1770,7 +1770,8 @@ namespace Dimension
                     }
                     if (weight > 0.0f && !layer.Machine.States.empty())
                     {
-                        Animation::BuildMask(*skeleton, layer.Mask, mask);
+                        auto maskAsset = layer.MaskAsset.IsValid() ? AssetManager::GetAvatarMask(layer.MaskAsset) : nullptr;
+                        Animation::BuildMask(*skeleton, maskAsset ? maskAsset->Joints : layer.Mask, mask);
                         if (layer.Blending == AnimLayerBlending::Override)
                             Animation::LayerOverride(current, layerPose, mask, weight);
                         else

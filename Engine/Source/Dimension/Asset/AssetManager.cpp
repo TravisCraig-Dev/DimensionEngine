@@ -55,6 +55,7 @@ namespace Dimension
             std::unordered_map<AssetHandle, Ref<AnimatorController>> Controllers;
             std::unordered_map<AssetHandle, Ref<AnimatorOverrideController>> Overrides;
             std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
+            std::unordered_map<AssetHandle, Ref<AvatarMaskAsset>> AvatarMasks;
             std::unordered_map<AssetHandle, Ref<AnimationClipAsset>> AnimationClips;
             std::unordered_map<AssetHandle, std::vector<AssetHandle>> ClipsByModel; // .anim clips per model (rebuilt when stale)
             bool ClipIndexDirty = true;
@@ -151,6 +152,7 @@ namespace Dimension
             for (auto& [o, ov] : s->Overrides)
                 if (ov && ov->Controller == h) s->Controllers.erase(o);
             s->Timelines.erase(h);
+            s->AvatarMasks.erase(h);
             if (s->AnimationClips.erase(h) || (s->Assets.contains(h) && s->Assets[h].Type == AssetType::AnimationClip))
             {
                 s->ClipIndexDirty = true;
@@ -182,6 +184,7 @@ namespace Dimension
         case AssetType::VideoClip: return "Video Clip";
         case AssetType::AnimationClip: return "Animation Clip";
         case AssetType::NavMeshData: return "NavMesh Data";
+        case AssetType::AvatarMask: return "Avatar Mask";
         default: return "None";
         }
     }
@@ -314,6 +317,7 @@ namespace Dimension
         if (ext == ".timeline") return AssetType::Timeline;
         if (ext == ".anim") return AssetType::AnimationClip;
         if (ext == ".navmesh") return AssetType::NavMeshData;
+        if (ext == ".mask") return AssetType::AvatarMask;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;
@@ -1052,6 +1056,34 @@ namespace Dimension
         idle.Name = "Idle";
         controller.States.push_back(idle);
         if (!controller.Save(absolutePath)) return AssetHandle::None();
+        return Import(absolutePath);
+    }
+
+    Ref<AvatarMaskAsset> AssetManager::GetAvatarMask(AssetHandle handle)
+    {
+        if (!handle.IsValid() || !s) return nullptr;
+        if (auto it = s->AvatarMasks.find(handle); it != s->AvatarMasks.end()) return it->second;
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::AvatarMask) return nullptr;
+        auto mask = AvatarMaskAsset::Load(s->AssetsDir / meta->Path);
+        s->AvatarMasks[handle] = mask;
+        return mask;
+    }
+
+    void AssetManager::SaveAvatarMask(AssetHandle handle)
+    {
+        auto it = s ? s->AvatarMasks.find(handle) : decltype(s->AvatarMasks)::iterator{};
+        auto* meta = GetMetadata(handle);
+        if (!s || it == s->AvatarMasks.end() || !it->second || !meta) return;
+        fs::path path = s->AssetsDir / meta->Path;
+        it->second->Save(path);
+        std::error_code ec;
+        s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
+    }
+
+    AssetHandle AssetManager::CreateAvatarMask(const fs::path& absolutePath, const AvatarMaskAsset& mask)
+    {
+        if (!mask.Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
     }
 

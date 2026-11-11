@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <cmath>
+#include <cstring>
 
 namespace Editor
 {
@@ -267,18 +268,53 @@ namespace Editor
                     ImGui::SetNextItemWidth(180);
                     if (ImGui::SliderFloat("Live Weight##layer", &w, 0.0f, 1.0f)) live->SetLayerWeight(m_Layer, w);
                 }
-                // Mask: joints (with their descendants) this layer affects; empty = whole body.
-                ImGui::TextDisabled("Mask: %s", layer.Mask.empty() ? "whole skeleton" : "these joints and their children");
+                // Mask: an Avatar Mask asset (shared with other layers and controllers), or this layer's own joints;
+                // either way joints with their descendants, none = the whole body.
+                auto maskAsset = layer.MaskAsset.IsValid() ? AssetManager::GetAvatarMask(layer.MaskAsset) : nullptr;
+                ImGui::SetNextItemWidth(200);
+                std::string maskName = maskAsset ? AssetManager::GetDisplayName(layer.MaskAsset) : std::string("(this layer's own joints)");
+                if (ImGui::BeginCombo("Mask##layerMask", maskName.c_str()))
+                {
+                    if (ImGui::Selectable("(this layer's own joints)", !maskAsset)) { layer.MaskAsset = AssetHandle::None(); changed = true; }
+                    for (AssetHandle h : AssetManager::GetAssetsOfType(AssetType::AvatarMask))
+                        if (ImGui::Selectable(AssetManager::GetDisplayName(h).c_str(), h == layer.MaskAsset)) { layer.MaskAsset = h; changed = true; }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("An Avatar Mask asset (.mask) shared by the layers that use it, or this layer's own list");
+                if (!maskAsset)
+                {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Save As Asset"))
+                    {
+                        // Beside the controller, named after the layer.
+                        fs::path folder = AssetManager::GetAbsolutePath(m_Handle).parent_path();
+                        std::string base;
+                        for (char ch : layer.Name) base += std::strchr("<>:\"/\\|?*", ch) || (unsigned char)ch < 32 ? '_' : ch;
+                        fs::path file = folder / (base + " Mask.mask");
+                        for (int n = 1; fs::exists(file); ++n) file = folder / (base + " Mask " + std::to_string(n) + ".mask");
+                        AvatarMaskAsset made;
+                        made.Joints = layer.Mask;
+                        if (AssetHandle h = AssetManager::CreateAvatarMask(file, made); h.IsValid())
+                        {
+                            layer.MaskAsset = h;
+                            changed = true;
+                        }
+                    }
+                    ImGui::SetItemTooltip("Make this list an Avatar Mask asset (other layers can then use it too)");
+                }
+                std::vector<std::string>& maskJoints = maskAsset ? maskAsset->Joints : layer.Mask;
+                bool maskChanged = false;
+                ImGui::TextDisabled("Mask: %s%s", maskJoints.empty() ? "whole skeleton" : "these joints and their children", maskAsset ? " (the asset's, shared)" : "");
                 int removeJoint = -1;
-                for (int mj = 0; mj < (int)layer.Mask.size(); ++mj)
+                for (int mj = 0; mj < (int)maskJoints.size(); ++mj)
                 {
                     ImGui::PushID(2000 + mj);
-                    ImGui::BulletText("%s", layer.Mask[mj].c_str());
+                    ImGui::BulletText("%s", maskJoints[mj].c_str());
                     ImGui::SameLine();
                     if (ImGui::SmallButton("x")) removeJoint = mj;
                     ImGui::PopID();
                 }
-                if (removeJoint >= 0) { layer.Mask.erase(layer.Mask.begin() + removeJoint); changed = true; }
+                if (removeJoint >= 0) { maskJoints.erase(maskJoints.begin() + removeJoint); maskChanged = true; }
                 const Skeleton* skeleton = mesh ? mesh->GetSkeleton() : nullptr;
                 if (skeleton)
                 {
@@ -292,8 +328,8 @@ namespace Editor
                             std::string item = std::string(depth * 2, ' ') + skeleton->Joints[j].Name;
                             if (ImGui::Selectable(item.c_str()))
                             {
-                                layer.Mask.push_back(skeleton->Joints[j].Name);
-                                changed = true;
+                                maskJoints.push_back(skeleton->Joints[j].Name);
+                                maskChanged = true;
                             }
                         }
                         ImGui::EndCombo();
@@ -301,6 +337,11 @@ namespace Editor
                 }
                 else
                     ImGui::TextDisabled("Select an entity using this controller to pick mask joints.");
+                if (maskChanged)
+                {
+                    if (maskAsset) AssetManager::SaveAvatarMask(layer.MaskAsset); // (every layer using it takes it up)
+                    else changed = true;
+                }
             }
             if (removeLayer >= 0)
             {

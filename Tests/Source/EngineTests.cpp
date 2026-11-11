@@ -7161,6 +7161,49 @@ namespace
         fs::remove_all(assets.parent_path());
     }
 
+    void TestAvatarMasks()
+    {
+        // An Avatar Mask asset, used by a controller layer instead of its own list; the layer keeps the reference.
+        fs::path assets = fs::temp_directory_path() / "dimension_masks" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        AvatarMaskAsset upper;
+        upper.Joints = { "Spine2", "Neck" };
+        AssetHandle h = AssetManager::CreateAvatarMask(assets / "Upper Body.mask", upper);
+        CHECK(h.IsValid() && AssetManager::GetMetadata(h) && AssetManager::GetMetadata(h)->Type == AssetType::AvatarMask);
+        auto loaded = AssetManager::GetAvatarMask(h);
+        CHECK(loaded && loaded->Joints.size() == 2 && loaded->Joints[1] == "Neck");
+        AnimatorController controller;
+        AnimLayer layer;
+        layer.Name = "Arms";
+        layer.Mask = { "Hips" };
+        layer.MaskAsset = h;
+        controller.Layers.push_back(layer);
+        CHECK(controller.Save(assets / "Rig.controller"));
+        auto back = AnimatorController::Load(assets / "Rig.controller");
+        CHECK(back && back->Layers.size() == 1 && back->Layers[0].MaskAsset == h && back->Layers[0].Mask.size() == 1);
+        // Editing the asset (as the Animator window does) is seen by every user.
+        loaded->Joints.push_back("Head");
+        AssetManager::SaveAvatarMask(h);
+        CHECK(AvatarMaskAsset::Load(assets / "Upper Body.mask")->Joints.size() == 3);
+        // The mask over a skeleton: the listed joints and their descendants.
+        Skeleton s;
+        auto add = [&](const char* name, int parent) {
+            Joint j;
+            j.Name = name;
+            j.Parent = parent;
+            s.Joints.push_back(j);
+        };
+        add("Hips", -1), add("Spine2", 0), add("Neck", 1), add("Head", 2), add("Leg", 0);
+        s.ComputeOrder();
+        std::vector<float> weights;
+        Animation::BuildMask(s, AssetManager::GetAvatarMask(h)->Joints, weights);
+        CHECK(weights.size() == 5 && weights[0] == 0.0f && weights[1] == 1.0f && weights[3] == 1.0f && weights[4] == 0.0f);
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     void TestGenericAnimator()
     {
         // A lamp without a skeleton: its Animator plays a generic clip (made for no model) keying its light's intensity,
@@ -16320,6 +16363,7 @@ int main(int argc, char** argv)
     Run("Managed build (ReadyToRun, framework closure)", TestManagedBuild);
     Run("Blend shapes", TestBlendShapes);
     Run("Generic Animators (no skeleton)", TestGenericAnimator);
+    Run("Avatar Masks", TestAvatarMasks);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);

@@ -159,12 +159,21 @@ namespace Dimension
     };
 
     // An extra layer: its own states and transitions, sharing the controller's parameters.
+    // An Avatar Mask asset (.mask, like Unity's AvatarMask): the joints a layer affects, each with its descendants.
+    struct AvatarMaskAsset
+    {
+        std::vector<std::string> Joints;
+        static Ref<AvatarMaskAsset> Load(const fs::path& path);
+        bool Save(const fs::path& path) const;
+    };
+
     struct AnimLayer
     {
         std::string Name = "Layer";
         float Weight = 1.0f;
         AnimLayerBlending Blending = AnimLayerBlending::Override;
         std::vector<std::string> Mask; // joints affected, with their descendants; empty = the whole skeleton
+        AssetHandle MaskAsset = AssetHandle::None(); // an Avatar Mask asset instead of Mask (shared with other layers)
         AnimatorController Machine;    // States, Transitions and DefaultState (its Parameters are unused)
         // Synced layer (like Unity's Sync): -1 = off; otherwise an earlier layer (0 = base, n = n-th extra layer) whose
         // state machine drives this one. The layer then plays its own motion for each of that layer's states (a state

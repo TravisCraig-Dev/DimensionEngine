@@ -15,11 +15,12 @@ namespace Dimension
     struct AnimatorController;
     struct AnimatorOverrideController;
     struct TimelineAsset;
+    struct AvatarMaskAsset;
     struct AnimationClipAsset;
     struct SpriteAtlas;
     struct SpriteRect;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip, AnimationClip, NavMeshData };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip, AnimationClip, NavMeshData, AvatarMask };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -143,6 +144,11 @@ namespace Dimension
         static void SaveAnimationClip(AssetHandle handle);
         static AssetHandle CreateAnimationClip(const fs::path& absolutePath, const AnimationClipAsset& clip);
         static const std::vector<AssetHandle>& ClipsFor(AssetHandle model); // None: the clips made for no model (generic)
+        // Avatar Masks (.mask, like Unity's AvatarMask): joints (each with its descendants) a controller layer affects,
+        // shared by any layers that use the asset. Save writes it (layers using it take the change at once).
+        static Ref<AvatarMaskAsset> GetAvatarMask(AssetHandle handle);
+        static void SaveAvatarMask(AssetHandle handle);
+        static AssetHandle CreateAvatarMask(const fs::path& absolutePath, const AvatarMaskAsset& mask);
         static uint64_t ClipsVersion();
         static void TouchAnimationClips();
         // Sprite atlases (.spriteatlas): packed when first asked for (and again after a sprite or the atlas changes);
