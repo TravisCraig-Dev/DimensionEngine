@@ -6974,6 +6974,21 @@ namespace
         Animation::ApplyHumanoidIK(s, map, half, halfGoals);
         glm::vec3 halfway = glm::vec3(globalsOf(half)[s.FindJoint("LeftHand")][3]);
         CHECK(glm::distance(halfway, goals.Limbs[2].Position) > 0.05f && glm::distance(halfway, glm::vec3(0.65f, 1.5f, 0.0f)) > 0.05f);
+        // A hint: the left elbow points down instead of where it would bend.
+        for (float hintY : { 0.5f, 2.5f })
+        {
+            Pose hinted;
+            hinted.SetBindPose(s);
+            HumanoidIKGoals reach;
+            reach.Limbs[2].PositionWeight = 1.0f;
+            reach.Limbs[2].Position = { 0.45f, 1.5f, 0.0f }; // (nearer than the arm's length: it must bend)
+            reach.Limbs[2].HintWeight = 1.0f;
+            reach.Limbs[2].Hint = { 0.3f, hintY, 0.0f };
+            Animation::ApplyHumanoidIK(s, map, hinted, reach);
+            auto hg = globalsOf(hinted);
+            float elbowY = hg[s.FindJoint("LeftForeArm")][3].y;
+            CHECK(Near(glm::vec3(hg[s.FindJoint("LeftHand")][3]), reach.Limbs[2].Position, 0.01f) && (hintY < 1.5f ? elbowY < 1.45f : elbowY > 1.55f));
+        }
         // The head looks toward a point off to its left (+X): its forward turns that way.
         Pose looking;
         looking.SetBindPose(s);

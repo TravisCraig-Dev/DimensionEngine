@@ -1836,6 +1836,9 @@ namespace Dimension
             Op(100, (int)goal, null, v);
             return new Vector3(v[1], v[2], v[3]);
         }
+        /// <summary>Where a knee or elbow points while its foot or hand has a goal (Unity's IK hints).</summary>
+        public void SetIKHintPositionWeight(AvatarIKHint hint, float weight) => IK((int)hint, 5, weight);
+        public void SetIKHintPosition(AvatarIKHint hint, Vector3 position) => IK((int)hint, 6, position.X, position.Y, position.Z);
         public void SetLookAtWeight(float weight) => IK(4, 0, weight);
         public void SetLookAtPosition(Vector3 position) => IK(4, 1, position.X, position.Y, position.Z);
         private bool PlayState(string state, int layer, float fadeSeconds, float offset, bool fixedTime)
@@ -1980,6 +1983,8 @@ namespace Dimension
     public enum AnimatorRetargeting { Humanoid, ByJointName }
     /// <summary>A humanoid's IK goals (Unity's AvatarIKGoal).</summary>
     public enum AvatarIKGoal { LeftFoot, RightFoot, LeftHand, RightHand }
+    /// <summary>The knees and elbows IK goals bend (Unity's AvatarIKHint).</summary>
+    public enum AvatarIKHint { LeftKnee, RightKnee, LeftElbow, RightElbow }
 
     /// <summary>An Animator layer's state as of this frame (Unity's AnimatorStateInfo).</summary>
     public readonly record struct AnimatorStateInfo(string Name, float NormalizedTime, float Length, float SpeedMultiplier, bool Loop, string Tag = "")

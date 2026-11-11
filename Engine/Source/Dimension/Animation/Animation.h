@@ -90,6 +90,9 @@ namespace Dimension
             float PositionWeight = 0.0f, RotationWeight = 0.0f;
             glm::vec3 Position{ 0.0f };
             glm::quat Rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
+            // Its hint (Unity's AvatarIKHint: the knee or elbow points toward it), by weight from where it bends now.
+            float HintWeight = 0.0f;
+            glm::vec3 Hint{ 0.0f };
         };
         std::array<Limb, 4> Limbs;
         float LookAtWeight = 0.0f;
@@ -176,7 +179,7 @@ namespace Dimension
         bool SolveLookAt(const Skeleton& skeleton, Pose& pose, int joint, const glm::vec3& aimAxis, int chainLength, const glm::vec3& target,
                          float maxAngle, float weight);
         // A humanoid's IK goals (model space) on a pose: each limb's upper and lower bone turned so its hand or foot reaches
-        // the goal (by its position weight; the knee or elbow keeps its bend plane), then the hand or foot turned to the
+        // the goal (by its position weight; the knee or elbow bends toward its hint, else keeps its bend plane), then the hand or foot turned to the
         // goal's rotation (by its rotation weight), then the head (with neck and chest) turned toward the look-at point.
         // Returns false when the skeleton is not humanoid.
         bool ApplyHumanoidIK(const Skeleton& skeleton, const HumanoidMap& map, Pose& pose, const HumanoidIKGoals& goals);

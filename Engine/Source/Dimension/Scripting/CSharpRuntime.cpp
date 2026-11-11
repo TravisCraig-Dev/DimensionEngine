@@ -2172,6 +2172,8 @@ namespace Dimension
                         else if (what == 2) limb.RotationWeight = std::clamp(v[1], 0.0f, 1.0f);
                         else if (what == 3) limb.Rotation = glm::normalize(glm::quat(v[4], v[1], v[2], v[3]));
                         else if (what == 4) { v[1] = limb.Position.x, v[2] = limb.Position.y, v[3] = limb.Position.z; }
+                        else if (what == 5) limb.HintWeight = std::clamp(v[1], 0.0f, 1.0f);
+                        else if (what == 6) limb.Hint = { v[1], v[2], v[3] };
                     }
                     else if (layer == 4)
                     {

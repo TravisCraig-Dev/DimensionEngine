@@ -1833,6 +1833,7 @@ namespace Dimension
                 for (auto& limb : goals.Limbs)
                 {
                     limb.Position = glm::vec3(toModel * glm::vec4(limb.Position, 1.0f));
+                    limb.Hint = glm::vec3(toModel * glm::vec4(limb.Hint, 1.0f));
                     limb.Rotation = toModelRotation * limb.Rotation;
                 }
                 goals.LookAt = glm::vec3(toModel * glm::vec4(goals.LookAt, 1.0f));

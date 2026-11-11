@@ -221,7 +221,18 @@ namespace Dimension
                 const HumanoidIKGoals::Limb& limb = goals.Limbs[g];
                 int tip = map[tips[g]];
                 if (tip < 0) continue;
-                if (limb.PositionWeight > 0.0f) SolveIK(skeleton, pose, tip, 2, limb.Position, nullptr, std::min(limb.PositionWeight, 1.0f));
+                if (limb.PositionWeight > 0.0f)
+                {
+                    // The bend toward the hint (by its weight, from where the knee or elbow is now).
+                    glm::vec3 pole(0.0f);
+                    int middle = skeleton.Joints[tip].Parent;
+                    if (limb.HintWeight > 0.0f && middle >= 0)
+                    {
+                        JointGlobals(skeleton, pose, globals);
+                        pole = glm::mix(glm::vec3(globals[middle][3]), limb.Hint, std::min(limb.HintWeight, 1.0f));
+                    }
+                    SolveIK(skeleton, pose, tip, 2, limb.Position, limb.HintWeight > 0.0f && middle >= 0 ? &pole : nullptr, std::min(limb.PositionWeight, 1.0f));
+                }
                 if (limb.RotationWeight > 0.0f)
                 {
                     // The hand or foot turned to the goal (model space), under its parent as posed now.
