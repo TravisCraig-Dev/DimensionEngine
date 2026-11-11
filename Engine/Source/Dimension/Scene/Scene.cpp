@@ -1075,6 +1075,17 @@ namespace Dimension
         UpdateTransforms();
         Navigation::FollowPlatforms(*this); // agents on Moving surfaces, where physics took them
         {
+            // OnAnimatorIK (as Unity's IK pass): scripts on animated objects set their IK goals for this frame's pose.
+            std::vector<Entity> ikScripts;
+            for (auto [e, anim, sc] : m_Registry.ViewOf<AnimatorComponent, ScriptComponent>())
+                for (auto& s : sc.Scripts)
+                    if (s.Instance && s.Enabled && s.Instance->HandlesAnimatorIK()) { ikScripts.push_back(e); break; }
+            for (Entity e : ikScripts)
+                if (auto* sc = IsValid(e) ? m_Registry.TryGet<ScriptComponent>(e) : nullptr)
+                    for (auto& inst : sc->LiveInstances(true))
+                        if (inst->HandlesAnimatorIK()) inst->OnAnimatorIK(0);
+        }
+        {
             DIM_PROFILE_SCOPE("Animation");
             UpdateAnimators(dt);
         }
@@ -1807,6 +1818,26 @@ namespace Dimension
                 }
             }
             applyIK(-1, 1.0f);
+            if (anim.ScriptIK.Any() && !generic)
+            {
+                // Scripts' goals, from the world into the model's space.
+                static std::map<const Skeleton*, HumanoidMap> maps;
+                auto found = maps.find(skeleton);
+                if (found == maps.end()) found = maps.emplace(skeleton, Animation::MapHumanoid(*skeleton)).first;
+                const glm::mat4& world = m_Registry.Get<TransformComponent>(e).World;
+                glm::mat4 toModel = glm::inverse(world);
+                glm::mat3 wr(world);
+                for (int c = 0; c < 3; ++c) wr[c] = glm::normalize(wr[c]);
+                glm::quat toModelRotation = glm::inverse(glm::quat_cast(wr));
+                HumanoidIKGoals goals = anim.ScriptIK;
+                for (auto& limb : goals.Limbs)
+                {
+                    limb.Position = glm::vec3(toModel * glm::vec4(limb.Position, 1.0f));
+                    limb.Rotation = toModelRotation * limb.Rotation;
+                }
+                goals.LookAt = glm::vec3(toModel * glm::vec4(goals.LookAt, 1.0f));
+                Animation::ApplyHumanoidIK(*skeleton, found->second, current, goals);
+            }
             Animation::ComputeSkinMatrices(*skeleton, current, anim.SkinMatrices);
             applyBlendShapes();
             blendGetUp();

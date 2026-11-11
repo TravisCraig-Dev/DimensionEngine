@@ -116,6 +116,9 @@ namespace Dimension
         /// with OnAnimatorMove moves the object itself (Unity's "handled by script"), also with Apply Root Motion off.
         /// Animator.ApplyBuiltinRootMotion() moves it as the Animator would.</summary>
         public virtual void OnAnimatorMove() { }
+        /// <summary>Every frame before the Animator poses the object (Unity's OnAnimatorIK): set its IK goals here with
+        /// Animator.SetIKPosition and co. (they hold until changed).</summary>
+        public virtual void OnAnimatorIK(int layerIndex) { }
         /// <summary>Every frame after animation (Unity's LateUpdate): read this frame's bone poses here (objects kept on
         /// a bone, cameras following an animated character).</summary>
         public virtual void OnLateUpdate(float dt) { }

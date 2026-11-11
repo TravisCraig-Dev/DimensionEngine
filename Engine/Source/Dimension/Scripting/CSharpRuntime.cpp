@@ -592,6 +592,7 @@ namespace Dimension
             bool HasControllerHit = false;    // overrides OnControllerColliderHit (called for every move's hits)
             bool HasMouseEvents = false;      // overrides an OnMouse* callback
             bool HasAnimatorMove = false;     // overrides OnAnimatorMove (takes the Animator's root motion)
+            bool HasAnimatorIK = false;       // overrides OnAnimatorIK
             bool HasLateUpdate = false;       // overrides OnLateUpdate
             uint32_t PointerEvents = 0;       // the UI pointer events it overrides (bits of PointerEventKind)
             std::vector<std::string> ContextMenu;
@@ -1008,6 +1009,8 @@ namespace Dimension
             void Mouse(int method) { if (m_Handle && m_Class->HasMouseEvents) s_Managed.Invoke(m_Handle, method, 0.0f); }
             uint32_t PointerEventMask() const override { return m_Handle ? m_Class->PointerEvents : 0; }
             bool HandlesAnimatorMove() const override { return m_Handle && m_Class->HasAnimatorMove; }
+            bool HandlesAnimatorIK() const override { return m_Handle && m_Class->HasAnimatorIK; }
+            void OnAnimatorIK(int layer) override { if (m_Handle) s_Managed.Invoke(m_Handle, 22, (float)layer); }
             bool HandlesLateUpdate() const override { return m_Handle && m_Class->HasLateUpdate; }
             void OnLateUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 21, dt); }
             void OnAnimatorMove() override { if (m_Handle) s_Managed.Invoke(m_Handle, 20, 0.0f); }
@@ -1041,6 +1044,7 @@ namespace Dimension
                 cls.HasControllerHit = j.value("controllerHit", false);
                 cls.HasMouseEvents = j.value("mouseEvents", false);
                 cls.HasAnimatorMove = j.value("animatorMove", false);
+                cls.HasAnimatorIK = j.value("animatorIK", false);
                 cls.HasLateUpdate = j.value("lateUpdate", false);
                 cls.PointerEvents = j.value("pointerEvents", 0u);
                 for (auto& item : j.value("contextMenu", nlohmann::json::array())) cls.ContextMenu.push_back(item.get<std::string>());
@@ -2156,6 +2160,26 @@ namespace Dimension
                     return 1;
                 case 3: scene.ApplyRootMotion(entity, { v[0], v[1], v[2] }, glm::quat(v[6], v[3], v[4], v[5])); return 1;
                 case 5: scene.UpdateAnimators(std::max(v[0], 0.0f), entity); return 1; // Animator.Update
+                case 100: // IK goals: `layer` the goal (0-3 feet and hands, 4 the look-at); v[0] what, then the values
+                {
+                    auto& ik = an->ScriptIK;
+                    int what = (int)v[0];
+                    if (layer >= 0 && layer < 4)
+                    {
+                        auto& limb = ik.Limbs[layer];
+                        if (what == 0) limb.PositionWeight = std::clamp(v[1], 0.0f, 1.0f);
+                        else if (what == 1) limb.Position = { v[1], v[2], v[3] };
+                        else if (what == 2) limb.RotationWeight = std::clamp(v[1], 0.0f, 1.0f);
+                        else if (what == 3) limb.Rotation = glm::normalize(glm::quat(v[4], v[1], v[2], v[3]));
+                        else if (what == 4) { v[1] = limb.Position.x, v[2] = limb.Position.y, v[3] = limb.Position.z; }
+                    }
+                    else if (layer == 4)
+                    {
+                        if (what == 0) ik.LookAtWeight = std::clamp(v[1], 0.0f, 1.0f);
+                        else if (what == 1) ik.LookAt = { v[1], v[2], v[3] };
+                    }
+                    return 1;
+                }
                 case 6: // MatchTarget: v position xyz, weight xyz, start, end; name the joint
                     if (!name || !*name) return 0;
                     an->Match = {};

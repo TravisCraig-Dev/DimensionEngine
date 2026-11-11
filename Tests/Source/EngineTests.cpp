@@ -6926,6 +6926,70 @@ namespace
         CHECK(Animation::RetargetHumanoid(source, tail, clip).Channels.empty() && Animation::RetargetClip(source, tail, clip).Channels.empty());
     }
 
+    void TestHumanoidIK()
+    {
+        // A T-posed biped (left arm along +X from 1.5 m up, legs down to the ground, facing +Z).
+        glm::quat I(1, 0, 0, 0);
+        std::vector<RigJoint> rig = {
+            { "Hips", nullptr, { 0, 1.0f, 0 }, I }, { "Spine", "Hips", { 0, 1.1f, 0 }, I }, { "Spine1", "Spine", { 0, 1.25f, 0 }, I },
+            { "Spine2", "Spine1", { 0, 1.4f, 0 }, I }, { "Neck", "Spine2", { 0, 1.55f, 0 }, I }, { "Head", "Neck", { 0, 1.65f, 0 }, I },
+            { "LeftShoulder", "Spine2", { 0.05f, 1.5f, 0 }, I }, { "LeftArm", "LeftShoulder", { 0.15f, 1.5f, 0 }, I },
+            { "LeftForeArm", "LeftArm", { 0.4f, 1.5f, 0 }, I }, { "LeftHand", "LeftForeArm", { 0.65f, 1.5f, 0 }, I },
+            { "RightShoulder", "Spine2", { -0.05f, 1.5f, 0 }, I }, { "RightArm", "RightShoulder", { -0.15f, 1.5f, 0 }, I },
+            { "RightForeArm", "RightArm", { -0.4f, 1.5f, 0 }, I }, { "RightHand", "RightForeArm", { -0.65f, 1.5f, 0 }, I },
+            { "LeftUpLeg", "Hips", { 0.1f, 0.95f, 0 }, I }, { "LeftLeg", "LeftUpLeg", { 0.1f, 0.5f, 0.02f }, I }, { "LeftFoot", "LeftLeg", { 0.1f, 0.05f, 0 }, I },
+            { "RightUpLeg", "Hips", { -0.1f, 0.95f, 0 }, I }, { "RightLeg", "RightUpLeg", { -0.1f, 0.5f, 0.02f }, I }, { "RightFoot", "RightLeg", { -0.1f, 0.05f, 0 }, I },
+        };
+        Skeleton s = BuildRig(rig);
+        HumanoidMap map = Animation::MapHumanoid(s);
+        CHECK(map.IsHumanoid());
+        auto globalsOf = [&](const Pose& p) {
+            std::vector<glm::mat4> g;
+            Animation::JointGlobals(s, p, g);
+            return g;
+        };
+        // The left hand reaches a point in front of the chest; the right hand turns to a goal rotation; a foot lifts.
+        HumanoidIKGoals goals;
+        goals.Limbs[2].PositionWeight = 1.0f;
+        goals.Limbs[2].Position = { 0.35f, 1.3f, 0.25f };
+        glm::quat palm = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 0, 1));
+        goals.Limbs[3].RotationWeight = 1.0f;
+        goals.Limbs[3].Rotation = palm;
+        goals.Limbs[0].PositionWeight = 1.0f;
+        goals.Limbs[0].Position = { 0.1f, 0.35f, 0.2f };
+        Pose pose;
+        pose.SetBindPose(s);
+        CHECK(Animation::ApplyHumanoidIK(s, map, pose, goals));
+        auto g = globalsOf(pose);
+        CHECK(Near(glm::vec3(g[s.FindJoint("LeftHand")][3]), goals.Limbs[2].Position, 0.01f));
+        CHECK(Near(glm::vec3(g[s.FindJoint("LeftFoot")][3]), goals.Limbs[0].Position, 0.01f));
+        glm::quat rightHand = glm::quat_cast(glm::mat3(g[s.FindJoint("RightHand")]));
+        CHECK(std::abs(std::abs(glm::dot(rightHand, palm)) - 1.0f) < 1e-3f);
+        // Half weight: halfway there (about).
+        Pose half;
+        half.SetBindPose(s);
+        HumanoidIKGoals halfGoals = goals;
+        halfGoals.Limbs[0].PositionWeight = 0.0f, halfGoals.Limbs[3].RotationWeight = 0.0f;
+        halfGoals.Limbs[2].PositionWeight = 0.5f;
+        Animation::ApplyHumanoidIK(s, map, half, halfGoals);
+        glm::vec3 halfway = glm::vec3(globalsOf(half)[s.FindJoint("LeftHand")][3]);
+        CHECK(glm::distance(halfway, goals.Limbs[2].Position) > 0.05f && glm::distance(halfway, glm::vec3(0.65f, 1.5f, 0.0f)) > 0.05f);
+        // The head looks toward a point off to its left (+X): its forward turns that way.
+        Pose looking;
+        looking.SetBindPose(s);
+        HumanoidIKGoals look;
+        look.LookAtWeight = 1.0f;
+        look.LookAt = { 5.0f, 1.65f, 1.0f };
+        Animation::ApplyHumanoidIK(s, map, looking, look);
+        glm::vec3 forward = glm::normalize(glm::vec3(globalsOf(looking)[s.FindJoint("Head")] * glm::vec4(0, 0, 1, 0)));
+        CHECK(forward.x > 0.7f);
+        // Not humanoid: nothing.
+        Skeleton tail = BuildRig({ { "Root", nullptr, { 0, 0, 0 }, I }, { "Tip", "Root", { 0, 1, 0 }, I } });
+        Pose tailPose;
+        tailPose.SetBindPose(tail);
+        CHECK(!Animation::ApplyHumanoidIK(tail, Animation::MapHumanoid(tail), tailPose, goals));
+    }
+
     void TestAnimationClipAssets()
     {
         MeshData tentacle;
@@ -16428,6 +16492,7 @@ int main(int argc, char** argv)
     Run("Animation retargeting", TestRetargeting);
     Run("Humanoid retargeting", TestHumanoidRetargeting);
     Run("Animation clip assets", TestAnimationClipAssets);
+    Run("Humanoid IK goals", TestHumanoidIK);
     Run("COLR v1 color glyphs", TestColrV1);
     Run("Managed build (ReadyToRun, framework closure)", TestManagedBuild);
     Run("Blend shapes", TestBlendShapes);

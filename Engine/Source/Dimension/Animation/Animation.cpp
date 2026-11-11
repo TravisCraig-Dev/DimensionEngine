@@ -211,6 +211,43 @@ namespace Dimension
             return glm::mix(a, b, t);
         }
 
+        bool ApplyHumanoidIK(const Skeleton& skeleton, const HumanoidMap& map, Pose& pose, const HumanoidIKGoals& goals)
+        {
+            if (!map.IsHumanoid() || pose.Rotations.size() != skeleton.Joints.size()) return false;
+            static const HumanBone tips[4] = { HumanBone::LeftFoot, HumanBone::RightFoot, HumanBone::LeftHand, HumanBone::RightHand };
+            std::vector<glm::mat4> globals;
+            for (int g = 0; g < 4; ++g)
+            {
+                const HumanoidIKGoals::Limb& limb = goals.Limbs[g];
+                int tip = map[tips[g]];
+                if (tip < 0) continue;
+                if (limb.PositionWeight > 0.0f) SolveIK(skeleton, pose, tip, 2, limb.Position, nullptr, std::min(limb.PositionWeight, 1.0f));
+                if (limb.RotationWeight > 0.0f)
+                {
+                    // The hand or foot turned to the goal (model space), under its parent as posed now.
+                    JointGlobals(skeleton, pose, globals);
+                    int parent = skeleton.Joints[tip].Parent;
+                    glm::mat3 pm = parent >= 0 ? glm::mat3(globals[parent]) : glm::mat3(skeleton.RootTransform);
+                    for (int c = 0; c < 3; ++c) pm[c] = glm::normalize(pm[c]);
+                    glm::quat local = glm::normalize(glm::inverse(glm::quat_cast(pm)) * limb.Rotation);
+                    pose.Rotations[tip] = glm::slerp(pose.Rotations[tip], local, std::min(limb.RotationWeight, 1.0f));
+                }
+            }
+            int head = map[HumanBone::Head];
+            if (goals.LookAtWeight > 0.0f && head >= 0)
+            {
+                // The head's forward: the model's +Z as the bind pose holds the head.
+                Pose bind;
+                bind.SetBindPose(skeleton);
+                JointGlobals(skeleton, bind, globals);
+                glm::mat3 hm(globals[head]);
+                for (int c = 0; c < 3; ++c) hm[c] = glm::normalize(hm[c]);
+                glm::vec3 aim = glm::normalize(glm::inverse(glm::quat_cast(hm)) * glm::vec3(0.0f, 0.0f, 1.0f));
+                SolveLookAt(skeleton, pose, head, aim, 3, goals.LookAt, 90.0f, std::min(goals.LookAtWeight, 1.0f));
+            }
+            return true;
+        }
+
         int ReduceKeys(AnimationChannel& ch, float rotationDegrees, float distance)
         {
             size_t n = std::min(ch.Times.size(), ch.Values.size());

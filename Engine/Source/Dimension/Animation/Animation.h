@@ -81,6 +81,27 @@ namespace Dimension
         void SetBindPose(const Skeleton& skeleton);
     };
 
+    // Scripts' IK goals for a humanoid (Unity's SetIKPosition / SetIKRotation / SetLookAtPosition): its feet and hands
+    // (AvatarIKGoal order: left foot, right foot, left hand, right hand) and where the head looks.
+    struct HumanoidIKGoals
+    {
+        struct Limb
+        {
+            float PositionWeight = 0.0f, RotationWeight = 0.0f;
+            glm::vec3 Position{ 0.0f };
+            glm::quat Rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
+        };
+        std::array<Limb, 4> Limbs;
+        float LookAtWeight = 0.0f;
+        glm::vec3 LookAt{ 0.0f };
+        bool Any() const
+        {
+            for (const Limb& l : Limbs)
+                if (l.PositionWeight > 0.0f || l.RotationWeight > 0.0f) return true;
+            return LookAtWeight > 0.0f;
+        }
+    };
+
     // Per-Animator state for root motion between frames.
     struct RootMotionState
     {
@@ -154,6 +175,11 @@ namespace Dimension
         // even part of the turn). The turn is limited to `maxAngle` degrees. Returns false when there is nothing to do.
         bool SolveLookAt(const Skeleton& skeleton, Pose& pose, int joint, const glm::vec3& aimAxis, int chainLength, const glm::vec3& target,
                          float maxAngle, float weight);
+        // A humanoid's IK goals (model space) on a pose: each limb's upper and lower bone turned so its hand or foot reaches
+        // the goal (by its position weight; the knee or elbow keeps its bend plane), then the hand or foot turned to the
+        // goal's rotation (by its rotation weight), then the head (with neck and chest) turned toward the look-at point.
+        // Returns false when the skeleton is not humanoid.
+        bool ApplyHumanoidIK(const Skeleton& skeleton, const HumanoidMap& map, Pose& pose, const HumanoidIKGoals& goals);
         const AnimationClip* FindClip(const std::vector<AnimationClip>& clips, const std::string& name);
 
         // Retargeting: plays a clip made for one skeleton on another whose joints have the same names (ignoring case

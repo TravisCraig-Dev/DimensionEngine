@@ -69,6 +69,9 @@ namespace Dimension
         // Root Motion is off.
         virtual bool HandlesAnimatorMove() const { return false; }
         virtual void OnAnimatorMove() {}
+        // Every frame before the Animator poses the object (Unity's OnAnimatorIK): set IK goals here.
+        virtual bool HandlesAnimatorIK() const { return false; }
+        virtual void OnAnimatorIK(int layer) {}
         virtual void OnJointBreak(float force) {}                  // a Joint / Joint 2D on this entity broke (reaction force, N)
         // The game's window gained or lost focus; was minimized (paused) or restored; is closing (also when play stops
         // in the editor), before OnDisable and OnDestroy.

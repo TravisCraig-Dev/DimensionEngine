@@ -773,6 +773,9 @@ namespace Dimension
                                            nameof(Behaviour.OnMouseUpAsButton) };
                         if (mouse.Any(Overrides)) w.WriteBoolean("mouseEvents", true);
                         if (Overrides(nameof(Behaviour.OnAnimatorMove))) w.WriteBoolean("animatorMove", true);
+                        if (type.GetMethod(nameof(Behaviour.OnAnimatorIK), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(int) })
+                                ?.DeclaringType != typeof(Behaviour))
+                            w.WriteBoolean("animatorIK", true);
                         if (type.GetMethod(nameof(Behaviour.OnLateUpdate), BindingFlags.Public | BindingFlags.Instance, new[] { typeof(float) })
                                 ?.DeclaringType != typeof(Behaviour))
                             w.WriteBoolean("lateUpdate", true);
@@ -1049,6 +1052,7 @@ namespace Dimension
                     case 19: b.OnApplicationQuit(); break;
                     case 20: b.OnAnimatorMove(); break;
                     case 21: b.OnLateUpdate(dt); break;
+                    case 22: b.OnAnimatorIK((int)dt); break;
                 }
             }
             catch (Exception e) { Debug.LogError($"{b?.GetType().Name}: {e}"); }

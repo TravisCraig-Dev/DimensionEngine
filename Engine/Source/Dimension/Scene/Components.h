@@ -473,6 +473,9 @@ namespace Dimension
         AnimatorRetargeting Retargeting = AnimatorRetargeting::Humanoid;
         bool MuscleLimits = true; // humanoid retargeting: joints kept within human ranges of motion
 
+        // Scripts' IK goals (world space; Animator.SetIKPosition and co.), applied after the pose each frame.
+        HumanoidIKGoals ScriptIK;
+
         // Root motion (runtime): movement applied this frame, world space.
         glm::vec3 RootMotionDelta{ 0.0f };
         glm::quat RootMotionRotation{ 1.0f, 0.0f, 0.0f, 0.0f }; // this frame's turn (world space)

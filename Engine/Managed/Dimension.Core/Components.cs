@@ -1817,6 +1817,27 @@ namespace Dimension
             var e = Entity;
             return Native.WithUtf8<int>(name ?? "", p => Native.Api.AnimatorOp(e.Scene, e.Id, op, layer, (byte*)p, v));
         }
+
+        // IK goals (Unity's): a humanoid's feet and hands reach their goals, its head looks at a point; they hold until
+        // changed (set them in OnAnimatorIK, or anywhere). Positions and rotations are world space.
+        private void IK(int goal, int what, float a = 0, float b = 0, float c = 0, float d = 0)
+        {
+            float* v = stackalloc float[5] { what, a, b, c, d };
+            Op(100, goal, null, v);
+        }
+        public void SetIKPositionWeight(AvatarIKGoal goal, float weight) => IK((int)goal, 0, weight);
+        public void SetIKPosition(AvatarIKGoal goal, Vector3 position) => IK((int)goal, 1, position.X, position.Y, position.Z);
+        public void SetIKRotationWeight(AvatarIKGoal goal, float weight) => IK((int)goal, 2, weight);
+        public void SetIKRotation(AvatarIKGoal goal, Quaternion rotation) => IK((int)goal, 3, rotation.X, rotation.Y, rotation.Z, rotation.W);
+        /// <summary>The goal's position as last set.</summary>
+        public Vector3 GetIKPosition(AvatarIKGoal goal)
+        {
+            float* v = stackalloc float[5] { 4, 0, 0, 0, 0 };
+            Op(100, (int)goal, null, v);
+            return new Vector3(v[1], v[2], v[3]);
+        }
+        public void SetLookAtWeight(float weight) => IK(4, 0, weight);
+        public void SetLookAtPosition(Vector3 position) => IK(4, 1, position.X, position.Y, position.Z);
         private bool PlayState(string state, int layer, float fadeSeconds, float offset, bool fixedTime)
         {
             float* v = stackalloc float[3] { fadeSeconds, offset, fixedTime ? 1 : 0 };
@@ -1957,6 +1978,8 @@ namespace Dimension
     public enum AnimatorUpdateMode { Normal, UnscaledTime, AnimatePhysics, Manual }
     public enum AnimatorCullingMode { AlwaysAnimate, CullCompletely }
     public enum AnimatorRetargeting { Humanoid, ByJointName }
+    /// <summary>A humanoid's IK goals (Unity's AvatarIKGoal).</summary>
+    public enum AvatarIKGoal { LeftFoot, RightFoot, LeftHand, RightHand }
 
     /// <summary>An Animator layer's state as of this frame (Unity's AnimatorStateInfo).</summary>
     public readonly record struct AnimatorStateInfo(string Name, float NormalizedTime, float Length, float SpeedMultiplier, bool Loop, string Tag = "")
