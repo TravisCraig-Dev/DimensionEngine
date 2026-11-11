@@ -1193,6 +1193,9 @@ namespace Dimension
         bool Activated = true;
         float ArcHeight = 0.5f;
         float CostModifier = 1.0f;
+        // Across the way (meters, in the object's space; 0 = from a point to a point): a crossing along an edge, like
+        // Unity's NavMeshLink width (a wide jump down a ledge, a row of stairs). Agents cross where it suits their path.
+        float Width = 0.0f;
         // A door: while not Activated, agents still take paths through it and wait at its start until it is
         // (without Agents Wait a closed link is no way at all).
         bool AgentsWait = false;

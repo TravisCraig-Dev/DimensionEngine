@@ -957,6 +957,30 @@ namespace Dimension
             return PathFrom(mesh, Nearest(mesh, from, std::max(mesh.AgentHeight, 2.0f), filter), from, to, corners, links, linkArcs, filter);
         }
 
+        std::vector<std::pair<glm::vec3, glm::vec3>> LinkCrossings(const glm::mat4& world, const OffMeshLinkComponent& link, float spacing)
+        {
+            std::vector<std::pair<glm::vec3, glm::vec3>> out;
+            glm::vec3 along = link.End - link.Start;
+            glm::vec3 side = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), along); // (in the object's space, level)
+            side.y = 0.0f;
+            float width = std::max(link.Width, 0.0f);
+            if (width <= 1e-4f || glm::dot(side, side) < 1e-10f)
+            {
+                out.push_back({ glm::vec3(world * glm::vec4(link.Start, 1.0f)), glm::vec3(world * glm::vec4(link.End, 1.0f)) });
+                return out;
+            }
+            side = glm::normalize(side);
+            // The spacing is measured in the world (the object may be scaled).
+            float worldWidth = width * glm::length(glm::vec3(world * glm::vec4(side, 0.0f)));
+            int count = std::clamp((int)std::ceil(worldWidth / std::max(spacing, 0.05f)) + 1, 2, 256);
+            for (int i = 0; i < count; ++i)
+            {
+                glm::vec3 offset = side * (width * ((float)i / (count - 1) - 0.5f));
+                out.push_back({ glm::vec3(world * glm::vec4(link.Start + offset, 1.0f)), glm::vec3(world * glm::vec4(link.End + offset, 1.0f)) });
+            }
+            return out;
+        }
+
         std::vector<Link> LinksOn(Scene& scene, const NavMeshData& mesh)
         {
             std::vector<Link> out;
@@ -966,14 +990,17 @@ namespace Dimension
             {
                 // Closed (not Activated): gone, unless agents wait at it (a door) - then paths still go through.
                 if ((!link.Activated && !link.AgentsWait) || !t.ActiveInHierarchy) continue;
-                glm::vec3 a = glm::vec3(toMesh * t.World * glm::vec4(link.Start, 1.0f)), b = glm::vec3(toMesh * t.World * glm::vec4(link.End, 1.0f));
-                // Each end joins the mesh within a meter (or the agent's radius past the edge it was baked back from).
-                float reach = std::max(1.0f, mesh.AgentRadius + mesh.CellSize * 2.0f);
-                int na = Nearest(mesh, a, reach), nb = Nearest(mesh, b, reach);
-                if (na < 0 || nb < 0 || na == nb) continue;
-                float cost = glm::distance(a, b) * std::max(link.CostModifier, 0.0f);
-                out.push_back({ na, nb, a, b, cost, std::max(link.ArcHeight, 0.0f), e, !link.Activated });
-                if (link.Bidirectional) out.push_back({ nb, na, b, a, cost, std::max(link.ArcHeight, 0.0f), e, !link.Activated });
+                // A wide link: a crossing every couple of cells across it.
+                for (auto [a, b] : LinkCrossings(toMesh * t.World, link, std::max(mesh.CellSize * 2.0f, 0.5f)))
+                {
+                    // Each end joins the mesh within a meter (or the agent's radius past the edge it was baked back from).
+                    float reach = std::max(1.0f, mesh.AgentRadius + mesh.CellSize * 2.0f);
+                    int na = Nearest(mesh, a, reach), nb = Nearest(mesh, b, reach);
+                    if (na < 0 || nb < 0 || na == nb) continue;
+                    float cost = glm::distance(a, b) * std::max(link.CostModifier, 0.0f);
+                    out.push_back({ na, nb, a, b, cost, std::max(link.ArcHeight, 0.0f), e, !link.Activated });
+                    if (link.Bidirectional) out.push_back({ nb, na, b, a, cost, std::max(link.ArcHeight, 0.0f), e, !link.Activated });
+                }
             }
             // The bake's own (a little dearer than walking the same length, so they are used where they save a way round).
             for (const NavMeshData::AutoLink& l : mesh.AutoLinks)

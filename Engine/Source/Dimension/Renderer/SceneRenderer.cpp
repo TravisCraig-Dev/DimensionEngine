@@ -5776,6 +5776,29 @@ namespace Dimension
             const glm::mat4& w = reg.Get<TransformComponent>(e).World;
             glm::vec3 a = glm::vec3(w * glm::vec4(link.Start, 1.0f)), b = glm::vec3(w * glm::vec4(link.End, 1.0f));
             glm::vec4 color = link.Activated ? glm::vec4(1.0f, 0.55f, 0.2f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 0.8f);
+            if (link.Width > 0.0f)
+            {
+                // A wide link: its two edges across, and the arcs at its sides (the middle one is drawn below).
+                auto crossings = Navigation::LinkCrossings(w, link, 1e6f);
+                if (crossings.size() >= 2)
+                {
+                    const auto& [a0, b0] = crossings.front();
+                    const auto& [a1, b1] = crossings.back();
+                    DrawLine(a0, a1, color);
+                    DrawLine(b0, b1, color);
+                    for (const auto& [from, to] : { crossings.front(), crossings.back() })
+                    {
+                        glm::vec3 prev = from;
+                        for (int i = 1; i <= 16; ++i)
+                        {
+                            float s = i / 16.0f;
+                            glm::vec3 q = glm::mix(from, to, s) + glm::vec3(0.0f, std::max(link.ArcHeight, 0.0f) * 4.0f * s * (1.0f - s), 0.0f);
+                            DrawLine(prev, q, color * glm::vec4(1.0f, 1.0f, 1.0f, 0.6f));
+                            prev = q;
+                        }
+                    }
+                }
+            }
             glm::vec3 prev = a;
             for (int i = 1; i <= 16; ++i)
             {

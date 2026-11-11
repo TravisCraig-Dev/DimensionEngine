@@ -2279,6 +2279,8 @@ namespace Dimension
         public bool Activated { get => GetBool("Activated"); set => SetBool("Activated", value); }
         public float ArcHeight { get => GetFloat("Arc Height"); set => SetFloat("Arc Height", value); }
         public float CostModifier { get => GetFloat("Cost Modifier"); set => SetFloat("Cost Modifier", value); }
+        /// <summary>Across the way, in the object's space (0 = point to point): agents cross anywhere along it.</summary>
+        public float Width { get => GetFloat("Width"); set => SetFloat("Width", value); }
         public bool AgentsWait { get => GetBool("Agents Wait"); set => SetBool("Agents Wait", value); }
         /// <summary>An Animator state (or clip) played while an agent crosses ("" none).</summary>
         public string Animation { get => GetString("Animation"); set => SetString("Animation", value ?? ""); }

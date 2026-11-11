@@ -3551,6 +3551,62 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    void TestNavMeshWideLinks()
+    {
+        // Two ledges with a 3 m gap between them (z from -1.5 to 1.5), joined by a link 6 m wide (x from -3 to 3).
+        Scene scene("Gap");
+        auto& reg = scene.GetRegistry();
+        auto box = [&](const char* name, glm::vec3 at, glm::vec3 size) {
+            Entity e = scene.CreateEntity(name);
+            reg.Get<TransformComponent>(e).Position = at;
+            reg.Emplace<BoxColliderComponent>(e).Size = size;
+        };
+        box("South", { 0.0f, -0.5f, -8.0f }, { 20.0f, 1.0f, 13.0f });
+        box("North", { 0.0f, -0.5f, 8.0f }, { 20.0f, 1.0f, 13.0f });
+        Entity surface = scene.CreateEntity("Navigation");
+        auto& s = reg.Emplace<NavMeshSurfaceComponent>(surface);
+        s.Size = { 20.0f, 10.0f, 30.0f };
+        s.AgentRadius = 0.3f;
+        Entity bridge = scene.CreateEntity("Jump");
+        auto& link = reg.Emplace<OffMeshLinkComponent>(bridge);
+        link.Start = { 0.0f, 0.0f, -2.0f };
+        link.End = { 0.0f, 0.0f, 2.0f };
+        link.Width = 6.0f;
+        scene.UpdateTransforms();
+        CHECK(Navigation::Bake(scene, surface));
+
+        // Crossings every so often across it, the outermost at its edges.
+        auto crossings = Navigation::LinkCrossings(reg.Get<TransformComponent>(bridge).World, link, 1.0f);
+        CHECK(crossings.size() == 7 && Near(crossings.front().first, glm::vec3(-3.0f, 0.0f, -2.0f)) && Near(crossings.back().second, glm::vec3(3.0f, 0.0f, 2.0f)));
+        link.Width = 0.0f;
+        CHECK(Navigation::LinkCrossings(reg.Get<TransformComponent>(bridge).World, link, 1.0f).size() == 1);
+
+        // A path straight across at x = 2.5 crosses there; a point link makes it go round by the middle.
+        auto pathLength = [&](float width, float* crossX) {
+            link.Width = width;
+            std::vector<glm::vec3> corners;
+            if (Navigation::CalculatePath(scene, { 2.5f, 0.0f, -6.0f }, { 2.5f, 0.0f, 6.0f }, corners) != NavPathStatus::Complete) return -1.0f;
+            float length = 0.0f;
+            for (size_t i = 0; i + 1 < corners.size(); ++i)
+            {
+                length += glm::distance(corners[i], corners[i + 1]);
+                if (corners[i].z < -1.0f && corners[i + 1].z > 1.0f) *crossX = corners[i].x;
+            }
+            return length;
+        };
+        float wideX = -100.0f, pointX = -100.0f;
+        float wide = pathLength(6.0f, &wideX), point = pathLength(0.0f, &pointX);
+        CHECK(wide > 0.0f && point > 0.0f && std::abs(wideX - 2.5f) < 0.6f && std::abs(pointX) < 0.1f && wide < point - 0.5f);
+        // Beyond its width there is no crossing: a path at x = 8 comes in to the link's edge.
+        link.Width = 6.0f;
+        std::vector<glm::vec3> corners;
+        CHECK(Navigation::CalculatePath(scene, { 8.0f, 0.0f, -6.0f }, { 8.0f, 0.0f, 6.0f }, corners) == NavPathStatus::Complete);
+        float farX = -100.0f;
+        for (size_t i = 0; i + 1 < corners.size(); ++i)
+            if (corners[i].z < -1.0f && corners[i + 1].z > 1.0f) farX = corners[i].x;
+        CHECK(std::abs(farX - 3.0f) < 0.6f);
+    }
+
     void TestNavMeshModifiers()
     {
         // The yard with modifiers: the wall left out of the bake, a road slab (Road, cost 0.5) with a child slab that
@@ -16024,6 +16080,7 @@ int main(int argc, char** argv)
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh saved with the scene", TestNavMeshSaved);
     Run("NavMesh modifiers", TestNavMeshModifiers);
+    Run("NavMesh wide links", TestNavMeshWideLinks);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);

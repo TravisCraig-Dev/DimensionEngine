@@ -128,6 +128,9 @@ namespace Dimension
             bool Closed = false;           // not Activated (agents wait at it)
         };
         std::vector<Link> LinksOn(Scene& scene, const NavMeshData& mesh);
+        // An Off Mesh Link's crossings in the world: its Start and End, or with a Width a row of them `spacing` apart
+        // across it (the outermost at its edges).
+        std::vector<std::pair<glm::vec3, glm::vec3>> LinkCrossings(const glm::mat4& world, const OffMeshLinkComponent& link, float spacing);
         // The shortest way from one point to another (lengths times the areas' costs): its corners, from `from` (on
         // the mesh) to `to` (or, when `to` cannot be reached, to the nearest reachable spot: Partial).
         // `linkArcs` (optional) gets, per corner, -1 or the arc height of the off-mesh link from it to the next corner.
