@@ -19,7 +19,14 @@
 #include <miniaudio.h>
 #include <extras/nodes/ma_reverb_node/ma_reverb_node.c>
 #undef STB_VORBIS_HEADER_ONLY
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4701) // (third-party: a variable MSVC cannot prove set)
+#endif
 #include <extras/stb_vorbis.c>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 // Opus (.opus, Ogg Opus) through libopus + opusfile, as a custom miniaudio decoding backend.
 #include <extras/decoders/libopus/miniaudio_libopus.c>
 

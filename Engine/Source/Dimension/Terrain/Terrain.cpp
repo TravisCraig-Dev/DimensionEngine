@@ -536,12 +536,12 @@ namespace Dimension::Terrain
                     {
                         bool target = (mode == BrushMode::PlaceTrees && k == 0) || (mode == BrushMode::PlaceGrass && k == 1);
                         if (mode != BrushMode::EraseDetails && !target) continue;
-                        uint8_t& d = terrain.EditDetails[i * 2 + k];
-                        float v = d / 255.0f;
+                        uint8_t& density = terrain.EditDetails[i * 2 + k];
+                        float v = density / 255.0f;
                         v += ((target ? 1.0f : 0.0f) - v) * amount;
                         int next = std::clamp((int)std::lround(v * 255.0f), 0, 255);
-                        if (next == d && amount > 0.0f) next = std::clamp(d + (target ? 1 : -1), 0, 255); // rounding would stall it
-                        d = (uint8_t)next;
+                        if (next == density && amount > 0.0f) next = std::clamp(density + (target ? 1 : -1), 0, 255); // rounding would stall it
+                        density = (uint8_t)next;
                     }
                     continue;
                 }

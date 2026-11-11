@@ -71,6 +71,9 @@ namespace Dimension
         public Texture Texture => new(Guid);
         public static implicit operator Texture(Texture2D t) => t?.Texture ?? default;
 
+        /// <param name="width">Pixels across.</param>
+        /// <param name="height">Pixels down.</param>
+        /// <param name="filter">How it is sampled between pixels.</param>
         /// <param name="linear">Data rather than colors (normal maps, masks): not sRGB.</param>
         public Texture2D(int width, int height, FilterMode filter = FilterMode.Bilinear, bool linear = false)
         {

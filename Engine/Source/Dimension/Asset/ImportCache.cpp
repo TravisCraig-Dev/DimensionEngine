@@ -212,11 +212,11 @@ namespace Dimension::ImportCache
         m.Images.resize(r.Count(1));
         for (ImportedImage& im : m.Images)
         {
-            std::string file;
+            std::string stored;
             r.Str(im.Name);
-            r.Str(file);
-            if (file.starts_with("assets:")) im.File = Project::GetAssetsDirectory() / Utf8Path(file.substr(7));
-            else im.File = Utf8Path(file);
+            r.Str(stored);
+            if (stored.starts_with("assets:")) im.File = Project::GetAssetsDirectory() / Utf8Path(stored.substr(7));
+            else im.File = Utf8Path(stored);
             r.Vec(im.Bytes);
         }
         if (!r.Ok || r.P != r.End) return false;

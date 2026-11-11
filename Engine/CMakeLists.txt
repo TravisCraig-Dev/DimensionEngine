@@ -4,6 +4,10 @@ file(GLOB DIM_SHADERS CONFIGURE_DEPENDS Shaders/*.vert Shaders/*.frag Shaders/*.
 # The engine is a DLL so that the editor, the player and hot-reloadable game
 # modules all share a single copy of engine state (registries, input, assets, ImGui).
 add_library(DimensionEngine SHARED ${DIM_ENGINE_SOURCES} ${DIM_IMGUI_SOURCES})
+if(MSVC)
+    # Third-party: ImGuizmo's signed/unsigned ImGuiID conversions.
+    set_source_files_properties(${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp PROPERTIES COMPILE_OPTIONS /wd4245)
+endif()
 # Every symbol is exported (the editor, player and game modules use the engine's classes directly), as
 # WINDOWS_EXPORT_ALL_SYMBOLS would, except lambdas' (over 11000, never used across modules): with them the import
 # library passes Windows' limit of 65535 symbols (LNK1189).

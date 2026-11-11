@@ -678,7 +678,7 @@ namespace Dimension
             foreach (Type t in chain)
                 foreach (FieldInfo f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    if (!IsSupported(f.FieldType, depth) || f.IsInitOnly || f.IsNotSerialized) continue;
+                    if (!IsSupported(f.FieldType, depth) || f.IsInitOnly || f.IsDefined(typeof(NonSerializedAttribute), false)) continue;
                     if (!f.IsPublic && f.GetCustomAttribute<SerializeFieldAttribute>() == null) continue;
                     yield return f;
                 }

@@ -1844,7 +1844,6 @@ namespace Dimension::UI
             if (composing)
                 keys.Backspace = keys.Delete = keys.Left = keys.Right = keys.LineUp = keys.LineDown = keys.Home = keys.End = keys.Enter = keys.Tab =
                     keys.SelectAll = keys.Cut = keys.Paste = false;
-            const PointerState& pointer = keys; // (from here on)
             std::string before = text;
             int32_t caretBefore = field.Caret, anchorBefore = field.SelectionAnchor;
             auto hasSelection = [&] { return field.SelectionAnchor >= 0 && field.SelectionAnchor != field.Caret; };
@@ -1879,7 +1878,7 @@ namespace Dimension::UI
                 field.SelectionAnchor = -1;
             };
             auto moveCaret = [&](size_t to) {
-                if (pointer.Shift)
+                if (keys.Shift)
                 {
                     if (field.SelectionAnchor < 0) field.SelectionAnchor = field.Caret;
                 }
@@ -1888,77 +1887,77 @@ namespace Dimension::UI
                 field.Caret = (int32_t)to;
             };
 
-            if (pointer.SelectAll)
+            if (keys.SelectAll)
             {
                 field.SelectionAnchor = 0;
                 field.Caret = (int32_t)text.size();
             }
-            if ((pointer.Copy || pointer.Cut) && hasSelection() && pointer.SetClipboard)
-                pointer.SetClipboard(text.substr(selectionLo(), selectionHi() - selectionLo()));
-            if (pointer.Cut) eraseSelection();
-            if (pointer.Paste) insert(pointer.PasteText);
-            if (!pointer.Text.empty()) insert(pointer.Text);
-            if (pointer.Backspace && !eraseSelection())
+            if ((keys.Copy || keys.Cut) && hasSelection() && keys.SetClipboard)
+                keys.SetClipboard(text.substr(selectionLo(), selectionHi() - selectionLo()));
+            if (keys.Cut) eraseSelection();
+            if (keys.Paste) insert(keys.PasteText);
+            if (!keys.Text.empty()) insert(keys.Text);
+            if (keys.Backspace && !eraseSelection())
             {
-                size_t from = pointer.Ctrl ? WordLeft(text, field.Caret) : PrevCodepoint(text, field.Caret);
+                size_t from = keys.Ctrl ? WordLeft(text, field.Caret) : PrevCodepoint(text, field.Caret);
                 text.erase(from, field.Caret - from);
                 field.Caret = (int32_t)from;
             }
-            if (pointer.Delete && !eraseSelection())
+            if (keys.Delete && !eraseSelection())
             {
-                size_t to = pointer.Ctrl ? WordRight(text, field.Caret) : NextCodepoint(text, field.Caret);
+                size_t to = keys.Ctrl ? WordRight(text, field.Caret) : NextCodepoint(text, field.Caret);
                 text.erase(field.Caret, to - field.Caret);
             }
-            if (pointer.Left)
+            if (keys.Left)
             {
-                if (!pointer.Shift && hasSelection()) { field.Caret = (int32_t)selectionLo(); field.SelectionAnchor = -1; }
-                else moveCaret(pointer.Ctrl ? WordLeft(text, field.Caret) : PrevCodepoint(text, field.Caret));
+                if (!keys.Shift && hasSelection()) { field.Caret = (int32_t)selectionLo(); field.SelectionAnchor = -1; }
+                else moveCaret(keys.Ctrl ? WordLeft(text, field.Caret) : PrevCodepoint(text, field.Caret));
             }
-            if (pointer.Right)
+            if (keys.Right)
             {
-                if (!pointer.Shift && hasSelection()) { field.Caret = (int32_t)selectionHi(); field.SelectionAnchor = -1; }
-                else moveCaret(pointer.Ctrl ? WordRight(text, field.Caret) : NextCodepoint(text, field.Caret));
+                if (!keys.Shift && hasSelection()) { field.Caret = (int32_t)selectionHi(); field.SelectionAnchor = -1; }
+                else moveCaret(keys.Ctrl ? WordRight(text, field.Caret) : NextCodepoint(text, field.Caret));
             }
-            if (field.MultiLine && (pointer.LineUp || pointer.LineDown))
+            if (field.MultiLine && (keys.LineUp || keys.LineDown))
             {
                 // Same x on the line above/below; past the first/last line, to the start/end.
                 TextLines lines = LayoutLines(text, wrapWidth, px);
                 size_t line = LineOf(lines.Starts, (size_t)field.Caret);
                 float x = MeasureText(text.substr(lines.Starts[line], field.Caret - lines.Starts[line]), px);
-                if (pointer.LineUp && line == 0) moveCaret(0);
-                else if (pointer.LineDown && line + 1 >= lines.Starts.size()) moveCaret(text.size());
+                if (keys.LineUp && line == 0) moveCaret(0);
+                else if (keys.LineDown && line + 1 >= lines.Starts.size()) moveCaret(text.size());
                 else
                 {
-                    size_t to = pointer.LineUp ? line - 1 : line + 1, a = lines.Starts[to], b = lines.Ends[to];
+                    size_t to = keys.LineUp ? line - 1 : line + 1, a = lines.Starts[to], b = lines.Ends[to];
                     size_t caret = a + CaretFromX(text.substr(a, b - a), x, px);
                     if (lines.Wrapped(to) && caret == b && b > a) caret = PrevCodepoint(text, b);
                     moveCaret(caret);
                 }
             }
-            if (field.MultiLine && !pointer.Ctrl && (pointer.Home || pointer.End))
+            if (field.MultiLine && !keys.Ctrl && (keys.Home || keys.End))
             {
                 TextLines lines = LayoutLines(text, wrapWidth, px);
                 size_t line = LineOf(lines.Starts, (size_t)field.Caret);
                 size_t end = lines.Ends[line];
                 if (lines.Wrapped(line) && end > lines.Starts[line]) end = PrevCodepoint(text, end); // before the break
-                moveCaret(pointer.Home ? lines.Starts[line] : end);
+                moveCaret(keys.Home ? lines.Starts[line] : end);
             }
             else
             {
-                if (pointer.Home) moveCaret(0);
-                if (pointer.End) moveCaret(text.size());
+                if (keys.Home) moveCaret(0);
+                if (keys.End) moveCaret(text.size());
             }
-            if (pointer.Tab)
+            if (keys.Tab)
             {
                 tabFrom = e;
-                tabBackwards = pointer.Shift;
+                tabBackwards = keys.Shift;
             }
 
-            bool newline = pointer.Enter && field.MultiLine && !pointer.Ctrl;
+            bool newline = keys.Enter && field.MultiLine && !keys.Ctrl;
             if (newline) insert("\n");
             if (text != before || field.Caret != caretBefore || field.SelectionAnchor != anchorBefore) field.CaretTime = 0.0f;
             if (text != before) texts.emplace_back(e, text, false);
-            if (pointer.Enter && !newline)
+            if (keys.Enter && !newline)
             {
                 field.Focused = false;
                 field.SelectionAnchor = -1;

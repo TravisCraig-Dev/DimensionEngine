@@ -1255,22 +1255,9 @@ namespace Dimension
         public float Torque => State(3);
     }
 
-    /// <summary>Limits, spring and breaking of a 3D joint (see Joint for the motor).</summary>
+    /// <summary>A 3D joint: limits, spring, breaking and motor all come from Joint (kept as a name for older scripts).</summary>
     public unsafe class Joint3D : Joint
     {
-        public bool UseLimits { get => GetBool("Use Limits"); set => SetBool("Use Limits", value); }
-        /// <summary>Hinge limits in degrees.</summary>
-        public float MinAngle { get => GetFloat("Min Angle"); set => SetFloat("Min Angle", value); }
-        public float MaxAngle { get => GetFloat("Max Angle"); set => SetFloat("Max Angle", value); }
-        /// <summary>Distance joint limits (m).</summary>
-        public float MinDistance { get => GetFloat("Min Distance"); set => SetFloat("Min Distance", value); }
-        public float MaxDistance { get => GetFloat("Max Distance"); set => SetFloat("Max Distance", value); }
-        public float SpringFrequency { get => GetFloat("Spring Frequency"); set => SetFloat("Spring Frequency", value); }
-        public float SpringDamping { get => GetFloat("Spring Damping"); set => SetFloat("Spring Damping", value); }
-        public float MotorMaxTorque { get => GetFloat("Motor Max Torque"); set => SetFloat("Motor Max Torque", value); }
-        /// <summary>Force (N) and torque (N*m) at which the joint breaks; 0 = unbreakable.</summary>
-        public float BreakForce { get => GetFloat("Break Force"); set => SetFloat("Break Force", value); }
-        public float BreakTorque { get => GetFloat("Break Torque"); set => SetFloat("Break Torque", value); }
     }
 
     /// <summary>Drives a Vehicle (car, motorcycle or tank) and reads its state.</summary>

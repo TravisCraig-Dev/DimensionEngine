@@ -1554,8 +1554,8 @@ namespace Dimension
         }
         if (underwaterFog)
         {
-            uint32_t depth = target.GetDepthBindless();
-            FullscreenPass(cmd, target.GetHdr(), true, res.Underwater, &depth, sizeof(depth));
+            uint32_t depthTexture = target.GetDepthBindless();
+            FullscreenPass(cmd, target.GetHdr(), true, res.Underwater, &depthTexture, sizeof(depthTexture));
         }
         if (taa)
         {
@@ -5556,7 +5556,7 @@ namespace Dimension
         if (auto* vehicle = reg.TryGet<VehicleComponent>(sel))
         {
             // Each wheel at full suspension extension, with its travel from the mount (the body's scale does not apply).
-            const glm::vec4 green{ 0.45f, 1.0f, 0.5f, 1.0f };
+            const glm::vec4 wheelGreen{ 0.45f, 1.0f, 0.5f, 1.0f };
             glm::mat4 body = glm::translate(glm::mat4(1.0f), t.GetWorldPosition()) * glm::toMat4(glm::quat_cast(glm::mat3(glm::normalize(glm::vec3(t.World[0])),
                                                                                                                          glm::normalize(glm::vec3(t.World[1])),
                                                                                                                          glm::normalize(glm::vec3(t.World[2])))));
@@ -5576,8 +5576,8 @@ namespace Dimension
             {
                 glm::vec3 center = mount - glm::vec3(0.0f, drop, 0.0f);
                 for (float side : { -0.5f, 0.5f })
-                    DrawWireCircle(body, center + glm::vec3(side * vehicle->WheelWidth, 0.0f, 0.0f), vehicle->WheelRadius, green, 0);
-                DrawLine(glm::vec3(body * glm::vec4(mount, 1.0f)), glm::vec3(body * glm::vec4(center, 1.0f)), green);
+                    DrawWireCircle(body, center + glm::vec3(side * vehicle->WheelWidth, 0.0f, 0.0f), vehicle->WheelRadius, wheelGreen, 0);
+                DrawLine(glm::vec3(body * glm::vec4(mount, 1.0f)), glm::vec3(body * glm::vec4(center, 1.0f)), wheelGreen);
             }
         }
         if (auto* probe = reg.TryGet<ReflectionProbeComponent>(sel))
@@ -5633,7 +5633,6 @@ namespace Dimension
         }
         if (auto* cc = reg.TryGet<CharacterControllerComponent>(sel))
         {
-            const glm::vec4 green{ 0.4f, 1.0f, 0.4f, 1.0f };
             glm::vec3 center = t.GetWorldPosition() + cc->Center;
             float r = cc->Radius, half = std::max(0.0f, cc->Height * 0.5f - r);
             glm::mat4 top = glm::translate(glm::mat4(1.0f), center + glm::vec3(0, half, 0));
