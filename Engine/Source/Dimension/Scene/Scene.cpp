@@ -1455,7 +1455,15 @@ namespace Dimension
                 if (tree) sampleTree(*machine, pb.Runtime, *tree, pb.Runtime.StateTime, out);
                 else
                 {
+                    float before = pb.Time;
                     advance(pb.Time, clip);
+                    // The clip's own events the playhead passed (as a state's do).
+                    if (clip && !clip->Events.empty() && dt > 0.0f && pb.Playing)
+                    {
+                        std::vector<std::string> passed;
+                        clip->EventsBetween(before, pb.Time, pb.Loop, passed);
+                        if (!passed.empty()) firedEvents.emplace_back(e, std::move(passed));
+                    }
                     if (clip) Animation::Sample(*skeleton, *clip, pb.Time, out);
                     else out.SetBindPose(*skeleton);
                 }

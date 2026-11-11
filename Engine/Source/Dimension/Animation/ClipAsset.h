@@ -32,6 +32,7 @@ namespace Dimension
             std::vector<glm::vec4> InTangents, OutTangents;
         };
         std::vector<Channel> Channels;
+        std::vector<AnimationClip::Event> Events; // in time order (OnAnimationEvent(function) when playback passes one)
         uint64_t Version = 0; // bumped on every edit (clips made from it are made again)
 
         static Ref<AnimationClipAsset> Load(const fs::path& path);
@@ -53,6 +54,9 @@ namespace Dimension
         bool RemoveKeys(const std::string& joint, float time);   // every channel of the joint at that time
         bool MoveKeys(const std::string& joint, float from, float to);
         bool HasKey(const std::string& joint, float time) const;
+        // Events: added (kept in time order; returns its index), moved (its new index).
+        int AddEvent(float time, const std::string& function);
+        int MoveEvent(int index, float time);
         static constexpr float kKeyTolerance = 1.0f / 120.0f;
 
         // Tangents set by hand (the curve view's handles): the channel keeps explicit spline tangents (a Smooth or

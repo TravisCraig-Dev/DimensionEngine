@@ -31,6 +31,9 @@ namespace Dimension
             clip->Name = j.value("name", clip->Name);
             clip->Duration = std::max(j.value("duration", 1.0f), 0.01f);
             clip->Loop = j.value("loop", true);
+            for (auto& e : j.value("events", json::array()))
+                if (e.is_object()) clip->Events.push_back({ std::clamp(e.value("time", 0.0f), 0.0f, clip->Duration), e.value("function", std::string()) });
+            std::stable_sort(clip->Events.begin(), clip->Events.end(), [](const auto& a, const auto& b) { return a.Time < b.Time; });
             for (auto& c : j.value("channels", json::array()))
             {
                 Channel ch;
@@ -90,6 +93,12 @@ namespace Dimension
             channels.push_back(entry);
         }
         json j{ { "model", (uint64_t)Model }, { "name", Name }, { "duration", Duration }, { "loop", Loop }, { "channels", channels } };
+        if (!Events.empty())
+        {
+            json events = json::array();
+            for (const auto& e : Events) events.push_back({ { "time", e.Time }, { "function", e.Function } });
+            j["events"] = events;
+        }
         std::ofstream out(path);
         if (!out) return false;
         out << j.dump(1);
@@ -101,6 +110,7 @@ namespace Dimension
         AnimationClipAsset a;
         a.Name = clip.Name;
         a.Duration = std::max(clip.Duration, 0.01f);
+        a.Events = clip.Events;
         for (const AnimationChannel& ch : clip.Channels)
         {
             if (ch.Joint < 0 || ch.Joint >= (int)skeleton.Joints.size()) continue;
@@ -136,6 +146,7 @@ namespace Dimension
         AnimationClip clip;
         clip.Name = Name;
         clip.Duration = Duration;
+        clip.Events = Events;
         for (const Channel& c : Channels)
         {
             if (IsBlendShape(c.Joint))
@@ -358,6 +369,24 @@ namespace Dimension
         }
         if (moved) ++Version;
         return moved;
+    }
+
+    int AnimationClipAsset::AddEvent(float time, const std::string& function)
+    {
+        time = std::clamp(time, 0.0f, Duration);
+        auto at = std::upper_bound(Events.begin(), Events.end(), time, [](float t, const AnimationClip::Event& e) { return t < e.Time; });
+        int index = (int)(at - Events.begin());
+        Events.insert(at, { time, function });
+        ++Version;
+        return index;
+    }
+
+    int AnimationClipAsset::MoveEvent(int index, float time)
+    {
+        if (index < 0 || index >= (int)Events.size()) return -1;
+        AnimationClip::Event e = Events[index];
+        Events.erase(Events.begin() + index);
+        return AddEvent(time, e.Function);
     }
 
     bool AnimationClipAsset::HasKey(const std::string& joint, float time) const

@@ -7022,6 +7022,28 @@ namespace
         turn.SetKey(joint, AnimationPath::Rotation, 2.0f, { -r2.x, -r2.y, -r2.z, -r2.w });
         CHECK(glm::dot(rc.Values[1], rc.Values[2]) > 0.0f);
 
+        // Events on a clip: kept in time order, saved with it, and passed by playback (across a loop's wrap too).
+        AnimationClipAsset stepping;
+        stepping.Duration = 2.0f;
+        CHECK(stepping.AddEvent(1.5f, "OnStepRight") == 0 && stepping.AddEvent(0.5f, "OnStepLeft") == 0 && stepping.AddEvent(9.0f, "OnEnd") == 2);
+        CHECK(Near(stepping.Events[2].Time, 2.0f) && stepping.MoveEvent(1, 0.2f) == 0 && stepping.Events[0].Function == "OnStepRight");
+        stepping.MoveEvent(0, 1.5f);
+        fs::path eventFile = fs::temp_directory_path() / "dimension_events.anim";
+        CHECK(stepping.Save(eventFile));
+        auto eventsBack = AnimationClipAsset::Load(eventFile);
+        fs::remove(eventFile);
+        CHECK(eventsBack->Events.size() == 3 && eventsBack->Events[0].Function == "OnStepLeft" && Near(eventsBack->Events[1].Time, 1.5f));
+        AnimationClip walk = eventsBack->ToClip(skeleton);
+        std::vector<std::string> passed;
+        walk.EventsBetween(0.4f, 0.6f, true, passed);
+        CHECK(passed.size() == 1 && passed[0] == "OnStepLeft");
+        passed.clear();
+        walk.EventsBetween(1.9f, 0.55f, true, passed); // wrapped: the end, then round to 0.55
+        CHECK(passed.size() == 2 && passed[0] == "OnEnd" && passed[1] == "OnStepLeft");
+        passed.clear();
+        walk.EventsBetween(1.9f, 0.55f, false, passed); // (not looping: going back passes nothing)
+        CHECK(passed.empty());
+
         // As project assets: saved and loaded, listed for their model, and a version that changes with every edit.
         fs::path assets = fs::temp_directory_path() / "dimension_clip_assets" / "Assets";
         fs::remove_all(assets.parent_path());

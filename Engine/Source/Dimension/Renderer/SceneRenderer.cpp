@@ -1268,7 +1268,6 @@ namespace Dimension
         if (!m_BlendJobs.empty())
         {
             // Blend shapes into this list's vertex streams, before any pass draws them.
-            auto& device = RenderDevice::Get();
             Renderer::Get().BlendShapes.Bind(cmd);
             device.BindBindless(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
             for (const BlendJob& job : m_BlendJobs)

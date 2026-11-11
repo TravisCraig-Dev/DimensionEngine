@@ -49,6 +49,16 @@ namespace Dimension
         // model's blend shapes, Values[k].x its weight (0..1), Path Translation (plain values). Kept apart from the
         // joint channels.
         std::vector<AnimationChannel> WeightChannels;
+        // Animation events (like Unity's on a clip): at a time (seconds), the function scripts get in OnAnimationEvent.
+        struct Event
+        {
+            float Time = 0.0f;
+            std::string Function;
+        };
+        std::vector<Event> Events;
+        // The events a playhead passes going from `from` to `to` (seconds; with `loop`, across the wrap when `to` is
+        // below `from`), in order.
+        void EventsBetween(float from, float to, bool loop, std::vector<std::string>& out) const;
     };
 
     // Local joint transforms.

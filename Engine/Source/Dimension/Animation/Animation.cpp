@@ -88,6 +88,21 @@ namespace Dimension
         return -1;
     }
 
+    void AnimationClip::EventsBetween(float from, float to, bool loop, std::vector<std::string>& out) const
+    {
+        if (Events.empty() || from == to) return;
+        auto range = [&](float a, float b, bool includeStart) {
+            for (const Event& e : Events)
+                if ((includeStart ? e.Time >= a : e.Time > a) && e.Time <= b) out.push_back(e.Function);
+        };
+        if (to > from) range(from, to, false);
+        else if (loop)
+        {
+            range(from, Duration, false); // to the end, then round from the start
+            range(0.0f, to, true);
+        }
+    }
+
     void Pose::SetBindPose(const Skeleton& skeleton)
     {
         size_t n = skeleton.Joints.size();
@@ -445,6 +460,7 @@ namespace Dimension
             AnimationClip out;
             out.Name = clip.Name;
             out.Duration = clip.Duration;
+            out.Events = clip.Events;
             for (const AnimationChannel& ch : clip.Channels)
             {
                 if (ch.Joint < 0 || ch.Joint >= (int)source.Joints.size()) continue;
@@ -922,6 +938,7 @@ namespace Dimension
             AnimationClip out;
             out.Name = clip.Name;
             out.Duration = clip.Duration;
+            out.Events = clip.Events;
             for (size_t j = 0; j < channels.size(); ++j)
                 if (sourceOf[j] >= 0)
                 {

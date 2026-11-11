@@ -240,7 +240,8 @@ namespace Editor
         // ---- Joints and their keys (a dope sheet), then the selected joint's values ----
         const float labelW = 220.0f, rowH = ImGui::GetFrameHeight(), inset = 8.0f;
         const float curveH = 120.0f;
-        float detailH = m_Joint >= 0 ? ImGui::GetFrameHeightWithSpacing() * 3.0f + curveH + 12.0f : ImGui::GetFrameHeightWithSpacing() * (m_Shape >= 0 ? 2.0f : 1.0f) + 4.0f;
+        float detailH = m_Joint >= 0 ? ImGui::GetFrameHeightWithSpacing() * 3.0f + curveH + 12.0f
+                                     : ImGui::GetFrameHeightWithSpacing() * (m_Shape >= 0 || m_Event >= 0 ? 2.0f : 1.0f) + 4.0f;
         ImGui::BeginChild("##sheet", ImVec2(0, -detailH), ImGuiChildFlags_Borders);
         float stripW = std::max(ImGui::GetContentRegionAvail().x - labelW - 6.0f, 80.0f);
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -266,6 +267,70 @@ namespace Editor
             dl->AddText(ImVec2(x + 2, r0.y), IM_COL32(150, 150, 160, 255), buf);
         }
         for (float t : KeyTimes(asset, nullptr)) diamond(timeToX(r0.x, t), r0.y + rowH * 0.72f, IM_COL32(160, 160, 170, 255));
+
+        // Events: markers on a row of their own (click one to select it, drag to move it, right-click to delete it).
+        if (m_Event >= (int)asset.Events.size()) m_Event = -1;
+        {
+            if (playing) ImGui::BeginDisabled();
+            if (ImGui::SmallButton("+ Event"))
+            {
+                m_Event = asset.AddEvent(m_Time, "OnEvent");
+                m_Joint = m_Shape = -1;
+                m_Selected.clear();
+                changed = commit = true;
+            }
+            if (playing) ImGui::EndDisabled();
+            ImGui::SetItemTooltip("Add an event at the current time: scripts' OnAnimationEvent(name) is called when playback passes it");
+            ImGui::SameLine(labelW);
+            ImVec2 e0 = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##events", ImVec2(stripW, rowH));
+            bool hovered = ImGui::IsItemHovered();
+            dl->AddRectFilled(e0, ImVec2(e0.x + stripW, e0.y + rowH), IM_COL32(38, 36, 30, 255), 3.0f);
+            int hit = -1;
+            for (int i = 0; i < (int)asset.Events.size(); ++i)
+            {
+                float x = timeToX(e0.x, asset.Events[i].Time);
+                ImU32 col = i == m_Event ? IM_COL32(255, 210, 90, 255) : IM_COL32(230, 180, 90, 255);
+                dl->AddRectFilled(ImVec2(x - 2.0f, e0.y + 3.0f), ImVec2(x + 2.0f, e0.y + rowH - 3.0f), col, 1.0f);
+                dl->AddTriangleFilled(ImVec2(x - 6.0f, e0.y + 3.0f), ImVec2(x + 6.0f, e0.y + 3.0f), ImVec2(x, e0.y + 9.0f), col);
+                if (hovered && std::abs(mouseX - timeToX(e0.x, asset.Events[i].Time)) < 6.0f) hit = i;
+            }
+            if (ImGui::IsItemClicked())
+            {
+                m_Event = hit;
+                m_EventDragging = hit >= 0 && !playing;
+                if (hit >= 0)
+                {
+                    m_Joint = m_Shape = -1;
+                    m_Selected.clear();
+                    m_Time = asset.Events[hit].Time;
+                }
+                else
+                    m_Time = xToTime(e0.x, mouseX);
+            }
+            if (hovered && hit >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !playing)
+            {
+                asset.Events.erase(asset.Events.begin() + hit);
+                ++asset.Version;
+                m_Event = -1;
+                changed = commit = true;
+            }
+            if (m_EventDragging && m_Event >= 0 && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f))
+            {
+                float to = xToTime(e0.x, mouseX);
+                if (std::abs(to - asset.Events[m_Event].Time) > 1e-4f)
+                {
+                    m_Event = asset.MoveEvent(m_Event, to);
+                    m_Time = to;
+                    changed = true;
+                }
+            }
+            if (ImGui::IsItemDeactivated() && m_EventDragging)
+            {
+                m_EventDragging = false;
+                commit = true;
+            }
+        }
 
         std::string pendingRemove;
         float removeAt = 0.0f;
@@ -296,6 +361,7 @@ namespace Editor
                 m_Selected = { j };
             m_Joint = j;
             m_Shape = -1;
+            m_Event = -1;
         };
         auto selectedNames = [&]() {
             std::vector<std::string> names;
@@ -369,6 +435,7 @@ namespace Editor
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
             if (ImGui::Selectable(shapeNames[s].c_str(), selected, 0, ImVec2(labelW - 22.0f, rowH)))
             {
+                m_Event = -1;
                 m_Shape = s;
                 m_Joint = -1;
                 m_Selected.clear();
@@ -717,6 +784,37 @@ namespace Editor
             if (!keyInfo.empty()) cdl->AddText(ImVec2(c0.x + 6, c0.y + curveH - ImGui::GetFontSize() - 3), IM_COL32(210, 210, 220, 255), keyInfo.c_str());
             cdl->PopClipRect();
         }
+        else if (m_Event >= 0 && m_Event < (int)asset.Events.size())
+        {
+            // The selected event: its function name and time.
+            auto& ev = asset.Events[m_Event];
+            ImGui::TextUnformatted("Event");
+            ImGui::SameLine(labelW);
+            if (playing) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(220);
+            if (ImGui::InputText("Function", &ev.Function)) changed = true;
+            if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
+            ImGui::SetItemTooltip("Scripts on the object get OnAnimationEvent with this name when playback passes the event");
+            ImGui::SameLine();
+            float t = ev.Time;
+            ImGui::SetNextItemWidth(90);
+            if (ImGui::DragFloat("Time", &t, 0.005f, 0.0f, asset.Duration, "%.3f s"))
+            {
+                m_Event = asset.MoveEvent(m_Event, t);
+                m_Time = t;
+                changed = true;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
+            ImGui::SameLine();
+            if (ImGui::Button("Delete Event"))
+            {
+                asset.Events.erase(asset.Events.begin() + m_Event);
+                ++asset.Version;
+                m_Event = -1;
+                changed = commit = true;
+            }
+            if (playing) ImGui::EndDisabled();
+        }
         else if (m_Shape >= 0)
         {
             // The selected blend shape's weight at the current time (0..100): editing it keys it there.
@@ -753,7 +851,7 @@ namespace Editor
             if (playing) ImGui::EndDisabled();
         }
         else
-            ImGui::TextDisabled("Select a joint to see and key its rotation and position, or a blend shape its weight, at the current time.");
+            ImGui::TextDisabled("Select a joint to key its rotation and position, a blend shape its weight, or an event to name it (+ Event adds one).");
 
         if (changed)
         {
