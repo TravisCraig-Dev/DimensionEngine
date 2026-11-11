@@ -783,7 +783,7 @@ namespace Editor
             {
                 auto& t = stage->GetRegistry().Get<TransformComponent>(container);
                 t.Position = translation;
-                t.Rotation = glm::eulerAngles(rotation);
+                t.Rotation = EulerAngles(rotation);
                 t.Scale = scale;
             }
             stage->UpdateTransforms();
@@ -3231,7 +3231,7 @@ namespace Editor
                 if (glm::decompose(local, scale, rotation, translation, skew, perspective))
                 {
                     t.Position = translation;
-                    if (m_GizmoOperation == ImGuizmo::ROTATE) t.Rotation = glm::eulerAngles(rotation);
+                    if (m_GizmoOperation == ImGuizmo::ROTATE) t.Rotation = EulerAngles(rotation);
                     if (m_GizmoOperation == ImGuizmo::SCALE) t.Scale = scale;
                     m_Ctx.MarkDirty();
                 }
@@ -3247,7 +3247,7 @@ namespace Editor
                     if (glm::decompose(newLocal, scale, rotation, translation, skew, perspective))
                     {
                         ot.Position = translation;
-                        if (m_GizmoOperation == ImGuizmo::ROTATE) ot.Rotation = glm::eulerAngles(rotation);
+                        if (m_GizmoOperation == ImGuizmo::ROTATE) ot.Rotation = EulerAngles(rotation);
                         if (m_GizmoOperation == ImGuizmo::SCALE) ot.Scale = scale;
                     }
                 }

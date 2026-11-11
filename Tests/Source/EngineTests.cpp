@@ -1,5 +1,6 @@
 // Headless engine tests (no GPU/window needed). Run: ctest --preset debug, or DimensionTests.exe
 #include <Dimension/Core/AppRuntime.h>
+#include <random>
 #include <Dimension/Dimension.h>
 #include <Dimension/Scene/ComponentRegistry.h>
 #include <Dimension/Scene/SceneSerializer.h>
@@ -503,6 +504,24 @@ namespace
         CHECK(Near(corner.x, -5.0f * 800.0f / 600.0f, 1e-3f) && Near(corner.y, 5.0f, 1e-3f) && Near(corner.z, 6.0f, 1e-3f));
         ScreenPointToRay(scene, cam, { 800, 600 }, view, origin, dir);
         CHECK(Near(dir.z, -1.0f) && Near(origin.x, 5.0f * 800.0f / 600.0f, 1e-3f) && Near(origin.y, -5.0f, 1e-3f));
+    }
+
+    void TestEulerAnglesGimbal()
+    {
+        // Euler angles back to the same rotation, also at gimbal lock (Y at +-90 degrees), where glm's roll is noise.
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<float> angle(-3.14159f, 3.14159f);
+        float worst = 1.0f;
+        for (int i = 0; i < 20000; ++i)
+        {
+            float yaw = i % 3 == 0 ? 1.5707964f : i % 3 == 1 ? -1.5707964f : angle(rng) * 0.49f;
+            glm::quat q(glm::vec3(angle(rng), yaw, angle(rng)));
+            worst = std::min(worst, std::abs(glm::dot(q, glm::quat(EulerAngles(q)))));
+        }
+        CHECK(worst > 0.9999f);
+        // The case found by a transform job: a turn about X under a parent turned 90 degrees about Y.
+        glm::quat q = glm::inverse(glm::quat(glm::vec3(0.0f, glm::half_pi<float>(), 0.0f))) * glm::angleAxis(0.5f, glm::vec3(1, 0, 0));
+        CHECK(std::abs(glm::dot(q, glm::quat(EulerAngles(q)))) > 0.9999f);
     }
 
     void TestRuntimeAddComponent()
@@ -16620,6 +16639,7 @@ int main(int argc, char** argv)
     Run("Camera projection", TestCameraProjection);
     Run("Time scale and cursor", TestTimeScaleAndCursor);
     Run("Runtime AddComponent", TestRuntimeAddComponent);
+    Run("Euler angles at gimbal lock", TestEulerAnglesGimbal);
     Run("Script assemblies", TestScriptAssemblies);
     Run("2D physics queries", TestPhysics2DQueries);
     Run("3D shape casts and spin", TestPhysics3DCasts);

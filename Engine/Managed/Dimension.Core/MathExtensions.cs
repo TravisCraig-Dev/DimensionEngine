@@ -235,9 +235,13 @@ namespace Dimension
                     Quaternion n = Quaternion.Normalize(q);
                     float x = n.X, y = n.Y, z = n.Z, w = n.W;
                     float py = 2.0f * (y * z + w * x), px = w * w - x * x - y * y + z * z;
-                    float pitch = MathF.Abs(py) < 1e-6f && MathF.Abs(px) < 1e-6f ? 2.0f * MathF.Atan2(x, w) : MathF.Atan2(py, px);
+                    float ry = 2.0f * (x * y + w * z), rx = w * w + x * x - y * y - z * z;
                     float yaw = MathF.Asin(Math.Clamp(-2.0f * (x * z - w * y), -1.0f, 1.0f));
-                    float roll = MathF.Atan2(2.0f * (x * y + w * z), w * w + x * x - y * y - z * z);
+                    // Gimbal lock (yaw +-90): roll's terms are rounding noise (glm's often gives 180, turning the
+                    // object over); roll is 0 and pitch takes the whole turn (as the engine's EulerAngles).
+                    if (MathF.Abs(ry) < 1e-6f && MathF.Abs(rx) < 1e-6f) return new Vector3(2.0f * MathF.Atan2(x, w), yaw, 0.0f) * Mathf.Rad2Deg;
+                    float pitch = MathF.Abs(py) < 1e-6f && MathF.Abs(px) < 1e-6f ? 2.0f * MathF.Atan2(x, w) : MathF.Atan2(py, px);
+                    float roll = MathF.Atan2(ry, rx);
                     return new Vector3(pitch, yaw, roll) * Mathf.Rad2Deg;
                 }
             }

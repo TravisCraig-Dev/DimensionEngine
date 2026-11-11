@@ -94,7 +94,7 @@ namespace Editor
         // A rotation key as the curve view shows it: Euler angles in degrees.
         glm::vec3 EulerDegrees(const glm::vec4& v)
         {
-            return glm::degrees(glm::eulerAngles(glm::normalize(glm::quat(v.w, v.x, v.y, v.z))));
+            return glm::degrees(EulerAngles(glm::normalize(glm::quat(v.w, v.x, v.y, v.z))));
         }
 
         // A key's tangent as the curve view shows it (change per second of each drawn value: Euler degrees for
@@ -1021,7 +1021,7 @@ namespace Editor
             glm::quat q = pose.Rotations[m_Joint];
             if (!ImGui::IsAnyItemActive() || m_EulerJoint != m_Joint || std::abs(m_EulerTime - m_Time) > 1e-6f)
             {
-                m_Euler = glm::degrees(glm::eulerAngles(q));
+                m_Euler = glm::degrees(EulerAngles(q));
                 m_EulerJoint = m_Joint;
                 m_EulerTime = m_Time;
             }

@@ -74,7 +74,7 @@ namespace Dimension::Constraints
             Decomposed local = Decompose(glm::inverse(ParentWorld(scene, e)) * world);
             auto& t = scene.GetRegistry().Get<TransformComponent>(e);
             t.Position = local.Position;
-            t.Rotation = glm::eulerAngles(local.Rotation);
+            t.Rotation = EulerAngles(local.Rotation);
             t.Scale = local.Scale;
             t.World = world;
         }
@@ -124,10 +124,10 @@ namespace Dimension::Constraints
             for (auto [m, w] : sources) rs.push_back({ Decompose(*m).Rotation, w });
             glm::quat target = AverageRotation(rs);
             Decomposed rest = RestWorld(scene, e, c), now = Decompose(scene.GetRegistry().Get<TransformComponent>(e).World);
-            if (first && c.MaintainOffset) c.Offset = glm::eulerAngles(glm::inverse(target) * rest.Rotation);
+            if (first && c.MaintainOffset) c.Offset = EulerAngles(glm::inverse(target) * rest.Rotation);
             glm::quat q = glm::slerp(rest.Rotation, glm::normalize(target * glm::quat(c.Offset)), std::clamp(c.Weight, 0.0f, 1.0f));
             if (!(c.AffectX && c.AffectY && c.AffectZ))
-                q = glm::quat(Pick(glm::eulerAngles(rest.Rotation), glm::eulerAngles(q), c.AffectX, c.AffectY, c.AffectZ));
+                q = glm::quat(Pick(EulerAngles(rest.Rotation), EulerAngles(q), c.AffectX, c.AffectY, c.AffectZ));
             WriteWorld(scene, e, now.Position, q, now.Scale);
         }
 
@@ -214,7 +214,7 @@ namespace Dimension::Constraints
             glm::mat3 localFrame(aimLocal, upLocalOrtho, glm::cross(aimLocal, upLocalOrtho));
             glm::mat3 worldFrame(dir, upWorld, glm::cross(dir, upWorld));
             glm::quat aimed = glm::normalize(glm::quat_cast(worldFrame * glm::transpose(localFrame)));
-            if (first && c.MaintainOffset) c.Offset = glm::eulerAngles(glm::inverse(aimed) * rest.Rotation);
+            if (first && c.MaintainOffset) c.Offset = EulerAngles(glm::inverse(aimed) * rest.Rotation);
             glm::quat q = glm::slerp(rest.Rotation, glm::normalize(aimed * glm::quat(c.Offset)), std::clamp(c.Weight, 0.0f, 1.0f));
             WriteWorld(scene, e, now.Position, q, now.Scale);
         }

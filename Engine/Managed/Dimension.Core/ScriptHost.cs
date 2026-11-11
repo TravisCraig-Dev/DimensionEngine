@@ -1122,7 +1122,11 @@ namespace Dimension
         [UnmanagedCallersOnly]
         internal static void CoroutinePhase(IntPtr scene, int phase)
         {
-            try { CoroutineRunner.ResumePhase(scene, phase); }
+            try
+            {
+                if (phase == 1) JobSystem.FinishCompleted(); // transform jobs nobody completed write back at the frame's end
+                CoroutineRunner.ResumePhase(scene, phase);
+            }
             catch (Exception e) { Debug.LogError($"Coroutines: {e}"); }
         }
 

@@ -31,7 +31,7 @@ namespace Dimension::ViewAlign
         glm::quat lr;
         if (!Decompose(glm::inverse(parentWorld) * world, lp, lr, ls)) return;
         t.Position = lp;
-        t.Rotation = glm::eulerAngles(lr);
+        t.Rotation = EulerAngles(lr);
         t.Scale = ls;
         scene.UpdateTransforms();
     }

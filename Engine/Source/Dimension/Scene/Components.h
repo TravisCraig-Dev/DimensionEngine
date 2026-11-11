@@ -40,6 +40,20 @@ namespace Dimension
         std::vector<std::string> ComponentOrder; // Inspector display order (component names); empty = registry order
     };
 
+    // A rotation's Euler angles (radians) as the Transform keeps them: glm::eulerAngles, except at gimbal lock (Y at
+    // +-90 degrees), where glm's roll comes from rounding noise (often 180 degrees: the object turned over); there roll
+    // is 0 and pitch takes the whole turn about the locked axis.
+    inline glm::vec3 EulerAngles(const glm::quat& rotation)
+    {
+        glm::quat q = glm::normalize(rotation);
+        float py = 2.0f * (q.y * q.z + q.w * q.x), px = q.w * q.w - q.x * q.x - q.y * q.y + q.z * q.z;
+        float ry = 2.0f * (q.x * q.y + q.w * q.z), rx = q.w * q.w + q.x * q.x - q.y * q.y - q.z * q.z;
+        float yaw = std::asin(glm::clamp(-2.0f * (q.x * q.z - q.w * q.y), -1.0f, 1.0f));
+        if (std::abs(ry) < 1e-6f && std::abs(rx) < 1e-6f) return { 2.0f * std::atan2(q.x, q.w), yaw, 0.0f };
+        float pitch = std::abs(py) < 1e-6f && std::abs(px) < 1e-6f ? 2.0f * std::atan2(q.x, q.w) : std::atan2(py, px);
+        return { pitch, yaw, std::atan2(ry, rx) };
+    }
+
     struct TransformComponent
     {
         glm::vec3 Position{ 0.0f };

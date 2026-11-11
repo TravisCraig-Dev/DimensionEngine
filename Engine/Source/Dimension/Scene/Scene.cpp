@@ -230,7 +230,7 @@ namespace Dimension
         if (glm::decompose(local, s, r, p, skew, perspective))
         {
             t.Position = p;
-            t.Rotation = glm::eulerAngles(r);
+            t.Rotation = EulerAngles(r);
             t.Scale = s;
         }
         UpdateTransforms();
@@ -475,7 +475,7 @@ namespace Dimension
             {
                 auto& t = m_Registry.Get<TransformComponent>(child);
                 t.Position = translation;
-                t.Rotation = glm::eulerAngles(rotation);
+                t.Rotation = EulerAngles(rotation);
                 t.Scale = scale;
             }
         }
@@ -525,6 +525,18 @@ namespace Dimension
     void Scene::UpdateTransforms()
     {
         for (Entity root : m_Roots) UpdateTransformRecursive(root, glm::mat4(1.0f), true);
+    }
+
+    glm::mat4 Scene::ComputeWorldMatrix(Entity e) const
+    {
+        glm::mat4 world(1.0f);
+        for (int depth = 0; !e.IsNull() && m_Registry.Has<TransformComponent>(e) && depth < 1024; ++depth)
+        {
+            world = m_Registry.Get<TransformComponent>(e).GetLocalMatrix() * world;
+            const auto* h = m_Registry.TryGet<HierarchyComponent>(e);
+            e = h ? h->Parent : Entity::Null();
+        }
+        return world;
     }
 
     void Scene::UpdateTransformRecursive(Entity e, const glm::mat4& parentWorld, bool parentActive)
@@ -1924,7 +1936,7 @@ namespace Dimension
                     if (float len = glm::length(pm[c]); len > 1e-8f) pm[c] /= len;
                 parentRot = glm::normalize(glm::quat_cast(pm));
             }
-            t.Rotation = glm::eulerAngles(glm::normalize(glm::inverse(parentRot) * worldTurn * parentRot * t.GetRotationQuat()));
+            t.Rotation = EulerAngles(glm::normalize(glm::inverse(parentRot) * worldTurn * parentRot * t.GetRotationQuat()));
         }
         if (glm::dot(worldDelta, worldDelta) <= 0.0f) return;
         if (m_Registry.Has<CharacterControllerComponent>(e) && m_Physics3D)

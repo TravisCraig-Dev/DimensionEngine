@@ -54,7 +54,17 @@ namespace Dimension
         public Task Task;
         public JobNode[] Dependencies;
         public string Name;
+        public Action MainThreadFinish; // run once on the main thread after it ran (Complete, or the frame's end)
         public bool IsCompleted => Task != null && Task.IsCompleted; // (no task yet: being scheduled)
+
+        // Its and its dependencies' main-thread finish actions (they ran: the caller waited).
+        public void Finish()
+        {
+            foreach (JobNode d in Dependencies) d.Finish();
+            Action finish = MainThreadFinish;
+            MainThreadFinish = null;
+            finish?.Invoke();
+        }
 
         public bool DependsOn(JobNode other)
         {
@@ -82,6 +92,7 @@ namespace Dimension
             if (Node == null) return;
             if (JobSystem.InJob) throw new InvalidOperationException("JobHandle.Complete cannot be called from inside a job");
             Node.Task.Wait();
+            Node.Finish();
         }
 
         /// <summary>One handle done when all of these are.</summary>
@@ -101,7 +112,8 @@ namespace Dimension
     }
 
     // A NativeArray's shared state: its memory and which scheduled jobs write and read it.
-    internal sealed class NativeSafety
+    // (a container's state derives from it: NativeList's grows its buffer, NativeHashMap's holds its table)
+    internal class NativeSafety
     {
         public IntPtr Buffer;
         public int Length;
@@ -109,11 +121,58 @@ namespace Dimension
         public JobNode Writer;
         public readonly List<JobNode> Readers = new();
         public readonly object Lock = new();
+        public string Kind = "NativeArray";
 
         public void Prune()
         {
             if (Writer != null && Writer.IsCompleted) Writer = null;
             Readers.RemoveAll(r => r.IsCompleted);
+        }
+
+        // Frees what it holds (under Lock, once).
+        public virtual unsafe void Release()
+        {
+            if (Buffer != IntPtr.Zero) NativeMemory.Free((void*)Buffer);
+            Buffer = IntPtr.Zero;
+        }
+
+        // The main thread may read it unless a scheduled job writes it.
+        public void CheckRead()
+        {
+            if (Disposed) throw new ObjectDisposedException($"The {Kind} has been disposed");
+            if (JobSystem.InJob) return;
+            JobNode writer = Writer;
+            if (writer != null && !writer.IsCompleted)
+                throw new InvalidOperationException($"The {Kind} is being written by the scheduled job {writer.Name}: call Complete() on its handle before reading it");
+        }
+
+        // The main thread may write it unless a scheduled job uses it; a job may unless its field is [ReadOnly].
+        public void CheckWrite(bool readOnlyCopy)
+        {
+            if (Disposed) throw new ObjectDisposedException($"The {Kind} has been disposed");
+            if (JobSystem.InJob)
+            {
+                if (readOnlyCopy) throw new InvalidOperationException($"The {Kind} is [ReadOnly] in this job: it cannot be written");
+                return;
+            }
+            lock (Lock)
+            {
+                Prune();
+                JobNode user = Writer ?? (Readers.Count > 0 ? Readers[0] : null);
+                if (user != null) throw new InvalidOperationException($"The {Kind} is used by the scheduled job {user.Name}: call Complete() on its handle before writing it");
+            }
+        }
+
+        public void CheckDispose()
+        {
+            if (Disposed) throw new ObjectDisposedException($"The {Kind} has been disposed already");
+            if (JobSystem.InJob) return;
+            lock (Lock)
+            {
+                Prune();
+                if (Writer != null || Readers.Count > 0)
+                    throw new InvalidOperationException($"The {Kind} is used by the scheduled job {(Writer ?? Readers[0]).Name}: Complete it (or Dispose(handle)) first");
+            }
         }
     }
 
@@ -130,6 +189,14 @@ namespace Dimension
     {
         private NativeSafety m_Safety;
         private bool m_ReadOnly; // (the copy a job gets for a [ReadOnly] field)
+        private bool m_View;     // (NativeList.AsArray: the list's memory, disposed with it)
+
+        internal NativeArray(NativeSafety state, bool view)
+        {
+            m_Safety = state;
+            m_ReadOnly = false;
+            m_View = view;
+        }
 
         public NativeArray(int length, Allocator allocator, NativeArrayOptions options = NativeArrayOptions.ClearMemory)
         {
@@ -139,6 +206,7 @@ namespace Dimension
             void* p = options == NativeArrayOptions.ClearMemory ? NativeMemory.AllocZeroed(Math.Max(bytes, 1)) : NativeMemory.Alloc(Math.Max(bytes, 1));
             m_Safety = new NativeSafety { Buffer = (IntPtr)p, Length = length };
             m_ReadOnly = false;
+            m_View = false;
             JobSystem.Track(m_Safety, allocator);
         }
 
@@ -208,51 +276,20 @@ namespace Dimension
         /// <summary>Frees the memory (no job may still use it).</summary>
         public void Dispose()
         {
-            if (m_Safety == null || m_Safety.Disposed) throw new ObjectDisposedException("The NativeArray has been disposed already (or was never created)");
-            if (!JobSystem.InJob)
-                lock (m_Safety.Lock)
-                {
-                    m_Safety.Prune();
-                    if (m_Safety.Writer != null || m_Safety.Readers.Count > 0)
-                        throw new InvalidOperationException($"The NativeArray is used by the scheduled job {(m_Safety.Writer ?? m_Safety.Readers[0]).Name}: Complete it (or Dispose(handle)) first");
-                }
+            if (m_Safety == null) throw new ObjectDisposedException("The NativeArray was never created");
+            if (m_View) throw new InvalidOperationException("This NativeArray is a NativeList's AsArray(): dispose the list instead");
+            m_Safety.CheckDispose();
             JobSystem.Free(m_Safety);
         }
 
         /// <summary>Frees the memory once the job is done; returns a handle for that.</summary>
         public JobHandle Dispose(JobHandle inputDeps)
         {
-            NativeSafety safety = m_Safety ?? throw new ObjectDisposedException("The NativeArray was never created");
-            return JobSystem.ScheduleAction(() => JobSystem.Free(safety), inputDeps, "NativeArray.Dispose", null);
+            return JobSystem.DisposeAfter(m_Safety ?? throw new ObjectDisposedException("The NativeArray was never created"), inputDeps);
         }
 
-        private void CheckRead()
-        {
-            NativeSafety s = m_Safety;
-            if (s == null || s.Disposed) throw new ObjectDisposedException("The NativeArray has been disposed (or was never created)");
-            if (JobSystem.InJob) return;
-            JobNode writer = s.Writer;
-            if (writer != null && !writer.IsCompleted)
-                throw new InvalidOperationException($"The NativeArray is being written by the scheduled job {writer.Name}: call Complete() on its handle before reading it");
-        }
-
-        private void CheckWrite()
-        {
-            NativeSafety s = m_Safety;
-            if (s == null || s.Disposed) throw new ObjectDisposedException("The NativeArray has been disposed (or was never created)");
-            if (JobSystem.InJob)
-            {
-                if (m_ReadOnly) throw new InvalidOperationException("The NativeArray is [ReadOnly] in this job: it cannot be written");
-                return;
-            }
-            lock (s.Lock)
-            {
-                s.Prune();
-                JobNode user = s.Writer ?? (s.Readers.Count > 0 ? s.Readers[0] : null);
-                if (user != null)
-                    throw new InvalidOperationException($"The NativeArray is used by the scheduled job {user.Name}: call Complete() on its handle before writing it");
-            }
-        }
+        private void CheckRead() => (m_Safety ?? throw new ObjectDisposedException("The NativeArray was never created")).CheckRead();
+        private void CheckWrite() => (m_Safety ?? throw new ObjectDisposedException("The NativeArray was never created")).CheckWrite(m_ReadOnly);
 
         NativeSafety INativeContainer.Safety => m_Safety;
         object INativeContainer.AsReadOnly()
@@ -371,17 +408,20 @@ namespace Dimension
 
         internal static void Track(NativeSafety safety, Allocator allocator) => s_Live[safety] = allocator;
 
-        internal static unsafe void Free(NativeSafety safety)
+        internal static void Free(NativeSafety safety)
         {
             lock (safety.Lock)
             {
                 if (safety.Disposed) return;
                 safety.Disposed = true;
-                NativeMemory.Free((void*)safety.Buffer);
-                safety.Buffer = IntPtr.Zero;
+                safety.Release();
             }
             s_Live.TryRemove(safety, out _);
         }
+
+        // A container's Dispose(handle): freed once the job is done.
+        internal static JobHandle DisposeAfter(NativeSafety safety, JobHandle inputDeps) =>
+            ScheduleAction(() => Free(safety), inputDeps, safety.Kind + ".Dispose", null);
 
         internal static JobHandle Combine(JobHandle[] handles)
         {
@@ -439,6 +479,24 @@ namespace Dimension
                 }
         }
 
+        // Jobs with a main-thread finish not yet run (transform jobs nobody completed): run at the frame's end.
+        private static readonly List<JobNode> s_Unfinished = new();
+
+        internal static void AddFinish(JobHandle handle, Action finish)
+        {
+            handle.Node.MainThreadFinish = finish;
+            s_Unfinished.Add(handle.Node);
+        }
+
+        // The frame's end (main thread): finished jobs' write-backs.
+        internal static void FinishCompleted()
+        {
+            if (s_Unfinished.Count == 0) return;
+            foreach (JobNode node in s_Unfinished.ToArray())
+                if (node.IsCompleted) node.Finish();
+            s_Unfinished.RemoveAll(n => n.MainThreadFinish == null);
+        }
+
         internal static JobHandle ScheduleAction(Action body, JobHandle dependsOn, string name, List<(NativeSafety, bool)> uses)
         {
             JobNode dep = dependsOn.Node != null && !dependsOn.Node.IsCompleted ? dependsOn.Node : null;
@@ -448,6 +506,11 @@ namespace Dimension
             {
                 t_InJob = true;
                 try { body(); }
+                catch (AggregateException e) when (e.InnerExceptions.Count > 0) // (batches of a parallel job)
+                {
+                    string more = e.InnerExceptions.Count > 1 ? $" (and {e.InnerExceptions.Count - 1} more batches)" : "";
+                    Debug.LogError($"Job {name} failed{more}: {e.InnerExceptions[0]}");
+                }
                 catch (Exception e) { Debug.LogError($"Job {name} failed: {e}"); }
                 finally
                 {
@@ -524,6 +587,7 @@ namespace Dimension
         internal static void Shutdown()
         {
             CompleteAll();
+            s_Unfinished.Clear(); // (their objects belong to the scene being torn down)
             int leaked = 0;
             foreach (NativeSafety s in s_Live.Keys)
             {

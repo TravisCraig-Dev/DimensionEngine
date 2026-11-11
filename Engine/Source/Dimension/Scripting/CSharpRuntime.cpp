@@ -1096,7 +1096,8 @@ namespace Dimension
                 if (auto* t = Comp<TransformComponent>(s, e)) { std::memcpy(&t->Position, p, 12); std::memcpy(&t->Rotation, r, 12); std::memcpy(&t->Scale, sc, 12); }
             };
             a.GetWorldPosition = [](void* s, uint64_t e, float* out) {
-                if (auto* t = Comp<TransformComponent>(s, e)) { glm::vec3 p = t->GetWorldPosition(); std::memcpy(out, &p, 12); }
+                // (from the current local values: right after a script moved it or its parents, not a frame late)
+                if (Comp<TransformComponent>(s, e)) { glm::vec3 p(S(s).ComputeWorldMatrix(Unpack(e))[3]); std::memcpy(out, &p, 12); }
             };
             a.HasComponent = [](void* s, uint64_t e, const char* name) -> int {
                 auto* info = ComponentRegistry::Find(name);
@@ -1463,7 +1464,7 @@ namespace Dimension
                     auto& t = scene.GetRegistry().Get<TransformComponent>(e);
                     glm::vec3 p = t.Position;
                     glm::quat q = t.GetRotationQuat();
-                    glm::vec3 r = Physics3DWorld::GetBodyPose(scene, e, p, q) ? glm::eulerAngles(q) : t.Rotation;
+                    glm::vec3 r = Physics3DWorld::GetBodyPose(scene, e, p, q) ? EulerAngles(q) : t.Rotation;
                     std::memcpy(v, &p, 12);
                     std::memcpy(v + 3, &r, 12);
                     break;
@@ -2618,7 +2619,7 @@ namespace Dimension
             a.GetFrameCount = [](void* s) -> uint64_t { return s ? S(s).GetFrameCount() : 0; };
             a.GetWorldMatrix = [](void* s, uint64_t e, float* out) {
                 glm::mat4 m(1.0f);
-                if (auto* t = Comp<TransformComponent>(s, e)) m = t->World;
+                if (Comp<TransformComponent>(s, e)) m = S(s).ComputeWorldMatrix(Unpack(e)); // (current, as GetWorldPosition)
                 std::memcpy(out, &m, sizeof(m));
             };
             a.GetUIValue = [](void* s, uint64_t e) -> float {

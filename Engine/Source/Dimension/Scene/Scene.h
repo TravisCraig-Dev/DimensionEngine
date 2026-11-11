@@ -224,6 +224,9 @@ namespace Dimension
         void Step(int frames = 1) { m_StepFrames = frames; }
 
         void UpdateTransforms();
+        // The object's world matrix from its and its parents' current local values (World as the next UpdateTransforms
+        // stores it; for reads right after a script moved something).
+        glm::mat4 ComputeWorldMatrix(Entity e) const;
         // The camera the game shows: the first active one marked Primary, else the first active one.
         Entity GetPrimaryCamera();
         // Makes a camera the one the game shows (Primary, and no other camera Primary).

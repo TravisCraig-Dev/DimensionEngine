@@ -1897,7 +1897,7 @@ namespace Dimension
             glm::mat3 r(local);
             for (int c = 0; c < 3; ++c) r[c] = glm::normalize(r[c]);
             // A turn about Y alone keeps its Euler angles as one (eulerAngles would write some as (180, y, 180)).
-            t.Rotation = std::abs(r[1].y) > 0.9999f ? glm::vec3(0.0f, std::atan2(r[2].x, r[2].z), 0.0f) : glm::eulerAngles(glm::quat_cast(r));
+            t.Rotation = std::abs(r[1].y) > 0.9999f ? glm::vec3(0.0f, std::atan2(r[2].x, r[2].z), 0.0f) : EulerAngles(glm::quat_cast(r));
         }
         // The limp pose relative to where the object now stands; the skin shows it until the Animator blends away.
         glm::mat4 toNew = glm::inverse(t.World) * oldWorld;
@@ -2020,7 +2020,7 @@ namespace Dimension
                 wt.Position = glm::vec3(local[3]);
                 glm::mat3 r(local);
                 for (int c = 0; c < 3; ++c) r[c] = glm::normalize(r[c]);
-                wt.Rotation = glm::eulerAngles(glm::quat_cast(r));
+                wt.Rotation = EulerAngles(glm::quat_cast(r));
             }
         }
     }
@@ -2534,7 +2534,7 @@ namespace Dimension
         {
             if (rb.Interpolation == RigidbodyInterpolation::None || !rb.HasPose || rb.Type != BodyType::Dynamic || rb.RuntimeBody == 0xFFFFFFFF) continue;
             t.Position = glm::mix(rb.PreviousPosition, rb.CurrentPosition, alpha);
-            t.Rotation = glm::eulerAngles(glm::slerp(rb.PreviousRotation, rb.CurrentRotation, alpha));
+            t.Rotation = EulerAngles(glm::slerp(rb.PreviousRotation, rb.CurrentRotation, alpha));
         }
     }
 
@@ -2915,7 +2915,7 @@ namespace Dimension
             bi.GetPositionAndRotation(id, pos, rot);
             t.Position = FromJolt(JPH::Vec3(pos));
             glm::quat q = FromJolt(rot);
-            t.Rotation = glm::eulerAngles(q);
+            t.Rotation = EulerAngles(q);
             if (rb.Interpolation != RigidbodyInterpolation::None)
             {
                 rb.PreviousPosition = rb.HasPose ? rb.CurrentPosition : t.Position;
@@ -3164,7 +3164,7 @@ namespace Dimension
         glm::vec3 scale(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])));
         glm::mat3 rot(world);
         for (int c = 0; c < 3; ++c) rot[c] /= std::max(scale[c], 1e-8f);
-        glm::vec3 euler = glm::eulerAngles(glm::normalize(glm::quat_cast(rot)));
+        glm::vec3 euler = EulerAngles(glm::normalize(glm::quat_cast(rot)));
         glm::vec3 linear(0.0f), angular(0.0f);
         float mass = 1.0f;
         auto& bi = m_Impl->System.GetBodyInterface();
