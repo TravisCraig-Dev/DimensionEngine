@@ -3,6 +3,7 @@
 #include <Dimension/Core/AppRuntime.h>
 #include "EditorLayer.h"
 #include <Dimension/Core/Log.h>
+#include <Dimension/Core/Profiler.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <cstring>
@@ -37,6 +38,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--anim-record")) options.AnimRecord = true;
         else if (!std::strcmp(argv[i], "--package-search") && i + 1 < argc) options.PackageSearch = argv[++i];
         else if (!std::strcmp(argv[i], "--run-tests")) options.RunTests = true;
+        else if (!std::strcmp(argv[i], "--deep-profile")) Dimension::Profiler::SetDeepProfiling(true);
         else if (!std::strcmp(argv[i], "--anim-onion")) options.AnimOnion = true;
         else if (!std::strcmp(argv[i], "--frame-event") && i + 1 < argc) options.FrameEvent = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--menu") && i + 1 < argc) options.MenuCommand = argv[++i];

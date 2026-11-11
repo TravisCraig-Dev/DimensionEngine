@@ -48,20 +48,23 @@ namespace Editor
 
     void ProfilerPanel::DrawTimeline(const Profiler::FrameRecord& f)
     {
-        if (f.Spans.empty())
+        if (f.Spans.empty() && f.Workers.empty())
         {
             ImGui::TextDisabled("No timed sections in this frame.");
             return;
         }
-        int rows = 1;
+        int rows = 1, workerRows = 0;
         float frameMs = f.FrameMs;
         for (const auto& s : f.Spans)
         {
             rows = std::max(rows, s.Depth + 1);
             frameMs = std::max(frameMs, s.StartMs + s.Ms);
         }
-        const float rulerH = 18.0f, rowH = ImGui::GetTextLineHeight() + 6.0f;
-        float width = ImGui::GetContentRegionAvail().x, height = rulerH + rows * rowH;
+        // Worker threads' work (C# jobs) below the main thread, a row per worker.
+        for (const auto& w : f.Workers) workerRows = std::max(workerRows, w.Worker + 1);
+        const float rulerH = 18.0f, rowH = ImGui::GetTextLineHeight() + 6.0f, gap = workerRows ? 8.0f : 0.0f;
+        float width = ImGui::GetContentRegionAvail().x, height = rulerH + rows * rowH + gap + workerRows * rowH;
+        auto workerY = [&](int worker, float originY) { return originY + rulerH + rows * rowH + gap + worker * rowH; };
         ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##timeline", ImVec2(width, height));
         bool hovered = ImGui::IsItemHovered();
@@ -106,11 +109,49 @@ namespace Editor
         }
         // Where the frame ends (the next one begins).
         draw->AddLine({ xOf(f.FrameMs), origin.y }, { xOf(f.FrameMs), end.y }, IM_COL32(255, 255, 255, 120), 1.5f);
-        int hoveredSpan = -1;
+        int hoveredSpan = -1, hoveredWorker = -1;
         if (hovered)
         {
             int row = (int)std::floor((io.MousePos.y - origin.y - rulerH) / rowH);
-            if (row >= 0 && row < rows) hoveredSpan = Profiler::SpanAt(f, row, m_ViewStart + (io.MousePos.x - origin.x) / width * m_ViewMs);
+            float at = m_ViewStart + (io.MousePos.x - origin.x) / width * m_ViewMs;
+            if (row >= 0 && row < rows) hoveredSpan = Profiler::SpanAt(f, row, at);
+            int worker = (int)std::floor((io.MousePos.y - workerY(0, origin.y)) / rowH);
+            if (workerRows && io.MousePos.y >= workerY(0, origin.y) && worker < workerRows)
+                for (int i = (int)f.Workers.size() - 1; i >= 0; --i)
+                    if (f.Workers[i].Worker == worker && at >= f.Workers[i].StartMs && at <= f.Workers[i].StartMs + f.Workers[i].Ms)
+                    {
+                        hoveredWorker = i;
+                        break;
+                    }
+        }
+        if (workerRows)
+        {
+            float y = workerY(0, origin.y) - gap * 0.5f;
+            draw->AddLine({ origin.x, y }, { end.x, y }, IM_COL32(255, 255, 255, 60));
+            for (int w = 0; w < workerRows; ++w)
+            {
+                char label[32];
+                std::snprintf(label, sizeof(label), "Worker %d", w + 1);
+                draw->AddText({ origin.x + 4.0f, workerY(w, origin.y) + 2.0f }, IM_COL32(255, 255, 255, 70), label);
+            }
+        }
+        for (size_t i = 0; i < f.Workers.size(); ++i)
+        {
+            const auto& w = f.Workers[i];
+            float x0 = xOf(w.StartMs), x1 = std::max(xOf(w.StartMs + w.Ms), x0 + 1.0f);
+            if (x1 < origin.x || x0 > end.x) continue;
+            float y0 = workerY(w.Worker, origin.y), y1 = y0 + rowH - 2.0f;
+            draw->AddRectFilled({ x0, y0 }, { x1, y1 }, SectionColor(w.Name), 2.0f);
+            if ((int)i == hoveredWorker) draw->AddRect({ x0, y0 }, { x1, y1 }, IM_COL32(255, 255, 255, 255), 2.0f, 0, 2.0f);
+            if (x1 - x0 > 28.0f)
+            {
+                char text[96];
+                std::snprintf(text, sizeof(text), "%s %.2f", w.Name, w.Ms);
+                float left = std::max(x0, origin.x) + 3.0f;
+                draw->PushClipRect({ left, y0 }, { std::min(x1, end.x) - 2.0f, y1 }, true);
+                draw->AddText({ left, y0 + 2.0f }, IM_COL32(20, 20, 20, 255), text);
+                draw->PopClipRect();
+            }
         }
         for (size_t i = 0; i < f.Spans.size(); ++i)
         {
@@ -132,6 +173,11 @@ namespace Editor
             }
         }
         draw->PopClipRect();
+        if (hoveredWorker >= 0)
+        {
+            const auto& w = f.Workers[hoveredWorker];
+            ImGui::SetTooltip("%s (worker %d)\n%.3f ms, from %.3f to %.3f ms", w.Name, w.Worker + 1, w.Ms, w.StartMs, w.StartMs + w.Ms);
+        }
         if (hoveredSpan >= 0)
         {
             const auto& s = f.Spans[hoveredSpan];
@@ -320,7 +366,11 @@ namespace Editor
             else ImGui::TextDisabled("  %s %.2f", name.c_str(), value);
         }
         ImGui::SameLine();
-        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 90.0f));
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 210.0f));
+        bool deep = Profiler::IsDeepProfiling();
+        if (ImGui::Checkbox("Deep Profile", &deep)) Profiler::SetDeepProfiling(deep);
+        ImGui::SetItemTooltip("Time every C# script callback (Spinner.OnUpdate, ...) as a section of its own (costs a little per call)");
+        ImGui::SameLine();
         ImGui::Checkbox("Timeline", &m_ShowTimeline);
         if (m_ShowTimeline) DrawTimeline(f);
         // CPU sections on the left, GPU spans (render passes) on the right.

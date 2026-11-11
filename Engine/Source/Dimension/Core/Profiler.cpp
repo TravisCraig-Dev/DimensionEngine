@@ -1,10 +1,12 @@
 #include "Dimension/Core/Profiler.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <map>
 #include <set>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 namespace Dimension::Profiler
@@ -22,6 +24,10 @@ namespace Dimension::Profiler
             std::thread::id Main;
             uint64_t Frame = 0;
             std::vector<std::unique_ptr<Scope>> Samples; // BeginSample's open sections, innermost last
+            // Worker threads add to Current.Workers (and intern names) under this; the frame changes under it too.
+            std::mutex WorkerMutex;
+            std::map<std::thread::id, int> WorkerIndex;
+            bool Deep = false;
         };
         State& S()
         {
@@ -38,6 +44,7 @@ namespace Dimension::Profiler
         // Samples still open: closed with the frame they began in.
         while (!s.Samples.empty()) s.Samples.pop_back();
         long long now = Now();
+        std::lock_guard lock(s.WorkerMutex);
         if (s.Recording && !s.Paused)
         {
             s.Current.FrameMs = (float)((now - s.FrameStart) / 1e6);
@@ -72,6 +79,22 @@ namespace Dimension::Profiler
         State& s = S();
         if (s.Recording) s.Current.Gpu = std::move(sections);
     }
+
+    long long Timestamp() { return Now(); }
+
+    void AddWorkerSpan(const std::string& name, long long start)
+    {
+        long long end = Now();
+        State& s = S();
+        std::lock_guard lock(s.WorkerMutex);
+        if (!s.Recording || s.Current.Workers.size() >= kMaxSpans) return;
+        auto [it, added] = s.WorkerIndex.try_emplace(std::this_thread::get_id(), (int)s.WorkerIndex.size());
+        float startMs = (float)((std::max(start, s.FrameStart) - s.FrameStart) / 1e6);
+        s.Current.Workers.push_back({ Intern(name), it->second, startMs, (float)((end - std::max(start, s.FrameStart)) / 1e6) });
+    }
+
+    void SetDeepProfiling(bool deep) { S().Deep = deep; }
+    bool IsDeepProfiling() { return S().Deep; }
 
     void SetPaused(bool paused) { S().Paused = paused; }
     bool IsPaused() { return S().Paused; }
@@ -136,6 +159,8 @@ namespace Dimension::Profiler
     const char* Intern(const std::string& name)
     {
         static std::set<std::string> names; // nodes do not move: the pointers stay good
+        static std::mutex mutex;              // (worker threads intern job names)
+        std::lock_guard lock(mutex);
         return names.insert(name).first->c_str();
     }
 
@@ -154,6 +179,11 @@ namespace Dimension::Profiler
                         { "spans", json::array() } };
             for (const auto& [name, value] : f.Counters) frame["counters"][name] = value;
             for (const Span& s : f.Spans) frame["spans"].push_back({ s.Name, s.Depth, s.StartMs, s.Ms });
+            if (!f.Workers.empty())
+            {
+                frame["workers"] = json::array();
+                for (const WorkerSpan& w : f.Workers) frame["workers"].push_back({ w.Name, w.Worker, w.StartMs, w.Ms });
+            }
             j["frames"].push_back(std::move(frame));
         }
         std::ofstream out(file);
@@ -187,6 +217,8 @@ namespace Dimension::Profiler
                 for (auto& [name, value] : f.value("counters", json::object()).items()) r.Counters.push_back({ name, value.get<float>() });
                 for (const json& s : f.value("spans", json::array()))
                     if (s.is_array() && s.size() == 4) r.Spans.push_back({ Intern(s[0].get<std::string>()), s[1].get<int>(), s[2].get<float>(), s[3].get<float>() });
+                for (const json& w : f.value("workers", json::array()))
+                    if (w.is_array() && w.size() == 4) r.Workers.push_back({ Intern(w[0].get<std::string>()), w[1].get<int>(), w[2].get<float>(), w[3].get<float>() });
                 frames.push_back(std::move(r));
             }
         }

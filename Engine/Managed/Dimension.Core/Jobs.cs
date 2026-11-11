@@ -497,7 +497,22 @@ namespace Dimension
             s_Unfinished.RemoveAll(n => n.MainThreadFinish == null);
         }
 
-        internal static JobHandle ScheduleAction(Action body, JobHandle dependsOn, string name, List<(NativeSafety, bool)> uses)
+        // Job names as UTF-8 for the Profiler (made once per name, kept for the session).
+        private static readonly ConcurrentDictionary<string, IntPtr> s_ProfileNames = new();
+
+        // Times work on this worker thread as a span on its row of the Profiler's timeline.
+        internal static unsafe void Profiled(string name, Action work)
+        {
+            long start = Interop.Native.Api.ProfilerWorker(0, null, 0);
+            try { work(); }
+            finally
+            {
+                IntPtr utf8 = s_ProfileNames.GetOrAdd(name, n => Marshal.StringToCoTaskMemUTF8(n));
+                Interop.Native.Api.ProfilerWorker(1, (byte*)utf8, start);
+            }
+        }
+
+        internal static JobHandle ScheduleAction(Action body, JobHandle dependsOn, string name, List<(NativeSafety, bool)> uses, bool profile = true)
         {
             JobNode dep = dependsOn.Node != null && !dependsOn.Node.IsCompleted ? dependsOn.Node : null;
             var node = new JobNode { Dependencies = dep != null ? new[] { dep } : Array.Empty<JobNode>(), Name = name };
@@ -505,7 +520,11 @@ namespace Dimension
             Action run = () =>
             {
                 t_InJob = true;
-                try { body(); }
+                try
+                {
+                    if (profile) Profiled(name, body);
+                    else body(); // (a parallel job's batches are timed one by one)
+                }
                 catch (AggregateException e) when (e.InnerExceptions.Count > 0) // (batches of a parallel job)
                 {
                     string more = e.InnerExceptions.Count > 1 ? $" (and {e.InnerExceptions.Count - 1} more batches)" : "";
@@ -532,17 +551,17 @@ namespace Dimension
             {
                 if (batches <= 1)
                 {
-                    body(0, length);
+                    Profiled(name, () => body(0, length));
                     return;
                 }
                 Parallel.For(0, batches, new ParallelOptions { MaxDegreeOfParallelism = WorkerCount + 1 }, b =>
                 {
                     bool was = t_InJob;
                     t_InJob = true;
-                    try { body(b * batch, Math.Min(length, (b + 1) * batch)); }
+                    try { Profiled(name, () => body(b * batch, Math.Min(length, (b + 1) * batch))); }
                     finally { t_InJob = was; }
                 });
-            }, dependsOn, name, uses);
+            }, dependsOn, name, uses, profile: false);
         }
 
         // The safety checks at Schedule: an array this job writes may not be in use by a job it does not depend on, nor

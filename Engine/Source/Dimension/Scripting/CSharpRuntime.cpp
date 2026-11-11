@@ -332,6 +332,8 @@ namespace Dimension
             // A constraint's sources (kind 0 Position, 1 Rotation, 2 Scale, 3 Parent, 4 Aim): op 0 count, 1 get (the source,
             // its weight in *w), 2 set (index == count adds), 3 remove.
             uint64_t (*ConstraintOp)(void*, uint64_t, int, int, int, uint64_t, float*);
+            // The Profiler from worker threads (C# jobs): op 0 a clock reading, 1 a span named `name` from `start` to now.
+            int64_t (*ProfilerWorker)(int, const char*, int64_t);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -587,6 +589,7 @@ namespace Dimension
         struct ManagedClass
         {
             std::string Name;
+            mutable std::array<const char*, 23> ProfileNames{}; // Deep Profile sections ("Spinner.OnUpdate"), made when first timed
             Layout Values;
             std::deque<Layout> NestedLayouts; // the [Serializable] types' (stable addresses)
             std::vector<bool> Drawn;          // per field: a C# property drawer draws it
@@ -827,6 +830,30 @@ namespace Dimension
             void* Storage() { return m_Values.Data(); }
             intptr_t Handle() const { return m_Handle; }
 
+            // A callback into the script (ScriptHost.Invoke's method numbers); with Deep Profile on, timed as its own
+            // section named after the class and callback.
+            void Call(int method, float value)
+            {
+                if (!Profiler::IsDeepProfiling() || method < 0 || method >= (int)m_Class->ProfileNames.size())
+                {
+                    s_Managed.Invoke(m_Handle, method, value);
+                    return;
+                }
+                static const char* kMethods[] = { "OnCreate", "OnUpdate", "OnFixedUpdate", "OnDestroy", "OnClick", "OnValueChanged",
+                                                  "OnJointBreak", "OnReloaded", "OnEnable", "OnDisable", "OnMouseEnter", "OnMouseOver",
+                                                  "OnMouseExit", "OnMouseDown", "OnMouseDrag", "OnMouseUp", "OnMouseUpAsButton",
+                                                  "OnApplicationFocus", "OnApplicationPause", "OnApplicationQuit", "OnAnimatorMove",
+                                                  "OnLateUpdate", "OnAnimatorIK" };
+                const char*& name = m_Class->ProfileNames[method];
+                if (!name)
+                {
+                    std::string shortName = m_Class->Name.substr(m_Class->Name.rfind('.') + 1);
+                    name = Profiler::Intern(shortName + "." + kMethods[method]);
+                }
+                Profiler::Scope scope(name);
+                s_Managed.Invoke(m_Handle, method, value);
+            }
+
             // Draws custom Inspector `id` for this script (its live object while playing, else one made from the slots)
             // and takes the values it leaves; true when they changed.
             bool Inspect(int id, Scene& scene, Entity e) { return Draw(s_Managed.Inspect, id, scene, e); }
@@ -926,7 +953,7 @@ namespace Dimension
                 OnBeforeCreate();
                 if (!m_Handle) return;
                 PushFields();
-                s_Managed.Invoke(m_Handle, method, 0.0f);
+                Call(method, 0.0f);
             }
 
             void OnFieldsChanged() override { PushFields(); }
@@ -960,17 +987,17 @@ namespace Dimension
                     }
                 }
             }
-            void OnUpdate(float dt) override { s_DeltaTime = dt; if (m_Handle) s_Managed.Invoke(m_Handle, 1, dt); }
-            void OnFixedUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 2, dt); }
-            void OnDestroy() override { if (m_Handle) s_Managed.Invoke(m_Handle, 3, 0.0f); }
-            void OnEnable() override { if (m_Handle) s_Managed.Invoke(m_Handle, 8, 0.0f); }
-            void OnDisable() override { if (m_Handle) s_Managed.Invoke(m_Handle, 9, 0.0f); }
-            void OnClick() override { if (m_Handle) s_Managed.Invoke(m_Handle, 4, 0.0f); }
-            void OnUIValueChanged(float v) override { if (m_Handle) s_Managed.Invoke(m_Handle, 5, v); }
-            void OnJointBreak(float force) override { if (m_Handle) s_Managed.Invoke(m_Handle, 6, force); }
-            void OnApplicationFocus(bool focused) override { if (m_Handle) s_Managed.Invoke(m_Handle, 17, focused ? 1.0f : 0.0f); }
-            void OnApplicationPause(bool paused) override { if (m_Handle) s_Managed.Invoke(m_Handle, 18, paused ? 1.0f : 0.0f); }
-            void OnApplicationQuit() override { if (m_Handle) s_Managed.Invoke(m_Handle, 19, 0.0f); }
+            void OnUpdate(float dt) override { s_DeltaTime = dt; if (m_Handle) Call(1, dt); }
+            void OnFixedUpdate(float dt) override { if (m_Handle) Call(2, dt); }
+            void OnDestroy() override { if (m_Handle) Call(3, 0.0f); }
+            void OnEnable() override { if (m_Handle) Call(8, 0.0f); }
+            void OnDisable() override { if (m_Handle) Call(9, 0.0f); }
+            void OnClick() override { if (m_Handle) Call(4, 0.0f); }
+            void OnUIValueChanged(float v) override { if (m_Handle) Call(5, v); }
+            void OnJointBreak(float force) override { if (m_Handle) Call(6, force); }
+            void OnApplicationFocus(bool focused) override { if (m_Handle) Call(17, focused ? 1.0f : 0.0f); }
+            void OnApplicationPause(bool paused) override { if (m_Handle) Call(18, paused ? 1.0f : 0.0f); }
+            void OnApplicationQuit() override { if (m_Handle) Call(19, 0.0f); }
             void OnControllerColliderHit(const ControllerColliderHit& hit) override
             {
                 if (!m_Handle || !m_Class->HasControllerHit) return;
@@ -1010,14 +1037,14 @@ namespace Dimension
             void OnMouseDrag() override { Mouse(14); }
             void OnMouseUp() override { Mouse(15); }
             void OnMouseUpAsButton() override { Mouse(16); }
-            void Mouse(int method) { if (m_Handle && m_Class->HasMouseEvents) s_Managed.Invoke(m_Handle, method, 0.0f); }
+            void Mouse(int method) { if (m_Handle && m_Class->HasMouseEvents) Call(method, 0.0f); }
             uint32_t PointerEventMask() const override { return m_Handle ? m_Class->PointerEvents : 0; }
             bool HandlesAnimatorMove() const override { return m_Handle && m_Class->HasAnimatorMove; }
             bool HandlesAnimatorIK() const override { return m_Handle && m_Class->HasAnimatorIK; }
-            void OnAnimatorIK(int layer) override { if (m_Handle) s_Managed.Invoke(m_Handle, 22, (float)layer); }
+            void OnAnimatorIK(int layer) override { if (m_Handle) Call(22, (float)layer); }
             bool HandlesLateUpdate() const override { return m_Handle && m_Class->HasLateUpdate; }
-            void OnLateUpdate(float dt) override { if (m_Handle) s_Managed.Invoke(m_Handle, 21, dt); }
-            void OnAnimatorMove() override { if (m_Handle) s_Managed.Invoke(m_Handle, 20, 0.0f); }
+            void OnLateUpdate(float dt) override { if (m_Handle) Call(21, dt); }
+            void OnAnimatorMove() override { if (m_Handle) Call(20, 0.0f); }
             void OnPointerEvent(PointerEventKind kind, const PointerEventData& d) override
             {
                 if (!m_Handle) return;
@@ -2347,6 +2374,11 @@ namespace Dimension
                 auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
                 s_StringReturn = data && index >= 0 && index < (int)data->BlendShapes.size() ? data->BlendShapes[index].Name : std::string();
                 return s_StringReturn.c_str();
+            };
+            a.ProfilerWorker = [](int op, const char* name, int64_t start) -> int64_t {
+                if (op == 0) return Profiler::Timestamp();
+                if (name) Profiler::AddWorkerSpan(name, start);
+                return 0;
             };
             a.ConstraintOp = [](void* s, uint64_t e, int kind, int op, int index, uint64_t source, float* w) -> uint64_t {
                 std::vector<ConstraintSource>* list = nullptr;

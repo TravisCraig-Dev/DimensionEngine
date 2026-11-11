@@ -29,6 +29,14 @@ namespace Dimension
             float StartMs; // from the frame's start
             float Ms;
         };
+        // Work on another thread (a C# job, a batch of one), on that worker's row of the timeline.
+        struct WorkerSpan
+        {
+            const char* Name;
+            int Worker;    // 0, 1, ... in the order threads first recorded something
+            float StartMs; // from the frame's start (work begun in the frame before starts at 0)
+            float Ms;
+        };
         struct FrameRecord
         {
             float FrameMs = 0.0f; // from this frame's start to the next's
@@ -39,6 +47,8 @@ namespace Dimension
             std::vector<Section> Gpu;
             // Each call, in the order they started (at most kMaxSpans a frame; Sections still add up the rest).
             std::vector<Span> Spans;
+            // Other threads' work that ended in this frame (at most kMaxSpans).
+            std::vector<WorkerSpan> Workers;
         };
         static constexpr size_t kHistory = 300;
         static constexpr size_t kMaxSpans = 4096;
@@ -71,6 +81,13 @@ namespace Dimension
         void BeginSample(const std::string& name);
         void EndSample();
         void SetGpuSections(std::vector<Section> sections);
+        // From any thread: a clock reading for AddWorkerSpan, and a span of work from `start` to now on this thread's
+        // worker row (recorded in the frame it ends in). The name is copied.
+        long long Timestamp();
+        void AddWorkerSpan(const std::string& name, long long start);
+        // Deep profiling (like Unity's): every C# script callback (Spinner.OnUpdate, ...) timed as a section of its own.
+        void SetDeepProfiling(bool deep);
+        bool IsDeepProfiling();
         // Recording stops while paused (the history stays to look at).
         void SetPaused(bool paused);
         bool IsPaused();
