@@ -859,6 +859,8 @@ namespace Dimension
         {
             UI::PointerState pointer{ m_UIPointer, m_UIDown, m_UIDown && !m_UIWasDown, !m_UIDown && m_UIWasDown, m_UIScroll };
             pointer.Text = Input::GetTypedText() + m_UIInjectedText;
+            pointer.Composition = Input::GetComposition();
+            pointer.CompositionCursor = Input::GetCompositionCursor();
             pointer.Backspace = Input::IsKeyTyped(Key::Backspace) || m_UIInjectedBackspace;
             pointer.Enter = Input::IsKeyPressed(Key::Enter) || m_UIInjectedEnter;
             pointer.Delete = Input::IsKeyTyped(Key::Delete);
@@ -905,6 +907,14 @@ namespace Dimension
                 screenPointer.NavUp = screenPointer.NavDown = screenPointer.NavLeft = screenPointer.NavRight = screenPointer.Submit =
                     screenPointer.Cancel = false;
             m_UIHovered = UI::Update(*this, screenPointer, m_UIScreen, unscaledDt); // menus work while the game is frozen
+            // The focused field of a screen canvas tells the input method where its caret is.
+            for (auto [fe, field] : m_Registry.ViewOf<UIInputFieldComponent>())
+                if (field.Focused && field.CaretRect.z > 0.0f)
+                {
+                    Entity canvas = CanvasOf(fe);
+                    if (canvas.IsNull() || m_Registry.Get<CanvasComponent>(canvas).RenderMode != CanvasRenderMode::WorldSpace)
+                        Input::SetTextInputRect(field.CaretRect);
+                }
             // World Space canvases: the pointer where the main camera's ray meets each panel, in its pixels (keys and
             // navigation stay with the screen's UI).
             std::vector<Entity> worldCanvases;

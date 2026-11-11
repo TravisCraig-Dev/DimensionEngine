@@ -8172,6 +8172,23 @@ namespace
         runtime->InjectUIKeyboard("x");
         step({ 100, 90 }, false);
         CHECK(rr.Get<UIInputFieldComponent>(field).Text == "Hell");
+        // An input method composing: the field shows the composition at its caret without taking it into its text,
+        // editing keys go to the input method, and the caret's rectangle goes to Input; the committed text then types.
+        step({ 100, 90 }, true);
+        step({ 100, 90 }, false);
+        const std::string composed = "\xE3\x81\xAB\xE3\x81\xBB"; // "nihon" being composed (two kana)
+        Input::SetComposition(composed, 3);                       // the cursor after the first
+        runtime->InjectUIKeyboard("", true); // a Backspace for the input method
+        step({ 100, 90 }, false);
+        {
+            auto& f = rr.Get<UIInputFieldComponent>(field);
+            CHECK(f.Focused && f.Text == "Hell" && f.Composition == composed && f.CompositionCursor == 3);
+            CHECK(f.CaretRect.z > 0.0f && f.CaretRect.w > 0.0f && f.CaretRect.x > 0.0f && Input::GetTextInputRect() == f.CaretRect);
+        }
+        Input::SetComposition({}, 0);
+        runtime->InjectUIKeyboard("\xE6\x97\xA5"); // committed: one kanji
+        step({ 100, 90 }, false);
+        CHECK(rr.Get<UIInputFieldComponent>(field).Text == "Hell\xE6\x97\xA5" && rr.Get<UIInputFieldComponent>(field).Composition.empty());
         runtime->OnRuntimeStop();
 
         // Widgets serialize through the reflection registry.

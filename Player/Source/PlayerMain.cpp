@@ -9,6 +9,7 @@
 //        [--fixed-dt seconds]                     every frame advances the game by this step (repeatable runs)
 //        [--wait-for-debugger]                    wait up to 60 s for a C# debugger to attach
 //        [--system-language fr-FR]                start as if the system's language were that (unless one was chosen)
+//        [--ime text]                             an input method composing this text from frame 60 (\uXXXX escapes allowed)
 // A built game ships as DimensionPlayer.exe next to a "Project" folder.
 #include <Dimension/Dimension.h>
 #include <Dimension/Project/Project.h>
@@ -39,6 +40,7 @@ namespace
 {
     // Scripted pointer: from Frame on the pointer sits at Position; a click is down for one frame, then up.
     float s_FixedDt = 0.0f; // --fixed-dt: the step every frame advances the game by (0 = real time)
+    std::string s_ImeText;  // --ime: an input method composing this text from frame 60
 
     struct PointerEvent
     {
@@ -141,6 +143,7 @@ namespace
             for (auto& ev : m_KeyEvents) Input::SimulateKey(ev.Code, false);
             for (auto& ev : m_KeyEvents)
                 if (ev.Frame == m_Frame - 1) Input::SimulateKey(ev.Code, true); // (m_Frame was advanced above)
+            if (!s_ImeText.empty() && m_Frame >= 60) Input::SetComposition(s_ImeText, (int)s_ImeText.size()); // (--ime)
             m_Scene->SetUIInput(pointer, down, { (float)size.x, (float)size.y }, true, Input::GetScrollDelta());
             auto updateStart = std::chrono::steady_clock::now();
             m_Scene->OnUpdateRuntime(dt);
@@ -222,6 +225,24 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--fixed-dt") && i + 1 < argc) s_FixedDt = (float)std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--wait-for-debugger")) waitForDebugger = true;
         else if (!std::strcmp(argv[i], "--system-language") && i + 1 < argc) Localization::SetSystemLanguage(argv[++i]);
+        else if (!std::strcmp(argv[i], "--ime") && i + 1 < argc)
+        {
+            // UTF-8, with \uXXXX escapes for what a command line cannot carry.
+            std::string in = argv[++i];
+            for (size_t k = 0; k < in.size(); ++k)
+            {
+                if (in[k] == '\\' && k + 5 < in.size() + 1 && in[k + 1] == 'u')
+                {
+                    uint32_t cp = (uint32_t)std::strtoul(in.substr(k + 2, 4).c_str(), nullptr, 16);
+                    if (cp < 0x80) s_ImeText += (char)cp;
+                    else if (cp < 0x800) { s_ImeText += (char)(0xC0 | (cp >> 6)); s_ImeText += (char)(0x80 | (cp & 0x3F)); }
+                    else { s_ImeText += (char)(0xE0 | (cp >> 12)); s_ImeText += (char)(0x80 | ((cp >> 6) & 0x3F)); s_ImeText += (char)(0x80 | (cp & 0x3F)); }
+                    k += 5;
+                }
+                else
+                    s_ImeText += in[k];
+            }
+        }
         else if ((!std::strcmp(argv[i], "--click") || !std::strcmp(argv[i], "--move")) && i + 1 < argc)
         {
             bool click = !std::strcmp(argv[i], "--click");

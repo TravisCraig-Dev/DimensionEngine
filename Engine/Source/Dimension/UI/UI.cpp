@@ -1829,10 +1829,22 @@ namespace Dimension::UI
                 field.SelectionAnchor = -1;
                 field.Selecting = false;
                 field.ScrollX = field.ScrollY = 0.0f;
+                field.Composition.clear();
+                field.CaretRect = glm::vec4(0.0f);
                 continue;
             }
 
             field.CaretTime += dt;
+            // An input method composing: its text shows at the caret, and editing keys go to it, not the field
+            // (what it commits arrives as typed text).
+            field.Composition = pointer.Composition;
+            field.CompositionCursor = std::clamp(pointer.CompositionCursor, 0, (int32_t)pointer.Composition.size());
+            bool composing = !field.Composition.empty();
+            PointerState keys = pointer;
+            if (composing)
+                keys.Backspace = keys.Delete = keys.Left = keys.Right = keys.LineUp = keys.LineDown = keys.Home = keys.End = keys.Enter = keys.Tab =
+                    keys.SelectAll = keys.Cut = keys.Paste = false;
+            const PointerState& pointer = keys; // (from here on)
             std::string before = text;
             int32_t caretBefore = field.Caret, anchorBefore = field.SelectionAnchor;
             auto hasSelection = [&] { return field.SelectionAnchor >= 0 && field.SelectionAnchor != field.Caret; };
@@ -1978,9 +1990,19 @@ namespace Dimension::UI
                 caretX = MeasureText(text.substr(0, field.Caret), px);
                 total = MeasureText(text, px);
             }
+            if (composing) // the composition's cursor kept in view too
+            {
+                float extra = MeasureText(field.Composition.substr(0, (size_t)field.CompositionCursor), px);
+                caretX += extra;
+                total += MeasureText(field.Composition, px);
+            }
             if (caretX - field.ScrollX > avail) field.ScrollX = caretX - avail;
             if (caretX - field.ScrollX < 0.0f) field.ScrollX = caretX;
             field.ScrollX = std::clamp(field.ScrollX, 0.0f, std::max(0.0f, total - avail));
+            // The caret's rectangle (for the input method's windows).
+            float caretTop = field.MultiLine ? textTop + LineOf(LayoutLines(text, wrapWidth, px).Starts, (size_t)field.Caret) * lineH - field.ScrollY
+                                             : rect->ComputedMin.y + (rect->ComputedMax.y - rect->ComputedMin.y - lineH) * 0.5f;
+            field.CaretRect = glm::vec4(textLeft + caretX - field.ScrollX, caretTop, std::max(1.0f, 2.0f * scale), lineH);
         }
         if (!tabFrom.IsNull() && fieldOrder.size() > 1)
         {
@@ -2192,13 +2214,23 @@ namespace Dimension::UI
                         float x0 = origin.x + MeasureText(text.substr(0, lo), px), x1 = origin.x + MeasureText(text.substr(0, hi), px);
                         Emit(out, { x0, lineY }, { x1, lineY + lineH }, { 0, 0 }, { 1, 1 }, { 0.25f, 0.55f, 0.95f, 0.35f }, white, inner);
                     }
-                    if (text.empty() && !field->Placeholder.empty() && !field->Focused)
+                    // An input method's composition shows inside the text at the caret, underlined, with its own cursor.
+                    bool composing = field->Focused && !field->Composition.empty() && !field->MultiLine;
+                    std::string shown = composing ? text.substr(0, caret) + field->Composition + text.substr(caret) : std::string();
+                    if (text.empty() && !composing && !field->Placeholder.empty() && !field->Focused)
                         EmitText(out, *font, field->Placeholder, px, origin, size.y, field->PlaceholderColor, inner);
-                    else if (!text.empty())
-                        EmitText(out, *font, text, px, origin, size.y, field->TextColor, inner);
-                    if (field->Focused && std::fmod(field->CaretTime, 1.0f) < 0.55f)
+                    else if (!text.empty() || composing)
+                        EmitText(out, *font, composing ? shown : text, px, origin, size.y, field->TextColor, inner);
+                    if (composing)
                     {
-                        float cx = origin.x + MeasureText(text.substr(0, caret), px);
+                        float u0 = origin.x + MeasureText(text.substr(0, caret), px), u1 = u0 + MeasureText(field->Composition, px);
+                        float uy = lineY + lineH - std::max(1.0f, 1.5f * s);
+                        Emit(out, { u0, uy }, { u1, uy + std::max(1.0f, 1.5f * s) }, { 0, 0 }, { 1, 1 }, field->TextColor, white, inner);
+                    }
+                    if (field->Focused && (composing || std::fmod(field->CaretTime, 1.0f) < 0.55f))
+                    {
+                        float cx = origin.x + MeasureText(text.substr(0, caret), px) +
+                                   (composing ? MeasureText(field->Composition.substr(0, (size_t)field->CompositionCursor), px) : 0.0f);
                         Emit(out, { cx, lineY }, { cx + std::max(1.0f, 2.0f * s), lineY + lineH }, { 0, 0 }, { 1, 1 }, field->TextColor, white, inner);
                     }
                 }

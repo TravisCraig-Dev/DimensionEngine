@@ -71,6 +71,19 @@ namespace Dimension
         static const std::string& GetInputString();
         static std::string GetClipboardText();
         static void SetClipboardText(const std::string& text);
+        // Input method editors (Chinese, Japanese, Korean): the text being composed (not yet committed; committed text
+        // arrives as typed text) and the cursor in it (a byte offset). The focused UI input field shows it at its caret.
+        static const std::string& GetComposition();
+        static int GetCompositionCursor();
+        static void SetComposition(const std::string& text, int cursor); // the window (and tests, automated runs)
+        // Where the focused text field's caret is (framebuffer pixels: x, y, width, height), set each frame a field is
+        // focused: the input method's composition and candidate windows open beside it. Active: set this frame.
+        static void SetTextInputRect(const glm::vec4& rect);
+        // Where the game's view starts in the window (client pixels): the editor's Game view; 0 in the Player.
+        static void SetTextInputOrigin(const glm::vec2& origin);
+        static glm::vec2 GetTextInputOrigin();
+        static glm::vec4 GetTextInputRect();
+        static bool IsTextInputActive();
 
         // When disabled (e.g. editor not in play mode or game view unfocused) all queries return "nothing pressed".
         static void SetGameInputEnabled(bool enabled);

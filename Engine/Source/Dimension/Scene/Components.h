@@ -658,6 +658,11 @@ namespace Dimension
         bool Selecting = false;       // mouse drag in progress
         float ScrollX = 0.0f;         // pixels the text is scrolled left to keep the caret visible
         float ScrollY = 0.0f;         // multi-line: pixels scrolled up
+        // Runtime: an input method's composition shown at the caret while focused, and the caret's rectangle (canvas
+        // pixels: x, y, width, height) for the input method's windows.
+        std::string Composition;
+        int32_t CompositionCursor = 0;
+        glm::vec4 CaretRect{ 0.0f };
     };
 
     enum class UILayoutDirection : int32_t { Vertical = 0, Horizontal = 1, Grid = 2 };

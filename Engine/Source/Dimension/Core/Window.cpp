@@ -3,9 +3,101 @@
 #include "Dimension/Core/Log.h"
 #include <volk.h>
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <imm.h>
+#pragma comment(lib, "imm32.lib")
+#endif
 
 namespace Dimension
 {
+#ifdef _WIN32
+    namespace
+    {
+        // Input method editors: while a game text field has the focus, the composition (what is typed but not yet
+        // committed) goes to Input for the field to draw at its caret, instead of the system's own composition window.
+        // Committed text still arrives as characters (WM_IME_CHAR becomes WM_CHAR in the default handling).
+        WNDPROC s_GlfwProc = nullptr;
+        glm::vec4 s_ImeRect{ -1.0f };
+
+        std::string Utf8(const wchar_t* text, int length)
+        {
+            if (length <= 0) return {};
+            int bytes = WideCharToMultiByte(CP_UTF8, 0, text, length, nullptr, 0, nullptr, nullptr);
+            std::string out((size_t)bytes, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, text, length, out.data(), bytes, nullptr, nullptr);
+            return out;
+        }
+
+        LRESULT CALLBACK ImeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+        {
+            bool game = Input::IsTextInputActive();
+            switch (msg)
+            {
+            case WM_IME_SETCONTEXT:
+                if (game) lp &= ~ISC_SHOWUICOMPOSITIONWINDOW; // the field draws the composition
+                break;
+            case WM_IME_STARTCOMPOSITION:
+                if (game) return 0;
+                break;
+            case WM_IME_COMPOSITION:
+                if (!game) break;
+                if (HIMC imc = ImmGetContext(hwnd))
+                {
+                    if (lp & GCS_COMPSTR)
+                    {
+                        LONG bytes = ImmGetCompositionStringW(imc, GCS_COMPSTR, nullptr, 0);
+                        std::wstring text(bytes > 0 ? (size_t)bytes / sizeof(wchar_t) : 0, L'\0');
+                        if (bytes > 0) ImmGetCompositionStringW(imc, GCS_COMPSTR, text.data(), bytes);
+                        LONG cursor = std::clamp<LONG>(ImmGetCompositionStringW(imc, GCS_CURSORPOS, nullptr, 0), 0, (LONG)text.size());
+                        Input::SetComposition(Utf8(text.data(), (int)text.size()), (int)Utf8(text.data(), (int)cursor).size());
+                    }
+                    if (lp & GCS_RESULTSTR) Input::SetComposition({}, 0);
+                    ImmReleaseContext(hwnd, imc);
+                }
+                if (!(lp & GCS_RESULTSTR)) return 0; // (the result goes on to become characters)
+                break;
+            case WM_IME_ENDCOMPOSITION:
+                if (game) Input::SetComposition({}, 0);
+                break;
+            default: break;
+            }
+            return CallWindowProcW(s_GlfwProc, hwnd, msg, wp, lp);
+        }
+
+        // The input method's composition and candidate windows beside the focused field's caret.
+        void PlaceIme(GLFWwindow* window)
+        {
+            if (!Input::IsTextInputActive())
+            {
+                s_ImeRect = glm::vec4(-1.0f);
+                return;
+            }
+            glm::vec4 r = Input::GetTextInputRect();
+            glm::vec2 o = Input::GetTextInputOrigin();
+            r.x += o.x;
+            r.y += o.y;
+            if (r == s_ImeRect) return;
+            s_ImeRect = r;
+            HWND hwnd = glfwGetWin32Window(window);
+            HIMC imc = ImmGetContext(hwnd);
+            if (!imc) return;
+            COMPOSITIONFORM composition{};
+            composition.dwStyle = CFS_POINT;
+            composition.ptCurrentPos = { (LONG)r.x, (LONG)r.y };
+            ImmSetCompositionWindow(imc, &composition);
+            CANDIDATEFORM candidate{};
+            candidate.dwIndex = 0;
+            candidate.dwStyle = CFS_EXCLUDE;
+            candidate.ptCurrentPos = { (LONG)r.x, (LONG)(r.y + r.w) };
+            candidate.rcArea = { (LONG)r.x, (LONG)r.y, (LONG)(r.x + r.z), (LONG)(r.y + r.w) };
+            ImmSetCandidateWindow(imc, &candidate);
+            ImmReleaseContext(hwnd, imc);
+        }
+    }
+#endif
+
     Window::Window(const WindowSpec& spec)
     {
         glfwSetErrorCallback([](int code, const char* desc) { Log::Error("GLFW error {}: {}", code, desc); });
@@ -36,6 +128,12 @@ namespace Dimension
             if (self->OnCloseRequested && !self->OnCloseRequested()) glfwSetWindowShouldClose(w, GLFW_FALSE);
         });
         Input::Init(m_Window);
+#ifdef _WIN32
+        // Input methods: the composition comes to the engine (GLFW does not report it).
+        HWND hwnd = glfwGetWin32Window(m_Window);
+        s_GlfwProc = (WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)&ImeProc);
+#endif
     }
 
     Window::~Window()
@@ -44,7 +142,13 @@ namespace Dimension
         glfwTerminate();
     }
 
-    void Window::PollEvents() { glfwPollEvents(); }
+    void Window::PollEvents()
+    {
+        glfwPollEvents();
+#ifdef _WIN32
+        PlaceIme(m_Window);
+#endif
+    }
     void Window::WaitEvents() { glfwWaitEvents(); }
     bool Window::ShouldClose() const { return glfwWindowShouldClose(m_Window); }
     void Window::SetShouldClose(bool close) { glfwSetWindowShouldClose(m_Window, close); }

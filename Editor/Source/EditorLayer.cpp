@@ -3255,6 +3255,7 @@ namespace Editor
         if (m_Ctx.IsPlaying())
         {
             ImVec2 mouse = ImGui::GetMousePos();
+            Input::SetTextInputOrigin({ origin.x, origin.y }); // the game's UI starts here in the window (input methods)
             m_Ctx.RuntimeScene->SetUIInput({ mouse.x - origin.x, mouse.y - origin.y },
                                            imageHovered && ImGui::IsMouseDown(ImGuiMouseButton_Left),
                                            { avail.x, avail.y }, imageHovered || ImGui::IsMouseDown(ImGuiMouseButton_Left),

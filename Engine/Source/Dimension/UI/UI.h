@@ -22,6 +22,8 @@ namespace Dimension
             bool Down = false, Pressed = false, Released = false;
             float Scroll = 0.0f;         // wheel notches this frame (positive = up)
             std::string Text;            // UTF-8 characters typed this frame
+            std::string Composition;     // an input method's text being composed (shown at the caret, not yet typed)
+            int CompositionCursor = 0;   // its cursor (byte offset)
             bool Backspace = false, Enter = false;
             // Text editing (presses including key repeat), modifiers and clipboard.
             bool Delete = false, Left = false, Right = false, LineUp = false, LineDown = false, Home = false, End = false, Tab = false;

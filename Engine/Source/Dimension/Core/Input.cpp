@@ -29,6 +29,11 @@ namespace Dimension
         std::array<uint8_t, GLFW_KEY_LAST + 1> s_KeyTypedAccum{}, s_KeyTyped{}; // presses + repeats this frame
         int s_ModsAccum = 0, s_Mods = 0; // modifiers seen with key presses this frame
         const std::string s_Empty;
+        std::string s_Composition;
+        int s_CompositionCursor = 0;
+        glm::vec4 s_TextInputRect{ 0.0f };
+        glm::vec2 s_TextInputOrigin{ 0.0f };
+        bool s_TextInputActive = false, s_TextInputSet = false;
 
         constexpr int kMaxPads = 4;
         struct PadState
@@ -182,6 +187,10 @@ namespace Dimension
         s_TypedAccum.clear();
         s_InputString = std::move(s_InputStringAccum);
         s_InputStringAccum.clear();
+        // A text field set its caret last frame: it is still being typed into (the window places the IME there).
+        s_TextInputActive = s_TextInputSet;
+        s_TextInputSet = false;
+        if (!s_TextInputActive) s_Composition.clear(), s_CompositionCursor = 0;
         s_KeyTyped = s_KeyTypedAccum;
         s_KeyTypedAccum.fill(0);
         s_Mods = s_ModsAccum;
@@ -285,6 +294,22 @@ namespace Dimension
     }
 
     const std::string& Input::GetTypedText() { return KeyboardOpen() ? s_Typed : s_Empty; }
+    const std::string& Input::GetComposition() { return s_Composition; }
+    int Input::GetCompositionCursor() { return s_CompositionCursor; }
+    void Input::SetComposition(const std::string& text, int cursor)
+    {
+        s_Composition = text;
+        s_CompositionCursor = std::clamp(cursor, 0, (int)text.size());
+    }
+    void Input::SetTextInputRect(const glm::vec4& rect)
+    {
+        s_TextInputRect = rect;
+        s_TextInputSet = true;
+    }
+    glm::vec4 Input::GetTextInputRect() { return s_TextInputRect; }
+    void Input::SetTextInputOrigin(const glm::vec2& origin) { s_TextInputOrigin = origin; }
+    glm::vec2 Input::GetTextInputOrigin() { return s_TextInputOrigin; }
+    bool Input::IsTextInputActive() { return s_TextInputActive; }
     const std::string& Input::GetInputString() { return KeyboardOpen() ? s_InputString : s_Empty; }
     void Input::SetKeyboardCapturedByUI(bool captured) { s_UICapture = captured; }
     bool Input::IsKeyboardCapturedByUI() { return s_UICapture; }
