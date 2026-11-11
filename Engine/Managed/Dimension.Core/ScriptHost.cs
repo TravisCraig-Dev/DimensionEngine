@@ -1003,6 +1003,7 @@ namespace Dimension
             s_EventMethods.Clear();
             EngineEvents.Clear(); // listeners may be methods of the scripts being unloaded
             s_ScriptAssemblies.Clear(); // (holding them would keep the old context alive)
+            JobSystem.Shutdown(); // (jobs run the scripts' code)
             PlayTestDriver.Current = null;
             if (s_Context == null) return null;
             var weak = new WeakReference(s_Context);

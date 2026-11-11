@@ -701,7 +701,8 @@ namespace Editor
             // The play-mode test goes on once a frame, after the scene's update; play stops when it is done.
             if (!m_Ctx.RunningPlayTest.empty() && m_Ctx.State == PlayState::Play)
             {
-                std::string result = CSharpRuntime::PlayTest(1, *m_Ctx.RuntimeScene, {}, dt);
+                // (the scene's step, as coroutines get: scaled and clamped, so a long editor frame is not a long wait)
+                std::string result = CSharpRuntime::PlayTest(1, *m_Ctx.RuntimeScene, {}, m_Ctx.RuntimeScene->GetDeltaTime());
                 if (!result.empty())
                 {
                     m_Ctx.PlayTestResult = result;
