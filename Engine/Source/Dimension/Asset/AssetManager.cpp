@@ -659,6 +659,9 @@ namespace Dimension
         settings.Scale = std::clamp(meta->ImportSettings.value("scale", 1.0f), 0.0001f, 10000.0f);
         settings.ImportAnimations = meta->ImportSettings.value("animations", true);
         settings.ImportMaterials = meta->ImportSettings.value("importMaterials", true);
+        settings.ReduceKeyframes = meta->ImportSettings.value("reduceKeyframes", false);
+        settings.RotationError = std::clamp(meta->ImportSettings.value("rotationError", 0.5f), 0.0f, 45.0f);
+        settings.PositionError = std::clamp(meta->ImportSettings.value("positionError", 0.001f), 0.0f, 10.0f);
         if (auto it = meta->ImportSettings.find("excludedClips"); it != meta->ImportSettings.end() && it->is_array())
             for (const auto& name : *it)
                 if (name.is_string()) settings.ExcludedClips.push_back(name.get<std::string>());

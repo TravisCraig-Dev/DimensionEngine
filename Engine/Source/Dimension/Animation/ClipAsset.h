@@ -63,6 +63,8 @@ namespace Dimension
         bool RemoveKeys(const std::string& joint, float time);   // every channel of the joint at that time
         bool MoveKeys(const std::string& joint, float from, float to);
         bool HasKey(const std::string& joint, float time) const;
+        // Keyframe reduction of its linear channels (Animation::ReduceKeys); returns how many keys went.
+        int ReduceKeys(float rotationDegrees, float distance);
         // Events: added (kept in time order; returns its index), moved (its new index).
         int AddEvent(float time, const std::string& function);
         int MoveEvent(int index, float time);

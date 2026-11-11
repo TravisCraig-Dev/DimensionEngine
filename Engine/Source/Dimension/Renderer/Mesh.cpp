@@ -616,6 +616,11 @@ namespace Dimension
         char key[64];
         std::snprintf(key, sizeof(key), "s%g a%d m%d", Scale, ImportAnimations ? 1 : 0, ImportMaterials ? 1 : 0);
         std::string result = key;
+        if (ReduceKeyframes)
+        {
+            std::snprintf(key, sizeof(key), " r%g p%g", RotationError, PositionError);
+            result += key;
+        }
         for (const auto& name : ExcludedClips) result += " -" + name;
         return result;
     }
@@ -633,7 +638,11 @@ namespace Dimension
             for (auto& sub : SubMeshes) sub.MaterialSlot = -1;
         }
         float s = settings.Scale;
-        if (s == 1.0f || s <= 0.0f) return;
+        if (s == 1.0f || s <= 0.0f)
+        {
+            ReduceClipKeys(settings);
+            return;
+        }
         // A uniform scale of the whole model: positions and every translation (joint offsets, the bind pose's
         // translation, animated translations, the root transform) grow by s; rotations and scales stay.
         for (auto& v : Vertices) v.Position *= s;
@@ -652,6 +661,19 @@ namespace Dimension
             for (auto& ch : clip.Channels)
                 if (ch.Path == AnimationPath::Translation)
                     for (auto& value : ch.Values) value = glm::vec4(glm::vec3(value) * s, value.w);
+        ReduceClipKeys(settings);
+    }
+
+    void MeshData::ReduceClipKeys(const MeshImportSettings& settings)
+    {
+        if (!settings.ReduceKeyframes) return;
+        int removed = 0, total = 0;
+        for (auto& clip : Clips)
+        {
+            for (const auto& ch : clip.Channels) total += (int)ch.Times.size();
+            removed += Animation::ReduceKeys(clip, settings.RotationError, settings.PositionError);
+        }
+        if (removed > 0) Log::Info("'{}': keyframe reduction left out {} of {} keys", Name, removed, total);
     }
 
     bool MeshData::LoadFromFile(const fs::path& path, MeshData& out, const MeshImportSettings& settings)

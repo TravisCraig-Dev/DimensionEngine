@@ -1921,6 +1921,20 @@ namespace Editor
             ImGui::SetItemTooltip("Off: every part uses the Mesh Renderer's own material");
             if (animations)
             {
+                // Keyframe reduction (Unity's animation compression): fewer keys, within the errors.
+                bool reduce = current.ReduceKeyframes;
+                if (ImGui::Checkbox("Reduce Keyframes", &reduce)) { settings["reduceKeyframes"] = reduce; changed = true; }
+                ImGui::SetItemTooltip("Leave out the keys the curve passes within the errors below (smaller clips, the same motion)");
+                if (reduce)
+                {
+                    float rotationError = current.RotationError, positionError = current.PositionError;
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::DragFloat("Rotation Error", &rotationError, 0.05f, 0.0f, 45.0f, "%.2f deg");
+                    if (ImGui::IsItemDeactivatedAfterEdit() && rotationError != current.RotationError) { settings["rotationError"] = rotationError; changed = true; }
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::DragFloat("Position Error", &positionError, 0.0001f, 0.0f, 10.0f, "%.4f m");
+                    if (ImGui::IsItemDeactivatedAfterEdit() && positionError != current.PositionError) { settings["positionError"] = positionError; changed = true; }
+                }
                 // Which clips to import: the imported ones, plus the excluded ones (known from the settings).
                 std::vector<std::pair<std::string, bool>> clips;
                 if (auto mesh = AssetManager::GetMesh(handle))

@@ -7067,6 +7067,67 @@ namespace
         AnimationClipAsset again = AnimationClipAsset::FromClip(skeleton, glow);
         CHECK(again.FindChannel(lamp, AnimationPath::Translation) && again.FindChannel(lamp, AnimationPath::Translation)->Times.size() == 2);
 
+        // Keyframe reduction: a straight motion keeps its ends, a turn at a steady rate too; a sine keeps enough keys that
+        // every original one stays within the tolerance; spline and step channels are left alone.
+        {
+            AnimationChannel line;
+            line.Path = AnimationPath::Translation;
+            AnimationChannel wave = line, turn;
+            turn.Path = AnimationPath::Rotation;
+            for (int k = 0; k <= 40; ++k)
+            {
+                float t = k / 40.0f;
+                line.Times.push_back(t), line.Values.push_back(glm::vec4(t * 2.0f, 1.0f, 0, 0));
+                wave.Times.push_back(t), wave.Values.push_back(glm::vec4(std::sin(t * 6.2831853f), 0, 0, 0));
+                glm::quat q = glm::angleAxis(glm::radians(90.0f * t), glm::vec3(0, 1, 0));
+                turn.Times.push_back(t), turn.Values.push_back(glm::vec4(q.x, q.y, q.z, q.w));
+            }
+            AnimationChannel original = wave;
+            CHECK(Animation::ReduceKeys(line, 0.5f, 0.001f) == 39 && line.Times.size() == 2 && Near(line.Values[1].x, 2.0f));
+            CHECK(Animation::ReduceKeys(turn, 0.5f, 0.001f) == 39 && turn.Times.size() == 2);
+            int removed = Animation::ReduceKeys(wave, 0.5f, 0.02f);
+            float worst = 0.0f;
+            for (size_t k = 0; k < original.Times.size(); ++k)
+                worst = std::max(worst, std::abs(Animation::SampleChannel(wave, original.Times[k]).x - original.Values[k].x));
+            CHECK(removed > 10 && wave.Times.size() < 30 && worst <= 0.02f + 1e-5f);
+            AnimationChannel spline = original;
+            spline.Interpolation = AnimationInterpolation::Step;
+            CHECK(Animation::ReduceKeys(spline, 0.5f, 1.0f) == 0);
+            // A recorded .anim's linear channels.
+            AnimationClipAsset recorded;
+            recorded.Duration = 1.0f;
+            for (int k = 0; k <= 10; ++k) recorded.SetKey(joint, AnimationPath::Translation, k / 10.0f, glm::vec4(k * 0.1f, 0, 0, 0));
+            CHECK(recorded.ReduceKeys(0.5f, 0.001f) == 9 && recorded.FindChannel(joint, AnimationPath::Translation)->Times.size() == 2);
+            // As an import setting: the Tentacle's clips with fewer keys, every pose within the error.
+            MeshImportSettings reduce;
+            reduce.ReduceKeyframes = true;
+            MeshData reduced;
+            CHECK(MeshData::LoadFromFile(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Tentacle.gltf", reduced, reduce));
+            size_t before = 0, after = 0;
+            const AnimationClip& full = tentacle.Clips[0];
+            for (const auto& c : full.Channels) before += c.Times.size();
+            const AnimationClip* reducedWave = Animation::FindClip(reduced.Clips, full.Name);
+            if (reducedWave)
+                for (const auto& c : reducedWave->Channels) after += c.Times.size();
+            std::printf("    Tentacle %s: %zu keys, %zu reduced\n", full.Name.c_str(), before, after);
+            CHECK(reducedWave && after < before);
+            // From the model's .meta import settings, through the asset manager.
+            fs::path metaAssets = fs::temp_directory_path() / "dimension_reduce_meta" / "Assets";
+            fs::remove_all(metaAssets.parent_path());
+            fs::create_directories(metaAssets);
+            fs::copy_file(fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Tentacle.gltf", metaAssets / "Tentacle.gltf");
+            { std::ofstream(metaAssets / "Tentacle.gltf.meta") << R"({ "guid": 424242, "type": "Mesh", "settings": { "reduceKeyframes": true } })"; }
+            AssetManager::Init(metaAssets);
+            auto viaMeta = AssetManager::GetMeshData(AssetHandle(uint64_t(424242)));
+            size_t metaKeys = 0;
+            if (viaMeta)
+                if (const AnimationClip* c = Animation::FindClip(viaMeta->Clips, full.Name))
+                    for (const auto& ch : c->Channels) metaKeys += ch.Times.size();
+            CHECK(AssetManager::GetMeshImportSettings(AssetHandle(uint64_t(424242))).ReduceKeyframes && metaKeys == after);
+            AssetManager::Shutdown();
+            fs::remove_all(metaAssets.parent_path());
+        }
+
         // As project assets: saved and loaded, listed for their model, and a version that changes with every edit.
         fs::path assets = fs::temp_directory_path() / "dimension_clip_assets" / "Assets";
         fs::remove_all(assets.parent_path());

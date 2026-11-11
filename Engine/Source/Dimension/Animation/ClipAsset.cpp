@@ -410,6 +410,25 @@ namespace Dimension
         return !component.empty() && !field.empty();
     }
 
+    int AnimationClipAsset::ReduceKeys(float rotationDegrees, float distance)
+    {
+        int removed = 0;
+        for (Channel& c : Channels)
+        {
+            if (c.Smooth || c.Interpolation != AnimationInterpolation::Linear || c.Times.size() != c.Values.size()) continue;
+            AnimationChannel ch;
+            ch.Path = c.Path;
+            ch.Interpolation = c.Interpolation;
+            ch.Times = std::move(c.Times);
+            ch.Values = std::move(c.Values);
+            removed += Animation::ReduceKeys(ch, rotationDegrees, distance);
+            c.Times = std::move(ch.Times);
+            c.Values = std::move(ch.Values);
+        }
+        if (removed) ++Version;
+        return removed;
+    }
+
     int AnimationClipAsset::AddEvent(float time, const std::string& function)
     {
         time = std::clamp(time, 0.0f, Duration);

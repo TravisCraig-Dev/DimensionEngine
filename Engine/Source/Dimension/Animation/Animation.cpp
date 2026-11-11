@@ -211,6 +211,66 @@ namespace Dimension
             return glm::mix(a, b, t);
         }
 
+        int ReduceKeys(AnimationChannel& ch, float rotationDegrees, float distance)
+        {
+            size_t n = std::min(ch.Times.size(), ch.Values.size());
+            if (n < 3 || ch.Interpolation != AnimationInterpolation::Linear) return 0;
+            bool rotation = ch.Path == AnimationPath::Rotation;
+            float tolerance = rotation ? glm::radians(std::max(rotationDegrees, 0.0f)) : std::max(distance, 0.0f);
+            // How far key k is from the line between keys a and b (at its time).
+            auto error = [&](size_t a, size_t b, size_t k) {
+                float span = ch.Times[b] - ch.Times[a];
+                float t = span > 1e-6f ? (ch.Times[k] - ch.Times[a]) / span : 0.0f;
+                const glm::vec4 &va = ch.Values[a], &vb = ch.Values[b], &vk = ch.Values[k];
+                if (rotation)
+                {
+                    glm::quat between = glm::slerp(glm::quat(va.w, va.x, va.y, va.z), glm::quat(vb.w, vb.x, vb.y, vb.z), t);
+                    float d = std::abs(glm::dot(between, glm::normalize(glm::quat(vk.w, vk.x, vk.y, vk.z))));
+                    return 2.0f * std::acos(std::clamp(d, 0.0f, 1.0f)); // the angle between them
+                }
+                glm::vec4 diff = glm::mix(va, vb, t) - vk;
+                return glm::length(glm::vec3(diff));
+            };
+            std::vector<uint8_t> keep(n, 0);
+            keep[0] = keep[n - 1] = 1;
+            std::vector<std::pair<size_t, size_t>> stack = { { 0, n - 1 } };
+            while (!stack.empty())
+            {
+                auto [a, b] = stack.back();
+                stack.pop_back();
+                size_t worst = 0;
+                float most = -1.0f;
+                for (size_t k = a + 1; k < b; ++k)
+                    if (float e = error(a, b, k); e > most) most = e, worst = k;
+                if (worst == 0 || most <= tolerance) continue;
+                keep[worst] = 1;
+                stack.push_back({ a, worst });
+                stack.push_back({ worst, b });
+            }
+            int removed = 0;
+            size_t w = 0;
+            for (size_t k = 0; k < n; ++k)
+                if (keep[k])
+                {
+                    ch.Times[w] = ch.Times[k];
+                    ch.Values[w] = ch.Values[k];
+                    ++w;
+                }
+                else
+                    ++removed;
+            ch.Times.resize(w);
+            ch.Values.resize(w);
+            return removed;
+        }
+
+        int ReduceKeys(AnimationClip& clip, float rotationDegrees, float distance)
+        {
+            int removed = 0;
+            for (AnimationChannel& ch : clip.Channels) removed += ReduceKeys(ch, rotationDegrees, distance);
+            for (AnimationChannel& ch : clip.WeightChannels) removed += ReduceKeys(ch, 0.0f, distance);
+            return removed;
+        }
+
         void AutoTangents(AnimationChannel& ch)
         {
             size_t n = std::min(ch.Times.size(), ch.Values.size());

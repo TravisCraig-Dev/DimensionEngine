@@ -59,8 +59,12 @@ namespace Dimension
         bool ImportAnimations = true;
         bool ImportMaterials = true; // false: every part uses the Mesh Renderer's material
         std::vector<std::string> ExcludedClips; // animation clips (by name) left out of the import
+        // Keyframe reduction of the clips (Animation::ReduceKeys): keys within these errors of the curve are dropped.
+        bool ReduceKeyframes = false;
+        float RotationError = 0.5f;  // degrees
+        float PositionError = 0.001f; // meters (after Scale)
         std::string Key() const;     // distinguishes cached imports with other settings
-        bool IsDefault() const { return Scale == 1.0f && ImportAnimations && ImportMaterials && ExcludedClips.empty(); }
+        bool IsDefault() const { return Scale == 1.0f && ImportAnimations && ImportMaterials && ExcludedClips.empty() && !ReduceKeyframes; }
     };
 
     // CPU-side mesh as imported from a file (no GPU resources; usable in tools and tests).
@@ -94,6 +98,7 @@ namespace Dimension
         int FindBlendShape(const std::string& name) const; // -1 = none
         // Applies import settings to freshly imported data.
         void ApplyImportSettings(const MeshImportSettings& settings);
+        void ReduceClipKeys(const MeshImportSettings& settings); // (keyframe reduction, when on)
         static MeshData FromArrays(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const std::string& name);
         // Fills in tangents for vertices that have none, from the UV layout (as MikkTSpace does: per-corner tangents
         // weighted by corner angle, orthogonalized against the normal). Where triangles with mirrored UVs share a

@@ -132,6 +132,12 @@ namespace Dimension
         // Smooth keys: a CubicSpline channel through its keys with automatic tangents (each key's slope from its
         // neighbours, as Catmull-Rom; flat at the ends), rotations kept on the short way round.
         void AutoTangents(AnimationChannel& channel);
+        // Keyframe reduction (like Unity's animation compression): drops the keys of a linear channel that the line
+        // between the keys kept passes within a tolerance (rotations: `rotationDegrees` of turn; others: `distance`),
+        // Ramer-Douglas-Peucker style, so every original key stays within it. The first and last keys stay; step and
+        // spline channels are left alone. Returns how many keys went.
+        int ReduceKeys(AnimationChannel& ch, float rotationDegrees, float distance);
+        int ReduceKeys(AnimationClip& clip, float rotationDegrees, float distance);
         // out = a * (1 - t) + b * t (rotations slerped).
         void Blend(const Pose& a, const Pose& b, float t, Pose& out);
         // Skinning matrices: jointWorld * inverseBind, in mesh space.

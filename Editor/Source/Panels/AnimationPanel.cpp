@@ -330,6 +330,19 @@ namespace Editor
         if (ImGui::InputText("Name", &asset.Name)) changed = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) commit = true;
         ImGui::SetItemTooltip("The name Animators and controller states play it by");
+        ImGui::SameLine();
+        if (playing) ImGui::BeginDisabled();
+        if (ImGui::Button("Reduce Keys"))
+        {
+            int total = 0;
+            for (const auto& c : asset.Channels) total += (int)c.Times.size();
+            int removed = asset.ReduceKeys(0.5f, 0.001f);
+            Log::Info("Reduce Keys: left out {} of {} keys of '{}'", removed, total, asset.Name);
+            if (removed) changed = commit = true;
+        }
+        if (playing) ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Leave out the keys of linear channels that the line between the others passes within half a degree\n"
+                              "(rotations) or a millimeter (positions and other values): a recorded clip's motion with fewer keys");
         m_Time = std::clamp(m_Time, 0.0f, asset.Duration);
         if (!m_PreviewEntity.IsNull() && anim)
         {
