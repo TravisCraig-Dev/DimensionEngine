@@ -6565,6 +6565,38 @@ namespace
         CHECK(edit.RemoveKeys(joint, 0.0f) && edit.FindChannel(joint, AnimationPath::Rotation)->Times.size() == 1);
         CHECK(edit.RemoveKeys(joint, 1.5f) && edit.Channels.empty()); // its last key: the channel goes
 
+        // Cubic splines: Hermite curves through the keys (flat tangents ease in and out), and smooth keys with automatic
+        // tangents (each key's slope from its neighbours).
+        AnimationChannel spline;
+        spline.Path = AnimationPath::Translation;
+        spline.Interpolation = AnimationInterpolation::CubicSpline;
+        spline.Times = { 0.0f, 1.0f };
+        spline.Values = { glm::vec4(0.0f), glm::vec4(1.0f, 0, 0, 0) };
+        spline.InTangents = spline.OutTangents = { glm::vec4(0.0f), glm::vec4(0.0f) };
+        CHECK(Near(Animation::SampleChannel(spline, 0.5f).x, 0.5f) && Near(Animation::SampleChannel(spline, 0.25f).x, 0.15625f));
+        AnimationChannel smooth;
+        smooth.Path = AnimationPath::Translation;
+        smooth.Times = { 0.0f, 1.0f, 2.0f };
+        smooth.Values = { glm::vec4(0.0f), glm::vec4(1.0f, 0, 0, 0), glm::vec4(4.0f, 0, 0, 0) };
+        CHECK(Near(Animation::SampleChannel(smooth, 0.5f).x, 0.5f)); // linear
+        Animation::AutoTangents(smooth);
+        CHECK(smooth.Interpolation == AnimationInterpolation::CubicSpline && Near(smooth.OutTangents[1].x, 2.0f) &&
+              Near(Animation::SampleChannel(smooth, 0.5f).x, 0.25f) && Near(Animation::SampleChannel(smooth, 1.0f).x, 1.0f));
+        // In a .anim: Smooth channels sample as automatic splines; editing an imported spline's keys makes it Smooth.
+        AnimationClipAsset curves;
+        curves.Duration = 2.0f;
+        curves.SetKey(joint, AnimationPath::Translation, 0.0f, glm::vec4(0.0f));
+        curves.SetKey(joint, AnimationPath::Translation, 1.0f, glm::vec4(1.0f, 0, 0, 0));
+        curves.SetKey(joint, AnimationPath::Translation, 2.0f, glm::vec4(4.0f, 0, 0, 0));
+        curves.Channels[0].Smooth = true;
+        AnimationClip curved = curves.ToClip(skeleton);
+        CHECK(curved.Channels.size() == 1 && Near(Animation::SampleChannel(curved.Channels[0], 0.5f).x, 0.25f));
+        curves.Channels[0].Smooth = false;
+        curves.Channels[0].Interpolation = AnimationInterpolation::CubicSpline;
+        curves.Channels[0].InTangents = curves.Channels[0].OutTangents = std::vector<glm::vec4>(3, glm::vec4(0.0f));
+        curves.SetKey(joint, AnimationPath::Translation, 1.5f, glm::vec4(2.0f, 0, 0, 0));
+        CHECK(curves.Channels[0].Smooth && curves.Channels[0].InTangents.empty());
+
         // As project assets: saved and loaded, listed for their model, and a version that changes with every edit.
         fs::path assets = fs::temp_directory_path() / "dimension_clip_assets" / "Assets";
         fs::remove_all(assets.parent_path());
@@ -6584,10 +6616,15 @@ namespace
             keysKept &= loaded->Channels[c].Joint == asset.Channels[c].Joint && loaded->Channels[c].Times.size() == asset.Channels[c].Times.size() &&
                         Near(glm::vec3(loaded->Channels[c].Values.back()), glm::vec3(asset.Channels[c].Values.back()), 1e-5f);
         CHECK(keysKept);
+        // The interpolation survives the file: smooth channels stay smooth.
+        curves.Model = model;
+        AssetHandle curvesHandle = AssetManager::CreateAnimationClip(assets / "Curves.anim", curves);
+        auto curvesLoaded = AssetManager::GetAnimationClip(curvesHandle);
+        CHECK(curvesLoaded && curvesLoaded->Channels.size() == 1 && curvesLoaded->Channels[0].Smooth);
         uint64_t edited = AssetManager::ClipsVersion();
         loaded->Model = other;
         AssetManager::SaveAnimationClip(h);
-        CHECK(AssetManager::ClipsVersion() != edited && AssetManager::ClipsFor(model).empty() && AssetManager::ClipsFor(other).size() == 1);
+        CHECK(AssetManager::ClipsVersion() != edited && AssetManager::ClipsFor(model).size() == 1 && AssetManager::ClipsFor(other).size() == 1);
         AssetManager::Shutdown();
         fs::remove_all(assets.parent_path());
     }

@@ -152,30 +152,62 @@ namespace Dimension
 
     namespace Animation
     {
+        glm::vec4 SampleChannel(const AnimationChannel& ch, float time)
+        {
+            if (ch.Values.empty()) return glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            if (time <= ch.Times.front()) return ch.Values.front();
+            if (time >= ch.Times.back()) return ch.Values.back();
+            size_t k = (size_t)(std::upper_bound(ch.Times.begin(), ch.Times.end(), time) - ch.Times.begin()) - 1;
+            float t0 = ch.Times[k], t1 = ch.Times[k + 1], td = std::max(t1 - t0, 1e-6f);
+            float t = ch.Interpolation == AnimationInterpolation::Step ? 0.0f : (time - t0) / td;
+            const glm::vec4& a = ch.Values[k];
+            const glm::vec4& b = ch.Values[k + 1];
+            if (ch.Interpolation == AnimationInterpolation::CubicSpline && ch.OutTangents.size() == ch.Values.size() &&
+                ch.InTangents.size() == ch.Values.size())
+            {
+                // Hermite: the keys and their tangents (scaled by the gap between the keys).
+                float t2 = t * t, t3 = t2 * t;
+                glm::vec4 v = (2.0f * t3 - 3.0f * t2 + 1.0f) * a + (t3 - 2.0f * t2 + t) * td * ch.OutTangents[k] + (-2.0f * t3 + 3.0f * t2) * b +
+                              (t3 - t2) * td * ch.InTangents[k + 1];
+                if (ch.Path == AnimationPath::Rotation)
+                {
+                    float len = glm::length(v);
+                    v = len > 1e-8f ? v / len : b;
+                }
+                return v;
+            }
+            if (ch.Path == AnimationPath::Rotation)
+            {
+                glm::quat q = glm::slerp(glm::quat(a.w, a.x, a.y, a.z), glm::quat(b.w, b.x, b.y, b.z), t);
+                return { q.x, q.y, q.z, q.w };
+            }
+            return glm::mix(a, b, t);
+        }
+
+        void AutoTangents(AnimationChannel& ch)
+        {
+            size_t n = std::min(ch.Times.size(), ch.Values.size());
+            if (ch.Path == AnimationPath::Rotation)
+                for (size_t k = 1; k < n; ++k)
+                    if (glm::dot(ch.Values[k - 1], ch.Values[k]) < 0.0f) ch.Values[k] = -ch.Values[k];
+            ch.Interpolation = AnimationInterpolation::CubicSpline;
+            ch.InTangents.assign(n, glm::vec4(0.0f));
+            ch.OutTangents.assign(n, glm::vec4(0.0f));
+            for (size_t k = 1; k + 1 < n; ++k)
+            {
+                float span = ch.Times[k + 1] - ch.Times[k - 1];
+                glm::vec4 slope = span > 1e-6f ? (ch.Values[k + 1] - ch.Values[k - 1]) / span : glm::vec4(0.0f);
+                ch.InTangents[k] = ch.OutTangents[k] = slope;
+            }
+        }
+
         void Sample(const Skeleton& skeleton, const AnimationClip& clip, float time, Pose& out)
         {
             out.SetBindPose(skeleton);
             for (const auto& ch : clip.Channels)
             {
                 if (ch.Times.empty() || ch.Joint < 0 || ch.Joint >= (int)skeleton.Joints.size()) continue;
-                glm::vec4 value;
-                if (time <= ch.Times.front()) value = ch.Values.front();
-                else if (time >= ch.Times.back()) value = ch.Values.back();
-                else
-                {
-                    size_t k = (size_t)(std::upper_bound(ch.Times.begin(), ch.Times.end(), time) - ch.Times.begin()) - 1;
-                    float t0 = ch.Times[k], t1 = ch.Times[k + 1];
-                    float t = ch.Interpolation == AnimationInterpolation::Step ? 0.0f : (time - t0) / std::max(t1 - t0, 1e-6f);
-                    const glm::vec4& a = ch.Values[k];
-                    const glm::vec4& b = ch.Values[k + 1];
-                    if (ch.Path == AnimationPath::Rotation)
-                    {
-                        glm::quat q = glm::slerp(glm::quat(a.w, a.x, a.y, a.z), glm::quat(b.w, b.x, b.y, b.z), t);
-                        value = { q.x, q.y, q.z, q.w };
-                    }
-                    else
-                        value = glm::mix(a, b, t);
-                }
+                glm::vec4 value = SampleChannel(ch, time);
                 switch (ch.Path)
                 {
                 case AnimationPath::Translation: out.Translations[ch.Joint] = glm::vec3(value); break;

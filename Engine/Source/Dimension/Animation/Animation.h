@@ -27,7 +27,8 @@ namespace Dimension
     };
 
     enum class AnimationPath : uint8_t { Translation, Rotation, Scale };
-    enum class AnimationInterpolation : uint8_t { Linear, Step };
+    // CubicSpline: Hermite curves through the keys with in and out tangents per key (glTF's CUBICSPLINE).
+    enum class AnimationInterpolation : uint8_t { Linear, Step, CubicSpline };
 
     struct AnimationChannel
     {
@@ -36,6 +37,7 @@ namespace Dimension
         AnimationInterpolation Interpolation = AnimationInterpolation::Linear;
         std::vector<float> Times;
         std::vector<glm::vec4> Values; // xyz for translation/scale, quaternion (x, y, z, w) for rotation
+        std::vector<glm::vec4> InTangents, OutTangents; // CubicSpline: per key, in value units per second
     };
 
     struct AnimationClip
@@ -101,6 +103,11 @@ namespace Dimension
                                     bool loop, const std::string& motionKey, float& yawDelta);
         // Samples `clip` at `time` (seconds) on top of the bind pose.
         void Sample(const Skeleton& skeleton, const AnimationClip& clip, float time, Pose& out);
+        // A channel's value at `time` (xyz, or a quaternion as x, y, z, w).
+        glm::vec4 SampleChannel(const AnimationChannel& channel, float time);
+        // Smooth keys: a CubicSpline channel through its keys with automatic tangents (each key's slope from its
+        // neighbours, as Catmull-Rom; flat at the ends), rotations kept on the short way round.
+        void AutoTangents(AnimationChannel& channel);
         // out = a * (1 - t) + b * t (rotations slerped).
         void Blend(const Pose& a, const Pose& b, float t, Pose& out);
         // Skinning matrices: jointWorld * inverseBind, in mesh space.

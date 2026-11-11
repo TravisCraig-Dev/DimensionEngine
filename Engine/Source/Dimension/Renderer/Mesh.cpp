@@ -184,8 +184,9 @@ namespace Dimension
                     else if (ch.target_path == cgltf_animation_path_type_scale) channel.Path = AnimationPath::Scale;
                     else continue; // morph weights are not supported
                     const cgltf_animation_sampler& s = *ch.sampler;
-                    channel.Interpolation = s.interpolation == cgltf_interpolation_type_step ? AnimationInterpolation::Step : AnimationInterpolation::Linear;
-                    bool cubic = s.interpolation == cgltf_interpolation_type_cubic_spline; // use the value, ignore tangents
+                    bool cubic = s.interpolation == cgltf_interpolation_type_cubic_spline; // (in tangent, value, out tangent) per key
+                    channel.Interpolation = s.interpolation == cgltf_interpolation_type_step ? AnimationInterpolation::Step
+                                            : cubic ? AnimationInterpolation::CubicSpline : AnimationInterpolation::Linear;
                     int comps = channel.Path == AnimationPath::Rotation ? 4 : 3;
                     for (cgltf_size k = 0; k < s.input->count; ++k)
                     {
@@ -195,6 +196,14 @@ namespace Dimension
                         cgltf_accessor_read_float(s.output, cubic ? k * 3 + 1 : k, glm::value_ptr(v), comps);
                         channel.Times.push_back(t);
                         channel.Values.push_back(v);
+                        if (cubic)
+                        {
+                            glm::vec4 in(0.0f), out(0.0f);
+                            cgltf_accessor_read_float(s.output, k * 3, glm::value_ptr(in), comps);
+                            cgltf_accessor_read_float(s.output, k * 3 + 2, glm::value_ptr(out), comps);
+                            channel.InTangents.push_back(in);
+                            channel.OutTangents.push_back(out);
+                        }
                         clip.Duration = std::max(clip.Duration, t);
                     }
                     clip.Channels.push_back(std::move(channel));

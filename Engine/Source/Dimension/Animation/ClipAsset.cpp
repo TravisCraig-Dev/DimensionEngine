@@ -35,13 +35,23 @@ namespace Dimension
                 Channel ch;
                 ch.Joint = c.value("joint", std::string());
                 ch.Path = PathFrom(c.value("path", std::string("rotation")));
-                ch.Interpolation = c.value("interpolation", std::string()) == "step" ? AnimationInterpolation::Step : AnimationInterpolation::Linear;
+                std::string mode = c.value("interpolation", std::string());
+                ch.Interpolation = mode == "step" ? AnimationInterpolation::Step : mode == "cubic" ? AnimationInterpolation::CubicSpline : AnimationInterpolation::Linear;
+                ch.Smooth = mode == "smooth";
+                auto vectors = [](const json& list, std::vector<glm::vec4>& out) {
+                    for (auto& v : list)
+                        if (v.is_array() && v.size() >= 3) out.push_back({ v[0].get<float>(), v[1].get<float>(), v[2].get<float>(), v.size() > 3 ? v[3].get<float>() : 0.0f });
+                };
+                vectors(c.value("in", json::array()), ch.InTangents);
+                vectors(c.value("out", json::array()), ch.OutTangents);
                 for (auto& k : c.value("keys", json::array()))
                 {
                     if (!k.is_array() || k.size() < 4) continue;
                     ch.Times.push_back(k[0].get<float>());
                     ch.Values.push_back({ k[1].get<float>(), k[2].get<float>(), k[3].get<float>(), k.size() > 4 ? k[4].get<float>() : 0.0f });
                 }
+                if (ch.Interpolation == AnimationInterpolation::CubicSpline && (ch.InTangents.size() != ch.Times.size() || ch.OutTangents.size() != ch.Times.size()))
+                    ch.Smooth = true; // tangents missing: automatic ones
                 if (!ch.Joint.empty() && !ch.Times.empty()) clip->Channels.push_back(std::move(ch));
             }
         }
@@ -64,8 +74,19 @@ namespace Dimension
                 if (rotation) keys.push_back({ ch.Times[k], v.x, v.y, v.z, v.w });
                 else keys.push_back({ ch.Times[k], v.x, v.y, v.z });
             }
-            channels.push_back({ { "joint", ch.Joint }, { "path", PathName(ch.Path) },
-                                 { "interpolation", ch.Interpolation == AnimationInterpolation::Step ? "step" : "linear" }, { "keys", keys } });
+            bool cubic = !ch.Smooth && ch.Interpolation == AnimationInterpolation::CubicSpline;
+            json entry{ { "joint", ch.Joint }, { "path", PathName(ch.Path) },
+                        { "interpolation", ch.Smooth ? "smooth" : cubic ? "cubic" : ch.Interpolation == AnimationInterpolation::Step ? "step" : "linear" },
+                        { "keys", keys } };
+            if (cubic)
+            {
+                json in = json::array(), out = json::array();
+                for (const glm::vec4& v : ch.InTangents) in.push_back({ v.x, v.y, v.z, v.w });
+                for (const glm::vec4& v : ch.OutTangents) out.push_back({ v.x, v.y, v.z, v.w });
+                entry["in"] = in;
+                entry["out"] = out;
+            }
+            channels.push_back(entry);
         }
         json j{ { "model", (uint64_t)Model }, { "name", Name }, { "duration", Duration }, { "loop", Loop }, { "channels", channels } };
         std::ofstream out(path);
@@ -88,6 +109,8 @@ namespace Dimension
             c.Interpolation = ch.Interpolation;
             c.Times = ch.Times;
             c.Values = ch.Values;
+            c.InTangents = ch.InTangents;
+            c.OutTangents = ch.OutTangents;
             a.Channels.push_back(std::move(c));
         }
         return a;
@@ -108,6 +131,9 @@ namespace Dimension
             ch.Interpolation = c.Interpolation;
             ch.Times = c.Times;
             ch.Values = c.Values;
+            ch.InTangents = c.InTangents;
+            ch.OutTangents = c.OutTangents;
+            if (c.Smooth) Animation::AutoTangents(ch);
             clip.Channels.push_back(std::move(ch));
         }
         return clip;
@@ -130,9 +156,21 @@ namespace Dimension
         return Channels.back();
     }
 
+    namespace
+    {
+        // A channel whose keys change: explicit spline tangents no longer fit, so it becomes smooth.
+        void KeysChanged(AnimationClipAsset::Channel& c)
+        {
+            if (c.Interpolation == AnimationInterpolation::CubicSpline && !c.Smooth) c.Smooth = true;
+            c.InTangents.clear();
+            c.OutTangents.clear();
+        }
+    }
+
     void AnimationClipAsset::SetKey(const std::string& joint, AnimationPath path, float time, const glm::vec4& value)
     {
         Channel& c = GetOrAddChannel(joint, path);
+        KeysChanged(c);
         time = std::clamp(time, 0.0f, Duration);
         glm::vec4 v = value;
         for (size_t k = 0; k < c.Times.size(); ++k)
@@ -159,6 +197,7 @@ namespace Dimension
             for (size_t k = c.Times.size(); k-- > 0;)
                 if (std::abs(c.Times[k] - time) <= kKeyTolerance * 0.5f)
                 {
+                    KeysChanged(c);
                     c.Times.erase(c.Times.begin() + k);
                     c.Values.erase(c.Values.begin() + k);
                     removed = true;
@@ -179,6 +218,7 @@ namespace Dimension
             for (size_t k = 0; k < c.Times.size(); ++k)
                 if (std::abs(c.Times[k] - from) <= kKeyTolerance * 0.5f)
                 {
+                    KeysChanged(c);
                     glm::vec4 v = c.Values[k];
                     c.Times.erase(c.Times.begin() + k);
                     c.Values.erase(c.Values.begin() + k);

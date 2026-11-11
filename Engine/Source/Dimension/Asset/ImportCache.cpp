@@ -16,7 +16,7 @@ namespace Dimension::ImportCache
     namespace
     {
         // Bump when an importer's output changes, so old entries are not read back.
-        constexpr uint32_t kImageVersion = 1, kMeshVersion = 2; // 2: OBJ materials
+        constexpr uint32_t kImageVersion = 1, kMeshVersion = 3; // 2: OBJ materials; 3: cubic spline tangents
         std::atomic<bool> s_Enabled{ true };
 
         uint64_t Hash(const void* data, size_t size, uint64_t h = 1469598103934665603ull)
@@ -195,6 +195,8 @@ namespace Dimension::ImportCache
                 r.Pod(ch.Interpolation);
                 r.Vec(ch.Times);
                 r.Vec(ch.Values);
+                r.Vec(ch.InTangents);
+                r.Vec(ch.OutTangents);
             }
         }
         m.Materials.resize(r.Count(1));
@@ -261,6 +263,8 @@ namespace Dimension::ImportCache
                 w.Pod(ch.Interpolation);
                 w.Vec(ch.Times);
                 w.Vec(ch.Values);
+                w.Vec(ch.InTangents);
+                w.Vec(ch.OutTangents);
             }
         }
         w.Pod((uint64_t)m.Materials.size());

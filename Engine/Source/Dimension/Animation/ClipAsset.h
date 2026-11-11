@@ -26,6 +26,10 @@ namespace Dimension
             AnimationInterpolation Interpolation = AnimationInterpolation::Linear;
             std::vector<float> Times;
             std::vector<glm::vec4> Values; // xyz, or a quaternion (x, y, z, w)
+            // Smooth: curves through the keys with automatic tangents (Interpolation is then ignored). Imported cubic
+            // splines keep their own tangents (Interpolation CubicSpline) until a key is edited, which makes them Smooth.
+            bool Smooth = false;
+            std::vector<glm::vec4> InTangents, OutTangents;
         };
         std::vector<Channel> Channels;
         uint64_t Version = 0; // bumped on every edit (clips made from it are made again)

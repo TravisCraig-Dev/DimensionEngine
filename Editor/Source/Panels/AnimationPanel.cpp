@@ -197,7 +197,8 @@ namespace Editor
 
         // ---- Joints and their keys (a dope sheet), then the selected joint's values ----
         const float labelW = 220.0f, rowH = ImGui::GetFrameHeight(), inset = 8.0f;
-        float detailH = m_Joint >= 0 ? ImGui::GetFrameHeightWithSpacing() * 3.0f + 8.0f : ImGui::GetFrameHeightWithSpacing() + 4.0f;
+        const float curveH = 120.0f;
+        float detailH = m_Joint >= 0 ? ImGui::GetFrameHeightWithSpacing() * 3.0f + curveH + 12.0f : ImGui::GetFrameHeightWithSpacing() + 4.0f;
         ImGui::BeginChild("##sheet", ImVec2(0, -detailH), ImGuiChildFlags_Borders);
         float stripW = std::max(ImGui::GetContentRegionAvail().x - labelW - 6.0f, 80.0f);
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -341,9 +342,79 @@ namespace Editor
                 changed = commit = true;
             }
             if (!keyed) ImGui::EndDisabled();
+            // How the joint's keys are joined: straight, held, or smooth curves (automatic tangents).
+            ImGui::SameLine();
+            int mode = -1; // its channels' (the first's)
+            for (const auto& c : asset.Channels)
+                if (c.Joint == name && mode < 0)
+                    mode = c.Smooth || c.Interpolation == AnimationInterpolation::CubicSpline ? 2 : c.Interpolation == AnimationInterpolation::Step ? 1 : 0;
+            const char* modes[] = { "Linear", "Step", "Smooth" };
+            ImGui::SetNextItemWidth(90);
+            if (mode >= 0 && ImGui::Combo("##interp", &mode, modes, 3))
+            {
+                for (auto& c : asset.Channels)
+                    if (c.Joint == name)
+                    {
+                        c.Smooth = mode == 2;
+                        c.Interpolation = mode == 1 ? AnimationInterpolation::Step : AnimationInterpolation::Linear;
+                        c.InTangents.clear();
+                        c.OutTangents.clear();
+                    }
+                changed = commit = true;
+            }
+            if (mode >= 0) ImGui::SetItemTooltip("How the joint's keys are joined: straight lines, held until the next key, or smooth curves");
             if (playing) ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::TextDisabled("Drag keys along a row to move them; right-click one to delete it.");
+
+            // The joint's curves over the clip: rotation (degrees, unwrapped) and position, each set scaled to fit,
+            // keys as dots, the current time as a line.
+            ImVec2 c0 = ImGui::GetCursorScreenPos();
+            float curveW = std::max(ImGui::GetContentRegionAvail().x, 100.0f);
+            ImGui::InvisibleButton("##curves", ImVec2(curveW, curveH));
+            if (ImGui::IsItemActive()) m_Time = std::clamp((ImGui::GetIO().MousePos.x - c0.x - inset) / (curveW - 2.0f * inset) * asset.Duration, 0.0f, asset.Duration);
+            ImDrawList* cdl = ImGui::GetWindowDrawList();
+            cdl->AddRectFilled(c0, ImVec2(c0.x + curveW, c0.y + curveH), IM_COL32(30, 31, 36, 255), 3.0f);
+            auto curveX = [&](float t) { return c0.x + inset + t / std::max(asset.Duration, 0.01f) * (curveW - 2.0f * inset); };
+            const int samples = 160;
+            const ImU32 axisColors[3] = { IM_COL32(235, 90, 90, 255), IM_COL32(110, 205, 95, 255), IM_COL32(90, 150, 245, 255) };
+            for (int set = 0; set < 2; ++set)
+            {
+                AnimationPath path = set == 0 ? AnimationPath::Rotation : AnimationPath::Translation;
+                const AnimationChannel* channel = nullptr;
+                int jointIndex = m_Joint;
+                for (const auto& ch : sampled.Channels)
+                    if (ch.Joint == jointIndex && ch.Path == path) channel = &ch;
+                if (!channel) continue;
+                std::vector<glm::vec3> values(samples + 1);
+                for (int i = 0; i <= samples; ++i)
+                {
+                    glm::vec4 v = Animation::SampleChannel(*channel, asset.Duration * i / samples);
+                    glm::vec3 x = set == 0 ? glm::degrees(glm::eulerAngles(glm::quat(v.w, v.x, v.y, v.z))) : glm::vec3(v);
+                    if (set == 0 && i > 0)
+                        for (int a = 0; a < 3; ++a) x[a] += 360.0f * std::round((values[i - 1][a] - x[a]) / 360.0f); // unwrapped
+                    values[i] = x;
+                }
+                float lo = 1e30f, hi = -1e30f;
+                for (const glm::vec3& v : values)
+                    for (int a = 0; a < 3; ++a) lo = std::min(lo, v[a]), hi = std::max(hi, v[a]);
+                if (hi - lo < 1e-4f) lo -= 1.0f, hi += 1.0f;
+                auto curveY = [&](float v) { return c0.y + curveH - 6.0f - (v - lo) / (hi - lo) * (curveH - 12.0f); };
+                for (int a = 0; a < 3; ++a)
+                {
+                    ImU32 col = set == 0 ? axisColors[a] : (axisColors[a] & 0x00FFFFFF) | 0x90000000;
+                    for (int i = 0; i < samples; ++i)
+                        cdl->AddLine(ImVec2(curveX(asset.Duration * i / samples), curveY(values[i][a])),
+                                     ImVec2(curveX(asset.Duration * (i + 1) / samples), curveY(values[i + 1][a])), col, set == 0 ? 1.5f : 1.0f);
+                    for (float t : channel->Times)
+                    {
+                        int i = std::clamp((int)std::round(t / std::max(asset.Duration, 0.01f) * samples), 0, samples);
+                        cdl->AddCircleFilled(ImVec2(curveX(t), curveY(values[i][a])), 2.5f, col);
+                    }
+                }
+            }
+            cdl->AddLine(ImVec2(curveX(m_Time), c0.y), ImVec2(curveX(m_Time), c0.y + curveH), IM_COL32(240, 120, 90, 255), 1.5f);
+            cdl->AddText(ImVec2(c0.x + 6, c0.y + 3), IM_COL32(150, 150, 160, 255), "Rotation (solid), position (faint): x red, y green, z blue");
         }
         else
             ImGui::TextDisabled("Select a joint to see and key its rotation and position at the current time.");
