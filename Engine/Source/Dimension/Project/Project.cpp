@@ -46,6 +46,7 @@ namespace Dimension
                 s_Config.Icon = Guid(j.value("icon", uint64_t(0)));
                 s_Config.StripUnusedAssets = j.value("stripUnusedAssets", true);
                 s_Config.PackAssets = j.value("packAssets", false);
+                s_Config.BundleDotNet = j.value("bundleDotNet", true);
                 if (j.contains("audioMixer") && j["audioMixer"].is_array() && !j["audioMixer"].empty())
                 {
                     s_Config.MixerGroups.clear();
@@ -204,6 +205,7 @@ namespace Dimension
                           { "icon", (uint64_t)s_Config.Icon },
                           { "stripUnusedAssets", s_Config.StripUnusedAssets },
                           { "packAssets", s_Config.PackAssets },
+                          { "bundleDotNet", s_Config.BundleDotNet },
                           { "physicsLayers", s_Config.PhysicsLayers },
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "navAreas", navAreas },

@@ -48,6 +48,8 @@
 #include <thread>
 #include <nethost.h>
 #include <hostfxr.h>
+#include <array>
+#include <cstdio>
 #include <coreclr_delegates.h>
 #endif
 
@@ -2770,6 +2772,52 @@ namespace Dimension
         }
     }
 
+    namespace
+    {
+        const char* s_RuntimeSource = "";
+    }
+
+    const char* CSharpRuntime::RuntimeSource() { return s_RuntimeSource; }
+
+    bool CSharpRuntime::BundleRuntime(const fs::path& dotnetDir, uintmax_t* bytes)
+    {
+        // The installed runtime: hostfxr is <root>/host/fxr/<version>/hostfxr.dll.
+        char_t hostfxrPath[MAX_PATH];
+        size_t size = MAX_PATH;
+        if (get_hostfxr_path(hostfxrPath, &size, nullptr) != 0) return false;
+        fs::path fxr = fs::path(hostfxrPath).parent_path(), root = fxr.parent_path().parent_path().parent_path();
+        // The newest framework of the major version the engine targets (10).
+        fs::path frameworks = root / "shared" / "Microsoft.NETCore.App", framework;
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(frameworks, ec))
+        {
+            std::string name = entry.path().filename().string();
+            if (!entry.is_directory() || name.rfind("10.", 0) != 0) continue;
+            auto version = [](const std::string& v) {
+                std::array<int, 3> n{};
+                std::sscanf(v.c_str(), "%d.%d.%d", &n[0], &n[1], &n[2]);
+                return n;
+            };
+            if (framework.empty() || version(name) > version(framework.filename().string())) framework = entry.path();
+        }
+        if (framework.empty()) return false;
+        fs::path fxrOut = dotnetDir / "host" / "fxr" / fxr.filename(), frameworkOut = dotnetDir / "shared" / "Microsoft.NETCore.App" / framework.filename();
+        fs::remove_all(dotnetDir, ec);
+        fs::create_directories(fxrOut, ec);
+        fs::create_directories(frameworkOut, ec);
+        fs::copy(fxr, fxrOut, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+        if (ec) return false;
+        fs::copy(framework, frameworkOut, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+        if (ec) return false;
+        if (bytes)
+        {
+            *bytes = 0;
+            for (const auto& entry : fs::recursive_directory_iterator(dotnetDir, ec))
+                if (entry.is_regular_file()) *bytes += entry.file_size();
+        }
+        return true;
+    }
+
     bool CSharpRuntime::Init(const fs::path& managedDir)
     {
         if (s_Available) return true;
@@ -2781,9 +2829,14 @@ namespace Dimension
             return false;
         }
 
+        // A runtime shipped with the game first (BundleRuntime), else the machine's.
+        fs::path bundled = managedDir.parent_path() / "dotnet";
+        bool useBundled = fs::exists(bundled / "host" / "fxr") && fs::exists(bundled / "shared" / "Microsoft.NETCore.App");
+        std::wstring bundledRoot = bundled.wstring();
+        get_hostfxr_parameters params{ sizeof(get_hostfxr_parameters), nullptr, bundledRoot.c_str() };
         char_t hostfxrPath[MAX_PATH];
         size_t size = MAX_PATH;
-        if (get_hostfxr_path(hostfxrPath, &size, nullptr) != 0)
+        if (get_hostfxr_path(hostfxrPath, &size, useBundled ? &params : nullptr) != 0)
         {
             Log::Warn("C# scripting disabled: .NET runtime (hostfxr) not found. Install the .NET 10 runtime.");
             return false;
@@ -2799,7 +2852,11 @@ namespace Dimension
         }
 
         hostfxr_handle context = nullptr;
-        int rc = init(config.c_str(), nullptr, &context);
+        wchar_t exePath[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        hostfxr_initialize_parameters initParams{ sizeof(hostfxr_initialize_parameters), exePath, bundledRoot.c_str() };
+        int rc = init(config.c_str(), useBundled ? &initParams : nullptr, &context);
+        s_RuntimeSource = useBundled ? "bundled" : "installed";
         if (rc < 0 || !context)
         {
             Log::Error("C# scripting disabled: runtime initialization failed (0x{:08x})", (uint32_t)rc);

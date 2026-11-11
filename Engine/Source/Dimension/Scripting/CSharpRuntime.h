@@ -86,7 +86,14 @@ namespace Dimension
         static void SetEditorHooks(const EditorHooks& hooks);
 
         // `managedDir` contains Dimension.Core.dll and its runtimeconfig.json.
+        // Starts .NET: a runtime shipped beside the game (`<managedDir>/../dotnet`, see BundleRuntime) when there is one,
+        // else the one installed on the machine.
         static bool Init(const fs::path& managedDir);
+        // Copies the installed .NET runtime this engine runs on (hostfxr and the Microsoft.NETCore.App framework, in the
+        // dotnet folder layout) into `dotnetDir`, so a built game runs C# without .NET installed. False when none.
+        static bool BundleRuntime(const fs::path& dotnetDir, uintmax_t* bytes = nullptr);
+        // Where the runtime in use came from: "bundled" or "installed" (empty before Init).
+        static const char* RuntimeSource();
         static bool IsAvailable();
 
         // Loads (or reloads) a user scripts assembly. No script instances may be alive.

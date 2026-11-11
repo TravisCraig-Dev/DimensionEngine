@@ -4695,6 +4695,10 @@ namespace Editor
         ImGui::SameLine();
         UI::HelpMarker("Copies only the assets the build's scenes use (following prefabs, materials, controllers and models), "
                        "plus everything in Assets/Resources for scripts that load files by path.");
+        changed |= ImGui::Checkbox("Bundle .NET Runtime", &config.BundleDotNet);
+        ImGui::SameLine();
+        UI::HelpMarker("Ships the .NET runtime with the game (about 70 MB), so its C# scripts run on machines without .NET "
+                       "installed. Off: players need the .NET 10 runtime.");
         changed |= ImGui::Checkbox("Pack Assets", &config.PackAssets);
         ImGui::SameLine();
         UI::HelpMarker("Ships the assets as one Assets.pak instead of a folder of files. The game unpacks it once per version "
@@ -4781,6 +4785,16 @@ namespace Editor
         {
             fs::copy_file(ExecutableDirectory() / "nethost.dll", folder / "nethost.dll", fs::copy_options::overwrite_existing, ec);
             fs::copy(ExecutableDirectory() / "managed", folder / "managed", fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+            // The .NET runtime itself, so C# runs without .NET installed (or the machine's is used).
+            std::error_code re;
+            if (config.BundleDotNet)
+            {
+                uintmax_t bytes = 0;
+                if (CSharpRuntime::BundleRuntime(folder / "dotnet", &bytes)) Log::Info("Bundled the .NET runtime ({:.1f} MB)", bytes / 1048576.0);
+                else Log::Warn("The .NET runtime could not be bundled: players need .NET 10 installed");
+            }
+            else
+                fs::remove_all(folder / "dotnet", re);
         }
         fs::path projectOut = folder / "Project";
         fs::remove_all(projectOut, ec);

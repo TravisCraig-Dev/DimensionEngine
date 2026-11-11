@@ -303,7 +303,7 @@ namespace Dimension.Interop
                 api->InvokePointer = &ScriptHost.InvokePointer;
                 api->InvokeStateBehaviour = &ScriptHost.InvokeStateBehaviour;
                 api->MemberOp = &ScriptHost.MemberOp;
-                Debug.Log($"C# scripting ready (.NET {Environment.Version})");
+                Debug.Log($"C# scripting ready (.NET {Environment.Version}, {System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()})");
                 return 1;
             }
             catch (Exception e)
