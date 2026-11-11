@@ -314,6 +314,10 @@ namespace Dimension
             .Field("Retargeting", &AnimatorComponent::Retargeting).Enum({ "Humanoid", "By Joint Name" })
                 .Tooltip("Humanoid: through the human bones when both models are humanoid (any joint names, axes and proportions;\n"
                          "otherwise by name). By Joint Name: joints with the same names, rotations as changes from each bind pose")
+            .Field("Foot IK", &AnimatorComponent::FootIK)
+                .Tooltip("Humanoids, while playing: feet planted on the ground under them (stairs, slopes), the hips lowered to match")
+            .Field("Foot IK Reach", &AnimatorComponent::FootIKReach).Range(0.05f, 5.0f).Speed(0.01f)
+                .Tooltip("How far above and below its level a foot looks for ground")
             .Field("Muscle Limits", &AnimatorComponent::MuscleLimits)
                 .Tooltip("Humanoid retargeting: keep each joint within a human range of motion (knees and elbows bend one way,\n"
                          "the head turns so far), so a clip made for another figure does not twist this one out of shape");

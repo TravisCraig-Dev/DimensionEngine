@@ -473,6 +473,10 @@ namespace Dimension
         AnimatorRetargeting Retargeting = AnimatorRetargeting::Humanoid;
         bool MuscleLimits = true; // humanoid retargeting: joints kept within human ranges of motion
 
+        // Foot IK (humanoids, while playing): feet planted on the ground under them (colliders found by rays from Foot
+        // IK Reach above), the hips lowered when a foot must go lower, feet tilted to the slope.
+        bool FootIK = false;
+        float FootIKReach = 0.5f;
         // Scripts' IK goals (world space; Animator.SetIKPosition and co.), applied after the pose each frame.
         HumanoidIKGoals ScriptIK;
 

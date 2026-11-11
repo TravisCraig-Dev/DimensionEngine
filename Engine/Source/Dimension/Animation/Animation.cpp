@@ -259,6 +259,73 @@ namespace Dimension
             return true;
         }
 
+        bool PlantFeet(const Skeleton& skeleton, const HumanoidMap& map, Pose& pose, const glm::mat4& world, float reach, const GroundQuery& ground)
+        {
+            int feet[2] = { map[HumanBone::LeftFoot], map[HumanBone::RightFoot] };
+            int hips = map[HumanBone::Hips];
+            if (!map.IsHumanoid() || feet[0] < 0 || feet[1] < 0 || hips < 0 || pose.Translations.size() != skeleton.Joints.size()) return false;
+            std::vector<glm::mat4> globals, bindGlobals;
+            Pose bind;
+            bind.SetBindPose(skeleton);
+            JointGlobals(skeleton, bind, bindGlobals);
+            JointGlobals(skeleton, pose, globals);
+            glm::mat4 toModel = glm::inverse(world);
+            float objectY = world[3].y, scaleY = glm::length(glm::vec3(world[1]));
+            // Each foot: its ground, and how far the ankle must move (up or down) to stand on it as it stood on the level.
+            float offset[2] = { 0.0f, 0.0f };
+            glm::vec3 normal[2] = { glm::vec3(0, 1, 0), glm::vec3(0, 1, 0) };
+            bool found[2] = { false, false };
+            for (int f = 0; f < 2; ++f)
+            {
+                glm::vec3 foot = glm::vec3(world * globals[feet[f]][3]);
+                float ankle = bindGlobals[feet[f]][3].y * scaleY; // the ankle's height over the level at rest
+                float lift = std::max(foot.y - objectY - ankle, 0.0f);
+                glm::vec3 point, n;
+                if (!ground(glm::vec3(foot.x, objectY + reach, foot.z), reach * 2.0f, point, n)) continue;
+                found[f] = true;
+                offset[f] = point.y + ankle + lift - foot.y;
+                normal[f] = glm::length(n) > 1e-4f ? glm::normalize(n) : glm::vec3(0, 1, 0);
+            }
+            if (!found[0] && !found[1]) return false;
+            // The hips come down as far as the lower foot needs (the higher one bends its knee).
+            float drop = std::min({ found[0] ? offset[0] : 0.0f, found[1] ? offset[1] : 0.0f, 0.0f });
+            if (drop < 0.0f)
+            {
+                int parent = skeleton.Joints[hips].Parent;
+                glm::vec3 deltaModel = glm::vec3(toModel * glm::vec4(0.0f, drop, 0.0f, 0.0f));
+                glm::mat3 pm = parent >= 0 ? glm::mat3(globals[parent]) : glm::mat3(skeleton.RootTransform);
+                pose.Translations[hips] += glm::inverse(pm) * deltaModel;
+                JointGlobals(skeleton, pose, globals);
+            }
+            for (int f = 0; f < 2; ++f)
+            {
+                if (!found[f]) continue;
+                // The ankle where it should be (it moved with the hips), then the foot tilted to the slope.
+                glm::vec3 foot = glm::vec3(world * globals[feet[f]][3]);
+                glm::vec3 target = foot + glm::vec3(0.0f, offset[f] - drop, 0.0f);
+                SolveIK(skeleton, pose, feet[f], 2, glm::vec3(toModel * glm::vec4(target, 1.0f)), nullptr, 1.0f);
+                glm::vec3 up(0, 1, 0);
+                float angle = std::acos(std::clamp(glm::dot(up, normal[f]), -1.0f, 1.0f));
+                if (angle > 1e-3f)
+                {
+                    glm::quat tilt = glm::rotation(up, normal[f]);
+                    if (angle > glm::radians(40.0f)) tilt = glm::slerp(glm::quat(1, 0, 0, 0), tilt, glm::radians(40.0f) / angle);
+                    JointGlobals(skeleton, pose, globals);
+                    auto rotationOf = [](const glm::mat4& m) {
+                        glm::mat3 r(m);
+                        for (int c = 0; c < 3; ++c) r[c] = glm::normalize(r[c]);
+                        return glm::quat_cast(r);
+                    };
+                    glm::quat worldRot = rotationOf(world), footModel = rotationOf(globals[feet[f]]);
+                    glm::quat footWorld = tilt * worldRot * footModel; // turned in the world
+                    int parent = skeleton.Joints[feet[f]].Parent;
+                    glm::quat parentModel = parent >= 0 ? rotationOf(globals[parent]) : rotationOf(skeleton.RootTransform);
+                    pose.Rotations[feet[f]] = glm::normalize(glm::inverse(parentModel) * glm::inverse(worldRot) * footWorld);
+                }
+            }
+            return true;
+        }
+
         int ReduceKeys(AnimationChannel& ch, float rotationDegrees, float distance)
         {
             size_t n = std::min(ch.Times.size(), ch.Values.size());

@@ -6998,6 +6998,36 @@ namespace
         Animation::ApplyHumanoidIK(s, map, looking, look);
         glm::vec3 forward = glm::normalize(glm::vec3(globalsOf(looking)[s.FindJoint("Head")] * glm::vec4(0, 0, 1, 0)));
         CHECK(forward.x > 0.7f);
+        // Foot IK on uneven ground: the left foot over a 0.2 m step stands on it (its knee bends), the right stays; over a
+        // 0.3 m hole the hips come down so the left foot reaches it and the right knee bends; on a slope the foot tilts.
+        auto plant = [&](float leftGround, float tiltDegrees, Pose& p) {
+            p.SetBindPose(s);
+            glm::vec3 slope = glm::angleAxis(glm::radians(tiltDegrees), glm::vec3(0, 0, 1)) * glm::vec3(0, 1, 0);
+            return Animation::PlantFeet(s, map, p, glm::mat4(1.0f), 0.5f, [&](const glm::vec3& origin, float distance, glm::vec3& point, glm::vec3& normal) {
+                bool left = origin.x > 0.0f;
+                point = { origin.x, left ? leftGround : 0.0f, origin.z };
+                normal = left ? slope : glm::vec3(0, 1, 0);
+                return origin.y - point.y <= distance;
+            });
+        };
+        int leftFoot = s.FindJoint("LeftFoot"), rightFoot = s.FindJoint("RightFoot"), hips = s.FindJoint("Hips");
+        Pose step;
+        CHECK(plant(0.2f, 0.0f, step));
+        auto sg = globalsOf(step);
+        CHECK(Near(sg[leftFoot][3].y, 0.25f, 0.01f) && Near(sg[rightFoot][3].y, 0.05f, 0.01f) && Near(sg[hips][3].y, 1.0f, 0.001f));
+        Pose hole;
+        CHECK(plant(-0.3f, 0.0f, hole));
+        auto hg2 = globalsOf(hole);
+        CHECK(Near(hg2[hips][3].y, 0.7f, 0.01f) && Near(hg2[leftFoot][3].y, -0.25f, 0.01f) && Near(hg2[rightFoot][3].y, 0.05f, 0.01f));
+        Pose sloped;
+        CHECK(plant(0.0f, 20.0f, sloped));
+        glm::vec3 footUp = glm::normalize(glm::vec3(globalsOf(sloped)[leftFoot][1]));
+        glm::vec3 slopeUp = glm::angleAxis(glm::radians(20.0f), glm::vec3(0, 0, 1)) * glm::vec3(0, 1, 0);
+        CHECK(glm::dot(footUp, slopeUp) > 0.999f);
+        Pose nowhere;
+        nowhere.SetBindPose(s);
+        CHECK(!Animation::PlantFeet(s, map, nowhere, glm::mat4(1.0f), 0.5f, [](const glm::vec3&, float, glm::vec3&, glm::vec3&) { return false; }));
+
         // Not humanoid: nothing.
         Skeleton tail = BuildRig({ { "Root", nullptr, { 0, 0, 0 }, I }, { "Tip", "Root", { 0, 1, 0 }, I } });
         Pose tailPose;

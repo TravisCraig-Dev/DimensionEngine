@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <array>
+#include <functional>
 
 namespace Dimension
 {
@@ -183,6 +184,13 @@ namespace Dimension
         // goal's rotation (by its rotation weight), then the head (with neck and chest) turned toward the look-at point.
         // Returns false when the skeleton is not humanoid.
         bool ApplyHumanoidIK(const Skeleton& skeleton, const HumanoidMap& map, Pose& pose, const HumanoidIKGoals& goals);
+        // Foot IK on uneven ground (Unity's Foot IK with ground alignment): each foot's ground found by `ground` (a ray
+        // straight down from `reach` above the foot, world space: true with the hit point and normal), the foot moved to
+        // stand on it as the animation stood on the object's own level (its lift above that kept), the hips lowered when
+        // a foot must go below where the leg reaches, and each foot tilted to the ground's slope (up to 40 degrees).
+        // `world` is the object's transform. Returns false when the skeleton is not humanoid or no ground was found.
+        using GroundQuery = std::function<bool(const glm::vec3& origin, float distance, glm::vec3& point, glm::vec3& normal)>;
+        bool PlantFeet(const Skeleton& skeleton, const HumanoidMap& map, Pose& pose, const glm::mat4& world, float reach, const GroundQuery& ground);
         const AnimationClip* FindClip(const std::vector<AnimationClip>& clips, const std::string& name);
 
         // Retargeting: plays a clip made for one skeleton on another whose joints have the same names (ignoring case

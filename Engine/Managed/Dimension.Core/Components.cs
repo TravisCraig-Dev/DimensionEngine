@@ -1909,6 +1909,9 @@ namespace Dimension
         public AnimatorRetargeting Retargeting { get => (AnimatorRetargeting)GetInt("Retargeting"); set => SetInt("Retargeting", (int)value); }
         /// <summary>Humanoid retargeting keeps each joint within a human range of motion.</summary>
         public bool MuscleLimits { get => GetBool("Muscle Limits"); set => SetBool("Muscle Limits", value); }
+        /// <summary>Humanoids: feet planted on the ground under them, the hips lowered to match.</summary>
+        public bool FootIK { get => GetBool("Foot IK"); set => SetBool("Foot IK", value); }
+        public float FootIKReach { get => GetFloat("Foot IK Reach"); set => SetFloat("Foot IK Reach", value); }
         /// <summary>Off screen and not animated this frame (Cull Completely).</summary>
         public bool IsCulled { get { float* v = stackalloc float[1]; return Op(10, 0, null, v) != 0; } }
         /// <summary>

@@ -1818,6 +1818,26 @@ namespace Dimension
                 }
             }
             applyIK(-1, 1.0f);
+            if (anim.FootIK && !generic && m_Running && m_Physics3D)
+            {
+                // Feet on the ground under them (colliders not part of this object).
+                static std::map<const Skeleton*, HumanoidMap> footMaps;
+                auto found = footMaps.find(skeleton);
+                if (found == footMaps.end()) found = footMaps.emplace(skeleton, Animation::MapHumanoid(*skeleton)).first;
+                auto ground = [&](const glm::vec3& origin, float distance, glm::vec3& point, glm::vec3& normal) {
+                    for (const RaycastHit& h : Physics3DWorld::RaycastAll(*this, origin, glm::vec3(0.0f, -1.0f, 0.0f), distance))
+                    {
+                        bool own = false;
+                        for (Entity x = h.Hit; !x.IsNull() && IsValid(x); x = GetParent(x)) own |= x == e;
+                        if (own) continue;
+                        point = h.Point;
+                        normal = h.Normal;
+                        return true;
+                    }
+                    return false;
+                };
+                Animation::PlantFeet(*skeleton, found->second, current, m_Registry.Get<TransformComponent>(e).World, std::max(anim.FootIKReach, 0.05f), ground);
+            }
             if (anim.ScriptIK.Any() && !generic)
             {
                 // Scripts' goals, from the world into the model's space.
