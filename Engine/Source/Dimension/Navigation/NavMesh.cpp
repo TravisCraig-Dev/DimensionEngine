@@ -254,8 +254,10 @@ namespace Dimension
 
             // Bakes a surface. With `previous` (the same grid), only the columns in `region` (x0, z0, x1, z1) are sampled
             // again; the others keep previous's surfaces.
+            // `previous` and `region` (columns x0, z0, x1, z1): only the region is sampled, the rest kept; with `clear` the
+            // region is emptied instead (a streamed tile dropped).
             std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& s, const glm::vec3& center, const BakeScope& scope,
-                                                const NavMeshData* previous = nullptr, glm::ivec4 region = glm::ivec4(0))
+                                                const NavMeshData* previous = nullptr, glm::ivec4 region = glm::ivec4(0), bool clear = false)
             {
                 auto& reg = scene.GetRegistry();
                 auto m = std::make_shared<NavMeshData>();
@@ -312,6 +314,7 @@ namespace Dimension
                                                  previous->RawHeights.begin() + previous->RawStart[col + 1]);
                             continue;
                         }
+                        if (clear) continue; // a dropped tile: nothing there
                         glm::vec3 p(m->Origin.x + (x + 0.5f) * c, top, m->Origin.y + (z + 0.5f) * c);
                         float above = kInf;
                         for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, p, down, size.y, Physics::kDefaultQueryMask, true))
@@ -1077,6 +1080,78 @@ namespace Dimension
             return updated;
         }
 
+        namespace
+        {
+            // Streamed surfaces: the tiles near the agents and the main camera baked (up to `budget` a call, nearest
+            // first) and those a tile farther than Stream Radius dropped. Returns how many tiles changed.
+            int StreamSurface(Scene& scene, Entity e, int budget)
+            {
+                auto& reg = scene.GetRegistry();
+                auto& s = reg.Get<NavMeshSurfaceComponent>(e);
+                const NavMeshData* current = s.Baked.get();
+                if (!s.Streamed || s.Moving || !current || !scene.GetPhysics3D()) return 0;
+                int tile = std::max(1, (int)std::round(std::max(s.TileSize, 1.0f) / current->CellSize));
+                int tilesX = (current->Width + tile - 1) / tile, tilesZ = (current->Depth + tile - 1) / tile;
+                if (s.TilesX != tilesX || s.TilesZ != tilesZ || s.TilesLoaded.size() != (size_t)tilesX * tilesZ)
+                {
+                    s.TilesX = tilesX, s.TilesZ = tilesZ;
+                    s.TilesLoaded.assign((size_t)tilesX * tilesZ, 0);
+                }
+                // Where the world is looked at or walked: every agent, and the main camera.
+                std::vector<glm::vec2> focus;
+                for (auto [a, agent, t] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
+                    if (t.ActiveInHierarchy) focus.push_back({ t.World[3].x, t.World[3].z });
+                if (Entity cam = scene.GetPrimaryCamera(); !cam.IsNull())
+                {
+                    const glm::mat4& w = reg.Get<TransformComponent>(cam).World;
+                    focus.push_back({ w[3].x, w[3].z });
+                }
+                float c = current->CellSize;
+                auto distance = [&](int tx, int tz) {
+                    glm::vec2 lo = current->Origin + glm::vec2(tx, tz) * (float)tile * c, hi = lo + glm::vec2((float)tile * c);
+                    float best = 1e30f;
+                    for (glm::vec2 p : focus) best = std::min(best, glm::length(glm::max(glm::max(lo - p, p - hi), glm::vec2(0.0f))));
+                    return best;
+                };
+                std::vector<std::pair<float, int>> load, drop;
+                for (int tz = 0; tz < tilesZ; ++tz)
+                    for (int tx = 0; tx < tilesX; ++tx)
+                    {
+                        float d = distance(tx, tz);
+                        int index = tz * tilesX + tx;
+                        if (!s.TilesLoaded[index] && d <= s.StreamRadius) load.push_back({ d, index });
+                        else if (s.TilesLoaded[index] && d > s.StreamRadius + std::max(s.TileSize, 1.0f)) drop.push_back({ -d, index });
+                    }
+                std::sort(load.begin(), load.end());
+                std::sort(drop.begin(), drop.end());
+                glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
+                BakeScope scope = ScopeOf(scene, e);
+                std::shared_ptr<NavMeshData> data;
+                int changed = 0;
+                auto apply = [&](int index, bool clear) {
+                    int tx = index % tilesX, tz = index / tilesX;
+                    glm::ivec4 region(tx * tile, tz * tile, std::min((tx + 1) * tile, current->Width) - 1, std::min((tz + 1) * tile, current->Depth) - 1);
+                    data = BakeIn(scene, s, center, scope, data ? data.get() : current, region, clear);
+                    s.TilesLoaded[index] = clear ? 0 : 1;
+                    ++changed;
+                };
+                for (size_t k = 0; k < load.size() && changed < budget; ++k) apply(load[k].second, false);
+                for (size_t k = 0; k < drop.size() && changed < budget; ++k) apply(drop[k].second, true);
+                if (data) Install(scene, s, data);
+                return changed;
+            }
+        }
+
+        int StreamTiles(Scene& scene, int budget)
+        {
+            std::vector<Entity> streamed;
+            for (auto [e, s] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent>())
+                if (s.Streamed && s.Baked) streamed.push_back(e);
+            int changed = 0;
+            for (Entity e : streamed) changed += StreamSurface(scene, e, budget);
+            return changed;
+        }
+
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity e)
         {
             auto& reg = scene.GetRegistry();
@@ -1084,6 +1159,22 @@ namespace Dimension
             if (!surface) return nullptr;
             scene.UpdateTransforms();
             glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
+            if (surface->Streamed && !surface->Moving && scene.GetPhysics3D())
+            {
+                // Streamed while playing: an empty mesh of the whole box, then the tiles around the agents and the
+                // camera now (the rest come as they get near).
+                NavMeshData empty;
+                GridOf(*surface, center, empty);
+                empty.RawStart.assign((size_t)empty.Width * empty.Depth + 1, 0u);
+                auto data = BakeIn(scene, *surface, center, ScopeOf(scene, e), &empty, glm::ivec4(0, 0, -1, -1));
+                Install(scene, *surface, data);
+                surface->TilesX = surface->TilesZ = 0;
+                surface->TilesLoaded.clear();
+                surface->BakedAt = reg.Get<TransformComponent>(e).World;
+                surface->Frame = surface->FrameInverse = glm::mat4(1.0f);
+                StreamSurface(scene, e, INT32_MAX);
+                return surface->Baked;
+            }
             std::shared_ptr<NavMeshData> data;
             BakeScope scope = ScopeOf(scene, e);
             if (scene.GetPhysics3D())
@@ -1381,6 +1472,7 @@ namespace Dimension
             if (dt <= 0.0f) return;
             auto& reg = scene.GetRegistry();
             FollowPlatforms(scene);
+            StreamTiles(scene, 1); // streamed surfaces: a tile a frame
 
             // Obstacles: how they move, and whether (and where) they cut the meshes. Those not cutting are steered
             // around.

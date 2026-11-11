@@ -1110,6 +1110,13 @@ namespace Dimension
         float DropHeight = 2.0f;
         float JumpDistance = 1.5f;
         bool Moving = false;
+        // Streamed (large worlds): while playing, only the tiles (Tile Size meters square) within Stream Radius of the
+        // agents and the main camera are baked, a tile a frame, nearest first; tiles a tile farther off are dropped.
+        bool Streamed = false;
+        float TileSize = 32.0f;
+        float StreamRadius = 48.0f;
+        std::vector<uint8_t> TilesLoaded; // runtime (Streamed): per tile (x + z * TilesX), 1 = baked
+        int TilesX = 0, TilesZ = 0;       // runtime
         std::shared_ptr<const NavMeshData> Data;  // runtime: the mesh agents walk (the baked one with obstacles' holes)
         std::shared_ptr<const NavMeshData> Baked; // runtime: as baked
         uint64_t CarveKey = 0;                    // runtime: which obstacles cut Data, and where

@@ -3801,6 +3801,47 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestNavStreaming()
+    {
+        // A streamed surface over a 200 m field: at play start only the tiles around the agent are baked; walked (here
+        // carried) across the field, the tiles where it is now are baked a tile a frame and the far ones dropped.
+        Scene scene("Streamed");
+        auto& reg = scene.GetRegistry();
+        Entity ground = scene.CreateEntity("Ground");
+        reg.Get<TransformComponent>(ground).Position = { 0.0f, -0.5f, 0.0f };
+        reg.Emplace<BoxColliderComponent>(ground).Size = { 200.0f, 1.0f, 200.0f };
+        Entity surface = scene.CreateEntity("Navigation");
+        auto& s = reg.Emplace<NavMeshSurfaceComponent>(surface);
+        s.Size = { 200.0f, 10.0f, 200.0f };
+        s.CellSize = 0.5f;
+        s.Streamed = true;
+        s.TileSize = 32.0f;
+        s.StreamRadius = 20.0f;
+        Entity walker = scene.CreateEntity("Walker");
+        reg.Get<TransformComponent>(walker).Position = { -80.0f, 0.0f, -80.0f };
+        reg.Emplace<NavMeshAgentComponent>(walker);
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        auto& rs = rr.Get<NavMeshSurfaceComponent>(surface);
+        auto loaded = [&] { return (int)std::count(rs.TilesLoaded.begin(), rs.TilesLoaded.end(), 1); };
+        auto onMesh = [&](glm::vec3 p) { return rs.Baked && Navigation::Nearest(*rs.Baked, p, 1.0f) >= 0; };
+        int total = rs.TilesX * rs.TilesZ;
+        CHECK(total == 49 && loaded() > 0 && loaded() <= 9 && onMesh({ -80.0f, 0.0f, -80.0f }) && !onMesh({ 80.0f, 0.0f, 80.0f }));
+        // Carried to the far corner: a tile a frame comes in, nearest first, and the old corner goes.
+        rr.Get<TransformComponent>(walker).Position = { 80.0f, 0.0f, 80.0f };
+        rt->UpdateTransforms();
+        Navigation::Update(*rt, 1.0f / 60.0f);
+        CHECK(onMesh({ 80.0f, 0.0f, 80.0f })); // the tile under it first
+        for (int i = 0; i < 40; ++i) Navigation::Update(*rt, 1.0f / 60.0f);
+        CHECK(onMesh({ 80.0f, 0.0f, 80.0f }) && !onMesh({ -80.0f, 0.0f, -80.0f }) && loaded() <= 9);
+        // Paths work across the loaded tiles.
+        std::vector<glm::vec3> corners;
+        CHECK(Navigation::CalculatePath(*rt, { 80.0f, 0.0f, 80.0f }, { 70.0f, 0.0f, 92.0f }, corners) == NavPathStatus::Complete);
+        rt->OnRuntimeStop();
+    }
+
     void TestNavCrowd()
     {
         // Two groups of 100 agents swap sides of an open field, walking through each other: all arrive, they barely
@@ -15710,6 +15751,7 @@ int main(int argc, char** argv)
     Run("Scene diff", TestSceneDiff);
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
+    Run("NavMesh streaming", TestNavStreaming);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);
     Run("LOD groups", TestLODGroups);
     Run("LOD impostor", TestLODImpostor);

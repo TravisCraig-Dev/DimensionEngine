@@ -75,6 +75,9 @@ namespace Dimension
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity surface);
         // Bakes every surface (all, or only those not baked yet). Agents find their mesh again.
         void BakeAll(Scene& scene, bool onlyMissing = false);
+        // Streamed surfaces (large worlds): bakes up to `budget` tiles near the agents and the main camera and drops far
+        // ones (Update does a tile a frame). Returns how many tiles changed.
+        int StreamTiles(Scene& scene, int budget);
         // After the level changed inside a box (a crater, a wall knocked down): every surface over it samples the ground
         // again there only, keeping the rest, and finishes its mesh anew. Returns how many surfaces changed.
         int UpdateArea(Scene& scene, const glm::vec3& min, const glm::vec3& max);

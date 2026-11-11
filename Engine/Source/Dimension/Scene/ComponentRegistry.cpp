@@ -830,7 +830,12 @@ namespace Dimension
             .Field("Drop Height", &NavMeshSurfaceComponent::DropHeight).Range(0.0f, 50.0f).Speed(0.05f).Tooltip("Highest ledge agents drop down (one way)")
             .Field("Jump Distance", &NavMeshSurfaceComponent::JumpDistance).Range(0.0f, 20.0f).Speed(0.05f).Tooltip("Widest gap agents jump across")
             .Field("Moving", &NavMeshSurfaceComponent::Moving)
-                .Tooltip("Rides on its object (a boat, a lift): baked from its own colliders, carrying agents on it along");
+                .Tooltip("Rides on its object (a boat, a lift): baked from its own colliders, carrying agents on it along")
+            .Field("Streamed", &NavMeshSurfaceComponent::Streamed)
+                .Tooltip("Large worlds: while playing, bake only the tiles near the agents and the main camera (a tile a frame), dropping far ones")
+            .Field("Tile Size", &NavMeshSurfaceComponent::TileSize).Range(4.0f, 1024.0f).Speed(0.5f).Tooltip("Streamed: meters across a tile")
+            .Field("Stream Radius", &NavMeshSurfaceComponent::StreamRadius).Range(1.0f, 10000.0f).Speed(0.5f)
+                .Tooltip("Streamed: tiles this close to an agent or the main camera are baked (those a tile farther off are dropped)");
         Register<NavMeshModifierVolumeComponent>("NavMesh Modifier Volume", "Navigation")
             .Field("Center", &NavMeshModifierVolumeComponent::Center).Speed(0.01f)
             .Field("Size", &NavMeshModifierVolumeComponent::Size).Speed(0.05f)
