@@ -1079,6 +1079,12 @@ namespace Dimension
             UpdateAnimators(dt);
         }
         {
+            // Constraints, after animation (and before LateUpdate scripts see the frame).
+            DIM_PROFILE_SCOPE("Constraints");
+            UpdateTransforms();
+            Constraints::Update(*this);
+        }
+        {
             // LateUpdate (as Unity's): after animation, so scripts see this frame's poses (bones, root motion).
             DIM_PROFILE_SCOPE("Late Update");
             std::vector<Entity> late;

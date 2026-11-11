@@ -2287,6 +2287,21 @@ namespace Dimension
         public bool MatchAnimation { get => GetBool("Match Animation"); set => SetBool("Match Animation", value); }
     }
 
+    /// <summary>The settings every constraint has (Position, Rotation, Scale, Parent and Aim Constraint).</summary>
+    public abstract class ConstraintBase : Component
+    {
+        /// <summary>Applied each frame while playing.</summary>
+        public bool ConstraintActive { get => GetBool("Constraint Active"); set => SetBool("Constraint Active", value); }
+        /// <summary>0: where the object rests; 1: fully constrained.</summary>
+        public float Weight { get => GetFloat("Weight"); set => SetFloat("Weight", value); }
+        public bool MaintainOffset { get => GetBool("Maintain Offset"); set => SetBool("Maintain Offset", value); }
+    }
+    public sealed class PositionConstraint : ConstraintBase { internal override string NativeName => "Position Constraint"; }
+    public sealed class RotationConstraint : ConstraintBase { internal override string NativeName => "Rotation Constraint"; }
+    public sealed class ScaleConstraint : ConstraintBase { internal override string NativeName => "Scale Constraint"; }
+    public sealed class ParentConstraint : ConstraintBase { internal override string NativeName => "Parent Constraint"; }
+    public sealed class AimConstraint : ConstraintBase { internal override string NativeName => "Aim Constraint"; }
+
     public unsafe class NavMeshAgent : Component
     {
         internal override string NativeName => "NavMesh Agent";

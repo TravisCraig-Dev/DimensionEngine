@@ -2,6 +2,20 @@
 
 namespace Dimension
 {
+    namespace
+    {
+        // The fields every constraint component has.
+        template <class T> FieldListBuilder<T>& ConstraintFields(FieldListBuilder<T>& b)
+        {
+            return b.Field("Constraint Active", &T::Active).Tooltip("Applies it each frame while playing")
+                .Field("Weight", &T::Weight).Range(0.0f, 1.0f).Speed(0.01f).Tooltip("0: where the object rests; 1: fully constrained")
+                .Field("Maintain Offset", &T::MaintainOffset).Tooltip("Keeps the offset the object has from its sources when it first applies")
+                .template List<ConstraintSource>("Sources", &T::Sources, [](FieldListBuilder<ConstraintSource>& s) {
+                    s.Field("Source", &ConstraintSource::Source).Field("Weight", &ConstraintSource::Weight).Range(0.0f, 1.0f).Speed(0.01f);
+                });
+        }
+    }
+
     std::deque<ComponentInfo>& ComponentRegistry::Infos()
     {
         static std::deque<ComponentInfo> infos;
@@ -324,6 +338,36 @@ namespace Dimension
             .Field("Loop", &TimelineComponent::Loop)
             .Field("Reset On End", &TimelineComponent::ResetOnEnd).Tooltip("Without Loop: at the end it stops and goes back to the start (otherwise it holds the last frame)")
             .Field("Speed", &TimelineComponent::Speed).Range(-10.0f, 10.0f).Speed(0.01f);
+
+        {
+            auto position = Register<PositionConstraintComponent>("Position Constraint", "Constraints");
+            ConstraintFields(position)
+                .Field("Offset", &PositionConstraintComponent::Offset).Speed(0.01f).Tooltip("Added to the sources' average position (world space)")
+                .Field("Affect X", &PositionConstraintComponent::AffectX).Field("Affect Y", &PositionConstraintComponent::AffectY)
+                .Field("Affect Z", &PositionConstraintComponent::AffectZ);
+            auto rotation = Register<RotationConstraintComponent>("Rotation Constraint", "Constraints");
+            ConstraintFields(rotation)
+                .Field("Offset", &RotationConstraintComponent::Offset).As(FieldType::Angles).Speed(0.5f).Tooltip("Turned by this after the sources' average rotation")
+                .Field("Affect X", &RotationConstraintComponent::AffectX).Field("Affect Y", &RotationConstraintComponent::AffectY)
+                .Field("Affect Z", &RotationConstraintComponent::AffectZ);
+            auto scale = Register<ScaleConstraintComponent>("Scale Constraint", "Constraints");
+            ConstraintFields(scale)
+                .Field("Offset", &ScaleConstraintComponent::Offset).Speed(0.01f).Tooltip("Multiplies the sources' average scale")
+                .Field("Affect X", &ScaleConstraintComponent::AffectX).Field("Affect Y", &ScaleConstraintComponent::AffectY)
+                .Field("Affect Z", &ScaleConstraintComponent::AffectZ);
+            auto parent = Register<ParentConstraintComponent>("Parent Constraint", "Constraints");
+            ConstraintFields(parent)
+                .Field("Affect Position", &ParentConstraintComponent::AffectPosition)
+                .Field("Affect Rotation", &ParentConstraintComponent::AffectRotation);
+            auto aim = Register<AimConstraintComponent>("Aim Constraint", "Constraints");
+            ConstraintFields(aim)
+                .Field("Aim Axis", &AimConstraintComponent::AimAxis).Enum({ "+X", "-X", "+Y", "-Y", "+Z", "-Z" }).Tooltip("The object's axis that points at the sources")
+                .Field("Up Axis", &AimConstraintComponent::UpAxis).Enum({ "+X", "-X", "+Y", "-Y", "+Z", "-Z" })
+                .Field("World Up", &AimConstraintComponent::WorldUp).Enum({ "Scene Up", "Object Up", "Object Rotation Up", "None" })
+                    .Tooltip("What the Up Axis leans toward: +Y, toward the World Up Object, along its up, or kept as at rest")
+                .Field("World Up Object", &AimConstraintComponent::WorldUpObject)
+                .Field("Offset", &AimConstraintComponent::Offset).As(FieldType::Angles).Speed(0.5f);
+        }
 
         Register<IKTargetComponent>("IK Target", "Animation")
             .Field("Animator", &IKTargetComponent::Animator).Tooltip("Object with the Animator. None = the nearest parent with one.")

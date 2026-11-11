@@ -7161,6 +7161,75 @@ namespace
         fs::remove_all(assets.parent_path());
     }
 
+    void TestConstraints()
+    {
+        Scene scene("Rig");
+        auto& reg = scene.GetRegistry();
+        auto at = [&](const char* name, glm::vec3 p, Entity parent = Entity::Null()) {
+            Entity e = scene.CreateEntity(name, parent);
+            reg.Get<TransformComponent>(e).Position = p;
+            return e;
+        };
+        Entity a = at("A", { 1, 2, 3 }), b = at("B", { 3, 2, 1 });
+        // Position: the sources' average (no offset kept), and with weight 0.5 halfway from rest, Y left alone.
+        Entity follower = at("Follower", { 0, 0, 0 });
+        auto& pc = reg.Emplace<PositionConstraintComponent>(follower);
+        pc.MaintainOffset = false;
+        pc.Sources = { { a, 1.0f }, { b, 1.0f } };
+        Entity half = at("Half", { 0, 0, 0 });
+        auto& hc = reg.Emplace<PositionConstraintComponent>(half);
+        hc.MaintainOffset = false;
+        hc.Weight = 0.5f;
+        hc.AffectY = false;
+        hc.Sources = { { a, 1.0f }, { b, 1.0f } };
+        Entity rider = at("Rider", { 0, 1, 0 }, follower); // a child of a constrained object
+        // Rotation: turned as the source; Parent: carried around a pivot; Aim: +Z toward a target.
+        Entity turner = at("Turner", { 0, 0, 0 });
+        reg.Get<TransformComponent>(turner).Rotation = { 0.0f, glm::radians(90.0f), 0.0f };
+        Entity copier = at("Copier", { 5, 0, 0 });
+        auto& rc = reg.Emplace<RotationConstraintComponent>(copier);
+        rc.MaintainOffset = false;
+        rc.Sources = { { turner, 1.0f } };
+        Entity pivot = at("Pivot", { 0, 0, 0 });
+        Entity carried = at("Carried", { 0, 0, 2 });
+        reg.Emplace<ParentConstraintComponent>(carried).Sources = { { pivot, 1.0f } };
+        Entity target = at("Target", { 5, 0, 0 });
+        Entity aimer = at("Aimer", { 0, 0, 0 });
+        auto& ac = reg.Emplace<AimConstraintComponent>(aimer);
+        ac.MaintainOffset = false;
+        ac.Sources = { { target, 1.0f } };
+        scene.UpdateTransforms();
+
+        // Saved and loaded: the sources stay the same objects.
+        Ref<Scene> loaded = SceneSerializer::Deserialize(SceneSerializer::Serialize(scene));
+        Entity loadedFollower = loaded->FindEntityByName("Follower");
+        const auto* lpc = loadedFollower.IsNull() ? nullptr : loaded->GetRegistry().TryGet<PositionConstraintComponent>(loadedFollower);
+        CHECK(lpc && lpc->Sources.size() == 2 && lpc->Sources[1].Source == loaded->FindEntityByName("B"));
+
+        auto rt = scene.Clone();
+        auto& rreg = rt->GetRegistry();
+        rt->OnRuntimeStart();
+        rt->OnUpdateRuntime(0.0625f);
+        auto world = [&](Entity e) { return glm::vec3(rreg.Get<TransformComponent>(e).World[3]); };
+        CHECK(Near(world(follower), { 2, 2, 2 }) && Near(world(half), { 1, 0, 1 }) && Near(world(rider), { 2, 3, 2 }));
+        glm::vec3 copiedForward = glm::vec3(rreg.Get<TransformComponent>(copier).World * glm::vec4(0, 0, 1, 0));
+        CHECK(Near(copiedForward, { 1, 0, 0 }) && Near(world(copier), { 5, 0, 0 }));
+        glm::vec3 aimZ = glm::normalize(glm::vec3(rreg.Get<TransformComponent>(aimer).World * glm::vec4(0, 0, 1, 0)));
+        CHECK(Near(aimZ, { 1, 0, 0 }));
+        CHECK(Near(world(carried), { 0, 0, 2 }));
+        // The pivot turns: the carried object goes round with it (its offset kept), and faces along.
+        rreg.Get<TransformComponent>(pivot).Rotation = { 0.0f, glm::radians(90.0f), 0.0f };
+        rreg.Get<TransformComponent>(a).Position = { 3, 4, 3 };
+        rt->OnUpdateRuntime(0.0625f);
+        CHECK(Near(world(carried), { 2, 0, 0 }) && Near(world(follower), { 3, 3, 2 }));
+        // Off: it stays where it was left.
+        rreg.Get<PositionConstraintComponent>(follower).Active = false;
+        rreg.Get<TransformComponent>(b).Position = { 9, 9, 9 };
+        rt->OnUpdateRuntime(0.0625f);
+        CHECK(Near(world(follower), { 3, 3, 2 }));
+        rt->OnRuntimeStop();
+    }
+
     void TestAvatarMasks()
     {
         // An Avatar Mask asset, used by a controller layer instead of its own list; the layer keeps the reference.
@@ -16364,6 +16433,7 @@ int main(int argc, char** argv)
     Run("Blend shapes", TestBlendShapes);
     Run("Generic Animators (no skeleton)", TestGenericAnimator);
     Run("Avatar Masks", TestAvatarMasks);
+    Run("Constraints", TestConstraints);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);
