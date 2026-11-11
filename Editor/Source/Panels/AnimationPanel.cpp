@@ -3,6 +3,8 @@
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Renderer/Mesh.h>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <ImGuizmo.h>
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <algorithm>
@@ -353,5 +355,111 @@ namespace Editor
         }
         if (commit) AssetManager::SaveAnimationClip(m_Clip);
         ImGui::End();
+    }
+
+    bool AnimationPanel::IsPosing() const { return !m_PreviewEntity.IsNull() && m_Joint >= 0 && m_Clip.IsValid(); }
+
+    bool AnimationPanel::UpdateSceneView(ImVec2 origin, ImVec2 size, const glm::mat4& view, const glm::mat4& proj, bool orthographic, bool hovered)
+    {
+        if (m_PreviewEntity.IsNull() || !m_Ctx.EditorScene || m_Ctx.IsPlaying()) return false;
+        Scene& scene = *m_Ctx.EditorScene;
+        auto& reg = scene.GetRegistry();
+        if (!scene.IsValid(m_PreviewEntity)) return false;
+        auto* anim = reg.TryGet<AnimatorComponent>(m_PreviewEntity);
+        auto* mr = reg.TryGet<MeshRendererComponent>(m_PreviewEntity);
+        auto clip = AssetManager::GetAnimationClip(m_Clip);
+        // Posing works on the clip's own model (an Animation Source's skeleton is not the one drawn).
+        if (!anim || !mr || !clip || anim->ClipSource.IsValid() || clip->Model != mr->Mesh) return false;
+        Ref<Mesh> model = AssetManager::GetMesh(mr->Mesh);
+        if (!model || !model->GetSkeleton()) return false;
+        const Skeleton& skeleton = *model->GetSkeleton();
+        const glm::mat4& world = reg.Get<TransformComponent>(m_PreviewEntity).World;
+
+        // The pose at the current time, in the world.
+        Pose pose;
+        Animation::Sample(skeleton, clip->ToClip(skeleton), m_Time, pose);
+        std::vector<glm::mat4> globals;
+        Animation::JointGlobals(skeleton, pose, globals);
+        auto worldOf = [&](int j) { return world * globals[j]; };
+        auto screenOf = [&](const glm::vec3& p, bool& visible) {
+            glm::vec4 c = proj * view * glm::vec4(p, 1.0f);
+            visible = c.w > 1e-4f;
+            glm::vec2 ndc = glm::vec2(c) / std::max(c.w, 1e-4f);
+            return ImVec2(origin.x + (ndc.x * 0.5f + 0.5f) * size.x, origin.y + (0.5f - ndc.y * 0.5f) * size.y);
+        };
+
+        // The skeleton: bones from each joint to its parent, the joints as dots (click one to select it).
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 mouse = ImGui::GetMousePos();
+        int closest = -1;
+        float best = 8.0f;
+        ImU32 accent = ImGui::GetColorU32(ImGuiCol_HeaderActive);
+        for (int j = 0; j < (int)skeleton.Joints.size(); ++j)
+        {
+            bool visible, parentVisible = false;
+            ImVec2 s = screenOf(glm::vec3(worldOf(j)[3]), visible);
+            if (!visible) continue;
+            if (int p = skeleton.Joints[j].Parent; p >= 0)
+            {
+                ImVec2 ps = screenOf(glm::vec3(worldOf(p)[3]), parentVisible);
+                if (parentVisible) dl->AddLine(ps, s, IM_COL32(120, 200, 255, 200), 2.0f);
+            }
+            float d = std::hypot(mouse.x - s.x, mouse.y - s.y);
+            if (hovered && d < best)
+            {
+                best = d;
+                closest = j;
+            }
+        }
+        for (int j = 0; j < (int)skeleton.Joints.size(); ++j)
+        {
+            bool visible;
+            ImVec2 s = screenOf(glm::vec3(worldOf(j)[3]), visible);
+            if (!visible) continue;
+            bool picked = j == m_Joint;
+            dl->AddCircleFilled(s, picked ? 6.0f : 4.0f, picked ? accent : closest == j ? IM_COL32(255, 230, 140, 255) : IM_COL32(120, 200, 255, 255));
+            dl->AddCircle(s, picked ? 6.0f : 4.0f, IM_COL32(20, 20, 20, 255), 0, 1.5f);
+        }
+        if (closest >= 0 && !ImGuizmo::IsUsing()) ImGui::SetTooltip("%s", skeleton.Joints[closest].Name.c_str());
+
+        // The selected joint's rotation gizmo: turning it keys the joint's rotation at the current time.
+        bool overGizmo = false;
+        if (m_Joint >= 0 && m_Joint < (int)skeleton.Joints.size())
+        {
+            ImGuizmo::SetOrthographic(orthographic);
+            ImGuizmo::SetDrawlist();
+            ImGuizmo::SetRect(origin.x, origin.y, size.x, size.y);
+            ImGuizmo::PushID(0xA41);
+            glm::mat4 m = worldOf(m_Joint);
+            // Without scale (a gizmo turns a frame), at the joint.
+            for (int c = 0; c < 3; ++c) m[c] = glm::vec4(glm::normalize(glm::vec3(m[c])), 0.0f);
+            overGizmo = ImGuizmo::IsOver();
+            if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ImGuizmo::ROTATE, ImGuizmo::LOCAL, glm::value_ptr(m)))
+            {
+                int parent = skeleton.Joints[m_Joint].Parent;
+                glm::mat4 parentWorld = parent >= 0 ? worldOf(parent) : world * skeleton.RootTransform;
+                auto rotationOf = [](const glm::mat4& x) {
+                    glm::mat3 r(x);
+                    for (int c = 0; c < 3; ++c) r[c] /= std::max(glm::length(r[c]), 1e-8f);
+                    return glm::normalize(glm::quat_cast(r));
+                };
+                glm::quat local = glm::normalize(glm::inverse(rotationOf(parentWorld)) * rotationOf(m));
+                clip->SetKey(skeleton.Joints[m_Joint].Name, AnimationPath::Rotation, m_Time, glm::vec4(local.x, local.y, local.z, local.w));
+                m_KeyTime = m_Time;
+                ++clip->Version;
+                AssetManager::TouchAnimationClips();
+            }
+            bool using_ = ImGuizmo::IsUsing();
+            if (m_GizmoUsing && !using_) AssetManager::SaveAnimationClip(m_Clip); // a turn done: written
+            m_GizmoUsing = using_;
+            overGizmo |= using_;
+            ImGuizmo::PopID();
+        }
+        if (hovered && closest >= 0 && !overGizmo && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            m_Joint = closest;
+            return true; // consumed: the object stays selected
+        }
+        return overGizmo || closest >= 0;
     }
 }

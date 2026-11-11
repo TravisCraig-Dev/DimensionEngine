@@ -3092,6 +3092,11 @@ namespace Editor
         bool measuring = UpdateMeasure(origin, avail); // the measuring tool owns the view's clicks
         bool tilePainting = !measuring && (UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail));
         bool lineEditing = !measuring && UpdateLinePointEditing(origin, avail);
+        // Posing a skeleton for the Animation window (its joints and a rotation gizmo on the selected one).
+        bool posing = !measuring && !lineEditing && m_ShowAnimation &&
+                      m_Animation->UpdateSceneView(origin, avail, m_Camera.GetView(), m_Camera.GetProjection(avail.x / std::max(1.0f, avail.y)),
+                                                   m_Camera.Is2D(), m_SceneViewHovered);
+        lineEditing |= posing;
         bool vertexSnapping = !measuring && !tilePainting && !lineEditing && m_LinePoint < 0 && UpdateVertexSnap(origin, avail);
         bool handles = !measuring && !tilePainting && !lineEditing && !vertexSnapping && UpdateScriptHandles(origin, avail);
 
@@ -3102,7 +3107,7 @@ namespace Editor
         bool uiSelected = m_Ctx.HasValidSelection() && scene.GetRegistry().Has<UIRectComponent>(m_Ctx.Selected) &&
                           (m_SceneUITarget || !scene.GetParent(m_Ctx.Selected).IsNull());
         if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !uiSelected && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
-            !measuring && m_HandleDrag == 0)
+            !measuring && m_HandleDrag == 0 && !(m_ShowAnimation && m_Animation->IsPosing()))
         {
             auto& reg = scene.GetRegistry();
             auto& t = reg.Get<TransformComponent>(m_Ctx.Selected);
