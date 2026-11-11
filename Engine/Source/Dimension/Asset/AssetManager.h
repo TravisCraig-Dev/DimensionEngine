@@ -142,7 +142,7 @@ namespace Dimension
         static Ref<AnimationClipAsset> GetAnimationClip(AssetHandle handle);
         static void SaveAnimationClip(AssetHandle handle);
         static AssetHandle CreateAnimationClip(const fs::path& absolutePath, const AnimationClipAsset& clip);
-        static const std::vector<AssetHandle>& ClipsFor(AssetHandle model);
+        static const std::vector<AssetHandle>& ClipsFor(AssetHandle model); // None: the clips made for no model (generic)
         static uint64_t ClipsVersion();
         static void TouchAnimationClips();
         // Sprite atlases (.spriteatlas): packed when first asked for (and again after a sprite or the atlas changes);

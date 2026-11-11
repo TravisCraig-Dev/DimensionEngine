@@ -7100,6 +7100,48 @@ namespace
         fs::remove_all(assets.parent_path());
     }
 
+    void TestGenericAnimator()
+    {
+        // A lamp without a skeleton: its Animator plays a generic clip (made for no model) keying its light's intensity,
+        // and a child's position, while the game runs.
+        fs::path assets = fs::temp_directory_path() / "dimension_generic_anim" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        AssetManager::Init(assets);
+        AnimationClipAsset flicker;
+        flicker.Name = "Flicker";
+        flicker.Duration = 1.0f;
+        std::string intensity = AnimationClipAsset::PropertyChannel("", "Point Light", "Intensity");
+        std::string shade = AnimationClipAsset::PropertyChannel("Shade", "Transform", "Position");
+        flicker.SetKey(intensity, AnimationPath::Translation, 0.0f, glm::vec4(1.0f, 0, 0, 0));
+        flicker.SetKey(intensity, AnimationPath::Translation, 1.0f, glm::vec4(5.0f, 0, 0, 0));
+        flicker.SetKey(shade, AnimationPath::Translation, 0.0f, glm::vec4(0.0f));
+        flicker.SetKey(shade, AnimationPath::Translation, 1.0f, glm::vec4(0.0f, 2.0f, 0.0f, 0.0f));
+        AssetHandle h = AssetManager::CreateAnimationClip(assets / "Flicker.anim", flicker);
+        CHECK(h.IsValid() && AssetManager::ClipsFor(AssetHandle::None()).size() == 1);
+
+        Scene scene("Room");
+        auto& reg = scene.GetRegistry();
+        Entity lamp = scene.CreateEntity("Lamp");
+        reg.Emplace<PointLightComponent>(lamp);
+        auto& animator = reg.Emplace<AnimatorComponent>(lamp);
+        animator.Clip = "Flicker";
+        animator.Loop = true;
+        Entity shadeEntity = scene.CreateEntity("Shade", lamp);
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        for (int i = 0; i < 8; ++i) rt->OnUpdateRuntime(0.0625f); // half a second
+        auto& rreg = rt->GetRegistry();
+        float lit = rreg.Get<PointLightComponent>(lamp).Intensity;
+        glm::vec3 shadeAt = rreg.Get<TransformComponent>(shadeEntity).Position;
+        CHECK(std::abs(lit - 3.0f) < 0.3f && std::abs(shadeAt.y - 1.0f) < 0.15f);
+        CHECK(rreg.Get<AnimatorComponent>(lamp).SkinMatrices.empty());
+        rt->OnRuntimeStop();
+        rt.reset();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     void TestBlendShapes()
     {
         // A glTF grid with morph targets "Bulge" (the center up 1 m, its normal leaning) and "Lift" (all up 0.5 m).
@@ -16216,6 +16258,7 @@ int main(int argc, char** argv)
     Run("COLR v1 color glyphs", TestColrV1);
     Run("Managed build (ReadyToRun, framework closure)", TestManagedBuild);
     Run("Blend shapes", TestBlendShapes);
+    Run("Generic Animators (no skeleton)", TestGenericAnimator);
     Run("Terrain", TestTerrain);
     Run("Terrain details", TestTerrainDetails);
     Run("Terrain stamp", TestTerrainStamp);

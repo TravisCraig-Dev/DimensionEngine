@@ -1114,12 +1114,13 @@ namespace Dimension
     const std::vector<AssetHandle>& AssetManager::ClipsFor(AssetHandle model)
     {
         static const std::vector<AssetHandle> none;
-        if (!s || !model.IsValid()) return none;
+        if (!s) return none;
         if (s->ClipIndexDirty)
         {
+            // (clips made for no model, under None: generic clips for Animators on objects without a skeleton)
             s->ClipsByModel.clear();
             for (AssetHandle h : GetAssetsOfType(AssetType::AnimationClip))
-                if (auto clip = GetAnimationClip(h); clip && clip->Model.IsValid()) s->ClipsByModel[clip->Model].push_back(h);
+                if (auto clip = GetAnimationClip(h)) s->ClipsByModel[clip->Model].push_back(h);
             s->ClipIndexDirty = false;
         }
         auto it = s->ClipsByModel.find(model);

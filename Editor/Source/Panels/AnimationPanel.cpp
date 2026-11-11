@@ -2,6 +2,7 @@
 #include "../EditorUI.h"
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Animation/Timeline.h>
+#include <Dimension/Project/Project.h>
 #include <Dimension/Scene/ComponentRegistry.h>
 #include <functional>
 #include <Dimension/Renderer/Mesh.h>
@@ -170,17 +171,21 @@ namespace Editor
         AssetHandle modelHandle = anim && mr ? (anim->ClipSource.IsValid() ? anim->ClipSource : mr->Mesh) : AssetHandle::None();
         Ref<Mesh> model = modelHandle.IsValid() ? AssetManager::GetMesh(modelHandle) : nullptr;
         if (entity != m_PreviewEntity) StopPreview();
-        if (!model || !model->GetSkeleton())
+        if (!anim)
         {
-            ImGui::TextDisabled("Select an object with an Animator on a skinned model to edit its animation clips (.anim).");
+            ImGui::TextDisabled("Select an object with an Animator to edit its animation clips (.anim).");
             ImGui::End();
             return;
         }
-        const Skeleton& skeleton = *model->GetSkeleton();
+        // Without a skinned model: generic clips (made for no model) of properties and events.
+        static const Skeleton noSkeleton;
+        bool generic = !model || !model->GetSkeleton();
+        if (generic) modelHandle = AssetHandle::None();
+        const Skeleton& skeleton = generic ? noSkeleton : *model->GetSkeleton();
         bool playing = m_Ctx.IsPlaying();
         // The model's blend shapes (rows after the joints; their keys are channels named after them).
         std::vector<std::string> shapeNames;
-        if (auto data = model->GetBlendShapeCount() ? AssetManager::GetMeshData(modelHandle) : nullptr)
+        if (auto data = !generic && model->GetBlendShapeCount() ? AssetManager::GetMeshData(modelHandle) : nullptr)
             for (const BlendShape& b : data->BlendShapes) shapeNames.push_back(b.Name);
         if (m_Shape >= (int)shapeNames.size()) m_Shape = -1;
         if (playing) StopPreview();
@@ -194,7 +199,7 @@ namespace Editor
             return (c ? c->Name : std::string("?")) + "  (" + AssetManager::GetDisplayName(h) + ")";
         };
         ImGui::SetNextItemWidth(230);
-        if (ImGui::BeginCombo("##clip", clip ? clipLabel(m_Clip).c_str() : "(no clips for this model)"))
+        if (ImGui::BeginCombo("##clip", clip ? clipLabel(m_Clip).c_str() : generic ? "(no generic clips yet: New makes one)" : "(no clips for this model)"))
         {
             for (AssetHandle h : clips)
                 if (ImGui::Selectable(clipLabel(h).c_str(), h == m_Clip))
@@ -205,7 +210,13 @@ namespace Editor
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        fs::path folder = AssetManager::GetAbsolutePath(modelHandle).parent_path();
+        // New clips beside the model (generic ones in Assets/Animations).
+        fs::path folder = generic ? Project::GetAssetsDirectory() / "Animations" : AssetManager::GetAbsolutePath(modelHandle).parent_path();
+        if (generic)
+        {
+            std::error_code ec;
+            fs::create_directories(folder, ec);
+        }
         auto created = [&](AssetHandle h) {
             if (!h.IsValid()) return;
             m_Clip = h;
@@ -216,8 +227,8 @@ namespace Editor
         ImGui::SetItemTooltip("Copy one of the model's clips into an editable .anim beside the model (same name: it plays wherever the original did)");
         if (ImGui::BeginPopup("##extract"))
         {
-            if (model->GetClips().empty()) ImGui::TextDisabled("The model has no clips");
-            for (const AnimationClip& c : model->GetClips())
+            if (generic || model->GetClips().empty()) ImGui::TextDisabled(generic ? "Generic Animators have no model clips to extract" : "The model has no clips");
+            for (const AnimationClip& c : generic ? std::vector<AnimationClip>() : model->GetClips())
                 if (ImGui::Selectable(c.Name.c_str()))
                 {
                     AnimationClipAsset made = AnimationClipAsset::FromClip(skeleton, c, &shapeNames);
@@ -253,7 +264,7 @@ namespace Editor
             m_SavedClip = anim->Clip;
             m_SavedTime = anim->Time;
             m_SavedPlaying = anim->Playing;
-            m_SavedWeights = mr->BlendShapeWeights;
+            m_SavedWeights = mr ? mr->BlendShapeWeights : std::vector<float>();
         };
         if (ImGui::Checkbox("Preview", &previewing))
         {

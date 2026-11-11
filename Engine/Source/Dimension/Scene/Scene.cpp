@@ -1158,6 +1158,26 @@ namespace Dimension
 
     namespace
     {
+        // Animators on objects without a skeleton: no joints, and the .anim clips made for no model (properties, events).
+        const Skeleton& NoSkeleton()
+        {
+            static const Skeleton none;
+            return none;
+        }
+        const std::vector<AnimationClip>& GenericClips()
+        {
+            static std::vector<AnimationClip> clips;
+            static uint64_t version = 0;
+            if (version != AssetManager::ClipsVersion())
+            {
+                version = AssetManager::ClipsVersion();
+                clips.clear();
+                for (AssetHandle h : AssetManager::ClipsFor(AssetHandle::None()))
+                    if (auto asset = AssetManager::GetAnimationClip(h)) clips.push_back(asset->ToClip(NoSkeleton()));
+            }
+            return clips;
+        }
+
         // The clips an Animator plays: its mesh's own, or its Animation Source's retargeted onto the mesh's skeleton, and
         // the .anim clips made for that model (one named as a model clip replaces it). Cached per source and target
         // mesh and retargeting, and made again when either is reloaded or any .anim changes.
@@ -1263,9 +1283,13 @@ namespace Dimension
             ikGoals.push_back({ owner, &ik, glm::vec3(t.World[3]), hasHint ? glm::vec3(m_Registry.Get<TransformComponent>(ik.Hint).World[3]) : glm::vec3(0.0f), hasHint });
         }
 
-        for (auto [e, anim, mr] : m_Registry.ViewOf<AnimatorComponent, MeshRendererComponent>())
+        MeshRendererComponent noRenderer; // (stands in on objects without one)
+        for (auto [e, anim] : m_Registry.ViewOf<AnimatorComponent>())
         {
             if (!only.IsNull() && e != only) continue;
+            MeshRendererComponent* renderer = m_Registry.TryGet<MeshRendererComponent>(e);
+            noRenderer = {};
+            MeshRendererComponent& mr = renderer ? *renderer : noRenderer;
             // This Animator's step: by its update mode while playing (Animator.Update gives its own; Manual animators
             // only pose at their time).
             float dt = frameDt;
@@ -1275,17 +1299,19 @@ namespace Dimension
                 else if (anim.UpdateMode == AnimatorUpdateMode::AnimatePhysics) dt = (float)m_FixedStepsThisFrame * m_FixedTimestep;
                 else if (anim.UpdateMode == AnimatorUpdateMode::Manual) dt = 0.0f;
             }
-            Ref<Mesh> mesh = AssetManager::GetMesh(mr.Mesh);
+            Ref<Mesh> mesh = renderer ? AssetManager::GetMesh(mr.Mesh) : nullptr;
             const Skeleton* skeleton = mesh ? mesh->GetSkeleton() : nullptr;
-            if (!skeleton)
+            // No skeleton (a door, a light): a generic Animator, playing clips of properties and events only.
+            bool generic = !skeleton;
+            if (generic)
             {
                 anim.SkinMatrices.clear();
-                continue;
+                skeleton = &NoSkeleton();
             }
             // Cull Completely: nothing runs while the object's bounds (grown for poses past the bind pose) are outside
             // the main camera's view; Animator.Update still runs it.
             anim.Culled = false;
-            if (m_Running && only.IsNull() && anim.CullingMode == AnimatorCullingMode::CullCompletely && !anim.SkinMatrices.empty())
+            if (m_Running && only.IsNull() && !generic && anim.CullingMode == AnimatorCullingMode::CullCompletely && !anim.SkinMatrices.empty())
             {
                 Entity camera = GetPrimaryCamera();
                 if (!camera.IsNull())
@@ -1307,7 +1333,7 @@ namespace Dimension
                     if (anim.Culled) continue;
                 }
             }
-            const auto& clips = AnimatorClips(anim, mr.Mesh, mesh);
+            const auto& clips = generic ? GenericClips() : AnimatorClips(anim, mr.Mesh, mesh);
             auto duration = [&](const std::string& name) {
                 const AnimationClip* c = Animation::FindClip(clips, name);
                 return c ? c->Duration : 0.0f;
@@ -1325,7 +1351,7 @@ namespace Dimension
                 if (weights.size() < current.Weights.size())
                 {
                     // Shapes not given a weight yet start from the model's own.
-                    auto data = mesh->GetBlendShapeCount() ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
+                    auto data = mesh && mesh->GetBlendShapeCount() ? AssetManager::GetMeshData(mr.Mesh) : nullptr;
                     size_t from = weights.size();
                     weights.resize(current.Weights.size(), 0.0f);
                     for (size_t i = from; data && i < weights.size() && i < data->BlendShapes.size(); ++i) weights[i] = data->BlendShapes[i].DefaultWeight * 100.0f;
