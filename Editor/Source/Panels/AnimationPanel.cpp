@@ -45,6 +45,37 @@ namespace Editor
                 if (merged.empty() || t - merged.back() > AnimationClipAsset::kKeyTolerance * 0.5f) merged.push_back(t);
             return merged;
         }
+
+        // A rotation key as the curve view shows it: Euler angles in degrees.
+        glm::vec3 EulerDegrees(const glm::vec4& v)
+        {
+            return glm::degrees(glm::eulerAngles(glm::normalize(glm::quat(v.w, v.x, v.y, v.z))));
+        }
+
+        // A key's tangent as the curve view shows it (change per second of each drawn value: Euler degrees for
+        // rotations), and back: the tangent that gives those rates. Central differences, so the two agree.
+        glm::vec3 ShownRate(bool rotation, const glm::vec4& value, const glm::vec4& tangent)
+        {
+            if (!rotation) return glm::vec3(tangent);
+            const float h = 0.01f;
+            glm::vec3 d = EulerDegrees(value + tangent * h) - EulerDegrees(value - tangent * h);
+            for (int a = 0; a < 3; ++a) d[a] -= 360.0f * std::round(d[a] / 360.0f);
+            return d / (2.0f * h);
+        }
+
+        glm::vec4 TangentFor(bool rotation, const glm::vec4& value, const glm::vec3& rate)
+        {
+            if (!rotation) return glm::vec4(rate, 0.0f);
+            const float h = 0.01f;
+            glm::vec3 e = EulerDegrees(value);
+            auto at = [&](float s) {
+                glm::quat q(glm::radians(e + rate * s));
+                glm::vec4 v(q.x, q.y, q.z, q.w);
+                return glm::dot(v, value) < 0.0f ? -v : v; // on the key's side
+            };
+            float length = glm::length(value);
+            return (at(h) - at(-h)) / (2.0f * h) * length;
+        }
     }
 
     void AnimationPanel::StopPreview()
@@ -194,6 +225,9 @@ namespace Editor
         Pose pose;
         Animation::Sample(skeleton, sampled, m_Time, pose);
         if (m_Joint >= (int)skeleton.Joints.size()) m_Joint = -1;
+        if (!m_AutoCurve.Joint.empty() && m_Joint < 0) // (automation: --anim-key)
+            for (size_t j = 0; j < skeleton.Joints.size(); ++j)
+                if (skeleton.Joints[j].Name == m_AutoCurve.Joint) m_Joint = (int)j, m_Selected = { (int)j };
 
         // ---- Joints and their keys (a dope sheet), then the selected joint's values ----
         const float labelW = 220.0f, rowH = ImGui::GetFrameHeight(), inset = 8.0f;
@@ -400,14 +434,21 @@ namespace Editor
             int mode = -1; // its channels' (the first's)
             for (const auto& c : asset.Channels)
                 if (c.Joint == name && mode < 0)
-                    mode = c.Smooth || c.Interpolation == AnimationInterpolation::CubicSpline ? 2 : c.Interpolation == AnimationInterpolation::Step ? 1 : 0;
-            const char* modes[] = { "Linear", "Step", "Smooth" };
+                    mode = AnimationClipAsset::HasExplicitTangents(c) ? 3
+                         : c.Smooth || c.Interpolation == AnimationInterpolation::CubicSpline ? 2
+                         : c.Interpolation == AnimationInterpolation::Step ? 1 : 0;
+            const char* modes[] = { "Linear", "Step", "Smooth", "Free" };
             ImGui::SetNextItemWidth(90);
-            if (mode >= 0 && ImGui::Combo("##interp", &mode, modes, 3))
+            if (mode >= 0 && ImGui::Combo("##interp", &mode, modes, 4))
             {
                 for (auto& c : asset.Channels)
                     if (c.Joint == name)
                     {
+                        if (mode == 3)
+                        {
+                            AnimationClipAsset::MakeTangentsExplicit(c); // the automatic ones, to drag from
+                            continue;
+                        }
                         c.Smooth = mode == 2;
                         c.Interpolation = mode == 1 ? AnimationInterpolation::Step : AnimationInterpolation::Linear;
                         c.InTangents.clear();
@@ -415,22 +456,57 @@ namespace Editor
                     }
                 changed = commit = true;
             }
-            if (mode >= 0) ImGui::SetItemTooltip("How the joint's keys are joined: straight lines, held until the next key, or smooth curves");
+            if (mode >= 0)
+                ImGui::SetItemTooltip("How the joint's keys are joined: straight lines, held until the next key, smooth curves (automatic "
+                                      "tangents), or curves with tangents set by hand (drag a key's handles in the curve view)");
             if (playing) ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::TextDisabled("Ctrl / Shift click rows to select several; drag keys to move them, right-click one to delete it.");
 
             // The joint's curves over the clip: rotation (degrees, unwrapped) and position, each set scaled to fit,
-            // keys as dots, the current time as a line.
+            // keys as dots, the current time as a line. Clicking a key selects it (and goes to its time); a smooth
+            // channel's selected key shows tangent handles: dragging one sets the curve's slope there (both sides
+            // together, Alt for one side only), right-clicking a key puts its tangents back to automatic or flat.
+            if (m_CurveJoint != m_Joint || m_CurveClip != m_Clip)
+            {
+                m_CurveJoint = m_Joint;
+                m_CurveClip = m_Clip;
+                m_CurveKey = -1;
+                m_CurveDrag = 0;
+            }
+            if (m_AutoCurve.Key >= 0 && m_AutoCurve.Joint == name)
+            {
+                m_CurveSet = m_AutoCurve.Set;
+                m_CurveAxis = m_AutoCurve.Axis;
+                m_CurveKey = m_AutoCurve.Key;
+                m_AutoCurve = {};
+            }
+            ImGuiIO& cio = ImGui::GetIO();
             ImVec2 c0 = ImGui::GetCursorScreenPos();
             float curveW = std::max(ImGui::GetContentRegionAvail().x, 100.0f);
-            ImGui::InvisibleButton("##curves", ImVec2(curveW, curveH));
-            if (ImGui::IsItemActive()) m_Time = std::clamp((ImGui::GetIO().MousePos.x - c0.x - inset) / (curveW - 2.0f * inset) * asset.Duration, 0.0f, asset.Duration);
+            ImGui::InvisibleButton("##curves", ImVec2(curveW, curveH), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+            bool curveClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left), curveRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+            bool curveActive = ImGui::IsItemActive();
             ImDrawList* cdl = ImGui::GetWindowDrawList();
             cdl->AddRectFilled(c0, ImVec2(c0.x + curveW, c0.y + curveH), IM_COL32(30, 31, 36, 255), 3.0f);
-            auto curveX = [&](float t) { return c0.x + inset + t / std::max(asset.Duration, 0.01f) * (curveW - 2.0f * inset); };
+            cdl->PushClipRect(c0, ImVec2(c0.x + curveW, c0.y + curveH), true);
+            const float pxPerSecond = (curveW - 2.0f * inset) / std::max(asset.Duration, 0.01f);
+            auto curveX = [&](float t) { return c0.x + inset + t * pxPerSecond; };
             const int samples = 160;
             const ImU32 axisColors[3] = { IM_COL32(235, 90, 90, 255), IM_COL32(110, 205, 95, 255), IM_COL32(90, 150, 245, 255) };
+            // What the mouse is over: a key (part 0) or the selected key's in / out handle (1 / 2), nearest first.
+            struct CurveHit { int Set = -1, Axis = 0, Key = -1, Part = 0; float Dist = 1e30f; } hit;
+            auto consider = [&](ImVec2 p, int set, int axis, int key, int part, float radius) {
+                float d = std::hypot(cio.MousePos.x - p.x, cio.MousePos.y - p.y);
+                if (d > radius) return;
+                if (part > 0) d -= 100.0f; // handles over the keys beneath them
+                if (d < hit.Dist) hit = { set, axis, key, part, d };
+            };
+            // The selected key's handles, for the drag below: where the key is, and the scale.
+            ImVec2 keyPos{ 0, 0 };
+            float pxPerValue = 1.0f;
+            const AnimationChannel* selectedChannel = nullptr;
+            std::string keyInfo;
             for (int set = 0; set < 2; ++set)
             {
                 AnimationPath path = set == 0 ? AnimationPath::Rotation : AnimationPath::Translation;
@@ -439,35 +515,140 @@ namespace Editor
                 for (const auto& ch : sampled.Channels)
                     if (ch.Joint == jointIndex && ch.Path == path) channel = &ch;
                 if (!channel) continue;
+                bool rotation = set == 0;
                 std::vector<glm::vec3> values(samples + 1);
                 for (int i = 0; i <= samples; ++i)
                 {
                     glm::vec4 v = Animation::SampleChannel(*channel, asset.Duration * i / samples);
-                    glm::vec3 x = set == 0 ? glm::degrees(glm::eulerAngles(glm::quat(v.w, v.x, v.y, v.z))) : glm::vec3(v);
-                    if (set == 0 && i > 0)
+                    glm::vec3 x = rotation ? EulerDegrees(v) : glm::vec3(v);
+                    if (rotation && i > 0)
                         for (int a = 0; a < 3; ++a) x[a] += 360.0f * std::round((values[i - 1][a] - x[a]) / 360.0f); // unwrapped
                     values[i] = x;
                 }
+                // The scale fits the curves, held while a handle is dragged (so the curve moves, not the axis).
                 float lo = 1e30f, hi = -1e30f;
-                for (const glm::vec3& v : values)
-                    for (int a = 0; a < 3; ++a) lo = std::min(lo, v[a]), hi = std::max(hi, v[a]);
-                if (hi - lo < 1e-4f) lo -= 1.0f, hi += 1.0f;
-                auto curveY = [&](float v) { return c0.y + curveH - 6.0f - (v - lo) / (hi - lo) * (curveH - 12.0f); };
+                if (m_CurveDrag != 0)
+                    lo = m_CurveLo[set], hi = m_CurveHi[set];
+                else
+                {
+                    for (const glm::vec3& v : values)
+                        for (int a = 0; a < 3; ++a) lo = std::min(lo, v[a]), hi = std::max(hi, v[a]);
+                    if (hi - lo < 1e-4f) lo -= 1.0f, hi += 1.0f;
+                    float pad = (hi - lo) * 0.08f;
+                    lo -= pad, hi += pad;
+                    m_CurveLo[set] = lo, m_CurveHi[set] = hi;
+                }
+                float valueScale = (curveH - 12.0f) / (hi - lo);
+                auto curveY = [&](float v) { return c0.y + curveH - 6.0f - (v - lo) * valueScale; };
+                bool tangents = channel->Interpolation == AnimationInterpolation::CubicSpline && channel->InTangents.size() == channel->Values.size() &&
+                                channel->OutTangents.size() == channel->Values.size();
                 for (int a = 0; a < 3; ++a)
                 {
-                    ImU32 col = set == 0 ? axisColors[a] : (axisColors[a] & 0x00FFFFFF) | 0x90000000;
+                    ImU32 col = rotation ? axisColors[a] : (axisColors[a] & 0x00FFFFFF) | 0x90000000;
                     for (int i = 0; i < samples; ++i)
                         cdl->AddLine(ImVec2(curveX(asset.Duration * i / samples), curveY(values[i][a])),
-                                     ImVec2(curveX(asset.Duration * (i + 1) / samples), curveY(values[i + 1][a])), col, set == 0 ? 1.5f : 1.0f);
-                    for (float t : channel->Times)
+                                     ImVec2(curveX(asset.Duration * (i + 1) / samples), curveY(values[i + 1][a])), col, rotation ? 1.5f : 1.0f);
+                    for (size_t k = 0; k < channel->Times.size(); ++k)
                     {
+                        float t = channel->Times[k];
                         int i = std::clamp((int)std::round(t / std::max(asset.Duration, 0.01f) * samples), 0, samples);
-                        cdl->AddCircleFilled(ImVec2(curveX(t), curveY(values[i][a])), 2.5f, col);
+                        // The key's own value (unwrapped beside the drawn curve).
+                        float v = rotation ? EulerDegrees(channel->Values[k])[a] : channel->Values[k][a];
+                        if (rotation) v += 360.0f * std::round((values[i][a] - v) / 360.0f);
+                        ImVec2 p(curveX(t), curveY(v));
+                        bool selected = m_CurveSet == set && m_CurveAxis == a && m_CurveKey == (int)k;
+                        cdl->AddCircleFilled(p, selected ? 4.0f : 2.5f, col);
+                        if (selected) cdl->AddCircle(p, 6.0f, IM_COL32(255, 255, 255, 230), 0, 1.5f);
+                        consider(p, set, a, (int)k, 0, 7.0f);
+                        if (!selected) continue;
+                        keyPos = p;
+                        pxPerValue = valueScale;
+                        selectedChannel = channel;
+                        char info[160];
+                        std::snprintf(info, sizeof(info), "%s %c, key %d at %.2f s: %.2f%s", rotation ? "Rotation" : "Position", "xyz"[a], (int)k + 1, t, v,
+                                      rotation ? "\xC2\xB0" : "");
+                        keyInfo = info;
+                        if (!tangents) continue;
+                        // Its tangents as the curve shows them (slope per second), drawn as handles a fixed length out.
+                        float slopes[2] = { ShownRate(rotation, channel->Values[k], channel->InTangents[k])[a],
+                                            ShownRate(rotation, channel->Values[k], channel->OutTangents[k])[a] };
+                        for (int side = 0; side < 2; ++side)
+                        {
+                            glm::vec2 dir = glm::normalize(glm::vec2(pxPerSecond, -slopes[side] * valueScale)) * 34.0f * (side == 0 ? -1.0f : 1.0f);
+                            ImVec2 h(p.x + dir.x, p.y + dir.y);
+                            cdl->AddLine(p, h, IM_COL32(220, 220, 225, 200), 1.0f);
+                            cdl->AddRectFilled(ImVec2(h.x - 3.5f, h.y - 3.5f), ImVec2(h.x + 3.5f, h.y + 3.5f),
+                                               m_CurveDrag == side + 1 ? IM_COL32(255, 200, 80, 255) : IM_COL32(235, 235, 240, 255));
+                            consider(h, set, a, (int)k, side + 1, 7.0f);
+                        }
+                        std::snprintf(info, sizeof(info), "   in %.1f, out %.1f%s per second", slopes[0], slopes[1], rotation ? "\xC2\xB0" : "");
+                        keyInfo += info;
                     }
                 }
             }
+            if (!ImGui::IsItemHovered() && !curveActive) hit = {};
+            if (curveClicked)
+            {
+                m_CurveScrub = false;
+                if (hit.Part > 0 && !playing)
+                    m_CurveDrag = hit.Part;
+                else if (hit.Key >= 0)
+                {
+                    m_CurveSet = hit.Set, m_CurveAxis = hit.Axis, m_CurveKey = hit.Key;
+                    for (const auto& ch : sampled.Channels)
+                        if (ch.Joint == m_Joint && ch.Path == (hit.Set == 0 ? AnimationPath::Rotation : AnimationPath::Translation) && hit.Key < (int)ch.Times.size())
+                            m_Time = ch.Times[hit.Key];
+                }
+                else
+                {
+                    m_CurveKey = -1;
+                    m_CurveScrub = true;
+                }
+            }
+            if (curveActive && m_CurveScrub)
+                m_Time = std::clamp((cio.MousePos.x - c0.x - inset) / (curveW - 2.0f * inset) * asset.Duration, 0.0f, asset.Duration);
+            // Dragging a handle: the slope from the key to the mouse (pointing out of the key on its side).
+            if (m_CurveDrag != 0 && curveActive && selectedChannel && m_CurveKey < (int)selectedChannel->Values.size() &&
+                selectedChannel->InTangents.size() == selectedChannel->Values.size())
+            {
+                bool rotation = m_CurveSet == 0;
+                AnimationPath path = rotation ? AnimationPath::Rotation : AnimationPath::Translation;
+                float dx = cio.MousePos.x - keyPos.x, dy = cio.MousePos.y - keyPos.y;
+                dx = m_CurveDrag == 2 ? std::max(dx, 1.0f) : std::min(dx, -1.0f);
+                float slope = -(dy / pxPerValue) / (dx / pxPerSecond);
+                const glm::vec4& value = selectedChannel->Values[m_CurveKey];
+                glm::vec3 inRate = ShownRate(rotation, value, selectedChannel->InTangents[m_CurveKey]);
+                glm::vec3 outRate = ShownRate(rotation, value, selectedChannel->OutTangents[m_CurveKey]);
+                bool oneSide = cio.KeyAlt;
+                if (m_CurveDrag == 1 || !oneSide) inRate[m_CurveAxis] = slope;
+                if (m_CurveDrag == 2 || !oneSide) outRate[m_CurveAxis] = slope;
+                glm::vec4 in = TangentFor(rotation, value, inRate), out = TangentFor(rotation, value, outRate);
+                if (asset.SetTangents(name, path, (size_t)m_CurveKey, &in, &out)) changed = true;
+            }
+            if (m_CurveDrag != 0 && !curveActive)
+            {
+                m_CurveDrag = 0;
+                commit = true;
+            }
+            // Right-click a key: its tangents back to automatic, or flat.
+            if (curveRightClicked && hit.Key >= 0 && !playing)
+            {
+                m_CurveSet = hit.Set, m_CurveAxis = hit.Axis, m_CurveKey = hit.Key;
+                ImGui::OpenPopup("##curveKey");
+            }
+            if (ImGui::BeginPopup("##curveKey"))
+            {
+                AnimationPath path = m_CurveSet == 0 ? AnimationPath::Rotation : AnimationPath::Translation;
+                if (ImGui::MenuItem("Auto Tangents") && asset.AutoTangent(name, path, (size_t)std::max(m_CurveKey, 0))) changed = commit = true;
+                ImGui::SetItemTooltip("The key's slope from its neighbours, as Smooth keys have");
+                if (ImGui::MenuItem("Flat Tangents") && asset.FlatTangent(name, path, (size_t)std::max(m_CurveKey, 0))) changed = commit = true;
+                ImGui::SetItemTooltip("Level on both sides: the curve eases in and out of the key");
+                ImGui::EndPopup();
+            }
             cdl->AddLine(ImVec2(curveX(m_Time), c0.y), ImVec2(curveX(m_Time), c0.y + curveH), IM_COL32(240, 120, 90, 255), 1.5f);
             cdl->AddText(ImVec2(c0.x + 6, c0.y + 3), IM_COL32(150, 150, 160, 255), "Rotation (solid), position (faint): x red, y green, z blue");
+            if (!keyInfo.empty()) cdl->AddText(ImVec2(c0.x + 6, c0.y + curveH - ImGui::GetFontSize() - 3), IM_COL32(210, 210, 220, 255), keyInfo.c_str());
+            cdl->PopClipRect();
         }
         else
             ImGui::TextDisabled("Select a joint to see and key its rotation and position at the current time.");
@@ -479,6 +660,23 @@ namespace Editor
         }
         if (commit) AssetManager::SaveAnimationClip(m_Clip);
         ImGui::End();
+    }
+
+    void AnimationPanel::SelectCurveKey(const std::string& spec)
+    {
+        // "Joint,rotation|position,axis,key"
+        std::vector<std::string> parts;
+        size_t from = 0;
+        for (size_t comma; (comma = spec.find(',', from)) != std::string::npos; from = comma + 1) parts.push_back(spec.substr(from, comma - from));
+        parts.push_back(spec.substr(from));
+        m_AutoCurve = {};
+        m_AutoCurve.Joint = parts[0];
+        if (parts.size() >= 4)
+        {
+            m_AutoCurve.Set = parts[1] == "position" ? 1 : 0;
+            m_AutoCurve.Axis = std::clamp(std::atoi(parts[2].c_str()), 0, 2);
+            m_AutoCurve.Key = std::max(std::atoi(parts[3].c_str()), 0);
+        }
     }
 
     bool AnimationPanel::IsPosing() const { return !m_PreviewEntity.IsNull() && m_Joint >= 0 && m_Clip.IsValid(); }

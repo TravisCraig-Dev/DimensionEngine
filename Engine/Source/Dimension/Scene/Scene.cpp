@@ -1173,8 +1173,8 @@ namespace Dimension
                 uint64_t Version = 0;
                 std::vector<AnimationClip> Clips;
             };
-            static std::map<std::tuple<const Mesh*, const Mesh*, AnimatorRetargeting>, Entry> cache;
-            Entry& entry = cache[{ source.get(), mesh.get(), anim.Retargeting }];
+            static std::map<std::tuple<const Mesh*, const Mesh*, AnimatorRetargeting, bool>, Entry> cache;
+            Entry& entry = cache[{ source.get(), mesh.get(), anim.Retargeting, anim.MuscleLimits }];
             uint64_t version = AssetManager::ClipsVersion();
             if ((source && entry.Source.lock() != source) || entry.Target.lock() != mesh || entry.Version != version)
             {
@@ -1186,7 +1186,7 @@ namespace Dimension
                 auto add = [&](const AnimationClip& clip) {
                     AnimationClip made = !source ? clip
                                          : anim.Retargeting == AnimatorRetargeting::Humanoid
-                                             ? Animation::RetargetHumanoid(*source->GetSkeleton(), *mesh->GetSkeleton(), clip)
+                                             ? Animation::RetargetHumanoid(*source->GetSkeleton(), *mesh->GetSkeleton(), clip, anim.MuscleLimits)
                                              : Animation::RetargetClip(*source->GetSkeleton(), *mesh->GetSkeleton(), clip);
                     auto same = std::find_if(entry.Clips.begin(), entry.Clips.end(), [&](const AnimationClip& c) { return c.Name == made.Name; });
                     if (same != entry.Clips.end()) *same = std::move(made);

@@ -145,8 +145,24 @@ namespace Dimension
         // human bone turns in the model's space as the source's turns from its bind pose, the hips travel scaled by the
         // ratio of the hips' heights, and the clip is resampled at 30 frames a second. Joints that are no human bone
         // (fingers, tails) carry over by name as RetargetClip does. Falls back to RetargetClip when either skeleton is
-        // not humanoid.
-        AnimationClip RetargetHumanoid(const Skeleton& source, const Skeleton& target, const AnimationClip& clip);
+        // not humanoid. With muscle limits each human bone stays within a human range of motion (HumanMuscleLimit)
+        // from its T-pose, turned relative to its parent bone; a clamped bone carries its children along.
+        AnimationClip RetargetHumanoid(const Skeleton& source, const Skeleton& target, const AnimationClip& clip, bool muscleLimits = true);
+
+        // A human bone's range of motion (degrees, from the T-pose, relative to its parent human bone), as Unity's
+        // muscles: Front, its tip swinging forward (+) or back (for feet and toes: up (+) or down); Side, its tip swinging
+        // up (+) or down for shoulders and arms, out to its own side (+) or in for legs and feet, left (+) or right for the
+        // spine, neck and head; Twist, about the bone itself.
+        // Bend limits the whole swing instead (elbows and wrists, whose bending way depends on how the rig was bound).
+        struct MuscleLimit
+        {
+            glm::vec2 Front{ -180.0f, 180.0f }, Side{ -180.0f, 180.0f }, Twist{ -180.0f, 180.0f };
+            float Bend = 180.0f;
+        };
+        MuscleLimit HumanMuscleLimit(HumanBone bone);
+        // A turn of a bone relative to its parent (in the T-pose's frame: left +X, up +Y, forward +Z) kept within the
+        // bone's limit (unchanged when already inside it).
+        glm::quat ClampMuscle(HumanBone bone, const glm::quat& turn);
 
         // Animator layers. A mask gives each joint a weight: 1 for the listed joints and all their descendants,
         // 0 elsewhere (an empty list covers the whole skeleton).

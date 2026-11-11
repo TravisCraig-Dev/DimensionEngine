@@ -158,25 +158,91 @@ namespace Dimension
 
     namespace
     {
-        // A channel whose keys change: explicit spline tangents no longer fit, so it becomes smooth.
+        // A channel whose keys change: explicit tangents (imported or set by hand) stay with their keys, so their size
+        // must match; a channel whose tangents are incomplete becomes smooth.
         void KeysChanged(AnimationClipAsset::Channel& c)
         {
+            if (AnimationClipAsset::HasExplicitTangents(c)) return;
             if (c.Interpolation == AnimationInterpolation::CubicSpline && !c.Smooth) c.Smooth = true;
             c.InTangents.clear();
             c.OutTangents.clear();
         }
+
+        // The automatic tangent of key k (its slope from its neighbours, flat at the ends).
+        glm::vec4 AutoSlope(const AnimationClipAsset::Channel& c, size_t k)
+        {
+            if (k == 0 || k + 1 >= c.Times.size()) return glm::vec4(0.0f);
+            glm::vec4 before = c.Values[k - 1], after = c.Values[k + 1];
+            if (c.Path == AnimationPath::Rotation)
+            {
+                if (glm::dot(before, c.Values[k]) < 0.0f) before = -before;
+                if (glm::dot(after, c.Values[k]) < 0.0f) after = -after;
+            }
+            float span = c.Times[k + 1] - c.Times[k - 1];
+            return span > 1e-6f ? (after - before) / span : glm::vec4(0.0f);
+        }
+    }
+
+    bool AnimationClipAsset::HasExplicitTangents(const Channel& c)
+    {
+        return !c.Smooth && c.Interpolation == AnimationInterpolation::CubicSpline && c.InTangents.size() == c.Times.size() &&
+               c.OutTangents.size() == c.Times.size() && c.Values.size() == c.Times.size();
+    }
+
+    void AnimationClipAsset::MakeTangentsExplicit(Channel& c)
+    {
+        if (HasExplicitTangents(c)) return;
+        AnimationChannel automatic;
+        automatic.Path = c.Path;
+        automatic.Times = c.Times;
+        automatic.Values = c.Values;
+        Animation::AutoTangents(automatic); // (rotations kept on the short way round between keys)
+        c.Values = automatic.Values;
+        c.InTangents = automatic.InTangents;
+        c.OutTangents = automatic.OutTangents;
+        c.Interpolation = AnimationInterpolation::CubicSpline;
+        c.Smooth = false;
+    }
+
+    bool AnimationClipAsset::SetTangents(const std::string& joint, AnimationPath path, size_t key, const glm::vec4* in, const glm::vec4* out)
+    {
+        Channel* c = FindChannel(joint, path);
+        if (!c || key >= c->Times.size()) return false;
+        MakeTangentsExplicit(*c);
+        if (in) c->InTangents[key] = *in;
+        if (out) c->OutTangents[key] = *out;
+        ++Version;
+        return true;
+    }
+
+    bool AnimationClipAsset::AutoTangent(const std::string& joint, AnimationPath path, size_t key)
+    {
+        Channel* c = FindChannel(joint, path);
+        if (!c || key >= c->Times.size()) return false;
+        MakeTangentsExplicit(*c);
+        c->InTangents[key] = c->OutTangents[key] = AutoSlope(*c, key);
+        ++Version;
+        return true;
+    }
+
+    bool AnimationClipAsset::FlatTangent(const std::string& joint, AnimationPath path, size_t key)
+    {
+        glm::vec4 zero(0.0f);
+        return SetTangents(joint, path, key, &zero, &zero);
     }
 
     void AnimationClipAsset::SetKey(const std::string& joint, AnimationPath path, float time, const glm::vec4& value)
     {
         Channel& c = GetOrAddChannel(joint, path);
         KeysChanged(c);
+        bool tangents = HasExplicitTangents(c);
         time = std::clamp(time, 0.0f, Duration);
         glm::vec4 v = value;
         for (size_t k = 0; k < c.Times.size(); ++k)
             if (std::abs(c.Times[k] - time) <= kKeyTolerance * 0.5f)
             {
-                c.Values[k] = v;
+                // (on the side of the key it replaces, which its tangents were made for)
+                c.Values[k] = path == AnimationPath::Rotation && glm::dot(c.Values[k], v) < 0.0f ? -v : v;
                 ++Version;
                 return;
             }
@@ -185,6 +251,12 @@ namespace Dimension
         if (path == AnimationPath::Rotation && at > 0 && glm::dot(c.Values[at - 1], v) < 0.0f) v = -v;
         c.Times.insert(c.Times.begin() + at, time);
         c.Values.insert(c.Values.begin() + at, v);
+        if (tangents) // the new key's automatic
+        {
+            glm::vec4 slope = AutoSlope(c, at);
+            c.InTangents.insert(c.InTangents.begin() + at, slope);
+            c.OutTangents.insert(c.OutTangents.begin() + at, slope);
+        }
         ++Version;
     }
 
@@ -198,6 +270,11 @@ namespace Dimension
                 if (std::abs(c.Times[k] - time) <= kKeyTolerance * 0.5f)
                 {
                     KeysChanged(c);
+                    if (HasExplicitTangents(c))
+                    {
+                        c.InTangents.erase(c.InTangents.begin() + k);
+                        c.OutTangents.erase(c.OutTangents.begin() + k);
+                    }
                     c.Times.erase(c.Times.begin() + k);
                     c.Values.erase(c.Values.begin() + k);
                     removed = true;
@@ -219,19 +296,29 @@ namespace Dimension
                 if (std::abs(c.Times[k] - from) <= kKeyTolerance * 0.5f)
                 {
                     KeysChanged(c);
-                    glm::vec4 v = c.Values[k];
-                    c.Times.erase(c.Times.begin() + k);
-                    c.Values.erase(c.Values.begin() + k);
+                    bool tangents = HasExplicitTangents(c); // they move with their keys
+                    auto erase = [&](size_t i) {
+                        c.Times.erase(c.Times.begin() + i);
+                        c.Values.erase(c.Values.begin() + i);
+                        if (tangents)
+                        {
+                            c.InTangents.erase(c.InTangents.begin() + i);
+                            c.OutTangents.erase(c.OutTangents.begin() + i);
+                        }
+                    };
+                    glm::vec4 v = c.Values[k], in = tangents ? c.InTangents[k] : glm::vec4(0.0f), out = tangents ? c.OutTangents[k] : glm::vec4(0.0f);
+                    erase(k);
                     // A key already at the new time gives way.
                     for (size_t o = c.Times.size(); o-- > 0;)
-                        if (std::abs(c.Times[o] - to) <= kKeyTolerance * 0.5f)
-                        {
-                            c.Times.erase(c.Times.begin() + o);
-                            c.Values.erase(c.Values.begin() + o);
-                        }
+                        if (std::abs(c.Times[o] - to) <= kKeyTolerance * 0.5f) erase(o);
                     size_t at = std::upper_bound(c.Times.begin(), c.Times.end(), to) - c.Times.begin();
                     c.Times.insert(c.Times.begin() + at, to);
                     c.Values.insert(c.Values.begin() + at, v);
+                    if (tangents)
+                    {
+                        c.InTangents.insert(c.InTangents.begin() + at, in);
+                        c.OutTangents.insert(c.OutTangents.begin() + at, out);
+                    }
                     moved = true;
                     break;
                 }

@@ -467,6 +467,7 @@ namespace Dimension
         // (None = the clips of its own mesh).
         AssetHandle ClipSource = AssetHandle::None();
         AnimatorRetargeting Retargeting = AnimatorRetargeting::Humanoid;
+        bool MuscleLimits = true; // humanoid retargeting: joints kept within human ranges of motion
 
         // Root motion (runtime): movement applied this frame, world space.
         glm::vec3 RootMotionDelta{ 0.0f };

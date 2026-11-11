@@ -51,5 +51,16 @@ namespace Dimension
         bool MoveKeys(const std::string& joint, float from, float to);
         bool HasKey(const std::string& joint, float time) const;
         static constexpr float kKeyTolerance = 1.0f / 120.0f;
+
+        // Tangents set by hand (the curve view's handles): the channel keeps explicit spline tangents (a Smooth or
+        // linear channel gets its automatic ones written out first), and key `key`'s in / out tangents (value units
+        // per second; null leaves that side) are set. Explicit tangents survive later key edits: a new key gets an
+        // automatic tangent, moved and removed keys take theirs along. AutoTangent puts one key's back to automatic
+        // (its slope from its neighbours), FlatTangent levels it. False when there is no such channel or key.
+        static bool HasExplicitTangents(const Channel& c);
+        static void MakeTangentsExplicit(Channel& c);
+        bool SetTangents(const std::string& joint, AnimationPath path, size_t key, const glm::vec4* in, const glm::vec4* out);
+        bool AutoTangent(const std::string& joint, AnimationPath path, size_t key);
+        bool FlatTangent(const std::string& joint, AnimationPath path, size_t key);
     };
 }

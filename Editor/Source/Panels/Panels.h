@@ -302,6 +302,8 @@ namespace Editor
         // object's transform gizmo makes way.
         bool UpdateSceneView(ImVec2 origin, ImVec2 size, const glm::mat4& view, const glm::mat4& proj, bool orthographic, bool hovered);
         bool IsPosing() const;
+        // Automation (--anim-key "Joint,rotation|position,axis,key"): that joint selected and that key of its curve.
+        void SelectCurveKey(const std::string& spec);
 
     private:
         EditorContext& m_Ctx;
@@ -320,6 +322,13 @@ namespace Editor
         glm::vec3 m_Euler{ 0.0f };
         int m_EulerJoint = -1;
         float m_EulerTime = -1.0f;
+        // The curve view: its selected key (set 0 rotation / 1 position, axis, key; -1 none), the tangent handle being
+        // dragged (1 in, 2 out) with the scale held while it is, and whether a click there scrubs the time.
+        int m_CurveJoint = -1, m_CurveSet = 0, m_CurveAxis = 0, m_CurveKey = -1, m_CurveDrag = 0;
+        AssetHandle m_CurveClip = AssetHandle::None();
+        bool m_CurveScrub = false;
+        float m_CurveLo[2]{}, m_CurveHi[2]{};
+        struct AutoCurveKey { std::string Joint; int Set = 0, Axis = 0, Key = -1; } m_AutoCurve;
     };
 
     class SceneSettingsPanel

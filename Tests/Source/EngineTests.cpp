@@ -6568,6 +6568,42 @@ namespace
         bool curled = false;
         for (const AnimationChannel& ch : mapped.Channels) curled |= ch.Joint == target.FindJoint("LeftHandIndex1") && ch.Path == AnimationPath::Rotation;
         CHECK(curled);
+        // Muscle limits: the thigh swung 150 degrees forward stops at 130, the knee bent the wrong way 60 degrees stops at
+        // 5 (carried along by the thigh), the elbow bent 175 degrees stops at 160; without limits they follow the source.
+        {
+            AnimationClip strain;
+            strain.Name = "Strain";
+            strain.Duration = 1.0f;
+            std::swap(strain, clip);
+            rotation(thigh, turn(-150, { 1, 0, 0 }));
+            rotation(source.FindJoint(mixamo("LeftLeg")), turn(-60, { 1, 0, 0 }));
+            rotation(fore, turn(175, { 0, 0, 1 }));
+            std::swap(strain, clip);
+            auto endPose = [&](const AnimationClip& c) {
+                Pose p;
+                std::vector<glm::mat4> g;
+                Animation::Sample(target, c, 1.0f, p);
+                Animation::JointGlobals(target, p, g);
+                return g;
+            };
+            std::vector<glm::mat4> limited = endPose(Animation::RetargetHumanoid(source, target, strain));
+            std::vector<glm::mat4> free = endPose(Animation::RetargetHumanoid(source, target, strain, false));
+            auto dir = [&](const std::vector<glm::mat4>& g, const char* a, const char* b) { return direction(g, target.FindJoint(a), target.FindJoint(b)); };
+            auto way = [](float degrees) { return glm::vec3(0.0f, -std::cos(glm::radians(degrees)), std::sin(glm::radians(degrees))); }; // from down, forward
+            CHECK(Near(dir(limited, "thigh_l", "calf_l"), way(130.0f), 0.01f) && Near(dir(free, "thigh_l", "calf_l"), way(150.0f), 0.01f));
+            CHECK(Near(dir(limited, "calf_l", "foot_l"), way(135.0f), 0.01f) && Near(dir(free, "calf_l", "foot_l"), way(210.0f), 0.01f));
+            glm::vec3 elbow = dir(limited, "lowerarm_l", "hand_l"), elbowFree = dir(free, "lowerarm_l", "hand_l");
+            CHECK(Near(elbow, glm::vec3(std::cos(glm::radians(160.0f)), std::sin(glm::radians(160.0f)), 0.0f), 0.01f) &&
+                  Near(elbowFree, glm::vec3(std::cos(glm::radians(175.0f)), std::sin(glm::radians(175.0f)), 0.0f), 0.01f));
+            // The other leg and the spine, within range, are as without limits.
+            CHECK(Near(dir(limited, "thigh_r", "calf_r"), dir(free, "thigh_r", "calf_r"), 1e-4f) && Near(dir(limited, "spine_03", "neck_01"), dir(free, "spine_03", "neck_01"), 1e-4f));
+            // One bone: a head turned 70 degrees turns 40; a turn within range comes back as it was.
+            glm::quat within = glm::angleAxis(glm::radians(25.0f), glm::vec3(0, 1, 0)) * glm::angleAxis(glm::radians(10.0f), glm::vec3(1, 0, 0));
+            CHECK(Near(glm::angle(Animation::ClampMuscle(HumanBone::Head, glm::angleAxis(glm::radians(70.0f), glm::vec3(0, 1, 0)))), glm::radians(40.0f), 1e-3f));
+            glm::quat back = Animation::ClampMuscle(HumanBone::Head, within);
+            CHECK(back.x == within.x && back.y == within.y && back.z == within.z && back.w == within.w);
+            CHECK(Animation::HumanMuscleLimit(HumanBone::LeftLowerArm).Bend == 160.0f && Animation::HumanMuscleLimit(HumanBone::Hips).Front.y == 180.0f);
+        }
         // An A-pose source (arms bound 45 degrees down) raising its left arm to the horizontal: on the T-pose target the
         // arm starts 45 degrees down too and ends horizontal (motion is measured from each rig's T-pose, not its bind).
         {
@@ -6679,11 +6715,40 @@ namespace
         curves.Channels[0].Smooth = true;
         AnimationClip curved = curves.ToClip(skeleton);
         CHECK(curved.Channels.size() == 1 && Near(Animation::SampleChannel(curved.Channels[0], 0.5f).x, 0.25f));
-        curves.Channels[0].Smooth = false;
-        curves.Channels[0].Interpolation = AnimationInterpolation::CubicSpline;
-        curves.Channels[0].InTangents = curves.Channels[0].OutTangents = std::vector<glm::vec4>(3, glm::vec4(0.0f));
+        // Tangents set by hand: a smooth channel writes its automatic ones out first (the other side keeps its own);
+        // they are value units per second (the curve leaves the key at that slope).
+        glm::vec4 steep(5.0f, 0, 0, 0), level(0.0f);
+        CHECK(curves.SetTangents(joint, AnimationPath::Translation, 1, nullptr, &steep));
+        auto& tc = curves.Channels[0];
+        CHECK(AnimationClipAsset::HasExplicitTangents(tc) && Near(tc.InTangents[1].x, 2.0f) && Near(tc.OutTangents[1].x, 5.0f));
+        AnimationClip handSet = curves.ToClip(skeleton);
+        float leave = (Animation::SampleChannel(handSet.Channels[0], 1.001f).x - Animation::SampleChannel(handSet.Channels[0], 1.0f).x) / 0.001f;
+        float arrive = (Animation::SampleChannel(handSet.Channels[0], 1.0f).x - Animation::SampleChannel(handSet.Channels[0], 0.999f).x) / 0.001f;
+        CHECK(std::abs(leave - 5.0f) < 0.05f && std::abs(arrive - 2.0f) < 0.05f);
+        // They survive key edits: a new key gets an automatic tangent, moved and removed keys take theirs along.
         curves.SetKey(joint, AnimationPath::Translation, 1.5f, glm::vec4(2.0f, 0, 0, 0));
-        CHECK(curves.Channels[0].Smooth && curves.Channels[0].InTangents.empty());
+        CHECK(AnimationClipAsset::HasExplicitTangents(tc) && tc.Times.size() == 4 && Near(tc.InTangents[2].x, 3.0f) && Near(tc.OutTangents[1].x, 5.0f));
+        CHECK(curves.MoveKeys(joint, 1.5f, 1.75f) && Near(tc.Times[2], 1.75f) && Near(tc.InTangents[2].x, 3.0f));
+        CHECK(curves.MoveKeys(joint, 1.0f, 0.5f) && Near(tc.Times[1], 0.5f) && Near(tc.OutTangents[1].x, 5.0f));
+        CHECK(curves.RemoveKeys(joint, 1.75f) && tc.Times.size() == 3 && tc.InTangents.size() == 3 && Near(tc.OutTangents[1].x, 5.0f));
+        CHECK(curves.MoveKeys(joint, 0.5f, 1.0f));
+        // One key back to automatic (from its neighbours) or level.
+        CHECK(curves.AutoTangent(joint, AnimationPath::Translation, 1) && Near(tc.InTangents[1].x, 2.0f) && Near(tc.OutTangents[1].x, 2.0f));
+        CHECK(curves.FlatTangent(joint, AnimationPath::Translation, 1) && Near(tc.OutTangents[1].x, 0.0f) && !curves.FlatTangent(joint, AnimationPath::Translation, 9));
+        CHECK(curves.SetTangents(joint, AnimationPath::Translation, 1, &level, &steep));
+        // Rotations: written-out tangents keep the keys on the short way round, and a replaced key stays on its side.
+        AnimationClipAsset turn;
+        turn.Duration = 2.0f;
+        glm::quat r0(1, 0, 0, 0), r1 = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0)), r2 = glm::angleAxis(glm::radians(170.0f), glm::vec3(0, 1, 0));
+        turn.SetKey(joint, AnimationPath::Rotation, 0.0f, { r0.x, r0.y, r0.z, r0.w });
+        turn.SetKey(joint, AnimationPath::Rotation, 1.0f, { r1.x, r1.y, r1.z, r1.w });
+        turn.SetKey(joint, AnimationPath::Rotation, 2.0f, { -r2.x, -r2.y, -r2.z, -r2.w });
+        turn.Channels[0].Smooth = true;
+        CHECK(turn.AutoTangent(joint, AnimationPath::Rotation, 1));
+        auto& rc = turn.Channels[0];
+        CHECK(glm::dot(rc.Values[1], rc.Values[2]) > 0.0f && rc.OutTangents[1].y > 0.0f);
+        turn.SetKey(joint, AnimationPath::Rotation, 2.0f, { -r2.x, -r2.y, -r2.z, -r2.w });
+        CHECK(glm::dot(rc.Values[1], rc.Values[2]) > 0.0f);
 
         // As project assets: saved and loaded, listed for their model, and a version that changes with every edit.
         fs::path assets = fs::temp_directory_path() / "dimension_clip_assets" / "Assets";
@@ -6704,11 +6769,12 @@ namespace
             keysKept &= loaded->Channels[c].Joint == asset.Channels[c].Joint && loaded->Channels[c].Times.size() == asset.Channels[c].Times.size() &&
                         Near(glm::vec3(loaded->Channels[c].Values.back()), glm::vec3(asset.Channels[c].Values.back()), 1e-5f);
         CHECK(keysKept);
-        // The interpolation survives the file: smooth channels stay smooth.
+        // The interpolation survives the file: hand-set tangents stay.
         curves.Model = model;
         AssetHandle curvesHandle = AssetManager::CreateAnimationClip(assets / "Curves.anim", curves);
         auto curvesLoaded = AssetManager::GetAnimationClip(curvesHandle);
-        CHECK(curvesLoaded && curvesLoaded->Channels.size() == 1 && curvesLoaded->Channels[0].Smooth);
+        CHECK(curvesLoaded && curvesLoaded->Channels.size() == 1 && AnimationClipAsset::HasExplicitTangents(curvesLoaded->Channels[0]) &&
+              Near(curvesLoaded->Channels[0].OutTangents[1].x, 5.0f) && Near(curvesLoaded->Channels[0].InTangents[1].x, 0.0f));
         uint64_t edited = AssetManager::ClipsVersion();
         loaded->Model = other;
         AssetManager::SaveAnimationClip(h);

@@ -544,14 +544,48 @@ namespace Dimension
             // T-posed figure's do (arms straight out to the sides, spine and neck up, legs down, feet forward), in the
             // rig's own frame (its left from the upper arms, up the model's +Y). Rigs bound in an A-pose (or any other)
             // then share a reference: motion is measured from it, not from the pose they were bound in.
+            // A humanoid rig's left (from its upper arms, level) in model space; its up is +Y, its forward left x up.
+            glm::vec3 BodyLeft(const HumanoidMap& map, const std::vector<glm::mat4>& bind)
+            {
+                glm::vec3 left = glm::vec3(bind[map[HumanBone::LeftUpperArm]][3]) - glm::vec3(bind[map[HumanBone::RightUpperArm]][3]);
+                left.y = 0.0f;
+                return glm::length(left) > 1e-6f ? glm::normalize(left) : glm::vec3(1, 0, 0);
+            }
+
+            // The human bone a bone hangs from (-1 for the hips).
+            int HumanParent(HumanBone bone)
+            {
+                using B = HumanBone;
+                switch (bone)
+                {
+                case B::Spine: return (int)B::Hips;
+                case B::Chest: return (int)B::Spine;
+                case B::UpperChest: return (int)B::Chest;
+                case B::Neck: return (int)B::UpperChest;
+                case B::Head: return (int)B::Neck;
+                case B::LeftShoulder: case B::RightShoulder: return (int)B::UpperChest;
+                case B::LeftUpperArm: return (int)B::LeftShoulder;
+                case B::LeftLowerArm: return (int)B::LeftUpperArm;
+                case B::LeftHand: return (int)B::LeftLowerArm;
+                case B::RightUpperArm: return (int)B::RightShoulder;
+                case B::RightLowerArm: return (int)B::RightUpperArm;
+                case B::RightHand: return (int)B::RightLowerArm;
+                case B::LeftUpperLeg: case B::RightUpperLeg: return (int)B::Hips;
+                case B::LeftLowerLeg: return (int)B::LeftUpperLeg;
+                case B::LeftFoot: return (int)B::LeftLowerLeg;
+                case B::LeftToes: return (int)B::LeftFoot;
+                case B::RightLowerLeg: return (int)B::RightUpperLeg;
+                case B::RightFoot: return (int)B::RightLowerLeg;
+                case B::RightToes: return (int)B::RightFoot;
+                default: return -1;
+                }
+            }
+
             std::vector<glm::quat> TPoseRotations(const Skeleton& s, const HumanoidMap& map, const std::vector<glm::mat4>& bind)
             {
                 size_t n = s.Joints.size();
                 std::vector<glm::quat> delta(n, glm::quat(1, 0, 0, 0)), out(n);
-                auto pos = [&](HumanBone b) { return glm::vec3(bind[map[b]][3]); };
-                glm::vec3 left = pos(HumanBone::LeftUpperArm) - pos(HumanBone::RightUpperArm);
-                left.y = 0.0f;
-                left = glm::length(left) > 1e-6f ? glm::normalize(left) : glm::vec3(1, 0, 0);
+                glm::vec3 left = BodyLeft(map, bind);
                 glm::vec3 up(0, 1, 0), forward = glm::normalize(glm::cross(left, up));
                 // Each bone, the human bone it points at, and the way that is in a T-pose.
                 struct Bone { HumanBone From, To, To2; glm::vec3 Dir; };
@@ -672,7 +706,92 @@ namespace Dimension
             return map;
         }
 
-        AnimationClip RetargetHumanoid(const Skeleton& source, const Skeleton& target, const AnimationClip& clip)
+        MuscleLimit HumanMuscleLimit(HumanBone bone)
+        {
+            auto limit = [](glm::vec2 front, glm::vec2 side, glm::vec2 twist) {
+                MuscleLimit m;
+                m.Front = front, m.Side = side, m.Twist = twist;
+                return m;
+            };
+            auto bend = [](float most, glm::vec2 twist) {
+                MuscleLimit m;
+                m.Bend = most, m.Twist = twist;
+                return m;
+            };
+            switch (bone)
+            {
+            case HumanBone::Spine:
+            case HumanBone::Chest: return limit({ -40, 40 }, { -40, 40 }, { -40, 40 });
+            case HumanBone::UpperChest: return limit({ -20, 20 }, { -20, 20 }, { -20, 20 });
+            case HumanBone::Neck:
+            case HumanBone::Head: return limit({ -40, 40 }, { -40, 40 }, { -40, 40 });
+            case HumanBone::LeftShoulder:
+            case HumanBone::RightShoulder: return limit({ -20, 25 }, { -15, 30 }, { -15, 15 });
+            case HumanBone::LeftUpperArm:
+            case HumanBone::RightUpperArm: return limit({ -80, 140 }, { -100, 120 }, { -110, 110 });
+            case HumanBone::LeftLowerArm:
+            case HumanBone::RightLowerArm: return bend(160, { -110, 110 });
+            case HumanBone::LeftHand:
+            case HumanBone::RightHand: return bend(90, { -90, 90 });
+            case HumanBone::LeftUpperLeg:
+            case HumanBone::RightUpperLeg: return limit({ -50, 130 }, { -40, 70 }, { -60, 60 });
+            case HumanBone::LeftLowerLeg:
+            case HumanBone::RightLowerLeg: return limit({ -160, 5 }, { -10, 10 }, { -45, 45 });
+            case HumanBone::LeftFoot:
+            case HumanBone::RightFoot: return limit({ -60, 40 }, { -35, 35 }, { -35, 35 });
+            case HumanBone::LeftToes:
+            case HumanBone::RightToes: return limit({ -50, 60 }, { -15, 15 }, { -15, 15 });
+            default: return MuscleLimit{}; // the hips: free
+            }
+        }
+
+        glm::quat ClampMuscle(HumanBone bone, const glm::quat& turn)
+        {
+            // The bone's way in the T-pose, and the ways its tip swings to for Front and Side (left +X, up +Y, forward +Z).
+            glm::vec3 left(1, 0, 0), up(0, 1, 0), forward(0, 0, 1), d = up, front = forward, side = left;
+            bool right = bone == HumanBone::RightShoulder || bone == HumanBone::RightUpperArm || bone == HumanBone::RightLowerArm ||
+                         bone == HumanBone::RightHand || bone == HumanBone::RightUpperLeg || bone == HumanBone::RightLowerLeg ||
+                         bone == HumanBone::RightFoot || bone == HumanBone::RightToes;
+            glm::vec3 out = right ? -left : left;
+            switch (bone)
+            {
+            case HumanBone::LeftShoulder: case HumanBone::LeftUpperArm: case HumanBone::LeftLowerArm: case HumanBone::LeftHand:
+            case HumanBone::RightShoulder: case HumanBone::RightUpperArm: case HumanBone::RightLowerArm: case HumanBone::RightHand:
+                d = out, front = forward, side = up;
+                break;
+            case HumanBone::LeftUpperLeg: case HumanBone::LeftLowerLeg: case HumanBone::RightUpperLeg: case HumanBone::RightLowerLeg:
+                d = -up, front = forward, side = out;
+                break;
+            case HumanBone::LeftFoot: case HumanBone::LeftToes: case HumanBone::RightFoot: case HumanBone::RightToes:
+                d = forward, front = up, side = out;
+                break;
+            default: break;
+            }
+            MuscleLimit limit = HumanMuscleLimit(bone);
+            glm::quat q = glm::normalize(turn);
+            if (q.w < 0.0f) q = -q;
+            // Swing (the bone's tip moving) after twist (about the bone): q = swing * twist.
+            float twist = 2.0f * std::atan2(glm::dot(glm::vec3(q.x, q.y, q.z), d), q.w);
+            glm::quat swing = q * glm::inverse(glm::angleAxis(twist, d));
+            if (swing.w < 0.0f) swing = -swing;
+            glm::vec3 sv(swing.x, swing.y, swing.z);
+            float sl = glm::length(sv);
+            glm::vec3 rv = sl > 1e-7f ? sv / sl * (2.0f * std::atan2(sl, swing.w)) : sv * 2.0f; // as a rotation vector
+            // A small turn rv moves the tip by rv x d: toward `front` by rv . (d x front).
+            glm::vec3 a1 = glm::cross(d, front), a2 = glm::cross(d, side);
+            float m1 = glm::dot(rv, a1), m2 = glm::dot(rv, a2);
+            auto clamp = [](float v, glm::vec2 range) { return std::clamp(v, glm::radians(range.x), glm::radians(range.y)); };
+            float c1 = clamp(m1, limit.Front), c2 = clamp(m2, limit.Side), ct = clamp(twist, limit.Twist);
+            float most = glm::radians(limit.Bend), size = std::hypot(c1, c2);
+            if (size > most) c1 *= most / size, c2 *= most / size;
+            if (c1 == m1 && c2 == m2 && ct == twist) return turn; // within range
+            glm::vec3 limited = a1 * c1 + a2 * c2;
+            float angle = glm::length(limited);
+            glm::quat swung = angle > 1e-7f ? glm::angleAxis(angle, limited / angle) : glm::quat(1, 0, 0, 0);
+            return glm::normalize(swung * glm::angleAxis(ct, d));
+        }
+
+        AnimationClip RetargetHumanoid(const Skeleton& source, const Skeleton& target, const AnimationClip& clip, bool muscleLimits)
         {
             HumanoidMap from = MapHumanoid(source), to = MapHumanoid(target);
             if (!from.IsHumanoid() || !to.IsHumanoid()) return RetargetClip(source, target, clip);
@@ -694,6 +813,21 @@ namespace Dimension
             glm::quat rootRotation = RotationOf(target.RootTransform);
             // Motion is measured from each rig's T-pose (so an A-pose rig and a T-pose rig retarget alike).
             std::vector<glm::quat> sourceT = TPoseRotations(source, from, sourceBindG), targetT = TPoseRotations(target, to, targetBindG);
+            // Muscle limits: each human bone's turn relative to its parent bone (the nearest both rigs have), in the
+            // target's body frame (left, up, forward), kept within range; children keep their own relative turns.
+            constexpr size_t boneCount = (size_t)HumanBone::Count;
+            std::array<int, boneCount> humanParent;
+            std::vector<int> humanOf(target.Joints.size(), -1);
+            for (size_t b = 0; b < boneCount; ++b)
+            {
+                int p = HumanParent((HumanBone)b);
+                while (p >= 0 && (from.Joints[p] < 0 || to.Joints[p] < 0)) p = HumanParent((HumanBone)p);
+                humanParent[b] = p;
+                if (from.Joints[b] >= 0 && to.Joints[b] >= 0) humanOf[to.Joints[b]] = (int)b;
+            }
+            glm::vec3 bodyLeft = BodyLeft(to, targetBindG);
+            glm::quat body = glm::normalize(glm::quat_cast(glm::mat3(bodyLeft, glm::vec3(0, 1, 0), glm::cross(bodyLeft, glm::vec3(0, 1, 0)))));
+            std::array<glm::quat, boneCount> sourceTurn, limitedTurn;
 
             int frames = std::max(2, (int)std::ceil(clip.Duration * 30.0f) + 1);
             std::vector<AnimationChannel> channels(target.Joints.size());
@@ -707,6 +841,21 @@ namespace Dimension
                 float time = clip.Duration * (float)f / (float)(frames - 1);
                 Sample(source, clip, time, sourcePose);
                 JointGlobals(source, sourcePose, sourceG);
+                // Each human bone's turn from its T-pose (model space), parents before children, limited.
+                for (size_t b = 0; b < boneCount; ++b)
+                {
+                    int s = from.Joints[b];
+                    if (s < 0 || to.Joints[b] < 0) continue;
+                    sourceTurn[b] = RotationOf(sourceG[s]) * glm::inverse(sourceT[s]);
+                    int p = humanParent[b];
+                    if (!muscleLimits || p < 0)
+                    {
+                        limitedTurn[b] = sourceTurn[b];
+                        continue;
+                    }
+                    glm::quat relative = glm::inverse(body) * (glm::inverse(sourceTurn[p]) * sourceTurn[b]) * body;
+                    limitedTurn[b] = glm::normalize(limitedTurn[p] * body * ClampMuscle((HumanBone)b, relative) * glm::inverse(body));
+                }
                 pose = targetBind;
                 for (int j : target.Order)
                 {
@@ -714,8 +863,8 @@ namespace Dimension
                     glm::quat parentWorld = parent >= 0 ? world[parent] : rootRotation;
                     if (int s = sourceOf[j]; s >= 0)
                     {
-                        // The source bone's turn from its bind pose (model space), on the target bone's bind pose.
-                        glm::quat turn = RotationOf(sourceG[s]) * glm::inverse(sourceT[s]);
+                        // The source bone's turn from its T-pose (model space, limited), on the target bone's T-pose.
+                        glm::quat turn = humanOf[j] >= 0 ? limitedTurn[humanOf[j]] : RotationOf(sourceG[s]) * glm::inverse(sourceT[s]);
                         world[j] = glm::normalize(turn * targetT[j]);
                         pose.Rotations[j] = glm::normalize(glm::inverse(parentWorld) * world[j]);
                     }

@@ -1866,6 +1866,8 @@ namespace Dimension
         public AnimatorCullingMode CullingMode { get => (AnimatorCullingMode)GetInt("Culling Mode"); set => SetInt("Culling Mode", (int)value); }
         /// <summary>How the Animation Source's clips are retargeted (takes effect when the clips are next built).</summary>
         public AnimatorRetargeting Retargeting { get => (AnimatorRetargeting)GetInt("Retargeting"); set => SetInt("Retargeting", (int)value); }
+        /// <summary>Humanoid retargeting keeps each joint within a human range of motion.</summary>
+        public bool MuscleLimits { get => GetBool("Muscle Limits"); set => SetBool("Muscle Limits", value); }
         /// <summary>Off screen and not animated this frame (Cull Completely).</summary>
         public bool IsCulled { get { float* v = stackalloc float[1]; return Op(10, 0, null, v) != 0; } }
         /// <summary>

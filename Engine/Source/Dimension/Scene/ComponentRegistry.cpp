@@ -298,7 +298,10 @@ namespace Dimension
                 .Tooltip("Play the clips of another model, retargeted onto this skeleton (None = this mesh's own)")
             .Field("Retargeting", &AnimatorComponent::Retargeting).Enum({ "Humanoid", "By Joint Name" })
                 .Tooltip("Humanoid: through the human bones when both models are humanoid (any joint names, axes and proportions;\n"
-                         "otherwise by name). By Joint Name: joints with the same names, rotations as changes from each bind pose");
+                         "otherwise by name). By Joint Name: joints with the same names, rotations as changes from each bind pose")
+            .Field("Muscle Limits", &AnimatorComponent::MuscleLimits)
+                .Tooltip("Humanoid retargeting: keep each joint within a human range of motion (knees and elbows bend one way,\n"
+                         "the head turns so far), so a clip made for another figure does not twist this one out of shape");
 
         Register<LightProbeVolumeComponent>("Light Probe Volume", "Rendering")
             .Field("Size", &LightProbeVolumeComponent::Size).Speed(0.05f).Tooltip("Box centered on the object")

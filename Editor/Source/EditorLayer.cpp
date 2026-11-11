@@ -178,6 +178,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Audio Mixer") m_ShowAudioMixer = true;
         else if (m_Options.OpenWindow == "Timeline") m_ShowTimeline = true;
         else if (m_Options.OpenWindow == "Animation") m_ShowAnimation = true;
+        if (!m_Options.AnimKey.empty()) m_Animation->SelectCurveKey(m_Options.AnimKey);
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
