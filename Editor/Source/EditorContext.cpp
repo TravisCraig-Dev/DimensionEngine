@@ -2,10 +2,48 @@
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/SceneDiff.h>
 #include <Dimension/Scene/SceneSearch.h>
+#include <Dimension/Navigation/NavMesh.h>
+#include <Dimension/Asset/AssetManager.h>
+#include <Dimension/Core/Log.h>
 #include <imgui.h>
 
 namespace Editor
 {
+    void EditorContext::BakeNavMesh(Entity surface)
+    {
+        Scene& scene = ActiveScene();
+        Navigation::Bake(scene, surface);
+        if (IsPlaying()) return; // (a look at it: play keeps nothing)
+        auto* s = scene.GetRegistry().TryGet<NavMeshSurfaceComponent>(surface);
+        if (!s || s->Streamed) return; // streamed surfaces bake their tiles while playing
+        if (ScenePath.empty())
+        {
+            Log::Warn("Save the scene to keep its navigation bake (play bakes it until then)");
+            return;
+        }
+        AssetHandle before = s->BakedData;
+        if (Navigation::SaveBaked(scene, surface, ScenePath))
+        {
+            if (s->BakedData != before) MarkDirty();
+            Log::Info("Saved the navigation bake of '{}' to {}", scene.GetRegistry().Get<TagComponent>(surface).Name,
+                      AssetManager::GetDisplayName(s->BakedData));
+        }
+    }
+
+    void EditorContext::ClearNavMesh(Entity surface)
+    {
+        Scene& scene = ActiveScene();
+        auto* s = scene.GetRegistry().TryGet<NavMeshSurfaceComponent>(surface);
+        if (!s) return;
+        s->Data.reset();
+        s->Baked.reset();
+        if (IsPlaying() || !s->BakedData.IsValid()) return;
+        const AssetMetadata* meta = AssetManager::GetMetadata(s->BakedData);
+        if (meta && meta->Type == AssetType::NavMeshData) AssetManager::DeleteAsset(AssetManager::GetAbsolutePath(s->BakedData));
+        s->BakedData = AssetHandle::None();
+        MarkDirty();
+    }
+
     EditorContext::Snapshot EditorContext::Capture()
     {
         uint64_t guid = HasValidSelection() ? (uint64_t)EditorScene->GetGuid(Selected) : 0;

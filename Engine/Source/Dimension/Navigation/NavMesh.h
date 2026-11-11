@@ -2,6 +2,7 @@
 #include "Dimension/ECS/Entity.h"
 #include "Dimension/Scene/Components.h"
 #include <glm/glm.hpp>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -73,8 +74,23 @@ namespace Dimension
         // Bakes a NavMesh Surface from the scene's colliders (it needs physics: a playing scene's, or else a temporary
         // one is built). Stores and returns the result (nullptr when the object has no surface).
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity surface);
-        // Bakes every surface (all, or only those not baked yet). Agents find their mesh again.
-        void BakeAll(Scene& scene, bool onlyMissing = false);
+        // Bakes every surface (all, or only those not baked yet). Agents find their mesh again. `useSaved`: surfaces
+        // whose saved bake (NavMesh Data) is up to date load it instead (play start).
+        void BakeAll(Scene& scene, bool onlyMissing = false, bool useSaved = false);
+
+        // Baked navigation saved with the scene (like Unity's NavMeshData assets). SettingsKey: what a bake depends on
+        // besides the level (the surface's settings and its place); a saved bake with another key is out of date.
+        uint64_t SettingsKey(Scene& scene, Entity surface);
+        // A mesh to a .navmesh file and back (with the key it was baked for and the surface's transform then).
+        bool WriteData(const fs::path& file, const NavMeshData& mesh, uint64_t key, const glm::mat4& bakedAt);
+        std::shared_ptr<NavMeshData> ReadData(const fs::path& file, uint64_t* key = nullptr, glm::mat4* bakedAt = nullptr);
+        // Writes a surface's baked mesh beside the scene file (in a folder named after the scene, "NavMesh-<object>.navmesh",
+        // or over the file it already uses) and points its NavMesh Data at it. False when it has no bake.
+        bool SaveBaked(Scene& scene, Entity surface, const fs::path& sceneFile);
+        // Installs a surface's saved bake when it is up to date (false: none, unreadable, or out of date).
+        bool LoadSaved(Scene& scene, Entity surface);
+        // Whether a surface's saved bake is up to date (false when it has none).
+        bool IsSavedCurrent(Scene& scene, Entity surface);
         // Streamed surfaces (large worlds): bakes up to `budget` tiles near the agents and the main camera and drops far
         // ones (Update does a tile a frame). Returns how many tiles changed.
         int StreamTiles(Scene& scene, int budget);

@@ -712,7 +712,7 @@ namespace Dimension
             a.Mesh.reset();
             a.Node = -1;
         }
-        Navigation::BakeAll(*this);
+        Navigation::BakeAll(*this, false, true); // (a surface's saved bake when it is up to date)
         DataAssets::OnRuntimeStart(); // the scripts' data asset objects start from their files
         InstantiateScripts();
         for (auto& sys : m_Systems) sys->OnStart(*this);
@@ -773,7 +773,7 @@ namespace Dimension
                 if (m_Physics3D) m_Physics3D->CreateBodiesFor(r);
                 if (m_Audio) m_Audio->CreateSourcesFor(r);
             }
-            Navigation::BakeAll(*this, true); // surfaces the new scene brought
+            Navigation::BakeAll(*this, true, true); // surfaces the new scene brought
             InstantiateScripts();
         }
         // The active (single-mode) scene comes first, after any persistent objects' entry.

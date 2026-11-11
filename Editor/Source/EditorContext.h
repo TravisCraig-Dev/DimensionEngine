@@ -161,6 +161,10 @@ namespace Editor
         {
             if (!IsPlaying()) Dirty = true;
         }
+        // Navigation baked in the editor (Inspector or Navigation window): while editing a saved scene the bake is
+        // written beside it (its NavMesh Data), so play starts with it; Clear drops it (and its file).
+        void BakeNavMesh(Entity surface);
+        void ClearNavMesh(Entity surface);
 
         Ref<Scene> EditorScene;
         Ref<Scene> RuntimeScene;

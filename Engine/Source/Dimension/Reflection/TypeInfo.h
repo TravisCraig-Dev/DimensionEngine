@@ -31,6 +31,7 @@ namespace Dimension
         DataAsset,        // AssetHandle of a data asset (.asset) whose class is AssetClass or derives from it
         UIStyleSheet,     // AssetHandle of a UI style sheet (.uistyle)
         VideoClip,        // AssetHandle of a video file
+        NavMeshData,      // AssetHandle of baked navigation (.navmesh)
     };
 
     struct FieldInfo

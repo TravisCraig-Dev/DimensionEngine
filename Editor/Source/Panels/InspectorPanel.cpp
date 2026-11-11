@@ -809,10 +809,11 @@ namespace Editor
                     {
                         // Preview the bake (play bakes again from the colliders as they start).
                         auto& surface = *static_cast<NavMeshSurfaceComponent*>(info.Get(scene, e));
-                        if (ImGui::Button("Bake")) Navigation::Bake(scene, e);
+                        if (ImGui::Button("Bake")) m_Ctx.BakeNavMesh(e);
+                        ImGui::SetItemTooltip("Bakes it now and saves the bake with the scene (NavMesh Data): play starts with it");
                         ImGui::SameLine();
-                        ImGui::BeginDisabled(!surface.Data);
-                        if (ImGui::Button("Clear##navmesh")) surface.Data.reset();
+                        ImGui::BeginDisabled(!surface.Data && !surface.BakedData.IsValid());
+                        if (ImGui::Button("Clear##navmesh")) m_Ctx.ClearNavMesh(e);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         if (surface.Data)
@@ -822,7 +823,9 @@ namespace Editor
                             ImGui::TextDisabled("%d spots, %d area%s", surface.Data->NodeCount(), islands, islands == 1 ? "" : "s");
                         }
                         else
-                            ImGui::TextDisabled("(not baked; play bakes it)");
+                            ImGui::TextDisabled(surface.BakedData.IsValid() ? "(saved bake)" : "(not baked; play bakes it)");
+                        if (surface.BakedData.IsValid() && !surface.Streamed && !m_Ctx.IsPlaying() && !Navigation::IsSavedCurrent(scene, e))
+                            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "The saved bake is out of date (settings or place changed): play bakes again until it is baked.");
                     }
                     if (info.TypeId == GetComponentTypeId<LODGroupComponent>())
                     {

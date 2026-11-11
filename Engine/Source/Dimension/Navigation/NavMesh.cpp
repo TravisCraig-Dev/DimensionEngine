@@ -3,6 +3,9 @@
 #include "Dimension/Physics/Physics3D.h"
 #include "Dimension/Project/Project.h"
 #include "Dimension/Scene/ComponentRegistry.h"
+#include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Core/Log.h"
+#include <fstream>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -1193,12 +1196,185 @@ namespace Dimension
             return data;
         }
 
-        void BakeAll(Scene& scene, bool onlyMissing)
+        void BakeAll(Scene& scene, bool onlyMissing, bool useSaved)
         {
             std::vector<Entity> surfaces;
             for (auto [e, s] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent>())
                 if (!onlyMissing || !s.Data) surfaces.push_back(e);
-            for (Entity e : surfaces) Bake(scene, e);
+            for (Entity e : surfaces)
+                if (!useSaved || !LoadSaved(scene, e)) Bake(scene, e);
+        }
+
+        uint64_t SettingsKey(Scene& scene, Entity e)
+        {
+            auto& reg = scene.GetRegistry();
+            auto* s = scene.IsValid(e) ? reg.TryGet<NavMeshSurfaceComponent>(e) : nullptr;
+            if (!s) return 0;
+            scene.UpdateTransforms();
+            // Rounded, so float noise from saving the scene does not count as a change.
+            uint64_t key = 1469598103934665603ull;
+            auto add = [&](float v) {
+                int64_t q = (int64_t)std::llround((double)v * 10000.0);
+                for (int b = 0; b < 8; ++b) key = (key ^ (uint8_t)(q >> (b * 8))) * 1099511628211ull;
+            };
+            for (int a = 0; a < 3; ++a) add(s->Size[a]);
+            for (float v : { s->CellSize, s->AgentRadius, s->AgentHeight, s->MaxSlope, s->StepHeight, s->DropHeight, s->JumpDistance }) add(v);
+            add(s->GenerateLinks ? 1.0f : 0.0f);
+            add(s->Moving ? 1.0f : 0.0f);
+            const glm::mat4& world = reg.Get<TransformComponent>(e).World;
+            for (int c = 0; c < 4; ++c)
+                for (int r = 0; r < 4; ++r) add(world[c][r]);
+            return key;
+        }
+
+        namespace
+        {
+            constexpr uint32_t kNavMagic = 0x56414E44; // "DNAV"
+            constexpr uint32_t kNavVersion = 1;
+
+            template <typename T> void Put(std::ofstream& out, const T& v) { out.write((const char*)&v, sizeof(T)); }
+            template <typename T> void PutList(std::ofstream& out, const std::vector<T>& v)
+            {
+                Put<uint64_t>(out, v.size());
+                if (!v.empty()) out.write((const char*)v.data(), (std::streamsize)(v.size() * sizeof(T)));
+            }
+            template <typename T> bool Take(std::ifstream& in, T& v) { return (bool)in.read((char*)&v, sizeof(T)); }
+            template <typename T> bool TakeList(std::ifstream& in, std::vector<T>& v)
+            {
+                uint64_t n = 0;
+                if (!Take(in, n) || n > (1ull << 32)) return false;
+                v.resize((size_t)n);
+                return n == 0 || (bool)in.read((char*)v.data(), (std::streamsize)(n * sizeof(T)));
+            }
+        }
+
+        bool WriteData(const fs::path& file, const NavMeshData& m, uint64_t key, const glm::mat4& bakedAt)
+        {
+            std::error_code ec;
+            fs::create_directories(file.parent_path(), ec);
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            if (!out) return false;
+            Put(out, kNavMagic);
+            Put(out, kNavVersion);
+            Put(out, key);
+            Put(out, bakedAt);
+            Put(out, m.Origin);
+            Put(out, m.CellSize);
+            Put(out, m.Width);
+            Put(out, m.Depth);
+            for (float v : { m.AgentRadius, m.AgentHeight, m.StepHeight, m.MinCost }) Put(out, v);
+            PutList(out, m.ColumnStart);
+            PutList(out, m.Heights);
+            PutList(out, m.Columns);
+            PutList(out, m.Links);
+            PutList(out, m.Islands);
+            PutList(out, m.Clearance);
+            PutList(out, m.Areas);
+            PutList(out, m.Costs);
+            Put<uint64_t>(out, m.AutoLinks.size());
+            for (const auto& l : m.AutoLinks)
+            {
+                Put<int32_t>(out, l.From);
+                Put<int32_t>(out, l.To);
+                Put(out, l.Arc);
+            }
+            PutList(out, m.RawStart);
+            PutList(out, m.RawHeights);
+            return (bool)out;
+        }
+
+        std::shared_ptr<NavMeshData> ReadData(const fs::path& file, uint64_t* key, glm::mat4* bakedAt)
+        {
+            std::ifstream in(file, std::ios::binary);
+            uint32_t magic = 0, version = 0;
+            uint64_t k = 0;
+            glm::mat4 at(1.0f);
+            auto m = std::make_shared<NavMeshData>();
+            if (!in || !Take(in, magic) || magic != kNavMagic || !Take(in, version) || version != kNavVersion || !Take(in, k) || !Take(in, at))
+                return nullptr;
+            bool ok = Take(in, m->Origin) && Take(in, m->CellSize) && Take(in, m->Width) && Take(in, m->Depth) && Take(in, m->AgentRadius) &&
+                      Take(in, m->AgentHeight) && Take(in, m->StepHeight) && Take(in, m->MinCost) && TakeList(in, m->ColumnStart) &&
+                      TakeList(in, m->Heights) && TakeList(in, m->Columns) && TakeList(in, m->Links) && TakeList(in, m->Islands) &&
+                      TakeList(in, m->Clearance) && TakeList(in, m->Areas) && TakeList(in, m->Costs);
+            uint64_t links = 0;
+            ok = ok && Take(in, links) && links < (1ull << 28);
+            for (uint64_t i = 0; ok && i < links; ++i)
+            {
+                NavMeshData::AutoLink l{};
+                int32_t from = 0, to = 0;
+                ok = Take(in, from) && Take(in, to) && Take(in, l.Arc);
+                l.From = from, l.To = to;
+                m->AutoLinks.push_back(l);
+            }
+            ok = ok && TakeList(in, m->RawStart) && TakeList(in, m->RawHeights);
+            // Consistent sizes, or it is not used.
+            size_t nodes = m->Heights.size();
+            ok = ok && m->Width >= 0 && m->Depth >= 0 && m->ColumnStart.size() == (size_t)m->Width * m->Depth + 1 && m->Columns.size() == nodes &&
+                 m->Links.size() == nodes * 8 && m->Islands.size() == nodes && m->ColumnStart.back() == nodes;
+            if (!ok) return nullptr;
+            if (key) *key = k;
+            if (bakedAt) *bakedAt = at;
+            return m;
+        }
+
+        bool SaveBaked(Scene& scene, Entity e, const fs::path& sceneFile)
+        {
+            auto& reg = scene.GetRegistry();
+            auto* s = scene.IsValid(e) ? reg.TryGet<NavMeshSurfaceComponent>(e) : nullptr;
+            if (!s || !s->Baked || sceneFile.empty()) return false;
+            // Over the file it already uses, else a new one in the scene's folder (named after the scene).
+            const AssetMetadata* meta = s->BakedData.IsValid() ? AssetManager::GetMetadata(s->BakedData) : nullptr;
+            fs::path file = meta && meta->Type == AssetType::NavMeshData ? AssetManager::GetAbsolutePath(s->BakedData) : fs::path();
+            if (file.empty())
+            {
+                std::string name;
+                for (char c : reg.Get<TagComponent>(e).Name) name += std::strchr("<>:\"/\\|?*", c) || (unsigned char)c < 32 ? '_' : c;
+                fs::path folder = sceneFile.parent_path() / sceneFile.stem();
+                file = folder / ("NavMesh-" + name + ".navmesh");
+                for (int n = 1; fs::exists(file); ++n) file = folder / ("NavMesh-" + name + " " + std::to_string(n) + ".navmesh");
+            }
+            if (!WriteData(file, *s->Baked, SettingsKey(scene, e), s->BakedAt)) return false;
+            AssetHandle handle = AssetManager::GetHandle(file);
+            if (!handle.IsValid()) handle = AssetManager::Import(file);
+            if (!handle.IsValid()) return false;
+            s->BakedData = handle;
+            return true;
+        }
+
+        bool IsSavedCurrent(Scene& scene, Entity e)
+        {
+            auto* s = scene.IsValid(e) ? scene.GetRegistry().TryGet<NavMeshSurfaceComponent>(e) : nullptr;
+            if (!s || !s->BakedData.IsValid()) return false;
+            std::ifstream in(AssetManager::GetAbsolutePath(s->BakedData), std::ios::binary);
+            uint32_t magic = 0, version = 0;
+            uint64_t key = 0;
+            return in && Take(in, magic) && magic == kNavMagic && Take(in, version) && version == kNavVersion && Take(in, key) && key == SettingsKey(scene, e);
+        }
+
+        bool LoadSaved(Scene& scene, Entity e)
+        {
+            auto& reg = scene.GetRegistry();
+            auto* s = scene.IsValid(e) ? reg.TryGet<NavMeshSurfaceComponent>(e) : nullptr;
+            if (!s || !s->BakedData.IsValid() || s->Streamed) return false; // (streamed surfaces bake their tiles as they go)
+            uint64_t key = 0;
+            glm::mat4 bakedAt(1.0f);
+            auto data = ReadData(AssetManager::GetAbsolutePath(s->BakedData), &key, &bakedAt);
+            const std::string& name = reg.Get<TagComponent>(e).Name;
+            if (!data)
+            {
+                Log::Warn("NavMesh Surface '{}': its saved navigation could not be read; baking it now", name);
+                return false;
+            }
+            if (key != SettingsKey(scene, e))
+            {
+                Log::Warn("NavMesh Surface '{}': its saved navigation is out of date (its settings or place changed; bake it again); baking it now", name);
+                return false;
+            }
+            Install(scene, *s, data);
+            s->BakedAt = bakedAt;
+            s->Frame = s->FrameInverse = glm::mat4(1.0f);
+            Log::Info("NavMesh Surface '{}': using its saved bake ({} spots)", name, data->NodeCount());
+            return true;
         }
 
         std::shared_ptr<const NavMeshData> MeshNear(Scene& scene, const glm::vec3& point, float maxDistance, int* node, const Filter& filter)

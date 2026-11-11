@@ -1911,6 +1911,7 @@ namespace Editor
         add("Scene View/Isolate Selection", [this] { if (m_Ctx.HasValidSelection()) m_Ctx.Visibility.Isolate(m_Ctx.ActiveScene(), m_Ctx.Selection); });
         add("Scene View/Exit Isolation", [this] { m_Ctx.Visibility.EndIsolation(); });
         add("Lighting/Bake All Probes", [this] { BakeAllProbes(); });
+        add("Navigation/Bake All", [this] { BakeAllNavigation(); });
         for (const auto& item : CSharpRuntime::GetEditorItems())
         {
             if (!item.Inspects.empty()) continue;
@@ -2055,6 +2056,13 @@ namespace Editor
             m_ShowSearch = false;
             results[picked].Pick();
         }
+    }
+
+    void EditorLayer::BakeAllNavigation()
+    {
+        std::vector<Entity> surfaces;
+        for (auto [e, s] : m_Ctx.ActiveScene().GetRegistry().ViewOf<NavMeshSurfaceComponent>()) surfaces.push_back(e);
+        for (Entity e : surfaces) m_Ctx.BakeNavMesh(e);
     }
 
     void EditorLayer::BakeAllProbes()
@@ -3990,6 +3998,7 @@ namespace Editor
         if (Pressed("edit.paste")) PasteClipboard(m_Ctx);
         if (Pressed("edit.delete") && !((m_SceneViewHovered || m_SceneViewFocused) && DeleteLinePoint())) DeleteSelected(m_Ctx);
         if (Pressed("edit.group") && !m_Ctx.IsPlaying()) GroupSelected(m_Ctx);
+        if (Pressed("navigation.bakeAll")) BakeAllNavigation();
         if (Pressed("scene.moveToView") && !m_Ctx.IsPlaying()) MoveSelectionToView();
         if (Pressed("scene.alignWithView") && !m_Ctx.IsPlaying()) AlignSelectionWithView();
         if (Pressed("scene.alignViewToSelected")) AlignViewToSelected();

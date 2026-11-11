@@ -1116,6 +1116,9 @@ namespace Dimension
         bool Streamed = false;
         float TileSize = 32.0f;
         float StreamRadius = 48.0f;
+        // Baked navigation saved with the scene (a .navmesh asset, from the editor's Bake): play start uses it instead
+        // of baking while it is up to date (the surface's settings and place unchanged since).
+        AssetHandle BakedData = AssetHandle::None();
         std::vector<uint8_t> TilesLoaded; // runtime (Streamed): per tile (x + z * TilesX), 1 = baked
         int TilesX = 0, TilesZ = 0;       // runtime
         std::shared_ptr<const NavMeshData> Data;  // runtime: the mesh agents walk (the baked one with obstacles' holes)

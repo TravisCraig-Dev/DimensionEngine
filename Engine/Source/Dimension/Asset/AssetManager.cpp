@@ -181,6 +181,7 @@ namespace Dimension
         case AssetType::UIStyleSheet: return "UI Style Sheet";
         case AssetType::VideoClip: return "Video Clip";
         case AssetType::AnimationClip: return "Animation Clip";
+        case AssetType::NavMeshData: return "NavMesh Data";
         default: return "None";
         }
     }
@@ -312,6 +313,7 @@ namespace Dimension
         if (ext == ".rendertexture") return AssetType::RenderTexture;
         if (ext == ".timeline") return AssetType::Timeline;
         if (ext == ".anim") return AssetType::AnimationClip;
+        if (ext == ".navmesh") return AssetType::NavMeshData;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;

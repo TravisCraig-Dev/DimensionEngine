@@ -46,7 +46,8 @@ namespace Dimension
         case FieldType::Timeline:
         case FieldType::DataAsset:
         case FieldType::UIStyleSheet:
-        case FieldType::VideoClip: return (uint64_t) * (const Guid*)p;
+        case FieldType::VideoClip:
+        case FieldType::NavMeshData: return (uint64_t) * (const Guid*)p;
         case FieldType::EntityRef:
         {
             Entity e = *(const Entity*)p;
@@ -141,7 +142,8 @@ namespace Dimension
             case FieldType::Timeline:
             case FieldType::DataAsset:
             case FieldType::UIStyleSheet:
-            case FieldType::VideoClip: *(Guid*)p = Guid(v.get<uint64_t>()); break;
+            case FieldType::VideoClip:
+            case FieldType::NavMeshData: *(Guid*)p = Guid(v.get<uint64_t>()); break;
             case FieldType::EntityRef:
                 *(Entity*)p = resolver ? resolver->FromGuid(v.get<uint64_t>()) : Entity::Null();
                 break;

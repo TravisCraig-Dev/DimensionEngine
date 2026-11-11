@@ -41,17 +41,13 @@ namespace Editor
         else
         {
             if (ImGui::Button("Bake All"))
-                for (Entity e : surfaces) Navigation::Bake(scene, e);
+                for (Entity e : surfaces) m_Ctx.BakeNavMesh(e);
+            ImGui::SetItemTooltip("Bakes every surface and saves the bakes with the scene: play starts with them");
             ImGui::SameLine();
             if (ImGui::Button("Clear All"))
-                for (Entity e : surfaces)
-                {
-                    auto& s = reg.Get<NavMeshSurfaceComponent>(e);
-                    s.Data.reset();
-                    s.Baked.reset();
-                }
+                for (Entity e : surfaces) m_Ctx.ClearNavMesh(e);
             ImGui::SameLine();
-            ImGui::TextDisabled("(play bakes them again)");
+            ImGui::TextDisabled("(surfaces without a saved bake bake at play)");
             if (ImGui::BeginTable("##surfaces", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
                 ImGui::TableSetupColumn("Surface");
@@ -68,11 +64,17 @@ namespace Editor
                     if (ImGui::Selectable(reg.Get<TagComponent>(e).Name.c_str(), m_Ctx.Selected == e)) m_Ctx.Select(e);
                     ImGui::TableNextColumn();
                     if (s.Data) ImGui::Text("%d", s.Data->NodeCount());
-                    else ImGui::TextDisabled("not baked");
+                    else ImGui::TextDisabled(s.BakedData.IsValid() ? "saved" : "not baked");
+                    if (s.BakedData.IsValid() && !s.Streamed && !m_Ctx.IsPlaying())
+                    {
+                        ImGui::SameLine();
+                        bool current = Navigation::IsSavedCurrent(scene, e);
+                        ImGui::TextColored(current ? ImVec4(0.45f, 0.8f, 0.5f, 1.0f) : ImVec4(0.95f, 0.75f, 0.3f, 1.0f), current ? "(saved)" : "(out of date)");
+                    }
                     ImGui::TableNextColumn();
                     if (s.Data) ImGui::Text("%zu", s.Data->AutoLinks.size());
                     ImGui::TableNextColumn();
-                    if (ImGui::SmallButton("Bake")) Navigation::Bake(scene, e);
+                    if (ImGui::SmallButton("Bake")) m_Ctx.BakeNavMesh(e);
                     ImGui::PopID();
                 }
                 ImGui::EndTable();

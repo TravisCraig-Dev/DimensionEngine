@@ -838,7 +838,10 @@ namespace Dimension
                 .Tooltip("Large worlds: while playing, bake only the tiles near the agents and the main camera (a tile a frame), dropping far ones")
             .Field("Tile Size", &NavMeshSurfaceComponent::TileSize).Range(4.0f, 1024.0f).Speed(0.5f).Tooltip("Streamed: meters across a tile")
             .Field("Stream Radius", &NavMeshSurfaceComponent::StreamRadius).Range(1.0f, 10000.0f).Speed(0.5f)
-                .Tooltip("Streamed: tiles this close to an agent or the main camera are baked (those a tile farther off are dropped)");
+                .Tooltip("Streamed: tiles this close to an agent or the main camera are baked (those a tile farther off are dropped)")
+            .Field("NavMesh Data", &NavMeshSurfaceComponent::BakedData).As(FieldType::NavMeshData)
+                .Tooltip("The bake saved with the scene (Bake writes it): play starts with it instead of baking, while the surface's\n"
+                         "settings and place are as they were then. None: play bakes from the colliders as it starts");
         Register<NavMeshModifierVolumeComponent>("NavMesh Modifier Volume", "Navigation")
             .Field("Center", &NavMeshModifierVolumeComponent::Center).Speed(0.01f)
             .Field("Size", &NavMeshModifierVolumeComponent::Size).Speed(0.05f)

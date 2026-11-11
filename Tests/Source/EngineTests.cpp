@@ -3551,6 +3551,71 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    void TestNavMeshSaved()
+    {
+        // A bake saved beside the scene (Assets/Scenes/Yard/NavMesh-Navigation.navmesh) as a NavMesh Data asset.
+        fs::path assets = fs::temp_directory_path() / "dimension_nav_saved" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets / "Scenes");
+        AssetManager::Init(assets);
+        Scene scene("Yard");
+        Entity surface = BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        auto t0 = std::chrono::steady_clock::now();
+        auto baked = Navigation::Bake(scene, surface);
+        float bakeMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        fs::path sceneFile = assets / "Scenes" / "Yard.scene";
+        CHECK(baked && Navigation::SaveBaked(scene, surface, sceneFile));
+        auto& s = reg.Get<NavMeshSurfaceComponent>(surface);
+        fs::path file = assets / "Scenes" / "Yard" / "NavMesh-Navigation.navmesh";
+        CHECK(fs::exists(file) && s.BakedData.IsValid() && AssetManager::GetMetadata(s.BakedData) &&
+              AssetManager::GetMetadata(s.BakedData)->Type == AssetType::NavMeshData && Navigation::IsSavedCurrent(scene, surface));
+        // Saving again writes over the same file.
+        AssetHandle first = s.BakedData;
+        CHECK(Navigation::SaveBaked(scene, surface, sceneFile) && s.BakedData == first && !fs::exists(assets / "Scenes" / "Yard" / "NavMesh-Navigation 1.navmesh"));
+
+        // Read back: the same mesh, node for node.
+        uint64_t key = 0;
+        auto read = Navigation::ReadData(file, &key);
+        bool same = read && key == Navigation::SettingsKey(scene, surface) && read->NodeCount() == baked->NodeCount() &&
+                    read->Width == baked->Width && read->Links == baked->Links && read->Heights == baked->Heights &&
+                    read->Clearance == baked->Clearance && read->Islands == baked->Islands && read->RawHeights == baked->RawHeights;
+        CHECK(same);
+
+        // Play start uses it (no bake): faster, and the same paths.
+        s.Data.reset();
+        s.Baked.reset();
+        t0 = std::chrono::steady_clock::now();
+        CHECK(Navigation::LoadSaved(scene, surface) && s.Data && s.Data->NodeCount() == baked->NodeCount());
+        float loadMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("    bake %.1f ms, load %.1f ms (%d spots, %.1f MB)\n", bakeMs, loadMs, baked->NodeCount(), fs::file_size(file) / 1048576.0);
+        CHECK(loadMs < bakeMs);
+        std::vector<glm::vec3> a, b;
+        CHECK(Navigation::FindPath(*s.Data, { -5.0f, 0.0f, -5.0f }, { -5.0f, 0.0f, 5.0f }, a) == NavPathStatus::Complete &&
+              Navigation::FindPath(*baked, { -5.0f, 0.0f, -5.0f }, { -5.0f, 0.0f, 5.0f }, b) == NavPathStatus::Complete && a == b);
+        s.Data.reset();
+        s.Baked.reset();
+        Navigation::BakeAll(scene, false, true);
+        CHECK(s.Data && s.Data->NodeCount() == baked->NodeCount());
+
+        // Out of date once its settings or place change (play bakes instead); back in date when put back.
+        s.AgentRadius = 0.6f;
+        CHECK(!Navigation::IsSavedCurrent(scene, surface) && !Navigation::LoadSaved(scene, surface));
+        s.AgentRadius = 0.5f;
+        reg.Get<TransformComponent>(surface).Position.x += 2.0f;
+        CHECK(!Navigation::IsSavedCurrent(scene, surface));
+        reg.Get<TransformComponent>(surface).Position.x -= 2.0f;
+        CHECK(Navigation::IsSavedCurrent(scene, surface));
+        // The reference survives the scene file, and builds take the file along (it is a dependency of the scene).
+        std::string text = SceneSerializer::Serialize(scene).dump();
+        CHECK(text.find(std::to_string((uint64_t)s.BakedData)) != std::string::npos);
+        // A damaged file is not used.
+        { std::ofstream(file, std::ios::binary | std::ios::trunc) << "DNAVbroken"; }
+        CHECK(!Navigation::ReadData(file) && !Navigation::LoadSaved(scene, surface));
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     // A wall across the yard (z = 0) with a 1.4 m door at x = 0 and a 5 m gap past x = 10; baked for agents from 0.3 m.
     Entity BuildDoorYard(Scene& scene)
     {
@@ -15823,6 +15888,7 @@ int main(int argc, char** argv)
     Run("Wind zones", TestWindZones);
     Run("Terrain crater", TestTerrainCrater);
     Run("NavMesh bake", TestNavMeshBake);
+    Run("NavMesh saved with the scene", TestNavMeshSaved);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);

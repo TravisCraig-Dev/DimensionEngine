@@ -60,6 +60,7 @@ namespace Editor::Shortcuts
                 { "scene.moveToView", "Scene View", "Move To View", ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_F },
                 { "scene.alignWithView", "Scene View", "Align With View", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F },
                 { "scene.alignViewToSelected", "Scene View", "Align View to Selected", 0 },
+                { "navigation.bakeAll", "Navigation", "Bake All (saved with the scene)", 0 },
                 { "scene.view1", "Scene View", "Go to View 1", ImGuiMod_Ctrl | ImGuiKey_1 },
                 { "scene.view2", "Scene View", "Go to View 2", ImGuiMod_Ctrl | ImGuiKey_2 },
                 { "scene.view3", "Scene View", "Go to View 3", ImGuiMod_Ctrl | ImGuiKey_3 },

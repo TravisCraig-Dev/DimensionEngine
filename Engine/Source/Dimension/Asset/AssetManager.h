@@ -19,7 +19,7 @@ namespace Dimension
     struct SpriteAtlas;
     struct SpriteRect;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip, AnimationClip };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip, AnimationClip, NavMeshData };
 
     const char* AssetTypeToString(AssetType type);
 
