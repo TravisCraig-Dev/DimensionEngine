@@ -87,6 +87,10 @@ namespace Dimension
         // The scripts' unit tests ([Test] methods; Window > Test Runner): listed, or run (those whose full name starts
         // with `filter`). JSON array of { name, passed, ms, message }.
         static std::string RunTests(bool run, const std::string& filter = {});
+        // A play-mode test ([PlayTest] IEnumerator) in a play session's scene: op 0 begins the test of that full name,
+        // 1 resumes it once a frame after the scene's update, 2 stops it. "" while it runs (and after op 0), then JSON
+        // { passed, ms, message, frames }.
+        static std::string PlayTest(int op, Scene& scene, const std::string& name = {}, float dt = 0.0f);
 
         // `managedDir` contains Dimension.Core.dll and its runtimeconfig.json.
         // Starts .NET: a runtime shipped beside the game (`<managedDir>/../dotnet`, see BundleRuntime) when there is one,

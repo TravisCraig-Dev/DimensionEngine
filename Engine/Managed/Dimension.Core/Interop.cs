@@ -150,7 +150,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, IntPtr*, int, int, int> SceneScripts;
         public delegate* unmanaged<IntPtr, byte*, ulong*, int, int, int> EntitiesWithComponent;
         public delegate* unmanaged<IntPtr, ulong, byte*, IntPtr> AddScript;
-        // Copies (kind 0 an object, 1 a prefab GUID) with a pose (position, rotation xyzw; flags 1 / 2) under a parent.
+        // Copies (kind 0 an object, 1 a prefab GUID; 2 makes a new empty object) with a pose (position, rotation xyzw; flags 1 / 2) under a parent.
         public delegate* unmanaged<IntPtr, int, ulong, float*, int, ulong, ulong> InstantiateObject;
         public delegate* unmanaged<IntPtr, ulong, byte*, IntPtr, int> RemoveComponent; // a script (handle) or a component (name)
         public delegate* unmanaged<IntPtr, ulong, int, int, byte*, float, float> AnimatorQuery; // see Animator in Components.cs
@@ -243,6 +243,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, int, byte*, byte*, byte*> MemberOp;
         // The Test Runner (see ScriptHost.RunTests).
         public delegate* unmanaged<int, byte*, byte*> RunTests;
+        // A play-mode test (see ScriptHost.PlayTest).
+        public delegate* unmanaged<int, IntPtr, byte*, float, byte*> PlayTest;
     }
 
     internal static unsafe class Native
@@ -309,6 +311,7 @@ namespace Dimension.Interop
                 api->InvokeStateBehaviour = &ScriptHost.InvokeStateBehaviour;
                 api->MemberOp = &ScriptHost.MemberOp;
                 api->RunTests = &ScriptHost.RunTests;
+                api->PlayTest = &ScriptHost.PlayTest;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version}, {System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()})");
                 return 1;
             }

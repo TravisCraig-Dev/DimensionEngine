@@ -141,7 +141,7 @@ namespace Editor
         void UpdateWindowTitle();
 
         // Play mode
-        void Play();
+        void Play(bool emptyScene = false); // emptyScene: a play-mode test's (the edited scene stays out of it)
         void Stop();
         void TogglePause();
 

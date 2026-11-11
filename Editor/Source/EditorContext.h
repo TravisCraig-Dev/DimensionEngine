@@ -209,6 +209,11 @@ namespace Editor
         // The Project window's Export Package... (an asset or folder, absolute) and Import Package...
         std::optional<fs::path> RequestExportPackage;
         bool RequestImportPackage = false;
+        // Play-mode tests (Test Runner): the test to run next (the editor plays an empty scene for it), the one running,
+        // and its result once done (JSON { passed, ms, message, frames }, taken by the Test Runner).
+        std::optional<std::string> RequestPlayTest;
+        std::string RunningPlayTest;
+        std::optional<std::string> PlayTestResult;
 
     private:
         std::vector<Entity> m_SearchMatches;

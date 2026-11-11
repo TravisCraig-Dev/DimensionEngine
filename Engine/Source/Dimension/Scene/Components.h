@@ -1362,6 +1362,7 @@ namespace Dimension
         bool CanSleep = true;
         float SleepThreshold = 0.05f; // m/s it must stay under to fall asleep
         uint64_t RuntimeBody = 0; // b2BodyId packed, runtime only
+        bool AddedForCollider = false; // runtime: made static by physics for a collider without one (not the object's own)
         glm::vec3 PreviousPose{ 0.0f }, CurrentPose{ 0.0f }; // runtime, Interpolate: the last two steps' (x, y, angle)
         bool HasPose = false;
         // Runtime: the pose (x, y, angle) the body last left its Transform at. A kinematic body whose Transform moved
@@ -1431,6 +1432,7 @@ namespace Dimension
         float MaxAngularVelocity = 47.1239f; // rad/s it may spin at most (Jolt's default, 15 pi)
         bool CanSleep = true;
         uint32_t RuntimeBody = 0xFFFFFFFF; // JPH::BodyID, runtime only
+        bool AddedForCollider = false; // runtime: made static by physics for a collider without one (not the object's own)
         glm::vec3 PreviousPosition{ 0.0f }, CurrentPosition{ 0.0f }; // runtime, Interpolate: the last two steps' poses
         glm::quat PreviousRotation{ 1, 0, 0, 0 }, CurrentRotation{ 1, 0, 0, 0 };
         bool HasPose = false;

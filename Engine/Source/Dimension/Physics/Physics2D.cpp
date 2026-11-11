@@ -381,7 +381,12 @@ namespace Dimension
     {
         auto& reg = m_Scene.GetRegistry();
         auto& t = reg.Get<TransformComponent>(e);
-        if (!reg.Has<Rigidbody2DComponent>(e)) reg.Emplace<Rigidbody2DComponent>(e).Type = BodyType::Static;
+        if (!reg.Has<Rigidbody2DComponent>(e))
+        {
+            auto& added = reg.Emplace<Rigidbody2DComponent>(e);
+            added.Type = BodyType::Static;
+            added.AddedForCollider = true;
+        }
         auto& rb = reg.Get<Rigidbody2DComponent>(e);
         if (rb.RuntimeBody) return;
 

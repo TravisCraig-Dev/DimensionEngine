@@ -2375,7 +2375,12 @@ namespace Dimension
         }
         if (reg.Has<SoftBodyComponent>(e)) return; // the soft body is its own collider
         bool ownRigidbody = reg.Has<RigidbodyComponent>(e); // (not one added for a lone collider)
-        if (!ownRigidbody) reg.Emplace<RigidbodyComponent>(e).Type = BodyType::Static;
+        if (!ownRigidbody)
+        {
+            auto& added = reg.Emplace<RigidbodyComponent>(e);
+            added.Type = BodyType::Static;
+            added.AddedForCollider = true;
+        }
         auto& rb = reg.Get<RigidbodyComponent>(e);
         if (rb.RuntimeBody != 0xFFFFFFFF) return;
         auto& t = reg.Get<TransformComponent>(e);

@@ -230,6 +230,10 @@ namespace Dimension
         void SetPrimaryCamera(Entity camera);
         // While playing: the object's 3D and 2D joints made again from their components (see Physics3DWorld::RebuildJoint).
         void RebuildJoint(Entity e);
+        // Adds an engine component by its registry name (a script's AddComponent); false when unknown or already there.
+        // While playing, physics bodies and joints are made again with it, and a Rigidbody (2D) added to a lone collider
+        // replaces the static one physics gave it (dynamic, as on an object that had none).
+        bool AddComponentByName(Entity e, std::string_view component);
         // While playing: the object's Rigidbody (3D) or Rigidbody 2D settings applied to its body (see RefreshBody).
         void RefreshBody(Entity e);
         // Puts the object and its body at a world position and rotation (Euler radians; 2D uses z's angle): at once

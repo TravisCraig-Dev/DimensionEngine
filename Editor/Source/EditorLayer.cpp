@@ -506,17 +506,21 @@ namespace Editor
 
     // ---- Play mode ------------------------------------------------------------------------
 
-    void EditorLayer::Play()
+    void EditorLayer::Play(bool emptyScene)
     {
         if (m_Ctx.IsPlaying()) return;
         if (m_Ctx.InPrefabMode() && !LeavePrefabMode()) return; // play always runs the scene
         m_Animation->StopPreview(); // the Animator as it was, not posed by the Animation window
         if (EditorPreferences::Get().SaveSceneBeforePlay && m_Ctx.Dirty && !m_Ctx.ScenePath.empty()) SaveScene();
-        if (m_Console->ClearOnPlay) m_Console->Clear();
+        if (m_Console->ClearOnPlay && !emptyScene) m_Console->Clear(); // (a test run keeps the earlier tests' logs)
         SceneManager::CancelPendingLoad();
         EditModeScripts::Clear(); // edit-mode scripts end as play starts (and start again after Stop)
-        m_Ctx.RuntimeScene = m_Ctx.EditorScene->Clone();
-        m_Ctx.Sections.RegisterLoaded(*m_Ctx.RuntimeScene); // scenes open alongside play as loaded additively
+        if (emptyScene) m_Ctx.RuntimeScene = MakeRef<Scene>("Test Scene");
+        else
+        {
+            m_Ctx.RuntimeScene = m_Ctx.EditorScene->Clone();
+            m_Ctx.Sections.RegisterLoaded(*m_Ctx.RuntimeScene); // scenes open alongside play as loaded additively
+        }
         m_MixerBeforePlay = AudioMixer::Groups();
         m_Ctx.RuntimeScene->OnRuntimeStart();
         m_Ctx.State = PlayState::Play;
@@ -527,6 +531,11 @@ namespace Editor
     void EditorLayer::Stop()
     {
         if (!m_Ctx.IsPlaying()) return;
+        if (!m_Ctx.RunningPlayTest.empty()) // stopped before the test finished (its result says so)
+        {
+            m_Ctx.PlayTestResult = CSharpRuntime::PlayTest(2, *m_Ctx.RuntimeScene);
+            m_Ctx.RunningPlayTest.clear();
+        }
         SceneManager::CancelPendingLoad();
         m_Ctx.RuntimeScene->NotifyApplicationQuit(); // as Unity's editor does when play stops
         m_Ctx.RuntimeScene->OnRuntimeStop();
@@ -659,6 +668,25 @@ namespace Editor
 
         if (m_SceneViewHovered || m_Camera.IsControlling()) m_Camera.Update(dt, m_SceneViewHovered);
 
+        m_TestRunner->Poll();
+        if (m_Ctx.RequestPlayTest) // the Test Runner's next play-mode test: a play session of its own on an empty scene
+        {
+            std::string test = *m_Ctx.RequestPlayTest;
+            m_Ctx.RequestPlayTest.reset();
+            Stop();
+            Play(true);
+            if (m_Ctx.IsPlaying())
+            {
+                std::string failed = CSharpRuntime::PlayTest(0, *m_Ctx.RuntimeScene, test);
+                if (failed.empty()) m_Ctx.RunningPlayTest = test;
+                else
+                {
+                    m_Ctx.PlayTestResult = failed;
+                    Stop();
+                }
+            }
+            else m_Ctx.PlayTestResult = R"({"passed":false,"message":"Play mode could not start"})";
+        }
         Input::SetGameInputEnabled(m_Ctx.IsPlaying() && m_GameViewFocused);
         if (m_Ctx.IsPlaying())
         {
@@ -669,6 +697,17 @@ namespace Editor
                 if (!m_Ctx.RuntimeScene->IsValid(m_Ctx.Selected)) m_Ctx.Select(Entity::Null());
                 std::erase_if(m_Ctx.Selection, [&](Entity e) { return !m_Ctx.RuntimeScene->IsValid(e); });
                 UpdateWindowTitle();
+            }
+            // The play-mode test goes on once a frame, after the scene's update; play stops when it is done.
+            if (!m_Ctx.RunningPlayTest.empty() && m_Ctx.State == PlayState::Play)
+            {
+                std::string result = CSharpRuntime::PlayTest(1, *m_Ctx.RuntimeScene, {}, dt);
+                if (!result.empty())
+                {
+                    m_Ctx.PlayTestResult = result;
+                    m_Ctx.RunningPlayTest.clear();
+                    Stop();
+                }
             }
         }
         else

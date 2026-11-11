@@ -505,6 +505,38 @@ namespace
         CHECK(Near(dir.z, -1.0f) && Near(origin.x, 5.0f * 800.0f / 600.0f, 1e-3f) && Near(origin.y, -5.0f, 1e-3f));
     }
 
+    void TestRuntimeAddComponent()
+    {
+        // Physics components added while playing (a script's AddComponent) get bodies: a new object made into a ball
+        // falls, and a Rigidbody added to a lone collider (static since play started) makes it fall too.
+        Scene scene("Add");
+        auto& reg = scene.GetRegistry();
+        Entity crate = scene.CreateEntity("Crate");
+        reg.Get<TransformComponent>(crate).Position = { 5, 10, 0 };
+        reg.Emplace<BoxColliderComponent>(crate);
+        Entity box2D = scene.CreateEntity("Box 2D");
+        reg.Get<TransformComponent>(box2D).Position = { -5, 10, 0 };
+        reg.Emplace<BoxCollider2DComponent>(box2D);
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rr = rt->GetRegistry();
+        CHECK(rr.Has<RigidbodyComponent>(crate) && rr.Get<RigidbodyComponent>(crate).AddedForCollider);
+        Entity ball = rt->CreateEntity("Ball");
+        rr.Get<TransformComponent>(ball).Position = { 0, 10, 0 };
+        CHECK(rt->AddComponentByName(ball, "Sphere Collider") && rt->AddComponentByName(ball, "Rigidbody"));
+        CHECK(!rt->AddComponentByName(ball, "Rigidbody")); // (already its own)
+        CHECK(rt->AddComponentByName(crate, "Rigidbody") && !rr.Get<RigidbodyComponent>(crate).AddedForCollider);
+        CHECK(rr.Get<RigidbodyComponent>(crate).Type == BodyType::Dynamic);
+        CHECK(rt->AddComponentByName(box2D, "Rigidbody 2D"));
+        CHECK(!rt->AddComponentByName(ball, "No Such Component"));
+        for (int i = 0; i < 16; ++i) rt->OnUpdateRuntime(0.0625f);
+        float ballY = rr.Get<TransformComponent>(ball).Position.y, crateY = rr.Get<TransformComponent>(crate).Position.y,
+              boxY = rr.Get<TransformComponent>(box2D).Position.y;
+        CHECK(ballY < 6.0f && crateY < 6.0f && boxY < 6.0f); // about 5 m in a second
+        CHECK(Near(rr.Get<TransformComponent>(crate).Position.x, 5.0f, 1e-3f));
+        rt->OnRuntimeStop();
+    }
+
     void TestTimeScaleAndCursor()
     {
         // Time scale: script steps, play time and physics slow down; the unscaled clock does not.
@@ -16519,6 +16551,7 @@ int main(int argc, char** argv)
     Run("Active state and tags", TestActiveState);
     Run("Camera projection", TestCameraProjection);
     Run("Time scale and cursor", TestTimeScaleAndCursor);
+    Run("Runtime AddComponent", TestRuntimeAddComponent);
     Run("2D physics queries", TestPhysics2DQueries);
     Run("3D shape casts and spin", TestPhysics3DCasts);
     Run("Collision details", TestCollisionDetails);

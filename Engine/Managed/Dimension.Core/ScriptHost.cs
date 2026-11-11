@@ -1254,43 +1254,23 @@ namespace Dimension
             try
             {
                 string filter = Marshal.PtrToStringUTF8((IntPtr)filterUtf8) ?? "";
-                var tests = new List<MethodInfo>();
-                if (s_ScriptsAssembly != null)
-                    foreach (Type type in s_ScriptsAssembly.GetTypes())
-                        foreach (MethodInfo m in type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-                            if (m.IsDefined(typeof(TestAttribute), false) && m.GetParameters().Length == 0) tests.Add(m);
-                tests.Sort((a, b) => string.CompareOrdinal(TestName(a), TestName(b)));
+                List<MethodInfo> tests = TestRunner.Find(s_ScriptsAssembly);
                 using var stream = new MemoryStream();
                 using (var w = new Utf8JsonWriter(stream))
                 {
                     w.WriteStartArray();
                     foreach (MethodInfo m in tests)
                     {
-                        string name = TestName(m);
-                        if (op == 1 && !name.StartsWith(filter, StringComparison.Ordinal)) continue;
+                        string name = TestRunner.Name(m);
+                        bool play = TestRunner.IsPlay(m);
+                        if (op == 1 && (play || !name.StartsWith(filter, StringComparison.Ordinal))) continue; // (play tests: PlayTest)
                         w.WriteStartObject();
                         w.WriteString("name", name);
+                        if (op == 0) w.WriteBoolean("play", play);
                         if (op == 1)
                         {
                             var watch = System.Diagnostics.Stopwatch.StartNew();
-                            string message = "";
-                            bool passed = true;
-                            try
-                            {
-                                object target = m.IsStatic ? null : Activator.CreateInstance(m.DeclaringType);
-                                m.Invoke(target, null);
-                            }
-                            catch (TargetInvocationException e) when (e.InnerException != null)
-                            {
-                                passed = false;
-                                message = e.InnerException is AssertionException ? e.InnerException.Message
-                                                                                   : $"{e.InnerException.GetType().Name}: {e.InnerException.Message}";
-                            }
-                            catch (Exception e)
-                            {
-                                passed = false;
-                                message = $"{e.GetType().Name}: {e.Message}";
-                            }
+                            (bool passed, string message) = TestRunner.RunEdit(m);
                             w.WriteBoolean("passed", passed);
                             w.WriteNumber("ms", watch.Elapsed.TotalMilliseconds);
                             w.WriteString("message", message);
@@ -1308,7 +1288,56 @@ namespace Dimension
             }
         }
 
-        private static string TestName(MethodInfo m) => $"{m.DeclaringType.FullName}.{m.Name}";
+        // A play-mode test in the running play session's scene: op 0 begins the [PlayTest] of that full name, 1 resumes it
+        // (once a frame, after the scene's update), 2 stops it. Null while it runs; once done JSON { passed, ms, message,
+        // frames }.
+        [UnmanagedCallersOnly]
+        internal static byte* PlayTest(int op, IntPtr scene, byte* nameUtf8, float dt)
+        {
+            try
+            {
+                Native.CurrentScene = scene;
+                string result;
+                if (op == 0)
+                {
+                    string name = Marshal.PtrToStringUTF8((IntPtr)nameUtf8) ?? "";
+                    MethodInfo method = TestRunner.Find(s_ScriptsAssembly).Find(m => TestRunner.IsPlay(m) && TestRunner.Name(m) == name);
+                    if (method == null)
+                    {
+                        PlayTestDriver.Current = null;
+                        return PlayTestResult(false, 0.0, $"No play-mode test named {name}", 0);
+                    }
+                    PlayTestDriver.Current = new PlayTestDriver(method);
+                    return null; // its first step runs after the scene's first update
+                }
+                PlayTestDriver driver = PlayTestDriver.Current;
+                if (driver == null) return null;
+                result = op == 1 ? driver.Step(dt) : driver.Finish("Stopped before it finished");
+                if (result == null) return null;
+                PlayTestDriver.Current = null;
+                return PlayTestResult(result.Length == 0, driver.Milliseconds, result, driver.Frames);
+            }
+            catch (Exception e)
+            {
+                PlayTestDriver.Current = null;
+                return PlayTestResult(false, 0.0, TestRunner.Describe(e), 0);
+            }
+        }
+
+        private static byte* PlayTestResult(bool passed, double ms, string message, int frames)
+        {
+            using var stream = new MemoryStream();
+            using (var w = new Utf8JsonWriter(stream))
+            {
+                w.WriteStartObject();
+                w.WriteBoolean("passed", passed);
+                w.WriteNumber("ms", ms);
+                w.WriteString("message", message);
+                w.WriteNumber("frames", frames);
+                w.WriteEndObject();
+            }
+            return Utf8Result(stream.ToArray());
+        }
 
         [UnmanagedCallersOnly]
         internal static byte* GetFields(IntPtr handle)

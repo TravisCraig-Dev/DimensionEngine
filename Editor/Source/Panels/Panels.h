@@ -370,26 +370,35 @@ namespace Editor
         int m_JobKind = 0; // 1 search, 2 add / remove
     };
 
-    // Window > Test Runner (like Unity's, edit mode): the C# scripts' [Test] methods, run all, the failed ones or one,
-    // with each result, its time and why it failed.
+    // Window > Test Runner (like Unity's): the C# scripts' tests, in two tabs. Edit Mode runs [Test] methods at once;
+    // Play Mode runs [PlayTest] IEnumerator methods one at a time, each in a play session of its own on an empty scene.
+    // Run all, the failed ones or one, with each result, its time and why it failed.
     class TestRunnerPanel
     {
     public:
         explicit TestRunnerPanel(EditorContext& ctx) : m_Ctx(ctx) {}
         void OnImGui(bool* open);
-        void RequestRun() { m_RunRequested = true; } // (automation: --run-tests)
+        // Every frame (also with the window closed): play-mode results in, the next queued test out.
+        void Poll();
+        void RequestRun() { m_RunRequested = true; } // (automation: --run-tests, edit then play mode)
 
     private:
         struct Test
         {
             std::string Name, Message;
-            int State = 0; // 0 not run, 1 passed, 2 failed
+            bool Play = false;
+            int State = 0; // 0 not run, 1 passed, 2 failed, 3 running
             float Milliseconds = 0.0f;
+            int Frames = 0; // (play mode)
         };
         void Refresh();
-        void Run(const std::string& filter);
+        void Run(const std::string& filter);           // edit mode
+        void RunPlay(const std::vector<std::string>& tests); // play mode (queued)
+        void DrawTests(bool play);
         EditorContext& m_Ctx;
         std::vector<Test> m_Tests;
+        std::vector<std::string> m_PlayQueue; // play-mode tests still to run (the first is running)
+        int m_PlayTotal = 0;
         fs::path m_ScriptsPath;
         bool m_Listed = false, m_RunRequested = false;
     };

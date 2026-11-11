@@ -162,6 +162,39 @@ namespace Dimension
         for (Entity e : pending) DestroyEntity(e);
     }
 
+    bool Scene::AddComponentByName(Entity e, std::string_view component)
+    {
+        const ComponentInfo* info = ComponentRegistry::Find(std::string(component));
+        if (!info || !IsValid(e)) return false;
+        if (info->Has(*this, e))
+        {
+            // Only a lone collider's static Rigidbody (made by physics as play starts) is replaced.
+            if (auto* rb = component == "Rigidbody" ? m_Registry.TryGet<RigidbodyComponent>(e) : nullptr; rb && rb->AddedForCollider)
+            {
+                uint32_t body = rb->RuntimeBody; // (the old body is removed by the rebuild)
+                *rb = RigidbodyComponent();
+                rb->RuntimeBody = body;
+            }
+            else if (auto* rb2 = component == "Rigidbody 2D" ? m_Registry.TryGet<Rigidbody2DComponent>(e) : nullptr; rb2 && rb2->AddedForCollider)
+            {
+                uint64_t body = rb2->RuntimeBody;
+                *rb2 = Rigidbody2DComponent();
+                rb2->RuntimeBody = body;
+            }
+            else return false;
+        }
+        else info->Add(*this, e);
+        if (!IsRunning()) return true;
+        static const char* k3D[] = { "Rigidbody", "Box Collider", "Sphere Collider", "Capsule Collider", "Mesh Collider", "Character Controller" };
+        static const char* k2D[] = { "Rigidbody 2D", "Box Collider 2D", "Circle Collider 2D" };
+        for (const char* n : k3D)
+            if (m_Physics3D && component == n) m_Physics3D->RebuildBody(e);
+        for (const char* n : k2D)
+            if (m_Physics2D && component == n) m_Physics2D->RebuildBody(e);
+        if (component == "Joint" || component == "Joint 2D") RebuildJoint(e); // a joint added while playing holds at once
+        return true;
+    }
+
     bool Scene::RemoveScriptDeferred(Entity e, const ScriptableEntity* script)
     {
         auto* sc = IsValid(e) && script ? m_Registry.TryGet<ScriptComponent>(e) : nullptr;

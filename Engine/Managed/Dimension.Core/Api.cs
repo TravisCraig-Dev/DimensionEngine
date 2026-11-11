@@ -346,7 +346,8 @@ namespace Dimension
                 return handle != IntPtr.Zero ? System.Runtime.InteropServices.GCHandle.FromIntPtr(handle).Target as T : null;
             }
             Component c = Wrapper(typeof(T));
-            if (!HasComponent(c.NativeName)) Native.WithUtf8(c.NativeName, p => Native.Api.AddComponent(self.Scene, self.Id, (byte*)p));
+            // (always asked: a lone collider's static Rigidbody, made by physics, becomes the object's own)
+            Native.WithUtf8(c.NativeName, p => Native.Api.AddComponent(self.Scene, self.Id, (byte*)p));
             return (T)(object)c;
         }
 
@@ -553,6 +554,15 @@ namespace Dimension
         }
 
         // A copy (kind 0: of the object `source`, 1: of the prefab `source`) with the pose parts that are given.
+        /// <summary>A new empty object in the current scene (like Unity's new GameObject(name)): only a Transform, at the
+        /// world origin or under `parent`. Add components with AddComponent.</summary>
+        public static Entity Create(string name = "GameObject", Entity parent = default)
+        {
+            Entity e = Copy(2, 0, null, null, parent);
+            if (e.IsValid && name != "GameObject") e.Name = name;
+            return e;
+        }
+
         private static Entity Copy(int kind, ulong source, Vector3? position, Quaternion? rotation, Entity parent)
         {
             IntPtr scene = Native.CurrentScene;
@@ -617,8 +627,11 @@ namespace Dimension
 
     public static unsafe class Debug
     {
-        private static void Write(int level, string message) =>
+        private static void Write(int level, string message)
+        {
+            if (level == 3) LogAssert.OnError(message ?? "null"); // a running test fails on errors
             Native.WithUtf8(message ?? "null", p => Native.Api.Log(level, (byte*)p));
+        }
         public static void Log(object message) => Write(1, message?.ToString());
         public static void LogWarning(object message) => Write(2, message?.ToString());
         public static void LogError(object message) => Write(3, message?.ToString());

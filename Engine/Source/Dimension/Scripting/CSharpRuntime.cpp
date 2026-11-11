@@ -382,6 +382,8 @@ namespace Dimension
             const char* (*MemberOp)(intptr_t, int, const char*, const char*);
             // The Test Runner: 0 list the scripts' [Test] methods, 1 run those starting with the filter; JSON.
             const char* (*RunTests)(int, const char*);
+            // A play-mode test: 0 begin (scene, name), 1 resume (dt), 2 stop; null while it runs, then JSON.
+            const char* (*PlayTest)(int, void*, const char*, float);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -1101,11 +1103,9 @@ namespace Dimension
                 return info && s && info->Has(S(s), Unpack(e)) ? 1 : 0;
             };
             a.AddComponent = [](void* s, uint64_t e, const char* name) {
-                auto* info = ComponentRegistry::Find(name);
-                if (!info || !s || !S(s).IsValid(Unpack(e))) return;
-                info->Add(S(s), Unpack(e));
-                // A joint added while playing holds at once (attached to the world until a script connects it).
-                if (S(s).IsRunning() && (info->Name == "Joint" || info->Name == "Joint 2D")) S(s).RebuildJoint(Unpack(e));
+                // While playing, bodies and joints are made again with it (a joint holds at once, attached to the world
+                // until connected).
+                if (s && name) S(s).AddComponentByName(Unpack(e), name);
             };
             a.IsValid = [](void* s, uint64_t e) -> int { return s && S(s).IsValid(Unpack(e)) ? 1 : 0; };
             a.FindEntity = [](void* s, const char* name) -> uint64_t {
@@ -1519,6 +1519,8 @@ namespace Dimension
                 Entity copy;
                 if (kind == 0)
                     copy = scene.Instantiate(Unpack(source), under, flags & 1 ? &position : nullptr, flags & 2 ? &rotation : nullptr);
+                else if (kind == 2) // a new empty object (Entity.Create): only a Transform, at the origin of its parent
+                    copy = scene.CreateEntity("GameObject", under);
                 else
                     copy = scene.InstantiatePrefab(AssetHandle(source), position, flags & 2 ? rotation : glm::quat(1, 0, 0, 0), under);
                 return copy.IsNull() ? UINT64_MAX : Pack(copy);
@@ -3035,6 +3037,13 @@ namespace Dimension
         return json ? json : "[]";
     }
 
+    std::string CSharpRuntime::PlayTest(int op, Scene& scene, const std::string& name, float dt)
+    {
+        if (!s_Available || !s_Managed.PlayTest) return op == 0 ? std::string() : R"({"passed":false,"message":"C# scripting is not available"})";
+        const char* json = s_Managed.PlayTest(op, &scene, name.c_str(), dt);
+        return json ? json : "";
+    }
+
     bool CSharpRuntime::LoadScripts(const fs::path& assemblyPath, bool reloadable)
     {
         if (!s_Available) return false;
@@ -3209,6 +3218,7 @@ namespace Dimension
     bool CSharpRuntime::LoadScripts(const fs::path&, bool) { return false; }
     void CSharpRuntime::UnloadScripts() {}
     std::string CSharpRuntime::RunTests(bool, const std::string&) { return "[]"; }
+    std::string CSharpRuntime::PlayTest(int, Scene&, const std::string&, float) { return R"({"passed":false,"message":"C# scripting is not available"})"; }
     const fs::path& CSharpRuntime::GetScriptsPath() { static fs::path p; return p; }
     bool CSharpRuntime::ScriptsChangedOnDisk() { return false; }
     size_t CSharpRuntime::GetScriptCount() { return 0; }
