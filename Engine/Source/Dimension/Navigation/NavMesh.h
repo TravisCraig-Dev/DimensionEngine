@@ -67,6 +67,7 @@ namespace Dimension
         {
             float Clearance = 0.0f;
             uint32_t AreaMask = 0xFFFFFFFFu;
+            int32_t AgentType = 0; // (surfaces of another type are not its; 0 = any)
             bool Passes(const NavMeshData& m, int node) const
             {
                 return !m.IsBlocked(node) && (m.Clearance.empty() || m.Clearance[node] >= Clearance - 1e-4f) &&
@@ -181,8 +182,13 @@ namespace Dimension
         void Update(Scene& scene, float dt);
         void SetPathBudget(int pathsPerFrame); // the project's (Project Settings)
         int GetPathBudget();
-        // Gives NavMesh Modifier Volume's Area dropdown the project's area names (after they change).
+        // Gives the Area dropdowns the project's area names, and the Agent Type dropdowns its agent types (after they
+        // change).
         void ApplyAreaNames();
+        // A surface's bake settings with its agent type's sizes in place of its own (as they are without a type).
+        NavMeshSurfaceComponent WithAgentType(const NavMeshSurfaceComponent& surface);
+        // Whether an agent of `agentType` walks a surface of `surfaceType` (either Any, or the same).
+        inline bool TypesMatch(int32_t agentType, int32_t surfaceType) { return agentType <= 0 || surfaceType <= 0 || agentType == surfaceType; }
         // Sends an agent to a point: false when there is no way at all (no mesh near it or the point).
         bool SetDestination(Scene& scene, Entity agent, const glm::vec3& destination);
         void ResetPath(Scene& scene, Entity agent);

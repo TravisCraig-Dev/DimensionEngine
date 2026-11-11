@@ -3551,6 +3551,52 @@ namespace
         CHECK(Navigation::FindPath(m, { -5.0f, 0.0f, -5.0f }, { -8.0f, 0.0f, -8.0f }, corners) == NavPathStatus::Complete && corners.size() == 2);
     }
 
+    void TestNavMeshAgentTypes()
+    {
+        // Project agent types: "Small" (radius 0.25) and "Large" (radius 1.5, step 0.1). Two surfaces over the same
+        // yard, one of each; a third (Any) off to the side.
+        auto& config = Project::GetConfig();
+        auto savedTypes = config.NavAgentTypes;
+        config.NavAgentTypes.clear();
+        ProjectConfig::NavAgentType small, large;
+        small.Name = "Small";
+        small.Radius = 0.25f;
+        large.Name = "Large";
+        large.Radius = 1.5f;
+        large.StepHeight = 0.1f;
+        config.NavAgentTypes = { small, large };
+        Scene scene("Yard");
+        Entity smallSurface = BuildNavYard(scene);
+        auto& reg = scene.GetRegistry();
+        reg.Get<NavMeshSurfaceComponent>(smallSurface).AgentType = 1;
+        Entity largeSurface = scene.CreateEntity("Large Navigation");
+        auto& ls = reg.Emplace<NavMeshSurfaceComponent>(largeSurface);
+        ls.Size = { 30.0f, 10.0f, 30.0f };
+        ls.AgentType = 2;
+        scene.UpdateTransforms();
+        auto smallMesh = Navigation::Bake(scene, smallSurface), largeMesh = Navigation::Bake(scene, largeSurface);
+        // Baked with the types' sizes, not the surfaces' own (0.5).
+        CHECK(smallMesh && largeMesh && Near(smallMesh->AgentRadius, 0.25f) && Near(largeMesh->AgentRadius, 1.5f) && Near(largeMesh->StepHeight, 0.1f));
+        CHECK(Near(Navigation::WithAgentType(reg.Get<NavMeshSurfaceComponent>(largeSurface)).AgentRadius, 1.5f));
+        if (!smallMesh || !largeMesh) return;
+        // An agent finds only its type's mesh; Any takes the nearest of all.
+        Navigation::Filter smallAgent, largeAgent, anyAgent;
+        smallAgent.AgentType = 1;
+        largeAgent.AgentType = 2;
+        glm::vec3 open(-5.0f, 0.0f, -5.0f);
+        CHECK(Navigation::MeshNear(scene, open, 1.0f, nullptr, smallAgent) == smallMesh && Navigation::MeshNear(scene, open, 1.0f, nullptr, largeAgent) == largeMesh);
+        CHECK(Navigation::MeshNear(scene, open, 1.0f, nullptr, anyAgent) != nullptr);
+        // Near the wall (0.5 m off it) only the small type has ground.
+        glm::vec3 byWall(-5.0f, 0.0f, 0.6f);
+        CHECK(Navigation::MeshNear(scene, byWall, 0.2f, nullptr, smallAgent) == smallMesh && Navigation::MeshNear(scene, byWall, 0.2f, nullptr, largeAgent) == nullptr);
+        CHECK(Navigation::TypesMatch(0, 2) && Navigation::TypesMatch(2, 0) && !Navigation::TypesMatch(1, 2));
+        // A type's sizes count toward a saved bake being up to date.
+        uint64_t key = Navigation::SettingsKey(scene, largeSurface);
+        config.NavAgentTypes[1].Radius = 1.0f;
+        CHECK(Navigation::SettingsKey(scene, largeSurface) != key);
+        config.NavAgentTypes = savedTypes;
+    }
+
     void TestNavMeshWideLinks()
     {
         // Two ledges with a 3 m gap between them (z from -1.5 to 1.5), joined by a link 6 m wide (x from -3 to 3).
@@ -16081,6 +16127,7 @@ int main(int argc, char** argv)
     Run("NavMesh saved with the scene", TestNavMeshSaved);
     Run("NavMesh modifiers", TestNavMeshModifiers);
     Run("NavMesh wide links", TestNavMeshWideLinks);
+    Run("NavMesh agent types", TestNavMeshAgentTypes);
     Run("NavMesh agents", TestNavMeshAgents);
     Run("Sprite atlas", TestSpriteAtlas);
     Run("Sprite slicing", TestSpriteSlicing);

@@ -1117,6 +1117,9 @@ namespace Dimension
         // Streamed (large worlds): while playing, only the tiles (Tile Size meters square) within Stream Radius of the
         // agents and the main camera are baked, a tile a frame, nearest first; tiles a tile farther off are dropped.
         bool Streamed = false;
+        // Agent Type (the project's, Window > Navigation): its sizes replace Agent Radius / Height / Step Height / Max
+        // Slope, and only agents of that type (or of Any) walk it. 0 = Any: its own settings, for every agent.
+        int32_t AgentType = 0;
         float TileSize = 32.0f;
         float StreamRadius = 48.0f;
         // Baked navigation saved with the scene (a .navmesh asset, from the editor's Bake): play start uses it instead
@@ -1218,6 +1221,7 @@ namespace Dimension
     enum class NavPathStatus : int32_t { Complete = 0, Partial = 1, Invalid = 2 };
     struct NavMeshAgentComponent
     {
+        int32_t AgentType = 0; // the project's agent type it is (only surfaces of that type, or of Any; 0 = Any)
         float Speed = 3.5f;
         float AngularSpeed = 360.0f;
         float Acceleration = 8.0f;

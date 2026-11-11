@@ -47,6 +47,14 @@ namespace Dimension
         std::array<std::string, kNavAreas> NavAreaNames{ "Walkable", "Not Walkable", "Road", "Grass", "Mud", "Water", "Area 6", "Area 7" };
         std::array<float, kNavAreas> NavAreaCosts{ 1.0f, 1.0f, 0.5f, 1.5f, 4.0f, 6.0f, 1.0f, 1.0f };
         int NavPathBudget = 16;
+        // Navigation agent types (like Unity's): a surface of a type bakes with its sizes, and an agent of a type walks
+        // only surfaces of that type (or of none). Type 0 in components is "Any"; type i is NavAgentTypes[i - 1].
+        struct NavAgentType
+        {
+            std::string Name = "Humanoid";
+            float Radius = 0.5f, Height = 2.0f, StepHeight = 0.4f, MaxSlope = 45.0f;
+        };
+        std::vector<NavAgentType> NavAgentTypes{ NavAgentType{} };
 
         // Presets: per component type (registry name), the preset applied to it when added in the editor.
         std::map<std::string, AssetHandle> DefaultPresets;

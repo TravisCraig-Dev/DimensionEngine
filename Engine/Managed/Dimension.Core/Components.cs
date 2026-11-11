@@ -2290,6 +2290,9 @@ namespace Dimension
     public unsafe class NavMeshAgent : Component
     {
         internal override string NativeName => "NavMesh Agent";
+        /// <summary>The project's agent type it is (Window > Navigation; 0 = Any): it walks only surfaces of that type
+        /// (or of Any).</summary>
+        public int AgentTypeID { get => GetInt("Agent Type"); set => SetInt("Agent Type", value); }
         private float Op(int op, Vector3 v = default) => Native.Api.NavAgent(Entity.Scene, Entity.Id, op, (float*)&v);
         /// <summary>Finds a path there and starts walking. False when there is no way at all.</summary>
         public bool SetDestination(Vector3 target) => Op(0, target) != 0.0f;

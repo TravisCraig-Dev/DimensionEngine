@@ -95,6 +95,20 @@ namespace Dimension
                         s_Config.NavAreaCosts[i] = j["navAreas"][i].value("cost", s_Config.NavAreaCosts[i]);
                     }
                 s_Config.NavPathBudget = j.value("navPathBudget", s_Config.NavPathBudget);
+                if (j.contains("navAgentTypes") && j["navAgentTypes"].is_array())
+                {
+                    s_Config.NavAgentTypes.clear();
+                    for (const auto& t : j["navAgentTypes"])
+                    {
+                        ProjectConfig::NavAgentType type;
+                        type.Name = t.value("name", type.Name);
+                        type.Radius = t.value("radius", type.Radius);
+                        type.Height = t.value("height", type.Height);
+                        type.StepHeight = t.value("stepHeight", type.StepHeight);
+                        type.MaxSlope = t.value("maxSlope", type.MaxSlope);
+                        s_Config.NavAgentTypes.push_back(type);
+                    }
+                }
                 s_Config.DefaultLanguage = j.value("defaultLanguage", std::string());
                 // Input actions: each binding's kind and control code (with its name, for people reading the file).
                 s_Config.InputActions.clear();
@@ -170,6 +184,9 @@ namespace Dimension
         }
         nlohmann::json navAreas = nlohmann::json::array();
         for (int i = 0; i < ProjectConfig::kNavAreas; ++i) navAreas.push_back({ { "name", s_Config.NavAreaNames[i] }, { "cost", s_Config.NavAreaCosts[i] } });
+        nlohmann::json navAgentTypes = nlohmann::json::array();
+        for (const auto& t : s_Config.NavAgentTypes)
+            navAgentTypes.push_back({ { "name", t.Name }, { "radius", t.Radius }, { "height", t.Height }, { "stepHeight", t.StepHeight }, { "maxSlope", t.MaxSlope } });
         nlohmann::json importRules = nlohmann::json::array();
         for (const ImportRule& r : s_Config.ImportRules)
             importRules.push_back({ { "folder", r.Folder }, { "type", (int)r.Type }, { "settings", r.Settings } });
@@ -214,6 +231,7 @@ namespace Dimension
                           { "layerCollisionMatrix", s_Config.LayerCollisionMatrix },
                           { "navAreas", navAreas },
                           { "navPathBudget", s_Config.NavPathBudget },
+                          { "navAgentTypes", navAgentTypes },
                           { "defaultPresets", defaultPresets },
                           { "importRules", importRules },
                           { "defaultLanguage", s_Config.DefaultLanguage },

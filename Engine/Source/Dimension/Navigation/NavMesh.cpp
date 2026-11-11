@@ -270,9 +270,10 @@ namespace Dimension
             // again; the others keep previous's surfaces.
             // `previous` and `region` (columns x0, z0, x1, z1): only the region is sampled, the rest kept; with `clear` the
             // region is emptied instead (a streamed tile dropped).
-            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& s, const glm::vec3& center, const BakeScope& scope,
+            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& surface, const glm::vec3& center, const BakeScope& scope,
                                                 const NavMeshData* previous = nullptr, glm::ivec4 region = glm::ivec4(0), bool clear = false)
             {
+                const NavMeshSurfaceComponent s = WithAgentType(surface); // (an agent type's sizes)
                 auto& reg = scene.GetRegistry();
                 auto m = std::make_shared<NavMeshData>();
                 GridOf(s, center, *m);
@@ -650,7 +651,7 @@ namespace Dimension
                 return status;
             }
 
-            Filter FilterOf(const NavMeshAgentComponent& agent) { return { agent.Radius, (uint32_t)agent.AreaMask }; }
+            Filter FilterOf(const NavMeshAgentComponent& agent) { return { agent.Radius, (uint32_t)agent.AreaMask, agent.AgentType }; }
 
             NavMeshAgentComponent* AgentOf(Scene& scene, Entity e) { return scene.IsValid(e) ? scene.GetRegistry().TryGet<NavMeshAgentComponent>(e) : nullptr; }
 
@@ -720,7 +721,12 @@ namespace Dimension
                 glm::vec3 world = ToWorld(scene, agent.Mesh.get(), ground);
                 auto previous = agent.Mesh;
                 agent.Mesh = MeshNear(scene, world, std::max(agent.Height, 2.0f), &node, FilterOf(agent));
-                if (!agent.Mesh) agent.Mesh = MeshNear(scene, world, std::max(agent.Height, 2.0f), &node); // nowhere roomy enough: anywhere
+                if (!agent.Mesh) // nowhere roomy enough: anywhere (of its type)
+                {
+                    Filter anyRoom;
+                    anyRoom.AgentType = agent.AgentType;
+                    agent.Mesh = MeshNear(scene, world, std::max(agent.Height, 2.0f), &node, anyRoom);
+                }
                 agent.Node = agent.Mesh ? node : -1;
                 if (agent.Mesh != previous)
                 {
@@ -1284,6 +1290,8 @@ namespace Dimension
             auto* s = scene.IsValid(e) ? reg.TryGet<NavMeshSurfaceComponent>(e) : nullptr;
             if (!s) return 0;
             scene.UpdateTransforms();
+            NavMeshSurfaceComponent typed = WithAgentType(*s); // (an agent type's sizes count)
+            s = &typed;
             // Rounded, so float noise from saving the scene does not count as a change.
             uint64_t key = 1469598103934665603ull;
             auto add = [&](float v) {
@@ -1461,7 +1469,7 @@ namespace Dimension
             int bestNode = -1;
             for (auto [e, s, t] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent, TransformComponent>())
             {
-                if (!s.Data || !t.ActiveInHierarchy) continue;
+                if (!s.Data || !t.ActiveInHierarchy || !TypesMatch(filter.AgentType, s.AgentType)) continue;
                 glm::vec3 local = s.Moving ? glm::vec3(s.FrameInverse * glm::vec4(point, 1.0f)) : point;
                 int a = Nearest(*s.Data, local, maxDistance, filter);
                 if (a < 0) continue;
@@ -1688,6 +1696,27 @@ namespace Dimension
                 if (ComponentInfo* info = ComponentRegistry::FindMutable(component))
                     for (FieldInfo& f : info->Fields)
                         if (f.Name == "Area") f.EnumNames.assign(Project::GetConfig().NavAreaNames.begin(), Project::GetConfig().NavAreaNames.end());
+            std::vector<std::string> types = { "Any" };
+            for (const auto& t : Project::GetConfig().NavAgentTypes) types.push_back(t.Name);
+            for (const char* component : { "NavMesh Surface", "NavMesh Agent" })
+                if (ComponentInfo* info = ComponentRegistry::FindMutable(component))
+                    for (FieldInfo& f : info->Fields)
+                        if (f.Name == "Agent Type") f.EnumNames = types;
+        }
+
+        NavMeshSurfaceComponent WithAgentType(const NavMeshSurfaceComponent& surface)
+        {
+            NavMeshSurfaceComponent s = surface;
+            const auto& types = Project::GetConfig().NavAgentTypes;
+            if (s.AgentType >= 1 && s.AgentType <= (int)types.size())
+            {
+                const auto& type = types[s.AgentType - 1];
+                s.AgentRadius = type.Radius;
+                s.AgentHeight = type.Height;
+                s.StepHeight = type.StepHeight;
+                s.MaxSlope = type.MaxSlope;
+            }
+            return s;
         }
 
         glm::mat4 MeshFrame(Scene& scene, const NavMeshData* mesh)

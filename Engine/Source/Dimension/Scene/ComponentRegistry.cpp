@@ -835,6 +835,8 @@ namespace Dimension
             .Field("Jump Distance", &NavMeshSurfaceComponent::JumpDistance).Range(0.0f, 20.0f).Speed(0.05f).Tooltip("Widest gap agents jump across")
             .Field("Moving", &NavMeshSurfaceComponent::Moving)
                 .Tooltip("Rides on its object (a boat, a lift): baked from its own colliders, carrying agents on it along")
+            .Field("Agent Type", &NavMeshSurfaceComponent::AgentType).Enum({ "Any", "Humanoid" })
+                .Tooltip("A project agent type (Window > Navigation): baked with its sizes, walked only by agents of that type.\nAny: its own settings, for every agent")
             .Field("Streamed", &NavMeshSurfaceComponent::Streamed)
                 .Tooltip("Large worlds: while playing, bake only the tiles near the agents and the main camera (a tile a frame), dropping far ones")
             .Field("Tile Size", &NavMeshSurfaceComponent::TileSize).Range(4.0f, 1024.0f).Speed(0.5f).Tooltip("Streamed: meters across a tile")
@@ -879,6 +881,8 @@ namespace Dimension
                 .Tooltip("Played on a crossing agent's Animator: a state of its controller or a clip of its model (a jump, a climb)")
             .Field("Match Animation", &OffMeshLinkComponent::MatchAnimation).Tooltip("The crossing takes as long as the animation");
         Register<NavMeshAgentComponent>("NavMesh Agent", "Navigation")
+            .Field("Agent Type", &NavMeshAgentComponent::AgentType).Enum({ "Any", "Humanoid" })
+                .Tooltip("Walks only surfaces of this agent type (or of Any); Any walks every surface")
             .Field("Speed", &NavMeshAgentComponent::Speed).Range(0.0f, 100.0f).Speed(0.05f).Tooltip("Top speed, m/s")
             .Field("Angular Speed", &NavMeshAgentComponent::AngularSpeed).Range(0.0f, 3600.0f).Speed(1.0f).Tooltip("Turning, degrees per second")
             .Field("Acceleration", &NavMeshAgentComponent::Acceleration).Range(0.0f, 1000.0f).Speed(0.1f)

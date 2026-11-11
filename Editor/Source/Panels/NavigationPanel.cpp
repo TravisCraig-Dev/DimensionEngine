@@ -134,6 +134,68 @@ namespace Editor
             ImGui::EndTable();
         }
         ImGui::TextDisabled("Agents' Area Mask has a bit per area: 1 << number.");
+
+        // Agent types: a surface of a type bakes with its sizes; an agent of a type walks only surfaces of it (or Any).
+        ImGui::SeparatorText("Agent Types");
+        bool typesChanged = false, typesEdited = false;
+        int remove = -1;
+        if (ImGui::BeginTable("##agentTypes", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Name");
+            ImGui::TableSetupColumn("Radius");
+            ImGui::TableSetupColumn("Height");
+            ImGui::TableSetupColumn("Step");
+            ImGui::TableSetupColumn("Slope");
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableHeadersRow();
+            for (int i = 0; i < (int)config.NavAgentTypes.size(); ++i)
+            {
+                auto& type = config.NavAgentTypes[i];
+                ImGui::PushID(i);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                typesChanged |= ImGui::InputText("##name", &type.Name);
+                typesEdited |= ImGui::IsItemDeactivatedAfterEdit();
+                float* values[4] = { &type.Radius, &type.Height, &type.StepHeight, &type.MaxSlope };
+                const float limits[4] = { 10.0f, 20.0f, 5.0f, 89.0f };
+                for (int k = 0; k < 4; ++k)
+                {
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::PushID(k);
+                    ImGui::DragFloat("##v", values[k], k == 3 ? 0.5f : 0.01f, 0.0f, limits[k], k == 3 ? "%.0f deg" : "%.2f");
+                    typesEdited |= ImGui::IsItemDeactivatedAfterEdit();
+                    ImGui::PopID();
+                }
+                ImGui::TableNextColumn();
+                if (ImGui::SmallButton("x")) remove = i;
+                ImGui::SetItemTooltip("Remove the type (surfaces and agents of it become Any; types after it move up)");
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (remove >= 0)
+        {
+            // Components keep their place in the list: those of the removed type become Any, later ones move up.
+            config.NavAgentTypes.erase(config.NavAgentTypes.begin() + remove);
+            auto renumber = [&](int32_t& type) { type = type == remove + 1 ? 0 : type > remove + 1 ? type - 1 : type; };
+            for (auto [e, s] : reg.ViewOf<NavMeshSurfaceComponent>()) renumber(s.AgentType);
+            for (auto [e, a] : reg.ViewOf<NavMeshAgentComponent>()) renumber(a.AgentType);
+            m_Ctx.MarkDirty();
+            typesChanged = typesEdited = true;
+        }
+        if (ImGui::Button("+ Agent Type"))
+        {
+            ProjectConfig::NavAgentType type;
+            type.Name = "Agent Type " + std::to_string(config.NavAgentTypes.size() + 1);
+            config.NavAgentTypes.push_back(type);
+            typesChanged = typesEdited = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Bake again after changing a type's sizes.");
+        if (typesChanged) Navigation::ApplyAreaNames();
+        if (typesEdited) Project::Save();
         ImGui::End();
     }
 }
