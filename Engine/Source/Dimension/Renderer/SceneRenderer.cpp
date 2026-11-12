@@ -3759,10 +3759,17 @@ namespace Dimension
             bool local = ps.SimulationSpace == ParticleSpace::Local;
             float worldScale = local ? glm::length(glm::vec3(t.World[0])) : 1.0f;
             uint32_t trailTexture = AssetManager::GetParticleTexture()->GetBindlessIndex();
+            // Points and directions to world space in plain floats (thousands of particles a frame, Debug builds too).
+            const float* w = &t.World[0][0];
+            auto toWorld = [w](const glm::vec3& v, float one) {
+                return glm::vec3(w[0] * v.x + w[4] * v.y + w[8] * v.z + w[12] * one, w[1] * v.x + w[5] * v.y + w[9] * v.z + w[13] * one,
+                                 w[2] * v.x + w[6] * v.y + w[10] * v.z + w[14] * one);
+            };
+            const float* view = &camera.View[0][0];
             for (const auto& p : ps.Particles)
             {
                 float life = std::clamp(p.Age / p.Lifetime, 0.0f, 1.0f);
-                glm::vec3 pos = local ? glm::vec3(t.World * glm::vec4(p.Position, 1.0f)) : p.Position;
+                glm::vec3 pos = local ? toWorld(p.Position, 1.0f) : p.Position;
                 float size = p.Size * ps.SizeOverLifetime.Evaluate(life) * worldScale;
                 glm::vec4 color = p.Color * ps.ColorOverLifetime.Evaluate(life);
                 if (ps.Trails && p.TrailCount > 0)
@@ -3770,59 +3777,76 @@ namespace Dimension
                     // Ribbon of camera-facing segments from the particle back through its history, tapering and fading.
                     glm::vec3 prev = pos;
                     int n = p.TrailCount;
+                    glm::vec3 moved(0.0f); // the head segment's particle end moved with it (the history points stay put)
+                    if (n > 0)
+                    {
+                        glm::vec3 vel = local ? toWorld(p.Velocity, 0.0f) : p.Velocity;
+                        moved = glm::vec3(vel.x * dt, vel.y * dt, vel.z * dt);
+                    }
                     for (int k = 0; k < n; ++k)
                     {
-                        glm::vec3 q = local ? glm::vec3(t.World * glm::vec4(p.Trail[k], 1.0f)) : p.Trail[k];
-                        glm::vec3 axis = q - prev;
-                        if (glm::dot(axis, axis) > 1e-8f)
+                        glm::vec3 q = local ? toWorld(p.Trail[k], 1.0f) : p.Trail[k];
+                        float ax = q.x - prev.x, ay = q.y - prev.y, az = q.z - prev.z;
+                        if (ax * ax + ay * ay + az * az > 1e-8f)
                         {
-                            glm::vec3 mid = (q + prev) * 0.5f;
-                            glm::vec3 side = glm::cross(axis, camera.Position - mid);
+                            float mx = (q.x + prev.x) * 0.5f, my = (q.y + prev.y) * 0.5f, mz = (q.z + prev.z) * 0.5f;
+                            float tx = camera.Position.x - mx, ty = camera.Position.y - my, tz = camera.Position.z - mz;
+                            float sx = ay * tz - az * ty, sy = az * tx - ax * tz, sz = ax * ty - ay * tx; // cross(axis, to camera)
                             float fade = 1.0f - (float)k / n;
                             float width = size * ps.TrailWidth * fade;
-                            if (glm::dot(side, side) > 1e-10f && width > 0.0f)
+                            float side2 = sx * sx + sy * sy + sz * sz;
+                            if (side2 > 1e-10f && width > 0.0f)
                             {
-                                side = glm::normalize(side) * width;
-                                SpriteDraw seg;
-                                seg.Transform = glm::mat4(glm::vec4(axis, 0), glm::vec4(side, 0), glm::vec4(forward, 0), glm::vec4(mid, 1));
-                                seg.Color = ToLinear(color * glm::vec4(1.0f, 1.0f, 1.0f, fade));
+                                float scale = width / std::sqrt(side2);
+                                sx *= scale, sy *= scale, sz *= scale;
+                                SpriteDraw& seg = m_Sprites.emplace_back();
+                                float* m = &seg.Transform[0][0];
+                                m[0] = ax, m[1] = ay, m[2] = az, m[3] = 0.0f;
+                                m[4] = sx, m[5] = sy, m[6] = sz, m[7] = 0.0f;
+                                m[8] = forward.x, m[9] = forward.y, m[10] = forward.z, m[11] = 0.0f;
+                                m[12] = mx, m[13] = my, m[14] = mz, m[15] = 1.0f;
+                                seg.Color = ToLinear(glm::vec4(color.r, color.g, color.b, color.a * fade));
                                 seg.UVMin = { 0.5f, 1.0f }; // soft falloff across the width, constant along the length
                                 seg.UVMax = { 0.5f, 0.0f };
                                 seg.Texture = trailTexture;
                                 seg.Entity = e.Index + 1;
                                 seg.Order = ps.SortingOrder;
-                                seg.Depth = (camera.View * glm::vec4(mid, 1.0f)).z;
+                                seg.Depth = view[2] * mx + view[6] * my + view[10] * mz + view[14];
                                 seg.Additive = ps.Blend == ParticleBlend::Additive;
                                 seg.MotionKind = 2;
                                 if (k == 0)
                                 {
-                                    // The segment at the particle: that end moved with it (the history points stay put).
-                                    glm::vec3 moved = (local ? glm::vec3(t.World * glm::vec4(p.Velocity, 0.0f)) : p.Velocity) * dt;
-                                    static const glm::vec4 kCorners[4] = { { -0.5f, -0.5f, 0, 1 }, { 0.5f, -0.5f, 0, 1 }, { 0.5f, 0.5f, 0, 1 }, { -0.5f, 0.5f, 0, 1 } };
+                                    // The segment at the particle: its corners at -x (the particle's end) moved with it.
+                                    const float cx[4] = { -0.5f, 0.5f, 0.5f, -0.5f }, cy[4] = { -0.5f, -0.5f, 0.5f, 0.5f };
                                     for (int i = 0; i < 4; ++i)
-                                        seg.Before[i] = glm::vec3(seg.Transform * kCorners[i]) - (kCorners[i].x < 0.0f ? moved : glm::vec3(0.0f));
+                                    {
+                                        glm::vec3 corner(ax * cx[i] + sx * cy[i] + mx, ay * cx[i] + sy * cy[i] + my, az * cx[i] + sz * cy[i] + mz);
+                                        seg.Before[i] = cx[i] < 0.0f ? glm::vec3(corner.x - moved.x, corner.y - moved.y, corner.z - moved.z) : corner;
+                                    }
                                     seg.MotionKind = moved == glm::vec3(0.0f) ? 2 : 3;
                                 }
-                                m_Sprites.push_back(seg);
                             }
                         }
                         prev = q;
                     }
                 }
                 float c = std::cos(p.Rotation), s = std::sin(p.Rotation);
-                glm::vec3 r = (right * c + up * s) * size, u = (up * c - right * s) * size;
-                SpriteDraw d;
-                d.Transform = glm::mat4(glm::vec4(r, 0), glm::vec4(u, 0), glm::vec4(forward, 0), glm::vec4(pos, 1));
+                SpriteDraw& d = m_Sprites.emplace_back();
+                float* m = &d.Transform[0][0];
+                m[0] = (right.x * c + up.x * s) * size, m[1] = (right.y * c + up.y * s) * size, m[2] = (right.z * c + up.z * s) * size, m[3] = 0.0f;
+                m[4] = (up.x * c - right.x * s) * size, m[5] = (up.y * c - right.y * s) * size, m[6] = (up.z * c - right.z * s) * size, m[7] = 0.0f;
+                m[8] = forward.x, m[9] = forward.y, m[10] = forward.z, m[11] = 0.0f;
+                m[12] = pos.x, m[13] = pos.y, m[14] = pos.z, m[15] = 1.0f;
                 d.Color = ToLinear(color);
                 ps.SheetUV(ps.SheetFrame(p), d.UVMin, d.UVMax);
                 d.Texture = texture;
                 d.Entity = e.Index + 1;
                 d.Order = ps.SortingOrder;
-                d.Depth = (camera.View * glm::vec4(pos, 1.0f)).z;
+                d.Depth = view[2] * pos.x + view[6] * pos.y + view[10] * pos.z + view[14];
                 d.Additive = ps.Blend == ParticleBlend::Additive;
                 d.MotionKind = 1;
-                d.Displacement = (local ? glm::vec3(t.World * glm::vec4(p.Velocity, 0.0f)) : p.Velocity) * dt;
-                m_Sprites.push_back(d);
+                glm::vec3 velocity = local ? toWorld(p.Velocity, 0.0f) : p.Velocity;
+                d.Displacement = glm::vec3(velocity.x * dt, velocity.y * dt, velocity.z * dt);
             }
         }
     }
@@ -3967,16 +3991,33 @@ namespace Dimension
             for (SpriteDraw& d : m_Sprites)
                 if (d.MotionKind == 0) d.Occurrence = occurrence[d.Entity]++;
         }
-        std::stable_sort(m_Sprites.begin(), m_Sprites.end(), [](const SpriteDraw& a, const SpriteDraw& b) {
-            if (a.Order != b.Order) return a.Order < b.Order;
-            return a.Depth < b.Depth; // back to front
-        });
+        {
+            // Sorted by order, then back to front, keeping the collected order for ties (a stable sort). The small keys
+            // are sorted and the draws moved once: sorting the large draws themselves was slow (particles).
+            struct Key { int32_t Order; float Depth; uint32_t Index; };
+            std::vector<Key> keys(m_Sprites.size());
+            for (uint32_t i = 0; i < (uint32_t)m_Sprites.size(); ++i) keys[i] = { m_Sprites[i].Order, std::isnan(m_Sprites[i].Depth) ? 0.0f : m_Sprites[i].Depth, i }; // (NaN breaks the ordering)
+            std::sort(keys.begin(), keys.end(), [](const Key& a, const Key& b) {
+                if (a.Order != b.Order) return a.Order < b.Order;
+                if (a.Depth != b.Depth) return a.Depth < b.Depth;
+                return a.Index < b.Index;
+            });
+            bool sorted = true;
+            for (uint32_t i = 0; i < (uint32_t)keys.size() && sorted; ++i) sorted = keys[i].Index == i;
+            if (!sorted)
+            {
+                std::vector<SpriteDraw> ordered;
+                ordered.reserve(m_Sprites.size());
+                for (const Key& k : keys) ordered.push_back(std::move(m_Sprites[k.Index]));
+                m_Sprites.swap(ordered);
+            }
+        }
 
         size_t count = m_Sprites.size();
         TransientAllocation vb = RenderDevice::Get().AllocateTransient(count * 4 * sizeof(SpriteVertex));
         if (!vb) return;
         auto* v = (SpriteVertex*)vb.Data;
-        const glm::vec4 corners[4] = { { -0.5f, -0.5f, 0, 1 }, { 0.5f, -0.5f, 0, 1 }, { 0.5f, 0.5f, 0, 1 }, { -0.5f, 0.5f, 0, 1 } };
+        const float cornerX[4] = { -0.5f, 0.5f, 0.5f, -0.5f }, cornerY[4] = { -0.5f, -0.5f, 0.5f, 0.5f };
         for (auto& s : m_Sprites)
         {
             if (s.HasCorners)
@@ -3985,8 +4026,20 @@ namespace Dimension
                 continue;
             }
             glm::vec2 uvs[4] = { { s.UVMin.x, s.UVMin.y }, { s.UVMax.x, s.UVMin.y }, { s.UVMax.x, s.UVMax.y }, { s.UVMin.x, s.UVMax.y } };
+            // Transform * (x, y, 0, 1), in plain floats (thousands of particles a frame, Debug builds too).
+            const float* m = &s.Transform[0][0];
             for (int i = 0; i < 4; ++i)
-                *v++ = { glm::vec3(s.Transform * corners[i]), s.Color, uvs[i], s.Texture, s.Entity };
+            {
+                float x = cornerX[i], y = cornerY[i];
+                SpriteVertex& out = *v++;
+                out.Position.x = m[0] * x + m[4] * y + m[12];
+                out.Position.y = m[1] * x + m[5] * y + m[13];
+                out.Position.z = m[2] * x + m[6] * y + m[14];
+                out.Color = s.Color;
+                out.UV = uvs[i];
+                out.Texture = s.Texture;
+                out.Entity = s.Entity;
+            }
         }
 
         VkBuffer buffer = vb.Buffer;

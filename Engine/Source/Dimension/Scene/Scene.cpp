@@ -23,6 +23,7 @@
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Core/Log.h"
 #include "Dimension/Core/Input.h"
+#include <cstring>
 #include <glm/gtx/matrix_decompose.hpp>
 #include "Dimension/Asset/DataAsset.h"
 #include "Dimension/Scene/CameraProjection.h"
@@ -522,9 +523,39 @@ namespace Dimension
 
     // ---- Transforms -------------------------------------------------------------------
 
+    namespace
+    {
+        // a * b on plain floats, summed in glm's order (the same result as glm's operator*, much faster unoptimized).
+        void MultiplyInto(const glm::mat4& a, const glm::mat4& b, glm::mat4& out)
+        {
+            const float* pa = &a[0][0];
+            const float* pb = &b[0][0];
+            float r[16];
+            for (int j = 0; j < 4; ++j)
+                for (int i = 0; i < 4; ++i)
+                    r[j * 4 + i] = pa[i] * pb[j * 4] + pa[4 + i] * pb[j * 4 + 1] + pa[8 + i] * pb[j * 4 + 2] + pa[12 + i] * pb[j * 4 + 3];
+            std::memcpy(&out[0][0], r, sizeof(r));
+        }
+    }
+
     void Scene::UpdateTransforms()
     {
-        for (Entity root : m_Roots) UpdateTransformRecursive(root, glm::mat4(1.0f), true);
+        // Depth first, without recursion; roots skip the multiply by identity.
+        struct Item { Entity E; const glm::mat4* Parent; bool Active; };
+        std::vector<Item> stack;
+        stack.reserve(64);
+        for (auto it = m_Roots.rbegin(); it != m_Roots.rend(); ++it) stack.push_back({ *it, nullptr, true });
+        while (!stack.empty())
+        {
+            Item item = stack.back();
+            stack.pop_back();
+            auto& t = m_Registry.Get<TransformComponent>(item.E);
+            if (item.Parent) MultiplyInto(*item.Parent, t.GetLocalMatrix(), t.World);
+            else t.World = t.GetLocalMatrix();
+            t.ActiveInHierarchy = item.Active && m_Registry.Get<TagComponent>(item.E).Active;
+            const auto& children = m_Registry.Get<HierarchyComponent>(item.E).Children;
+            for (auto c = children.rbegin(); c != children.rend(); ++c) stack.push_back({ *c, &t.World, t.ActiveInHierarchy });
+        }
     }
 
     glm::mat4 Scene::ComputeWorldMatrix(Entity e) const
@@ -542,7 +573,7 @@ namespace Dimension
     void Scene::UpdateTransformRecursive(Entity e, const glm::mat4& parentWorld, bool parentActive)
     {
         auto& t = m_Registry.Get<TransformComponent>(e);
-        t.World = parentWorld * t.GetLocalMatrix();
+        MultiplyInto(parentWorld, t.GetLocalMatrix(), t.World);
         t.ActiveInHierarchy = parentActive && m_Registry.Get<TagComponent>(e).Active;
         glm::mat4 world = t.World;
         bool active = t.ActiveInHierarchy;

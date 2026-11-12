@@ -65,9 +65,20 @@ namespace Dimension
         bool ActiveInHierarchy = true;
 
         glm::quat GetRotationQuat() const { return glm::quat(Rotation); }
+        // translate(Position) * toMat4(rotation) * scale(Scale), written out in floats: the transform system runs it for
+        // every object several times a frame, and glm's matrix products are slow in unoptimized builds.
         glm::mat4 GetLocalMatrix() const
         {
-            return glm::translate(glm::mat4(1.0f), Position) * glm::toMat4(GetRotationQuat()) * glm::scale(glm::mat4(1.0f), Scale);
+            glm::quat q = GetRotationQuat();
+            float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z, xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+            float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+            glm::mat4 m(1.0f);
+            float* c = &m[0][0];
+            c[0] = (1.0f - 2.0f * (yy + zz)) * Scale.x, c[1] = 2.0f * (xy + wz) * Scale.x, c[2] = 2.0f * (xz - wy) * Scale.x;
+            c[4] = 2.0f * (xy - wz) * Scale.y, c[5] = (1.0f - 2.0f * (xx + zz)) * Scale.y, c[6] = 2.0f * (yz + wx) * Scale.y;
+            c[8] = 2.0f * (xz + wy) * Scale.z, c[9] = 2.0f * (yz - wx) * Scale.z, c[10] = (1.0f - 2.0f * (xx + yy)) * Scale.z;
+            c[12] = Position.x, c[13] = Position.y, c[14] = Position.z;
+            return m;
         }
         glm::vec3 GetWorldPosition() const { return glm::vec3(World[3]); }
         glm::vec3 Forward() const { return glm::normalize(glm::vec3(World * glm::vec4(0, 0, -1, 0))); }

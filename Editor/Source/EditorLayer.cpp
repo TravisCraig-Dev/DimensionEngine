@@ -175,9 +175,18 @@ namespace Editor
         m_ResetLayout = !fs::exists(m_IniPath);
 
         EditorPreferences::Get().Load();
-        // The editor's quality level: this session's (--quality), else the one chosen last, else the project's default.
+        // The editor's quality level: this session's (--quality), else the one chosen last (saved from the toolbar), else
+        // Medium (the project's level named so, else its second), whatever the project's default for builds is.
         if (m_Options.Quality >= 0) Quality::SetCurrent(m_Options.Quality);
         else if (EditorPreferences::Get().QualityLevel >= 0) Quality::SetCurrent(EditorPreferences::Get().QualityLevel);
+        else
+        {
+            const auto& levels = Quality::Levels();
+            int medium = std::min(1, std::max((int)levels.size() - 1, 0));
+            for (int i = 0; i < (int)levels.size(); ++i)
+                if (levels[i].Name == "Medium") { medium = i; break; }
+            Quality::SetCurrent(medium);
+        }
         Shortcuts::Load(EditorPreferences::Get().Shortcuts);
         if (m_Options.Theme >= 0) EditorPreferences::Get().Theme = m_Options.Theme; // not saved unless Preferences change
         ApplyPreferences();

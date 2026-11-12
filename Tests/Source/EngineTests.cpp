@@ -197,6 +197,46 @@ namespace
         CHECK(r.Get<Position>(b).X == 5.0f); // deep copy
     }
 
+    // The transform system's hand-written matrices (local TRS and the parent product) match glm's.
+    void TestTransformMatrices()
+    {
+        auto same = [](const glm::mat4& a, const glm::mat4& b) {
+            for (int c = 0; c < 4; ++c)
+                for (int r = 0; r < 4; ++r)
+                    if (std::abs(a[c][r] - b[c][r]) > 1e-5f * std::max(1.0f, std::abs(b[c][r]))) return false;
+            return true;
+        };
+        TransformComponent t;
+        t.Position = { 3.0f, -2.0f, 7.5f };
+        t.Rotation = { 0.4f, -1.1f, 2.3f };
+        t.Scale = { 2.0f, 0.5f, -1.5f };
+        glm::mat4 expected = glm::translate(glm::mat4(1.0f), t.Position) * glm::toMat4(t.GetRotationQuat()) * glm::scale(glm::mat4(1.0f), t.Scale);
+        CHECK(same(t.GetLocalMatrix(), expected));
+
+        // A three-deep chain: each world matrix is its parent's times its own local one; inactive parents carry down.
+        Scene scene("Test");
+        auto& reg = scene.GetRegistry();
+        Entity a = scene.CreateEntity("A"), b = scene.CreateEntity("B"), c = scene.CreateEntity("C"), d = scene.CreateEntity("D");
+        scene.SetParent(b, a);
+        scene.SetParent(c, b);
+        scene.SetParent(d, a);
+        reg.Get<TransformComponent>(a) = t;
+        reg.Get<TransformComponent>(b).Position = { 1.0f, 2.0f, 3.0f };
+        reg.Get<TransformComponent>(b).Rotation = { 0.0f, 0.7f, 0.0f };
+        reg.Get<TransformComponent>(c).Scale = { 3.0f, 3.0f, 3.0f };
+        reg.Get<TransformComponent>(c).Rotation = { -0.3f, 0.0f, 0.9f };
+        reg.Get<TagComponent>(b).Active = false;
+        scene.UpdateTransforms();
+        auto local = [&](Entity e) { return reg.Get<TransformComponent>(e).GetLocalMatrix(); };
+        CHECK(same(reg.Get<TransformComponent>(a).World, local(a)));
+        CHECK(same(reg.Get<TransformComponent>(b).World, local(a) * local(b)));
+        CHECK(same(reg.Get<TransformComponent>(c).World, local(a) * local(b) * local(c)));
+        CHECK(same(reg.Get<TransformComponent>(c).World, scene.ComputeWorldMatrix(c)));
+        CHECK(same(reg.Get<TransformComponent>(d).World, local(a) * local(d)));
+        CHECK(reg.Get<TransformComponent>(a).ActiveInHierarchy && !reg.Get<TransformComponent>(b).ActiveInHierarchy);
+        CHECK(!reg.Get<TransformComponent>(c).ActiveInHierarchy && reg.Get<TransformComponent>(d).ActiveInHierarchy);
+    }
+
     void TestHierarchy()
     {
         Scene scene("Test");
@@ -16732,6 +16772,7 @@ int main(int argc, char** argv)
     Run("Views", TestViews);
     Run("Registry clone", TestClonePreservesHandles);
     Run("Scene hierarchy", TestHierarchy);
+    Run("Transform matrices", TestTransformMatrices);
     Run("Serialization round trip", TestSerializationRoundTrip);
     Run("Duplicate entity", TestDuplicateRemapsReferences);
     Run("Script runtime", TestScriptsRuntime);

@@ -7,18 +7,30 @@ namespace Dimension
     bool OccluderDepth::Hides(const glm::vec3& center, const glm::vec3& extents) const
     {
         if (!IsValid()) return false;
-        glm::vec2 lo(1e30f), hi(-1e30f);
-        float nearest = 1e30f;
+        // The corners in clip space: the center's, plus or minus each axis's column scaled by the extent (plain
+        // floats: every render item is tested each frame, Debug builds too).
+        const float* m = &ViewProj[0][0];
+        float base[4], axis[3][4];
+        for (int r = 0; r < 4; ++r)
+        {
+            base[r] = m[r] * center.x + m[4 + r] * center.y + m[8 + r] * center.z + m[12 + r];
+            axis[0][r] = m[r] * extents.x;
+            axis[1][r] = m[4 + r] * extents.y;
+            axis[2][r] = m[8 + r] * extents.z;
+        }
+        float loX = 1e30f, loY = 1e30f, hiX = -1e30f, hiY = -1e30f, nearest = 1e30f;
         for (int i = 0; i < 8; ++i)
         {
-            glm::vec3 corner = center + extents * glm::vec3((i & 1) ? 1.0f : -1.0f, (i & 2) ? 1.0f : -1.0f, (i & 4) ? 1.0f : -1.0f);
-            glm::vec4 clip = ViewProj * glm::vec4(corner, 1.0f);
-            if (clip.w <= 1e-4f) return false; // reaches behind the camera
-            glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            lo = glm::min(lo, glm::vec2(ndc));
-            hi = glm::max(hi, glm::vec2(ndc));
-            nearest = std::min(nearest, ndc.z);
+            float sx = (i & 1) ? 1.0f : -1.0f, sy = (i & 2) ? 1.0f : -1.0f, sz = (i & 4) ? 1.0f : -1.0f;
+            float clip[4];
+            for (int r = 0; r < 4; ++r) clip[r] = base[r] + sx * axis[0][r] + sy * axis[1][r] + sz * axis[2][r];
+            if (clip[3] <= 1e-4f) return false; // reaches behind the camera
+            float inv = 1.0f / clip[3], nx = clip[0] * inv, ny = clip[1] * inv, nz = clip[2] * inv;
+            loX = std::min(loX, nx), hiX = std::max(hiX, nx);
+            loY = std::min(loY, ny), hiY = std::max(hiY, ny);
+            nearest = std::min(nearest, nz);
         }
+        glm::vec2 lo(loX, loY), hi(hiX, hiY);
         if (nearest <= 0.0f) return false;
         if (hi.x < -1.0f || lo.x > 1.0f || hi.y < -1.0f || lo.y > 1.0f) return false; // off screen: the frustum decides
         if ((hi.x - lo.x) * (hi.y - lo.y) > 2.0f) return false;                        // over half the view

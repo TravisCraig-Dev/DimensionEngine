@@ -3,6 +3,8 @@
 #include "Dimension/Physics/Physics3D.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
+#include <array>
+#include <execution>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -226,7 +228,13 @@ namespace Dimension::Water
         // The waves die down between 6 and 18 wave lengths away.
         float fadeStart = std::max(water.WaveLength, 0.1f) * 6.0f, fadeEnd = std::max(water.WaveLength, 0.1f) * 18.0f;
         out.resize(1 + (size_t)kOceanRings * kOceanSegments);
-        for (int k = 0; k <= kOceanRings; ++k)
+        // ~18k vertices every frame: the rings are spread over the cores (each writes only its own vertices).
+        static const auto rings = [] {
+            std::array<int, kOceanRings + 1> r{};
+            for (int k = 0; k <= kOceanRings; ++k) r[k] = k;
+            return r;
+        }();
+        std::for_each(std::execution::par, rings.begin(), rings.end(), [&](int k)
         {
             float r = radius * std::pow((float)k / kOceanRings, kOceanSpread);
             float strength = moving ? std::clamp((fadeEnd - r) / (fadeEnd - fadeStart), 0.0f, 1.0f) : 0.0f;
@@ -250,7 +258,7 @@ namespace Dimension::Water
                 v.UV = rest * 0.1f; // a texture tiles every 10 m
                 v.Tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
             }
-        }
+        });
     }
 
     Ref<Mesh> SurfaceMesh(const WaterVolumeComponent& water)

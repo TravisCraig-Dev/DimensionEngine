@@ -63,4 +63,21 @@ set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 
+# Debug builds compile the libraries above optimized (still with debug symbols and the debug runtime): unoptimized
+# Jolt, Box2D, glslang and Opus made physics alone take ~45 ms a frame in Demo3D. The engine's own code stays /Od.
+# Jolt overrides the flags itself unless OVERRIDE_CXX_FLAGS is off. Turn DIM_OPTIMIZE_DEPENDENCIES off to step into them.
+option(DIM_OPTIMIZE_DEPENDENCIES "Compile third-party libraries optimized in Debug builds" ON)
+if (MSVC AND DIM_OPTIMIZE_DEPENDENCIES)
+    set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
+    set(DIM_SAVED_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+    set(DIM_SAVED_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    set(CMAKE_C_FLAGS_DEBUG "/Zi /O2 /Ob2")
+    set(CMAKE_CXX_FLAGS_DEBUG "/Zi /O2 /Ob2")
+endif()
+
 FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf ufbx box2d jolt miniaudio vhacd ogg opus opusfile msdfgen glslang)
+
+if (MSVC AND DIM_OPTIMIZE_DEPENDENCIES)
+    set(CMAKE_C_FLAGS_DEBUG "${DIM_SAVED_C_FLAGS_DEBUG}")
+    set(CMAKE_CXX_FLAGS_DEBUG "${DIM_SAVED_CXX_FLAGS_DEBUG}")
+endif()
