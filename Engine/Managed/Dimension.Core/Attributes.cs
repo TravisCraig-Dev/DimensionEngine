@@ -67,4 +67,38 @@ namespace Dimension
         public readonly Type[] Types;
         public RequireComponentAttribute(params Type[] types) { Types = types; }
     }
+
+    /// <summary>When a [RuntimeInitializeOnLoadMethod] runs as play (or the game) starts, in this order.</summary>
+    public enum RuntimeInitializeLoadType
+    {
+        /// <summary>After the first scene's objects have started (OnCreate).</summary>
+        AfterSceneLoad = 0,
+        /// <summary>Before the first scene's objects start (its objects exist; new ones made here start with them).</summary>
+        BeforeSceneLoad = 1,
+        /// <summary>As the scripts are ready, before anything of the scene.</summary>
+        AfterAssembliesLoaded = 2,
+        /// <summary>Before AfterAssembliesLoaded (no splash screen here: kept for Unity's code).</summary>
+        BeforeSplashScreen = 3,
+        /// <summary>First of all: reset static state of your systems here (as Unity's, when domain reload is off).</summary>
+        SubsystemRegistration = 4,
+    }
+
+    /// <summary>A static method without parameters run once as play starts in the editor and as a built game starts
+    /// (like Unity's), at its load type's point: set up or reset static state, make objects every scene needs.</summary>
+    [AttributeUsage(AttributeTargets.Method)]
+    public sealed class RuntimeInitializeOnLoadMethodAttribute : Attribute
+    {
+        public RuntimeInitializeLoadType LoadType { get; }
+        public RuntimeInitializeOnLoadMethodAttribute() : this(RuntimeInitializeLoadType.AfterSceneLoad) { }
+        public RuntimeInitializeOnLoadMethodAttribute(RuntimeInitializeLoadType loadType) { LoadType = loadType; }
+    }
+
+    /// <summary>A class whose static constructor runs whenever the editor loads the scripts (at start, after each
+    /// recompile), like Unity's (editor only; not in built games).</summary>
+    [AttributeUsage(AttributeTargets.Class)]
+    public sealed class InitializeOnLoadAttribute : Attribute { }
+
+    /// <summary>A static method without parameters run whenever the editor loads the scripts (editor only).</summary>
+    [AttributeUsage(AttributeTargets.Method)]
+    public sealed class InitializeOnLoadMethodAttribute : Attribute { }
 }

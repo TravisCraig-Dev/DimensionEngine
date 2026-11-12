@@ -386,6 +386,8 @@ namespace Dimension
             const char* (*RunTests)(int, const char*);
             // A play-mode test: 0 begin (scene, name), 1 resume (dt), 2 stop; null while it runs, then JSON.
             const char* (*PlayTest)(int, void*, const char*, float);
+            // [RuntimeInitializeOnLoadMethod]s: phase 0 before the first scene's objects start, 1 after.
+            void (*RunRuntimeInitializers)(void*, int);
         };
         // Where gizmos go while a script draws them (null: they are dropped).
         std::vector<CSharpRuntime::GizmoLine>* s_GizmoSink = nullptr;
@@ -3070,6 +3072,11 @@ namespace Dimension
         return json ? json : "[]";
     }
 
+    void CSharpRuntime::RunRuntimeInitializers(Scene& scene, bool afterSceneLoad)
+    {
+        if (s_Available && s_Managed.RunRuntimeInitializers) s_Managed.RunRuntimeInitializers(&scene, afterSceneLoad ? 1 : 0);
+    }
+
     std::string CSharpRuntime::PlayTest(int op, Scene& scene, const std::string& name, float dt)
     {
         if (!s_Available || !s_Managed.PlayTest) return op == 0 ? std::string() : R"({"passed":false,"message":"C# scripting is not available"})";
@@ -3251,6 +3258,7 @@ namespace Dimension
     bool CSharpRuntime::LoadScripts(const fs::path&, bool) { return false; }
     void CSharpRuntime::UnloadScripts() {}
     std::string CSharpRuntime::RunTests(bool, const std::string&) { return "[]"; }
+    void CSharpRuntime::RunRuntimeInitializers(Scene&, bool) {}
     std::string CSharpRuntime::PlayTest(int, Scene&, const std::string&, float) { return R"({"passed":false,"message":"C# scripting is not available"})"; }
     const fs::path& CSharpRuntime::GetScriptsPath() { static fs::path p; return p; }
     bool CSharpRuntime::ScriptsChangedOnDisk() { return false; }

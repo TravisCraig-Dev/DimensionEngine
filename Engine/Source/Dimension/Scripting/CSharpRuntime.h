@@ -91,6 +91,9 @@ namespace Dimension
         // 1 resumes it once a frame after the scene's update, 2 stops it. "" while it runs (and after op 0), then JSON
         // { passed, ms, message, frames }.
         static std::string PlayTest(int op, Scene& scene, const std::string& name = {}, float dt = 0.0f);
+        // The scripts' [RuntimeInitializeOnLoadMethod]s, once per play session (editor) or game: before the first
+        // scene's objects start (OnRuntimeStart), then after.
+        static void RunRuntimeInitializers(Scene& scene, bool afterSceneLoad);
 
         // `managedDir` contains Dimension.Core.dll and its runtimeconfig.json.
         // Starts .NET: a runtime shipped beside the game (`<managedDir>/../dotnet`, see BundleRuntime) when there is one,

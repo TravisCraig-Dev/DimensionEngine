@@ -246,6 +246,8 @@ namespace Dimension.Interop
         public delegate* unmanaged<int, byte*, byte*> RunTests;
         // A play-mode test (see ScriptHost.PlayTest).
         public delegate* unmanaged<int, IntPtr, byte*, float, byte*> PlayTest;
+        // [RuntimeInitializeOnLoadMethod]s as play starts (see ScriptHost.RunRuntimeInitializers).
+        public delegate* unmanaged<IntPtr, int, void> RunRuntimeInitializers;
     }
 
     internal static unsafe class Native
@@ -313,6 +315,7 @@ namespace Dimension.Interop
                 api->MemberOp = &ScriptHost.MemberOp;
                 api->RunTests = &ScriptHost.RunTests;
                 api->PlayTest = &ScriptHost.PlayTest;
+                api->RunRuntimeInitializers = &ScriptHost.RunRuntimeInitializers;
                 Debug.Log($"C# scripting ready (.NET {Environment.Version}, {System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()})");
                 return 1;
             }

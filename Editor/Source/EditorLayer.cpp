@@ -533,7 +533,9 @@ namespace Editor
             m_Ctx.Sections.RegisterLoaded(*m_Ctx.RuntimeScene); // scenes open alongside play as loaded additively
         }
         m_MixerBeforePlay = AudioMixer::Groups();
+        CSharpRuntime::RunRuntimeInitializers(*m_Ctx.RuntimeScene, false); // [RuntimeInitializeOnLoadMethod] (BeforeSceneLoad...)
         m_Ctx.RuntimeScene->OnRuntimeStart();
+        CSharpRuntime::RunRuntimeInitializers(*m_Ctx.RuntimeScene, true); // (AfterSceneLoad)
         m_Ctx.State = PlayState::Play;
         m_FocusGameView = 3;
         UpdateWindowTitle();

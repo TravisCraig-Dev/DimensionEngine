@@ -876,6 +876,7 @@ namespace Dimension
                 }
                 RegisterDataClasses();
                 RegisterEditorItems();
+                if (fixedLoad == 0) RunEditorInitializers(); // ([InitializeOnLoad]: the editor's loads only)
                 return s_Classes.Count;
             }
             catch (Exception e)
@@ -1348,6 +1349,63 @@ namespace Dimension
                 Debug.LogError($"Running C# tests failed: {e.Message}");
                 return null;
             }
+        }
+
+        private const BindingFlags kStatics = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
+        // [InitializeOnLoad] classes' static constructors and [InitializeOnLoadMethod] methods, as the editor loads the
+        // scripts.
+        private static void RunEditorInitializers()
+        {
+            foreach (Type type in ScriptTypes().OrderBy(t => t.FullName))
+            {
+                try
+                {
+                    if (type.IsDefined(typeof(InitializeOnLoadAttribute), false))
+                        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(type.TypeHandle);
+                    foreach (MethodInfo m in type.GetMethods(kStatics))
+                        if (m.IsDefined(typeof(InitializeOnLoadMethodAttribute), false) && m.GetParameters().Length == 0) m.Invoke(null, null);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"InitializeOnLoad {type.FullName}: {(e is TargetInvocationException t && t.InnerException != null ? t.InnerException : e)}");
+                }
+            }
+        }
+
+        // [RuntimeInitializeOnLoadMethod] methods as play starts: phase 0 everything before the first scene's objects
+        // start (SubsystemRegistration, BeforeSplashScreen, AfterAssembliesLoaded, BeforeSceneLoad, in that order), 1
+        // after (AfterSceneLoad).
+        [UnmanagedCallersOnly]
+        internal static void RunRuntimeInitializers(IntPtr scene, int phase)
+        {
+            try
+            {
+                Native.CurrentScene = scene;
+                var calls = new List<(RuntimeInitializeLoadType Type, MethodInfo Method)>();
+                foreach (Type type in ScriptTypes())
+                    foreach (MethodInfo m in type.GetMethods(kStatics))
+                        if (m.GetCustomAttribute<RuntimeInitializeOnLoadMethodAttribute>() is { } a && m.GetParameters().Length == 0)
+                            if ((phase == 1) == (a.LoadType == RuntimeInitializeLoadType.AfterSceneLoad)) calls.Add((a.LoadType, m));
+                // Unity's order: SubsystemRegistration, AfterAssembliesLoaded, BeforeSplashScreen, BeforeSceneLoad.
+                int Rank(RuntimeInitializeLoadType t) => t switch
+                {
+                    RuntimeInitializeLoadType.SubsystemRegistration => 0,
+                    RuntimeInitializeLoadType.AfterAssembliesLoaded => 1,
+                    RuntimeInitializeLoadType.BeforeSplashScreen => 2,
+                    RuntimeInitializeLoadType.BeforeSceneLoad => 3,
+                    _ => 4,
+                };
+                foreach (var (t, m) in calls.OrderBy(c => Rank(c.Type)).ThenBy(c => c.Method.DeclaringType.FullName).ThenBy(c => c.Method.Name))
+                {
+                    try { m.Invoke(null, null); }
+                    catch (Exception e)
+                    {
+                        Debug.LogError($"RuntimeInitializeOnLoadMethod {m.DeclaringType.FullName}.{m.Name}: {(e is TargetInvocationException ti && ti.InnerException != null ? ti.InnerException : e)}");
+                    }
+                }
+            }
+            catch (Exception e) { Debug.LogError($"RuntimeInitializeOnLoadMethod: {e}"); }
         }
 
         // A play-mode test in the running play session's scene: op 0 begins the [PlayTest] of that full name, 1 resumes it

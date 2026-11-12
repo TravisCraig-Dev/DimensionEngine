@@ -88,7 +88,9 @@ namespace
             Prefabs::SyncAll(*m_Scene);
             auto size = Application::Get().GetWindow().GetFramebufferSize();
             m_Target = MakeScope<SceneRenderTarget>(size.x, size.y);
+            CSharpRuntime::RunRuntimeInitializers(*m_Scene, false); // [RuntimeInitializeOnLoadMethod] (BeforeSceneLoad...)
             m_Scene->OnRuntimeStart();
+            CSharpRuntime::RunRuntimeInitializers(*m_Scene, true); // (AfterSceneLoad)
         }
 
         void OnDetach() override
