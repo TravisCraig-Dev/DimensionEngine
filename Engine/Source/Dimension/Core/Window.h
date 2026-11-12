@@ -12,6 +12,7 @@ namespace Dimension
         uint32_t Width = 1600, Height = 900;
         bool Maximized = false;
         bool Fullscreen = false; // borderless fullscreen on the primary monitor
+        bool Hidden = false;     // created hidden (the editor shows it once loaded, behind its splash screen)
     };
 
     class Window
@@ -27,6 +28,9 @@ namespace Dimension
         bool ShouldClose() const;
         void SetShouldClose(bool close);
         void SetTitle(const std::string& title);
+        // Shows a window created Hidden (maximized if its spec asked) and brings it to the front.
+        void Show();
+        bool IsVisible() const;
         glm::uvec2 GetFramebufferSize() const;
         bool IsMinimized() const;
         bool IsFocused() const;
@@ -49,6 +53,7 @@ namespace Dimension
     private:
         GLFWwindow* m_Window = nullptr;
         bool m_Fullscreen = false;
+        bool m_ShowMaximized = false;
         int m_WindowedRect[4] = { 100, 100, 1280, 720 }; // restored when leaving fullscreen
     };
 }

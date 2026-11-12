@@ -4,6 +4,7 @@
 #include "EditorLayer.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Core/Profiler.h>
+#include <Dimension/Platform/SplashScreen.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <cstring>
@@ -38,6 +39,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--anim-record")) options.AnimRecord = true;
         else if (!std::strcmp(argv[i], "--package-search") && i + 1 < argc) options.PackageSearch = argv[++i];
         else if (!std::strcmp(argv[i], "--run-tests")) options.RunTests = true;
+        else if (!std::strcmp(argv[i], "--no-splash")) options.NoSplash = true;
         else if (!std::strcmp(argv[i], "--deep-profile")) Dimension::Profiler::SetDeepProfiling(true);
         else if (!std::strcmp(argv[i], "--anim-onion")) options.AnimOnion = true;
         else if (!std::strcmp(argv[i], "--frame-event") && i + 1 < argc) options.FrameEvent = std::atoi(argv[++i]);
@@ -89,15 +91,28 @@ int main(int argc, char** argv)
         else projectDir = argv[i];
     }
 
+    // The splash screen until the editor is ready to show the scene (EditorLayer closes it); the main window waits
+    // hidden behind it. Not for batch builds (no window is ever shown).
+    if (!options.NoSplash && options.BuildFolder.empty())
+    {
+        std::string project = fs::absolute(projectDir).lexically_normal().filename().string();
+        if (project.empty()) project = fs::absolute(projectDir).lexically_normal().parent_path().filename().string();
+        SplashScreen::Show("Dimension Editor", project);
+        SplashScreen::SetStatus("Starting the renderer...");
+        spec.Window.Hidden = true;
+    }
     {
         Application app(spec);
+        SplashScreen::SetStatus("Opening the project (importing changed assets)...");
         if (!Project::Open(projectDir))
         {
+            SplashScreen::Close();
             Log::Error("Could not open project '{}'", projectDir.string());
             return 1;
         }
         app.PushLayer(MakeScope<Editor::EditorLayer>(options));
         app.Run();
+        SplashScreen::Close(); // (quit before it was ready)
         app.PopAllLayers(); // scenes may hold objects created by the game module
         GameModule::Unload();
     }

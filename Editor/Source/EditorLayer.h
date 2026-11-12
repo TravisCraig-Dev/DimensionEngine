@@ -34,6 +34,7 @@ namespace Editor
         int LinePoint = -1;       // --line-point N: start editing point N of the selected Line Renderer
         std::string PackageSearch; // --package-search "term": with --open Packages, that search run
         bool RunTests = false;     // --run-tests: with --open "Test Runner", every test run once the scripts load
+        bool NoSplash = false;     // --no-splash: the editor window shows at once (no splash screen while loading)
         std::string AnimKey;      // --anim-key "Joint,rotation|position,axis,key": with --open Animation, that curve key selected
         bool AnimRecord = false;  // --anim-record: with --open Animation, record mode on from the start
         bool AnimOnion = false;   // --anim-onion: with --open Animation, a preview with onion skin
@@ -361,6 +362,10 @@ namespace Editor
         fs::file_time_type m_CSharpBuiltSources{};
         float m_CSharpCheckTimer = 0.0f;
         bool m_CSharpReloadPending = false;
+        // Start-up: frames drawn since attaching; the splash screen closes (and the window shows) once the scene has
+        // been drawn and a script build started while loading has finished and loaded.
+        int m_StartupFrames = 0;
+        void UpdateStartup();
 
         bool m_ShowHierarchy = true, m_ShowInspector = true, m_ShowContent = true, m_ShowConsole = true;
         bool m_ShowAnimator = true;

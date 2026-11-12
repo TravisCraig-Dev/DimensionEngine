@@ -1,6 +1,7 @@
 #include <Dimension/Terrain/Terrain.h>
 #include <chrono>
 #include <sstream>
+#include <Dimension/Platform/SplashScreen.h>
 #include <Dimension/Asset/AssetPack.h>
 #include "EditorLayer.h"
 #include "Dimension/Platform/AppIcon.h"
@@ -219,14 +220,17 @@ namespace Editor
         }
         else if (m_Options.OpenWindow == "Tile Palette") m_ShowTilePalette = true;
 
+        SplashScreen::SetStatus("Loading the game module...");
         LoadGameModule();
         // Imports of files that changed or are gone (their new import gets a new entry).
         if (size_t stale = ImportCache::ClearUnused(Project::GetAssetsDirectory())) Log::Info("Removed {} stale import cache entries", stale);
+        SplashScreen::SetStatus("Loading the C# scripts...");
         InitCSharp();
         m_SceneTarget = MakeScope<SceneRenderTarget>(m_SceneViewSize.x, m_SceneViewSize.y);
         m_GameTarget = MakeScope<SceneRenderTarget>(m_GameViewSize.x, m_GameViewSize.y);
 
         fs::path startScene = !m_Options.ScenePath.empty() ? fs::path(m_Options.ScenePath) : AssetManager::GetAbsolutePath(Project::GetConfig().StartScene);
+        if (!startScene.empty() && fs::exists(startScene)) SplashScreen::SetStatus("Opening " + startScene.filename().string() + "...");
         if (!startScene.empty() && fs::exists(startScene)) OpenScene(startScene);
         else NewScene();
 
@@ -582,8 +586,27 @@ namespace Editor
 
     // ---- Frame ------------------------------------------------------------------------------
 
+    void EditorLayer::UpdateStartup()
+    {
+        Window& window = Application::Get().GetWindow();
+        if (window.IsVisible() && !SplashScreen::IsShown()) return;
+        ++m_StartupFrames;
+        static const auto started = std::chrono::steady_clock::now();
+        float waited = std::chrono::duration<float>(std::chrono::steady_clock::now() - started).count();
+        bool building = m_CSharpBuild && m_CSharpBuild->load() == 1;
+        if (building) SplashScreen::SetStatus("Compiling the C# scripts...");
+        else if (m_StartupFrames < 3) SplashScreen::SetStatus("Preparing the scene view...");
+        // Ready: the scene drawn (a few frames: pipelines and textures made), scripts built and loaded. A build that
+        // takes very long (a first NuGet restore) does not hold the editor back past a minute.
+        bool ready = m_StartupFrames >= 3 && ((!building && !m_CSharpReloadPending) || waited > 60.0f);
+        if (!ready) return;
+        window.Show();
+        SplashScreen::Close();
+    }
+
     void EditorLayer::OnUpdate(float dt)
     {
+        UpdateStartup();
         if (!m_Options.OpenSceneLater.empty() && ++m_AutomationFrames == 30)
         {
             fs::path p = m_Options.OpenSceneLater;

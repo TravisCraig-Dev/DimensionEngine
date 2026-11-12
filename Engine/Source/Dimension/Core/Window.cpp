@@ -106,6 +106,8 @@ namespace Dimension
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_MAXIMIZED, spec.Maximized ? GLFW_TRUE : GLFW_FALSE);
+        glfwWindowHint(GLFW_VISIBLE, spec.Hidden ? GLFW_FALSE : GLFW_TRUE);
+        m_ShowMaximized = spec.Hidden && spec.Maximized;
         m_Window = glfwCreateWindow((int)spec.Width, (int)spec.Height, spec.Title.c_str(), nullptr, nullptr);
         DIM_ASSERT(m_Window, "Failed to create window");
         glfwSetWindowUserPointer(m_Window, this);
@@ -135,6 +137,16 @@ namespace Dimension
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)&ImeProc);
 #endif
     }
+
+    void Window::Show()
+    {
+        if (glfwGetWindowAttrib(m_Window, GLFW_VISIBLE)) return;
+        glfwShowWindow(m_Window);
+        if (m_ShowMaximized) glfwMaximizeWindow(m_Window);
+        glfwFocusWindow(m_Window);
+    }
+
+    bool Window::IsVisible() const { return glfwGetWindowAttrib(m_Window, GLFW_VISIBLE) == GLFW_TRUE; }
 
     Window::~Window()
     {
