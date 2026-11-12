@@ -30,6 +30,7 @@ namespace Dimension
             std::string MenuPath, Title, Inspects;
             bool SceneGUI = false;     // an Inspector overriding OnSceneGUI
             bool InspectorGUI = false; // ... and OnInspectorGUI (else the script's fields show as usual)
+            int Settings = 0;          // a [SettingsProvider] page: 1 in Project Settings, 2 in Preferences (Title its label)
         };
         static const std::vector<EditorItem>& GetEditorItems();
         // Runs a menu item, or draws a window's contents (inside the caller's window), with `scene` as the scene.

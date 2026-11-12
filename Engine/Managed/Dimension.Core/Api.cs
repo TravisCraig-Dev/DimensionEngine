@@ -1465,6 +1465,8 @@ namespace Dimension
         public static string ProductName => Native.FromUtf8(Native.Api.AppText(0)) ?? "";
         public static string Version => Native.FromUtf8(Native.Api.AppText(1)) ?? "";
         public static string CompanyName => Native.FromUtf8(Native.Api.AppText(2)) ?? "";
+        /// <summary>The project's folder (the one with Project.dproj and Assets).</summary>
+        public static string ProjectPath => Native.FromUtf8(Native.Api.AppText(3)) ?? "";
 
         /// <summary>
         /// The folder for the player's data (save games, settings): <c>%APPDATA%\&lt;product name&gt;</c> in a build, the

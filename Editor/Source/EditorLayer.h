@@ -143,6 +143,7 @@ namespace Editor
         // Play mode
         void Play(bool emptyScene = false); // emptyScene: a play-mode test's (the edited scene stays out of it)
         void Stop();
+        void DrawScriptSettings(int scope); // [SettingsProvider] pages (1 Project Settings, 2 Preferences)
         void TogglePause();
 
         // UI

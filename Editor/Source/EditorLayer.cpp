@@ -1975,7 +1975,7 @@ namespace Editor
         add("Navigation/Bake All", [this] { BakeAllNavigation(); });
         for (const auto& item : CSharpRuntime::GetEditorItems())
         {
-            if (!item.Inspects.empty()) continue;
+            if (!item.Inspects.empty() || item.Settings) continue;
             if (item.Window) add(item.MenuPath, [this, title = item.Title] { m_ScriptWindows[title] = true; });
             else add(item.MenuPath, [this, id = item.Id] { CSharpRuntime::CallEditorItem(id, false, m_Ctx.ActiveScene()); });
         }
@@ -3817,6 +3817,7 @@ namespace Editor
                 changed = true;
             }
         }
+        DrawScriptSettings(1); // (the scripts' [SettingsProvider] pages with Scope Project)
         ImGui::TextDisabled("Project folder: %s", Project::GetDirectory().string().c_str());
         if (changed) Project::Save();
         ImGui::End();
@@ -4130,6 +4131,23 @@ namespace Editor
         if (m_Console) m_Console->ClearOnPlay = prefs.ClearConsoleOnPlay;
     }
 
+    // The scripts' [SettingsProvider] pages for a settings window (1 Project Settings, 2 Preferences): a section each.
+    void EditorLayer::DrawScriptSettings(int scope)
+    {
+        for (const auto& item : CSharpRuntime::GetEditorItems())
+        {
+            if (item.Settings != scope) continue;
+            ImGui::PushID(item.Id);
+            if (ImGui::CollapsingHeader(item.Title.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::Indent(4.0f);
+                CSharpRuntime::CallEditorItem(item.Id, true, m_Ctx.ActiveScene());
+                ImGui::Unindent(4.0f);
+            }
+            ImGui::PopID();
+        }
+    }
+
     void EditorLayer::DrawPreferences()
     {
         ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Appearing);
@@ -4198,6 +4216,7 @@ namespace Editor
             changed |= ImGui::Checkbox("##reloadplay", &prefs.ReloadScriptsOnPlay);
             UI::EndProperties();
         }
+        DrawScriptSettings(2);
         ImGui::TextDisabled("Stored in %s", EditorPreferences::FilePath().string().c_str());
         if (changed)
         {
@@ -5547,7 +5566,7 @@ namespace Editor
         // between are submenus. Windows show a check while open.
         for (const auto& item : CSharpRuntime::GetEditorItems())
         {
-            if (!item.Inspects.empty()) continue;
+            if (!item.Inspects.empty() || item.Settings) continue;
             std::vector<std::string> parts;
             for (size_t start = 0; start <= item.MenuPath.size();)
             {
@@ -5577,7 +5596,7 @@ namespace Editor
         // A command from the command line runs once the scripts are in.
         if (!m_Options.MenuCommand.empty())
             for (const auto& item : CSharpRuntime::GetEditorItems())
-                if (!item.Window && item.MenuPath == m_Options.MenuCommand)
+                if (!item.Window && !item.Settings && item.MenuPath == m_Options.MenuCommand)
                 {
                     CSharpRuntime::CallEditorItem(item.Id, false, m_Ctx.ActiveScene());
                     m_Options.MenuCommand.clear();

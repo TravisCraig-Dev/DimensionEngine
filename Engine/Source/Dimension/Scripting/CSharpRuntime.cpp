@@ -1998,7 +1998,7 @@ namespace Dimension
             };
             a.AppText = [](int op) -> const char* {
                 const auto& config = Project::GetConfig();
-                s_StringReturn = op == 0 ? config.Name : op == 1 ? config.Version : config.CompanyName;
+                s_StringReturn = op == 0 ? config.Name : op == 1 ? config.Version : op == 2 ? config.CompanyName : Project::GetDirectory().string();
                 return s_StringReturn.c_str();
             };
             a.InputText = [](int op, int pad) -> const char* {
@@ -2032,6 +2032,7 @@ namespace Dimension
                     item.Inspects = j.value("inspects", std::string());
                     item.SceneGUI = j.value("sceneGUI", false);
                     item.InspectorGUI = j.value("inspectorGUI", false);
+                    item.Settings = j.value("settings", 0);
                     s_EditorItems.push_back(std::move(item));
                 }
                 catch (const std::exception& e)

@@ -121,6 +121,7 @@ namespace Dimension
             public EditorWindow Window;
             public Type InspectorType;
             public Inspector Inspector;
+            public SettingsProvider Provider; // a [SettingsProvider] page
         }
         private static readonly List<EditorItem> s_EditorItems = new();
         // Property drawers by the attribute or field type they draw.
@@ -159,6 +160,26 @@ namespace Dimension
                         s_EditorItems.Add(new EditorItem { Method = m });
                         RegisterEditorItem("menu", item.Path, null);
                     }
+                // [SettingsProvider] pages: a method's SettingsProvider (or array of them), each a section of Project
+                // Settings or Preferences.
+                foreach (MethodInfo m in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                {
+                    if (!m.IsDefined(typeof(SettingsProviderAttribute), false) || m.GetParameters().Length != 0) continue;
+                    object made;
+                    try { made = m.Invoke(null, null); }
+                    catch (Exception e)
+                    {
+                        Debug.LogError($"[SettingsProvider] {type.FullName}.{m.Name}: {(e as TargetInvocationException)?.InnerException ?? e}");
+                        continue;
+                    }
+                    var providers = made switch { SettingsProvider p => new[] { p }, IEnumerable<SettingsProvider> many => many, _ => Array.Empty<SettingsProvider>() };
+                    foreach (SettingsProvider p in providers)
+                    {
+                        if (p == null) continue;
+                        s_EditorItems.Add(new EditorItem { Provider = p });
+                        RegisterEditorItem("settings", p.SettingsPath, p.Label, settings: p.Scope == SettingsScope.Project ? 1 : 2);
+                    }
+                }
                 if (!type.IsAbstract && type.IsSubclassOf(typeof(EditorWindow)))
                 {
                     var window = type.GetCustomAttribute<EditorWindowAttribute>() ?? new EditorWindowAttribute(type.Name);
@@ -176,7 +197,7 @@ namespace Dimension
         }
 
         private static void RegisterEditorItem(string kind, string path, string title, string inspects = null, bool sceneGUI = false,
-                                               bool inspectorGUI = false)
+                                               bool inspectorGUI = false, int settings = 0)
         {
             using var stream = new MemoryStream();
             using (var w = new Utf8JsonWriter(stream))
@@ -189,6 +210,7 @@ namespace Dimension
                 if (inspects != null) w.WriteString("inspects", inspects);
                 if (sceneGUI) w.WriteBoolean("sceneGUI", true);
                 if (inspectorGUI) w.WriteBoolean("inspectorGUI", true);
+                if (settings != 0) w.WriteNumber("settings", settings);
                 w.WriteEndObject();
             }
             byte[] json = stream.ToArray();
@@ -206,6 +228,7 @@ namespace Dimension
                 Native.CurrentScene = scene;
                 EditorItem item = s_EditorItems[id];
                 if (kind == 0 && item.Method != null) item.Method.Invoke(null, null);
+                else if (kind == 1 && item.Provider != null) item.Provider.OnGUI("");
                 else if (kind == 1 && item.WindowType != null)
                 {
                     item.Window ??= (EditorWindow)Activator.CreateInstance(item.WindowType);
