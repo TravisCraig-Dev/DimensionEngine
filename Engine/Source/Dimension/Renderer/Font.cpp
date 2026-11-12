@@ -1,3 +1,6 @@
+#include <array>
+#include <cstdlib>
+#include <chrono>
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Core/Log.h"
@@ -659,6 +662,84 @@ namespace Dimension
         }
     };
 
+    // The baked Latin-1 glyphs of a font, cached per user (%LOCALAPPDATA%\Dimension\FontCache): the atlas rows they
+    // use, the packing position and the glyph metrics, keyed by the font's bytes and the bake settings. Color fonts
+    // (their glyphs in a second atlas) are not cached.
+    namespace
+    {
+        constexpr uint32_t kFontCacheVersion = 1;
+
+        fs::path FontCachePath(const std::vector<uint8_t>& data)
+        {
+            uint64_t h = 1469598103934665603ull;
+            auto mix = [&](const void* p, size_t n) {
+                for (size_t i = 0; i < n; ++i) h = (h ^ static_cast<const uint8_t*>(p)[i]) * 1099511628211ull;
+            };
+            mix(data.data(), data.size());
+            uint32_t params[] = { kFontCacheVersion, (uint32_t)Font::kBakeSize, 6u, 2048u, 1024u, Font::kFirstChar, Font::kCharCount };
+            mix(params, sizeof(params));
+            const char* local = std::getenv("LOCALAPPDATA");
+            fs::path base = local ? fs::path(local) / "Dimension" : fs::temp_directory_path() / "Dimension";
+            char name[32];
+            std::snprintf(name, sizeof(name), "%016llx.fontcache", (unsigned long long)h);
+            return base / "FontCache" / name;
+        }
+
+        struct FontCacheHeader
+        {
+            char Magic[4] = { 'D', 'F', 'N', 'T' };
+            uint32_t Version = kFontCacheVersion;
+            int32_t PenX = 0, PenY = 0, RowHeight = 0, Full = 0;
+            uint32_t Rows = 0, Width = 0;
+        };
+    }
+
+    bool Font::LoadBakedLatin1(Dynamic& dyn, std::array<Glyph, kCharCount>& glyphs)
+    {
+        if (dyn.HasColors) return false;
+        std::ifstream in(FontCachePath(dyn.Data), std::ios::binary);
+        if (!in) return false;
+        FontCacheHeader h;
+        in.read(reinterpret_cast<char*>(&h), sizeof(h));
+        if (!in || std::memcmp(h.Magic, "DFNT", 4) != 0 || h.Version != kFontCacheVersion || h.Width != (uint32_t)Dynamic::kWidth ||
+            h.Rows > (uint32_t)Dynamic::kHeight)
+            return false;
+        std::array<Glyph, kCharCount> read{};
+        in.read(reinterpret_cast<char*>(read.data()), sizeof(read));
+        std::vector<uint32_t> rows(size_t(h.Rows) * Dynamic::kWidth);
+        in.read(reinterpret_cast<char*>(rows.data()), rows.size() * sizeof(uint32_t));
+        if (!in) return false;
+        std::copy(rows.begin(), rows.end(), dyn.Rgba.begin());
+        glyphs = read;
+        dyn.PenX = h.PenX, dyn.PenY = h.PenY, dyn.RowHeight = h.RowHeight, dyn.Full = h.Full != 0;
+        dyn.Dirty = true;
+        return true;
+    }
+
+    void Font::StoreBakedLatin1(const Dynamic& dyn, const std::array<Glyph, kCharCount>& glyphs)
+    {
+        if (dyn.HasColors) return;
+        fs::path path = FontCachePath(dyn.Data);
+        std::error_code ec;
+        fs::create_directories(path.parent_path(), ec);
+        FontCacheHeader h;
+        h.PenX = dyn.PenX, h.PenY = dyn.PenY, h.RowHeight = dyn.RowHeight, h.Full = dyn.Full ? 1 : 0;
+        h.Width = Dynamic::kWidth;
+        h.Rows = (uint32_t)std::min(dyn.PenY + dyn.RowHeight + 1, Dynamic::kHeight);
+        fs::path temp = path;
+        temp += ".tmp";
+        {
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            if (!out) return;
+            out.write(reinterpret_cast<const char*>(&h), sizeof(h));
+            out.write(reinterpret_cast<const char*>(glyphs.data()), sizeof(glyphs));
+            out.write(reinterpret_cast<const char*>(dyn.Rgba.data()), size_t(h.Rows) * Dynamic::kWidth * sizeof(uint32_t));
+            if (!out) return;
+        }
+        fs::rename(temp, path, ec); // (whole or not at all: another editor may be reading)
+        if (ec) fs::remove(temp, ec);
+    }
+
     Ref<Font> Font::LoadFromMemory(const uint8_t* data, size_t size, const std::string& name, bool bakeLatin1)
     {
         auto dyn = std::make_shared<Dynamic>();
@@ -686,8 +767,12 @@ namespace Dimension
         font->m_Ascent = ascent * dyn->Scale;
         font->m_Descent = descent * dyn->Scale;
         font->m_LineGap = lineGap * dyn->Scale;
-        if (bakeLatin1)
+        if (bakeLatin1 && !LoadBakedLatin1(*dyn, font->m_Glyphs))
+        {
+            // Baking 224 distance fields takes a while (seconds in a debug build): kept for the next start.
             for (uint32_t i = 0; i < kCharCount; ++i) dyn->Bake(kFirstChar + i, font->m_Glyphs[i]);
+            StoreBakedLatin1(*dyn, font->m_Glyphs);
+        }
         if (dyn->Full) Log::Warn("Font '{}': some glyphs did not fit in the atlas", name);
         font->GetAtlasIndex(); // the atlas texture, now
         return font;

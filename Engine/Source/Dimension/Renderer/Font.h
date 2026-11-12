@@ -112,6 +112,9 @@ namespace Dimension
     private:
         struct Dynamic; // the font file, the atlas pixels and the glyphs baked since loading
         std::array<Glyph, kCharCount> m_Glyphs{};
+        // The baked Latin-1 glyphs kept between runs (see Font.cpp); false when there are none for this font yet.
+        static bool LoadBakedLatin1(Dynamic& dyn, std::array<Glyph, kCharCount>& glyphs);
+        static void StoreBakedLatin1(const Dynamic& dyn, const std::array<Glyph, kCharCount>& glyphs);
         mutable Ref<Texture2D> m_Atlas;
         mutable Ref<Texture2D> m_ColorAtlas;
         std::shared_ptr<Dynamic> m_Dynamic;
