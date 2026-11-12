@@ -574,6 +574,38 @@ namespace
         CHECK(!MeshData::LoadFromFile(data / "maya_human_ik_6100_binary.fbx", none)); // (a skeleton without meshes)
     }
 
+    void TestHumanoidSample()
+    {
+        // The Sandbox's humanoid sample: the FBX character maps to its real bones (not its rig's controls: HipsCtrl,
+        // LeftKneeCtrl, LeftFootIK), the robot to its Unreal-named ones, and the Flail clip retargets onto the robot with
+        // straight legs where the source stands, its head turning about 150 degrees unless muscle limits hold it.
+        fs::path dir = fs::path(DIM_SOURCE_DIR) / "Projects/Sandbox/Assets/Models/Humanoid";
+        MeshData k, r;
+        CHECK(MeshData::LoadFromFile(dir / "KenneyCharacter.fbx", k) && k.SkeletonData && !k.Clips.empty());
+        CHECK(MeshData::LoadFromFile(dir / "Robot.gltf", r) && r.SkeletonData);
+        if (!k.SkeletonData || !r.SkeletonData) return;
+        HumanoidMap km = Animation::MapHumanoid(*k.SkeletonData), rm = Animation::MapHumanoid(*r.SkeletonData);
+        CHECK(km.IsHumanoid() && rm.IsHumanoid() && km.Mapped() == 22 && rm.Mapped() == 21);
+        CHECK(k.SkeletonData->Joints[km[HumanBone::Hips]].Name == "Hips" && k.SkeletonData->Joints[km[HumanBone::LeftLowerLeg]].Name == "LeftLeg" &&
+              k.SkeletonData->Joints[km[HumanBone::RightFoot]].Name == "RightFoot");
+        auto asset = AnimationClipAsset::Load(dir / "Flail.anim");
+        CHECK(asset != nullptr);
+        if (!asset) return;
+        AnimationClip clip = asset->ToClip(*k.SkeletonData);
+        auto at = [&](bool limits, float t, const char* joint, glm::vec4 v) {
+            AnimationClip rt = Animation::RetargetHumanoid(*k.SkeletonData, *r.SkeletonData, clip, limits);
+            Pose pose;
+            pose.SetBindPose(*r.SkeletonData);
+            Animation::Sample(*r.SkeletonData, rt, t, pose);
+            std::vector<glm::mat4> g;
+            Animation::JointGlobals(*r.SkeletonData, pose, g);
+            return glm::vec3(g[r.SkeletonData->FindJoint(joint)] * v);
+        };
+        CHECK(at(true, 0.0f, "foot_l", { 0, 0, 0, 1 }).y < 0.15f && at(true, 0.0f, "calf_l", { 0, 0, 0, 1 }).y > 0.45f); // standing
+        CHECK(at(false, 1.0f, "head", { 0, 0, 1, 0 }).z < -0.5f); // turned past the shoulder
+        CHECK(at(true, 1.0f, "head", { 0, 0, 1, 0 }).z > 0.5f);   // held within a person's range
+    }
+
     void TestEulerAnglesGimbal()
     {
         // Euler angles back to the same rotation, also at gimbal lock (Y at +-90 degrees), where glm's roll is noise.
@@ -16709,6 +16741,7 @@ int main(int argc, char** argv)
     Run("Runtime AddComponent", TestRuntimeAddComponent);
     Run("Euler angles at gimbal lock", TestEulerAnglesGimbal);
     Run("FBX import", TestFbxImport);
+    Run("Humanoid sample", TestHumanoidSample);
     Run("Script assemblies", TestScriptAssemblies);
     Run("2D physics queries", TestPhysics2DQueries);
     Run("3D shape casts and spin", TestPhysics3DCasts);

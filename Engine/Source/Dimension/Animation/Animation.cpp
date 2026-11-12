@@ -727,8 +727,8 @@ namespace Dimension
             HumanBone Classify(const NameParts& n)
             {
                 const std::string& c = n.Core;
-                // Helpers that sit beside or past the real bones.
-                for (const char* skip : { "twist", "roll", "end", "nub", "tip", "ik", "pole", "target", "helper", "dummy", "socket", "prop",
+                // Helpers that sit beside or past the real bones (and animation rigs' controls: "HipsCtrl", "LeftKneeCtrl").
+                for (const char* skip : { "twist", "roll", "end", "nub", "tip", "ik", "pole", "target", "helper", "dummy", "socket", "prop", "ctrl", "control",
                                           "thumb", "index", "middle", "ring", "pinky", "little", "finger", "eye", "jaw", "tongue", "teeth",
                                           "breast", "weapon", "attach", "corrective", "adjust" })
                     if (Has(c, skip)) return HumanBone::Count;
