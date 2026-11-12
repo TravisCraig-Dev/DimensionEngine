@@ -360,6 +360,8 @@ namespace Dimension
         AssetHandle GetRendererMaterialInstance(Entity e);
         // The view the scene is shown in (from SetUIInput): its size in pixels (a 1280x720 stand-in before the first
         // frame), and the pointer in it (top-left origin).
+        // The size the UI is laid out at (the view's, as SetUIInput gave it; 0 when none was given).
+        glm::vec2 GetUIScreenSize() const { return m_UIScreen; }
         glm::vec2 GetViewSize() const { return m_UIScreen.x >= 1.0f && m_UIScreen.y >= 1.0f ? m_UIScreen : glm::vec2(1280.0f, 720.0f); }
         glm::vec2 GetViewPointer() const { return m_UIPointer; }
         uint64_t GetFrameCount() const { return m_FrameCount; }

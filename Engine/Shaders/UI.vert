@@ -6,7 +6,7 @@ layout(location = 2) in vec2 aUV;
 layout(location = 3) in uint aTexture;
 layout(location = 4) in uint aEntity;
 
-layout(push_constant) uniform Push { vec2 ScreenSize; uvec2 Masks; } pc;
+layout(push_constant) uniform Push { vec2 ScreenSize; uvec2 Masks; vec2 FragScale; } pc;
 
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out vec2 vUV;

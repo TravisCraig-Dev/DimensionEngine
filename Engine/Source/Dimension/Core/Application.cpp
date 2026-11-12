@@ -132,6 +132,7 @@ namespace Dimension
                 DIM_PROFILE_SCOPE("Update");
                 for (auto& l : m_Layers) l->OnUpdate(m_FrameTime);
             }
+
             if (m_ImGui)
             {
                 DIM_PROFILE_SCOPE("Editor UI");
@@ -139,10 +140,12 @@ namespace Dimension
                 for (auto& l : m_Layers) l->OnImGui();
                 m_ImGui->EndFrame();
             }
+
             {
                 DIM_PROFILE_SCOPE("Render");
                 for (auto& l : m_Layers) l->OnRender(cmd);
             }
+
 
             // Compose into the swapchain image, then draw ImGui on top.
             Vk::TransitionImage(cmd, frame.SwapchainImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -195,7 +198,8 @@ namespace Dimension
                 else m_Running = false;
             }
             // Target frame rate: the rest of the frame slept away (the last part spun, as sleeps overshoot).
-            if (int fps = AppRuntime::GetTargetFrameRate(); fps > 0)
+            int target = AppRuntime::GetTargetFrameRate(), cap = AppRuntime::GetFrameRateCap();
+            if (int fps = target > 0 && cap > 0 ? std::min(target, cap) : std::max(target, cap); fps > 0)
             {
                 auto until = frameStart + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / fps));
                 auto coarse = until - std::chrono::milliseconds(2);

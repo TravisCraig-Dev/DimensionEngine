@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "Dimension/Core/AppRuntime.h"
 #include <atomic>
 #include <chrono>
@@ -24,6 +25,13 @@ namespace Dimension::AppRuntime
 
     void SetTargetFrameRate(int framesPerSecond) { s_TargetFrameRate = framesPerSecond > 0 ? framesPerSecond : -1; }
     int GetTargetFrameRate() { return s_TargetFrameRate; }
+
+    namespace
+    {
+        int s_FrameRateCap = 0;
+    }
+    void SetFrameRateCap(int framesPerSecond) { s_FrameRateCap = std::max(framesPerSecond, 0); }
+    int GetFrameRateCap() { return s_FrameRateCap; }
 
     double GetRealtimeSinceStartup() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - s_Start).count(); }
 

@@ -26,8 +26,8 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--play")) options.StartInPlayMode = true;
-        else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) spec.MaxFrames = std::atoi(argv[++i]);
-        else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) spec.ScreenshotPath = argv[++i];
+        else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) spec.MaxFrames = std::atoi(argv[++i]), options.Automated = true;
+        else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) spec.ScreenshotPath = argv[++i], options.Automated = true;
         else if (!std::strcmp(argv[i], "--windowed")) spec.Window.Maximized = false;
         else if (!std::strcmp(argv[i], "--select") && i + 1 < argc) options.SelectEntity = argv[++i];
         else if (!std::strcmp(argv[i], "--select-asset") && i + 1 < argc) options.SelectAsset = argv[++i];
@@ -40,6 +40,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--package-search") && i + 1 < argc) options.PackageSearch = argv[++i];
         else if (!std::strcmp(argv[i], "--run-tests")) options.RunTests = true;
         else if (!std::strcmp(argv[i], "--no-splash")) options.NoSplash = true;
+        else if (!std::strcmp(argv[i], "--quality") && i + 1 < argc) options.Quality = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--frame-caps")) options.KeepFrameCaps = true;
         else if (!std::strcmp(argv[i], "--deep-profile")) Dimension::Profiler::SetDeepProfiling(true);
         else if (!std::strcmp(argv[i], "--anim-onion")) options.AnimOnion = true;
         else if (!std::strcmp(argv[i], "--frame-event") && i + 1 < argc) options.FrameEvent = std::atoi(argv[++i]);

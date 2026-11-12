@@ -1,3 +1,4 @@
+#include "Dimension/Renderer/Quality.h"
 #include "Dimension/Renderer/SceneRenderer.h"
 #include "Dimension/Renderer/PostProcess.h"
 #include "Dimension/Renderer/Texture.h"
@@ -941,7 +942,7 @@ namespace Dimension
         // the Scene view and probe faces are never jittered.
         CameraData camera = view;
         glm::mat4 unjitteredViewProj = view.Projection * view.View;
-        bool taa = scene.GetSettings().TAA && !options.ProbeCapture && !options.EditorOverlays;
+        bool taa = Quality::Apply(scene.GetSettings()).TAA && !options.ProbeCapture && !options.EditorOverlays;
         // A cut to another camera: the previous frames do not belong to this view (they would smear into it).
         if (!options.ProbeCapture && target.Temporal.CameraCuts != scene.GetCameraCuts())
         {
@@ -959,14 +960,14 @@ namespace Dimension
         else
             target.Temporal.Valid = false;
         // MSAA for this view (probe faces stay single-sampled).
-        target.SetSamples(options.ProbeCapture ? 1u : (uint32_t)std::clamp(scene.GetSettings().MSAA, 1, 8));
+        target.SetSamples(options.ProbeCapture ? 1u : (uint32_t)std::clamp(Quality::Apply(scene.GetSettings()).MSAA, 1, 8));
         m_Samples = target.GetSamples();
         m_Capturing = options.ProbeCapture;
         auto cpuStart = std::chrono::steady_clock::now();
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
         m_Stats = {};
-        auto& settings = scene.GetSettings();
+        const SceneSettings settings = Quality::Apply(scene.GetSettings()); // (the quality level's caps)
         auto& reg = scene.GetRegistry();
 
         // Lights
@@ -1003,7 +1004,7 @@ namespace Dimension
             u.LightDirection = glm::vec4(t.Forward(), 1.0f);
             u.LightColor = glm::vec4(ToLinear(light.Color) * light.Intensity, 1.0f);
             castShadows = light.CastShadows;
-            shadowDistance = light.ShadowDistance;
+            shadowDistance = light.ShadowDistance * std::clamp(Quality::Active().ShadowDistance, 0.1f, 1.0f);
             shadowBias = light.ShadowBias;
             cascadeCount = std::clamp(light.ShadowCascades, 1, ShadowCascades::kMax);
             debugCascades = light.DebugCascades;
@@ -1405,7 +1406,7 @@ namespace Dimension
         post.Vignette = settings.Vignette;
         if (!options.ProbeCapture && !options.EditorOverlays) post = PostProcess::Evaluate(scene, camera.Position, camera.CullingMask);
         // Motion blur and TAA read the velocity buffer (game views).
-        bool motionBlur = post.MotionBlur > 0.0f && !options.ProbeCapture && !options.EditorOverlays;
+        bool motionBlur = post.MotionBlur > 0.0f && Quality::Active().MotionBlur && !options.ProbeCapture && !options.EditorOverlays; // (volumes too)
         bool velocity = taa || motionBlur;
         bool readDepth = dof || surface || fog || underwaterFog || velocity || !m_Decals.empty() || m_ParticleDepthWanted || occlusion;
         m_ParticleDepthKept = readDepth && !camera.Orthographic;
@@ -3071,7 +3072,7 @@ namespace Dimension
         if (last.Target == "Shadow Map" && m_ShadowMap)
         {
             source = m_ShadowBindless;
-            size = { kShadowMapSize, kShadowMapSize };
+            size = { ShadowMapSize(), ShadowMapSize() };
         }
         else if (last.Target == "Point Shadow Map" && m_PointShadowMap)
         {
@@ -3484,9 +3485,19 @@ namespace Dimension
                                         float distance, int cascadeCount, const void* uniforms, size_t uniformSize, ShadowCascades& out)
     {
         auto& device = RenderDevice::Get();
+        // The quality level's resolution: a different one makes the atlas again (the old one goes once the GPU is done).
+        uint32_t tile = 256;
+        while (tile < 4096 && tile < (uint32_t)Quality::Active().ShadowResolution) tile *= 2;
+        if (m_ShadowMap && tile != m_ShadowTileSize)
+        {
+            std::shared_ptr<Image> old(m_ShadowMap.release());
+            uint32_t oldIndex = m_ShadowBindless;
+            device.DeferRelease([old, oldIndex] { RenderDevice::Get().UnregisterTexture(oldIndex); });
+        }
+        m_ShadowTileSize = tile;
         if (!m_ShadowMap)
         {
-            m_ShadowMap = MakeScope<Image>(ImageDesc{ kShadowMapSize, kShadowMapSize, VK_FORMAT_D32_SFLOAT,
+            m_ShadowMap = MakeScope<Image>(ImageDesc{ ShadowMapSize(), ShadowMapSize(), VK_FORMAT_D32_SFLOAT,
                                                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, "ShadowAtlas" });
             m_ShadowBindless = device.RegisterTexture(m_ShadowMap->GetView(), device.GetNearestClampSampler());
             VkImage img = m_ShadowMap->GetHandle();
@@ -3536,7 +3547,7 @@ namespace Dimension
             radius = std::ceil(radius * 16.0f) / 16.0f; // quantized size reduces shimmering
 
             // Snap the center to whole shadow texels in light space so shadows do not crawl as the camera moves.
-            float unitsPerTexel = radius * 2.0f / kShadowTileSize;
+            float unitsPerTexel = radius * 2.0f / m_ShadowTileSize;
             glm::vec3 ls = glm::vec3(lightRot * glm::vec4(center, 1.0f));
             ls.x = std::floor(ls.x / unitsPerTexel) * unitsPerTexel;
             ls.y = std::floor(ls.y / unitsPerTexel) * unitsPerTexel;
@@ -3560,7 +3571,7 @@ namespace Dimension
         depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         depth.clearValue.depthStencil = { 1.0f, 0 };
         VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-        info.renderArea = { { 0, 0 }, { kShadowMapSize, kShadowMapSize } };
+        info.renderArea = { { 0, 0 }, { ShadowMapSize(), ShadowMapSize() } };
         info.layerCount = 1;
         info.pDepthAttachment = &depth;
         vkCmdBeginRendering(cmd, &info);
@@ -3569,9 +3580,9 @@ namespace Dimension
         std::vector<uint8_t> shadowUniforms((const uint8_t*)uniforms, (const uint8_t*)uniforms + uniformSize);
         for (int c = 0; c < out.Count; ++c)
         {
-            float x = (float)((c & 1) * kShadowTileSize), y = (float)((c >> 1) * kShadowTileSize);
-            VkViewport viewport{ x, y + kShadowTileSize, (float)kShadowTileSize, -(float)kShadowTileSize, 0.0f, 1.0f };
-            VkRect2D scissor{ { (int32_t)x, (int32_t)y }, { kShadowTileSize, kShadowTileSize } };
+            float x = (float)((c & 1) * m_ShadowTileSize), y = (float)((c >> 1) * m_ShadowTileSize);
+            VkViewport viewport{ x, y + m_ShadowTileSize, (float)m_ShadowTileSize, -(float)m_ShadowTileSize, 0.0f, 1.0f };
+            VkRect2D scissor{ { (int32_t)x, (int32_t)y }, { m_ShadowTileSize, m_ShadowTileSize } };
             vkCmdSetViewport(cmd, 0, 1, &viewport);
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             std::memcpy(shadowUniforms.data(), &out.ViewProj[c], sizeof(glm::mat4)); // ViewProj is the first member
@@ -4081,15 +4092,18 @@ namespace Dimension
     void SceneRenderer::DrawUI(VkCommandBuffer cmd, Scene& scene, VkExtent2D extent)
     {
         std::vector<UI::DrawCommand> commands;
-        glm::vec2 screen((float)extent.width, (float)extent.height);
+        // Laid out at the view's size (as input sees it), drawn into the target at whatever render scale it has: the
+        // UI keeps its place and size on screen, only softer at a lower scale.
+        glm::vec2 screen((float)extent.width, (float)extent.height), view = scene.GetUIScreenSize();
+        if (view.x >= 1.0f && view.y >= 1.0f && std::abs(view.x / view.y - screen.x / screen.y) < 0.02f) screen = view;
         UI::BuildDrawList(scene, screen, commands);
-        DrawQuads(cmd, commands, extent);
+        DrawQuads(cmd, commands, extent, screen);
     }
 
-    void SceneRenderer::DrawQuads(VkCommandBuffer cmd, const std::vector<UI::DrawCommand>& commands, VkExtent2D extent)
+    void SceneRenderer::DrawQuads(VkCommandBuffer cmd, const std::vector<UI::DrawCommand>& commands, VkExtent2D extent, glm::vec2 logical)
     {
         if (commands.empty()) return;
-        glm::vec2 screen((float)extent.width, (float)extent.height);
+        glm::vec2 screen = logical.x >= 1.0f && logical.y >= 1.0f ? logical : glm::vec2((float)extent.width, (float)extent.height);
 
         TransientAllocation vb = RenderDevice::Get().AllocateTransient(commands.size() * 4 * sizeof(SpriteVertex));
         if (!vb) return;
@@ -4133,7 +4147,8 @@ namespace Dimension
         {
             glm::vec2 Screen;
             glm::uvec2 Masks;
-        } push{ screen, glm::uvec2(0) };
+            glm::vec2 FragScale; // target pixels to UI pixels (masks test fragment positions)
+        } push{ screen, glm::uvec2(0), screen / glm::vec2((float)extent.width, (float)extent.height) };
         if (!masks.empty())
             if (TransientAllocation mb = RenderDevice::Get().AllocateTransient(masks.size() * sizeof(GpuMask)))
             {

@@ -1,4 +1,5 @@
 #pragma once
+#include "Dimension/Renderer/Quality.h"
 #include "Dimension/Core/Base.h"
 #include "Dimension/Core/Guid.h"
 #include <array>
@@ -32,6 +33,11 @@ namespace Dimension
         bool BundleDotNet = true;             // Build ships the .NET runtime (C# runs without .NET installed)
         bool AheadOfTimeScripts = true;       // Build compiles C# to ReadyToRun code (crossgen2): no JIT at start
         bool TrimDotNet = true;               // a bundled runtime keeps only the framework assemblies scripts can reach
+
+        // Quality (Project Settings > Quality, like Unity's): the levels (empty: Quality::DefaultLevels) and the one a
+        // built game starts at (the editor keeps its own choice in its preferences).
+        std::vector<QualityLevel> QualityLevels;
+        int DefaultQuality = 3;
 
         std::vector<AudioMixerGroup> MixerGroups = AudioMixer::DefaultGroups();
         std::vector<AudioMixerSnapshot> MixerSnapshots;

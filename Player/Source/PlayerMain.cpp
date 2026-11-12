@@ -23,6 +23,7 @@
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
+#include <Dimension/Renderer/Quality.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Platform/AppIcon.h>
 #include <Dimension/Core/AppRuntime.h>
@@ -116,7 +117,9 @@ namespace
         {
             if (s_FixedDt > 0.0f) dt = s_FixedDt;
             auto size = Application::Get().GetWindow().GetFramebufferSize();
-            m_Target->Resize(size.x, size.y);
+            uint32_t tw, th;
+            Quality::ScaledSize(size.x, size.y, tw, th); // (the quality level's Render Scale; the UI keeps the window's size)
+            m_Target->Resize(tw, th);
             if (Input::IsKeyPressed(Key::Escape)) Application::Get().Close();
             if (Input::IsKeyPressed(Key::Enter) && (Input::RawKeyDown(Key::LeftAlt) || Input::RawKeyDown(Key::RightAlt)))
             {
@@ -210,6 +213,7 @@ int main(int argc, char** argv)
     AppRuntime::SetHost(AppRuntime::Host::Player);
     fs::path projectDir;
     fs::path sceneOverride;
+    int qualityOverride = -1;
     int maxFrames = 0;
     std::string screenshot;
     std::vector<PointerEvent> pointerEvents;
@@ -218,6 +222,7 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) sceneOverride = argv[++i];
+        else if (!std::strcmp(argv[i], "--quality") && i + 1 < argc) qualityOverride = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
         else if (!std::strcmp(argv[i], "--no-instancing")) SceneRenderer::SetInstancingEnabled(false);
@@ -280,6 +285,7 @@ int main(int argc, char** argv)
 #endif
     // The project is opened first so its window settings apply.
     if (!Project::Open(projectDir)) return 1;
+    if (qualityOverride >= 0) Quality::SetCurrent(qualityOverride); // (--quality: else the project's default level)
     auto& config = Project::GetConfig();
     // The player's data (PlayerPrefs, save files) beside other programs' in %APPDATA%, under the product's name.
     if (const char* appData = std::getenv("APPDATA")) PlayerData::SetFolder(fs::path(appData) / PlayerData::FolderName(config.Name));

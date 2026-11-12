@@ -515,15 +515,17 @@ namespace Dimension
         void BuildEntityOverlay(Scene& scene, Entity e);
         void FlushLines(VkCommandBuffer cmd, std::vector<LineVertex>& lines, const Pipeline& pipeline);
         void DrawUI(VkCommandBuffer cmd, Scene& scene, VkExtent2D extent);
-        void DrawQuads(VkCommandBuffer cmd, const std::vector<UI::DrawCommand>& commands, VkExtent2D extent);
+        // `logical`: the size the UI was laid out at when the target is drawn smaller (render scale); 0 = the extent.
+        void DrawQuads(VkCommandBuffer cmd, const std::vector<UI::DrawCommand>& commands, VkExtent2D extent, glm::vec2 logical = glm::vec2(0.0f));
         void RenderBloom(VkCommandBuffer cmd, SceneRenderTarget& target, const SceneSettings& settings);
         // Renders the cube faces of each shadowed point light into the point shadow atlas.
         // faceCounts[i] is 6 for point lights and 1 for spot lights.
         void RenderPointShadows(VkCommandBuffer cmd, Scene& scene, const glm::mat4* faceViewProj, const uint32_t* faceCounts,
                                 uint32_t lightCount, const void* uniforms, size_t uniformSize);
 
-        static constexpr uint32_t kShadowTileSize = 2048;               // one cascade
-        static constexpr uint32_t kShadowMapSize = kShadowTileSize * 2; // 2x2 atlas
+        // One cascade's size (the quality level's Shadow Resolution); the atlas holds 2x2 of them.
+        uint32_t m_ShadowTileSize = 2048;
+        uint32_t ShadowMapSize() const { return m_ShadowTileSize * 2; }
         Scope<Image> m_ShadowMap;
         uint32_t m_ShadowBindless = 0;
 

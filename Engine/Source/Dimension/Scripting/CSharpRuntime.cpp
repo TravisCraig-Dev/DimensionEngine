@@ -30,6 +30,7 @@
 #include "Dimension/Asset/AssetPack.h"
 #include "Dimension/Renderer/Environment.h"
 #include "Dimension/Renderer/Texture.h"
+#include "Dimension/Renderer/Quality.h"
 #include <stb_image_write.h>
 #include "Dimension/Physics/Wind.h"
 #include <climits>
@@ -1993,11 +1994,20 @@ namespace Dimension
                 case 9: return h;
                 case 10: return hz;
                 case 11: return window ? window->GetDpi() : 96.0;
+                case 20: return Quality::Current();
+                case 21: Quality::SetCurrent((int)x); return 0.0;
+                case 22: return (double)Quality::Levels().size();
                 default: return AppRuntime::GetRealtimeSinceStartup();
                 }
             };
             a.AppText = [](int op) -> const char* {
                 const auto& config = Project::GetConfig();
+                if (op >= 100) // a quality level's name
+                {
+                    const auto& levels = Quality::Levels();
+                    s_StringReturn = op - 100 < (int)levels.size() ? levels[op - 100].Name : std::string();
+                    return s_StringReturn.c_str();
+                }
                 s_StringReturn = op == 0 ? config.Name : op == 1 ? config.Version : op == 2 ? config.CompanyName : Project::GetDirectory().string();
                 return s_StringReturn.c_str();
             };

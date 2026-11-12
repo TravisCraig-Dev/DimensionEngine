@@ -40,6 +40,10 @@ namespace Editor
             AutosaveMinutes = j.value("autosaveMinutes", AutosaveMinutes);
             SaveSceneBeforePlay = j.value("saveSceneBeforePlay", SaveSceneBeforePlay);
             ReloadScriptsOnPlay = j.value("reloadScriptsOnPlay", ReloadScriptsOnPlay);
+            SceneViewScale = j.value("sceneViewScale", SceneViewScale);
+            BackgroundFrameRate = j.value("backgroundFrameRate", BackgroundFrameRate);
+            IdleFrameRate = j.value("idleFrameRate", IdleFrameRate);
+            QualityLevel = j.value("qualityLevel", QualityLevel);
             Theme = j.value("theme", Theme);
             Accent = j.value("accent", Accent);
             Snap = j.value("snap", Snap);
@@ -72,6 +76,10 @@ namespace Editor
                           { "autosaveMinutes", AutosaveMinutes },
                           { "saveSceneBeforePlay", SaveSceneBeforePlay },
                           { "reloadScriptsOnPlay", ReloadScriptsOnPlay },
+                          { "sceneViewScale", SceneViewScale },
+                          { "backgroundFrameRate", BackgroundFrameRate },
+                          { "idleFrameRate", IdleFrameRate },
+                          { "qualityLevel", QualityLevel },
                           { "theme", Theme },
                           { "accent", Accent },
                           { "snap", Snap },

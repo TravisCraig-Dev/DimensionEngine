@@ -49,6 +49,27 @@ namespace Dimension
                 s_Config.BundleDotNet = j.value("bundleDotNet", true);
                 s_Config.AheadOfTimeScripts = j.value("aheadOfTimeScripts", true);
                 s_Config.TrimDotNet = j.value("trimDotNet", true);
+                s_Config.DefaultQuality = j.value("defaultQuality", 3);
+                s_Config.QualityLevels.clear();
+                for (auto& q : j.value("quality", nlohmann::json::array()))
+                {
+                    QualityLevel level;
+                    level.Name = q.value("name", std::string("Level"));
+                    level.MaxMSAA = q.value("maxMsaa", level.MaxMSAA);
+                    level.AmbientOcclusion = q.value("ssao", level.AmbientOcclusion);
+                    level.ScreenSpaceReflections = q.value("ssr", level.ScreenSpaceReflections);
+                    level.ScreenSpaceGI = q.value("ssgi", level.ScreenSpaceGI);
+                    level.Bloom = q.value("bloom", level.Bloom);
+                    level.DepthOfField = q.value("depthOfField", level.DepthOfField);
+                    level.MotionBlur = q.value("motionBlur", level.MotionBlur);
+                    level.CloudShadows = q.value("cloudShadows", level.CloudShadows);
+                    level.MaxRaySteps = q.value("maxRaySteps", level.MaxRaySteps);
+                    level.MaxGIRays = q.value("maxGiRays", level.MaxGIRays);
+                    level.ShadowResolution = q.value("shadowResolution", level.ShadowResolution);
+                    level.ShadowDistance = q.value("shadowDistance", level.ShadowDistance);
+                    level.RenderScale = q.value("renderScale", level.RenderScale);
+                    s_Config.QualityLevels.push_back(level);
+                }
                 if (j.contains("audioMixer") && j["audioMixer"].is_array() && !j["audioMixer"].empty())
                 {
                     s_Config.MixerGroups.clear();
@@ -237,6 +258,18 @@ namespace Dimension
                           { "defaultLanguage", s_Config.DefaultLanguage },
                           { "engineVersion", "0.1.0" } };
         if (s_Config.InputActionsSet) j["inputActions"] = inputActions;
+        // Quality: written once the project changes the defaults (projects that never do keep their file as it was).
+        if (!s_Config.QualityLevels.empty() || s_Config.DefaultQuality != 3)
+        {
+            j["defaultQuality"] = s_Config.DefaultQuality;
+            nlohmann::json levels = nlohmann::json::array();
+            for (const QualityLevel& q : s_Config.QualityLevels)
+                levels.push_back({ { "name", q.Name }, { "maxMsaa", q.MaxMSAA }, { "ssao", q.AmbientOcclusion }, { "ssr", q.ScreenSpaceReflections },
+                                   { "ssgi", q.ScreenSpaceGI }, { "bloom", q.Bloom }, { "depthOfField", q.DepthOfField }, { "motionBlur", q.MotionBlur },
+                                   { "cloudShadows", q.CloudShadows }, { "maxRaySteps", q.MaxRaySteps }, { "maxGiRays", q.MaxGIRays },
+                                   { "shadowResolution", q.ShadowResolution }, { "shadowDistance", q.ShadowDistance }, { "renderScale", q.RenderScale } });
+            if (!levels.empty()) j["quality"] = levels;
+        }
         std::ofstream out(s_Directory / kFileName);
         out << j.dump(2);
         return (bool)out;

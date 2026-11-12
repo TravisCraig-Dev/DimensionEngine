@@ -18,6 +18,10 @@ namespace Dimension::AppRuntime
     // it goes (or the display's rate with VSync).
     void SetTargetFrameRate(int framesPerSecond);
     int GetTargetFrameRate();
+    // A host's own cap on top of the game's (the editor's background and idle frame rates); 0: none. The
+    // Application holds the lower of the two.
+    void SetFrameRateCap(int framesPerSecond);
+    int GetFrameRateCap();
 
     // Real seconds since the program started.
     double GetRealtimeSinceStartup();

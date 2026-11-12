@@ -1,3 +1,4 @@
+#include "Dimension/Renderer/Quality.h"
 #include "Dimension/Renderer/PostProcess.h"
 #include "Dimension/Scene/Scene.h"
 #include <stb_image_write.h>
@@ -11,7 +12,7 @@ namespace Dimension
     {
         PostProcessValues Evaluate(Scene& scene, const glm::vec3& cameraPosition, uint32_t cullingMask)
         {
-            const SceneSettings& settings = scene.GetSettings();
+            const SceneSettings settings = Quality::Apply(scene.GetSettings()); // (the quality level's caps)
             PostProcessValues v;
             v.Exposure = settings.Exposure;
             v.BloomIntensity = settings.BloomIntensity;

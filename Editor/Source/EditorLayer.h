@@ -35,6 +35,9 @@ namespace Editor
         std::string PackageSearch; // --package-search "term": with --open Packages, that search run
         bool RunTests = false;     // --run-tests: with --open "Test Runner", every test run once the scripts load
         bool NoSplash = false;     // --no-splash: the editor window shows at once (no splash screen while loading)
+        bool Automated = false;    // --frames / --screenshot: no frame rate caps (runs keep their pace)
+        bool KeepFrameCaps = false; // --frame-caps: the caps apply in automated runs too (to check them)
+        int Quality = -1;          // --quality N: the quality level for this session (preferences unchanged)
         std::string AnimKey;      // --anim-key "Joint,rotation|position,axis,key": with --open Animation, that curve key selected
         bool AnimRecord = false;  // --anim-record: with --open Animation, record mode on from the start
         bool AnimOnion = false;   // --anim-onion: with --open Animation, a preview with onion skin
@@ -366,6 +369,8 @@ namespace Editor
         // been drawn and a script build started while loading has finished and loaded.
         int m_StartupFrames = 0;
         void UpdateStartup();
+        float m_IdleSeconds = 0.0f; // since the last input (the Idle Frame Rate starts after a moment)
+        void UpdateFrameRateCap(float dt);
 
         bool m_ShowHierarchy = true, m_ShowInspector = true, m_ShowContent = true, m_ShowConsole = true;
         bool m_ShowAnimator = true;

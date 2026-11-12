@@ -25,6 +25,13 @@ namespace Editor
         // Enter Play Mode option (Unity's Reload Domain): the C# scripts load again as play starts, so static fields
         // start from their initial values each time. Off: play starts faster and statics keep what the last play left.
         bool ReloadScriptsOnPlay = true;
+        // Performance: the Scene view drawn at this fraction of its size (shown stretched); the editor's frame rate
+        // while its window is not focused, and while nothing is happening (no input for a moment, not playing; 0 = no
+        // cap); and the quality level the editor draws at (-1: the project's default).
+        float SceneViewScale = 1.0f;
+        int BackgroundFrameRate = 10;
+        int IdleFrameRate = 30;
+        int QualityLevel = -1;
         int Theme = 0;                 // Dimension::ImGuiLayer::Theme: Dark, Light, Midnight
         uint32_t Accent = 0x3A79BB;    // 0xRRGGBB
         // Scene view snapping (the toolbar's Snap; Ctrl inverts it while held): moves land on the world grid, rotation

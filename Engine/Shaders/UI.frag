@@ -11,7 +11,7 @@ layout(location = 2) flat in uint vTexture;
 layout(location = 3) flat in uint vMask;
 layout(location = 0) out vec4 outColor;
 
-layout(push_constant) uniform Push { vec2 ScreenSize; uvec2 Masks; } pc;
+layout(push_constant) uniform Push { vec2 ScreenSize; uvec2 Masks; vec2 FragScale; } pc;
 
 // UI Masks: rect (pixels), soft edges, and an image whose alpha shapes it.
 struct UIMask
@@ -44,7 +44,7 @@ float MaskAlpha()
     for (int i = 0; i < 4 && index != 0u; ++i)
     {
         UIMask m = UIMaskTable(pc.Masks).Masks[index - 1u];
-        a *= MaskLevelAlpha(m, gl_FragCoord.xy);
+        a *= MaskLevelAlpha(m, gl_FragCoord.xy * pc.FragScale); // (UI pixels, whatever the render scale)
         index = m.Parent;
     }
     return a;

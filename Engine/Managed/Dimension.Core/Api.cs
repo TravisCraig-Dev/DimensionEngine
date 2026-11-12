@@ -1476,6 +1476,31 @@ namespace Dimension
     }
 
     /// <summary>
+    /// The quality levels of Project Settings > Quality (like Unity's QualitySettings): each caps the costly rendering a
+    /// scene asks for (MSAA, ambient occlusion, reflections, GI, bloom, depth of field, motion blur, shadow resolution
+    /// and distance, render scale). A built game starts at the project's default level; an options menu can switch.
+    /// </summary>
+    public static unsafe class QualitySettings
+    {
+        /// <summary>The levels' names, lowest first.</summary>
+        public static string[] Names
+        {
+            get
+            {
+                int count = (int)Native.Api.AppControl(22, 0, 0, 0);
+                var names = new string[count];
+                for (int i = 0; i < count; ++i) names[i] = Native.FromUtf8(Native.Api.AppText(100 + i)) ?? "";
+                return names;
+            }
+        }
+        public static int GetQualityLevel() => (int)Native.Api.AppControl(20, 0, 0, 0);
+        /// <summary>Switches level from the next frame (shadows are made again at the new resolution).</summary>
+        public static void SetQualityLevel(int index) => Native.Api.AppControl(21, index, 0, 0);
+        public static void IncreaseLevel() => SetQualityLevel(GetQualityLevel() + 1);
+        public static void DecreaseLevel() => SetQualityLevel(GetQualityLevel() - 1);
+    }
+
+    /// <summary>
     /// The game's text in the player's language, from the project's string tables (.csv assets: a column per language,
     /// a row per key). The language starts as the one chosen last, else the system's, else the project's default
     /// (Project Settings > Localization); a text missing in a language comes from the default one.

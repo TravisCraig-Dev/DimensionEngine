@@ -2,6 +2,8 @@
 #include <chrono>
 #include <sstream>
 #include <Dimension/Platform/SplashScreen.h>
+#include <Dimension/Renderer/Quality.h>
+#include <Dimension/Core/AppRuntime.h>
 #include <Dimension/Asset/AssetPack.h>
 #include "EditorLayer.h"
 #include "Dimension/Platform/AppIcon.h"
@@ -173,6 +175,9 @@ namespace Editor
         m_ResetLayout = !fs::exists(m_IniPath);
 
         EditorPreferences::Get().Load();
+        // The editor's quality level: this session's (--quality), else the one chosen last, else the project's default.
+        if (m_Options.Quality >= 0) Quality::SetCurrent(m_Options.Quality);
+        else if (EditorPreferences::Get().QualityLevel >= 0) Quality::SetCurrent(EditorPreferences::Get().QualityLevel);
         Shortcuts::Load(EditorPreferences::Get().Shortcuts);
         if (m_Options.Theme >= 0) EditorPreferences::Get().Theme = m_Options.Theme; // not saved unless Preferences change
         ApplyPreferences();
@@ -604,9 +609,29 @@ namespace Editor
         SplashScreen::Close();
     }
 
+    // The editor's frame rate cap: the Background Frame Rate while another window has the focus, the Idle Frame Rate
+    // once nothing has happened for a moment (no input, not playing, no script build or bake running), none otherwise or
+    // in automated runs.
+    void EditorLayer::UpdateFrameRateCap(float dt)
+    {
+        const auto& prefs = EditorPreferences::Get();
+        ImGuiIO& io = ImGui::GetIO();
+        bool input = io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f || io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f ||
+                     ImGui::IsAnyMouseDown() || ImGui::IsAnyItemActive() || !io.InputQueueCharacters.empty();
+        for (int k = ImGuiKey_NamedKey_BEGIN; !input && k < ImGuiKey_NamedKey_END; ++k) input = ImGui::IsKeyDown((ImGuiKey)k);
+        bool busy = m_Ctx.IsPlaying() || (m_CSharpBuild && m_CSharpBuild->load() == 1) || SplashScreen::IsShown();
+        m_IdleSeconds = input || busy ? 0.0f : m_IdleSeconds + dt;
+        int cap = 0;
+        if (m_Options.Automated && !m_Options.KeepFrameCaps) cap = 0;
+        else if (!Application::Get().GetWindow().IsFocused()) cap = prefs.BackgroundFrameRate;
+        else if (m_IdleSeconds > 1.5f) cap = prefs.IdleFrameRate;
+        AppRuntime::SetFrameRateCap(cap);
+    }
+
     void EditorLayer::OnUpdate(float dt)
     {
         UpdateStartup();
+        UpdateFrameRateCap(dt);
         if (!m_Options.OpenSceneLater.empty() && ++m_AutomationFrames == 30)
         {
             fs::path p = m_Options.OpenSceneLater;
@@ -684,8 +709,17 @@ namespace Editor
                 if (!key.empty()) m_Ctx.Visibility.Save(file, key);
             }
         }
-        m_SceneTarget->Resize(m_SceneViewSize.x, m_SceneViewSize.y);
-        m_GameTarget->Resize(m_GameViewSize.x, m_GameViewSize.y);
+        // Drawn at a fraction of the panels' sizes (shown stretched): the Scene view at the editor's Scene View
+        // Resolution, the Game view at the quality level's Render Scale, as the game would be.
+        {
+            float sceneScale = std::clamp(EditorPreferences::Get().SceneViewScale, 0.25f, 1.0f);
+            m_SceneTarget->Resize(std::max(1u, (uint32_t)std::lround(m_SceneViewSize.x * sceneScale)), std::max(1u, (uint32_t)std::lround(m_SceneViewSize.y * sceneScale)));
+            uint32_t gw, gh;
+            Quality::ScaledSize(m_GameViewSize.x, m_GameViewSize.y, gw, gh);
+            m_GameTarget->Resize(gw, gh);
+            // The edited scene's UI lays out at the Game view's size too (as the playing one does through its input).
+            if (!m_Ctx.IsPlaying()) m_Ctx.EditorScene->SetUIInput({ -1.0f, -1.0f }, false, { (float)m_GameViewSize.x, (float)m_GameViewSize.y }, false, 0.0f);
+        }
 
         // Pick up files changed outside the editor when the window regains focus.
         bool focused = Application::Get().GetWindow().IsFocused();
@@ -939,7 +973,7 @@ namespace Editor
         }
         else if (m_ShowUIInSceneView && (reg.Has<UIRectComponent>(m_Ctx.Selected) || reg.Has<CanvasComponent>(m_Ctx.Selected)))
         {
-            glm::vec2 layout = m_GameTarget ? glm::vec2((float)m_GameTarget->GetWidth(), (float)m_GameTarget->GetHeight()) : glm::vec2(1920.0f, 1080.0f);
+            glm::vec2 layout = m_GameTarget ? glm::vec2((float)m_GameViewSize.x, (float)m_GameViewSize.y) : glm::vec2(1920.0f, 1080.0f);
             Dimension::UI::ComputeLayout(scene, layout);
             glm::vec2 mn(0.0f), mx = layout;
             if (auto* r = reg.TryGet<UIRectComponent>(m_Ctx.Selected))
@@ -1229,7 +1263,7 @@ namespace Editor
             for (auto [ce, canvas, ct] : scene.GetRegistry().ViewOf<CanvasComponent, TransformComponent>()) canvases |= ct.ActiveInHierarchy;
             if (m_ShowUIInSceneView && canvases)
             {
-                uint32_t w = m_GameTarget ? m_GameTarget->GetWidth() : 1920u, h = m_GameTarget ? m_GameTarget->GetHeight() : 1080u;
+                uint32_t w = m_GameTarget ? m_GameViewSize.x : 1920u, h = m_GameTarget ? m_GameViewSize.y : 1080u; // (the game's layout size)
                 if (!m_SceneUITarget) m_SceneUITarget = MakeScope<SceneRenderTarget>(w, h);
                 else m_SceneUITarget->Resize(w, h);
                 m_SceneRenderer.RenderUIOnly(cmd, scene, *m_SceneUITarget);
@@ -3025,6 +3059,27 @@ namespace Editor
             int mode = (int)m_DrawMode;
             if (ImGui::Combo("##drawmode", &mode, modes, IM_ARRAYSIZE(modes))) m_DrawMode = (SceneDrawMode)mode;
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scene view draw mode");
+            // The quality level the editor draws at (both views; remembered in the preferences).
+            ImGui::SameLine();
+            {
+                const auto& levels = Quality::Levels();
+                int current = Quality::Current();
+                ImGui::SetNextItemWidth(100.0f);
+                if (ImGui::BeginCombo("##quality", levels.empty() ? "Quality" : levels[current].Name.c_str()))
+                {
+                    for (int i = 0; i < (int)levels.size(); ++i)
+                        if (ImGui::Selectable(levels[i].Name.c_str(), i == current))
+                        {
+                            Quality::SetCurrent(i);
+                            EditorPreferences::Get().QualityLevel = i;
+                            EditorPreferences::Get().Save();
+                        }
+                    ImGui::EndCombo();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Quality level the editor draws at: lower levels turn off costly effects, shrink shadows and the Game\n"
+                                      "view's resolution (Project Settings > Quality); scenes keep their own settings");
+            }
             // Isolation (Shift+H): a button to leave it.
             if (m_Ctx.Visibility.Isolating())
             {
@@ -3316,7 +3371,9 @@ namespace Editor
         if (m_SceneViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !gizmoHovered && !alt && !tilePainting)
         {
             ImVec2 mouse = ImGui::GetMousePos();
-            m_SceneTarget->RequestPick((uint32_t)(mouse.x - origin.x), (uint32_t)(mouse.y - origin.y));
+            // (in the target's pixels: it may be drawn smaller than the panel)
+            float sx = (float)m_SceneTarget->GetWidth() / std::max(1.0f, (float)m_SceneViewSize.x), sy = (float)m_SceneTarget->GetHeight() / std::max(1.0f, (float)m_SceneViewSize.y);
+            m_SceneTarget->RequestPick((uint32_t)((mouse.x - origin.x) * sx), (uint32_t)((mouse.y - origin.y) * sy));
             m_PickAdditive = ImGui::GetIO().KeyCtrl;
         }
 
@@ -3840,6 +3897,94 @@ namespace Editor
                 changed = true;
             }
         }
+        if (ImGui::CollapsingHeader("Quality"))
+        {
+            // The levels (a copy of the defaults until edited), and the one built games start at.
+            if (config.QualityLevels.empty()) config.QualityLevels = Quality::DefaultLevels(), changed = false; // (saved once changed)
+            auto& levels = config.QualityLevels;
+            ImGui::TextDisabled("Each level caps what scenes ask for; a scene never gains an effect it has off.");
+            if (UI::BeginProperties("QualityDefault"))
+            {
+                std::vector<const char*> names;
+                for (auto& l : levels) names.push_back(l.Name.c_str());
+                UI::PropertyLabel("Default For Builds", "The level a built game starts at (scripts: QualitySettings.SetQualityLevel)");
+                changed |= ImGui::Combo("##defaultq", &config.DefaultQuality, names.data(), (int)names.size());
+                UI::EndProperties();
+            }
+            std::optional<size_t> remove;
+            for (size_t i = 0; i < levels.size(); ++i)
+            {
+                QualityLevel& q = levels[i];
+                ImGui::PushID((int)i);
+                bool open = ImGui::TreeNodeEx("##level", ImGuiTreeNodeFlags_SpanAvailWidth, "%s%s", q.Name.c_str(),
+                                              (int)i == Quality::Current() ? "  (editor)" : "");
+                if (open)
+                {
+                    if (UI::BeginProperties("QualityLevel"))
+                    {
+                        UI::PropertyLabel("Name");
+                        changed |= ImGui::InputText("##name", &q.Name);
+                        UI::PropertyLabel("Max MSAA", "Samples per pixel at most (1: off)");
+                        int msaa[] = { 1, 2, 4, 8 };
+                        const char* msaaNames[] = { "Off", "2x", "4x", "8x" };
+                        int m = 0;
+                        while (m < 3 && msaa[m] < q.MaxMSAA) ++m;
+                        if (ImGui::Combo("##msaa", &m, msaaNames, 4)) q.MaxMSAA = msaa[m], changed = true;
+                        auto toggle = [&](const char* label, bool& v) {
+                            UI::PropertyLabel(label);
+                            changed |= ImGui::Checkbox((std::string("##") + label).c_str(), &v);
+                        };
+                        toggle("Ambient Occlusion", q.AmbientOcclusion);
+                        toggle("Screen Space Reflections", q.ScreenSpaceReflections);
+                        toggle("Screen Space GI", q.ScreenSpaceGI);
+                        toggle("Bloom", q.Bloom);
+                        toggle("Depth Of Field", q.DepthOfField);
+                        toggle("Motion Blur", q.MotionBlur);
+                        toggle("Cloud Shadows", q.CloudShadows);
+                        UI::PropertyLabel("Max Ray Steps", "Reflection, fog and cloud ray-march steps at most");
+                        changed |= ImGui::SliderInt("##steps", &q.MaxRaySteps, 4, 256);
+                        UI::PropertyLabel("Max GI Rays");
+                        changed |= ImGui::SliderInt("##rays", &q.MaxGIRays, 1, 16);
+                        UI::PropertyLabel("Shadow Resolution", "One shadow cascade's size in texels");
+                        int res[] = { 512, 1024, 2048, 4096 };
+                        const char* resNames[] = { "512", "1024", "2048", "4096" };
+                        int r = 0;
+                        while (r < 3 && res[r] < q.ShadowResolution) ++r;
+                        if (ImGui::Combo("##shadowres", &r, resNames, 4)) q.ShadowResolution = res[r], changed = true;
+                        UI::PropertyLabel("Shadow Distance", "Multiplies each light's Shadow Distance");
+                        changed |= ImGui::SliderFloat("##shadowdist", &q.ShadowDistance, 0.1f, 1.0f, "%.2f");
+                        UI::PropertyLabel("Render Scale", "The scene drawn at this fraction of the screen's resolution, then stretched");
+                        changed |= ImGui::SliderFloat("##scale", &q.RenderScale, 0.25f, 1.0f, "%.2f");
+                        UI::EndProperties();
+                    }
+                    ImGui::BeginDisabled(levels.size() <= 1);
+                    if (ImGui::SmallButton("Remove Level")) remove = i;
+                    ImGui::EndDisabled();
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            if (remove)
+            {
+                levels.erase(levels.begin() + *remove);
+                config.DefaultQuality = std::clamp(config.DefaultQuality, 0, (int)levels.size() - 1);
+                changed = true;
+            }
+            if (ImGui::Button("Add Level"))
+            {
+                QualityLevel q = levels.empty() ? QualityLevel{} : levels.back();
+                q.Name = "Level " + std::to_string(levels.size());
+                levels.push_back(q);
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset to Defaults"))
+            {
+                levels = Quality::DefaultLevels();
+                config.DefaultQuality = 3;
+                changed = true;
+            }
+        }
         DrawScriptSettings(1); // (the scripts' [SettingsProvider] pages with Scope Project)
         ImGui::TextDisabled("Project folder: %s", Project::GetDirectory().string().c_str());
         if (changed) Project::Save();
@@ -4229,6 +4374,20 @@ namespace Editor
             changed |= ImGui::DragFloat("##autosave", &prefs.AutosaveMinutes, 0.1f, 0.0f, 120.0f, "%.1f");
             UI::PropertyLabel("Save Scene Before Play");
             changed |= ImGui::Checkbox("##saveplay", &prefs.SaveSceneBeforePlay);
+            UI::EndProperties();
+        }
+        ImGui::SeparatorText("Performance");
+        if (UI::BeginProperties("PrefsPerf"))
+        {
+            UI::PropertyLabel("Scene View Resolution", "The Scene view drawn at this fraction of its size (lower: faster, softer)");
+            const char* scales[] = { "100%", "75%", "50%" };
+            float values[] = { 1.0f, 0.75f, 0.5f };
+            int s = prefs.SceneViewScale > 0.9f ? 0 : prefs.SceneViewScale > 0.6f ? 1 : 2;
+            if (ImGui::Combo("##sceneScale", &s, scales, 3)) prefs.SceneViewScale = values[s], changed = true;
+            UI::PropertyLabel("Background Frame Rate", "Frames a second at most while the editor is not the focused window (0: no cap)");
+            changed |= ImGui::SliderInt("##bgfps", &prefs.BackgroundFrameRate, 0, 60);
+            UI::PropertyLabel("Idle Frame Rate", "Frames a second at most while nothing happens (no input for a moment, not playing; 0: no cap)");
+            changed |= ImGui::SliderInt("##idlefps", &prefs.IdleFrameRate, 0, 120);
             UI::EndProperties();
         }
         ImGui::SeparatorText("Enter Play Mode");
