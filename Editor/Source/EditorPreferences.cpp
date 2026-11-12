@@ -39,6 +39,7 @@ namespace Editor
             ClearConsoleOnPlay = j.value("clearConsoleOnPlay", ClearConsoleOnPlay);
             AutosaveMinutes = j.value("autosaveMinutes", AutosaveMinutes);
             SaveSceneBeforePlay = j.value("saveSceneBeforePlay", SaveSceneBeforePlay);
+            ReloadScriptsOnPlay = j.value("reloadScriptsOnPlay", ReloadScriptsOnPlay);
             Theme = j.value("theme", Theme);
             Accent = j.value("accent", Accent);
             Snap = j.value("snap", Snap);
@@ -70,6 +71,7 @@ namespace Editor
                           { "clearConsoleOnPlay", ClearConsoleOnPlay },
                           { "autosaveMinutes", AutosaveMinutes },
                           { "saveSceneBeforePlay", SaveSceneBeforePlay },
+                          { "reloadScriptsOnPlay", ReloadScriptsOnPlay },
                           { "theme", Theme },
                           { "accent", Accent },
                           { "snap", Snap },

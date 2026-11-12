@@ -1,4 +1,6 @@
 #include <Dimension/Terrain/Terrain.h>
+#include <chrono>
+#include <sstream>
 #include <Dimension/Asset/AssetPack.h>
 #include "EditorLayer.h"
 #include "Dimension/Platform/AppIcon.h"
@@ -515,6 +517,15 @@ namespace Editor
         if (m_Console->ClearOnPlay && !emptyScene) m_Console->Clear(); // (a test run keeps the earlier tests' logs)
         SceneManager::CancelPendingLoad();
         EditModeScripts::Clear(); // edit-mode scripts end as play starts (and start again after Stop)
+        // Enter Play Mode option: a fresh load of the scripts, so their static fields start over (the edited scene holds
+        // no C# objects, so nothing else notices).
+        if (EditorPreferences::Get().ReloadScriptsOnPlay && CSharpRuntime::IsAvailable() && !CSharpRuntime::GetScriptsPath().empty())
+        {
+            auto start = std::chrono::steady_clock::now();
+            fs::path scripts = CSharpRuntime::GetScriptsPath();
+            CSharpRuntime::LoadScripts(scripts);
+            Log::Trace("Scripts reloaded for play in {:.0f} ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        }
         if (emptyScene) m_Ctx.RuntimeScene = MakeRef<Scene>("Test Scene");
         else
         {
@@ -2719,11 +2730,16 @@ namespace Editor
         if (m_ShowAbout) DrawAbout();
         if (m_ShowImGuiDemo) ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
         m_SelectionHistory.Record(CaptureSelection()); // each new selection (Back and Forward step through them)
-        if (!m_Options.Press.empty()) // --press (automation): at frame 40, or the frame after '@'
+        if (!m_Options.Press.empty()) // --press (automation): "id[@frame],..." each at frame 40 or the frame after '@'
         {
-            size_t at = m_Options.Press.find('@');
-            int frame = at == std::string::npos ? 40 : std::atoi(m_Options.Press.c_str() + at + 1);
-            if (ImGui::GetFrameCount() == frame) Shortcuts::Press(m_Options.Press.substr(0, at));
+            std::stringstream list(m_Options.Press);
+            std::string item;
+            while (std::getline(list, item, ','))
+            {
+                size_t at = item.find('@');
+                int frame = at == std::string::npos ? 40 : std::atoi(item.c_str() + at + 1);
+                if (ImGui::GetFrameCount() == frame) Shortcuts::Press(item.substr(0, at));
+            }
         }
         HandleShortcuts();
         if (!m_Options.BuildFolder.empty() && !m_BatchBuildDone)
@@ -4170,6 +4186,14 @@ namespace Editor
             changed |= ImGui::DragFloat("##autosave", &prefs.AutosaveMinutes, 0.1f, 0.0f, 120.0f, "%.1f");
             UI::PropertyLabel("Save Scene Before Play");
             changed |= ImGui::Checkbox("##saveplay", &prefs.SaveSceneBeforePlay);
+            UI::EndProperties();
+        }
+        ImGui::SeparatorText("Enter Play Mode");
+        if (UI::BeginProperties("PrefsPlay"))
+        {
+            UI::PropertyLabel("Reload Scripts", "Load the C# scripts again as play starts, so static fields start from their initial values "
+                                                "(Unity's Reload Domain). Off: play starts sooner, and statics keep what the last play left in them");
+            changed |= ImGui::Checkbox("##reloadplay", &prefs.ReloadScriptsOnPlay);
             UI::EndProperties();
         }
         ImGui::TextDisabled("Stored in %s", EditorPreferences::FilePath().string().c_str());

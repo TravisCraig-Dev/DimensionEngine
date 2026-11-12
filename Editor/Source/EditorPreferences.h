@@ -22,6 +22,9 @@ namespace Editor
         bool ClearConsoleOnPlay = true;
         float AutosaveMinutes = 5.0f;  // 0 = off; backups go to <project>/.dimension/Autosave
         bool SaveSceneBeforePlay = false;
+        // Enter Play Mode option (Unity's Reload Domain): the C# scripts load again as play starts, so static fields
+        // start from their initial values each time. Off: play starts faster and statics keep what the last play left.
+        bool ReloadScriptsOnPlay = true;
         int Theme = 0;                 // Dimension::ImGuiLayer::Theme: Dark, Light, Midnight
         uint32_t Accent = 0x3A79BB;    // 0xRRGGBB
         // Scene view snapping (the toolbar's Snap; Ctrl inverts it while held): moves land on the world grid, rotation
