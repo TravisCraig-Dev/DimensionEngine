@@ -4,4 +4,9 @@
     <DimensionManagedDir>C:\Users\travi\RiderProjects\DimensionEngine\cmake-build-debug\bin\managed</DimensionManagedDir>
     <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\.dimension\obj\</BaseIntermediateOutputPath>
   </PropertyGroup>
+  <!-- The engine's checks of scripts (DIM001...: callbacks never called, containers not disposed, engine use in jobs). -->
+  <ItemGroup Condition="Exists('$(DimensionManagedDir)\Dimension.Analyzers.dll')">
+    <Analyzer Include="$(DimensionManagedDir)\Dimension.Analyzers.dll" />
+    <Analyzer Include="$(DimensionManagedDir)\Dimension.Analyzers.CodeFixes.dll" Condition="Exists('$(DimensionManagedDir)\Dimension.Analyzers.CodeFixes.dll')" />
+  </ItemGroup>
 </Project>
