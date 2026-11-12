@@ -17,6 +17,7 @@ FetchContent_Declare(imgui          GIT_REPOSITORY https://github.com/ocornut/im
 FetchContent_Declare(imguizmo       GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git  GIT_TAG master GIT_SHALLOW TRUE SOURCE_SUBDIR _sources_only)
 FetchContent_Declare(stb            GIT_REPOSITORY https://github.com/nothings/stb.git              GIT_TAG master GIT_SHALLOW TRUE)
 FetchContent_Declare(cgltf          GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git               GIT_TAG v1.15  GIT_SHALLOW TRUE)
+FetchContent_Declare(ufbx           GIT_REPOSITORY https://github.com/ufbx/ufbx.git                 GIT_TAG v0.23.1 GIT_SHALLOW TRUE SOURCE_SUBDIR _sources_only)
 FetchContent_Declare(box2d          GIT_REPOSITORY https://github.com/erincatto/box2d.git           GIT_TAG v3.1.1 GIT_SHALLOW TRUE)
 FetchContent_Declare(jolt           GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git        GIT_TAG v5.6.0 GIT_SHALLOW TRUE SOURCE_SUBDIR Build)
 FetchContent_Declare(miniaudio      GIT_REPOSITORY https://github.com/mackron/miniaudio.git         GIT_TAG 0.11.25 GIT_SHALLOW TRUE SOURCE_SUBDIR _header_only)
@@ -62,4 +63,4 @@ set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf box2d jolt miniaudio vhacd ogg opus opusfile msdfgen glslang)
+FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf ufbx box2d jolt miniaudio vhacd ogg opus opusfile msdfgen glslang)

@@ -13,6 +13,13 @@ target_include_directories(stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 add_library(cgltf INTERFACE)
 target_include_directories(cgltf SYSTEM INTERFACE ${cgltf_SOURCE_DIR})
 
+# ufbx (FBX import): one C file.
+add_library(ufbx STATIC ${ufbx_SOURCE_DIR}/ufbx.c)
+target_include_directories(ufbx SYSTEM PUBLIC ${ufbx_SOURCE_DIR})
+if(MSVC)
+    target_compile_options(ufbx PRIVATE /W0)
+endif()
+
 # V-HACD (convex decomposition): single header, implemented in ConvexDecomposition.cpp.
 add_library(vhacd INTERFACE)
 target_include_directories(vhacd SYSTEM INTERFACE ${vhacd_SOURCE_DIR}/include)

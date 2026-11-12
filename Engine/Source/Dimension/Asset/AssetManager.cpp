@@ -306,7 +306,7 @@ namespace Dimension
         for (auto& c : ext) c = (char)std::tolower(c);
         if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".psd" || ext == ".hdr")
             return AssetType::Texture;
-        if (ext == ".gltf" || ext == ".glb" || ext == ".obj") return AssetType::Mesh;
+        if (ext == ".gltf" || ext == ".glb" || ext == ".obj" || ext == ".fbx") return AssetType::Mesh;
         if (ext == ".scene") return AssetType::Scene;
         if (ext == ".prefab") return AssetType::Prefab;
         if (ext == ".mat") return AssetType::Material;

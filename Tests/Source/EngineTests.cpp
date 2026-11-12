@@ -506,6 +506,74 @@ namespace
         CHECK(Near(dir.z, -1.0f) && Near(origin.x, 5.0f * 800.0f / 600.0f, 1e-3f) && Near(origin.y, -5.0f, 1e-3f));
     }
 
+    void TestFbxImport()
+    {
+        // FBX models (ufbx's test files, from the fetched ufbx sources): skinned and posed by their takes as ufbx's
+        // reference meshes are, plus materials, embedded textures and blend shapes.
+        fs::path data = DIM_UFBX_DATA;
+        if (!fs::exists(data / "blender_279_sausage_7400_binary.fbx")) return;
+        auto objBox = [](const fs::path& file) {
+            AABB box{ glm::vec3(1e9f), glm::vec3(-1e9f) };
+            std::ifstream in(file);
+            std::string line;
+            while (std::getline(in, line))
+                if (line.rfind("v ", 0) == 0)
+                {
+                    glm::vec3 p;
+                    std::sscanf(line.c_str() + 2, "%f %f %f", &p.x, &p.y, &p.z);
+                    box.Min = glm::min(box.Min, p), box.Max = glm::max(box.Max, p);
+                }
+            return box;
+        };
+        // The mesh skinned on the CPU at a clip's time (-1: bind pose).
+        auto posedBox = [](const MeshData& m, const std::string& clipName, float time) {
+            Pose pose;
+            pose.SetBindPose(*m.SkeletonData);
+            for (const auto& clip : m.Clips)
+                if (clip.Name == clipName) Animation::Sample(*m.SkeletonData, clip, time, pose);
+            std::vector<glm::mat4> skin;
+            Animation::ComputeSkinMatrices(*m.SkeletonData, pose, skin);
+            AABB box{ glm::vec3(1e9f), glm::vec3(-1e9f) };
+            for (size_t v = 0; v < m.Vertices.size(); ++v)
+            {
+                glm::vec3 p(0.0f);
+                for (int k = 0; k < 4; ++k) p += m.Skin[v].Weights[k] * glm::vec3(skin[m.Skin[v].Joints[k]] * glm::vec4(m.Vertices[v].Position, 1.0f));
+                box.Min = glm::min(box.Min, p), box.Max = glm::max(box.Max, p);
+            }
+            return box;
+        };
+        auto similar = [](const AABB& a, const AABB& b, float tolerance) {
+            bool ok = glm::all(glm::lessThan(glm::abs(a.Min - b.Min), glm::vec3(tolerance))) && glm::all(glm::lessThan(glm::abs(a.Max - b.Max), glm::vec3(tolerance)));
+            if (!ok) std::printf("  box (%.2f %.2f %.2f)-(%.2f %.2f %.2f) vs (%.2f %.2f %.2f)-(%.2f %.2f %.2f)\n", a.Min.x, a.Min.y, a.Min.z, a.Max.x, a.Max.y,
+                                 a.Max.z, b.Min.x, b.Min.y, b.Min.z, b.Max.x, b.Max.y, b.Max.z);
+            return ok;
+        };
+        MeshData sausage;
+        CHECK(MeshData::LoadFromFile(data / "blender_279_sausage_7400_binary.fbx", sausage) && sausage.SkeletonData && sausage.Clips.size() == 3);
+        if (sausage.SkeletonData)
+        {
+            CHECK(similar(posedBox(sausage, "", 0.0f), objBox(data / "blender_279_sausage_base_0.obj"), 0.02f));
+            CHECK(similar(posedBox(sausage, "Skeleton|Wiggle", 20.0f / 24.0f), objBox(data / "blender_279_sausage_wiggle_20.obj"), 0.05f));
+            CHECK(similar(posedBox(sausage, "Skeleton|Spin", 15.0f / 24.0f), objBox(data / "blender_279_sausage_spin_15.obj"), 0.05f));
+        }
+        MeshData maya; // (Maya: centimeters, Y up; its takes in separate files)
+        CHECK(MeshData::LoadFromFile(data / "maya_game_sausage_7500_binary_wiggle.fbx", maya) && maya.SkeletonData && !maya.Clips.empty());
+        if (maya.SkeletonData && !maya.Clips.empty())
+        {
+            AABB ref = objBox(data / "maya_game_sausage_wiggle_18.obj");
+            AABB got = posedBox(maya, maya.Clips[0].Name, 18.0f / 24.0f);
+            CHECK(similar(got, AABB{ ref.Min * 0.01f, ref.Max * 0.01f }, 0.02f));
+        }
+        MeshData suzanne, cube, shapes;
+        CHECK(MeshData::LoadFromFile(data / "blender_suzanne_multimaterial_7400_binary.fbx", suzanne) && suzanne.Materials.size() == 7 &&
+              suzanne.SubMeshes.size() == 7 && !suzanne.SkeletonData);
+        CHECK(MeshData::LoadFromFile(data / "blender_293_embedded_textures_7400_binary.fbx", cube) && cube.Images.size() == 2 && !cube.Images[0].Bytes.empty());
+        CHECK(MeshData::LoadFromFile(data / "blender_279_shape_weights_7400_binary.fbx", shapes) && shapes.BlendShapes.size() == 1 &&
+              shapes.Clips.size() == 1 && shapes.Clips[0].WeightChannels.size() == 1);
+        MeshData none;
+        CHECK(!MeshData::LoadFromFile(data / "maya_human_ik_6100_binary.fbx", none)); // (a skeleton without meshes)
+    }
+
     void TestEulerAnglesGimbal()
     {
         // Euler angles back to the same rotation, also at gimbal lock (Y at +-90 degrees), where glm's roll is noise.
@@ -16640,6 +16708,7 @@ int main(int argc, char** argv)
     Run("Time scale and cursor", TestTimeScaleAndCursor);
     Run("Runtime AddComponent", TestRuntimeAddComponent);
     Run("Euler angles at gimbal lock", TestEulerAnglesGimbal);
+    Run("FBX import", TestFbxImport);
     Run("Script assemblies", TestScriptAssemblies);
     Run("2D physics queries", TestPhysics2DQueries);
     Run("3D shape casts and spin", TestPhysics3DCasts);

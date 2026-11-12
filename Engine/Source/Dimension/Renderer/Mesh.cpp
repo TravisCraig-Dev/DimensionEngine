@@ -676,6 +676,8 @@ namespace Dimension
         if (removed > 0) Log::Info("'{}': keyframe reduction left out {} of {} keys", Name, removed, total);
     }
 
+    bool LoadFbx(const fs::path& path, MeshData& out); // (FbxImport.cpp)
+
     bool MeshData::LoadFromFile(const fs::path& path, MeshData& out, const MeshImportSettings& settings)
     {
         out = MeshData();
@@ -686,6 +688,7 @@ namespace Dimension
         bool ok = false;
         if (ext == ".gltf" || ext == ".glb") ok = LoadGltf(path, out);
         else if (ext == ".obj") ok = LoadObj(path, out);
+        else if (ext == ".fbx") ok = LoadFbx(path, out);
         else Log::Error("Unsupported mesh format '{}'", ext);
         if (ok && out.SubMeshes.empty()) out.SubMeshes.push_back({ 0, (uint32_t)out.Indices.size(), -1 });
         if (ok)
