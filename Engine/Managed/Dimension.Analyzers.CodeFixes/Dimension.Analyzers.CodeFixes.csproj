@@ -1,35 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Quick fixes for Dimension.Analyzers' warnings (the IDE offers them). Built against the Roslyn workspace assemblies
-       that come with the .NET SDK's dotnet-format (the same Roslyn version as its compiler), so nothing is downloaded. -->
+  <!-- Quick fixes for Dimension.Analyzers' warnings (the IDE offers them). netstandard2.0 against Roslyn 4.8, as the
+       analyzers. -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>netstandard2.0</TargetFramework>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
     <IsRoslynComponent>true</IsRoslynComponent>
-    <RoslynDir>$(NetCoreRoot)sdk\$(NETCoreSdkVersion)\DotnetTools\dotnet-format\</RoslynDir>
     <NoWarn>RS1036;RS2008;RS1041;RS1038</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Dimension.Analyzers\Dimension.Analyzers.csproj" Private="false" />
-    <Reference Include="Microsoft.CodeAnalysis">
-      <HintPath>$(RoslynDir)Microsoft.CodeAnalysis.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Microsoft.CodeAnalysis.CSharp">
-      <HintPath>$(RoslynDir)Microsoft.CodeAnalysis.CSharp.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Microsoft.CodeAnalysis.Workspaces">
-      <HintPath>$(RoslynDir)Microsoft.CodeAnalysis.Workspaces.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="System.Composition.AttributedModel">
-      <HintPath>$(RoslynDir)System.Composition.AttributedModel.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Microsoft.CodeAnalysis.CSharp.Workspaces">
-      <HintPath>$(RoslynDir)Microsoft.CodeAnalysis.CSharp.Workspaces.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" PrivateAssets="all" />
   </ItemGroup>
 </Project>
