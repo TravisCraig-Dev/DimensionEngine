@@ -137,7 +137,7 @@ namespace Dimension
         Const = 1, GetAttr, SetAttr, AddAttr, Input,
         Add, Sub, Mul, Div, Min, Max, Lerp, Sin, Cos, Abs, Fract, Floor, Length, Normalize, Dot, Cross,
         Random, RandomInSphere, RandomOnSphere, RandomInCircle, Noise, Gradient, Curve, Split, Combine, Step,
-        Saturate, KillIf, Pow, ToSimPoint, ToSimVector, RandomCone, Bounce, Sqrt, TriggerDie
+        Saturate, KillIf, Pow, ToSimPoint, ToSimVector, RandomCone, Bounce, Sqrt, TriggerDie, CollideScene, TriggerCollide
     };
     // Built-in inputs (VfxOp::Input).
     enum class VfxInput : uint32_t { AgeOverLifetime = 0, Time, DeltaTime, ParticleRandom, ParticleIndex, EmitterPosition, SourcePosition, SourceVelocity, SourceColor };
@@ -201,6 +201,9 @@ namespace Dimension
         };
         // A new particle (its defaults, then Initialize), and a frame of an alive one (Update, then it moves on).
         void Spawn(const VfxProgram& program, CpuParticle& p, const CpuContext& ctx);
+        // The graph's Collide With Scene block (the first enabled one in Update; null when none): its values are the
+        // collision's for every particle (the renderer reads them; the CPU VM does not collide).
+        const VfxNode* SceneCollision(const VisualEffectAsset& asset);
         void Step(const VfxProgram& program, CpuParticle& p, const CpuContext& ctx);
 
         // Spawning, every frame (play mode and edit-mode preview): how many particles each effect starts.

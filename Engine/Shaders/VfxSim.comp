@@ -1,6 +1,10 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
 #include "ParticleCommon.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D uTextures[];
+#include "ParticleCollision.glsl"
 
 // Visual Effect Graph simulation: one invocation per slot of the effect's particle ring. This frame's new particles
 // take the slots from the ring head on: their defaults, then the graph's Initialize program; every other live one runs
@@ -30,6 +34,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Vf
     vec4 Trail;     // x 1 = trails (recorded in the buffer at TrailBuffer.xy), y seconds between points
     uvec4 TrailBuffer;
     uvec4 MeshOut;  // xy: mesh output's instances (one per slot, MeshCommon.glsl's MeshInstance; 0 = quads), z entity id
+    uvec4 Collide;  // xy: the collision's parameters (GpuParticleParamsRef: depth, terrain, colliders, bounce...), z 1 = on
 };
 // Mesh output: the slot's instance for the mesh passes (a dead slot's collapses to a point).
 struct VfxMeshInstance
@@ -156,6 +161,8 @@ float aSize, aAge, aLife, aRot, aSpin, aRandom;
 vec3 sPos = vec3(0.0), sVel = vec3(0.0);
 vec4 sColor = vec4(1.0);
 uint gDie[4] = uint[4](0u, 0u, 0u, 0u); // Trigger On Die: events to send if the particle dies this frame
+uint gHit[4] = uint[4](0u, 0u, 0u, 0u); // Trigger On Collide: events to send if it bounces this frame
+bool gCollide = false;                  // Collide With Scene: after it moves
 
 vec4 GetAttr(uint a)
 {
@@ -291,6 +298,8 @@ void Run(VfxParamsRef P, uint start, uint count, uint index)
         }
         case 39u: r[d] = sqrt(max(r[a], vec4(0.0))); break; // Sqrt
         case 40u: if (w < 4u) gDie[w] = uint(max(r[a].x, 0.0) + 0.5); break; // TriggerDie
+        case 41u: gCollide = true; break;                                     // CollideScene
+        case 42u: if (w < 4u) gHit[w] = uint(max(r[a].x, 0.0) + 0.5); break; // TriggerCollide
         default: break;
         }
     }
@@ -367,17 +376,33 @@ void main()
             aPos += aVel * dt;
             aRot += aSpin * dt;
             aAge += dt;
-            // Died this frame: its events.
-            if (aAge >= aLife)
+            // Collide With Scene: the GPU particles' collisions, on the particle as it is now.
+            bool bounced = false;
+            if (gCollide && P.Collide.z != 0u)
+            {
+                GpuParticleParamsRef C = GpuParticleParamsRef(P.Collide.xy);
+                GpuParticle q = GpuParticle(vec4(aPos, aAge), vec4(aVel, aLife), aColor, vec4(aSize, aRot, aSpin, aRandom));
+                g_ParticleHit = false;
+                TerrainCollide(C, q);
+                DepthCollide(C, q);
+                ColliderCollide(C, q);
+                bounced = g_ParticleHit;
+                aPos = q.PosAge.xyz;
+                aVel = q.VelLife.xyz;
+                aLife = q.VelLife.w;
+            }
+            // Bounced or died this frame: its events.
+            if (aAge >= aLife || bounced)
             {
                 vec3 wp = (P.SimToWorld * vec4(aPos, 1.0)).xyz, wv = mat3(P.SimToWorld) * aVel;
                 for (uint s = 0u; s < 4u; ++s)
                 {
                     uvec2 address = s < 2u ? (s == 0u ? P.Events[0].xy : P.Events[0].zw) : (s == 2u ? P.Events[1].xy : P.Events[1].zw);
-                    if (gDie[s] == 0u || address == uvec2(0u)) continue;
+                    uint n = (aAge >= aLife ? gDie[s] : 0u) + (bounced ? gHit[s] : 0u);
+                    if (n == 0u || address == uvec2(0u)) continue;
                     VfxEventsRef target = VfxEventsRef(address);
-                    uint at = atomicAdd(target.Count, gDie[s]);
-                    for (uint k = 0u; k < gDie[s] && at + k < P.Source.w; ++k)
+                    uint at = atomicAdd(target.Count, n);
+                    for (uint k = 0u; k < n && at + k < P.Source.w; ++k)
                     {
                         target.Items[(at + k) * 3u] = vec4(wp, 0.0);
                         target.Items[(at + k) * 3u + 1u] = vec4(wv, 0.0);

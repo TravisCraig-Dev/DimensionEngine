@@ -4403,6 +4403,53 @@ namespace Dimension
                     vkCmdDispatch(cmd, padded / 64, 1, 1);
                 }
         };
+        // The 32 colliders nearest a point, in world space (GpuParticleParams' Colliders).
+        auto fillColliders = [&](GpuParticleParams& p, const glm::vec3& emitter) {
+            struct Shape { float Distance; glm::vec4 Rows[4]; };
+            std::vector<Shape> shapes;
+            auto axes = [](const glm::mat4& m, glm::vec3 axis[3], glm::vec3& scale) {
+                for (int k = 0; k < 3; ++k)
+                {
+                    scale[k] = glm::length(glm::vec3(m[k]));
+                    axis[k] = scale[k] > 1e-8f ? glm::vec3(m[k]) / scale[k] : glm::vec3(0.0f);
+                }
+            };
+            auto& reg = scene.GetRegistry();
+            auto add = [&](const glm::vec3& center, const glm::vec4 r1, const glm::vec4 r2, const glm::vec4 r3, float type) {
+                shapes.push_back({ glm::distance(center, emitter), { glm::vec4(center, type), r1, r2, r3 } });
+            };
+            for (auto [ce, sc, ct] : reg.ViewOf<SphereColliderComponent, TransformComponent>())
+            {
+                if (!ct.ActiveInHierarchy || sc.IsTrigger) continue;
+                glm::vec3 axis[3], scale;
+                axes(ct.World, axis, scale);
+                add(glm::vec3(ct.World * glm::vec4(sc.Offset, 1.0f)), glm::vec4(0, 0, 0, sc.Radius * std::max({ scale.x, scale.y, scale.z })), {}, {}, 0.0f);
+            }
+            for (auto [ce, bc, ct] : reg.ViewOf<BoxColliderComponent, TransformComponent>())
+            {
+                if (!ct.ActiveInHierarchy || bc.IsTrigger) continue;
+                glm::vec3 axis[3], scale;
+                axes(ct.World, axis, scale);
+                glm::vec3 half = glm::abs(bc.Size) * 0.5f * scale;
+                add(glm::vec3(ct.World * glm::vec4(bc.Offset, 1.0f)), glm::vec4(axis[0], half.x), glm::vec4(axis[1], half.y), glm::vec4(axis[2], half.z), 1.0f);
+            }
+            auto capsule = [&](const TransformComponent& ct, const glm::vec3& offset, float radius, float height) {
+                glm::vec3 axis[3], scale;
+                axes(ct.World, axis, scale);
+                float r = radius * std::max(scale.x, scale.z);
+                add(glm::vec3(ct.World * glm::vec4(offset, 1.0f)), glm::vec4(0, 0, 0, r), glm::vec4(axis[1], std::max(height * 0.5f * scale.y - r, 0.0f)), {}, 2.0f);
+            };
+            for (auto [ce, cc, ct] : reg.ViewOf<CapsuleColliderComponent, TransformComponent>())
+                if (ct.ActiveInHierarchy && !cc.IsTrigger) capsule(ct, cc.Offset, cc.Radius, cc.Height);
+            for (auto [ce, ch, ct] : reg.ViewOf<CharacterControllerComponent, TransformComponent>())
+                if (ct.ActiveInHierarchy) capsule(ct, ch.Center, ch.Radius, ch.Height);
+            if (shapes.size() > 32)
+                std::partial_sort(shapes.begin(), shapes.begin() + 32, shapes.end(), [](const Shape& a, const Shape& b) { return a.Distance < b.Distance; });
+            uint32_t count = (uint32_t)std::min<size_t>(shapes.size(), 32);
+            for (uint32_t k = 0; k < count; ++k)
+                for (int row = 0; row < 4; ++row) p.Colliders[k * 4 + row] = shapes[k].Rows[row];
+            p.ColliderCount = glm::uvec4(count, 0u, 0u, 0u);
+        };
         // One GPU system: its buffers, this frame's parameters, simulation (and sorting) and its draw. `salt` tells apart
         // several systems on one object (a Weather's rain and snow).
         auto simulateOne = [&](Entity e, ParticleSystemComponent& ps, const glm::mat4& emitterWorld, uint64_t salt) {
@@ -4503,52 +4550,7 @@ namespace Dimension
                 }
             if (ps.CollideWithColliders)
             {
-                // The 32 colliders nearest the emitter, in world space.
-                struct Shape { float Distance; glm::vec4 Rows[4]; };
-                std::vector<Shape> shapes;
-                glm::vec3 emitter(world[3]);
-                auto axes = [](const glm::mat4& m, glm::vec3 axis[3], glm::vec3& scale) {
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        scale[k] = glm::length(glm::vec3(m[k]));
-                        axis[k] = scale[k] > 1e-8f ? glm::vec3(m[k]) / scale[k] : glm::vec3(0.0f);
-                    }
-                };
-                auto& reg = scene.GetRegistry();
-                auto add = [&](const glm::vec3& center, const glm::vec4 r1, const glm::vec4 r2, const glm::vec4 r3, float type) {
-                    shapes.push_back({ glm::distance(center, emitter), { glm::vec4(center, type), r1, r2, r3 } });
-                };
-                for (auto [ce, sc, ct] : reg.ViewOf<SphereColliderComponent, TransformComponent>())
-                {
-                    if (!ct.ActiveInHierarchy || sc.IsTrigger) continue;
-                    glm::vec3 axis[3], scale;
-                    axes(ct.World, axis, scale);
-                    add(glm::vec3(ct.World * glm::vec4(sc.Offset, 1.0f)), glm::vec4(0, 0, 0, sc.Radius * std::max({ scale.x, scale.y, scale.z })), {}, {}, 0.0f);
-                }
-                for (auto [ce, bc, ct] : reg.ViewOf<BoxColliderComponent, TransformComponent>())
-                {
-                    if (!ct.ActiveInHierarchy || bc.IsTrigger) continue;
-                    glm::vec3 axis[3], scale;
-                    axes(ct.World, axis, scale);
-                    glm::vec3 half = glm::abs(bc.Size) * 0.5f * scale;
-                    add(glm::vec3(ct.World * glm::vec4(bc.Offset, 1.0f)), glm::vec4(axis[0], half.x), glm::vec4(axis[1], half.y), glm::vec4(axis[2], half.z), 1.0f);
-                }
-                auto capsule = [&](const TransformComponent& ct, const glm::vec3& offset, float radius, float height) {
-                    glm::vec3 axis[3], scale;
-                    axes(ct.World, axis, scale);
-                    float r = radius * std::max(scale.x, scale.z);
-                    add(glm::vec3(ct.World * glm::vec4(offset, 1.0f)), glm::vec4(0, 0, 0, r), glm::vec4(axis[1], std::max(height * 0.5f * scale.y - r, 0.0f)), {}, 2.0f);
-                };
-                for (auto [ce, cc, ct] : reg.ViewOf<CapsuleColliderComponent, TransformComponent>())
-                    if (ct.ActiveInHierarchy && !cc.IsTrigger) capsule(ct, cc.Offset, cc.Radius, cc.Height);
-                for (auto [ce, ch, ct] : reg.ViewOf<CharacterControllerComponent, TransformComponent>())
-                    if (ct.ActiveInHierarchy) capsule(ct, ch.Center, ch.Radius, ch.Height);
-                if (shapes.size() > 32)
-                    std::partial_sort(shapes.begin(), shapes.begin() + 32, shapes.end(), [](const Shape& a, const Shape& b) { return a.Distance < b.Distance; });
-                uint32_t count = (uint32_t)std::min<size_t>(shapes.size(), 32);
-                for (uint32_t k = 0; k < count; ++k)
-                    for (int row = 0; row < 4; ++row) p.Colliders[k * 4 + row] = shapes[k].Rows[row];
-                p.ColliderCount = glm::uvec4(count, 0u, 0u, 0u);
+                fillColliders(p, glm::vec3(world[3])); // (the 32 nearest the emitter)
                 p.Collision.z = ps.Bounce;
                 p.Collision.w = ps.CollisionDampen;
                 p.DepthParams.y = ps.CollisionRadius;
@@ -4675,6 +4677,7 @@ namespace Dimension
             glm::vec4 Trail;
             glm::uvec4 TrailBuffer;
             glm::uvec4 MeshOut;
+            glm::uvec4 Collide;
         };
         m_VfxMeshOutputs.clear();
         auto makeBuffer = [&](Buffer& buffer, VkDeviceAddress& address, VkDeviceSize size, MemoryUsage usage, const char* name) {
@@ -4801,6 +4804,30 @@ namespace Dimension
                 p.Counts = glm::uvec4(capacity, st.Head, 0u, 0u);
                 p.Lighting = glm::vec4(g.Lit ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
                 for (int i = 0; i < kParticleLut; ++i) p.ColorLut[i] = p.CurveLut[i] = glm::vec4(1.0f);
+                // Collide With Scene: the GPU particles' World collision (last frame's depth, the terrain, the colliders
+                // near the effect), with the block's values. VfxSim.comp reads these parameters for it.
+                if (const VfxNode* collide = VisualEffects::SceneCollision(g))
+                {
+                    auto in = [&](int k, float fallback) { return k < (int)collide->Inputs.size() ? collide->Inputs[k].x : fallback; };
+                    float radius = std::max(in(2, 0.05f), 0.0f);
+                    m_ParticleDepthWanted = true;
+                    p.DepthViewProj = m_ParticleDepthViewProj;
+                    p.DepthInvViewProj = glm::inverse(m_ParticleDepthViewProj);
+                    p.DepthInfo = glm::uvec4(depthBindless, depthValid ? 1u : 0u, 0u, 0u);
+                    p.DepthParams = glm::vec4(0.6f + radius, radius, 0.0f, 0.0f);
+                    p.Collision = glm::vec4(2.0f, 0.0f, std::max(in(0, 0.4f), 0.0f), std::clamp(in(1, 0.2f), 0.0f, 1.0f));
+                    p.Misc.x = std::clamp(in(3, 0.0f), 0.0f, 1.0f);
+                    if (collideTerrain)
+                    {
+                        p.TerrainToWorld = collideTerrainWorld;
+                        p.TerrainToLocal = glm::inverse(collideTerrainWorld);
+                        p.TerrainInfo = glm::uvec4(SplitAddress(res.ParticleTerrain.Address), res.ParticleTerrain.Samples, 1u);
+                        p.TerrainSize = glm::vec4(collideTerrain->Size, 0.0f, 0.0f);
+                    }
+                    fillColliders(p, glm::vec3(t.World[3]));
+                    vp.Collide = glm::uvec4(SplitAddress(params.Address), 1u, 0u);
+                    std::memcpy(simParams.Data, &vp, sizeof(vp));
+                }
                 if (trails)
                 {
                     p.Trail = glm::vec4(1.0f, std::max(g.TrailLifetime, 1e-3f) / kGpuTrailPoints, std::max(g.TrailWidth, 0.0f), 0.0f);

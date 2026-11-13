@@ -391,7 +391,7 @@ namespace Editor
                             changed = true;
                         }
                     }
-                    if (n->Type == "Trigger On Die")
+                    if (n->Type == "Trigger On Die" || n->Type == "Trigger On Collide")
                     {
                         UI::EditResult r = UI::AssetField("Child", n->Child, AssetType::VisualEffect);
                         if (r.Activated) BeginChange();
@@ -657,7 +657,7 @@ namespace Editor
                 std::string name = n->Type;
                 if (t && !t->Options.empty())
                     name += std::string(": ") + VisualEffects::AttributeName((VfxAttribute)std::clamp(n->Option, 0, (int)VfxAttribute::Count - 1));
-                if (n->Type == "Trigger On Die")
+                if (n->Type == "Trigger On Die" || n->Type == "Trigger On Collide")
                 {
                     auto* child = AssetManager::GetMetadata(n->Child);
                     name += std::string(" -> ") + (child ? child->Path.stem().string() : "(no child)");

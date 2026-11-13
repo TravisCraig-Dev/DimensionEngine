@@ -112,6 +112,12 @@ namespace Dimension
                 { "Collide Plane", "Collision/Collide Plane", Category::Update, { { "Height", F, V(0) }, { "Bounce", F, V(0.5f) }, { "Friction", F, V(0.1f) } },
                   false, F, {}, "Bounces the particles off a level floor" },
                 { "Kill Below", "Collision/Kill Below", Category::Update, { { "Height", F, V(-10) } }, false, F, {}, "Removes particles that fall below Height" },
+                { "Collide With Scene", "Collision/Collide With Scene", Category::Update,
+                  { { "Bounce", F, V(0.4f) }, { "Friction", F, V(0.2f) }, { "Radius", F, V(0.05f) }, { "Lifetime Loss", F, V(0) } }, false, F, {},
+                  "Bounces the particles off what the camera saw last frame, the terrain's shape and the nearest colliders (as GPU "
+                  "Particle Systems' World collision; the values set on the block, for all particles)" },
+                { "Trigger On Collide", "Event/Trigger On Collide", Category::Update, { { "Count", F, V(3) } }, false, F, {},
+                  "When a particle bounces (Collide With Scene, after it), starts Count particles of the Child effect where it hit" },
                 { "Trigger On Die", "Event/Trigger On Die", Category::Update, { { "Count", F, V(10) } }, false, F, {},
                   "When a particle dies, starts Count particles of the Child effect where it was (they can read its Source attributes)" },
             };
@@ -816,11 +822,13 @@ namespace Dimension
                         Emit(VfxOp::Combine, params, h, b, f);
                         Emit(VfxOp::Bounce, 0, params);
                     }
-                    else if (t == "Trigger On Die")
+                    else if (t == "Collide With Scene")
+                        Emit(VfxOp::CollideScene, 0);
+                    else if (t == "Trigger On Die" || t == "Trigger On Collide")
                     {
                         if (!n.Child.IsValid())
                         {
-                            Out.Errors.push_back("A Trigger On Die block has no Child effect");
+                            Out.Errors.push_back("A " + t + " block has no Child effect");
                             return;
                         }
                         auto it = std::find(Out.Children.begin(), Out.Children.end(), n.Child);
@@ -834,7 +842,7 @@ namespace Dimension
                             it = Out.Children.insert(Out.Children.end(), n.Child);
                         }
                         int count = Input(n, 0);
-                        Emit(VfxOp::TriggerDie, 0, count, 0, 0, (uint32_t)(it - Out.Children.begin()));
+                        Emit(t == "Trigger On Die" ? VfxOp::TriggerDie : VfxOp::TriggerCollide, 0, count, 0, 0, (uint32_t)(it - Out.Children.begin()));
                     }
                     else if (t == "Kill Below")
                     {
@@ -854,6 +862,13 @@ namespace Dimension
         glm::vec4 PropertyConstant(const VfxProperty& property, const glm::vec4& value)
         {
             return property.Type == VfxValue::Float ? glm::vec4(value.x) : value;
+        }
+
+        const VfxNode* SceneCollision(const VisualEffectAsset& asset)
+        {
+            for (uint32_t id : asset.Update)
+                if (const VfxNode* n = asset.Find(id); n && n->Enabled && n->Type == "Collide With Scene") return n;
+            return nullptr;
         }
 
         VfxProgram Compile(const VisualEffectAsset& asset)

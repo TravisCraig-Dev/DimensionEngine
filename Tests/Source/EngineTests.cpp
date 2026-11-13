@@ -10622,6 +10622,7 @@ namespace
         trigger.Inputs[0] = glm::vec4(3.0f);
         CHECK(!VisualEffects::Compile(parent).Valid()); // (no child yet)
         trigger.Child = AssetHandle(uint64_t(777));
+        uint32_t triggerId = trigger.Id; // (the reference moves as nodes are added)
         VfxProgram pp = VisualEffects::Compile(parent);
         CHECK(pp.Valid() && pp.Children.size() == 1 && pp.Children[0] == AssetHandle(uint64_t(777)));
         std::vector<VisualEffects::CpuEvent> events;
@@ -10656,8 +10657,20 @@ namespace
         VisualEffects::Spawn(cp, c, cctx);
         CHECK(glm::all(glm::epsilonEqual(c.Position, events[1].Position, 1e-5f)) && Near(c.Velocity.y, 5.0f, 1e-4f) &&
               glm::all(glm::epsilonEqual(c.Color, glm::vec4(0.5f, 0.25f, 0.0f, 0.5f), 1e-5f)));
+        // Collide With Scene (its values for the renderer) and Trigger On Collide sharing the child's event slot.
+        auto& collide = parent.Add("Collide With Scene");
+        collide.Inputs[0] = glm::vec4(0.7f);
+        uint32_t collideId = collide.Id;
+        auto& onHit = parent.Add("Trigger On Collide");
+        onHit.Child = AssetHandle(uint64_t(777));
+        VfxProgram hp = VisualEffects::Compile(parent);
+        CHECK(hp.Valid() && hp.Children.size() == 1 && VisualEffects::SceneCollision(parent) && VisualEffects::SceneCollision(parent)->Id == collideId &&
+              Near(VisualEffects::SceneCollision(parent)->Inputs[0].x, 0.7f));
+        CHECK(std::count_if(hp.Code.begin(), hp.Code.end(), [](const glm::uvec4& c) { return c.x == (uint32_t)VfxOp::TriggerCollide; }) == 1);
+        parent.Find(collideId)->Enabled = false;
+        CHECK(!VisualEffects::SceneCollision(parent));
         // Saved with its child; at most four children.
-        CHECK(VisualEffectAsset::FromJson(parent.ToJson()).Find(trigger.Id)->Child == AssetHandle(uint64_t(777)));
+        CHECK(VisualEffectAsset::FromJson(parent.ToJson()).Find(triggerId)->Child == AssetHandle(uint64_t(777)));
         for (int k = 0; k < 4; ++k) parent.Add("Trigger On Die").Child = AssetHandle(uint64_t(800 + k));
         CHECK(!VisualEffects::Compile(parent).Valid());
     }
