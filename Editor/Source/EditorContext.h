@@ -204,6 +204,7 @@ namespace Editor
         // Deferred requests handled by the EditorLayer at a safe point in the frame.
         std::optional<AssetHandle> RequestOpenPrefab;
         std::optional<fs::path> RequestOpenScene;
+        std::optional<AssetHandle> RequestOpenVisualEffect; // the Visual Effect Graph window on this effect
         std::optional<glm::vec3> RequestFocus; // frame point in scene view
         bool RequestFocusSelected = false;
         // The Project window's Export Package... (an asset or folder, absolute) and Import Package...

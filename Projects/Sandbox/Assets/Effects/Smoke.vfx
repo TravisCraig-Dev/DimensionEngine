@@ -1,0 +1,309 @@
+{
+  "capacity": 4000,
+  "rate": 120,
+  "duration": 5,
+  "loop": true,
+  "bursts": [],
+  "space": "World",
+  "blend": "Alpha",
+  "texture": 0,
+  "sort": true,
+  "lit": false,
+  "nextId": 30,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Position (Circle)",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0.6,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 2,
+      "type": "Set Attribute",
+      "position": [
+        0,
+        0
+      ],
+      "option": 1,
+      "inputs": [
+        [
+          0,
+          1.2,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Lifetime (Random)",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          3,
+          0,
+          0,
+          0
+        ],
+        [
+          4,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 4,
+      "type": "Set Attribute",
+      "position": [
+        0,
+        0
+      ],
+      "option": 2,
+      "inputs": [
+        [
+          1,
+          1,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "id": 10,
+      "type": "Property",
+      "position": [
+        -560,
+        150
+      ],
+      "option": 0,
+      "inputs": []
+    },
+    {
+      "id": 11,
+      "type": "Particle Random",
+      "position": [
+        -760,
+        330
+      ],
+      "option": 0,
+      "inputs": []
+    },
+    {
+      "id": 12,
+      "type": "Lerp",
+      "position": [
+        -300,
+        200
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          1,
+          1,
+          1,
+          1
+        ],
+        [
+          0.5,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 13,
+      "type": "Color",
+      "position": [
+        -560,
+        230
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0.9,
+          0.9,
+          0.9,
+          0.6
+        ]
+      ]
+    },
+    {
+      "id": 14,
+      "type": "Split",
+      "position": [
+        -540,
+        330
+      ],
+      "option": 0,
+      "inputs": []
+    },
+    {
+      "id": 5,
+      "type": "Turbulence",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          1.5,
+          0,
+          0,
+          0
+        ],
+        [
+          0.4,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 6,
+      "type": "Drag",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0.3,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 7,
+      "type": "Size Over Life",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          1.6,
+          0,
+          0,
+          0
+        ]
+      ],
+      "curve": {
+        "smooth": true,
+        "keys": [
+          [
+            0,
+            0.3
+          ],
+          [
+            1,
+            1.2
+          ]
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "type": "Add Per Second",
+      "position": [
+        0,
+        0
+      ],
+      "option": 2,
+      "inputs": [
+        [
+          0,
+          0,
+          0,
+          -0.18
+        ]
+      ]
+    }
+  ],
+  "links": [
+    [
+      10,
+      12,
+      0
+    ],
+    [
+      13,
+      12,
+      1
+    ],
+    [
+      11,
+      14,
+      0
+    ],
+    [
+      14,
+      12,
+      2
+    ],
+    [
+      12,
+      4,
+      0
+    ]
+  ],
+  "initialize": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "update": [
+    5,
+    6,
+    7,
+    8
+  ],
+  "properties": [
+    {
+      "name": "Tint",
+      "type": "Color",
+      "value": [
+        0.5,
+        0.5,
+        0.5,
+        0.6
+      ]
+    }
+  ]
+}

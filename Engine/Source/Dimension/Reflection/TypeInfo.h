@@ -33,6 +33,7 @@ namespace Dimension
         VideoClip,        // AssetHandle of a video file
         NavMeshData,      // AssetHandle of baked navigation (.navmesh)
         FloatList,        // std::vector<float>
+        VisualEffect,     // AssetHandle of a visual effect graph (.vfx)
     };
 
     struct FieldInfo

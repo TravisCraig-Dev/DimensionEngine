@@ -15,6 +15,7 @@
 #include <map>
 #include <future>
 #include <Dimension/Scripting/CSharpProject.h>
+#include <Dimension/Particles/VisualEffect.h>
 #include <mutex>
 
 namespace Editor
@@ -183,6 +184,35 @@ namespace Editor
         glm::vec2 m_Pan{ 0.0f };
         float m_Zoom = 1.0f;
         glm::vec2 m_ContextPos{ 0.0f };
+    };
+
+    // The Visual Effect Graph window: an effect's contexts, blocks and operator nodes (VisualEffectPanel.cpp).
+    class VisualEffectPanel
+    {
+    public:
+        explicit VisualEffectPanel(EditorContext& ctx) : m_Ctx(ctx) {}
+        void OnImGui(bool* open);
+        void Open(AssetHandle handle); // shows this effect (and brings the window forward)
+        AssetHandle GetHandle() const { return m_Handle; }
+        void Select(uint32_t node) { m_Selected = m_PendingSelect = node; } // (automation)
+
+    private:
+        void DrawSidebar(VisualEffectAsset& graph);
+        void DrawGraph(VisualEffectAsset& graph);
+        VfxNode* Selected();
+        void BeginChange(); // remembers the graph for Ctrl+Z
+        void Commit();      // saves it (effects using it recompile)
+        void Undo();
+        EditorContext& m_Ctx;
+        AssetHandle m_Handle = AssetHandle::None();
+        uint32_t m_Selected = 0;
+        uint32_t m_DragFrom = 0; // a link being dragged from this operator's output
+        bool m_PickedUp = false; // (taken off an input: dropping it on nothing removes it)
+        bool m_Moving = false, m_Panned = false, m_Framed = false, m_UserPanned = false, m_Focus = false;
+        float m_FramedWidth = 0.0f, m_Zoom = 1.0f;
+        uint32_t m_PendingSelect = 0;
+        glm::vec2 m_Pan{ 0.0f }, m_AddAt{ 0.0f };
+        std::vector<nlohmann::json> m_History;
     };
 
     // Tracks and keys of the selected object's Timeline (like Unity's Timeline/Animation window), with preview.

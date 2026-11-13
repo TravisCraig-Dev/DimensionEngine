@@ -16,11 +16,12 @@ namespace Dimension
     struct AnimatorOverrideController;
     struct TimelineAsset;
     struct AvatarMaskAsset;
+    struct VisualEffectAsset;
     struct AnimationClipAsset;
     struct SpriteAtlas;
     struct SpriteRect;
 
-    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip, AnimationClip, NavMeshData, AvatarMask };
+    enum class AssetType : int32_t { None = 0, Texture, Mesh, Scene, Prefab, Audio, Material, Font, AnimatorController, Timeline, SpriteAtlas, Preset, StringTable, DataAsset, AnimatorOverride, RenderTexture, UIStyleSheet, VideoClip, AnimationClip, NavMeshData, AvatarMask, VisualEffect };
 
     const char* AssetTypeToString(AssetType type);
 
@@ -149,6 +150,10 @@ namespace Dimension
         static Ref<AvatarMaskAsset> GetAvatarMask(AssetHandle handle);
         static void SaveAvatarMask(AssetHandle handle);
         static AssetHandle CreateAvatarMask(const fs::path& absolutePath, const AvatarMaskAsset& mask);
+        // Visual Effects (.vfx graphs): editable in place, SaveVisualEffect writes the changes (and recompiles them).
+        static std::shared_ptr<VisualEffectAsset> GetVisualEffect(AssetHandle handle);
+        static void SaveVisualEffect(AssetHandle handle);
+        static AssetHandle CreateVisualEffect(const fs::path& absolutePath);
         static uint64_t ClipsVersion();
         static void TouchAnimationClips();
         // Sprite atlases (.spriteatlas): packed when first asked for (and again after a sprite or the atlas changes);

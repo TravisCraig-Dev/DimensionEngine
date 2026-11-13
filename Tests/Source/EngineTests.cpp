@@ -10480,6 +10480,194 @@ namespace
         }
     }
 
+    void TestVisualEffectGraph()
+    {
+        // A fountain built as a graph: spawned in a sphere around the effect, sent up a cone, falling under gravity,
+        // its color and size over life from the blocks' gradient and curve. Run on the CPU (the VM VfxSim.comp runs).
+        VisualEffectAsset a;
+        a.Add("Position (Sphere)").Inputs = { glm::vec4(0.0f), glm::vec4(0.5f), glm::vec4(0.0f) };
+        a.Add("Velocity (Cone)").Inputs = { glm::vec4(20.0f), glm::vec4(2.0f), glm::vec4(4.0f) };
+        a.Add("Lifetime (Random)").Inputs = { glm::vec4(1.0f), glm::vec4(2.0f) };
+        a.Add("Gravity");
+        auto& color = a.Add("Color Over Life");
+        color.Colors = Gradient::Linear({ 1, 0, 0, 1 }, { 0, 0, 1, 0 });
+        auto& size = a.Add("Size Over Life");
+        size.Inputs[0] = glm::vec4(0.4f);
+        size.Values = Curve::Linear(1.0f, 0.0f);
+        CHECK(a.Initialize.size() == 3 && a.Update.size() == 3);
+        VfxProgram prog = VisualEffects::Compile(a);
+        CHECK(prog.Valid() && prog.InitCount > 0 && prog.UpdateCount > 0 && prog.Luts.size() == 2u * VfxProgram::kLutSize);
+        VisualEffects::CpuContext ctx;
+        ctx.EmitterToSim = glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, 1.0f, 0.0f)); // (world space, the effect at (5, 1, 0))
+        ctx.Seed = 7;
+        std::vector<VisualEffects::CpuParticle> ps(500);
+        bool inSphere = true, inCone = true, lifetimes = true;
+        glm::vec3 mean(0.0f);
+        for (uint32_t i = 0; i < ps.size(); ++i)
+        {
+            ps[i].Index = i;
+            VisualEffects::Spawn(prog, ps[i], ctx);
+            const auto& p = ps[i];
+            inSphere &= glm::distance(p.Position, glm::vec3(5.0f, 1.0f, 0.0f)) <= 0.5f + 1e-4f;
+            float speed = glm::length(p.Velocity);
+            inCone &= speed >= 2.0f - 1e-3f && speed <= 4.0f + 1e-3f && p.Velocity.y / speed >= std::cos(glm::radians(20.0f)) - 1e-4f;
+            lifetimes &= p.Lifetime >= 1.0f && p.Lifetime <= 2.0f;
+            mean += p.Position;
+        }
+        mean /= (float)ps.size();
+        CHECK(inSphere && inCone && lifetimes && glm::distance(mean, glm::vec3(5.0f, 1.0f, 0.0f)) < 0.1f);
+        // Random values differ per particle.
+        CHECK(ps[0].Position != ps[1].Position && ps[0].Lifetime != ps[1].Lifetime);
+        // Half a second on: gravity took 4.9 m/s off the rise, the colors and sizes follow the age.
+        ctx.DeltaTime = 0.05f;
+        auto before = ps[3];
+        for (int k = 0; k < 10; ++k)
+            for (auto& p : ps) VisualEffects::Step(prog, p, ctx);
+        const auto& p3 = ps[3];
+        CHECK(Near(p3.Velocity.y, before.Velocity.y - 9.81f * 0.5f, 1e-3f) && Near(p3.Age, 0.5f, 1e-4f));
+        float t = 0.45f / p3.Lifetime; // (the color was set before the last step's age)
+        CHECK(Near(p3.Color.r, 1.0f - t, 0.03f) && Near(p3.Color.b, t, 0.03f) && Near(p3.Size, 0.4f * (1.0f - t), 0.01f));
+        // Past their lifetimes they are gone.
+        for (int k = 0; k < 40; ++k)
+            for (auto& p : ps) VisualEffects::Step(prog, p, ctx);
+        CHECK(std::none_of(ps.begin(), ps.end(), [](const auto& p) { return p.Alive(); }));
+
+        // Operators linked into a block: velocity = Particle Random's xyz * a property (Speed), turned by Set Attribute.
+        VisualEffectAsset g;
+        g.Properties.push_back({ "Speed", VfxValue::Float, glm::vec4(3.0f) });
+        auto& set = g.Add("Set Attribute");
+        set.Option = (int)VfxAttribute::Velocity;
+        uint32_t setId = set.Id;
+        uint32_t random = g.Add("Particle Random", { -200, 0 }).Id;
+        auto& prop = g.Add("Property", { -200, 80 });
+        prop.Option = 0;
+        uint32_t propId = prop.Id;
+        uint32_t mul = g.Add("Multiply", { -100, 40 }).Id;
+        CHECK(g.Link(random, mul, 0) && g.Link(propId, mul, 1) && g.Link(mul, setId, 0));
+        CHECK(!g.Link(mul, mul, 0) && !g.Link(setId, mul, 0)); // (no cycles; blocks have no output)
+        uint32_t add = g.Add("Add", { -50, 40 }).Id;
+        CHECK(g.Link(mul, add, 0) && !g.Link(add, mul, 1)); // add depends on mul: mul cannot depend on add
+        VfxProgram gp = VisualEffects::Compile(g);
+        CHECK(gp.Valid() && gp.Constants.size() >= 1 && gp.Constants[0] == glm::vec4(3.0f));
+        VisualEffects::CpuParticle q;
+        q.Index = 4;
+        VisualEffects::Spawn(gp, q, {});
+        glm::vec3 base = q.Velocity / 3.0f;
+        CHECK(glm::all(glm::greaterThanEqual(base, glm::vec3(0.0f))) && glm::all(glm::lessThan(base, glm::vec3(1.0f))) && glm::length(base) > 0.0f);
+        gp.Constants[0] = glm::vec4(6.0f); // (an object's override, as the renderer fills it in)
+        VisualEffects::CpuParticle q2;
+        q2.Index = 4;
+        VisualEffects::Spawn(gp, q2, {});
+        CHECK(glm::all(glm::epsilonEqual(q2.Velocity, base * 6.0f, 1e-4f)));
+
+        // Update blocks: a floor bounce and a kill height.
+        VisualEffectAsset f;
+        f.Add("Collide Plane").Inputs = { glm::vec4(0.0f), glm::vec4(0.5f), glm::vec4(0.0f) };
+        f.Add("Kill Below").Inputs[0] = glm::vec4(-1.0f);
+        VfxProgram fp = VisualEffects::Compile(f);
+        CHECK(fp.Valid());
+        VisualEffects::CpuParticle b;
+        b.Position = { 0.0f, -0.1f, 0.0f };
+        b.Velocity = { 1.0f, -4.0f, 0.0f };
+        b.Lifetime = 10.0f;
+        VisualEffects::CpuContext step;
+        step.DeltaTime = 0.01f;
+        VisualEffects::Step(fp, b, step);
+        CHECK(Near(b.Velocity.y, 2.0f, 1e-4f) && b.Position.y >= 0.0f && b.Alive());
+        VisualEffects::CpuParticle k;
+        k.Position = { 0.0f, -2.0f, 0.0f };
+        k.Lifetime = 10.0f;
+        f.Remove(f.Initialize.empty() ? f.Update[0] : f.Initialize[0]); // (the floor goes: the particle stays below)
+        VfxProgram kp = VisualEffects::Compile(f);
+        VisualEffects::Step(kp, k, step);
+        CHECK(!k.Alive());
+
+        // A block in the wrong context is an error, not a crash.
+        VisualEffectAsset w;
+        w.Add("Gravity");
+        w.Initialize = w.Update;
+        w.Update.clear();
+        CHECK(!VisualEffects::Compile(w).Valid());
+
+        // Saved and read back the same.
+        nlohmann::json j = a.ToJson();
+        CHECK(VisualEffectAsset::FromJson(j).ToJson() == j);
+        nlohmann::json gj = g.ToJson();
+        VisualEffectAsset g2 = VisualEffectAsset::FromJson(gj);
+        CHECK(g2.Links == g.Links && g2.Properties.size() == 1 && g2.Find(mul) && g2.NextId == g.NextId);
+        CHECK(VisualEffects::Compile(VisualEffectAsset::Default()).Valid());
+    }
+
+    void TestVisualEffectSpawn()
+    {
+        // The component in a scene: a .vfx asset with a rate and a burst; play start spawns the burst, the rate adds
+        // its particles a frame at a time, properties are set per object, and a one-shot effect stops after its loop.
+        fs::path assets = fs::temp_directory_path() / "dimension_vfx" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        VisualEffectAsset asset = VisualEffectAsset::Default();
+        asset.Rate = 100.0f;
+        asset.Bursts = { { 0.0f, 50 }, { 0.5f, 7 } };
+        asset.Duration = 1.0f;
+        asset.Properties.push_back({ "Tint", VfxValue::Color, glm::vec4(1.0f, 0.5f, 0.25f, 1.0f) });
+        CHECK(asset.Save(assets / "Sparks.vfx"));
+        AssetManager::Init(assets);
+        AssetHandle h = AssetManager::Import(assets / "Sparks.vfx");
+        CHECK(h.IsValid() && AssetManager::GetMetadata(h) && AssetManager::GetMetadata(h)->Type == AssetType::VisualEffect);
+        auto loaded = AssetManager::GetVisualEffect(h);
+        CHECK(loaded && loaded->Bursts.size() == 2 && VisualEffects::ProgramOf(h) && VisualEffects::ProgramOf(h)->Valid());
+
+        Scene scene("Effects");
+        auto& reg = scene.GetRegistry();
+        Entity e = scene.CreateEntity("Sparks");
+        auto& v = reg.Emplace<VisualEffectComponent>(e);
+        v.Asset = h;
+        Entity once = scene.CreateEntity("Once");
+        reg.Emplace<VisualEffectComponent>(once).Asset = h;
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rv = rt->GetRegistry().Get<VisualEffectComponent>(e);
+        CHECK(rv.Playing && rv.PendingSpawn == 0);
+        VisualEffects::Update(*rt, 0.1f);
+        CHECK(rv.PendingSpawn == 50 + 10); // the burst at 0 and 0.1 s of the rate
+        rv.PendingSpawn = 0;
+        for (int i = 0; i < 5; ++i) VisualEffects::Update(*rt, 0.1f); // to 0.6 s: the 0.5 s burst and 0.5 s of the rate
+        CHECK(rv.PendingSpawn == 7 + 50);
+        // The loop goes round: the burst at 0 again at 1 s.
+        rv.PendingSpawn = 0;
+        for (int i = 0; i < 5; ++i) VisualEffects::Update(*rt, 0.1f);
+        CHECK(rv.PendingSpawn >= 50 + 49 && rv.PendingSpawn <= 50 + 51 && rv.Playing);
+        // Properties: the asset's value until the object sets its own; unknown names are refused.
+        glm::vec4 tint;
+        CHECK(rv.GetProperty("Tint", tint) && tint == glm::vec4(1.0f, 0.5f, 0.25f, 1.0f));
+        CHECK(rv.SetProperty("Tint", glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)) && rv.GetProperty("Tint", tint) && tint.g == 1.0f && !rv.SetProperty("Nope", glm::vec4(1.0f)));
+        // Stop: no more spawning; Play starts the loop again; Reinit clears the particles (a new generation).
+        rv.Stop();
+        rv.PendingSpawn = 0;
+        VisualEffects::Update(*rt, 0.1f);
+        CHECK(rv.PendingSpawn == 0 && !rv.Playing);
+        uint32_t gen = rv.Generation;
+        rv.Reinit();
+        CHECK(rv.Generation == gen + 1 && rv.Time == 0.0f);
+        rv.Play();
+        VisualEffects::Update(*rt, 0.05f);
+        CHECK(rv.PendingSpawn == 50 + 5);
+        // Saved with the scene: the object's property values come back.
+        rt->UpdateTransforms();
+        nlohmann::json saved = SceneSerializer::Serialize(*rt);
+        CHECK(saved.dump().find("\"Tint\"") != std::string::npos);
+        // A one-shot effect stops after its Duration.
+        auto loadedAsset = AssetManager::GetVisualEffect(h);
+        loadedAsset->Loop = false;
+        auto& ro = rt->GetRegistry().Get<VisualEffectComponent>(once);
+        for (int i = 0; i < 12; ++i) VisualEffects::Update(*rt, 0.1f);
+        CHECK(!ro.Playing);
+        rt->OnRuntimeStop();
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     void TestParticleDecals()
     {
         auto run = [&](int maxDecals, float decalLifetime, float seconds) {
@@ -16923,6 +17111,8 @@ int main(int argc, char** argv)
     Run("Particle texture sheets and noise", TestParticleSheetsAndNoise);
     Run("Particle mesh shape", TestParticleMeshShape);
     Run("Particle decals", TestParticleDecals);
+    Run("Visual effect graph", TestVisualEffectGraph);
+    Run("Visual effect spawning", TestVisualEffectSpawn);
     Run("Script timers", TestScriptTimers);
     Run("Coroutines (C++)", TestCoroutines);
     Run("C++ script options", TestScriptOptions);

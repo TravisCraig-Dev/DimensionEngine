@@ -155,6 +155,7 @@ namespace Editor
         m_Console = MakeScope<ConsolePanel>();
         m_SceneSettings = MakeScope<SceneSettingsPanel>(m_Ctx);
         m_Animator = MakeScope<AnimatorPanel>(m_Ctx);
+        m_VisualEffect = MakeScope<VisualEffectPanel>(m_Ctx);
         m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
         m_Animation = MakeScope<AnimationPanel>(m_Ctx);
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
@@ -197,6 +198,11 @@ namespace Editor
         else if (m_Options.OpenWindow == "Project Settings") m_ShowProjectSettings = true;
         else if (m_Options.OpenWindow == "Audio Mixer") m_ShowAudioMixer = true;
         else if (m_Options.OpenWindow == "Timeline") m_ShowTimeline = true;
+        else if (m_Options.OpenWindow == "Visual Effect Graph")
+        {
+            m_ShowVisualEffect = true;
+            if (m_Options.VfxNode > 0) m_VisualEffect->Select((uint32_t)m_Options.VfxNode);
+        }
         else if (m_Options.OpenWindow == "Animation") m_ShowAnimation = true;
         if (!m_Options.AnimKey.empty()) m_Animation->SelectCurveKey(m_Options.AnimKey);
         if (m_Options.AnimRecord) m_Animation->RequestRecording();
@@ -1531,7 +1537,7 @@ namespace Editor
     std::vector<std::pair<const char*, bool*>> EditorLayer::WindowToggles()
     {
         return { { "Hierarchy", &m_ShowHierarchy }, { "Inspector", &m_ShowInspector }, { "Project", &m_ShowContent }, { "Console", &m_ShowConsole },
-                 { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator },
+                 { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator }, { "Visual Effect Graph", &m_ShowVisualEffect },
                  { "Timeline", &m_ShowTimeline }, { "Animation", &m_ShowAnimation }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
                  { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings }, { "Packages", &m_ShowPackages }, { "Test Runner", &m_ShowTestRunner },
                  { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
@@ -2726,6 +2732,13 @@ namespace Editor
         if (m_ShowConsole) m_Console->OnImGui(&m_ShowConsole);
         if (m_ShowSceneSettings) m_SceneSettings->OnImGui(&m_ShowSceneSettings);
         if (m_ShowAnimator) m_Animator->OnImGui(&m_ShowAnimator);
+        if (m_Ctx.RequestOpenVisualEffect)
+        {
+            m_ShowVisualEffect = true;
+            m_VisualEffect->Open(*m_Ctx.RequestOpenVisualEffect);
+            m_Ctx.RequestOpenVisualEffect.reset();
+        }
+        if (m_ShowVisualEffect) m_VisualEffect->OnImGui(&m_ShowVisualEffect);
         if (m_ShowTimeline) m_Timeline->OnImGui(&m_ShowTimeline);
         if (m_ShowAnimation) m_Animation->OnImGui(&m_ShowAnimation);
         else m_Animation->StopPreview();
@@ -2844,6 +2857,7 @@ namespace Editor
         ImGui::DockBuilderDockWindow("Project", bottom);
         ImGui::DockBuilderDockWindow("Console", bottom);
         ImGui::DockBuilderDockWindow("Animator", bottom);
+        ImGui::DockBuilderDockWindow("Visual Effect Graph", bottom);
         ImGui::DockBuilderDockWindow("Audio Mixer", bottom);
         ImGui::DockBuilderDockWindow("Timeline", bottom);
         ImGui::DockBuilderDockWindow("Animation", bottom);
@@ -2986,6 +3000,7 @@ namespace Editor
             ImGui::MenuItem("Console", nullptr, &m_ShowConsole);
             ImGui::MenuItem("Scene Settings", nullptr, &m_ShowSceneSettings);
             ImGui::MenuItem("Animator", nullptr, &m_ShowAnimator);
+            ImGui::MenuItem("Visual Effect Graph", nullptr, &m_ShowVisualEffect);
             ImGui::MenuItem("Timeline", nullptr, &m_ShowTimeline);
             ImGui::MenuItem("Animation", nullptr, &m_ShowAnimation);
             ImGui::MenuItem("Navigation", nullptr, &m_ShowNavigation);
@@ -3254,6 +3269,17 @@ namespace Editor
                         m_Ctx.Select(scene.InstantiatePrefab(h, pos));
                         break;
                     case AssetType::Scene: m_Ctx.RequestOpenScene = AssetManager::GetAbsolutePath(h); break;
+                    case AssetType::VisualEffect:
+                    {
+                        m_Ctx.RecordUndo();
+                        auto* meta = AssetManager::GetMetadata(h);
+                        Entity fx = scene.CreateEntity(meta ? meta->Path.stem().string() : "Visual Effect");
+                        scene.GetRegistry().Get<TransformComponent>(fx).Position = pos;
+                        scene.GetRegistry().Emplace<VisualEffectComponent>(fx).Asset = h;
+                        m_Ctx.Select(fx);
+                        m_Ctx.MarkDirty();
+                        break;
+                    }
                     default: break;
                     }
                 }

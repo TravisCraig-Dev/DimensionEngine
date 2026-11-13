@@ -771,6 +771,7 @@ namespace Dimension
         m_Persistent.clear();
 
         ParticleSystems::Restart(*this);
+        VisualEffects::Restart(*this);
         Timeline::Restart(*this);
         TrailRenderers::ClearAll(*this);
         for (auto [e, anim] : m_Registry.ViewOf<AnimatorComponent>())
@@ -1190,6 +1191,7 @@ namespace Dimension
         {
             DIM_PROFILE_SCOPE("Particles");
             ParticleSystems::Update(*this, dt);
+            VisualEffects::Update(*this, dt);
             TrailRenderers::Update(*this, m_Time);
         }
         {
@@ -1245,6 +1247,7 @@ namespace Dimension
         UpdateTransforms();
         UpdateAnimators(0.0f);
         ParticleSystems::Update(*this, dt); // live preview while editing, like Unity's scene view
+        VisualEffects::Update(*this, dt);
         m_EditorTime += dt;
         Water::Update(*this, m_EditorTime); // waves move in the editor too
     }

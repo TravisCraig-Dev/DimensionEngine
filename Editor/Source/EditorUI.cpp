@@ -210,6 +210,7 @@ namespace Editor::UI
         case AssetType::AnimationClip: return { 0.55f, 0.9f, 0.6f, 1 };
         case AssetType::NavMeshData: return { 0.35f, 0.75f, 0.95f, 1 };
         case AssetType::AvatarMask: return { 0.85f, 0.6f, 0.95f, 1 };
+        case AssetType::VisualEffect: return { 1.0f, 0.55f, 0.85f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -236,6 +237,7 @@ namespace Editor::UI
         case AssetType::AnimationClip: return "CLIP";
         case AssetType::NavMeshData: return "NAV";
         case AssetType::AvatarMask: return "MASK";
+        case AssetType::VisualEffect: return "VFX";
         case AssetType::UIStyleSheet: return "USS";
         case AssetType::VideoClip: return "VIDEO";
         default: return "FILE";
@@ -832,6 +834,7 @@ namespace Editor::UI
         case FieldType::UIStyleSheet: r = AssetField(label, *(AssetHandle*)p, AssetType::UIStyleSheet); break;
         case FieldType::VideoClip: r = AssetField(label, *(AssetHandle*)p, AssetType::VideoClip); break;
         case FieldType::NavMeshData: r = AssetField(label, *(AssetHandle*)p, AssetType::NavMeshData); break;
+        case FieldType::VisualEffect: r = AssetField(label, *(AssetHandle*)p, AssetType::VisualEffect); break;
         case FieldType::DataAsset:
         {
             // Data assets of the field's class (or a class deriving from it).

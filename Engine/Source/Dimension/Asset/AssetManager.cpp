@@ -13,6 +13,7 @@
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Animation/Timeline.h"
 #include "Dimension/Animation/ClipAsset.h"
+#include "Dimension/Particles/VisualEffect.h"
 #include "Dimension/Renderer/SpriteAtlas.h"
 #include "Dimension/Asset/ImportDefaults.h"
 #include "Dimension/Project/Project.h"
@@ -56,6 +57,7 @@ namespace Dimension
             std::unordered_map<AssetHandle, Ref<AnimatorOverrideController>> Overrides;
             std::unordered_map<AssetHandle, Ref<TimelineAsset>> Timelines;
             std::unordered_map<AssetHandle, Ref<AvatarMaskAsset>> AvatarMasks;
+            std::unordered_map<AssetHandle, std::shared_ptr<VisualEffectAsset>> VisualEffects;
             std::unordered_map<AssetHandle, Ref<AnimationClipAsset>> AnimationClips;
             std::unordered_map<AssetHandle, std::vector<AssetHandle>> ClipsByModel; // .anim clips per model (rebuilt when stale)
             bool ClipIndexDirty = true;
@@ -153,6 +155,7 @@ namespace Dimension
                 if (ov && ov->Controller == h) s->Controllers.erase(o);
             s->Timelines.erase(h);
             s->AvatarMasks.erase(h);
+            if (s->VisualEffects.erase(h)) VisualEffects::Invalidate(h);
             if (s->AnimationClips.erase(h) || (s->Assets.contains(h) && s->Assets[h].Type == AssetType::AnimationClip))
             {
                 s->ClipIndexDirty = true;
@@ -185,6 +188,7 @@ namespace Dimension
         case AssetType::AnimationClip: return "Animation Clip";
         case AssetType::NavMeshData: return "NavMesh Data";
         case AssetType::AvatarMask: return "Avatar Mask";
+        case AssetType::VisualEffect: return "Visual Effect";
         default: return "None";
         }
     }
@@ -291,6 +295,7 @@ namespace Dimension
         Water::ReleaseMeshes();
         Font::ReleaseFallbackFonts(); // their atlases, before the device goes
         Terrain::ReleaseRuntimes();
+        VisualEffects::Invalidate(AssetHandle::None()); // (compiled graphs of this project)
         delete s;
         s = nullptr;
         Localization::Reset();
@@ -318,6 +323,7 @@ namespace Dimension
         if (ext == ".anim") return AssetType::AnimationClip;
         if (ext == ".navmesh") return AssetType::NavMeshData;
         if (ext == ".mask") return AssetType::AvatarMask;
+        if (ext == ".vfx") return AssetType::VisualEffect;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;
@@ -1084,6 +1090,36 @@ namespace Dimension
     AssetHandle AssetManager::CreateAvatarMask(const fs::path& absolutePath, const AvatarMaskAsset& mask)
     {
         if (!mask.Save(absolutePath)) return AssetHandle::None();
+        return Import(absolutePath);
+    }
+
+    std::shared_ptr<VisualEffectAsset> AssetManager::GetVisualEffect(AssetHandle handle)
+    {
+        if (!handle.IsValid() || !s) return nullptr;
+        if (auto it = s->VisualEffects.find(handle); it != s->VisualEffects.end()) return it->second;
+        auto* meta = GetMetadata(handle);
+        if (!meta || meta->Type != AssetType::VisualEffect) return nullptr;
+        auto graph = VisualEffectAsset::Load(s->AssetsDir / meta->Path);
+        s->VisualEffects[handle] = graph;
+        return graph;
+    }
+
+    void AssetManager::SaveVisualEffect(AssetHandle handle)
+    {
+        if (!s) return;
+        auto it = s->VisualEffects.find(handle);
+        auto* meta = GetMetadata(handle);
+        if (it == s->VisualEffects.end() || !it->second || !meta) return;
+        fs::path path = s->AssetsDir / meta->Path;
+        it->second->Save(path);
+        std::error_code ec;
+        s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
+        VisualEffects::Invalidate(handle);
+    }
+
+    AssetHandle AssetManager::CreateVisualEffect(const fs::path& absolutePath)
+    {
+        if (!VisualEffectAsset::Default().Save(absolutePath)) return AssetHandle::None();
         return Import(absolutePath);
     }
 

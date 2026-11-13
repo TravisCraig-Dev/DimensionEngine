@@ -42,6 +42,7 @@ namespace Editor
         bool AnimRecord = false;  // --anim-record: with --open Animation, record mode on from the start
         bool AnimOnion = false;   // --anim-onion: with --open Animation, a preview with onion skin
         int FrameEvent = -1;      // --frame-event N: with --open "Frame Debugger", step the Scene view to draw N (0-based)
+        int VfxNode = 0;          // --vfx-node N: with --open "Visual Effect Graph" (and --select-asset a .vfx), node N selected
         std::string MenuCommand;  // --menu "Tools/Item": run a C# extension's menu item once the scripts have loaded
         std::string Search;       // --search "query": start with this Hierarchy search
         std::string SearchQuery;  // --find "query": with --open "Search", the Search window's query
@@ -220,6 +221,7 @@ namespace Editor
         Scope<ConsolePanel> m_Console;
         Scope<SceneSettingsPanel> m_SceneSettings;
         Scope<AnimatorPanel> m_Animator;
+        Scope<VisualEffectPanel> m_VisualEffect;
         Scope<TimelinePanel> m_Timeline;
         Scope<AnimationPanel> m_Animation;
         Scope<PackagesPanel> m_Packages;
@@ -374,6 +376,7 @@ namespace Editor
 
         bool m_ShowHierarchy = true, m_ShowInspector = true, m_ShowContent = true, m_ShowConsole = true;
         bool m_ShowAnimator = true;
+        bool m_ShowVisualEffect = false;
         bool m_ShowTimeline = false;
         bool m_ShowAnimation = false;
         bool m_ShowNavigation = false;

@@ -1,0 +1,211 @@
+{
+  "capacity": 20000,
+  "rate": 1500,
+  "duration": 5,
+  "loop": true,
+  "bursts": [],
+  "space": "World",
+  "blend": "Additive",
+  "texture": 0,
+  "sort": false,
+  "lit": false,
+  "nextId": 20,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Position (Sphere)",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0.2,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 2,
+      "type": "Velocity (Cone)",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          18,
+          0,
+          0,
+          0
+        ],
+        [
+          6,
+          0,
+          0,
+          0
+        ],
+        [
+          8,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Lifetime (Random)",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          1.5,
+          0,
+          0,
+          0
+        ],
+        [
+          2.5,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 4,
+      "type": "Set Attribute",
+      "position": [
+        0,
+        0
+      ],
+      "option": 3,
+      "inputs": [
+        [
+          0.12,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 5,
+      "type": "Gravity",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0,
+          -9.81,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 6,
+      "type": "Collide Plane",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0.4,
+          0,
+          0,
+          0
+        ],
+        [
+          0.2,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 7,
+      "type": "Color Over Life",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [],
+      "gradient": [
+        {
+          "t": 0,
+          "color": [
+            0.6,
+            0.9,
+            1,
+            1
+          ]
+        },
+        {
+          "t": 0.5,
+          "color": [
+            0.2,
+            0.5,
+            1,
+            1
+          ]
+        },
+        {
+          "t": 1,
+          "color": [
+            0.1,
+            0.1,
+            0.6,
+            0
+          ]
+        }
+      ]
+    }
+  ],
+  "links": [],
+  "initialize": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "update": [
+    5,
+    6,
+    7
+  ],
+  "properties": []
+}

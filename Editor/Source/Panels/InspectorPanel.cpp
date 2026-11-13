@@ -870,6 +870,60 @@ namespace Editor
                         if (surface.BakedData.IsValid() && !surface.Streamed && !m_Ctx.IsPlaying() && !Navigation::IsSavedCurrent(scene, e))
                             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "The saved bake is out of date (settings or place changed): play bakes again until it is baked.");
                     }
+                    if (info.TypeId == GetComponentTypeId<VisualEffectComponent>())
+                    {
+                        // Play controls, the graph's exposed properties (this object's values), and the window to edit it.
+                        auto& vfx = *static_cast<VisualEffectComponent*>(info.Get(scene, e));
+                        if (ImGui::Button(vfx.Playing ? "Stop" : "Play")) vfx.Playing ? vfx.Stop() : vfx.Play();
+                        ImGui::SameLine();
+                        if (ImGui::Button("Restart"))
+                        {
+                            vfx.Reinit();
+                            vfx.Play();
+                        }
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(!vfx.Asset.IsValid());
+                        if (ImGui::Button("Edit Graph")) m_Ctx.RequestOpenVisualEffect = vfx.Asset;
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%u alive", vfx.AliveCount);
+                        auto graph = AssetManager::GetVisualEffect(vfx.Asset);
+                        if (graph && !graph->Properties.empty() && UI::BeginProperties("##vfxprops"))
+                        {
+                            for (const VfxProperty& p : graph->Properties)
+                            {
+                                ImGui::PushID(p.Name.c_str());
+                                bool overridden = std::any_of(vfx.Overrides.begin(), vfx.Overrides.end(), [&](const VfxOverride& o) { return o.Name == p.Name; });
+                                UI::PropertyLabel(p.Name.c_str(), overridden ? "Set on this object (right-click: back to the graph's value)" : "The graph's value");
+                                glm::vec4 v;
+                                vfx.GetProperty(p.Name, v);
+                                bool edited = false;
+                                float w = ImGui::GetContentRegionAvail().x;
+                                ImGui::SetNextItemWidth(w);
+                                if (p.Type == VfxValue::Float) edited = ImGui::DragFloat("##v", &v.x, 0.01f);
+                                else if (p.Type == VfxValue::Vector) edited = ImGui::DragFloat3("##v", &v.x, 0.01f);
+                                else edited = ImGui::ColorEdit4("##v", &v.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaPreviewHalf);
+                                if (ImGui::IsItemActivated()) m_Ctx.RecordUndo();
+                                if (edited)
+                                {
+                                    vfx.SetProperty(p.Name, v);
+                                    m_Ctx.MarkDirty();
+                                }
+                                if (overridden && ImGui::BeginPopupContextItem("##reset"))
+                                {
+                                    if (ImGui::MenuItem("Use the Graph's Value"))
+                                    {
+                                        m_Ctx.RecordUndo();
+                                        std::erase_if(vfx.Overrides, [&](const VfxOverride& o) { return o.Name == p.Name; });
+                                        m_Ctx.MarkDirty();
+                                    }
+                                    ImGui::EndPopup();
+                                }
+                                ImGui::PopID();
+                            }
+                            UI::EndProperties();
+                        }
+                    }
                     if (info.TypeId == GetComponentTypeId<LODGroupComponent>())
                     {
                         auto& lod = *static_cast<LODGroupComponent*>(info.Get(scene, e));

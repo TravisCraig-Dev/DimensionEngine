@@ -388,6 +388,15 @@ namespace Dimension
                 .Tooltip("Applied after this Animator layer (0 = base layer); its weight scales with that layer's. -1 = after all layers.");
 
         using PS = ParticleSystemComponent;
+        Register<VisualEffectComponent>("Visual Effect", "Effects")
+            .Field("Asset", &VisualEffectComponent::Asset).As(FieldType::VisualEffect).Tooltip("The effect graph (.vfx; double-click it to edit)")
+            .Field("Play On Awake", &VisualEffectComponent::PlayOnAwake).Tooltip("Starts when play starts (and previews while editing)")
+            .Field("Play Rate", &VisualEffectComponent::PlayRate).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("How fast its time runs (1 = real time)")
+            .List<VfxOverride>("Properties", &VisualEffectComponent::Overrides, [](FieldListBuilder<VfxOverride>& o) {
+                o.Field("Name", &VfxOverride::Name).Field("Value", &VfxOverride::Value);
+            })
+            .HideInInspector(); // (the Inspector lists the graph's properties itself)
+
         Register<PS>("Particle System", "Effects")
             .Field("Duration", &PS::Duration).Range(0.05f, 1000.0f).Speed(0.05f)
             .Field("Looping", &PS::Looping)

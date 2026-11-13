@@ -115,6 +115,7 @@ namespace Editor
             if (isDir) m_EnterDir = path;
             else if (type == AssetType::Scene) m_Ctx.RequestOpenScene = path;
             else if (type == AssetType::Prefab && handle.IsValid()) m_Ctx.RequestOpenPrefab = handle;
+            else if (type == AssetType::VisualEffect && handle.IsValid()) m_Ctx.RequestOpenVisualEffect = handle;
             else FileDialogs::OpenWithDefaultApp(path);
         }
 
@@ -634,6 +635,15 @@ namespace Editor
                 {
                     AssetHandle h = AssetManager::CreateRenderTexture(UniquePath(m_Current / "New Render Texture.rendertexture"));
                     if (h.IsValid()) m_Ctx.SelectAsset(h);
+                }
+                if (ImGui::MenuItem("New Visual Effect"))
+                {
+                    AssetHandle h = AssetManager::CreateVisualEffect(UniquePath(m_Current / "New Visual Effect.vfx"));
+                    if (h.IsValid())
+                    {
+                        m_Ctx.SelectAsset(h);
+                        m_Ctx.RequestOpenVisualEffect = h;
+                    }
                 }
                 if (ImGui::MenuItem("New Timeline"))
                 {

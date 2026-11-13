@@ -1,0 +1,305 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "ParticleCommon.glsl"
+
+// Visual Effect Graph simulation: one invocation per slot of the effect's particle ring. This frame's new particles
+// take the slots from the ring head on: their defaults, then the graph's Initialize program; every other live one runs
+// the Update program, then moves on. The programs are VisualEffects::Compile's instructions, run here as on the CPU
+// (VisualEffect.cpp's Run: keep the two in step). Particles are stored as GPU Particle Systems' (drawn the same way).
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform Push
+{
+    uvec2 Particles;
+    uvec2 Params;
+} pc;
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxParamsRef
+{
+    mat4 EmitterToSim;
+    vec4 Time;      // x seconds since the effect started, y this frame's seconds
+    uvec4 Counts;   // x capacity, y ring head, z new particles, w random seed
+    uvec4 Program;  // x Initialize start, y count, z Update start, w count
+    uvec4 Code;     // xy instructions, zw constants
+    uvec4 Tables;   // xy gradient / curve tables, zw alive counter (0 = none)
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxCodeRef { uvec4 Items[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxVec4Ref { vec4 Items[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer VfxCounterRef { uint Count; };
+
+const float TWO_PI = 6.28318530718;
+#define REGISTERS 32
+#define LUT 32
+
+// Gradient noise and its curl, as ParticleSystems::GradientNoise / CurlNoise (and ParticleSim.comp).
+uint HashCell(ivec3 c)
+{
+    uint h = uint(c.x) * 0x8da6b343u ^ uint(c.y) * 0xd8163841u ^ uint(c.z) * 0xcb1ab31fu;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    h *= 0x297a2d39u;
+    return h ^ (h >> 15);
+}
+
+float GradDot(uint hash, vec3 d)
+{
+    switch (hash % 12u)
+    {
+    case 0u: return d.x + d.y;
+    case 1u: return -d.x + d.y;
+    case 2u: return d.x - d.y;
+    case 3u: return -d.x - d.y;
+    case 4u: return d.x + d.z;
+    case 5u: return -d.x + d.z;
+    case 6u: return d.x - d.z;
+    case 7u: return -d.x - d.z;
+    case 8u: return d.y + d.z;
+    case 9u: return -d.y + d.z;
+    case 10u: return d.y - d.z;
+    default: return -d.y - d.z;
+    }
+}
+
+float GradientNoise(vec3 p)
+{
+    vec3 cell = floor(p), f = p - cell;
+    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    ivec3 c = ivec3(cell);
+    float c000 = GradDot(HashCell(c), f), c100 = GradDot(HashCell(c + ivec3(1, 0, 0)), f - vec3(1, 0, 0));
+    float c010 = GradDot(HashCell(c + ivec3(0, 1, 0)), f - vec3(0, 1, 0)), c110 = GradDot(HashCell(c + ivec3(1, 1, 0)), f - vec3(1, 1, 0));
+    float c001 = GradDot(HashCell(c + ivec3(0, 0, 1)), f - vec3(0, 0, 1)), c101 = GradDot(HashCell(c + ivec3(1, 0, 1)), f - vec3(1, 0, 1));
+    float c011 = GradDot(HashCell(c + ivec3(0, 1, 1)), f - vec3(0, 1, 1)), c111 = GradDot(HashCell(c + ivec3(1, 1, 1)), f - vec3(1, 1, 1));
+    float x00 = mix(c000, c100, u.x), x10 = mix(c010, c110, u.x), x01 = mix(c001, c101, u.x), x11 = mix(c011, c111, u.x);
+    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+}
+
+vec3 Psi(vec3 q)
+{
+    return vec3(GradientNoise(q), GradientNoise(q + vec3(31.416, -47.853, 12.793)), GradientNoise(q + vec3(-73.219, 19.371, 58.111)));
+}
+
+vec3 CurlNoise(vec3 p)
+{
+    const float e = 0.05;
+    vec3 dx = (Psi(p + vec3(e, 0, 0)) - Psi(p - vec3(e, 0, 0))) / (2.0 * e);
+    vec3 dy = (Psi(p + vec3(0, e, 0)) - Psi(p - vec3(0, e, 0))) / (2.0 * e);
+    vec3 dz = (Psi(p + vec3(0, 0, e)) - Psi(p - vec3(0, 0, e))) / (2.0 * e);
+    return vec3(dy.z - dz.y, dz.x - dx.z, dx.y - dy.x) * 0.5;
+}
+
+uint Hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+float Unit(uint h) { return float(h >> 8) * (1.0 / 16777216.0); }
+vec4 Random4(uint index, uint seed, uint pc)
+{
+    uint h = Hash(index * 1973u + seed * 9277u + pc * 26699u + 1u);
+    uint a = Hash(h), b = Hash(a), c = Hash(b), d = Hash(c);
+    return vec4(Unit(a), Unit(b), Unit(c), Unit(d));
+}
+
+vec4 Lut(VfxParamsRef P, uint slot, float t)
+{
+    VfxVec4Ref luts = VfxVec4Ref(P.Tables.xy);
+    float x = clamp(t, 0.0, 1.0) * float(LUT - 1);
+    int i = min(int(x), LUT - 2);
+    uint base = slot * uint(LUT);
+    return mix(luts.Items[base + uint(i)], luts.Items[base + uint(i) + 1u], x - float(i));
+}
+
+// The particle's attributes while a program runs.
+vec3 aPos, aVel;
+vec4 aColor;
+float aSize, aAge, aLife, aRot, aSpin, aRandom;
+
+vec4 GetAttr(uint a)
+{
+    switch (a)
+    {
+    case 0u: return vec4(aPos, 0.0);
+    case 1u: return vec4(aVel, 0.0);
+    case 2u: return aColor;
+    case 3u: return vec4(aSize);
+    case 4u: return vec4(aAge);
+    case 5u: return vec4(aLife);
+    case 6u: return vec4(aRot);
+    case 7u: return vec4(aSpin);
+    default: return vec4(0.0);
+    }
+}
+
+void SetAttr(uint a, vec4 v)
+{
+    switch (a)
+    {
+    case 0u: aPos = v.xyz; break;
+    case 1u: aVel = v.xyz; break;
+    case 2u: aColor = v; break;
+    case 3u: aSize = v.x; break;
+    case 4u: aAge = v.x; break;
+    case 5u: aLife = v.x; break;
+    case 6u: aRot = v.x; break;
+    case 7u: aSpin = v.x; break;
+    default: break;
+    }
+}
+
+void Run(VfxParamsRef P, uint start, uint count, uint index)
+{
+    vec4 r[REGISTERS];
+    VfxCodeRef code = VfxCodeRef(P.Code.xy);
+    VfxVec4Ref consts = VfxVec4Ref(P.Code.zw);
+    for (uint pc = start; pc < start + count; ++pc)
+    {
+        uvec4 ins = code.Items[pc];
+        uint d = ins.y & 31u, a = ins.z & 31u, b = (ins.z >> 8) & 31u, c = (ins.z >> 16) & 31u, w = ins.w;
+        switch (ins.x)
+        {
+        case 1u: r[d] = consts.Items[w]; break;            // Const
+        case 2u: r[d] = GetAttr(w); break;                 // GetAttr
+        case 3u: SetAttr(w, r[a]); break;                  // SetAttr
+        case 4u: SetAttr(w, GetAttr(w) + r[a]); break;     // AddAttr
+        case 5u:                                           // Input
+            if (w == 0u) r[d] = vec4(aLife > 0.0 ? clamp(aAge / aLife, 0.0, 1.0) : 0.0);
+            else if (w == 1u) r[d] = vec4(P.Time.x);
+            else if (w == 2u) r[d] = vec4(P.Time.y);
+            else if (w == 3u) r[d] = fract(aRandom * vec4(1.0, 13.371, 71.137, 431.79) + vec4(0.0, 0.31, 0.57, 0.83));
+            else if (w == 4u) r[d] = vec4(float(index));
+            else r[d] = vec4(P.EmitterToSim[3].xyz, 0.0);
+            break;
+        case 6u: r[d] = r[a] + r[b]; break;
+        case 7u: r[d] = r[a] - r[b]; break;
+        case 8u: r[d] = r[a] * r[b]; break;
+        case 9u:
+            r[d] = vec4(r[b].x != 0.0 ? r[a].x / r[b].x : 0.0, r[b].y != 0.0 ? r[a].y / r[b].y : 0.0, r[b].z != 0.0 ? r[a].z / r[b].z : 0.0,
+                        r[b].w != 0.0 ? r[a].w / r[b].w : 0.0);
+            break;
+        case 10u: r[d] = min(r[a], r[b]); break;
+        case 11u: r[d] = max(r[a], r[b]); break;
+        case 12u: r[d] = mix(r[a], r[b], vec4(r[c].x)); break; // Lerp
+        case 13u: r[d] = sin(r[a]); break;
+        case 14u: r[d] = cos(r[a]); break;
+        case 15u: r[d] = abs(r[a]); break;
+        case 16u: r[d] = fract(r[a]); break;
+        case 17u: r[d] = floor(r[a]); break;
+        case 18u: r[d] = vec4(length(r[a].xyz)); break;    // Length
+        case 19u:                                          // Normalize
+        {
+            float l = length(r[a].xyz);
+            r[d] = l > 1e-8 ? vec4(r[a].xyz / l, 0.0) : vec4(0.0);
+            break;
+        }
+        case 20u: r[d] = vec4(dot(r[a].xyz, r[b].xyz)); break;
+        case 21u: r[d] = vec4(cross(r[a].xyz, r[b].xyz), 0.0); break;
+        case 22u: r[d] = Random4(index, P.Counts.w, pc); break; // Random
+        case 23u:                                          // RandomInSphere
+        case 24u:                                          // RandomOnSphere
+        {
+            vec4 k = Random4(index, P.Counts.w, pc);
+            float z = k.x * 2.0 - 1.0, phi = k.y * TWO_PI, s = sqrt(max(1.0 - z * z, 0.0));
+            vec3 dir = vec3(s * cos(phi), z, s * sin(phi));
+            r[d] = vec4(dir * (ins.x == 23u ? pow(k.z, 1.0 / 3.0) : 1.0), 0.0);
+            break;
+        }
+        case 25u:                                          // RandomInCircle
+        {
+            vec4 k = Random4(index, P.Counts.w, pc);
+            float phi = k.x * TWO_PI, rr = sqrt(k.y);
+            r[d] = vec4(rr * cos(phi), 0.0, rr * sin(phi), 0.0);
+            break;
+        }
+        case 26u: r[d] = vec4(CurlNoise(r[a].xyz), 0.0); break; // Noise
+        case 27u: r[d] = Lut(P, w, r[a].x); break;         // Gradient
+        case 28u: r[d] = vec4(Lut(P, w, r[a].x).x); break; // Curve
+        case 29u: r[d] = vec4(r[a][min(w, 3u)]); break;    // Split
+        case 30u: r[d] = vec4(r[a].x, r[b].x, r[c].x, 0.0); break; // Combine
+        case 31u: r[d] = step(r[a], r[b]); break;          // Step
+        case 32u: r[d] = clamp(r[a], vec4(0.0), vec4(1.0)); break; // Saturate
+        case 33u: if (r[a].x > 0.5) aAge = max(aAge, aLife); break; // KillIf
+        case 34u: r[d] = pow(max(r[a], vec4(0.0)), r[b]); break; // Pow
+        case 35u: r[d] = vec4((P.EmitterToSim * vec4(r[a].xyz, 1.0)).xyz, 0.0); break; // ToSimPoint
+        case 36u: r[d] = vec4((P.EmitterToSim * vec4(r[a].xyz, 0.0)).xyz, 0.0); break; // ToSimVector
+        case 37u:                                          // RandomCone
+        {
+            vec4 k = Random4(index, P.Counts.w, pc);
+            float cosMax = cos(radians(clamp(r[a].x, 0.0, 180.0)));
+            float z = mix(1.0, cosMax, k.x), phi = k.y * TWO_PI, s = sqrt(max(1.0 - z * z, 0.0));
+            r[d] = vec4(s * cos(phi), z, s * sin(phi), 0.0);
+            break;
+        }
+        case 38u:                                          // Bounce: r[a] = (height, bounce, friction)
+        {
+            float h = r[a].x;
+            if (aPos.y < h)
+            {
+                aPos.y = h;
+                if (aVel.y < 0.0)
+                {
+                    float keep = 1.0 - clamp(r[a].z, 0.0, 1.0);
+                    aVel = vec3(aVel.x * keep, -aVel.y * r[a].y, aVel.z * keep);
+                }
+            }
+            break;
+        }
+        case 39u: r[d] = sqrt(max(r[a], vec4(0.0))); break; // Sqrt
+        default: break;
+        }
+    }
+}
+
+void main()
+{
+    VfxParamsRef P = VfxParamsRef(pc.Params);
+    uint capacity = P.Counts.x;
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= capacity) return;
+    GpuParticlesRef particles = GpuParticlesRef(pc.Particles);
+    uint offset = (i + capacity - P.Counts.y % capacity) % capacity; // position after the ring head
+    if (offset < P.Counts.z)
+    {
+        // New: the defaults, then Initialize.
+        aPos = P.EmitterToSim[3].xyz;
+        aVel = vec3(0.0);
+        aColor = vec4(1.0);
+        aSize = 0.1;
+        aAge = 0.0;
+        aLife = 1.0;
+        aRot = 0.0;
+        aSpin = 0.0;
+        aRandom = Unit(Hash(i * 7919u + P.Counts.w * 104729u + 17u));
+        Run(P, P.Program.x, P.Program.y, i);
+    }
+    else
+    {
+        GpuParticle p = particles.Items[i];
+        if (!ParticleAlive(p)) return;
+        aPos = p.PosAge.xyz;
+        aAge = p.PosAge.w;
+        aVel = p.VelLife.xyz;
+        aLife = p.VelLife.w;
+        aColor = p.Color;
+        aSize = p.Misc.x;
+        aRot = p.Misc.y;
+        aSpin = p.Misc.z;
+        aRandom = p.Misc.w;
+        float dt = P.Time.y;
+        if (dt > 0.0)
+        {
+            Run(P, P.Program.z, P.Program.w, i);
+            aPos += aVel * dt;
+            aRot += aSpin * dt;
+            aAge += dt;
+        }
+    }
+    // A lifetime of 0 would read as never born: a particle given none dies at once instead.
+    aLife = max(aLife, 1e-4);
+    particles.Items[i] = GpuParticle(vec4(aPos, aAge), vec4(aVel, aLife), aColor, vec4(aSize, aRot, aSpin, aRandom));
+    if (P.Tables.zw != uvec2(0u) && aAge < aLife) atomicAdd(VfxCounterRef(P.Tables.zw).Count, 1u);
+}

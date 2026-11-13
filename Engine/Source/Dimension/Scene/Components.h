@@ -6,6 +6,7 @@
 #include "Dimension/ECS/Entity.h"
 #include "Dimension/Renderer/Font.h"
 #include "Dimension/Particles/ParticleSystem.h"
+#include "Dimension/Particles/VisualEffect.h"
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Animation/Animation.h"
 #include <glm/glm.hpp>

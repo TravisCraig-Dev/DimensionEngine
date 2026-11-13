@@ -335,6 +335,9 @@ namespace Dimension
             uint64_t (*ConstraintOp)(void*, uint64_t, int, int, int, uint64_t, float*);
             // The Profiler from worker threads (C# jobs): op 0 a clock reading, 1 a span named `name` from `start` to now.
             int64_t (*ProfilerWorker)(int, const char*, int64_t);
+            // A Visual Effect: op 0 play, 1 stop, 2 reinit, 3 is playing, 4 alive particles, 5 set property `name` from v[0..3]
+            // (1 if it has one), 6 get it into v (1 if it has one), 7 has property, 8 time, 9 property count.
+            float (*VisualEffectOp)(void*, uint64_t, int, const char*, float*);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -2387,6 +2390,34 @@ namespace Dimension
                 auto data = mr ? AssetManager::GetMeshData(mr->Mesh) : nullptr;
                 s_StringReturn = data && index >= 0 && index < (int)data->BlendShapes.size() ? data->BlendShapes[index].Name : std::string();
                 return s_StringReturn.c_str();
+            };
+            a.VisualEffectOp = [](void* s, uint64_t e, int op, const char* name, float* v) -> float {
+                auto* vfx = Comp<VisualEffectComponent>(s, e);
+                if (!vfx) return 0.0f;
+                switch (op)
+                {
+                case 0: vfx->Play(); return 1.0f;
+                case 1: vfx->Stop(); return 1.0f;
+                case 2: vfx->Reinit(); return 1.0f;
+                case 3: return vfx->Playing ? 1.0f : 0.0f;
+                case 4: return (float)vfx->AliveCount;
+                case 5: return name && v && vfx->SetProperty(name, glm::vec4(v[0], v[1], v[2], v[3])) ? 1.0f : 0.0f;
+                case 6:
+                case 7:
+                {
+                    glm::vec4 value;
+                    if (!name || !vfx->GetProperty(name, value)) return 0.0f;
+                    if (op == 6 && v) v[0] = value.x, v[1] = value.y, v[2] = value.z, v[3] = value.w;
+                    return 1.0f;
+                }
+                case 8: return vfx->Time;
+                case 9:
+                {
+                    auto graph = AssetManager::GetVisualEffect(vfx->Asset);
+                    return graph ? (float)graph->Properties.size() : 0.0f;
+                }
+                default: return 0.0f;
+                }
             };
             a.ProfilerWorker = [](int op, const char* name, int64_t start) -> int64_t {
                 if (op == 0) return Profiler::Timestamp();

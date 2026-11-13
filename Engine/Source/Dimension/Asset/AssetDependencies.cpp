@@ -34,7 +34,7 @@ namespace Dimension::AssetDependencies
         {
             std::string ext = LowerExtension(path);
             return ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".controller" || ext == ".overridecontroller" || ext == ".spriteatlas" ||
-                   ext == ".timeline" || ext == ".preset" || ext == ".asset";
+                   ext == ".timeline" || ext == ".preset" || ext == ".asset" || ext == ".vfx";
         }
 
         // Relative URIs inside a .gltf (buffers and images), resolved against the model's folder (Assets-relative).

@@ -2001,6 +2001,55 @@ namespace Dimension
         public float Time => Length * (Loop ? NormalizedTime - MathF.Floor(NormalizedTime) : MathF.Min(NormalizedTime, 1.0f));
     }
 
+    /// <summary>Plays a Visual Effect Graph (.vfx; like Unity's VisualEffect): GPU particles a graph spawns, moves and
+    /// colors. Its exposed properties are set per object (the Inspector) and from here.</summary>
+    public unsafe class VisualEffect : Component
+    {
+        internal override string NativeName => "Visual Effect";
+        private float Op(int op, string name = null, float* v = null)
+        {
+            if (name == null) return Native.Api.VisualEffectOp(Entity.Scene, Entity.Id, op, null, v);
+            return Native.WithUtf8<float>(name, p => Native.Api.VisualEffectOp(Entity.Scene, Entity.Id, op, (byte*)p, v));
+        }
+        /// <summary>Starts spawning (from the start of its loop if it was stopped).</summary>
+        public void Play() => Op(0);
+        /// <summary>Stops spawning; the particles out finish their lives.</summary>
+        public void Stop() => Op(1);
+        /// <summary>Removes every particle and stops (Play starts it again).</summary>
+        public void Reinit() => Op(2);
+        public bool IsPlaying => Op(3) != 0.0f;
+        /// <summary>Particles alive (read back from the GPU, a few frames late).</summary>
+        public int AliveParticleCount => (int)Op(4);
+        /// <summary>Seconds since it started playing.</summary>
+        public float Time => Op(8);
+        /// <summary>How fast its time runs (1 = real time).</summary>
+        public float PlayRate { get => base.GetFloat("Play Rate"); set => base.SetFloat("Play Rate", value); }
+        public bool PlayOnAwake { get => base.GetFloat("Play On Awake") != 0.0f; set => base.SetFloat("Play On Awake", value ? 1.0f : 0.0f); }
+
+        private bool Set(string name, Vector4 v)
+        {
+            float* f = stackalloc float[4] { v.X, v.Y, v.Z, v.W };
+            return Op(5, name, f) != 0.0f;
+        }
+        private Vector4 Get(string name)
+        {
+            float* f = stackalloc float[4];
+            return Op(6, name, f) != 0.0f ? new Vector4(f[0], f[1], f[2], f[3]) : Vector4.Zero;
+        }
+        /// <summary>Whether the graph exposes a property of that name.</summary>
+        public bool HasProperty(string name) => Op(7, name) != 0.0f;
+        /// <summary>Sets an exposed property for this object (false if the graph has none of that name).</summary>
+        public new bool SetFloat(string name, float value) => Set(name, new Vector4(value));
+        public bool SetVector3(string name, Vector3 value) => Set(name, new Vector4(value, 0.0f));
+        public bool SetVector4(string name, Vector4 value) => Set(name, value);
+        public bool SetColor(string name, Color value) => Set(name, new Vector4(value.R, value.G, value.B, value.A));
+        /// <summary>An exposed property's value here (this object's, else the graph's).</summary>
+        public new float GetFloat(string name) => Get(name).X;
+        public Vector3 GetVector3(string name) { var v = Get(name); return new Vector3(v.X, v.Y, v.Z); }
+        public Vector4 GetVector4(string name) => Get(name);
+        public Color GetColor(string name) { var v = Get(name); return new Color(v.X, v.Y, v.Z, v.W); }
+    }
+
     public unsafe class ParticleSystem : Component
     {
         internal override string NativeName => "Particle System";
