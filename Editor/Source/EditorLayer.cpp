@@ -4303,6 +4303,15 @@ namespace Editor
     {
         auto& prefs = EditorPreferences::Get();
         ImGuiLayer::ApplyEditorStyle(std::clamp(prefs.Theme, 0, 2), prefs.Accent);
+        // The window's title bar in the menu bar's color, so the two read as one strip.
+        {
+            const ImVec4* c = ImGui::GetStyle().Colors;
+            auto pack = [](const ImVec4& v) {
+                auto ch = [](float f) { return (uint32_t)std::lround(std::clamp(f, 0.0f, 1.0f) * 255.0f); };
+                return (ch(v.x) << 16) | (ch(v.y) << 8) | ch(v.z);
+            };
+            Application::Get().GetWindow().SetTitleBarColors(pack(c[ImGuiCol_MenuBarBg]), pack(c[ImGuiCol_Text]), !ImGuiLayer::IsLightTheme());
+        }
         ImGui::GetStyle().FontScaleMain = std::clamp(prefs.UIScale, 0.5f, 3.0f);
         m_Camera.FieldOfView = std::clamp(prefs.CameraFieldOfView, 10.0f, 150.0f);
         if (m_Console) m_Console->ClearOnPlay = prefs.ClearConsoleOnPlay;

@@ -182,6 +182,28 @@ namespace Dimension
         glfwSetWindowIcon(m_Window, (int)glfwImages.size(), glfwImages.empty() ? nullptr : glfwImages.data());
     }
 
+    void Window::SetTitleBarColors(uint32_t background, uint32_t text, bool dark)
+    {
+#ifdef _WIN32
+        // DwmSetWindowAttribute from dwmapi.dll, loaded on first use (no import library needed).
+        using SetAttribute = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+        static SetAttribute set = [] {
+            HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+            return dwm ? (SetAttribute)GetProcAddress(dwm, "DwmSetWindowAttribute") : nullptr;
+        }();
+        if (!set) return;
+        HWND hwnd = glfwGetWin32Window(m_Window);
+        auto colorRef = [](uint32_t rgb) { return (DWORD)(((rgb & 0xFF) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 0xFF)); };
+        BOOL useDark = dark ? TRUE : FALSE;
+        DWORD caption = colorRef(background), captionText = colorRef(text);
+        set(hwnd, 20, &useDark, sizeof(useDark));            // DWMWA_USE_IMMERSIVE_DARK_MODE (Windows 10 1809+)
+        set(hwnd, 35, &caption, sizeof(caption));            // DWMWA_CAPTION_COLOR (Windows 11)
+        set(hwnd, 36, &captionText, sizeof(captionText));    // DWMWA_TEXT_COLOR (Windows 11)
+#else
+        (void)background; (void)text; (void)dark;
+#endif
+    }
+
     void Window::SetFullscreen(bool fullscreen)
     {
         if (fullscreen == m_Fullscreen) return;

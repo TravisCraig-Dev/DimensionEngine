@@ -90,6 +90,62 @@ namespace Editor::UI
         return a == b ? 0u : 1u;
     }
 
+    // The small colored channel squares in front of vector and color fields: a rounded square of the given color,
+    // 70% of the line height and centered on it, with the channel letter in white.
+    static float ChannelBoxSize() { return std::floor(ImGui::GetFrameHeight() * 0.7f); }
+
+    static void DrawChannelBox(ImVec2 p, ImU32 color, bool hovered, const char* letter)
+    {
+        float lineH = ImGui::GetFrameHeight(), box = ChannelBoxSize();
+        if (hovered)
+        {
+            ImVec4 c = ImGui::ColorConvertU32ToFloat4(color);
+            color = ImGui::ColorConvertFloat4ToU32(ImVec4(std::min(c.x + 0.1f, 1.0f), std::min(c.y + 0.1f, 1.0f), std::min(c.z + 0.1f, 1.0f), c.w));
+        }
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 b0(p.x, std::floor(p.y + (lineH - box) * 0.5f)), b1(b0.x + box, b0.y + box);
+        dl->AddRectFilled(b0, b1, color, 2.0f);
+        float fs = std::min(ImGui::GetFontSize(), box * 0.85f);
+        float tw = ImGui::CalcTextSize(letter).x * fs / ImGui::GetFontSize();
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(std::floor(b0.x + (box - tw) * 0.5f), std::floor(b0.y + (box - fs) * 0.5f)), IM_COL32(255, 255, 255, 255), letter);
+    }
+
+    static constexpr ImU32 kChannelRed = IM_COL32(191, 51, 51, 255), kChannelGreen = IM_COL32(64, 153, 64, 255),
+                           kChannelBlue = IM_COL32(51, 89, 204, 255), kChannelAlpha = IM_COL32(110, 110, 118, 255);
+
+    // ImGui's ColorEdit3/4, with shorter R/G/B/A markers: ImGui's own (full-height bars down each field's left
+    // edge) are turned off and a short bar is drawn centered on the same edge, laid out the way ColorEdit splits
+    // its inputs. Zeroing ColorMarkerSize (rather than passing NoColorMarkers) keeps the value text unprefixed.
+    static EditResult ColorEditCompact(bool alpha, float* v, ImGuiColorEditFlags flags)
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        float wFull = ImGui::CalcItemWidth();
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        float markerW = style.ColorMarkerSize;
+        ImGui::GetStyle().ColorMarkerSize = 0.0f;
+        EditResult r = Track(alpha ? ImGui::ColorEdit4("##v", v, flags) : ImGui::ColorEdit3("##v", v, flags));
+        ImGui::GetStyle().ColorMarkerSize = markerW;
+        if ((flags & ImGuiColorEditFlags_NoInputs) || markerW <= 0.0f) return r;
+
+        int n = alpha ? 4 : 3;
+        float lineH = ImGui::GetFrameHeight();
+        float wButton = (flags & ImGuiColorEditFlags_NoSmallPreview) ? 0.0f : lineH + style.ItemInnerSpacing.x;
+        float wItems = std::max(wFull - wButton, 1.0f) - style.ItemInnerSpacing.x * (n - 1);
+        float x = pos.x + (style.ColorButtonPosition == ImGuiDir_Left ? wButton : 0.0f);
+        const ImU32 colors[4] = { IM_COL32(240, 20, 20, 255), IM_COL32(20, 240, 20, 255), IM_COL32(20, 20, 240, 255), IM_COL32(140, 140, 140, 255) }; // ImGui's
+        float h = std::floor(lineH * 0.45f), y0 = std::floor(pos.y + (lineH - h) * 0.5f);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float prev = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            float next = std::trunc(wItems * (i + 1) / n);
+            float left = x + prev + style.ItemInnerSpacing.x * i + 1.0f;
+            dl->AddRectFilled(ImVec2(left, y0), ImVec2(left + markerW, y0 + h), colors[i], markerW * 0.5f);
+            prev = next;
+        }
+        return r;
+    }
+
     EditResult Vec3Control(const char* label, glm::vec3& v, float reset, float speed)
     {
         EditResult r;
@@ -97,22 +153,28 @@ namespace Editor::UI
         ImGui::PushID(label);
         float full = ImGui::GetContentRegionAvail().x;
         float lineH = ImGui::GetFrameHeight();
-        float itemW = (full - lineH * 3.0f - ImGui::GetStyle().ItemSpacing.x * 2.0f) / 3.0f;
-        const ImVec4 colors[3] = { { 0.75f, 0.2f, 0.2f, 1 }, { 0.25f, 0.6f, 0.25f, 1 }, { 0.2f, 0.35f, 0.8f, 1 } };
         const char* names[3] = { "X", "Y", "Z" };
+        // A channel square with the axis letter in front of each field; clicking it resets that component.
+        float labelW = ChannelBoxSize() + 3.0f;
+        float gap = ImGui::GetStyle().FramePadding.x;
+        float itemW = (full - labelW * 3.0f - gap * 2.0f) / 3.0f;
+        const ImU32 colors[3] = { kChannelRed, kChannelGreen, kChannelBlue };
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
         for (int i = 0; i < 3; ++i)
         {
-            if (i > 0) ImGui::SameLine(0, ImGui::GetStyle().FramePadding.x);
-            ImGui::PushStyleColor(ImGuiCol_Button, colors[i]);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(colors[i].x + 0.1f, colors[i].y + 0.1f, colors[i].z + 0.1f, 1));
-            if (ImGui::Button(names[i], ImVec2(lineH, lineH)))
+            if (i > 0) ImGui::SameLine(0, gap);
+            ImGui::PushID(i);
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            if (ImGui::InvisibleButton("##axis", ImVec2(labelW, lineH)))
             {
                 r.Activated = true; // treat reset as an edit for undo purposes
                 v[i] = reset;
                 r.Changed = true;
             }
-            ImGui::PopStyleColor(2);
+            bool hovered = ImGui::IsItemHovered();
+            if (hovered) ImGui::SetTooltip("Reset %s to %g", names[i], reset);
+            DrawChannelBox(p, colors[i], hovered, names[i]);
+            ImGui::PopID();
             ImGui::SameLine();
             ImGui::SetNextItemWidth(itemW);
             ImGui::PushID(i);
@@ -682,7 +744,7 @@ namespace Editor::UI
             bool alpha = f.Type == FieldType::Color4;
             ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaPreviewHalf;
             if (mixed) flags |= ImGuiColorEditFlags_NoInputs; // swatch of the active object, then "--"
-            r = Track(alpha ? ImGui::ColorEdit4("##v", (float*)p, flags) : ImGui::ColorEdit3("##v", (float*)p, flags));
+            r = ColorEditCompact(alpha, (float*)p, flags);
             if (mixed)
             {
                 ImGui::SameLine();

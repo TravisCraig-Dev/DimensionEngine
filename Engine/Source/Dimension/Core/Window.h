@@ -44,6 +44,9 @@ namespace Dimension
         // executable's own icon.
         struct IconImage { int Width, Height; const uint8_t* Rgba; };
         void SetIcon(const std::vector<IconImage>& images);
+        // The system title bar's colors (0xRRGGBB): background, caption text, and dark mode for its buttons. Custom
+        // colors need Windows 11; Windows 10 only takes the dark mode. No effect on other platforms.
+        void SetTitleBarColors(uint32_t background, uint32_t text, bool dark);
         bool IsFullscreen() const { return m_Fullscreen; }
         GLFWwindow* GetNative() const { return m_Window; }
 
