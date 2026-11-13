@@ -155,7 +155,7 @@ namespace Dimension
                 if (ov && ov->Controller == h) s->Controllers.erase(o);
             s->Timelines.erase(h);
             s->AvatarMasks.erase(h);
-            if (s->VisualEffects.erase(h)) VisualEffects::Invalidate(h);
+            if (s->VisualEffects.erase(h)) VisualEffects::Invalidate(AssetHandle::None()); // (graphs using it as a subgraph too)
             if (s->AnimationClips.erase(h) || (s->Assets.contains(h) && s->Assets[h].Type == AssetType::AnimationClip))
             {
                 s->ClipIndexDirty = true;
@@ -1114,7 +1114,7 @@ namespace Dimension
         it->second->Save(path);
         std::error_code ec;
         s->Assets[handle].LastWrite = fs::last_write_time(path, ec);
-        VisualEffects::Invalidate(handle);
+        VisualEffects::Invalidate(AssetHandle::None()); // (graphs using it as a subgraph or a child recompile too)
     }
 
     AssetHandle AssetManager::CreateVisualEffect(const fs::path& absolutePath)

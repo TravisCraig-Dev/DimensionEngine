@@ -39,7 +39,7 @@ namespace Dimension
         Gradient Colors = Gradient::Linear({ 1, 1, 1, 1 }, { 1, 1, 1, 0 }); // Sample Gradient, Color Over Life
         Curve Values = Curve::Linear(1.0f, 0.0f);                           // Sample Curve, Size Over Life
         bool Enabled = true;      // blocks: off = skipped
-        AssetHandle Child = AssetHandle::None(); // Trigger On Die: the effect its events start
+        AssetHandle Child = AssetHandle::None(); // Trigger On Die: the effect its events start; Subgraph: the graph it uses
     };
 
     struct VfxLink
@@ -160,6 +160,8 @@ namespace Dimension
         };
         const std::vector<NodeType>& NodeTypes();
         const NodeType* FindType(const std::string& name);
+        // A node's inputs: its type's, or for a Subgraph node its subgraph's exposed properties (names and kinds).
+        std::vector<Port> InputsOf(const VfxNode& node);
         const char* AttributeName(VfxAttribute a);
 
         VfxProgram Compile(const VisualEffectAsset& asset);

@@ -79,6 +79,11 @@ namespace Dimension
                   "A swirling (divergence-free) field at Position" },
                 { "Sample Gradient", "Sample/Sample Gradient", Category::Operator, { { "T", F, V(0) } }, true, C, {}, "The node's gradient at T (0-1)" },
                 { "Sample Curve", "Sample/Sample Curve", Category::Operator, { { "T", F, V(0) } }, true, F, {}, "The node's curve at T (0-1)" },
+                // Subgraphs
+                { "Subgraph", "Subgraph/Subgraph", Category::Operator, {}, true, Vec, {},
+                  "Another .vfx graph used as an operator: its properties are this node's inputs, its Subgraph Output this node's value" },
+                { "Subgraph Output", "Subgraph/Subgraph Output", Category::Operator, { { "Value", Vec, V(0) } }, true, Vec, {},
+                  "What the graph gives where it is used as a Subgraph (it passes its input on)" },
                 // Blocks
                 { "Set Attribute", "Attribute/Set Attribute", Category::Both, { { "Value", Vec, V(0) } }, false, F, kAttributes,
                   "Sets an attribute (Initialize: Position and Velocity in the effect's own space)" },
@@ -118,6 +123,19 @@ namespace Dimension
             for (const NodeType& t : NodeTypes())
                 if (name == t.Name) return &t;
             return nullptr;
+        }
+
+        std::vector<Port> InputsOf(const VfxNode& node)
+        {
+            if (node.Type == "Subgraph")
+            {
+                std::vector<Port> ports;
+                if (auto sub = AssetManager::IsInitialized() ? AssetManager::GetVisualEffect(node.Child) : nullptr)
+                    for (const VfxProperty& p : sub->Properties) ports.push_back({ p.Name.c_str(), p.Type, p.Value });
+                return ports;
+            }
+            const NodeType* t = FindType(node.Type);
+            return t ? t->Inputs : std::vector<Port>{};
         }
 
         const char* AttributeName(VfxAttribute a)
@@ -179,7 +197,8 @@ namespace Dimension
         if (!source || !target || from == to) return false;
         const auto* st = VisualEffects::FindType(source->Type);
         const auto* tt = VisualEffects::FindType(target->Type);
-        if (!st || !tt || !st->HasOutput || input < 0 || input >= (int32_t)tt->Inputs.size()) return false;
+        int inputs = target->Type == "Subgraph" ? 64 : tt ? (int)tt->Inputs.size() : 0; // (a subgraph's inputs come and go with it)
+        if (!st || !tt || !st->HasOutput || input < 0 || input >= inputs) return false;
         // No cycles: `to` must not feed `from`.
         std::vector<uint32_t> stack{ from };
         std::set<uint32_t> seen;
@@ -366,10 +385,21 @@ namespace Dimension
         {
             struct Compiler
             {
-                const VisualEffectAsset& Asset;
+                const VisualEffectAsset& Root;
                 VfxProgram& Out;
-                std::map<uint32_t, int> Memo; // node -> register (within a block)
-                std::map<uint32_t, uint32_t> LutOf;
+                // A subgraph being compiled inline: its graph, and the registers holding the values its properties take.
+                struct Frame
+                {
+                    const VisualEffectAsset* Graph;
+                    std::vector<int> Properties;
+                    uint64_t Key;
+                };
+                std::vector<Frame> Frames;
+                uint64_t NextFrameKey = 1;
+                const VisualEffectAsset& Graph() const { return Frames.empty() ? Root : *Frames.back().Graph; }
+                uint64_t FrameKey() const { return Frames.empty() ? 0 : Frames.back().Key; }
+                std::map<uint64_t, int> Memo; // (frame, node) -> register (within a block)
+                std::map<uint64_t, uint32_t> LutOf;
                 std::map<std::tuple<float, float, float, float>, uint32_t> ConstOf;
                 int NextReg = 0;
 
@@ -403,7 +433,8 @@ namespace Dimension
                 }
                 uint32_t Lut(const VfxNode& n, bool gradient)
                 {
-                    if (auto it = LutOf.find(n.Id); it != LutOf.end()) return it->second;
+                    uint64_t key = (FrameKey() << 32) | n.Id; // (a subgraph's nodes are not the graph's)
+                    if (auto it = LutOf.find(key); it != LutOf.end()) return it->second;
                     uint32_t slot = (uint32_t)(Out.Luts.size() / VfxProgram::kLutSize);
                     if (slot >= (uint32_t)VfxProgram::kMaxLuts)
                     {
@@ -415,26 +446,27 @@ namespace Dimension
                         float t = (float)i / (VfxProgram::kLutSize - 1);
                         Out.Luts.push_back(gradient ? n.Colors.Evaluate(t) : glm::vec4(n.Values.Evaluate(t)));
                     }
-                    LutOf[n.Id] = slot;
+                    LutOf[key] = slot;
                     return slot;
                 }
 
                 // The register holding a node input's value: what is linked into it, else its own value.
                 int Input(const VfxNode& n, int input)
                 {
-                    if (const VfxLink* l = Asset.LinkInto(n.Id, input))
-                        if (const VfxNode* from = Asset.Find(l->From)) return Node(*from);
-                    glm::vec4 v = input < (int)n.Inputs.size() ? n.Inputs[input] : glm::vec4(0.0f);
+                    if (const VfxLink* l = Graph().LinkInto(n.Id, input))
+                        if (const VfxNode* from = Graph().Find(l->From)) return Node(*from);
+                    std::vector<Port> ports = InputsOf(n);
+                    glm::vec4 v = input < (int)n.Inputs.size() ? n.Inputs[input] : input < (int)ports.size() ? ports[input].Default : glm::vec4(0.0f);
                     // A number is the same in every component (so it scales vectors whole).
-                    if (const auto* type = FindType(n.Type); type && input < (int)type->Inputs.size() && type->Inputs[input].Kind == VfxValue::Float)
-                        v = glm::vec4(v.x);
+                    if (input < (int)ports.size() && ports[input].Kind == VfxValue::Float) v = glm::vec4(v.x);
                     return Constant(v);
                 }
 
                 // An operator node's value (computed once per block).
                 int Node(const VfxNode& n)
                 {
-                    if (auto it = Memo.find(n.Id); it != Memo.end()) return it->second;
+                    uint64_t memoKey = (FrameKey() << 32) | n.Id;
+                    if (auto it = Memo.find(memoKey); it != Memo.end()) return it->second;
                     int r = -1;
                     const std::string& t = n.Type;
                     auto unary = [&](VfxOp op) {
@@ -454,10 +486,39 @@ namespace Dimension
                         Emit(VfxOp::Input, d, 0, 0, 0, (uint32_t)which);
                         return d;
                     };
-                    if (t == "Float" || t == "Vector" || t == "Color") r = Input(n, 0);
+                    if (t == "Float" || t == "Vector" || t == "Color" || t == "Subgraph Output") r = Input(n, 0);
+                    else if (t == "Property" && !Frames.empty())
+                    {
+                        // In a subgraph: the value the Subgraph node gives that property.
+                        const auto& props = Frames.back().Properties;
+                        r = n.Option >= 0 && n.Option < (int)props.size() ? props[n.Option] : Constant(glm::vec4(0.0f));
+                    }
+                    else if (t == "Subgraph")
+                    {
+                        auto sub = AssetManager::IsInitialized() ? AssetManager::GetVisualEffect(n.Child) : nullptr;
+                        const VfxNode* output = nullptr;
+                        if (sub)
+                            for (const VfxNode& m : sub->Nodes)
+                                if (m.Type == "Subgraph Output") output = &m;
+                        if (!sub || !output || Frames.size() >= 8)
+                        {
+                            Out.Errors.push_back(!sub ? "A Subgraph node has no graph" : !output ? "A subgraph has no Subgraph Output node"
+                                                                                                   : "Subgraphs nest too deep (one uses itself?)");
+                            r = Constant(glm::vec4(0.0f));
+                        }
+                        else
+                        {
+                            // Its properties' values here, then its output's value inside it.
+                            Frame frame{ sub.get(), {}, NextFrameKey++ };
+                            for (size_t i = 0; i < sub->Properties.size(); ++i) frame.Properties.push_back(Input(n, (int)i));
+                            Frames.push_back(std::move(frame));
+                            r = Node(*output);
+                            Frames.pop_back();
+                        }
+                    }
                     else if (t == "Property")
                     {
-                        if (n.Option < 0 || n.Option >= (int)Asset.Properties.size())
+                        if (n.Option < 0 || n.Option >= (int)Root.Properties.size())
                         {
                             Out.Errors.push_back("A Property node names no property");
                             r = Constant(glm::vec4(0.0f));
@@ -572,7 +633,7 @@ namespace Dimension
                         Out.Errors.push_back("'" + t + "' cannot feed a block");
                         r = Constant(glm::vec4(0.0f));
                     }
-                    Memo[n.Id] = r;
+                    Memo[memoKey] = r;
                     return r;
                 }
 

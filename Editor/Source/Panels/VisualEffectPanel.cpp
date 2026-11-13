@@ -41,8 +41,8 @@ namespace Editor
         // The kind an input's value is shown and edited as: the type's, or for attribute blocks the attribute's.
         VfxValue InputKind(const VfxNode& n, int input)
         {
-            const auto* t = VisualEffects::FindType(n.Type);
-            VfxValue kind = t && input < (int)t->Inputs.size() ? t->Inputs[input].Kind : VfxValue::Float;
+            auto ports = VisualEffects::InputsOf(n);
+            VfxValue kind = input < (int)ports.size() ? ports[input].Kind : VfxValue::Float;
             if (n.Type == "Set Attribute" || n.Type == "Add Attribute" || n.Type == "Add Per Second")
             {
                 VfxAttribute a = (VfxAttribute)std::clamp(n.Option, 0, (int)VfxAttribute::Count - 1);
@@ -390,10 +390,23 @@ namespace Editor
                             changed = true;
                         }
                     }
-                    for (size_t i = 0; i < type->Inputs.size() && i < n->Inputs.size(); ++i)
+                    if (n->Type == "Subgraph")
+                    {
+                        UI::EditResult r = UI::AssetField("Graph", n->Child, AssetType::VisualEffect);
+                        if (r.Activated) BeginChange();
+                        if (r.Changed)
+                        {
+                            if (n->Child == m_Handle) n->Child = AssetHandle::None(); // (not itself)
+                            changed = true;
+                        }
+                    }
+                    auto ports = VisualEffects::InputsOf(*n);
+                    // (a subgraph's inputs follow its properties: their values start at the properties' own)
+                    while (n->Inputs.size() < ports.size()) n->Inputs.push_back(ports[n->Inputs.size()].Default);
+                    for (size_t i = 0; i < ports.size() && i < n->Inputs.size(); ++i)
                     {
                         ImGui::PushID((int)i);
-                        UI::PropertyLabel(type->Inputs[i].Name);
+                        UI::PropertyLabel(ports[i].Name);
                         if (const VfxLink* l = g.LinkInto(n->Id, (int)i))
                         {
                             const VfxNode* from = g.Find(l->From);
@@ -410,7 +423,7 @@ namespace Editor
                         else
                         {
                             // Color-like Set Attribute values edit as colors.
-                            VfxValue kind = type->Inputs[i].Kind;
+                            VfxValue kind = ports[i].Kind;
                             if ((n->Type == "Set Attribute" || n->Type == "Add Attribute" || n->Type == "Add Per Second"))
                             {
                                 VfxAttribute a = (VfxAttribute)std::clamp(n->Option, 0, (int)VfxAttribute::Count - 1);
@@ -535,10 +548,7 @@ namespace Editor
         };
         std::vector<Pin> pins;
         std::map<uint32_t, ImVec2> outputs;
-        auto rowsOf = [&](const VfxNode& n) {
-            const auto* t = VisualEffects::FindType(n.Type);
-            return t ? (int)t->Inputs.size() : 0;
-        };
+        auto rowsOf = [&](const VfxNode& n) { return (int)VisualEffects::InputsOf(n).size(); };
         float y = 0.0f;
         glm::vec2 spawnAt(0.0f, y);
         y += kSpawnH + kGap;
@@ -626,7 +636,8 @@ namespace Editor
                 VfxNode* n = g.Find(id);
                 if (!n) continue;
                 const auto* t = VisualEffects::FindType(n->Type);
-                int rows = t ? (int)t->Inputs.size() : 0;
+                auto ports = VisualEffects::InputsOf(*n);
+                int rows = (int)ports.size();
                 glm::vec2 a(at.x + 6.0f, by), b(at.x + kContextW - 6.0f, by + kRowH * (1 + rows));
                 ImVec2 sa = toScreen(a), sb = toScreen(b);
                 bool selected = m_Selected == id;
@@ -651,8 +662,8 @@ namespace Editor
                 {
                     float ry = by + kRowH * (1 + i);
                     ImVec2 pin = toScreen(glm::vec2(at.x, ry + kRowH * 0.5f));
-                    pins.push_back({ pin, id, i, t->Inputs[i].Kind });
-                    std::string row = std::string(t->Inputs[i].Name);
+                    pins.push_back({ pin, id, i, ports[i].Kind });
+                    std::string row = std::string(ports[i].Name);
                     if (!g.LinkInto(id, i)) row += "  " + ValueText(i < (int)n->Inputs.size() ? n->Inputs[i] : glm::vec4(0.0f), InputKind(*n, i));
                     label(toScreen(glm::vec2(a.x + 14.0f, ry + 2.0f)), dim, row.c_str());
                 }
@@ -668,11 +679,17 @@ namespace Editor
         {
             const auto* t = VisualEffects::FindType(n.Type);
             if (!t || !t->HasOutput) continue;
-            int rows = (int)t->Inputs.size();
+            auto ports = VisualEffects::InputsOf(n);
+            int rows = (int)ports.size();
             std::string title = n.Type;
             if (n.Type == "Property") title = n.Option >= 0 && n.Option < (int)g.Properties.size() ? g.Properties[n.Option].Name : "(property?)";
             else if (n.Type == "Get Attribute") title = std::string("Get ") + VisualEffects::AttributeName((VfxAttribute)std::clamp(n.Option, 0, (int)VfxAttribute::Count - 1));
             else if (n.Type == "Split") title = std::string("Split ") + "XYZW"[std::clamp(n.Option, 0, 3)];
+            else if (n.Type == "Subgraph")
+            {
+                auto* meta = AssetManager::GetMetadata(n.Child);
+                title = meta ? meta->Path.stem().string() + " (subgraph)" : "Subgraph (none)";
+            }
             float extra = (n.Type == "Sample Gradient" || n.Type == "Sample Curve") ? kRowH : 0.0f;
             glm::vec2 a = n.Position, b = n.Position + glm::vec2(kNodeW, kHeaderH + kRowH * (float)rows + extra + 4.0f);
             ImVec2 sa = toScreen(a), sb = toScreen(b);
@@ -711,11 +728,11 @@ namespace Editor
             {
                 float ry = a.y + kHeaderH + kRowH * (float)i;
                 ImVec2 pin = toScreen(glm::vec2(a.x, ry + kRowH * 0.5f));
-                pins.push_back({ pin, n.Id, i, t->Inputs[i].Kind });
-                std::string row = t->Inputs[i].Name;
-                if (!g.LinkInto(n.Id, i)) row += "  " + ValueText(i < (int)n.Inputs.size() ? n.Inputs[i] : glm::vec4(0.0f), t->Inputs[i].Kind);
+                pins.push_back({ pin, n.Id, i, ports[i].Kind });
+                std::string row = ports[i].Name;
+                if (!g.LinkInto(n.Id, i)) row += "  " + ValueText(i < (int)n.Inputs.size() ? n.Inputs[i] : ports[i].Default, ports[i].Kind);
                 label(toScreen(glm::vec2(a.x + 12.0f, ry + 2.0f)), dim, row.c_str());
-                if (t->Inputs[i].Kind == VfxValue::Color && !g.LinkInto(n.Id, i) && i < (int)n.Inputs.size())
+                if (ports[i].Kind == VfxValue::Color && !g.LinkInto(n.Id, i) && i < (int)n.Inputs.size())
                 {
                     ImVec2 c = toScreen(glm::vec2(b.x - 30.0f, ry + 4.0f)), d = toScreen(glm::vec2(b.x - 8.0f, ry + 16.0f));
                     const glm::vec4& v = n.Inputs[i];
@@ -815,8 +832,11 @@ namespace Editor
         }
         if (hoveredPin)
         {
-            const auto* t = VisualEffects::FindType(g.Find(hoveredPin->Node) ? g.Find(hoveredPin->Node)->Type : "");
-            if (t && hoveredPin->Input >= 0 && hoveredPin->Input < (int)t->Inputs.size()) ImGui::SetTooltip("%s", t->Inputs[hoveredPin->Input].Name);
+            if (const VfxNode* pn = g.Find(hoveredPin->Node); pn && hoveredPin->Input >= 0)
+            {
+                auto ports = VisualEffects::InputsOf(*pn);
+                if (hoveredPin->Input < (int)ports.size()) ImGui::SetTooltip("%s", ports[hoveredPin->Input].Name);
+            }
         }
         else if (hoveredNode)
             if (const VfxNode* n = g.Find(hoveredNode))

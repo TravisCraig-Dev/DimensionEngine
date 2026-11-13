@@ -10658,6 +10658,74 @@ namespace
         CHECK(!VisualEffects::Compile(parent).Valid());
     }
 
+    void TestVisualEffectSubgraph()
+    {
+        // A .vfx used as an operator: its properties are the Subgraph node's inputs, its Subgraph Output the value.
+        fs::path assets = fs::temp_directory_path() / "dimension_vfx_sub" / "Assets";
+        fs::remove_all(assets.parent_path());
+        fs::create_directories(assets);
+        VisualEffectAsset scale; // Value = Dir * Amount
+        scale.Properties = { { "Amount", VfxValue::Float, glm::vec4(2.0f) }, { "Dir", VfxValue::Vector, glm::vec4(1.0f, 0.0f, 0.0f, 0.0f) } };
+        auto& amount = scale.Add("Property", { -300, 0 });
+        amount.Option = 0;
+        uint32_t amountId = amount.Id;
+        auto& dir = scale.Add("Property", { -300, 80 });
+        dir.Option = 1;
+        uint32_t dirId = dir.Id;
+        uint32_t mul = scale.Add("Multiply", { -150, 40 }).Id;
+        uint32_t out = scale.Add("Subgraph Output", { 0, 40 }).Id;
+        CHECK(scale.Link(dirId, mul, 0) && scale.Link(amountId, mul, 1) && scale.Link(mul, out, 0));
+        CHECK(scale.Save(assets / "Scale.vfx"));
+        VisualEffectAsset empty;
+        CHECK(empty.Save(assets / "NoOutput.vfx"));
+        AssetManager::Init(assets);
+        AssetHandle sub = AssetManager::Import(assets / "Scale.vfx"), none = AssetManager::Import(assets / "NoOutput.vfx");
+
+        VisualEffectAsset g;
+        auto& set = g.Add("Set Attribute");
+        set.Option = (int)VfxAttribute::Velocity;
+        uint32_t setId = set.Id;
+        auto& node = g.Add("Subgraph", { -200, 0 });
+        node.Child = sub;
+        uint32_t nodeId = node.Id;
+        CHECK(VisualEffects::InputsOf(*g.Find(nodeId)).size() == 2 && std::string(VisualEffects::InputsOf(*g.Find(nodeId))[1].Name) == "Dir");
+        CHECK(g.Link(nodeId, setId, 0));
+        // The properties' own values: (1, 0, 0) * 2.
+        VfxProgram p1 = VisualEffects::Compile(g);
+        CHECK(p1.Valid());
+        VisualEffects::CpuParticle a;
+        VisualEffects::Spawn(p1, a, {});
+        CHECK(glm::all(glm::epsilonEqual(a.Velocity, glm::vec3(2.0f, 0.0f, 0.0f), 1e-5f)));
+        // Values given on the node, and one linked in.
+        g.Find(nodeId)->Inputs = { glm::vec4(0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f) };
+        auto& three = g.Add("Float", { -400, 0 });
+        three.Inputs[0] = glm::vec4(3.0f);
+        CHECK(g.Link(three.Id, nodeId, 0));
+        VfxProgram p2 = VisualEffects::Compile(g);
+        VisualEffects::CpuParticle b;
+        VisualEffects::Spawn(p2, b, {});
+        CHECK(p2.Valid() && glm::all(glm::epsilonEqual(b.Velocity, glm::vec3(0.0f, 3.0f, 0.0f), 1e-5f)));
+        // Used twice in one block: each use its own values.
+        auto& col = g.Add("Set Attribute");
+        col.Option = (int)VfxAttribute::Color;
+        uint32_t colId = col.Id;
+        auto& again = g.Add("Subgraph", { -200, 100 });
+        again.Child = sub;
+        again.Inputs = { glm::vec4(0.5f), glm::vec4(1.0f, 1.0f, 1.0f, 1.0f) };
+        CHECK(g.Link(again.Id, colId, 0));
+        VfxProgram p3 = VisualEffects::Compile(g);
+        VisualEffects::CpuParticle c;
+        VisualEffects::Spawn(p3, c, {});
+        CHECK(p3.Valid() && glm::all(glm::epsilonEqual(c.Velocity, glm::vec3(0.0f, 3.0f, 0.0f), 1e-5f)) && Near(c.Color.r, 0.5f, 1e-5f));
+        // A graph without a Subgraph Output, or none at all, is an error.
+        g.Find(nodeId)->Child = none;
+        CHECK(!VisualEffects::Compile(g).Valid());
+        g.Find(nodeId)->Child = AssetHandle::None();
+        CHECK(!VisualEffects::Compile(g).Valid());
+        AssetManager::Shutdown();
+        fs::remove_all(assets.parent_path());
+    }
+
     void TestVisualEffectSpawn()
     {
         // The component in a scene: a .vfx asset with a rate and a burst; play start spawns the burst, the rate adds
@@ -17174,6 +17242,7 @@ int main(int argc, char** argv)
     Run("Visual effect graph", TestVisualEffectGraph);
     Run("Visual effect spawning", TestVisualEffectSpawn);
     Run("Visual effect events", TestVisualEffectEvents);
+    Run("Visual effect subgraphs", TestVisualEffectSubgraph);
     Run("Script timers", TestScriptTimers);
     Run("Coroutines (C++)", TestCoroutines);
     Run("C++ script options", TestScriptOptions);
