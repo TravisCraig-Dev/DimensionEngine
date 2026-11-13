@@ -1885,7 +1885,7 @@ namespace Editor
         }
         // Models and prefabs: a live picture to turn and play clips on; materials: their picture (drawn again a frame
         // after they change).
-        if (m_Ctx.Previews && (meta->Type == AssetType::Mesh || meta->Type == AssetType::Prefab)) DrawLivePreview(handle);
+        if (m_Ctx.Previews && (meta->Type == AssetType::Mesh || meta->Type == AssetType::Prefab || meta->Type == AssetType::VisualEffect)) DrawLivePreview(handle);
         else if (uint64_t preview = m_Ctx.Previews && AssetPreviews::HasPreview(meta->Type) ? m_Ctx.Previews->Get(handle) : 0)
         {
             float size = std::min(ImGui::GetContentRegionAvail().x, 160.0f);

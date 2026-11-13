@@ -50,7 +50,10 @@ namespace Editor
         const std::vector<ClipInfo>& LiveClips(int slot = 0) { return m_Live[slot].Clips; }
         // Draws the waiting ones (call while recording the frame).
         void Render(VkCommandBuffer cmd);
-        static bool HasPreview(AssetType type) { return type == AssetType::Material || type == AssetType::Mesh || type == AssetType::Prefab; }
+        static bool HasPreview(AssetType type)
+        {
+            return type == AssetType::Material || type == AssetType::Mesh || type == AssetType::Prefab || type == AssetType::VisualEffect;
+        }
         // What a picture shows: a material's values and which of its textures are loaded; a model or prefab's file.
         static uint64_t KeyOf(AssetHandle asset);
 
@@ -81,5 +84,8 @@ namespace Editor
         std::unordered_map<uint64_t, Entry> m_Entries;
         std::vector<AssetHandle> m_Queue;
         std::unordered_set<uint64_t> m_Queued;
+        // Visual Effects: the picture after a moment of play (a few simulation steps drawn), and the live one playing.
+        uint32_t m_EffectGeneration = 1000; // (each staged effect starts with no particles of the last)
+        AssetHandle m_LiveEffect = AssetHandle::None();
     };
 }

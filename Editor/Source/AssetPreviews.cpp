@@ -6,6 +6,8 @@
 #include <Dimension/Renderer/RenderDevice.h>
 #include <Dimension/Scene/Components.h>
 #include <Dimension/Scene/Prefab.h>
+#include <Dimension/Particles/VisualEffect.h>
+#include <imgui.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace Editor
@@ -88,7 +90,7 @@ namespace Editor
     uint64_t AssetPreviews::Live(AssetHandle asset, const LiveView& view, int slot)
     {
         const AssetMetadata* meta = AssetManager::GetMetadata(asset);
-        if (!meta || (meta->Type != AssetType::Mesh && meta->Type != AssetType::Prefab)) return 0;
+        if (!meta || (meta->Type != AssetType::Mesh && meta->Type != AssetType::Prefab && meta->Type != AssetType::VisualEffect)) return 0;
         LiveSlot& live = m_Live[slot];
         if (asset != live.Asset)
         {
@@ -103,9 +105,16 @@ namespace Editor
     bool AssetPreviews::Stage(AssetHandle asset, const LiveView* view)
     {
         auto& reg = m_Scene->GetRegistry();
-        if (!m_Subject.IsNull() && m_Scene->IsValid(m_Subject)) m_Scene->DestroyEntity(m_Subject);
-        m_Subject = Entity::Null();
         const AssetMetadata* meta = AssetManager::GetMetadata(asset);
+        // A live effect already playing goes on (its particles stay); only the camera moves.
+        bool keepEffect = view && meta && meta->Type == AssetType::VisualEffect && asset == m_LiveEffect && !m_Subject.IsNull() &&
+                          m_Scene->IsValid(m_Subject) && reg.Has<VisualEffectComponent>(m_Subject);
+        if (!keepEffect)
+        {
+            if (!m_Subject.IsNull() && m_Scene->IsValid(m_Subject)) m_Scene->DestroyEntity(m_Subject);
+            m_Subject = Entity::Null();
+            m_LiveEffect = AssetHandle::None();
+        }
         if (!meta) return false;
         glm::vec3 lo(1e30f), hi(-1e30f);
         auto grow = [&](const glm::mat4& world, const AABB& box) {
@@ -154,9 +163,26 @@ namespace Editor
             pitch = -22.0f;
             yaw = 35.0f;
         }
+        else if (meta->Type == AssetType::VisualEffect)
+        {
+            if (!AssetManager::GetVisualEffect(asset)) return false;
+            if (!keepEffect)
+            {
+                m_Subject = m_Scene->CreateEntity("Effect");
+                auto& vfx = reg.Emplace<VisualEffectComponent>(m_Subject);
+                vfx.Asset = asset;
+                vfx.Generation = ++m_EffectGeneration;
+                if (view) m_LiveEffect = asset;
+            }
+            // (no bounds known on the CPU: a few meters around and above it)
+            lo = glm::vec3(-2.0f, 0.0f, -2.0f);
+            hi = glm::vec3(2.0f, 3.0f, 2.0f);
+            pitch = -15.0f;
+            yaw = 20.0f;
+        }
         else
             return false;
-        if (view && meta->Type != AssetType::Material)
+        if (view && meta->Type != AssetType::Material && meta->Type != AssetType::VisualEffect)
         {
             pitch = view->Pitch;
             yaw = view->Yaw;
@@ -203,6 +229,12 @@ namespace Editor
         glm::vec3 forward = -glm::normalize(glm::vec3(t.World[2]));
         float distance = meta->Type == AssetType::Material ? 2.35f : radius / std::sin(glm::radians(15.0f)) * 1.05f;
         if (view) distance *= std::clamp(view->Zoom, 0.2f, 5.0f);
+        if (view && meta->Type == AssetType::VisualEffect)
+        {
+            t.Rotation = { glm::radians(view->Pitch), glm::radians(view->Yaw), 0.0f };
+            m_Scene->UpdateTransforms();
+            forward = -glm::normalize(glm::vec3(t.World[2]));
+        }
         t.Position = center - forward * distance;
         auto& camera = reg.Get<CameraComponent>(m_Camera);
         camera.NearClip = std::max(distance - radius * 2.0f, distance * 0.01f);
@@ -220,6 +252,8 @@ namespace Editor
                 if (Stage(live.Asset, &*live.Request))
                 {
                     live.Clips = m_StagedClips;
+                    // A live effect plays on in real time.
+                    if (m_LiveEffect == live.Asset) VisualEffects::Update(*m_Scene, std::min(ImGui::GetIO().DeltaTime, 0.1f));
                     Draw(cmd, live.Picture, live.Asset);
                 }
                 live.Request.reset();
@@ -231,6 +265,19 @@ namespace Editor
             m_Queue.erase(m_Queue.begin());
             m_Queued.erase((uint64_t)asset);
             if (!Stage(asset)) continue;
+            const AssetMetadata* meta = AssetManager::GetMetadata(asset);
+            if (meta && meta->Type == AssetType::VisualEffect)
+            {
+                // A moment of play (1.5 s in the simulation's largest steps), drawn each step so the GPU simulation runs; the
+                // last one stays. (One such picture a frame: they cost six small renders.)
+                for (int k = 0; k < 6; ++k)
+                {
+                    VisualEffects::Update(*m_Scene, 0.25f);
+                    Draw(cmd, m_Entries[(uint64_t)asset], asset);
+                }
+                drawn = 2;
+                continue;
+            }
             Draw(cmd, m_Entries[(uint64_t)asset], asset);
             ++drawn;
         }
