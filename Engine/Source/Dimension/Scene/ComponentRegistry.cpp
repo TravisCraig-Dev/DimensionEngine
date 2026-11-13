@@ -888,7 +888,7 @@ namespace Dimension
             .Field("Agent Type", &NavMeshSurfaceComponent::AgentType).Enum({ "Any", "Humanoid" })
                 .Tooltip("A project agent type (Window > Navigation): baked with its sizes, walked only by agents of that type.\nAny: its own settings, for every agent")
             .Field("Streamed", &NavMeshSurfaceComponent::Streamed)
-                .Tooltip("Large worlds: while playing, bake only the tiles near the agents and the main camera (a tile a frame), dropping far ones")
+                .Tooltip("Large worlds (any Size): while playing, bake only the tiles near the agents and the main camera (on a worker thread),\ndropping far ones")
             .Field("Tile Size", &NavMeshSurfaceComponent::TileSize).Range(4.0f, 1024.0f).Speed(0.5f).Tooltip("Streamed: meters across a tile")
             .Field("Stream Radius", &NavMeshSurfaceComponent::StreamRadius).Range(1.0f, 10000.0f).Speed(0.5f)
                 .Tooltip("Streamed: tiles this close to an agent or the main camera are baked (those a tile farther off are dropped)")

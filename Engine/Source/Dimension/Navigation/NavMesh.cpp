@@ -267,41 +267,24 @@ namespace Dimension
                 m.Origin = { center.x - m.Width * c * 0.5f, center.z - m.Depth * c * 0.5f };
             }
 
-            // Bakes a surface. With `previous` (the same grid), only the columns in `region` (x0, z0, x1, z1) are sampled
-            // again; the others keep previous's surfaces.
-            // `previous` and `region` (columns x0, z0, x1, z1): only the region is sampled, the rest kept; with `clear` the
-            // region is emptied instead (a streamed tile dropped).
-            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& surface, const glm::vec3& center, const BakeScope& scope,
-                                                const NavMeshData* previous = nullptr, glm::ivec4 region = glm::ivec4(0), bool clear = false)
+            // Modifier volumes, as boxes in their objects' space.
+            struct Volume
             {
-                const NavMeshSurfaceComponent s = WithAgentType(surface); // (an agent type's sizes)
-                auto& reg = scene.GetRegistry();
-                auto m = std::make_shared<NavMeshData>();
-                GridOf(s, center, *m);
-                float c = m->CellSize;
-                glm::vec3 size = glm::max(s.Size, glm::vec3(0.1f));
-                m->AgentRadius = std::max(s.AgentRadius, 0.0f);
-                m->AgentHeight = std::max(s.AgentHeight, 0.1f);
-                m->StepHeight = std::max(s.StepHeight, 0.0f);
-                float top = center.y + size.y * 0.5f;
-                float cosSlope = std::cos(glm::radians(std::clamp(s.MaxSlope, 0.0f, 89.0f)));
-                const glm::vec3 down(0.0f, -1.0f, 0.0f), up(0.0f, 1.0f, 0.0f);
-
-                // Modifier volumes, as boxes in their objects' space.
-                struct Volume
+                glm::mat4 ToLocal;
+                glm::vec3 Center, Half;
+                int Area;
+                float Cost;
+                bool Contains(const glm::vec3& p) const
                 {
-                    glm::mat4 ToLocal;
-                    glm::vec3 Center, Half;
-                    int Area;
-                    float Cost;
-                    bool Contains(const glm::vec3& p) const
-                    {
-                        glm::vec3 local = glm::vec3(ToLocal * glm::vec4(p, 1.0f)) - Center;
-                        return glm::all(glm::lessThanEqual(glm::abs(local), Half));
-                    }
-                };
+                    glm::vec3 local = glm::vec3(ToLocal * glm::vec4(p, 1.0f)) - Center;
+                    return glm::all(glm::lessThanEqual(glm::abs(local), Half));
+                }
+            };
+
+            std::vector<Volume> VolumesOf(Scene& scene)
+            {
                 std::vector<Volume> volumes;
-                for (auto [e, v, t] : reg.ViewOf<NavMeshModifierVolumeComponent, TransformComponent>())
+                for (auto [e, v, t] : scene.GetRegistry().ViewOf<NavMeshModifierVolumeComponent, TransformComponent>())
                     if (t.ActiveInHierarchy)
                     {
                         // Cost 0: the area's own (Project Settings, the Navigation window).
@@ -309,68 +292,74 @@ namespace Dimension
                         float cost = v.Cost > 0.0f ? v.Cost : Project::GetConfig().NavAreaCosts[area];
                         volumes.push_back({ glm::inverse(t.World), v.Center, glm::abs(v.Size) * 0.5f, area, std::max(cost, 0.01f) });
                     }
-                auto notWalkable = [&](const glm::vec3& p) {
-                    for (const Volume& v : volumes)
-                        if (v.Area == kNotWalkable && v.Contains(p)) return true;
-                    return false;
-                };
+                return volumes;
+            }
 
-                // Every column: the surfaces under its center, top down. A surface is walkable when it is flat enough,
-                // nothing seen above it is within Agent Height, and a ray up finds no underside (or solid) that close.
-                m->RawStart.reserve((size_t)m->Width * m->Depth + 1);
-                if (previous && previous->RawStart.size() != (size_t)m->Width * m->Depth + 1) previous = nullptr;
-                for (int z = 0; z < m->Depth; ++z)
-                    for (int x = 0; x < m->Width; ++x)
+            // What sampling a column needs to know: the surface's box (top and height), its agent and slope limits.
+            struct Sampler
+            {
+                float Top, Depth, AgentHeight, CosSlope;
+                const std::vector<Volume>* Volumes;
+                const BakeScope* Scope;
+            };
+
+            Sampler SamplerOf(const NavMeshSurfaceComponent& s, const glm::vec3& center, const std::vector<Volume>& volumes, const BakeScope& scope)
+            {
+                glm::vec3 size = glm::max(s.Size, glm::vec3(0.1f));
+                return { center.y + size.y * 0.5f, size.y, std::max(s.AgentHeight, 0.1f), std::cos(glm::radians(std::clamp(s.MaxSlope, 0.0f, 89.0f))),
+                         &volumes, &scope };
+            }
+
+            // The walkable surfaces under a column's center (x/z), top down, appended with their areas and costs. A
+            // surface is walkable when it is flat enough, nothing seen above it is within Agent Height, and a ray up
+            // finds no underside (or solid) that close.
+            void SampleColumn(Scene& scene, const Sampler& k, glm::vec2 xz, std::vector<float>& heights, std::vector<uint8_t>& areas,
+                              std::vector<float>& costs)
+            {
+                const glm::vec3 down(0.0f, -1.0f, 0.0f), up(0.0f, 1.0f, 0.0f);
+                glm::vec3 p(xz.x, k.Top, xz.y);
+                float above = kInf;
+                for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, p, down, k.Depth, Physics::kDefaultQueryMask, true))
+                {
+                    if (Ignored(scene, h.Hit, *k.Scope)) continue;
+                    float y = h.Point.y;
+                    if (above - y < 0.02f) continue; // the same surface again (on a shared triangle edge)
+                    bool walkable = h.Normal.y >= k.CosSlope && above - y >= k.AgentHeight;
+                    above = y;
+                    if (!walkable) continue;
+                    bool blocked = false;
+                    for (const RaycastHit& u : Physics3DWorld::RaycastAll(scene, h.Point + up * 0.02f, up, k.AgentHeight - 0.02f))
+                        if (!Ignored(scene, u.Hit, *k.Scope))
+                        {
+                            blocked = true;
+                            break;
+                        }
+                    if (blocked) continue;
+                    bool notWalkable = false;
+                    for (const Volume& v : *k.Volumes)
+                        if (v.Area == kNotWalkable && v.Contains(h.Point)) notWalkable = true;
+                    if (notWalkable) continue;
+                    // The ground's own area, from a NavMesh Modifier on what it lies on.
+                    uint8_t area = 255;
+                    float cost = 1.0f;
+                    if (const NavMeshModifierComponent* mod = ModifierOf(scene, h.Hit); mod && mod->OverrideArea)
                     {
-                        m->RawStart.push_back((uint32_t)m->RawHeights.size());
-                        if (previous && (x < region.x || z < region.y || x > region.z || z > region.w))
-                        {
-                            int col = z * m->Width + x;
-                            uint32_t from = previous->RawStart[col], to = previous->RawStart[col + 1];
-                            m->RawHeights.insert(m->RawHeights.end(), previous->RawHeights.begin() + from, previous->RawHeights.begin() + to);
-                            bool areas = previous->RawAreas.size() == previous->RawHeights.size() && previous->RawCosts.size() == previous->RawHeights.size();
-                            for (uint32_t k = from; k < to; ++k)
-                            {
-                                m->RawAreas.push_back(areas ? previous->RawAreas[k] : 255);
-                                m->RawCosts.push_back(areas ? previous->RawCosts[k] : 1.0f);
-                            }
-                            continue;
-                        }
-                        if (clear) continue; // a dropped tile: nothing there
-                        glm::vec3 p(m->Origin.x + (x + 0.5f) * c, top, m->Origin.y + (z + 0.5f) * c);
-                        float above = kInf;
-                        for (const RaycastHit& h : Physics3DWorld::RaycastAll(scene, p, down, size.y, Physics::kDefaultQueryMask, true))
-                        {
-                            if (Ignored(scene, h.Hit, scope)) continue;
-                            float y = h.Point.y;
-                            if (above - y < 0.02f) continue; // the same surface again (on a shared triangle edge)
-                            bool walkable = h.Normal.y >= cosSlope && above - y >= m->AgentHeight;
-                            above = y;
-                            if (!walkable) continue;
-                            bool blocked = false;
-                            for (const RaycastHit& u : Physics3DWorld::RaycastAll(scene, h.Point + up * 0.02f, up, m->AgentHeight - 0.02f))
-                                if (!Ignored(scene, u.Hit, scope))
-                                {
-                                    blocked = true;
-                                    break;
-                                }
-                            if (blocked || notWalkable(h.Point)) continue;
-                            // The ground's own area, from a NavMesh Modifier on what it lies on.
-                            uint8_t area = 255;
-                            float cost = 1.0f;
-                            if (const NavMeshModifierComponent* mod = ModifierOf(scene, h.Hit); mod && mod->OverrideArea)
-                            {
-                                area = (uint8_t)std::clamp((int)mod->Area, 0, kAreaCount - 1);
-                                if (area == kNotWalkable) continue;
-                                cost = std::max(mod->Cost > 0.0f ? mod->Cost : Project::GetConfig().NavAreaCosts[area], 0.01f);
-                            }
-                            m->RawHeights.push_back(y);
-                            m->RawAreas.push_back(area);
-                            m->RawCosts.push_back(cost);
-                        }
+                        area = (uint8_t)std::clamp((int)mod->Area, 0, kAreaCount - 1);
+                        if (area == kNotWalkable) continue;
+                        cost = std::max(mod->Cost > 0.0f ? mod->Cost : Project::GetConfig().NavAreaCosts[area], 0.01f);
                     }
-                m->RawStart.push_back((uint32_t)m->RawHeights.size());
-                // The spots: every surface found.
+                    heights.push_back(y);
+                    areas.push_back(area);
+                    costs.push_back(cost);
+                }
+            }
+
+            // Makes the mesh from its sampled surfaces (Raw*, on its grid): the spots linked up, room for the agent taken
+            // off the edges, areas and costs, islands, and the bake's own links.
+            void FinishMesh(Scene& scene, const NavMeshSurfaceComponent& s, NavMeshData& mesh, const std::vector<Volume>& volumes, const BakeScope& scope)
+            {
+                NavMeshData* m = &mesh;
+                float c = m->CellSize;
                 m->ColumnStart = m->RawStart;
                 m->Heights = m->RawHeights;
                 m->Columns.resize(m->Heights.size());
@@ -429,6 +418,50 @@ namespace Dimension
                 for (float cost : m->Costs) m->MinCost = std::min(m->MinCost, cost);
                 BuildIslands(*m);
                 if (s.GenerateLinks) GenerateLinks(scene, *m, std::max(s.DropHeight, 0.0f), std::max(s.JumpDistance, 0.0f), scope);
+            }
+
+            void SetAgentSizes(const NavMeshSurfaceComponent& s, NavMeshData& m)
+            {
+                m.AgentRadius = std::max(s.AgentRadius, 0.0f);
+                m.AgentHeight = std::max(s.AgentHeight, 0.1f);
+                m.StepHeight = std::max(s.StepHeight, 0.0f);
+            }
+
+            // Bakes a surface. With `previous` (the same grid) and `region` (columns x0, z0, x1, z1), only the region is
+            // sampled and the rest kept.
+            std::shared_ptr<NavMeshData> BakeIn(Scene& scene, const NavMeshSurfaceComponent& surface, const glm::vec3& center, const BakeScope& scope,
+                                                const NavMeshData* previous = nullptr, glm::ivec4 region = glm::ivec4(0))
+            {
+                const NavMeshSurfaceComponent s = WithAgentType(surface); // (an agent type's sizes)
+                auto m = std::make_shared<NavMeshData>();
+                GridOf(s, center, *m);
+                SetAgentSizes(s, *m);
+                float c = m->CellSize;
+                std::vector<Volume> volumes = VolumesOf(scene);
+                Sampler sampler = SamplerOf(s, center, volumes, scope);
+                m->RawStart.reserve((size_t)m->Width * m->Depth + 1);
+                if (previous && previous->RawStart.size() != (size_t)m->Width * m->Depth + 1) previous = nullptr;
+                for (int z = 0; z < m->Depth; ++z)
+                    for (int x = 0; x < m->Width; ++x)
+                    {
+                        m->RawStart.push_back((uint32_t)m->RawHeights.size());
+                        if (previous && (x < region.x || z < region.y || x > region.z || z > region.w))
+                        {
+                            int col = z * m->Width + x;
+                            uint32_t from = previous->RawStart[col], to = previous->RawStart[col + 1];
+                            m->RawHeights.insert(m->RawHeights.end(), previous->RawHeights.begin() + from, previous->RawHeights.begin() + to);
+                            bool areas = previous->RawAreas.size() == previous->RawHeights.size() && previous->RawCosts.size() == previous->RawHeights.size();
+                            for (uint32_t k = from; k < to; ++k)
+                            {
+                                m->RawAreas.push_back(areas ? previous->RawAreas[k] : 255);
+                                m->RawCosts.push_back(areas ? previous->RawCosts[k] : 1.0f);
+                            }
+                            continue;
+                        }
+                        SampleColumn(scene, sampler, { m->Origin.x + (x + 0.5f) * c, m->Origin.y + (z + 0.5f) * c }, m->RawHeights, m->RawAreas, m->RawCosts);
+                    }
+                m->RawStart.push_back((uint32_t)m->RawHeights.size());
+                FinishMesh(scene, s, *m, volumes, scope);
                 return m;
             }
 
@@ -1122,11 +1155,27 @@ namespace Dimension
 
         namespace
         {
+            // A copy of the scene for sampling with physics of its own: the copied bodies' handles cleared (in a playing
+            // scene they name its own world's bodies, and the copy's physics would skip them).
+            Ref<Scene> Copy(Scene& scene)
+            {
+                Ref<Scene> copy = scene.Clone();
+                for (auto [e, rb] : copy->GetRegistry().ViewOf<RigidbodyComponent>()) rb.RuntimeBody = 0xFFFFFFFF;
+                return copy;
+            }
+
+            Ref<Scene> LevelCopy(Scene& scene)
+            {
+                Ref<Scene> copy = Copy(scene);
+                copy->StartQueryPhysics();
+                return copy;
+            }
+
             // A copy of the scene whose physics is what is drawn: the Mesh Renderers' meshes as static mesh colliders,
             // the colliders gone (terrains keep theirs), for surfaces baked from Render Meshes.
             Ref<Scene> RenderMeshScene(Scene& scene)
             {
-                Ref<Scene> copy = scene.Clone();
+                Ref<Scene> copy = Copy(scene);
                 auto& reg = copy->GetRegistry();
                 std::vector<Entity> drawn;
                 for (auto [e, mr, t] : reg.ViewOf<MeshRendererComponent, TransformComponent>())
@@ -1151,6 +1200,11 @@ namespace Dimension
             bool FromRenderMeshes(const NavMeshSurfaceComponent& s) { return s.UseGeometry == NavMeshSurfaceComponent::Geometry::RenderMeshes && !s.Streamed; }
         }
 
+        namespace
+        {
+            bool UpdateStreamedArea(Scene& scene, Entity e, const glm::vec3& center, const glm::vec3& lo, const glm::vec3& hi);
+        }
+
         int UpdateArea(Scene& scene, const glm::vec3& lo, const glm::vec3& hi)
         {
             Ref<Scene> drawnCopy; // (for surfaces baked from render meshes)
@@ -1165,6 +1219,11 @@ namespace Dimension
                 auto& s = reg.Get<NavMeshSurfaceComponent>(e);
                 if (s.Moving) continue; // the level around changed, not the platform
                 glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
+                if (s.Streamed && s.Stream && scene.GetPhysics3D())
+                {
+                    updated += UpdateStreamedArea(scene, e, center, lo, hi) ? 1 : 0;
+                    continue;
+                }
                 glm::vec3 half = glm::max(s.Size, glm::vec3(0.1f)) * 0.5f;
                 if (hi.x < center.x - half.x || lo.x > center.x + half.x || hi.z < center.z - half.z || lo.z > center.z + half.z ||
                     hi.y < center.y - half.y || lo.y > center.y + half.y)
@@ -1187,11 +1246,7 @@ namespace Dimension
                 }
                 else if (!scene.GetPhysics3D())
                 {
-                    if (!copy)
-                    {
-                        copy = scene.Clone();
-                        copy->StartQueryPhysics();
-                    }
+                    if (!copy) copy = LevelCopy(scene);
                     sampled = copy.get();
                 }
                 Install(scene, s, BakeIn(*sampled, s, center, ScopeOf(scene, e), previous, region));
@@ -1200,76 +1255,338 @@ namespace Dimension
             return updated;
         }
 
+    }
+
+    // A streamed surface's tiles (runtime): each tile's sampled surfaces kept on their own, keyed by the tile's place
+    // on the surface's grid (which may be any size), and the mesh agents walk made from the loaded ones: a window just
+    // over them (at most kMaxWindow columns a side), its corner on a tile's. New tiles are sampled on a worker thread
+    // against a copy of the level (taken at play start and after UpdateArea), one batch at a time.
+    struct NavTileStream
+    {
+        struct Tile
+        {
+            int W = 0, D = 0;            // columns
+            std::vector<uint32_t> Start; // W * D + 1, as NavMeshData::RawStart
+            std::vector<float> Heights, Costs;
+            std::vector<uint8_t> Areas;
+        };
+        using TileMap = std::map<std::pair<int, int>, std::shared_ptr<const Tile>>; // (tx, tz)
+        static constexpr int kMaxWindow = 4096;
+        static constexpr int kBatch = 8; // tiles a worker bake samples
+
+        // The grid: the surface box's corner, its columns, and the tiles over them.
+        glm::vec2 Corner{ 0.0f };
+        float CellSize = 0.25f;
+        int Columns = 0, Rows = 0, TileCells = 1, TilesX = 0, TilesZ = 0;
+        uint64_t Key = 0; // what the grid was made for (settings and place)
+        TileMap Loaded;
+        Ref<Scene> Level; // the level copy worker bakes sample (null: take a new one)
+
+        struct Result
+        {
+            TileMap Tiles;
+            std::shared_ptr<NavMeshData> Mesh;
+            int Changed = 0;
+        };
+        std::future<Result> Job;
+    };
+
+    namespace Navigation
+    {
         namespace
         {
-            // Streamed surfaces: the tiles near the agents and the main camera baked (up to `budget` a call, nearest
-            // first) and those a tile farther than Stream Radius dropped. Returns how many tiles changed.
-            int StreamSurface(Scene& scene, Entity e, int budget)
+            using Tile = NavTileStream::Tile;
+            using TileMap = NavTileStream::TileMap;
+
+            uint64_t StreamKey(const NavMeshSurfaceComponent& s, const glm::vec3& center)
+            {
+                uint64_t h = 1469598103934665603ull;
+                auto mix = [&](float v) {
+                    uint32_t bits;
+                    std::memcpy(&bits, &v, 4);
+                    h = (h ^ bits) * 1099511628211ull;
+                };
+                for (float v : { s.CellSize, s.TileSize, s.Size.x, s.Size.y, s.Size.z, center.x, center.y, center.z, s.AgentRadius, s.AgentHeight,
+                                 s.StepHeight, s.MaxSlope, s.DropHeight, s.JumpDistance, (float)s.GenerateLinks, (float)s.AgentType })
+                    mix(v);
+                return h;
+            }
+
+            // The surface's stream, made anew when its grid changed (settings or place).
+            NavTileStream& StreamOf(NavMeshSurfaceComponent& surface, const glm::vec3& center)
+            {
+                uint64_t key = StreamKey(surface, center);
+                if (surface.Stream && surface.Stream->Key == key) return *surface.Stream;
+                if (surface.Stream && surface.Stream->Job.valid()) surface.Stream->Job.wait();
+                auto st = std::make_shared<NavTileStream>();
+                st->Key = key;
+                float c = std::max(surface.CellSize, 0.05f);
+                glm::vec3 size = glm::max(surface.Size, glm::vec3(0.1f));
+                st->CellSize = c;
+                st->Columns = std::max((int)std::ceil(size.x / c), 1);
+                st->Rows = std::max((int)std::ceil(size.z / c), 1);
+                st->Corner = { center.x - st->Columns * c * 0.5f, center.z - st->Rows * c * 0.5f };
+                st->TileCells = std::clamp((int)std::round(std::max(surface.TileSize, 1.0f) / c), 1, NavTileStream::kMaxWindow);
+                st->TilesX = (st->Columns + st->TileCells - 1) / st->TileCells;
+                st->TilesZ = (st->Rows + st->TileCells - 1) / st->TileCells;
+                surface.Stream = st;
+                return *st;
+            }
+
+            // Samples a tile's columns.
+            std::shared_ptr<const Tile> SampleTile(Scene& scene, const NavTileStream& st, const Sampler& sampler, int tx, int tz)
+            {
+                auto t = std::make_shared<Tile>();
+                int x0 = tx * st.TileCells, z0 = tz * st.TileCells;
+                t->W = std::min(st.TileCells, st.Columns - x0);
+                t->D = std::min(st.TileCells, st.Rows - z0);
+                t->Start.reserve((size_t)t->W * t->D + 1);
+                for (int z = 0; z < t->D; ++z)
+                    for (int x = 0; x < t->W; ++x)
+                    {
+                        t->Start.push_back((uint32_t)t->Heights.size());
+                        glm::vec2 xz = st.Corner + glm::vec2(x0 + x + 0.5f, z0 + z + 0.5f) * st.CellSize;
+                        SampleColumn(scene, sampler, xz, t->Heights, t->Areas, t->Costs);
+                    }
+                t->Start.push_back((uint32_t)t->Heights.size());
+                return t;
+            }
+
+            // The mesh over the loaded tiles: a window from the lowest to the highest tile loaded (columns of tiles not
+            // loaded are empty).
+            std::shared_ptr<NavMeshData> BuildWindow(Scene& scene, const NavMeshSurfaceComponent& s, const NavTileStream& st, const TileMap& tiles,
+                                                     const BakeScope& scope)
+            {
+                auto m = std::make_shared<NavMeshData>();
+                SetAgentSizes(s, *m);
+                m->CellSize = st.CellSize;
+                glm::ivec2 lo(INT32_MAX), hi(INT32_MIN);
+                for (const auto& [key, tile] : tiles)
+                {
+                    lo = glm::min(lo, glm::ivec2(key.first, key.second));
+                    hi = glm::max(hi, glm::ivec2(key.first, key.second));
+                }
+                if (tiles.empty()) lo = hi = glm::ivec2(0);
+                int x0 = lo.x * st.TileCells, z0 = lo.y * st.TileCells;
+                m->Width = tiles.empty() ? 1 : std::min((hi.x + 1) * st.TileCells, st.Columns) - x0;
+                m->Depth = tiles.empty() ? 1 : std::min((hi.y + 1) * st.TileCells, st.Rows) - z0;
+                m->Origin = st.Corner + glm::vec2((float)x0, (float)z0) * st.CellSize;
+                m->RawStart.reserve((size_t)m->Width * m->Depth + 1);
+                for (int z = 0; z < m->Depth; ++z)
+                {
+                    int tz = (z0 + z) / st.TileCells, lz = (z0 + z) % st.TileCells;
+                    for (int x = 0; x < m->Width; ++x)
+                    {
+                        m->RawStart.push_back((uint32_t)m->RawHeights.size());
+                        int tx = (x0 + x) / st.TileCells, lx = (x0 + x) % st.TileCells;
+                        auto it = tiles.find({ tx, tz });
+                        if (it == tiles.end()) continue;
+                        const Tile& t = *it->second;
+                        int col = lz * t.W + lx;
+                        uint32_t from = t.Start[col], to = t.Start[col + 1];
+                        m->RawHeights.insert(m->RawHeights.end(), t.Heights.begin() + from, t.Heights.begin() + to);
+                        m->RawAreas.insert(m->RawAreas.end(), t.Areas.begin() + from, t.Areas.begin() + to);
+                        m->RawCosts.insert(m->RawCosts.end(), t.Costs.begin() + from, t.Costs.begin() + to);
+                    }
+                }
+                m->RawStart.push_back((uint32_t)m->RawHeights.size());
+                FinishMesh(scene, s, *m, VolumesOf(scene), scope);
+                return m;
+            }
+
+            // Which tiles a streamed surface wants now: those within Stream Radius of an agent or the main camera to
+            // load (nearest first), and the loaded ones to drop (a tile farther than that, or outside the largest window
+            // around the camera, or the first agent without one).
+            void WantedTiles(Scene& scene, const NavMeshSurfaceComponent& s, const NavTileStream& st, std::vector<std::pair<int, int>>& load,
+                             std::vector<std::pair<int, int>>& drop)
             {
                 auto& reg = scene.GetRegistry();
-                auto& s = reg.Get<NavMeshSurfaceComponent>(e);
-                const NavMeshData* current = s.Baked.get();
-                if (!s.Streamed || s.Moving || !current || !scene.GetPhysics3D()) return 0;
-                int tile = std::max(1, (int)std::round(std::max(s.TileSize, 1.0f) / current->CellSize));
-                int tilesX = (current->Width + tile - 1) / tile, tilesZ = (current->Depth + tile - 1) / tile;
-                if (s.TilesX != tilesX || s.TilesZ != tilesZ || s.TilesLoaded.size() != (size_t)tilesX * tilesZ)
-                {
-                    s.TilesX = tilesX, s.TilesZ = tilesZ;
-                    s.TilesLoaded.assign((size_t)tilesX * tilesZ, 0);
-                }
-                // Where the world is looked at or walked: every agent, and the main camera.
                 std::vector<glm::vec2> focus;
-                for (auto [a, agent, t] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
-                    if (t.ActiveInHierarchy) focus.push_back({ t.World[3].x, t.World[3].z });
                 if (Entity cam = scene.GetPrimaryCamera(); !cam.IsNull())
                 {
                     const glm::mat4& w = reg.Get<TransformComponent>(cam).World;
                     focus.push_back({ w[3].x, w[3].z });
                 }
-                float c = current->CellSize;
+                for (auto [a, agent, t] : reg.ViewOf<NavMeshAgentComponent, TransformComponent>())
+                    if (t.ActiveInHierarchy) focus.push_back({ t.World[3].x, t.World[3].z });
+                float tileM = st.TileCells * st.CellSize, radius = std::max(s.StreamRadius, 0.0f);
+                auto tileOf = [&](glm::vec2 p) { return glm::ivec2(glm::floor((p - st.Corner) / tileM)); };
+                // The window allowed: kMaxWindow columns around the first focus.
+                int half = std::max((NavTileStream::kMaxWindow / st.TileCells - 1) / 2, 0);
+                glm::ivec2 center = focus.empty() ? glm::ivec2(0) : tileOf(focus[0]);
+                auto allowed = [&](int tx, int tz) {
+                    return tx >= 0 && tz >= 0 && tx < st.TilesX && tz < st.TilesZ && std::abs(tx - center.x) <= half && std::abs(tz - center.y) <= half;
+                };
                 auto distance = [&](int tx, int tz) {
-                    glm::vec2 lo = current->Origin + glm::vec2(tx, tz) * (float)tile * c, hi = lo + glm::vec2((float)tile * c);
+                    glm::vec2 lo = st.Corner + glm::vec2(tx, tz) * tileM, hi = lo + glm::vec2(tileM);
                     float best = 1e30f;
                     for (glm::vec2 p : focus) best = std::min(best, glm::length(glm::max(glm::max(lo - p, p - hi), glm::vec2(0.0f))));
                     return best;
                 };
-                std::vector<std::pair<float, int>> load, drop;
-                for (int tz = 0; tz < tilesZ; ++tz)
-                    for (int tx = 0; tx < tilesX; ++tx)
-                    {
-                        float d = distance(tx, tz);
-                        int index = tz * tilesX + tx;
-                        if (!s.TilesLoaded[index] && d <= s.StreamRadius) load.push_back({ d, index });
-                        else if (s.TilesLoaded[index] && d > s.StreamRadius + std::max(s.TileSize, 1.0f)) drop.push_back({ -d, index });
-                    }
-                std::sort(load.begin(), load.end());
-                std::sort(drop.begin(), drop.end());
+                std::vector<std::pair<float, std::pair<int, int>>> wanted;
+                std::set<std::pair<int, int>> seen;
+                for (glm::vec2 p : focus)
+                {
+                    glm::ivec2 a = tileOf(p - glm::vec2(radius)), b = tileOf(p + glm::vec2(radius));
+                    for (int tz = std::max(a.y, 0); tz <= std::min(b.y, st.TilesZ - 1); ++tz)
+                        for (int tx = std::max(a.x, 0); tx <= std::min(b.x, st.TilesX - 1); ++tx)
+                        {
+                            if (st.Loaded.count({ tx, tz }) || !allowed(tx, tz) || !seen.insert({ tx, tz }).second) continue;
+                            if (float d = distance(tx, tz); d <= radius) wanted.push_back({ d, { tx, tz } });
+                        }
+                }
+                std::sort(wanted.begin(), wanted.end());
+                load.clear();
+                for (const auto& w : wanted) load.push_back(w.second);
+                drop.clear();
+                for (const auto& [key, tile] : st.Loaded)
+                    if (!allowed(key.first, key.second) || distance(key.first, key.second) > radius + tileM) drop.push_back(key);
+            }
+
+            // A streamed surface's tiles brought up to date at once (up to `budget` loaded, every far one dropped),
+            // sampling the scene itself. Returns how many tiles changed.
+            int StreamSurface(Scene& scene, Entity e, int budget)
+            {
+                auto& reg = scene.GetRegistry();
+                auto& surface = reg.Get<NavMeshSurfaceComponent>(e);
+                if (!surface.Streamed || surface.Moving || !surface.Baked || !scene.GetPhysics3D()) return 0;
                 glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
-                BakeScope scope = ScopeOf(scene, e);
-                std::shared_ptr<NavMeshData> data;
+                NavTileStream& st = StreamOf(surface, center);
                 int changed = 0;
-                auto apply = [&](int index, bool clear) {
-                    int tx = index % tilesX, tz = index / tilesX;
-                    glm::ivec4 region(tx * tile, tz * tile, std::min((tx + 1) * tile, current->Width) - 1, std::min((tz + 1) * tile, current->Depth) - 1);
-                    data = BakeIn(scene, s, center, scope, data ? data.get() : current, region, clear);
-                    s.TilesLoaded[index] = clear ? 0 : 1;
-                    ++changed;
-                };
-                for (size_t k = 0; k < load.size() && changed < budget; ++k) apply(load[k].second, false);
-                for (size_t k = 0; k < drop.size() && changed < budget; ++k) apply(drop[k].second, true);
-                if (data) Install(scene, s, data);
+                if (st.Job.valid())
+                {
+                    NavTileStream::Result r = st.Job.get(); // (a worker bake first)
+                    st.Loaded = std::move(r.Tiles);
+                    if (r.Mesh) Install(scene, surface, r.Mesh);
+                    changed += r.Changed;
+                }
+                std::vector<std::pair<int, int>> load, drop;
+                WantedTiles(scene, surface, st, load, drop);
+                if (load.empty() && drop.empty()) return changed;
+                const NavMeshSurfaceComponent s = WithAgentType(surface);
+                BakeScope scope = ScopeOf(scene, e);
+                std::vector<Volume> volumes = VolumesOf(scene);
+                Sampler sampler = SamplerOf(s, center, volumes, scope);
+                for (const auto& key : drop) st.Loaded.erase(key), ++changed;
+                for (size_t k = 0; k < load.size() && (int)k < budget; ++k, ++changed) st.Loaded[load[k]] = SampleTile(scene, st, sampler, load[k].first, load[k].second);
+                Install(scene, surface, BuildWindow(scene, s, st, st.Loaded, scope));
                 return changed;
+            }
+
+            // The same on a worker thread: installs a finished worker bake, then starts the next one when tiles are
+            // wanted (sampling a batch of them in a copy of the level). Returns how many tiles changed.
+            int StreamSurfaceAsync(Scene& scene, Entity e)
+            {
+                auto& reg = scene.GetRegistry();
+                auto& surface = reg.Get<NavMeshSurfaceComponent>(e);
+                if (!surface.Streamed || surface.Moving || !surface.Baked || !scene.GetPhysics3D()) return 0;
+                glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
+                NavTileStream& st = StreamOf(surface, center);
+                int changed = 0;
+                if (st.Job.valid())
+                {
+                    if (st.Job.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return 0;
+                    NavTileStream::Result r = st.Job.get();
+                    st.Loaded = std::move(r.Tiles);
+                    if (r.Mesh) Install(scene, surface, r.Mesh);
+                    changed += r.Changed;
+                }
+                std::vector<std::pair<int, int>> load, drop;
+                WantedTiles(scene, surface, st, load, drop);
+                if (load.empty() && drop.empty()) return changed;
+                if (!st.Level) st.Level = LevelCopy(scene);
+                if (load.size() > (size_t)NavTileStream::kBatch) load.resize(NavTileStream::kBatch);
+                TileMap tiles = st.Loaded;
+                for (const auto& key : drop) tiles.erase(key);
+                Ref<Scene> level = st.Level;
+                NavMeshSurfaceComponent s = WithAgentType(surface);
+                s.Stream.reset(), s.Data.reset(), s.Baked.reset(); // (the job's copy holds no runtime state)
+                BakeScope scope = ScopeOf(scene, e);
+                const NavTileStream* grid = &st; // (its grid fields stay as they are while the job runs: StreamOf waits for it)
+                int count = (int)(load.size() + drop.size());
+                st.Job = std::async(std::launch::async, [level, s, center, scope, grid, tiles = std::move(tiles), load, count]() mutable {
+                    std::vector<Volume> volumes = VolumesOf(*level);
+                    Sampler sampler = SamplerOf(s, center, volumes, scope);
+                    for (const auto& key : load) tiles[key] = SampleTile(*level, *grid, sampler, key.first, key.second);
+                    NavTileStream::Result r;
+                    r.Mesh = BuildWindow(*level, s, *grid, tiles, scope);
+                    r.Tiles = std::move(tiles);
+                    r.Changed = count;
+                    return r;
+                });
+                return changed;
+            }
+
+            std::vector<Entity> StreamedSurfaces(Scene& scene)
+            {
+                std::vector<Entity> streamed;
+                for (auto [e, s] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent>())
+                    if (s.Streamed && s.Baked) streamed.push_back(e);
+                return streamed;
+            }
+        }
+
+        namespace
+        {
+            // The loaded tiles of a streamed surface over a box sampled again (one more column all round, as their
+            // spots' room changes too); later worker bakes sample a new copy of the level.
+            bool UpdateStreamedArea(Scene& scene, Entity e, const glm::vec3& center, const glm::vec3& lo, const glm::vec3& hi)
+            {
+                auto& surface = scene.GetRegistry().Get<NavMeshSurfaceComponent>(e);
+                NavTileStream& st = StreamOf(surface, center);
+                if (st.Job.valid())
+                {
+                    NavTileStream::Result r = st.Job.get();
+                    st.Loaded = std::move(r.Tiles);
+                }
+                st.Level.reset();
+                float tileM = st.TileCells * st.CellSize, pad = st.CellSize;
+                glm::ivec2 a(glm::floor((glm::vec2(lo.x, lo.z) - pad - st.Corner) / tileM)), b(glm::floor((glm::vec2(hi.x, hi.z) + pad - st.Corner) / tileM));
+                const NavMeshSurfaceComponent s = WithAgentType(surface);
+                BakeScope scope = ScopeOf(scene, e);
+                std::vector<Volume> volumes = VolumesOf(scene);
+                Sampler sampler = SamplerOf(s, center, volumes, scope);
+                bool any = false;
+                for (auto& [key, tile] : st.Loaded)
+                    if (key.first >= a.x && key.first <= b.x && key.second >= a.y && key.second <= b.y)
+                    {
+                        tile = SampleTile(scene, st, sampler, key.first, key.second);
+                        any = true;
+                    }
+                if (any) Install(scene, surface, BuildWindow(scene, s, st, st.Loaded, scope));
+                return any;
             }
         }
 
         int StreamTiles(Scene& scene, int budget)
         {
-            std::vector<Entity> streamed;
-            for (auto [e, s] : scene.GetRegistry().ViewOf<NavMeshSurfaceComponent>())
-                if (s.Streamed && s.Baked) streamed.push_back(e);
             int changed = 0;
-            for (Entity e : streamed) changed += StreamSurface(scene, e, budget);
+            for (Entity e : StreamedSurfaces(scene)) changed += StreamSurface(scene, e, budget);
             return changed;
+        }
+
+        int StreamTilesAsync(Scene& scene)
+        {
+            int changed = 0;
+            for (Entity e : StreamedSurfaces(scene)) changed += StreamSurfaceAsync(scene, e);
+            return changed;
+        }
+
+        bool IsStreaming(Scene& scene)
+        {
+            for (Entity e : StreamedSurfaces(scene))
+                if (auto& st = scene.GetRegistry().Get<NavMeshSurfaceComponent>(e).Stream; st && st->Job.valid()) return true;
+            return false;
+        }
+
+        std::vector<glm::ivec2> LoadedTiles(Scene& scene, Entity e, glm::ivec2* tileCount)
+        {
+            std::vector<glm::ivec2> out;
+            auto* s = scene.IsValid(e) ? scene.GetRegistry().TryGet<NavMeshSurfaceComponent>(e) : nullptr;
+            if (tileCount) *tileCount = s && s->Stream ? glm::ivec2(s->Stream->TilesX, s->Stream->TilesZ) : glm::ivec2(0);
+            if (!s || !s->Stream) return out;
+            for (const auto& [key, tile] : s->Stream->Loaded) out.push_back({ key.first, key.second });
+            return out;
         }
 
         std::shared_ptr<const NavMeshData> Bake(Scene& scene, Entity e)
@@ -1281,15 +1598,13 @@ namespace Dimension
             glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
             if (surface->Streamed && !surface->Moving && scene.GetPhysics3D())
             {
-                // Streamed while playing: an empty mesh of the whole box, then the tiles around the agents and the
-                // camera now (the rest come as they get near).
-                NavMeshData empty;
-                GridOf(*surface, center, empty);
-                empty.RawStart.assign((size_t)empty.Width * empty.Depth + 1, 0u);
-                auto data = BakeIn(scene, *surface, center, ScopeOf(scene, e), &empty, glm::ivec4(0, 0, -1, -1));
-                Install(scene, *surface, data);
-                surface->TilesX = surface->TilesZ = 0;
-                surface->TilesLoaded.clear();
+                // Streamed while playing: the tiles around the agents and the camera now (the rest come as they get
+                // near), and the copy of the level later tiles are sampled in.
+                if (surface->Stream && surface->Stream->Job.valid()) surface->Stream->Job.wait();
+                surface->Stream.reset();
+                NavTileStream& st = StreamOf(*surface, center);
+                st.Level = LevelCopy(scene);
+                Install(scene, *surface, BuildWindow(scene, WithAgentType(*surface), st, st.Loaded, ScopeOf(scene, e)));
                 surface->BakedAt = reg.Get<TransformComponent>(e).World;
                 surface->Frame = surface->FrameInverse = glm::mat4(1.0f);
                 StreamSurface(scene, e, INT32_MAX);
@@ -1308,8 +1623,7 @@ namespace Dimension
             else
             {
                 // Editing: the colliders in a physics world of a copy (the scene itself is left alone).
-                Ref<Scene> copy = scene.Clone();
-                copy->StartQueryPhysics();
+                Ref<Scene> copy = LevelCopy(scene);
                 data = BakeIn(*copy, *surface, center, scope);
             }
             Install(scene, *surface, data);
@@ -1347,8 +1661,7 @@ namespace Dimension
             if (Pending().count(key)) FinishBakes(scene, true); // (one at a time per surface: the earlier one first)
             // The level as it is now, with its own physics to sample (the scene's own runs on meanwhile).
             PendingBake job;
-            job.Level = FromRenderMeshes(*surface) ? RenderMeshScene(scene) : scene.Clone();
-            if (!job.Level->GetPhysics3D()) job.Level->StartQueryPhysics();
+            job.Level = FromRenderMeshes(*surface) ? RenderMeshScene(scene) : LevelCopy(scene);
             job.BakedAt = reg.Get<TransformComponent>(e).World;
             NavMeshSurfaceComponent settings = *surface;
             glm::vec3 center = reg.Get<TransformComponent>(e).GetWorldPosition();
@@ -1886,7 +2199,7 @@ namespace Dimension
             if (dt <= 0.0f) return;
             auto& reg = scene.GetRegistry();
             FollowPlatforms(scene);
-            StreamTiles(scene, 1); // streamed surfaces: a tile a frame
+            StreamTilesAsync(scene); // streamed surfaces: tiles near the agents baked on a worker thread
 
             // Obstacles: how they move, and whether (and where) they cut the meshes. Those not cutting are steered
             // around.

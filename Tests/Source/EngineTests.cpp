@@ -3772,6 +3772,15 @@ namespace
         // A new bake sees the wall gone.
         CHECK(Navigation::BakeAllAsync(scene) == 1 && Navigation::FinishBakes(scene, true) == 1);
         CHECK(reg.Get<NavMeshSurfaceComponent>(surface).Baked->NodeCount() > now->NodeCount());
+        // While playing: the copy the bake samples gets bodies of its own (the copied components name the playing
+        // world's), so it bakes the same mesh as on the spot.
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto onTheSpot = Navigation::Bake(*rt, surface);
+        CHECK(Navigation::BakeAsync(*rt, surface) && Navigation::FinishBakes(*rt, true) == 1);
+        auto inPlay = rt->GetRegistry().Get<NavMeshSurfaceComponent>(surface).Baked;
+        CHECK(onTheSpot && inPlay && onTheSpot->NodeCount() > 0 && inPlay->Heights == onTheSpot->Heights);
+        rt->OnRuntimeStop();
     }
 
     void TestNavMeshRenderMeshes()
@@ -4299,7 +4308,8 @@ namespace
     void TestNavStreaming()
     {
         // A streamed surface over a 200 m field: at play start only the tiles around the agent are baked; walked (here
-        // carried) across the field, the tiles where it is now are baked a tile a frame and the far ones dropped.
+        // carried) across the field, the tiles where it is now are baked on a worker thread (Update returns at once and
+        // installs them when done) and the far ones dropped.
         Scene scene("Streamed");
         auto& reg = scene.GetRegistry();
         Entity ground = scene.CreateEntity("Ground");
@@ -4320,20 +4330,83 @@ namespace
         rt->OnRuntimeStart();
         auto& rr = rt->GetRegistry();
         auto& rs = rr.Get<NavMeshSurfaceComponent>(surface);
-        auto loaded = [&] { return (int)std::count(rs.TilesLoaded.begin(), rs.TilesLoaded.end(), 1); };
+        glm::ivec2 count;
+        auto loaded = [&] { return (int)Navigation::LoadedTiles(*rt, surface, &count).size(); };
         auto onMesh = [&](glm::vec3 p) { return rs.Baked && Navigation::Nearest(*rs.Baked, p, 1.0f) >= 0; };
-        int total = rs.TilesX * rs.TilesZ;
-        CHECK(total == 49 && loaded() > 0 && loaded() <= 9 && onMesh({ -80.0f, 0.0f, -80.0f }) && !onMesh({ 80.0f, 0.0f, 80.0f }));
-        // Carried to the far corner: a tile a frame comes in, nearest first, and the old corner goes.
+        CHECK(loaded() > 0 && loaded() <= 9 && count == glm::ivec2(7, 7) && onMesh({ -80.0f, 0.0f, -80.0f }) && !onMesh({ 80.0f, 0.0f, 80.0f }));
+        // Updates until the worker batches are all in.
+        auto settle = [&] {
+            for (int i = 0; i < 3000; ++i)
+            {
+                Navigation::Update(*rt, 1.0f / 60.0f);
+                if (!Navigation::IsStreaming(*rt)) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        };
+        // Carried to the far corner: the first Update starts a worker batch and returns before it is done.
         rr.Get<TransformComponent>(walker).Position = { 80.0f, 0.0f, 80.0f };
         rt->UpdateTransforms();
         Navigation::Update(*rt, 1.0f / 60.0f);
-        CHECK(onMesh({ 80.0f, 0.0f, 80.0f })); // the tile under it first
-        for (int i = 0; i < 40; ++i) Navigation::Update(*rt, 1.0f / 60.0f);
+        CHECK(Navigation::IsStreaming(*rt) && !onMesh({ 80.0f, 0.0f, 80.0f }));
+        settle();
+        settle(); // (a batch the first one's install wanted next)
         CHECK(onMesh({ 80.0f, 0.0f, 80.0f }) && !onMesh({ -80.0f, 0.0f, -80.0f }) && loaded() <= 9);
+        // The mesh is a window over the loaded tiles only.
+        CHECK(rs.Baked->Width <= 3 * 64 && rs.Baked->Depth <= 3 * 64);
         // Paths work across the loaded tiles.
         std::vector<glm::vec3> corners;
         CHECK(Navigation::CalculatePath(*rt, { 80.0f, 0.0f, 80.0f }, { 70.0f, 0.0f, 92.0f }, corners) == NavPathStatus::Complete);
+        // The level changed (a wall dropped across the path): UpdateArea samples the tiles there again at once.
+        Entity wall = rt->CreateEntity("Wall");
+        rr.Get<TransformComponent>(wall).Position = { 75.0f, 1.0f, 86.0f };
+        rt->UpdateTransforms();
+        CHECK(rt->AddComponentByName(wall, "Box Collider"));
+        rr.Get<BoxColliderComponent>(wall).Size = { 40.0f, 2.0f, 1.0f };
+        rt->GetPhysics3D()->RefreshColliders(wall);
+        CHECK(Navigation::UpdateArea(*rt, { 55.0f, 0.0f, 85.0f }, { 95.0f, 2.0f, 87.0f }) == 1);
+        const NavMeshData& after = *rr.Get<NavMeshSurfaceComponent>(surface).Baked; // (rs moved when the wall was added)
+        // A way across it now goes round its end (straight across is 12 m).
+        CHECK(after.NodeCount() > 0 && Navigation::CalculatePath(*rt, { 75.0f, 0.0f, 80.0f }, { 75.0f, 0.0f, 92.0f }, corners) == NavPathStatus::Complete);
+        float length = 0.0f;
+        for (size_t k = 1; k < corners.size(); ++k) length += glm::distance(corners[k - 1], corners[k]);
+        CHECK(length > 30.0f);
+        rt->OnRuntimeStop();
+    }
+
+    void TestNavLargeWorld()
+    {
+        // A streamed surface 20 km across at half-meter cells (40000 a side, ten times what one mesh holds): tiles load
+        // anywhere on it, and the mesh agents walk is a window over them.
+        Scene scene("Large");
+        auto& reg = scene.GetRegistry();
+        Entity ground = scene.CreateEntity("Ground");
+        reg.Get<TransformComponent>(ground).Position = { 0.0f, -0.5f, 0.0f };
+        reg.Emplace<BoxColliderComponent>(ground).Size = { 20000.0f, 1.0f, 20000.0f };
+        Entity surface = scene.CreateEntity("Navigation");
+        auto& s = reg.Emplace<NavMeshSurfaceComponent>(surface);
+        s.Size = { 20000.0f, 10.0f, 20000.0f };
+        s.CellSize = 0.5f;
+        s.Streamed = true;
+        s.TileSize = 32.0f;
+        s.StreamRadius = 20.0f;
+        Entity walker = scene.CreateEntity("Walker");
+        reg.Get<TransformComponent>(walker).Position = { 9500.0f, 0.0f, -9500.0f };
+        reg.Emplace<NavMeshAgentComponent>(walker);
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        auto& rs = rt->GetRegistry().Get<NavMeshSurfaceComponent>(surface);
+        glm::ivec2 count;
+        size_t loaded = Navigation::LoadedTiles(*rt, surface, &count).size();
+        CHECK(count == glm::ivec2(625, 625) && loaded > 0 && loaded <= 9);
+        CHECK(rs.Baked && rs.Baked->Width <= 3 * 64 && Navigation::Nearest(*rs.Baked, { 9500.0f, 0.0f, -9500.0f }, 1.0f) >= 0);
+        std::vector<glm::vec3> corners;
+        CHECK(Navigation::CalculatePath(*rt, { 9500.0f, 0.0f, -9500.0f }, { 9510.0f, 0.0f, -9490.0f }, corners) == NavPathStatus::Complete);
+        // The agent walks there.
+        CHECK(Navigation::SetDestination(*rt, walker, { 9510.0f, 0.0f, -9490.0f }));
+        for (int i = 0; i < 600; ++i) Navigation::Update(*rt, 1.0f / 30.0f);
+        glm::vec3 at = rt->GetRegistry().Get<TransformComponent>(walker).Position;
+        CHECK(glm::distance(glm::vec2(at.x, at.z), glm::vec2(9510.0f, -9490.0f)) < 1.0f);
         rt->OnRuntimeStop();
     }
 
@@ -16932,6 +17005,7 @@ int main(int argc, char** argv)
     Run("NavMesh root motion", TestNavRootMotion);
     Run("NavMesh moving platforms", TestNavMovingPlatforms);
     Run("NavMesh streaming", TestNavStreaming);
+    Run("NavMesh large world", TestNavLargeWorld);
     Run("NavMesh across surfaces", TestNavCrossSurfaces);
     Run("LOD groups", TestLODGroups);
     Run("LOD impostor", TestLODImpostor);

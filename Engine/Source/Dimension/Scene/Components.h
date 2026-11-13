@@ -23,6 +23,7 @@ namespace Dimension
 {
     class ScriptableEntity;
     struct NavMeshData;
+    struct NavTileStream;
 
     // ---- Core (every entity has these) -------------------------------------
 
@@ -1147,8 +1148,10 @@ namespace Dimension
         float DropHeight = 2.0f;
         float JumpDistance = 1.5f;
         bool Moving = false;
-        // Streamed (large worlds): while playing, only the tiles (Tile Size meters square) within Stream Radius of the
-        // agents and the main camera are baked, a tile a frame, nearest first; tiles a tile farther off are dropped.
+        // Streamed (large worlds, any Size): while playing, only the tiles (Tile Size meters square) within Stream Radius
+        // of the agents and the main camera are baked, nearest first, on a worker thread (against a copy of the level
+        // taken at play start and after Navigation::UpdateArea); tiles a tile farther off are dropped. Agents walk a
+        // mesh over the loaded tiles, at most 4096 cells a side around the camera (else the first agent).
         bool Streamed = false;
         // Use Geometry (like Unity's): Physics Colliders, or Render Meshes (what is drawn: the Mesh Renderers' meshes,
         // colliders left out but terrains', so invisible blockers do not count and decor without colliders does).
@@ -1163,8 +1166,7 @@ namespace Dimension
         // Baked navigation saved with the scene (a .navmesh asset, from the editor's Bake): play start uses it instead
         // of baking while it is up to date (the surface's settings and place unchanged since).
         AssetHandle BakedData = AssetHandle::None();
-        std::vector<uint8_t> TilesLoaded; // runtime (Streamed): per tile (x + z * TilesX), 1 = baked
-        int TilesX = 0, TilesZ = 0;       // runtime
+        std::shared_ptr<NavTileStream> Stream; // runtime (Streamed): its tiles (Navigation::LoadedTiles)
         std::shared_ptr<const NavMeshData> Data;  // runtime: the mesh agents walk (the baked one with obstacles' holes)
         std::shared_ptr<const NavMeshData> Baked; // runtime: as baked
         uint64_t CarveKey = 0;                    // runtime: which obstacles cut Data, and where

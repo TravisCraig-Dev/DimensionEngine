@@ -104,9 +104,15 @@ namespace Dimension
         bool LoadSaved(Scene& scene, Entity surface);
         // Whether a surface's saved bake is up to date (false when it has none).
         bool IsSavedCurrent(Scene& scene, Entity surface);
-        // Streamed surfaces (large worlds): bakes up to `budget` tiles near the agents and the main camera and drops far
-        // ones (Update does a tile a frame). Returns how many tiles changed.
+        // Streamed surfaces (large worlds): bakes up to `budget` tiles near the agents and the main camera at once and
+        // drops far ones. Returns how many tiles changed.
         int StreamTiles(Scene& scene, int budget);
+        // The same on worker threads (Update does it): installs the batches finished, then starts the next where tiles
+        // are wanted. Returns how many tiles the installed batches changed.
+        int StreamTilesAsync(Scene& scene);
+        bool IsStreaming(Scene& scene); // a worker batch running
+        // A streamed surface's loaded tiles (tile x, z from the box's -x/-z corner) and, optionally, how many it has.
+        std::vector<glm::ivec2> LoadedTiles(Scene& scene, Entity surface, glm::ivec2* tileCount = nullptr);
         // After the level changed inside a box (a crater, a wall knocked down): every surface over it samples the ground
         // again there only, keeping the rest, and finishes its mesh anew. Returns how many surfaces changed.
         int UpdateArea(Scene& scene, const glm::vec3& min, const glm::vec3& max);
