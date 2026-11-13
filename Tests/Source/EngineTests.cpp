@@ -10594,6 +10594,10 @@ namespace
         a.TrailLifetime = 0.7f;
         nlohmann::json j = a.ToJson();
         CHECK(VisualEffectAsset::FromJson(j).Trails && Near(VisualEffectAsset::FromJson(j).TrailLifetime, 0.7f));
+        a.MeshOutput = true;
+        a.Mesh = AssetManager::kCube;
+        j = a.ToJson();
+        CHECK(VisualEffectAsset::FromJson(j).MeshOutput && VisualEffectAsset::FromJson(j).Mesh == AssetManager::kCube);
         CHECK(VisualEffectAsset::FromJson(j).ToJson() == j);
         nlohmann::json gj = g.ToJson();
         VisualEffectAsset g2 = VisualEffectAsset::FromJson(gj);

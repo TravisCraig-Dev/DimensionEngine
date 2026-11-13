@@ -443,6 +443,8 @@ namespace Dimension
             struct EventBuffer { Buffer Data; VkDeviceAddress Address = 0; };
             std::vector<EventBuffer> VfxEvents; // a Visual Effect's Trigger On Die slots (their child effects read them)
             Buffer VfxHead; // a child effect's ring head (kept on the GPU)
+            Buffer VfxInstances; // a mesh output's instances (one per slot)
+            VkDeviceAddress VfxInstancesAddress = 0;
             VkDeviceAddress VfxHeadAddress = 0;
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
@@ -3047,6 +3049,28 @@ namespace Dimension
             }
         }
         m_Stats.RenderListItems = (uint32_t)m_RenderItems.size();
+        // Visual Effects drawn as meshes: a part per submesh, each drawn once for all the effect's slots.
+        m_VfxMeshParts.clear();
+        for (const VfxMeshOutput& out : m_VfxMeshOutputs)
+        {
+            static const Material kDefaultMaterial;
+            Ref<Material> overrideMat = AssetManager::GetMaterial(out.Material);
+            const auto& slots = AssetManager::GetMeshMaterials(out.MeshHandle);
+            for (const SubMesh& sub : out.MeshRef->GetSubMeshes())
+            {
+                Ref<Material> slotMat;
+                const Material* mat = overrideMat.get();
+                if (!mat && sub.MaterialSlot >= 0 && sub.MaterialSlot < (int32_t)slots.size())
+                {
+                    slotMat = AssetManager::GetMaterial(slots[sub.MaterialSlot]);
+                    mat = slotMat.get();
+                }
+                if (!mat) mat = &kDefaultMaterial;
+                if (VkDeviceAddress address = uploadMaterial(*mat, 0))
+                    m_VfxMeshParts.push_back({ out.MeshRef, sub.IndexOffset, sub.IndexCount, address, mat->DoubleSided, mat->CastShadows, out.Instances,
+                                               out.Capacity, out.EntityId });
+            }
+        }
         m_Stats.ListMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - listStart).count();
     }
 
@@ -3285,6 +3309,33 @@ namespace Dimension
                     if (overlayEdges) wireOverlay.push_back({ d, 1u });
                 }
         }
+        // Visual Effects drawn as meshes: every slot an instance (dead ones collapse), written by VfxSim.comp.
+        if (!oitPass)
+            for (const VfxMeshPart& v : m_VfxMeshParts)
+            {
+                if (shadowPass && !v.CastShadows) continue;
+                if (!m_HiddenIds.empty() && m_HiddenIds.contains(v.EntityId)) continue;
+                for (uint32_t done = 0; done < v.Capacity; done += kMaxInstancesPerDraw)
+                {
+                    Draw d;
+                    d.MeshPtr = v.MeshRef.get();
+                    d.FirstIndex = v.FirstIndex;
+                    d.IndexCount = v.IndexCount;
+                    d.Push.Model = glm::mat4(1.0f);
+                    d.Push.Material = v.Material;
+                    d.Push.EntityId = v.EntityId;
+                    d.Push.Skin = 0;
+                    d.Push.Joints = 0;
+                    d.Push.Instances = v.Instances + (VkDeviceAddress)done * sizeof(InstanceGPU);
+                    d.Push.Flags = 2u;
+                    d.Push.Motion = 0;
+                    d.Pipe = shadowPass ? &res.Shadow
+                           : depthPass  ? &MainPipeline(v.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
+                           : modePipe   ? modePipe
+                                        : &MainPipeline(v.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
+                    submit(d, std::min(kMaxInstancesPerDraw, v.Capacity - done));
+                }
+            }
         // Shaded Wireframe: the opaque meshes' edges over them (not counted in the stats).
         if (!wireOverlay.empty())
         {
@@ -4623,7 +4674,9 @@ namespace Dimension
             glm::uvec4 Source, Head;
             glm::vec4 Trail;
             glm::uvec4 TrailBuffer;
+            glm::uvec4 MeshOut;
         };
+        m_VfxMeshOutputs.clear();
         auto makeBuffer = [&](Buffer& buffer, VkDeviceAddress& address, VkDeviceSize size, MemoryUsage usage, const char* name) {
             buffer = Buffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, usage, name);
             VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
@@ -4664,6 +4717,12 @@ namespace Dimension
                     clear = true;
                 }
                 bool trails = g.Trails && capacity <= kMaxGpuTrailParticles;
+                Ref<Mesh> outMesh = g.MeshOutput && g.Mesh.IsValid() ? AssetManager::GetMesh(g.Mesh) : nullptr;
+                if (outMesh && (!st.VfxInstances.IsValid() || st.VfxInstances.GetSize() != (VkDeviceSize)capacity * 80))
+                {
+                    makeBuffer(st.VfxInstances, st.VfxInstancesAddress, (VkDeviceSize)capacity * 80, MemoryUsage::GpuOnly, "VfxMeshInstances");
+                    clear = true;
+                }
                 if (trails && (!st.Trails.IsValid() || st.Trails.GetSize() != (VkDeviceSize)capacity * kGpuTrailPoints * 16))
                 {
                     makeBuffer(st.Trails, st.TrailAddress, (VkDeviceSize)capacity * kGpuTrailPoints * 16, MemoryUsage::GpuOnly, "VfxTrails");
@@ -4726,6 +4785,7 @@ namespace Dimension
                     }
                 vp.Source = glm::uvec4(child >= 0 ? 1u : 0u, SplitAddress(childEvents), (uint32_t)VfxProgram::kMaxEvents);
                 vp.Head = glm::uvec4(SplitAddress(child >= 0 ? st.VfxHeadAddress : 0), 0u, 0u);
+                if (outMesh) vp.MeshOut = glm::uvec4(SplitAddress(st.VfxInstancesAddress), e.Index + 1, 0u);
                 if (trails)
                 {
                     vp.Trail = glm::vec4(1.0f, std::max(g.TrailLifetime, 1e-3f) / kGpuTrailPoints, 0.0f, 0.0f);
@@ -4752,6 +4812,7 @@ namespace Dimension
                     beginCompute();
                     res.VfxSim.Bind(cmd);
                     if (clear) vkCmdFillBuffer(cmd, st.Particles.GetHandle(), 0, VK_WHOLE_SIZE, 0); // every slot dead
+                    if (clear && outMesh) vkCmdFillBuffer(cmd, st.VfxInstances.GetHandle(), 0, VK_WHOLE_SIZE, 0);
                     if (clear && child >= 0) vkCmdFillBuffer(cmd, st.VfxHead.GetHandle(), 0, VK_WHOLE_SIZE, 0);
                     if (child < 0) vkCmdFillBuffer(cmd, st.Hits[slot].GetHandle(), 0, 16, 0);
                     toCompute();
@@ -4774,6 +4835,12 @@ namespace Dimension
                     }
                     else
                         st.Head = (st.Head + spawn) % capacity;
+                }
+                if (outMesh)
+                {
+                    // Drawn by the mesh passes (BuildRenderList takes its materials), not as quads.
+                    m_VfxMeshOutputs.push_back({ outMesh, g.Mesh, g.Material, st.VfxInstancesAddress, capacity, e.Index + 1 });
+                    return;
                 }
                 bool sort = g.Sort && g.Blend == ParticleBlend::Alpha;
                 if (sort) sortParticles(st, capacity, params.Address);

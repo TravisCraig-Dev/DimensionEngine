@@ -234,6 +234,17 @@ namespace Editor
             edit(ImGui::Checkbox("##sort", &g.Sort));
             UI::PropertyLabel("Lit", "Shaded by the scene's lights");
             edit(ImGui::Checkbox("##lit", &g.Lit));
+            UI::PropertyLabel("Draw As Mesh", "Each particle a lit mesh (Size its scale, Rotation its turn) instead of a camera-facing quad");
+            edit(ImGui::Checkbox("##meshout", &g.MeshOutput));
+            if (g.MeshOutput)
+            {
+                UI::EditResult m = UI::AssetField("Mesh", g.Mesh, AssetType::Mesh);
+                if (m.Activated) BeginChange();
+                if (m.Changed) changed = true;
+                UI::EditResult mat = UI::AssetField("Material", g.Material, AssetType::Material);
+                if (mat.Activated) BeginChange();
+                if (mat.Changed) changed = true;
+            }
             UI::PropertyLabel("Trails", "Each particle also draws a ribbon back through where it was (strips; up to 262,144 particles)");
             edit(ImGui::Checkbox("##trails", &g.Trails));
             if (g.Trails)

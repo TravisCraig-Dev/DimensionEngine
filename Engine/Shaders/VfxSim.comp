@@ -29,7 +29,33 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Vf
     uvec4 Head;     // xy the ring head (modes 1 and 2: kept on the GPU, the count is only known there)
     vec4 Trail;     // x 1 = trails (recorded in the buffer at TrailBuffer.xy), y seconds between points
     uvec4 TrailBuffer;
+    uvec4 MeshOut;  // xy: mesh output's instances (one per slot, MeshCommon.glsl's MeshInstance; 0 = quads), z entity id
 };
+// Mesh output: the slot's instance for the mesh passes (a dead slot's collapses to a point).
+struct VfxMeshInstance
+{
+    mat4 Model;
+    uvec4 Data;
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer VfxInstancesRef { VfxMeshInstance Items[]; };
+
+void WriteInstance(VfxParamsRef P, uint i, bool alive, vec3 aPos, float aRot, float aSize, float aRandom)
+{
+    if (P.MeshOut.xy == uvec2(0u)) return;
+    mat4 m = mat4(0.0);
+    if (alive)
+    {
+        // Turned by Rotation about an axis of the particle's own, scaled by Size, at its position (world space).
+        vec3 axis = normalize(fract(aRandom * vec3(13.37, 71.13, 43.71)) - 0.5 + vec3(1e-4));
+        float c = cos(aRot), s = sin(aRot), t = 1.0 - c;
+        mat3 r = mat3(t * axis.x * axis.x + c, t * axis.x * axis.y + s * axis.z, t * axis.x * axis.z - s * axis.y,
+                      t * axis.x * axis.y - s * axis.z, t * axis.y * axis.y + c, t * axis.y * axis.z + s * axis.x,
+                      t * axis.x * axis.z + s * axis.y, t * axis.y * axis.z - s * axis.x, t * axis.z * axis.z + c);
+        mat3 world = mat3(P.SimToWorld) * r * max(aSize, 0.0);
+        m = mat4(vec4(world[0], 0.0), vec4(world[1], 0.0), vec4(world[2], 0.0), P.SimToWorld * vec4(aPos, 1.0));
+    }
+    VfxInstancesRef(P.MeshOut.xy).Items[i] = VfxMeshInstance(m, uvec4(P.MeshOut.z, 0u, 0u, 0u));
+}
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxCodeRef { uvec4 Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxVec4Ref { vec4 Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer VfxCounterRef { uint Count; };
@@ -364,6 +390,7 @@ void main()
     // A lifetime of 0 would read as never born: a particle given none dies at once instead.
     aLife = max(aLife, 1e-4);
     particles.Items[i] = GpuParticle(vec4(aPos, aAge), vec4(aVel, aLife), aColor, vec4(aSize, aRot, aSpin, aRandom));
+    WriteInstance(P, i, aAge < aLife, aPos, aRot, aSize, aRandom);
     if (P.Trail.x > 0.5 && aAge < aLife)
     {
         // The trail: the position every interval (and at once the first time), the older points pushed back.

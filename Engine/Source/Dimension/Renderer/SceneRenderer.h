@@ -491,6 +491,25 @@ namespace Dimension
             bool Trails = false;        // also draw the slots' trail ribbons
         };
         std::vector<GpuParticleDraw> m_GpuParticleDraws;
+        // Visual Effects drawn as meshes: their instance buffers (SimulateGpuParticles), then their parts (BuildRenderList).
+        struct VfxMeshOutput
+        {
+            Ref<Mesh> MeshRef;
+            AssetHandle MeshHandle, Material;
+            VkDeviceAddress Instances;
+            uint32_t Capacity, EntityId;
+        };
+        std::vector<VfxMeshOutput> m_VfxMeshOutputs;
+        struct VfxMeshPart
+        {
+            Ref<Mesh> MeshRef;
+            uint32_t FirstIndex, IndexCount;
+            VkDeviceAddress Material;
+            bool DoubleSided, CastShadows;
+            VkDeviceAddress Instances;
+            uint32_t Capacity, EntityId;
+        };
+        std::vector<VfxMeshPart> m_VfxMeshParts;
         void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& view);
         // GPU particle world collision reads the depth this view stored last frame (with its view-projection).
         bool m_ParticleDepthWanted = false, m_ParticleDepthKept = false;

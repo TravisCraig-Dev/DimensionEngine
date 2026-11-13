@@ -82,6 +82,11 @@ namespace Dimension
         bool Trails = false;
         float TrailLifetime = 0.4f; // seconds of path the ribbon covers
         float TrailWidth = 1.0f;    // times the particle's size
+        // Draw As Mesh: each particle a lit mesh (Size its scale, Rotation its turn about an axis of its own) with the
+        // mesh's materials, or Material in their place; opaque, casting shadows. Off: camera-facing quads.
+        bool MeshOutput = false;
+        AssetHandle Mesh = AssetHandle::None();
+        AssetHandle Material = AssetHandle::None();
         // Graph
         std::vector<VfxNode> Nodes;
         std::vector<VfxLink> Links;

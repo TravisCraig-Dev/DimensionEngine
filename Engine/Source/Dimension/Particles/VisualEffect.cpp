@@ -244,6 +244,7 @@ namespace Dimension
         j["sort"] = Sort;
         j["lit"] = Lit;
         if (Trails) j["trails"] = { { "lifetime", TrailLifetime }, { "width", TrailWidth } };
+        if (MeshOutput) j["meshOutput"] = { { "mesh", (uint64_t)Mesh }, { "material", (uint64_t)Material } };
         j["nextId"] = NextId;
         j["nodes"] = nlohmann::json::array();
         for (const VfxNode& n : Nodes)
@@ -289,6 +290,12 @@ namespace Dimension
         a.Texture = AssetHandle(j.value("texture", (uint64_t)0));
         a.Sort = j.value("sort", a.Sort);
         a.Lit = j.value("lit", a.Lit);
+        if (j.contains("meshOutput"))
+        {
+            a.MeshOutput = true;
+            a.Mesh = AssetHandle(j["meshOutput"].value("mesh", (uint64_t)0));
+            a.Material = AssetHandle(j["meshOutput"].value("material", (uint64_t)0));
+        }
         if (j.contains("trails"))
         {
             a.Trails = true;

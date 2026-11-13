@@ -245,6 +245,41 @@
           "Properties": []
         }
       }
+    },
+    {
+      "guid": 3000004,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Debris",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            4
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Visual Effect": {
+          "Asset": 100087,
+          "Play On Awake": true,
+          "Play Rate": 1.0,
+          "Properties": []
+        }
+      }
     }
   ]
 }
