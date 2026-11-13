@@ -85,6 +85,7 @@ layout(location = 3) flat in uint vEntity;
 layout(location = 4) in vec4 vTangent;
 layout(location = 5) in float vShell; // fur shells: height 0-1
 layout(location = 6) in float vFoam;  // water (Flags.w = 2): foam 0-1
+layout(location = 7) flat in vec4 vTint; // an instance's own color (Visual Effect meshes), else white
 
 #ifdef DIM_OIT
 // Weighted blended order-independent transparency (McGuire and Bavoil 2013): the shaded color, weighted by its alpha
@@ -323,7 +324,7 @@ void main()
     vec4 mr = m.Flags.z == 1u ? vec4(1.0) : SampleTexture(m.Maps.z, uv);
     float roughness = clamp(m.Params.y * mr.g, 0.02, 1.0);
     float metallic = clamp(m.Params.x * mr.b, 0.0, 1.0);
-    vec3 albedo = base.rgb;
+    vec3 albedo = base.rgb * vTint.rgb;
     float foam = m.Flags.w == 2u ? vFoam : 0.0;
     if (m.Flags.w == 2u && uScene.Refraction.w > 0.5 && m.Layers[0].x > 0.0)
     {

@@ -3327,7 +3327,7 @@ namespace Dimension
                     d.Push.Skin = 0;
                     d.Push.Joints = 0;
                     d.Push.Instances = v.Instances + (VkDeviceAddress)done * sizeof(InstanceGPU);
-                    d.Push.Flags = 2u;
+                    d.Push.Flags = 2u | (1u << 17); // (instanced, each with its particle's color)
                     d.Push.Motion = 0;
                     d.Pipe = shadowPass ? &res.Shadow
                            : depthPass  ? &MainPipeline(v.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)

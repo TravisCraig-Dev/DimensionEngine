@@ -146,14 +146,61 @@
           0
         ]
       ]
+    },
+    {
+      "id": 10,
+      "type": "Set Attribute",
+      "position": [
+        0,
+        0
+      ],
+      "option": 2,
+      "inputs": [
+        [
+          1,
+          1,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "id": 11,
+      "type": "Random Range",
+      "position": [
+        -300,
+        150
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0.2,
+          0.2,
+          0.2,
+          1
+        ],
+        [
+          1,
+          0.9,
+          0.4,
+          1
+        ]
+      ]
     }
   ],
-  "links": [],
+  "links": [
+    [
+      11,
+      10,
+      0
+    ]
+  ],
   "initialize": [
     1,
     2,
     3,
-    4
+    4,
+    10
   ],
   "update": [
     5,

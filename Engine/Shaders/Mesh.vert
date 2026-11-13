@@ -15,6 +15,7 @@ layout(location = 3) flat out uint vEntity;
 layout(location = 4) out vec4 vTangent;
 layout(location = 5) out float vShell; // fur shells: height 0-1 (0 for everything else)
 layout(location = 6) out float vFoam;  // water: foam 0-1, carried as the normal's length above 1
+layout(location = 7) flat out vec4 vTint; // instances with their own color (Flags bit 17: Data.yz, half floats; linear)
 
 invariant gl_Position; // the depth prepass and the main pass must produce identical depths
 
@@ -46,6 +47,12 @@ void main()
         model = pc.Instances.Items[gl_InstanceIndex].Model;
         vEntity = pc.Instances.Items[gl_InstanceIndex].Data.x;
         motion = pc.Instances.Items[gl_InstanceIndex].Data.w;
+    }
+    vTint = vec4(1.0);
+    if ((pc.Flags & 0x20002u) == 0x20002u)
+    {
+        uvec4 data = pc.Instances.Items[gl_InstanceIndex].Data;
+        vTint = vec4(unpackHalf2x16(data.y), unpackHalf2x16(data.z));
     }
     vec4 world = model * vec4(position, 1.0);
     vNormal = normalize(transpose(inverse(mat3(model))) * normal);

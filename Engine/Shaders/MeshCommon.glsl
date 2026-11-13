@@ -56,7 +56,8 @@ layout(push_constant) uniform Push
     JointsRef Joints;   // skinning matrices (mesh space)
     InstancesRef Instances; // valid when Flags & 2 (Model and EntityId then come from here)
     uint EntityId;
-    uint Flags;         // bit 0: skinned, bit 1: instanced, bits 8-15: LOD cross-fade coverage (0 = none), bit 16: its side
+    uint Flags;         // bit 0: skinned, bit 1: instanced, bits 8-15: LOD cross-fade coverage (0 = none), bit 16: its side,
+                        // bit 17: instances carry a color (Data.yz as half floats, unskinned only; Visual Effect meshes)
     uint Motion;        // grass tufts: half floats (sway, bending); fur shells: (length, -height 0-1); 0 = neither
 } pc;
 

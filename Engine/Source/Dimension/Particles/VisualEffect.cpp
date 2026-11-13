@@ -67,7 +67,7 @@ namespace Dimension
                 { "Combine", "Vector/Combine", Category::Operator, { { "X", F, V(0) }, { "Y", F, V(0) }, { "Z", F, V(0) } }, true, Vec, {}, "A vector from three numbers" },
                 // Random
                 { "Random Range", "Random/Random Range", Category::Operator, { { "Min", Vec, V(0) }, { "Max", Vec, V(1, 1, 1, 1) } }, true, Vec, {},
-                  "A random value between Min and Max (each component on its own)" },
+                  "A random value between Min and Max (one random step for all components, so colors stay between the two)" },
                 { "Random In Sphere", "Random/Random In Sphere", Category::Operator, { { "Radius", F, V(1) } }, true, Vec, {}, "A random point inside a sphere" },
                 { "Random On Sphere", "Random/Random On Sphere", Category::Operator, { { "Radius", F, V(1) } }, true, Vec, {}, "A random point on a sphere" },
                 { "Random In Circle", "Random/Random In Circle", Category::Operator, { { "Radius", F, V(1) } }, true, Vec, {}, "A random point in a flat (XZ) circle" },
