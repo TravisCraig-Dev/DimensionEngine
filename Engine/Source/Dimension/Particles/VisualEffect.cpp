@@ -39,6 +39,9 @@ namespace Dimension
                 { "Time", "Effect/Time", Category::Operator, {}, true, F, {}, "Seconds since the effect started" },
                 { "Delta Time", "Effect/Delta Time", Category::Operator, {}, true, F, {}, "Seconds this frame" },
                 { "Emitter Position", "Effect/Emitter Position", Category::Operator, {}, true, Vec, {}, "The effect's object, in simulation space" },
+                { "Source Position", "Event/Source Position", Category::Operator, {}, true, Vec, {}, "Where the event that started the particle was (a child effect's Initialize)" },
+                { "Source Velocity", "Event/Source Velocity", Category::Operator, {}, true, Vec, {}, "The velocity of the particle that sent the event" },
+                { "Source Color", "Event/Source Color", Category::Operator, {}, true, C, {}, "The color of the particle that sent the event" },
                 // Math
                 { "Add", "Math/Add", Category::Operator, { { "A", Vec, V(0) }, { "B", Vec, V(0) } }, true, Vec, {}, "A + B" },
                 { "Subtract", "Math/Subtract", Category::Operator, { { "A", Vec, V(0) }, { "B", Vec, V(0) } }, true, Vec, {}, "A - B" },
@@ -104,6 +107,8 @@ namespace Dimension
                 { "Collide Plane", "Collision/Collide Plane", Category::Update, { { "Height", F, V(0) }, { "Bounce", F, V(0.5f) }, { "Friction", F, V(0.1f) } },
                   false, F, {}, "Bounces the particles off a level floor" },
                 { "Kill Below", "Collision/Kill Below", Category::Update, { { "Height", F, V(-10) } }, false, F, {}, "Removes particles that fall below Height" },
+                { "Trigger On Die", "Event/Trigger On Die", Category::Update, { { "Count", F, V(10) } }, false, F, {},
+                  "When a particle dies, starts Count particles of the Child effect where it was (they can read its Source attributes)" },
             };
             return types;
         }
@@ -225,6 +230,7 @@ namespace Dimension
         {
             nlohmann::json jn = { { "id", n.Id }, { "type", n.Type }, { "position", { n.Position.x, n.Position.y } }, { "option", n.Option } };
             if (!n.Enabled) jn["enabled"] = false;
+            if (n.Child.IsValid()) jn["child"] = (uint64_t)n.Child;
             jn["inputs"] = nlohmann::json::array();
             for (const glm::vec4& v : n.Inputs) jn["inputs"].push_back(Vec4Json(v));
             if (n.Type == "Sample Gradient" || n.Type == "Color Over Life")
@@ -272,6 +278,7 @@ namespace Dimension
                 if (jn.contains("position")) n.Position = { jn["position"][0].get<float>(), jn["position"][1].get<float>() };
                 n.Option = jn.value("option", 0);
                 n.Enabled = jn.value("enabled", true);
+                n.Child = AssetHandle(jn.value("child", (uint64_t)0));
                 if (jn.contains("inputs"))
                     for (const auto& v : jn["inputs"]) n.Inputs.push_back(JsonVec4(v));
                 // Inputs a newer version of the type added get their defaults.
@@ -464,6 +471,9 @@ namespace Dimension
                     else if (t == "Time") r = input(VfxInput::Time);
                     else if (t == "Delta Time") r = input(VfxInput::DeltaTime);
                     else if (t == "Emitter Position") r = input(VfxInput::EmitterPosition);
+                    else if (t == "Source Position") r = input(VfxInput::SourcePosition);
+                    else if (t == "Source Velocity") r = input(VfxInput::SourceVelocity);
+                    else if (t == "Source Color") r = input(VfxInput::SourceColor);
                     else if (t == "Add") r = binary(VfxOp::Add);
                     else if (t == "Subtract") r = binary(VfxOp::Sub);
                     else if (t == "Multiply") r = binary(VfxOp::Mul);
@@ -731,6 +741,26 @@ namespace Dimension
                         Emit(VfxOp::Combine, params, h, b, f);
                         Emit(VfxOp::Bounce, 0, params);
                     }
+                    else if (t == "Trigger On Die")
+                    {
+                        if (!n.Child.IsValid())
+                        {
+                            Out.Errors.push_back("A Trigger On Die block has no Child effect");
+                            return;
+                        }
+                        auto it = std::find(Out.Children.begin(), Out.Children.end(), n.Child);
+                        if (it == Out.Children.end())
+                        {
+                            if ((int)Out.Children.size() >= VfxProgram::kMaxChildren)
+                            {
+                                Out.Errors.push_back("Events start at most 4 child effects");
+                                return;
+                            }
+                            it = Out.Children.insert(Out.Children.end(), n.Child);
+                        }
+                        int count = Input(n, 0);
+                        Emit(VfxOp::TriggerDie, 0, count, 0, 0, (uint32_t)(it - Out.Children.begin()));
+                    }
                     else if (t == "Kill Below")
                     {
                         int h = Input(n, 0);
@@ -830,7 +860,7 @@ namespace Dimension
                 }
             }
 
-            void Run(const VfxProgram& prog, uint32_t start, uint32_t count, CpuParticle& p, const CpuContext& ctx)
+            void Run(const VfxProgram& prog, uint32_t start, uint32_t count, CpuParticle& p, const CpuContext& ctx, uint32_t* onDie = nullptr)
             {
                 glm::vec4 r[VfxProgram::kRegisters]{};
                 for (uint32_t pc = start; pc < start + count && pc < prog.Code.size(); ++pc)
@@ -852,6 +882,9 @@ namespace Dimension
                         case VfxInput::ParticleRandom: r[d] = glm::fract(p.Random * glm::vec4(1.0f, 13.371f, 71.137f, 431.79f) + glm::vec4(0.0f, 0.31f, 0.57f, 0.83f)); break;
                         case VfxInput::ParticleIndex: r[d] = glm::vec4((float)p.Index); break;
                         case VfxInput::EmitterPosition: r[d] = glm::vec4(glm::vec3(ctx.EmitterToSim[3]), 0.0f); break;
+                        case VfxInput::SourcePosition: r[d] = ctx.Source ? glm::vec4(ctx.Source->Position, 0.0f) : glm::vec4(0.0f); break;
+                        case VfxInput::SourceVelocity: r[d] = ctx.Source ? glm::vec4(ctx.Source->Velocity, 0.0f) : glm::vec4(0.0f); break;
+                        case VfxInput::SourceColor: r[d] = ctx.Source ? ctx.Source->Color : glm::vec4(1.0f); break;
                         }
                         break;
                     case VfxOp::Add: r[d] = r[a] + r[b]; break;
@@ -916,6 +949,9 @@ namespace Dimension
                         break;
                     case VfxOp::ToSimPoint: r[d] = glm::vec4(glm::vec3(ctx.EmitterToSim * glm::vec4(glm::vec3(r[a]), 1.0f)), 0.0f); break;
                     case VfxOp::ToSimVector: r[d] = glm::vec4(glm::vec3(ctx.EmitterToSim * glm::vec4(glm::vec3(r[a]), 0.0f)), 0.0f); break;
+                    case VfxOp::TriggerDie:
+                        if (onDie && w < (uint32_t)VfxProgram::kMaxChildren) onDie[w] = (uint32_t)std::max(std::lround(r[a].x), 0L);
+                        break;
                     case VfxOp::Bounce:
                     {
                         // r[a] = (height, bounce, friction): below the plane and moving down, it comes back up.
@@ -941,7 +977,7 @@ namespace Dimension
         void Spawn(const VfxProgram& program, CpuParticle& p, const CpuContext& ctx)
         {
             uint32_t h = Hash(p.Index * 7919u + ctx.Seed * 104729u + 17u);
-            p.Position = glm::vec3(ctx.EmitterToSim[3]);
+            p.Position = ctx.Source ? ctx.Source->Position : glm::vec3(ctx.EmitterToSim[3]);
             p.Velocity = glm::vec3(0.0f);
             p.Color = glm::vec4(1.0f);
             p.Size = 0.1f;
@@ -956,11 +992,16 @@ namespace Dimension
         void Step(const VfxProgram& program, CpuParticle& p, const CpuContext& ctx)
         {
             if (!p.Alive()) return;
-            Run(program, program.UpdateStart, program.UpdateCount, p, ctx);
+            uint32_t onDie[VfxProgram::kMaxChildren] = {};
+            Run(program, program.UpdateStart, program.UpdateCount, p, ctx, onDie);
             p.Position += p.Velocity * ctx.DeltaTime;
             p.Rotation += p.AngularVelocity * ctx.DeltaTime;
             p.Age += ctx.DeltaTime;
             p.Lifetime = std::max(p.Lifetime, 1e-4f);
+            // Died this step: its events (as VfxSim.comp writes them).
+            if (!p.Alive() && ctx.Events)
+                for (int s = 0; s < VfxProgram::kMaxChildren; ++s)
+                    for (uint32_t k = 0; k < onDie[s]; ++k) ctx.Events->push_back({ s, p.Position, p.Velocity, p.Color });
         }
 
         // ---- Programs and spawning --------------------------------------------------------------------------------

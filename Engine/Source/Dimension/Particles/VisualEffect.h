@@ -39,6 +39,7 @@ namespace Dimension
         Gradient Colors = Gradient::Linear({ 1, 1, 1, 1 }, { 1, 1, 1, 0 }); // Sample Gradient, Color Over Life
         Curve Values = Curve::Linear(1.0f, 0.0f);                           // Sample Curve, Size Over Life
         bool Enabled = true;      // blocks: off = skipped
+        AssetHandle Child = AssetHandle::None(); // Trigger On Die: the effect its events start
     };
 
     struct VfxLink
@@ -108,10 +109,13 @@ namespace Dimension
         static constexpr int kRegisters = 32;
         static constexpr int kLutSize = 32;
         static constexpr int kMaxLuts = 16;
+        static constexpr int kMaxChildren = 4; // effects its events start (Trigger On Die), each an event slot
+        static constexpr int kMaxEvents = 8192; // events per slot per frame
         std::vector<glm::uvec4> Code;
         std::vector<glm::vec4> Constants;
         std::vector<glm::vec4> Luts; // kLutSize per table
         uint32_t InitStart = 0, InitCount = 0, UpdateStart = 0, UpdateCount = 0;
+        std::vector<AssetHandle> Children; // event slot -> the effect it starts
         std::vector<std::string> Errors;
         bool Valid() const { return Errors.empty(); }
     };
@@ -123,10 +127,10 @@ namespace Dimension
         Const = 1, GetAttr, SetAttr, AddAttr, Input,
         Add, Sub, Mul, Div, Min, Max, Lerp, Sin, Cos, Abs, Fract, Floor, Length, Normalize, Dot, Cross,
         Random, RandomInSphere, RandomOnSphere, RandomInCircle, Noise, Gradient, Curve, Split, Combine, Step,
-        Saturate, KillIf, Pow, ToSimPoint, ToSimVector, RandomCone, Bounce, Sqrt
+        Saturate, KillIf, Pow, ToSimPoint, ToSimVector, RandomCone, Bounce, Sqrt, TriggerDie
     };
     // Built-in inputs (VfxOp::Input).
-    enum class VfxInput : uint32_t { AgeOverLifetime = 0, Time, DeltaTime, ParticleRandom, ParticleIndex, EmitterPosition };
+    enum class VfxInput : uint32_t { AgeOverLifetime = 0, Time, DeltaTime, ParticleRandom, ParticleIndex, EmitterPosition, SourcePosition, SourceVelocity, SourceColor };
 
     namespace VisualEffects
     {
@@ -168,11 +172,20 @@ namespace Dimension
             uint32_t Index = 0;
             bool Alive() const { return Age < Lifetime; }
         };
+        // An event a particle sent (Trigger On Die): which slot, and its attributes then (simulation space).
+        struct CpuEvent
+        {
+            int Slot = 0;
+            glm::vec3 Position{ 0.0f }, Velocity{ 0.0f };
+            glm::vec4 Color{ 1.0f };
+        };
         struct CpuContext
         {
             float Time = 0.0f, DeltaTime = 0.0f;
             glm::mat4 EmitterToSim{ 1.0f };
             uint32_t Seed = 1;
+            const CpuEvent* Source = nullptr;  // Spawn: the event starting this particle (it starts where the event was)
+            std::vector<CpuEvent>* Events = nullptr; // Step: where events go
         };
         // A new particle (its defaults, then Initialize), and a frame of an alive one (Update, then it moves on).
         void Spawn(const VfxProgram& program, CpuParticle& p, const CpuContext& ctx);

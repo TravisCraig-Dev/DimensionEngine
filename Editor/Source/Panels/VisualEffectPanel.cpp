@@ -369,6 +369,16 @@ namespace Editor
                             changed = true;
                         }
                     }
+                    if (n->Type == "Trigger On Die")
+                    {
+                        UI::EditResult r = UI::AssetField("Child", n->Child, AssetType::VisualEffect);
+                        if (r.Activated) BeginChange();
+                        if (r.Changed)
+                        {
+                            if (n->Child == m_Handle) n->Child = AssetHandle::None(); // (not itself)
+                            changed = true;
+                        }
+                    }
                     for (size_t i = 0; i < type->Inputs.size() && i < n->Inputs.size(); ++i)
                     {
                         ImGui::PushID((int)i);
@@ -613,6 +623,11 @@ namespace Editor
                 std::string name = n->Type;
                 if (t && !t->Options.empty())
                     name += std::string(": ") + VisualEffects::AttributeName((VfxAttribute)std::clamp(n->Option, 0, (int)VfxAttribute::Count - 1));
+                if (n->Type == "Trigger On Die")
+                {
+                    auto* child = AssetManager::GetMetadata(n->Child);
+                    name += std::string(" -> ") + (child ? child->Path.stem().string() : "(no child)");
+                }
                 label(ImVec2(sa.x + 6.0f * z, sa.y + 3.0f * z), n->Enabled ? text : dim, name.c_str());
                 ImGui::SetCursorScreenPos(sa);
                 ImGui::PushID((int)id);

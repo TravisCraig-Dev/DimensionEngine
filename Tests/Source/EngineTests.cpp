@@ -10598,6 +10598,63 @@ namespace
         CHECK(VisualEffects::Compile(VisualEffectAsset::Default()).Valid());
     }
 
+    void TestVisualEffectEvents()
+    {
+        // Trigger On Die: a parent's particles send Count events as they die (where they were, their velocity and
+        // color); a child's particles start at their event and read its Source attributes.
+        VisualEffectAsset parent;
+        parent.Add("Set Attribute").Inputs[0] = glm::vec4(0.0f, 5.0f, 0.0f, 0.0f); // (Velocity below)
+        parent.Nodes.back().Option = (int)VfxAttribute::Velocity;
+        auto& life = parent.Add("Set Attribute");
+        life.Option = (int)VfxAttribute::Lifetime;
+        life.Inputs[0] = glm::vec4(0.5f);
+        auto& color = parent.Add("Set Attribute");
+        color.Option = (int)VfxAttribute::Color;
+        color.Inputs[0] = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f);
+        auto& trigger = parent.Add("Trigger On Die");
+        trigger.Inputs[0] = glm::vec4(3.0f);
+        CHECK(!VisualEffects::Compile(parent).Valid()); // (no child yet)
+        trigger.Child = AssetHandle(uint64_t(777));
+        VfxProgram pp = VisualEffects::Compile(parent);
+        CHECK(pp.Valid() && pp.Children.size() == 1 && pp.Children[0] == AssetHandle(uint64_t(777)));
+        std::vector<VisualEffects::CpuEvent> events;
+        VisualEffects::CpuContext ctx;
+        ctx.DeltaTime = 0.1f;
+        ctx.Events = &events;
+        VisualEffects::CpuParticle p;
+        VisualEffects::Spawn(pp, p, ctx);
+        int steps = 0;
+        while (p.Alive() && steps < 100) VisualEffects::Step(pp, p, ctx), ++steps;
+        CHECK(steps == 5 && events.size() == 3);
+        CHECK(Near(events[0].Position.y, 2.5f, 1e-3f) && Near(events[0].Velocity.y, 5.0f, 1e-4f) && events[0].Color == glm::vec4(1.0f, 0.5f, 0.0f, 1.0f));
+        // A child: velocity from the source's, color from the source's (halved).
+        VisualEffectAsset child;
+        auto& vel = child.Add("Set Attribute");
+        vel.Option = (int)VfxAttribute::Velocity;
+        uint32_t velId = vel.Id;
+        auto& col = child.Add("Set Attribute");
+        col.Option = (int)VfxAttribute::Color;
+        uint32_t colId = col.Id;
+        uint32_t sv = child.Add("Source Velocity", { -200, 0 }).Id;
+        uint32_t sc = child.Add("Source Color", { -200, 60 }).Id;
+        auto& half = child.Add("Multiply", { -100, 60 });
+        half.Inputs[1] = glm::vec4(0.5f);
+        uint32_t halfId = half.Id;
+        CHECK(child.Link(sv, velId, 0) && child.Link(sc, halfId, 0) && child.Link(halfId, colId, 0));
+        VfxProgram cp = VisualEffects::Compile(child);
+        CHECK(cp.Valid());
+        VisualEffects::CpuContext cctx;
+        cctx.Source = &events[1];
+        VisualEffects::CpuParticle c;
+        VisualEffects::Spawn(cp, c, cctx);
+        CHECK(glm::all(glm::epsilonEqual(c.Position, events[1].Position, 1e-5f)) && Near(c.Velocity.y, 5.0f, 1e-4f) &&
+              glm::all(glm::epsilonEqual(c.Color, glm::vec4(0.5f, 0.25f, 0.0f, 0.5f), 1e-5f)));
+        // Saved with its child; at most four children.
+        CHECK(VisualEffectAsset::FromJson(parent.ToJson()).Find(trigger.Id)->Child == AssetHandle(uint64_t(777)));
+        for (int k = 0; k < 4; ++k) parent.Add("Trigger On Die").Child = AssetHandle(uint64_t(800 + k));
+        CHECK(!VisualEffects::Compile(parent).Valid());
+    }
+
     void TestVisualEffectSpawn()
     {
         // The component in a scene: a .vfx asset with a rate and a burst; play start spawns the burst, the rate adds
@@ -17113,6 +17170,7 @@ int main(int argc, char** argv)
     Run("Particle decals", TestParticleDecals);
     Run("Visual effect graph", TestVisualEffectGraph);
     Run("Visual effect spawning", TestVisualEffectSpawn);
+    Run("Visual effect events", TestVisualEffectEvents);
     Run("Script timers", TestScriptTimers);
     Run("Coroutines (C++)", TestCoroutines);
     Run("C++ script options", TestScriptOptions);

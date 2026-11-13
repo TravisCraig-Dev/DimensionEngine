@@ -1,0 +1,177 @@
+{
+  "capacity": 200,
+  "rate": 3,
+  "duration": 5,
+  "loop": true,
+  "bursts": [],
+  "space": "World",
+  "blend": "Additive",
+  "texture": 0,
+  "sort": false,
+  "lit": false,
+  "nextId": 20,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Velocity (Cone)",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          12,
+          0,
+          0,
+          0
+        ],
+        [
+          9,
+          0,
+          0,
+          0
+        ],
+        [
+          11,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 2,
+      "type": "Lifetime (Random)",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0.9,
+          0,
+          0,
+          0
+        ],
+        [
+          1.2,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Set Attribute",
+      "position": [
+        0,
+        0
+      ],
+      "option": 3,
+      "inputs": [
+        [
+          0.25,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 4,
+      "type": "Set Attribute",
+      "position": [
+        0,
+        0
+      ],
+      "option": 2,
+      "inputs": [
+        [
+          1,
+          1,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "id": 10,
+      "type": "Random Range",
+      "position": [
+        -300,
+        120
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0.2,
+          0.2,
+          0.2,
+          1
+        ],
+        [
+          1,
+          1,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "id": 5,
+      "type": "Gravity",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          0,
+          -6,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "id": 6,
+      "type": "Trigger On Die",
+      "position": [
+        0,
+        0
+      ],
+      "option": 0,
+      "inputs": [
+        [
+          150,
+          0,
+          0,
+          0
+        ]
+      ],
+      "child": 100086
+    }
+  ],
+  "links": [
+    [
+      10,
+      4,
+      0
+    ]
+  ],
+  "initialize": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "update": [
+    5,
+    6
+  ],
+  "properties": []
+}

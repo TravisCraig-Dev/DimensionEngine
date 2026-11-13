@@ -22,10 +22,17 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Vf
     uvec4 Program;  // x Initialize start, y count, z Update start, w count
     uvec4 Code;     // xy instructions, zw constants
     uvec4 Tables;   // xy gradient / curve tables, zw alive counter (0 = none)
+    mat4 SimToWorld; // (events are written in world space)
+    uvec4 Events[2]; // the event buffers of Trigger On Die's slots 0-3 (xy, zw; 0 = none)
+    uvec4 Source;   // x mode: 0 spawn Counts.z new ones, 1 spawn from the events at yz (a child effect), 2 finish that
+                    // spawn (thread 0: the ring head moves on, the events are cleared); w event capacity
+    uvec4 Head;     // xy the ring head (modes 1 and 2: kept on the GPU, the count is only known there)
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxCodeRef { uvec4 Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxVec4Ref { vec4 Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer VfxCounterRef { uint Count; };
+// Events: a count, then three vec4s each (position, velocity, color; world space).
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer VfxEventsRef { uint Count; uint Pad0, Pad1, Pad2; vec4 Items[]; };
 
 const float TWO_PI = 6.28318530718;
 #define REGISTERS 32
@@ -118,6 +125,9 @@ vec4 Lut(VfxParamsRef P, uint slot, float t)
 vec3 aPos, aVel;
 vec4 aColor;
 float aSize, aAge, aLife, aRot, aSpin, aRandom;
+vec3 sPos = vec3(0.0), sVel = vec3(0.0);
+vec4 sColor = vec4(1.0);
+uint gDie[4] = uint[4](0u, 0u, 0u, 0u); // Trigger On Die: events to send if the particle dies this frame
 
 vec4 GetAttr(uint a)
 {
@@ -172,7 +182,10 @@ void Run(VfxParamsRef P, uint start, uint count, uint index)
             else if (w == 2u) r[d] = vec4(P.Time.y);
             else if (w == 3u) r[d] = fract(aRandom * vec4(1.0, 13.371, 71.137, 431.79) + vec4(0.0, 0.31, 0.57, 0.83));
             else if (w == 4u) r[d] = vec4(float(index));
-            else r[d] = vec4(P.EmitterToSim[3].xyz, 0.0);
+            else if (w == 5u) r[d] = vec4(P.EmitterToSim[3].xyz, 0.0);
+            else if (w == 6u) r[d] = vec4(sPos, 0.0);
+            else if (w == 7u) r[d] = vec4(sVel, 0.0);
+            else r[d] = sColor;
             break;
         case 6u: r[d] = r[a] + r[b]; break;
         case 7u: r[d] = r[a] - r[b]; break;
@@ -249,6 +262,7 @@ void Run(VfxParamsRef P, uint start, uint count, uint index)
             break;
         }
         case 39u: r[d] = sqrt(max(r[a], vec4(0.0))); break; // Sqrt
+        case 40u: if (w < 4u) gDie[w] = uint(max(r[a].x, 0.0) + 0.5); break; // TriggerDie
         default: break;
         }
     }
@@ -259,13 +273,37 @@ void main()
     VfxParamsRef P = VfxParamsRef(pc.Params);
     uint capacity = P.Counts.x;
     uint i = gl_GlobalInvocationID.x;
+    uint head = P.Counts.y, spawn = P.Counts.z;
+    VfxEventsRef events = VfxEventsRef(P.Source.yz);
+    if (P.Source.x != 0u)
+    {
+        // A child effect: as many new particles as its events (counted on the GPU), from a head kept there.
+        VfxCounterRef headRef = VfxCounterRef(P.Head.xy);
+        spawn = min(min(events.Count, P.Source.w), capacity);
+        head = headRef.Count;
+        if (P.Source.x == 2u)
+        {
+            if (i == 0u)
+            {
+                headRef.Count = (head + spawn) % max(capacity, 1u);
+                events.Count = 0u;
+            }
+            return;
+        }
+    }
     if (i >= capacity) return;
     GpuParticlesRef particles = GpuParticlesRef(pc.Particles);
-    uint offset = (i + capacity - P.Counts.y % capacity) % capacity; // position after the ring head
-    if (offset < P.Counts.z)
+    uint offset = (i + capacity - head % capacity) % capacity; // position after the ring head
+    if (offset < spawn)
     {
-        // New: the defaults, then Initialize.
-        aPos = P.EmitterToSim[3].xyz;
+        // New: the defaults, then Initialize (a child's start where their event was).
+        if (P.Source.x == 1u)
+        {
+            sPos = events.Items[offset * 3u].xyz;
+            sVel = events.Items[offset * 3u + 1u].xyz;
+            sColor = events.Items[offset * 3u + 2u];
+        }
+        aPos = P.Source.x == 1u ? sPos : P.EmitterToSim[3].xyz;
         aVel = vec3(0.0);
         aColor = vec4(1.0);
         aSize = 0.1;
@@ -296,6 +334,24 @@ void main()
             aPos += aVel * dt;
             aRot += aSpin * dt;
             aAge += dt;
+            // Died this frame: its events.
+            if (aAge >= aLife)
+            {
+                vec3 wp = (P.SimToWorld * vec4(aPos, 1.0)).xyz, wv = mat3(P.SimToWorld) * aVel;
+                for (uint s = 0u; s < 4u; ++s)
+                {
+                    uvec2 address = s < 2u ? (s == 0u ? P.Events[0].xy : P.Events[0].zw) : (s == 2u ? P.Events[1].xy : P.Events[1].zw);
+                    if (gDie[s] == 0u || address == uvec2(0u)) continue;
+                    VfxEventsRef target = VfxEventsRef(address);
+                    uint at = atomicAdd(target.Count, gDie[s]);
+                    for (uint k = 0u; k < gDie[s] && at + k < P.Source.w; ++k)
+                    {
+                        target.Items[(at + k) * 3u] = vec4(wp, 0.0);
+                        target.Items[(at + k) * 3u + 1u] = vec4(wv, 0.0);
+                        target.Items[(at + k) * 3u + 2u] = aColor;
+                    }
+                }
+            }
         }
     }
     // A lifetime of 0 would read as never born: a particle given none dies at once instead.

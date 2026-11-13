@@ -210,6 +210,41 @@
           ]
         }
       }
+    },
+    {
+      "guid": 3000003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Fireworks",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            -6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Visual Effect": {
+          "Asset": 100085,
+          "Play On Awake": true,
+          "Play Rate": 1.0,
+          "Properties": []
+        }
+      }
     }
   ]
 }

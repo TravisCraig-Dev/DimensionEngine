@@ -440,6 +440,8 @@ namespace Dimension
             Buffer Sort; // (key, slot) pairs for back-to-front drawing
             VkDeviceAddress SortAddress = 0;
             uint32_t SortPadded = 0;
+            struct EventBuffer { Buffer Data; VkDeviceAddress Address = 0; };
+            std::vector<EventBuffer> VfxEvents; // a Visual Effect's Trigger On Die slots (their child effects read them)
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
         // The terrain's height grid for GPU particle collision (made again when the terrain changes).
@@ -4606,118 +4608,192 @@ namespace Dimension
             if (w.RainParticles.IsAlive()) simulateOne(e, w.RainParticles, w.RainWorld, 1ull << 40);
             if (w.SnowParticles.IsAlive()) simulateOne(e, w.SnowParticles, w.SnowWorld, 2ull << 40);
         }
-        // Visual Effects: their graph's programs run by VfxSim.comp, drawn as GPU particles.
+        // Visual Effects: their graph's programs run by VfxSim.comp, drawn as GPU particles. A graph's Trigger On Die
+        // blocks start child effects: the parent writes events as its particles die, then each child spawns from its
+        // events on the GPU (the count never comes back to the CPU), and a last pass moves the child's ring on.
+        struct VfxParams
+        {
+            glm::mat4 EmitterToSim;
+            glm::vec4 Time;
+            glm::uvec4 Counts, Program, Code, Tables;
+            glm::mat4 SimToWorld;
+            glm::uvec4 Events[2];
+            glm::uvec4 Source, Head;
+        };
+        auto makeBuffer = [&](Buffer& buffer, VkDeviceAddress& address, VkDeviceSize size, MemoryUsage usage, const char* name) {
+            buffer = Buffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, usage, name);
+            VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+            info.buffer = buffer.GetHandle();
+            address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+        };
+        constexpr VkDeviceSize kEventBytes = 16 + (VkDeviceSize)VfxProgram::kMaxEvents * 48;
+        auto toCompute = [&] {
+            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+        };
         for (auto [e, vfx, t] : scene.GetRegistry().ViewOf<VisualEffectComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
             auto graph = AssetManager::GetVisualEffect(vfx.Asset);
             auto program = graph ? VisualEffects::ProgramOf(vfx.Asset) : nullptr;
             if (!graph || !program) continue;
-            uint32_t capacity = (uint32_t)std::clamp(graph->Capacity, 1, (int32_t)kMaxGpuParticles);
-            uint64_t key = (uint64_t)(uintptr_t)&scene * 1000003ull ^ ((uint64_t)e.Index << 1) ^ (3ull << 40);
-            auto& st = res.GpuParticleStates[key];
-            st.LastFrame = frame;
-            bool clear = false;
-            if (!st.Particles.IsValid() || st.Capacity != capacity)
-            {
-                st.Particles = Buffer(capacity * kGpuParticleSize,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                      MemoryUsage::GpuOnly, "VfxParticles");
-                VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
-                info.buffer = st.Particles.GetHandle();
-                st.Address = vkGetBufferDeviceAddress(device.GetDevice(), &info);
-                st.Capacity = capacity;
-                clear = true;
-            }
-            if (st.Generation != vfx.Generation) clear = true;
-            if (clear)
-            {
-                st.Generation = vfx.Generation;
-                st.Head = 0;
-            }
-            bool worldSpace = graph->Space == ParticleSpace::World;
             float dt = std::min(vfx.PendingDt, 0.25f);
             vfx.PendingDt = 0.0f;
-            uint32_t spawn = (uint32_t)std::min<int64_t>(std::max(vfx.PendingSpawn, 0), capacity);
-            vfx.PendingSpawn = 0;
-
-            // The alive count: last time around this ring slot's (that frame is done), and a fresh counter for this one.
-            uint32_t slot = (uint32_t)(frame % kHitRing);
-            Buffer& counter = st.Hits[slot];
-            if (counter.IsValid() && st.HitsFrame[slot] != 0 && st.HitsFrame[slot] <= device.GetCompletedFrameNumber())
-                vfx.AliveCount = *static_cast<const uint32_t*>(counter.GetMapped());
-            if (!counter.IsValid())
+            uint64_t parentKey = (uint64_t)(uintptr_t)&scene * 1000003ull ^ ((uint64_t)e.Index << 1) ^ (3ull << 40);
+            uint32_t seed = ++vfx.Seed * 2654435761u ^ (e.Index + 1) * 40503u;
+            // One effect's simulation, sort and draw. `child` >= 0: a child spawning from `events` (slot `child`).
+            auto simulate = [&](const VisualEffectAsset& g, const VfxProgram& prog, uint64_t key, int child, VkDeviceAddress childEvents,
+                                VkDeviceAddress eventSlots[VfxProgram::kMaxChildren]) {
+                uint32_t capacity = (uint32_t)std::clamp(g.Capacity, 1, (int32_t)kMaxGpuParticles);
+                auto& st = res.GpuParticleStates[key];
+                st.LastFrame = frame;
+                bool clear = false;
+                if (!st.Particles.IsValid() || st.Capacity != capacity)
+                {
+                    makeBuffer(st.Particles, st.Address, capacity * kGpuParticleSize, MemoryUsage::GpuOnly, "VfxParticles");
+                    st.Capacity = capacity;
+                    clear = true;
+                }
+                if (child >= 0 && !st.Trails.IsValid()) // (a child's ring head lives on the GPU: in the trail buffer slot)
+                {
+                    makeBuffer(st.Trails, st.TrailAddress, 16, MemoryUsage::GpuOnly, "VfxChildHead");
+                    clear = true;
+                }
+                if (st.Generation != vfx.Generation) clear = true;
+                if (clear)
+                {
+                    st.Generation = vfx.Generation;
+                    st.Head = 0;
+                }
+                bool worldSpace = child >= 0 || g.Space == ParticleSpace::World; // (children have no object: world space)
+                uint32_t spawn = 0;
+                if (child < 0)
+                {
+                    spawn = (uint32_t)std::min<int64_t>(std::max(vfx.PendingSpawn, 0), capacity);
+                    vfx.PendingSpawn = 0;
+                }
+                // The alive count (the parent's): last time around this ring slot's, and a fresh counter.
+                uint32_t slot = (uint32_t)(frame % kHitRing);
+                bool dispatch = clear || dt > 0.0f || spawn > 0 || child >= 0;
+                if (child < 0)
+                {
+                    Buffer& counter = st.Hits[slot];
+                    if (counter.IsValid() && st.HitsFrame[slot] != 0 && st.HitsFrame[slot] <= device.GetCompletedFrameNumber())
+                        vfx.AliveCount = *static_cast<const uint32_t*>(counter.GetMapped());
+                    if (!counter.IsValid()) makeBuffer(counter, st.HitsAddress[slot], 16, MemoryUsage::GpuToCpu, "VfxAliveCount");
+                    st.HitsFrame[slot] = dispatch ? frame : 0;
+                }
+                // The programs, their constants (exposed properties first: this object's values) and tables.
+                std::vector<glm::vec4> constants = prog.Constants;
+                for (size_t k = 0; k < g.Properties.size() && k < constants.size(); ++k)
+                    if (glm::vec4 value; child < 0 && vfx.GetProperty(g.Properties[k].Name, value)) constants[k] = VisualEffects::PropertyConstant(g.Properties[k], value);
+                size_t codeBytes = prog.Code.size() * sizeof(glm::uvec4), constBytes = constants.size() * sizeof(glm::vec4), lutBytes = prog.Luts.size() * sizeof(glm::vec4);
+                size_t constOffset = std::max<size_t>(codeBytes, 16);
+                TransientAllocation tables = device.AllocateTransient(constOffset + constBytes + lutBytes, 16);
+                TransientAllocation simParams = device.AllocateTransient(sizeof(VfxParams), 16);
+                TransientAllocation params = device.AllocateTransient(sizeof(GpuParticleParams), 16);
+                if (!tables || !simParams || !params) return;
+                auto* bytes = static_cast<uint8_t*>(tables.Data);
+                if (codeBytes) std::memcpy(bytes, prog.Code.data(), codeBytes);
+                std::memcpy(bytes + constOffset, constants.data(), constBytes);
+                std::memcpy(bytes + constOffset + constBytes, prog.Luts.data(), lutBytes);
+                glm::mat4 simToWorld = worldSpace ? glm::mat4(1.0f) : t.World;
+                VfxParams vp{};
+                vp.EmitterToSim = child >= 0 ? glm::mat4(1.0f) : worldSpace ? t.World : glm::mat4(1.0f);
+                vp.Time = glm::vec4(vfx.Time, dt, 0.0f, 0.0f);
+                vp.Counts = glm::uvec4(capacity, st.Head, spawn, seed ^ (uint32_t)(child + 1) * 668265263u);
+                vp.Program = glm::uvec4(prog.InitStart, prog.InitCount, prog.UpdateStart, prog.UpdateCount);
+                vp.Code = glm::uvec4(SplitAddress(tables.Address), SplitAddress(tables.Address + constOffset));
+                vp.Tables = glm::uvec4(SplitAddress(tables.Address + constOffset + constBytes),
+                                       child < 0 && dispatch ? SplitAddress(st.HitsAddress[slot]) : glm::uvec2(0u));
+                vp.SimToWorld = simToWorld;
+                if (eventSlots)
+                    for (int k = 0; k < VfxProgram::kMaxChildren; ++k)
+                    {
+                        glm::uvec2 a = SplitAddress(eventSlots[k]);
+                        vp.Events[k / 2][(k % 2) * 2] = a.x;
+                        vp.Events[k / 2][(k % 2) * 2 + 1] = a.y;
+                    }
+                vp.Source = glm::uvec4(child >= 0 ? 1u : 0u, SplitAddress(childEvents), (uint32_t)VfxProgram::kMaxEvents);
+                vp.Head = glm::uvec4(SplitAddress(child >= 0 ? st.TrailAddress : 0), 0u, 0u);
+                std::memcpy(simParams.Data, &vp, sizeof(vp));
+                // Drawing as a GPU Particle System: the particles' own colors and sizes (flat tables), the effect's space.
+                GpuParticleParams p{};
+                p.Emitter = t.World;
+                p.SimToWorld = simToWorld;
+                p.WorldToSim = glm::inverse(simToWorld);
+                p.Misc = glm::vec4(0.0f, worldSpace ? 1.0f : glm::length(glm::vec3(t.World[0])), 0.0f, 0.0f);
+                p.Counts = glm::uvec4(capacity, st.Head, 0u, 0u);
+                p.Lighting = glm::vec4(g.Lit ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+                for (int i = 0; i < kParticleLut; ++i) p.ColorLut[i] = p.CurveLut[i] = glm::vec4(1.0f);
+                std::memcpy(params.Data, &p, sizeof(p));
+                if (dispatch)
+                {
+                    beginCompute();
+                    res.VfxSim.Bind(cmd);
+                    if (clear) vkCmdFillBuffer(cmd, st.Particles.GetHandle(), 0, VK_WHOLE_SIZE, 0); // every slot dead
+                    if (clear && child >= 0) vkCmdFillBuffer(cmd, st.Trails.GetHandle(), 0, VK_WHOLE_SIZE, 0);
+                    if (child < 0) vkCmdFillBuffer(cmd, st.Hits[slot].GetHandle(), 0, 16, 0);
+                    toCompute();
+                    struct { glm::uvec2 Particles, Params; } push{ SplitAddress(st.Address), SplitAddress(simParams.Address) };
+                    vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                    vkCmdDispatch(cmd, (capacity + 63) / 64, 1, 1);
+                    if (child >= 0)
+                    {
+                        // The ring head moves on by the events taken, and the events are cleared for the next frame.
+                        toCompute();
+                        vp.Source.x = 2u;
+                        TransientAllocation finish = device.AllocateTransient(sizeof(VfxParams), 16);
+                        if (finish)
+                        {
+                            std::memcpy(finish.Data, &vp, sizeof(vp));
+                            push.Params = SplitAddress(finish.Address);
+                            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                            vkCmdDispatch(cmd, 1, 1, 1);
+                        }
+                    }
+                    else
+                        st.Head = (st.Head + spawn) % capacity;
+                }
+                bool sort = g.Sort && g.Blend == ParticleBlend::Alpha;
+                if (sort) sortParticles(st, capacity, params.Address);
+                auto tex = g.Texture.IsValid() ? AssetManager::GetTexture(g.Texture) : nullptr;
+                m_GpuParticleDraws.push_back({ st.Address, params.Address, capacity, (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex(),
+                                               e.Index + 1, g.Blend == ParticleBlend::Additive, 0, sort ? st.SortAddress : 0, false });
+            };
+            // The children's event buffers (in the parent's state, one per slot), cleared when made or reset.
+            VkDeviceAddress slots[VfxProgram::kMaxChildren] = {};
+            auto& parentState = res.GpuParticleStates[parentKey];
+            size_t children = std::min<size_t>(program->Children.size(), VfxProgram::kMaxChildren);
+            bool freshEvents = false;
+            if (parentState.VfxEvents.size() != children) parentState.VfxEvents.resize(children), freshEvents = true;
+            for (size_t k = 0; k < children; ++k)
             {
-                counter = Buffer(16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                 MemoryUsage::GpuToCpu, "VfxAliveCount");
-                VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
-                info.buffer = counter.GetHandle();
-                st.HitsAddress[slot] = vkGetBufferDeviceAddress(device.GetDevice(), &info);
+                auto& ev = parentState.VfxEvents[k];
+                if (!ev.Data.IsValid())
+                {
+                    makeBuffer(ev.Data, ev.Address, kEventBytes, MemoryUsage::GpuOnly, "VfxEvents");
+                    freshEvents = true;
+                }
+                slots[k] = ev.Address;
             }
-            bool dispatch = clear || dt > 0.0f || spawn > 0;
-            st.HitsFrame[slot] = dispatch ? frame : 0;
-
-            // The programs, their constants (exposed properties first, this object's values) and tables.
-            std::vector<glm::vec4> constants = program->Constants;
-            for (size_t k = 0; k < graph->Properties.size() && k < constants.size(); ++k)
-                if (glm::vec4 value; vfx.GetProperty(graph->Properties[k].Name, value)) constants[k] = VisualEffects::PropertyConstant(graph->Properties[k], value);
-            size_t codeBytes = program->Code.size() * sizeof(glm::uvec4), constBytes = constants.size() * sizeof(glm::vec4),
-                   lutBytes = program->Luts.size() * sizeof(glm::vec4);
-            TransientAllocation tables = device.AllocateTransient(std::max<size_t>(codeBytes, 16) + constBytes + lutBytes, 16);
-            if (!tables) continue;
-            auto* bytes = static_cast<uint8_t*>(tables.Data);
-            if (codeBytes) std::memcpy(bytes, program->Code.data(), codeBytes);
-            size_t constOffset = std::max<size_t>(codeBytes, 16);
-            std::memcpy(bytes + constOffset, constants.data(), constBytes);
-            std::memcpy(bytes + constOffset + constBytes, program->Luts.data(), lutBytes);
-            struct VfxParams
-            {
-                glm::mat4 EmitterToSim;
-                glm::vec4 Time;
-                glm::uvec4 Counts, Program, Code, Tables;
-            } vp{};
-            vp.EmitterToSim = worldSpace ? t.World : glm::mat4(1.0f);
-            vp.Time = glm::vec4(vfx.Time, dt, 0.0f, 0.0f);
-            vp.Counts = glm::uvec4(capacity, st.Head, spawn, ++vfx.Seed * 2654435761u ^ (e.Index + 1) * 40503u);
-            vp.Program = glm::uvec4(program->InitStart, program->InitCount, program->UpdateStart, program->UpdateCount);
-            vp.Code = glm::uvec4(SplitAddress(tables.Address), SplitAddress(tables.Address + constOffset));
-            vp.Tables = glm::uvec4(SplitAddress(tables.Address + constOffset + constBytes), dispatch ? SplitAddress(st.HitsAddress[slot]) : glm::uvec2(0u));
-            TransientAllocation simParams = device.AllocateTransient(sizeof(vp), 16);
-            // Drawing as a GPU Particle System: the particles' own colors and sizes (flat tables), the effect's space.
-            GpuParticleParams p{};
-            p.Emitter = t.World;
-            p.SimToWorld = worldSpace ? glm::mat4(1.0f) : t.World;
-            p.WorldToSim = worldSpace ? glm::mat4(1.0f) : glm::inverse(t.World);
-            p.Misc = glm::vec4(0.0f, worldSpace ? 1.0f : glm::length(glm::vec3(t.World[0])), 0.0f, 0.0f);
-            p.Counts = glm::uvec4(capacity, st.Head, 0u, 0u);
-            p.Lighting = glm::vec4(graph->Lit ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
-            for (int i = 0; i < kParticleLut; ++i)
-            {
-                p.ColorLut[i] = glm::vec4(1.0f);
-                p.CurveLut[i] = glm::vec4(1.0f);
-            }
-            TransientAllocation params = device.AllocateTransient(sizeof(p), 16);
-            if (!simParams || !params) continue;
-            std::memcpy(simParams.Data, &vp, sizeof(vp));
-            std::memcpy(params.Data, &p, sizeof(p));
-            if (dispatch)
+            // (new, or the effect restarts: no events left over)
+            bool restart = !parentState.Particles.IsValid() || parentState.Generation != vfx.Generation ||
+                           parentState.Capacity != (uint32_t)std::clamp(graph->Capacity, 1, (int32_t)kMaxGpuParticles);
+            if ((freshEvents || restart) && children > 0)
             {
                 beginCompute();
-                res.VfxSim.Bind(cmd);
-                if (clear) vkCmdFillBuffer(cmd, st.Particles.GetHandle(), 0, VK_WHOLE_SIZE, 0); // every slot dead
-                vkCmdFillBuffer(cmd, counter.GetHandle(), 0, 16, 0);
-                Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
-                struct { glm::uvec2 Particles, Params; } push{ SplitAddress(st.Address), SplitAddress(simParams.Address) };
-                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
-                vkCmdDispatch(cmd, (capacity + 63) / 64, 1, 1);
-                st.Head = (st.Head + spawn) % capacity;
+                for (size_t k = 0; k < children; ++k) vkCmdFillBuffer(cmd, parentState.VfxEvents[k].Data.GetHandle(), 0, 16, 0);
             }
-            bool sort = graph->Sort && graph->Blend == ParticleBlend::Alpha;
-            if (sort) sortParticles(st, capacity, params.Address);
-            auto tex = graph->Texture.IsValid() ? AssetManager::GetTexture(graph->Texture) : nullptr;
-            m_GpuParticleDraws.push_back({ st.Address, params.Address, capacity, (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex(),
-                                           e.Index + 1, graph->Blend == ParticleBlend::Additive, 0, sort ? st.SortAddress : 0, false });
+            simulate(*graph, *program, parentKey, -1, 0, slots);
+            for (size_t k = 0; k < children; ++k)
+            {
+                auto childGraph = AssetManager::GetVisualEffect(program->Children[k]);
+                auto childProgram = childGraph ? VisualEffects::ProgramOf(program->Children[k]) : nullptr;
+                if (!childGraph || !childProgram || !childProgram->Valid()) continue;
+                toCompute(); // the parent's events are written
+                simulate(*childGraph, *childProgram, parentKey ^ ((uint64_t)(k + 1) << 44), (int)k, slots[k], nullptr);
+            }
         }
         if (!first)
             Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
