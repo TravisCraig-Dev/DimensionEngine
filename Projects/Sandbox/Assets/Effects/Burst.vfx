@@ -187,5 +187,9 @@
     6,
     7
   ],
-  "properties": []
+  "properties": [],
+  "trails": {
+    "lifetime": 0.35,
+    "width": 0.8
+  }
 }

@@ -234,6 +234,17 @@ namespace Editor
             edit(ImGui::Checkbox("##sort", &g.Sort));
             UI::PropertyLabel("Lit", "Shaded by the scene's lights");
             edit(ImGui::Checkbox("##lit", &g.Lit));
+            UI::PropertyLabel("Trails", "Each particle also draws a ribbon back through where it was (strips; up to 262,144 particles)");
+            edit(ImGui::Checkbox("##trails", &g.Trails));
+            if (g.Trails)
+            {
+                UI::PropertyLabel("Trail Lifetime", "Seconds of path the ribbon covers");
+                ImGui::SetNextItemWidth(-1);
+                edit(ImGui::DragFloat("##trailLife", &g.TrailLifetime, 0.01f, 0.01f, 10.0f));
+                UI::PropertyLabel("Trail Width", "Times the particle's size");
+                ImGui::SetNextItemWidth(-1);
+                edit(ImGui::DragFloat("##trailWidth", &g.TrailWidth, 0.01f, 0.0f, 10.0f));
+            }
             UI::EndProperties();
         }
 
@@ -570,7 +581,8 @@ namespace Editor
         {
             char line[128];
             std::snprintf(line, sizeof(line), "%s, %s space%s%s", g.Blend == ParticleBlend::Additive ? "Additive" : "Alpha",
-                          g.Space == ParticleSpace::World ? "world" : "local", g.Sort && g.Blend == ParticleBlend::Alpha ? ", sorted" : "", g.Lit ? ", lit" : "");
+                          g.Space == ParticleSpace::World ? "world" : "local", g.Sort && g.Blend == ParticleBlend::Alpha ? ", sorted" : "",
+                          (std::string(g.Lit ? ", lit" : "") + (g.Trails ? ", trails" : "")).c_str());
             label(toScreen(outputAt + glm::vec2(8.0f, kHeaderH + 6.0f)), dim, line);
             label(toScreen(outputAt + glm::vec2(8.0f, kHeaderH + 22.0f)), dim, "color, size, rotation from the attributes");
         }

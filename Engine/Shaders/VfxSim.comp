@@ -27,6 +27,8 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Vf
     uvec4 Source;   // x mode: 0 spawn Counts.z new ones, 1 spawn from the events at yz (a child effect), 2 finish that
                     // spawn (thread 0: the ring head moves on, the events are cleared); w event capacity
     uvec4 Head;     // xy the ring head (modes 1 and 2: kept on the GPU, the count is only known there)
+    vec4 Trail;     // x 1 = trails (recorded in the buffer at TrailBuffer.xy), y seconds between points
+    uvec4 TrailBuffer;
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxCodeRef { uvec4 Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VfxVec4Ref { vec4 Items[]; };
@@ -304,6 +306,11 @@ void main()
             sColor = events.Items[offset * 3u + 2u];
         }
         aPos = P.Source.x == 1u ? sPos : P.EmitterToSim[3].xyz;
+        if (P.Trail.x > 0.5)
+        {
+            GpuTrailRef trail = GpuTrailRef(P.TrailBuffer.xy);
+            for (uint k = 0u; k < TRAIL_POINTS; ++k) trail.Points[i * TRAIL_POINTS + k] = vec4(0.0, 0.0, 0.0, -1.0);
+        }
         aVel = vec3(0.0);
         aColor = vec4(1.0);
         aSize = 0.1;
@@ -357,5 +364,17 @@ void main()
     // A lifetime of 0 would read as never born: a particle given none dies at once instead.
     aLife = max(aLife, 1e-4);
     particles.Items[i] = GpuParticle(vec4(aPos, aAge), vec4(aVel, aLife), aColor, vec4(aSize, aRot, aSpin, aRandom));
+    if (P.Trail.x > 0.5 && aAge < aLife)
+    {
+        // The trail: the position every interval (and at once the first time), the older points pushed back.
+        GpuTrailRef trail = GpuTrailRef(P.TrailBuffer.xy);
+        uint base = i * TRAIL_POINTS;
+        float last = trail.Points[base].w;
+        if (last < 0.0 || aAge - last >= P.Trail.y)
+        {
+            for (uint k = TRAIL_POINTS - 1u; k > 0u; --k) trail.Points[base + k] = trail.Points[base + k - 1u];
+            trail.Points[base] = vec4(aPos, aAge);
+        }
+    }
     if (P.Tables.zw != uvec2(0u) && aAge < aLife) atomicAdd(VfxCounterRef(P.Tables.zw).Count, 1u);
 }

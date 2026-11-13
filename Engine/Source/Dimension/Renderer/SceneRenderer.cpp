@@ -442,6 +442,8 @@ namespace Dimension
             uint32_t SortPadded = 0;
             struct EventBuffer { Buffer Data; VkDeviceAddress Address = 0; };
             std::vector<EventBuffer> VfxEvents; // a Visual Effect's Trigger On Die slots (their child effects read them)
+            Buffer VfxHead; // a child effect's ring head (kept on the GPU)
+            VkDeviceAddress VfxHeadAddress = 0;
         };
         std::unordered_map<uint64_t, GpuParticleState> GpuParticleStates;
         // The terrain's height grid for GPU particle collision (made again when the terrain changes).
@@ -4619,6 +4621,8 @@ namespace Dimension
             glm::mat4 SimToWorld;
             glm::uvec4 Events[2];
             glm::uvec4 Source, Head;
+            glm::vec4 Trail;
+            glm::uvec4 TrailBuffer;
         };
         auto makeBuffer = [&](Buffer& buffer, VkDeviceAddress& address, VkDeviceSize size, MemoryUsage usage, const char* name) {
             buffer = Buffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, usage, name);
@@ -4654,10 +4658,16 @@ namespace Dimension
                     st.Capacity = capacity;
                     clear = true;
                 }
-                if (child >= 0 && !st.Trails.IsValid()) // (a child's ring head lives on the GPU: in the trail buffer slot)
+                if (child >= 0 && !st.VfxHead.IsValid()) // (a child's ring head lives on the GPU)
                 {
-                    makeBuffer(st.Trails, st.TrailAddress, 16, MemoryUsage::GpuOnly, "VfxChildHead");
+                    makeBuffer(st.VfxHead, st.VfxHeadAddress, 16, MemoryUsage::GpuOnly, "VfxChildHead");
                     clear = true;
+                }
+                bool trails = g.Trails && capacity <= kMaxGpuTrailParticles;
+                if (trails && (!st.Trails.IsValid() || st.Trails.GetSize() != (VkDeviceSize)capacity * kGpuTrailPoints * 16))
+                {
+                    makeBuffer(st.Trails, st.TrailAddress, (VkDeviceSize)capacity * kGpuTrailPoints * 16, MemoryUsage::GpuOnly, "VfxTrails");
+                    clear = true; // (the particles out have no history)
                 }
                 if (st.Generation != vfx.Generation) clear = true;
                 if (clear)
@@ -4715,7 +4725,12 @@ namespace Dimension
                         vp.Events[k / 2][(k % 2) * 2 + 1] = a.y;
                     }
                 vp.Source = glm::uvec4(child >= 0 ? 1u : 0u, SplitAddress(childEvents), (uint32_t)VfxProgram::kMaxEvents);
-                vp.Head = glm::uvec4(SplitAddress(child >= 0 ? st.TrailAddress : 0), 0u, 0u);
+                vp.Head = glm::uvec4(SplitAddress(child >= 0 ? st.VfxHeadAddress : 0), 0u, 0u);
+                if (trails)
+                {
+                    vp.Trail = glm::vec4(1.0f, std::max(g.TrailLifetime, 1e-3f) / kGpuTrailPoints, 0.0f, 0.0f);
+                    vp.TrailBuffer = glm::uvec4(SplitAddress(st.TrailAddress), 0u, 0u);
+                }
                 std::memcpy(simParams.Data, &vp, sizeof(vp));
                 // Drawing as a GPU Particle System: the particles' own colors and sizes (flat tables), the effect's space.
                 GpuParticleParams p{};
@@ -4726,13 +4741,18 @@ namespace Dimension
                 p.Counts = glm::uvec4(capacity, st.Head, 0u, 0u);
                 p.Lighting = glm::vec4(g.Lit ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
                 for (int i = 0; i < kParticleLut; ++i) p.ColorLut[i] = p.CurveLut[i] = glm::vec4(1.0f);
+                if (trails)
+                {
+                    p.Trail = glm::vec4(1.0f, std::max(g.TrailLifetime, 1e-3f) / kGpuTrailPoints, std::max(g.TrailWidth, 0.0f), 0.0f);
+                    p.TrailBuffer = glm::uvec4(SplitAddress(st.TrailAddress), 0u, 0u);
+                }
                 std::memcpy(params.Data, &p, sizeof(p));
                 if (dispatch)
                 {
                     beginCompute();
                     res.VfxSim.Bind(cmd);
                     if (clear) vkCmdFillBuffer(cmd, st.Particles.GetHandle(), 0, VK_WHOLE_SIZE, 0); // every slot dead
-                    if (clear && child >= 0) vkCmdFillBuffer(cmd, st.Trails.GetHandle(), 0, VK_WHOLE_SIZE, 0);
+                    if (clear && child >= 0) vkCmdFillBuffer(cmd, st.VfxHead.GetHandle(), 0, VK_WHOLE_SIZE, 0);
                     if (child < 0) vkCmdFillBuffer(cmd, st.Hits[slot].GetHandle(), 0, 16, 0);
                     toCompute();
                     struct { glm::uvec2 Particles, Params; } push{ SplitAddress(st.Address), SplitAddress(simParams.Address) };
@@ -4759,7 +4779,7 @@ namespace Dimension
                 if (sort) sortParticles(st, capacity, params.Address);
                 auto tex = g.Texture.IsValid() ? AssetManager::GetTexture(g.Texture) : nullptr;
                 m_GpuParticleDraws.push_back({ st.Address, params.Address, capacity, (tex ? tex : AssetManager::GetParticleTexture())->GetBindlessIndex(),
-                                               e.Index + 1, g.Blend == ParticleBlend::Additive, 0, sort ? st.SortAddress : 0, false });
+                                               e.Index + 1, g.Blend == ParticleBlend::Additive, 0, sort ? st.SortAddress : 0, trails });
             };
             // The children's event buffers (in the parent's state, one per slot), cleared when made or reset.
             VkDeviceAddress slots[VfxProgram::kMaxChildren] = {};

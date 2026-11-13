@@ -224,6 +224,7 @@ namespace Dimension
         j["texture"] = (uint64_t)Texture;
         j["sort"] = Sort;
         j["lit"] = Lit;
+        if (Trails) j["trails"] = { { "lifetime", TrailLifetime }, { "width", TrailWidth } };
         j["nextId"] = NextId;
         j["nodes"] = nlohmann::json::array();
         for (const VfxNode& n : Nodes)
@@ -269,6 +270,12 @@ namespace Dimension
         a.Texture = AssetHandle(j.value("texture", (uint64_t)0));
         a.Sort = j.value("sort", a.Sort);
         a.Lit = j.value("lit", a.Lit);
+        if (j.contains("trails"))
+        {
+            a.Trails = true;
+            a.TrailLifetime = j["trails"].value("lifetime", a.TrailLifetime);
+            a.TrailWidth = j["trails"].value("width", a.TrailWidth);
+        }
         if (j.contains("nodes"))
             for (const auto& jn : j["nodes"])
             {

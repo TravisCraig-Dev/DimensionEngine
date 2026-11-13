@@ -10589,8 +10589,11 @@ namespace
         w.Update.clear();
         CHECK(!VisualEffects::Compile(w).Valid());
 
-        // Saved and read back the same.
+        // Saved and read back the same (trails too).
+        a.Trails = true;
+        a.TrailLifetime = 0.7f;
         nlohmann::json j = a.ToJson();
+        CHECK(VisualEffectAsset::FromJson(j).Trails && Near(VisualEffectAsset::FromJson(j).TrailLifetime, 0.7f));
         CHECK(VisualEffectAsset::FromJson(j).ToJson() == j);
         nlohmann::json gj = g.ToJson();
         VisualEffectAsset g2 = VisualEffectAsset::FromJson(gj);

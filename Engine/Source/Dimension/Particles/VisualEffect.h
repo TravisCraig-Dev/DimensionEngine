@@ -77,6 +77,11 @@ namespace Dimension
         AssetHandle Texture = AssetHandle::None(); // None = the soft round particle
         bool Sort = true;           // Alpha: back to front
         bool Lit = false;
+        // Trails (strips): each particle also draws a ribbon back through where it was, narrowing and fading (up to
+        // 262,144 particles).
+        bool Trails = false;
+        float TrailLifetime = 0.4f; // seconds of path the ribbon covers
+        float TrailWidth = 1.0f;    // times the particle's size
         // Graph
         std::vector<VfxNode> Nodes;
         std::vector<VfxLink> Links;
