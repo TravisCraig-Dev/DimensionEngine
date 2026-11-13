@@ -63,7 +63,7 @@ namespace Dimension
         m_Device->WaitIdle();
         for (auto it = m_Layers.rbegin(); it != m_Layers.rend(); ++it) (*it)->OnDetach();
         m_Layers.clear();
-        Input::StopAllVibration();
+        Input::Shutdown();
         AssetManager::Shutdown();
         m_ImGui.reset();
         Renderer::Shutdown();

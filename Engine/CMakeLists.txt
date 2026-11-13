@@ -33,6 +33,9 @@ target_compile_definitions(DimensionEngine
     PUBLIC GLFW_INCLUDE_NONE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS GLM_ENABLE_EXPERIMENTAL $<$<CONFIG:Debug>:DIM_DEBUG>
     PRIVATE "IMGUI_API=__declspec(dllexport)"
     INTERFACE "IMGUI_API=__declspec(dllimport)")
+if(WIN32)
+    target_link_libraries(DimensionEngine PRIVATE runtimeobject) # Windows.Gaming.Input (gamepad haptics)
+endif()
 if(MSVC)
     target_compile_options(DimensionEngine PRIVATE /W4 /wd4100 /wd4201 /wd4324 /bigobj) # /bigobj: the component registry has many template instances
 endif()

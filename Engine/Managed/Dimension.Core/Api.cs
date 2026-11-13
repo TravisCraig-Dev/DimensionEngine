@@ -889,6 +889,12 @@ namespace Dimension
         /// stops it after that many seconds; 0 keeps it until changed. Stops when play stops.</summary>
         public static void SetGamepadVibration(float lowFrequency, float highFrequency, float duration = 0.0f, int pad = 0) =>
             Native.Api.GamepadVibrate(lowFrequency, highFrequency, duration, pad);
+        /// <summary>The impulse triggers of Xbox One / Series controllers, 0..1 each, timed as SetGamepadVibration and
+        /// independently of it. Pads without them ignore it (see <see cref="GetGamepadHaptics"/>).</summary>
+        public static void SetGamepadTriggerVibration(float left, float right, float duration = 0.0f, int pad = 0) =>
+            Native.Api.GamepadHaptics(0, left, right, duration, pad);
+        /// <summary>What a connected pad's motors can do (none when it is not connected).</summary>
+        public static GamepadHaptics GetGamepadHaptics(int pad = 0) => (GamepadHaptics)Native.Api.GamepadHaptics(1, 0, 0, 0, pad);
         /// <summary>The left stick, or WASD/arrows when no stick is pushed (+Y up).</summary>
         public static Vector2 GetMoveInput(int pad = 0)
         {
@@ -906,6 +912,8 @@ namespace Dimension
     }
 
     public enum GamepadAxis { LeftX = 0, LeftY, RightX, RightY, LeftTrigger, RightTrigger }
+    /// <summary>A gamepad's motors (Input.GetGamepadHaptics).</summary>
+    [System.Flags] public enum GamepadHaptics { None = 0, Rumble = 1, TriggerRumble = 2 }
 
     /// <summary>A half-line: Origin plus Direction (normalized) times a distance.</summary>
     public struct Ray

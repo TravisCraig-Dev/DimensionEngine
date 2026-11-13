@@ -30,6 +30,9 @@ namespace Dimension
     // look: GetMouseDelta keeps reporting movement).
     enum class CursorMode : int { Normal = 0, Hidden = 1, Locked = 2 };
 
+    // What a gamepad's motors can do (Input::GetGamepadHaptics).
+    enum class GamepadHapticBits : int { Rumble = 1, TriggerRumble = 2 };
+
     // Modifier bits (match GLFW).
     enum KeyModifier : int { ModShift = 1, ModControl = 2, ModAlt = 4, ModSuper = 8 };
 
@@ -63,7 +66,12 @@ namespace Dimension
         // Rumble (XInput controllers): low-frequency (left, heavy) and high-frequency (right, light) motor speeds 0..1.
         // A positive duration stops it after that many seconds; 0 keeps it until changed. Silent while game input is off.
         static void SetGamepadVibration(float lowFrequency, float highFrequency, float duration = 0.0f, int pad = 0);
+        // The impulse triggers of Xbox One / Series controllers (Windows.Gaming.Input), 0..1 each, timed as above and
+        // independently of the body motors. Ignored by pads without them (GetGamepadHaptics tells).
+        static void SetGamepadTriggerVibration(float left, float right, float duration = 0.0f, int pad = 0);
+        static int GetGamepadHaptics(int pad = 0); // GamepadHapticBits of a connected pad (0: none or unknown)
         static void StopAllVibration();
+        static void Shutdown(); // stops the motors and releases the platform's gamepad objects (the app's exit)
         // UTF-8 text typed this frame (respects the game-input gate).
         static const std::string& GetTypedText();
         // This frame's typed text as Unity's Input.inputString has it: the characters, with '\b' for each Backspace and

@@ -338,6 +338,8 @@ namespace Dimension
             // A Visual Effect: op 0 play, 1 stop, 2 reinit, 3 is playing, 4 alive particles, 5 set property `name` from v[0..3]
             // (1 if it has one), 6 get it into v (1 if it has one), 7 has property, 8 time, 9 property count.
             float (*VisualEffectOp)(void*, uint64_t, int, const char*, float*);
+            // Gamepad haptics: op 0 trigger rumble (left, right, seconds, pad), 1 the pad's GamepadHapticBits.
+            int (*GamepadHaptics)(int, float, float, float, int);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -2418,6 +2420,10 @@ namespace Dimension
                 }
                 default: return 0.0f;
                 }
+            };
+            a.GamepadHaptics = [](int op, float a0, float a1, float seconds, int pad) -> int {
+                if (op == 0) Input::SetGamepadTriggerVibration(a0, a1, seconds, pad);
+                return op == 1 ? Input::GetGamepadHaptics(pad) : 0;
             };
             a.ProfilerWorker = [](int op, const char* name, int64_t start) -> int64_t {
                 if (op == 0) return Profiler::Timestamp();

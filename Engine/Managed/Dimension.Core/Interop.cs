@@ -201,6 +201,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, int, int, ulong, float*, ulong> ConstraintOp;  // see ConstraintBase in Components.cs
         public delegate* unmanaged<int, byte*, long, long> ProfilerWorker;  // see JobSystem (0 clock, 1 a worker span)
         public delegate* unmanaged<IntPtr, ulong, int, byte*, float*, float> VisualEffectOp;  // see VisualEffect in Components.cs
+        public delegate* unmanaged<int, float, float, float, int, int> GamepadHaptics;  // see Input.SetGamepadTriggerVibration
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

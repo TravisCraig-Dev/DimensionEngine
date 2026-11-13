@@ -1,4 +1,5 @@
 #include "Dimension/Core/Input.h"
+#include "Dimension/Platform/GamepadHaptics.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
@@ -44,11 +45,14 @@ namespace Dimension
         };
         std::array<PadState, kMaxPads> s_Pads;
 
+        // The four motors: heavy, light, left trigger, right trigger.
+        using Motors = std::array<float, 4>;
         struct RumbleState
         {
-            float Low = 0.0f, High = 0.0f;
-            double EndTime = 0.0;            // glfwGetTime() at which it stops (0 = until changed)
-            float SentLow = -1.0f, SentHigh = -1.0f;
+            Motors Body{};                   // the heavy and light motors (Body[2..3] unused)
+            Motors Triggers{};               // the impulse triggers (Triggers[2..3])
+            double BodyEnd = 0.0, TriggerEnd = 0.0; // glfwGetTime() at which each stops (0 = until changed)
+            Motors Sent{ -1.0f, -1.0f, -1.0f, -1.0f };
         };
         std::array<RumbleState, kMaxPads> s_Rumble;
 
@@ -75,12 +79,10 @@ namespace Dimension
             return api;
         }
 
-        // GLFW tags XInput joysticks with a GUID starting "xinput" and lists them in user-index order, so pad p's
-        // XInput slot is the n-th connected slot, n being p's rank among the XInput joysticks.
-        int XInputSlot(int pad)
+        // GLFW tags XInput joysticks with a GUID starting "xinput" and lists them in user-index order: pad p's rank
+        // among the XInput joysticks (-1: not one).
+        int XInputRank(int pad)
         {
-            const XInputApi& x = XInput();
-            if (!x.GetState) return -1;
             int rank = 0;
             for (int j = 0; j <= pad; ++j)
             {
@@ -89,6 +91,15 @@ namespace Dimension
                 if (j == pad && !isX) return -1;
                 if (j < pad && isX) ++rank;
             }
+            return rank;
+        }
+
+        // Pad p's XInput slot is the n-th connected slot, n being its rank among the XInput joysticks.
+        int XInputSlot(int pad)
+        {
+            const XInputApi& x = XInput();
+            int rank = XInputRank(pad);
+            if (!x.GetState || rank < 0) return -1;
             for (DWORD slot = 0; slot < XUSER_MAX_COUNT; ++slot)
             {
                 XINPUT_STATE state{};
@@ -97,15 +108,29 @@ namespace Dimension
             return -1;
         }
 
-        void SendRumble(int pad, float low, float high)
+        // Windows.Gaming.Input drives all four motors (Xbox One / Series impulse triggers too); XInput only the two
+        // body motors, for pads it does not list.
+        void SendRumble(int pad, const Motors& m)
         {
+            int rank = XInputRank(pad);
+            if (rank < 0) return;
+            if (GamepadHaptics::Set(rank, m[0], m[1], m[2], m[3])) return;
             int slot = XInputSlot(pad);
             if (slot < 0 || !XInput().SetState) return;
-            XINPUT_VIBRATION v{ (WORD)std::lround(low * 65535.0f), (WORD)std::lround(high * 65535.0f) };
+            XINPUT_VIBRATION v{ (WORD)std::lround(m[0] * 65535.0f), (WORD)std::lround(m[1] * 65535.0f) };
             XInput().SetState((DWORD)slot, &v);
         }
+
+        int ProbeHaptics(int pad)
+        {
+            int rank = XInputRank(pad);
+            if (rank < 0) return 0;
+            if (rank < GamepadHaptics::Count()) return (int)GamepadHapticBits::Rumble | (int)GamepadHapticBits::TriggerRumble;
+            return XInputSlot(pad) >= 0 ? (int)GamepadHapticBits::Rumble : 0;
+        }
 #else
-        void SendRumble(int, float, float) {}
+        void SendRumble(int, const Motors&) {}
+        int ProbeHaptics(int) { return 0; }
 #endif
 
         void UpdateRumble()
@@ -114,39 +139,62 @@ namespace Dimension
             for (int p = 0; p < kMaxPads; ++p)
             {
                 RumbleState& r = s_Rumble[p];
-                if (r.EndTime > 0.0 && now >= r.EndTime) r = { 0.0f, 0.0f, 0.0, r.SentLow, r.SentHigh };
+                if (r.BodyEnd > 0.0 && now >= r.BodyEnd) r.Body = {}, r.BodyEnd = 0.0;
+                if (r.TriggerEnd > 0.0 && now >= r.TriggerEnd) r.Triggers = {}, r.TriggerEnd = 0.0;
                 if (!s_Pads[p].Connected)
                 {
-                    r.SentLow = r.SentHigh = -1.0f; // resend when it reconnects
+                    r.Sent = { -1.0f, -1.0f, -1.0f, -1.0f }; // resend when it reconnects
                     continue;
                 }
-                float low = s_GameInput ? r.Low : 0.0f, high = s_GameInput ? r.High : 0.0f;
-                if (low == r.SentLow && high == r.SentHigh) continue;
-                SendRumble(p, low, high);
-                r.SentLow = low;
-                r.SentHigh = high;
+                Motors m{ r.Body[0], r.Body[1], r.Triggers[2], r.Triggers[3] };
+                if (!s_GameInput) m = {};
+                if (m == r.Sent) continue;
+                SendRumble(p, m);
+                r.Sent = m;
             }
+        }
+
+        void ArmRumble(Motors& motors, double& end, int first, float a, float b, float duration)
+        {
+            motors[first] = std::clamp(a, 0.0f, 1.0f);
+            motors[first + 1] = std::clamp(b, 0.0f, 1.0f);
+            end = duration > 0.0f && (motors[first] > 0.0f || motors[first + 1] > 0.0f) ? glfwGetTime() + duration : 0.0;
+            if (s_Window) UpdateRumble(); // start now rather than next frame
         }
     }
 
     void Input::SetGamepadVibration(float low, float high, float duration, int pad)
     {
         if (pad < 0 || pad >= kMaxPads) return;
-        RumbleState& r = s_Rumble[pad];
-        r.Low = std::clamp(low, 0.0f, 1.0f);
-        r.High = std::clamp(high, 0.0f, 1.0f);
-        r.EndTime = duration > 0.0f && (r.Low > 0.0f || r.High > 0.0f) ? glfwGetTime() + duration : 0.0;
-        if (s_Window) UpdateRumble(); // start now rather than next frame
+        ArmRumble(s_Rumble[pad].Body, s_Rumble[pad].BodyEnd, 0, low, high, duration);
+    }
+
+    void Input::SetGamepadTriggerVibration(float left, float right, float duration, int pad)
+    {
+        if (pad < 0 || pad >= kMaxPads) return;
+        ArmRumble(s_Rumble[pad].Triggers, s_Rumble[pad].TriggerEnd, 2, left, right, duration);
+    }
+
+    int Input::GetGamepadHaptics(int pad)
+    {
+        return IsGamepadConnected(pad) ? ProbeHaptics(pad) : 0;
     }
 
     void Input::StopAllVibration()
     {
         for (int p = 0; p < kMaxPads; ++p)
         {
-            s_Rumble[p].Low = s_Rumble[p].High = 0.0f;
-            s_Rumble[p].EndTime = 0.0;
+            s_Rumble[p].Body = s_Rumble[p].Triggers = {};
+            s_Rumble[p].BodyEnd = s_Rumble[p].TriggerEnd = 0.0;
         }
         if (s_Window) UpdateRumble();
+    }
+
+    void Input::Shutdown()
+    {
+        StopAllVibration();
+        GamepadHaptics::Shutdown();
+        s_Window = nullptr;
     }
 
     void Input::Init(GLFWwindow* window)
