@@ -78,7 +78,11 @@ namespace Dimension::AssetListing
         auto system = std::chrono::clock_cast<std::chrono::system_clock>(time);
         std::time_t t = std::chrono::system_clock::to_time_t(system);
         std::tm local{};
+#ifdef _WIN32
         localtime_s(&local, &t);
+#else
+        localtime_r(&t, &local);
+#endif
         char buf[32];
         std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &local);
         return buf;

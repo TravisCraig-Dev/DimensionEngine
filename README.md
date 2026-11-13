@@ -1,6 +1,6 @@
 # Dimension Engine
 
-A 2D/3D game engine written in C++23 on **Vulkan 1.3**. Its core is a custom **Entity Component System**, and it ships with a Unity-style **editor** and a standalone **player** runtime.
+A 2D/3D game engine written in C++23 on **Vulkan 1.3**. Its core is a custom **Entity Component System**, and it ships with a Unity-style **editor** and a standalone **player** runtime. It runs on **Windows and Linux** (X11 and Wayland).
 
 ```
 Engine/    DimensionEngine.dll (ECS, renderer, scene, physics, audio, assets, UI, ImGui)
@@ -14,6 +14,7 @@ Projects/  Sandbox sample project (Demo3D and Demo2D scenes)
 ## Features
 
 **Core and ECS**
+- **Linux**: the engine, editor, player, game modules, C# scripting and the test suite build with GCC 14 and run on X11 and Wayland. File dialogs and confirmations use the desktop's dialog program (zenity, or kdialog on KDE); Show in Explorer selects the file through the file manager's `org.freedesktop.FileManager1` interface (else opens the folder) and Open uses `xdg-open`. Per-user files follow the XDG folders: preferences and recent projects in `~/.config/Dimension`, player saves in `~/.local/share/<product>`, font and asset-pack caches in `~/.cache` (`%APPDATA%` / `%LOCALAPPDATA%` on Windows). Game modules are `.so` files hot-reloaded through `dlopen` copies, .NET is hosted from the distribution's or Microsoft's packages, Build packages `<Name>` next to `DimensionEngine.so`, and the system language comes from `LANG`. Gamepad rumble goes through the kernel's force feedback (`FF_RUMBLE`: Xbox, DualShock 4, DualSense and other pads whose driver supports it). Video playback is Windows-only for now.
 - Sparse-set ECS with generational entity handles and typed views (`for (auto [e, t, s] : reg.ViewOf<Transform, Sprite>())`).
 - Deep registry cloning that preserves entity handles, which powers Play mode.
 - Reflection for components and script fields. The inspector, serializer and prefabs are all driven by one field declaration.
@@ -393,6 +394,15 @@ scripts\dev.bat ctest --preset debug
 ```
 Binaries land in `out/build/<preset>/bin/`.
 
+**Linux** (tested on Ubuntu 24.04): GCC 14, CMake, Ninja, the X11 and Wayland development headers, a Vulkan 1.3 driver (Mesa), and zenity or kdialog for dialogs; `dotnet-sdk-10.0` enables C# scripting.
+```sh
+sudo apt install g++-14 cmake ninja-build pkg-config libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev     libwayland-dev libxkbcommon-dev wayland-protocols mesa-vulkan-drivers zenity dotnet-sdk-10.0
+CC=gcc-14 CXX=g++-14 cmake --preset debug
+cmake --build --preset debug
+out/build/debug/bin/DimensionTests
+```
+Under WSL2 the editor and player open through WSLg; Mesa there offers only llvmpipe (software Vulkan), which is correct but slow.
+
 **Validation layers (optional).** Debug builds enable `VK_LAYER_KHRONOS_validation` when it is installed, either from the Vulkan SDK or by pointing `VK_ADD_LAYER_PATH` at a self-built layer.
 
 ## Running
@@ -477,4 +487,4 @@ ComponentRegistry::Register<HealthComponent>("Health", "Gameplay")
 
 Done in this milestone: everything listed under Features. These are the largest remaining areas, in a suggested order:
 
-1. **Platform:** Linux support (file dialogs and paths), and rumble for controllers outside XInput (DualShock 4, DualSense).
+1. **Platform:** video playback on Linux (a GStreamer or FFmpeg decoder behind `VideoDecoder`), rumble for DualShock 4 and DualSense pads on Windows (HID output reports), and macOS.

@@ -1,5 +1,6 @@
 #include "Dimension/Scripting/CSharpProject.h"
 #include "Dimension/Core/Log.h"
+#include "Dimension/Platform/Platform.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cctype>
@@ -363,8 +364,7 @@ namespace Dimension::CSharpProject
         std::string command = build(ProjectFile(projectDir));
         for (const ScriptAssembly& a : FindAssemblies(projectDir))
             if (a.EditorOnly) command += " && " + build(GeneratedProject(projectDir, a.Name));
-        // Outer quotes are stripped by cmd /c (used by _popen).
-        return "\"" + command + " 2>&1\"";
+        return command + " 2>&1"; // for Platform::OpenPipe
     }
 
         std::vector<PackageReference> ListPackages(const fs::path& projectDir)
@@ -445,11 +445,6 @@ namespace Dimension::CSharpProject
 
         int RunCommand(const std::string& command, std::string& output)
         {
-            // Outer quotes are stripped by cmd /c (used by _popen).
-            FILE* pipe = _popen(("\"" + command + " 2>&1\"").c_str(), "r");
-            if (!pipe) return -1;
-            char buffer[512];
-            while (std::fgets(buffer, sizeof(buffer), pipe)) output += buffer;
-            return _pclose(pipe);
+            return Platform::RunCommand(command, &output);
         }
 }

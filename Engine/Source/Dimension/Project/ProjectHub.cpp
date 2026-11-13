@@ -3,6 +3,7 @@
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Scene/SceneSerializer.h"
 #include "Dimension/Scene/SceneTemplates.h"
+#include "Dimension/Platform/Platform.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -18,9 +19,7 @@ namespace Dimension::ProjectHub
         fs::path File()
         {
             if (!s_File.empty()) return s_File;
-            const char* appData = std::getenv("APPDATA");
-            fs::path base = appData ? fs::path(appData) : fs::temp_directory_path();
-            return base / "Dimension" / "RecentProjects.json";
+            return Platform::UserSettingsDirectory() / "Dimension" / "RecentProjects.json";
         }
 
         nlohmann::json Read()

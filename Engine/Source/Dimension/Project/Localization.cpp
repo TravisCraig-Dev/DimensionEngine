@@ -4,6 +4,7 @@
 #include "Dimension/Core/PlayerPrefs.h"
 #include "Dimension/Project/Project.h"
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -306,6 +307,17 @@ namespace Dimension
                 for (const wchar_t* p = name; *p; ++p) out += (char)*p; // locale names are ASCII
                 return out;
             }
+#else
+            // POSIX locales ("fr_FR.UTF-8", "de_DE@euro") as BCP 47 tags ("fr-FR"); C / POSIX mean none chosen.
+            for (const char* var : { "LC_ALL", "LC_MESSAGES", "LANG" })
+                if (const char* v = std::getenv(var); v && *v)
+                {
+                    std::string s(v);
+                    s = s.substr(0, s.find_first_of(".@"));
+                    if (s == "C" || s == "POSIX" || s.empty()) break;
+                    std::replace(s.begin(), s.end(), '_', '-');
+                    return s;
+                }
 #endif
             return "en-US";
         }

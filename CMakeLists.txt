@@ -9,6 +9,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Linux: the programs find libDimensionEngine.so and the game module next to themselves (packaged builds too).
+if(NOT WIN32)
+    set(CMAKE_BUILD_RPATH "$ORIGIN")
+    set(CMAKE_INSTALL_RPATH "$ORIGIN")
+    # The static third-party libraries end up inside DimensionEngine.so.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 if(MSVC)
     add_compile_options(/MP /utf-8 /Zc:preprocessor)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)

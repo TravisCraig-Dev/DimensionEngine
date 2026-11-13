@@ -214,7 +214,8 @@ namespace Dimension::Profiler
                 r.FrameMs = f.value("ms", 0.0f);
                 r.Sections = sections(f.value("sections", json::array()));
                 r.Gpu = sections(f.value("gpu", json::array()));
-                for (auto& [name, value] : f.value("counters", json::object()).items()) r.Counters.push_back({ name, value.get<float>() });
+                json counters = f.value("counters", json::object()); // (items() of a temporary would dangle)
+                for (auto& [name, value] : counters.items()) r.Counters.push_back({ name, value.get<float>() });
                 for (const json& s : f.value("spans", json::array()))
                     if (s.is_array() && s.size() == 4) r.Spans.push_back({ Intern(s[0].get<std::string>()), s[1].get<int>(), s[2].get<float>(), s[3].get<float>() });
                 for (const json& w : f.value("workers", json::array()))

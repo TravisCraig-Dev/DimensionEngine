@@ -177,6 +177,8 @@ namespace Dimension
 
     void Window::SetIcon(const std::vector<IconImage>& images)
     {
+        // Wayland windows take their icon from the desktop file (the app id), not from the program.
+        if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) return;
         std::vector<GLFWimage> glfwImages;
         for (auto& i : images) glfwImages.push_back({ i.Width, i.Height, const_cast<unsigned char*>(i.Rgba) });
         glfwSetWindowIcon(m_Window, (int)glfwImages.size(), glfwImages.empty() ? nullptr : glfwImages.data());

@@ -30,10 +30,9 @@ target_link_libraries(DimensionEngine
     PUBLIC volk_headers vma glm::glm nlohmann_json::nlohmann_json imgui_headers
     PRIVATE volk glfw stb cgltf ufbx box2d Jolt miniaudio vhacd opusfile msdfgen)
 target_compile_definitions(DimensionEngine
-    PUBLIC GLFW_INCLUDE_NONE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS GLM_ENABLE_EXPERIMENTAL $<$<CONFIG:Debug>:DIM_DEBUG>
-    PRIVATE "IMGUI_API=__declspec(dllexport)"
-    INTERFACE "IMGUI_API=__declspec(dllimport)")
+    PUBLIC GLFW_INCLUDE_NONE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS GLM_ENABLE_EXPERIMENTAL $<$<CONFIG:Debug>:DIM_DEBUG>)
 if(WIN32)
+    target_compile_definitions(DimensionEngine PRIVATE "IMGUI_API=__declspec(dllexport)" INTERFACE "IMGUI_API=__declspec(dllimport)")
     target_link_libraries(DimensionEngine PRIVATE runtimeobject) # Windows.Gaming.Input (gamepad haptics)
 endif()
 if(MSVC)
@@ -44,18 +43,32 @@ dim_compile_shaders(DimensionEngine ${DIM_SHADERS})
 # ---- C# scripting (.NET hosting). Optional: enabled when the .NET SDK with its native host pack is installed.
 find_program(DIM_DOTNET_EXE dotnet)
 if(DIM_DOTNET_EXE)
-    get_filename_component(_dotnet_root "${DIM_DOTNET_EXE}" DIRECTORY)
-    file(GLOB _hostdirs LIST_DIRECTORIES true "${_dotnet_root}/packs/Microsoft.NETCore.App.Host.win-x64/*/runtimes/win-x64/native")
+    file(REAL_PATH "${DIM_DOTNET_EXE}" _dotnet_exe) # (Linux: /usr/bin/dotnet links into the installation)
+    get_filename_component(_dotnet_root "${_dotnet_exe}" DIRECTORY)
+    if(WIN32)
+        file(GLOB _hostdirs LIST_DIRECTORIES true "${_dotnet_root}/packs/Microsoft.NETCore.App.Host.win-x64/*/runtimes/win-x64/native")
+    else()
+        # linux-x64 from Microsoft's builds, <distro>-x64 (ubuntu.24.04-x64) from the distribution's.
+        file(GLOB _hostdirs LIST_DIRECTORIES true "${_dotnet_root}/packs/Microsoft.NETCore.App.Host.*-x64/*/runtimes/*-x64/native")
+    endif()
     list(SORT _hostdirs COMPARE NATURAL)
     list(POP_BACK _hostdirs DIM_NETHOST_DIR)
 endif()
 if(DIM_NETHOST_DIR AND EXISTS "${DIM_NETHOST_DIR}/nethost.h")
     message(STATUS "C# scripting enabled (nethost: ${DIM_NETHOST_DIR})")
+    if(WIN32)
+        set(DIM_NETHOST_LINK "${DIM_NETHOST_DIR}/nethost.lib")
+        set(DIM_NETHOST_RUNTIME "${DIM_NETHOST_DIR}/nethost.dll")
+    else()
+        set(DIM_NETHOST_LINK "${DIM_NETHOST_DIR}/libnethost.so")
+        set(DIM_NETHOST_RUNTIME "${DIM_NETHOST_DIR}/libnethost.so")
+    endif()
+    get_filename_component(DIM_NETHOST_FILE "${DIM_NETHOST_RUNTIME}" NAME)
     target_include_directories(DimensionEngine SYSTEM PRIVATE "${DIM_NETHOST_DIR}")
-    target_link_libraries(DimensionEngine PRIVATE "${DIM_NETHOST_DIR}/nethost.lib")
+    target_link_libraries(DimensionEngine PRIVATE "${DIM_NETHOST_LINK}")
     target_compile_definitions(DimensionEngine PUBLIC DIM_DOTNET=1)
     add_custom_command(TARGET DimensionEngine POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DIM_NETHOST_DIR}/nethost.dll" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/nethost.dll")
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DIM_NETHOST_RUNTIME}" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${DIM_NETHOST_FILE}")
     # Dimension.Core.dll (managed API). dotnet build is incremental, so running it every build is cheap.
     add_custom_target(DimensionManaged ALL
         COMMAND "${DIM_DOTNET_EXE}" build "${CMAKE_SOURCE_DIR}/Engine/Managed/Dimension.Core/Dimension.Core.csproj"
@@ -69,3 +82,6 @@ else()
     message(STATUS "C# scripting disabled (.NET SDK native host pack not found)")
 endif()
 dim_embed_file(DimensionEngine ${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf kDefaultFontData)
+if(NOT WIN32)
+    set_target_properties(DimensionEngine PROPERTIES PREFIX "") # DimensionEngine.so, as the editor packages it
+endif()

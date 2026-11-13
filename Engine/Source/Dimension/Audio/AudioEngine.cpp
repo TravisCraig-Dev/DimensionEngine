@@ -34,6 +34,24 @@ namespace Dimension
 {
     namespace
     {
+        // miniaudio opens files by UTF-16 name on Windows (any path) and by the native (UTF-8) name elsewhere.
+        ma_result DecoderInitFile(const fs::path& file, const ma_decoder_config* cfg, ma_decoder* decoder)
+        {
+#ifdef _WIN32
+            return ma_decoder_init_file_w(file.c_str(), cfg, decoder);
+#else
+            return ma_decoder_init_file(file.c_str(), cfg, decoder);
+#endif
+        }
+        ma_result SoundInitFromFile(ma_engine* engine, const fs::path& file, ma_uint32 flags, ma_sound_group* group, ma_sound* sound)
+        {
+#ifdef _WIN32
+            return ma_sound_init_from_file_w(engine, file.c_str(), flags, group, nullptr, sound);
+#else
+            return ma_sound_init_from_file(engine, file.c_str(), flags, group, nullptr, sound);
+#endif
+        }
+
         ma_engine* s_Engine = nullptr;
         ma_resource_manager* s_ResourceManager = nullptr;
         ma_decoding_backend_vtable* s_CustomBackends[] = { ma_decoding_backend_libopus };
@@ -145,7 +163,7 @@ namespace Dimension
             cfg.ppCustomBackendVTables = s_CustomBackends;
             cfg.customBackendCount = 1;
             ma_decoder decoder;
-            if (ma_decoder_init_file_w(file.wstring().c_str(), &cfg, &decoder) != MA_SUCCESS) return false;
+            if (DecoderInitFile(file, &cfg, &decoder) != MA_SUCCESS) return false;
             ma_format format;
             ma_uint32 sampleRate = 0;
             ma_decoder_get_data_format(&decoder, &format, &channels, &sampleRate, nullptr, 0);
@@ -365,7 +383,7 @@ namespace Dimension
         cfg.ppCustomBackendVTables = s_CustomBackends;
         cfg.customBackendCount = 1;
         ma_decoder decoder;
-        if (ma_decoder_init_file_w(file.wstring().c_str(), &cfg, &decoder) != MA_SUCCESS) return std::nullopt;
+        if (DecoderInitFile(file, &cfg, &decoder) != MA_SUCCESS) return std::nullopt;
         AudioClipInfo info;
         ma_format format;
         ma_decoder_get_data_format(&decoder, &format, &info.Channels, &info.SampleRate, nullptr, 0);
@@ -760,7 +778,7 @@ namespace Dimension
         cfg.ppCustomBackendVTables = s_CustomBackends;
         cfg.customBackendCount = 1;
         ma_decoder decoder;
-        if (ma_decoder_init_file_w(file.wstring().c_str(), &cfg, &decoder) != MA_SUCCESS) return std::nullopt;
+        if (DecoderInitFile(file, &cfg, &decoder) != MA_SUCCESS) return std::nullopt;
         AudioWaveform w;
         w.Channels = info->Channels;
         w.Buckets = buckets;
@@ -796,7 +814,7 @@ namespace Dimension
         PreviewStop();
         if (!s_Engine) return false;
         auto* sound = new ma_sound();
-        if (ma_sound_init_from_file_w(s_Engine, file.wstring().c_str(), MA_SOUND_FLAG_STREAM, nullptr, nullptr, sound) != MA_SUCCESS)
+        if (SoundInitFromFile(s_Engine, file, MA_SOUND_FLAG_STREAM, nullptr, sound) != MA_SUCCESS)
         {
             delete sound;
             return false;
@@ -915,7 +933,7 @@ namespace Dimension
             auto* voice = new SourceVoice();
             auto* group = static_cast<ma_sound_group*>(AudioMixer::GetGroupNode(src.Output.empty() ? 0 : AudioMixer::FindGroup(src.Output)));
             ma_uint32 flags = stream ? MA_SOUND_FLAG_STREAM : MA_SOUND_FLAG_DECODE;
-            if (ma_sound_init_from_file_w(s_Engine, path.c_str(), flags, group, nullptr, &voice->Sound) != MA_SUCCESS)
+            if (SoundInitFromFile(s_Engine, path, flags, group, &voice->Sound) != MA_SUCCESS)
             {
                 Log::Error("Failed to load audio clip '{}'", path.string());
                 delete voice;

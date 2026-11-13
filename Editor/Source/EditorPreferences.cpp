@@ -1,4 +1,5 @@
 #include "EditorPreferences.h"
+#include <Dimension/Platform/Platform.h>
 #include <Dimension/Core/Log.h>
 #include <nlohmann/json.hpp>
 #include <cstdlib>
@@ -16,9 +17,7 @@ namespace Editor
 
     fs::path EditorPreferences::FilePath()
     {
-        const char* appData = std::getenv("APPDATA");
-        fs::path base = appData ? fs::path(appData) : fs::temp_directory_path();
-        return base / "Dimension" / "EditorPreferences.json";
+        return Dimension::Platform::UserSettingsDirectory() / "Dimension" / "EditorPreferences.json";
     }
 
     void EditorPreferences::Load()

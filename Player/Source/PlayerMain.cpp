@@ -32,6 +32,7 @@
 #include <cstring>
 #include <fstream>
 #include <vector>
+#include <Dimension/Platform/Platform.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -196,16 +197,7 @@ namespace
         CameraStack m_Cameras;
     };
 
-    fs::path ExecutableDirectory()
-    {
-#ifdef _WIN32
-        wchar_t buffer[MAX_PATH];
-        GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-        return fs::path(buffer).parent_path();
-#else
-        return fs::current_path();
-#endif
-    }
+    fs::path ExecutableDirectory() { return Platform::ExecutableDirectory(); }
 }
 
 int main(int argc, char** argv)
@@ -288,7 +280,7 @@ int main(int argc, char** argv)
     if (qualityOverride >= 0) Quality::SetCurrent(qualityOverride); // (--quality: else the project's default level)
     auto& config = Project::GetConfig();
     // The player's data (PlayerPrefs, save files) beside other programs' in %APPDATA%, under the product's name.
-    if (const char* appData = std::getenv("APPDATA")) PlayerData::SetFolder(fs::path(appData) / PlayerData::FolderName(config.Name));
+    PlayerData::SetFolder(Platform::UserDataDirectory() / PlayerData::FolderName(config.Name));
     ApplicationSpec spec;
     spec.Name = config.Name;
     spec.EnableImGui = false;
@@ -310,7 +302,7 @@ int main(int argc, char** argv)
                 for (auto& s : sizes) icons.push_back({ s.Width, s.Height, s.Rgba.data() });
                 app.GetWindow().SetIcon(icons);
             }
-        GameModule::Load(ExecutableDirectory() / (config.GameModule + ".dll"));
+        GameModule::Load(ExecutableDirectory() / Platform::SharedLibraryName(config.GameModule));
         if (CSharpRuntime::Init(ExecutableDirectory() / "managed"))
         {
             if (waitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);

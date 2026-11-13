@@ -1,4 +1,5 @@
 #include "Dimension/Scripting/ManagedBuild.h"
+#include "Dimension/Platform/Platform.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -180,13 +181,7 @@ namespace Dimension::ManagedBuild
         // A command's output (stderr too); its exit code.
         int Run(const std::string& command, std::string* output)
         {
-            // Outer quotes are stripped by cmd /c (used by _popen).
-            FILE* pipe = _popen(("\"" + command + " 2>&1\"").c_str(), "r");
-            if (!pipe) return -1;
-            char buffer[512];
-            while (std::fgets(buffer, sizeof(buffer), pipe))
-                if (output) *output += buffer;
-            return _pclose(pipe);
+            return Platform::RunCommand(command, output);
         }
 
         std::array<int, 3> Version(const std::string& v)
@@ -199,8 +194,7 @@ namespace Dimension::ManagedBuild
         fs::path NuGetPackages()
         {
             if (const char* custom = std::getenv("NUGET_PACKAGES"); custom && *custom) return custom;
-            const char* home = std::getenv("USERPROFILE");
-            return fs::path(home ? home : "") / ".nuget" / "packages";
+            return Platform::HomeDirectory() / ".nuget" / "packages";
         }
     }
 

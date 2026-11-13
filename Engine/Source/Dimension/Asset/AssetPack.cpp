@@ -2,6 +2,7 @@
 #include "Dimension/Core/Log.h"
 #include "Dimension/Core/PlayerPrefs.h"
 #include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Platform/Platform.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -170,8 +171,7 @@ namespace Dimension
             std::vector<Entry> entries;
             uint64_t hash = 0;
             if (!Read(pak, entries, hash)) return {};
-            const char* local = std::getenv("LOCALAPPDATA");
-            fs::path base = local ? fs::path(local) : fs::temp_directory_path();
+            fs::path base = Platform::UserCacheDirectory();
             char name[17];
             std::snprintf(name, sizeof(name), "%016llx", (unsigned long long)hash);
             fs::path folder = base / PlayerData::FolderName(product) / "AssetCache" / name;

@@ -44,7 +44,15 @@
 #include <new>
 
 #ifdef DIM_DOTNET
+#include "Dimension/Platform/Platform.h"
+#ifdef _WIN32
 #include <windows.h>
+#define DIM_HOST_STR(s) L##s
+#else
+#include <dlfcn.h>
+#include <unistd.h>
+#define DIM_HOST_STR(s) s
+#endif
 #include <chrono>
 #include <thread>
 #include <nethost.h>
@@ -2959,14 +2967,34 @@ namespace Dimension
     namespace
     {
         const char* s_RuntimeSource = "";
+        constexpr size_t kHostPath = 4096;
+
+        // hostfxr's exports (char_t: UTF-16 on Windows, UTF-8 elsewhere, as fs::path's native strings).
+        void* LoadHostLibrary(const char_t* path)
+        {
+#ifdef _WIN32
+            return LoadLibraryW(path);
+#else
+            return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+#endif
+        }
+        void* HostSymbol(void* library, const char* name)
+        {
+            if (!library) return nullptr;
+#ifdef _WIN32
+            return reinterpret_cast<void*>(GetProcAddress((HMODULE)library, name));
+#else
+            return dlsym(library, name);
+#endif
+        }
     }
 
     const char* CSharpRuntime::RuntimeSource() { return s_RuntimeSource; }
 
     fs::path CSharpRuntime::InstalledFramework()
     {
-        char_t hostfxrPath[MAX_PATH];
-        size_t size = MAX_PATH;
+        char_t hostfxrPath[kHostPath];
+        size_t size = kHostPath;
         if (get_hostfxr_path(hostfxrPath, &size, nullptr) != 0) return {};
         fs::path root = fs::path(hostfxrPath).parent_path().parent_path().parent_path().parent_path();
         fs::path frameworks = root / "shared" / "Microsoft.NETCore.App", framework;
@@ -2988,8 +3016,8 @@ namespace Dimension
     bool CSharpRuntime::BundleRuntime(const fs::path& dotnetDir, uintmax_t* bytes)
     {
         // The installed runtime: hostfxr is <root>/host/fxr/<version>/hostfxr.dll.
-        char_t hostfxrPath[MAX_PATH];
-        size_t size = MAX_PATH;
+        char_t hostfxrPath[kHostPath];
+        size_t size = kHostPath;
         if (get_hostfxr_path(hostfxrPath, &size, nullptr) != 0) return false;
         fs::path fxr = fs::path(hostfxrPath).parent_path(), root = fxr.parent_path().parent_path().parent_path();
         // The newest framework of the major version the engine targets (10).
@@ -3038,19 +3066,19 @@ namespace Dimension
         // A runtime shipped with the game first (BundleRuntime), else the machine's.
         fs::path bundled = managedDir.parent_path() / "dotnet";
         bool useBundled = fs::exists(bundled / "host" / "fxr") && fs::exists(bundled / "shared" / "Microsoft.NETCore.App");
-        std::wstring bundledRoot = bundled.wstring();
+        fs::path::string_type bundledRoot = bundled.native();
         get_hostfxr_parameters params{ sizeof(get_hostfxr_parameters), nullptr, bundledRoot.c_str() };
-        char_t hostfxrPath[MAX_PATH];
-        size_t size = MAX_PATH;
+        char_t hostfxrPath[kHostPath];
+        size_t size = kHostPath;
         if (get_hostfxr_path(hostfxrPath, &size, useBundled ? &params : nullptr) != 0)
         {
             Log::Warn("C# scripting disabled: .NET runtime (hostfxr) not found. Install the .NET 10 runtime.");
             return false;
         }
-        HMODULE hostfxr = LoadLibraryW(hostfxrPath);
-        auto init = (hostfxr_initialize_for_runtime_config_fn)GetProcAddress(hostfxr, "hostfxr_initialize_for_runtime_config");
-        auto getDelegate = (hostfxr_get_runtime_delegate_fn)GetProcAddress(hostfxr, "hostfxr_get_runtime_delegate");
-        auto close = (hostfxr_close_fn)GetProcAddress(hostfxr, "hostfxr_close");
+        void* hostfxr = LoadHostLibrary(hostfxrPath);
+        auto init = (hostfxr_initialize_for_runtime_config_fn)HostSymbol(hostfxr, "hostfxr_initialize_for_runtime_config");
+        auto getDelegate = (hostfxr_get_runtime_delegate_fn)HostSymbol(hostfxr, "hostfxr_get_runtime_delegate");
+        auto close = (hostfxr_close_fn)HostSymbol(hostfxr, "hostfxr_close");
         if (!init || !getDelegate || !close)
         {
             Log::Error("C# scripting disabled: incompatible hostfxr");
@@ -3058,9 +3086,8 @@ namespace Dimension
         }
 
         hostfxr_handle context = nullptr;
-        wchar_t exePath[MAX_PATH] = {};
-        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-        hostfxr_initialize_parameters initParams{ sizeof(hostfxr_initialize_parameters), exePath, bundledRoot.c_str() };
+        fs::path::string_type exePath = Platform::ExecutablePath().native();
+        hostfxr_initialize_parameters initParams{ sizeof(hostfxr_initialize_parameters), exePath.c_str(), bundledRoot.c_str() };
         int rc = init(config.c_str(), useBundled ? &initParams : nullptr, &context);
         s_RuntimeSource = useBundled ? "bundled" : "installed";
         if (rc < 0 || !context)
@@ -3079,7 +3106,7 @@ namespace Dimension
         }
 
         int (*initialize)(void*, void*) = nullptr;
-        rc = loadAssembly(assembly.c_str(), L"Dimension.Interop.Host, Dimension.Core", L"Initialize", UNMANAGEDCALLERSONLY_METHOD, nullptr,
+        rc = loadAssembly(assembly.c_str(), DIM_HOST_STR("Dimension.Interop.Host, Dimension.Core"), DIM_HOST_STR("Initialize"), UNMANAGEDCALLERSONLY_METHOD, nullptr,
                           (void**)&initialize);
         if (rc < 0 || !initialize)
         {
@@ -3272,7 +3299,11 @@ namespace Dimension
     bool CSharpRuntime::WaitForDebugger(float seconds)
     {
         if (!s_Available) return false;
-        DWORD pid = GetCurrentProcessId();
+#ifdef _WIN32
+        auto pid = GetCurrentProcessId();
+#else
+        auto pid = getpid();
+#endif
         Log::Info("Waiting up to {:g} s for a C# debugger: attach to process {} (Rider: Run > Attach to Process, .NET; Visual Studio: "
                   "Debug > Attach to Process, Managed (.NET Core))", seconds, (unsigned)pid);
         auto end = std::chrono::steady_clock::now() + std::chrono::duration<float>(std::max(seconds, 0.0f));
@@ -3302,6 +3333,9 @@ namespace Dimension
     bool CSharpRuntime::LaunchDebugger() { return false; }
     bool CSharpRuntime::WaitForDebugger(float) { return false; }
     bool CSharpRuntime::Init(const fs::path&) { return false; }
+    fs::path CSharpRuntime::InstalledFramework() { return {}; }
+    const char* CSharpRuntime::RuntimeSource() { return ""; }
+    bool CSharpRuntime::BundleRuntime(const fs::path&, uintmax_t*) { return false; }
     bool CSharpRuntime::IsAvailable() { return false; }
     bool CSharpRuntime::LoadScripts(const fs::path&, bool) { return false; }
     void CSharpRuntime::UnloadScripts() {}

@@ -112,12 +112,17 @@ namespace Dimension::GamepadHaptics
         catch (...) {}
         s.Started = false;
     }
+
+    bool SetDeviceRumble(const std::string&, int, float, float) { return false; }
+    bool DeviceHasRumble(const std::string&, int) { return false; }
 }
-#else
+#elif !defined(__linux__) // (GamepadHapticsLinux.cpp)
 namespace Dimension::GamepadHaptics
 {
     bool Set(int, float, float, float, float) { return false; }
     int Count() { return 0; }
+    bool SetDeviceRumble(const std::string&, int, float, float) { return false; }
+    bool DeviceHasRumble(const std::string&, int) { return false; }
     void Shutdown() {}
 }
 #endif

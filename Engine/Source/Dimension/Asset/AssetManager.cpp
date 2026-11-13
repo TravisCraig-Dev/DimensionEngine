@@ -92,7 +92,7 @@ namespace Dimension
             return abs.lexically_relative(base);
         }
 
-        fs::path MetaPath(const fs::path& absolute) { return fs::path(absolute.native() + L".meta"); }
+        fs::path MetaPath(const fs::path& absolute) { return fs::path(absolute) += ".meta"; }
 
         json DefaultSettings(AssetType type)
         {

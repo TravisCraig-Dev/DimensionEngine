@@ -156,7 +156,8 @@ namespace Dimension
                     s_Config.ImportRules.push_back({ r.value("folder", std::string()), (AssetType)r.value("type", 0),
                                                      r.value("settings", nlohmann::json::object()) });
                 s_Config.DefaultPresets.clear();
-                for (auto& [component, preset] : j.value("defaultPresets", nlohmann::json::object()).items())
+                nlohmann::json presets = j.value("defaultPresets", nlohmann::json::object()); // (items() of a temporary would dangle)
+                for (auto& [component, preset] : presets.items())
                     if (preset.is_number_unsigned()) s_Config.DefaultPresets[component] = AssetHandle(preset.get<uint64_t>());
                 if (j.contains("layerCollisionMatrix") && j["layerCollisionMatrix"].is_array())
                     for (size_t i = 0; i < j["layerCollisionMatrix"].size() && i < ProjectConfig::kMaxLayers; ++i)

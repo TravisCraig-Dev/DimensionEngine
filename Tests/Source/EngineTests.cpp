@@ -59,6 +59,7 @@
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Renderer/ColrV1.h>
+#include <Dimension/Platform/Platform.h>
 #include <Dimension/Audio/Microphone.h>
 #include <Dimension/Audio/VoiceChat.h>
 #include <Dimension/Physics/Water.h>
@@ -76,25 +77,22 @@
 #include <Dimension/Physics/Fracture.h>
 #include <Dimension/Physics/Rope.h>
 #include <set>
+#include <Dimension/Video/VideoDecoder.h>
+#include <Dimension/Video/VideoPlayer.h>
+#ifdef _WIN32
 #include <windows.h>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
-#include <Dimension/Video/VideoDecoder.h>
-#include <Dimension/Video/VideoPlayer.h>
 #undef small // rpcndr.h (through the Media Foundation headers) defines it
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfreadwrite.lib")
 #pragma comment(lib, "mfuuid.lib")
+#endif
 
 namespace
 {
-    std::filesystem::path ExecutableDir()
-    {
-        wchar_t buffer[MAX_PATH];
-        GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-        return std::filesystem::path(buffer).parent_path();
-    }
+    std::filesystem::path ExecutableDir() { return Dimension::Platform::ExecutableDirectory(); }
 }
 #include <cstdlib>
 #include <cstdio>
@@ -5078,6 +5076,7 @@ namespace
     // frames and green after, the bottom half blue throughout, and a 440 Hz tone.
     bool WriteTestVideo(const std::filesystem::path& file, uint32_t w, uint32_t h, int frames, int fps)
     {
+#ifdef _WIN32
         if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET))) return false;
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         IMFSinkWriter* writer = nullptr;
@@ -5177,6 +5176,10 @@ namespace
         ok = ok && SUCCEEDED(writer->Finalize());
         writer->Release();
         return ok;
+#else
+        (void)file, (void)w, (void)h, (void)frames, (void)fps;
+        return false; // (no encoder here: the video tests skip)
+#endif
     }
 
     void TestVideoDecoder()
@@ -7864,7 +7867,8 @@ namespace
         };
         std::string targets = read(scripts / "Directory.Build.targets");
         // GameScripts: all three folders out; references the auto-referenced build assembly only.
-        CHECK(targets.find("Remove=\"Core\\**\"") != std::string::npos && targets.find("Remove=\"Tests\\**\"") != std::string::npos &&
+        auto removes = [&](const char* folder) { return "Remove=\"" + (fs::path(folder) / "**").string() + "\""; }; // (native separators)
+        CHECK(targets.find(removes("Core")) != std::string::npos && targets.find(removes("Tests")) != std::string::npos &&
               targets.find("Game.Core.csproj") != std::string::npos && targets.find("Game.AI.csproj") == std::string::npos &&
               targets.find("Game.Tests.csproj") == std::string::npos);
         // Game.Core leaves its AI subfolder to Game.AI; every assembly gets the scripts' packages.
@@ -7930,8 +7934,8 @@ namespace
         CHECK(!closure.count("System.Private.Xml") && !closure.count("System.Net.Http") && closure.size() < 60);
         // A .NET Standard library references the netstandard facade, which forwards to the whole framework: only the
         // forwards it uses count (Crc32.NET from the NuGet cache, when there).
-        if (const char* home = std::getenv("USERPROFILE"))
-            if (fs::path crc = fs::path(home) / ".nuget/packages/crc32.net/1.2.0/lib/netstandard2.0/Crc32.NET.dll"; fs::exists(crc))
+        if (fs::path home = Platform::HomeDirectory(); !home.empty())
+            if (fs::path crc = home / ".nuget/packages/crc32.net/1.2.0/lib/netstandard2.0/Crc32.NET.dll"; fs::exists(crc))
             {
                 std::set<std::string> small = ManagedBuild::FrameworkClosure({ crc }, framework);
                 CHECK(small.count("netstandard") && small.count("System.Private.CoreLib") && !small.count("System.Private.Xml") &&
@@ -16049,6 +16053,7 @@ namespace
         CHECK(AudioMixer::GetLevel(0).Peak >= 0.0f && AudioMixer::GetLevel(99).Rms == 0.0f);
     }
 
+#ifdef _WIN32
     // Icon images in an executable's GLFW_ICON group: (size, first bytes of each image).
     std::vector<std::pair<int, std::vector<uint8_t>>> ReadExeIcons(const fs::path& exe)
     {
@@ -16074,6 +16079,7 @@ namespace
         FreeLibrary(module);
         return icons;
     }
+#endif
 
     void TestAppIcon()
     {
@@ -16091,10 +16097,9 @@ namespace
         auto ico = AppIcon::BuildIco(src);
         CHECK(ico.size() > 6 && ico[2] == 1 && ico[4] == (uint8_t)std::size(AppIcon::kSizes));
 
+#ifdef _WIN32
         // The engine's executables carry the default icon; Build writes the project icon into the game's copy.
-        wchar_t self[MAX_PATH];
-        GetModuleFileNameW(nullptr, self, MAX_PATH);
-        fs::path exeDir = fs::path(self).parent_path();
+        fs::path exeDir = Platform::ExecutableDirectory();
         auto engineIcons = ReadExeIcons(exeDir / "DimensionGame.exe");
         CHECK(engineIcons.size() == std::size(AppIcon::kSizes));
         fs::path copy = fs::temp_directory_path() / "dimension_icon_test.exe";
@@ -16109,6 +16114,7 @@ namespace
         CHECK(allPng && written.back().first == 256 && written.front().first == 16);
         CHECK(written.size() == engineIcons.size() && written[0].second != engineIcons[0].second);
         fs::remove(copy, ec);
+#endif // (Linux executables have no icon resources: the window gets the icon at run time)
     }
 
     void TestMixerSnapshots()

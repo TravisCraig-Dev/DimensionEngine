@@ -137,15 +137,4 @@ namespace Dimension
         return r == IDYES ? 0 : r == IDNO ? 1 : 2;
     }
 }
-#else
-namespace Dimension
-{
-    std::optional<fs::path> FileDialogs::OpenFile(const Filter&, const fs::path&) { return std::nullopt; }
-    std::optional<fs::path> FileDialogs::SaveFile(const Filter&, const std::wstring&, const fs::path&) { return std::nullopt; }
-    std::optional<fs::path> FileDialogs::PickFolder(const fs::path&) { return std::nullopt; }
-    void FileDialogs::RevealInExplorer(const fs::path&) {}
-    void FileDialogs::OpenWithDefaultApp(const fs::path&) {}
-    bool FileDialogs::Confirm(const std::string&, const std::string&) { return true; }
-    int FileDialogs::YesNoCancel(const std::string&, const std::string&) { return 1; }
-}
 #endif

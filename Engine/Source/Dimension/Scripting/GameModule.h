@@ -2,7 +2,11 @@
 #include "Dimension/Core/Base.h"
 
 // Game modules export this function; it registers scripts, systems and components.
+#ifdef _WIN32
 #define DIM_GAME_MODULE_ENTRY extern "C" __declspec(dllexport) void DimensionGameRegister()
+#else
+#define DIM_GAME_MODULE_ENTRY extern "C" __attribute__((visibility("default"))) void DimensionGameRegister()
+#endif
 
 namespace Dimension
 {

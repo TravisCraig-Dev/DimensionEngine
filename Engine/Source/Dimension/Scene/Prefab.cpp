@@ -59,7 +59,8 @@ namespace Dimension::Prefabs
                 json& comps = rec["components"];
                 for (auto& name : o.value("removed", json::array()))
                     if (name.is_string()) comps.erase(name.get<std::string>());
-                for (auto& [name, fields] : o.value("components", json::object()).items())
+                json components = o.value("components", json::object()); // (items() of a temporary would dangle)
+                for (auto& [name, fields] : components.items())
                 {
                     if (!comps.contains(name) || !comps[name].is_object()) comps[name] = json::object();
                     for (auto& [field, value] : fields.items()) comps[name][field] = value;

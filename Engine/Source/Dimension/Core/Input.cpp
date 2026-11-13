@@ -129,8 +129,32 @@ namespace Dimension
             return XInputSlot(pad) >= 0 ? (int)GamepadHapticBits::Rumble : 0;
         }
 #else
-        void SendRumble(int, const Motors&) {}
-        int ProbeHaptics(int) { return 0; }
+        // Pad p's GUID and its rank among the connected pads with the same one (-1: none).
+        int SameGuidOrdinal(int pad, std::string& guid)
+        {
+            const char* g = glfwGetJoystickGUID(GLFW_JOYSTICK_1 + pad);
+            if (!g) return -1;
+            guid = g;
+            int ordinal = 0;
+            for (int j = 0; j < pad; ++j)
+                if (const char* other = glfwGetJoystickGUID(GLFW_JOYSTICK_1 + j); other && guid == other) ++ordinal;
+            return ordinal;
+        }
+
+        // The body motors through the kernel's force feedback (no trigger motors there).
+        void SendRumble(int pad, const Motors& m)
+        {
+            std::string guid;
+            int ordinal = SameGuidOrdinal(pad, guid);
+            if (ordinal >= 0) GamepadHaptics::SetDeviceRumble(guid, ordinal, m[0], m[1]);
+        }
+
+        int ProbeHaptics(int pad)
+        {
+            std::string guid;
+            int ordinal = SameGuidOrdinal(pad, guid);
+            return ordinal >= 0 && GamepadHaptics::DeviceHasRumble(guid, ordinal) ? (int)GamepadHapticBits::Rumble : 0;
+        }
 #endif
 
         void UpdateRumble()

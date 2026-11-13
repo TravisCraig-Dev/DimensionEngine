@@ -4,6 +4,7 @@
 #include "EditorLayer.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Core/Profiler.h>
+#include <Dimension/Platform/Platform.h>
 #include <Dimension/Platform/SplashScreen.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/GameModule.h>
@@ -102,7 +103,9 @@ int main(int argc, char** argv)
         if (project.empty()) project = fs::absolute(projectDir).lexically_normal().parent_path().filename().string();
         SplashScreen::Show("Dimension Editor", project);
         SplashScreen::SetStatus("Starting the renderer...");
-        spec.Window.Hidden = true;
+        // Only where there is a splash screen (Windows). Elsewhere the window shows at once: Wayland never lets a
+        // hidden window's frames be presented (vkQueuePresentKHR waits for a frame callback that does not come).
+        spec.Window.Hidden = Platform::IsWindows();
     }
     {
         Application app(spec);

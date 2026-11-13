@@ -47,7 +47,13 @@
 #include <Dimension/UI/UI.h>
 #include <Dimension/Asset/ImportCache.h>
 #include <thread>
+#ifdef _WIN32
 #include <process.h>
+#define DIM_GETPID _getpid
+#else
+#include <unistd.h>
+#define DIM_GETPID getpid
+#endif
 #include <cstdio>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -58,6 +64,7 @@
 #include <functional>
 #include <fstream>
 #include <optional>
+#include <Dimension/Platform/Platform.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -77,16 +84,7 @@ namespace Editor
             direction = glm::normalize(glm::vec3(b) / b.w - from);
         }
 
-        fs::path ExecutableDirectory()
-        {
-#ifdef _WIN32
-            wchar_t buffer[MAX_PATH];
-            GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-            return fs::path(buffer).parent_path();
-#else
-            return fs::current_path();
-#endif
-        }
+        fs::path ExecutableDirectory() { return Dimension::Platform::ExecutableDirectory(); }
 
         enum class Glyph { Play, Pause, Step, Stop, Hand, Move, Rotate, Scale };
 
@@ -2969,7 +2967,7 @@ namespace Editor
             {
                 bool attached = CSharpRuntime::IsDebuggerAttached();
                 ImGui::TextDisabled(attached ? "A debugger is attached" : "No debugger attached");
-                ImGui::TextDisabled("Attach from Rider (Run > Attach to Process) or Visual Studio to process %d", _getpid());
+                ImGui::TextDisabled("Attach from Rider (Run > Attach to Process) or Visual Studio to process %d", (int)DIM_GETPID());
                 if (ImGui::MenuItem("Launch Debugger Prompt...", nullptr, false, !attached)) CSharpRuntime::LaunchDebugger();
                 ImGui::EndMenu();
             }
@@ -5106,8 +5104,8 @@ namespace Editor
 
         std::error_code ec;
         // The shipping runtime has no console window; fall back to the dev player if it is missing.
-        fs::path player = ExecutableDirectory() / "DimensionGame.exe";
-        if (!fs::exists(player)) player = ExecutableDirectory() / "DimensionPlayer.exe";
+        fs::path player = ExecutableDirectory() / Dimension::Platform::ExecutableName("DimensionGame");
+        if (!fs::exists(player)) player = ExecutableDirectory() / Dimension::Platform::ExecutableName("DimensionPlayer");
         if (!fs::exists(player))
         {
             Log::Error("Player runtime not found next to the editor");
@@ -5115,7 +5113,7 @@ namespace Editor
         }
         std::string exeName = config.Name.empty() ? "Game" : config.Name;
         fs::create_directories(folder, ec);
-        fs::path exe = folder / (exeName + ".exe");
+        fs::path exe = folder / Dimension::Platform::ExecutableName(exeName);
         fs::copy_file(player, exe, fs::copy_options::overwrite_existing, ec);
         if (ec)
         {
@@ -5127,13 +5125,14 @@ namespace Editor
             auto image = AppIcon::Load(AssetManager::GetAbsolutePath(config.Icon));
             if (!image || !AppIcon::WriteToExecutable(exe, *image)) Log::Warn("The game keeps the engine icon");
         }
-        for (const char* dll : { "DimensionEngine.dll" })
-            fs::copy_file(ExecutableDirectory() / dll, folder / dll, fs::copy_options::overwrite_existing, ec);
-        fs::path module = ExecutableDirectory() / (config.GameModule + ".dll");
+        std::string engineLibrary = Dimension::Platform::SharedLibraryName("DimensionEngine");
+        fs::copy_file(ExecutableDirectory() / engineLibrary, folder / engineLibrary, fs::copy_options::overwrite_existing, ec);
+        fs::path module = ExecutableDirectory() / Dimension::Platform::SharedLibraryName(config.GameModule);
         if (fs::exists(module)) fs::copy_file(module, folder / module.filename(), fs::copy_options::overwrite_existing, ec);
-        if (fs::exists(ExecutableDirectory() / "nethost.dll"))
+        std::string nethost = Dimension::Platform::IsWindows() ? "nethost.dll" : "libnethost.so";
+        if (fs::exists(ExecutableDirectory() / nethost))
         {
-            fs::copy_file(ExecutableDirectory() / "nethost.dll", folder / "nethost.dll", fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(ExecutableDirectory() / nethost, folder / nethost, fs::copy_options::overwrite_existing, ec);
             fs::copy(ExecutableDirectory() / "managed", folder / "managed", fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
             for (const char* editorOnly : { "Dimension.Analyzers", "Dimension.Analyzers.CodeFixes" }) // (the IDE's)
                 for (const char* ext : { ".dll", ".pdb", ".deps.json" })
@@ -5313,7 +5312,7 @@ namespace Editor
 
     void EditorLayer::LoadGameModule()
     {
-        fs::path dll = ExecutableDirectory() / (Project::GetConfig().GameModule + ".dll");
+        fs::path dll = ExecutableDirectory() / Dimension::Platform::SharedLibraryName(Project::GetConfig().GameModule);
         if (!GameModule::Load(dll)) Log::Warn("Running without a game module: scripts will be unavailable");
     }
 
@@ -5351,12 +5350,14 @@ namespace Editor
 #if defined(DIM_SOURCE_DIR) && defined(DIM_BUILD_DIR) && defined(DIM_CMAKE_COMMAND)
         m_BuildState = std::make_shared<std::atomic<int>>(1);
         std::string target = Project::GetConfig().GameModule;
-        // Outer quotes: cmd /c strips them, leaving the inner quoted paths intact.
-        std::string command = std::string("\"\"") + DIM_SOURCE_DIR + "/scripts/dev.bat\" \"" + DIM_CMAKE_COMMAND + "\" --build \"" +
-                              DIM_BUILD_DIR + "\" --target " + target + " 2>&1\"";
+        namespace platform = Dimension::Platform;
+        // Windows: through dev.bat, which sets up the compiler's environment.
+        std::string command = (platform::IsWindows() ? platform::ShellQuote(std::string(DIM_SOURCE_DIR) + "/scripts/dev.bat") + " " : std::string()) +
+                              platform::ShellQuote(DIM_CMAKE_COMMAND) + " --build " + platform::ShellQuote(DIM_BUILD_DIR) + " --target " + target +
+                              " 2>&1";
         Log::Info("Compiling game module '{}'...", target);
         std::thread([state = m_BuildState, command] {
-            FILE* pipe = _popen(command.c_str(), "r");
+            FILE* pipe = Dimension::Platform::OpenPipe(command);
             if (!pipe)
             {
                 Log::Error("Could not start the build");
@@ -5374,7 +5375,7 @@ namespace Editor
                 else if (text.find(": warning") != std::string::npos) Log::Warn("{}", text);
                 else Log::Trace("{}", text);
             }
-            int code = _pclose(pipe);
+            int code = Dimension::Platform::ClosePipe(pipe);
             state->store(code == 0 ? 2 : 3);
         }).detach();
 #else
@@ -5859,7 +5860,7 @@ namespace Editor
         std::string command = CSharpProject::BuildCommand(project);
         Log::Info("Compiling C# scripts...");
         std::thread([state = m_CSharpBuild, command] {
-            FILE* pipe = _popen(command.c_str(), "r");
+            FILE* pipe = Dimension::Platform::OpenPipe(command);
             if (!pipe)
             {
                 state->store(3);
@@ -5877,7 +5878,7 @@ namespace Editor
                 else if (text.find(": warning") != std::string::npos) Log::Warn("{}", text);
                 else Log::Trace("{}", text);
             }
-            state->store(_pclose(pipe) == 0 ? 2 : 3);
+            state->store(Dimension::Platform::ClosePipe(pipe) == 0 ? 2 : 3);
         }).detach();
     }
 

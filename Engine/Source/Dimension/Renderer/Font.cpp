@@ -1,3 +1,4 @@
+#include "Dimension/Platform/Platform.h"
 #include <array>
 #include <cstdlib>
 #include <chrono>
@@ -678,8 +679,7 @@ namespace Dimension
             mix(data.data(), data.size());
             uint32_t params[] = { kFontCacheVersion, (uint32_t)Font::kBakeSize, 6u, 2048u, 1024u, Font::kFirstChar, Font::kCharCount };
             mix(params, sizeof(params));
-            const char* local = std::getenv("LOCALAPPDATA");
-            fs::path base = local ? fs::path(local) / "Dimension" : fs::temp_directory_path() / "Dimension";
+            fs::path base = Platform::UserCacheDirectory() / "Dimension";
             char name[32];
             std::snprintf(name, sizeof(name), "%016llx.fontcache", (unsigned long long)h);
             return base / "FontCache" / name;

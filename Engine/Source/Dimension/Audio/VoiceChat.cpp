@@ -2,6 +2,13 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 #include "Dimension/Audio/VoiceChat.h"
 #include "Dimension/Audio/AudioEngine.h"
@@ -40,7 +47,8 @@ namespace Dimension
 #else
         using Socket = int;
         constexpr Socket kNoSocket = -1;
-        void CloseSocket(Socket) {}
+        bool StartSockets() { return true; }
+        void CloseSocket(Socket s) { close(s); }
 #endif
         constexpr uint8_t kMagic0 = 'D', kMagic1 = 'V'; // packet: magic, sequence (16 bits), Opus frame
 
@@ -231,7 +239,7 @@ namespace Dimension
                 for (;;)
                 {
                     unsigned char in[4000];
-                    int got = recvfrom(Sock, (char*)in, (int)sizeof(in), 0, nullptr, nullptr);
+                    int got = (int)recvfrom(Sock, (char*)in, sizeof(in), 0, nullptr, nullptr);
                     if (got <= 4) break;
                     if (in[0] != kMagic0 || in[1] != kMagic1) continue;
                     busy = true;
@@ -277,7 +285,6 @@ namespace Dimension
         m_State = std::make_unique<State>();
         State& s = *m_State;
         s.Opts = options;
-#ifdef _WIN32
         if (!StartSockets()) return false;
         addrinfo hints{}, *found = nullptr;
         hints.ai_family = AF_INET;
@@ -301,6 +308,7 @@ namespace Dimension
             s.Close();
             return false;
         }
+#ifdef _WIN32
         u_long nonBlocking = 1;
         ioctlsocket(s.Sock, FIONBIO, &nonBlocking);
         // A peer not listening yet must not make the next receive fail (Windows reports its "port unreachable" there).
@@ -308,7 +316,7 @@ namespace Dimension
         DWORD returned = 0;
         WSAIoctl(s.Sock, _WSAIOW(IOC_VENDOR, 12) /* SIO_UDP_CONNRESET */, &report, sizeof(report), nullptr, 0, &returned, nullptr, nullptr);
 #else
-        return false;
+        fcntl(s.Sock, F_SETFL, fcntl(s.Sock, F_GETFL, 0) | O_NONBLOCK); // (unconnected UDP: no "port unreachable" errors)
 #endif
         int error = 0;
         s.Encoder = opus_encoder_create((opus_int32)kSampleRate, 1, OPUS_APPLICATION_VOIP, &error);

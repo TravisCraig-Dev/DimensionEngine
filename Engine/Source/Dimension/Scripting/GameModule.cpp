@@ -7,6 +7,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 namespace Dimension
@@ -20,11 +22,31 @@ namespace Dimension
         int s_Generation = 0;
 
         fs::path HotDirectory(const fs::path& dll) { return dll.parent_path() / ".hotreload"; }
+
+#ifdef _WIN32
+        void* OpenLibrary(const fs::path& path, std::string& error)
+        {
+            HMODULE module = LoadLibraryW(path.c_str());
+            if (!module) error = "error " + std::to_string(GetLastError());
+            return module;
+        }
+        void* FindSymbol(void* module, const char* name) { return reinterpret_cast<void*>(GetProcAddress((HMODULE)module, name)); }
+        void CloseLibrary(void* module) { FreeLibrary((HMODULE)module); }
+#else
+        // RTLD_LOCAL: each reload's copy keeps its own symbols (the engine's come from the already loaded library).
+        void* OpenLibrary(const fs::path& path, std::string& error)
+        {
+            void* module = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!module) error = dlerror();
+            return module;
+        }
+        void* FindSymbol(void* module, const char* name) { return dlsym(module, name); }
+        void CloseLibrary(void* module) { dlclose(module); }
+#endif
     }
 
     bool GameModule::Load(const fs::path& dllPath)
     {
-#ifdef _WIN32
         if (s_Handle) Unload();
         std::error_code ec;
         if (!fs::exists(dllPath))
@@ -33,12 +55,13 @@ namespace Dimension
             return false;
         }
 
-        // Copy first: the loaded image locks its file, and the linker must be able to overwrite the original.
+        // Copy first: the loaded image locks its file (Windows), and the linker must be able to overwrite the original; a
+        // fresh name also makes dlopen load the new code rather than return the library it already has (Linux).
         fs::path hotDir = HotDirectory(dllPath);
         fs::create_directories(hotDir, ec);
         if (s_Generation == 0)
             for (auto& old : fs::directory_iterator(hotDir, ec)) fs::remove(old.path(), ec); // leftovers from earlier runs
-        fs::path copy = hotDir / (dllPath.stem().string() + "_" + std::to_string(++s_Generation) + ".dll");
+        fs::path copy = hotDir / (dllPath.stem().string() + "_" + std::to_string(++s_Generation) + dllPath.extension().string());
         auto writeTime = fs::last_write_time(dllPath, ec);
         if (!fs::copy_file(dllPath, copy, fs::copy_options::overwrite_existing, ec))
         {
@@ -46,17 +69,18 @@ namespace Dimension
             return false;
         }
 
-        HMODULE module = LoadLibraryW(copy.c_str());
+        std::string error;
+        void* module = OpenLibrary(copy, error);
         if (!module)
         {
-            Log::Error("LoadLibrary failed for '{}' (error {})", copy.string(), GetLastError());
+            Log::Error("Could not load the game module '{}' ({})", copy.string(), error);
             return false;
         }
-        auto entry = (void (*)())GetProcAddress(module, "DimensionGameRegister");
+        auto entry = reinterpret_cast<void (*)()>(FindSymbol(module, "DimensionGameRegister"));
         if (!entry)
         {
             Log::Error("'{}' does not export DimensionGameRegister (use DIM_GAME_MODULE_ENTRY)", dllPath.filename().string());
-            FreeLibrary(module);
+            CloseLibrary(module);
             return false;
         }
         entry();
@@ -68,25 +92,19 @@ namespace Dimension
         Log::Info("Loaded game module '{}' ({} scripts, {} systems)", dllPath.filename().string(), ScriptRegistry::All().size(),
                   SystemRegistry::All().size());
         return true;
-#else
-        Log::Error("Game modules are only supported on Windows in this version");
-        return false;
-#endif
     }
 
     void GameModule::Unload()
     {
-#ifdef _WIN32
         if (!s_Handle) return;
         // Everything registered by the module points into its code; drop it before unmapping.
         ScriptRegistry::ClearModule("native");
         SystemRegistry::Clear();
         ComponentRegistry::RemoveGameComponents();
-        FreeLibrary((HMODULE)s_Handle);
+        CloseLibrary(s_Handle);
         s_Handle = nullptr;
         std::error_code ec;
         fs::remove(s_LoadedCopy, ec);
-#endif
     }
 
     bool GameModule::Reload()
