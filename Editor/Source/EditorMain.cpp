@@ -55,6 +55,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--measure") && i + 1 < argc) options.Measure = argv[++i];
         else if (!std::strcmp(argv[i], "--selection-set") && i + 1 < argc) options.SelectionSet = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--press") && i + 1 < argc) options.Press = argv[++i];
+        else if (!std::strcmp(argv[i], "--input") && i + 1 < argc) options.Input = argv[++i];
         else if (!std::strcmp(argv[i], "--grid") && i + 1 < argc) options.Grid = argv[++i];
         else if (!std::strcmp(argv[i], "--new-inspector")) options.NewInspector = true;
         else if (!std::strcmp(argv[i], "--lock-inspector")) options.LockInspector = true;

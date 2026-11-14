@@ -18,6 +18,8 @@
 #include "../EditorPreferences.h"
 #include <optional>
 #include <Dimension/Platform/FileDialogs.h>
+#include <Dimension/Modeling/ModelExport.h>
+#include "../MeshEditMode.h"
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <algorithm>
@@ -172,6 +174,10 @@ namespace Editor
             if (path.extension() == ".scene" && ImGui::MenuItem("Open Additive", nullptr, false, !m_Ctx.IsPlaying()))
                 m_Ctx.RequestOpenAdditive = path;
             if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
+            if (type == AssetType::Mesh && ImGui::MenuItem("Export as glTF..."))
+                if (auto data = AssetManager::GetMeshData(AssetManager::GetHandle(path)))
+                    if (auto out = FileDialogs::SaveFile({ { L"glTF Binary", L"*.glb" }, { L"glTF", L"*.gltf" } }, L"glb", path.parent_path()))
+                        if (Modeling::ExportGltf(*data, *out)) Log::Info("Exported {}", out->string());
             if (fs::is_directory(path) && ImGui::MenuItem("Build Asset Bundle"))
             {
                 // The folder's files with their .meta (GUIDs) as one pack a running game loads (AssetBundle.LoadFromFile).
@@ -644,6 +650,12 @@ namespace Editor
                         m_Ctx.SelectAsset(h);
                         m_Ctx.RequestOpenVisualEffect = h;
                     }
+                }
+                if (ImGui::MenuItem("New Model"))
+                {
+                    // An editable model (a cube to start from): Tab edits it in the Scene view once on an object.
+                    AssetHandle h = MeshEditMode::CreateModelAsset(MeshEditMode::MakePrimitive(MeshEditMode::Primitive::Cube), m_Current, "New Model");
+                    if (h.IsValid()) m_Ctx.SelectAsset(h);
                 }
                 if (ImGui::MenuItem("New Timeline"))
                 {

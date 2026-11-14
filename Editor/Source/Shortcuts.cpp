@@ -84,6 +84,32 @@ namespace Editor::Shortcuts
                 { "tool.rotate", "Tools", "Rotate Tool", ImGuiKey_E },
                 { "tool.scale", "Tools", "Scale Tool", ImGuiKey_R },
                 { "tool.measure", "Tools", "Measure", ImGuiKey_M },
+                // Edit Mode (modeling in the Scene view): Blender's keys. They apply only while editing a mesh.
+                { "mesh.editMode", "Mesh Edit", "Enter or Leave Edit Mode", ImGuiKey_Tab },
+                { "mesh.vertexMode", "Mesh Edit", "Vertex Select Mode", ImGuiKey_1 },
+                { "mesh.edgeMode", "Mesh Edit", "Edge Select Mode", ImGuiKey_2 },
+                { "mesh.faceMode", "Mesh Edit", "Face Select Mode", ImGuiKey_3 },
+                { "mesh.selectAll", "Mesh Edit", "Select All", ImGuiKey_A },
+                { "mesh.deselectAll", "Mesh Edit", "Select None", ImGuiMod_Alt | ImGuiKey_A },
+                { "mesh.invert", "Mesh Edit", "Invert Selection", ImGuiMod_Ctrl | ImGuiKey_I },
+                { "mesh.selectLinked", "Mesh Edit", "Select Linked", ImGuiMod_Ctrl | ImGuiKey_L },
+                { "mesh.linkedPick", "Mesh Edit", "Select Linked Under Mouse", ImGuiKey_L },
+                { "mesh.selectMore", "Mesh Edit", "Select More", ImGuiMod_Ctrl | ImGuiKey_Equal },
+                { "mesh.selectLess", "Mesh Edit", "Select Less", ImGuiMod_Ctrl | ImGuiKey_Minus },
+                { "mesh.grab", "Mesh Edit", "Move", ImGuiKey_G },
+                { "mesh.rotate", "Mesh Edit", "Rotate", ImGuiKey_R },
+                { "mesh.scale", "Mesh Edit", "Scale", ImGuiKey_S },
+                { "mesh.delete", "Mesh Edit", "Delete Menu", ImGuiKey_X },
+                { "mesh.merge", "Mesh Edit", "Merge Menu", ImGuiKey_M },
+                { "mesh.normals", "Mesh Edit", "Normals Menu", ImGuiMod_Alt | ImGuiKey_N },
+                { "mesh.recalcNormals", "Mesh Edit", "Recalculate Normals Outside", ImGuiMod_Shift | ImGuiKey_N },
+                { "mesh.add", "Mesh Edit", "Add Mesh Menu", ImGuiMod_Shift | ImGuiKey_A },
+                { "mesh.edgeMenu", "Mesh Edit", "Edge Menu", ImGuiMod_Ctrl | ImGuiKey_E },
+                { "mesh.hide", "Mesh Edit", "Hide Selected", ImGuiKey_H },
+                { "mesh.hideUnselected", "Mesh Edit", "Hide Unselected", ImGuiMod_Shift | ImGuiKey_H },
+                { "mesh.reveal", "Mesh Edit", "Reveal Hidden", ImGuiMod_Alt | ImGuiKey_H },
+                { "mesh.proportional", "Mesh Edit", "Toggle Proportional Editing", ImGuiKey_O },
+                { "mesh.xray", "Mesh Edit", "Toggle X-Ray", ImGuiMod_Alt | ImGuiKey_Z },
             };
             for (Shortcut& x : s) x.Key = x.Default;
             return s;
@@ -124,8 +150,18 @@ namespace Editor::Shortcuts
     {
         std::vector<const Shortcut*> out;
         if (s.Key == 0) return out;
+        // Edit Mode's keys replace the object tools' and Scene view's while a mesh is edited, so those never clash.
+        auto contextual = [](const Shortcut& x) {
+            std::string_view c = x.Category;
+            return c == "Tools" || c == "Scene View" || c == "Navigation";
+        };
         for (const Shortcut& other : All())
-            if (&other != &s && other.Key == s.Key) out.push_back(&other);
+        {
+            if (&other == &s || other.Key != s.Key) continue;
+            bool meshA = std::string_view(s.Category) == "Mesh Edit", meshB = std::string_view(other.Category) == "Mesh Edit";
+            if (meshA != meshB && (contextual(meshA ? other : s))) continue;
+            out.push_back(&other);
+        }
         return out;
     }
 

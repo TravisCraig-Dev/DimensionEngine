@@ -311,7 +311,7 @@ namespace Dimension
         for (auto& c : ext) c = (char)std::tolower(c);
         if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".psd" || ext == ".hdr")
             return AssetType::Texture;
-        if (ext == ".gltf" || ext == ".glb" || ext == ".obj" || ext == ".fbx") return AssetType::Mesh;
+        if (ext == ".gltf" || ext == ".glb" || ext == ".obj" || ext == ".fbx" || ext == ".dmodel") return AssetType::Mesh;
         if (ext == ".scene") return AssetType::Scene;
         if (ext == ".prefab") return AssetType::Prefab;
         if (ext == ".mat") return AssetType::Material;
@@ -618,6 +618,19 @@ namespace Dimension
         }
         s->MeshDatas[handle] = data;
         return data;
+    }
+
+    void AssetManager::SetMeshData(AssetHandle handle, MeshData data)
+    {
+        if (!s || !handle.IsValid()) return;
+        auto* meta = GetMetadata(handle);
+        std::vector<std::string> names;
+        for (const auto& m : data.Materials) names.push_back(m.Name);
+        auto it = s->MeshMaterialNames.find(handle);
+        if (meta && (it == s->MeshMaterialNames.end() || it->second != names)) RegisterMeshMaterials(handle, *meta, data);
+        auto shared = std::make_shared<const MeshData>(std::move(data));
+        s->MeshDatas[handle] = shared;
+        s->Meshes[handle] = MakeRef<Mesh>(MeshData(*shared));
     }
 
     AssetHandle AssetManager::RegisterRuntimeMesh(MeshData data, std::vector<AssetHandle> materials)

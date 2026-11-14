@@ -55,6 +55,7 @@
 #define DIM_GETPID getpid
 #endif
 #include <cstdio>
+#include <cstring>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -156,6 +157,7 @@ namespace Editor
         m_VisualEffect = MakeScope<VisualEffectPanel>(m_Ctx);
         m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
         m_Animation = MakeScope<AnimationPanel>(m_Ctx);
+        m_MeshEdit = MakeScope<MeshEditMode>(m_Ctx);
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
         m_TestRunner = MakeScope<TestRunnerPanel>(m_Ctx);
         m_Navigation = MakeScope<NavigationPanel>(m_Ctx);
@@ -674,6 +676,7 @@ namespace Editor
             !ImGui::IsMouseDown(ImGuiMouseButton_Left))
             SavePrefabStage();
 
+        m_MeshEdit->Update(); // leaves Edit Mode when its object goes away; writes the model once a change is done
         ApplyPendingLayout();
         PollGameModule(dt);
         PollCSharp(dt);
@@ -749,7 +752,7 @@ namespace Editor
         }
         m_WasWindowFocused = focused;
 
-        if (m_SceneViewHovered || m_Camera.IsControlling()) m_Camera.Update(dt, m_SceneViewHovered);
+        if (m_SceneViewHovered || m_Camera.IsControlling()) m_Camera.Update(dt, m_SceneViewHovered && !m_MeshEdit->IsModal());
 
         m_TestRunner->Poll();
         if (m_Ctx.RequestPlayTest) // the Test Runner's next play-mode test: a play session of its own on an empty scene
@@ -956,6 +959,14 @@ namespace Editor
 
     void EditorLayer::FocusSelected()
     {
+        if (m_MeshEdit->IsActive())
+        {
+            // Edit Mode frames the selected vertices (or the whole mesh).
+            glm::vec3 center;
+            float radius;
+            if (m_MeshEdit->GetFrame(center, radius)) m_Camera.Focus(center, radius);
+            return;
+        }
         if (!m_Ctx.HasValidSelection()) return;
         Scene& scene = m_Ctx.ActiveScene();
         auto& t = scene.GetRegistry().Get<TransformComponent>(m_Ctx.Selected);
@@ -1241,6 +1252,12 @@ namespace Editor
             options.GridConfig = SceneGridSettings();
             options.Selected = m_Ctx.Selected;
             options.Selection = m_Ctx.Selection;
+            if (m_MeshEdit->IsActive())
+            {
+                // Edit Mode draws the mesh's own wire instead of the selection's outline and bounds.
+                options.Selection.clear();
+                options.Selected = Entity::Null();
+            }
             options.DefaultLight = m_Ctx.InPrefabMode();
             DIM_PROFILE_SCOPE("Scene View");
             options.ShowNavMeshes = m_ShowNavigation;
@@ -2820,6 +2837,7 @@ namespace Editor
                 if (ImGui::GetFrameCount() == frame) Shortcuts::Press(item.substr(0, at));
             }
         }
+        InjectInput();
         HandleShortcuts();
         if (!m_Options.BuildFolder.empty() && !m_BatchBuildDone)
         {
@@ -3163,6 +3181,20 @@ namespace Editor
             if (measuring) ImGui::PopStyleColor();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Measure distances in the Scene view (%s): click two points", Shortcuts::Label("tool.measure").c_str());
+            // Edit Mode on the selected object's mesh.
+            ImGui::SameLine();
+            {
+                bool editing = m_MeshEdit->IsActive();
+                bool canEdit = editing || (!m_Ctx.IsPlaying() && m_Ctx.HasValidSelection() &&
+                                           m_Ctx.ActiveScene().GetRegistry().Has<MeshRendererComponent>(m_Ctx.Selected));
+                ImGui::BeginDisabled(!canEdit);
+                if (editing) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                if (ImGui::Button("Edit Mesh")) m_MeshEdit->Toggle();
+                if (editing) ImGui::PopStyleColor();
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Edit Mode (%s): model the selected object's mesh, its vertices, edges and faces", Shortcuts::Label("mesh.editMode").c_str());
+            }
 
             // Play controls (center)
             float w = ImGui::GetFrameHeight() * 1.25f * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
@@ -3219,6 +3251,7 @@ namespace Editor
         ImVec2 avail = ImGui::GetContentRegionAvail();
         m_SceneViewSize = { (uint32_t)std::max(1.0f, avail.x), (uint32_t)std::max(1.0f, avail.y) };
         ImVec2 origin = ImGui::GetCursorScreenPos();
+        m_SceneViewOrigin = origin;
         ImGui::Image(ImTextureRef((ImTextureID)m_SceneTarget->GetImGuiTexture()), avail);
         m_SceneViewHovered = ImGui::IsItemHovered();
         // Right/middle clicks focus the view too, so keyboard shortcuts work after camera moves.
@@ -3285,24 +3318,27 @@ namespace Editor
             ImGui::EndDragDropTarget();
         }
 
-        bool measuring = UpdateMeasure(origin, avail); // the measuring tool owns the view's clicks
-        bool tilePainting = !measuring && (UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail));
-        bool lineEditing = !measuring && UpdateLinePointEditing(origin, avail);
+        m_MeshEdit->DrawPopups();
+        // Edit Mode (modeling) replaces the object tools: their handles, picking and painting wait until it ends.
+        bool meshEditing = m_MeshEdit->IsActive();
+        bool measuring = !meshEditing && UpdateMeasure(origin, avail); // the measuring tool owns the view's clicks
+        bool tilePainting = !meshEditing && !measuring && (UpdateTilePainting(origin, avail) || UpdateTerrainBrush(origin, avail));
+        bool lineEditing = !meshEditing && !measuring && UpdateLinePointEditing(origin, avail);
         // Posing a skeleton for the Animation window (its joints and a rotation gizmo on the selected one).
-        bool posing = !measuring && !lineEditing && m_ShowAnimation &&
+        bool posing = !meshEditing && !measuring && !lineEditing && m_ShowAnimation &&
                       m_Animation->UpdateSceneView(origin, avail, m_Camera.GetView(), m_Camera.GetProjection(avail.x / std::max(1.0f, avail.y)),
                                                    m_Camera.Is2D(), m_SceneViewHovered);
         lineEditing |= posing;
-        bool vertexSnapping = !measuring && !tilePainting && !lineEditing && m_LinePoint < 0 && UpdateVertexSnap(origin, avail);
-        bool handles = !measuring && !tilePainting && !lineEditing && !vertexSnapping && UpdateScriptHandles(origin, avail);
+        bool vertexSnapping = !meshEditing && !measuring && !tilePainting && !lineEditing && m_LinePoint < 0 && UpdateVertexSnap(origin, avail);
+        bool handles = !meshEditing && !measuring && !tilePainting && !lineEditing && !vertexSnapping && UpdateScriptHandles(origin, avail);
 
         // Transform gizmo
-        bool uiEditing = !measuring && !tilePainting && !lineEditing && !vertexSnapping && !handles && DrawSceneViewUI(origin, avail);
+        bool uiEditing = !meshEditing && !measuring && !tilePainting && !lineEditing && !vertexSnapping && !handles && DrawSceneViewUI(origin, avail);
         bool gizmoHovered = measuring || lineEditing || vertexSnapping || handles || uiEditing;
         // UI elements are moved by their rect handles on the canvas, not the transform gizmo.
         bool uiSelected = m_Ctx.HasValidSelection() && scene.GetRegistry().Has<UIRectComponent>(m_Ctx.Selected) &&
                           (m_SceneUITarget || !scene.GetParent(m_Ctx.Selected).IsNull());
-        if (m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !uiSelected && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
+        if (!meshEditing && m_Ctx.HasValidSelection() && m_GizmoOperation != 0 && !uiSelected && !m_Camera.IsControlling() && !tilePainting && m_LinePoint < 0 && !vertexSnapping &&
             !measuring && m_HandleDrag == 0 && !(m_ShowAnimation && m_Animation->IsPosing()))
         {
             auto& reg = scene.GetRegistry();
@@ -3399,9 +3435,17 @@ namespace Editor
                 gizmoHovered = true;
         }
 
+        // Edit Mode: the mesh's vertices, edges and faces (drawn over the view, picked by the mouse).
+        if (meshEditing)
+        {
+            glm::mat4 view = m_Camera.GetView();
+            glm::mat4 proj = m_Camera.GetProjection(avail.x / std::max(1.0f, avail.y));
+            gizmoHovered |= m_MeshEdit->UpdateSceneView(origin, avail, view, proj, m_SceneViewHovered && !m_Camera.IsControlling(), m_SceneViewFocused, gizmoHovered);
+        }
+
         // Click to select (GPU picking)
         bool alt = ImGui::GetIO().KeyAlt;
-        if (m_SceneViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !gizmoHovered && !alt && !tilePainting)
+        if (!meshEditing && m_SceneViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !gizmoHovered && !alt && !tilePainting)
         {
             ImVec2 mouse = ImGui::GetMousePos();
             // (in the target's pixels: it may be drawn smaller than the panel)
@@ -4248,6 +4292,82 @@ namespace Editor
         ImGui::End();
     }
 
+    void EditorLayer::InjectInput()
+    {
+        if (m_Options.Input.empty()) return;
+        // "frame action args; ...": queued now, seen by ImGui from the next frame on.
+        ImGuiIO& io = ImGui::GetIO();
+        int now = ImGui::GetFrameCount();
+        std::stringstream list(m_Options.Input);
+        std::string item;
+        while (std::getline(list, item, ';'))
+        {
+            std::stringstream words(item);
+            int frame = -1;
+            std::string action;
+            words >> frame >> action;
+            auto key = [&](const std::string& chord, bool down) {
+                std::string rest = chord;
+                auto mod = [&](const char* prefix, ImGuiKey k) {
+                    if (rest.rfind(prefix, 0) != 0) return;
+                    io.AddKeyEvent(k, down);
+                    rest = rest.substr(std::strlen(prefix));
+                };
+                for (int i = 0; i < 3; ++i)
+                {
+                    mod("Ctrl+", ImGuiMod_Ctrl);
+                    mod("Shift+", ImGuiMod_Shift);
+                    mod("Alt+", ImGuiMod_Alt);
+                }
+                for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
+                    if (rest == ImGui::GetKeyName((ImGuiKey)k)) io.AddKeyEvent((ImGuiKey)k, down);
+            };
+            if (frame == now)
+            {
+                if (action == "move")
+                {
+                    float x = 0, y = 0;
+                    words >> x >> y;
+                    io.AddMousePosEvent(m_SceneViewOrigin.x + x, m_SceneViewOrigin.y + y);
+                }
+                else if (action == "down" || action == "click") io.AddMouseButtonEvent(0, true);
+                else if (action == "up") io.AddMouseButtonEvent(0, false);
+                else if (action == "rdown" || action == "rclick") io.AddMouseButtonEvent(1, true);
+                else if (action == "rup") io.AddMouseButtonEvent(1, false);
+                else if (action == "wheel")
+                {
+                    float w = 0;
+                    words >> w;
+                    io.AddMouseWheelEvent(0.0f, w);
+                }
+                else if (action == "key" || action == "keydown")
+                {
+                    std::string chord;
+                    words >> chord;
+                    key(chord, true);
+                }
+                else if (action == "keyup")
+                {
+                    std::string chord;
+                    words >> chord;
+                    key(chord, false);
+                }
+            }
+            else if (frame + 1 == now)
+            {
+                // Clicks and key presses release a frame later.
+                if (action == "click") io.AddMouseButtonEvent(0, false);
+                else if (action == "rclick") io.AddMouseButtonEvent(1, false);
+                else if (action == "key")
+                {
+                    std::string chord;
+                    words >> chord;
+                    key(chord, false);
+                }
+            }
+        }
+    }
+
     void EditorLayer::HandleShortcuts()
     {
         ImGuiIO& io = ImGui::GetIO();
@@ -4258,7 +4378,11 @@ namespace Editor
         using Shortcuts::Pressed;
         if (Pressed("play.play")) m_Ctx.IsPlaying() ? Stop() : Play();
         if (Pressed("play.pause")) TogglePause();
-        if (Pressed("file.save")) SaveScene();
+        if (Pressed("file.save"))
+        {
+            m_MeshEdit->Save(); // (the model being edited, if any)
+            SaveScene();
+        }
         if (Pressed("file.saveAs")) SaveSceneAs();
         if (Pressed("file.new")) m_ShowNewScene = true;
         if (Pressed("file.buildModule")) BuildGameModule();
@@ -4267,6 +4391,27 @@ namespace Editor
         if (Pressed("file.open")) OpenSceneWithDialog();
         if (Pressed("edit.search")) OpenSearch(true);
         if (m_GameViewFocused && m_Ctx.IsPlaying()) return; // the game owns the keyboard
+
+        bool viewActive = m_SceneViewHovered || m_SceneViewFocused;
+        if (m_MeshEdit->IsActive())
+        {
+            // Edit Mode has its own undo steps and keys (the Scene view handles those); the object tools wait.
+            if (Pressed("edit.undo")) m_MeshEdit->Undo();
+            if (Pressed("edit.redo")) m_MeshEdit->Redo();
+            if (viewActive && !m_Camera.IsControlling() && !m_MeshEdit->IsModal())
+            {
+                if (Pressed("mesh.editMode")) m_MeshEdit->Toggle();
+                if (Pressed("scene.frame")) FocusSelected();
+                for (int slot = 1; slot <= SceneBookmarks::kSlots; ++slot)
+                {
+                    std::string n = std::to_string(slot);
+                    if (Pressed(("scene.view" + n).c_str())) GoToView(slot);
+                    if (Pressed(("scene.saveView" + n).c_str())) SaveView(slot);
+                }
+            }
+            return;
+        }
+        if (viewActive && !m_Camera.IsControlling() && Pressed("mesh.editMode")) m_MeshEdit->Toggle();
 
         if (Pressed("edit.undo")) m_Ctx.Undo();
         if (Pressed("edit.redo")) m_Ctx.Redo();
@@ -4304,7 +4449,6 @@ namespace Editor
             m_Ctx.VisibilityChanged = true;
         }
 
-        bool viewActive = m_SceneViewHovered || m_SceneViewFocused;
         if (viewActive && !m_Camera.IsControlling())
         {
             if (Pressed("tool.view")) m_GizmoOperation = 0;

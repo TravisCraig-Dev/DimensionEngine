@@ -1,6 +1,7 @@
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Core/Log.h"
 #include "Dimension/Asset/ImportCache.h"
+#include "Dimension/Modeling/EditableMesh.h"
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
@@ -681,10 +682,20 @@ namespace Dimension
     bool MeshData::LoadFromFile(const fs::path& path, MeshData& out, const MeshImportSettings& settings)
     {
         out = MeshData();
-        if (ImportCache::LoadMesh(path, settings.Key(), out)) return true;
-        out.Name = path.filename().string();
         auto ext = path.extension().string();
         for (auto& c : ext) c = (char)std::tolower(c);
+        if (ext == ".dmodel")
+        {
+            // Models made in the editor: the editable mesh, triangulated (fast enough not to need the import cache).
+            Modeling::EditableMesh model;
+            if (!Modeling::EditableMesh::Load(path, model)) return false;
+            out = model.ToMeshData();
+            if (out.SubMeshes.empty()) out.SubMeshes.push_back({ 0, (uint32_t)out.Indices.size(), -1 });
+            out.ApplyImportSettings(settings);
+            return true;
+        }
+        if (ImportCache::LoadMesh(path, settings.Key(), out)) return true;
+        out.Name = path.filename().string();
         bool ok = false;
         if (ext == ".gltf" || ext == ".glb") ok = LoadGltf(path, out);
         else if (ext == ".obj") ok = LoadObj(path, out);

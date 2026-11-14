@@ -9,6 +9,7 @@
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/CameraStack.h>
 #include "AssetPreviews.h"
+#include "MeshEditMode.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneTemplates.h>
@@ -59,6 +60,10 @@ namespace Editor
         std::string Measure;          // --measure "x,y,z;x,y,z": the measuring tool on with that measurement
         int SelectionSet = 0;         // --selection-set N: select saved selection N
         std::string Press;            // --press "edit.group" (or "edit.group@120"): that shortcut's command, once, at frame 40 (or that frame)
+        // --input "60 move 400 300; 61 down; 64 move 450 320; 65 up; 70 key G; 72 key Shift+A": mouse and key events at
+        // those frames, as if from the user (positions in the Scene view's pixels from its top-left; down/up/click are
+        // the left button, rdown/rup/rclick the right; key presses and releases a key, with Ctrl+/Shift+/Alt+).
+        std::string Input;
         std::string Grid;             // --grid "plane=1,cell=0.5,opacity=0.6,follow": grid settings for the session
         bool NewInspector = false;    // --new-inspector: another Inspector, locked to the --select selection
         bool LockInspector = false;   // --lock-inspector: the Inspector locked to the --select selection
@@ -224,6 +229,7 @@ namespace Editor
         Scope<VisualEffectPanel> m_VisualEffect;
         Scope<TimelinePanel> m_Timeline;
         Scope<AnimationPanel> m_Animation;
+        Scope<MeshEditMode> m_MeshEdit; // Edit Mode: modeling in the Scene view
         Scope<PackagesPanel> m_Packages;
         Scope<TestRunnerPanel> m_TestRunner;
         Scope<NavigationPanel> m_Navigation;
@@ -234,6 +240,8 @@ namespace Editor
         SceneRenderer m_SceneRenderer, m_GameRenderer;
         CameraStack m_GameCameras; // the Game view's other cameras (smaller viewports drawn over the primary)
         glm::uvec2 m_SceneViewSize{ 1280, 720 }, m_GameViewSize{ 1280, 720 };
+        ImVec2 m_SceneViewOrigin{ 0.0f, 0.0f }; // (screen position of the Scene view's image: --input positions)
+        void InjectInput(); // --input
         bool m_SceneViewVisible = false, m_GameViewVisible = false;
         bool m_SceneViewHovered = false, m_SceneViewFocused = false, m_GameViewFocused = false;
         int m_FocusGameView = 0;

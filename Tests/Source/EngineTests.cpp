@@ -78,6 +78,10 @@
 #include <Dimension/Physics/Rope.h>
 #include <set>
 #include <Dimension/Video/VideoDecoder.h>
+#include <Dimension/Modeling/EditableMesh.h>
+#include <Dimension/Modeling/MeshOps.h>
+#include <Dimension/Modeling/MeshRaycast.h>
+#include <Dimension/Modeling/ModelExport.h>
 #include <Dimension/Video/VideoPlayer.h>
 #ifdef _WIN32
 #include <windows.h>
@@ -17131,6 +17135,539 @@ namespace
 
     const char* g_Filter = nullptr; // run only tests whose name contains this (first command-line argument; '|' separates several)
 
+    // ---- Modeling (the editor's Edit Mode core)
+
+    namespace ModelingTest
+    {
+        using namespace Dimension::Modeling;
+
+        size_t EdgeCount(const EditableMesh& m) { return m.Topo().Edges.size(); }
+
+        // Every edge between exactly two faces, walked in opposite directions by them.
+        bool ClosedAndConsistent(const EditableMesh& m)
+        {
+            const Topology& t = m.Topo();
+            for (size_t e = 0; e < t.Edges.size(); ++e)
+            {
+                if (t.EdgeFaces[e].size() != 2) return false;
+                uint32_t a = EdgeA(t.Edges[e]), b = EdgeB(t.Edges[e]);
+                auto walks = [&](uint32_t f) {
+                    const auto& v = m.Faces[f].Verts;
+                    for (size_t i = 0; i < v.size(); ++i)
+                        if (v[i] == a && v[(i + 1) % v.size()] == b) return true;
+                    return false;
+                };
+                if (walks(t.EdgeFaces[e][0]) == walks(t.EdgeFaces[e][1])) return false;
+            }
+            return true;
+        }
+
+        // Faces of a closed, star-shaped primitive around the origin point away from it.
+        bool Outward(const EditableMesh& m)
+        {
+            for (uint32_t f = 0; f < m.FaceCount(); ++f)
+                if (glm::dot(m.FaceNormal(f), m.FaceCenter(f)) <= 0.0f) return false;
+            return true;
+        }
+
+        uint32_t SelectedFaces(const EditableMesh& m)
+        {
+            uint32_t n = 0;
+            for (const auto& f : m.Faces) n += (f.Flags & Selected) ? 1 : 0;
+            return n;
+        }
+        uint32_t SelectedVerts(const EditableMesh& m) { return (uint32_t)Ops::SelectedVertices(m).size(); }
+        uint32_t SelectedEdges(const EditableMesh& m)
+        {
+            uint32_t n = 0;
+            for (EdgeKey k : m.Topo().Edges) n += m.IsEdgeSelected(k) ? 1 : 0;
+            return n;
+        }
+        // The edge between two vertex positions.
+        int32_t EdgeAt(const EditableMesh& m, glm::vec3 a, glm::vec3 b)
+        {
+            const Topology& t = m.Topo();
+            for (size_t e = 0; e < t.Edges.size(); ++e)
+            {
+                glm::vec3 pa = m.Positions[EdgeA(t.Edges[e])], pb = m.Positions[EdgeB(t.Edges[e])];
+                if ((Near(pa, a) && Near(pb, b)) || (Near(pa, b) && Near(pb, a))) return (int32_t)e;
+            }
+            return -1;
+        }
+        int32_t VertexAt(const EditableMesh& m, glm::vec3 p)
+        {
+            for (uint32_t v = 0; v < m.VertexCount(); ++v)
+                if (Near(m.Positions[v], p)) return (int32_t)v;
+            return -1;
+        }
+    }
+
+    void TestModelingPrimitives()
+    {
+        using namespace ModelingTest;
+        EditableMesh cube = Primitives::Cube();
+        CHECK(cube.VertexCount() == 8 && cube.FaceCount() == 6 && EdgeCount(cube) == 12);
+        CHECK(ClosedAndConsistent(cube) && Outward(cube));
+        CHECK(Near(cube.Bounds().Min, glm::vec3(-1.0f)) && Near(cube.Bounds().Max, glm::vec3(1.0f)));
+        CHECK(SelectedVerts(cube) == 8 && SelectedEdges(cube) == 12 && SelectedFaces(cube) == 6); // new primitives come selected
+
+        EditableMesh uv = Primitives::UVSphere(32, 16);
+        CHECK(uv.VertexCount() == 32 * 15 + 2 && uv.FaceCount() == 32 * 16);
+        CHECK(ClosedAndConsistent(uv) && Outward(uv));
+        CHECK(uv.VertexCount() - EdgeCount(uv) + uv.FaceCount() == 2); // Euler: a sphere
+
+        EditableMesh ico1 = Primitives::IcoSphere(1), ico2 = Primitives::IcoSphere(2);
+        CHECK(ico1.VertexCount() == 12 && ico1.FaceCount() == 20 && EdgeCount(ico1) == 30);
+        CHECK(ico2.VertexCount() == 42 && ico2.FaceCount() == 80);
+        CHECK(ClosedAndConsistent(ico2) && Outward(ico2));
+        for (const auto& p : ico2.Positions) CHECK(Near(glm::length(p), 1.0f));
+
+        EditableMesh cyl = Primitives::Cylinder(16);
+        CHECK(cyl.VertexCount() == 32 && cyl.FaceCount() == 18 && ClosedAndConsistent(cyl) && Outward(cyl));
+        EditableMesh cone = Primitives::Cone(16);
+        CHECK(cone.VertexCount() == 17 && cone.FaceCount() == 17 && ClosedAndConsistent(cone) && Outward(cone));
+        EditableMesh open = Primitives::Cylinder(16, 1.0f, 2.0f, false);
+        CHECK(open.FaceCount() == 16 && !ClosedAndConsistent(open));
+
+        EditableMesh torus = Primitives::Torus(24, 8);
+        CHECK(torus.VertexCount() == 24 * 8 && torus.FaceCount() == 24 * 8 && ClosedAndConsistent(torus));
+        CHECK((int)torus.VertexCount() - (int)EdgeCount(torus) + (int)torus.FaceCount() == 0); // Euler: a torus
+
+        EditableMesh grid = Primitives::Grid(10, 10);
+        CHECK(grid.VertexCount() == 121 && grid.FaceCount() == 100);
+        for (uint32_t f = 0; f < grid.FaceCount(); ++f) CHECK(Near(grid.FaceNormal(f), glm::vec3(0, 1, 0)));
+        EditableMesh plane = Primitives::Plane();
+        CHECK(plane.FaceCount() == 1 && Near(plane.FaceNormal(0), glm::vec3(0, 1, 0)) && Near(plane.FaceArea(0), 4.0f));
+
+        EditableMesh circle = Primitives::Circle(32), disc = Primitives::Circle(32, 1.0f, true);
+        CHECK(circle.FaceCount() == 0 && circle.LooseEdges.size() == 32 && EdgeCount(circle) == 32);
+        CHECK(disc.FaceCount() == 1 && disc.Faces[0].Verts.size() == 32 && Near(disc.FaceNormal(0), glm::vec3(0, 1, 0)));
+
+        // Appending: vertices renumbered, both parts kept.
+        EditableMesh two = Primitives::Cube();
+        two.Append(Primitives::Cube());
+        CHECK(two.VertexCount() == 16 && two.FaceCount() == 12 && EdgeCount(two) == 24);
+    }
+
+    void TestModelingRenderMesh()
+    {
+        using namespace ModelingTest;
+        // Flat cube: a vertex per face corner, axis-aligned normals.
+        MeshData cube = Primitives::Cube().ToMeshData();
+        CHECK(cube.Vertices.size() == 24 && cube.Indices.size() == 36 && cube.SubMeshes.size() == 1 && cube.SubMeshes[0].MaterialSlot == -1);
+        for (const auto& v : cube.Vertices)
+        {
+            glm::vec3 a = glm::abs(v.Normal);
+            CHECK(Near(a.x + a.y + a.z, 1.0f) && Near(glm::max(a.x, glm::max(a.y, a.z)), 1.0f));
+            CHECK(glm::dot(v.Normal, v.Position) > 0.0f);
+            CHECK(v.Tangent != glm::vec4(0.0f)); // tangents generated
+        }
+        // Triangles face their normals' way (counter-clockwise from outside).
+        for (size_t i = 0; i < cube.Indices.size(); i += 3)
+        {
+            const Vertex &a = cube.Vertices[cube.Indices[i]], &b = cube.Vertices[cube.Indices[i + 1]], &c = cube.Vertices[cube.Indices[i + 2]];
+            CHECK(glm::dot(glm::cross(b.Position - a.Position, c.Position - a.Position), a.Normal) > 0.0f);
+        }
+
+        // Smooth sphere: one normal per vertex position (except along the UV seam), pointing out from the center.
+        EditableMesh sphere = Primitives::UVSphere(24, 12);
+        MeshData smooth = sphere.ToMeshData();
+        for (const auto& v : smooth.Vertices) CHECK(glm::dot(v.Normal, glm::normalize(v.Position)) > 0.995f);
+        CHECK(smooth.Vertices.size() < sphere.FaceCount() * 4 / 2);
+
+        // Auto smooth splits the cylinder's caps from its sides; a sharp edge splits too.
+        EditableMesh cyl = Primitives::Cylinder(16);
+        Ops::SetSmooth(cyl, true, false);
+        MeshData rounded = cyl.ToMeshData();
+        bool tilted = false;
+        for (const auto& v : rounded.Vertices) tilted |= std::abs(v.Normal.y) > 0.1f && std::abs(v.Normal.y) < 0.9f;
+        CHECK(tilted); // without auto smooth, rim normals lean between cap and side
+        cyl.AutoSmooth = true;
+        MeshData split = cyl.ToMeshData();
+        for (const auto& v : split.Vertices) CHECK(Near(std::abs(v.Normal.y), 1.0f) || Near(v.Normal.y, 0.0f));
+        cyl.AutoSmooth = false;
+        Ops::DeselectAll(cyl);
+        // Mark the top rim sharp: only the bottom rim's normals still lean.
+        for (EdgeKey k : cyl.Topo().Edges)
+            if (cyl.Positions[EdgeA(k)].y > 0.5f && cyl.Positions[EdgeB(k)].y > 0.5f) cyl.SetEdgeFlag(k, Selected, true);
+        Ops::MarkSharp(cyl, true);
+        MeshData half = cyl.ToMeshData();
+        bool topLeans = false, bottomLeans = false;
+        for (const auto& v : half.Vertices)
+            if (std::abs(v.Normal.y) > 0.1f && std::abs(v.Normal.y) < 0.9f) (v.Position.y > 0 ? topLeans : bottomLeans) = true;
+        CHECK(!topLeans && bottomLeans);
+
+        // Concave n-gon (an L): ear clipping covers its area exactly, every triangle facing the polygon's way.
+        EditableMesh l;
+        for (glm::vec2 p : { glm::vec2(0, 0), glm::vec2(2, 0), glm::vec2(2, 1), glm::vec2(1, 1), glm::vec2(1, 2), glm::vec2(0, 2) })
+            l.AddVertex({ p.x, 0.0f, -p.y });
+        l.AddFace({ 0, 1, 2, 3, 4, 5 });
+        CHECK(Near(l.FaceNormal(0), glm::vec3(0, 1, 0)) && Near(l.FaceArea(0), 3.0f));
+        std::vector<uint32_t> tris;
+        l.TriangulateFace(0, tris);
+        CHECK(tris.size() == 12);
+        float area = 0.0f;
+        for (size_t i = 0; i < tris.size(); i += 3)
+        {
+            glm::vec3 a = l.Positions[tris[i]], b = l.Positions[tris[i + 1]], c = l.Positions[tris[i + 2]];
+            glm::vec3 n = glm::cross(b - a, c - a);
+            CHECK(n.y > 0.0f);
+            area += glm::length(n) * 0.5f;
+        }
+        CHECK(Near(area, 3.0f));
+
+        // Material slots: a sub-mesh per used slot.
+        EditableMesh two = Primitives::Cube();
+        two.MaterialSlots = { "Red", "Blue" };
+        two.Faces[4].Material = 1;
+        MeshData slots = two.ToMeshData();
+        CHECK(slots.SubMeshes.size() == 2 && slots.Materials.size() == 2 && slots.Materials[1].Name == "Blue");
+        CHECK(slots.SubMeshes[0].IndexCount == 30 && slots.SubMeshes[1].IndexCount == 6 && slots.SubMeshes[1].MaterialSlot == 1);
+
+        // Back from render meshes: welded, triangle pairs joined into quads, shading kept.
+        EditableMesh fromCube = EditableMesh::FromMeshData(MeshData::Cube());
+        CHECK(fromCube.VertexCount() == 8 && fromCube.FaceCount() == 6 && ClosedAndConsistent(fromCube));
+        for (const auto& f : fromCube.Faces) CHECK(f.Verts.size() == 4 && !f.Smooth);
+        EditableMesh fromSphere = EditableMesh::FromMeshData(MeshData::Sphere(16, 8));
+        bool allSmooth = true;
+        for (const auto& f : fromSphere.Faces) allSmooth &= f.Smooth;
+        CHECK(allSmooth && fromSphere.FaceCount() < 16 * 8 * 2);
+        // A round trip keeps the shape: same triangles' area.
+        auto area3 = [](const MeshData& d) {
+            float a = 0.0f;
+            for (size_t i = 0; i < d.Indices.size(); i += 3)
+                a += glm::length(glm::cross(d.Vertices[d.Indices[i + 1]].Position - d.Vertices[d.Indices[i]].Position,
+                                            d.Vertices[d.Indices[i + 2]].Position - d.Vertices[d.Indices[i]].Position)) * 0.5f;
+            return a;
+        };
+        CHECK(Near(area3(fromSphere.ToMeshData()), area3(MeshData::Sphere(16, 8)), 1e-3f));
+        // The built-in cylinder: smooth sides, flat caps (its rims split by that alone).
+        EditableMesh fromCyl = EditableMesh::FromMeshData(MeshData::Cylinder(16));
+        bool shading = fromCyl.EdgeAttrs.empty();
+        for (uint32_t f = 0; f < fromCyl.FaceCount(); ++f) shading &= fromCyl.Faces[f].Smooth == (std::abs(fromCyl.FaceNormal(f).y) < 0.5f);
+        CHECK(shading && ClosedAndConsistent(fromCyl));
+        // A smooth surface with a hard crease (normals split along an edge between smooth faces) gets sharp edges.
+        EditableMesh creased = Primitives::UVSphere(16, 8);
+        Ops::DeselectAll(creased);
+        for (EdgeKey k : creased.Topo().Edges)
+            if (Near(creased.Positions[EdgeA(k)].y, 0.0f) && Near(creased.Positions[EdgeB(k)].y, 0.0f)) creased.SetEdgeFlag(k, Selected, true);
+        Ops::MarkSharp(creased, true);
+        Ops::DeselectAll(creased);
+        EditableMesh back = EditableMesh::FromMeshData(creased.ToMeshData(), false);
+        size_t sharp = 0;
+        for (auto& [k, d] : back.EdgeAttrs) sharp += d.Sharp ? 1 : 0;
+        CHECK(sharp == 16);
+    }
+
+    void TestModelingSelection()
+    {
+        using namespace ModelingTest;
+        // Vertex mode: edges and faces follow their vertices.
+        EditableMesh cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        CHECK(!Ops::AnySelected(cube) && SelectedEdges(cube) == 0 && SelectedFaces(cube) == 0);
+        Ops::SelectVertex(cube, 0, true);
+        Ops::FlushSelection(cube, SelectMode::Vertex);
+        CHECK(SelectedVerts(cube) == 1 && SelectedEdges(cube) == 0 && SelectedFaces(cube) == 0);
+        for (uint32_t v : cube.Faces[0].Verts) Ops::SelectVertex(cube, v, true);
+        Ops::FlushSelection(cube, SelectMode::Vertex);
+        CHECK(SelectedVerts(cube) == 5 && SelectedEdges(cube) == 5 && SelectedFaces(cube) == 1); // (vertex 0 has an edge to the face)
+        // To face mode: the stray vertex drops out.
+        Ops::ConvertSelection(cube, SelectMode::Vertex, SelectMode::Face);
+        CHECK(SelectedFaces(cube) == 1 && SelectedVerts(cube) == 4 && SelectedEdges(cube) == 4);
+        // Face mode: neighbours share vertices, but only selected faces count.
+        Ops::SelectFace(cube, 2, true);
+        Ops::FlushSelection(cube, SelectMode::Face);
+        CHECK(SelectedFaces(cube) == 2 && SelectedVerts(cube) == 6 && SelectedEdges(cube) == 7);
+        Ops::InvertSelection(cube, SelectMode::Face);
+        CHECK(SelectedFaces(cube) == 4);
+        Ops::SelectAll(cube, SelectMode::Edge);
+        CHECK(SelectedEdges(cube) == 12 && SelectedFaces(cube) == 6);
+
+        // Linked: one vertex of one of two cubes reaches its 8.
+        EditableMesh two = Primitives::Cube();
+        two.Append(Primitives::Cube());
+        Ops::DeselectAll(two);
+        Ops::SelectVertex(two, 9, true);
+        Ops::SelectLinked(two, SelectMode::Vertex);
+        CHECK(SelectedVerts(two) == 8 && SelectedFaces(two) == 6);
+        for (uint32_t v = 0; v < 8; ++v) CHECK(!two.IsVertSelected(v));
+
+        // Edge loops and rings on a 4x4 grid (5x5 vertices, from -1 to 1 in steps of 0.5).
+        EditableMesh grid = Primitives::Grid(4, 4);
+        Ops::DeselectAll(grid);
+        int32_t inner = EdgeAt(grid, { -0.5f, 0, 0 }, { 0, 0, 0 }); // along X through the middle
+        CHECK(inner >= 0);
+        std::vector<uint32_t> loop = Ops::EdgeLoop(grid, (uint32_t)inner);
+        CHECK(loop.size() == 4);
+        for (uint32_t e : loop) CHECK(Near(grid.Positions[EdgeA(grid.Topo().Edges[e])].z, 0.0f) && Near(grid.Positions[EdgeB(grid.Topo().Edges[e])].z, 0.0f));
+        std::vector<uint32_t> ringFaces;
+        std::vector<uint32_t> ring = Ops::EdgeRing(grid, (uint32_t)inner, &ringFaces);
+        CHECK(ring.size() == 5 && ringFaces.size() == 4);
+        // Border edges loop along the border.
+        int32_t border = EdgeAt(grid, { -1, 0, 1 }, { -0.5f, 0, 1 });
+        CHECK(Ops::EdgeLoop(grid, (uint32_t)border).size() == 16);
+        // Alt+click: vertex mode selects the loop's vertices, face mode the faces across the edge.
+        Ops::SelectLoop(grid, SelectMode::Vertex, (uint32_t)inner, false);
+        CHECK(SelectedVerts(grid) == 5 && SelectedEdges(grid) == 4 && SelectedFaces(grid) == 0);
+        Ops::SelectLoop(grid, SelectMode::Vertex, (uint32_t)inner, true); // extend on a selected loop: deselects
+        CHECK(SelectedVerts(grid) == 0);
+        Ops::SelectLoop(grid, SelectMode::Face, (uint32_t)inner, false);
+        CHECK(SelectedFaces(grid) == 4);
+        // A torus loops all the way around.
+        EditableMesh torus = Primitives::Torus(24, 8);
+        CHECK(Ops::EdgeLoop(torus, 0).size() == 24 || Ops::EdgeLoop(torus, 0).size() == 8);
+        CHECK(Ops::EdgeRing(torus, 0).size() == 24 || Ops::EdgeRing(torus, 0).size() == 8);
+        CHECK(Ops::EdgeLoop(torus, 0).size() != Ops::EdgeRing(torus, 0).size());
+
+        // More and less.
+        Ops::DeselectAll(grid);
+        Ops::SelectVertex(grid, (uint32_t)VertexAt(grid, { 0, 0, 0 }), true);
+        Ops::FlushSelection(grid, SelectMode::Vertex);
+        Ops::SelectMore(grid, SelectMode::Vertex);
+        CHECK(SelectedVerts(grid) == 9 && SelectedFaces(grid) == 4);
+        Ops::SelectLess(grid, SelectMode::Vertex);
+        CHECK(SelectedVerts(grid) == 1);
+
+        // Hiding: hidden faces leave the selection and can't be selected; reveal selects them.
+        EditableMesh hidden = Primitives::Cube();
+        Ops::DeselectAll(hidden);
+        Ops::SelectFace(hidden, 0, true);
+        Ops::FlushSelection(hidden, SelectMode::Face);
+        Ops::HideSelected(hidden, SelectMode::Face);
+        CHECK((hidden.Faces[0].Flags & Hidden) && SelectedFaces(hidden) == 0);
+        Ops::SelectAll(hidden, SelectMode::Face);
+        CHECK(SelectedFaces(hidden) == 5 && !(hidden.Faces[0].Flags & Selected));
+        for (uint32_t v : hidden.Faces[0].Verts) CHECK(!hidden.IsVertHidden(v)); // still used by visible faces
+        Ops::DeselectAll(hidden);
+        Ops::RevealAll(hidden);
+        CHECK(!(hidden.Faces[0].Flags & Hidden) && SelectedFaces(hidden) == 1);
+        // Hide unselected.
+        Ops::HideSelected(hidden, SelectMode::Face, true);
+        uint32_t hiddenFaces = 0;
+        for (const auto& f : hidden.Faces) hiddenFaces += (f.Flags & Hidden) ? 1 : 0;
+        CHECK(hiddenFaces == 5);
+
+        // Proportional editing: full weight on the selection, fading to nothing at the radius.
+        Ops::DeselectAll(grid);
+        uint32_t center = (uint32_t)VertexAt(grid, { 0, 0, 0 });
+        Ops::SelectVertex(grid, center, true);
+        auto w = Ops::ProportionalWeights(grid, 1.0f, Ops::Falloff::Linear, false);
+        CHECK(Near(w[center], 1.0f) && Near(w[VertexAt(grid, { 0.5f, 0, 0 })], 0.5f) && Near(w[VertexAt(grid, { 1, 0, 0 })], 0.0f));
+        auto wc = Ops::ProportionalWeights(grid, 1.0f, Ops::Falloff::Linear, true);
+        CHECK(Near(wc[VertexAt(grid, { 0.5f, 0, 0.5f })], 0.0f)); // diagonal: 1 along edges, so out of reach
+        CHECK(Near(w[VertexAt(grid, { 0.5f, 0, 0.5f })], 1.0f - std::sqrt(0.5f)));
+        Ops::TransformVertices(grid, glm::translate(glm::mat4(1.0f), glm::vec3(0, 1, 0)), &w);
+        CHECK(Near(grid.Positions[center].y, 1.0f) && Near(grid.Positions[VertexAt(grid, { 0.5f, 0.5f, 0 })].y, 0.5f));
+        CHECK(Near(Ops::SelectionCenter(grid), glm::vec3(0, 1, 0)));
+    }
+
+    void TestModelingEdits()
+    {
+        using namespace ModelingTest;
+        // Delete a vertex: its faces and edges go.
+        EditableMesh cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        Ops::SelectVertex(cube, 7, true);
+        Ops::FlushSelection(cube, SelectMode::Vertex);
+        Ops::Delete(cube, Ops::DeleteKind::Vertices);
+        CHECK(cube.VertexCount() == 7 && cube.FaceCount() == 3 && EdgeCount(cube) == 9);
+
+        // Delete a face: its vertices stay (other faces use them); Only Faces is the same here.
+        cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        Ops::SelectFace(cube, 4, true);
+        Ops::FlushSelection(cube, SelectMode::Face);
+        Ops::Delete(cube, Ops::DeleteKind::Faces);
+        CHECK(cube.VertexCount() == 8 && cube.FaceCount() == 5 && EdgeCount(cube) == 12 && !ClosedAndConsistent(cube));
+        // Deleting a lone quad's face removes its vertices, Only Faces keeps them and its edges as wire.
+        EditableMesh plane = Primitives::Plane();
+        Ops::Delete(plane, Ops::DeleteKind::Faces);
+        CHECK(plane.VertexCount() == 0 && plane.FaceCount() == 0);
+        plane = Primitives::Plane();
+        Ops::Delete(plane, Ops::DeleteKind::OnlyFaces);
+        CHECK(plane.VertexCount() == 4 && plane.FaceCount() == 0 && plane.LooseEdges.size() == 4);
+        // Delete an edge: both its faces go, the other edges of those faces stay.
+        cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        Ops::SelectEdge(cube, cube.Topo().Edges[0], true);
+        Ops::FlushSelection(cube, SelectMode::Edge);
+        Ops::Delete(cube, Ops::DeleteKind::Edges);
+        CHECK(cube.VertexCount() == 8 && cube.FaceCount() == 4 && EdgeCount(cube) == 11);
+        // Only edges and faces: the vertices stay even when nothing uses them.
+        plane = Primitives::Plane();
+        Ops::Delete(plane, Ops::DeleteKind::OnlyEdgesAndFaces);
+        CHECK(plane.VertexCount() == 4 && plane.FaceCount() == 0 && EdgeCount(plane) == 0);
+
+        // Merge a cube's top face at its center: a pyramid on a quad.
+        cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        Ops::SelectFace(cube, 4, true); // +Y
+        Ops::FlushSelection(cube, SelectMode::Face);
+        CHECK(Ops::MergeAtCenter(cube, false) == 3);
+        CHECK(cube.VertexCount() == 5 && cube.FaceCount() == 5 && EdgeCount(cube) == 8 && ClosedAndConsistent(cube));
+        CHECK(VertexAt(cube, { 0, 1, 0 }) >= 0);
+        // Collapse: each selected group merges on its own.
+        EditableMesh grid = Primitives::Grid(4, 4);
+        Ops::DeselectAll(grid);
+        for (glm::vec3 p : { glm::vec3(-1, 0, 1), glm::vec3(-0.5f, 0, 1), glm::vec3(1, 0, -1), glm::vec3(0.5f, 0, -1) })
+            Ops::SelectVertex(grid, (uint32_t)VertexAt(grid, p), true);
+        Ops::FlushSelection(grid, SelectMode::Vertex);
+        CHECK(Ops::MergeAtCenter(grid, true) == 2);
+        CHECK(grid.VertexCount() == 23 && VertexAt(grid, { -0.75f, 0, 1 }) >= 0 && VertexAt(grid, { 0.75f, 0, -1 }) >= 0);
+        // By distance: two planes side by side weld along their shared edge.
+        EditableMesh pair = Primitives::Plane();
+        EditableMesh right = Primitives::Plane();
+        for (auto& p : right.Positions) p.x += 2.0f;
+        pair.Append(right);
+        CHECK(EdgeCount(pair) == 8);
+        CHECK(Ops::MergeByDistance(pair, 0.001f, false) == 2);
+        CHECK(pair.VertexCount() == 6 && pair.FaceCount() == 2 && EdgeCount(pair) == 7);
+        // Duplicate faces after a weld collapse into one.
+        EditableMesh twin = Primitives::Plane();
+        twin.Append(Primitives::Plane());
+        Ops::MergeByDistance(twin, 0.001f, false);
+        CHECK(twin.VertexCount() == 4 && twin.FaceCount() == 1);
+
+        // Normals: flipped faces come back outward.
+        EditableMesh sphere = Primitives::IcoSphere(2);
+        Ops::DeselectAll(sphere);
+        for (uint32_t f = 0; f < sphere.FaceCount(); f += 3) Ops::SelectFace(sphere, f, true);
+        Ops::FlushSelection(sphere, SelectMode::Face);
+        Ops::FlipNormals(sphere);
+        CHECK(!Outward(sphere) && !ClosedAndConsistent(sphere));
+        Ops::DeselectAll(sphere);
+        Ops::RecalculateNormals(sphere);
+        CHECK(Outward(sphere) && ClosedAndConsistent(sphere));
+        Ops::RecalculateNormals(sphere, true);
+        for (uint32_t f = 0; f < sphere.FaceCount(); ++f) CHECK(glm::dot(sphere.FaceNormal(f), sphere.FaceCenter(f)) < 0.0f);
+        // Shading flags.
+        Ops::SetSmooth(sphere, false, false);
+        CHECK(!sphere.Faces[0].Smooth);
+        Ops::SelectAll(sphere, SelectMode::Edge);
+        Ops::MarkSeam(sphere, true);
+        Ops::SetCrease(sphere, 0.5f);
+        CHECK(sphere.GetEdge(sphere.Topo().Edges[3]).Seam && Near(sphere.GetEdge(sphere.Topo().Edges[3]).Crease, 0.5f));
+        Ops::MarkSeam(sphere, false);
+        Ops::SetCrease(sphere, 0.0f);
+        Ops::DeselectAll(sphere);
+        CHECK(sphere.EdgeAttrs.empty()); // nothing left to store
+    }
+
+    void TestModelingFiles()
+    {
+        using namespace ModelingTest;
+        fs::path dir = fs::temp_directory_path() / "dimension_modeling_test";
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+
+        // .dmodel round trip: geometry, UVs, shading, edge marks, materials, selection, hiding, wire edges.
+        EditableMesh m = Primitives::Cylinder(12);
+        m.Name = "Barrel";
+        m.MaterialSlots = { "Wood", "Metal" };
+        m.Faces[3].Material = 1;
+        Ops::SetSmooth(m, true, false);
+        m.AutoSmooth = true;
+        m.AutoSmoothAngle = 45.0f;
+        Ops::DeselectAll(m);
+        EdgeKey marked = m.Topo().Edges[5];
+        m.EditEdge(marked).Seam = true;
+        m.EditEdge(marked).Crease = 0.25f;
+        m.EditEdge(m.Topo().Edges[6]).Sharp = true;
+        Ops::SelectFace(m, 2, true);
+        Ops::FlushSelection(m, SelectMode::Face);
+        m.Faces[7].Flags |= Hidden;
+        uint32_t lone = m.AddVertex({ 5, 5, 5 });
+        m.AddLooseEdge(0, lone);
+        CHECK(m.Save(dir / "Barrel.dmodel"));
+        EditableMesh back;
+        CHECK(EditableMesh::Load(dir / "Barrel.dmodel", back));
+        CHECK(back.Name == "Barrel" && back.VertexCount() == m.VertexCount() && back.FaceCount() == m.FaceCount());
+        bool same = true;
+        for (uint32_t v = 0; v < m.VertexCount(); ++v) same &= Near(back.Positions[v], m.Positions[v], 1e-5f) && back.VertFlags[v] == m.VertFlags[v];
+        for (uint32_t f = 0; f < m.FaceCount(); ++f)
+        {
+            same &= back.Faces[f].Verts == m.Faces[f].Verts && back.Faces[f].Material == m.Faces[f].Material && back.Faces[f].Smooth == m.Faces[f].Smooth;
+            same &= back.Faces[f].Flags == m.Faces[f].Flags;
+            for (size_t c = 0; c < m.Faces[f].UVs.size(); ++c) same &= Near(back.Faces[f].UVs[c], m.Faces[f].UVs[c], 1e-5f);
+        }
+        CHECK(same);
+        CHECK(back.MaterialSlots == m.MaterialSlots && back.AutoSmooth && Near(back.AutoSmoothAngle, 45.0f));
+        CHECK(back.GetEdge(marked).Seam && Near(back.GetEdge(marked).Crease, 0.25f) && back.GetEdge(m.Topo().Edges[6]).Sharp);
+        CHECK(SelectedFaces(back) == 1 && SelectedEdges(back) == SelectedEdges(m) && back.LooseEdges.size() == 1);
+        CHECK(!EditableMesh::FromJson(nlohmann::json::object(), back));
+
+        // A .dmodel is a mesh asset: loaded through the usual path, triangulated.
+        CHECK(AssetManager::TypeFromExtension("Thing.dmodel") == AssetType::Mesh);
+        MeshData loaded;
+        CHECK(MeshData::LoadFromFile(dir / "Barrel.dmodel", loaded));
+        MeshData direct = m.ToMeshData();
+        CHECK(loaded.Indices.size() == direct.Indices.size() && loaded.Vertices.size() == direct.Vertices.size() && loaded.SubMeshes.size() == 2);
+
+        // glTF export, read back by the importer (binary and embedded text).
+        for (const char* name : { "Barrel.glb", "Barrel.gltf" })
+        {
+            CHECK(Modeling::ExportGltf(direct, dir / name));
+            MeshData gltf;
+            CHECK(MeshData::LoadFromFile(dir / name, gltf));
+            CHECK(gltf.Indices.size() == direct.Indices.size());
+            CHECK(gltf.SubMeshes.size() == 2 && gltf.Materials.size() == 2 && gltf.Materials[1].Name == "Metal");
+            // The same triangles in the same order, corner by corner.
+            bool match = gltf.Indices.size() == direct.Indices.size();
+            for (size_t i = 0; match && i < gltf.Indices.size(); ++i)
+            {
+                const Vertex &a = gltf.Vertices[gltf.Indices[i]], &b = direct.Vertices[direct.Indices[i]];
+                match = Near(a.Position, b.Position) && Near(a.Normal, b.Normal) && Near(a.UV, b.UV);
+            }
+            CHECK(match);
+        }
+
+        // Ray casts: the cube's front face from the front; its far corners are behind it, near ones not.
+        EditableMesh cube = Primitives::Cube();
+        MeshRaycaster rays;
+        rays.Build(cube);
+        auto hit = rays.Raycast({ 0.2f, 0.3f, 5.0f }, { 0, 0, -1 });
+        CHECK(hit.Hit && Near(hit.Distance, 4.0f) && Near(cube.FaceNormal(hit.Face), glm::vec3(0, 0, 1)) && Near(hit.Point, glm::vec3(0.2f, 0.3f, 1.0f)));
+        CHECK(!rays.Raycast({ 3, 0, 5 }, { 0, 0, -1 }).Hit);
+        glm::vec3 eye(0.3f, 0.4f, 6.0f);
+        CHECK(rays.Occluded(eye, { -1, -1, -1 }) && !rays.Occluded(eye, { 1, 1, 1 }));
+        // Hidden faces are left out.
+        cube.Faces[0].Flags |= Hidden; // +Z
+        rays.Build(cube);
+        hit = rays.Raycast({ 0.2f, 0.3f, 5.0f }, { 0, 0, -1 });
+        CHECK(hit.Hit && Near(hit.Distance, 6.0f));
+        // Many triangles: same answer as testing them all.
+        EditableMesh dense = Primitives::UVSphere(64, 32);
+        rays.Build(dense);
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+        bool agree = true;
+        for (int i = 0; i < 50; ++i)
+        {
+            glm::vec3 from(u(rng) * 3.0f, u(rng) * 3.0f, 3.0f), dir = glm::normalize(glm::vec3(u(rng) * 0.3f, u(rng) * 0.3f, -1.0f));
+            auto h = rays.Raycast(from, dir);
+            // Brute force against the ToMeshData triangles.
+            MeshData tri = dense.ToMeshData();
+            float best = 1e30f;
+            for (size_t k = 0; k < tri.Indices.size(); k += 3)
+            {
+                glm::vec3 a = tri.Vertices[tri.Indices[k]].Position, b = tri.Vertices[tri.Indices[k + 1]].Position, c = tri.Vertices[tri.Indices[k + 2]].Position;
+                glm::vec3 e1 = b - a, e2 = c - a, p = glm::cross(dir, e2);
+                float det = glm::dot(e1, p);
+                if (std::abs(det) < 1e-12f) continue;
+                glm::vec3 s = from - a;
+                float uu = glm::dot(s, p) / det;
+                glm::vec3 q = glm::cross(s, e1);
+                float vv = glm::dot(dir, q) / det, t = glm::dot(e2, q) / det;
+                if (uu >= 0 && vv >= 0 && uu + vv <= 1 && t > 0) best = std::min(best, t);
+            }
+            agree &= h.Hit == (best < 1e30f) && (!h.Hit || Near(h.Distance, best, 1e-3f));
+            if (i > 8) break; // (the brute force is slow in debug builds)
+        }
+        CHECK(agree);
+        fs::remove_all(dir);
+    }
+
     void Run(const char* name, void (*fn)())
     {
         if (g_Filter)
@@ -17416,6 +17953,11 @@ int main(int argc, char** argv)
     Run("Audio level meter", TestAudioMeter);
     Run("Smooth curves and particle forces", TestSmoothCurvesAndParticleForces);
     Run("UI grid and horizontal scroll", TestUIGridAndHorizontalScroll);
+    Run("Modeling primitives", TestModelingPrimitives);
+    Run("Modeling render meshes", TestModelingRenderMesh);
+    Run("Modeling selection", TestModelingSelection);
+    Run("Modeling edits", TestModelingEdits);
+    Run("Modeling files and ray casts", TestModelingFiles);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

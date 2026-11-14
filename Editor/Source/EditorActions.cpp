@@ -1,4 +1,5 @@
 #include "EditorActions.h"
+#include "MeshEditMode.h"
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scene/SceneGrouping.h>
@@ -189,6 +190,16 @@ namespace Editor
             if (ImGui::MenuItem("Plane")) CreateObject(ctx, ObjectKind::Plane, parent);
             if (ImGui::MenuItem("Quad")) CreateObject(ctx, ObjectKind::Quad, parent);
             if (ImGui::MenuItem("Terrain")) CreateObject(ctx, ObjectKind::Terrain, parent);
+            ImGui::Separator();
+            // Editable models (.dmodel in Assets/Models): Tab edits them in the Scene view.
+            if (ImGui::BeginMenu("Model"))
+            {
+                for (int p = 0; p < (int)MeshEditMode::Primitive::Count; ++p)
+                    if (ImGui::MenuItem(MeshEditMode::PrimitiveName((MeshEditMode::Primitive)p)))
+                        MeshEditMode::CreateModelObject(ctx, (MeshEditMode::Primitive)p, parent);
+                ImGui::EndMenu();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("A new model you can edit in the Scene view (Tab)");
             ImGui::Separator();
             if (ImGui::MenuItem("Physics Cube")) CreateObject(ctx, ObjectKind::PhysicsCube, parent);
             if (ImGui::MenuItem("Physics Sphere")) CreateObject(ctx, ObjectKind::PhysicsSphere, parent);
