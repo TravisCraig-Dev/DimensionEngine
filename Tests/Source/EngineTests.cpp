@@ -19599,6 +19599,22 @@ namespace
             split.Scale = 2.0f;
             CHECK(Near(split.Sample({ 0.25f, 0.5f }), 1.0f) && Near(split.Sample({ 0.75f, 0.5f }), 0.0f));
         }
+        // Sharp voxel remesh: a cube keeps its corners and flat sides (the plain remesh rounds them off).
+        {
+            EditableMesh cube = Primitives::Cube(2.0f);
+            auto cornerGap = [](const EditableMesh& r) {
+                float best = 1e30f;
+                for (const glm::vec3& p : r.Positions) best = std::min(best, glm::length(p - glm::vec3(1.0f)));
+                return best;
+            };
+            EditableMesh sharp = Sculpt::VoxelRemesh(cube, 0.1f, 2, true), round = Sculpt::VoxelRemesh(cube, 0.1f, 2, false);
+            CHECK(ClosedAndConsistent(sharp) && Near(Volume(sharp), 8.0f, 0.08f));
+            CHECK(cornerGap(sharp) < 0.01f && cornerGap(round) > 0.05f);
+            float flat = 0.0f; // how far the vertices on the +X side stray from it
+            for (const glm::vec3& p : sharp.Positions)
+                if (p.x > 0.95f) flat = std::max(flat, std::abs(p.x - 1.0f));
+            CHECK(flat < 1e-3f);
+        }
         // Dynamic topology keeps the UVs: on a flat sheet they stay the same linear function of position after
         // splitting finer and collapsing coarser.
         {

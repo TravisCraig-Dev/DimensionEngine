@@ -1194,7 +1194,77 @@ namespace Dimension::Modeling::Sculpt
 
     // ---- Voxel remesh
 
-    EditableMesh VoxelRemesh(const EditableMesh& m, float voxelSize, int smooth)
+    namespace
+    {
+        // Eigenvalues and eigenvectors (columns of `vectors`) of a symmetric 3x3 matrix (cyclic Jacobi).
+        void SymmetricEigen(glm::dmat3 a, glm::dvec3& values, glm::dmat3& vectors)
+        {
+            vectors = glm::dmat3(1.0);
+            for (int sweep = 0; sweep < 12; ++sweep)
+            {
+                double off = a[0][1] * a[0][1] + a[0][2] * a[0][2] + a[1][2] * a[1][2];
+                if (off < 1e-24) break;
+                for (int p = 0; p < 2; ++p)
+                    for (int q = p + 1; q < 3; ++q)
+                    {
+                        if (std::abs(a[p][q]) < 1e-30) continue;
+                        double theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+                        double t = (theta >= 0 ? 1.0 : -1.0) / (std::abs(theta) + std::sqrt(theta * theta + 1.0));
+                        double c = 1.0 / std::sqrt(t * t + 1.0), s = t * c;
+                        glm::dmat3 r(1.0);
+                        r[p][p] = c;
+                        r[q][q] = c;
+                        r[q][p] = s;  // column q, row p
+                        r[p][q] = -s; // column p, row q
+                        a = glm::transpose(r) * a * r;
+                        vectors = vectors * r;
+                    }
+            }
+            values = glm::dvec3(a[0][0], a[1][1], a[2][2]);
+        }
+
+        // The point nearest all the planes (point, normal) in the least squares sense, starting from their points'
+        // middle and moving only along directions the planes pin down (so flat patches stay put, edges and corners
+        // snap). `rank`: how many directions that was.
+        glm::vec3 SolvePlanes(const std::vector<glm::vec3>& points, const std::vector<glm::vec3>& normals, int& rank)
+        {
+            glm::dvec3 c(0.0);
+            for (const glm::vec3& p : points) c += glm::dvec3(p);
+            c /= (double)std::max<size_t>(points.size(), 1);
+            glm::dmat3 ata(0.0);
+            glm::dvec3 rhs(0.0);
+            for (size_t i = 0; i < points.size(); ++i)
+            {
+                glm::dvec3 n(normals[i]);
+                for (int col = 0; col < 3; ++col)
+                    for (int row = 0; row < 3; ++row) ata[col][row] += n[row] * n[col];
+                rhs += n * glm::dot(n, glm::dvec3(points[i]) - c);
+            }
+            glm::dvec3 w;
+            glm::dmat3 v;
+            SymmetricEigen(ata, w, v);
+            double top = std::max({ w.x, w.y, w.z });
+            glm::dvec3 x = c;
+            rank = 0;
+            for (int k = 0; k < 3; ++k)
+                if (w[k] > top * 0.1 && w[k] > 1e-12)
+                {
+                    x += v[k] * (glm::dot(v[k], rhs) / w[k]);
+                    ++rank;
+                }
+            return glm::vec3(x);
+        }
+
+        struct LineHit
+        {
+            float X;
+            int Sign;    // +1 entering, -1 leaving
+            glm::vec3 N; // the surface's normal there
+            bool operator<(const LineHit& o) const { return X < o.X; }
+        };
+    }
+
+    EditableMesh VoxelRemesh(const EditableMesh& m, float voxelSize, int smooth, bool sharp)
     {
         EditableMesh out;
         out.Name = m.Name;
@@ -1232,8 +1302,8 @@ namespace Dimension::Modeling::Sculpt
         glm::ivec3 dim = glm::ivec3(glm::ceil((mx - origin) / h)) + 3;
         auto node = [&](int i, int j, int k) { return ((size_t)k * dim.y + j) * dim.x + i; };
         auto pos = [&](int i, int j, int k) { return origin + glm::vec3((float)i, (float)j, (float)k) * h; };
-        // Crossings along grid lines of each axis: per line, (coordinate along it, +1 entering / -1 leaving).
-        std::vector<std::vector<std::pair<float, int>>> lines[3];
+        // Crossings along grid lines of each axis.
+        std::vector<std::vector<LineHit>> lines[3];
         int other[3][2] = { { 1, 2 }, { 0, 2 }, { 0, 1 } };
         for (int a = 0; a < 3; ++a)
         {
@@ -1262,7 +1332,7 @@ namespace Dimension::Modeling::Sculpt
                         if (std::abs(sum) < 1e-30f) continue;
                         // d1 weighs p0, d2 weighs p1, d0 weighs p2.
                         float x = (d1 * p0[a] + d2 * p1[a] + d0 * p2[a]) / sum;
-                        lines[a][(size_t)k * dim[b] + j].push_back({ x, n[a] < 0.0f ? 1 : -1 });
+                        lines[a][(size_t)k * dim[b] + j].push_back({ x, n[a] < 0.0f ? 1 : -1, glm::normalize(n) });
                     }
             }
             for (auto& l : lines[a]) std::sort(l.begin(), l.end());
@@ -1278,26 +1348,30 @@ namespace Dimension::Modeling::Sculpt
                 for (int i = 0; i < dim.x; ++i)
                 {
                     float x = origin.x + i * h;
-                    while (h0 < l.size() && l[h0].first < x) winding += l[h0++].second;
+                    while (h0 < l.size() && l[h0].X < x) winding += l[h0++].Sign;
                     inside[node(i, j, k)] = winding != 0;
                 }
             }
-        // Where the surface crosses a grid edge from node (i,j,k) along axis a.
-        auto crossing = [&](int a, int i, int j, int k) {
+        // Where the surface crosses a grid edge from node (i,j,k) along axis a, and its normal there.
+        auto crossing = [&](int a, int i, int j, int k, glm::vec3& normal) {
             glm::ivec3 id(i, j, k);
             int b = other[a][0], c = other[a][1];
             const auto& l = lines[a][(size_t)id[c] * dim[b] + id[b]];
             glm::vec3 p = pos(i, j, k);
             float lo = p[a], hi = lo + h;
-            for (const auto& [x, s] : l)
-                if (x >= lo && x <= hi)
+            for (const LineHit& hit : l)
+                if (hit.X >= lo && hit.X <= hi)
                 {
-                    p[a] = x;
+                    p[a] = hit.X;
+                    normal = hit.N;
                     return p;
                 }
             p[a] = lo + h * 0.5f;
+            normal = glm::vec3(0.0f);
             return p;
         };
+        std::vector<uint8_t> feature; // per new vertex: on an edge or corner (kept out of the relaxing)
+        std::vector<glm::vec3> cellPoints, cellNormals;
         // Surface nets: a vertex in each cell the surface passes through, at its crossings' average.
         glm::ivec3 cells = dim - 1;
         std::unordered_map<size_t, uint32_t> cellVertex;
@@ -1312,6 +1386,8 @@ namespace Dimension::Modeling::Sculpt
                     if (!mixed) continue;
                     glm::vec3 sum(0.0f);
                     int count = 0;
+                    cellPoints.clear();
+                    cellNormals.clear();
                     for (int a = 0; a < 3; ++a)
                         for (int e = 0; e < 4; ++e)
                         {
@@ -1321,10 +1397,28 @@ namespace Dimension::Modeling::Sculpt
                             glm::ivec3 t = s;
                             t[a] += 1;
                             if (inside[node(s.x, s.y, s.z)] == inside[node(t.x, t.y, t.z)]) continue;
-                            sum += crossing(a, s.x, s.y, s.z);
+                            glm::vec3 n;
+                            glm::vec3 p = crossing(a, s.x, s.y, s.z, n);
+                            sum += p;
                             ++count;
+                            if (glm::dot(n, n) > 0.0f)
+                            {
+                                cellPoints.push_back(p);
+                                cellNormals.push_back(n);
+                            }
                         }
-                    cellVertex[cellIndex(i, j, k)] = out.AddVertex(count ? sum / (float)count : pos(i, j, k) + glm::vec3(h * 0.5f));
+                    glm::vec3 at = count ? sum / (float)count : pos(i, j, k) + glm::vec3(h * 0.5f);
+                    int rank = 1;
+                    if (sharp && !cellPoints.empty())
+                    {
+                        glm::vec3 solved = SolvePlanes(cellPoints, cellNormals, rank);
+                        // (kept near its cell: planes nearly parallel can put the meeting point far away)
+                        glm::vec3 lo = pos(i, j, k) - glm::vec3(h * 0.5f), hi = pos(i, j, k) + glm::vec3(h * 1.5f);
+                        if (glm::all(glm::greaterThanEqual(solved, lo)) && glm::all(glm::lessThanEqual(solved, hi))) at = solved;
+                        else rank = 1;
+                    }
+                    cellVertex[cellIndex(i, j, k)] = out.AddVertex(at);
+                    feature.push_back(rank >= 2 ? 1 : 0);
                 }
         // A quad around each grid edge the surface crosses, facing out of the inside.
         for (int k = 1; k < dim.z - 1; ++k)
@@ -1374,7 +1468,7 @@ namespace Dimension::Modeling::Sculpt
                 std::vector<glm::vec3> next = out.Positions;
                 for (uint32_t v = 0; v < out.VertexCount(); ++v)
                 {
-                    if (nb[v].empty()) continue;
+                    if (nb[v].empty() || (sharp && feature[v])) continue;
                     glm::vec3 avg(0.0f);
                     for (uint32_t u : nb[v]) avg += out.Positions[u];
                     next[v] += (avg / (float)nb[v].size() - out.Positions[v]) * lambda;

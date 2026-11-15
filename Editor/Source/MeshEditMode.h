@@ -371,6 +371,7 @@ namespace Editor
         bool m_DynTopo = false, m_ConstantDetail = false;
         float m_DetailPx = 12.0f, m_DetailSize = 0.05f;
         float m_VoxelSize = 0.05f;
+        bool m_RemeshSharp = false;
         bool m_Stroking = false;
         Modeling::Sculpt::Brush m_StrokeType = Modeling::Sculpt::Brush::Draw;
         bool m_StrokeInvert = false;

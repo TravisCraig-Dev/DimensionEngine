@@ -158,7 +158,9 @@ namespace Dimension::Modeling::Sculpt
     };
 
     // Voxel Remesh: a new, even, all-quad surface over the mesh's volume, made from a grid of `voxelSize` cells (its
-    // inside found by counting crossings, so the mesh should be closed). `smooth` relaxing passes follow. Material slots,
-    // modifiers and the name are kept; faces come out smooth; UVs are lost.
-    EditableMesh VoxelRemesh(const EditableMesh& m, float voxelSize, int smooth = 2);
+    // inside found by counting crossings, so the mesh should be closed). `smooth` relaxing passes follow. `sharp` keeps
+    // corners and creases (dual contouring: each vertex where the surface's planes in its cell meet, and left out of the
+    // relaxing) instead of rounding them off. Material slots, modifiers and the name are kept; faces come out smooth;
+    // UVs are lost.
+    EditableMesh VoxelRemesh(const EditableMesh& m, float voxelSize, int smooth = 2, bool sharp = false);
 }

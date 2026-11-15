@@ -103,7 +103,7 @@ namespace Editor
         EnsureSculptMesh();
         Record("Voxel Remesh");
         m_Sculpt.WriteTo(m_Mesh);
-        m_Mesh = sc::VoxelRemesh(m_Mesh, m_VoxelSize);
+        m_Mesh = sc::VoxelRemesh(m_Mesh, m_VoxelSize, 2, m_RemeshSharp);
         m_Mesh.Changed();
         m_SculptValid = false;
         Commit();
@@ -484,6 +484,8 @@ namespace Editor
         ImGui::SetNextItemWidth(80.0f);
         ImGui::DragFloat("##voxel", &m_VoxelSize, 0.001f, 0.001f, 10.0f, "%.3f m");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Voxel size for Remesh");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Sharp", m_RemeshSharp, "Remesh keeps corners and creases (else rounds them off a little)")) m_RemeshSharp = !m_RemeshSharp;
         ImGui::SameLine(0.0f, 2.0f);
         if (ImGui::Button("Remesh")) DoVoxelRemesh();
         if (ImGui::IsItemHovered())
