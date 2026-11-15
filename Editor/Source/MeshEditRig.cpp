@@ -328,7 +328,18 @@ namespace Editor
             glm::mat4 frame = (start.Parent >= 0 && start.Parent < (int)startPose.size() ? startPose[(size_t)start.Parent] : glm::mat4(1.0f)) *
                               rig::RestLocal(m_Mesh, (int)b);
             glm::quat fr = RotationOf(frame);
-            if (md.Kind == 1) bone.PoseLocation = start.PoseLocation + glm::inverse(fr) * move;
+            if (md.Kind == 1)
+            {
+                // Auto IK: a bone with parents isn't moved but reached for (its tail follows the mouse, its chain bends).
+                if (m_AutoIK && start.Parent >= 0)
+                {
+                    float len = glm::length(start.Tail - start.Head);
+                    glm::vec3 tail = glm::vec3(startPose[b] * glm::vec4(0, len, 0, 1));
+                    rig::SolveIK(m_Mesh, (int)b, tail + move, std::max(m_AutoIKChain, 2));
+                    continue;
+                }
+                bone.PoseLocation = start.PoseLocation + glm::inverse(fr) * move;
+            }
             else if (md.Kind == 2) bone.PoseRotation = glm::normalize(glm::inverse(fr) * turn * fr * start.PoseRotation);
             else
             {
@@ -353,7 +364,11 @@ namespace Editor
                     if ((sb.Flags & (BoneHead | BoneBody)) && !(md.Start[o].Flags & (BoneTail | BoneBody)) && glm::length(md.Start[o].Tail - sb.Head) < 1e-5f)
                         m_Mesh.Bones[o].Tail = m_Mesh.Bones[b].Head;
                 }
-        if (m_RigMode == 2) SyncRigPreview();
+        if (m_RigMode == 2)
+        {
+            rig::ApplyConstraints(m_Mesh);
+            SyncRigPreview();
+        }
         bool later = ImGui::GetFrameCount() > md.StartFrame;
         if (later && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
             EndBoneModal(true);
@@ -471,7 +486,8 @@ namespace Editor
             if (Pressed("rig.insertKey"))
                 RigOperate("Insert Keyframe", [&] {
                     if (m_Action < 0 || m_Action >= (int)m_Mesh.Actions.size()) m_Action = rig::AddAction(m_Mesh, "Action");
-                    rig::InsertKey(m_Mesh, m_Action, m_ActionTime);
+                    rig::InsertKey(m_Mesh, m_Action, m_ActionTime, m_KeySelectedOnly, m_KeyShapes);
+                    m_SelectedKey = m_ActionTime;
                     Log::Info("Keyed the pose at {:.2f} s in '{}'", m_ActionTime, m_Mesh.Actions[(size_t)m_Action].Name);
                 });
         }
@@ -575,9 +591,11 @@ namespace Editor
             m_ActionTime += ImGui::GetIO().DeltaTime;
             if (length > 0.0f) m_ActionTime = std::fmod(m_ActionTime, length);
             rig::EvaluateAction(m_Mesh, m_Action, m_ActionTime);
+            rig::ApplyConstraints(m_Mesh);
             SyncRigPreview();
         }
         DrawBoneOverlay(dl);
+        if (m_RigMode == 2 && m_ShowDopeSheet) DrawDopeSheet(dl);
         ImVec2 cursor = ImGui::GetCursorScreenPos();
         DrawRigToolbar(m_Origin);
         ImGui::SetCursorScreenPos(cursor);
@@ -692,6 +710,29 @@ namespace Editor
                 ImGui::SameLine(0.0f, 2.0f);
                 bool deform = bone.Deform;
                 if (ImGui::Checkbox("Deform", &deform)) RigOperate("Bone Deform", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].Deform = deform; });
+                // An IK constraint: this bone's tail reaching for another bone (a target to move in Pose).
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120.0f);
+                std::string ik = bone.IKTarget >= 0 && bone.IKTarget < (int)m_Mesh.Bones.size() ? "IK: " + m_Mesh.Bones[(size_t)bone.IKTarget].Name : "No IK";
+                if (ImGui::BeginCombo("##ik", ik.c_str()))
+                {
+                    if (ImGui::Selectable("No IK", bone.IKTarget < 0)) RigOperate("IK Constraint", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].IKTarget = -1; });
+                    for (size_t t = 0; t < m_Mesh.Bones.size(); ++t)
+                    {
+                        if ((int)t == m_ActiveBone) continue;
+                        if (ImGui::Selectable((m_Mesh.Bones[t].Name + "##ik" + std::to_string(t)).c_str(), bone.IKTarget == (int)t))
+                            RigOperate("IK Constraint", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].IKTarget = (int)t; });
+                    }
+                    ImGui::EndCombo();
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("IK constraint: in Pose this bone's tail reaches for the target bone's head (move the target)");
+                if (bone.IKTarget >= 0)
+                {
+                    ImGui::SameLine(0.0f, 2.0f);
+                    ImGui::SetNextItemWidth(70.0f);
+                    int chain = bone.IKChain;
+                    if (ImGui::SliderInt("##chain", &chain, 1, 8, "chain %d")) RigOperate("IK Chain", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].IKChain = chain; });
+                }
             }
         }
         else if (m_RigMode == 2)
@@ -723,6 +764,7 @@ namespace Editor
                 {
                     m_ActionPlaying = false;
                     rig::EvaluateAction(m_Mesh, m_Action, m_ActionTime);
+                    rig::ApplyConstraints(m_Mesh);
                     SyncRigPreview();
                 }
                 ImGui::SameLine(0.0f, 2.0f);
@@ -736,6 +778,24 @@ namespace Editor
                 ImGui::SameLine(0.0f, 2.0f);
                 ImGui::TextDisabled("%zu keys", action.Keys.size());
             }
+            // Second line of options.
+            ImGui::Checkbox("Selected Only", &m_KeySelectedOnly);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Key only the selected bones (else every bone)");
+            ImGui::SameLine();
+            ImGui::Checkbox("Key Shapes", &m_KeyShapes);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Key the shape keys' values too (they play as blend shape weights)");
+            ImGui::SameLine();
+            bool autoIK = m_AutoIK;
+            if (ImGui::Checkbox("Auto IK", &autoIK)) m_AutoIK = autoIK;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("G on a bone with parents bends its chain so its tail follows the mouse");
+            if (m_AutoIK)
+            {
+                ImGui::SameLine(0.0f, 2.0f);
+                ImGui::SetNextItemWidth(70.0f);
+                ImGui::SliderInt("##ikchain", &m_AutoIKChain, 2, 8, "chain %d");
+            }
+            ImGui::SameLine();
+            ImGui::Checkbox("Dope Sheet", &m_ShowDopeSheet);
             ImGui::SameLine();
             if (ImGui::Button("Rest Pose"))
                 RigOperate("Clear Pose", [&] {
@@ -783,6 +843,103 @@ namespace Editor
         ImGui::EndGroup();
         m_ToolbarMin = ImGui::GetItemRectMin();
         m_ToolbarMax = ImGui::GetItemRectMax();
+    }
+
+    // ---- The dope sheet: the action's keys on a timeline (drag to move, Delete to remove, click the ruler to scrub)
+
+    void MeshEditMode::DrawDopeSheet(ImDrawList* dl)
+    {
+        if (m_Action < 0 || m_Action >= (int)m_Mesh.Actions.size()) return;
+        Action& action = m_Mesh.Actions[(size_t)m_Action];
+        // Rows: all keys, then the selected bones (up to 6), then the shape keys keyed anywhere.
+        std::vector<std::pair<std::string, int>> rows = { { "Keys", -1 } }; // (label, bone >= 0 or -2 - shape index)
+        for (size_t b = 0; b < m_Mesh.Bones.size() && rows.size() < 7; ++b)
+            if (m_Mesh.Bones[b].Flags & BoneBody) rows.push_back({ m_Mesh.Bones[b].Name, (int)b });
+        for (size_t s = 0; s < m_Mesh.ShapeKeys.size(); ++s)
+            for (const ActionKey& k : action.Keys)
+                if (s < k.Shapes.size())
+                {
+                    rows.push_back({ m_Mesh.ShapeKeys[s].Name, -2 - (int)s });
+                    break;
+                }
+        const float rowH = 16.0f, labelW = 110.0f;
+        float height = 18.0f + rowH * (float)rows.size();
+        ImVec2 mn(m_Origin.x + 8.0f, m_Origin.y + m_Size.y - 32.0f - height), mx(m_Origin.x + m_Size.x - 8.0f, m_Origin.y + m_Size.y - 32.0f);
+        float end = std::max(action.Duration() + 0.5f, 1.0f);
+        float x0 = mn.x + labelW, x1 = mx.x - 8.0f;
+        auto toX = [&](float t) { return x0 + (x1 - x0) * t / end; };
+        auto toTime = [&](float x) { return std::clamp((x - x0) / (x1 - x0) * end, 0.0f, end); };
+        dl->AddRectFilled(mn, mx, IM_COL32(25, 25, 28, 220), 4.0f);
+        // The ruler.
+        for (float t = 0.0f; t <= end + 1e-4f; t += end > 4.0f ? 1.0f : 0.25f)
+        {
+            float x = toX(t);
+            dl->AddLine(ImVec2(x, mn.y + 2.0f), ImVec2(x, mx.y - 2.0f), IM_COL32(255, 255, 255, 25));
+            char label[16];
+            std::snprintf(label, sizeof(label), "%.2g", t);
+            dl->AddText(ImVec2(x + 2.0f, mn.y + 1.0f), IM_COL32(200, 200, 200, 160), label);
+        }
+        // The input area (so clicks here don't reach the view).
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(mn);
+        ImGui::InvisibleButton("##dopesheet", ImVec2(mx.x - mn.x, mx.y - mn.y));
+        bool hovered = ImGui::IsItemHovered();
+        ImGui::SetCursorScreenPos(cursor);
+        ImVec2 mouse = ImGui::GetIO().MousePos;
+        int hitKey = -1;
+        for (size_t r = 0; r < rows.size(); ++r)
+        {
+            float y = mn.y + 18.0f + rowH * (float)r + rowH * 0.5f;
+            dl->AddText(ImVec2(mn.x + 6.0f, y - 7.0f), IM_COL32(220, 220, 220, 220), rows[r].first.c_str());
+            for (size_t k = 0; k < action.Keys.size(); ++k)
+            {
+                const ActionKey& key = action.Keys[k];
+                int row = rows[r].second;
+                bool has = row == -1 ? true : row >= 0 ? key.HasBone((size_t)row) : (size_t)(-2 - row) < key.Shapes.size();
+                if (!has) continue;
+                float x = key.Time == m_DragKeyFrom && m_DragKeyFrom >= 0.0f ? toX(toTime(mouse.x)) : toX(key.Time);
+                bool sel = std::abs(key.Time - m_SelectedKey) < 1e-4f;
+                ImVec2 c(x, y);
+                dl->AddQuadFilled(ImVec2(c.x, c.y - 5), ImVec2(c.x + 5, c.y), ImVec2(c.x, c.y + 5), ImVec2(c.x - 5, c.y), sel ? IM_COL32(255, 180, 60, 255) : IM_COL32(220, 220, 220, 230));
+                if (hovered && std::abs(mouse.x - c.x) < 6.0f && std::abs(mouse.y - c.y) < 7.0f) hitKey = (int)k;
+            }
+        }
+        float px = toX(m_ActionTime);
+        dl->AddLine(ImVec2(px, mn.y), ImVec2(px, mx.y), IM_COL32(80, 160, 255, 255), 2.0f);
+        // Clicking a key selects it (and starts dragging it); the ruler or an empty spot moves the playhead.
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            if (hitKey >= 0)
+            {
+                m_SelectedKey = action.Keys[(size_t)hitKey].Time;
+                m_DragKeyFrom = m_SelectedKey;
+            }
+            else
+            {
+                m_ActionPlaying = false;
+                m_ActionTime = toTime(mouse.x);
+                rig::EvaluateAction(m_Mesh, m_Action, m_ActionTime);
+                rig::ApplyConstraints(m_Mesh);
+                SyncRigPreview();
+            }
+        }
+        if (m_DragKeyFrom >= 0.0f && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            float to = std::round(toTime(mouse.x) * 100.0f) / 100.0f; // (hundredths of a second)
+            if (std::abs(to - m_DragKeyFrom) > 1e-4f)
+            {
+                Record("Move Keyframe");
+                rig::MoveKey(m_Mesh, m_Action, m_DragKeyFrom, to);
+                m_SelectedKey = to;
+                m_Dirty = true;
+            }
+            m_DragKeyFrom = -1.0f;
+        }
+        if (hovered && m_SelectedKey >= 0.0f && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_X)))
+        {
+            RigOperate("Delete Keyframe", [&] { rig::DeleteKey(m_Mesh, m_Action, m_SelectedKey); });
+            m_SelectedKey = -1.0f;
+        }
     }
 
     // ---- Shape keys

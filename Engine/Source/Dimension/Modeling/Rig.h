@@ -77,10 +77,21 @@ namespace Dimension::Modeling::Rig
     // ---- Actions
 
     int AddAction(EditableMesh& m, const std::string& name);
-    // Keys every bone's current pose at `time` (replacing a key there).
-    void InsertKey(EditableMesh& m, int action, float time);
+    // Keys the bones' current poses at `time` (only the selected ones with `selectedOnly`; into a key already there),
+    // and the shape keys' values with `shapes`.
+    void InsertKey(EditableMesh& m, int action, float time, bool selectedOnly = false, bool shapes = false);
+    // Moves the key at `from` to `to` (merging into one there). Returns false when there's none at `from`.
+    bool MoveKey(EditableMesh& m, int action, float from, float to);
     void DeleteKey(EditableMesh& m, int action, float time);
     // Sets the bones' poses to the action at `time` (between keys: interpolated).
     void EvaluateAction(EditableMesh& m, int action, float time);
     AnimationClip ToClip(const EditableMesh& m, const Action& action);
+
+    // ---- IK
+
+    // Turns `bone` and `chain - 1` of its parents (cyclic coordinate descent) so its tail reaches `target` (model
+    // space). Returns how far the tail ends up from it.
+    float SolveIK(EditableMesh& m, int bone, const glm::vec3& target, int chain, int iterations = 256);
+    // The bones' IK constraints (each reaching for its target bone's posed head).
+    void ApplyConstraints(EditableMesh& m);
 }

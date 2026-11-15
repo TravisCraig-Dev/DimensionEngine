@@ -56,6 +56,25 @@ namespace Dimension::Modeling::Paint
         return true;
     }
 
+    bool Image::CanSave(const fs::path& path)
+    {
+        std::string ext = path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return (char)std::tolower((unsigned char)c); });
+        return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp";
+    }
+
+    bool Image::Save(const fs::path& path) const
+    {
+        if (Pixels.empty()) return false;
+        std::string ext = path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return (char)std::tolower((unsigned char)c); });
+        std::string file = path.string();
+        if (ext == ".jpg" || ext == ".jpeg") return stbi_write_jpg(file.c_str(), (int)Width, (int)Height, 4, Pixels.data(), 95) != 0;
+        if (ext == ".tga") return stbi_write_tga(file.c_str(), (int)Width, (int)Height, 4, Pixels.data()) != 0;
+        if (ext == ".bmp") return stbi_write_bmp(file.c_str(), (int)Width, (int)Height, 4, Pixels.data()) != 0;
+        return SavePng(path);
+    }
+
     bool Image::SavePng(const fs::path& path) const
     {
         if (Pixels.empty()) return false;
@@ -88,6 +107,13 @@ namespace Dimension::Modeling::Paint
         glm::vec3 rgb = glm::clamp(glm::mix(d, target, w), 0.0f, 1.0f);
         float a = mode == Blend::Mix ? dst.a + (1.0f - dst.a) * w : dst.a;
         return glm::vec4(rgb, a);
+    }
+
+    glm::vec4 BlendColorLinear(const glm::vec4& dst, const glm::vec4& src, Blend mode, float weight)
+    {
+        auto lin = [](const glm::vec4& c) { return glm::vec4(SrgbToLinear(c.r), SrgbToLinear(c.g), SrgbToLinear(c.b), c.a); };
+        glm::vec4 out = BlendColor(lin(dst), lin(src), mode, weight);
+        return glm::vec4(LinearToSrgb(out.r), LinearToSrgb(out.g), LinearToSrgb(out.b), out.a);
     }
 
     float BrushWeight(const Brush& brush, float d)
@@ -151,7 +177,8 @@ namespace Dimension::Modeling::Paint
                         if (face.Verts[k] != v) continue;
                         glm::vec4 before = UnpackRGBA8(face.ColorAt(k));
                         glm::vec4 after = brush.Mode == Blend::Blur ? glm::mix(before, neighbours, std::min(1.0f, w))
-                                                                     : BlendColor(before, brush.Color, brush.Mode, w);
+                                          : brush.Linear ? BlendColorLinear(before, brush.Color, brush.Mode, w)
+                                                         : BlendColor(before, brush.Color, brush.Mode, w);
                         uint32_t packed = PackRGBA8(after);
                         if (packed != face.ColorAt(k))
                         {
@@ -261,7 +288,7 @@ namespace Dimension::Modeling::Paint
                                 next = glm::mix(old, avg / 9.0f, std::min(1.0f, w));
                             }
                             else
-                                next = BlendColor(old, brush.Color, brush.Mode, w);
+                                next = brush.Linear ? BlendColorLinear(old, brush.Color, brush.Mode, w) : BlendColor(old, brush.Color, brush.Mode, w);
                             uint32_t packed = PackRGBA8(next);
                             if (packed != dst)
                             {

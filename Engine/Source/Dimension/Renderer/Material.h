@@ -19,6 +19,9 @@ namespace Dimension
         float Metallic = 0.0f;
         float Roughness = 0.5f;
         AssetHandle MetallicRoughnessMap = AssetHandle::None();
+        // Baked ambient occlusion (red channel): darkens the ambient and reflected light, by Occlusion Strength.
+        AssetHandle OcclusionMap = AssetHandle::None();
+        float OcclusionStrength = 1.0f;
         glm::vec3 EmissionColor{ 0.0f };
         float EmissionStrength = 1.0f;
         AssetHandle EmissionMap = AssetHandle::None();

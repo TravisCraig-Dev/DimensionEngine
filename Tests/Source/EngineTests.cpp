@@ -19271,6 +19271,66 @@ namespace
         CHECK(ClosedAndConsistent(disc) && Near(std::abs(Volume(disc)), glm::pi<float>() * 0.2f, 0.06f) && Near(db.Max.y - db.Min.y, 0.2f, 1e-3f));
     }
 
+    void TestModelingRigFixes()
+    {
+        using namespace ModelingTest;
+        using namespace RigTest;
+        // Keys of only some bones: each bone moves between its own keys.
+        EditableMesh m = Column();
+        int act = Rig::AddAction(m, "Wave");
+        Rig::InsertKey(m, act, 0.0f); // everything at rest
+        m.Bones[1].Flags = BoneBody;
+        m.Bones[1].PoseRotation = glm::angleAxis(1.0f, glm::vec3(0, 0, 1));
+        Rig::InsertKey(m, act, 1.0f, true); // the upper bone only
+        m.Bones[0].Flags = BoneBody;
+        m.Bones[1].Flags = 0;
+        m.Bones[0].PoseLocation = { 0, 0.5f, 0 };
+        Rig::InsertKey(m, act, 2.0f, true); // the lower bone only
+        CHECK(m.Actions[0].Keys.size() == 3 && !m.Actions[0].Keys[1].HasBone(0) && m.Actions[0].Keys[1].HasBone(1));
+        Rig::EvaluateAction(m, act, 1.0f);
+        CHECK(Near(m.Bones[1].PoseRotation.z, std::sin(0.5f), 1e-4f) && Near(m.Bones[0].PoseLocation.y, 0.25f, 1e-4f)); // lower half way 0 -> 2
+        Rig::EvaluateAction(m, act, 2.0f);
+        CHECK(Near(m.Bones[1].PoseRotation.z, std::sin(0.5f), 1e-4f) && Near(m.Bones[0].PoseLocation.y, 0.5f, 1e-4f)); // upper held
+        AnimationClip clip = Rig::ToClip(m, m.Actions[0]);
+        size_t upperKeys = 0, lowerKeys = 0;
+        for (const AnimationChannel& c : clip.Channels)
+            if (c.Path == AnimationPath::Rotation) (c.Joint == 1 ? upperKeys : lowerKeys) = c.Times.size();
+        CHECK(upperKeys == 2 && lowerKeys == 2);
+        // Shape key values keyed: weight channels.
+        Rig::AddShapeKey(m, "Smile");
+        m.ShapeKeys[0].Value = 0.0f;
+        Rig::InsertKey(m, act, 0.0f, true, true);
+        m.ShapeKeys[0].Value = 1.0f;
+        Rig::InsertKey(m, act, 1.0f, true, true);
+        Rig::EvaluateAction(m, act, 0.5f);
+        CHECK(Near(m.ShapeKeys[0].Value, 0.5f, 1e-4f));
+        AnimationClip shaped = Rig::ToClip(m, m.Actions[0]);
+        CHECK(shaped.WeightChannels.size() == 1 && shaped.WeightChannels[0].Times.size() == 2 && Near(shaped.WeightChannels[0].Values[1].x, 1.0f));
+        // Moving a key; moving it onto another merges them.
+        CHECK(Rig::MoveKey(m, act, 2.0f, 3.0f) && Near(m.Actions[0].Duration(), 3.0f));
+        CHECK(Rig::MoveKey(m, act, 3.0f, 1.0f) && m.Actions[0].Keys.size() == 2 && m.Actions[0].Keys[1].HasBone(0) && m.Actions[0].Keys[1].HasBone(1));
+        // Kept in the file.
+        EditableMesh back;
+        CHECK(EditableMesh::FromJson(m.ToJson(), back) && back.Actions[0].Keys.size() == 2 && back.Actions[0].Keys[0].Shapes.size() == 1);
+
+        // IK: the upper bone's tail reaches a point by bending both bones; a constraint does it towards a target bone.
+        EditableMesh arm = Column();
+        float miss = Rig::SolveIK(arm, 1, { 1.5f, 0.5f, 0.0f }, 2); // (beyond the upper bone alone)
+        CHECK(miss < 2e-3f && std::abs(arm.Bones[0].PoseRotation.w) < 0.9999f);
+        EditableMesh rig = Column();
+        int target = Rig::AddBone(rig, "Target", { 1.2f, 0.6f, 0 }, { 1.2f, 0.8f, 0 });
+        rig.Bones[target].Deform = false;
+        rig.Bones[1].IKTarget = target;
+        rig.Bones[1].IKChain = 2;
+        Rig::ApplyConstraints(rig);
+        std::vector<glm::mat4> pose = Rig::PoseMatrices(rig);
+        CHECK(Near(glm::vec3(pose[1] * glm::vec4(0, 1, 0, 1)), glm::vec3(1.2f, 0.6f, 0), 2e-3f));
+        EditableMesh rigBack;
+        CHECK(EditableMesh::FromJson(rig.ToJson(), rigBack) && rigBack.Bones[1].IKTarget == target && rigBack.Bones[1].IKChain == 2);
+        Rig::DeleteBones(rig, { 0 });
+        CHECK(rig.Bones[0].IKTarget == target - 1);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19694,6 +19754,7 @@ int main(int argc, char** argv)
     Run("Modeling curves and text", TestModelingCurvesAndText);
     Run("Modeling retopology", TestModelingRetopology);
     Run("Modeling tool fixes", TestModelingToolFixes);
+    Run("Modeling rig fixes", TestModelingRigFixes);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

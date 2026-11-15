@@ -1803,6 +1803,18 @@ namespace Dimension
             g->Maps = glm::uvec4(TextureIndex(m.BaseColorMap, white), normal, TextureIndex(m.MetallicRoughnessMap, white),
                                  TextureIndex(m.EmissionMap, white));
             g->Flags = glm::uvec4((uint32_t)m.BlendMode, m.NormalMap.IsValid() && normal != white ? 1u : 0u, 0u, 0u);
+            // Occlusion (plain materials: terrain and water use Maps2 themselves): z its texture + 1, w the strength.
+            if (m.OcclusionMap.IsValid())
+            {
+                uint32_t occlusion = TextureIndex(m.OcclusionMap, white);
+                if (occlusion != white)
+                {
+                    float strength = std::clamp(m.OcclusionStrength, 0.0f, 1.0f);
+                    uint32_t bits;
+                    std::memcpy(&bits, &strength, 4);
+                    g->Maps2 = glm::uvec4(0u, 0u, occlusion + 1u, bits);
+                }
+            }
             return gpu;
         }
     }

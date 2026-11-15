@@ -918,6 +918,11 @@ namespace Dimension::Modeling
                 if (std::abs(b.PoseRotation.w) < 0.999999f) o["poseRotation"] = { b.PoseRotation.x, b.PoseRotation.y, b.PoseRotation.z, b.PoseRotation.w };
                 if (b.PoseLocation != glm::vec3(0.0f)) o["poseLocation"] = vec3(b.PoseLocation);
                 if (b.PoseScale != glm::vec3(1.0f)) o["poseScale"] = vec3(b.PoseScale);
+                if (b.IKTarget >= 0)
+                {
+                    o["ikTarget"] = b.IKTarget;
+                    o["ikChain"] = b.IKChain;
+                }
                 bones.push_back(std::move(o));
             }
             j["bones"] = std::move(bones);
@@ -969,7 +974,21 @@ namespace Dimension::Modeling
                         for (int c = 0; c < 3; ++c) loc.push_back(Round(k.Locations[b][c]));
                         for (int c = 0; c < 3; ++c) scl.push_back(Round(k.Scales[b][c]));
                     }
-                    keys.push_back({ { "time", Round(k.Time) }, { "rotations", std::move(rot) }, { "locations", std::move(loc) }, { "scales", std::move(scl) } });
+                    json key = { { "time", Round(k.Time) }, { "rotations", std::move(rot) }, { "locations", std::move(loc) }, { "scales", std::move(scl) } };
+                    if (!k.Keyed.empty())
+                    {
+                        json keyed = json::array();
+                        for (size_t b = 0; b < k.Keyed.size(); ++b)
+                            if (k.Keyed[b]) keyed.push_back(b);
+                        key["bones"] = std::move(keyed);
+                    }
+                    if (!k.Shapes.empty())
+                    {
+                        json shapes = json::array();
+                        for (float v : k.Shapes) shapes.push_back(Round(v));
+                        key["shapes"] = std::move(shapes);
+                    }
+                    keys.push_back(std::move(key));
                 }
                 actions.push_back({ { "name", a.Name }, { "keys", std::move(keys) } });
             }
@@ -1127,6 +1146,8 @@ namespace Dimension::Modeling
             }
             b.PoseLocation = readVec3(o.value("poseLocation", json()), glm::vec3(0.0f));
             b.PoseScale = readVec3(o.value("poseScale", json()), glm::vec3(1.0f));
+            b.IKTarget = o.value("ikTarget", -1);
+            b.IKChain = std::clamp(o.value("ikChain", 2), 1, 64);
             out.Bones.push_back(b);
         }
         for (Bone& b : out.Bones)
@@ -1174,6 +1195,13 @@ namespace Dimension::Modeling
                     k.Locations.push_back({ loc[3 * b].get<float>(), loc[3 * b + 1].get<float>(), loc[3 * b + 2].get<float>() });
                     k.Scales.push_back({ scl[3 * b].get<float>(), scl[3 * b + 1].get<float>(), scl[3 * b + 2].get<float>() });
                 }
+                if (kj.contains("bones"))
+                {
+                    k.Keyed.assign(k.Rotations.size(), 0);
+                    for (const auto& b : kj["bones"])
+                        if (b.get<size_t>() < k.Keyed.size()) k.Keyed[b.get<size_t>()] = 1;
+                }
+                for (const auto& v : kj.value("shapes", json::array())) k.Shapes.push_back(v.get<float>());
                 a.Keys.push_back(std::move(k));
             }
             std::sort(a.Keys.begin(), a.Keys.end(), [](const ActionKey& x, const ActionKey& y) { return x.Time < y.Time; });

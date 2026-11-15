@@ -12,6 +12,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Ma
     uvec4 Flags;        // x blend mode (0 opaque, 1 cutout, 2 transparent), y has normal map, z 1 = terrain, w 1 = fur shell
     vec4 Layers[2];     // fur: [0] density, thickness, droop, wind response; [1] tip color (rgb), root shade
     uvec4 Maps2;        // terrain: xy its layers' address (TerrainLayersRef), z their count, w height blend (float bits);
+                        // plain materials: z occlusion map + 1 (0 none), w its strength (float bits);
                         // water: xy the floating things' boxes (FloatingRef, 0 = none)
 };
 

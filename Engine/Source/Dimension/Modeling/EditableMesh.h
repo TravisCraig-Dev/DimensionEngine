@@ -108,6 +108,10 @@ namespace Dimension::Modeling
         uint8_t Flags = 0;     // BoneHead/BoneTail/BoneBody selection bits
         glm::quat PoseRotation{ 1.0f, 0.0f, 0.0f, 0.0f };
         glm::vec3 PoseLocation{ 0.0f }, PoseScale{ 1.0f };
+        // An IK constraint (Blender's): this bone's tail reaches for the target bone's head, turning this bone and
+        // IKChain - 1 of its parents (-1: none). Applied when posing; actions key its result.
+        int IKTarget = -1;
+        int IKChain = 2;
     };
     enum BoneFlag : uint8_t { BoneHead = 1, BoneTail = 2, BoneBody = 4 };
 
@@ -172,6 +176,9 @@ namespace Dimension::Modeling
         float Time = 0.0f;
         std::vector<glm::quat> Rotations; // per bone (as Bone::PoseRotation)
         std::vector<glm::vec3> Locations, Scales;
+        std::vector<uint8_t> Keyed;       // per bone: this key holds its pose (empty: every bone's)
+        std::vector<float> Shapes;        // per shape key: its value (empty: shape keys not keyed here)
+        bool HasBone(size_t b) const { return b < Rotations.size() && (Keyed.empty() || (b < Keyed.size() && Keyed[b])); }
     };
     struct Action
     {

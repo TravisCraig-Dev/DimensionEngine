@@ -242,6 +242,7 @@ namespace Dimension::Modeling::Rig
                     k.Rotations.push_back(glm::quat(1, 0, 0, 0));
                     k.Locations.push_back(glm::vec3(0.0f));
                     k.Scales.push_back(glm::vec3(1.0f));
+                    if (!k.Keyed.empty()) k.Keyed.push_back(0);
                 }
         return index;
     }
@@ -273,6 +274,7 @@ namespace Dimension::Modeling::Rig
             if (gone[b]) continue;
             Bone bone = m.Bones[b];
             bone.Parent = survivingParent(bone.Parent);
+            bone.IKTarget = bone.IKTarget >= 0 && bone.IKTarget < (int)n ? remap[(size_t)bone.IKTarget] : -1;
             kept.push_back(bone);
         }
         for (auto& list : m.Weights)
@@ -287,12 +289,14 @@ namespace Dimension::Modeling::Rig
             {
                 ActionKey out;
                 out.Time = k.Time;
+                out.Shapes = k.Shapes;
                 for (size_t b = 0; b < n && b < k.Rotations.size(); ++b)
                     if (!gone[b])
                     {
                         out.Rotations.push_back(k.Rotations[b]);
                         out.Locations.push_back(k.Locations[b]);
                         out.Scales.push_back(k.Scales[b]);
+                        if (!k.Keyed.empty()) out.Keyed.push_back(b < k.Keyed.size() ? k.Keyed[b] : 0);
                     }
                 k = std::move(out);
             }
@@ -647,26 +651,81 @@ namespace Dimension::Modeling::Rig
         return (int)m.Actions.size() - 1;
     }
 
-    void InsertKey(EditableMesh& m, int action, float time)
+    void InsertKey(EditableMesh& m, int action, float time, bool selectedOnly, bool shapes)
     {
         if (action < 0 || action >= (int)m.Actions.size()) return;
-        ActionKey k;
-        k.Time = std::max(time, 0.0f);
-        for (const Bone& b : m.Bones)
-        {
-            k.Rotations.push_back(b.PoseRotation);
-            k.Locations.push_back(b.PoseLocation);
-            k.Scales.push_back(b.PoseScale);
-        }
+        time = std::max(time, 0.0f);
         auto& keys = m.Actions[(size_t)action].Keys;
+        ActionKey* key = nullptr;
         for (ActionKey& o : keys)
-            if (std::abs(o.Time - k.Time) < 1e-4f)
-            {
-                o = std::move(k);
-                return;
-            }
-        keys.push_back(std::move(k));
+            if (std::abs(o.Time - time) < 1e-4f) key = &o;
+        bool created = !key;
+        if (created)
+        {
+            keys.push_back({});
+            key = &keys.back();
+            key->Time = time;
+            key->Keyed.assign(m.Bones.size(), 0);
+        }
+        size_t n = m.Bones.size();
+        key->Rotations.resize(n, glm::quat(1, 0, 0, 0));
+        key->Locations.resize(n, glm::vec3(0.0f));
+        key->Scales.resize(n, glm::vec3(1.0f));
+        if (key->Keyed.empty()) key->Keyed.assign(n, 1); // (an old whole-pose key)
+        key->Keyed.resize(n, 0);
+        for (size_t b = 0; b < n; ++b)
+        {
+            if (selectedOnly && !(m.Bones[b].Flags & BoneBody)) continue;
+            key->Rotations[b] = m.Bones[b].PoseRotation;
+            key->Locations[b] = m.Bones[b].PoseLocation;
+            key->Scales[b] = m.Bones[b].PoseScale;
+            key->Keyed[b] = 1;
+        }
+        if (shapes)
+        {
+            key->Shapes.clear();
+            for (const ShapeKey& s : m.ShapeKeys) key->Shapes.push_back(s.Value);
+        }
+        // Everything keyed: stored as a whole-pose key.
+        if (std::all_of(key->Keyed.begin(), key->Keyed.end(), [](uint8_t k) { return k != 0; })) key->Keyed.clear();
+        if (created) std::sort(keys.begin(), keys.end(), [](const ActionKey& a, const ActionKey& b) { return a.Time < b.Time; });
+    }
+
+    bool MoveKey(EditableMesh& m, int action, float from, float to)
+    {
+        if (action < 0 || action >= (int)m.Actions.size()) return false;
+        auto& keys = m.Actions[(size_t)action].Keys;
+        auto it = std::find_if(keys.begin(), keys.end(), [&](const ActionKey& k) { return std::abs(k.Time - from) < 1e-4f; });
+        if (it == keys.end()) return false;
+        ActionKey moved = std::move(*it);
+        keys.erase(it);
+        moved.Time = std::max(to, 0.0f);
+        auto there = std::find_if(keys.begin(), keys.end(), [&](const ActionKey& k) { return std::abs(k.Time - moved.Time) < 1e-4f; });
+        if (there != keys.end())
+        {
+            // Into the key already there: the moved key's bones (and shapes) win.
+            ActionKey& o = *there;
+            size_t n = std::max(o.Rotations.size(), moved.Rotations.size());
+            if (o.Keyed.empty()) o.Keyed.assign(o.Rotations.size(), 1);
+            o.Rotations.resize(n, glm::quat(1, 0, 0, 0));
+            o.Locations.resize(n, glm::vec3(0.0f));
+            o.Scales.resize(n, glm::vec3(1.0f));
+            o.Keyed.resize(n, 0);
+            for (size_t b = 0; b < n; ++b)
+                if (moved.HasBone(b))
+                {
+                    o.Rotations[b] = moved.Rotations[b];
+                    o.Locations[b] = moved.Locations[b];
+                    o.Scales[b] = moved.Scales[b];
+                    o.Keyed[b] = 1;
+                }
+            if (!moved.Shapes.empty()) o.Shapes = moved.Shapes;
+            if (std::all_of(o.Keyed.begin(), o.Keyed.end(), [](uint8_t k) { return k != 0; })) o.Keyed.clear();
+        }
+        else
+            keys.push_back(std::move(moved));
         std::sort(keys.begin(), keys.end(), [](const ActionKey& a, const ActionKey& b) { return a.Time < b.Time; });
+        return true;
     }
 
     void DeleteKey(EditableMesh& m, int action, float time)
@@ -681,25 +740,50 @@ namespace Dimension::Modeling::Rig
         if (action < 0 || action >= (int)m.Actions.size()) return;
         const auto& keys = m.Actions[(size_t)action].Keys;
         if (keys.empty()) return;
-        size_t hi = 0;
-        while (hi < keys.size() && keys[hi].Time < time) ++hi;
-        size_t lo = hi == 0 ? 0 : hi - 1;
-        hi = std::min(hi, keys.size() - 1);
-        float span = keys[hi].Time - keys[lo].Time;
-        float t = span > 1e-6f ? std::clamp((time - keys[lo].Time) / span, 0.0f, 1.0f) : 0.0f;
+        // Per bone, between the keys around `time` that hold it.
         for (size_t b = 0; b < m.Bones.size(); ++b)
         {
             Bone& bone = m.Bones[b];
-            if (b >= keys[lo].Rotations.size() || b >= keys[hi].Rotations.size())
+            int lo = -1, hi = -1;
+            for (int k = 0; k < (int)keys.size(); ++k)
+            {
+                if (!keys[(size_t)k].HasBone(b)) continue;
+                if (keys[(size_t)k].Time <= time) lo = k;
+                else if (hi < 0) hi = k;
+            }
+            if (lo < 0 && hi < 0)
             {
                 bone.PoseRotation = glm::quat(1, 0, 0, 0);
                 bone.PoseLocation = glm::vec3(0.0f);
                 bone.PoseScale = glm::vec3(1.0f);
                 continue;
             }
-            bone.PoseRotation = glm::slerp(keys[lo].Rotations[b], keys[hi].Rotations[b], t);
-            bone.PoseLocation = glm::mix(keys[lo].Locations[b], keys[hi].Locations[b], t);
-            bone.PoseScale = glm::mix(keys[lo].Scales[b], keys[hi].Scales[b], t);
+            if (lo < 0) lo = hi;
+            if (hi < 0) hi = lo;
+            const ActionKey &a = keys[(size_t)lo], &c = keys[(size_t)hi];
+            float span = c.Time - a.Time;
+            float t = span > 1e-6f ? std::clamp((time - a.Time) / span, 0.0f, 1.0f) : 0.0f;
+            bone.PoseRotation = glm::slerp(a.Rotations[b], c.Rotations[b], t);
+            bone.PoseLocation = glm::mix(a.Locations[b], c.Locations[b], t);
+            bone.PoseScale = glm::mix(a.Scales[b], c.Scales[b], t);
+        }
+        // Shape key values, between the keys that hold them.
+        for (size_t s = 0; s < m.ShapeKeys.size(); ++s)
+        {
+            int lo = -1, hi = -1;
+            for (int k = 0; k < (int)keys.size(); ++k)
+            {
+                if (s >= keys[(size_t)k].Shapes.size()) continue;
+                if (keys[(size_t)k].Time <= time) lo = k;
+                else if (hi < 0) hi = k;
+            }
+            if (lo < 0 && hi < 0) continue;
+            if (lo < 0) lo = hi;
+            if (hi < 0) hi = lo;
+            const ActionKey &a = keys[(size_t)lo], &c = keys[(size_t)hi];
+            float span = c.Time - a.Time;
+            float t = span > 1e-6f ? std::clamp((time - a.Time) / span, 0.0f, 1.0f) : 0.0f;
+            m.ShapeKeys[s].Value = glm::mix(a.Shapes[s], c.Shapes[s], t);
         }
     }
 
@@ -718,6 +802,7 @@ namespace Dimension::Modeling::Rig
             glm::mat4 rest = RestLocal(m, (int)b);
             for (const ActionKey& k : action.Keys)
             {
+                if (!k.HasBone(b) && !k.Keyed.empty()) continue; // (keys without this bone: no key for it here)
                 Bone posed = m.Bones[b];
                 if (b < k.Rotations.size())
                 {
@@ -744,6 +829,109 @@ namespace Dimension::Modeling::Rig
             clip.Channels.push_back(std::move(r));
             clip.Channels.push_back(std::move(s));
         }
+        // Keyed shape key values: weight channels (blend shape index, value in x).
+        for (size_t sk = 0; sk < m.ShapeKeys.size(); ++sk)
+        {
+            AnimationChannel w;
+            w.Joint = (int)sk;
+            w.Path = AnimationPath::Translation;
+            for (const ActionKey& k : action.Keys)
+                if (sk < k.Shapes.size())
+                {
+                    w.Times.push_back(k.Time);
+                    w.Values.push_back(glm::vec4(k.Shapes[sk], 0.0f, 0.0f, 0.0f));
+                }
+            if (!w.Times.empty()) clip.WeightChannels.push_back(std::move(w));
+        }
         return clip;
+    }
+
+    // ---- IK
+
+    float SolveIK(EditableMesh& m, int bone, const glm::vec3& target, int chain, int iterations)
+    {
+        if (bone < 0 || bone >= (int)m.Bones.size()) return 0.0f;
+        std::vector<int> joints;
+        for (int b = bone; b >= 0 && b < (int)m.Bones.size() && (int)joints.size() < std::max(chain, 1); b = m.Bones[(size_t)b].Parent) joints.push_back(b);
+        float len = glm::length(m.Bones[(size_t)bone].Tail - m.Bones[(size_t)bone].Head);
+        auto tip = [&](const std::vector<glm::mat4>& pose) { return glm::vec3(pose[(size_t)bone] * glm::vec4(0, len, 0, 1)); };
+        std::vector<glm::mat4> pose = PoseMatrices(m);
+        // Turns joint j (in its own frame) by the shortest turn taking direction `from` onto `to` (model space).
+        auto turnJoint = [&](int j, glm::vec3 from, glm::vec3 to) {
+            if (glm::length(from) < 1e-9f || glm::length(to) < 1e-9f) return;
+            from = glm::normalize(from);
+            to = glm::normalize(to);
+            float c = std::clamp(glm::dot(from, to), -1.0f, 1.0f);
+            if (c > 0.999999f) return;
+            glm::vec3 axis = glm::cross(from, to);
+            if (glm::length(axis) < 1e-9f) return;
+            glm::quat turn = glm::angleAxis(std::acos(c), glm::normalize(axis));
+            const Bone& bj = m.Bones[(size_t)j];
+            glm::mat4 frame = (bj.Parent >= 0 && bj.Parent < (int)pose.size() ? pose[(size_t)bj.Parent] : glm::mat4(1.0f)) * RestLocal(m, j);
+            glm::mat3 r(glm::normalize(glm::vec3(frame[0])), glm::normalize(glm::vec3(frame[1])), glm::normalize(glm::vec3(frame[2])));
+            glm::quat fr = glm::normalize(glm::quat_cast(r));
+            m.Bones[(size_t)j].PoseRotation = glm::normalize(glm::inverse(fr) * turn * fr * bj.PoseRotation);
+            pose = PoseMatrices(m);
+        };
+        if (joints.size() == 2)
+        {
+            // Two bones: exactly (law of cosines), bending the way the chain already bends.
+            int upper = joints[1], lower = joints[0];
+            glm::vec3 a = glm::vec3(pose[(size_t)upper][3]), b = glm::vec3(pose[(size_t)lower][3]), c = tip(pose);
+            float l1 = glm::length(b - a), l2 = glm::length(c - b);
+            glm::vec3 toT = target - a;
+            float d = glm::length(toT);
+            if (l1 > 1e-9f && l2 > 1e-9f && d > 1e-9f)
+            {
+                d = std::clamp(d, std::abs(l1 - l2) + 1e-5f, l1 + l2 - 1e-5f);
+                glm::vec3 dir = glm::normalize(toT);
+                glm::vec3 bend = (b - a) - dir * glm::dot(b - a, dir); // the elbow's side
+                if (glm::length(bend) < 1e-6f) bend = (c - a) - dir * glm::dot(c - a, dir);
+                if (glm::length(bend) < 1e-6f) bend = glm::cross(dir, std::abs(dir.x) < 0.9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0));
+                bend = glm::normalize(bend);
+                float cosA = std::clamp((l1 * l1 + d * d - l2 * l2) / (2.0f * l1 * d), -1.0f, 1.0f);
+                glm::vec3 elbow = a + (dir * cosA + bend * std::sqrt(1.0f - cosA * cosA)) * l1;
+                turnJoint(upper, b - a, elbow - a);
+                glm::vec3 nb = glm::vec3(pose[(size_t)lower][3]);
+                turnJoint(lower, tip(pose) - nb, target - nb);
+            }
+            return glm::length(tip(pose) - target);
+        }
+        for (int it = 0; it < iterations; ++it)
+        {
+            for (int j : joints)
+            {
+                glm::vec3 head = glm::vec3(pose[(size_t)j][3]);
+                glm::vec3 a = tip(pose) - head, b = target - head;
+                if (glm::length(a) < 1e-9f || glm::length(b) < 1e-9f) continue;
+                a = glm::normalize(a);
+                b = glm::normalize(b);
+                float c = std::clamp(glm::dot(a, b), -1.0f, 1.0f);
+                if (c > 0.99999f) continue;
+                glm::vec3 axis = glm::cross(a, b);
+                if (glm::length(axis) < 1e-9f) continue;
+                glm::quat turn = glm::angleAxis(std::acos(c), glm::normalize(axis)); // (model space)
+                // Into the bone's own frame (the one its pose rotation acts in).
+                const Bone& bj = m.Bones[(size_t)j];
+                glm::mat4 frame = (bj.Parent >= 0 && bj.Parent < (int)pose.size() ? pose[(size_t)bj.Parent] : glm::mat4(1.0f)) * RestLocal(m, j);
+                glm::mat3 r(glm::normalize(glm::vec3(frame[0])), glm::normalize(glm::vec3(frame[1])), glm::normalize(glm::vec3(frame[2])));
+                glm::quat fr = glm::normalize(glm::quat_cast(r));
+                m.Bones[(size_t)j].PoseRotation = glm::normalize(glm::inverse(fr) * turn * fr * bj.PoseRotation);
+                pose = PoseMatrices(m);
+            }
+            if (glm::length(tip(pose) - target) < 1e-5f) break;
+        }
+        return glm::length(tip(pose) - target);
+    }
+
+    void ApplyConstraints(EditableMesh& m)
+    {
+        for (size_t b = 0; b < m.Bones.size(); ++b)
+        {
+            int target = m.Bones[b].IKTarget;
+            if (target < 0 || target >= (int)m.Bones.size() || target == (int)b) continue;
+            glm::vec3 goal = glm::vec3(PoseMatrices(m)[(size_t)target][3]);
+            SolveIK(m, (int)b, goal, m.Bones[b].IKChain);
+        }
     }
 }

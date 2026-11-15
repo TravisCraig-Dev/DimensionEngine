@@ -20,6 +20,9 @@ namespace Dimension::Modeling::Paint
         glm::vec4 Sample(glm::vec2 uv) const;
         static bool Load(const fs::path& path, Image& out);
         bool SavePng(const fs::path& path) const;
+        // In the format its extension names: .png, .jpg/.jpeg (quality 95), .tga or .bmp.
+        bool Save(const fs::path& path) const;
+        static bool CanSave(const fs::path& path);
     };
 
     enum class Blend
@@ -37,6 +40,8 @@ namespace Dimension::Modeling::Paint
     const char* BlendName(Blend b);
     // `dst` blended with `src` by `weight` (0..1; the source's alpha scales it too).
     glm::vec4 BlendColor(const glm::vec4& dst, const glm::vec4& src, Blend mode, float weight);
+    // The same on linear light (the colors' sRGB values turned linear, blended, turned back): mixes like light does.
+    glm::vec4 BlendColorLinear(const glm::vec4& dst, const glm::vec4& src, Blend mode, float weight);
 
     struct Brush
     {
@@ -48,6 +53,7 @@ namespace Dimension::Modeling::Paint
         bool FrontFacesOnly = true;
         glm::vec3 ViewDir{ 0, 0, -1 }; // the camera's looking direction (model space)
         uint8_t Symmetry = 0;          // bits: 1 X, 2 Y, 4 Z (the model's own planes)
+        bool Linear = false;           // blend in linear light (else on the sRGB values, like most paint programs)
     };
     // The brush's weight at a distance (0 outside it).
     float BrushWeight(const Brush& brush, float distance);

@@ -450,6 +450,14 @@ void main()
         envOcclusion = mix(ao, 1.0, 0.25);
         env *= envOcclusion;
     }
+    // A baked occlusion map (plain materials) darkens indirect light the same way.
+    if (m.Flags.z == 0u && m.Flags.w == 0u && m.Maps2.z != 0u)
+    {
+        float baked = mix(1.0, SampleTexture(m.Maps2.z - 1u, uv).r, uintBitsToFloat(m.Maps2.w));
+        ambient *= baked;
+        env *= baked;
+        envOcclusion *= baked;
+    }
     vec3 color = albedo * (1.0 - metallic) * ambient;
     vec3 envBRDF = EnvBRDFApprox(F0, roughness, NdotV);
     color += env * envBRDF; // the sky is the environment, at full strength

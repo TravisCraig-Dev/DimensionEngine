@@ -78,11 +78,9 @@ namespace Editor
         if (!target.IsValid()) return false;
         const AssetMetadata* meta = AssetManager::GetMetadata(target);
         if (!meta || meta->Type != AssetType::Texture) return false;
-        std::string ext = meta->Path.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return (char)std::tolower((unsigned char)c); });
-        if (ext != ".png")
+        if (!pt::Image::CanSave(meta->Path))
         {
-            Log::Warn("Texture Paint paints PNG textures; '{}' is not one (New Texture makes one)", meta->Path.filename().string());
+            Log::Warn("Texture Paint paints PNG, JPG, TGA and BMP textures; '{}' is none of them (New Texture makes one)", meta->Path.filename().string());
             return false;
         }
         if (!pt::Image::Load(AssetManager::GetAbsolutePath(target), m_PaintImage))
@@ -97,7 +95,7 @@ namespace Editor
     {
         if (!m_PaintUnsaved || m_PaintImage.Empty() || !m_PaintTexture.IsValid()) return;
         fs::path file = AssetManager::GetAbsolutePath(m_PaintTexture);
-        if (m_PaintImage.SavePng(file))
+        if (m_PaintImage.Save(file))
         {
             m_PaintUnsaved = false;
             Log::Info("Saved the painted texture {}", file.filename().string());
@@ -173,6 +171,7 @@ namespace Editor
         b.FrontFacesOnly = m_PaintFrontFaces;
         b.ViewDir = viewDir;
         b.Symmetry = m_PaintSymmetry;
+        b.Linear = m_PaintLinear;
         return b;
     }
 
@@ -389,6 +388,9 @@ namespace Editor
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hardness: how far in from the rim the brush stays at full strength");
         ImGui::SameLine();
         if (toggle("Front Faces", m_PaintFrontFaces, "Only faces turned towards the camera")) m_PaintFrontFaces = !m_PaintFrontFaces;
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Linear", m_PaintLinear, "Blend in linear light (colors mix like light does) instead of on the stored sRGB values"))
+            m_PaintLinear = !m_PaintLinear;
         for (int a = 0; a < 3; ++a)
         {
             ImGui::SameLine(0.0f, 2.0f);
@@ -519,7 +521,7 @@ namespace Editor
         ImGui::DragFloat("AO Distance", &m_Bake.AODistance, 0.01f, 0.001f, 100.0f, "%.2f m");
         ImGui::SetNextItemWidth(100.0f);
         ImGui::SliderInt("Margin", &m_Bake.Margin, 0, 64, "%d px");
-        ImGui::Checkbox("Use the normal map on the object's material", &m_BakeAssign);
+        ImGui::Checkbox("Use the maps on the object's material (normal, occlusion)", &m_BakeAssign);
         ImGui::TextDisabled("Written to Assets/Textures/%s_Normal.png, _AO.png and _Curvature.png", m_File.stem().string().c_str());
         if (ImGui::Button("Bake"))
         {
@@ -582,11 +584,11 @@ namespace Editor
             return h;
         };
         normalMap = write(r.Normal, "_Normal");
-        write(r.AmbientOcclusion, "_AO");
+        AssetHandle aoMap = write(r.AmbientOcclusion, "_AO");
         write(r.Curvature, "_Curvature");
         if (highData && r.Missed > r.Texels / 20)
             Log::Warn("Bake: {} of {} texels found no detailed surface within the cage (try a larger Cage Extrusion)", r.Missed, r.Texels);
-        if (m_BakeAssign && normalMap.IsValid())
+        if (m_BakeAssign && (normalMap.IsValid() || aoMap.IsValid()))
         {
             auto& mr = reg.Get<MeshRendererComponent>(m_Entity);
             AssetHandle material = !mr.Materials.empty() && mr.Materials[0].IsValid() ? mr.Materials[0] : mr.Material;
@@ -609,7 +611,8 @@ namespace Editor
             }
             if (Ref<Material> mat = AssetManager::GetMaterial(material); mat && !AssetManager::IsRuntimeMaterial(material))
             {
-                mat->NormalMap = normalMap;
+                if (normalMap.IsValid()) mat->NormalMap = normalMap;
+                if (aoMap.IsValid()) mat->OcclusionMap = aoMap;
                 mat->Save(AssetManager::GetAbsolutePath(material));
             }
         }

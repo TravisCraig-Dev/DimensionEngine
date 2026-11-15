@@ -397,6 +397,7 @@ namespace Editor
         Modeling::Paint::Blend m_PaintBlend = Modeling::Paint::Blend::Mix;
         float m_PaintRadiusPx = 40.0f, m_PaintStrength = 1.0f, m_PaintHardness = 0.0f;
         bool m_PaintFrontFaces = true;
+        bool m_PaintLinear = false;
         uint8_t m_PaintSymmetry = 0;
         Modeling::MeshRaycaster m_PaintRays;
         uint64_t m_PaintRaysVersion = ~0ull;
@@ -450,6 +451,11 @@ namespace Editor
         float m_ActionTime = 0.0f;
         bool m_ActionPlaying = false;
         bool m_OpenShapeKeys = false;
+        bool m_KeySelectedOnly = false, m_KeyShapes = false, m_AutoIK = false, m_ShowDopeSheet = true;
+        int m_AutoIKChain = 2;
+        float m_SelectedKey = -1.0f;   // the dope sheet's selected key (its time), -1 none
+        float m_DragKeyFrom = -1.0f;   // a key being dragged (its time when the drag began)
+        void DrawDopeSheet(ImDrawList* dl);
         // Curves, text and retopology.
         struct CurveModal
         {
