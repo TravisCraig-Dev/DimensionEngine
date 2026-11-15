@@ -324,6 +324,159 @@ namespace Dimension::Modeling::UV
             }
         };
 
+        // A sparse symmetric positive definite system factored once (Cholesky, L L^T) and then solved directly as often as
+        // needed: the unknowns reordered by reverse Cuthill-McKee so each row's nonzeros lie close to the diagonal, and
+        // only that envelope stored. Much faster than iterating on large, badly conditioned charts.
+        class EnvelopeCholesky
+        {
+        public:
+            // False when the matrix isn't positive definite or the envelope would be too big (use an iterative solve).
+            bool Factor(const SymmetricSystem& A, size_t maxEntries = 60000000)
+            {
+                size_t n = A.Rows.size();
+                m_N = n;
+                if (n == 0) return false;
+                // Reverse Cuthill-McKee: breadth first from a far-out vertex, neighbours by rising degree, reversed.
+                std::vector<uint32_t> order;
+                order.reserve(n);
+                std::vector<uint8_t> seen(n, 0);
+                std::vector<uint32_t> level(n, 0);
+                auto degree = [&](uint32_t v) { return A.Rows[v].size(); };
+                auto bfs = [&](uint32_t start, std::vector<uint32_t>& out, std::vector<uint8_t>& mark) {
+                    size_t begin = out.size();
+                    out.push_back(start);
+                    mark[start] = 1;
+                    level[start] = 0;
+                    std::vector<uint32_t> next;
+                    for (size_t q = begin; q < out.size(); ++q)
+                    {
+                        uint32_t v = out[q];
+                        next.clear();
+                        for (auto& [c, w] : A.Rows[v])
+                            if (c != v && !mark[c])
+                            {
+                                mark[c] = 1;
+                                level[c] = level[v] + 1;
+                                next.push_back(c);
+                            }
+                        std::sort(next.begin(), next.end(), [&](uint32_t a, uint32_t b) { return degree(a) < degree(b); });
+                        out.insert(out.end(), next.begin(), next.end());
+                    }
+                };
+                for (uint32_t s = 0; s < n; ++s)
+                {
+                    if (seen[s]) continue;
+                    // A pseudo-peripheral start: the last-reached vertex of a breadth-first pass, twice.
+                    uint32_t start = s;
+                    for (int pass = 0; pass < 2; ++pass)
+                    {
+                        std::vector<uint32_t> tmp;
+                        std::vector<uint8_t> mark = seen;
+                        bfs(start, tmp, mark);
+                        uint32_t far = tmp.back();
+                        for (uint32_t v : tmp)
+                            if (level[v] == level[far] && degree(v) < degree(far)) far = v;
+                        start = far;
+                    }
+                    bfs(start, order, seen);
+                }
+                std::reverse(order.begin(), order.end());
+                m_Perm = order;
+                std::vector<uint32_t> inv(n);
+                for (size_t i = 0; i < n; ++i) inv[m_Perm[i]] = (uint32_t)i;
+                // The envelope: each row from its first nonzero to the diagonal.
+                m_First.assign(n, 0);
+                m_Start.assign(n + 1, 0);
+                for (size_t i = 0; i < n; ++i)
+                {
+                    uint32_t first = (uint32_t)i;
+                    for (auto& [c, w] : A.Rows[m_Perm[i]]) first = std::min(first, inv[c]);
+                    m_First[i] = first;
+                    m_Start[i + 1] = m_Start[i] + (i - first + 1);
+                    if (m_Start[i + 1] > maxEntries) return false;
+                }
+                m_L.assign(m_Start[n], 0.0);
+                double* L = m_L.data();
+                for (size_t i = 0; i < n; ++i)
+                    for (auto& [c, w] : A.Rows[m_Perm[i]])
+                        if (uint32_t j = inv[c]; j <= i) L[m_Start[i] + (j - m_First[i])] += w;
+                double largest = 0.0;
+                for (size_t i = 0; i < n; ++i) largest = std::max(largest, std::abs(L[m_Start[i + 1] - 1]));
+                for (size_t i = 0; i < n; ++i)
+                {
+                    size_t fi = m_First[i];
+                    double* Li = L + m_Start[i] - fi; // Li[k]: row i, column k
+                    for (size_t j = fi; j < i; ++j)
+                    {
+                        size_t fj = m_First[j];
+                        const double* Lj = L + m_Start[j] - fj;
+                        double sum = Li[j];
+                        for (size_t k = std::max(fi, fj); k < j; ++k) sum -= Li[k] * Lj[k];
+                        Li[j] = sum / Lj[j];
+                    }
+                    double d = Li[i];
+                    for (size_t k = fi; k < i; ++k) d -= Li[k] * Li[k];
+                    if (!(d > largest * 1e-14)) return false;
+                    Li[i] = std::sqrt(d);
+                }
+                return true;
+            }
+
+            void Solve(const std::vector<double>& b, std::vector<double>& x) const
+            {
+                size_t n = m_N;
+                std::vector<double> y(n);
+                const double* L = m_L.data();
+                for (size_t i = 0; i < n; ++i)
+                {
+                    size_t fi = m_First[i];
+                    const double* Li = L + m_Start[i] - fi;
+                    double sum = b[m_Perm[i]];
+                    for (size_t k = fi; k < i; ++k) sum -= Li[k] * y[k];
+                    y[i] = sum / Li[i];
+                }
+                for (size_t i = n; i-- > 0;)
+                {
+                    size_t fi = m_First[i];
+                    const double* Li = L + m_Start[i] - fi;
+                    y[i] /= Li[i];
+                    double yi = y[i];
+                    for (size_t k = fi; k < i; ++k) y[k] -= Li[k] * yi;
+                }
+                x.resize(n);
+                for (size_t i = 0; i < n; ++i) x[m_Perm[i]] = y[i];
+            }
+
+        private:
+            size_t m_N = 0;
+            std::vector<uint32_t> m_Perm, m_First;
+            std::vector<size_t> m_Start;
+            std::vector<double> m_L;
+        };
+
+        // A least squares problem solved through its normal equations (A^T A x = A^T b) factored directly; false when
+        // that can't be done (then iterate).
+        bool SolveDirect(const LeastSquares& ls, std::vector<double>& x)
+        {
+            SymmetricSystem N;
+            N.Rows.resize(ls.Cols);
+            std::vector<double> b(ls.Cols, 0.0);
+            for (size_t r = 0; r < ls.Rows(); ++r)
+                for (uint32_t k = ls.RowStart[r]; k < ls.RowStart[r + 1]; ++k)
+                {
+                    b[ls.Col[k]] += ls.Val[k] * ls.Rhs[r];
+                    for (uint32_t l = ls.RowStart[r]; l < ls.RowStart[r + 1]; ++l) N.Add(ls.Col[k], ls.Col[l], ls.Val[k] * ls.Val[l]);
+                }
+            EnvelopeCholesky chol;
+            if (!chol.Factor(N)) return false;
+            std::vector<double> out;
+            chol.Solve(b, out);
+            for (double v : out)
+                if (!std::isfinite(v)) return false;
+            x = std::move(out);
+            return true;
+        }
+
         // ---- Flattening
 
         // Starting UVs: the chart projected along its average facing; pins: the user's, or the two vertices farthest
@@ -422,7 +575,7 @@ namespace Dimension::Modeling::UV
                     x[(size_t)index[v]] = ch.UV[v].x;
                     x[(size_t)index[v] + freeCount] = ch.UV[v].y;
                 }
-            ls.Solve(x, (int)std::clamp<size_t>(freeCount * 8, 200, 20000), 1e-10);
+            if (!SolveDirect(ls, x)) ls.Solve(x, (int)std::clamp<size_t>(freeCount * 8, 200, 20000), 1e-10);
             for (size_t v = 0; v < n; ++v)
                 if (index[v] >= 0) ch.UV[v] = glm::dvec2(x[(size_t)index[v]], x[(size_t)index[v] + freeCount]);
         }
@@ -478,6 +631,8 @@ namespace Dimension::Modeling::UV
                     }
                 }
             std::vector<double> bu(freeCount), bv(freeCount), xu(freeCount), xv(freeCount);
+            EnvelopeCholesky chol; // (the matrix stays the same: factored once, solved every step)
+            bool direct = chol.Factor(L);
             for (int it = 0; it < iterations; ++it)
             {
                 std::fill(bu.begin(), bu.end(), 0.0);
@@ -524,9 +679,17 @@ namespace Dimension::Modeling::UV
                         xu[(size_t)index[v]] = ch.UV[v].x;
                         xv[(size_t)index[v]] = ch.UV[v].y;
                     }
-                int inner = (int)std::clamp<size_t>(freeCount * 2, 50, 2000);
-                L.Solve(bu, xu, inner, 1e-9);
-                L.Solve(bv, xv, inner, 1e-9);
+                if (direct)
+                {
+                    chol.Solve(bu, xu);
+                    chol.Solve(bv, xv);
+                }
+                else
+                {
+                    int inner = (int)std::clamp<size_t>(freeCount * 2, 50, 2000);
+                    L.Solve(bu, xu, inner, 1e-9);
+                    L.Solve(bv, xv, inner, 1e-9);
+                }
                 for (size_t v = 0; v < n; ++v)
                     if (index[v] >= 0) ch.UV[v] = glm::dvec2(xu[(size_t)index[v]], xv[(size_t)index[v]]);
             }
