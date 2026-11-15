@@ -2,6 +2,7 @@
 #include "Dimension/Core/Log.h"
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <unordered_map>
 
 namespace Dimension::Modeling::Sculpt
@@ -45,8 +46,59 @@ namespace Dimension::Modeling::Sculpt
 
     const char* BrushName(Brush b)
     {
-        static const char* names[] = { "Draw", "Clay", "Inflate", "Smooth", "Flatten", "Scrape", "Pinch", "Crease", "Grab", "Snake Hook", "Mask" };
+        static const char* names[] = { "Draw", "Clay", "Inflate", "Smooth", "Flatten", "Scrape", "Pinch", "Crease", "Grab", "Snake Hook", "Mask",
+                                       "Pose", "Boundary", "Cloth" };
         return names[std::clamp((int)b, 0, (int)Brush::Count - 1)];
+    }
+
+    // ---- Brush textures
+
+    BrushTexture BrushTexture::FromRGBA8(const uint32_t* pixels, uint32_t width, uint32_t height)
+    {
+        BrushTexture t;
+        t.Width = width;
+        t.Height = height;
+        t.Values.resize((size_t)width * height);
+        for (size_t i = 0; i < t.Values.size(); ++i)
+        {
+            uint32_t p = pixels[i];
+            float r = (float)(p & 0xFF), g = (float)((p >> 8) & 0xFF), b = (float)((p >> 16) & 0xFF), a = (float)(p >> 24);
+            t.Values[i] = (0.2126f * r + 0.7152f * g + 0.0722f * b) / 255.0f * (a / 255.0f);
+        }
+        return t;
+    }
+
+    float BrushTexture::Sample(glm::vec2 uv) const
+    {
+        if (Width == 0 || Height == 0 || Values.size() < (size_t)Width * Height) return 1.0f;
+        glm::vec2 p = (uv - glm::floor(uv)) * glm::vec2((float)Width, (float)Height) - 0.5f;
+        glm::vec2 f = p - glm::floor(p);
+        int x0 = (int)std::floor(p.x), y0 = (int)std::floor(p.y);
+        auto at = [&](int x, int y) {
+            x = ((x % (int)Width) + (int)Width) % (int)Width;
+            y = ((y % (int)Height) + (int)Height) % (int)Height;
+            return Values[(size_t)y * Width + (size_t)x];
+        };
+        float top = at(x0, y0) * (1.0f - f.x) + at(x0 + 1, y0) * f.x;
+        float bottom = at(x0, y0 + 1) * (1.0f - f.x) + at(x0 + 1, y0 + 1) * f.x;
+        return top * (1.0f - f.y) + bottom * f.y;
+    }
+
+    float BrushTexture::At(const glm::vec3& p, const glm::vec3& center, float radius, const glm::vec3& view) const
+    {
+        glm::vec3 n = glm::length(view) > 1e-12f ? glm::normalize(view) : glm::vec3(0, 0, -1);
+        glm::vec3 helper = std::abs(n.y) < 0.99f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+        glm::vec3 right = glm::normalize(glm::cross(helper, n)), up = glm::cross(n, right);
+        glm::vec2 q = Mapping == 1 ? glm::vec2(glm::dot(p, right), glm::dot(p, up)) / std::max(Scale, 1e-6f)
+                                   : glm::vec2(glm::dot(p - center, right), glm::dot(p - center, up)) / (2.0f * std::max(radius, 1e-9f));
+        float a = glm::radians(Angle), cs = std::cos(a), sn = std::sin(a);
+        q = glm::vec2(cs * q.x - sn * q.y, sn * q.x + cs * q.y);
+        if (Mapping != 1)
+        {
+            q += 0.5f;
+            if (q.x < 0.0f || q.y < 0.0f || q.x > 1.0f || q.y > 1.0f) return 0.0f;
+        }
+        return Sample(glm::vec2(q.x, 1.0f - q.y)); // (rows from the top)
     }
 
     // ---- Building and writing back
@@ -71,7 +123,8 @@ namespace Dimension::Modeling::Sculpt
             {
                 uint32_t a = face.Verts[tri[k]], b = face.Verts[tri[k + 1]], c = face.Verts[tri[k + 2]];
                 if (a == b || b == c || a == c) continue;
-                s.AddTri(a, b, c, face.Material);
+                auto uv = [&](uint32_t corner) { return corner < face.UVs.size() ? face.UVs[corner] : glm::vec2(0.0f); };
+                s.AddTri(a, b, c, face.Material, { uv(tri[k]), uv(tri[k + 1]), uv(tri[k + 2]) });
             }
             for (size_t c = 0; c < face.Verts.size(); ++c)
                 if (!hasUV[face.Verts[c]] && c < face.UVs.size())
@@ -115,7 +168,7 @@ namespace Dimension::Modeling::Sculpt
                 }
                 x = (uint32_t)index[x];
             }
-            out.AddFace({ v[0], v[1], v[2] }, {}, TriMaterial[t], true);
+            out.AddFace({ v[0], v[1], v[2] }, { TriUVs[t][0], TriUVs[t][1], TriUVs[t][2] }, TriMaterial[t], true);
         }
         if (!anyMask) out.Mask.clear();
         out.Changed();
@@ -182,18 +235,149 @@ namespace Dimension::Modeling::Sculpt
         UVs.push_back(uv);
         Mask.push_back(mask);
         VertTris.emplace_back();
-        return (uint32_t)Positions.size() - 1;
+        uint32_t v = (uint32_t)Positions.size() - 1;
+        if (m_GridOk)
+        {
+            m_VertKey.push_back(CellKey(CellOf(p)));
+            m_Grid[m_VertKey.back()].push_back(v);
+            m_Lo = glm::min(m_Lo, p);
+            m_Hi = glm::max(m_Hi, p);
+        }
+        return v;
     }
 
-    uint32_t SculptMesh::AddTri(uint32_t a, uint32_t b, uint32_t c, int32_t material)
+    uint32_t SculptMesh::AddTri(uint32_t a, uint32_t b, uint32_t c, int32_t material, const std::array<glm::vec2, 3>& uv)
     {
         uint32_t t = (uint32_t)Tris.size();
         Tris.push_back({ a, b, c });
         TriMaterial.push_back(material);
+        TriUVs.push_back(uv);
         VertTris[a].push_back(t);
         VertTris[b].push_back(t);
         VertTris[c].push_back(t);
+        if (m_GridOk)
+        {
+            float e = std::max({ glm::length(Positions[a] - Positions[b]), glm::length(Positions[b] - Positions[c]), glm::length(Positions[c] - Positions[a]) });
+            m_MaxEdge = std::max(m_MaxEdge, e);
+            if (m_MaxEdge > m_Cell) m_GridOk = false;
+        }
         return t;
+    }
+
+    // ---- The vertex grid
+
+    glm::ivec3 SculptMesh::CellOf(const glm::vec3& p) const { return glm::ivec3(glm::floor(p / m_Cell)); }
+
+    uint64_t SculptMesh::CellKey(const glm::ivec3& c) const
+    {
+        auto bits = [](int v) { return (uint64_t)((uint32_t)(v + (1 << 20)) & 0x1FFFFFu); };
+        return (bits(c.x) << 42) | (bits(c.y) << 21) | bits(c.z);
+    }
+
+    void SculptMesh::EnsureGrid() const
+    {
+        if (m_GridOk && m_VertKey.size() == Positions.size()) return;
+        m_Lo = glm::vec3(1e30f);
+        m_Hi = glm::vec3(-1e30f);
+        for (size_t v = 0; v < Positions.size(); ++v)
+            if (!VertTris[v].empty())
+            {
+                m_Lo = glm::min(m_Lo, Positions[v]);
+                m_Hi = glm::max(m_Hi, Positions[v]);
+            }
+        if (m_Lo.x > m_Hi.x) m_Lo = m_Hi = glm::vec3(0.0f);
+        m_MaxEdge = 0.0f;
+        for (const glm::uvec3& t : Tris)
+        {
+            if (t.x == kDead) continue;
+            m_MaxEdge = std::max({ m_MaxEdge, glm::length(Positions[t.x] - Positions[t.y]), glm::length(Positions[t.y] - Positions[t.z]),
+                                   glm::length(Positions[t.z] - Positions[t.x]) });
+        }
+        float diag = glm::length(m_Hi - m_Lo);
+        // Room to grow (edges stretched by brushes) before the next rebuild; never so fine the grid is mostly empty.
+        m_Cell = std::max({ m_MaxEdge * 1.5f, diag / 200.0f, 1e-6f });
+        m_Grid.clear();
+        m_VertKey.resize(Positions.size());
+        for (uint32_t v = 0; v < Positions.size(); ++v)
+        {
+            m_VertKey[v] = CellKey(CellOf(Positions[v]));
+            m_Grid[m_VertKey[v]].push_back(v);
+        }
+        m_GridOk = true;
+    }
+
+    void SculptMesh::GridMoved(uint32_t v)
+    {
+        if (!m_GridOk) return;
+        const glm::vec3& p = Positions[v];
+        m_Lo = glm::min(m_Lo, p);
+        m_Hi = glm::max(m_Hi, p);
+        uint64_t key = CellKey(CellOf(p));
+        if (key == m_VertKey[v]) return;
+        std::vector<uint32_t>& old = m_Grid[m_VertKey[v]];
+        auto it = std::find(old.begin(), old.end(), v);
+        if (it != old.end())
+        {
+            *it = old.back();
+            old.pop_back();
+        }
+        m_Grid[key].push_back(v);
+        m_VertKey[v] = key;
+    }
+
+    void SculptMesh::NoteEdges(uint32_t v)
+    {
+        if (!m_GridOk) return;
+        for (uint32_t t : VertTris[v])
+            for (int k = 0; k < 3; ++k)
+                if (uint32_t u = Tris[t][k]; u != v) m_MaxEdge = std::max(m_MaxEdge, glm::length(Positions[u] - Positions[v]));
+        if (m_MaxEdge > m_Cell) m_GridOk = false;
+    }
+
+    void SculptMesh::VertsNear(const glm::vec3& c, float r, std::vector<uint32_t>& out) const
+    {
+        out.clear();
+        EnsureGrid();
+        float r2 = r * r;
+        auto scanAll = [&] {
+            for (uint32_t v = 0; v < Positions.size(); ++v)
+            {
+                if (VertTris[v].empty()) continue;
+                glm::vec3 d = Positions[v] - c;
+                if (!(r < 1e18f) || glm::dot(d, d) <= r2) out.push_back(v);
+            }
+        };
+        if (!(r < 1e18f)) return scanAll();
+        glm::vec3 lo = glm::max(c - r, m_Lo), hi = glm::min(c + r, m_Hi);
+        if (glm::any(glm::greaterThan(lo, hi))) return; // (the sphere misses the mesh)
+        glm::ivec3 a = CellOf(lo), b = CellOf(hi);
+        double cells = (double)(b.x - a.x + 1) * (double)(b.y - a.y + 1) * (double)(b.z - a.z + 1);
+        if (cells > (double)m_Grid.size()) return scanAll(); // (more cells than filled ones)
+        for (int z = a.z; z <= b.z; ++z)
+            for (int y = a.y; y <= b.y; ++y)
+                for (int x = a.x; x <= b.x; ++x)
+                {
+                    auto it = m_Grid.find(CellKey({ x, y, z }));
+                    if (it == m_Grid.end()) continue;
+                    for (uint32_t v : it->second)
+                    {
+                        if (VertTris[v].empty()) continue;
+                        glm::vec3 d = Positions[v] - c;
+                        if (glm::dot(d, d) <= r2) out.push_back(v);
+                    }
+                }
+        std::sort(out.begin(), out.end()); // (the same order as a plain scan, so results don't depend on the grid)
+    }
+
+    uint32_t SculptMesh::NextStamp() const
+    {
+        if (m_TriStamp.size() < Tris.size()) m_TriStamp.resize(Tris.size(), 0);
+        if (++m_StampId == 0)
+        {
+            std::fill(m_TriStamp.begin(), m_TriStamp.end(), 0);
+            m_StampId = 1;
+        }
+        return m_StampId;
     }
 
     void SculptMesh::KillTri(uint32_t t)
@@ -252,28 +436,93 @@ namespace Dimension::Modeling::Sculpt
         float best = 1e30f;
         bool hit = false;
         const float ox = from.x, oy = from.y, oz = from.z, dx = dir.x, dy = dir.y, dz = dir.z;
-        for (size_t t = 0; t < Tris.size(); ++t)
-        {
+        auto test = [&](uint32_t t) {
             const glm::uvec3& tri = Tris[t];
-            if (tri.x == kDead) continue;
+            if (tri.x == kDead) return;
             const glm::vec3 &a = Positions[tri.x], &b = Positions[tri.y], &c = Positions[tri.z];
             // Moller-Trumbore in plain floats.
             float e1x = b.x - a.x, e1y = b.y - a.y, e1z = b.z - a.z, e2x = c.x - a.x, e2y = c.y - a.y, e2z = c.z - a.z;
             float px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
             float det = e1x * px + e1y * py + e1z * pz;
-            if (det > -1e-12f && det < 1e-12f) continue;
+            if (det > -1e-12f && det < 1e-12f) return;
             float inv = 1.0f / det;
             float sx = ox - a.x, sy = oy - a.y, sz = oz - a.z;
             float u = (sx * px + sy * py + sz * pz) * inv;
-            if (u < 0.0f || u > 1.0f) continue;
+            if (u < 0.0f || u > 1.0f) return;
             float qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
             float v = (dx * qx + dy * qy + dz * qz) * inv;
-            if (v < 0.0f || u + v > 1.0f) continue;
+            if (v < 0.0f || u + v > 1.0f) return;
             float d = (e2x * qx + e2y * qy + e2z * qz) * inv;
-            if (d <= 0.0f || d >= best) continue;
+            if (d <= 0.0f || d >= best) return;
             best = d;
             normal = glm::vec3(e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x);
             hit = true;
+        };
+        EnsureGrid();
+        // The ray's stretch inside the bounds (a cell wider all round).
+        glm::vec3 lo = m_Lo - m_Cell, hi = m_Hi + m_Cell;
+        float t0 = 0.0f, t1 = 1e30f;
+        for (int k = 0; k < 3; ++k)
+        {
+            if (std::abs(dir[k]) < 1e-20f)
+            {
+                if (from[k] < lo[k] || from[k] > hi[k]) return false;
+                continue;
+            }
+            float a = (lo[k] - from[k]) / dir[k], b = (hi[k] - from[k]) / dir[k];
+            if (a > b) std::swap(a, b);
+            t0 = std::max(t0, a);
+            t1 = std::min(t1, b);
+        }
+        if (t0 > t1) return false;
+        glm::ivec3 span = CellOf(hi) - CellOf(lo) + 1;
+        if ((double)span.x * span.y * span.z <= 64.0)
+        {
+            for (uint32_t t = 0; t < Tris.size(); ++t) test(t); // (a coarse grid: just test them all)
+        }
+        else
+        {
+            // Walking the cells along the ray (Amanatides & Woo); a triangle crossing the ray in a cell has its corners
+            // in that cell or a neighbour, and the walk stops once a hit is nearer than the cell's far side.
+            uint32_t stamp = NextStamp();
+            glm::vec3 p = from + dir * t0;
+            glm::ivec3 cell = CellOf(p), step, last = CellOf(from + dir * t1);
+            glm::vec3 tMax, tDelta;
+            for (int k = 0; k < 3; ++k)
+            {
+                step[k] = dir[k] > 0.0f ? 1 : dir[k] < 0.0f ? -1 : 0;
+                if (step[k] == 0)
+                {
+                    tMax[k] = tDelta[k] = 1e30f;
+                    continue;
+                }
+                float boundary = (float)(cell[k] + (step[k] > 0 ? 1 : 0)) * m_Cell;
+                tMax[k] = (boundary - from[k]) / dir[k];
+                tDelta[k] = m_Cell / std::abs(dir[k]);
+            }
+            for (int guard = 0; guard < 1000000; ++guard)
+            {
+                for (int z = -1; z <= 1; ++z)
+                    for (int y = -1; y <= 1; ++y)
+                        for (int x = -1; x <= 1; ++x)
+                        {
+                            auto it = m_Grid.find(CellKey(cell + glm::ivec3(x, y, z)));
+                            if (it == m_Grid.end()) continue;
+                            for (uint32_t v : it->second)
+                                for (uint32_t t : VertTris[v])
+                                    if (m_TriStamp[t] != stamp)
+                                    {
+                                        m_TriStamp[t] = stamp;
+                                        test(t);
+                                    }
+                        }
+                float exit = std::min({ tMax.x, tMax.y, tMax.z });
+                if (hit && best <= exit) break;
+                if (cell == last || exit > t1) break;
+                int k = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2) : (tMax.y < tMax.z ? 1 : 2);
+                cell[k] += step[k];
+                tMax[k] += tDelta[k];
+            }
         }
         if (hit)
         {
@@ -303,14 +552,24 @@ namespace Dimension::Modeling::Sculpt
     void SculptMesh::BeginStroke(const glm::vec3& center, const BrushSettings& brush)
     {
         m_Caught.clear();
+        m_Pose.clear();
+        m_ClothRest.clear();
+        if (brush.Type == Brush::Pose || brush.Type == Brush::Boundary)
+        {
+            for (const glm::vec3& s : Mirrors(brush.Symmetry))
+                if (brush.Type == Brush::Pose) CatchPose(center * s, brush, s);
+                else CatchBoundary(center * s, brush, s);
+            return;
+        }
         if (brush.Type != Brush::Grab) return;
         float r2 = brush.Radius * brush.Radius;
         for (const glm::vec3& s : Mirrors(brush.Symmetry))
         {
             glm::vec3 c = center * s, view = brush.ViewDir * s;
-            for (uint32_t v = 0; v < Positions.size(); ++v)
+            std::vector<uint32_t> near;
+            VertsNear(c, brush.Radius, near);
+            for (uint32_t v : near)
             {
-                if (VertTris[v].empty()) continue;
                 glm::vec3 d = Positions[v] - c;
                 float d2 = glm::dot(d, d);
                 if (d2 > r2) continue;
@@ -325,18 +584,230 @@ namespace Dimension::Modeling::Sculpt
         }
     }
 
-    void SculptMesh::EndStroke() { m_Caught.clear(); }
+    void SculptMesh::EndStroke()
+    {
+        m_Caught.clear();
+        m_Pose.clear();
+        m_ClothRest.clear();
+    }
+
+    void SculptMesh::CatchPose(const glm::vec3& c, const BrushSettings& brush, const glm::vec3& mirror)
+    {
+        float r = std::max(brush.Radius, 1e-6f);
+        std::vector<uint32_t> near;
+        VertsNear(c, r, near);
+        if (near.empty()) return;
+        // The pivot: the middle of the ring where the brush's sphere cuts the surface (a limb's joint when the brush
+        // covers its end).
+        glm::vec3 pivot(0.0f), areaN(0.0f);
+        float count = 0.0f;
+        for (uint32_t v : near)
+        {
+            areaN += Normals[v];
+            if (glm::length(Positions[v] - c) >= r * 0.75f)
+            {
+                pivot += Positions[v];
+                count += 1.0f;
+            }
+        }
+        pivot = count > 0.0f ? pivot / count : c - (glm::length(areaN) > 1e-12f ? glm::normalize(areaN) : glm::vec3(0, 0, 1)) * r;
+        glm::vec3 axis = c - pivot;
+        float len2 = glm::dot(axis, axis);
+        if (len2 < 1e-12f) return;
+        m_Pose.push_back({ mirror, pivot, c });
+        // What turns: the surface joined to the brush's part beyond the pivot (within twice the radius), more the
+        // farther past the pivot.
+        auto along = [&](uint32_t v) { return glm::dot(Positions[v] - pivot, axis) / len2; };
+        std::unordered_map<uint32_t, float> weight;
+        std::vector<uint32_t> queue;
+        for (uint32_t v : near)
+            if (along(v) > 0.0f)
+            {
+                weight[v] = 0.0f;
+                queue.push_back(v);
+            }
+        for (size_t q = 0; q < queue.size(); ++q)
+            for (uint32_t u : Neighbors(queue[q]))
+                if (!weight.count(u) && along(u) > 0.0f && glm::length(Positions[u] - c) < 2.0f * r)
+                {
+                    weight[u] = 0.0f;
+                    queue.push_back(u);
+                }
+        for (uint32_t v : queue)
+        {
+            float t = std::clamp(along(v), 0.0f, 1.0f);
+            float w = t * t * (3.0f - 2.0f * t) * (1.0f - Mask[v]);
+            if (w <= 0.0f) continue;
+            bool already = false;
+            for (const Caught& k : m_Caught) already |= k.Vertex == v;
+            if (!already) m_Caught.push_back({ v, w, Positions[v], mirror });
+        }
+    }
+
+    void SculptMesh::CatchBoundary(const glm::vec3& c, const BrushSettings& brush, const glm::vec3& mirror)
+    {
+        float r = std::max(brush.Radius, 1e-6f);
+        std::vector<uint32_t> near;
+        VertsNear(c, r, near);
+        // From the open edges under the brush, along the surface: nearer (to the brush's center, then along the
+        // surface from the edge) moves more.
+        std::unordered_map<uint32_t, float> dist;
+        std::vector<std::pair<float, uint32_t>> heap;
+        for (uint32_t v : near)
+            if (IsBorder(v))
+            {
+                float d = glm::length(Positions[v] - c);
+                dist[v] = d;
+                heap.push_back({ -d, v });
+            }
+        std::make_heap(heap.begin(), heap.end());
+        while (!heap.empty())
+        {
+            std::pop_heap(heap.begin(), heap.end());
+            auto [negD, v] = heap.back();
+            heap.pop_back();
+            if (-negD > dist[v]) continue;
+            for (uint32_t u : Neighbors(v))
+            {
+                float nd = -negD + glm::length(Positions[u] - Positions[v]);
+                if (nd >= r) continue;
+                auto it = dist.find(u);
+                if (it != dist.end() && it->second <= nd) continue;
+                dist[u] = nd;
+                heap.push_back({ -nd, u });
+                std::push_heap(heap.begin(), heap.end());
+            }
+        }
+        for (auto& [v, d] : dist)
+        {
+            float w = Falloff(d / r) * (1.0f - Mask[v]);
+            if (w <= 0.0f) continue;
+            bool already = false;
+            for (const Caught& k : m_Caught) already |= k.Vertex == v;
+            if (!already) m_Caught.push_back({ v, w, Positions[v], mirror });
+        }
+        std::sort(m_Caught.begin(), m_Caught.end(), [](const Caught& p, const Caught& q) { return p.Vertex < q.Vertex; });
+    }
+
+    void SculptMesh::ClothDab(const glm::vec3& c, const BrushSettings& brush, const glm::vec3& move)
+    {
+        float r = std::max(brush.Radius, 1e-6f);
+        std::vector<uint32_t> region;
+        VertsNear(c, r * 1.5f, region);
+        if (region.empty()) return;
+        std::unordered_map<uint32_t, uint32_t> local;
+        for (uint32_t i = 0; i < region.size(); ++i) local[region[i]] = i;
+        // The edges among them, with their rest lengths (as first seen in the stroke, before this dab moves them).
+        std::vector<std::pair<uint32_t, uint32_t>> edges;
+        for (uint32_t v : region)
+            for (uint32_t u : Neighbors(v))
+                if (v < u && local.count(u)) edges.push_back({ v, u });
+        std::vector<float> rest(edges.size());
+        for (size_t e = 0; e < edges.size(); ++e)
+        {
+            uint64_t key = ((uint64_t)edges[e].first << 32) | edges[e].second;
+            auto it = m_ClothRest.find(key);
+            if (it == m_ClothRest.end()) it = m_ClothRest.emplace(key, glm::length(Positions[edges[e].first] - Positions[edges[e].second])).first;
+            rest[e] = it->second;
+        }
+        // The brush drags the middle along; the cloth around it follows, folding where it bunches up. Farther out
+        // the surface holds still; masked parts too. (Position-based dynamics: each edge pulled back to its length,
+        // the held ends not moving.)
+        float str = std::min(1.0f, std::clamp(brush.Strength, 0.0f, 1.0f) * 2.0f);
+        std::vector<glm::vec3> p(region.size());
+        std::vector<float> freedom(region.size());
+        for (size_t i = 0; i < region.size(); ++i)
+        {
+            uint32_t v = region[i];
+            float d = glm::length(Positions[v] - c);
+            float f = Falloff(d / r) * (1.0f - Mask[v]);
+            // (a slight lift where the brush's edge bunches the cloth up, so it folds out of the surface rather than
+            // squashing flat)
+            p[i] = Positions[v] + move * (f * str) + Normals[v] * (f * (1.0f - f) * glm::length(move) * str);
+            // (the middle goes with the brush, a ring past it is free to be pulled along, the rest holds)
+            freedom[i] = d >= r * 1.3f ? 0.0f : (1.0f - f) * (1.0f - Mask[v]);
+        }
+        for (int it = 0; it < 20; ++it)
+            for (size_t e = 0; e < edges.size(); ++e)
+            {
+                uint32_t i = local[edges[e].first], j = local[edges[e].second];
+                float wi = freedom[i], wj = freedom[j];
+                if (wi + wj <= 0.0f) continue;
+                glm::vec3 d = p[j] - p[i];
+                float len = glm::length(d);
+                if (len < 1e-12f) continue;
+                glm::vec3 fix = d * ((len - rest[e]) / len / (wi + wj));
+                p[i] += fix * wi;
+                p[j] -= fix * wj;
+            }
+        std::vector<uint32_t> ring;
+        for (size_t i = 0; i < region.size(); ++i)
+        {
+            uint32_t v = region[i];
+            for (int a = 0; a < 3; ++a)
+                if ((brush.Symmetry >> a) & 1)
+                    if (std::abs(Positions[v][a]) < r * 1e-4f) p[i][a] = Positions[v][a];
+            Positions[v] = p[i];
+            GridMoved(v);
+        }
+        for (uint32_t v : region)
+        {
+            NoteEdges(v);
+            ring.push_back(v);
+            for (uint32_t u : Neighbors(v)) ring.push_back(u);
+        }
+        std::sort(ring.begin(), ring.end());
+        ring.erase(std::unique(ring.begin(), ring.end()), ring.end());
+        UpdateNormals(ring);
+    }
 
     void SculptMesh::Dab(const glm::vec3& center, const BrushSettings& brush, const glm::vec3& move)
     {
-        if (brush.Type == Brush::Grab)
+        if (brush.Type == Brush::Pose)
+        {
+            // Each mirror copy turns about its pivot by the angle the mouse has swung the brush's center through, the
+            // caught vertices by as much of it as their weight.
+            float k = std::min(1.0f, brush.Strength * 2.0f);
+            std::vector<uint32_t> touched;
+            for (const PoseFrame& pf : m_Pose)
+            {
+                glm::vec3 a = pf.Center - pf.Pivot, b = pf.Center + move * pf.Mirror - pf.Pivot;
+                glm::vec3 axis = glm::cross(a, b);
+                float sinA = glm::length(axis), cosA = glm::dot(a, b);
+                if (sinA < 1e-12f) continue;
+                axis /= sinA;
+                float angle = std::atan2(sinA, cosA);
+                for (const Caught& c : m_Caught)
+                {
+                    if (c.Mirror != pf.Mirror) continue;
+                    float t = angle * c.Weight * k, cs = std::cos(t), sn = std::sin(t);
+                    glm::vec3 d = c.Start - pf.Pivot;
+                    // Rodrigues' rotation about the axis.
+                    glm::vec3 rd = d * cs + glm::cross(axis, d) * sn + axis * glm::dot(axis, d) * (1.0f - cs);
+                    Positions[c.Vertex] = pf.Pivot + rd;
+                    GridMoved(c.Vertex);
+                    touched.push_back(c.Vertex);
+                }
+            }
+            for (uint32_t v : touched) NoteEdges(v);
+            std::vector<uint32_t> ring = touched;
+            for (uint32_t v : touched)
+                for (uint32_t u : Neighbors(v)) ring.push_back(u);
+            std::sort(ring.begin(), ring.end());
+            ring.erase(std::unique(ring.begin(), ring.end()), ring.end());
+            UpdateNormals(ring);
+            return;
+        }
+        if (brush.Type == Brush::Grab || brush.Type == Brush::Boundary)
         {
             std::vector<uint32_t> touched;
             for (const Caught& k : m_Caught)
             {
                 Positions[k.Vertex] = k.Start + move * k.Mirror * k.Weight * std::min(1.0f, brush.Strength * 2.0f);
+                GridMoved(k.Vertex);
                 touched.push_back(k.Vertex);
             }
+            for (uint32_t v : touched) NoteEdges(v);
             std::vector<uint32_t> ring = touched;
             for (uint32_t v : touched)
                 for (uint32_t u : Neighbors(v)) ring.push_back(u);
@@ -349,7 +820,9 @@ namespace Dimension::Modeling::Sculpt
         // The detail first (so even a big flat face has vertices under the brush), then the brush.
         if (DetailSize > 0.0f && brush.Type != Brush::Mask)
             for (const glm::vec3& s : mirrors) Retopologize(center * s, brush.Radius);
-        for (const glm::vec3& s : mirrors) ApplyBrush(center * s, brush, move * s, s);
+        for (const glm::vec3& s : mirrors)
+            if (brush.Type == Brush::Cloth) ClothDab(center * s, brush, move * s);
+            else ApplyBrush(center * s, brush, move * s, s);
     }
 
     void SculptMesh::ApplyBrush(const glm::vec3& c, const BrushSettings& brush, const glm::vec3& move, const glm::vec3& mirror)
@@ -359,9 +832,10 @@ namespace Dimension::Modeling::Sculpt
         std::vector<std::pair<uint32_t, float>> hit; // vertex, falloff
         glm::vec3 areaN(0.0f), areaC(0.0f);
         float areaW = 0.0f;
-        for (uint32_t v = 0; v < Positions.size(); ++v)
+        std::vector<uint32_t> near;
+        VertsNear(c, r, near);
+        for (uint32_t v : near)
         {
-            if (VertTris[v].empty()) continue;
             const glm::vec3& p = Positions[v];
             float dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z, d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > r2) continue;
@@ -383,6 +857,7 @@ namespace Dimension::Modeling::Sculpt
             uint32_t v = hit[i].first;
             float f = hit[i].second;
             glm::vec3 p = Positions[v];
+            if (brush.Texture && brush.Type != Brush::SnakeHook) f *= brush.Texture->At(p, c, r, view);
             float w = f * (1.0f - Mask[v]);
             switch (brush.Type)
             {
@@ -446,7 +921,9 @@ namespace Dimension::Modeling::Sculpt
                 if ((brush.Symmetry >> a) & 1)
                     if (std::abs(old[a]) < r * 1e-4f) p[a] = old[a];
             Positions[hit[i].first] = p;
+            GridMoved(hit[i].first);
         }
+        for (auto& [v, f] : hit) NoteEdges(v);
         std::vector<uint32_t> ring;
         for (auto& [v, f] : hit)
         {
@@ -479,9 +956,10 @@ namespace Dimension::Modeling::Sculpt
             if (i == 3) continue;
             uint32_t x = v[i], y = v[(i + 1) % 3], z = v[(i + 2) % 3];
             int32_t mat = TriMaterial[t];
+            glm::vec2 ux = TriUVs[t][i], uy = TriUVs[t][(i + 1) % 3], uz = TriUVs[t][(i + 2) % 3], um = (ux + uy) * 0.5f;
             KillTri(t);
-            AddTri(x, m, z, mat);
-            AddTri(m, y, z, mat);
+            AddTri(x, m, z, mat, { ux, um, uz });
+            AddTri(m, y, z, mat, { um, uy, uz });
         }
         m_TopologyChanged = true;
         return true;
@@ -521,7 +999,31 @@ namespace Dimension::Modeling::Sculpt
             return true;
         };
         if (!check(a) || !check(b)) return false;
+        // Corner UVs: each triangle around a or b moves its corner halfway along the collapsing edge in its own UV
+        // island (known from a removed triangle with the same UV there; across a seam it stays put).
+        std::vector<std::pair<glm::vec2, glm::vec2>> edgeUVs; // (at a, at b) in the removed triangles
+        for (uint32_t t : shared)
+        {
+            glm::vec2 ua(0.0f), ub(0.0f);
+            for (int k = 0; k < 3; ++k)
+            {
+                if (Tris[t][k] == a) ua = TriUVs[t][k];
+                if (Tris[t][k] == b) ub = TriUVs[t][k];
+            }
+            edgeUVs.push_back({ ua, ub });
+        }
         for (uint32_t t : shared) KillTri(t);
+        auto sameUV = [](glm::vec2 p, glm::vec2 q) { return std::abs(p.x - q.x) < 1e-6f && std::abs(p.y - q.y) < 1e-6f; };
+        for (int side = 0; side < 2; ++side)
+            for (uint32_t t : VertTris[side ? b : a])
+                for (int k = 0; k < 3; ++k)
+                    if (Tris[t][k] == (side ? b : a))
+                        for (auto& [ua, ub] : edgeUVs)
+                            if (sameUV(TriUVs[t][k], side ? ub : ua))
+                            {
+                                TriUVs[t][k] += ((side ? ua : ub) - (side ? ub : ua)) * 0.5f;
+                                break;
+                            }
         std::vector<uint32_t> moving = VertTris[b];
         for (uint32_t t : moving)
         {
@@ -532,6 +1034,8 @@ namespace Dimension::Modeling::Sculpt
         }
         VertTris[b].clear();
         Positions[a] = mid;
+        GridMoved(a);
+        NoteEdges(a);
         Mask[a] = (Mask[a] + Mask[b]) * 0.5f;
         UVs[a] = (UVs[a] + UVs[b]) * 0.5f;
         m_TopologyChanged = true;
@@ -546,8 +1050,28 @@ namespace Dimension::Modeling::Sculpt
         float reach2 = reach < 1e18f ? reach * reach : 1e36f;
         auto regionEdges = [&](bool longOnes) {
             std::vector<std::pair<float, std::pair<uint32_t, uint32_t>>> edges;
-            // The triangles the brush's sphere touches.
-            for (uint32_t t = 0; t < Tris.size(); ++t)
+            // The triangles the brush's sphere touches (each has a corner within an edge's length of it).
+            std::vector<uint32_t> candidates;
+            if (reach2 < 1e35f)
+            {
+                std::vector<uint32_t> near;
+                VertsNear(center, reach + m_MaxEdge, near);
+                uint32_t stamp = NextStamp();
+                for (uint32_t v : near)
+                    for (uint32_t t : VertTris[v])
+                        if (m_TriStamp[t] != stamp)
+                        {
+                            m_TriStamp[t] = stamp;
+                            candidates.push_back(t);
+                        }
+                std::sort(candidates.begin(), candidates.end());
+            }
+            else
+            {
+                candidates.resize(Tris.size());
+                std::iota(candidates.begin(), candidates.end(), 0u);
+            }
+            for (uint32_t t : candidates)
             {
                 if (IsDead(t)) continue;
                 const glm::vec3 &a = Positions[Tris[t].x], &b = Positions[Tris[t].y], &c = Positions[Tris[t].z];
@@ -664,6 +1188,7 @@ namespace Dimension::Modeling::Sculpt
             }
             Positions = std::move(next);
         }
+        m_GridOk = false;
         UpdateNormals();
     }
 

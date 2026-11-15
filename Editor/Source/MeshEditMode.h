@@ -360,7 +360,12 @@ namespace Editor
         Modeling::Sculpt::SculptMesh m_Sculpt;
         Modeling::Sculpt::Brush m_BrushType = Modeling::Sculpt::Brush::Draw;
         float m_BrushRadiusPx = 60.0f;
-        float m_BrushStrength[(size_t)Modeling::Sculpt::Brush::Count] = { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
+        float m_BrushStrength[(size_t)Modeling::Sculpt::Brush::Count] = { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f, 0.5f, 0.5f, 0.5f };
+        AssetHandle m_BrushTexAsset = AssetHandle::None(); // varies the brushes' strength
+        Modeling::Sculpt::BrushTexture m_BrushTex;
+        void LoadBrushTexture();
+        bool m_LiveModifiers = true;      // strokes show the modifiers as they go (while that stays quick)
+        float m_LiveModifierMs = 0.0f;
         bool m_BrushInvert = false, m_FrontFacesOnly = true;
         uint8_t m_Symmetry = 1;
         bool m_DynTopo = false, m_ConstantDetail = false;

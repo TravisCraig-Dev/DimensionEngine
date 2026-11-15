@@ -19430,6 +19430,196 @@ namespace
         CHECK(Ops::SelectedVertices(plane).size() == 4 && (plane.Faces[1].Flags & Selected) && !(plane.Faces[0].Flags & Selected));
     }
 
+    void TestModelingSculptFixes()
+    {
+        using namespace ModelingTest;
+        // The vertex grid: rays and brushes find what a plain search over everything finds, also after brushes have
+        // stretched the surface far past the grid's cells.
+        Sculpt::SculptMesh s = Sculpt::SculptMesh::FromEditable(Primitives::IcoSphere(4, 1.0f));
+        auto brute = [&](const glm::vec3& o, const glm::vec3& d) {
+            float best = 1e30f;
+            for (size_t t = 0; t < s.Tris.size(); ++t)
+            {
+                if (s.IsDead((uint32_t)t)) continue;
+                glm::vec3 a = s.Positions[s.Tris[t].x], e1 = s.Positions[s.Tris[t].y] - a, e2 = s.Positions[s.Tris[t].z] - a;
+                glm::vec3 pv = glm::cross(d, e2);
+                float det = glm::dot(e1, pv);
+                if (std::abs(det) < 1e-12f) continue;
+                glm::vec3 sv = o - a, qv = glm::cross(sv, e1);
+                float u = glm::dot(sv, pv) / det, v = glm::dot(d, qv) / det, dist = glm::dot(e2, qv) / det;
+                if (u >= 0.0f && v >= 0.0f && u + v <= 1.0f && dist > 0.0f) best = std::min(best, dist);
+            }
+            return best;
+        };
+        auto raysAgree = [&] {
+            uint32_t seed = 12345;
+            auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (float)(seed >> 8) / 16777216.0f * 2.0f - 1.0f; };
+            int agree = 0;
+            for (int i = 0; i < 120; ++i)
+            {
+                glm::vec3 o = glm::normalize(glm::vec3(rnd(), rnd(), rnd())) * 4.0f;
+                glm::vec3 d = glm::normalize(glm::vec3(rnd(), rnd(), rnd()) * 0.6f - o);
+                float t = 1e30f;
+                glm::vec3 n;
+                bool hit = s.Raycast(o, d, t, n);
+                float b = brute(o, d);
+                if (hit ? std::abs(t - b) < 1e-4f : b >= 1e29f) ++agree;
+            }
+            return agree;
+        };
+        CHECK(raysAgree() == 120);
+        Sculpt::BrushSettings snake;
+        snake.Type = Sculpt::Brush::SnakeHook;
+        snake.Radius = 0.3f;
+        snake.Strength = 1.0f;
+        snake.FrontFacesOnly = false;
+        glm::vec3 at(0, 0, 1);
+        s.BeginStroke(at, snake);
+        for (int i = 0; i < 20; ++i)
+        {
+            s.Dab(at, snake, glm::vec3(0, 0, 0.15f));
+            at.z += 0.15f;
+        }
+        s.EndStroke();
+        CHECK(raysAgree() == 120);
+        float tip = 0.0f;
+        for (const glm::vec3& p : s.Positions) tip = std::max(tip, p.z);
+        CHECK(tip > 2.0f); // (pulled well out)
+        glm::vec3 n;
+        float t = 0.0f;
+        CHECK(s.Raycast(glm::vec3(0, 0, 10), glm::vec3(0, 0, -1), t, n) && Near(10.0f - t, tip, 0.05f));
+        // Pose: the end of a long shape turns about a joint; the far end stays.
+        {
+            EditableMesh limb = Primitives::IcoSphere(4, 1.0f);
+            for (glm::vec3& p : limb.Positions) p.y *= 3.0f;
+            limb.Changed();
+            Sculpt::SculptMesh pose = Sculpt::SculptMesh::FromEditable(limb);
+            Sculpt::BrushSettings b;
+            b.Type = Sculpt::Brush::Pose;
+            b.Radius = 1.5f;
+            b.Strength = 1.0f;
+            b.FrontFacesOnly = false;
+            pose.BeginStroke(glm::vec3(0, 3, 0), b);
+            pose.Dab(glm::vec3(0, 3, 0), b, glm::vec3(3, 0, 0));
+            pose.EndStroke();
+            uint32_t topV = 0, bottomV = 0;
+            for (uint32_t v = 0; v < limb.VertexCount(); ++v)
+            {
+                if (limb.Positions[v].y > limb.Positions[topV].y) topV = v;
+                if (limb.Positions[v].y < limb.Positions[bottomV].y) bottomV = v;
+            }
+            glm::vec3 top = pose.Positions[topV];
+            CHECK(top.x > 0.8f && top.y < 3.0f);                                  // (turned towards +X)
+            CHECK(Near(pose.Positions[bottomV], limb.Positions[bottomV]));         // (the far end stays)
+            float spanBefore = glm::length(limb.Positions[topV] - glm::vec3(0, 1.6f, 0)), spanAfter = glm::length(top - glm::vec3(0, 1.6f, 0));
+            CHECK(std::abs(spanAfter - spanBefore) < 0.35f);                        // (turned, not stretched)
+        }
+        // Boundary: an open edge dragged, the far side of the sheet left alone.
+        {
+            EditableMesh sheet = Primitives::Grid(20, 20, 2.0f);
+            Sculpt::SculptMesh bnd = Sculpt::SculptMesh::FromEditable(sheet);
+            Sculpt::BrushSettings b;
+            b.Type = Sculpt::Brush::Boundary;
+            b.Radius = 0.5f;
+            b.Strength = 1.0f;
+            b.FrontFacesOnly = false;
+            bnd.BeginStroke(glm::vec3(1, 0, 0), b);
+            bnd.Dab(glm::vec3(1, 0, 0), b, glm::vec3(0, 0.4f, 0));
+            bnd.EndStroke();
+            float edgeRise = 0.0f, inside = 0.0f, farEdge = 0.0f;
+            for (uint32_t v = 0; v < sheet.VertexCount(); ++v)
+            {
+                glm::vec3 p = sheet.Positions[v];
+                if (Near(p, glm::vec3(1, 0, 0))) edgeRise = bnd.Positions[v].y;
+                if (Near(p, glm::vec3(0.4f, 0, 0), 1e-3f)) inside = bnd.Positions[v].y;
+                if (Near(p, glm::vec3(-1, 0, 0))) farEdge = bnd.Positions[v].y;
+            }
+            CHECK(Near(edgeRise, 0.4f, 1e-3f) && Near(inside, 0.0f) && Near(farEdge, 0.0f));
+        }
+        // Cloth: dragging keeps the edges nearer their lengths than Snake Hook's drag does.
+        {
+            auto worstStretch = [](Sculpt::Brush type) {
+                EditableMesh sheet = Primitives::Grid(24, 24, 2.0f);
+                Sculpt::SculptMesh cloth = Sculpt::SculptMesh::FromEditable(sheet);
+                Sculpt::BrushSettings b;
+                b.Type = type;
+                b.Radius = 0.5f;
+                b.Strength = 1.0f;
+                b.FrontFacesOnly = false;
+                glm::vec3 at(0.0f);
+                cloth.BeginStroke(at, b);
+                for (int i = 0; i < 6; ++i)
+                {
+                    cloth.Dab(at, b, glm::vec3(0.05f, 0, 0));
+                    at.x += 0.05f;
+                }
+                cloth.EndStroke();
+                float strain = 0.0f, count = 0.0f;
+                for (const glm::uvec3& t : cloth.Tris)
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        uint32_t a = t[k], c = t[(k + 1) % 3];
+                        float rest = glm::length(sheet.Positions[a] - sheet.Positions[c]);
+                        strain += std::abs(glm::length(cloth.Positions[a] - cloth.Positions[c]) / rest - 1.0f);
+                        count += 1.0f;
+                    }
+                float moved = 0.0f, lift = 0.0f;
+                for (uint32_t v = 0; v < sheet.VertexCount(); ++v)
+                {
+                    moved = std::max(moved, glm::length(cloth.Positions[v] - sheet.Positions[v]));
+                    lift = std::max(lift, std::abs(cloth.Positions[v].y));
+                }
+                return std::array<float, 3>{ strain / count, moved, lift };
+            };
+            std::array<float, 3> cloth = worstStretch(Sculpt::Brush::Cloth), snake = worstStretch(Sculpt::Brush::SnakeHook);
+            CHECK(cloth[1] > 0.2f && cloth[0] < snake[0] && cloth[2] > 0.01f); // (moves, stretches less on the whole, folds)
+        }
+        // Brush textures: black stops the brush, white is the plain brush.
+        {
+            auto drawWith = [](float value) {
+                EditableMesh sheet = Primitives::Grid(16, 16, 2.0f);
+                Sculpt::SculptMesh d = Sculpt::SculptMesh::FromEditable(sheet);
+                uint32_t px[4];
+                for (uint32_t& p : px) p = value > 0.5f ? 0xFFFFFFFFu : 0xFF000000u;
+                Sculpt::BrushTexture tex = Sculpt::BrushTexture::FromRGBA8(px, 2, 2);
+                Sculpt::BrushSettings b;
+                b.Radius = 0.5f;
+                b.ViewDir = glm::vec3(0, -1, 0);
+                b.Texture = &tex;
+                d.BeginStroke(glm::vec3(0.0f), b);
+                d.Dab(glm::vec3(0.0f), b);
+                float top = 0.0f;
+                for (const glm::vec3& p : d.Positions) top = std::max(top, p.y);
+                return top;
+            };
+            CHECK(drawWith(0.0f) == 0.0f && drawWith(1.0f) > 0.001f);
+            uint32_t half[2] = { 0xFFFFFFFFu, 0xFF000000u };
+            Sculpt::BrushTexture split = Sculpt::BrushTexture::FromRGBA8(half, 2, 1);
+            split.Mapping = 1;
+            split.Scale = 2.0f;
+            CHECK(Near(split.Sample({ 0.25f, 0.5f }), 1.0f) && Near(split.Sample({ 0.75f, 0.5f }), 0.0f));
+        }
+        // Dynamic topology keeps the UVs: on a flat sheet they stay the same linear function of position after
+        // splitting finer and collapsing coarser.
+        {
+            EditableMesh sheet = Primitives::Grid(6, 6, 2.0f);
+            Sculpt::SculptMesh dyn = Sculpt::SculptMesh::FromEditable(sheet);
+            CHECK(dyn.FloodFillDetail(0.12f));
+            dyn.FloodFillDetail(0.5f);
+            EditableMesh back = sheet;
+            dyn.WriteTo(back);
+            CHECK(back.FaceCount() != sheet.FaceCount());
+            float worst = 0.0f;
+            for (const Face& f : back.Faces)
+                for (size_t c = 0; c < f.Verts.size(); ++c)
+                {
+                    glm::vec3 p = back.Positions[f.Verts[c]];
+                    worst = std::max(worst, glm::length(f.UVs[c] - glm::vec2(0.5f + p.x * 0.5f, 0.5f + p.z * 0.5f)));
+                }
+            CHECK(worst < 1e-4f);
+        }
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19856,6 +20046,7 @@ int main(int argc, char** argv)
     Run("Modeling rig fixes", TestModelingRigFixes);
     Run("Modeling curve and text fixes", TestModelingCurveTextFixes);
     Run("Modeling UV fixes", TestModelingUVFixes);
+    Run("Modeling sculpt fixes", TestModelingSculptFixes);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

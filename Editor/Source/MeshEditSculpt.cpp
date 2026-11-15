@@ -1,8 +1,10 @@
 #include "MeshEditMode.h"
+#include "EditorUI.h"
 #include "Shortcuts.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Scene/Components.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 
@@ -25,7 +27,8 @@ namespace Editor
         }
 
         const char* kBrushKeys[] = { "sculpt.draw", "sculpt.clay", "sculpt.inflate", "sculpt.smooth", "sculpt.flatten", "sculpt.scrape",
-                                     "sculpt.pinch", "sculpt.crease", "sculpt.grab", "sculpt.snakeHook", "sculpt.mask" };
+                                     "sculpt.pinch", "sculpt.crease", "sculpt.grab", "sculpt.snakeHook", "sculpt.mask",
+                                     "sculpt.pose", "sculpt.boundary", "sculpt.cloth" };
         const char* kBrushTips[] = { "Pushes the surface out (in with Ctrl or Subtract)",
                                      "Builds up towards a plane above the surface, filling dips first",
                                      "Each part swells along its own normal (shrinks with Ctrl)",
@@ -36,7 +39,10 @@ namespace Editor
                                      "A sharp groove (a ridge with Ctrl)",
                                      "Drags the part caught under the brush with the mouse",
                                      "Pulls the surface along the stroke (with dynamic topology, long new shapes)",
-                                     "Paints the mask: masked parts don't move (Ctrl erases)" };
+                                     "Paints the mask: masked parts don't move (Ctrl erases)",
+                                     "Bends the part under the brush about a joint at the brush's edge (put the brush over a limb's end and drag)",
+                                     "Drags the open edges under the brush, the surface behind them following",
+                                     "Drags the surface like cloth: it keeps its size, so it folds and wrinkles where it bunches up" };
     }
 
     void MeshEditMode::SetSculpting(bool on)
@@ -65,12 +71,24 @@ namespace Editor
     void MeshEditMode::SculptPreview()
     {
         ++m_GeometryVersion;
+        if (m_LiveModifiers && m_Mesh.HasActiveModifiers() && m_LiveModifierMs < 40.0f)
+        {
+            // The model as it would be written back, with its modifiers (dropped for the rest of the stroke when it
+            // gets slow).
+            auto start = std::chrono::steady_clock::now();
+            EditableMesh view = m_Mesh;
+            m_Sculpt.WriteTo(view);
+            AssetManager::SetMeshData(m_Asset, view.ToMeshData());
+            m_LiveModifierMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+            return;
+        }
         AssetManager::SetMeshData(m_Asset, m_Sculpt.ToMeshData(m_Mesh.MaterialSlots.size()));
     }
 
     void MeshEditMode::SculptCommit()
     {
         bool rebuilt = m_Sculpt.TopologyChanged();
+        m_LiveModifierMs = 0.0f;
         m_Sculpt.WriteTo(m_Mesh);
         if (rebuilt)
         {
@@ -126,7 +144,8 @@ namespace Editor
         b.Radius = m_BrushRadiusPx * ModelPerPixel(at);
         b.Strength = m_BrushStrength[(size_t)m_StrokeType];
         b.Invert = m_StrokeInvert;
-        b.FrontFacesOnly = m_FrontFacesOnly && m_StrokeType != sc::Brush::Grab && m_StrokeType != sc::Brush::SnakeHook;
+        b.FrontFacesOnly = m_FrontFacesOnly && !sc::IsDragBrush(m_StrokeType);
+        b.Texture = m_BrushTexAsset.IsValid() && !m_BrushTex.Values.empty() ? &m_BrushTex : nullptr;
         b.ViewDir = viewDir;
         b.Symmetry = m_Symmetry;
         return b;
@@ -157,7 +176,7 @@ namespace Editor
             sc::BrushSettings b = StrokeBrush(m_StrokeStart, dir);
             m_Sculpt.DetailSize = m_DynTopo ? (m_ConstantDetail ? m_DetailSize : m_DetailPx * ModelPerPixel(m_StrokeStart)) : 0.0f;
             m_Sculpt.BeginStroke(m_StrokeStart, b);
-            if (m_StrokeType != sc::Brush::Grab && m_StrokeType != sc::Brush::SnakeHook)
+            if (!sc::IsDragBrush(m_StrokeType))
             {
                 m_Sculpt.Dab(m_StrokeStart, b);
                 SculptPreview();
@@ -174,15 +193,16 @@ namespace Editor
         if (Dist(mouse, m_StrokeMouse) < 0.5f) return;
         glm::vec3 from, dir;
         bool changed = false;
-        if (m_StrokeType == sc::Brush::Grab || m_StrokeType == sc::Brush::SnakeHook)
+        if (sc::IsDragBrush(m_StrokeType))
         {
             // The mouse carried onto a plane facing the view through where the stroke is.
             SculptRay(mouse, from, dir);
-            glm::vec3 anchor = m_StrokeType == sc::Brush::Grab ? m_StrokeStart : m_StrokeLast, p;
+            bool anchored = sc::IsAnchoredBrush(m_StrokeType);
+            glm::vec3 anchor = anchored ? m_StrokeStart : m_StrokeLast, p;
             if (RayPlane(from, dir, anchor, m_StrokeView, p))
             {
                 sc::BrushSettings b = StrokeBrush(anchor, m_StrokeView);
-                if (m_StrokeType == sc::Brush::Grab) m_Sculpt.Dab(m_StrokeStart, b, p - m_StrokeStart);
+                if (anchored) m_Sculpt.Dab(m_StrokeStart, b, p - m_StrokeStart);
                 else
                 {
                     m_Sculpt.Dab(m_StrokeLast, b, p - m_StrokeLast);
@@ -338,6 +358,23 @@ namespace Editor
         return m_Stroking || m_SculptAdjust != 0;
     }
 
+    void MeshEditMode::LoadBrushTexture()
+    {
+        std::vector<uint32_t> pixels;
+        glm::uvec2 size(0);
+        if (m_BrushTexAsset.IsValid() && AssetManager::ReadTexturePixels(m_BrushTexAsset, pixels, size) && size.x && size.y)
+        {
+            sc::BrushTexture loaded = sc::BrushTexture::FromRGBA8(pixels.data(), size.x, size.y);
+            m_BrushTex.Values = std::move(loaded.Values);
+            m_BrushTex.Width = loaded.Width;
+            m_BrushTex.Height = loaded.Height;
+            return;
+        }
+        if (m_BrushTexAsset.IsValid()) Log::Warn("Sculpt: couldn't read the brush texture's pixels");
+        m_BrushTexAsset = AssetHandle::None();
+        m_BrushTex.Values.clear();
+    }
+
     void MeshEditMode::DrawSculptToolbar(const ImVec2& origin)
     {
         ImGui::SetCursorScreenPos(ImVec2(origin.x + 8.0f, origin.y + 28.0f));
@@ -379,6 +416,35 @@ namespace Editor
         ImGui::SameLine();
         if (toggle("Front Faces", m_FrontFacesOnly, "Only parts facing the camera (else the brush reaches through to the far side)"))
             m_FrontFacesOnly = !m_FrontFacesOnly;
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Texture", m_BrushTexAsset.IsValid(), "A texture varying the brushes' strength (white full, black none)")) ImGui::OpenPopup("SculptTexture");
+        if (ImGui::BeginPopup("SculptTexture"))
+        {
+            ImGui::SetNextItemWidth(220.0f);
+            if (UI::AssetField("Texture", m_BrushTexAsset, AssetType::Texture).Changed) LoadBrushTexture();
+            const char* mappings[] = { "View (one per dab)", "Tiled (over the view)" };
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::Combo("Mapping", &m_BrushTex.Mapping, mappings, 2);
+            if (m_BrushTex.Mapping == 1)
+            {
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::DragFloat("Size", &m_BrushTex.Scale, 0.005f, 0.001f, 100.0f, "%.3f m");
+            }
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::DragFloat("Angle", &m_BrushTex.Angle, 1.0f, -360.0f, 360.0f, "%.0f deg");
+            if (ImGui::Button("None"))
+            {
+                m_BrushTexAsset = AssetHandle::None();
+                m_BrushTex.Values.clear();
+            }
+            ImGui::EndPopup();
+        }
+        if (m_Mesh.HasActiveModifiers())
+        {
+            ImGui::SameLine(0.0f, 2.0f);
+            if (toggle("Modifiers", m_LiveModifiers, "Strokes show the model's modifiers as they go (else just the base mesh until the stroke ends)"))
+                m_LiveModifiers = !m_LiveModifiers;
+        }
         ImGui::SameLine();
         ImGui::TextUnformatted("Mirror");
         for (int a = 0; a < 3; ++a)
