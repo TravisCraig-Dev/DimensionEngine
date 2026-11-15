@@ -126,6 +126,26 @@ namespace Editor::Shortcuts
                 { "mesh.shrinkFatten", "Mesh Edit", "Shrink/Fatten", ImGuiMod_Alt | ImGuiKey_S },
                 { "mesh.faceMenu", "Mesh Edit", "Face Menu", ImGuiMod_Ctrl | ImGuiKey_F },
                 { "mesh.uvMenu", "Mesh Edit", "UV Menu (Unwrap)", ImGuiKey_U },
+                { "mesh.sculptMode", "Mesh Edit", "Sculpt Mode (and back)", ImGuiMod_Shift | ImGuiKey_Tab },
+                { "sculpt.draw", "Sculpt", "Draw Brush", ImGuiKey_X },
+                { "sculpt.clay", "Sculpt", "Clay Brush", ImGuiKey_C },
+                { "sculpt.inflate", "Sculpt", "Inflate Brush", ImGuiKey_I },
+                { "sculpt.smooth", "Sculpt", "Smooth Brush", ImGuiKey_S },
+                { "sculpt.flatten", "Sculpt", "Flatten Brush", ImGuiMod_Shift | ImGuiKey_T },
+                { "sculpt.scrape", "Sculpt", "Scrape Brush", ImGuiMod_Shift | ImGuiKey_S },
+                { "sculpt.pinch", "Sculpt", "Pinch Brush", ImGuiKey_P },
+                { "sculpt.crease", "Sculpt", "Crease Brush", ImGuiMod_Shift | ImGuiKey_C },
+                { "sculpt.grab", "Sculpt", "Grab Brush", ImGuiKey_G },
+                { "sculpt.snakeHook", "Sculpt", "Snake Hook Brush", ImGuiKey_K },
+                { "sculpt.mask", "Sculpt", "Mask Brush", ImGuiKey_M },
+                { "sculpt.radius", "Sculpt", "Brush Radius (drag)", ImGuiKey_F },
+                { "sculpt.strength", "Sculpt", "Brush Strength (drag)", ImGuiMod_Shift | ImGuiKey_F },
+                { "sculpt.smaller", "Sculpt", "Smaller Brush", ImGuiKey_LeftBracket },
+                { "sculpt.larger", "Sculpt", "Larger Brush", ImGuiKey_RightBracket },
+                { "sculpt.dyntopo", "Sculpt", "Toggle Dynamic Topology", ImGuiMod_Ctrl | ImGuiKey_D },
+                { "sculpt.remesh", "Sculpt", "Voxel Remesh", ImGuiMod_Ctrl | ImGuiKey_R },
+                { "sculpt.clearMask", "Sculpt", "Clear Mask", ImGuiMod_Alt | ImGuiKey_M },
+                { "sculpt.invertMask", "Sculpt", "Invert Mask", ImGuiMod_Ctrl | ImGuiKey_I },
                 { "uv.vertexMode", "UV Editor", "Vertex Select Mode", ImGuiKey_1 },
                 { "uv.edgeMode", "UV Editor", "Edge Select Mode", ImGuiKey_2 },
                 { "uv.faceMode", "UV Editor", "Face Select Mode", ImGuiKey_3 },
@@ -184,9 +204,13 @@ namespace Editor::Shortcuts
     bool ShadowedInEditMode(const char* id)
     {
         const Shortcut* s = Find(id);
-        if (!s || s->Key == 0 || std::string_view(s->Category) == "Mesh Edit") return false;
+        auto editing = [](const Shortcut& x) {
+            std::string_view c = x.Category;
+            return c == "Mesh Edit" || c == "Sculpt";
+        };
+        if (!s || s->Key == 0 || editing(*s)) return false;
         for (const Shortcut& other : All())
-            if (other.Key == s->Key && std::string_view(other.Category) == "Mesh Edit") return true;
+            if (other.Key == s->Key && editing(other)) return true;
         return false;
     }
 
@@ -202,7 +226,7 @@ namespace Editor::Shortcuts
         };
         auto scope = [](const Shortcut& x) {
             std::string_view c = x.Category;
-            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : 0;
+            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : c == "Sculpt" ? 3 : 0;
         };
         for (const Shortcut& other : All())
         {

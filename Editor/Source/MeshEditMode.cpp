@@ -153,6 +153,11 @@ namespace Editor
 
     void MeshEditMode::Toggle()
     {
+        if (m_Active && m_Sculpting)
+        {
+            SetSculpting(false); // (Tab in Sculpt Mode goes back to Edit Mode, as in Blender)
+            return;
+        }
         if (m_Active)
         {
             Exit();
@@ -196,6 +201,8 @@ namespace Editor
         m_Redo.clear();
         m_Modal = {};
         m_Pressing = m_BoxSelecting = false;
+        m_Sculpting = m_SculptValid = m_Stroking = false;
+        m_SculptAdjust = 0;
         ops::FlushSelection(m_Mesh, m_Mode);
         ++m_GeometryVersion;
         return true;
@@ -206,6 +213,15 @@ namespace Editor
         if (!m_Active) return;
         if (m_Modal.Kind != ModalKind::None) EndModal(false);
         if (m_UVModal.Kind != UVModalKind::None) EndUVModal(false);
+        if (m_Stroking)
+        {
+            m_Sculpt.EndStroke();
+            m_Stroking = false;
+            SculptCommit();
+        }
+        m_Sculpting = m_SculptValid = false;
+        m_SculptAdjust = 0;
+        m_Sculpt = {};
         m_Tool = Tool::None;
         m_KnifePoints.clear();
         m_LoopPreview.clear();
@@ -296,7 +312,9 @@ namespace Editor
             m_LoopPreview.clear();
             return;
         }
+        if (m_Stroking || m_SculptAdjust) return;
         if (m_Undo.empty()) return;
+        m_SculptValid = false;
         m_Redo.push_back({ m_Mesh, m_Mode, m_Undo.back().Name });
         m_Mesh = std::move(m_Undo.back().Mesh);
         m_Mode = m_Undo.back().Mode;
@@ -308,6 +326,7 @@ namespace Editor
     void MeshEditMode::Redo()
     {
         if (IsModal() || m_Redo.empty()) return;
+        m_SculptValid = false;
         m_Undo.push_back({ m_Mesh, m_Mode, m_Redo.back().Name });
         m_Mesh = std::move(m_Redo.back().Mesh);
         m_Mode = m_Redo.back().Mode;
@@ -346,6 +365,14 @@ namespace Editor
         m_Size = size;
         m_View = view;
         m_Proj = proj;
+        if (m_Sculpting)
+        {
+            m_World = m_Ctx.ActiveScene().GetRegistry().Get<TransformComponent>(m_Entity).World;
+            m_ViewProj = proj * view;
+            m_CameraWorld = glm::vec3(glm::inverse(view)[3]);
+            m_CameraLocal = glm::vec3(glm::inverse(m_World) * glm::vec4(m_CameraWorld, 1.0f));
+            return UpdateSculptView(hovered, focused, blocked);
+        }
         UpdateProjection(origin, size, view, proj);
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -548,6 +575,9 @@ namespace Editor
             if (i) ImGui::SameLine(0.0f, 2.0f);
             if (toggle(ModeName((SelectMode)i), (int)m_Mode == i, modeTips[i].c_str())) SetSelectMode((SelectMode)i);
         }
+        ImGui::SameLine();
+        if (toggle("Sculpt", false, ("Sculpt Mode: shape the model with brushes (" + Shortcuts::Label("mesh.sculptMode") + ")").c_str()))
+            SetSculpting(true);
         ImGui::SameLine();
         if (toggle("X-Ray", m_XRay, ("See and select through the surface (" + Shortcuts::Label("mesh.xray") + ")").c_str())) m_XRay = !m_XRay;
         ImGui::SameLine();
@@ -1144,6 +1174,7 @@ namespace Editor
         if (Pressed("mesh.shrinkFatten")) BeginModal(ModalKind::ShrinkFatten);
         if (Pressed("mesh.faceMenu")) m_OpenMenu = 6;
         if (Pressed("mesh.uvMenu")) m_OpenMenu = 9;
+        if (Pressed("mesh.sculptMode")) SetSculpting(true);
     }
 
     // ---- Mouse selection

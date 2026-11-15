@@ -717,6 +717,18 @@ namespace Dimension::Modeling
                 if (bits & UVSelected) uvSel.push_back(cornerIndex);
                 if (bits & UVPinned) uvPin.push_back(cornerIndex);
             }
+        // Sculpt mask: [vertex, value] pairs of the masked vertices.
+        if (Mask.size() == Positions.size())
+        {
+            json mask = json::array();
+            for (uint32_t v = 0; v < Mask.size(); ++v)
+                if (Mask[v] > 0.0f)
+                {
+                    mask.push_back(v);
+                    mask.push_back(Round(Mask[v]));
+                }
+            if (!mask.empty()) j["mask"] = std::move(mask);
+        }
         if (!uvSel.empty()) j["uvSelected"] = std::move(uvSel);
         if (!uvPin.empty()) j["uvPinned"] = std::move(uvPin);
         if (json s = flagged(Selected); !s.empty()) j["selected"] = std::move(s);
@@ -818,6 +830,13 @@ namespace Dimension::Modeling
                 first += n;
             }
         };
+        if (j.contains("mask"))
+        {
+            const json& mask = j["mask"];
+            out.Mask.assign(vc, 0.0f);
+            for (size_t i = 0; i + 1 < mask.size(); i += 2)
+                if (mask[i].get<uint32_t>() < vc) out.Mask[mask[i].get<uint32_t>()] = std::clamp(mask[i + 1].get<float>(), 0.0f, 1.0f);
+        }
         readCorners("uvSelected", UVSelected);
         readCorners("uvPinned", UVPinned);
         readFlags("selected", Selected);

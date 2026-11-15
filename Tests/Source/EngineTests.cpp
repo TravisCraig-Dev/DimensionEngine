@@ -83,6 +83,7 @@
 #include <Dimension/Modeling/MeshTools.h>
 #include <Dimension/Modeling/Modifiers.h>
 #include <Dimension/Modeling/UVTools.h>
+#include <Dimension/Modeling/Sculpt.h>
 #include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/ModelExport.h>
@@ -18432,6 +18433,236 @@ namespace
         CHECK(back.Faces[1].CornerFlags(1) == UVSelected);
     }
 
+    void TestModelingSculptBrushes()
+    {
+        using namespace ModelingTest;
+        using Sculpt::Brush;
+        // A flat grid seen from above: Draw raises what's under the brush along its normal, nothing outside it.
+        EditableMesh grid = Primitives::Grid(20, 20, 2.0f);
+        Sculpt::SculptMesh s = Sculpt::SculptMesh::FromEditable(grid);
+        Sculpt::BrushSettings brush;
+        brush.Radius = 0.3f;
+        brush.Strength = 1.0f;
+        brush.ViewDir = { 0, -1, 0 };
+        float r = 0.0f;
+        glm::vec3 n;
+        CHECK(s.Raycast({ 0.05f, 5, 0.05f }, { 0, -1, 0 }, r, n) && Near(r, 5.0f, 1e-4f) && Near(n, glm::vec3(0, 1, 0)));
+        for (int i = 0; i < 10; ++i) s.Dab({ 0, 0, 0 }, brush);
+        bool outsideStill = true, raised = false;
+        for (uint32_t v = 0; v < s.Positions.size(); ++v)
+        {
+            float d = glm::length(glm::vec2(grid.Positions[v].x, grid.Positions[v].z));
+            if (d > 0.3f) outsideStill &= Near(s.Positions[v], grid.Positions[v]);
+            if (d < 0.01f) raised = s.Positions[v].y > 0.05f && Near(s.Positions[v].x, 0.0f) && Near(s.Positions[v].z, 0.0f);
+        }
+        CHECK(outsideStill && raised);
+        // Invert pushes back in; Smooth flattens the bump down a lot.
+        Sculpt::SculptMesh bump = s;
+        auto peak = [](const Sculpt::SculptMesh& m) {
+            float y = -1e30f;
+            for (const glm::vec3& p : m.Positions) y = std::max(y, p.y);
+            return y;
+        };
+        float before = peak(bump);
+        brush.Type = Brush::Smooth;
+        brush.Radius = 0.5f;
+        for (int i = 0; i < 20; ++i) bump.Dab({ 0, before, 0 }, brush);
+        CHECK(peak(bump) < before * 0.5f);
+        // Back faces are left alone: seen from below, nothing moves.
+        Sculpt::SculptMesh under = Sculpt::SculptMesh::FromEditable(grid);
+        Sculpt::BrushSettings fromBelow = brush;
+        fromBelow.Type = Brush::Draw;
+        fromBelow.ViewDir = { 0, 1, 0 };
+        under.Dab({ 0, 0, 0 }, fromBelow);
+        CHECK(peak(under) < 1e-6f);
+
+        // Symmetry: a dab at +X moves the mirrored vertex at -X the same way.
+        EditableMesh sphere = Primitives::UVSphere(32, 16);
+        Sculpt::SculptMesh sym = Sculpt::SculptMesh::FromEditable(sphere);
+        Sculpt::BrushSettings side;
+        side.Type = Brush::Draw;
+        side.Radius = 0.4f;
+        side.Strength = 1.0f;
+        side.ViewDir = { -1, 0, 0 };
+        side.FrontFacesOnly = false;
+        side.Symmetry = 1;
+        for (int i = 0; i < 5; ++i) sym.Dab({ 1, 0, 0 }, side);
+        bool mirrored = true;
+        float grown = 0.0f;
+        for (uint32_t v = 0; v < sphere.VertexCount(); ++v)
+        {
+            glm::vec3 p = sphere.Positions[v];
+            for (uint32_t u = 0; u < sphere.VertexCount(); ++u)
+                if (Near(sphere.Positions[u], glm::vec3(-p.x, p.y, p.z), 1e-5f))
+                {
+                    mirrored &= Near(sym.Positions[u], sym.Positions[v] * glm::vec3(-1, 1, 1), 1e-4f);
+                    break;
+                }
+            grown = std::max(grown, sym.Positions[v].x);
+        }
+        CHECK(mirrored && grown > 1.05f);
+
+        // Mask: masked vertices don't move; the mask brush paints it, Invert and Clear.
+        Sculpt::SculptMesh masked = Sculpt::SculptMesh::FromEditable(grid);
+        Sculpt::BrushSettings paint;
+        paint.Type = Brush::Mask;
+        paint.Radius = 0.5f;
+        paint.Strength = 1.0f;
+        paint.ViewDir = { 0, -1, 0 };
+        for (int i = 0; i < 6; ++i) masked.Dab({ 0, 0, 0 }, paint);
+        uint32_t centerV = 0;
+        for (uint32_t v = 0; v < grid.VertexCount(); ++v)
+            if (glm::length(grid.Positions[v]) < 1e-4f) centerV = v;
+        CHECK(Near(masked.Mask[centerV], 1.0f));
+        Sculpt::BrushSettings draw = paint;
+        draw.Type = Brush::Draw;
+        masked.Dab({ 0, 0, 0 }, draw);
+        CHECK(Near(masked.Positions[centerV].y, 0.0f));
+        masked.InvertMask();
+        CHECK(Near(masked.Mask[centerV], 0.0f));
+        masked.ClearMask();
+        // The mask is kept with the model.
+        EditableMesh withMask = grid;
+        Sculpt::SculptMesh painted = Sculpt::SculptMesh::FromEditable(grid);
+        for (int i = 0; i < 6; ++i) painted.Dab({ 0, 0, 0 }, paint);
+        painted.WriteTo(withMask);
+        EditableMesh back;
+        CHECK(EditableMesh::FromJson(withMask.ToJson(), back) && back.Mask.size() == grid.VertexCount() && Near(back.Mask[centerV], 1.0f, 1e-4f));
+
+        // Grab drags the vertices caught at the start by the mouse's move; Snake Hook pulls along the stroke.
+        Sculpt::SculptMesh grab = Sculpt::SculptMesh::FromEditable(grid);
+        Sculpt::BrushSettings g = draw;
+        g.Type = Brush::Grab;
+        g.Radius = 0.3f;
+        grab.BeginStroke({ 0, 0, 0 }, g);
+        grab.Dab({ 0, 0, 0 }, g, { 0, 0.2f, 0 });
+        grab.Dab({ 0, 0, 0 }, g, { 0, 0.5f, 0 });
+        grab.EndStroke();
+        CHECK(Near(grab.Positions[centerV], glm::vec3(0, 0.5f, 0), 1e-4f));
+        // Other brushes don't break anything and keep the vertices where they were with zero strength.
+        for (int b = 0; b < (int)Brush::Count; ++b)
+        {
+            Sculpt::SculptMesh m = Sculpt::SculptMesh::FromEditable(grid);
+            Sculpt::BrushSettings any = draw;
+            any.Type = (Brush)b;
+            any.Strength = 0.0f;
+            m.BeginStroke({ 0, 0, 0 }, any);
+            m.Dab({ 0, 0, 0 }, any, { 0, 0.1f, 0 });
+            bool same = true;
+            for (uint32_t v = 0; v < grid.VertexCount(); ++v) same &= Near(m.Positions[v], grid.Positions[v]);
+            CHECK(same);
+        }
+
+        // Without topology changes, writing back keeps faces, UVs and modifiers.
+        EditableMesh cube = Primitives::Cube();
+        cube.Modifiers.push_back(Modifier::Make(ModifierType::Subdivision));
+        Sculpt::SculptMesh cs = Sculpt::SculptMesh::FromEditable(cube);
+        Sculpt::BrushSettings inflate;
+        inflate.Type = Brush::Inflate;
+        inflate.Radius = 3.0f;
+        inflate.Strength = 1.0f;
+        inflate.FrontFacesOnly = false;
+        cs.Dab({ 0, 0, 0 }, inflate);
+        EditableMesh written = cube;
+        cs.WriteTo(written);
+        CHECK(written.FaceCount() == 6 && written.Faces[0].UVs == cube.Faces[0].UVs && written.Modifiers.size() == 1);
+        CHECK(glm::length(written.Positions[0]) > glm::length(cube.Positions[0]) + 1e-3f);
+        CHECK(!cs.ToMeshData(0).Indices.empty());
+    }
+
+    void TestModelingDynamicTopology()
+    {
+        using namespace ModelingTest;
+        // Detail flood fill on a cube: every edge comes under the detail size, the surface stays closed and the shape
+        // (its volume) stays a cube.
+        EditableMesh cube = Primitives::Cube(1.0f);
+        Sculpt::SculptMesh s = Sculpt::SculptMesh::FromEditable(cube);
+        CHECK(s.FloodFillDetail(0.1f, 12));
+        CHECK(s.TopologyChanged() && s.LiveTriangleCount() > 200);
+        EditableMesh fine = cube;
+        s.WriteTo(fine);
+        CHECK(ClosedAndConsistent(fine) && Near(Volume(fine), 1.0f, 1e-3f));
+        float longest = 0.0f;
+        for (EdgeKey e : fine.Topo().Edges) longest = std::max(longest, glm::length(fine.Positions[EdgeA(e)] - fine.Positions[EdgeB(e)]));
+        CHECK(longest <= 0.1f + 1e-4f);
+        // A coarser detail collapses it back down (still closed).
+        Sculpt::SculptMesh coarse = Sculpt::SculptMesh::FromEditable(fine);
+        size_t dense = coarse.LiveTriangleCount();
+        coarse.FloodFillDetail(0.4f, 12);
+        EditableMesh fewer = fine;
+        coarse.WriteTo(fewer);
+        CHECK(coarse.LiveTriangleCount() < dense / 2 && ClosedAndConsistent(fewer));
+
+        // Dynamic topology under the brush: only near it, and the stroke stays closed.
+        EditableMesh sphere = Primitives::IcoSphere(2);
+        Sculpt::SculptMesh d = Sculpt::SculptMesh::FromEditable(sphere);
+        d.DetailSize = 0.06f;
+        Sculpt::BrushSettings brush;
+        brush.Radius = 0.35f;
+        brush.Strength = 0.8f;
+        brush.ViewDir = { 0, -1, 0 };
+        for (int i = 0; i < 8; ++i) d.Dab({ 0.0f, 1.0f, 0.1f * i - 0.4f }, brush);
+        EditableMesh sculpted = sphere;
+        d.WriteTo(sculpted);
+        CHECK(sculpted.FaceCount() > sphere.FaceCount() * 2 && ClosedAndConsistent(sculpted));
+        bool bottomUntouched = true;
+        for (uint32_t f = 0; f < sculpted.FaceCount(); ++f)
+            if (sculpted.FaceCenter(f).y < -0.5f)
+                for (uint32_t v : sculpted.Faces[f].Verts)
+                    for (uint32_t w : sculpted.Faces[f].Verts)
+                        bottomUntouched &= glm::length(sculpted.Positions[v] - sculpted.Positions[w]) > 0.2f || v == w;
+        CHECK(bottomUntouched); // (the ico sphere's own edges there, ~0.3 long, not split)
+        // Snake hook with dynamic topology pulls out a long, still closed shape.
+        Sculpt::SculptMesh snake = Sculpt::SculptMesh::FromEditable(sphere);
+        snake.DetailSize = 0.08f;
+        Sculpt::BrushSettings hook = brush;
+        hook.Type = Sculpt::Brush::SnakeHook;
+        hook.Radius = 0.3f;
+        hook.Strength = 1.0f;
+        hook.FrontFacesOnly = false;
+        glm::vec3 at(0, 1, 0);
+        for (int i = 0; i < 20; ++i)
+        {
+            snake.Dab(at, hook, { 0, 0.05f, 0 });
+            at.y += 0.05f;
+        }
+        EditableMesh pulled = sphere;
+        snake.WriteTo(pulled);
+        CHECK(pulled.Bounds().Max.y > 1.4f && ClosedAndConsistent(pulled));
+    }
+
+    void TestModelingVoxelRemesh()
+    {
+        using namespace ModelingTest;
+        // A sphere comes back as an even, closed, all-quad surface of the same size.
+        EditableMesh sphere = Primitives::UVSphere(32, 16);
+        EditableMesh r = Sculpt::VoxelRemesh(sphere, 0.08f);
+        bool quads = true;
+        for (const Face& f : r.Faces) quads &= f.Verts.size() == 4 && f.Smooth;
+        CHECK(r.FaceCount() > 500 && quads && ClosedAndConsistent(r));
+        float sphereVolume = Volume(sphere);
+        CHECK(std::abs(Volume(r) - sphereVolume) < sphereVolume * 0.06f);
+        float radiusError = 0.0f;
+        for (const glm::vec3& p : r.Positions) radiusError = std::max(radiusError, std::abs(glm::length(p) - 1.0f));
+        CHECK(radiusError < 0.06f);
+        // Overlapping parts become one surface (a union).
+        EditableMesh two = Primitives::Cube(1.0f);
+        EditableMesh other = Primitives::Cube(1.0f);
+        for (auto& p : other.Positions) p += glm::vec3(0.5f, 0.3f, 0.2f);
+        two.Append(other);
+        two.Changed();
+        EditableMesh joined = Sculpt::VoxelRemesh(two, 0.05f, 1);
+        CHECK(ClosedAndConsistent(joined));
+        float expected = 2.0f - 0.5f * 0.7f * 0.8f;
+        CHECK(std::abs(Volume(joined) - expected) < expected * 0.05f);
+        // Names, materials and modifiers stay.
+        two.Name = "Pair";
+        two.MaterialSlots = { "Stone" };
+        two.Modifiers.push_back(Modifier::Make(ModifierType::Mirror));
+        EditableMesh kept = Sculpt::VoxelRemesh(two, 0.1f);
+        CHECK(kept.Name == "Pair" && kept.MaterialSlots.size() == 1 && kept.Modifiers.size() == 1);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -18844,6 +19075,9 @@ int main(int argc, char** argv)
     Run("Modeling modifier stacks", TestModelingModifierStacks);
     Run("Modeling UV unwrap", TestModelingUVUnwrap);
     Run("Modeling UV editing", TestModelingUVEditing);
+    Run("Modeling sculpt brushes", TestModelingSculptBrushes);
+    Run("Modeling dynamic topology", TestModelingDynamicTopology);
+    Run("Modeling voxel remesh", TestModelingVoxelRemesh);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

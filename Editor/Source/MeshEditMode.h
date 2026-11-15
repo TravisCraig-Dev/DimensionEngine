@@ -6,6 +6,7 @@
 #include <Dimension/Modeling/Modifiers.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/UVTools.h>
+#include <Dimension/Modeling/Sculpt.h>
 #include <imgui.h>
 #include <deque>
 
@@ -51,9 +52,15 @@ namespace Editor
         void SetUVView(float zoom, ImVec2 pan) { m_UVZoom = zoom; m_UVPan = pan; m_UVFramed = true; }
         // A move, rotate or scale following the mouse (G, R, S), or another tool that owns the keys (inset, bevel, loop
         // cut, knife...).
-        bool IsModal() const { return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None || m_UVModal.Kind != UVModalKind::None; }
+        bool IsModal() const
+        {
+            return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None || m_UVModal.Kind != UVModalKind::None || m_Stroking || m_SculptAdjust != 0;
+        }
         // Whether the camera should leave the mouse alone (the knife lets it orbit between cuts).
-        bool BlocksCamera() const { return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut; }
+        bool BlocksCamera() const { return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut || m_Stroking || m_SculptAdjust != 0; }
+        // Sculpt Mode: the same model shaped with brushes instead of selected and moved (MeshEditSculpt.cpp).
+        bool IsSculpting() const { return m_Active && m_Sculpting; }
+        void SetSculpting(bool on);
 
         bool CanUndo() const { return !m_Undo.empty(); }
         bool CanRedo() const { return !m_Redo.empty(); }
@@ -271,6 +278,46 @@ namespace Editor
         float m_CubeSize = 1.0f;
         int m_ProjectAxis = 1;
         float m_UVMergeDistance = 0.001f;
+        // Sculpting.
+        bool UpdateSculptView(bool hovered, bool focused, bool blocked);
+        void DrawSculptToolbar(const ImVec2& origin);
+        void HandleSculptKeys();
+        void UpdateStroke(bool hovered, bool blocked);
+        void UpdateSculptAdjust();
+        void SculptRay(const ImVec2& mouse, glm::vec3& from, glm::vec3& dir) const; // model space
+        float ModelPerPixel(const glm::vec3& at) const;                               // at a model-space point
+        Modeling::Sculpt::BrushSettings StrokeBrush(const glm::vec3& at, const glm::vec3& viewDir) const;
+        void EnsureSculptMesh();
+        void SculptPreview(); // the object shows the sculpt mesh as it is (quick, during a stroke)
+        void SculptCommit();  // the sculpt mesh back into the model (an undo step was recorded before)
+        template <class F> void SculptOperate(const char* name, F&& fn)
+        {
+            EnsureSculptMesh();
+            Record(name);
+            fn();
+            SculptCommit();
+        }
+        void DoVoxelRemesh();
+        bool m_Sculpting = false, m_SculptValid = false;
+        Modeling::Sculpt::SculptMesh m_Sculpt;
+        Modeling::Sculpt::Brush m_BrushType = Modeling::Sculpt::Brush::Draw;
+        float m_BrushRadiusPx = 60.0f;
+        float m_BrushStrength[(size_t)Modeling::Sculpt::Brush::Count] = { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f };
+        bool m_BrushInvert = false, m_FrontFacesOnly = true;
+        uint8_t m_Symmetry = 1;
+        bool m_DynTopo = false, m_ConstantDetail = false;
+        float m_DetailPx = 12.0f, m_DetailSize = 0.05f;
+        float m_VoxelSize = 0.05f;
+        bool m_Stroking = false;
+        Modeling::Sculpt::Brush m_StrokeType = Modeling::Sculpt::Brush::Draw;
+        bool m_StrokeInvert = false;
+        glm::vec3 m_StrokeStart{ 0.0f }, m_StrokeLast{ 0.0f }, m_StrokeView{ 0.0f };
+        ImVec2 m_StrokeMouse{ 0, 0 };
+        bool m_StrokeMoved = false;
+        int m_SculptAdjust = 0; // F: 1 radius, 2 strength (Shift+F)
+        ImVec2 m_AdjustCenter{ 0, 0 };
+        float m_AdjustStart = 0.0f;
+        int m_AdjustFrame = 0;
         // Operation settings.
         int m_SubdivideCuts = 1;
         float m_DissolveAngle = 5.0f;

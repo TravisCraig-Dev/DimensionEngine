@@ -103,6 +103,7 @@ namespace Dimension::Modeling
         bool AutoSmooth = false;                          // smooth faces split where they meet at more than this
         float AutoSmoothAngle = 30.0f;                    // degrees
         std::vector<Modifier> Modifiers;                  // applied in order by ToMeshData (Modifiers.h)
+        std::vector<float> Mask;                          // per vertex sculpt mask 0..1 (ignored unless one per vertex)
         bool HasActiveModifiers() const
         {
             for (const Modifier& m : Modifiers)
