@@ -1,4 +1,5 @@
 #include "Dimension/Modeling/Rig.h"
+#include "Dimension/Modeling/SparseSolve.h"
 #include "Dimension/Modeling/MeshRaycast.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -392,60 +393,120 @@ namespace Dimension::Modeling::Rig
         std::vector<uint8_t> chosen(n, 1);
         if (selectedOnly)
             for (uint32_t v = 0; v < n; ++v) chosen[v] = m.IsVertSelected(v);
-        // Initial weights: the bones each vertex sees, by inverse distance (to the 4th power: the nearest dominates).
+        // Bone heat (Baran and Popovic, "Automatic Rigging and Animation of 3D Characters"): each bone's weights are
+        // heat diffusing over the surface, (L + A H) w = A H p, with L the cotangent Laplacian, A the vertices' areas,
+        // H_j = 1 / d_j^2 for d_j the distance to the nearest bone vertex j can see, and p_j = 1 where that bone is
+        // this one. The matrix is the same for every bone: factored once.
+        std::vector<float> heat(n, 0.0f);
+        std::vector<std::vector<int>> nearestBones(n);
+        for (uint32_t v = 0; v < n; ++v)
+        {
+            glm::vec3 p = m.Positions[v], inside = p - normals[v] * eps;
+            float bestSeen = 1e30f, bestAny = 1e30f;
+            int any = -1;
+            std::vector<std::pair<float, int>> seen;
+            for (int b : deform)
+            {
+                const Bone& bone = m.Bones[(size_t)b];
+                glm::vec3 q = ClosestOnSegment(p, bone.Head, bone.Tail);
+                float d = std::max(glm::length(p - q), eps);
+                if (d < bestAny)
+                {
+                    bestAny = d;
+                    any = b;
+                }
+                // Hidden behind a wall of the mesh (another part of the body)? Seen when any of a few points along the
+                // bone is (the nearest one can sit on the surface where a bone pokes out).
+                bool visible = false;
+                for (float k : { -1.0f, 0.0f, 0.25f, 0.5f, 0.75f })
+                    if (!visible) visible = !rays.Occluded(inside, k < 0.0f ? q : glm::mix(bone.Head, bone.Tail, k));
+                if (!visible) continue;
+                seen.push_back({ d, b });
+                bestSeen = std::min(bestSeen, d);
+            }
+            if (seen.empty())
+            {
+                // (no bone in sight: the nearest one, weakly, so the neighbours' heat mostly decides)
+                if (any >= 0) nearestBones[v].push_back(any);
+                heat[v] = 0.1f / (bestAny * bestAny);
+                continue;
+            }
+            for (auto& [d, b] : seen)
+                if (d <= bestSeen * 1.0001f) nearestBones[v].push_back(b);
+            heat[v] = 1.0f / (bestSeen * bestSeen);
+        }
+        // Cotangent weights and vertex areas over the triangulated faces.
+        Sparse::SymmetricSystem system;
+        system.Rows.resize(n);
+        std::vector<double> area(n, 0.0);
+        std::vector<uint32_t> tri;
+        for (uint32_t f = 0; f < m.FaceCount(); ++f)
+        {
+            const Face& face = m.Faces[f];
+            tri.clear();
+            m.TriangulateFace(f, tri);
+            for (size_t k = 0; k + 2 < tri.size(); k += 3)
+            {
+                uint32_t id[3] = { face.Verts[tri[k]], face.Verts[tri[k + 1]], face.Verts[tri[k + 2]] };
+                glm::dvec3 p[3] = { glm::dvec3(m.Positions[id[0]]), glm::dvec3(m.Positions[id[1]]), glm::dvec3(m.Positions[id[2]]) };
+                double a = glm::length(glm::cross(p[1] - p[0], p[2] - p[0])) * 0.5;
+                if (a < 1e-20) continue;
+                for (int c = 0; c < 3; ++c)
+                {
+                    area[id[c]] += a / 3.0;
+                    // The angle at corner c weighs the opposite edge.
+                    glm::dvec3 u = p[(c + 1) % 3] - p[c], w = p[(c + 2) % 3] - p[c];
+                    double cot = std::clamp(glm::dot(u, w) / std::max(glm::length(glm::cross(u, w)), 1e-20), -10.0, 1e3) * 0.5;
+                    uint32_t i = id[(c + 1) % 3], j = id[(c + 2) % 3];
+                    system.Add(i, i, cot);
+                    system.Add(j, j, cot);
+                    system.Add(i, j, -cot);
+                    system.Add(j, i, -cot);
+                }
+            }
+        }
+        double meanArea = 0.0;
+        for (double a : area) meanArea += a;
+        meanArea = std::max(meanArea / (double)n, 1e-20);
+        std::vector<double> diag(n);
+        for (uint32_t v = 0; v < n; ++v)
+        {
+            double a = area[v] > 0.0 ? area[v] : meanArea;
+            diag[v] = a * (double)heat[v] + meanArea * 1e-9 * (double)heat[v] + 1e-12;
+            system.Add(v, v, diag[v]);
+        }
+        Sparse::EnvelopeCholesky chol;
+        bool direct = chol.Factor(system);
         std::vector<std::vector<VertexWeight>> w(n);
+        std::vector<double> rhs(n), x(n);
+        for (int b : deform)
+        {
+            bool any = false;
+            for (uint32_t v = 0; v < n; ++v)
+            {
+                double share = 0.0;
+                for (int nb : nearestBones[v])
+                    if (nb == b) share = 1.0 / (double)nearestBones[v].size();
+                rhs[v] = diag[v] * share;
+                any |= share > 0.0;
+            }
+            if (!any) continue;
+            if (direct) chol.Solve(rhs, x);
+            else
+            {
+                std::fill(x.begin(), x.end(), 0.0);
+                system.Solve(rhs, x, (int)std::clamp<size_t>(n * 2, 100, 5000), 1e-8);
+            }
+            for (uint32_t v = 0; v < n; ++v)
+                if (chosen[v] && x[v] > 0.005) w[v].push_back({ (uint16_t)b, (float)std::min(x[v], 1.0) });
+        }
         for (uint32_t v = 0; v < n; ++v)
         {
             if (!chosen[v]) continue;
-            glm::vec3 p = m.Positions[v], inside = p - normals[v] * eps;
-            int nearest = -1;
-            float nearestD = 1e30f;
-            for (int b : deform)
-            {
-                glm::vec3 q = ClosestOnSegment(p, m.Bones[(size_t)b].Head, m.Bones[(size_t)b].Tail);
-                float d = std::max(glm::length(p - q), eps);
-                if (d < nearestD)
-                {
-                    nearestD = d;
-                    nearest = b;
-                }
-                // Hidden behind a wall of the mesh (another part of the body)? Seen when any of a few points along the bone
-                // is (the nearest one can sit on the surface where a bone pokes out).
-                const Bone& bone = m.Bones[(size_t)b];
-                bool seen = false;
-                for (float k : { -1.0f, 0.0f, 0.25f, 0.5f, 0.75f })
-                    if (!seen) seen = !rays.Occluded(inside, k < 0.0f ? q : glm::mix(bone.Head, bone.Tail, k));
-                if (!seen) continue;
-                w[v].push_back({ (uint16_t)b, 1.0f / (d * d * d * d) });
-            }
-            if (w[v].empty() && nearest >= 0) w[v].push_back({ (uint16_t)nearest, 1.0f });
+            if (w[v].empty() && !nearestBones[v].empty()) w[v].push_back({ (uint16_t)nearestBones[v][0], 1.0f });
             Normalize(w[v]);
+            m.Weights[v] = w[v];
         }
-        // Smoothing along edges (heat spreading out from the bones).
-        const Topology& t = m.Topo();
-        for (int it = 0; it < 4; ++it)
-        {
-            std::vector<std::vector<VertexWeight>> next = w;
-            for (uint32_t v = 0; v < n; ++v)
-            {
-                if (!chosen[v] || v >= t.VertEdges.size() || t.VertEdges[v].empty()) continue; // (vertices added since: no edges yet)
-                std::unordered_map<uint16_t, float> sum;
-                for (const VertexWeight& x : w[v]) sum[x.Bone] += x.Weight * 0.5f;
-                float k = 0.5f / (float)t.VertEdges[v].size();
-                for (uint32_t e : t.VertEdges[v])
-                {
-                    uint32_t u = EdgeA(t.Edges[e]) == v ? EdgeB(t.Edges[e]) : EdgeA(t.Edges[e]);
-                    const auto& src = chosen[u] ? w[u] : m.Weights[u];
-                    for (const VertexWeight& x : src) sum[x.Bone] += x.Weight * k;
-                }
-                next[v].clear();
-                for (auto& [b, x] : sum) next[v].push_back({ b, x });
-                Normalize(next[v]);
-            }
-            w = std::move(next);
-        }
-        for (uint32_t v = 0; v < n; ++v)
-            if (chosen[v]) m.Weights[v] = w[v];
     }
 
     std::vector<std::vector<VertexWeight>> TransferWeights(const EditableMesh& from, const EditableMesh& to)

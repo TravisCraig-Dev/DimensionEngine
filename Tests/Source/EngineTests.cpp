@@ -19686,6 +19686,55 @@ namespace
         CHECK(tex.At(4, 16) == red && tex.At(28, 16) == white);
     }
 
+    void TestModelingRigWeights()
+    {
+        using namespace ModelingTest;
+        // Bone heat on a tube along two bones: each end belongs to its bone, the joint is shared, and the blend runs
+        // smoothly and one way along the tube.
+        EditableMesh tube;
+        const int rings = 41, sides = 16;
+        for (int r = 0; r < rings; ++r)
+            for (int s = 0; s < sides; ++s)
+            {
+                float a = glm::two_pi<float>() * (float)s / (float)sides;
+                tube.AddVertex({ 0.3f * std::cos(a), 4.0f * (float)r / (float)(rings - 1), 0.3f * std::sin(a) });
+            }
+        for (int r = 0; r + 1 < rings; ++r)
+            for (int s = 0; s < sides; ++s)
+            {
+                uint32_t a = (uint32_t)(r * sides + s), b = (uint32_t)(r * sides + (s + 1) % sides);
+                tube.AddFace({ a, a + sides, b + sides, b });
+            }
+        tube.Changed();
+        Bone lower, upper;
+        lower.Name = "Lower";
+        lower.Head = { 0, 0, 0 };
+        lower.Tail = { 0, 2, 0 };
+        upper.Name = "Upper";
+        upper.Parent = 0;
+        upper.Head = { 0, 2, 0 };
+        upper.Tail = { 0, 4, 0 };
+        tube.Bones = { lower, upper };
+        Rig::AutomaticWeights(tube);
+        auto weightOf = [&](uint32_t v, uint16_t bone) {
+            for (const VertexWeight& w : tube.Weights[v])
+                if (w.Bone == bone) return w.Weight;
+            return 0.0f;
+        };
+        std::vector<float> upperAt(rings);
+        for (int r = 0; r < rings; ++r) upperAt[r] = weightOf((uint32_t)(r * sides), 1);
+        CHECK(upperAt[1] < 0.05f && upperAt[rings - 2] > 0.95f);
+        CHECK(std::abs(upperAt[rings / 2] - 0.5f) < 0.15f);
+        bool oneWay = true;
+        for (int r = 1; r < rings; ++r) oneWay &= upperAt[r] >= upperAt[r - 1] - 1e-3f;
+        CHECK(oneWay);
+        CHECK(upperAt[rings / 2 - 8] < 0.2f && upperAt[rings / 2 + 8] > 0.8f); // (the blend stays near the joint)
+        bool even = true; // every vertex of a ring the same (the tube is round)
+        for (int r = 0; r < rings; ++r)
+            for (int s = 1; s < sides; ++s) even &= std::abs(weightOf((uint32_t)(r * sides + s), 1) - upperAt[r]) < 0.02f;
+        CHECK(even);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -20114,6 +20163,7 @@ int main(int argc, char** argv)
     Run("Modeling UV fixes", TestModelingUVFixes);
     Run("Modeling sculpt fixes", TestModelingSculptFixes);
     Run("Modeling paint fixes", TestModelingPaintFixes);
+    Run("Modeling rig weights", TestModelingRigWeights);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;
