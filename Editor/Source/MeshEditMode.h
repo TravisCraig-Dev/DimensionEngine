@@ -5,6 +5,7 @@
 #include <Dimension/Modeling/MeshTools.h>
 #include <Dimension/Modeling/Modifiers.h>
 #include <Dimension/Modeling/MeshRaycast.h>
+#include <Dimension/Modeling/UVTools.h>
 #include <imgui.h>
 #include <deque>
 
@@ -43,9 +44,14 @@ namespace Editor
         void DrawModifierPanel(Entity e);
         // The question asked before editing an object whose mesh is not a model (call each frame).
         void DrawPopups();
+        // The UV Editor window (Window > UV Editor): the selected faces' UVs over the object's texture, selected, moved,
+        // unwrapped and packed there (MeshEditUV.cpp). Call each frame while it is open.
+        void DrawUVEditor(bool* open);
+        // Automation: the UV Editor's view of 0..1 (zoom in pixels per UV unit, pan to the 0,0 corner).
+        void SetUVView(float zoom, ImVec2 pan) { m_UVZoom = zoom; m_UVPan = pan; m_UVFramed = true; }
         // A move, rotate or scale following the mouse (G, R, S), or another tool that owns the keys (inset, bevel, loop
         // cut, knife...).
-        bool IsModal() const { return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None; }
+        bool IsModal() const { return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None || m_UVModal.Kind != UVModalKind::None; }
         // Whether the camera should leave the mouse alone (the knife lets it orbit between cuts).
         bool BlocksCamera() const { return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut; }
 
@@ -68,6 +74,18 @@ namespace Editor
         static bool JoinSelected(EditorContext& ctx);
 
     private:
+        // A move, rotate or scale of UVs in the UV Editor (G, R, S there).
+        enum class UVModalKind { None, Move, Rotate, Scale };
+        struct UVModal
+        {
+            UVModalKind Kind = UVModalKind::None;
+            std::vector<std::pair<Modeling::UV::Corner, glm::vec2>> Start;
+            glm::vec2 Pivot{ 0.0f };
+            ImVec2 MouseStart{ 0, 0 };
+            int Axis = -1; // 0 u, 1 v
+            float Angle = 0.0f, LastAngle = 0.0f;
+            int StartFrame = 0;
+        };
         enum class ModalKind { None, Move, Rotate, Scale, ShrinkFatten, Inset, Bevel, Slide };
         enum class Tool { None, LoopCut, Knife };
         struct Modal
@@ -218,6 +236,41 @@ namespace Editor
         fs::file_time_type m_PanelStamp{};
         bool m_PanelEditing = false; // a change is under way (one undo step)
         bool m_PanelUnsaved = false;
+        // UV editing.
+        void UVMenuItems(bool inUVEditor); // the UV menu (U in either view)
+        template <class F> void UVOperate(const char* name, F&& fn)
+        {
+            Record(name);
+            fn();
+            Commit();
+        }
+        ImVec2 UVToScreen(const glm::vec2& uv) const;
+        glm::vec2 ScreenToUV(const ImVec2& p) const;
+        void FrameUVs(bool selectedOnly);
+        void HandleUVKeys(const std::vector<uint32_t>& faces, bool hovered);
+        void HandleUVMouse(const std::vector<uint32_t>& faces, bool hovered);
+        void UVClickSelect(const std::vector<uint32_t>& faces, const ImVec2& mouse, bool extend);
+        void UVBoxSelect(const std::vector<uint32_t>& faces, const ImVec2& a, const ImVec2& b, int op);
+        void BeginUVModal(UVModalKind kind);
+        void UpdateUVModal(const std::vector<uint32_t>& faces);
+        void EndUVModal(bool confirm);
+        AssetHandle UVBackground() const; // the texture drawn under the UVs
+        UVModal m_UVModal;
+        int m_UVMode = 0;                 // 0 vertex, 1 edge, 2 face, 3 island
+        Modeling::UV::Sticky m_UVSticky = Modeling::UV::Sticky::Location;
+        int m_UVStretch = -1;             // -1 off, else Modeling::UV::StretchMode
+        bool m_UVShowTexture = true;
+        ImVec2 m_UVCanvasMin{ 0, 0 }, m_UVCanvasSize{ 1, 1 }, m_UVPan{ 0, 0 };
+        float m_UVZoom = 300.0f;
+        bool m_UVFramed = false;
+        bool m_UVPressing = false, m_UVBoxSelecting = false, m_UVPanning = false;
+        ImVec2 m_UVPressPos{ 0, 0 };
+        int m_UVOpenMenu = 0;             // 1 the UV menu at the mouse, 2 merge
+        Modeling::UV::UnwrapSettings m_Unwrap;
+        float m_SmartAngle = 66.0f;
+        float m_CubeSize = 1.0f;
+        int m_ProjectAxis = 1;
+        float m_UVMergeDistance = 0.001f;
         // Operation settings.
         int m_SubdivideCuts = 1;
         float m_DissolveAngle = 5.0f;

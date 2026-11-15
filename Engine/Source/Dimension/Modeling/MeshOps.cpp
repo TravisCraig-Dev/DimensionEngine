@@ -837,8 +837,7 @@ namespace Dimension::Modeling::Ops
     {
         void FlipFace(Face& f)
         {
-            std::reverse(f.Verts.begin(), f.Verts.end());
-            std::reverse(f.UVs.begin(), f.UVs.end());
+            f.Reverse();
         }
 
         // Whether face f walks from a to b (a directly followed by b).

@@ -390,6 +390,7 @@ namespace Editor
         bool m_ShowNavigation = false;
         bool m_ShowFrameDebugger = false;
         bool m_ShowSpriteEditor = false;
+        bool m_ShowUVEditor = false;
         Scope<SpriteEditorPanel> m_SpriteEditor;
         Scope<AssetPreviews> m_AssetPreviews;
         Scope<FrameDebuggerPanel> m_FrameDebugger;

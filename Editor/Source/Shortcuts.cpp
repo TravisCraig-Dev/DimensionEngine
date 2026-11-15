@@ -125,6 +125,25 @@ namespace Editor::Shortcuts
                 { "mesh.separate", "Mesh Edit", "Separate Menu", ImGuiKey_P },
                 { "mesh.shrinkFatten", "Mesh Edit", "Shrink/Fatten", ImGuiMod_Alt | ImGuiKey_S },
                 { "mesh.faceMenu", "Mesh Edit", "Face Menu", ImGuiMod_Ctrl | ImGuiKey_F },
+                { "mesh.uvMenu", "Mesh Edit", "UV Menu (Unwrap)", ImGuiKey_U },
+                { "uv.vertexMode", "UV Editor", "Vertex Select Mode", ImGuiKey_1 },
+                { "uv.edgeMode", "UV Editor", "Edge Select Mode", ImGuiKey_2 },
+                { "uv.faceMode", "UV Editor", "Face Select Mode", ImGuiKey_3 },
+                { "uv.islandMode", "UV Editor", "Island Select Mode", ImGuiKey_4 },
+                { "uv.selectAll", "UV Editor", "Select All", ImGuiKey_A },
+                { "uv.deselectAll", "UV Editor", "Select None", ImGuiMod_Alt | ImGuiKey_A },
+                { "uv.invert", "UV Editor", "Invert Selection", ImGuiMod_Ctrl | ImGuiKey_I },
+                { "uv.selectLinked", "UV Editor", "Select Linked", ImGuiMod_Ctrl | ImGuiKey_L },
+                { "uv.linkedPick", "UV Editor", "Select Island Under Mouse", ImGuiKey_L },
+                { "uv.grab", "UV Editor", "Move", ImGuiKey_G },
+                { "uv.rotate", "UV Editor", "Rotate", ImGuiKey_R },
+                { "uv.scale", "UV Editor", "Scale", ImGuiKey_S },
+                { "uv.pin", "UV Editor", "Pin", ImGuiKey_P },
+                { "uv.unpin", "UV Editor", "Unpin", ImGuiMod_Alt | ImGuiKey_P },
+                { "uv.unwrapMenu", "UV Editor", "UV Menu", ImGuiKey_U },
+                { "uv.merge", "UV Editor", "Merge Menu", ImGuiKey_M },
+                { "uv.frame", "UV Editor", "Frame Selected", ImGuiKey_KeypadDecimal },
+                { "uv.frameAll", "UV Editor", "Frame All", ImGuiKey_Home },
                 { "object.join", "Object", "Join Meshes", ImGuiMod_Ctrl | ImGuiKey_J },
             };
             for (Shortcut& x : s) x.Key = x.Default;
@@ -175,17 +194,21 @@ namespace Editor::Shortcuts
     {
         std::vector<const Shortcut*> out;
         if (s.Key == 0) return out;
-        // Edit Mode's keys replace the others while a mesh is edited (except Undo and Redo, which it uses), so those
-        // never clash.
+        // Edit Mode's keys replace the others while a mesh is edited (except Undo and Redo, which it uses), and the UV
+        // Editor's work only in its window, so those never clash with keys of another scope.
         auto contextual = [](const Shortcut& x) {
             std::string_view id = x.Id;
             return id != "edit.undo" && id != "edit.redo";
         };
+        auto scope = [](const Shortcut& x) {
+            std::string_view c = x.Category;
+            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : 0;
+        };
         for (const Shortcut& other : All())
         {
             if (&other == &s || other.Key != s.Key) continue;
-            bool meshA = std::string_view(s.Category) == "Mesh Edit", meshB = std::string_view(other.Category) == "Mesh Edit";
-            if (meshA != meshB && (contextual(meshA ? other : s))) continue;
+            int a = scope(s), b = scope(other);
+            if (a != b && ((a != 0 && b != 0) || contextual(a == 0 ? s : other))) continue;
             out.push_back(&other);
         }
         return out;

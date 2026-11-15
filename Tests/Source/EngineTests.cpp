@@ -82,6 +82,7 @@
 #include <Dimension/Modeling/MeshOps.h>
 #include <Dimension/Modeling/MeshTools.h>
 #include <Dimension/Modeling/Modifiers.h>
+#include <Dimension/Modeling/UVTools.h>
 #include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/ModelExport.h>
@@ -18088,6 +18089,349 @@ namespace
         CHECK(!bevelled.ToMeshData().Indices.empty());
     }
 
+    namespace UVTest
+    {
+        using namespace Dimension::Modeling;
+
+        std::vector<uint32_t> AllFaces(const EditableMesh& m)
+        {
+            std::vector<uint32_t> f(m.FaceCount());
+            std::iota(f.begin(), f.end(), 0u);
+            return f;
+        }
+
+        bool InUnitSquare(const EditableMesh& m, float slack = 1e-4f)
+        {
+            for (const Face& f : m.Faces)
+                for (const glm::vec2& uv : f.UVs)
+                    if (uv.x < -slack || uv.y < -slack || uv.x > 1.0f + slack || uv.y > 1.0f + slack) return false;
+            return true;
+        }
+
+        // The islands' UV bounding boxes don't overlap (packing places them apart).
+        bool IslandsApart(const EditableMesh& m)
+        {
+            std::vector<std::pair<glm::vec2, glm::vec2>> boxes;
+            for (const auto& island : UV::Islands(m, AllFaces(m)))
+            {
+                glm::vec2 mn(1e30f), mx(-1e30f);
+                for (uint32_t f : island)
+                    for (const glm::vec2& uv : m.Faces[f].UVs)
+                    {
+                        mn = glm::min(mn, uv);
+                        mx = glm::max(mx, uv);
+                    }
+                boxes.push_back({ mn, mx });
+            }
+            for (size_t i = 0; i < boxes.size(); ++i)
+                for (size_t j = i + 1; j < boxes.size(); ++j)
+                {
+                    glm::vec2 lo = glm::max(boxes[i].first, boxes[j].first), hi = glm::min(boxes[i].second, boxes[j].second);
+                    if (hi.x - lo.x > 1e-5f && hi.y - lo.y > 1e-5f) return false;
+                }
+            return true;
+        }
+
+        float MaxStretch(const EditableMesh& m, UV::StretchMode mode)
+        {
+            float worst = 0.0f;
+            for (float s : UV::FaceStretch(m, AllFaces(m), mode)) worst = std::max(worst, s);
+            return worst;
+        }
+
+        // A face's UV area with v pointing down: positive when its corners run counter-clockwise on the image as seen
+        // from the front (the texture lands the right way round, not mirrored).
+        float UVWinding(const Face& f)
+        {
+            float a = 0.0f;
+            for (size_t i = 0; i < f.UVs.size(); ++i)
+            {
+                glm::vec2 p = f.UVs[i], q = f.UVs[(i + 1) % f.UVs.size()];
+                a += p.x * -q.y - q.x * -p.y;
+            }
+            return a * 0.5f;
+        }
+    }
+
+    void TestModelingUVUnwrap()
+    {
+        using namespace ModelingTest;
+        using namespace UVTest;
+        // A tube cut down one side flattens to a rectangle with no distortion (both methods).
+        for (UV::UnwrapMethod method : { UV::UnwrapMethod::AngleBased, UV::UnwrapMethod::Conformal })
+        {
+            EditableMesh tube = Primitives::Cylinder(16, 1.0f, 2.0f, false);
+            uint32_t cut = 0;
+            for (EdgeKey k : tube.Topo().Edges)
+            {
+                glm::vec3 a = tube.Positions[EdgeA(k)], b = tube.Positions[EdgeB(k)];
+                if (Near(a.x, b.x) && Near(a.z, b.z))
+                {
+                    tube.EditEdge(k).Seam = true;
+                    ++cut;
+                    break;
+                }
+            }
+            CHECK(cut == 1);
+            UV::UnwrapSettings settings;
+            settings.Method = method;
+            CHECK(UV::Unwrap(tube, AllFaces(tube), settings) == 1);
+            CHECK(InUnitSquare(tube));
+            CHECK(MaxStretch(tube, UV::StretchMode::Angle) < 0.02f);
+            CHECK(MaxStretch(tube, UV::StretchMode::Area) < 0.03f);
+            glm::vec2 mn(1e30f), mx(-1e30f);
+            bool facing = true;
+            for (const Face& f : tube.Faces)
+            {
+                for (const glm::vec2& uv : f.UVs)
+                {
+                    mn = glm::min(mn, uv);
+                    mx = glm::max(mx, uv);
+                }
+                facing &= UVWinding(f) > 0.0f;
+            }
+            CHECK(facing); // not mirrored
+            // Packed along its long side: width over height is the circumference over the height.
+            float perimeter = 16.0f * 2.0f * std::sin(glm::pi<float>() / 16.0f);
+            glm::vec2 ext = mx - mn;
+            float ratio = std::max(ext.x, ext.y) / std::min(ext.x, ext.y);
+            CHECK(std::abs(ratio - perimeter / 2.0f) < 0.05f);
+            CHECK(std::max(ext.x, ext.y) > 0.95f); // fills the square
+        }
+
+        // A cube cut along every edge: six equal squares, packed apart.
+        EditableMesh cube = Primitives::Cube();
+        for (EdgeKey k : cube.Topo().Edges) cube.EditEdge(k).Seam = true;
+        CHECK(UV::Unwrap(cube, AllFaces(cube)) == 6);
+        CHECK(InUnitSquare(cube) && IslandsApart(cube));
+        CHECK(UV::Islands(cube, AllFaces(cube)).size() == 6);
+        CHECK(MaxStretch(cube, UV::StretchMode::Area) < 0.01f && MaxStretch(cube, UV::StretchMode::Angle) < 0.01f);
+        // Seams from islands marks exactly the cuts.
+        EditableMesh marked = cube;
+        marked.EdgeAttrs.clear();
+        CHECK(UV::SeamsFromIslands(marked, AllFaces(marked)) == 12);
+
+        // Cut into a cross (seven seams): one piece, still undistorted.
+        EditableMesh net = Primitives::Cube();
+        int seams = 0;
+        for (EdgeKey k : net.Topo().Edges)
+        {
+            glm::vec3 a = net.Positions[EdgeA(k)], b = net.Positions[EdgeB(k)];
+            bool top = a.y > 0 && b.y > 0, bottom = a.y < 0 && b.y < 0, vertical = !top && !bottom;
+            // A cross: the sides a strip cut at one back corner, the top and bottom hanging off the front.
+            bool front = a.z > 0 && b.z > 0;
+            if ((vertical && a.z < 0 && a.x > 0) || ((top || bottom) && !front))
+            {
+                net.EditEdge(k).Seam = true;
+                ++seams;
+            }
+        }
+        CHECK(seams == 7);
+        CHECK(UV::Unwrap(net, AllFaces(net)) == 1);
+        CHECK(MaxStretch(net, UV::StretchMode::Angle) < 0.02f && MaxStretch(net, UV::StretchMode::Area) < 0.03f);
+
+        // A sphere unwrapped along a meridian seam: one piece with no flipped faces.
+        EditableMesh sphere = Primitives::UVSphere(16, 8);
+        for (EdgeKey k : sphere.Topo().Edges)
+        {
+            glm::vec3 a = sphere.Positions[EdgeA(k)], b = sphere.Positions[EdgeB(k)];
+            if (std::abs(a.x) < 1e-4f && std::abs(b.x) < 1e-4f && a.z >= -1e-4f && b.z >= -1e-4f) sphere.EditEdge(k).Seam = true;
+        }
+        CHECK(UV::Unwrap(sphere, AllFaces(sphere)) == 1);
+        bool unflipped = true;
+        for (const Face& f : sphere.Faces) unflipped &= UVWinding(f) > -1e-7f;
+        CHECK(unflipped && InUnitSquare(sphere));
+
+        // Smart UV Project: a sphere and a torus break into flat-ish charts, packed apart, nothing flipped.
+        for (EditableMesh m : { Primitives::UVSphere(24, 12), Primitives::Torus(24, 8) })
+        {
+            int charts = UV::SmartProject(m, AllFaces(m));
+            CHECK(charts > 4);
+            CHECK(InUnitSquare(m) && IslandsApart(m));
+            bool ok = true;
+            for (const Face& f : m.Faces) ok &= UVWinding(f) > -1e-7f;
+            CHECK(ok);
+        }
+
+        // Pins: two pinned corners of a grid stay put while the rest unwraps around them.
+        EditableMesh grid = Primitives::Grid(4, 4, 2.0f);
+        grid.Faces[0].SetCornerFlag(0, UVPinned, true);
+        grid.Faces[0].UVs[0] = { 0.1f, 0.9f };
+        uint32_t last = grid.FaceCount() - 1;
+        grid.Faces[last].SetCornerFlag(2, UVPinned, true);
+        grid.Faces[last].UVs[2] = { 0.9f, 0.1f };
+        UV::UnwrapSettings conformal;
+        conformal.Method = UV::UnwrapMethod::Conformal; // (pins nearer than the surface is wide scale a conformal map only)
+        UV::Unwrap(grid, AllFaces(grid), conformal);
+        CHECK(Near(grid.Faces[0].UVs[0], glm::vec2(0.1f, 0.9f), 1e-4f) && Near(grid.Faces[last].UVs[2], glm::vec2(0.9f, 0.1f), 1e-4f));
+        CHECK(MaxStretch(grid, UV::StretchMode::Angle) < 0.02f);
+    }
+
+    void TestModelingUVEditing()
+    {
+        using namespace ModelingTest;
+        using namespace UVTest;
+        // Projections.
+        EditableMesh cube = Primitives::Cube(2.0f);
+        UV::CubeProject(cube, AllFaces(cube), 2.0f);
+        bool full = true, facing = true;
+        for (const Face& f : cube.Faces)
+        {
+            glm::vec2 mn(1e30f), mx(-1e30f);
+            for (const glm::vec2& uv : f.UVs)
+            {
+                mn = glm::min(mn, uv);
+                mx = glm::max(mx, uv);
+            }
+            full &= Near(mn, glm::vec2(0.0f)) && Near(mx, glm::vec2(1.0f));
+            facing &= UVWinding(f) > 0.0f;
+        }
+        CHECK(full && facing);
+        CHECK(UV::Islands(cube, AllFaces(cube)).size() == 6);
+
+        EditableMesh tube = Primitives::Cylinder(12, 1.0f, 2.0f, false);
+        UV::CylinderProject(tube, AllFaces(tube));
+        bool around = true, tubeFacing = true;
+        for (const Face& f : tube.Faces)
+        {
+            float mn = 1e30f, mx = -1e30f;
+            for (const glm::vec2& uv : f.UVs)
+            {
+                mn = std::min(mn, uv.x);
+                mx = std::max(mx, uv.x);
+                around &= uv.y > -1e-4f && uv.y < 1.0f + 1e-4f;
+            }
+            around &= Near(mx - mn, 1.0f / 12.0f, 1e-3f); // each side face an equal slice, none across the wrap
+            tubeFacing &= UVWinding(f) > 0.0f;
+        }
+        CHECK(around && tubeFacing);
+
+        EditableMesh sphere = Primitives::UVSphere(12, 6);
+        UV::SphereProject(sphere, AllFaces(sphere));
+        bool sphereOK = true;
+        for (const Face& f : sphere.Faces)
+        {
+            float mn = 1e30f, mx = -1e30f;
+            for (const glm::vec2& uv : f.UVs)
+            {
+                mn = std::min(mn, uv.x);
+                mx = std::max(mx, uv.x);
+            }
+            sphereOK &= mx - mn < 0.2f && UVWinding(f) > -1e-6f;
+        }
+        CHECK(sphereOK);
+
+        EditableMesh plane = Primitives::Plane(2.0f);
+        glm::mat4 top = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, -10.0f, 10.0f) *
+                        glm::lookAt(glm::vec3(0, 5, 0), glm::vec3(0.0f), glm::vec3(0, 0, -1));
+        UV::ProjectFromView(plane, AllFaces(plane), top, 1.0f);
+        CHECK(Near(plane.Faces[0].UVs[0], glm::vec2(0, 1), 1e-4f) && Near(plane.Faces[0].UVs[2], glm::vec2(1, 0), 1e-4f));
+
+        EditableMesh reset = Primitives::Cylinder(6);
+        UV::Reset(reset, AllFaces(reset));
+        bool squares = true;
+        for (const Face& f : reset.Faces)
+        {
+            squares &= UVWinding(f) > 0.0f;
+            for (const glm::vec2& uv : f.UVs) squares &= uv.x > -1e-5f && uv.y > -1e-5f && uv.x < 1.00001f && uv.y < 1.00001f;
+        }
+        CHECK(squares);
+        CHECK(Near(reset.Faces[0].UVs[0], glm::vec2(0, 1)) && Near(reset.Faces[0].UVs[2], glm::vec2(1, 0))); // a side quad
+
+        // Selection: sticky corners, linked islands, splitting.
+        EditableMesh m = Primitives::Cube();
+        for (EdgeKey k : m.Topo().Edges) m.EditEdge(k).Seam = true;
+        std::vector<uint32_t> all = AllFaces(m);
+        UV::Unwrap(m, all);
+        UV::SelectAll(m, all, false);
+        UV::SelectCorner(m, all, { 0, 0 }, true, UV::Sticky::Location);
+        CHECK(UV::SelectedCorners(m, all).size() == 1); // every face is its own island: no other corner there
+        UV::SelectCorner(m, all, { 0, 0 }, true, UV::Sticky::Vertex);
+        CHECK(UV::SelectedCorners(m, all).size() == 3); // the cube's corner is in three faces
+        UV::SelectAll(m, all, false);
+        UV::Corner seed{ 2, 1 };
+        UV::SelectLinked(m, all, &seed);
+        CHECK(UV::SelectedCorners(m, all).size() == 4);
+        // Welding pulls the selected UVs to one point; splitting keeps only fully selected faces.
+        UV::SelectAll(m, all, false);
+        UV::SelectCorner(m, all, { 0, 0 }, true, UV::Sticky::Vertex);
+        UV::WeldSelected(m, all);
+        auto sel = UV::SelectedCorners(m, all);
+        bool welded = true;
+        for (auto& c : sel) welded &= Near(m.Faces[c.Face].UVs[c.Index], m.Faces[sel[0].Face].UVs[sel[0].Index]);
+        CHECK(welded);
+        UV::SplitSelection(m, all);
+        CHECK(UV::SelectedCorners(m, all).empty());
+
+        // Transforms of the selection: move, mirror, align, merge by distance.
+        EditableMesh g = Primitives::Grid(2, 2, 2.0f);
+        std::vector<uint32_t> gf = AllFaces(g);
+        UV::SelectAll(g, gf, false);
+        UV::SelectCorner(g, gf, { 0, 0 }, true, UV::Sticky::Location);
+        glm::vec2 before = g.Faces[0].UVs[0];
+        UV::TransformSelected(g, gf, glm::mat3(1, 0, 0, 0, 1, 0, 0.25f, -0.125f, 1));
+        CHECK(Near(g.Faces[0].UVs[0], before + glm::vec2(0.25f, -0.125f)));
+        UV::SelectAll(g, gf);
+        glm::vec2 center;
+        CHECK(UV::SelectionCenter(g, gf, center));
+        UV::MirrorSelected(g, gf, 0);
+        glm::vec2 c2;
+        UV::SelectionCenter(g, gf, c2);
+        CHECK(Near(center, c2, 1e-5f));
+        UV::AlignSelected(g, gf, 1);
+        bool line = true;
+        for (const Face& f : g.Faces)
+            for (const glm::vec2& uv : f.UVs) line &= Near(uv.y, g.Faces[0].UVs[0].y);
+        CHECK(line);
+        EditableMesh d = Primitives::Grid(2, 2, 2.0f);
+        std::vector<uint32_t> df = AllFaces(d);
+        for (Face& f : d.Faces)
+            for (glm::vec2& uv : f.UVs) uv += glm::vec2(0.0001f) * (float)(&f - &d.Faces[0]); // torn a little apart
+        UV::SelectAll(d, df);
+        CHECK(UV::MergeByDistance(d, df, 0.001f) > 0);
+        CHECK(UV::Islands(d, df).size() == 1);
+
+        // Pins, average island scale, pack and relax.
+        EditableMesh p = Primitives::Cube();
+        for (EdgeKey k : p.Topo().Edges) p.EditEdge(k).Seam = true;
+        std::vector<uint32_t> pf = AllFaces(p);
+        UV::Unwrap(p, pf);
+        UV::SelectAll(p, pf, false);
+        UV::Corner first{ 0, 0 };
+        UV::SelectLinked(p, pf, &first);
+        UV::TransformSelected(p, pf, glm::mat3(2, 0, 0, 0, 2, 0, 0, 0, 1)); // one island twice as big
+        CHECK(MaxStretch(p, UV::StretchMode::Area) > 0.3f);
+        UV::AverageIslandScale(p, pf);
+        CHECK(MaxStretch(p, UV::StretchMode::Area) < 0.01f);
+        UV::PackIslands(p, pf);
+        CHECK(InUnitSquare(p) && IslandsApart(p));
+        UV::SetPinned(p, pf, true);
+        CHECK(UV::IsPinned(p, first) && !UV::IsPinned(p, { 1, 0 }));
+
+        EditableMesh r = Primitives::Grid(6, 6, 2.0f);
+        std::vector<uint32_t> rf = AllFaces(r);
+        UV::Unwrap(r, rf);
+        r.Faces[14].UVs[1] += glm::vec2(0.05f, 0.03f); // a dent
+        for (uint32_t f : rf)
+            for (size_t c = 0; c < r.Faces[f].Verts.size(); ++c)
+                if (r.Faces[f].Verts[c] == r.Faces[14].Verts[1]) r.Faces[f].UVs[c] = r.Faces[14].UVs[1];
+        float dented = MaxStretch(r, UV::StretchMode::Angle);
+        UV::SelectAll(r, rf, false);
+        UV::Relax(r, rf, 20);
+        CHECK(MaxStretch(r, UV::StretchMode::Angle) < dented * 0.5f);
+
+        // UV selection and pins are saved with the model.
+        EditableMesh saved = Primitives::Cube();
+        saved.Faces[1].SetCornerFlag(2, UVSelected, true);
+        saved.Faces[4].SetCornerFlag(3, UVPinned, true);
+        EditableMesh back;
+        CHECK(EditableMesh::FromJson(saved.ToJson(), back));
+        CHECK(back.Faces[1].CornerFlags(2) == UVSelected && back.Faces[4].CornerFlags(3) == UVPinned && back.Faces[0].CornerFlags(0) == 0);
+        // Turning a face over keeps its flags on the same corners.
+        back.Faces[1].Reverse();
+        CHECK(back.Faces[1].CornerFlags(1) == UVSelected);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -18498,6 +18842,8 @@ int main(int argc, char** argv)
     Run("Modeling subdivide, spin and separate", TestModelingSubdivideSpinSeparate);
     Run("Modeling modifiers", TestModelingModifiers);
     Run("Modeling modifier stacks", TestModelingModifierStacks);
+    Run("Modeling UV unwrap", TestModelingUVUnwrap);
+    Run("Modeling UV editing", TestModelingUVEditing);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

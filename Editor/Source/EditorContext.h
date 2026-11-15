@@ -27,6 +27,7 @@ namespace Editor
         // Material pictures for the Inspector and the Project window (owned by the editor layer).
         AssetPreviews* Previews = nullptr;
         bool OpenSpriteEditor = false; // a panel asks for the Sprite Editor on the selected texture
+        bool OpenUVEditor = false;     // Edit Mode asks for the UV Editor window
         // The Inspector's Modifiers section for an object whose mesh is a model made in the editor (set by the editor layer).
         std::function<void(Entity)> DrawModelModifiers;
         bool IsPlaying() const { return State != PlayState::Edit; }

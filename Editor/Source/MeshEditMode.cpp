@@ -205,6 +205,7 @@ namespace Editor
     {
         if (!m_Active) return;
         if (m_Modal.Kind != ModalKind::None) EndModal(false);
+        if (m_UVModal.Kind != UVModalKind::None) EndUVModal(false);
         m_Tool = Tool::None;
         m_KnifePoints.clear();
         m_LoopPreview.clear();
@@ -278,6 +279,11 @@ namespace Editor
 
     void MeshEditMode::Undo()
     {
+        if (m_UVModal.Kind != UVModalKind::None)
+        {
+            EndUVModal(false);
+            return;
+        }
         if (m_Modal.Kind != ModalKind::None)
         {
             EndModal(false);
@@ -574,6 +580,10 @@ namespace Editor
         if (ImGui::Button("Mesh")) ImGui::OpenPopup("MeshMenu");
         ImGui::SameLine(0.0f, 2.0f);
         if (ImGui::Button("Add")) ImGui::OpenPopup("MeshAddMenu");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (ImGui::Button("UV")) ImGui::OpenPopup("MeshUVMenu");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unwrap and project the selected faces' UVs (%s); Window > UV Editor edits them",
+                                                      Shortcuts::Label("mesh.uvMenu").c_str());
         ImGui::SameLine();
         if (ImGui::Button("Done")) Exit();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Leave Edit Mode (%s)", Shortcuts::Label("mesh.editMode").c_str());
@@ -655,7 +665,7 @@ namespace Editor
     {
         if (m_OpenMenu)
         {
-            static const char* ids[] = { "", "MeshDeleteMenu", "MeshMergeMenu", "MeshNormalsMenu", "MeshAddMenu", "MeshEdgeMenu", "MeshFaceMenu", "MeshExtrudeMenu", "MeshSeparateMenu" };
+            static const char* ids[] = { "", "MeshDeleteMenu", "MeshMergeMenu", "MeshNormalsMenu", "MeshAddMenu", "MeshEdgeMenu", "MeshFaceMenu", "MeshExtrudeMenu", "MeshSeparateMenu", "MeshUVMenu" };
             ImGui::OpenPopup(ids[m_OpenMenu]);
             m_OpenMenu = 0;
         }
@@ -936,6 +946,12 @@ namespace Editor
             extrudeItems();
             ImGui::EndPopup();
         }
+        if (ImGui::BeginPopup("MeshUVMenu"))
+        {
+            ImGui::TextDisabled("UV");
+            UVMenuItems(false);
+            ImGui::EndPopup();
+        }
         if (ImGui::BeginPopup("MeshSeparateMenu"))
         {
             ImGui::TextDisabled("Separate");
@@ -1002,6 +1018,11 @@ namespace Editor
             if (ImGui::BeginMenu("Edges"))
             {
                 edgeItems();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("UV"))
+            {
+                UVMenuItems(false);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -1122,6 +1143,7 @@ namespace Editor
         if (Pressed("mesh.separate")) m_OpenMenu = 8;
         if (Pressed("mesh.shrinkFatten")) BeginModal(ModalKind::ShrinkFatten);
         if (Pressed("mesh.faceMenu")) m_OpenMenu = 6;
+        if (Pressed("mesh.uvMenu")) m_OpenMenu = 9;
     }
 
     // ---- Mouse selection

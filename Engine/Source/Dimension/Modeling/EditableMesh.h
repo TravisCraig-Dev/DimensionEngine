@@ -4,6 +4,7 @@
 #include "Dimension/Modeling/Modifier.h"
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <unordered_map>
 
 namespace Dimension::Modeling
@@ -25,6 +26,13 @@ namespace Dimension::Modeling
     inline uint32_t EdgeA(EdgeKey k) { return (uint32_t)(k >> 32); }
     inline uint32_t EdgeB(EdgeKey k) { return (uint32_t)(k & 0xFFFFFFFFu); }
 
+    // A face corner's UV state in the UV Editor (Face::UVFlags).
+    enum UVFlag : uint8_t
+    {
+        UVSelected = 1,
+        UVPinned = 2, // unwrapping keeps it where it is
+    };
+
     // A polygon: its corners' vertices in counter-clockwise order seen from the front, with a UV per corner.
     struct Face
     {
@@ -33,6 +41,22 @@ namespace Dimension::Modeling
         int32_t Material = 0;       // material slot
         bool Smooth = false;        // smooth shading (else flat)
         uint8_t Flags = 0;
+        std::vector<uint8_t> UVFlags; // per corner UVFlag bits (ignored unless there is one per corner)
+
+        uint8_t CornerFlags(size_t c) const { return UVFlags.size() == Verts.size() ? UVFlags[c] : 0; }
+        void SetCornerFlag(size_t c, uint8_t flag, bool on)
+        {
+            if (UVFlags.size() != Verts.size()) UVFlags.assign(Verts.size(), 0);
+            if (on) UVFlags[c] |= flag;
+            else UVFlags[c] &= (uint8_t)~flag;
+        }
+        // The corners in the opposite order (the face turned over), UVs and UV flags with them.
+        void Reverse()
+        {
+            std::reverse(Verts.begin(), Verts.end());
+            std::reverse(UVs.begin(), UVs.end());
+            std::reverse(UVFlags.begin(), UVFlags.end());
+        }
     };
 
     // What an edge carries beyond its vertices (only stored for edges that carry something).

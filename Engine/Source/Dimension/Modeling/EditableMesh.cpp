@@ -6,6 +6,7 @@
 #include <cmath>
 #include <fstream>
 #include <numeric>
+#include <set>
 #include <unordered_set>
 
 namespace Dimension::Modeling
@@ -706,6 +707,18 @@ namespace Dimension::Modeling
             if (!f.empty()) s["faces"] = std::move(f);
             return s;
         };
+        // UV Editor selection and pins: corners numbered across all faces.
+        json uvSel = json::array(), uvPin = json::array();
+        size_t cornerIndex = 0;
+        for (const Face& face : Faces)
+            for (size_t c = 0; c < face.Verts.size(); ++c, ++cornerIndex)
+            {
+                uint8_t bits = face.CornerFlags(c);
+                if (bits & UVSelected) uvSel.push_back(cornerIndex);
+                if (bits & UVPinned) uvPin.push_back(cornerIndex);
+            }
+        if (!uvSel.empty()) j["uvSelected"] = std::move(uvSel);
+        if (!uvPin.empty()) j["uvPinned"] = std::move(uvPin);
         if (json s = flagged(Selected); !s.empty()) j["selected"] = std::move(s);
         if (json h = flagged(Hidden); !h.empty()) j["hidden"] = std::move(h);
         return j;
@@ -723,6 +736,7 @@ namespace Dimension::Modeling
         const json sizes = j.value("faceSizes", json::array()), verts = j.value("faceVerts", json::array()), uvs = j.value("uvs", json::array());
         const json mats = j.value("faceMaterials", json::array());
         size_t corner = 0;
+        std::set<size_t> skipped;
         for (size_t f = 0; f < sizes.size(); ++f)
         {
             size_t n = sizes[f].get<size_t>();
@@ -740,7 +754,8 @@ namespace Dimension::Modeling
             }
             face.Material = f < mats.size() ? mats[f].get<int32_t>() : 0;
             if (valid) out.Faces.push_back(std::move(face));
-            else Log::Warn("Model '{}': face {} skipped (bad vertex indices)", out.Name, f);
+            else skipped.insert(f);
+            if (!valid) Log::Warn("Model '{}': face {} skipped (bad vertex indices)", out.Name, f);
         }
         for (const auto& s : j.value("smoothFaces", json::array()))
             if (s.get<size_t>() < out.Faces.size()) out.Faces[s.get<size_t>()].Smooth = true;
@@ -786,6 +801,25 @@ namespace Dimension::Modeling
                 if (a < vc && b < vc) out.EdgeAttrs[MakeEdgeKey(a, b)].Flags |= flag;
             }
         };
+        // Corner numbers to faces (only the faces kept: a skipped face's corners count but are dropped).
+        auto readCorners = [&](const char* key, uint8_t flag) {
+            if (!j.contains(key)) return;
+            std::vector<size_t> list;
+            for (const auto& c : j[key]) list.push_back(c.get<size_t>());
+            std::sort(list.begin(), list.end());
+            size_t k = 0, first = 0, fi = 0;
+            for (size_t f = 0; f < sizes.size() && k < list.size(); ++f)
+            {
+                size_t n = sizes[f].get<size_t>();
+                bool kept = fi < out.Faces.size() && skipped.count(f) == 0;
+                for (; k < list.size() && list[k] < first + n; ++k)
+                    if (kept && list[k] >= first) out.Faces[fi].SetCornerFlag(list[k] - first, flag, true);
+                if (kept) ++fi;
+                first += n;
+            }
+        };
+        readCorners("uvSelected", UVSelected);
+        readCorners("uvPinned", UVPinned);
         readFlags("selected", Selected);
         readFlags("hidden", Hidden);
         out.Changed();

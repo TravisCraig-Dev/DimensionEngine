@@ -1142,8 +1142,7 @@ namespace Dimension::Modeling::Ops
                               glm::mix(uvOf(q.X2), uvOf(q.Y2), fr[k + 1]), glm::mix(uvOf(q.X2), uvOf(q.Y2), fr[k]) };
                 if (!forward)
                 {
-                    std::reverse(strip.Verts.begin(), strip.Verts.end());
-                    std::reverse(strip.UVs.begin(), strip.UVs.end());
+                    strip.Reverse();
                 }
                 newFaces.push_back((uint32_t)faces.size());
                 faces.push_back(std::move(strip));
@@ -2087,8 +2086,7 @@ namespace Dimension::Modeling::Ops
             bool all = true;
             for (uint32_t v : face.Verts) all &= m.IsVertSelected(v);
             if (!all) continue;
-            std::reverse(face.Verts.begin(), face.Verts.end());
-            std::reverse(face.UVs.begin(), face.UVs.end());
+            face.Reverse();
         }
         m.Changed();
     }
@@ -2209,8 +2207,7 @@ namespace Dimension::Modeling::Ops
         if (glm::determinant(glm::mat3(transform)) < 0.0f)
             for (uint32_t f = firstFace; f < m.FaceCount(); ++f)
             {
-                std::reverse(m.Faces[f].Verts.begin(), m.Faces[f].Verts.end());
-                std::reverse(m.Faces[f].UVs.begin(), m.Faces[f].UVs.end());
+                m.Faces[f].Reverse();
             }
         m.Changed();
         return base;

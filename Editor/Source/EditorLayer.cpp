@@ -211,6 +211,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Navigation") m_ShowNavigation = true;
         else if (m_Options.OpenWindow == "Profiler") m_ShowProfiler = true;
         else if (m_Options.OpenWindow == "Sprite Editor") m_ShowSpriteEditor = true;
+        else if (m_Options.OpenWindow == "UV Editor") m_ShowUVEditor = true;
         else if (m_Options.OpenWindow == "Snap Settings") m_ShowSnapSettings = true;
         else if (m_Options.OpenWindow == "Packages") m_ShowPackages = true;
         else if (m_Options.OpenWindow == "Test Runner") m_ShowTestRunner = true;
@@ -1555,7 +1556,7 @@ namespace Editor
         return { { "Hierarchy", &m_ShowHierarchy }, { "Inspector", &m_ShowInspector }, { "Project", &m_ShowContent }, { "Console", &m_ShowConsole },
                  { "Scene Settings", &m_ShowSceneSettings }, { "Lighting", &m_ShowLighting }, { "Animator", &m_ShowAnimator }, { "Visual Effect Graph", &m_ShowVisualEffect },
                  { "Timeline", &m_ShowTimeline }, { "Animation", &m_ShowAnimation }, { "Navigation", &m_ShowNavigation }, { "Profiler", &m_ShowProfiler },
-                 { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "Snap Settings", &m_ShowSnapSettings }, { "Packages", &m_ShowPackages }, { "Test Runner", &m_ShowTestRunner },
+                 { "Frame Debugger", &m_ShowFrameDebugger }, { "Sprite Editor", &m_ShowSpriteEditor }, { "UV Editor", &m_ShowUVEditor }, { "Snap Settings", &m_ShowSnapSettings }, { "Packages", &m_ShowPackages }, { "Test Runner", &m_ShowTestRunner },
                  { "Audio Mixer", &m_ShowAudioMixer }, { "Tile Palette", &m_ShowTilePalette }, { "Stats", &m_ShowStats },
                  { "Shortcuts", &m_ShowShortcuts }, { "Undo History", &m_ShowUndoHistory } };
     }
@@ -2767,6 +2768,13 @@ namespace Editor
             m_Ctx.OpenSpriteEditor = false;
         }
         if (m_ShowSpriteEditor) m_SpriteEditor->OnImGui(&m_ShowSpriteEditor);
+        if (m_Ctx.OpenUVEditor)
+        {
+            m_ShowUVEditor = true;
+            ImGui::SetWindowFocus("UV Editor");
+            m_Ctx.OpenUVEditor = false;
+        }
+        if (m_ShowUVEditor) m_MeshEdit->DrawUVEditor(&m_ShowUVEditor);
         if (m_ShowSnapSettings) DrawSnapSettings();
         if (m_ShowPackages) m_Packages->OnImGui(&m_ShowPackages);
         if (m_ShowTestRunner) m_TestRunner->OnImGui(&m_ShowTestRunner);
@@ -3024,6 +3032,7 @@ namespace Editor
             ImGui::MenuItem("Profiler", nullptr, &m_ShowProfiler);
             ImGui::MenuItem("Frame Debugger", nullptr, &m_ShowFrameDebugger);
             ImGui::MenuItem("Sprite Editor", nullptr, &m_ShowSpriteEditor);
+            ImGui::MenuItem("UV Editor", nullptr, &m_ShowUVEditor);
             ImGui::MenuItem("Snap Settings", nullptr, &m_ShowSnapSettings);
             ImGui::MenuItem("Packages", nullptr, &m_ShowPackages);
             ImGui::MenuItem("Test Runner", nullptr, &m_ShowTestRunner);
