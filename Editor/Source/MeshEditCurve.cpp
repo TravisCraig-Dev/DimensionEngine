@@ -103,6 +103,20 @@ namespace Editor
                 ImVec2 a, b;
                 if (CurvePointScreen(c, i, a) && CurvePointScreen(c, (i + 1) % curve.Points.size(), b)) dl->AddLine(a, b, kCurveHull, 1.0f);
             }
+            // Handles of selected points (Auto ones drawn dimmer).
+            for (size_t i = 0; i < curve.Points.size(); ++i)
+            {
+                if (!(curve.Points[i].Flags & Selected) || curve.Points[i].Sharp) continue;
+                glm::vec3 hin, hout;
+                CurveOps::Handles(curve, i, hin, hout);
+                ImVec2 a, hi, ho;
+                if (!CurvePointScreen(c, i, a) || !project(hin, hi) || !project(hout, ho)) continue;
+                ImU32 col = curve.Points[i].HandleType == 0 ? IM_COL32(200, 200, 120, 160) : curve.Points[i].HandleType == 1 ? IM_COL32(230, 120, 230, 230) : IM_COL32(120, 230, 120, 230);
+                dl->AddLine(hi, a, col, 1.0f);
+                dl->AddLine(a, ho, col, 1.0f);
+                dl->AddCircle(hi, 4.0f, col, 12, 1.5f);
+                dl->AddCircle(ho, 4.0f, col, 12, 1.5f);
+            }
             for (size_t i = 0; i < curve.Points.size(); ++i)
             {
                 ImVec2 a;
@@ -150,7 +164,33 @@ namespace Editor
         for (int a = 0; a < 3; ++a)
             if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_X + a), false)) md.Axis = md.Axis == a ? -1 : a;
         m_Mesh.Curves = md.Start;
-        if (md.Kind == 1)
+        if (md.Kind == 3)
+        {
+            // A handle dragged: Auto handles become Aligned (kept in line); Aligned turns the other one too.
+            glm::vec3 from, dir, hit, move(0.0f);
+            SculptRay(mouse, from, dir);
+            if (RayPlane(from, dir, md.Pivot, glm::normalize(md.Pivot - m_CameraLocal), hit)) move = hit - md.PlaneStart;
+            if (md.Axis >= 0)
+            {
+                float along = move[md.Axis];
+                move = glm::vec3(0.0f);
+                move[md.Axis] = along;
+            }
+            CurvePoint& p = m_Mesh.Curves[md.HandleCurve].Points[md.HandlePoint];
+            glm::vec3 hin, hout;
+            CurveOps::Handles(md.Start[md.HandleCurve], md.HandlePoint, hin, hout);
+            if (p.HandleType == 0)
+            {
+                p.HandleType = 1;
+                p.HandleIn = hin - p.Position;
+                p.HandleOut = hout - p.Position;
+            }
+            glm::vec3& moved = md.HandleSide == 1 ? p.HandleIn : p.HandleOut;
+            glm::vec3& other = md.HandleSide == 1 ? p.HandleOut : p.HandleIn;
+            moved = md.HandleStart + move - p.Position;
+            if (p.HandleType == 1 && glm::length(moved) > 1e-9f) other = -glm::normalize(moved) * glm::length(other);
+        }
+        else if (md.Kind == 1)
         {
             glm::vec3 from, dir, hit, move(0.0f);
             SculptRay(mouse, from, dir);
@@ -187,7 +227,8 @@ namespace Editor
         }
         Commit();
         bool later = ImGui::GetFrameCount() > md.StartFrame;
-        if (later && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+        bool dragEnded = md.Kind == 3 && !ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        if (dragEnded || (later && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))))
             EndCurveModal(true);
         else if (later && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsKeyPressed(ImGuiKey_Escape)))
             EndCurveModal(false);
@@ -317,6 +358,22 @@ namespace Editor
                     if (any) c.Cyclic = !c.Cyclic;
                 }
             });
+        if (Pressed("curve.handleType"))
+            op("Handle Type", [&] {
+                // Auto -> Aligned -> Free -> Auto, keeping the handles where they are.
+                for (MCurve& c : m_Mesh.Curves)
+                    for (size_t i = 0; i < c.Points.size(); ++i)
+                    {
+                        CurvePoint& p = c.Points[i];
+                        if (!(p.Flags & Selected)) continue;
+                        glm::vec3 hin, hout;
+                        CurveOps::Handles(c, i, hin, hout);
+                        p.HandleIn = hin - p.Position;
+                        p.HandleOut = hout - p.Position;
+                        p.HandleType = (uint8_t)((p.HandleType + 1) % 3);
+                        p.Sharp = false;
+                    }
+            });
         if (Pressed("curve.sharp"))
             op("Toggle Sharp", [&] {
                 for (MCurve& c : m_Mesh.Curves)
@@ -344,6 +401,39 @@ namespace Editor
             AddCurvePointAtMouse(mouse);
             return;
         }
+        // A selected point's handle: drag it.
+        glm::mat4 mvp = m_ViewProj * m_World;
+        for (size_t c = 0; c < m_Mesh.Curves.size(); ++c)
+            for (size_t p = 0; p < m_Mesh.Curves[c].Points.size(); ++p)
+            {
+                const CurvePoint& cp = m_Mesh.Curves[c].Points[p];
+                if (!(cp.Flags & Selected) || cp.Sharp) continue;
+                glm::vec3 hs[2];
+                CurveOps::Handles(m_Mesh.Curves[c], p, hs[0], hs[1]);
+                for (int side = 0; side < 2; ++side)
+                {
+                    glm::vec4 clip = mvp * glm::vec4(hs[side], 1.0f);
+                    if (clip.w <= 1e-6f) continue;
+                    ImVec2 s(m_Origin.x + (clip.x / clip.w * 0.5f + 0.5f) * m_Size.x, m_Origin.y + (0.5f - clip.y / clip.w * 0.5f) * m_Size.y);
+                    if (Dist(s, mouse) > 7.0f) continue;
+                    Record("Move Curve Handle");
+                    m_CurveModal = {};
+                    m_CurveModal.Kind = 3;
+                    m_CurveModal.Recorded = true;
+                    m_CurveModal.Start = m_Mesh.Curves;
+                    m_CurveModal.HandleCurve = c;
+                    m_CurveModal.HandlePoint = p;
+                    m_CurveModal.HandleSide = side + 1;
+                    m_CurveModal.HandleStart = hs[side];
+                    m_CurveModal.Pivot = hs[side];
+                    m_CurveModal.MouseStart = mouse;
+                    m_CurveModal.StartFrame = ImGui::GetFrameCount() - 1; // (the release ends it: a drag)
+                    glm::vec3 from, dir;
+                    SculptRay(mouse, from, dir);
+                    RayPlane(from, dir, hs[side], glm::normalize(hs[side] - m_CameraLocal), m_CurveModal.PlaneStart);
+                    return;
+                }
+            }
         float best = 12.0f;
         int bc = -1, bp = -1;
         for (size_t c = 0; c < m_Mesh.Curves.size(); ++c)
@@ -390,7 +480,7 @@ namespace Editor
                       m_Mesh.Curves.size(), points, Shortcuts::Label("curve.radius").c_str(), Shortcuts::Label("curve.cyclic").c_str(), Shortcuts::Label("curve.sharp").c_str());
         std::string status = buf;
         if (m_CurveModal.Kind)
-            status = std::string(m_CurveModal.Kind == 1 ? "Move" : "Radius") + (m_CurveModal.Axis >= 0 ? std::string("  along ") + "XYZ"[m_CurveModal.Axis] : "") +
+            status = std::string(m_CurveModal.Kind == 1 ? "Move" : m_CurveModal.Kind == 3 ? "Handle" : "Radius") + (m_CurveModal.Axis >= 0 ? std::string("  along ") + "XYZ"[m_CurveModal.Axis] : "") +
                      "   X/Y/Z axis, Ctrl snap; click or Enter: done, right-click or Esc: cancel";
         dl->AddText(ImVec2(m_Origin.x + 8.0f, m_Origin.y + m_Size.y - 24.0f), IM_COL32(255, 255, 255, 230), status.c_str());
         return m_CurveModal.Kind != 0;
@@ -535,6 +625,8 @@ namespace Editor
                 };
                 field("Size", "Line height", [&] { return ImGui::DragFloat("##size", &t.Size, 0.01f, 0.001f, 1000.0f, "%.3f"); });
                 field("Depth", "Thickness (0: flat)", [&] { return ImGui::DragFloat("##depth", &t.Depth, 0.005f, 0.0f, 100.0f, "%.3f"); });
+                field("Bevel", "The letters' front and back edges chamfered this much (up to half the depth)",
+                      [&] { return ImGui::DragFloat("##bevel", &t.Bevel, 0.001f, 0.0f, 10.0f, "%.3f"); });
                 field("Spacing", "Extra space between letters (times the size)", [&] { return ImGui::DragFloat("##spacing", &t.Spacing, 0.005f, -1.0f, 5.0f, "%.3f"); });
                 field("Line Spacing", nullptr, [&] { return ImGui::DragFloat("##lines", &t.LineSpacing, 0.01f, 0.1f, 10.0f, "%.2f"); });
                 field("Align", nullptr, [&] {

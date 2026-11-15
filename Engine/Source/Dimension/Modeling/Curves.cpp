@@ -194,7 +194,7 @@ namespace Dimension::Modeling
         return out;
     }
 
-    EditableMesh Shapes::Fill(const std::vector<std::vector<glm::vec2>>& input, float depth)
+    EditableMesh Shapes::Fill(const std::vector<std::vector<glm::vec2>>& input, float depth, float bevel)
     {
         EditableMesh m;
         std::vector<std::vector<glm::vec2>> contours;
@@ -232,51 +232,84 @@ namespace Dimension::Modeling
         float scale = std::max(extent.x, extent.y);
         auto capUV = [&](glm::vec2 p) { return glm::vec2((p.x - mn.x) / scale, 1.0f - (p.y - mn.y) / scale); };
         float h = depth * 0.5f;
+        float b = depth > 0.0f ? std::clamp(bevel, 0.0f, h * 0.98f) : 0.0f;
         for (size_t i = 0; i < n; ++i)
         {
             if (level[i] % 2) continue;
+            // The outline counter-clockwise, its holes clockwise: the solid is on every ring's left.
             std::vector<std::vector<glm::vec2>> rings = { contours[i] };
             for (size_t j = 0; j < n; ++j)
                 if (parent[j] == (int)i && level[j] % 2) rings.push_back(contours[j]);
-            std::vector<uint32_t> tris = Triangulate(rings);
-            // Front and back vertices, ring by ring.
-            std::vector<uint32_t> front, back;
-            for (const auto& ring : rings)
-                for (const glm::vec2& p : ring)
+            for (size_t r = 0; r < rings.size(); ++r)
+                if ((SignedArea(rings[r]) > 0.0f) != (r == 0)) std::reverse(rings[r].begin(), rings[r].end());
+            // The bevel: the rings moved into the solid by `b` (mitred corners, not more than three times `b`).
+            std::vector<std::vector<glm::vec2>> inset = rings;
+            if (b > 0.0f)
+                for (size_t r = 0; r < rings.size(); ++r)
                 {
-                    front.push_back(m.AddVertex({ p.x, p.y, h }));
-                    if (depth > 0.0f) back.push_back(m.AddVertex({ p.x, p.y, -h }));
+                    const auto& ring = rings[r];
+                    size_t c = ring.size();
+                    for (size_t k = 0; k < c; ++k)
+                    {
+                        glm::vec2 e0 = ring[k] - ring[(k + c - 1) % c], e1 = ring[(k + 1) % c] - ring[k];
+                        glm::vec2 n0 = glm::length(e0) > 1e-12f ? glm::normalize(glm::vec2(-e0.y, e0.x)) : glm::vec2(0.0f);
+                        glm::vec2 n1 = glm::length(e1) > 1e-12f ? glm::normalize(glm::vec2(-e1.y, e1.x)) : glm::vec2(0.0f);
+                        glm::vec2 off = (n0 + n1) / std::max(1.0f + glm::dot(n0, n1), 0.1f);
+                        if (glm::length(off) > 3.0f) off = glm::normalize(off) * 3.0f;
+                        inset[r][k] = ring[k] + off * b;
+                    }
                 }
+            // Layers from front to back: the caps on the (inset) rings, the sides between.
+            struct Layer
+            {
+                const std::vector<std::vector<glm::vec2>>* Rings;
+                float Z;
+            };
+            std::vector<Layer> layers;
+            if (depth <= 0.0f) layers = { { &rings, 0.0f } };
+            else if (b > 0.0f) layers = { { &inset, h }, { &rings, h - b }, { &rings, -(h - b) }, { &inset, -h } };
+            else layers = { { &rings, h }, { &rings, -h } };
+            std::vector<std::vector<std::vector<uint32_t>>> ids(layers.size());
+            for (size_t L = 0; L < layers.size(); ++L)
+                for (const auto& ring : *layers[L].Rings)
+                {
+                    ids[L].emplace_back();
+                    for (const glm::vec2& p : ring) ids[L].back().push_back(m.AddVertex({ p.x, p.y, layers[L].Z }));
+                }
+            // Caps (triangulated on the cap layer's own rings).
+            std::vector<uint32_t> tris = Triangulate(*layers.front().Rings);
             std::vector<glm::vec2> flat;
-            for (const auto& ring : rings) flat.insert(flat.end(), ring.begin(), ring.end());
+            std::vector<uint32_t> front, back;
+            for (size_t r = 0; r < layers.front().Rings->size(); ++r)
+            {
+                const auto& ring = (*layers.front().Rings)[r];
+                flat.insert(flat.end(), ring.begin(), ring.end());
+                front.insert(front.end(), ids.front()[r].begin(), ids.front()[r].end());
+                back.insert(back.end(), ids.back()[r].begin(), ids.back()[r].end());
+            }
             for (size_t k = 0; k + 2 < tris.size(); k += 3)
             {
-                uint32_t a = tris[k], b = tris[k + 1], c = tris[k + 2];
-                m.AddFace({ front[a], front[b], front[c] }, { capUV(flat[a]), capUV(flat[b]), capUV(flat[c]) });
-                if (depth > 0.0f) m.AddFace({ back[c], back[b], back[a] }, { capUV(flat[c]), capUV(flat[b]), capUV(flat[a]) });
+                uint32_t a = tris[k], bb = tris[k + 1], c = tris[k + 2];
+                m.AddFace({ front[a], front[bb], front[c] }, { capUV(flat[a]), capUV(flat[bb]), capUV(flat[c]) });
+                if (layers.size() > 1) m.AddFace({ back[c], back[bb], back[a] }, { capUV(flat[c]), capUV(flat[bb]), capUV(flat[a]) });
             }
-            if (depth <= 0.0f) continue;
-            // Sides: each ring's edges, facing out of the solid (outline counter-clockwise, holes clockwise).
-            size_t base = 0;
-            for (size_t r = 0; r < rings.size(); ++r)
-            {
-                const auto& ring = rings[r];
-                bool ccw = SignedArea(ring) > 0.0f;
-                bool wantCcw = r == 0;
-                float along = 0.0f, perimeter = 0.0f;
-                for (size_t k = 0; k < ring.size(); ++k) perimeter += glm::length(ring[(k + 1) % ring.size()] - ring[k]);
-                for (size_t k = 0; k < ring.size(); ++k)
+            // Sides (and chamfers): quads between neighbouring layers, facing out of the solid.
+            for (size_t L = 0; L + 1 < layers.size(); ++L)
+                for (size_t r = 0; r < rings.size(); ++r)
                 {
-                    size_t i0 = k, i1 = (k + 1) % ring.size();
-                    if (ccw != wantCcw) std::swap(i0, i1);
-                    float len = glm::length(ring[i1] - ring[i0]);
-                    float u0 = along / std::max(perimeter, 1e-9f), u1 = (along + len) / std::max(perimeter, 1e-9f);
-                    along += len;
-                    uint32_t af = front[base + i0], ab = back[base + i0], bb = back[base + i1], bf = front[base + i1];
-                    m.AddFace({ af, ab, bb, bf }, { { u0, 0 }, { u0, 1 }, { u1, 1 }, { u1, 0 } });
+                    const auto& ring = rings[r];
+                    float along = 0.0f, perimeter = 0.0f;
+                    for (size_t k = 0; k < ring.size(); ++k) perimeter += glm::length(ring[(k + 1) % ring.size()] - ring[k]);
+                    float v0 = (float)L / (float)(layers.size() - 1), v1 = (float)(L + 1) / (float)(layers.size() - 1);
+                    for (size_t k = 0; k < ring.size(); ++k)
+                    {
+                        size_t k1 = (k + 1) % ring.size();
+                        float len = glm::length(ring[k1] - ring[k]);
+                        float u0 = along / std::max(perimeter, 1e-9f), u1 = (along + len) / std::max(perimeter, 1e-9f);
+                        along += len;
+                        m.AddFace({ ids[L][r][k], ids[L + 1][r][k], ids[L + 1][r][k1], ids[L][r][k1] }, { { u0, v0 }, { u0, v1 }, { u1, v1 }, { u1, v0 } });
+                    }
                 }
-                base += ring.size();
-            }
         }
         m.Changed();
         return m;
@@ -295,6 +328,34 @@ namespace Dimension::Modeling
             c.Points.push_back(cp);
         }
         return c;
+    }
+
+    void CurveOps::Handles(const Curve& curve, size_t i, glm::vec3& in, glm::vec3& out)
+    {
+        const auto& p = curve.Points;
+        size_t n = p.size();
+        const CurvePoint& c = p[i];
+        if (c.HandleType != 0 && !c.Sharp)
+        {
+            in = c.Position + c.HandleIn;
+            out = c.Position + c.HandleOut;
+            return;
+        }
+        // Auto: along the line from the previous point to the next, a third of each span long.
+        bool cyclic = curve.Cyclic && n >= 3;
+        bool first = !cyclic && i == 0, last = !cyclic && i + 1 == n;
+        glm::vec3 prev = first ? c.Position : p[(i + n - 1) % n].Position, next = last ? c.Position : p[(i + 1) % n].Position;
+        if (c.Sharp)
+        {
+            in = c.Position + (prev - c.Position) / 3.0f;
+            out = c.Position + (next - c.Position) / 3.0f;
+            return;
+        }
+        glm::vec3 t = next - prev;
+        float tl = glm::length(t);
+        t = tl > 1e-12f ? t / tl : glm::vec3(0.0f);
+        in = c.Position - t * (glm::length(c.Position - prev) / 3.0f);
+        out = c.Position + t * (glm::length(next - c.Position) / 3.0f);
     }
 
     std::vector<glm::vec3> CurveOps::Sample(const Curve& curve, int resolution, std::vector<float>* radius, std::vector<float>* tilt)
@@ -316,22 +377,7 @@ namespace Dimension::Modeling
         bool cyclic = curve.Cyclic && n >= 3;
         auto at = [&](int i) -> const CurvePoint& { return p[(size_t)((i % (int)n + (int)n) % (int)n)]; };
         // Auto handles: along the line from the previous point to the next, a third of each span long.
-        auto handles = [&](int i, glm::vec3& in, glm::vec3& outH) {
-            const CurvePoint& c = at(i);
-            bool first = !cyclic && i == 0, last = !cyclic && i == (int)n - 1;
-            glm::vec3 prev = first ? c.Position : at(i - 1).Position, next = last ? c.Position : at(i + 1).Position;
-            if (c.Sharp)
-            {
-                in = c.Position + (prev - c.Position) / 3.0f;
-                outH = c.Position + (next - c.Position) / 3.0f;
-                return;
-            }
-            glm::vec3 t = next - prev;
-            float tl = glm::length(t);
-            t = tl > 1e-12f ? t / tl : glm::vec3(0.0f);
-            in = c.Position - t * (glm::length(c.Position - prev) / 3.0f);
-            outH = c.Position + t * (glm::length(next - c.Position) / 3.0f);
-        };
+        auto handles = [&](int i, glm::vec3& in, glm::vec3& outH) { Handles(curve, (size_t)((i % (int)n + (int)n) % (int)n), in, outH); };
         int spans = cyclic ? (int)n : (int)n - 1;
         for (int s = 0; s < spans; ++s)
         {
@@ -453,7 +499,7 @@ namespace Dimension::Modeling
                     for (const glm::vec3& p : l) ring.push_back({ glm::dot(p - center, ax), glm::dot(p - center, ay) });
                     contours.push_back(std::move(ring));
                 }
-                EditableMesh filled = Shapes::Fill(contours, s.Extrude * 2.0f);
+                EditableMesh filled = Shapes::Fill(contours, s.Extrude * 2.0f, s.BevelDepth);
                 for (auto& p : filled.Positions) p = center + ax * p.x + ay * p.y + n * p.z;
                 filled.Changed();
                 m.Append(filled);
@@ -673,7 +719,7 @@ namespace Dimension::Modeling
             {
                 for (auto& c : glyph)
                     for (glm::vec2& p : c) p += glm::vec2(shift, y);
-                m.Append(Shapes::Fill(glyph, text.Depth));
+                m.Append(Shapes::Fill(glyph, text.Depth, text.Bevel));
             }
         }
         m.Changed();

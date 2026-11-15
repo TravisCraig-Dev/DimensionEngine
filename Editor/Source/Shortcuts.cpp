@@ -177,6 +177,7 @@ namespace Editor::Shortcuts
                 { "curve.delete", "Curve", "Delete Points", ImGuiKey_X },
                 { "curve.cyclic", "Curve", "Toggle Cyclic", ImGuiMod_Alt | ImGuiKey_C },
                 { "curve.sharp", "Curve", "Toggle Sharp", ImGuiKey_V },
+                { "curve.handleType", "Curve", "Cycle Handle Type (Auto, Aligned, Free)", ImGuiKey_H },
                 { "curve.add", "Curve", "Add Curve", ImGuiMod_Shift | ImGuiKey_A },
                 { "paint.radius", "Paint", "Brush Radius (drag)", ImGuiKey_F },
                 { "paint.strength", "Paint", "Brush Strength (drag)", ImGuiMod_Shift | ImGuiKey_F },

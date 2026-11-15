@@ -11,12 +11,15 @@ namespace Dimension::Modeling
         // Indices into the rings' points taken in order (ring 0's, then ring 1's...).
         std::vector<uint32_t> Triangulate(const std::vector<std::vector<glm::vec2>>& rings);
         // Closed outlines in the XY plane filled (contours inside others are holes, inside those solid again...) and,
-        // with `depth`, made solid: front at +depth/2 facing +Z, back at -depth/2, flat sides.
-        EditableMesh Fill(const std::vector<std::vector<glm::vec2>>& contours, float depth);
+        // with `depth`, made solid: front at +depth/2 facing +Z, back at -depth/2, flat sides; `bevel` chamfers the
+        // front and back edges that far in (and down).
+        EditableMesh Fill(const std::vector<std::vector<glm::vec2>>& contours, float depth, float bevel = 0.0f);
     }
 
     namespace CurveOps
     {
+        // A point's handles (positions) as the curve uses them.
+        void Handles(const Curve& curve, size_t point, glm::vec3& in, glm::vec3& out);
         // Points along a curve (`resolution` per span; the last one left out on cyclic curves), with the radius and tilt
         // there.
         std::vector<glm::vec3> Sample(const Curve& curve, int resolution, std::vector<float>* radius = nullptr, std::vector<float>* tilt = nullptr);

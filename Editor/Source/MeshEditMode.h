@@ -459,8 +459,11 @@ namespace Editor
         // Curves, text and retopology.
         struct CurveModal
         {
-            int Kind = 0; // 1 move, 2 radius
+            int Kind = 0; // 1 move, 2 radius, 3 a handle
             std::vector<Modeling::Curve> Start;
+            size_t HandleCurve = 0, HandlePoint = 0;
+            int HandleSide = 0; // 1 in, 2 out
+            glm::vec3 HandleStart{ 0.0f };
             glm::vec3 Pivot{ 0.0f }, PlaneStart{ 0.0f };
             ImVec2 MouseStart{ 0, 0 };
             int Axis = -1;

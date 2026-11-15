@@ -139,6 +139,10 @@ namespace Dimension::Modeling
         float Tilt = 0.0f;   // radians, the profile turned about the curve
         bool Sharp = false;
         uint8_t Flags = 0;   // Selected
+        // Handles: 0 Auto (from the neighbours; Sharp: pointing at them), 1 Aligned (stored, kept in line: moving one
+        // turns the other), 2 Free (stored, each its own).
+        uint8_t HandleType = 0;
+        glm::vec3 HandleIn{ 0.0f }, HandleOut{ 0.0f }; // (Aligned and Free: offsets from Position)
     };
     struct Curve
     {
@@ -152,6 +156,7 @@ namespace Dimension::Modeling
         float BevelDepth = 0.05f; // a round tube this thick (0: none)
         int BevelResolution = 8;  // sides around the tube
         float Extrude = 0.0f;     // a ribbon this wide either side (no bevel), or a filled shape's thickness either side
+                                  // (a filled shape's edges are chamfered by BevelDepth)
         bool Fill = false;        // closed curves filled flat in the XY plane (nested ones make holes)
         bool Caps = true;         // open tubes closed at their ends
         bool Smooth = true;
@@ -164,6 +169,7 @@ namespace Dimension::Modeling
         uint64_t Font = 0;        // a font asset (0: the built-in one)
         float Size = 1.0f;        // line height
         float Depth = 0.1f;       // thickness (0: flat)
+        float Bevel = 0.0f;       // the letters' front and back edges chamfered this much
         float Spacing = 0.0f;     // extra space between letters (times the size)
         float LineSpacing = 1.2f; // times the size
         int Align = 0;            // 0 left, 1 center, 2 right

@@ -19331,6 +19331,53 @@ namespace
         CHECK(rig.Bones[0].IKTarget == target - 1);
     }
 
+    void TestModelingCurveTextFixes()
+    {
+        using namespace ModelingTest;
+        // Bevelled solid shapes: closed, a little less volume, the front face smaller.
+        std::vector<std::vector<glm::vec2>> square = { { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } }, { { -0.5f, -0.5f }, { -0.5f, 0.5f }, { 0.5f, 0.5f }, { 0.5f, -0.5f } } };
+        EditableMesh plain = Shapes::Fill(square, 0.4f), bevelled = Shapes::Fill(square, 0.4f, 0.05f);
+        CHECK(ClosedAndConsistent(bevelled) && Volume(bevelled) < Volume(plain) && Volume(bevelled) > Volume(plain) * 0.85f);
+        float frontArea = 0.0f;
+        for (uint32_t f = 0; f < bevelled.FaceCount(); ++f)
+            if (bevelled.FaceNormal(f).z > 0.99f) frontArea += bevelled.FaceArea(f);
+        CHECK(Near(frontArea, 1.9f * 1.9f - 1.1f * 1.1f, 1e-3f)); // (each edge 0.05 in)
+        // Bevelled letters.
+        size_t fontSize = 0;
+        const uint8_t* font = AssetManager::GetDefaultFontData(&fontSize);
+        TextSettings text;
+        text.Enabled = true;
+        text.Body = "Bo";
+        text.Depth = 0.2f;
+        text.Bevel = 0.01f;
+        EditableMesh letters = TextOps::ToMesh(text, font, fontSize);
+        CHECK(ClosedAndConsistent(letters) && Volume(letters) > 0.0f);
+        // Filled curves bevelled by Bevel Depth.
+        CurveSettings fill;
+        fill.Fill = true;
+        fill.Extrude = 0.1f;
+        fill.BevelDepth = 0.02f;
+        EditableMesh disc = CurveOps::ToMesh({ CurveOps::Make({ { 1, 0, 0 }, { 0, 1, 0 }, { -1, 0, 0 }, { 0, -1, 0 } }, true) }, fill);
+        CHECK(ClosedAndConsistent(disc));
+
+        // Handles: Free handles bend the curve where they point; Aligned keep in line; files keep them.
+        Modeling::Curve c = CurveOps::Make({ { 0, 0, 0 }, { 1, 0, 0 } }, false);
+        c.Points[0].HandleType = 2;
+        c.Points[0].HandleOut = { 0, 1, 0 };
+        c.Points[1].HandleType = 2;
+        c.Points[1].HandleIn = { 0, 1, 0 };
+        float top = 0.0f;
+        for (const glm::vec3& q : CurveOps::Sample(c, 16)) top = std::max(top, q.y);
+        CHECK(Near(top, 0.75f, 1e-3f)); // (a cubic Bezier with both handles 1 up peaks at 3/4)
+        glm::vec3 hin, hout;
+        CurveOps::Handles(c, 0, hin, hout);
+        CHECK(Near(hout, glm::vec3(0, 1, 0)));
+        EditableMesh model;
+        model.Curves.push_back(c);
+        EditableMesh back;
+        CHECK(EditableMesh::FromJson(model.ToJson(), back) && back.Curves[0].Points[0].HandleType == 2 && Near(back.Curves[0].Points[1].HandleIn, glm::vec3(0, 1, 0)));
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19755,6 +19802,7 @@ int main(int argc, char** argv)
     Run("Modeling retopology", TestModelingRetopology);
     Run("Modeling tool fixes", TestModelingToolFixes);
     Run("Modeling rig fixes", TestModelingRigFixes);
+    Run("Modeling curve and text fixes", TestModelingCurveTextFixes);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

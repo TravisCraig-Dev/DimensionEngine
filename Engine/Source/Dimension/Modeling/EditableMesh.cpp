@@ -1002,7 +1002,12 @@ namespace Dimension::Modeling
             {
                 json pts = json::array();
                 for (const CurvePoint& p : c.Points)
-                    pts.push_back({ Round(p.Position.x), Round(p.Position.y), Round(p.Position.z), Round(p.Radius), Round(p.Tilt), p.Sharp ? 1 : 0, (int)p.Flags });
+                {
+                    json pt = { Round(p.Position.x), Round(p.Position.y), Round(p.Position.z), Round(p.Radius), Round(p.Tilt), p.Sharp ? 1 : 0, (int)p.Flags };
+                    if (p.HandleType != 0)
+                        for (float v : { (float)p.HandleType, p.HandleIn.x, p.HandleIn.y, p.HandleIn.z, p.HandleOut.x, p.HandleOut.y, p.HandleOut.z }) pt.push_back(Round(v));
+                    pts.push_back(std::move(pt));
+                }
                 curves.push_back({ { "cyclic", c.Cyclic }, { "points", std::move(pts) } });
             }
             j["curves"] = std::move(curves);
@@ -1011,7 +1016,7 @@ namespace Dimension::Modeling
                                    { "extrude", Round(s.Extrude) }, { "fill", s.Fill }, { "caps", s.Caps }, { "smooth", s.Smooth } };
         }
         if (Text.Enabled)
-            j["text"] = { { "body", Text.Body }, { "font", Text.Font }, { "size", Round(Text.Size) }, { "depth", Round(Text.Depth) }, { "spacing", Round(Text.Spacing) },
+            j["text"] = { { "body", Text.Body }, { "font", Text.Font }, { "size", Round(Text.Size) }, { "depth", Round(Text.Depth) }, { "bevel", Round(Text.Bevel) }, { "spacing", Round(Text.Spacing) },
                           { "lineSpacing", Round(Text.LineSpacing) }, { "align", Text.Align }, { "resolution", Text.Resolution } };
         // Sculpt mask: [vertex, value] pairs of the masked vertices.
         if (Mask.size() == Positions.size())
@@ -1220,6 +1225,12 @@ namespace Dimension::Modeling
                 if (p.size() > 4) cp.Tilt = p[4].get<float>();
                 if (p.size() > 5) cp.Sharp = p[5].get<int>() != 0;
                 if (p.size() > 6) cp.Flags = (uint8_t)p[6].get<int>();
+                if (p.size() > 13)
+                {
+                    cp.HandleType = (uint8_t)std::clamp((int)p[7].get<float>(), 0, 2);
+                    cp.HandleIn = { p[8].get<float>(), p[9].get<float>(), p[10].get<float>() };
+                    cp.HandleOut = { p[11].get<float>(), p[12].get<float>(), p[13].get<float>() };
+                }
                 c.Points.push_back(cp);
             }
             out.Curves.push_back(std::move(c));
@@ -1245,6 +1256,7 @@ namespace Dimension::Modeling
             o.Font = t.value("font", (uint64_t)0);
             o.Size = t.value("size", o.Size);
             o.Depth = t.value("depth", o.Depth);
+            o.Bevel = t.value("bevel", o.Bevel);
             o.Spacing = t.value("spacing", o.Spacing);
             o.LineSpacing = t.value("lineSpacing", o.LineSpacing);
             o.Align = std::clamp(t.value("align", o.Align), 0, 2);
