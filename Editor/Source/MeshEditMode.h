@@ -314,7 +314,13 @@ namespace Editor
         void UpdateUVModal(const std::vector<uint32_t>& faces);
         void EndUVModal(bool confirm);
         AssetHandle UVBackground() const; // the texture drawn under the UVs
+        glm::ivec2 UVTextureSize() const; // its size in pixels (64 x 64 without one)
+        std::vector<uint32_t> UVFaces() const; // the faces the UV Editor shows (all visible ones with sync selection)
         UVModal m_UVModal;
+        bool m_UVSync = false;            // the UV selection is the mesh's (UV Sync Selection)
+        bool m_UVPixelSnap = false;       // moved UVs land on pixel corners
+        bool m_FollowEven = false;        // Follow Active Quads: even steps (else edge lengths)
+        bool m_StitchSnap = true;         // Stitch: islands move onto each other
         int m_UVMode = 0;                 // 0 vertex, 1 edge, 2 face, 3 island
         Modeling::UV::Sticky m_UVSticky = Modeling::UV::Sticky::Location;
         int m_UVStretch = -1;             // -1 off, else Modeling::UV::StretchMode

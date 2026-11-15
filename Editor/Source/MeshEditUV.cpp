@@ -111,6 +111,16 @@ namespace Editor
             });
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("As the Scene view sees them, stretched to fill the texture");
         if (ImGui::MenuItem("Reset", nullptr, false, any)) UVOperate("Reset UVs", [&] { uv::Reset(m_Mesh, faces); });
+        if (ImGui::BeginMenu("Follow Active Quads", any))
+        {
+            if (ImGui::MenuItem("Lay Out"))
+                UVOperate("Follow Active Quads", [&] { Log::Info("Laid out {} quads", uv::FollowActiveQuads(m_Mesh, faces, -1, m_FollowEven)); });
+            ImGui::Checkbox("Even Steps", &m_FollowEven);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Every row and column the same size (else as long as the edges on the surface)");
+            ImGui::EndMenu();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Lays the selected quads out as a grid continuing the active quad's UVs (the first fully UV-selected quad)");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Each face fills the whole texture");
         ImGui::Separator();
         if (!inUVEditor)
@@ -128,6 +138,7 @@ namespace Editor
         if (inUVEditor)
         {
             ImGui::Separator();
+            if (m_UVSync) faces = UVFaces();
             bool sel = !uv::SelectedCorners(m_Mesh, faces).empty();
             if (ImGui::MenuItem("Pin", Shortcuts::Label("uv.pin").c_str(), false, sel)) UVOperate("Pin", [&] { uv::SetPinned(m_Mesh, faces, true); });
             if (ImGui::MenuItem("Unpin", Shortcuts::Label("uv.unpin").c_str(), false, sel)) UVOperate("Unpin", [&] { uv::SetPinned(m_Mesh, faces, false); });
@@ -141,6 +152,17 @@ namespace Editor
                 ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Split Selection", nullptr, false, sel)) UVOperate("Split UV Selection", [&] { uv::SplitSelection(m_Mesh, faces); });
+            if (ImGui::BeginMenu("Stitch", sel))
+            {
+                if (ImGui::MenuItem("Stitch", Shortcuts::Label("uv.stitch").c_str()))
+                    UVOperate("Stitch UVs", [&] { Log::Info("Stitched {} vertices", uv::Stitch(m_Mesh, faces, m_StitchSnap)); });
+                ImGui::Checkbox("Snap Islands", &m_StitchSnap);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Moves (and turns) islands onto the one they are stitched to, else the UVs meet halfway");
+                ImGui::EndMenu();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Joins selected UVs of the same vertex that lie apart (closing a seam between islands)");
+            if (ImGui::MenuItem("Snap to Pixels", nullptr, false, sel))
+                UVOperate("Snap UVs to Pixels", [&] { uv::SnapToPixels(m_Mesh, faces, UVTextureSize()); });
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keeps only whole faces selected, so moving them tears them off their neighbours");
             if (ImGui::BeginMenu("Align", sel))
             {
@@ -179,6 +201,16 @@ namespace Editor
     {
         return ImVec2(m_UVCanvasMin.x + m_UVPan.x + p.x * m_UVZoom, m_UVCanvasMin.y + m_UVPan.y + p.y * m_UVZoom);
     }
+
+    glm::ivec2 MeshEditMode::UVTextureSize() const
+    {
+        AssetHandle bg = UVBackground();
+        Ref<Texture2D> t = bg.IsValid() ? AssetManager::GetTexture(bg) : nullptr;
+        if (!t || t->GetWidth() == 0 || t->GetHeight() == 0) return { 64, 64 };
+        return { (int)t->GetWidth(), (int)t->GetHeight() };
+    }
+
+    std::vector<uint32_t> MeshEditMode::UVFaces() const { return m_UVSync ? uv::VisibleFaces(m_Mesh) : uv::SelectedFaces(m_Mesh); }
 
     glm::vec2 MeshEditMode::ScreenToUV(const ImVec2& p) const
     {
@@ -342,7 +374,7 @@ namespace Editor
 
     void MeshEditMode::BeginUVModal(UVModalKind kind)
     {
-        std::vector<uint32_t> faces = uv::SelectedFaces(m_Mesh);
+        std::vector<uint32_t> faces = UVFaces();
         std::vector<uv::Corner> sel = uv::SelectedCorners(m_Mesh, faces);
         if (sel.empty()) return;
         static const char* names[] = { "", "Move UVs", "Rotate UVs", "Scale UVs" };
@@ -372,7 +404,7 @@ namespace Editor
         if (md.Kind == UVModalKind::Move)
         {
             glm::vec2 d((mouse.x - md.MouseStart.x) / m_UVZoom, (mouse.y - md.MouseStart.y) / m_UVZoom);
-            if (io.KeyCtrl) d = glm::round(d * 64.0f) / 64.0f; // texel-ish steps of a 64-wide grid
+            if (io.KeyCtrl) d = glm::round(d * glm::vec2(UVTextureSize())) / glm::vec2(UVTextureSize()); // whole pixels
             if (md.Axis == 0) d.y = 0.0f;
             if (md.Axis == 1) d.x = 0.0f;
             m[2] = glm::vec3(d, 1.0f);
@@ -400,6 +432,11 @@ namespace Editor
             Face& face = m_Mesh.Faces[c.Face];
             if (face.UVs.size() != face.Verts.size()) face.UVs.resize(face.Verts.size(), glm::vec2(0.0f));
             face.UVs[c.Index] = glm::vec2(m * glm::vec3(start, 1.0f));
+            if (m_UVPixelSnap)
+            {
+                glm::vec2 px(UVTextureSize());
+                face.UVs[c.Index] = glm::round(face.UVs[c.Index] * px) / px;
+            }
         }
         Commit();
         bool later = ImGui::GetFrameCount() > md.StartFrame;
@@ -458,6 +495,7 @@ namespace Editor
             if (found) selectOp("Select Linked UVs", [&] { uv::SelectLinked(m_Mesh, faces, &hit, !ImGui::GetIO().KeyShift); });
         }
         if (Pressed("uv.grab")) BeginUVModal(UVModalKind::Move);
+        if (Pressed("uv.stitch")) UVOperate("Stitch UVs", [&] { Log::Info("Stitched {} vertices", uv::Stitch(m_Mesh, faces, m_StitchSnap)); });
         if (Pressed("uv.rotate")) BeginUVModal(UVModalKind::Rotate);
         if (Pressed("uv.scale")) BeginUVModal(UVModalKind::Scale);
         if (Pressed("uv.pin")) UVOperate("Pin", [&] { uv::SetPinned(m_Mesh, faces, true); });
@@ -528,7 +566,16 @@ namespace Editor
             ImGui::End();
             return;
         }
-        std::vector<uint32_t> faces = uv::SelectedFaces(m_Mesh);
+        std::vector<uint32_t> faces = UVFaces();
+        // With sync selection the mesh's selection is the truth: read it, and write back what the editor changes.
+        if (m_UVSync && m_UVModal.Kind == UVModalKind::None) uv::SyncSelectionFromMesh(m_Mesh, faces);
+        auto uvSelectionHash = [&] {
+            uint64_t h = 1469598103934665603ull;
+            for (uint32_t f : faces)
+                for (size_t c = 0; c < m_Mesh.Faces[f].Verts.size(); ++c) h = (h ^ (m_Mesh.Faces[f].CornerFlags(c) & UVSelected)) * 1099511628211ull;
+            return h;
+        };
+        uint64_t selectionBefore = m_UVSync ? uvSelectionHash() : 0;
 
         if (ImGui::BeginMenuBar())
         {
@@ -598,8 +645,32 @@ namespace Editor
         int stretch = m_UVStretch + 1;
         if (ImGui::Combo("##stretch", &stretch, stretches, 3)) m_UVStretch = stretch - 1;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Colors faces by how distorted their UVs are: blue true to the surface, red badly stretched");
-        ImGui::SameLine();
+        // (the rest wraps onto another line when the window is narrow)
+        auto next = [](const char* label) {
+            ImGui::SameLine();
+            float w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+            if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
+        };
+        next("Texture");
         ImGui::Checkbox("Texture", &m_UVShowTexture);
+        next("Sync");
+        bool syncKey = Shortcuts::Pressed("uv.sync");
+        if (syncKey) m_UVSync = !m_UVSync;
+        if (ImGui::Checkbox("Sync", &m_UVSync) || syncKey)
+        {
+            if (m_UVSync)
+            {
+                faces = UVFaces();
+                uv::SyncSelectionFromMesh(m_Mesh, faces);
+                selectionBefore = uvSelectionHash();
+            }
+            else faces = UVFaces();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("UV Sync Selection: shows every face, and selecting UVs selects the mesh's vertices (and the other way round)");
+        next("Pixel Snap");
+        ImGui::Checkbox("Pixel Snap", &m_UVPixelSnap);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Moved, turned and scaled UVs land on the texture's pixel corners");
         ImGui::PopStyleVar();
 
         // The canvas.
@@ -706,6 +777,11 @@ namespace Editor
         // Status: what's shown, or the transform under way.
         std::string status;
         char buf[200];
+        if (m_UVSync && m_UVModal.Kind == UVModalKind::None && uvSelectionHash() != selectionBefore)
+        {
+            uv::SyncSelectionToMesh(m_Mesh, faces);
+            SelectionChanged();
+        }
         if (faces.empty()) status = "Select faces in the Scene view to see their UVs";
         else
         {
@@ -722,7 +798,7 @@ namespace Editor
                 std::snprintf(buf, sizeof(buf), "  %.1f deg", glm::degrees(m_UVModal.Angle));
                 status += buf;
             }
-            status += "   X/Y axis, Ctrl snap; click or Enter: done, right-click or Esc: cancel";
+            status += "   X/Y axis, Ctrl snap (whole pixels when moving); click or Enter: done, right-click or Esc: cancel";
         }
         dl->AddText(ImVec2(m_UVCanvasMin.x + 8.0f, cmax.y - 22.0f), IM_COL32(255, 255, 255, 220), status.c_str());
         dl->PopClipRect();

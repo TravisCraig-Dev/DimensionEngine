@@ -19378,6 +19378,58 @@ namespace
         CHECK(EditableMesh::FromJson(model.ToJson(), back) && back.Curves[0].Points[0].HandleType == 2 && Near(back.Curves[0].Points[1].HandleIn, glm::vec3(0, 1, 0)));
     }
 
+    void TestModelingUVFixes()
+    {
+        using namespace ModelingTest;
+        using namespace UVTest;
+        // Follow Active Quads: a grid with no UVs laid out from one quad, as one undistorted island.
+        for (bool even : { true, false })
+        {
+            EditableMesh grid = Primitives::Grid(4, 3, 2.0f);
+            for (Face& f : grid.Faces) f.UVs.assign(f.Verts.size(), glm::vec2(0.0f));
+            CHECK(UV::FollowActiveQuads(grid, AllFaces(grid), 0, even) == grid.FaceCount());
+            CHECK(UV::Islands(grid, AllFaces(grid)).size() == 1);
+            CHECK(even || MaxStretch(grid, UV::StretchMode::Angle) < 1e-3f && MaxStretch(grid, UV::StretchMode::Area) < 1e-3f); // (even steps square up the 4 x 3 cells)
+        }
+        // Stitch: half the grid's UVs moved and turned away; stitching puts it back, undistorted.
+        EditableMesh grid = Primitives::Grid(4, 4, 2.0f);
+        for (Face& f : grid.Faces) f.UVs.assign(f.Verts.size(), glm::vec2(0.0f));
+        UV::FollowActiveQuads(grid, AllFaces(grid), 0, false);
+        for (uint32_t f = 0; f < grid.FaceCount(); ++f)
+            if (grid.FaceCenter(f).x > 0.0f)
+                for (glm::vec2& uv : grid.Faces[f].UVs) uv = glm::vec2(3.0f - uv.y, 0.5f + uv.x);
+        CHECK(UV::Islands(grid, AllFaces(grid)).size() == 2);
+        UV::SelectAll(grid, AllFaces(grid));
+        CHECK(UV::Stitch(grid, AllFaces(grid), true) == 5); // (the 5 vertices down the middle)
+        CHECK(UV::Islands(grid, AllFaces(grid)).size() == 1);
+        CHECK(MaxStretch(grid, UV::StretchMode::Angle) < 1e-3f && MaxStretch(grid, UV::StretchMode::Area) < 1e-3f);
+        // Without moving islands the halves meet halfway.
+        EditableMesh apart = Primitives::Grid(2, 1, 2.0f);
+        for (Face& f : apart.Faces) f.UVs.assign(f.Verts.size(), glm::vec2(0.0f));
+        UV::FollowActiveQuads(apart, AllFaces(apart), 0, true);
+        for (glm::vec2& uv : apart.Faces[1].UVs) uv.y += 0.5f;
+        UV::SelectAll(apart, AllFaces(apart));
+        CHECK(UV::Stitch(apart, AllFaces(apart), false) == 2 && UV::Islands(apart, AllFaces(apart)).size() == 1);
+        // Pixel snapping.
+        UV::SelectAll(grid, AllFaces(grid));
+        UV::SnapToPixels(grid, AllFaces(grid), { 16, 8 });
+        bool onPixels = true;
+        for (const Face& f : grid.Faces)
+            for (const glm::vec2& uv : f.UVs) onPixels &= Near(uv.x * 16.0f, std::round(uv.x * 16.0f), 1e-4f) && Near(uv.y * 8.0f, std::round(uv.y * 8.0f), 1e-4f);
+        CHECK(onPixels);
+        // Sync selection: corners follow vertices, and back.
+        EditableMesh plane = Primitives::Grid(2, 2, 2.0f);
+        Ops::DeselectAll(plane);
+        Ops::SelectVertex(plane, plane.Faces[0].Verts[0], true);
+        UV::SyncSelectionFromMesh(plane, UV::VisibleFaces(plane));
+        size_t corners = UV::SelectedCorners(plane, UV::VisibleFaces(plane)).size();
+        CHECK(corners >= 1 && corners == plane.Topo().VertFaces[plane.Faces[0].Verts[0]].size());
+        UV::SelectAll(plane, UV::VisibleFaces(plane), false);
+        for (size_t c = 0; c < 4; ++c) plane.Faces[1].SetCornerFlag(c, UVSelected, true);
+        UV::SyncSelectionToMesh(plane, UV::VisibleFaces(plane));
+        CHECK(Ops::SelectedVertices(plane).size() == 4 && (plane.Faces[1].Flags & Selected) && !(plane.Faces[0].Flags & Selected));
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19803,6 +19855,7 @@ int main(int argc, char** argv)
     Run("Modeling tool fixes", TestModelingToolFixes);
     Run("Modeling rig fixes", TestModelingRigFixes);
     Run("Modeling curve and text fixes", TestModelingCurveTextFixes);
+    Run("Modeling UV fixes", TestModelingUVFixes);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

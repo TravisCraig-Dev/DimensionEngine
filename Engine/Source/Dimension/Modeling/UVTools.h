@@ -107,4 +107,23 @@ namespace Dimension::Modeling::UV
     size_t MergeByDistance(EditableMesh& m, const std::vector<uint32_t>& faces, float distance);
     // Lines the selected UVs up: axis 0 gives them all the same u (a vertical line), 1 the same v (horizontal).
     void AlignSelected(EditableMesh& m, const std::vector<uint32_t>& faces, int axis);
+    // Rounds the selected UVs to the nearest pixel corner of a `size` texture.
+    void SnapToPixels(EditableMesh& m, const std::vector<uint32_t>& faces, glm::ivec2 size);
+
+    // Follow Active Quads: the quads among `faces` connected to `active` (a quad; -1: the first fully UV-selected quad,
+    // else the first quad) laid out from its UVs as a grid, each step across an edge continuing the one before.
+    // `evenLength` gives every step the same length; else steps follow the edges' lengths on the surface. Returns how
+    // many faces were laid out.
+    size_t FollowActiveQuads(EditableMesh& m, const std::vector<uint32_t>& faces, int64_t active = -1, bool evenLength = false);
+    // Stitch: corners of the same vertex selected at different places are joined. `snapIslands` first moves (and turns)
+    // each island onto the one it is stitched to (the biggest stays), so only the seam closes; else they meet halfway.
+    // Returns how many vertices were stitched.
+    size_t Stitch(EditableMesh& m, const std::vector<uint32_t>& faces, bool snapIslands = true);
+
+    // UV Sync Selection: the UV Editor's selection as the mesh's own. FromMesh selects the corners of selected vertices;
+    // ToMesh selects the vertices with a selected corner (edges and faces following).
+    void SyncSelectionFromMesh(EditableMesh& m, const std::vector<uint32_t>& faces);
+    void SyncSelectionToMesh(EditableMesh& m, const std::vector<uint32_t>& faces);
+    // The faces that are not hidden (what the UV Editor shows with sync selection).
+    std::vector<uint32_t> VisibleFaces(const EditableMesh& m);
 }

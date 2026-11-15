@@ -1,4 +1,5 @@
 #include "Dimension/Modeling/UVTools.h"
+#include "Dimension/Modeling/MeshOps.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
 #include <cmath>
@@ -1456,5 +1457,227 @@ namespace Dimension::Modeling::UV
             uv[axis & 1] = value;
             SetUV(m.Faces[c.Face], c.Index, uv);
         }
+    }
+
+    void SnapToPixels(EditableMesh& m, const std::vector<uint32_t>& faces, glm::ivec2 size)
+    {
+        glm::vec2 px = glm::vec2(glm::max(size, glm::ivec2(1)));
+        for (const Corner& c : SelectedCorners(m, faces)) SetUV(m.Faces[c.Face], c.Index, glm::round(UVAt(m.Faces[c.Face], c.Index) * px) / px);
+    }
+
+    // ---- Follow Active Quads
+
+    size_t FollowActiveQuads(EditableMesh& m, const std::vector<uint32_t>& faces, int64_t active, bool evenLength)
+    {
+        std::vector<uint8_t> in(m.FaceCount(), 0);
+        for (uint32_t f : faces)
+            if (m.Faces[f].Verts.size() == 4) in[f] = 1;
+        if (active < 0 || active >= (int64_t)m.FaceCount() || !in[active])
+        {
+            active = -1;
+            for (uint32_t f : faces)
+                if (in[f])
+                {
+                    bool all = true;
+                    for (size_t c = 0; c < 4; ++c) all &= (m.Faces[f].CornerFlags(c) & UVSelected) != 0;
+                    if (all)
+                    {
+                        active = f;
+                        break;
+                    }
+                    if (active < 0) active = f;
+                }
+            if (active < 0) return 0;
+        }
+        const Topology& topo = m.Topo();
+        auto len3 = [&](uint32_t a, uint32_t b) { return glm::length(m.Positions[a] - m.Positions[b]); };
+        // The active quad keeps its UVs (made a rectangle of its edges' lengths when they are flat).
+        {
+            Face& f = m.Faces[active];
+            glm::vec2 u[4];
+            for (size_t c = 0; c < 4; ++c) u[c] = UVAt(f, c);
+            float area = 0.0f;
+            for (size_t c = 0; c < 4; ++c) area += u[c].x * u[(c + 1) % 4].y - u[(c + 1) % 4].x * u[c].y;
+            if (std::abs(area) < 1e-10f)
+            {
+                float w = 0.5f * (len3(f.Verts[0], f.Verts[1]) + len3(f.Verts[2], f.Verts[3]));
+                float h = 0.5f * (len3(f.Verts[1], f.Verts[2]) + len3(f.Verts[3], f.Verts[0]));
+                float k = 1.0f / std::max({ w, h, 1e-6f });
+                if (evenLength) w = h = 1.0f, k = 1.0f;
+                glm::vec2 sq[4] = { { 0, 1 }, { w * k, 1 }, { w * k, 1 - h * k }, { 0, 1 - h * k } };
+                for (size_t c = 0; c < 4; ++c) SetUV(f, c, sq[c]);
+            }
+        }
+        std::vector<uint8_t> done(m.FaceCount(), 0);
+        std::vector<uint32_t> queue = { (uint32_t)active };
+        done[active] = 1;
+        size_t count = 1;
+        for (size_t qi = 0; qi < queue.size(); ++qi)
+        {
+            uint32_t f = queue[qi];
+            for (size_t i = 0; i < 4; ++i)
+            {
+                const std::vector<uint32_t>& across = topo.EdgeFaces[topo.FaceEdges[f][i]];
+                if (across.size() != 2) continue;
+                uint32_t g = across[0] == f ? across[1] : across[0];
+                if (!in[g] || done[g]) continue;
+                const Face& ff = m.Faces[f];
+                Face& gf = m.Faces[g];
+                uint32_t va = ff.Verts[i], vb = ff.Verts[(i + 1) % 4];
+                int ga = -1, gb = -1;
+                for (int c = 0; c < 4; ++c)
+                {
+                    if (gf.Verts[c] == va) ga = c;
+                    if (gf.Verts[c] == vb) gb = c;
+                }
+                if (ga < 0 || gb < 0) continue;
+                // g's corners after a (away from b) and after b (away from a).
+                int gc = (ga + 1) % 4 == gb ? (ga + 3) % 4 : (ga + 1) % 4;
+                int gd = (gb + 1) % 4 == ga ? (gb + 3) % 4 : (gb + 1) % 4;
+                size_t fa = (i + 3) % 4, fb = (i + 2) % 4; // f's corners beyond a and b
+                glm::vec2 ua = UVAt(ff, i), ub = UVAt(ff, (i + 1) % 4), ua0 = UVAt(ff, fa), ub0 = UVAt(ff, fb);
+                float ka = 1.0f, kb = 1.0f;
+                if (!evenLength)
+                {
+                    ka = len3(va, gf.Verts[gc]) / std::max(len3(va, ff.Verts[fa]), 1e-9f);
+                    kb = len3(vb, gf.Verts[gd]) / std::max(len3(vb, ff.Verts[fb]), 1e-9f);
+                }
+                SetUV(gf, ga, ua);
+                SetUV(gf, gb, ub);
+                SetUV(gf, gc, ua + (ua - ua0) * ka);
+                SetUV(gf, gd, ub + (ub - ub0) * kb);
+                done[g] = 1;
+                queue.push_back(g);
+                ++count;
+            }
+        }
+        m.Changed();
+        return count;
+    }
+
+    // ---- Stitch
+
+    size_t Stitch(EditableMesh& m, const std::vector<uint32_t>& faces, bool snapIslands)
+    {
+        std::vector<Corner> sel = SelectedCorners(m, faces);
+        // Stitch points: vertices whose selected corners are not all at one place.
+        std::map<uint32_t, std::vector<Corner>> byVert;
+        for (const Corner& c : sel) byVert[m.Faces[c.Face].Verts[c.Index]].push_back(c);
+        std::vector<std::vector<Corner>> groups;
+        for (auto& [v, cs] : byVert)
+        {
+            bool apart = false;
+            for (const Corner& c : cs) apart |= !SameUV(UVAt(m.Faces[c.Face], c.Index), UVAt(m.Faces[cs[0].Face], cs[0].Index));
+            if (apart) groups.push_back(cs);
+        }
+        if (groups.empty()) return 0;
+        if (snapIslands)
+        {
+            std::vector<std::vector<uint32_t>> islands = Islands(m, faces);
+            std::vector<int> islandOf(m.FaceCount(), -1);
+            for (size_t i = 0; i < islands.size(); ++i)
+                for (uint32_t f : islands[i]) islandOf[f] = (int)i;
+            std::vector<uint8_t> involved(islands.size(), 0), placed(islands.size(), 0);
+            for (const auto& g : groups)
+                for (const Corner& c : g) involved[islandOf[c.Face]] = 1;
+            int anchor = -1;
+            for (size_t i = 0; i < islands.size(); ++i)
+                if (involved[i] && (anchor < 0 || islands[i].size() > islands[anchor].size())) anchor = (int)i;
+            placed[anchor] = 1;
+            for (bool progress = true; progress;)
+            {
+                progress = false;
+                for (size_t I = 0; I < islands.size(); ++I)
+                {
+                    if (placed[I] || !involved[I]) continue;
+                    // Pairs: this island's UV at a stitch vertex, and where the placed islands have it.
+                    std::vector<glm::vec2> src, dst;
+                    for (const auto& g : groups)
+                    {
+                        glm::vec2 mine(0.0f), theirs(0.0f);
+                        int nm = 0, nt = 0;
+                        for (const Corner& c : g)
+                        {
+                            int isl = islandOf[c.Face];
+                            glm::vec2 uv = UVAt(m.Faces[c.Face], c.Index);
+                            if (isl == (int)I) mine += uv, ++nm;
+                            else if (placed[isl]) theirs += uv, ++nt;
+                        }
+                        if (nm && nt)
+                        {
+                            src.push_back(mine / (float)nm);
+                            dst.push_back(theirs / (float)nt);
+                        }
+                    }
+                    if (src.empty()) continue;
+                    // The rigid move that best takes src onto dst.
+                    glm::vec2 cs(0.0f), cd(0.0f);
+                    for (size_t k = 0; k < src.size(); ++k) cs += src[k], cd += dst[k];
+                    cs /= (float)src.size();
+                    cd /= (float)src.size();
+                    float dot = 0.0f, cross = 0.0f;
+                    for (size_t k = 0; k < src.size(); ++k)
+                    {
+                        glm::vec2 a = src[k] - cs, b = dst[k] - cd;
+                        dot += a.x * b.x + a.y * b.y;
+                        cross += a.x * b.y - a.y * b.x;
+                    }
+                    float angle = src.size() > 1 && (std::abs(dot) + std::abs(cross)) > 1e-12f ? std::atan2(cross, dot) : 0.0f;
+                    float cn = std::cos(angle), sn = std::sin(angle);
+                    for (uint32_t f : islands[I])
+                    {
+                        Face& face = m.Faces[f];
+                        for (size_t c = 0; c < face.Verts.size(); ++c)
+                        {
+                            glm::vec2 d = UVAt(face, c) - cs;
+                            SetUV(face, c, cd + glm::vec2(cn * d.x - sn * d.y, sn * d.x + cn * d.y));
+                        }
+                    }
+                    placed[I] = 1;
+                    progress = true;
+                }
+            }
+        }
+        // Each stitch point's corners to their middle.
+        for (const auto& g : groups)
+        {
+            glm::vec2 sum(0.0f);
+            for (const Corner& c : g) sum += UVAt(m.Faces[c.Face], c.Index);
+            for (const Corner& c : g) SetUV(m.Faces[c.Face], c.Index, sum / (float)g.size());
+        }
+        m.Changed();
+        return groups.size();
+    }
+
+    // ---- Sync selection
+
+    std::vector<uint32_t> VisibleFaces(const EditableMesh& m)
+    {
+        std::vector<uint32_t> out;
+        for (uint32_t f = 0; f < m.FaceCount(); ++f)
+            if (!(m.Faces[f].Flags & Hidden)) out.push_back(f);
+        return out;
+    }
+
+    void SyncSelectionFromMesh(EditableMesh& m, const std::vector<uint32_t>& faces)
+    {
+        for (uint32_t f : faces)
+        {
+            Face& face = m.Faces[f];
+            for (size_t c = 0; c < face.Verts.size(); ++c) face.SetCornerFlag(c, UVSelected, m.IsVertSelected(face.Verts[c]));
+        }
+    }
+
+    void SyncSelectionToMesh(EditableMesh& m, const std::vector<uint32_t>& faces)
+    {
+        for (uint32_t f : faces)
+            for (uint32_t v : m.Faces[f].Verts) m.VertFlags[v] &= (uint8_t)~Selected;
+        for (uint32_t f : faces)
+        {
+            const Face& face = m.Faces[f];
+            for (size_t c = 0; c < face.Verts.size(); ++c)
+                if (face.CornerFlags(c) & UVSelected) m.VertFlags[face.Verts[c]] |= Selected;
+        }
+        Ops::FlushSelection(m, SelectMode::Vertex);
     }
 }
