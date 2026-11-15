@@ -863,6 +863,82 @@ namespace Dimension::Modeling::Ops
         }
     }
 
+    size_t RepairColors(EditableMesh& m, const EditableMesh& before)
+    {
+        bool needed = false;
+        for (const Face& f : m.Faces) needed |= f.Colors.size() != f.Verts.size();
+        if (!needed || !before.HasColors()) return 0;
+        // Each old vertex's color (its corners' average).
+        size_t n = before.VertexCount();
+        std::vector<glm::vec4> color(n, glm::vec4(0.0f));
+        std::vector<float> count(n, 0.0f);
+        for (const Face& f : before.Faces)
+            for (size_t c = 0; c < f.Verts.size(); ++c)
+            {
+                color[f.Verts[c]] += UnpackRGBA8(f.ColorAt(c));
+                count[f.Verts[c]] += 1.0f;
+            }
+        std::vector<uint32_t> withColor;
+        for (uint32_t v = 0; v < n; ++v)
+            if (count[v] > 0.0f)
+            {
+                color[v] /= count[v];
+                withColor.push_back(v);
+            }
+        if (withColor.empty()) return 0;
+        // Nearest old vertex for new ones: a grid over the old positions.
+        AABB b = before.Bounds();
+        float cell = std::max(glm::length(b.Max - b.Min) / 32.0f, 1e-5f);
+        auto key = [&](const glm::vec3& p) {
+            glm::ivec3 c = glm::ivec3(glm::floor((p - b.Min) / cell));
+            return ((int64_t)c.x * 73856093ll) ^ ((int64_t)c.y * 19349663ll) ^ ((int64_t)c.z * 83492791ll);
+        };
+        std::unordered_map<int64_t, std::vector<uint32_t>> grid;
+        for (uint32_t v : withColor) grid[key(before.Positions[v])].push_back(v);
+        auto nearest = [&](const glm::vec3& p) {
+            glm::ivec3 c = glm::ivec3(glm::floor((p - b.Min) / cell));
+            uint32_t best = withColor[0];
+            float bestD = 1e30f;
+            for (int r = 1; r <= 4 && bestD > 1e29f; ++r)
+                for (int dz = -r; dz <= r; ++dz)
+                    for (int dy = -r; dy <= r; ++dy)
+                        for (int dx = -r; dx <= r; ++dx)
+                        {
+                            glm::ivec3 q = c + glm::ivec3(dx, dy, dz);
+                            int64_t k = ((int64_t)q.x * 73856093ll) ^ ((int64_t)q.y * 19349663ll) ^ ((int64_t)q.z * 83492791ll);
+                            if (auto it = grid.find(k); it != grid.end())
+                                for (uint32_t v : it->second)
+                                    if (float d = glm::length(before.Positions[v] - p); d < bestD)
+                                    {
+                                        bestD = d;
+                                        best = v;
+                                    }
+                        }
+            if (bestD > 1e29f)
+                for (uint32_t v : withColor)
+                    if (float d = glm::length(before.Positions[v] - p); d < bestD)
+                    {
+                        bestD = d;
+                        best = v;
+                    }
+            return best;
+        };
+        size_t repaired = 0;
+        for (Face& f : m.Faces)
+        {
+            if (f.Colors.size() == f.Verts.size()) continue;
+            f.Colors.resize(f.Verts.size());
+            for (size_t c = 0; c < f.Verts.size(); ++c)
+            {
+                uint32_t v = f.Verts[c];
+                bool same = v < n && count[v] > 0.0f && glm::length(before.Positions[v] - m.Positions[v]) < 1e-6f;
+                f.Colors[c] = PackRGBA8(color[same ? v : nearest(m.Positions[v])]);
+            }
+            ++repaired;
+        }
+        return repaired;
+    }
+
     void FlipNormals(EditableMesh& m, bool selectedOnly)
     {
         for (auto& f : m.Faces)

@@ -826,7 +826,15 @@ namespace Dimension::Modeling
                     f.Reverse();
                 }
             other.Changed();
-            return ModifierOps::BooleanOp(m, other, mod.Operation);
+            EditableMesh result = ModifierOps::BooleanOp(m, other, mod.Operation);
+            if (m.HasColors() || other.HasColors())
+            {
+                // Vertex colors carried over from both sides by position.
+                EditableMesh both = m;
+                both.Append(other);
+                Ops::RepairColors(result, both);
+            }
+            return result;
         }
         case ModifierType::Decimate:
         {

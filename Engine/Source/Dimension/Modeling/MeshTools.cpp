@@ -294,25 +294,71 @@ namespace Dimension::Modeling::Ops
         }
 
         // Splits a face between two of its corners (not neighbours). Returns the new face's index.
+        // Splits face f from corner ci to corner cj along a chain of new vertices (ordered from ci's side to cj's).
+        uint32_t SplitFaceChain(EditableMesh& m, uint32_t f, uint32_t ci, uint32_t cj, const std::vector<uint32_t>& chain)
+        {
+            Face& face = m.Faces[f];
+            size_t n = face.Verts.size();
+            std::vector<glm::vec2> chainUV;
+            for (uint32_t v : chain) chainUV.push_back(FaceUVAt(m, f, m.Positions[v]));
+            uint32_t chainColor = face.ColorAt(ci);
+            bool colored = face.Colors.size() == n;
+            Face a = face, b = face;
+            for (Face* x : { &a, &b })
+            {
+                x->Verts.clear();
+                x->UVs.clear();
+                x->Colors.clear();
+                x->UVFlags.clear();
+            }
+            auto add = [&](Face& x, uint32_t v, glm::vec2 uv, uint32_t color) {
+                x.Verts.push_back(v);
+                x.UVs.push_back(uv);
+                if (colored) x.Colors.push_back(color);
+            };
+            for (size_t k = ci;; k = (k + 1) % n)
+            {
+                add(a, face.Verts[k], CornerUV(face, k), face.ColorAt(k));
+                if (k == cj) break;
+            }
+            for (size_t k = chain.size(); k-- > 0;) add(a, chain[k], chainUV[k], chainColor);
+            for (size_t k = cj;; k = (k + 1) % n)
+            {
+                add(b, face.Verts[k], CornerUV(face, k), face.ColorAt(k));
+                if (k == ci) break;
+            }
+            for (size_t k = 0; k < chain.size(); ++k) add(b, chain[k], chainUV[k], chainColor);
+            m.Faces[f] = std::move(a);
+            m.Faces.push_back(std::move(b));
+            m.Changed();
+            return m.FaceCount() - 1;
+        }
+
         uint32_t SplitFace(EditableMesh& m, uint32_t f, uint32_t ci, uint32_t cj)
         {
             Face& face = m.Faces[f];
             size_t n = face.Verts.size();
             Face a = face, b = face;
-            a.Verts.clear();
-            a.UVs.clear();
-            b.Verts.clear();
-            b.UVs.clear();
+            for (Face* x : { &a, &b })
+            {
+                x->Verts.clear();
+                x->UVs.clear();
+                x->Colors.clear();
+                x->UVFlags.clear();
+            }
+            bool colored = face.Colors.size() == n;
             for (size_t k = ci;; k = (k + 1) % n)
             {
                 a.Verts.push_back(face.Verts[k]);
                 a.UVs.push_back(CornerUV(face, k));
+                if (colored) a.Colors.push_back(face.Colors[k]);
                 if (k == cj) break;
             }
             for (size_t k = cj;; k = (k + 1) % n)
             {
                 b.Verts.push_back(face.Verts[k]);
                 b.UVs.push_back(CornerUV(face, k));
+                if (colored) b.Colors.push_back(face.Colors[k]);
                 if (k == ci) break;
             }
             m.Faces[f] = std::move(a);
@@ -681,7 +727,7 @@ namespace Dimension::Modeling::Ops
 
     // ---- Bevel
 
-    void Bevel(EditableMesh& m, float width, uint32_t segments, bool vertexOnly)
+    void Bevel(EditableMesh& m, float width, uint32_t segments, bool vertexOnly, bool clamp)
     {
         if (width <= 0.0f) return;
         segments = std::max(1u, segments);
@@ -734,6 +780,21 @@ namespace Dimension::Modeling::Ops
         bool anyAffected = false;
         for (uint32_t v = 0; v < nV; ++v) anyAffected |= affected[v] != 0;
         if (!anyAffected) return;
+        if (clamp)
+        {
+            // Half the shortest edge at a bevelled vertex (bevelled edges too: both their ends move in).
+            float limit = 1e30f;
+            for (uint32_t v = 0; v < nV; ++v)
+                if (affected[v])
+                    for (uint32_t e : t.VertEdges[v])
+                    {
+                        EdgeKey k = t.Edges[e];
+                        float len = glm::length(m.Positions[EdgeA(k)] - m.Positions[EdgeB(k)]);
+                        bool bothMove = bev[e] || (affected[EdgeA(k)] && affected[EdgeB(k)]);
+                        limit = std::min(limit, len * (bothMove ? 0.5f : 1.0f));
+                    }
+            width = std::min(width, limit * 0.999f);
+        }
 
         std::vector<glm::vec2> uvHint; // per new vertex (index - nV)
         auto newVert = [&](const glm::vec3& p, const glm::vec2& uv) {
@@ -995,7 +1056,8 @@ namespace Dimension::Modeling::Ops
             }
             if (segments > 1 && loop.size() > 4)
             {
-                // A fan of triangles around a center pulled toward the old corner.
+                // A rounded patch: rings of points on the sphere the corner rounds onto (its center where the faces'
+                // planes, moved in by the width, meet), quads between them, a fan in the middle.
                 glm::vec3 avg(0.0f);
                 glm::vec2 uvAvg(0.0f);
                 for (uint32_t v : loop)
@@ -1005,10 +1067,51 @@ namespace Dimension::Modeling::Ops
                 }
                 avg /= (float)loop.size();
                 uvAvg /= (float)loop.size();
-                uint32_t center = newVert(0.5f * avg + 0.5f * m.Positions[p.V], uvAvg);
-                std::vector<uint32_t> oriented = loop;
-                if (glm::dot(LoopNormal(m, oriented), outward) < 0.0f) std::reverse(oriented.begin(), oriented.end());
-                for (size_t i = 0; i < oriented.size(); ++i) addLoop({ oriented[i], oriented[(i + 1) % oriented.size()], center }, original[p.LikeFace], glm::vec3(0.0f));
+                glm::vec3 corner = m.Positions[p.V];
+                glm::vec3 sphere = avg;
+                if (fans[p.V].size() == 3)
+                {
+                    glm::mat3 a(0.0f);
+                    glm::vec3 rhs(0.0f);
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        glm::vec3 n = glm::normalize(LoopNormal(m, original[fans[p.V][i].F].Verts));
+                        a[0][i] = n.x;
+                        a[1][i] = n.y;
+                        a[2][i] = n.z;
+                        rhs[i] = glm::dot(n, corner) - width;
+                    }
+                    if (std::abs(glm::determinant(a)) > 1e-6f) sphere = glm::inverse(a) * rhs;
+                }
+                float radius = 0.0f;
+                for (uint32_t v : loop) radius += glm::length(m.Positions[v] - sphere);
+                radius /= (float)loop.size();
+                auto onSphere = [&](const glm::vec3& q) {
+                    glm::vec3 d = q - sphere;
+                    return glm::length(d) > 1e-9f ? sphere + glm::normalize(d) * radius : q;
+                };
+                std::vector<uint32_t> outer = loop;
+                if (glm::dot(LoopNormal(m, outer), outward) < 0.0f) std::reverse(outer.begin(), outer.end());
+                glm::vec3 apex = onSphere(glm::length(corner - sphere) > 1e-9f ? corner : avg);
+                int rings = std::max(1, (int)segments / 2);
+                for (int r = 1; r <= rings; ++r)
+                {
+                    float s = (float)r / (float)(rings + 1);
+                    std::vector<uint32_t> inner;
+                    for (uint32_t v : outer)
+                    {
+                        glm::vec3 q = onSphere(glm::mix(m.Positions[v], apex, s));
+                        inner.push_back(newVert(q, glm::mix(hint(v, glm::vec2(0.0f)), uvAvg, s)));
+                    }
+                    for (size_t i = 0; i < outer.size(); ++i)
+                    {
+                        size_t j = (i + 1) % outer.size();
+                        addLoop({ outer[i], outer[j], inner[j], inner[i] }, original[p.LikeFace], glm::vec3(0.0f));
+                    }
+                    outer = std::move(inner);
+                }
+                uint32_t center = newVert(apex, uvAvg);
+                for (size_t i = 0; i < outer.size(); ++i) addLoop({ outer[i], outer[(i + 1) % outer.size()], center }, original[p.LikeFace], glm::vec3(0.0f));
             }
             else addLoop(loop, original[p.LikeFace], outward);
         }
@@ -1269,9 +1372,23 @@ namespace Dimension::Modeling::Ops
         if (path.size() < 2) return 0;
         std::map<EdgeKey, std::vector<std::pair<float, uint32_t>>> splits; // original edge -> (t from its A end, vertex)
         std::vector<uint32_t> ids;
+        std::vector<uint8_t> inside; // per id: a new vertex inside a face
         for (const CutPoint& p : path)
         {
-            if (p.A >= m.VertexCount() || p.B >= m.VertexCount()) continue;
+            if (p.Face >= 0)
+            {
+                if ((uint32_t)p.Face >= m.FaceCount()) continue;
+                ids.push_back(m.AddVertex(p.Position));
+                inside.resize(ids.size(), 0);
+                inside.back() = 1;
+                continue;
+            }
+            inside.resize(ids.size() + 1, 0);
+            if (p.A >= m.VertexCount() || p.B >= m.VertexCount())
+            {
+                inside.pop_back();
+                continue;
+            }
             if (p.A == p.B || p.T <= 1e-4f)
             {
                 ids.push_back(p.A);
@@ -1302,10 +1419,38 @@ namespace Dimension::Modeling::Ops
             list.push_back({ tk, nv });
             ids.push_back(nv);
         }
+        inside.resize(ids.size(), 0);
         size_t count = 0;
         std::vector<std::pair<uint32_t, uint32_t>> made;
+        std::vector<uint8_t> used(ids.size(), 0);
         for (size_t i = 0; i + 1 < ids.size(); ++i)
         {
+            if (inside[i]) continue;
+            if (inside[i + 1])
+            {
+                // A run of inside points up to the next border point: that face split along them.
+                size_t j = i + 1;
+                while (j < ids.size() && inside[j]) ++j;
+                if (j >= ids.size()) break;
+                uint32_t u = ids[i], w = ids[j];
+                std::vector<uint32_t> chain(ids.begin() + (std::ptrdiff_t)i + 1, ids.begin() + (std::ptrdiff_t)j);
+                for (uint32_t f = 0; f < m.FaceCount() && u != w; ++f)
+                {
+                    const Face& face = m.Faces[f];
+                    if (Hid(m, f)) continue;
+                    int cu = CornerOf(face, u), cw = CornerOf(face, w);
+                    if (cu < 0 || cw < 0) continue;
+                    SplitFaceChain(m, f, (uint32_t)cu, (uint32_t)cw, chain);
+                    ++count;
+                    for (size_t k = i; k <= j; ++k) used[k] = 1;
+                    made.push_back({ u, chain.front() });
+                    for (size_t k = 0; k + 1 < chain.size(); ++k) made.push_back({ chain[k], chain[k + 1] });
+                    made.push_back({ chain.back(), w });
+                    break;
+                }
+                i = j - 1;
+                continue;
+            }
             uint32_t u = ids[i], w = ids[i + 1];
             if (u == w) continue;
             bool joined = false;
@@ -1326,6 +1471,31 @@ namespace Dimension::Modeling::Ops
                 joined = true;
             }
             made.push_back({ u, w });
+        }
+        // Inside points that joined nothing go again.
+        std::vector<uint8_t> unusedInside(m.VertexCount(), 0);
+        bool anyUnused = false;
+        for (size_t k = 0; k < ids.size(); ++k)
+            if (inside[k] && !used[k])
+            {
+                unusedInside[ids[k]] = 1;
+                anyUnused = true;
+            }
+        if (anyUnused)
+        {
+            // Removing them renumbers the vertices after them: the path's ids follow.
+            std::vector<uint32_t> removedBefore(m.VertexCount() + 1, 0);
+            for (uint32_t v = 0; v < m.VertexCount(); ++v) removedBefore[v + 1] = removedBefore[v] + unusedInside[v];
+            std::vector<uint32_t> kept;
+            for (size_t k = 0; k < ids.size(); ++k)
+                if (!(inside[k] && !used[k])) kept.push_back(ids[k] - removedBefore[ids[k]]);
+            for (auto& [u, w] : made)
+            {
+                u -= removedBefore[u];
+                w -= removedBefore[w];
+            }
+            RemoveUnusedVertices(m, &unusedInside);
+            ids = std::move(kept);
         }
         DeselectAll(m);
         m.Changed();

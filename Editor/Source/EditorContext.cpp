@@ -1,4 +1,6 @@
 #include "EditorContext.h"
+#include <fstream>
+#include <iterator>
 #include <Dimension/Scene/SceneSerializer.h>
 #include <Dimension/Scene/SceneDiff.h>
 #include <Dimension/Scene/SceneSearch.h>
@@ -44,17 +46,30 @@ namespace Editor
         MarkDirty();
     }
 
-    EditorContext::Snapshot EditorContext::Capture()
+    EditorContext::Snapshot EditorContext::Capture(const std::vector<std::string>& files)
     {
         uint64_t guid = HasValidSelection() ? (uint64_t)EditorScene->GetGuid(Selected) : 0;
         std::vector<uint64_t> all;
         for (Entity e : Selection)
             if (EditorScene->IsValid(e)) all.push_back(EditorScene->GetGuid(e));
-        return { SceneSerializer::Serialize(*EditorScene), guid, all };
+        Snapshot s{ SceneSerializer::Serialize(*EditorScene), guid, all };
+        for (const std::string& f : files)
+        {
+            std::ifstream in(fs::path(f), std::ios::binary);
+            s.Files.push_back({ f, std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()) });
+        }
+        return s;
     }
 
     void EditorContext::Restore(const Snapshot& s)
     {
+        for (const auto& [path, contents] : s.Files)
+        {
+            std::ofstream out(fs::path(path), std::ios::binary);
+            out << contents;
+            out.close();
+            if (OnFileRestored) OnFileRestored(fs::path(path));
+        }
         EditorScene = SceneSerializer::Deserialize(s.Scene);
         Selected = s.SelectedGuid ? EditorScene->FindEntityByGuid(Guid(s.SelectedGuid)) : Entity::Null();
         Selection.clear();
@@ -192,10 +207,12 @@ namespace Editor
             if (Entity e = EditorScene->FindEntityByGuid(Guid(stage.SelectedGuid)); !e.IsNull()) Selected = e;
     }
 
-    void EditorContext::RecordUndo(const char* name)
+    void EditorContext::RecordUndo(const char* name, const std::vector<fs::path>& files)
     {
         if (IsPlaying()) return;
-        Snapshot now = Capture();
+        std::vector<std::string> paths;
+        for (const fs::path& f : files) paths.push_back(f.string());
+        Snapshot now = Capture(paths);
         // The step before this one is now complete: name it while both of its states are at hand.
         if (!m_UndoStack.empty() && !m_UndoStack.back().Named)
         {
@@ -216,7 +233,10 @@ namespace Editor
     void EditorContext::Undo()
     {
         if (IsPlaying() || m_UndoStack.empty()) return;
-        Snapshot current = Capture();
+        Snapshot& top = m_UndoStack.back();
+        std::vector<std::string> paths;
+        for (const auto& f : top.Files) paths.push_back(f.first);
+        Snapshot current = Capture(paths);
         Snapshot s = std::move(m_UndoStack.back());
         m_UndoStack.pop_back();
         // Redo does the same step again.
@@ -231,7 +251,9 @@ namespace Editor
         if (IsPlaying() || m_RedoStack.empty()) return;
         Snapshot s = std::move(m_RedoStack.back());
         m_RedoStack.pop_back();
-        Snapshot current = Capture();
+        std::vector<std::string> paths;
+        for (const auto& f : s.Files) paths.push_back(f.first);
+        Snapshot current = Capture(paths);
         current.Name = s.Name;
         current.Named = true;
         m_UndoStack.push_back(std::move(current));

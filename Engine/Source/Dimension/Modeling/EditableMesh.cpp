@@ -549,7 +549,23 @@ namespace Dimension::Modeling
                 s.Weights = glm::vec4(0.0f);
                 if (w.empty() || sum <= 0.0f)
                 {
-                    s.Joints = glm::uvec4(0);
+                    // No weights: the nearest deform bone carries it (as if fully weighted to it).
+                    uint32_t nearest = 0;
+                    float best = 1e30f;
+                    glm::vec3 p = Positions[source[i]];
+                    for (size_t b = 0; b < Bones.size(); ++b)
+                    {
+                        if (!Bones[b].Deform) continue;
+                        glm::vec3 a = Bones[b].Head, ab = Bones[b].Tail - Bones[b].Head;
+                        float along = glm::dot(ab, ab) > 1e-20f ? std::clamp(glm::dot(p - a, ab) / glm::dot(ab, ab), 0.0f, 1.0f) : 0.0f;
+                        float d = glm::length(p - (a + ab * along));
+                        if (d < best)
+                        {
+                            best = d;
+                            nearest = (uint32_t)b;
+                        }
+                    }
+                    s.Joints = glm::uvec4(nearest, 0, 0, 0);
                     s.Weights.x = 1.0f;
                     continue;
                 }

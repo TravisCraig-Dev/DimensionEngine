@@ -141,7 +141,10 @@ namespace Editor
         // Undo/redo via full scene snapshots. Call RecordUndo() *before* a change.
         // Edits during play mode are not recorded (they are discarded on Stop, like Unity). A step is named after what
         // it changed (SceneDiff), or by `name` when given.
-        void RecordUndo(const char* name = nullptr);
+        // `files`: asset files the change rewrites; their contents go back with the step (undo and redo).
+        void RecordUndo(const char* name = nullptr, const std::vector<fs::path>& files = {});
+        // Called after undo or redo put a file's contents back (the editor reloads that asset).
+        std::function<void(const fs::path&)> OnFileRestored;
         // The Undo History: the steps done (oldest first), then the ones undone (next to redo first).
         struct HistoryStep
         {
@@ -233,8 +236,9 @@ namespace Editor
             // The step from this state (undo) or to it (redo); Named once known for good.
             std::string Name = {};
             bool Named = false;
+            std::vector<std::pair<std::string, std::string>> Files = {}; // (path, contents) of files kept with this state
         };
-        Snapshot Capture();
+        Snapshot Capture(const std::vector<std::string>& files = {});
         void Restore(const Snapshot& s);
 
         std::deque<Snapshot> m_UndoStack, m_RedoStack;

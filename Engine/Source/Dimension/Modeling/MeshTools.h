@@ -26,7 +26,9 @@ namespace Dimension::Modeling::Ops
     void Inset(EditableMesh& m, float thickness, float depth = 0.0f, bool individual = false);
     // Bevels the selected edges between two faces (the selected vertices with `vertices`): `width` is the distance
     // from the old edge to the new ones across each face, `segments` rounds the bevel. The new faces are selected.
-    void Bevel(EditableMesh& m, float width, uint32_t segments = 1, bool vertices = false);
+    // `clamp` (Blender's Clamp Overlap): the width limited so the new edges can't pass each other (half the shortest
+    // edge next to the bevel).
+    void Bevel(EditableMesh& m, float width, uint32_t segments = 1, bool vertices = false, bool clamp = true);
 
     // ---- Cutting
 
@@ -43,14 +45,18 @@ namespace Dimension::Modeling::Ops
     SlideRails EdgeSlideRails(const EditableMesh& m);
     void ApplySlide(EditableMesh& m, const SlideRails& rails, float factor);
 
-    // A knife point: on vertex A (A == B), or on edge A-B at T (0 at A, 1 at B).
+    // A knife point: on vertex A (A == B), on edge A-B at T (0 at A, 1 at B), or inside face Face at Position.
     struct CutPoint
     {
         uint32_t A = 0, B = 0;
         float T = 0.0f;
+        int32_t Face = -1;          // >= 0: a point inside that face
+        glm::vec3 Position{ 0.0f }; // (model space)
     };
-    // Cuts along a path of points: each point on an edge splits it, and consecutive points that share a face split that
-    // face. The path's vertices and new edges are selected. Returns the number of faces split.
+    // Cuts along a path of points: each point on an edge splits it, consecutive points that share a face split that
+    // face, and points inside a face between two points on its border split it along the zigzag through them (inside
+    // points with no border point on both sides are left out). The path's vertices and new edges are selected.
+    // Returns the number of faces split.
     size_t Knife(EditableMesh& m, const std::vector<CutPoint>& path);
     // Connect Vertex Path (J): splits faces between their selected vertices. Returns the number of faces split.
     size_t ConnectVertices(EditableMesh& m);

@@ -422,25 +422,40 @@ namespace Dimension::Modeling
         // Filled shapes: the closed curves in the XY plane.
         if (s.Fill)
         {
-            std::vector<std::vector<glm::vec2>> contours;
-            float z = 0.0f;
+            // The closed curves' own plane (best fit, Newell's method over all of them; XY when they're flat in it).
+            std::vector<std::vector<glm::vec3>> loops;
+            glm::vec3 normal(0.0f), center(0.0f);
             int count = 0;
             for (const Curve& c : curves)
             {
                 if (!c.Cyclic || c.Points.size() < 3) continue;
-                std::vector<glm::vec2> ring;
-                for (const glm::vec3& p : Sample(c, s.Resolution))
+                loops.push_back(Sample(c, s.Resolution));
+                const auto& l = loops.back();
+                for (size_t i = 0; i < l.size(); ++i)
                 {
-                    ring.push_back({ p.x, p.y });
-                    z += p.z;
+                    const glm::vec3 &a = l[i], &b = l[(i + 1) % l.size()];
+                    normal += glm::vec3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
+                    center += a;
                     ++count;
                 }
-                contours.push_back(std::move(ring));
             }
-            if (!contours.empty())
+            if (!loops.empty())
             {
+                center /= (float)std::max(count, 1);
+                glm::vec3 n = glm::length(normal) > 1e-12f ? glm::normalize(normal) : glm::vec3(0, 0, 1);
+                if (glm::dot(n, glm::vec3(0, 0, 1)) < 0.0f && std::abs(n.z) > 0.999f) n = -n; // (flat in XY: face +Z)
+                glm::vec3 ref = std::abs(n.x) < 0.9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+                glm::vec3 ax = glm::normalize(ref - n * glm::dot(ref, n)), ay = glm::cross(n, ax); // (ax x ay = n; X stays X in the XY plane)
+                std::vector<std::vector<glm::vec2>> contours;
+                for (const auto& l : loops)
+                {
+                    std::vector<glm::vec2> ring;
+                    for (const glm::vec3& p : l) ring.push_back({ glm::dot(p - center, ax), glm::dot(p - center, ay) });
+                    contours.push_back(std::move(ring));
+                }
                 EditableMesh filled = Shapes::Fill(contours, s.Extrude * 2.0f);
-                for (auto& p : filled.Positions) p.z += z / (float)std::max(count, 1);
+                for (auto& p : filled.Positions) p = center + ax * p.x + ay * p.y + n * p.z;
+                filled.Changed();
                 m.Append(filled);
             }
         }
@@ -580,7 +595,7 @@ namespace Dimension::Modeling
         // Lines of glyph outlines, laid out left to right.
         struct Line
         {
-            std::vector<std::vector<glm::vec2>> Contours;
+            std::vector<std::vector<std::vector<glm::vec2>>> Glyphs; // per letter, its outlines
             float Width = 0.0f;
         };
         std::vector<Line> lines(1);
@@ -601,6 +616,8 @@ namespace Dimension::Modeling
             stbtt_vertex* v = nullptr;
             int count = stbtt_GetGlyphShape(&info, glyph, &v);
             std::vector<glm::vec2>* contour = nullptr;
+            lines.back().Glyphs.emplace_back();
+            auto& outlines = lines.back().Glyphs.back();
             glm::vec2 at(0.0f);
             auto point = [&](float x, float y) { return glm::vec2(pen + x * scale, y * scale); };
             for (int i = 0; i < count; ++i)
@@ -609,8 +626,8 @@ namespace Dimension::Modeling
                 switch (v[i].type)
                 {
                 case STBTT_vmove:
-                    lines.back().Contours.emplace_back();
-                    contour = &lines.back().Contours.back();
+                    outlines.emplace_back();
+                    contour = &outlines.back();
                     contour->push_back(p);
                     break;
                 case STBTT_vline:
@@ -647,18 +664,19 @@ namespace Dimension::Modeling
             prevGlyph = glyph;
         }
         lines.back().Width = pen;
-        std::vector<std::vector<glm::vec2>> all;
+        // Each letter filled on its own (so letters that overlap, as in tight script fonts, don't cut holes in each other).
         for (size_t l = 0; l < lines.size(); ++l)
         {
             float shift = text.Align == 1 ? -lines[l].Width * 0.5f : text.Align == 2 ? -lines[l].Width : 0.0f;
             float y = -(float)l * text.LineSpacing * text.Size;
-            for (auto& c : lines[l].Contours)
+            for (auto& glyph : lines[l].Glyphs)
             {
-                for (glm::vec2& p : c) p += glm::vec2(shift, y);
-                all.push_back(std::move(c));
+                for (auto& c : glyph)
+                    for (glm::vec2& p : c) p += glm::vec2(shift, y);
+                m.Append(Shapes::Fill(glyph, text.Depth));
             }
         }
-        // Each glyph's outlines filled on their own would be cleaner, but glyphs never overlap in practice: fill all.
-        return Shapes::Fill(all, text.Depth);
+        m.Changed();
+        return m;
     }
 }

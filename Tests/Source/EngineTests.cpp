@@ -19201,6 +19201,76 @@ namespace
         CHECK(std::string(ModifierTypeName(ModifierType::Shrinkwrap)) == "Shrinkwrap");
     }
 
+    void TestModelingToolFixes()
+    {
+        using namespace ModelingTest;
+        // Knife points inside a face: a zigzag cut across a square from edge to edge.
+        EditableMesh plane = Primitives::Plane(2.0f);
+        Ops::CutPoint a{ 0, 1, 0.5f }, inside1{}, inside2{}, b{ 2, 3, 0.5f };
+        inside1.Face = 0;
+        inside1.Position = { -0.3f, 0.0f, 0.4f };
+        inside2.Face = 0;
+        inside2.Position = { 0.3f, 0.0f, -0.4f };
+        CHECK(Ops::Knife(plane, { a, inside1, inside2, b }) == 1);
+        CHECK(plane.FaceCount() == 2 && plane.VertexCount() == 8 && Near(Volume(plane), 0.0f));
+        float area = plane.FaceArea(0) + plane.FaceArea(1);
+        CHECK(Near(area, 4.0f, 1e-4f));
+        // An inside point with no border point after it is dropped.
+        EditableMesh plane2 = Primitives::Plane(2.0f);
+        CHECK(Ops::Knife(plane2, { a, inside1 }) == 0 && plane2.VertexCount() == 5 && plane2.FaceCount() == 1);
+
+        // Faces an operation rebuilds get their vertex colors back.
+        EditableMesh colored = Primitives::Cube();
+        uint32_t red = PackRGBA8(glm::vec4(1, 0, 0, 1));
+        for (uint32_t f = 0; f < colored.FaceCount(); ++f) Paint::FillVertices(colored, { f }, red);
+        EditableMesh before = colored;
+        Ops::DeselectAll(colored);
+        Ops::SelectFace(colored, 0, true);
+        Ops::FlushSelection(colored, SelectMode::Face);
+        Ops::Extrude(colored, false);
+        size_t white = 0;
+        for (const Face& f : colored.Faces) white += f.Colors.size() != f.Verts.size() ? 1 : 0;
+        CHECK(white > 0);
+        CHECK(Ops::RepairColors(colored, before) == white);
+        bool allRed = true;
+        for (const Face& f : colored.Faces)
+            for (size_t c = 0; c < f.Verts.size(); ++c) allRed &= f.ColorAt(c) == red;
+        CHECK(allRed);
+
+        // Bevel: Clamp Overlap keeps a too-wide bevel inside the shape; several segments round the corners.
+        EditableMesh wide = Primitives::Cube(2.0f);
+        Ops::Bevel(wide, 5.0f, 1);
+        AABB wb = wide.Bounds();
+        CHECK(ClosedAndConsistent(wide) && Volume(wide) > 0.0f && wb.Max.x <= 1.0001f && wb.Min.x >= -1.0001f);
+        EditableMesh round = Primitives::Cube(2.0f);
+        Ops::Bevel(round, 0.3f, 4);
+        CHECK(ClosedAndConsistent(round));
+        float vr = Volume(round);
+        CHECK(vr < 8.0f && vr > 7.6f);
+        float cornerDist = 1e30f;
+        for (const glm::vec3& q : round.Positions) cornerDist = std::min(cornerDist, glm::length(q - glm::vec3(1.0f)));
+        float sphereGap = glm::length(glm::vec3(0.3f)) - 0.3f; // (a rounded corner of radius 0.3)
+        CHECK(std::abs(cornerDist - sphereGap) < 0.05f);
+
+        // Vertices without weights follow the nearest bone.
+        EditableMesh rigged = Primitives::Cube(2.0f);
+        Rig::AddBone(rigged, "Left", { -1, 0, 0 }, { -0.5f, 0, 0 });
+        Rig::AddBone(rigged, "Right", { 1, 0, 0 }, { 0.5f, 0, 0 });
+        MeshData skinned = rigged.ToMeshData();
+        bool nearest = !skinned.Skin.empty();
+        for (size_t i = 0; i < skinned.Vertices.size(); ++i) nearest &= skinned.Skin[i].Joints.x == (skinned.Vertices[i].Position.x > 0.0f ? 1u : 0u);
+        CHECK(nearest);
+
+        // A filled curve in a tilted plane: filled in its own plane.
+        Modeling::Curve tilted = CurveOps::Make({ { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 }, { 0, 0, -1 } }, true);
+        CurveSettings fill;
+        fill.Fill = true;
+        fill.Extrude = 0.1f;
+        EditableMesh disc = CurveOps::ToMesh({ tilted }, fill);
+        AABB db = disc.Bounds();
+        CHECK(ClosedAndConsistent(disc) && Near(std::abs(Volume(disc)), glm::pi<float>() * 0.2f, 0.06f) && Near(db.Max.y - db.Min.y, 0.2f, 1e-3f));
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19623,6 +19693,7 @@ int main(int argc, char** argv)
     Run("Modeling shape keys and rig files", TestModelingShapeKeysAndRigFiles);
     Run("Modeling curves and text", TestModelingCurvesAndText);
     Run("Modeling retopology", TestModelingRetopology);
+    Run("Modeling tool fixes", TestModelingToolFixes);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

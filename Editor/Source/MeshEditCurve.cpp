@@ -599,12 +599,22 @@ namespace Editor
 
     void MeshEditMode::SnapModalVertices()
     {
-        // The moved vertices dropped onto whatever surface lies under them (seen from the camera).
+        // The moved vertices dropped onto the surface seen behind them from the camera, or the nearest surface point.
         glm::mat4 inv = glm::inverse(m_World);
+        BuildSnapTree();
         for (uint32_t v = 0; v < m_Mesh.VertexCount() && v < m_Modal.Weights.size(); ++v)
         {
             if (m_Modal.Weights[v] <= 0.0f) continue;
             glm::vec3 world = glm::vec3(m_World * glm::vec4(m_Mesh.Positions[v], 1.0f)), hit, n;
+            if (m_SnapMode == 1)
+            {
+                TriangleTree::Hit h = m_SnapTree.Closest(world);
+                if (!h.Found) continue;
+                // (the normal's side facing the vertex: out of the surface it was moved over)
+                n = glm::dot(h.Normal, world - h.Point) < 0.0f && h.Distance > 1e-6f ? -h.Normal : h.Normal;
+                m_Mesh.Positions[v] = glm::vec3(inv * glm::vec4(h.Point + n * m_SnapOffset, 1.0f));
+                continue;
+            }
             if (SnapRay(m_CameraWorld, glm::normalize(world - m_CameraWorld), hit, n)) m_Mesh.Positions[v] = glm::vec3(inv * glm::vec4(hit + n * m_SnapOffset, 1.0f));
         }
     }

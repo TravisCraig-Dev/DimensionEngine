@@ -38,8 +38,13 @@ namespace Editor
         void Toggle();
         bool Enter(Entity e);
         void Exit();
-        // Writes the model file now (it is also written once each change is finished).
+        // Writes the model file now (it is also written once each change is finished); models whose Boolean or
+        // Shrinkwrap modifiers use it are worked out again.
         void Save();
+        // Models (loaded ones) whose modifiers use `changed` (directly or through others) made again.
+        void RefreshDependents(AssetHandle changed);
+        // A model file put back by undo or redo (outside Edit Mode): the object shows it again.
+        void OnFileRestored(const fs::path& file);
 
         // Each frame before the Scene view: leaves edit mode when the object goes away or play starts; saves.
         void Update();
@@ -142,6 +147,16 @@ namespace Editor
             bool Option = false, AppliedOption = false; // inset: each face on its own; bevel: vertices
         };
 
+        // An object Separate made (kept to take it away on undo and make it again on redo).
+        struct SeparatedPart
+        {
+            uint64_t Guid = 0, ParentGuid = 0;
+            std::string Name;
+            TransformComponent Transform;
+            MeshRendererComponent Renderer;
+        };
+        void RemoveParts(std::vector<SeparatedPart>& parts);
+        void RestoreParts(std::vector<SeparatedPart>& parts);
         // Texture Paint's undo: the changed tiles of the image (swapped with the image's on undo and redo).
         struct PaintTile
         {
@@ -159,6 +174,7 @@ namespace Editor
             Modeling::SelectMode Mode;
             std::string Name;
             std::shared_ptr<PaintUndo> Paint; // a texture paint stroke
+            std::shared_ptr<std::vector<SeparatedPart>> Parts; // objects a Separate made (undo removes them, redo makes them again)
         };
 
         // Records an undo step (before a change) and marks the model changed afterwards (Commit).
@@ -170,6 +186,9 @@ namespace Editor
         void UpdateProjection(const ImVec2& origin, const ImVec2& size, const glm::mat4& view, const glm::mat4& proj);
         void DrawOverlay(ImDrawList* dl);
         void DrawToolbar(const ImVec2& origin);
+        // Toolbars: the next item on this line when it fits before the view cube, else on a new one.
+        void ToolbarNext(const char* label, float width = 0.0f);
+        int m_OpenModelPopup = 0;
         void DrawMenus();
         void HandleKeys();
         void HandleMouse(bool hovered, bool blocked);
@@ -462,6 +481,7 @@ namespace Editor
         bool m_CurveMode = false;
         CurveModal m_CurveModal;
         bool m_SnapSurface = false;
+        int m_SnapMode = 0; // 0 from the view, 1 the nearest surface point
         float m_SnapOffset = 0.0f;
         Modeling::TriangleTree m_SnapTree;
         uint64_t m_SnapSignature = 0;

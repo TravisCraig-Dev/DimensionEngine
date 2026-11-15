@@ -69,6 +69,11 @@ namespace Dimension::Modeling::Ops
     // than three corners and duplicated loose edges; then removes the vertices nothing maps to.
     void RemapVertices(EditableMesh& m, const std::vector<uint32_t>& remap);
 
+    // Faces that lost their vertex colors (an operation made or rebuilt them without) get colors again from `before`
+    // (the mesh before the operation): each corner its vertex's color there, or the nearest old vertex's for new ones.
+    // Nothing happens when `before` has no colors. Returns how many faces were repaired.
+    size_t RepairColors(EditableMesh& m, const EditableMesh& before);
+
     // ---- Normals and shading
 
     void FlipNormals(EditableMesh& m, bool selectedOnly = true);

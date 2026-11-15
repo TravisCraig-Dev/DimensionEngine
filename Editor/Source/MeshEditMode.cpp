@@ -304,8 +304,39 @@ namespace Editor
         if (!m_Active) return;
         SavePaintTexture();
         m_Mesh.Name = m_File.stem().string();
-        if (m_Mesh.Save(m_File)) m_Dirty = false;
+        if (m_Mesh.Save(m_File))
+        {
+            m_Dirty = false;
+            RefreshDependents(m_Asset);
+        }
         else Log::Error("Could not write the model {}", m_File.string());
+    }
+
+    void MeshEditMode::RefreshDependents(AssetHandle changed)
+    {
+        std::vector<AssetHandle> queue = { changed };
+        std::vector<AssetHandle> done = { changed };
+        while (!queue.empty())
+        {
+            AssetHandle c = queue.back();
+            queue.pop_back();
+            for (AssetHandle h : AssetManager::GetAssetsOfType(AssetType::Mesh))
+            {
+                if (std::find(done.begin(), done.end(), h) != done.end() || !AssetManager::IsLoaded(h)) continue;
+                const AssetMetadata* meta = AssetManager::GetMetadata(h);
+                if (!meta || meta->Path.extension() != ".dmodel") continue;
+                EditableMesh model;
+                if (!EditableMesh::Load(AssetManager::GetAbsolutePath(h), model)) continue;
+                bool uses = false;
+                for (const Modifier& mod : model.Modifiers)
+                    uses |= mod.Enabled && (mod.Type == ModifierType::Boolean || mod.Type == ModifierType::Shrinkwrap) && mod.Operand == (uint64_t)c;
+                if (!uses) continue;
+                done.push_back(h);
+                queue.push_back(h);
+                if (m_Active && h == m_Asset) SyncRenderMesh();
+                else AssetManager::SetMeshData(h, model.ToMeshData());
+            }
+        }
     }
 
     void MeshEditMode::Update()
@@ -343,6 +374,8 @@ namespace Editor
 
     void MeshEditMode::Commit()
     {
+        // Faces an operation rebuilt without their vertex colors get them back from before it.
+        if (!m_Undo.empty()) ops::RepairColors(m_Mesh, m_Undo.back().Mesh);
         m_Dirty = true;
         SyncRenderMesh();
     }
@@ -395,8 +428,9 @@ namespace Editor
         if (m_Undo.empty()) return;
         m_SculptValid = false;
         m_PaintRaysVersion = ~0ull;
-        m_Redo.push_back({ m_Mesh, m_Mode, m_Undo.back().Name, m_Undo.back().Paint });
+        m_Redo.push_back({ m_Mesh, m_Mode, m_Undo.back().Name, m_Undo.back().Paint, m_Undo.back().Parts });
         if (m_Redo.back().Paint) SwapPaintUndo(*m_Redo.back().Paint);
+        if (m_Redo.back().Parts) RemoveParts(*m_Redo.back().Parts);
         m_Mesh = std::move(m_Undo.back().Mesh);
         m_Mode = m_Undo.back().Mode;
         m_Undo.pop_back();
@@ -410,8 +444,9 @@ namespace Editor
         if (IsModal() || m_Redo.empty()) return;
         m_SculptValid = false;
         m_PaintRaysVersion = ~0ull;
-        m_Undo.push_back({ m_Mesh, m_Mode, m_Redo.back().Name, m_Redo.back().Paint });
+        m_Undo.push_back({ m_Mesh, m_Mode, m_Redo.back().Name, m_Redo.back().Paint, m_Redo.back().Parts });
         if (m_Undo.back().Paint) SwapPaintUndo(*m_Undo.back().Paint);
+        if (m_Undo.back().Parts) RestoreParts(*m_Undo.back().Parts);
         m_Mesh = std::move(m_Redo.back().Mesh);
         m_Mode = m_Redo.back().Mode;
         m_Redo.pop_back();
@@ -643,6 +678,14 @@ namespace Editor
         dl->PopClipRect();
     }
 
+    void MeshEditMode::ToolbarNext(const char* label, float width)
+    {
+        // On the same line when it fits left of the view cube (the top right corner), else on the next one.
+        if (label) width = ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        float right = ImGui::GetItemRectMax().x + 2.0f + width;
+        if (right < m_Origin.x + m_Size.x - 150.0f) ImGui::SameLine(0.0f, 2.0f);
+    }
+
     void MeshEditMode::DrawToolbar(const ImVec2& origin)
     {
         ImGui::SetCursorScreenPos(ImVec2(origin.x + 8.0f, origin.y + 28.0f));
@@ -663,10 +706,19 @@ namespace Editor
             if (toggle(ModeName((SelectMode)i), (int)m_Mode == i, modeTips[i].c_str())) SetSelectMode((SelectMode)i);
         }
         ImGui::SameLine();
-        if (toggle("Sculpt", false, ("Sculpt Mode: shape the model with brushes (" + Shortcuts::Label("mesh.sculptMode") + ")").c_str()))
-            SetSculpting(true);
-        ImGui::SameLine(0.0f, 2.0f);
-        if (toggle("Paint", false, "Vertex Paint and Texture Paint: color the model with brushes; bake maps")) SetPaintMode(2);
+        // The other ways of working on the model.
+        ImGui::SetNextItemWidth(104.0f);
+        if (ImGui::BeginCombo("##editmode", "Edit", ImGuiComboFlags_HeightLarge))
+        {
+            if (ImGui::Selectable("Edit", true)) {}
+            if (ImGui::Selectable(("Sculpt  " + Shortcuts::Label("mesh.sculptMode")).c_str())) SetSculpting(true);
+            if (ImGui::Selectable("Vertex Paint")) SetPaintMode(1);
+            if (ImGui::Selectable("Texture Paint")) SetPaintMode(2);
+            if (ImGui::Selectable("Rig (bones, pose, weights)")) SetRigMode(1);
+            if (ImGui::Selectable("Curves")) SetCurveMode(true);
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Edit the mesh, sculpt it, paint it, rig it or edit its curves");
         ImGui::SameLine();
         if (toggle("X-Ray", m_XRay, ("See and select through the surface (" + Shortcuts::Label("mesh.xray") + ")").c_str())) m_XRay = !m_XRay;
         ImGui::SameLine();
@@ -697,37 +749,47 @@ namespace Editor
         if (ImGui::Button("Select")) ImGui::OpenPopup("MeshSelectMenu");
         ImGui::SameLine(0.0f, 2.0f);
         if (ImGui::Button("Mesh")) ImGui::OpenPopup("MeshMenu");
-        ImGui::SameLine(0.0f, 2.0f);
+        ToolbarNext("Add");
         if (ImGui::Button("Add")) ImGui::OpenPopup("MeshAddMenu");
-        ImGui::SameLine(0.0f, 2.0f);
+        ToolbarNext("UV");
         if (ImGui::Button("UV")) ImGui::OpenPopup("MeshUVMenu");
-        ImGui::SameLine(0.0f, 2.0f);
-        if (ImGui::Button("Curves")) SetCurveMode(true);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The model's curves (control points; Ctrl+click adds them)");
-        ImGui::SameLine(0.0f, 2.0f);
-        if (ImGui::Button(m_Mesh.Text.Enabled ? "Text*" : "Text")) ImGui::OpenPopup("TextSettings");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Solid letters made with the model");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unwrap and project the selected faces' UVs (%s); Window > UV Editor edits them",
+                                                      Shortcuts::Label("mesh.uvMenu").c_str());
+        const char* modelLabel = m_Mesh.EditedShape >= 0 || m_Mesh.Text.Enabled ? "Model*" : "Model";
+        ToolbarNext(modelLabel);
+        if (ImGui::Button(modelLabel)) ImGui::OpenPopup("MeshModelMenu");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Text and shape keys (* while there is text or a shape key is being edited)");
+        if (ImGui::BeginPopup("MeshModelMenu"))
+        {
+            if (ImGui::MenuItem(m_Mesh.Text.Enabled ? "Text... (on)" : "Text...")) m_OpenModelPopup = 1;
+            if (ImGui::MenuItem(m_Mesh.EditedShape >= 0 ? "Shape Keys... (editing one)" : "Shape Keys...")) m_OpenModelPopup = 2;
+            if (m_Mesh.HasGenerated() && ImGui::MenuItem("Convert Curves and Text to Mesh")) ConvertGeneratedToMesh();
+            ImGui::EndPopup();
+        }
+        if (m_OpenModelPopup)
+        {
+            ImGui::OpenPopup(m_OpenModelPopup == 1 ? "TextSettings" : "ShapeKeys");
+            m_OpenModelPopup = 0;
+        }
         DrawTextPopup();
-        ImGui::SameLine(0.0f, 2.0f);
-        if (toggle("Snap", m_SnapSurface, "Retopology: moved vertices (and Ctrl+click's new ones) land on other objects' surfaces under them"))
+        DrawShapeKeysPopup();
+        ToolbarNext("Snap");
+        if (toggle("Snap", m_SnapSurface, "Retopology: moved vertices (and Ctrl+click's new ones) land on other objects' surfaces"))
             m_SnapSurface = !m_SnapSurface;
         if (m_SnapSurface)
         {
+            ToolbarNext(nullptr, 150.0f);
+            ImGui::SetNextItemWidth(78.0f);
+            const char* snapModes[] = { "From View", "Nearest" };
+            ImGui::Combo("##snapmode", &m_SnapMode, snapModes, 2);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("From View: onto the surface seen behind each vertex (as Blender's face snapping); Nearest: the closest surface point");
             ImGui::SameLine(0.0f, 2.0f);
             ImGui::SetNextItemWidth(70.0f);
             ImGui::DragFloat("##snapoffset", &m_SnapOffset, 0.001f, -1.0f, 1.0f, "%.3f m");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Kept this far out from the surface");
         }
-        ImGui::SameLine(0.0f, 2.0f);
-        if (ImGui::Button("Rig")) SetRigMode(1);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bones, posing, weight painting and actions");
-        ImGui::SameLine(0.0f, 2.0f);
-        if (ImGui::Button(m_Mesh.EditedShape >= 0 ? "Shape Keys*" : "Shape Keys")) ImGui::OpenPopup("ShapeKeys");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The model's shape keys (blend shapes); * while one is being edited");
-        DrawShapeKeysPopup();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unwrap and project the selected faces' UVs (%s); Window > UV Editor edits them",
-                                                      Shortcuts::Label("mesh.uvMenu").c_str());
-        ImGui::SameLine();
+        ToolbarNext("Done");
         if (ImGui::Button("Done")) Exit();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Leave Edit Mode (%s)", Shortcuts::Label("mesh.editMode").c_str());
         ImGui::PopStyleVar();
@@ -1980,33 +2042,84 @@ namespace Editor
             Log::Warn("{}", looseParts ? "Separate: the mesh is all one piece" : "Separate: select the faces to take out");
             return;
         }
-        // Each part becomes a model of its own on a new object beside this one (same place, same materials).
+        // Each part becomes a model of its own on a new object beside this one (same place, same materials). The objects
+        // belong to this undo step (one scene step too, so the scene's history knows them).
         Scene& scene = m_Ctx.ActiveScene();
         auto& reg = scene.GetRegistry();
-        TransformComponent transform = reg.Get<TransformComponent>(m_Entity);
-        MeshRendererComponent renderer = reg.Get<MeshRendererComponent>(m_Entity);
-        std::string name = reg.Get<TagComponent>(m_Entity).Name;
+        m_Ctx.RecordUndo(looseParts ? "Separate Loose Parts" : "Separate");
+        auto made = std::make_shared<std::vector<SeparatedPart>>();
         Entity parent = scene.GetParent(m_Entity);
         for (EditableMesh& part : parts)
         {
             AssetHandle model = CreateModelAsset(part, m_File.parent_path(), m_File.stem().string() + " Part");
             if (!model.IsValid()) continue;
-            Entity e = CreateObject(m_Ctx, ObjectKind::Empty, parent);
-            auto& t = reg.Get<TransformComponent>(e);
-            t.Position = transform.Position;
-            t.Rotation = transform.Rotation;
-            t.Scale = transform.Scale;
-            reg.Get<TagComponent>(e).Name = name + " Part";
-            MeshRendererComponent copy = renderer;
-            copy.Mesh = model;
-            reg.Emplace<MeshRendererComponent>(e) = copy;
+            SeparatedPart sp;
+            sp.ParentGuid = parent.IsNull() ? 0 : (uint64_t)scene.GetGuid(parent);
+            sp.Name = reg.Get<TagComponent>(m_Entity).Name + " Part";
+            sp.Transform = reg.Get<TransformComponent>(m_Entity);
+            sp.Renderer = reg.Get<MeshRendererComponent>(m_Entity);
+            sp.Renderer.Mesh = model;
+            made->push_back(sp);
         }
+        RestoreParts(*made);
+        m_Undo.back().Parts = made;
         m_Ctx.Select(m_Entity); // (stay in Edit Mode on this object)
         m_Ctx.MarkDirty();
         ops::FlushSelection(m_Mesh, m_Mode);
         Commit();
         Save();
         Log::Info("Separated {} part{} into new objects", parts.size(), parts.size() == 1 ? "" : "s");
+    }
+
+    void MeshEditMode::RemoveParts(std::vector<SeparatedPart>& parts)
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        for (SeparatedPart& p : parts)
+            if (Entity e = scene.FindEntityByGuid(Guid(p.Guid)); !e.IsNull()) scene.DestroyEntity(e);
+        m_Ctx.Select(m_Entity);
+        m_Ctx.MarkDirty();
+    }
+
+    void MeshEditMode::RestoreParts(std::vector<SeparatedPart>& parts)
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        for (SeparatedPart& p : parts)
+        {
+            Entity parent = p.ParentGuid ? scene.FindEntityByGuid(Guid(p.ParentGuid)) : Entity::Null();
+            Entity e = p.Guid ? scene.CreateEntity(p.Name, parent, Guid(p.Guid)) : scene.CreateEntity(p.Name, parent);
+            p.Guid = (uint64_t)scene.GetGuid(e);
+            auto& t = reg.Get<TransformComponent>(e);
+            t.Position = p.Transform.Position;
+            t.Rotation = p.Transform.Rotation;
+            t.Scale = p.Transform.Scale;
+            reg.Emplace<MeshRendererComponent>(e) = p.Renderer;
+        }
+        m_Ctx.Select(m_Entity);
+        m_Ctx.MarkDirty();
+    }
+
+    void MeshEditMode::OnFileRestored(const fs::path& file)
+    {
+        // A model put back by the scene's undo: shown again (and what uses it), the modifier panel reading it afresh.
+        if (file.extension() != ".dmodel") return;
+        for (AssetHandle h : AssetManager::GetAssetsOfType(AssetType::Mesh))
+        {
+            if (fs::path(AssetManager::GetAbsolutePath(h)) != file) continue;
+            EditableMesh model;
+            if (!EditableMesh::Load(file, model)) return;
+            if (m_Active && h == m_Asset)
+            {
+                m_Mesh = std::move(model);
+                m_Mesh.Changed();
+                SyncRenderMesh();
+            }
+            else if (AssetManager::IsLoaded(h))
+                AssetManager::SetMeshData(h, model.ToMeshData());
+            if (h == m_PanelAsset) m_PanelAsset = AssetHandle::None();
+            RefreshDependents(h);
+            return;
+        }
     }
 
     // ---- Loop cut and knife
@@ -2086,7 +2199,23 @@ namespace Editor
             return true;
         }
         int64_t e = NearestEdge(mouse, 12.0f);
-        if (e < 0) return false;
+        if (e < 0)
+        {
+            // Inside a face: where the mouse ray meets it.
+            int64_t f = FaceUnderMouse(mouse);
+            if (f < 0) return false;
+            glm::vec3 from, dir;
+            RayAt(m_ViewProj, m_Origin, m_Size, mouse, from, dir);
+            glm::mat4 inv = glm::inverse(m_World);
+            glm::vec3 lf = glm::vec3(inv * glm::vec4(from, 1.0f)), ld = glm::normalize(glm::vec3(inv * glm::vec4(dir, 0.0f)));
+            glm::vec3 n = m_Mesh.FaceNormal((uint32_t)f), c = m_Mesh.FaceCenter((uint32_t)f), hit;
+            if (!RayPlane(lf, ld, c, n, hit)) return false;
+            cut = ops::CutPoint{};
+            cut.Face = (int32_t)f;
+            cut.Position = hit;
+            pos = hit;
+            return true;
+        }
         EdgeKey k = m_Mesh.Topo().Edges[(size_t)e];
         // Where the mouse ray passes the edge.
         glm::vec3 from, dir;
@@ -2148,6 +2277,7 @@ namespace Editor
             ImVec2 P = Project(mvp, m_Origin, m_Size, kp.Pos), Q = Project(mvp, m_Origin, m_Size, next.Pos);
             if (!OnScreen(P) || !OnScreen(Q)) continue;
             auto touches = [&](const ops::CutPoint& c, EdgeKey k) {
+                if (c.Face >= 0) return false;
                 if (c.A == c.B) return EdgeA(k) == c.A || EdgeB(k) == c.A;
                 return k == MakeEdgeKey(c.A, c.B);
             };
@@ -2311,6 +2441,12 @@ namespace Editor
         // Records the undo step (in Edit Mode) once per change; call before changing the mesh.
         auto begin = [&](const char* what) {
             if (live && !m_PanelEditing) Record(what);
+            if (!live && !m_PanelEditing)
+            {
+                // (the file holds the state before the change: saved after each one)
+                if (m_PanelUnsaved) mesh->Save(file);
+                m_Ctx.RecordUndo(what, { file });
+            }
             m_PanelEditing = true;
             changed = true;
         };
@@ -2561,6 +2697,7 @@ namespace Editor
                 std::error_code ec;
                 m_PanelStamp = fs::last_write_time(file, ec);
                 m_PanelUnsaved = false;
+                RefreshDependents(asset);
             }
         }
     }
