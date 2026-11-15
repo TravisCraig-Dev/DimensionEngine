@@ -85,7 +85,7 @@ namespace Dimension::Modeling::Paint
 
     const char* BlendName(Blend b)
     {
-        static const char* names[] = { "Mix", "Add", "Subtract", "Multiply", "Lighten", "Darken", "Erase Alpha", "Blur" };
+        static const char* names[] = { "Mix", "Add", "Subtract", "Multiply", "Lighten", "Darken", "Erase Alpha", "Blur", "Clone" };
         return names[std::clamp((int)b, 0, (int)Blend::Count - 1)];
     }
 
@@ -176,9 +176,19 @@ namespace Dimension::Modeling::Paint
                     {
                         if (face.Verts[k] != v) continue;
                         glm::vec4 before = UnpackRGBA8(face.ColorAt(k));
-                        glm::vec4 after = brush.Mode == Blend::Blur ? glm::mix(before, neighbours, std::min(1.0f, w))
-                                          : brush.Linear ? BlendColorLinear(before, brush.Color, brush.Mode, w)
-                                                         : BlendColor(before, brush.Color, brush.Mode, w);
+                        float wk = brush.Texture ? w * brush.Texture->At(m.Positions[v], c, brush.Radius, view) : w;
+                        glm::vec4 color = brush.Color;
+                        Blend mode = brush.Mode;
+                        if (mode == Blend::Clone)
+                        {
+                            if (!brush.CloneSource || brush.CloneSource->Empty()) continue;
+                            glm::vec2 uv = k < face.UVs.size() ? face.UVs[k] : glm::vec2(0.0f);
+                            color = brush.CloneSource->Sample(uv + brush.CloneOffset);
+                            mode = Blend::Mix;
+                        }
+                        glm::vec4 after = mode == Blend::Blur ? glm::mix(before, neighbours, std::min(1.0f, wk))
+                                          : brush.Linear ? BlendColorLinear(before, color, mode, wk)
+                                                         : BlendColor(before, color, mode, wk);
                         uint32_t packed = PackRGBA8(after);
                         if (packed != face.ColorAt(k))
                         {
@@ -205,9 +215,10 @@ namespace Dimension::Modeling::Paint
         Rect changed;
         if (image.Empty()) return changed;
         const float W = (float)image.Width, H = (float)image.Height;
-        // Blur reads the image as it was before this dab.
+        // Blur (and cloning from this image) read the image as it was before this dab.
         Image before;
-        if (brush.Mode == Blend::Blur) before = image;
+        if (brush.Mode == Blend::Blur || (brush.Mode == Blend::Clone && brush.CloneSource == &image)) before = image;
+        const Image* cloneFrom = brush.CloneSource == &image ? &before : brush.CloneSource;
         std::vector<uint32_t> tri;
         for (const glm::vec3& s : Mirrors(brush.Symmetry))
         {
@@ -271,6 +282,7 @@ namespace Dimension::Modeling::Paint
                             if (sum <= 0.0f) continue;
                             glm::vec3 point = (p[0] * b[0] + p[1] * b[1] + p[2] * b[2]) / sum;
                             float w = BrushWeight(brush, glm::length(point - c));
+                            if (w > 0.0f && brush.Texture) w *= brush.Texture->At(point, c, r, view);
                             if (w <= 0.0f) continue;
                             int px = ((x % (int)image.Width) + (int)image.Width) % (int)image.Width;
                             int py = ((y % (int)image.Height) + (int)image.Height) % (int)image.Height;
@@ -287,6 +299,13 @@ namespace Dimension::Modeling::Paint
                                     }
                                 next = glm::mix(old, avg / 9.0f, std::min(1.0f, w));
                             }
+                            else if (brush.Mode == Blend::Clone)
+                            {
+                                if (!cloneFrom || cloneFrom->Empty()) continue;
+                                glm::vec2 uv(((float)px + 0.5f) / W, ((float)py + 0.5f) / H);
+                                glm::vec4 src = cloneFrom->Sample(uv + brush.CloneOffset);
+                                next = brush.Linear ? BlendColorLinear(old, src, Blend::Mix, w) : BlendColor(old, src, Blend::Mix, w);
+                            }
                             else
                                 next = brush.Linear ? BlendColorLinear(old, brush.Color, brush.Mode, w) : BlendColor(old, brush.Color, brush.Mode, w);
                             uint32_t packed = PackRGBA8(next);
@@ -299,6 +318,68 @@ namespace Dimension::Modeling::Paint
                 }
             }
         }
+        return changed;
+    }
+
+    Rect PaintImage(Image& image, const glm::vec2& center, float radius, const Brush& brush)
+    {
+        Rect changed;
+        if (image.Empty() || radius <= 0.0f) return changed;
+        const float W = (float)image.Width, H = (float)image.Height;
+        Image before;
+        if (brush.Mode == Blend::Blur || (brush.Mode == Blend::Clone && brush.CloneSource == &image)) before = image;
+        const Image* cloneFrom = brush.CloneSource == &image ? &before : brush.CloneSource;
+        Brush flat = brush;
+        flat.Radius = radius;
+        int x0 = (int)std::floor(center.x - radius), x1 = (int)std::ceil(center.x + radius);
+        int y0 = (int)std::floor(center.y - radius), y1 = (int)std::ceil(center.y + radius);
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+            {
+                glm::vec2 d((float)x + 0.5f - center.x, (float)y + 0.5f - center.y);
+                float w = BrushWeight(flat, glm::length(d));
+                if (w <= 0.0f) continue;
+                int px = ((x % (int)image.Width) + (int)image.Width) % (int)image.Width;
+                int py = ((y % (int)image.Height) + (int)image.Height) % (int)image.Height;
+                glm::vec2 uv(((float)px + 0.5f) / W, ((float)py + 0.5f) / H);
+                if (brush.Texture)
+                {
+                    const Sculpt::BrushTexture& t = *brush.Texture;
+                    glm::vec2 q = t.Mapping == 1 ? glm::vec2((float)x + 0.5f, (float)y + 0.5f) / glm::vec2(W, H) / std::max(t.Scale, 1e-6f)
+                                                 : d / (2.0f * radius);
+                    float a = glm::radians(t.Angle), cs = std::cos(a), sn = std::sin(a);
+                    q = glm::vec2(cs * q.x - sn * q.y, sn * q.x + cs * q.y);
+                    w *= t.Sample(t.Mapping == 1 ? q : q + 0.5f);
+                    if (w <= 0.0f) continue;
+                }
+                uint32_t& dst = image.At((uint32_t)px, (uint32_t)py);
+                glm::vec4 old = UnpackRGBA8(dst), next;
+                if (brush.Mode == Blend::Blur)
+                {
+                    glm::vec4 avg(0.0f);
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx)
+                        {
+                            int sx = std::clamp(px + dx, 0, (int)image.Width - 1), sy = std::clamp(py + dy, 0, (int)image.Height - 1);
+                            avg += UnpackRGBA8(before.At((uint32_t)sx, (uint32_t)sy));
+                        }
+                    next = glm::mix(old, avg / 9.0f, std::min(1.0f, w));
+                }
+                else if (brush.Mode == Blend::Clone)
+                {
+                    if (!cloneFrom || cloneFrom->Empty()) continue;
+                    glm::vec4 src = cloneFrom->Sample(uv + brush.CloneOffset);
+                    next = brush.Linear ? BlendColorLinear(old, src, Blend::Mix, w) : BlendColor(old, src, Blend::Mix, w);
+                }
+                else
+                    next = brush.Linear ? BlendColorLinear(old, brush.Color, brush.Mode, w) : BlendColor(old, brush.Color, brush.Mode, w);
+                uint32_t packed = PackRGBA8(next);
+                if (packed != dst)
+                {
+                    dst = packed;
+                    changed.Add(px, py);
+                }
+            }
         return changed;
     }
 

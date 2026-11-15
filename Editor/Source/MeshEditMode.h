@@ -307,7 +307,8 @@ namespace Editor
         glm::vec2 ScreenToUV(const ImVec2& p) const;
         void FrameUVs(bool selectedOnly);
         void HandleUVKeys(const std::vector<uint32_t>& faces, bool hovered);
-        void HandleUVMouse(const std::vector<uint32_t>& faces, bool hovered);
+        void HandleUVMouse(const std::vector<uint32_t>& faces, bool hovered, bool selectWithLeft = true);
+        void UpdateUVPaint(bool hovered); // painting the texture in the UV Editor
         void UVClickSelect(const std::vector<uint32_t>& faces, const ImVec2& mouse, bool extend);
         void UVBoxSelect(const std::vector<uint32_t>& faces, const ImVec2& a, const ImVec2& b, int op);
         void BeginUVModal(UVModalKind kind);
@@ -418,6 +419,22 @@ namespace Editor
         bool m_PaintUnsaved = false, m_PaintGpuDirty = false;
         std::vector<uint32_t> m_PaintBefore;
         Modeling::Paint::Rect m_PaintStrokeRect;
+        void BeginTextureStroke();  // (after Record) remembers the pixels for the stroke's undo
+        void EndTextureStroke();    // the stroke's undo step: the tiles it changed
+        bool BeginClone(const glm::vec2& strokeUV); // Clone: the source and offset for a stroke starting at that UV
+        // The brush texture (or stencil) and the clone source.
+        AssetHandle m_PaintTexAsset = AssetHandle::None();
+        Modeling::Sculpt::BrushTexture m_PaintTex;
+        glm::vec2 m_StencilPos{ 80.0f, 90.0f }, m_StencilSize{ 256.0f, 256.0f }; // in the view, from its top-left corner
+        int m_StencilDrag = 0; // 1 moving, 2 resizing
+        ImVec2 m_StencilDragStart{ 0, 0 };
+        glm::vec2 m_StencilStartPos{ 0.0f }, m_StencilStartSize{ 0.0f };
+        AssetHandle m_CloneAsset = AssetHandle::None(); // Clone from this texture (none: the painted one)
+        Modeling::Paint::Image m_CloneImage;
+        bool m_CloneAnchorSet = false;
+        glm::vec2 m_CloneAnchorUV{ 0.0f }, m_CloneOffset{ 0.0f };
+        bool m_UVPaint = false, m_UVPainting = false;
+        ImVec2 m_UVPaintMouse{ 0, 0 };
         int m_NewTextureSize = 1024;
         glm::vec4 m_NewTextureColor{ 1.0f };
         Modeling::Bake::Settings m_Bake;

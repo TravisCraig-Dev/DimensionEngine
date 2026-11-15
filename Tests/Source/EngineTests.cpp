@@ -19636,6 +19636,56 @@ namespace
         }
     }
 
+    void TestModelingPaintFixes()
+    {
+        using namespace ModelingTest;
+        const uint32_t white = 0xFFFFFFFFu, red = 0xFF0000FFu, blue = 0xFFFF0000u, green = 0xFF00FF00u;
+        // Painting straight on the image (UV Editor): a round dab, repeating across the edges.
+        Paint::Image image = Paint::Image::Solid(64, 64, white);
+        Paint::Brush b;
+        b.Color = glm::vec4(1, 0, 0, 1);
+        b.Hardness = 1.0f;
+        CHECK(!Paint::PaintImage(image, { 32.0f, 32.0f }, 8.0f, b).Empty());
+        CHECK(image.At(32, 32) == red && image.At(32, 45) == white && image.At(45, 32) == white);
+        Paint::PaintImage(image, { 0.0f, 0.0f }, 4.0f, b);
+        CHECK(image.At(63, 63) == red && image.At(0, 0) == red);
+        // Clone: colors from another image, shifted in UV.
+        Paint::Image source = Paint::Image::Solid(64, 64, blue);
+        for (uint32_t y = 0; y < 64; ++y)
+            for (uint32_t x = 32; x < 64; ++x) source.At(x, y) = green;
+        Paint::Image target = Paint::Image::Solid(64, 64, white);
+        Paint::Brush clone = b;
+        clone.Mode = Paint::Blend::Clone;
+        clone.CloneSource = &source;
+        clone.CloneOffset = { 0.5f, 0.0f };
+        Paint::PaintImage(target, { 16.0f, 16.0f }, 6.0f, clone);
+        CHECK(target.At(16, 16) == green);
+        clone.CloneOffset = { 0.0f, 0.0f };
+        Paint::PaintImage(target, { 16.0f, 48.0f }, 6.0f, clone);
+        CHECK(target.At(16, 48) == blue);
+        // Cloning from the image being painted reads it as the dab starts (no smearing into itself).
+        Paint::Image self = Paint::Image::Solid(64, 64, white);
+        self.At(40, 16) = red;
+        Paint::Brush selfClone = clone;
+        selfClone.CloneSource = &self;
+        selfClone.CloneOffset = { 24.0f / 64.0f, 0.0f };
+        Paint::PaintImage(self, { 16.5f, 16.5f }, 3.0f, selfClone);
+        CHECK(self.At(16, 16) == red && self.At(17, 16) == white);
+        // A stencil: only the part of the model it covers takes paint.
+        EditableMesh plane = Primitives::Grid(4, 4, 2.0f);
+        Paint::Image tex = Paint::Image::Solid(32, 32, white);
+        uint32_t halves[8] = { white, white, white, white, 0xFF000000u, 0xFF000000u, 0xFF000000u, 0xFF000000u };
+        Sculpt::BrushTexture stencil = Sculpt::BrushTexture::FromRGBA8(halves, 8, 1);
+        stencil.Mapping = 2;
+        stencil.Stencil = glm::mat4(glm::vec4(0.5f, 0, 0, 0), glm::vec4(0, 0, 0, 0), glm::vec4(0, 0.5f, 0, 0), glm::vec4(0.5f, 0.5f, 0, 1)); // x, z -> u, v
+        Paint::Brush through = b;
+        through.Radius = 5.0f;
+        through.FrontFacesOnly = false;
+        through.Texture = &stencil;
+        Paint::PaintTexture(plane, tex, glm::vec3(0.0f), through);
+        CHECK(tex.At(4, 16) == red && tex.At(28, 16) == white);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -20063,6 +20113,7 @@ int main(int argc, char** argv)
     Run("Modeling curve and text fixes", TestModelingCurveTextFixes);
     Run("Modeling UV fixes", TestModelingUVFixes);
     Run("Modeling sculpt fixes", TestModelingSculptFixes);
+    Run("Modeling paint fixes", TestModelingPaintFixes);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

@@ -1,5 +1,6 @@
 #include "MeshEditMode.h"
 #include "EditorUI.h"
+#include <Dimension/Renderer/Texture.h>
 #include "Shortcuts.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Renderer/Material.h>
@@ -172,7 +173,77 @@ namespace Editor
         b.ViewDir = viewDir;
         b.Symmetry = m_PaintSymmetry;
         b.Linear = m_PaintLinear;
+        b.Texture = m_PaintTexAsset.IsValid() && !m_PaintTex.Values.empty() ? &m_PaintTex : nullptr;
+        if (m_PaintBlend == pt::Blend::Clone && !blur)
+        {
+            b.CloneSource = &m_CloneImage;
+            b.CloneOffset = m_CloneOffset;
+        }
         return b;
+    }
+
+    bool MeshEditMode::BeginClone(const glm::vec2& strokeUV)
+    {
+        if (!m_CloneAnchorSet)
+        {
+            Log::Warn("Clone: Ctrl+click first where to copy from");
+            return false;
+        }
+        m_CloneOffset = m_CloneAnchorUV - strokeUV;
+        m_CloneImage = {};
+        if (m_CloneAsset.IsValid())
+        {
+            glm::uvec2 size(0);
+            if (AssetManager::ReadTexturePixels(m_CloneAsset, m_CloneImage.Pixels, size))
+            {
+                m_CloneImage.Width = size.x;
+                m_CloneImage.Height = size.y;
+            }
+            else m_CloneImage = {};
+        }
+        else if (m_PaintMode == 2)
+            m_CloneImage = m_PaintImage; // (this texture as the stroke starts)
+        if (m_CloneImage.Empty())
+        {
+            Log::Warn("Clone: no texture to copy from (pick one under Clone From)");
+            return false;
+        }
+        return true;
+    }
+
+    void MeshEditMode::BeginTextureStroke()
+    {
+        m_PaintBefore = m_PaintImage.Pixels;
+        m_PaintStrokeRect = {};
+    }
+
+    void MeshEditMode::EndTextureStroke()
+    {
+        // The stroke's undo step: the tiles it changed, as they were.
+        auto undo = std::make_shared<PaintUndo>();
+        undo->Texture = m_PaintTexture;
+        const pt::Rect& r = m_PaintStrokeRect;
+        if (!r.Empty() && m_PaintBefore.size() == m_PaintImage.Pixels.size())
+            for (int ty = r.Y0 / kTile; ty <= r.Y1 / kTile; ++ty)
+                for (int tx = r.X0 / kTile; tx <= r.X1 / kTile; ++tx)
+                {
+                    PaintTile tile{ tx * kTile, ty * kTile, std::min(kTile, (int)m_PaintImage.Width - tx * kTile),
+                                    std::min(kTile, (int)m_PaintImage.Height - ty * kTile), {} };
+                    bool changed = false;
+                    tile.Pixels.resize((size_t)tile.W * tile.H);
+                    for (int y = 0; y < tile.H; ++y)
+                        for (int x = 0; x < tile.W; ++x)
+                        {
+                            size_t i = (size_t)(tile.Y + y) * m_PaintImage.Width + tile.X + x;
+                            tile.Pixels[(size_t)y * tile.W + x] = m_PaintBefore[i];
+                            changed |= m_PaintBefore[i] != m_PaintImage.Pixels[i];
+                        }
+                    if (changed) undo->Tiles.push_back(std::move(tile));
+                }
+        if (undo->Tiles.empty()) m_Undo.pop_back();
+        else m_Undo.back().Paint = undo;
+        m_PaintBefore.clear();
+        m_PaintBefore.shrink_to_fit();
     }
 
     void MeshEditMode::PaintDab(const glm::vec3& at, const glm::vec3& viewDir, bool blur)
@@ -205,15 +276,25 @@ namespace Editor
                 return;
             }
             if (!PaintHit(mouse, point, face, dir)) return;
+            if (m_PaintBlend == pt::Blend::Clone && !io.KeyShift)
+            {
+                glm::vec2 uv;
+                glm::vec4 color;
+                if (!pt::SurfaceAt(m_Mesh, face, point, uv, color)) return;
+                if (io.KeyCtrl)
+                {
+                    // Ctrl+click: where Clone copies from.
+                    m_CloneAnchorUV = uv;
+                    m_CloneAnchorSet = true;
+                    return;
+                }
+                if (!BeginClone(uv)) return;
+            }
             Record(m_PaintMode == 1 ? "Vertex Paint" : "Texture Paint");
             m_Painting = true;
             m_PaintBlurStroke = io.KeyShift;
             m_PaintMouse = mouse;
-            if (m_PaintMode == 2)
-            {
-                m_PaintBefore = m_PaintImage.Pixels;
-                m_PaintStrokeRect = {};
-            }
+            if (m_PaintMode == 2) BeginTextureStroke();
             PaintDab(point, dir, m_PaintBlurStroke);
             return;
         }
@@ -225,31 +306,7 @@ namespace Editor
                 Commit();
                 return;
             }
-            // The stroke's undo step: the tiles it changed, as they were.
-            auto undo = std::make_shared<PaintUndo>();
-            undo->Texture = m_PaintTexture;
-            const pt::Rect& r = m_PaintStrokeRect;
-            if (!r.Empty() && m_PaintBefore.size() == m_PaintImage.Pixels.size())
-                for (int ty = r.Y0 / kTile; ty <= r.Y1 / kTile; ++ty)
-                    for (int tx = r.X0 / kTile; tx <= r.X1 / kTile; ++tx)
-                    {
-                        PaintTile tile{ tx * kTile, ty * kTile, std::min(kTile, (int)m_PaintImage.Width - tx * kTile),
-                                        std::min(kTile, (int)m_PaintImage.Height - ty * kTile), {} };
-                        bool changed = false;
-                        tile.Pixels.resize((size_t)tile.W * tile.H);
-                        for (int y = 0; y < tile.H; ++y)
-                            for (int x = 0; x < tile.W; ++x)
-                            {
-                                size_t i = (size_t)(tile.Y + y) * m_PaintImage.Width + tile.X + x;
-                                tile.Pixels[(size_t)y * tile.W + x] = m_PaintBefore[i];
-                                changed |= m_PaintBefore[i] != m_PaintImage.Pixels[i];
-                            }
-                        if (changed) undo->Tiles.push_back(std::move(tile));
-                    }
-            if (undo->Tiles.empty()) m_Undo.pop_back();
-            else m_Undo.back().Paint = undo;
-            m_PaintBefore.clear();
-            m_PaintBefore.shrink_to_fit();
+            EndTextureStroke();
             return;
         }
         float spacing = std::max(2.0f, m_PaintRadiusPx * 0.2f);
@@ -302,6 +359,44 @@ namespace Editor
         ImGui::SetCursorScreenPos(cursor);
         m_OverUI = ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
         ImVec2 mouse = ImGui::GetIO().MousePos;
+        bool stencil = m_PaintTexAsset.IsValid() && !m_PaintTex.Values.empty() && m_PaintTex.Mapping == 2;
+        if (stencil)
+        {
+            // Model space -> clip -> the view's pixels -> the stencil's 0..1.
+            glm::mat4 toStencil(0.0f);
+            toStencil[0][0] = 0.5f * m_Size.x / m_StencilSize.x;
+            toStencil[3][0] = (0.5f * m_Size.x - m_StencilPos.x) / m_StencilSize.x;
+            toStencil[1][1] = -0.5f * m_Size.y / m_StencilSize.y;
+            toStencil[3][1] = (0.5f * m_Size.y - m_StencilPos.y) / m_StencilSize.y;
+            toStencil[3][3] = 1.0f;
+            m_PaintTex.Stencil = toStencil * m_ViewProj * m_World;
+            ImVec2 s0(m_Origin.x + m_StencilPos.x, m_Origin.y + m_StencilPos.y), s1(s0.x + m_StencilSize.x, s0.y + m_StencilSize.y);
+            if (Ref<Texture2D> t = AssetManager::GetTexture(m_PaintTexAsset))
+                dl->AddImage(ImTextureRef((ImTextureID)t->GetImGuiId()), s0, s1, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 80));
+            // Handles: the bar along the top moves it, the corner box resizes it.
+            ImVec2 bar1(s1.x, s0.y + 14.0f), box0(s1.x - 14.0f, s1.y - 14.0f);
+            dl->AddRectFilled(s0, bar1, IM_COL32(40, 40, 40, 170));
+            dl->AddText(ImVec2(s0.x + 4.0f, s0.y), IM_COL32(255, 255, 255, 220), "Stencil");
+            dl->AddRectFilled(box0, s1, IM_COL32(40, 40, 40, 200));
+            dl->AddRect(s0, s1, IM_COL32(255, 255, 255, 120));
+            auto inside = [&](ImVec2 a, ImVec2 b) { return mouse.x >= a.x && mouse.x <= b.x && mouse.y >= a.y && mouse.y <= b.y; };
+            if (!m_StencilDrag && !m_Painting && hovered && !m_OverUI && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                if (inside(box0, s1)) m_StencilDrag = 2;
+                else if (inside(s0, bar1)) m_StencilDrag = 1;
+                m_StencilDragStart = mouse;
+                m_StencilStartPos = m_StencilPos;
+                m_StencilStartSize = m_StencilSize;
+            }
+            if (m_StencilDrag)
+            {
+                glm::vec2 d(mouse.x - m_StencilDragStart.x, mouse.y - m_StencilDragStart.y);
+                if (m_StencilDrag == 1) m_StencilPos = m_StencilStartPos + d;
+                else m_StencilSize = glm::max(m_StencilStartSize + d, glm::vec2(16.0f));
+                if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_StencilDrag = 0;
+                m_OverUI = true; // (no painting while it moves)
+            }
+        }
         if (m_PaintAdjust)
         {
             float d = Dist(mouse, m_PaintAdjustCenter);
@@ -319,7 +414,7 @@ namespace Editor
         else
         {
             if ((hovered || focused) && !m_Painting && !ImGui::GetIO().WantTextInput) HandlePaintKeys();
-            if (m_PaintMode && !m_PaintAdjust) UpdatePaintStroke(hovered, blocked);
+            if (m_PaintMode && !m_PaintAdjust && !m_StencilDrag) UpdatePaintStroke(hovered, blocked);
         }
         if (m_PaintGpuDirty && !m_PaintImage.Empty())
         {
@@ -340,12 +435,13 @@ namespace Editor
             dl->AddCircle(mouse, m_PaintRadiusPx, col, 64, 1.5f);
         }
         char buf[300];
-        std::snprintf(buf, sizeof(buf), "%s: %s   radius %.0f px (%s)   strength %.2f (%s)   %s: pick color   Shift: blur%s",
+        std::snprintf(buf, sizeof(buf), "%s: %s   radius %.0f px (%s)   strength %.2f (%s)   %s: pick color   Shift: blur%s%s",
                       m_PaintMode == 1 ? "Vertex Paint" : "Texture Paint", pt::BlendName(m_PaintBlend), m_PaintRadiusPx, Shortcuts::Label("paint.radius").c_str(),
                       m_PaintStrength, Shortcuts::Label("paint.strength").c_str(), Shortcuts::Label("paint.sample").c_str(),
+                      m_PaintBlend == pt::Blend::Clone ? (m_CloneAnchorSet ? "   Ctrl+click: new clone source" : "   Ctrl+click: set where Clone copies from") : "",
                       m_PaintMode == 2 && m_PaintUnsaved ? "   (texture unsaved: saved on Ctrl+S or leaving)" : "");
         dl->AddText(ImVec2(m_Origin.x + 8.0f, m_Origin.y + m_Size.y - 24.0f), IM_COL32(255, 255, 255, 230), buf);
-        return m_Painting || m_PaintAdjust != 0;
+        return m_Painting || m_PaintAdjust != 0 || m_StencilDrag != 0;
     }
 
     void MeshEditMode::DrawPaintToolbar(const ImVec2& origin)
@@ -386,6 +482,59 @@ namespace Editor
         ImGui::SetNextItemWidth(70.0f);
         ImGui::SliderFloat("##phard", &m_PaintHardness, 0.0f, 1.0f, "hard %.2f");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hardness: how far in from the rim the brush stays at full strength");
+        ImGui::SameLine();
+        if (toggle("Texture##ptex", m_PaintTexAsset.IsValid(), "A texture varying the brush's strength, or a stencil on the screen to paint through"))
+            ImGui::OpenPopup("PaintBrushTexture");
+        if (ImGui::BeginPopup("PaintBrushTexture"))
+        {
+            ImGui::SetNextItemWidth(220.0f);
+            if (UI::AssetField("Texture", m_PaintTexAsset, AssetType::Texture).Changed)
+            {
+                std::vector<uint32_t> pixels;
+                glm::uvec2 size(0);
+                if (m_PaintTexAsset.IsValid() && AssetManager::ReadTexturePixels(m_PaintTexAsset, pixels, size) && size.x && size.y)
+                {
+                    Modeling::Sculpt::BrushTexture loaded = Modeling::Sculpt::BrushTexture::FromRGBA8(pixels.data(), size.x, size.y);
+                    m_PaintTex.Values = std::move(loaded.Values);
+                    m_PaintTex.Width = loaded.Width;
+                    m_PaintTex.Height = loaded.Height;
+                    m_StencilSize = glm::vec2(256.0f, 256.0f * (float)size.y / (float)size.x);
+                }
+                else
+                {
+                    m_PaintTexAsset = AssetHandle::None();
+                    m_PaintTex.Values.clear();
+                }
+            }
+            const char* mappings[] = { "View (one per dab)", "Tiled (over the view)", "Stencil (fixed on screen)" };
+            ImGui::SetNextItemWidth(170.0f);
+            ImGui::Combo("Mapping", &m_PaintTex.Mapping, mappings, 3);
+            if (m_PaintTex.Mapping == 2) ImGui::TextDisabled("Drag the stencil's top bar to move it, its corner to resize it");
+            if (m_PaintTex.Mapping == 1)
+            {
+                ImGui::SetNextItemWidth(170.0f);
+                ImGui::DragFloat("Size", &m_PaintTex.Scale, 0.005f, 0.001f, 100.0f, "%.3f m");
+            }
+            if (m_PaintTex.Mapping != 2)
+            {
+                ImGui::SetNextItemWidth(170.0f);
+                ImGui::DragFloat("Angle", &m_PaintTex.Angle, 1.0f, -360.0f, 360.0f, "%.0f deg");
+            }
+            if (ImGui::Button("None"))
+            {
+                m_PaintTexAsset = AssetHandle::None();
+                m_PaintTex.Values.clear();
+            }
+            ImGui::EndPopup();
+        }
+        if (m_PaintBlend == pt::Blend::Clone)
+        {
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::SetNextItemWidth(150.0f);
+            UI::AssetField("##clonefrom", m_CloneAsset, AssetType::Texture);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Clone From: the texture Clone copies (none: the one being painted). Ctrl+click sets where it copies from.");
+        }
         ImGui::SameLine();
         if (toggle("Front Faces", m_PaintFrontFaces, "Only faces turned towards the camera")) m_PaintFrontFaces = !m_PaintFrontFaces;
         ImGui::SameLine(0.0f, 2.0f);

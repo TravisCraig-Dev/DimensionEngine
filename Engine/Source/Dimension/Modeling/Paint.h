@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/Modeling/EditableMesh.h"
+#include "Dimension/Modeling/Sculpt.h"
 
 // Painting (Blender's Vertex Paint and Texture Paint): brushes that color a mesh's corners, or the texels of an image
 // laid on it through its UVs, wherever the surface lies inside the brush's sphere. Colors are RGBA8 with sRGB color,
@@ -35,6 +36,7 @@ namespace Dimension::Modeling::Paint
         Darken,
         Erase,    // alpha down (texture paint)
         Blur,     // averages with the neighbours
+        Clone,    // the colors of CloneSource, CloneOffset away in UV (another texture, or this one elsewhere)
         Count
     };
     const char* BlendName(Blend b);
@@ -54,6 +56,9 @@ namespace Dimension::Modeling::Paint
         glm::vec3 ViewDir{ 0, 0, -1 }; // the camera's looking direction (model space)
         uint8_t Symmetry = 0;          // bits: 1 X, 2 Y, 4 Z (the model's own planes)
         bool Linear = false;           // blend in linear light (else on the sRGB values, like most paint programs)
+        const Sculpt::BrushTexture* Texture = nullptr; // varies the strength across the brush (or a stencil on screen)
+        const Image* CloneSource = nullptr;            // Clone: where the colors come from
+        glm::vec2 CloneOffset{ 0.0f };                 // Clone: added to the painted point's UV to find its color
     };
     // The brush's weight at a distance (0 outside it).
     float BrushWeight(const Brush& brush, float distance);
@@ -83,6 +88,10 @@ namespace Dimension::Modeling::Paint
     // Texture Paint: the texels whose point on the surface (through the faces' UVs) is inside the brush, a little past
     // each face's UV edges so seams don't show gaps.
     Rect PaintTexture(const EditableMesh& m, Image& image, const glm::vec3& center, const Brush& brush);
+    // Painting straight on the image (as the UV Editor shows it): pixels within `radius` pixels of `center` (in
+    // pixels, repeating across the edges). The brush's Radius is ignored; a texture maps over each dab (Tiled: every
+    // Scale UV units).
+    Rect PaintImage(Image& image, const glm::vec2& center, float radius, const Brush& brush);
     // Every corner of `faces` one color.
     void FillVertices(EditableMesh& m, const std::vector<uint32_t>& faces, uint32_t rgba);
     // The UV and vertex color at a point on a face (barycentric over its triangles).

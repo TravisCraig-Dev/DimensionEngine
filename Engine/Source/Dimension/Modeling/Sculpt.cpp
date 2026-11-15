@@ -86,6 +86,14 @@ namespace Dimension::Modeling::Sculpt
 
     float BrushTexture::At(const glm::vec3& p, const glm::vec3& center, float radius, const glm::vec3& view) const
     {
+        if (Mapping == 2)
+        {
+            glm::vec4 q = Stencil * glm::vec4(p, 1.0f);
+            if (q.w <= 1e-9f) return 0.0f;
+            glm::vec2 uv(q.x / q.w, q.y / q.w);
+            if (uv.x < 0.0f || uv.y < 0.0f || uv.x > 1.0f || uv.y > 1.0f) return 0.0f;
+            return Sample(uv);
+        }
         glm::vec3 n = glm::length(view) > 1e-12f ? glm::normalize(view) : glm::vec3(0, 0, -1);
         glm::vec3 helper = std::abs(n.y) < 0.99f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
         glm::vec3 right = glm::normalize(glm::cross(helper, n)), up = glm::cross(n, right);

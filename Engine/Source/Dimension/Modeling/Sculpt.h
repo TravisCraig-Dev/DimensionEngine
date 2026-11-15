@@ -40,9 +40,11 @@ namespace Dimension::Modeling::Sculpt
     {
         std::vector<float> Values; // 0..1 per pixel, rows from the top
         uint32_t Width = 0, Height = 0;
-        int Mapping = 0;      // 0: one copy over each dab (facing the view); 1: tiled over the view plane every Scale units
+        int Mapping = 0;      // 0: one copy over each dab (facing the view); 1: tiled over the view plane every Scale units;
+                              // 2: a stencil fixed on the screen (Stencil places it)
         float Scale = 1.0f;   // tiled: the model units one copy spans
         float Angle = 0.0f;   // degrees
+        glm::mat4 Stencil{ 1.0f }; // stencil: model space to the texture's UV (x, y after dividing by w; outside 0..1: none)
         // From RGBA8 pixels (their brightness times alpha).
         static BrushTexture FromRGBA8(const uint32_t* pixels, uint32_t width, uint32_t height);
         float Sample(glm::vec2 uv) const; // bilinear, repeating

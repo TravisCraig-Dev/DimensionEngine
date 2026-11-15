@@ -205,6 +205,7 @@ namespace Editor::Shortcuts
                 { "uv.merge", "UV Editor", "Merge Menu", ImGuiKey_M },
                 { "uv.stitch", "UV Editor", "Stitch", ImGuiKey_V },
                 { "uv.sync", "UV Editor", "Toggle Sync Selection", 0 },
+                { "uv.paint", "UV Editor", "Toggle Painting", 0 },
                 { "uv.frame", "UV Editor", "Frame Selected", ImGuiKey_KeypadDecimal },
                 { "uv.frameAll", "UV Editor", "Frame All", ImGuiKey_Home },
                 { "object.join", "Object", "Join Meshes", ImGuiMod_Ctrl | ImGuiKey_J },

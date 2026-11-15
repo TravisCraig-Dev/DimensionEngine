@@ -13,6 +13,7 @@ namespace Editor
 {
     using namespace Dimension::Modeling;
     namespace uv = Dimension::Modeling::UV;
+    namespace pt = Dimension::Modeling::Paint;
 
     namespace
     {
@@ -506,7 +507,57 @@ namespace Editor
         if (Pressed("uv.frameAll")) FrameUVs(false);
     }
 
-    void MeshEditMode::HandleUVMouse(const std::vector<uint32_t>& faces, bool hovered)
+    void MeshEditMode::UpdateUVPaint(bool hovered)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 mouse = ImGui::GetMousePos();
+        glm::vec2 size((float)m_PaintImage.Width, (float)m_PaintImage.Height);
+        float radius = m_PaintRadiusPx / std::max(m_UVZoom, 1e-3f) * size.x; // (in the texture's pixels)
+        auto dab = [&](ImVec2 at) {
+            pt::Brush b = PaintBrush(glm::vec3(0.0f), glm::vec3(0, 0, -1), io.KeyShift);
+            b.Texture = b.Texture && m_PaintTex.Mapping != 2 ? b.Texture : nullptr; // (a stencil belongs to the 3D view)
+            pt::Rect r = pt::PaintImage(m_PaintImage, ScreenToUV(at) * size, radius, b);
+            if (r.Empty()) return;
+            m_PaintStrokeRect.Add(r);
+            m_PaintGpuDirty = m_PaintUnsaved = true;
+        };
+        if (!m_UVPainting)
+        {
+            if (!hovered || io.KeyAlt || !ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
+            if (m_PaintBlend == pt::Blend::Clone && !io.KeyShift)
+            {
+                if (io.KeyCtrl)
+                {
+                    m_CloneAnchorUV = ScreenToUV(mouse);
+                    m_CloneAnchorSet = true;
+                    return;
+                }
+                if (!BeginClone(ScreenToUV(mouse))) return;
+            }
+            Record("Texture Paint");
+            BeginTextureStroke();
+            m_UVPainting = true;
+            m_UVPaintMouse = mouse;
+            dab(mouse);
+            return;
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            m_UVPainting = false;
+            EndTextureStroke();
+            return;
+        }
+        float spacing = std::max(2.0f, m_PaintRadiusPx * 0.2f);
+        int steps = std::min((int)(Dist(mouse, m_UVPaintMouse) / spacing), 16);
+        for (int i = 1; i <= steps; ++i)
+        {
+            float k = (float)i / (float)steps;
+            dab(ImVec2(m_UVPaintMouse.x + (mouse.x - m_UVPaintMouse.x) * k, m_UVPaintMouse.y + (mouse.y - m_UVPaintMouse.y) * k));
+        }
+        if (steps > 0) m_UVPaintMouse = mouse;
+    }
+
+    void MeshEditMode::HandleUVMouse(const std::vector<uint32_t>& faces, bool hovered, bool selectWithLeft)
     {
         ImGuiIO& io = ImGui::GetIO();
         ImVec2 mouse = ImGui::GetMousePos();
@@ -527,7 +578,7 @@ namespace Editor
             else
                 m_UVPanning = false;
         }
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        if (selectWithLeft && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
             m_UVPressing = true;
             m_UVBoxSelecting = false;
@@ -671,6 +722,16 @@ namespace Editor
         next("Pixel Snap");
         ImGui::Checkbox("Pixel Snap", &m_UVPixelSnap);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Moved, turned and scaled UVs land on the texture's pixel corners");
+        bool canPaint = m_PaintMode == 2 && !m_PaintImage.Empty();
+        if (Shortcuts::Pressed("uv.paint")) m_UVPaint = !m_UVPaint;
+        if (canPaint)
+        {
+            next("Paint");
+            ImGui::Checkbox("Paint", &m_UVPaint);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Paint the texture right here with the Texture Paint brush (left drag; Shift blurs; the middle button pans)");
+        }
+        bool painting2D = canPaint && m_UVPaint;
         ImGui::PopStyleVar();
 
         // The canvas.
@@ -761,8 +822,30 @@ namespace Editor
 
         // Interaction.
         if (m_UVModal.Kind != UVModalKind::None) UpdateUVModal(faces);
+        else if (painting2D)
+        {
+            HandleUVMouse(faces, hovered, false);
+            UpdateUVPaint(hovered);
+            if (m_PaintGpuDirty)
+            {
+                AssetManager::SetTexturePixels(m_PaintTexture, m_PaintImage.Pixels.data(), m_PaintImage.Width, m_PaintImage.Height);
+                m_PaintGpuDirty = false;
+            }
+            if (hovered || m_UVPainting)
+            {
+                glm::vec4 pc = m_PaintColor;
+                ImVec2 mp = ImGui::GetMousePos();
+                dl->AddCircle(mp, m_PaintRadiusPx, IM_COL32(0, 0, 0, 160), 64, 3.0f);
+                dl->AddCircle(mp, m_PaintRadiusPx, IM_COL32((int)(pc.r * 255), (int)(pc.g * 255), (int)(pc.b * 255), 230), 64, 1.5f);
+            }
+        }
         else
         {
+            if (m_UVPainting)
+            {
+                m_UVPainting = false;
+                EndTextureStroke();
+            }
             if ((hovered || ImGui::IsWindowFocused()) && !ImGui::GetIO().WantTextInput) HandleUVKeys(faces, hovered);
             HandleUVMouse(faces, hovered);
         }
