@@ -65,7 +65,7 @@ namespace Dimension
         void ReadPrimitive(const cgltf_primitive& prim, const glm::mat4& transform, MeshData& out, bool& needNormals,
                            const std::vector<int>* jointRemap)
         {
-            const cgltf_accessor *pos = nullptr, *nrm = nullptr, *uv = nullptr, *joints = nullptr, *weights = nullptr, *tan = nullptr;
+            const cgltf_accessor *pos = nullptr, *nrm = nullptr, *uv = nullptr, *joints = nullptr, *weights = nullptr, *tan = nullptr, *color = nullptr;
             for (cgltf_size a = 0; a < prim.attributes_count; ++a)
             {
                 auto& attr = prim.attributes[a];
@@ -73,6 +73,7 @@ namespace Dimension
                 else if (attr.type == cgltf_attribute_type_normal) nrm = attr.data;
                 else if (attr.type == cgltf_attribute_type_tangent) tan = attr.data;
                 else if (attr.type == cgltf_attribute_type_texcoord && attr.index == 0) uv = attr.data;
+                else if (attr.type == cgltf_attribute_type_color && attr.index == 0) color = attr.data;
                 else if (attr.type == cgltf_attribute_type_joints && attr.index == 0) joints = attr.data;
                 else if (attr.type == cgltf_attribute_type_weights && attr.index == 0) weights = attr.data;
             }
@@ -91,6 +92,13 @@ namespace Dimension
                     v.Normal = glm::normalize(normalMatrix * v.Normal);
                 }
                 if (uv) cgltf_accessor_read_float(uv, i, glm::value_ptr(v.UV), 2);
+                if (color)
+                {
+                    // glTF vertex colors are linear; ours are sRGB bytes.
+                    glm::vec4 c(1.0f);
+                    cgltf_accessor_read_float(color, i, glm::value_ptr(c), 4);
+                    v.Color = PackRGBA8(glm::vec4(LinearToSrgb(c.r), LinearToSrgb(c.g), LinearToSrgb(c.b), c.a));
+                }
                 if (tan && nrm)
                 {
                     // Authored tangents (glTF TANGENT): match the artist's normal-map baker exactly.

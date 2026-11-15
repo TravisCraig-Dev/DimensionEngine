@@ -484,7 +484,8 @@ namespace Dimension
         mesh.Attributes = { { 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Position) },
                             { 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, Normal) },
                             { 2, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, UV) },
-                            { 3, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, Tangent) } };
+                            { 3, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, Tangent) },
+                            { 4, VK_FORMAT_R8G8B8A8_UNORM, offsetof(Vertex, Color) } };
         mesh.CullMode = VK_CULL_MODE_BACK_BIT;
         mesh.DepthTest = mesh.DepthWrite = true;
         // HDR color, entity ids and the surface buffer for screen-space reflections (opaque meshes only write it).

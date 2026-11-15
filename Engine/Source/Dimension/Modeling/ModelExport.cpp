@@ -91,7 +91,8 @@ namespace Dimension::Modeling
             size_t n = used.size();
             std::vector<glm::vec3> pos(n), nrm(n);
             std::vector<glm::vec2> uv(n);
-            std::vector<glm::vec4> tan(n);
+            std::vector<glm::vec4> tan(n), col(n);
+            bool colored = false;
             glm::vec3 mn(1e30f), mx(-1e30f);
             for (size_t i = 0; i < n; ++i)
             {
@@ -100,6 +101,9 @@ namespace Dimension::Modeling
                 float len = glm::length(v.Normal);
                 nrm[i] = len > 1e-12f ? v.Normal / len : glm::vec3(0, 1, 0);
                 uv[i] = v.UV;
+                glm::vec4 c = UnpackRGBA8(v.Color);
+                col[i] = glm::vec4(SrgbToLinear(c.r), SrgbToLinear(c.g), SrgbToLinear(c.b), c.a); // (glTF colors are linear)
+                colored |= v.Color != 0xFFFFFFFFu;
                 glm::vec3 t(v.Tangent);
                 float tl = glm::length(t);
                 tan[i] = tl > 1e-12f ? glm::vec4(t / tl, v.Tangent.w < 0.0f ? -1.0f : 1.0f) : glm::vec4(1, 0, 0, 1);
@@ -114,6 +118,7 @@ namespace Dimension::Modeling
             attributes["NORMAL"] = accessor(view(Append(bin, nrm.data(), n), n * 12, kArray), kFloat, n, "VEC3");
             attributes["TEXCOORD_0"] = accessor(view(Append(bin, uv.data(), n), n * 8, kArray), kFloat, n, "VEC2");
             if (tangents) attributes["TANGENT"] = accessor(view(Append(bin, tan.data(), n), n * 16, kArray), kFloat, n, "VEC4");
+            if (colored) attributes["COLOR_0"] = accessor(view(Append(bin, col.data(), n), n * 16, kArray), kFloat, n, "VEC4");
             size_t off = Append(bin, indices.data(), indices.size());
             json prim = { { "attributes", attributes }, { "mode", 4 } };
             prim["indices"] = accessor(view(off, indices.size() * 4, kElements), kUInt, indices.size(), "SCALAR");

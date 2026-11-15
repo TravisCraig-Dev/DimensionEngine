@@ -3,6 +3,8 @@
 #include "Dimension/Animation/Animation.h"
 #include "Dimension/Renderer/Material.h"
 #include <glm/glm.hpp>
+#include <algorithm>
+#include <cmath>
 
 namespace Dimension
 {
@@ -12,7 +14,22 @@ namespace Dimension
         glm::vec3 Normal;
         glm::vec2 UV;
         glm::vec4 Tangent{ 0.0f }; // xyz tangent, w handedness (+-1); all zero = none (shaders derive a frame)
+        uint32_t Color = 0xFFFFFFFFu; // vertex color, RGBA8 with sRGB color (multiplies the base color); white = none
     };
+    static_assert(sizeof(Vertex) == 52, "Vertex is 13 tightly packed 4-byte values (BlendShapes.comp reads it so)");
+
+    // RGBA8 colors (red in the lowest byte, as images and the vertex Color store them) to and from 0..1 floats.
+    inline glm::vec4 UnpackRGBA8(uint32_t c)
+    {
+        return glm::vec4((float)(c & 0xFF), (float)((c >> 8) & 0xFF), (float)((c >> 16) & 0xFF), (float)(c >> 24)) / 255.0f;
+    }
+    inline uint32_t PackRGBA8(const glm::vec4& v)
+    {
+        auto b = [](float x) { return (uint32_t)(std::clamp(x, 0.0f, 1.0f) * 255.0f + 0.5f); };
+        return b(v.r) | (b(v.g) << 8) | (b(v.b) << 16) | (b(v.a) << 24);
+    }
+    inline float SrgbToLinear(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+    inline float LinearToSrgb(float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; }
 
     // Per-vertex skinning data (std430-compatible; read by the vertex shader through a device address).
     struct SkinVertex

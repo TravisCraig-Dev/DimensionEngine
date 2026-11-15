@@ -158,6 +158,11 @@ namespace Editor
             SetSculpting(false); // (Tab in Sculpt Mode goes back to Edit Mode, as in Blender)
             return;
         }
+        if (m_Active && m_PaintMode)
+        {
+            SetPaintMode(0);
+            return;
+        }
         if (m_Active)
         {
             Exit();
@@ -203,6 +208,10 @@ namespace Editor
         m_Pressing = m_BoxSelecting = false;
         m_Sculpting = m_SculptValid = m_Stroking = false;
         m_SculptAdjust = 0;
+        m_PaintMode = 0;
+        m_Painting = false;
+        m_PaintAdjust = 0;
+        m_PaintRaysVersion = ~0ull;
         ops::FlushSelection(m_Mesh, m_Mode);
         ++m_GeometryVersion;
         return true;
@@ -222,6 +231,16 @@ namespace Editor
         m_Sculpting = m_SculptValid = false;
         m_SculptAdjust = 0;
         m_Sculpt = {};
+        if (m_Painting)
+        {
+            m_Painting = false;
+            if (m_PaintMode == 1) Commit();
+        }
+        SavePaintTexture();
+        m_PaintMode = 0;
+        m_PaintAdjust = 0;
+        m_PaintImage = {};
+        m_PaintTexture = AssetHandle::None();
         m_Tool = Tool::None;
         m_KnifePoints.clear();
         m_LoopPreview.clear();
@@ -238,6 +257,7 @@ namespace Editor
     void MeshEditMode::Save()
     {
         if (!m_Active) return;
+        SavePaintTexture();
         m_Mesh.Name = m_File.stem().string();
         if (m_Mesh.Save(m_File)) m_Dirty = false;
         else Log::Error("Could not write the model {}", m_File.string());
@@ -312,10 +332,12 @@ namespace Editor
             m_LoopPreview.clear();
             return;
         }
-        if (m_Stroking || m_SculptAdjust) return;
+        if (m_Stroking || m_SculptAdjust || m_Painting || m_PaintAdjust) return;
         if (m_Undo.empty()) return;
         m_SculptValid = false;
-        m_Redo.push_back({ m_Mesh, m_Mode, m_Undo.back().Name });
+        m_PaintRaysVersion = ~0ull;
+        m_Redo.push_back({ m_Mesh, m_Mode, m_Undo.back().Name, m_Undo.back().Paint });
+        if (m_Redo.back().Paint) SwapPaintUndo(*m_Redo.back().Paint);
         m_Mesh = std::move(m_Undo.back().Mesh);
         m_Mode = m_Undo.back().Mode;
         m_Undo.pop_back();
@@ -327,7 +349,9 @@ namespace Editor
     {
         if (IsModal() || m_Redo.empty()) return;
         m_SculptValid = false;
-        m_Undo.push_back({ m_Mesh, m_Mode, m_Redo.back().Name });
+        m_PaintRaysVersion = ~0ull;
+        m_Undo.push_back({ m_Mesh, m_Mode, m_Redo.back().Name, m_Redo.back().Paint });
+        if (m_Undo.back().Paint) SwapPaintUndo(*m_Undo.back().Paint);
         m_Mesh = std::move(m_Redo.back().Mesh);
         m_Mode = m_Redo.back().Mode;
         m_Redo.pop_back();
@@ -365,13 +389,13 @@ namespace Editor
         m_Size = size;
         m_View = view;
         m_Proj = proj;
-        if (m_Sculpting)
+        if (m_Sculpting || m_PaintMode)
         {
             m_World = m_Ctx.ActiveScene().GetRegistry().Get<TransformComponent>(m_Entity).World;
             m_ViewProj = proj * view;
             m_CameraWorld = glm::vec3(glm::inverse(view)[3]);
             m_CameraLocal = glm::vec3(glm::inverse(m_World) * glm::vec4(m_CameraWorld, 1.0f));
-            return UpdateSculptView(hovered, focused, blocked);
+            return m_Sculpting ? UpdateSculptView(hovered, focused, blocked) : UpdatePaintView(hovered, focused, blocked);
         }
         UpdateProjection(origin, size, view, proj);
 
@@ -578,6 +602,8 @@ namespace Editor
         ImGui::SameLine();
         if (toggle("Sculpt", false, ("Sculpt Mode: shape the model with brushes (" + Shortcuts::Label("mesh.sculptMode") + ")").c_str()))
             SetSculpting(true);
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Paint", false, "Vertex Paint and Texture Paint: color the model with brushes; bake maps")) SetPaintMode(2);
         ImGui::SameLine();
         if (toggle("X-Ray", m_XRay, ("See and select through the surface (" + Shortcuts::Label("mesh.xray") + ")").c_str())) m_XRay = !m_XRay;
         ImGui::SameLine();
@@ -1175,6 +1201,8 @@ namespace Editor
         if (Pressed("mesh.faceMenu")) m_OpenMenu = 6;
         if (Pressed("mesh.uvMenu")) m_OpenMenu = 9;
         if (Pressed("mesh.sculptMode")) SetSculpting(true);
+        if (Pressed("mesh.vertexPaint")) SetPaintMode(1);
+        if (Pressed("mesh.texturePaint")) SetPaintMode(2);
     }
 
     // ---- Mouse selection

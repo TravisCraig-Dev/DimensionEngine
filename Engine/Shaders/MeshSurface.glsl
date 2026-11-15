@@ -86,6 +86,7 @@ layout(location = 4) in vec4 vTangent;
 layout(location = 5) in float vShell; // fur shells: height 0-1
 layout(location = 6) in float vFoam;  // water (Flags.w = 2): foam 0-1
 layout(location = 7) flat in vec4 vTint; // an instance's own color (Visual Effect meshes), else white
+layout(location = 8) in vec4 vColor;     // the vertex color (linear), white when the mesh has none
 
 #ifdef DIM_OIT
 // Weighted blended order-independent transparency (McGuire and Bavoil 2013): the shaded color, weighted by its alpha
@@ -292,6 +293,7 @@ void main()
     }
     else
         base = SampleTexture(m.Maps.x, uv) * m.BaseColor;
+    base *= vColor;
     if (m.Flags.x == 1u && base.a < m.Params.z) discard;
     if (m.Flags.w == 1u)
     {

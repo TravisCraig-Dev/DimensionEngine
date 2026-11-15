@@ -365,6 +365,7 @@ namespace Editor
     void EditorLayer::OnDetach()
     {
         if (m_Ctx.IsPlaying()) Stop();
+        m_MeshEdit->Exit(); // (writes the model and a painted texture)
         ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
         ImGui::GetIO().IniFilename = nullptr;
         m_Ctx.EditorScene.reset();
@@ -4361,6 +4362,13 @@ namespace Editor
                     std::string chord;
                     words >> chord;
                     key(chord, false);
+                }
+                else if (action == "type")
+                {
+                    // Text typed into the active field.
+                    std::string text;
+                    words >> text;
+                    io.AddInputCharactersUTF8(text.c_str());
                 }
             }
             else if (frame + 1 == now)

@@ -84,6 +84,8 @@
 #include <Dimension/Modeling/Modifiers.h>
 #include <Dimension/Modeling/UVTools.h>
 #include <Dimension/Modeling/Sculpt.h>
+#include <Dimension/Modeling/Paint.h>
+#include <Dimension/Modeling/Bake.h>
 #include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/ModelExport.h>
@@ -127,6 +129,7 @@ namespace
     bool Near(float a, float b, float eps = 1e-3f) { return std::abs(a - b) <= eps; }
     bool Near(const glm::vec2& a, const glm::vec2& b, float eps = 1e-3f) { return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec2(eps))); }
     bool Near(const glm::vec3& a, const glm::vec3& b, float eps = 1e-3f) { return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec3(eps))); }
+    bool Near(const glm::vec4& a, const glm::vec4& b, float eps = 1e-3f) { return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec4(eps))); }
 
     struct Position { float X = 0, Y = 0; };
     struct Velocity { float X = 0, Y = 0; };
@@ -18663,6 +18666,194 @@ namespace
         CHECK(kept.Name == "Pair" && kept.MaterialSlots.size() == 1 && kept.Modifiers.size() == 1);
     }
 
+    void TestModelingVertexColors()
+    {
+        using namespace ModelingTest;
+        CHECK(sizeof(Vertex) == 52 && Vertex{}.Color == 0xFFFFFFFFu);
+        CHECK(PackRGBA8(glm::vec4(1, 0, 0, 1)) == 0xFF0000FFu && Near(UnpackRGBA8(0xFF00FF00u), glm::vec4(0, 1, 0, 1)));
+        // Corner colors render as vertex colors (corners of one vertex with different colors split it), and are kept
+        // in the file.
+        EditableMesh cube = Primitives::Cube();
+        uint32_t red = PackRGBA8(glm::vec4(1, 0, 0, 1)), blue = PackRGBA8(glm::vec4(0, 0, 1, 1));
+        Paint::FillVertices(cube, { 0 }, red);
+        Paint::FillVertices(cube, { 1 }, blue);
+        CHECK(cube.HasColors() && !Primitives::Cube().HasColors());
+        MeshData data = cube.ToMeshData();
+        size_t reds = 0, blues = 0, whites = 0;
+        for (const Vertex& v : data.Vertices)
+        {
+            if (v.Color == red) ++reds;
+            else if (v.Color == blue) ++blues;
+            else if (v.Color == 0xFFFFFFFFu) ++whites;
+        }
+        CHECK(reds == 4 && blues == 4 && whites == data.Vertices.size() - 8);
+        EditableMesh back;
+        CHECK(EditableMesh::FromJson(cube.ToJson(), back) && back.Faces[0].ColorAt(2) == red && back.Faces[1].ColorAt(0) == blue && back.Faces[2].ColorAt(0) == 0xFFFFFFFFu);
+        // Back from a render mesh, and through the subdivision modifier (colors blend like UVs).
+        EditableMesh fromData = EditableMesh::FromMeshData(data);
+        CHECK(fromData.HasColors());
+        EditableMesh smooth = Primitives::Cube();
+        smooth.Faces[0].SetColor(0, red); // one corner: the face's color fades from it
+        smooth.Modifiers.push_back(Modifier::Make(ModifierType::Subdivision));
+        bool someMixed = false;
+        for (const Vertex& v : smooth.ToMeshData().Vertices)
+        {
+            glm::vec4 c = UnpackRGBA8(v.Color);
+            someMixed |= c.r > 0.95f && c.g > 0.2f && c.g < 0.8f; // red faded towards white
+        }
+        CHECK(someMixed);
+        // Turning faces over keeps each corner's color.
+        EditableMesh flipped = cube;
+        uint32_t corner0 = flipped.Faces[0].Verts[0];
+        flipped.Faces[0].SetColor(0, blue);
+        flipped.Faces[0].Reverse();
+        CHECK(flipped.Faces[0].Verts.back() == corner0 && flipped.Faces[0].Colors.back() == blue);
+        // glTF keeps them (COLOR_0, linear).
+        fs::path file = fs::temp_directory_path() / "dimension_colors.glb";
+        CHECK(ExportGltf(data, file));
+        MeshData loaded;
+        CHECK(MeshData::LoadFromFile(file, loaded));
+        size_t loadedReds = 0;
+        for (const Vertex& v : loaded.Vertices)
+            if (glm::length(UnpackRGBA8(v.Color) - glm::vec4(1, 0, 0, 1)) < 0.02f) ++loadedReds;
+        CHECK(loadedReds == 4);
+        fs::remove(file);
+    }
+
+    void TestModelingPainting()
+    {
+        using namespace ModelingTest;
+        // Vertex paint: red under the brush, white beyond; Blur softens; the mirror copy paints too.
+        EditableMesh grid = Primitives::Grid(20, 20, 2.0f);
+        Paint::Brush brush;
+        brush.Color = { 1, 0, 0, 1 };
+        brush.Radius = 0.3f;
+        brush.ViewDir = { 0, -1, 0 };
+        brush.Hardness = 1.0f;
+        CHECK(Paint::PaintVertices(grid, { 0.5f, 0, 0 }, brush) > 0);
+        auto colorAt = [&](const EditableMesh& m, glm::vec3 p) {
+            for (const Face& f : m.Faces)
+                for (size_t c = 0; c < f.Verts.size(); ++c)
+                    if (glm::length(m.Positions[f.Verts[c]] - p) < 1e-4f) return UnpackRGBA8(f.ColorAt(c));
+            return glm::vec4(-1.0f);
+        };
+        CHECK(Near(colorAt(grid, { 0.5f, 0, 0 }), glm::vec4(1, 0, 0, 1), 0.01f) && Near(colorAt(grid, { -0.5f, 0, 0 }), glm::vec4(1.0f)));
+        Paint::Brush mirrored = brush;
+        mirrored.Color = { 0, 0, 1, 1 };
+        mirrored.Symmetry = 1;
+        Paint::PaintVertices(grid, { 0.5f, 0, 0.6f }, mirrored);
+        CHECK(Near(colorAt(grid, { -0.5f, 0, 0.6f }), glm::vec4(0, 0, 1, 1), 0.01f));
+        Paint::Brush back = brush;
+        back.ViewDir = { 0, 1, 0 }; // seen from below: nothing faces it
+        CHECK(Paint::PaintVertices(grid, { -0.5f, 0, -0.5f }, back) == 0);
+        Paint::Brush blur = brush;
+        blur.Mode = Paint::Blend::Blur;
+        blur.Radius = 0.6f;
+        float edgeBefore = colorAt(grid, { 0.8f, 0, 0 }).g;
+        for (int i = 0; i < 5; ++i) Paint::PaintVertices(grid, { 0.5f, 0, 0 }, blur);
+        CHECK(colorAt(grid, { 0.5f, 0, 0 }).g > 0.01f || colorAt(grid, { 0.8f, 0, 0 }).g < edgeBefore); // the edge softened
+        // Blend modes.
+        CHECK(Near(Paint::BlendColor({ 0.2f, 0.2f, 0.2f, 1 }, { 0.5f, 0.5f, 0.5f, 1 }, Paint::Blend::Add, 1.0f), glm::vec4(0.7f, 0.7f, 0.7f, 1)));
+        CHECK(Near(Paint::BlendColor({ 0.5f, 0.5f, 0.5f, 1 }, { 0.5f, 1, 0, 1 }, Paint::Blend::Multiply, 1.0f), glm::vec4(0.25f, 0.5f, 0, 1)));
+        CHECK(Near(Paint::BlendColor({ 1, 1, 1, 1 }, { 0, 0, 0, 1 }, Paint::Blend::Erase, 0.25f).a, 0.75f));
+        CHECK(Near(Paint::BlendColor({ 1, 1, 1, 1 }, { 0, 0, 0, 1 }, Paint::Blend::Mix, 0.5f), glm::vec4(0.5f, 0.5f, 0.5f, 1)));
+
+        // Texture paint on a plane whose UVs fill the image: the texels under the brush, and only those.
+        EditableMesh plane = Primitives::Plane(2.0f);
+        Paint::Image image = Paint::Image::Solid(64, 64, 0xFFFFFFFFu);
+        Paint::Brush tex = brush;
+        tex.Radius = 0.25f;
+        Paint::Rect r = Paint::PaintTexture(plane, image, { 0.5f, 0, 0.5f }, tex); // u 0.75, v 0.75 (v grows with +Z)
+        CHECK(!r.Empty() && r.X0 > 32 && r.Y0 > 32 && r.X1 < 64 && r.Y1 < 64);
+        CHECK(Near(UnpackRGBA8(image.At(48, 48)), glm::vec4(1, 0, 0, 1), 0.01f) && image.At(16, 16) == 0xFFFFFFFFu);
+        CHECK(Near(image.Sample({ 0.75f, 0.75f }), glm::vec4(1, 0, 0, 1), 0.02f));
+        glm::vec2 uv;
+        glm::vec4 color;
+        CHECK(Paint::SurfaceAt(plane, 0, { 0.5f, 0, 0.5f }, uv, color) && Near(uv, glm::vec2(0.75f, 0.75f), 1e-4f));
+        // Images save and load.
+        fs::path png = fs::temp_directory_path() / "dimension_paint.png";
+        CHECK(image.SavePng(png));
+        Paint::Image loaded;
+        CHECK(Paint::Image::Load(png, loaded) && loaded.Width == 64 && loaded.Pixels == image.Pixels);
+        fs::remove(png);
+    }
+
+    void TestModelingBaking()
+    {
+        using namespace ModelingTest;
+        // Normal map: a flat plane baked from a tilted copy of itself gives the tilt in tangent space everywhere.
+        EditableMesh lowMesh = Primitives::Plane(2.0f);
+        MeshData low = lowMesh.ToMeshData();
+        EditableMesh highMesh = Primitives::Grid(8, 8, 2.0f);
+        MeshData high = highMesh.ToMeshData();
+        float angle = glm::radians(10.0f);
+        glm::mat4 tilt = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0, 0, 1));
+        Bake::Settings settings;
+        settings.Width = settings.Height = 64;
+        settings.CageExtrusion = 0.3f;
+        settings.AOSamples = 16;
+        Bake::Result r = Bake::BakeMaps(low, &high, tilt, settings);
+        CHECK(r.Texels > 4000 && r.Missed == 0);
+        glm::vec4 n = UnpackRGBA8(r.Normal.At(32, 32));
+        glm::vec3 expected(-std::sin(angle), 0.0f, std::cos(angle)); // T = +X, B = -Z (up the image), N = +Y
+        CHECK(Near(glm::vec3(n) * 2.0f - 1.0f, expected, 0.02f));
+        CHECK(Near(UnpackRGBA8(r.Normal.At(5, 60)), n, 0.02f)); // the same at a corner
+        // Nothing around: no occlusion.
+        CHECK(Near(UnpackRGBA8(r.AmbientOcclusion.At(32, 32)).r, 1.0f, 0.01f));
+
+        // Ambient occlusion: a box standing on the plane darkens the plane next to it.
+        EditableMesh scene = Primitives::Grid(8, 8, 2.0f);
+        EditableMesh box = Primitives::Cube(0.5f);
+        for (auto& p : box.Positions) p += glm::vec3(0, 0.25f, 0);
+        scene.Append(box);
+        scene.Changed();
+        MeshData occluders = scene.ToMeshData();
+        Bake::Settings ao = settings;
+        ao.Normal = false;
+        ao.Curvature = false;
+        ao.AOSamples = 64;
+        ao.AODistance = 1.0f;
+        Bake::Result shaded = Bake::BakeMaps(low, &occluders, glm::mat4(1.0f), ao);
+        float nearBox = UnpackRGBA8(shaded.AmbientOcclusion.At(32 + 9, 32)).r; // just beside it (x 0.28)
+        float open = UnpackRGBA8(shaded.AmbientOcclusion.At(2, 2)).r;
+        CHECK(nearBox < open - 0.15f && open > 0.85f);
+        CHECK(shaded.Normal.Empty() && shaded.Curvature.Empty());
+
+        // Curvature (baked from itself): a torus's outside is convex (light), its inside concave (dark).
+        EditableMesh torus = Primitives::Torus(32, 16, 1.0f, 0.3f);
+        MeshData t = torus.ToMeshData();
+        Bake::Settings curv = settings;
+        curv.Width = curv.Height = 128;
+        curv.Normal = curv.AmbientOcclusion = false;
+        Bake::Result c = Bake::BakeMaps(t, nullptr, glm::mat4(1.0f), curv);
+        float outer = 0.0f, inner = 0.0f;
+        int outerN = 0, innerN = 0;
+        for (size_t i = 0; i + 2 < t.Indices.size(); i += 3)
+        {
+            glm::vec3 p = (t.Vertices[t.Indices[i]].Position + t.Vertices[t.Indices[i + 1]].Position + t.Vertices[t.Indices[i + 2]].Position) / 3.0f;
+            glm::vec2 uv = (t.Vertices[t.Indices[i]].UV + t.Vertices[t.Indices[i + 1]].UV + t.Vertices[t.Indices[i + 2]].UV) / 3.0f;
+            float v = c.Curvature.Sample(uv).r, radial = glm::length(glm::vec2(p.x, p.z));
+            if (radial > 1.2f) { outer += v; ++outerN; }
+            if (radial < 0.8f) { inner += v; ++innerN; }
+        }
+        // (the inside of a torus still curves out around the tube, just less)
+        CHECK(outerN > 0 && innerN > 0 && outer / outerN > 0.8f && inner / innerN < outer / outerN - 0.1f);
+        // A V-shaped valley is concave (dark) along its fold and flat (middle gray) away from it.
+        EditableMesh valley = Primitives::Grid(16, 16, 2.0f);
+        for (auto& p : valley.Positions) p.y = std::abs(p.z) * 0.5f;
+        valley.Changed();
+        MeshData vd = valley.ToMeshData();
+        Bake::Result vc = Bake::BakeMaps(vd, nullptr, glm::mat4(1.0f), curv);
+        CHECK(vc.Curvature.Sample({ 0.25f, 0.5f }).r < 0.3f && Near(vc.Curvature.Sample({ 0.25f, 0.1f }).r, 0.5f, 0.05f));
+        // Margins: texels just outside an island take its color.
+        Paint::Image dil = Paint::Image::Solid(8, 8, 0);
+        dil.At(3, 3) = 0xFFFFFFFFu;
+        std::vector<uint8_t> cov(64, 0);
+        cov[3 * 8 + 3] = 1;
+        Bake::Dilate(dil, cov, 2);
+        CHECK(dil.At(5, 3) == 0xFFFFFFFFu && dil.At(6, 3) == 0u);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19078,6 +19269,9 @@ int main(int argc, char** argv)
     Run("Modeling sculpt brushes", TestModelingSculptBrushes);
     Run("Modeling dynamic topology", TestModelingDynamicTopology);
     Run("Modeling voxel remesh", TestModelingVoxelRemesh);
+    Run("Modeling vertex colors", TestModelingVertexColors);
+    Run("Modeling painting", TestModelingPainting);
+    Run("Modeling baking", TestModelingBaking);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

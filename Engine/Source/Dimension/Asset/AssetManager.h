@@ -112,6 +112,9 @@ namespace Dimension
         // The same for pictures that change every frame (video): while a frame records, its GPU texture is updated in
         // place through that frame's commands (no new texture, no waiting); otherwise as SetRuntimeTexturePixels.
         static bool StreamRuntimeTexturePixels(AssetHandle handle, const uint32_t* rgba8, size_t count);
+        // Shows new pixels for a texture asset (an image file) until it is next loaded from its file (Texture Paint's
+        // live view): copied into its GPU image in place while a frame is recorded, else a new image (without mips).
+        static bool SetTexturePixels(AssetHandle handle, const uint32_t* rgba8, uint32_t width, uint32_t height);
         static const std::vector<uint32_t>* GetRuntimeTexturePixels(AssetHandle handle, glm::uvec2* size = nullptr);
         static void DestroyRuntimeTexture(AssetHandle handle);
         static void ReleaseRuntimeTextures(const void* owner);

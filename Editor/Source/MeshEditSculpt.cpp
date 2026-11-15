@@ -42,6 +42,7 @@ namespace Editor
     void MeshEditMode::SetSculpting(bool on)
     {
         if (!m_Active || on == m_Sculpting) return;
+        if (on && m_PaintMode) SetPaintMode(0);
         if (m_Modal.Kind != ModalKind::None) EndModal(false);
         m_Tool = Tool::None;
         m_Sculpting = on;

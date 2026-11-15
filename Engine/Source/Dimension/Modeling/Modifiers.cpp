@@ -297,6 +297,14 @@ namespace Dimension::Modeling
                     Face nf;
                     nf.Verts = { face.Verts[i], nV + t.FaceEdges[f][i], nV + nE + f, nV + t.FaceEdges[f][p] };
                     nf.UVs = { uv(i), (uv(i) + uv(q)) * 0.5f, uvF, (uv(p) + uv(i)) * 0.5f };
+                    if (face.Colors.size() == c)
+                    {
+                        // Colors subdivide like UVs (averaged in their 0..1 values).
+                        glm::vec4 cF(0.0f);
+                        for (size_t k = 0; k < c; ++k) cF += UnpackRGBA8(face.Colors[k]);
+                        auto col = [&](size_t k) { return UnpackRGBA8(face.Colors[k]); };
+                        nf.Colors = { face.Colors[i], PackRGBA8((col(i) + col(q)) * 0.5f), PackRGBA8(cF / (float)c), PackRGBA8((col(p) + col(i)) * 0.5f) };
+                    }
                     nf.Material = face.Material;
                     nf.Smooth = face.Smooth;
                     out.Faces.push_back(std::move(nf));
@@ -688,8 +696,7 @@ namespace Dimension::Modeling
                 for (auto& p : copy.Positions) p[axis] = -p[axis];
                 for (auto& f : copy.Faces)
                 {
-                    std::reverse(f.Verts.begin(), f.Verts.end());
-                    std::reverse(f.UVs.begin(), f.UVs.end());
+                    f.Reverse();
                 }
                 copy.Changed();
                 uint32_t base = m.Append(copy);
@@ -763,8 +770,7 @@ namespace Dimension::Modeling
             {
                 Face copy = m.Faces[f];
                 for (uint32_t& v : copy.Verts) v = back[v];
-                std::reverse(copy.Verts.begin(), copy.Verts.end());
-                std::reverse(copy.UVs.begin(), copy.UVs.end());
+                copy.Reverse();
                 m.Faces.push_back(std::move(copy));
             }
             std::vector<std::pair<EdgeKey, EdgeData>> marks(m.EdgeAttrs.begin(), m.EdgeAttrs.end());
@@ -801,8 +807,7 @@ namespace Dimension::Modeling
             if (glm::determinant(glm::mat3(xf)) < 0.0f)
                 for (auto& f : other.Faces)
                 {
-                    std::reverse(f.Verts.begin(), f.Verts.end());
-                    std::reverse(f.UVs.begin(), f.UVs.end());
+                    f.Reverse();
                 }
             other.Changed();
             return ModifierOps::BooleanOp(m, other, mod.Operation);

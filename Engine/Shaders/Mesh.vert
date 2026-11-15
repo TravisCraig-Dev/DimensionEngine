@@ -7,6 +7,7 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aTangent; // w = 0: no tangent
+layout(location = 4) in vec4 aColor;   // vertex color (sRGB bytes; white = none)
 
 layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vNormal;
@@ -16,6 +17,7 @@ layout(location = 4) out vec4 vTangent;
 layout(location = 5) out float vShell; // fur shells: height 0-1 (0 for everything else)
 layout(location = 6) out float vFoam;  // water: foam 0-1, carried as the normal's length above 1
 layout(location = 7) flat out vec4 vTint; // instances with their own color (Flags bit 17: Data.yz, half floats; linear)
+layout(location = 8) out vec4 vColor;     // the vertex color, linear
 
 invariant gl_Position; // the depth prepass and the main pass must produce identical depths
 
@@ -75,5 +77,6 @@ void main()
     // Tangents transform like positions (they lie in the surface); a mirrored model flips the handedness.
     vTangent = aTangent.w == 0.0 ? vec4(0.0) : vec4(mat3(model) * tangent, aTangent.w * sign(determinant(mat3(model))));
     vUV = aUV;
+    vColor = vec4(mix(aColor.rgb / 12.92, pow((aColor.rgb + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), aColor.rgb)), aColor.a);
     gl_Position = uScene.ViewProj * world;
 }

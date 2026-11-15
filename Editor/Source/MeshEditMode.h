@@ -7,6 +7,9 @@
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/UVTools.h>
 #include <Dimension/Modeling/Sculpt.h>
+#include <Dimension/Modeling/Paint.h>
+#include <Dimension/Modeling/Bake.h>
+#include <memory>
 #include <imgui.h>
 #include <deque>
 
@@ -54,10 +57,17 @@ namespace Editor
         // cut, knife...).
         bool IsModal() const
         {
-            return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None || m_UVModal.Kind != UVModalKind::None || m_Stroking || m_SculptAdjust != 0;
+            return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None || m_UVModal.Kind != UVModalKind::None || m_Stroking || m_SculptAdjust != 0 ||
+                   m_Painting || m_PaintAdjust != 0;
         }
         // Whether the camera should leave the mouse alone (the knife lets it orbit between cuts).
-        bool BlocksCamera() const { return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut || m_Stroking || m_SculptAdjust != 0; }
+        bool BlocksCamera() const
+        {
+            return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut || m_Stroking || m_SculptAdjust != 0 || m_Painting || m_PaintAdjust != 0;
+        }
+        // Vertex Paint (1) and Texture Paint (2): the model colored with brushes (MeshEditPaint.cpp); 0 off.
+        int GetPaintMode() const { return m_Active ? m_PaintMode : 0; }
+        void SetPaintMode(int mode);
         // Sculpt Mode: the same model shaped with brushes instead of selected and moved (MeshEditSculpt.cpp).
         bool IsSculpting() const { return m_Active && m_Sculpting; }
         void SetSculpting(bool on);
@@ -121,11 +131,23 @@ namespace Editor
             bool Option = false, AppliedOption = false; // inset: each face on its own; bevel: vertices
         };
 
+        // Texture Paint's undo: the changed tiles of the image (swapped with the image's on undo and redo).
+        struct PaintTile
+        {
+            int X, Y, W, H;
+            std::vector<uint32_t> Pixels;
+        };
+        struct PaintUndo
+        {
+            AssetHandle Texture = AssetHandle::None();
+            std::vector<PaintTile> Tiles;
+        };
         struct Snapshot
         {
             Modeling::EditableMesh Mesh;
             Modeling::SelectMode Mode;
             std::string Name;
+            std::shared_ptr<PaintUndo> Paint; // a texture paint stroke
         };
 
         // Records an undo step (before a change) and marks the model changed afterwards (Commit).
@@ -318,6 +340,46 @@ namespace Editor
         ImVec2 m_AdjustCenter{ 0, 0 };
         float m_AdjustStart = 0.0f;
         int m_AdjustFrame = 0;
+        // Painting.
+        bool UpdatePaintView(bool hovered, bool focused, bool blocked);
+        void DrawPaintToolbar(const ImVec2& origin);
+        void HandlePaintKeys();
+        void UpdatePaintStroke(bool hovered, bool blocked);
+        bool PaintHit(const ImVec2& mouse, glm::vec3& point, uint32_t& face, glm::vec3& dir); // model space
+        Modeling::Paint::Brush PaintBrush(const glm::vec3& at, const glm::vec3& viewDir, bool blur) const;
+        void PaintDab(const glm::vec3& at, const glm::vec3& viewDir, bool blur);
+        AssetHandle PaintTarget() const; // the object's base color texture
+        void AssignBaseColorTexture(AssetHandle texture);
+        bool LoadPaintTexture();
+        void NewPaintTexture();
+        void SavePaintTexture();
+        void SwapPaintUndo(PaintUndo& undo);
+        void DrawBakePopup();
+        void RunBake();
+        int m_PaintMode = 0;
+        bool m_Painting = false, m_PaintBlurStroke = false;
+        int m_PaintAdjust = 0; // F: 1 radius, 2 strength
+        ImVec2 m_PaintAdjustCenter{ 0, 0 };
+        float m_PaintAdjustStart = 0.0f;
+        int m_PaintAdjustFrame = 0;
+        ImVec2 m_PaintMouse{ 0, 0 };
+        glm::vec4 m_PaintColor{ 0.85f, 0.2f, 0.15f, 1.0f };
+        Modeling::Paint::Blend m_PaintBlend = Modeling::Paint::Blend::Mix;
+        float m_PaintRadiusPx = 40.0f, m_PaintStrength = 1.0f, m_PaintHardness = 0.0f;
+        bool m_PaintFrontFaces = true;
+        uint8_t m_PaintSymmetry = 0;
+        Modeling::MeshRaycaster m_PaintRays;
+        uint64_t m_PaintRaysVersion = ~0ull;
+        Modeling::Paint::Image m_PaintImage;
+        AssetHandle m_PaintTexture = AssetHandle::None();
+        bool m_PaintUnsaved = false, m_PaintGpuDirty = false;
+        std::vector<uint32_t> m_PaintBefore;
+        Modeling::Paint::Rect m_PaintStrokeRect;
+        int m_NewTextureSize = 1024;
+        glm::vec4 m_NewTextureColor{ 1.0f };
+        Modeling::Bake::Settings m_Bake;
+        Entity m_BakeSource = Entity::Null();
+        bool m_BakeAssign = true, m_OpenBake = false;
         // Operation settings.
         int m_SubdivideCuts = 1;
         float m_DissolveAngle = 5.0f;

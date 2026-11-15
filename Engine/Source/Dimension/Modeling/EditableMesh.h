@@ -42,8 +42,15 @@ namespace Dimension::Modeling
         bool Smooth = false;        // smooth shading (else flat)
         uint8_t Flags = 0;
         std::vector<uint8_t> UVFlags; // per corner UVFlag bits (ignored unless there is one per corner)
+        std::vector<uint32_t> Colors; // per corner vertex color, RGBA8 sRGB (ignored unless there is one per corner: white)
 
         uint8_t CornerFlags(size_t c) const { return UVFlags.size() == Verts.size() ? UVFlags[c] : 0; }
+        uint32_t ColorAt(size_t c) const { return Colors.size() == Verts.size() ? Colors[c] : 0xFFFFFFFFu; }
+        void SetColor(size_t c, uint32_t rgba)
+        {
+            if (Colors.size() != Verts.size()) Colors.assign(Verts.size(), 0xFFFFFFFFu);
+            Colors[c] = rgba;
+        }
         void SetCornerFlag(size_t c, uint8_t flag, bool on)
         {
             if (UVFlags.size() != Verts.size()) UVFlags.assign(Verts.size(), 0);
@@ -56,6 +63,7 @@ namespace Dimension::Modeling
             std::reverse(Verts.begin(), Verts.end());
             std::reverse(UVs.begin(), UVs.end());
             std::reverse(UVFlags.begin(), UVFlags.end());
+            std::reverse(Colors.begin(), Colors.end());
         }
     };
 
@@ -112,6 +120,7 @@ namespace Dimension::Modeling
         }
 
         uint32_t VertexCount() const { return (uint32_t)Positions.size(); }
+        bool HasColors() const; // any corner not white
         uint32_t FaceCount() const { return (uint32_t)Faces.size(); }
         uint32_t AddVertex(const glm::vec3& p, uint8_t flags = 0);
         // Adds a face (UVs empty: all zero). Returns its index.

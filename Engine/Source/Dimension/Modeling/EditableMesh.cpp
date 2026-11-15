@@ -13,6 +13,14 @@ namespace Dimension::Modeling
 {
     using json = nlohmann::json;
 
+    bool EditableMesh::HasColors() const
+    {
+        for (const Face& f : Faces)
+            for (uint32_t c : f.Colors)
+                if (c != 0xFFFFFFFFu && f.Colors.size() == f.Verts.size()) return true;
+        return false;
+    }
+
     uint32_t EditableMesh::AddVertex(const glm::vec3& p, uint8_t flags)
     {
         Positions.push_back(p);
@@ -276,7 +284,7 @@ namespace Dimension::Modeling
 
         struct CornerKey
         {
-            uint32_t Vert, NormalId, U, V;
+            uint32_t Vert, NormalId, U, V, Color;
             bool operator==(const CornerKey&) const = default;
         };
         struct CornerHash
@@ -286,6 +294,7 @@ namespace Dimension::Modeling
                 uint64_t h = (uint64_t)k.Vert * 0x9E3779B97F4A7C15ull;
                 h ^= (uint64_t)k.NormalId + 0x7F4A7C15ull + (h << 6) + (h >> 2);
                 h ^= ((uint64_t)k.U << 32 | k.V) + 0x9E3779B9ull + (h << 6) + (h >> 2);
+                h ^= (uint64_t)k.Color * 0xC2B2AE3D27D4EB4Full + (h << 6) + (h >> 2);
                 return (size_t)h;
             }
         };
@@ -398,9 +407,10 @@ namespace Dimension::Modeling
                     }
                 if (normal == glm::vec3(0.0f)) normal = glm::vec3(0, 1, 0);
                 glm::vec2 uv = c < face.UVs.size() ? face.UVs[c] : glm::vec2(0.0f);
-                CornerKey key{ v, nid, Bits(uv.x), Bits(uv.y) };
+                uint32_t color = face.ColorAt(c);
+                CornerKey key{ v, nid, Bits(uv.x), Bits(uv.y), color };
                 auto [it, inserted] = corners.try_emplace(key, (uint32_t)out.Vertices.size());
-                if (inserted) out.Vertices.push_back({ Positions[v], normal, uv, glm::vec4(0.0f) });
+                if (inserted) out.Vertices.push_back({ Positions[v], normal, uv, glm::vec4(0.0f), color });
                 cornerVertex[c] = it->second;
             }
             tri.clear();
@@ -559,6 +569,7 @@ namespace Dimension::Modeling
                 {
                     f.Verts.push_back(remap[c]);
                     f.UVs.push_back(data.Vertices[c].UV);
+                    f.Colors.push_back(data.Vertices[c].Color);
                     quadNormals.back().push_back(data.Vertices[c].Normal);
                 }
                 f.Material = ta.Material;
@@ -587,6 +598,7 @@ namespace Dimension::Modeling
             {
                 f.Verts.push_back(remap[c]);
                 f.UVs.push_back(data.Vertices[c].UV);
+                f.Colors.push_back(data.Vertices[c].Color);
                 faceNormals.back().push_back(data.Vertices[c].Normal);
             }
             f.Material = tris[i].Material;
@@ -717,6 +729,14 @@ namespace Dimension::Modeling
                 if (bits & UVSelected) uvSel.push_back(cornerIndex);
                 if (bits & UVPinned) uvPin.push_back(cornerIndex);
             }
+        // Vertex colors: one per corner (in face order) when any isn't white.
+        if (HasColors())
+        {
+            json colors = json::array();
+            for (const Face& face : Faces)
+                for (size_t c = 0; c < face.Verts.size(); ++c) colors.push_back(face.ColorAt(c));
+            j["colors"] = std::move(colors);
+        }
         // Sculpt mask: [vertex, value] pairs of the masked vertices.
         if (Mask.size() == Positions.size())
         {
@@ -830,6 +850,22 @@ namespace Dimension::Modeling
                 first += n;
             }
         };
+        if (j.contains("colors"))
+        {
+            // (corners of skipped faces count too)
+            const json& colors = j["colors"];
+            size_t at = 0, fi = 0;
+            for (size_t f = 0; f < sizes.size(); ++f)
+            {
+                size_t n = sizes[f].get<size_t>();
+                if (!skipped.count(f) && fi < out.Faces.size())
+                {
+                    Face& face = out.Faces[fi++];
+                    for (size_t c = 0; c < n && at + c < colors.size(); ++c) face.SetColor(c, colors[at + c].get<uint32_t>());
+                }
+                at += n;
+            }
+        }
         if (j.contains("mask"))
         {
             const json& mask = j["mask"];

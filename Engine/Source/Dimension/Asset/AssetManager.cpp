@@ -916,6 +916,22 @@ namespace Dimension
         return true;
     }
 
+    bool AssetManager::SetTexturePixels(AssetHandle handle, const uint32_t* rgba8, uint32_t width, uint32_t height)
+    {
+        const AssetMetadata* meta = s ? GetMetadata(handle) : nullptr;
+        if (!meta || meta->Type != AssetType::Texture || !rgba8 || width == 0 || height == 0) return false;
+        auto it = s->Textures.find(handle);
+        if (it != s->Textures.end() && it->second && RenderDevice::Exists() && RenderDevice::Get().IsRecordingFrame() &&
+            it->second->Update(RenderDevice::Get().Frame().Cmd, rgba8, width, height))
+            return true;
+        TextureSettings ts;
+        ts.Filter = (TextureFilter)meta->ImportSettings.value("filter", 0);
+        ts.SRGB = meta->ImportSettings.value("srgb", true);
+        ts.GenerateMips = false; // (so later frames can update it in place)
+        s->Textures[handle] = MakeRef<Texture2D>(rgba8, width, height, ts, meta->Path.filename().string().c_str());
+        return true;
+    }
+
     const std::vector<uint32_t>* AssetManager::GetRuntimeTexturePixels(AssetHandle handle, glm::uvec2* size)
     {
         auto it = s ? s->RuntimeTextures.find(handle) : decltype(s->RuntimeTextures)::iterator{};

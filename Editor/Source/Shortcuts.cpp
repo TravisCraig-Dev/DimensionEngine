@@ -146,6 +146,13 @@ namespace Editor::Shortcuts
                 { "sculpt.remesh", "Sculpt", "Voxel Remesh", ImGuiMod_Ctrl | ImGuiKey_R },
                 { "sculpt.clearMask", "Sculpt", "Clear Mask", ImGuiMod_Alt | ImGuiKey_M },
                 { "sculpt.invertMask", "Sculpt", "Invert Mask", ImGuiMod_Ctrl | ImGuiKey_I },
+                { "mesh.vertexPaint", "Mesh Edit", "Vertex Paint", 0 },
+                { "mesh.texturePaint", "Mesh Edit", "Texture Paint", 0 },
+                { "paint.radius", "Paint", "Brush Radius (drag)", ImGuiKey_F },
+                { "paint.strength", "Paint", "Brush Strength (drag)", ImGuiMod_Shift | ImGuiKey_F },
+                { "paint.sample", "Paint", "Pick Color Under the Mouse", ImGuiKey_S },
+                { "paint.smaller", "Paint", "Smaller Brush", ImGuiKey_LeftBracket },
+                { "paint.larger", "Paint", "Larger Brush", ImGuiKey_RightBracket },
                 { "uv.vertexMode", "UV Editor", "Vertex Select Mode", ImGuiKey_1 },
                 { "uv.edgeMode", "UV Editor", "Edge Select Mode", ImGuiKey_2 },
                 { "uv.faceMode", "UV Editor", "Face Select Mode", ImGuiKey_3 },
@@ -206,7 +213,7 @@ namespace Editor::Shortcuts
         const Shortcut* s = Find(id);
         auto editing = [](const Shortcut& x) {
             std::string_view c = x.Category;
-            return c == "Mesh Edit" || c == "Sculpt";
+            return c == "Mesh Edit" || c == "Sculpt" || c == "Paint";
         };
         if (!s || s->Key == 0 || editing(*s)) return false;
         for (const Shortcut& other : All())
@@ -226,7 +233,7 @@ namespace Editor::Shortcuts
         };
         auto scope = [](const Shortcut& x) {
             std::string_view c = x.Category;
-            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : c == "Sculpt" ? 3 : 0;
+            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : c == "Sculpt" ? 3 : c == "Paint" ? 4 : 0;
         };
         for (const Shortcut& other : All())
         {
