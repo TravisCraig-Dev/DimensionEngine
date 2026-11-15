@@ -163,6 +163,11 @@ namespace Editor
             SetPaintMode(0);
             return;
         }
+        if (m_Active && m_RigMode)
+        {
+            SetRigMode(0);
+            return;
+        }
         if (m_Active)
         {
             Exit();
@@ -212,6 +217,12 @@ namespace Editor
         m_Painting = false;
         m_PaintAdjust = 0;
         m_PaintRaysVersion = ~0ull;
+        m_RigMode = 0;
+        m_BoneModal = {};
+        m_WeightPainting = m_ActionPlaying = false;
+        m_ActiveBone = m_Mesh.Bones.empty() ? -1 : 0;
+        m_Action = m_Mesh.Actions.empty() ? -1 : 0;
+        m_ActionTime = 0.0f;
         ops::FlushSelection(m_Mesh, m_Mode);
         ++m_GeometryVersion;
         return true;
@@ -239,6 +250,9 @@ namespace Editor
         SavePaintTexture();
         m_PaintMode = 0;
         m_PaintAdjust = 0;
+        if (m_BoneModal.Kind) EndBoneModal(false);
+        m_RigMode = 0;
+        m_WeightPainting = m_ActionPlaying = false;
         m_PaintImage = {};
         m_PaintTexture = AssetHandle::None();
         m_Tool = Tool::None;
@@ -310,6 +324,15 @@ namespace Editor
     void MeshEditMode::SyncRenderMesh()
     {
         ++m_GeometryVersion;
+        if (m_Mesh.EditedShape >= 0)
+        {
+            // Editing a shape key: the object shows that shape.
+            EditableMesh view = m_Mesh;
+            view.ShapeKeys.clear();
+            view.EditedShape = -1;
+            AssetManager::SetMeshData(m_Asset, view.ToMeshData());
+            return;
+        }
         AssetManager::SetMeshData(m_Asset, m_Mesh.ToMeshData());
     }
 
@@ -343,6 +366,7 @@ namespace Editor
         m_Undo.pop_back();
         m_Mesh.Changed();
         Commit();
+        if (m_RigMode) SyncRigPreview();
     }
 
     void MeshEditMode::Redo()
@@ -357,6 +381,7 @@ namespace Editor
         m_Redo.pop_back();
         m_Mesh.Changed();
         Commit();
+        if (m_RigMode) SyncRigPreview();
     }
 
     bool MeshEditMode::GetFrame(glm::vec3& center, float& radius) const
@@ -389,12 +414,13 @@ namespace Editor
         m_Size = size;
         m_View = view;
         m_Proj = proj;
-        if (m_Sculpting || m_PaintMode)
+        if (m_Sculpting || m_PaintMode || m_RigMode)
         {
             m_World = m_Ctx.ActiveScene().GetRegistry().Get<TransformComponent>(m_Entity).World;
             m_ViewProj = proj * view;
             m_CameraWorld = glm::vec3(glm::inverse(view)[3]);
             m_CameraLocal = glm::vec3(glm::inverse(m_World) * glm::vec4(m_CameraWorld, 1.0f));
+            if (m_RigMode) return UpdateRigView(hovered, focused, blocked);
             return m_Sculpting ? UpdateSculptView(hovered, focused, blocked) : UpdatePaintView(hovered, focused, blocked);
         }
         UpdateProjection(origin, size, view, proj);
@@ -638,6 +664,13 @@ namespace Editor
         if (ImGui::Button("Add")) ImGui::OpenPopup("MeshAddMenu");
         ImGui::SameLine(0.0f, 2.0f);
         if (ImGui::Button("UV")) ImGui::OpenPopup("MeshUVMenu");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (ImGui::Button("Rig")) SetRigMode(1);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bones, posing, weight painting and actions");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (ImGui::Button(m_Mesh.EditedShape >= 0 ? "Shape Keys*" : "Shape Keys")) ImGui::OpenPopup("ShapeKeys");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The model's shape keys (blend shapes); * while one is being edited");
+        DrawShapeKeysPopup();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unwrap and project the selected faces' UVs (%s); Window > UV Editor edits them",
                                                       Shortcuts::Label("mesh.uvMenu").c_str());
         ImGui::SameLine();
@@ -1203,6 +1236,7 @@ namespace Editor
         if (Pressed("mesh.sculptMode")) SetSculpting(true);
         if (Pressed("mesh.vertexPaint")) SetPaintMode(1);
         if (Pressed("mesh.texturePaint")) SetPaintMode(2);
+        if (Pressed("mesh.rigMode")) SetRigMode(1);
     }
 
     // ---- Mouse selection

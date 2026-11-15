@@ -153,8 +153,13 @@ namespace Dimension::Modeling
         // A copy without modifiers and selection (what a modifier works on).
         EditableMesh Plain(const EditableMesh& m)
         {
-            EditableMesh out = m;
+            EditableMesh out = m.EditedShape >= 0 ? m.Canonical() : m;
             out.Modifiers.clear();
+            // (rigging data is carried over afterwards: EditableMesh::ToMeshData)
+            out.Bones.clear();
+            out.Weights.clear();
+            out.ShapeKeys.clear();
+            out.Actions.clear();
             return out;
         }
         void CopySettings(const EditableMesh& from, EditableMesh& to)

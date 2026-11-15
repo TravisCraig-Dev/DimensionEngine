@@ -1,0 +1,856 @@
+#include "MeshEditMode.h"
+#include "Shortcuts.h"
+#include <Dimension/Core/Log.h>
+#include <Dimension/Scene/Components.h>
+#include <glm/gtc/quaternion.hpp>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+// Edit Mode's rigging: the armature's bones, posing them (and keying actions), weight painting, and shape keys.
+namespace Editor
+{
+    using namespace Dimension::Modeling;
+    namespace rig = Dimension::Modeling::Rig;
+
+    namespace
+    {
+        constexpr ImU32 kBone = IM_COL32(150, 150, 150, 230);
+        constexpr ImU32 kBonePose = IM_COL32(110, 160, 230, 230);
+        constexpr ImU32 kBoneSelected = IM_COL32(255, 160, 40, 255);
+        constexpr ImU32 kBoneActive = IM_COL32(255, 220, 140, 255);
+
+        float Dist(ImVec2 a, ImVec2 b) { return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); }
+
+        float SegmentDist(ImVec2 p, ImVec2 a, ImVec2 b)
+        {
+            ImVec2 ab(b.x - a.x, b.y - a.y);
+            float len2 = ab.x * ab.x + ab.y * ab.y;
+            float t = len2 > 0.0f ? std::clamp(((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2, 0.0f, 1.0f) : 0.0f;
+            return Dist(p, ImVec2(a.x + ab.x * t, a.y + ab.y * t));
+        }
+
+        bool RayPlane(const glm::vec3& from, const glm::vec3& dir, const glm::vec3& point, const glm::vec3& normal, glm::vec3& hit)
+        {
+            float d = glm::dot(dir, normal);
+            if (std::abs(d) < 1e-8f) return false;
+            hit = from + dir * (glm::dot(point - from, normal) / d);
+            return true;
+        }
+
+        glm::quat RotationOf(const glm::mat4& m)
+        {
+            glm::mat3 r(glm::normalize(glm::vec3(m[0])), glm::normalize(glm::vec3(m[1])), glm::normalize(glm::vec3(m[2])));
+            return glm::normalize(glm::quat_cast(r));
+        }
+
+        const char* kRigModeNames[] = { "", "Bones", "Pose", "Weights" };
+    }
+
+    // ---- Modes and preview
+
+    void MeshEditMode::SetRigMode(int mode)
+    {
+        if (!m_Active || mode == m_RigMode) return;
+        if (m_Modal.Kind != ModalKind::None) EndModal(false);
+        if (m_BoneModal.Kind) EndBoneModal(false);
+        m_Tool = Tool::None;
+        if (m_Sculpting) SetSculpting(false);
+        if (m_PaintMode) SetPaintMode(0);
+        m_RigMode = std::clamp(mode, 0, 3);
+        m_WeightPainting = m_ActionPlaying = false;
+        m_PaintRaysVersion = ~0ull;
+        if (m_ActiveBone >= (int)m_Mesh.Bones.size()) m_ActiveBone = m_Mesh.Bones.empty() ? -1 : 0;
+        if (m_RigMode == 3 && m_ActiveBone < 0 && !m_Mesh.Bones.empty()) m_ActiveBone = 0;
+        if (m_RigMode == 0) ++m_GeometryVersion;
+        SyncRigPreview();
+    }
+
+    void MeshEditMode::SyncRigPreview()
+    {
+        if (m_RigMode == 2 && m_Mesh.HasRig() && !rig::AtRest(m_Mesh))
+        {
+            MeshData data = m_Mesh.ToMeshData();
+            rig::PoseMeshData(data, m_Mesh);
+            ++m_GeometryVersion;
+            AssetManager::SetMeshData(m_Asset, std::move(data));
+            return;
+        }
+        if (m_RigMode == 3 && m_ActiveBone >= 0 && m_ActiveBone < (int)m_Mesh.Bones.size())
+        {
+            // The active bone's weights as colors (blue none .. red full).
+            EditableMesh view = m_Mesh.EditedShape >= 0 ? m_Mesh.Canonical() : m_Mesh;
+            view.Bones.clear();
+            view.ShapeKeys.clear();
+            view.Modifiers.clear();
+            for (Face& f : view.Faces)
+            {
+                f.Colors.resize(f.Verts.size());
+                for (size_t c = 0; c < f.Verts.size(); ++c) f.Colors[c] = PackRGBA8(rig::WeightColor(rig::GetWeight(m_Mesh, f.Verts[c], m_ActiveBone)));
+            }
+            ++m_GeometryVersion;
+            AssetManager::SetMeshData(m_Asset, view.ToMeshData(false));
+            return;
+        }
+        SyncRenderMesh();
+    }
+
+    void MeshEditMode::RigOperate(const char* name, const std::function<void()>& fn)
+    {
+        Record(name);
+        fn();
+        m_Dirty = true;
+        SyncRigPreview();
+    }
+
+    // ---- Bones on screen
+
+    bool MeshEditMode::BoneScreen(int b, ImVec2& head, ImVec2& tail) const
+    {
+        const Bone& bone = m_Mesh.Bones[(size_t)b];
+        glm::vec3 h = bone.Head, t = bone.Tail;
+        if (m_RigMode == 2)
+        {
+            std::vector<glm::mat4> pose = rig::PoseMatrices(m_Mesh);
+            float len = glm::length(bone.Tail - bone.Head);
+            h = glm::vec3(pose[(size_t)b] * glm::vec4(0, 0, 0, 1));
+            t = glm::vec3(pose[(size_t)b] * glm::vec4(0, len, 0, 1));
+        }
+        glm::mat4 mvp = m_ViewProj * m_World;
+        auto project = [&](const glm::vec3& p, ImVec2& out) {
+            glm::vec4 c = mvp * glm::vec4(p, 1.0f);
+            if (c.w <= 1e-6f) return false;
+            out = ImVec2(m_Origin.x + (c.x / c.w * 0.5f + 0.5f) * m_Size.x, m_Origin.y + (0.5f - c.y / c.w * 0.5f) * m_Size.y);
+            return true;
+        };
+        return project(h, head) && project(t, tail);
+    }
+
+    void MeshEditMode::DrawBoneOverlay(ImDrawList* dl)
+    {
+        if (m_Mesh.Bones.empty()) return;
+        glm::mat4 mvp = m_ViewProj * m_World;
+        std::vector<glm::mat4> frames(m_Mesh.Bones.size());
+        if (m_RigMode == 2) frames = rig::PoseMatrices(m_Mesh);
+        else
+            for (size_t b = 0; b < m_Mesh.Bones.size(); ++b) frames[b] = rig::RestMatrix(m_Mesh.Bones[b]);
+        auto project = [&](const glm::vec3& p, ImVec2& out) {
+            glm::vec4 c = mvp * glm::vec4(p, 1.0f);
+            if (c.w <= 1e-6f) return false;
+            out = ImVec2(m_Origin.x + (c.x / c.w * 0.5f + 0.5f) * m_Size.x, m_Origin.y + (0.5f - c.y / c.w * 0.5f) * m_Size.y);
+            return true;
+        };
+        for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+        {
+            const Bone& bone = m_Mesh.Bones[b];
+            float len = glm::length(bone.Tail - bone.Head);
+            if (len < 1e-8f) continue;
+            const glm::mat4& f = frames[b];
+            float r = len * 0.1f;
+            glm::vec3 local[6] = { { 0, 0, 0 }, { r, len * 0.1f, 0 }, { 0, len * 0.1f, r }, { -r, len * 0.1f, 0 }, { 0, len * 0.1f, -r }, { 0, len, 0 } };
+            ImVec2 p[6];
+            bool ok = true;
+            for (int i = 0; i < 6; ++i) ok &= project(glm::vec3(f * glm::vec4(local[i], 1.0f)), p[i]);
+            if (!ok) continue;
+            bool selected = (bone.Flags & BoneBody) != 0;
+            ImU32 col = (int)b == m_ActiveBone && selected ? kBoneActive : selected ? kBoneSelected : (m_RigMode == 2 ? kBonePose : kBone);
+            float w = selected ? 2.0f : 1.25f;
+            for (int i = 1; i <= 4; ++i)
+            {
+                dl->AddLine(p[0], p[i], col, w);
+                dl->AddLine(p[i], p[5], col, w);
+                dl->AddLine(p[i], p[i % 4 + 1], col, w);
+            }
+            // Parent link (dashed look: a thin line from the parent's tail).
+            if (bone.Parent >= 0 && bone.Parent < (int)m_Mesh.Bones.size())
+            {
+                const Bone& parent = m_Mesh.Bones[(size_t)bone.Parent];
+                float plen = glm::length(parent.Tail - parent.Head);
+                ImVec2 pt;
+                if (project(glm::vec3(frames[(size_t)bone.Parent] * glm::vec4(0, plen, 0, 1)), pt) && Dist(pt, p[0]) > 2.0f)
+                    dl->AddLine(pt, p[0], IM_COL32(200, 200, 200, 90), 1.0f);
+            }
+            if (m_RigMode == 1)
+            {
+                dl->AddCircleFilled(p[0], 4.0f, (bone.Flags & BoneHead) ? kBoneSelected : IM_COL32(40, 40, 40, 255));
+                dl->AddCircleFilled(p[5], 4.0f, (bone.Flags & BoneTail) ? kBoneSelected : IM_COL32(40, 40, 40, 255));
+            }
+        }
+    }
+
+    int MeshEditMode::PickBone(const ImVec2& mouse, int* joint) const
+    {
+        int best = -1, bestJoint = BoneBody;
+        float bestD = 9.0f;
+        for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+        {
+            ImVec2 h, t;
+            if (!BoneScreen((int)b, h, t)) continue;
+            if (m_RigMode == 1)
+            {
+                if (float d = Dist(mouse, t); d < bestD + 3.0f && d < 12.0f)
+                {
+                    bestD = d - 3.0f;
+                    best = (int)b;
+                    bestJoint = BoneTail;
+                }
+                if (float d = Dist(mouse, h); d < bestD + 3.0f && d < 12.0f)
+                {
+                    bestD = d - 3.0f;
+                    best = (int)b;
+                    bestJoint = BoneHead;
+                }
+            }
+            if (float d = SegmentDist(mouse, h, t); d < bestD)
+            {
+                bestD = d;
+                best = (int)b;
+                bestJoint = BoneBody;
+            }
+        }
+        if (joint) *joint = bestJoint;
+        return best;
+    }
+
+    // ---- Moving bones (G, R, S): joints in Bones, poses in Pose
+
+    void MeshEditMode::BeginBoneModal(int kind, bool recorded)
+    {
+        bool any = false;
+        glm::vec3 sum(0.0f);
+        int count = 0;
+        std::vector<glm::mat4> pose = rig::PoseMatrices(m_Mesh);
+        for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+        {
+            const Bone& bone = m_Mesh.Bones[b];
+            if (m_RigMode == 1)
+            {
+                if (bone.Flags & (BoneHead | BoneBody)) { sum += bone.Head; ++count; }
+                if (bone.Flags & (BoneTail | BoneBody)) { sum += bone.Tail; ++count; }
+            }
+            else if (bone.Flags & BoneBody)
+            {
+                sum += glm::vec3(pose[b][3]);
+                ++count;
+            }
+            any |= (bone.Flags & (BoneHead | BoneTail | BoneBody)) != 0;
+        }
+        if (!any || count == 0) return;
+        static const char* names[] = { "", "Move Bones", "Rotate Bones", "Scale Bones" };
+        if (!recorded) Record(names[kind]);
+        m_BoneModal = {};
+        m_BoneModal.Kind = kind;
+        m_BoneModal.Recorded = recorded;
+        m_BoneModal.Start = m_Mesh.Bones;
+        m_BoneModal.Pivot = sum / (float)count;
+        m_BoneModal.MouseStart = ImGui::GetIO().MousePos;
+        m_BoneModal.StartFrame = ImGui::GetFrameCount();
+        glm::vec3 from, dir;
+        SculptRay(m_BoneModal.MouseStart, from, dir);
+        RayPlane(from, dir, m_BoneModal.Pivot, glm::normalize(m_BoneModal.Pivot - m_CameraLocal), m_BoneModal.PlaneStart);
+        glm::vec4 c = m_ViewProj * m_World * glm::vec4(m_BoneModal.Pivot, 1.0f);
+        ImVec2 ps(m_Origin.x + (c.x / c.w * 0.5f + 0.5f) * m_Size.x, m_Origin.y + (0.5f - c.y / c.w * 0.5f) * m_Size.y);
+        m_BoneModal.LastAngle = std::atan2(m_BoneModal.MouseStart.y - ps.y, m_BoneModal.MouseStart.x - ps.x);
+    }
+
+    void MeshEditMode::UpdateBoneModal()
+    {
+        BoneModal& md = m_BoneModal;
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 mouse = io.MousePos;
+        for (int a = 0; a < 3; ++a)
+            if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_X + a), false)) md.Axis = md.Axis == a ? -1 : a;
+        glm::vec3 viewDir = glm::normalize(md.Pivot - m_CameraLocal);
+        glm::vec4 c = m_ViewProj * m_World * glm::vec4(md.Pivot, 1.0f);
+        ImVec2 ps(m_Origin.x + (c.x / c.w * 0.5f + 0.5f) * m_Size.x, m_Origin.y + (0.5f - c.y / c.w * 0.5f) * m_Size.y);
+        m_Mesh.Bones = md.Start;
+        std::vector<glm::mat4> startPose = rig::PoseMatrices(m_Mesh);
+        // The change: a move (model space), a turn about the view axis (or the locked axis), or a scale.
+        glm::vec3 move(0.0f);
+        glm::quat turn(1, 0, 0, 0);
+        float scale = 1.0f;
+        if (md.Kind == 1)
+        {
+            glm::vec3 from, dir, hit;
+            SculptRay(mouse, from, dir);
+            if (RayPlane(from, dir, md.Pivot, viewDir, hit)) move = hit - md.PlaneStart;
+            if (md.Axis >= 0)
+            {
+                float along = move[md.Axis];
+                move = glm::vec3(0.0f);
+                move[md.Axis] = along;
+            }
+            if (io.KeyCtrl) move = glm::round(move * 10.0f) / 10.0f;
+        }
+        else if (md.Kind == 2)
+        {
+            float a = std::atan2(mouse.y - ps.y, mouse.x - ps.x), d = a - md.LastAngle;
+            while (d > glm::pi<float>()) d -= glm::two_pi<float>();
+            while (d < -glm::pi<float>()) d += glm::two_pi<float>();
+            md.Angle += d;
+            md.LastAngle = a;
+            float angle = io.KeyCtrl ? glm::radians(std::round(glm::degrees(md.Angle) / 5.0f) * 5.0f) : md.Angle;
+            glm::vec3 axis = -viewDir;
+            if (md.Axis >= 0)
+            {
+                axis = glm::vec3(0.0f);
+                axis[md.Axis] = glm::dot(-viewDir, glm::vec3(md.Axis == 0, md.Axis == 1, md.Axis == 2)) < 0.0f ? -1.0f : 1.0f;
+            }
+            turn = glm::angleAxis(-angle, axis); // screen y runs down: clockwise on screen
+        }
+        else
+        {
+            scale = Dist(mouse, ps) / std::max(Dist(md.MouseStart, ps), 1.0f);
+            if (io.KeyCtrl) scale = std::round(scale * 10.0f) / 10.0f;
+        }
+        auto transformPoint = [&](const glm::vec3& p) {
+            if (md.Kind == 1) return p + move;
+            if (md.Kind == 2) return md.Pivot + turn * (p - md.Pivot);
+            glm::vec3 d = (p - md.Pivot) * scale;
+            if (md.Axis >= 0)
+                for (int a = 0; a < 3; ++a)
+                    if (a != md.Axis) d[a] = (p - md.Pivot)[a];
+            return md.Pivot + d;
+        };
+        for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+        {
+            Bone& bone = m_Mesh.Bones[b];
+            const Bone& start = md.Start[b];
+            if (m_RigMode == 1)
+            {
+                if (start.Flags & (BoneHead | BoneBody)) bone.Head = transformPoint(start.Head);
+                if (start.Flags & (BoneTail | BoneBody)) bone.Tail = transformPoint(start.Tail);
+                continue;
+            }
+            if (!(start.Flags & BoneBody)) continue;
+            // Pose: the change taken into the bone's own frame (the one its pose rotation and location act in).
+            glm::mat4 frame = (start.Parent >= 0 && start.Parent < (int)startPose.size() ? startPose[(size_t)start.Parent] : glm::mat4(1.0f)) *
+                              rig::RestLocal(m_Mesh, (int)b);
+            glm::quat fr = RotationOf(frame);
+            if (md.Kind == 1) bone.PoseLocation = start.PoseLocation + glm::inverse(fr) * move;
+            else if (md.Kind == 2) bone.PoseRotation = glm::normalize(glm::inverse(fr) * turn * fr * start.PoseRotation);
+            else
+            {
+                glm::vec3 k(scale);
+                if (md.Axis >= 0)
+                {
+                    k = glm::vec3(1.0f);
+                    k[md.Axis] = scale;
+                }
+                bone.PoseScale = start.PoseScale * k;
+            }
+        }
+        // In Bones: joints sitting on a moved joint (connected chains) move with it.
+        if (m_RigMode == 1)
+            for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+                for (size_t o = 0; o < m_Mesh.Bones.size(); ++o)
+                {
+                    if (o == b) continue;
+                    const Bone& sb = md.Start[b];
+                    if ((sb.Flags & (BoneTail | BoneBody)) && !(md.Start[o].Flags & (BoneHead | BoneBody)) && glm::length(md.Start[o].Head - sb.Tail) < 1e-5f)
+                        m_Mesh.Bones[o].Head = m_Mesh.Bones[b].Tail;
+                    if ((sb.Flags & (BoneHead | BoneBody)) && !(md.Start[o].Flags & (BoneTail | BoneBody)) && glm::length(md.Start[o].Tail - sb.Head) < 1e-5f)
+                        m_Mesh.Bones[o].Tail = m_Mesh.Bones[b].Head;
+                }
+        if (m_RigMode == 2) SyncRigPreview();
+        bool later = ImGui::GetFrameCount() > md.StartFrame;
+        if (later && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+            EndBoneModal(true);
+        else if (later && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsKeyPressed(ImGuiKey_Escape)))
+            EndBoneModal(false);
+    }
+
+    void MeshEditMode::EndBoneModal(bool confirm)
+    {
+        if (!m_BoneModal.Kind) return;
+        if (!confirm)
+        {
+            if (m_BoneModal.Recorded && !m_Undo.empty()) m_Mesh = std::move(m_Undo.back().Mesh); // (back to before the operation)
+            else m_Mesh.Bones = m_BoneModal.Start;
+            if (!m_Undo.empty()) m_Undo.pop_back();
+            if (m_ActiveBone >= (int)m_Mesh.Bones.size()) m_ActiveBone = (int)m_Mesh.Bones.size() - 1;
+        }
+        else
+            m_Dirty = true;
+        m_BoneModal = {};
+        SyncRigPreview();
+    }
+
+    // ---- Keys and mouse
+
+    void MeshEditMode::HandleRigKeys(bool hovered)
+    {
+        using Shortcuts::Pressed;
+        auto selected = [&]() {
+            std::vector<int> out;
+            for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+                if (m_Mesh.Bones[b].Flags & BoneBody) out.push_back((int)b);
+            return out;
+        };
+        if (Pressed("rig.selectAll"))
+            RigOperate("Select All Bones", [&] {
+                for (Bone& b : m_Mesh.Bones) b.Flags = BoneHead | BoneTail | BoneBody;
+            });
+        if (Pressed("rig.deselectAll"))
+            RigOperate("Select No Bones", [&] {
+                for (Bone& b : m_Mesh.Bones) b.Flags = 0;
+            });
+        if (m_RigMode == 1 || m_RigMode == 2)
+        {
+            if (Pressed("rig.grab")) BeginBoneModal(1);
+            if (Pressed("rig.rotate")) BeginBoneModal(2);
+            if (Pressed("rig.scale")) BeginBoneModal(3);
+        }
+        if (m_RigMode == 1)
+        {
+            if (Pressed("rig.addBone"))
+                RigOperate("Add Bone", [&] {
+                    AABB bounds = m_Mesh.Bounds();
+                    float size = m_Mesh.VertexCount() ? std::max(glm::length(bounds.Max - bounds.Min) * 0.25f, 0.05f) : 0.5f;
+                    for (Bone& b : m_Mesh.Bones) b.Flags = 0;
+                    m_ActiveBone = rig::AddBone(m_Mesh, "Bone", glm::vec3(0.0f), glm::vec3(0.0f, size, 0.0f));
+                    m_Mesh.Bones[(size_t)m_ActiveBone].Flags = BoneHead | BoneTail | BoneBody;
+                });
+            if (Pressed("rig.extrude"))
+            {
+                // A new child bone from each selected tail, then moved with the mouse.
+                bool any = false;
+                for (const Bone& b : m_Mesh.Bones) any |= (b.Flags & (BoneTail | BoneBody)) != 0;
+                if (any)
+                {
+                    Record("Extrude Bones");
+                    size_t n = m_Mesh.Bones.size();
+                    std::vector<int> made;
+                    for (size_t b = 0; b < n; ++b)
+                        if (m_Mesh.Bones[b].Flags & (BoneTail | BoneBody))
+                            made.push_back(rig::AddBone(m_Mesh, m_Mesh.Bones[b].Name, m_Mesh.Bones[b].Tail, m_Mesh.Bones[b].Tail, (int)b));
+                    for (Bone& b : m_Mesh.Bones) b.Flags = 0;
+                    for (int b : made) m_Mesh.Bones[(size_t)b].Flags = BoneTail;
+                    m_ActiveBone = made.back();
+                    BeginBoneModal(1, true); // (cancelling takes the new bones away too)
+                }
+            }
+            if (Pressed("rig.delete"))
+            {
+                std::vector<int> gone;
+                for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+                    if ((m_Mesh.Bones[b].Flags & BoneBody) || (m_Mesh.Bones[b].Flags & (BoneHead | BoneTail)) == (BoneHead | BoneTail)) gone.push_back((int)b);
+                if (!gone.empty())
+                    RigOperate("Delete Bones", [&] {
+                        rig::DeleteBones(m_Mesh, gone);
+                        m_ActiveBone = m_Mesh.Bones.empty() ? -1 : std::min(m_ActiveBone, (int)m_Mesh.Bones.size() - 1);
+                    });
+            }
+            if (Pressed("rig.parent") && m_ActiveBone >= 0)
+                RigOperate("Parent Bones", [&] {
+                    for (int b : selected())
+                        if (b != m_ActiveBone && !rig::WouldLoop(m_Mesh, b, m_ActiveBone)) m_Mesh.Bones[(size_t)b].Parent = m_ActiveBone;
+                });
+            if (Pressed("rig.clearParent"))
+                RigOperate("Clear Parent", [&] {
+                    for (int b : selected()) m_Mesh.Bones[(size_t)b].Parent = -1;
+                });
+        }
+        if (m_RigMode == 2)
+        {
+            auto clear = [&](const char* name, int what) {
+                RigOperate(name, [&] {
+                    for (int b : selected())
+                    {
+                        Bone& bone = m_Mesh.Bones[(size_t)b];
+                        if (what == 0) bone.PoseRotation = glm::quat(1, 0, 0, 0);
+                        if (what == 1) bone.PoseLocation = glm::vec3(0.0f);
+                        if (what == 2) bone.PoseScale = glm::vec3(1.0f);
+                    }
+                });
+            };
+            if (Pressed("rig.clearRotation")) clear("Clear Rotation", 0);
+            if (Pressed("rig.clearLocation")) clear("Clear Location", 1);
+            if (Pressed("rig.clearScale")) clear("Clear Scale", 2);
+            if (Pressed("rig.insertKey"))
+                RigOperate("Insert Keyframe", [&] {
+                    if (m_Action < 0 || m_Action >= (int)m_Mesh.Actions.size()) m_Action = rig::AddAction(m_Mesh, "Action");
+                    rig::InsertKey(m_Mesh, m_Action, m_ActionTime);
+                    Log::Info("Keyed the pose at {:.2f} s in '{}'", m_ActionTime, m_Mesh.Actions[(size_t)m_Action].Name);
+                });
+        }
+        if (m_RigMode == 3)
+        {
+            if (Pressed("paint.radius") || Pressed("paint.smaller")) m_WeightRadiusPx = std::max(2.0f, m_WeightRadiusPx / 1.15f);
+            if (Pressed("paint.larger")) m_WeightRadiusPx = std::min(2000.0f, m_WeightRadiusPx * 1.15f);
+        }
+        if (Pressed("rig.autoWeights")) RigOperate("Automatic Weights", [&] { rig::AutomaticWeights(m_Mesh); });
+        if (Pressed("rig.boneMode")) SetRigMode(1);
+        if (Pressed("rig.poseMode")) SetRigMode(2);
+        if (Pressed("rig.weightMode")) SetRigMode(3);
+        (void)hovered;
+    }
+
+    void MeshEditMode::HandleRigMouse(bool hovered, bool blocked)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 mouse = io.MousePos;
+        bool overToolbar = mouse.x >= m_ToolbarMin.x && mouse.x <= m_ToolbarMax.x && mouse.y >= m_ToolbarMin.y && mouse.y <= m_ToolbarMax.y;
+        if (!(hovered && !blocked && !m_OverUI && !overToolbar && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left))) return;
+        if (m_RigMode == 3 && !io.KeyCtrl) return; // (painting; Ctrl+click picks the bone)
+        int joint = BoneBody;
+        int b = PickBone(mouse, &joint);
+        Record("Select Bone");
+        if (!io.KeyShift)
+            for (Bone& bone : m_Mesh.Bones) bone.Flags = 0;
+        if (b >= 0)
+        {
+            Bone& bone = m_Mesh.Bones[(size_t)b];
+            uint8_t bits = joint == BoneBody ? (uint8_t)(BoneHead | BoneTail | BoneBody) : (uint8_t)joint;
+            if (io.KeyShift && (bone.Flags & bits) == bits && m_ActiveBone == b) bone.Flags &= (uint8_t)~bits;
+            else bone.Flags |= bits;
+            m_ActiveBone = b;
+        }
+        else if (m_Undo.size() && io.KeyShift)
+            m_Undo.pop_back(); // (nothing changed)
+        m_Dirty = true;
+        if (m_RigMode == 3) SyncRigPreview();
+    }
+
+    void MeshEditMode::UpdateWeightStroke(bool hovered, bool blocked)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 mouse = io.MousePos;
+        bool overToolbar = mouse.x >= m_ToolbarMin.x && mouse.x <= m_ToolbarMax.x && mouse.y >= m_ToolbarMin.y && mouse.y <= m_ToolbarMax.y;
+        auto dab = [&](const ImVec2& at) {
+            glm::vec3 point, dir;
+            uint32_t face;
+            if (!PaintHit(at, point, face, dir)) return;
+            rig::WeightBrush b;
+            b.Bone = m_ActiveBone;
+            b.Mode = io.KeyShift ? rig::WeightMode::Smooth : m_WeightMode;
+            b.Value = m_WeightValue;
+            b.Strength = m_WeightStrength;
+            b.Radius = m_WeightRadiusPx * ModelPerPixel(point);
+            b.FrontFacesOnly = m_WeightFrontFaces;
+            b.ViewDir = dir;
+            b.Symmetry = m_WeightSymmetry;
+            if (rig::PaintWeights(m_Mesh, point, b) > 0) SyncRigPreview();
+        };
+        if (!m_WeightPainting)
+        {
+            if (!(hovered && !blocked && !m_OverUI && !overToolbar && !io.KeyAlt && !io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left))) return;
+            if (m_ActiveBone < 0 || m_ActiveBone >= (int)m_Mesh.Bones.size())
+            {
+                Log::Warn("Weight Paint: add a bone first (Bones), then pick it here");
+                return;
+            }
+            Record("Weight Paint");
+            m_WeightPainting = true;
+            m_WeightMouse = mouse;
+            dab(mouse);
+            return;
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            m_WeightPainting = false;
+            m_Dirty = true;
+            return;
+        }
+        float spacing = std::max(2.0f, m_WeightRadiusPx * 0.2f);
+        int steps = std::min((int)(Dist(mouse, m_WeightMouse) / spacing), 8);
+        for (int i = 1; i <= steps; ++i)
+        {
+            float k = (float)i / (float)steps;
+            dab(ImVec2(m_WeightMouse.x + (mouse.x - m_WeightMouse.x) * k, m_WeightMouse.y + (mouse.y - m_WeightMouse.y) * k));
+        }
+        if (steps > 0) m_WeightMouse = mouse;
+    }
+
+    // ---- The view
+
+    bool MeshEditMode::UpdateRigView(bool hovered, bool focused, bool blocked)
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        // Playing an action: the pose follows the time.
+        if (m_RigMode == 2 && m_ActionPlaying && m_Action >= 0 && m_Action < (int)m_Mesh.Actions.size())
+        {
+            float length = m_Mesh.Actions[(size_t)m_Action].Duration();
+            m_ActionTime += ImGui::GetIO().DeltaTime;
+            if (length > 0.0f) m_ActionTime = std::fmod(m_ActionTime, length);
+            rig::EvaluateAction(m_Mesh, m_Action, m_ActionTime);
+            SyncRigPreview();
+        }
+        DrawBoneOverlay(dl);
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        DrawRigToolbar(m_Origin);
+        ImGui::SetCursorScreenPos(cursor);
+        m_OverUI = ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
+        if (m_BoneModal.Kind) UpdateBoneModal();
+        else
+        {
+            if ((hovered || focused) && !m_WeightPainting && !ImGui::GetIO().WantTextInput) HandleRigKeys(hovered);
+            if (m_RigMode && !m_BoneModal.Kind)
+            {
+                HandleRigMouse(hovered, blocked);
+                if (m_RigMode == 3) UpdateWeightStroke(hovered, blocked);
+            }
+        }
+        if (m_RigMode == 3 && (hovered || m_WeightPainting) && !m_OverUI)
+            dl->AddCircle(ImGui::GetIO().MousePos, m_WeightRadiusPx, IM_COL32(255, 255, 255, 200), 64, 1.5f);
+        std::string status;
+        char buf[256];
+        if (m_RigMode == 1)
+            std::snprintf(buf, sizeof(buf), "Bones: %zu   click a joint or bone (Shift adds)   %s add   %s extrude   G/R/S move   %s parent to active   %s delete",
+                          m_Mesh.Bones.size(), Shortcuts::Label("rig.addBone").c_str(), Shortcuts::Label("rig.extrude").c_str(),
+                          Shortcuts::Label("rig.parent").c_str(), Shortcuts::Label("rig.delete").c_str());
+        else if (m_RigMode == 2)
+            std::snprintf(buf, sizeof(buf), "Pose: click a bone (Shift adds)   R rotate, G move, S scale (X/Y/Z axis)   Alt+R/G/S clear   %s key the pose at %.2f s",
+                          Shortcuts::Label("rig.insertKey").c_str(), m_ActionTime);
+        else
+            std::snprintf(buf, sizeof(buf), "Weights: %s   paint (Shift smooths)   Ctrl+click a bone to paint it   blue 0 .. red 1",
+                          m_ActiveBone >= 0 && m_ActiveBone < (int)m_Mesh.Bones.size() ? m_Mesh.Bones[(size_t)m_ActiveBone].Name.c_str() : "(no bone)");
+        status = buf;
+        if (m_BoneModal.Kind)
+        {
+            static const char* names[] = { "", "Move", "Rotate", "Scale" };
+            status = std::string(names[m_BoneModal.Kind]) + (m_BoneModal.Axis >= 0 ? std::string("  along ") + "XYZ"[m_BoneModal.Axis] : "") +
+                     "   X/Y/Z axis, Ctrl snap; click or Enter: done, right-click or Esc: cancel";
+        }
+        dl->AddText(ImVec2(m_Origin.x + 8.0f, m_Origin.y + m_Size.y - 24.0f), IM_COL32(255, 255, 255, 230), status.c_str());
+        return m_BoneModal.Kind != 0 || m_WeightPainting;
+    }
+
+    void MeshEditMode::DrawRigToolbar(const ImVec2& origin)
+    {
+        ImGui::SetCursorScreenPos(ImVec2(origin.x + 8.0f, origin.y + 28.0f));
+        ImGui::BeginGroup();
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+        auto toggle = [](const char* label, bool on, const char* tip) {
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            bool pressed = ImGui::Button(label);
+            if (on) ImGui::PopStyleColor();
+            if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            return pressed;
+        };
+        if (toggle("Edit", false, "Back to Edit Mode")) SetRigMode(0);
+        static const char* tips[] = { "", "The armature: add, extrude, move and parent bones", "Pose the bones to try the rig, and key actions",
+                                      "Paint how much each bone moves the vertices" };
+        for (int mode = 1; mode <= 3; ++mode)
+        {
+            ImGui::SameLine(0.0f, 2.0f);
+            if (toggle(kRigModeNames[mode], m_RigMode == mode, tips[mode])) SetRigMode(mode);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Shape Keys...")) ImGui::OpenPopup("ShapeKeys");
+        DrawShapeKeysPopup();
+        ImGui::SameLine();
+        if (ImGui::Button("Done")) Exit();
+
+        // Second row.
+        if (m_RigMode == 1)
+        {
+            if (ImGui::Button("Add Bone")) Shortcuts::Press("rig.addBone");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::Button("Delete")) Shortcuts::Press("rig.delete");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::Button("Symmetrize"))
+                RigOperate("Symmetrize Bones", [&] { Log::Info("Symmetrize: {} bones made", rig::Symmetrize(m_Mesh)); });
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bones on +X named .L/_L/Left... mirrored to the other side");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::Button("Automatic Weights")) Shortcuts::Press("rig.autoWeights");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Weights from each vertex's distance to the bones it can see (replaces the weights)");
+            if (m_ActiveBone >= 0 && m_ActiveBone < (int)m_Mesh.Bones.size())
+            {
+                Bone& bone = m_Mesh.Bones[(size_t)m_ActiveBone];
+                ImGui::SameLine();
+                char name[128];
+                std::snprintf(name, sizeof(name), "%s", bone.Name.c_str());
+                ImGui::SetNextItemWidth(120.0f);
+                if (ImGui::InputText("##bonename", name, sizeof(name), ImGuiInputTextFlags_EnterReturnsTrue) && name[0])
+                    RigOperate("Rename Bone", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].Name = rig::FindBone(m_Mesh, name) < 0 ? std::string(name) : rig::UniqueBoneName(m_Mesh, name); });
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("The active bone's name (Enter to rename; .L/.R sides mirror)");
+                ImGui::SameLine(0.0f, 2.0f);
+                ImGui::SetNextItemWidth(120.0f);
+                std::string parent = bone.Parent >= 0 && bone.Parent < (int)m_Mesh.Bones.size() ? m_Mesh.Bones[(size_t)bone.Parent].Name : "(no parent)";
+                if (ImGui::BeginCombo("##boneparent", parent.c_str()))
+                {
+                    if (ImGui::Selectable("(no parent)", bone.Parent < 0)) RigOperate("Clear Parent", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].Parent = -1; });
+                    for (size_t p = 0; p < m_Mesh.Bones.size(); ++p)
+                    {
+                        if ((int)p == m_ActiveBone || rig::WouldLoop(m_Mesh, m_ActiveBone, (int)p)) continue;
+                        if (ImGui::Selectable((m_Mesh.Bones[p].Name + "##p" + std::to_string(p)).c_str(), bone.Parent == (int)p))
+                            RigOperate("Parent Bone", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].Parent = (int)p; });
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine(0.0f, 2.0f);
+                ImGui::SetNextItemWidth(80.0f);
+                float roll = glm::degrees(bone.Roll);
+                if (ImGui::DragFloat("##roll", &roll, 0.5f, -180.0f, 180.0f, "roll %.0f"))
+                {
+                    if (ImGui::IsItemActivated()) Record("Bone Roll");
+                    m_Mesh.Bones[(size_t)m_ActiveBone].Roll = glm::radians(roll);
+                    m_Dirty = true;
+                }
+                ImGui::SameLine(0.0f, 2.0f);
+                bool deform = bone.Deform;
+                if (ImGui::Checkbox("Deform", &deform)) RigOperate("Bone Deform", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].Deform = deform; });
+            }
+        }
+        else if (m_RigMode == 2)
+        {
+            ImGui::SetNextItemWidth(110.0f);
+            std::string current = m_Action >= 0 && m_Action < (int)m_Mesh.Actions.size() ? m_Mesh.Actions[(size_t)m_Action].Name : "(no action)";
+            if (ImGui::BeginCombo("##action", current.c_str()))
+            {
+                for (size_t a = 0; a < m_Mesh.Actions.size(); ++a)
+                    if (ImGui::Selectable((m_Mesh.Actions[a].Name + "##a" + std::to_string(a)).c_str(), (int)a == m_Action)) m_Action = (int)a;
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Actions are the model's clips: an Animator plays them by name");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::Button("New Action")) RigOperate("New Action", [&] { m_Action = rig::AddAction(m_Mesh, "Action"); });
+            if (m_Action >= 0 && m_Action < (int)m_Mesh.Actions.size())
+            {
+                Action& action = m_Mesh.Actions[(size_t)m_Action];
+                ImGui::SameLine(0.0f, 2.0f);
+                char name[128];
+                std::snprintf(name, sizeof(name), "%s", action.Name.c_str());
+                ImGui::SetNextItemWidth(100.0f);
+                if (ImGui::InputText("##actionname", name, sizeof(name), ImGuiInputTextFlags_EnterReturnsTrue) && name[0])
+                    RigOperate("Rename Action", [&] { m_Mesh.Actions[(size_t)m_Action].Name = name; });
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(160.0f);
+                float end = std::max(action.Duration() + 1.0f, 1.0f);
+                if (ImGui::SliderFloat("##time", &m_ActionTime, 0.0f, end, "%.2f s"))
+                {
+                    m_ActionPlaying = false;
+                    rig::EvaluateAction(m_Mesh, m_Action, m_ActionTime);
+                    SyncRigPreview();
+                }
+                ImGui::SameLine(0.0f, 2.0f);
+                if (ImGui::Button("Key")) Shortcuts::Press("rig.insertKey");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keys every bone's pose at this time (%s)", Shortcuts::Label("rig.insertKey").c_str());
+                ImGui::SameLine(0.0f, 2.0f);
+                if (ImGui::Button("Delete Key"))
+                    RigOperate("Delete Keyframe", [&] { rig::DeleteKey(m_Mesh, m_Action, m_ActionTime); });
+                ImGui::SameLine(0.0f, 2.0f);
+                if (toggle(m_ActionPlaying ? "Stop" : "Play", m_ActionPlaying, "Plays the action in a loop")) m_ActionPlaying = !m_ActionPlaying;
+                ImGui::SameLine(0.0f, 2.0f);
+                ImGui::TextDisabled("%zu keys", action.Keys.size());
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Rest Pose"))
+                RigOperate("Clear Pose", [&] {
+                    m_ActionPlaying = false;
+                    rig::ClearPose(m_Mesh);
+                });
+        }
+        else if (m_RigMode == 3)
+        {
+            ImGui::SetNextItemWidth(120.0f);
+            std::string current = m_ActiveBone >= 0 && m_ActiveBone < (int)m_Mesh.Bones.size() ? m_Mesh.Bones[(size_t)m_ActiveBone].Name : "(no bone)";
+            if (ImGui::BeginCombo("##wbone", current.c_str()))
+            {
+                for (size_t b = 0; b < m_Mesh.Bones.size(); ++b)
+                    if (ImGui::Selectable((m_Mesh.Bones[b].Name + "##w" + std::to_string(b)).c_str(), (int)b == m_ActiveBone))
+                    {
+                        m_ActiveBone = (int)b;
+                        SyncRigPreview();
+                    }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine(0.0f, 2.0f);
+            const char* modes[] = { "Add", "Subtract", "Mix", "Smooth" };
+            int mode = (int)m_WeightMode;
+            ImGui::SetNextItemWidth(80.0f);
+            if (ImGui::Combo("##wmode", &mode, modes, 4)) m_WeightMode = (rig::WeightMode)mode;
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::SetNextItemWidth(80.0f);
+            ImGui::SliderFloat("##wvalue", &m_WeightValue, 0.0f, 1.0f, "weight %.2f");
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::DragFloat("##wradius", &m_WeightRadiusPx, 0.5f, 2.0f, 2000.0f, "%.0f px");
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::SliderFloat("##wstrength", &m_WeightStrength, 0.0f, 1.0f, "%.2f");
+            ImGui::SameLine();
+            if (toggle("Front Faces", m_WeightFrontFaces, "Only vertices facing the camera")) m_WeightFrontFaces = !m_WeightFrontFaces;
+            ImGui::SameLine(0.0f, 2.0f);
+            if (toggle("Mirror X", m_WeightSymmetry & 1, "Strokes mirrored across X paint the mirrored bone (.L/.R)")) m_WeightSymmetry ^= 1;
+            ImGui::SameLine();
+            if (ImGui::Button("Normalize All")) RigOperate("Normalize Weights", [&] { rig::NormalizeWeights(m_Mesh); });
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Each vertex's four strongest bones, adding up to one (as the renderer uses them)");
+        }
+        ImGui::PopStyleVar();
+        ImGui::EndGroup();
+        m_ToolbarMin = ImGui::GetItemRectMin();
+        m_ToolbarMax = ImGui::GetItemRectMax();
+    }
+
+    // ---- Shape keys
+
+    void MeshEditMode::DrawShapeKeysPopup()
+    {
+        if (!ImGui::BeginPopup("ShapeKeys")) return;
+        ImGui::TextDisabled("Shape keys (the model's blend shapes)");
+        auto editing = [&](int key, const char* label) {
+            if (ImGui::RadioButton(label, m_Mesh.EditedShape == key))
+            {
+                Record("Edit Shape Key");
+                rig::SetEditedShape(m_Mesh, key);
+                ++m_GeometryVersion;
+                Commit();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Edit Mode moves this shape's vertices");
+        };
+        editing(-1, "Basis##edit");
+        int remove = -1;
+        for (int k = 0; k < (int)m_Mesh.ShapeKeys.size(); ++k)
+        {
+            ImGui::PushID(k);
+            editing(k, "##edit");
+            ImGui::SameLine();
+            char name[128];
+            std::snprintf(name, sizeof(name), "%s", m_Mesh.ShapeKeys[(size_t)k].Name.c_str());
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::InputText("##name", name, sizeof(name), ImGuiInputTextFlags_EnterReturnsTrue) && name[0])
+            {
+                Record("Rename Shape Key");
+                m_Mesh.ShapeKeys[(size_t)k].Name = name;
+                Commit();
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0f);
+            float value = m_Mesh.ShapeKeys[(size_t)k].Value;
+            if (ImGui::SliderFloat("##value", &value, 0.0f, 1.0f, "%.2f"))
+            {
+                if (ImGui::IsItemActivated()) Record("Shape Key Value");
+                m_Mesh.ShapeKeys[(size_t)k].Value = value;
+                Commit();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How much of it shows by default (a Mesh Renderer's Blend Shape Weights and animations set it too)");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) remove = k;
+            ImGui::PopID();
+        }
+        if (remove >= 0)
+        {
+            Record("Remove Shape Key");
+            rig::RemoveShapeKey(m_Mesh, remove);
+            ++m_GeometryVersion;
+            Commit();
+        }
+        if (ImGui::Button("New Shape Key"))
+        {
+            Record("New Shape Key");
+            rig::AddShapeKey(m_Mesh, "Key");
+            Commit();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("New from Mix"))
+        {
+            Record("New Shape Key");
+            rig::AddShapeKey(m_Mesh, "Key", true);
+            Commit();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("A new key of the shapes mixed at their values");
+        ImGui::EndPopup();
+    }
+}

@@ -43,6 +43,7 @@ namespace Editor
     {
         if (!m_Active || on == m_Sculpting) return;
         if (on && m_PaintMode) SetPaintMode(0);
+        if (on && m_RigMode) SetRigMode(0);
         if (m_Modal.Kind != ModalKind::None) EndModal(false);
         m_Tool = Tool::None;
         m_Sculpting = on;

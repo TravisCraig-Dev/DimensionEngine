@@ -607,11 +607,19 @@ namespace Dimension::Modeling::Ops
             newIndex[v] = next;
             m.Positions[next] = m.Positions[v];
             m.VertFlags[next] = m.VertFlags[v];
+            if (m.Weights.size() == n) m.Weights[next] = std::move(m.Weights[v]);
+            if (m.Mask.size() == n) m.Mask[next] = m.Mask[v];
+            for (ShapeKey& k : m.ShapeKeys)
+                if (k.Positions.size() == n) k.Positions[next] = k.Positions[v];
             ++next;
         }
         if (next == n) return;
         m.Positions.resize(next);
         m.VertFlags.resize(next);
+        if (m.Weights.size() == n) m.Weights.resize(next);
+        if (m.Mask.size() == n) m.Mask.resize(next);
+        for (ShapeKey& k : m.ShapeKeys)
+            if (k.Positions.size() == n) k.Positions.resize(next);
         for (auto& f : m.Faces)
             for (uint32_t& v : f.Verts) v = newIndex[v];
         for (EdgeKey& k : m.LooseEdges) k = MakeEdgeKey(newIndex[EdgeA(k)], newIndex[EdgeB(k)]);
@@ -632,17 +640,23 @@ namespace Dimension::Modeling::Ops
             Face out = f;
             out.Verts.clear();
             out.UVs.clear();
+            out.Colors.clear();
+            out.UVFlags.clear();
             for (size_t c = 0; c < f.Verts.size(); ++c)
             {
                 uint32_t v = remap[f.Verts[c]];
                 if (!out.Verts.empty() && out.Verts.back() == v) continue;
                 out.Verts.push_back(v);
                 out.UVs.push_back(c < f.UVs.size() ? f.UVs[c] : glm::vec2(0.0f));
+                out.Colors.push_back(f.ColorAt(c));
+                out.UVFlags.push_back(f.CornerFlags(c));
             }
             while (out.Verts.size() > 1 && out.Verts.front() == out.Verts.back())
             {
                 out.Verts.pop_back();
                 out.UVs.pop_back();
+                out.Colors.pop_back();
+                out.UVFlags.pop_back();
             }
             if (out.Verts.size() < 3) continue;
             std::vector<uint32_t> key = out.Verts;

@@ -28,6 +28,7 @@ namespace Editor
         if (m_Modal.Kind != ModalKind::None) EndModal(false);
         m_Tool = Tool::None;
         if (m_Sculpting) SetSculpting(false);
+        if (mode && m_RigMode) SetRigMode(0);
         if (m_PaintMode == 2) SavePaintTexture();
         m_PaintMode = std::clamp(mode, 0, 2);
         m_Painting = false;

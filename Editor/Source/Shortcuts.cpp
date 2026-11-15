@@ -148,6 +148,25 @@ namespace Editor::Shortcuts
                 { "sculpt.invertMask", "Sculpt", "Invert Mask", ImGuiMod_Ctrl | ImGuiKey_I },
                 { "mesh.vertexPaint", "Mesh Edit", "Vertex Paint", 0 },
                 { "mesh.texturePaint", "Mesh Edit", "Texture Paint", 0 },
+                { "mesh.rigMode", "Mesh Edit", "Rig (Bones)", 0 },
+                { "rig.selectAll", "Rig", "Select All Bones", ImGuiKey_A },
+                { "rig.deselectAll", "Rig", "Select No Bones", ImGuiMod_Alt | ImGuiKey_A },
+                { "rig.grab", "Rig", "Move", ImGuiKey_G },
+                { "rig.rotate", "Rig", "Rotate", ImGuiKey_R },
+                { "rig.scale", "Rig", "Scale", ImGuiKey_S },
+                { "rig.addBone", "Rig", "Add Bone", ImGuiMod_Shift | ImGuiKey_A },
+                { "rig.extrude", "Rig", "Extrude Bone", ImGuiKey_E },
+                { "rig.delete", "Rig", "Delete Bones", ImGuiKey_X },
+                { "rig.parent", "Rig", "Parent to Active Bone", ImGuiMod_Ctrl | ImGuiKey_P },
+                { "rig.clearParent", "Rig", "Clear Parent", ImGuiMod_Alt | ImGuiKey_P },
+                { "rig.clearRotation", "Rig", "Clear Pose Rotation", ImGuiMod_Alt | ImGuiKey_R },
+                { "rig.clearLocation", "Rig", "Clear Pose Location", ImGuiMod_Alt | ImGuiKey_G },
+                { "rig.clearScale", "Rig", "Clear Pose Scale", ImGuiMod_Alt | ImGuiKey_S },
+                { "rig.insertKey", "Rig", "Insert Keyframe", ImGuiKey_I },
+                { "rig.autoWeights", "Rig", "Automatic Weights", 0 },
+                { "rig.boneMode", "Rig", "Bones", 0 },
+                { "rig.poseMode", "Rig", "Pose", 0 },
+                { "rig.weightMode", "Rig", "Weights", 0 },
                 { "paint.radius", "Paint", "Brush Radius (drag)", ImGuiKey_F },
                 { "paint.strength", "Paint", "Brush Strength (drag)", ImGuiMod_Shift | ImGuiKey_F },
                 { "paint.sample", "Paint", "Pick Color Under the Mouse", ImGuiKey_S },
@@ -213,7 +232,7 @@ namespace Editor::Shortcuts
         const Shortcut* s = Find(id);
         auto editing = [](const Shortcut& x) {
             std::string_view c = x.Category;
-            return c == "Mesh Edit" || c == "Sculpt" || c == "Paint";
+            return c == "Mesh Edit" || c == "Sculpt" || c == "Paint" || c == "Rig";
         };
         if (!s || s->Key == 0 || editing(*s)) return false;
         for (const Shortcut& other : All())
@@ -233,7 +252,7 @@ namespace Editor::Shortcuts
         };
         auto scope = [](const Shortcut& x) {
             std::string_view c = x.Category;
-            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : c == "Sculpt" ? 3 : c == "Paint" ? 4 : 0;
+            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : c == "Sculpt" ? 3 : c == "Paint" ? 4 : c == "Rig" ? 5 : 0;
         };
         for (const Shortcut& other : All())
         {

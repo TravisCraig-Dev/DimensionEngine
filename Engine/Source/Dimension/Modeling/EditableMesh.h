@@ -3,6 +3,7 @@
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Modeling/Modifier.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <unordered_map>
@@ -95,6 +96,50 @@ namespace Dimension::Modeling
 
     enum class SelectMode { Vertex = 0, Edge = 1, Face = 2 };
 
+    // A bone of the model's armature (Blender's edit bones): its rest pose in the model's space, from head to tail
+    // (the bone's own Y axis) turned `Roll` radians about itself, and a pose on top (Pose Mode, relative to rest).
+    struct Bone
+    {
+        std::string Name;
+        int Parent = -1;
+        glm::vec3 Head{ 0.0f }, Tail{ 0.0f, 0.2f, 0.0f };
+        float Roll = 0.0f;
+        bool Deform = true;    // moves vertices (else only a helper in the hierarchy)
+        uint8_t Flags = 0;     // BoneHead/BoneTail/BoneBody selection bits
+        glm::quat PoseRotation{ 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::vec3 PoseLocation{ 0.0f }, PoseScale{ 1.0f };
+    };
+    enum BoneFlag : uint8_t { BoneHead = 1, BoneTail = 2, BoneBody = 4 };
+
+    // How much a bone moves a vertex.
+    struct VertexWeight
+    {
+        uint16_t Bone = 0;
+        float Weight = 0.0f;
+    };
+
+    // A shape key (blend shape): every vertex's position in that shape; Value is how much of it shows by default.
+    struct ShapeKey
+    {
+        std::string Name;
+        std::vector<glm::vec3> Positions;
+        float Value = 0.0f;
+    };
+
+    // An action (an animation of the armature, played as a clip of the model by its name): poses keyed at times.
+    struct ActionKey
+    {
+        float Time = 0.0f;
+        std::vector<glm::quat> Rotations; // per bone (as Bone::PoseRotation)
+        std::vector<glm::vec3> Locations, Scales;
+    };
+    struct Action
+    {
+        std::string Name;
+        std::vector<ActionKey> Keys; // by time
+        float Duration() const { return Keys.empty() ? 0.0f : Keys.back().Time; }
+    };
+
     // A polygon mesh for modeling (like Blender's edit mesh): n-gons with per-corner UVs, wire edges, edge attributes
     // (sharp, seam, crease), per-element selection and hiding, and material slots. Positions are in the model's own
     // space. ToMeshData triangulates it for rendering; Save/Load read and write .dmodel files.
@@ -112,6 +157,17 @@ namespace Dimension::Modeling
         float AutoSmoothAngle = 30.0f;                    // degrees
         std::vector<Modifier> Modifiers;                  // applied in order by ToMeshData (Modifiers.h)
         std::vector<float> Mask;                          // per vertex sculpt mask 0..1 (ignored unless one per vertex)
+        // Rigging (Rig.h): the armature, per vertex weights (empty, or one list per vertex), shape keys and actions.
+        std::vector<Bone> Bones;
+        std::vector<std::vector<VertexWeight>> Weights;
+        std::vector<ShapeKey> ShapeKeys;
+        std::vector<Action> Actions;
+        // The shape key being edited (-1 the basis): while one is, Positions holds that shape and the key holds the
+        // basis (swapped back in Canonical(), files and render meshes).
+        int EditedShape = -1;
+        bool HasRig() const { return !Bones.empty(); }
+        // A copy with the basis in Positions (as stored).
+        EditableMesh Canonical() const;
         bool HasActiveModifiers() const
         {
             for (const Modifier& m : Modifiers)
@@ -154,7 +210,8 @@ namespace Dimension::Modeling
         // face's Verts), three per triangle.
         void TriangulateFace(uint32_t f, std::vector<uint32_t>& corners) const;
 
-        // A render mesh: faces triangulated, normals from the shading (flat faces get their own normal; smooth faces
+        // A render mesh (with the armature as its skeleton and skin, shape keys as blend shapes, actions as clips):
+        // faces triangulated, normals from the shading (flat faces get their own normal; smooth faces
         // share vertex normals, split at sharp edges and, with AutoSmooth, at edges sharper than its angle), one
         // sub-mesh per used material slot, tangents generated. Hidden faces are drawn too. The enabled modifiers apply
         // first (`applyModifiers` false: the mesh as it is).

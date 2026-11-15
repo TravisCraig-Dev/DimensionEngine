@@ -1,5 +1,6 @@
 #include "Dimension/Modeling/EditableMesh.h"
 #include "Dimension/Modeling/Modifiers.h"
+#include "Dimension/Modeling/Rig.h"
 #include "Dimension/Core/Log.h"
 #include <algorithm>
 #include <cstring>
@@ -25,6 +26,9 @@ namespace Dimension::Modeling
     {
         Positions.push_back(p);
         VertFlags.push_back(flags);
+        if (!Weights.empty()) Weights.emplace_back();
+        if (!Mask.empty()) Mask.push_back(0.0f);
+        for (ShapeKey& k : ShapeKeys) k.Positions.push_back(p); // (a new vertex is where it is in every shape)
         return (uint32_t)Positions.size() - 1;
     }
 
@@ -53,6 +57,46 @@ namespace Dimension::Modeling
     uint32_t EditableMesh::Append(const EditableMesh& other)
     {
         uint32_t base = VertexCount();
+        // Per vertex data first (sized against the vertices before).
+        if (!Mask.empty() || other.Mask.size() == other.VertexCount())
+        {
+            Mask.resize(base, 0.0f);
+            if (other.Mask.size() == other.VertexCount()) Mask.insert(Mask.end(), other.Mask.begin(), other.Mask.end());
+            else Mask.resize(base + other.VertexCount(), 0.0f);
+        }
+        for (ShapeKey& k : ShapeKeys)
+        {
+            // The other mesh's same-named shape, else its basis.
+            const ShapeKey* match = nullptr;
+            for (const ShapeKey& o : other.ShapeKeys)
+                if (o.Name == k.Name && o.Positions.size() == other.VertexCount()) match = &o;
+            const auto& src = match ? match->Positions : other.Positions;
+            k.Positions.insert(k.Positions.end(), src.begin(), src.end());
+        }
+        if (!Weights.empty() || !other.Weights.empty())
+        {
+            Weights.resize(base);
+            // Bones by name (missing ones added).
+            std::vector<int> boneMap(other.Bones.size(), -1);
+            std::vector<uint8_t> added(other.Bones.size(), 0);
+            for (size_t b = 0; b < other.Bones.size(); ++b)
+            {
+                int found = Rig::FindBone(*this, other.Bones[b].Name);
+                added[b] = found < 0;
+                boneMap[b] = found >= 0 ? found : Rig::AddBone(*this, other.Bones[b].Name, other.Bones[b].Head, other.Bones[b].Tail);
+            }
+            for (size_t b = 0; b < other.Bones.size(); ++b)
+                if (added[b] && other.Bones[b].Parent >= 0 && other.Bones[b].Parent < (int)other.Bones.size())
+                    Bones[(size_t)boneMap[b]].Parent = boneMap[(size_t)other.Bones[b].Parent];
+            for (uint32_t v = 0; v < other.VertexCount(); ++v)
+            {
+                std::vector<VertexWeight> list;
+                if (v < other.Weights.size())
+                    for (const VertexWeight& w : other.Weights[v])
+                        if (w.Bone < boneMap.size()) list.push_back({ (uint16_t)boneMap[w.Bone], w.Weight });
+                Weights.push_back(std::move(list));
+            }
+        }
         Positions.insert(Positions.end(), other.Positions.begin(), other.Positions.end());
         VertFlags.insert(VertFlags.end(), other.VertFlags.begin(), other.VertFlags.end());
         // The other mesh's slots map onto this one's by name.
@@ -306,9 +350,43 @@ namespace Dimension::Modeling
         }
     }
 
+    EditableMesh EditableMesh::Canonical() const
+    {
+        EditableMesh c = *this;
+        Rig::SetEditedShape(c, -1);
+        return c;
+    }
+
     MeshData EditableMesh::ToMeshData(bool applyModifiers) const
     {
-        if (applyModifiers && HasActiveModifiers()) return EvaluateModifiers(*this).ToMeshData(false);
+        if (EditedShape >= 0) return Canonical().ToMeshData(applyModifiers);
+        if (applyModifiers && HasActiveModifiers())
+        {
+            // Modifiers make a new mesh: the rig comes along (weights carried over by position), and each shape key is
+            // the modifiers run on that shape (kept when it comes out with the same vertices).
+            EditableMesh evaluated = EvaluateModifiers(*this);
+            if (HasRig())
+            {
+                evaluated.Bones = Bones;
+                evaluated.Actions = Actions;
+                evaluated.Weights = Rig::TransferWeights(*this, evaluated);
+            }
+            for (const ShapeKey& k : ShapeKeys)
+            {
+                if (k.Positions.size() != Positions.size()) continue;
+                EditableMesh shaped = *this;
+                shaped.Positions = k.Positions;
+                shaped.ShapeKeys.clear();
+                shaped.Bones.clear();
+                shaped.Weights.clear();
+                EditableMesh result = EvaluateModifiers(shaped);
+                if (result.VertexCount() == evaluated.VertexCount() && result.FaceCount() == evaluated.FaceCount())
+                    evaluated.ShapeKeys.push_back({ k.Name, std::move(result.Positions), k.Value });
+                else
+                    Log::Warn("Model '{}': shape key '{}' left out (the modifiers give it different topology)", Name, k.Name);
+            }
+            return evaluated.ToMeshData(false);
+        }
         MeshData out;
         out.Name = Name;
         const Topology& t = Topo();
@@ -387,6 +465,7 @@ namespace Dimension::Modeling
         size_t slots = std::max<size_t>(1, MaterialSlots.size());
         std::vector<std::vector<uint32_t>> bySlot(slots);
         std::unordered_map<CornerKey, uint32_t, CornerHash> corners;
+        std::vector<uint32_t> source; // per render vertex: the vertex it comes from
         std::vector<uint32_t> tri, cornerVertex;
         for (uint32_t f = 0; f < faceCount; ++f)
         {
@@ -410,7 +489,11 @@ namespace Dimension::Modeling
                 uint32_t color = face.ColorAt(c);
                 CornerKey key{ v, nid, Bits(uv.x), Bits(uv.y), color };
                 auto [it, inserted] = corners.try_emplace(key, (uint32_t)out.Vertices.size());
-                if (inserted) out.Vertices.push_back({ Positions[v], normal, uv, glm::vec4(0.0f), color });
+                if (inserted)
+                {
+                    out.Vertices.push_back({ Positions[v], normal, uv, glm::vec4(0.0f), color });
+                    source.push_back(v);
+                }
                 cornerVertex[c] = it->second;
             }
             tri.clear();
@@ -433,6 +516,61 @@ namespace Dimension::Modeling
             ImportedMaterial m;
             m.Name = name;
             out.Materials.push_back(m);
+        }
+        // The armature: skeleton, each vertex's four strongest deform bones (none: the first bone), actions as clips.
+        if (HasRig())
+        {
+            out.SkeletonData = Rig::BuildSkeleton(*this);
+            out.Skin.resize(out.Vertices.size());
+            for (size_t i = 0; i < out.Vertices.size(); ++i)
+            {
+                std::vector<VertexWeight> w;
+                if (source[i] < Weights.size())
+                    for (const VertexWeight& x : Weights[source[i]])
+                        if (x.Bone < Bones.size() && Bones[x.Bone].Deform && x.Weight > 0.0f) w.push_back(x);
+                std::sort(w.begin(), w.end(), [](const VertexWeight& a, const VertexWeight& b) { return a.Weight > b.Weight; });
+                if (w.size() > 4) w.resize(4);
+                float sum = 0.0f;
+                for (const VertexWeight& x : w) sum += x.Weight;
+                SkinVertex& s = out.Skin[i];
+                s.Weights = glm::vec4(0.0f);
+                if (w.empty() || sum <= 0.0f)
+                {
+                    s.Joints = glm::uvec4(0);
+                    s.Weights.x = 1.0f;
+                    continue;
+                }
+                for (size_t k = 0; k < w.size(); ++k)
+                {
+                    s.Joints[(int)k] = w[k].Bone;
+                    s.Weights[(int)k] = w[k].Weight / sum;
+                }
+            }
+            for (const Action& a : Actions)
+                if (!a.Keys.empty()) out.Clips.push_back(Rig::ToClip(*this, a));
+        }
+        // Shape keys: position deltas from the basis, normal deltas from the shape's own shading.
+        for (const ShapeKey& k : ShapeKeys)
+        {
+            if (k.Positions.size() != Positions.size()) continue;
+            BlendShape shape;
+            shape.Name = k.Name;
+            shape.DefaultWeight = k.Value;
+            shape.Positions.resize(out.Vertices.size());
+            shape.Normals.assign(out.Vertices.size(), glm::vec3(0.0f));
+            for (size_t i = 0; i < out.Vertices.size(); ++i) shape.Positions[i] = k.Positions[source[i]] - Positions[source[i]];
+            EditableMesh shaped;
+            shaped.Positions = k.Positions;
+            shaped.VertFlags = VertFlags;
+            shaped.Faces = Faces;
+            shaped.EdgeAttrs = EdgeAttrs;
+            shaped.MaterialSlots = MaterialSlots;
+            shaped.AutoSmooth = AutoSmooth;
+            shaped.AutoSmoothAngle = AutoSmoothAngle;
+            MeshData sd = shaped.ToMeshData(false);
+            if (sd.Vertices.size() >= out.Vertices.size())
+                for (size_t i = 0; i < out.Vertices.size(); ++i) shape.Normals[i] = sd.Vertices[i].Normal - out.Vertices[i].Normal;
+            out.BlendShapes.push_back(std::move(shape));
         }
         out.GenerateTangents();
         return out;
@@ -641,6 +779,7 @@ namespace Dimension::Modeling
 
     json EditableMesh::ToJson() const
     {
+        if (EditedShape >= 0) return Canonical().ToJson();
         json j;
         j["format"] = "dmodel";
         j["version"] = 1;
@@ -736,6 +875,76 @@ namespace Dimension::Modeling
             for (const Face& face : Faces)
                 for (size_t c = 0; c < face.Verts.size(); ++c) colors.push_back(face.ColorAt(c));
             j["colors"] = std::move(colors);
+        }
+        // The armature, weights ([vertex, count, bone, weight, ...]), shape keys and actions.
+        auto vec3 = [](const glm::vec3& v) { return json::array({ Round(v.x), Round(v.y), Round(v.z) }); };
+        if (!Bones.empty())
+        {
+            json bones = json::array();
+            for (const Bone& b : Bones)
+            {
+                json o = { { "name", b.Name }, { "parent", b.Parent }, { "head", vec3(b.Head) }, { "tail", vec3(b.Tail) } };
+                if (b.Roll != 0.0f) o["roll"] = Round(b.Roll);
+                if (!b.Deform) o["deform"] = false;
+                if (std::abs(b.PoseRotation.w) < 0.999999f) o["poseRotation"] = { b.PoseRotation.x, b.PoseRotation.y, b.PoseRotation.z, b.PoseRotation.w };
+                if (b.PoseLocation != glm::vec3(0.0f)) o["poseLocation"] = vec3(b.PoseLocation);
+                if (b.PoseScale != glm::vec3(1.0f)) o["poseScale"] = vec3(b.PoseScale);
+                bones.push_back(std::move(o));
+            }
+            j["bones"] = std::move(bones);
+        }
+        if (Weights.size() == Positions.size())
+        {
+            json weights = json::array();
+            for (uint32_t v = 0; v < Weights.size(); ++v)
+            {
+                if (Weights[v].empty()) continue;
+                weights.push_back(v);
+                weights.push_back(Weights[v].size());
+                for (const VertexWeight& w : Weights[v])
+                {
+                    weights.push_back(w.Bone);
+                    weights.push_back(Round(w.Weight));
+                }
+            }
+            if (!weights.empty()) j["weights"] = std::move(weights);
+        }
+        if (!ShapeKeys.empty())
+        {
+            json keys = json::array();
+            for (const ShapeKey& k : ShapeKeys)
+            {
+                json shapePos = json::array();
+                for (const auto& p : k.Positions)
+                {
+                    shapePos.push_back(Round(p.x));
+                    shapePos.push_back(Round(p.y));
+                    shapePos.push_back(Round(p.z));
+                }
+                keys.push_back({ { "name", k.Name }, { "value", Round(k.Value) }, { "positions", std::move(shapePos) } });
+            }
+            j["shapeKeys"] = std::move(keys);
+        }
+        if (!Actions.empty())
+        {
+            json actions = json::array();
+            for (const Action& a : Actions)
+            {
+                json keys = json::array();
+                for (const ActionKey& k : a.Keys)
+                {
+                    json rot = json::array(), loc = json::array(), scl = json::array();
+                    for (size_t b = 0; b < k.Rotations.size(); ++b)
+                    {
+                        for (float x : { k.Rotations[b].x, k.Rotations[b].y, k.Rotations[b].z, k.Rotations[b].w }) rot.push_back(Round(x));
+                        for (int c = 0; c < 3; ++c) loc.push_back(Round(k.Locations[b][c]));
+                        for (int c = 0; c < 3; ++c) scl.push_back(Round(k.Scales[b][c]));
+                    }
+                    keys.push_back({ { "time", Round(k.Time) }, { "rotations", std::move(rot) }, { "locations", std::move(loc) }, { "scales", std::move(scl) } });
+                }
+                actions.push_back({ { "name", a.Name }, { "keys", std::move(keys) } });
+            }
+            j["actions"] = std::move(actions);
         }
         // Sculpt mask: [vertex, value] pairs of the masked vertices.
         if (Mask.size() == Positions.size())
@@ -850,6 +1059,78 @@ namespace Dimension::Modeling
                 first += n;
             }
         };
+        auto readVec3 = [](const json& a, glm::vec3 fallback) {
+            if (!a.is_array() || a.size() < 3) return fallback;
+            return glm::vec3(a[0].get<float>(), a[1].get<float>(), a[2].get<float>());
+        };
+        for (const auto& o : j.value("bones", json::array()))
+        {
+            Bone b;
+            b.Name = o.value("name", "Bone");
+            b.Parent = o.value("parent", -1);
+            b.Head = readVec3(o.value("head", json()), glm::vec3(0.0f));
+            b.Tail = readVec3(o.value("tail", json()), glm::vec3(0, 0.2f, 0));
+            b.Roll = o.value("roll", 0.0f);
+            b.Deform = o.value("deform", true);
+            if (o.contains("poseRotation") && o["poseRotation"].size() == 4)
+            {
+                const json& r = o["poseRotation"];
+                b.PoseRotation = glm::normalize(glm::quat(r[3].get<float>(), r[0].get<float>(), r[1].get<float>(), r[2].get<float>()));
+            }
+            b.PoseLocation = readVec3(o.value("poseLocation", json()), glm::vec3(0.0f));
+            b.PoseScale = readVec3(o.value("poseScale", json()), glm::vec3(1.0f));
+            out.Bones.push_back(b);
+        }
+        for (Bone& b : out.Bones)
+            if (b.Parent >= (int)out.Bones.size() || Rig::WouldLoop(out, (int)(&b - &out.Bones[0]), b.Parent)) b.Parent = -1;
+        if (j.contains("weights"))
+        {
+            const json& w = j["weights"];
+            out.Weights.assign(vc, {});
+            size_t i = 0;
+            while (i + 1 < w.size())
+            {
+                uint32_t v = w[i].get<uint32_t>();
+                size_t count = w[i + 1].get<size_t>();
+                i += 2;
+                for (size_t k = 0; k < count && i + 1 < w.size(); ++k, i += 2)
+                {
+                    uint32_t bone = w[i].get<uint32_t>();
+                    if (v < vc && bone < out.Bones.size()) out.Weights[v].push_back({ (uint16_t)bone, w[i + 1].get<float>() });
+                }
+            }
+        }
+        for (const auto& o : j.value("shapeKeys", json::array()))
+        {
+            ShapeKey k;
+            k.Name = o.value("name", "Key");
+            k.Value = o.value("value", 0.0f);
+            const json shapePos = o.value("positions", json::array());
+            for (size_t i = 0; i + 2 < shapePos.size(); i += 3)
+                k.Positions.push_back({ shapePos[i].get<float>(), shapePos[i + 1].get<float>(), shapePos[i + 2].get<float>() });
+            if (k.Positions.size() == vc) out.ShapeKeys.push_back(std::move(k));
+            else Log::Warn("Model '{}': shape key '{}' skipped (its vertex count differs)", out.Name, k.Name);
+        }
+        for (const auto& o : j.value("actions", json::array()))
+        {
+            Action a;
+            a.Name = o.value("name", "Action");
+            for (const auto& kj : o.value("keys", json::array()))
+            {
+                ActionKey k;
+                k.Time = kj.value("time", 0.0f);
+                const json rot = kj.value("rotations", json::array()), loc = kj.value("locations", json::array()), scl = kj.value("scales", json::array());
+                for (size_t b = 0; 4 * b + 3 < rot.size() && 3 * b + 2 < loc.size() && 3 * b + 2 < scl.size(); ++b)
+                {
+                    k.Rotations.push_back(glm::normalize(glm::quat(rot[4 * b + 3].get<float>(), rot[4 * b].get<float>(), rot[4 * b + 1].get<float>(), rot[4 * b + 2].get<float>())));
+                    k.Locations.push_back({ loc[3 * b].get<float>(), loc[3 * b + 1].get<float>(), loc[3 * b + 2].get<float>() });
+                    k.Scales.push_back({ scl[3 * b].get<float>(), scl[3 * b + 1].get<float>(), scl[3 * b + 2].get<float>() });
+                }
+                a.Keys.push_back(std::move(k));
+            }
+            std::sort(a.Keys.begin(), a.Keys.end(), [](const ActionKey& x, const ActionKey& y) { return x.Time < y.Time; });
+            out.Actions.push_back(std::move(a));
+        }
         if (j.contains("colors"))
         {
             // (corners of skipped faces count too)

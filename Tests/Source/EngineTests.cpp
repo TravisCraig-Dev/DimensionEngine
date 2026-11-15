@@ -86,6 +86,7 @@
 #include <Dimension/Modeling/Sculpt.h>
 #include <Dimension/Modeling/Paint.h>
 #include <Dimension/Modeling/Bake.h>
+#include <Dimension/Modeling/Rig.h>
 #include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/ModelExport.h>
@@ -18854,6 +18855,203 @@ namespace
         CHECK(dil.At(5, 3) == 0xFFFFFFFFu && dil.At(6, 3) == 0u);
     }
 
+    namespace RigTest
+    {
+        using namespace Dimension::Modeling;
+        // A box column 0.2 wide from y = 0 to 2, cut every 0.2, with a two-bone chain up its middle.
+        EditableMesh Column()
+        {
+            EditableMesh m = Primitives::Cube(2.0f);
+            Ops::Subdivide(m, 9);
+            for (auto& p : m.Positions) p = glm::vec3(p.x * 0.1f, p.y + 1.0f, p.z * 0.1f);
+            m.Changed();
+            Ops::DeselectAll(m);
+            int lower = Rig::AddBone(m, "Lower", { 0, 0, 0 }, { 0, 1, 0 });
+            Rig::AddBone(m, "Upper", { 0, 1, 0 }, { 0, 2, 0 }, lower);
+            return m;
+        }
+        uint32_t VertexNear(const EditableMesh& m, glm::vec3 p)
+        {
+            uint32_t best = 0;
+            for (uint32_t v = 1; v < m.VertexCount(); ++v)
+                if (glm::length(m.Positions[v] - p) < glm::length(m.Positions[best] - p)) best = v;
+            return best;
+        }
+    }
+
+    void TestModelingRigging()
+    {
+        using namespace ModelingTest;
+        using namespace RigTest;
+        // Bone frames: +Y runs from head to tail.
+        Bone up;
+        up.Tail = { 0, 1, 0 };
+        CHECK(Near(glm::vec3(Rig::RestMatrix(up)[1]), glm::vec3(0, 1, 0)));
+        Bone side;
+        side.Head = { 1, 2, 3 };
+        side.Tail = { 2, 2, 3 };
+        glm::mat4 r = Rig::RestMatrix(side);
+        CHECK(Near(glm::vec3(r[1]), glm::vec3(1, 0, 0)) && Near(glm::vec3(r[3]), glm::vec3(1, 2, 3)));
+        side.Roll = glm::half_pi<float>();
+        CHECK(Near(glm::vec3(Rig::RestMatrix(side)[1]), glm::vec3(1, 0, 0)) && !Near(glm::vec3(Rig::RestMatrix(side)[0]), glm::vec3(r[0])));
+
+        // Automatic weights: the bottom follows the lower bone, the top the upper one, the middle both.
+        EditableMesh m = Column();
+        Rig::AutomaticWeights(m);
+        uint32_t bottom = VertexNear(m, { 0.1f, 0.0f, 0.1f }), top = VertexNear(m, { 0.1f, 2.0f, 0.1f }), middle = VertexNear(m, { 0.1f, 1.0f, 0.1f });
+        CHECK(Rig::GetWeight(m, bottom, 0) > 0.9f && Rig::GetWeight(m, top, 1) > 0.9f);
+        CHECK(Rig::GetWeight(m, middle, 0) > 0.2f && Rig::GetWeight(m, middle, 1) > 0.2f);
+        bool normalized = true;
+        for (auto& list : m.Weights)
+        {
+            float sum = 0.0f;
+            for (auto& w : list) sum += w.Weight;
+            normalized &= list.size() <= 4 && (list.empty() || Near(sum, 1.0f, 1e-3f));
+        }
+        CHECK(normalized);
+
+        // The render mesh has the skeleton and skin; posing bends the top.
+        MeshData data = m.ToMeshData();
+        CHECK(data.SkeletonData && data.SkeletonData->Joints.size() == 2 && data.SkeletonData->Joints[1].Parent == 0 && data.Skin.size() == data.Vertices.size());
+        m.Bones[1].PoseRotation = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0, 0, 1));
+        CHECK(!Rig::AtRest(m));
+        MeshData posed = m.ToMeshData();
+        Rig::PoseMeshData(posed, m);
+        CHECK(!posed.SkeletonData && posed.Skin.empty());
+        float topX = 1e30f;
+        for (const Vertex& v : posed.Vertices) topX = std::min(topX, v.Position.x);
+        CHECK(topX < -0.8f); // the upper half now points along -X
+        bool bottomStill = true;
+        for (size_t i = 0; i < data.Vertices.size(); ++i)
+            if (data.Vertices[i].Position.y < 0.3f) bottomStill &= Near(posed.Vertices[i].Position, data.Vertices[i].Position, 0.02f); // (a little leaks, as in Blender)
+        CHECK(bottomStill);
+
+        // Actions become clips; the animation system's skinning at a time matches the editor's pose.
+        Rig::ClearPose(m);
+        int act = Rig::AddAction(m, "Bend");
+        Rig::InsertKey(m, act, 0.0f);
+        m.Bones[1].PoseRotation = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0, 0, 1));
+        m.Bones[0].PoseLocation = { 0.0f, 0.5f, 0.0f };
+        Rig::InsertKey(m, act, 1.0f);
+        CHECK(m.Actions[0].Keys.size() == 2 && Near(m.Actions[0].Duration(), 1.0f));
+        MeshData clipped = m.ToMeshData();
+        CHECK(clipped.Clips.size() == 1 && clipped.Clips[0].Name == "Bend" && Near(clipped.Clips[0].Duration, 1.0f));
+        Pose pose;
+        pose.SetBindPose(*clipped.SkeletonData);
+        Dimension::Animation::Sample(*clipped.SkeletonData, clipped.Clips[0], 0.5f, pose);
+        std::vector<glm::mat4> engineSkin;
+        Dimension::Animation::ComputeSkinMatrices(*clipped.SkeletonData, pose, engineSkin);
+        Rig::EvaluateAction(m, act, 0.5f);
+        std::vector<glm::mat4> editorSkin = Rig::SkinMatrices(m);
+        bool same = engineSkin.size() == 2;
+        for (size_t b = 0; b < 2 && same; ++b)
+            for (int c = 0; c < 4; ++c) same &= Near(glm::vec4(engineSkin[b][c]), glm::vec4(editorSkin[b][c]), 1e-3f);
+        CHECK(same);
+        Rig::EvaluateAction(m, act, 0.0f);
+        CHECK(Rig::AtRest(m));
+
+        // Weight painting: Mix towards 1 under the brush; mirrored strokes paint the mirrored bone.
+        EditableMesh wp = Column();
+        int armL = Rig::AddBone(wp, "Arm.L", { 0.1f, 1.6f, 0 }, { 0.5f, 1.6f, 0 });
+        int armR = Rig::AddBone(wp, "Arm.R", { -0.1f, 1.6f, 0 }, { -0.5f, 1.6f, 0 });
+        Rig::WeightBrush brush;
+        brush.Bone = armL;
+        brush.Radius = 0.15f;
+        brush.Strength = 1.0f;
+        brush.Value = 1.0f;
+        brush.FrontFacesOnly = false;
+        brush.Symmetry = 1;
+        CHECK(Rig::PaintWeights(wp, { 0.1f, 1.6f, 0.0f }, brush) > 0);
+        uint32_t onL = VertexNear(wp, { 0.1f, 1.6f, 0.0f }), onR = VertexNear(wp, { -0.1f, 1.6f, 0.0f });
+        CHECK(Near(Rig::GetWeight(wp, onL, armL), 1.0f) && Near(Rig::GetWeight(wp, onR, armR), 1.0f) && Rig::GetWeight(wp, onR, armL) == 0.0f);
+        CHECK(Rig::FlipSideName("Arm.L") == "Arm.R" && Rig::FlipSideName("LeftHand") == "RightHand" && Rig::FlipSideName("hand_r") == "hand_l" &&
+              Rig::FlipSideName("Spine") == "Spine");
+        // Deleting a bone renumbers the weights and reparents its children.
+        int tip = Rig::AddBone(wp, "Tip", { 0, 2, 0 }, { 0, 2.2f, 0 }, armR);
+        (void)tip;
+        Rig::DeleteBones(wp, { armL });
+        CHECK(wp.Bones.size() == 4 && wp.Bones[2].Name == "Arm.R" && wp.Bones[3].Parent == 2 && Near(Rig::GetWeight(wp, onR, 2), 1.0f));
+        // Symmetrize makes the missing side.
+        EditableMesh sym = Column();
+        Rig::AddBone(sym, "Leg.L", { 0.1f, 0.5f, 0 }, { 0.3f, 0.0f, 0 }, 0);
+        CHECK(Rig::Symmetrize(sym) == 1);
+        int legR = Rig::FindBone(sym, "Leg.R");
+        CHECK(legR >= 0 && Near(sym.Bones[(size_t)legR].Head, glm::vec3(-0.1f, 0.5f, 0)) && sym.Bones[(size_t)legR].Parent == 0);
+    }
+
+    void TestModelingShapeKeysAndRigFiles()
+    {
+        using namespace ModelingTest;
+        using namespace RigTest;
+        // Shape keys: edited in place (the basis comes back afterwards), rendered as blend shapes.
+        EditableMesh m = Column();
+        int smile = Rig::AddShapeKey(m, "Smile");
+        CHECK(smile == 0 && m.ShapeKeys[0].Positions == m.Positions);
+        std::vector<glm::vec3> basis = m.Positions;
+        Rig::SetEditedShape(m, smile);
+        uint32_t top = VertexNear(m, { 0.1f, 2.0f, 0.1f });
+        m.Positions[top] += glm::vec3(0, 0.5f, 0);
+        CHECK(m.Canonical().Positions == basis && m.Canonical().ShapeKeys[0].Positions[top].y > 2.4f);
+        MeshData shaped = m.ToMeshData(); // (from the canonical form)
+        CHECK(shaped.BlendShapes.size() == 1 && shaped.BlendShapes[0].Name == "Smile");
+        float moved = 0.0f;
+        for (const glm::vec3& d : shaped.BlendShapes[0].Positions) moved = std::max(moved, d.y);
+        CHECK(Near(moved, 0.5f, 1e-4f));
+        Rig::SetEditedShape(m, -1);
+        CHECK(m.Positions == basis && m.EditedShape == -1);
+        m.ShapeKeys[0].Value = 0.5f;
+        CHECK(Near(Rig::MixedPositions(m)[top].y, 2.25f, 1e-4f));
+        CHECK(Near(m.ToMeshData().BlendShapes[0].DefaultWeight, 0.5f));
+        // New vertices follow into every shape; deleting vertices keeps them lined up.
+        uint32_t added = m.AddVertex({ 5, 5, 5 });
+        CHECK(m.ShapeKeys[0].Positions.size() == m.VertexCount() && m.ShapeKeys[0].Positions[added] == glm::vec3(5, 5, 5));
+        Rig::AutomaticWeights(m);
+        Ops::DeselectAll(m);
+        uint32_t bottom = VertexNear(m, { 0.1f, 0.0f, 0.1f });
+        Ops::SelectVertex(m, bottom, true);
+        Ops::Delete(m, Ops::DeleteKind::Vertices);
+        CHECK(m.Weights.size() == m.VertexCount() && m.ShapeKeys[0].Positions.size() == m.VertexCount());
+        uint32_t topAfter = VertexNear(m, { 0.1f, 2.0f, 0.1f });
+        CHECK(Near(m.ShapeKeys[0].Positions[topAfter].y, 2.5f, 1e-4f) && Rig::GetWeight(m, topAfter, 1) > 0.9f);
+
+        // Everything is kept in the file.
+        Rig::AddAction(m, "Wave");
+        m.Bones[1].PoseRotation = glm::angleAxis(0.5f, glm::vec3(1, 0, 0));
+        Rig::InsertKey(m, 0, 0.25f);
+        m.Bones[1].Deform = false;
+        m.Bones[0].Roll = 0.3f;
+        Rig::SetEditedShape(m, 0); // (saved as the basis anyway)
+        EditableMesh back;
+        CHECK(EditableMesh::FromJson(m.ToJson(), back));
+        Rig::SetEditedShape(m, -1);
+        CHECK(back.EditedShape == -1 && back.Positions.size() == m.Positions.size() && Near(back.Positions[topAfter], m.Positions[topAfter], 1e-4f));
+        CHECK(back.Bones.size() == 2 && back.Bones[1].Parent == 0 && !back.Bones[1].Deform && Near(back.Bones[0].Roll, 0.3f, 1e-4f));
+        CHECK(Near(glm::vec4(back.Bones[1].PoseRotation.x, back.Bones[1].PoseRotation.y, back.Bones[1].PoseRotation.z, back.Bones[1].PoseRotation.w),
+                   glm::vec4(m.Bones[1].PoseRotation.x, m.Bones[1].PoseRotation.y, m.Bones[1].PoseRotation.z, m.Bones[1].PoseRotation.w), 1e-4f));
+        CHECK(back.Weights.size() == back.VertexCount() && Near(Rig::GetWeight(back, topAfter, 1), Rig::GetWeight(m, topAfter, 1), 1e-4f));
+        CHECK(back.ShapeKeys.size() == 1 && Near(back.ShapeKeys[0].Value, 0.5f) && Near(back.ShapeKeys[0].Positions[topAfter].y, 2.5f, 1e-4f));
+        CHECK(back.Actions.size() == 1 && back.Actions[0].Name == "Wave" && back.Actions[0].Keys.size() == 1 && Near(back.Actions[0].Keys[0].Time, 0.25f));
+
+        // Through modifiers: a mirrored half keeps its skin, the mirror side on the mirrored bone; shape keys go along.
+        EditableMesh half = Primitives::Cube(1.0f);
+        Ops::Subdivide(half, 3);
+        for (auto& p : half.Positions) p.x += 0.75f; // x 0.25 .. 1.25
+        half.Changed();
+        Rig::AddBone(half, "Arm.L", { 0.25f, 0, 0 }, { 1.25f, 0, 0 });
+        Rig::AddBone(half, "Arm.R", { -0.25f, 0, 0 }, { -1.25f, 0, 0 });
+        for (uint32_t v = 0; v < half.VertexCount(); ++v) Rig::SetWeight(half, v, 0, 1.0f);
+        Rig::AddShapeKey(half, "Puff");
+        for (auto& p : half.ShapeKeys[0].Positions) p *= 1.1f;
+        Modifier mirror = Modifier::Make(ModifierType::Mirror);
+        mirror.Axis[0] = true;
+        half.Modifiers.push_back(mirror);
+        MeshData both = half.ToMeshData();
+        bool sides = !both.Skin.empty();
+        for (size_t i = 0; i < both.Vertices.size() && sides; ++i)
+            sides &= both.Skin[i].Joints.x == (both.Vertices[i].Position.x < 0.0f ? 1u : 0u) && Near(both.Skin[i].Weights.x, 1.0f, 1e-3f);
+        CHECK(sides && both.BlendShapes.size() == 1);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19272,6 +19470,8 @@ int main(int argc, char** argv)
     Run("Modeling vertex colors", TestModelingVertexColors);
     Run("Modeling painting", TestModelingPainting);
     Run("Modeling baking", TestModelingBaking);
+    Run("Modeling rigging", TestModelingRigging);
+    Run("Modeling shape keys and rig files", TestModelingShapeKeysAndRigFiles);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

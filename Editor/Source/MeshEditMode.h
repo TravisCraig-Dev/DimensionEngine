@@ -9,6 +9,8 @@
 #include <Dimension/Modeling/Sculpt.h>
 #include <Dimension/Modeling/Paint.h>
 #include <Dimension/Modeling/Bake.h>
+#include <Dimension/Modeling/Rig.h>
+#include <functional>
 #include <memory>
 #include <imgui.h>
 #include <deque>
@@ -58,16 +60,20 @@ namespace Editor
         bool IsModal() const
         {
             return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None || m_UVModal.Kind != UVModalKind::None || m_Stroking || m_SculptAdjust != 0 ||
-                   m_Painting || m_PaintAdjust != 0;
+                   m_Painting || m_PaintAdjust != 0 || m_BoneModal.Kind != 0 || m_WeightPainting;
         }
         // Whether the camera should leave the mouse alone (the knife lets it orbit between cuts).
         bool BlocksCamera() const
         {
-            return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut || m_Stroking || m_SculptAdjust != 0 || m_Painting || m_PaintAdjust != 0;
+            return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut || m_Stroking || m_SculptAdjust != 0 || m_Painting || m_PaintAdjust != 0 ||
+                   m_BoneModal.Kind != 0 || m_WeightPainting;
         }
         // Vertex Paint (1) and Texture Paint (2): the model colored with brushes (MeshEditPaint.cpp); 0 off.
         int GetPaintMode() const { return m_Active ? m_PaintMode : 0; }
         void SetPaintMode(int mode);
+        // Rigging (MeshEditRig.cpp): 1 the armature's bones, 2 posing them, 3 weight painting; 0 off.
+        int GetRigMode() const { return m_Active ? m_RigMode : 0; }
+        void SetRigMode(int mode);
         // Sculpt Mode: the same model shaped with brushes instead of selected and moved (MeshEditSculpt.cpp).
         bool IsSculpting() const { return m_Active && m_Sculpting; }
         void SetSculpting(bool on);
@@ -380,6 +386,46 @@ namespace Editor
         Modeling::Bake::Settings m_Bake;
         Entity m_BakeSource = Entity::Null();
         bool m_BakeAssign = true, m_OpenBake = false;
+        // Rigging.
+        struct BoneModal
+        {
+            int Kind = 0; // 1 move, 2 rotate, 3 scale
+            std::vector<Modeling::Bone> Start;
+            ImVec2 MouseStart{ 0, 0 };
+            glm::vec3 Pivot{ 0.0f };   // model space
+            glm::vec3 PlaneStart{ 0.0f };
+            float LastAngle = 0.0f, Angle = 0.0f;
+            int Axis = -1;
+            int StartFrame = 0;
+            bool Recorded = false; // the operation before it recorded the undo step
+        };
+        bool UpdateRigView(bool hovered, bool focused, bool blocked);
+        void DrawRigToolbar(const ImVec2& origin);
+        void DrawBoneOverlay(ImDrawList* dl);
+        void DrawShapeKeysPopup();
+        void HandleRigKeys(bool hovered);
+        void HandleRigMouse(bool hovered, bool blocked);
+        int PickBone(const ImVec2& mouse, int* joint) const; // joint: BoneHead/BoneTail when near one, else BoneBody
+        void BeginBoneModal(int kind, bool recorded = false);
+        void UpdateBoneModal();
+        void EndBoneModal(bool confirm);
+        void UpdateWeightStroke(bool hovered, bool blocked);
+        void SyncRigPreview(); // the object shows the posed mesh (Pose) or the active bone's weights (Weights)
+        void RigOperate(const char* name, const std::function<void()>& fn);
+        bool BoneScreen(int bone, ImVec2& head, ImVec2& tail) const;
+        int m_RigMode = 0;
+        int m_ActiveBone = -1;
+        BoneModal m_BoneModal;
+        bool m_WeightPainting = false;
+        ImVec2 m_WeightMouse{ 0, 0 };
+        Modeling::Rig::WeightMode m_WeightMode = Modeling::Rig::WeightMode::Mix;
+        float m_WeightValue = 1.0f, m_WeightStrength = 0.5f, m_WeightRadiusPx = 40.0f;
+        bool m_WeightFrontFaces = true;
+        uint8_t m_WeightSymmetry = 1;
+        int m_Action = -1;
+        float m_ActionTime = 0.0f;
+        bool m_ActionPlaying = false;
+        bool m_OpenShapeKeys = false;
         // Operation settings.
         int m_SubdivideCuts = 1;
         float m_DissolveAngle = 5.0f;
