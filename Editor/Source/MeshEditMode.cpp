@@ -2584,6 +2584,43 @@ namespace Editor
                         modChanged |= ImGui::DragInt("##seed", &edit.Seed, 0.2f);
                         break;
                     }
+                    case ModifierType::Multires:
+                    {
+                        UI::PropertyLabel("Levels", "Subdivision levels holding sculpted detail (Sculpt Mode sculpts the finest)");
+                        ImGui::Text("%d", edit.Levels);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Subdivide"))
+                        {
+                            ModifierOps::MultiresSubdivide(*mesh, edit);
+                            modChanged = true;
+                        }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("One more level: the sculpted surface subdivided smoothly (4x the faces)");
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(edit.Levels == 0);
+                        if (ImGui::SmallButton("Delete Higher"))
+                        {
+                            ModifierOps::MultiresDeleteHigher(*mesh, edit);
+                            modChanged = true;
+                        }
+                        ImGui::EndDisabled();
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes the finest level (its detail is lost)");
+                        UI::PropertyLabel("Viewport", "The level the object shows (a coarser one is quicker)");
+                        modChanged |= ImGui::SliderInt("##viewlevels", &edit.ViewLevels, 0, std::max(edit.Levels, 1));
+                        // (Catmull-Clark's counts per level: V + E + F vertices, 2E + sides edges, `sides` quads)
+                        size_t verts = mesh->VertexCount(), edges = mesh->Topo().Edges.size(), faces = mesh->FaceCount(), sides = 0;
+                        for (const Face& f : mesh->Faces) sides += f.Verts.size();
+                        for (int l = 0; l < edit.Levels; ++l)
+                        {
+                            size_t nv = verts + edges + faces, ne = 2 * edges + sides;
+                            verts = nv;
+                            edges = ne;
+                            faces = sides;
+                            sides = 4 * faces;
+                        }
+                        if (!edit.Displacements.empty() && edit.Levels > 0 && edit.Displacements.size() != verts)
+                            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "The base's faces changed: the sculpted detail no longer fits");
+                        break;
+                    }
                     case ModifierType::Shrinkwrap:
                     {
                         UI::PropertyLabel("Mode", "Nearest Surface Point, or along each vertex's normal (Project)");
@@ -2678,6 +2715,7 @@ namespace Editor
         {
             if (live)
             {
+                m_SculptValid = false; // (a Multires level added or removed: sculpting picks it up)
                 ops::FlushSelection(m_Mesh, m_Mode);
                 Commit();
             }

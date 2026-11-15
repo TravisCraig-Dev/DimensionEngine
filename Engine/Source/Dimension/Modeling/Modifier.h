@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace Dimension::Modeling
 {
@@ -20,6 +21,7 @@ namespace Dimension::Modeling
         Weld,        // vertices closer than a distance merged
         Displace,    // vertices pushed by noise
         Shrinkwrap,  // vertices moved onto another model's surface (retopology)
+        Multires,    // subdivision levels carrying sculpted detail (Sculpt Mode sculpts the finest level)
         Count
     };
     const char* ModifierTypeName(ModifierType type);
@@ -30,7 +32,7 @@ namespace Dimension::Modeling
         ModifierType Type = ModifierType::Subdivision;
         bool Enabled = true;
 
-        // Subdivision
+        // Subdivision (and Multires: its levels)
         int Levels = 1;          // 0..6
         bool UseCreases = true;  // edge creases keep edges sharp (1) or partly (0..1)
         // Mirror (axes of the model's own space, through its origin)
@@ -66,6 +68,10 @@ namespace Dimension::Modeling
         // Shrinkwrap (the target is the Boolean's Operand, placed the same way)
         int WrapMode = 0;        // 0 nearest surface point, 1 along the vertex normals
         float WrapOffset = 0.0f; // kept this far out from the surface
+        // Multires: the level shown (up to Levels), and the sculpted detail: per vertex of the base subdivided Levels
+        // times, its offset from that smooth surface (model space; dropped when the base's topology changes)
+        int ViewLevels = 6;
+        std::vector<glm::vec3> Displacements;
 
         static Modifier Make(ModifierType type);
         nlohmann::json ToJson() const;

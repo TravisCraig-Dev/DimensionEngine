@@ -18,14 +18,15 @@ namespace Dimension::Modeling
 
     const char* ModifierTypeName(ModifierType type)
     {
-        static const char* names[] = { "Subdivision Surface", "Mirror", "Array", "Bevel", "Solidify", "Boolean", "Decimate", "Weld", "Displace", "Shrinkwrap" };
+        static const char* names[] = { "Subdivision Surface", "Mirror", "Array", "Bevel", "Solidify", "Boolean", "Decimate", "Weld", "Displace", "Shrinkwrap",
+                                       "Multiresolution" };
         int i = (int)type;
         return i >= 0 && i < (int)ModifierType::Count ? names[i] : "Unknown";
     }
 
     namespace
     {
-        const char* kTypeKeys[] = { "subdivision", "mirror", "array", "bevel", "solidify", "boolean", "decimate", "weld", "displace", "shrinkwrap" };
+        const char* kTypeKeys[] = { "subdivision", "mirror", "array", "bevel", "solidify", "boolean", "decimate", "weld", "displace", "shrinkwrap", "multires" };
         json Vec(const glm::vec3& v) { return json::array({ v.x, v.y, v.z }); }
         glm::vec3 ReadVec(const json& j, const char* key, glm::vec3 fallback)
         {
@@ -39,6 +40,7 @@ namespace Dimension::Modeling
         Modifier m;
         m.Type = type;
         if (type == ModifierType::Bevel) m.Segments = 1;
+        if (type == ModifierType::Multires) m.Levels = 0; // (Subdivide adds levels)
         return m;
     }
 
@@ -106,6 +108,16 @@ namespace Dimension::Modeling
             j["wrapMode"] = WrapMode;
             j["wrapOffset"] = WrapOffset;
             break;
+        case ModifierType::Multires:
+        {
+            j["levels"] = Levels;
+            j["viewLevels"] = ViewLevels;
+            json d = json::array();
+            for (const glm::vec3& v : Displacements)
+                for (int k = 0; k < 3; ++k) d.push_back(std::round(v[k] * 1e6f) / 1e6f);
+            j["displacements"] = std::move(d);
+            break;
+        }
         default: break;
         }
         return j;
@@ -151,6 +163,14 @@ namespace Dimension::Modeling
         out.WrapOffset = j.value("wrapOffset", out.WrapOffset);
         out.Direction = std::clamp(j.value("direction", out.Direction), 0, 3);
         out.Seed = j.value("seed", out.Seed);
+        out.ViewLevels = std::clamp(j.value("viewLevels", out.ViewLevels), 0, 6);
+        if (j.contains("displacements") && j["displacements"].is_array())
+        {
+            const json& d = j["displacements"];
+            out.Displacements.resize(d.size() / 3);
+            for (size_t i = 0; i < out.Displacements.size(); ++i)
+                out.Displacements[i] = { d[i * 3].get<float>(), d[i * 3 + 1].get<float>(), d[i * 3 + 2].get<float>() };
+        }
         return true;
     }
 
@@ -695,6 +715,61 @@ namespace Dimension::Modeling
         }
     }
 
+    // ---- Multires
+
+    namespace
+    {
+        // The base subdivided 0..levels times (each a step of the one before).
+        std::vector<EditableMesh> SubdivisionLevels(const EditableMesh& base, int levels, bool creases)
+        {
+            std::vector<EditableMesh> out;
+            out.push_back(Plain(base));
+            for (int i = 0; i < levels; ++i) out.push_back(ModifierOps::SubdivideSmooth(out.back(), creases));
+            return out;
+        }
+    }
+
+    EditableMesh ModifierOps::MultiresMesh(const EditableMesh& base, const Modifier& mod, int level)
+    {
+        int levels = std::clamp(mod.Levels, 0, 6);
+        level = std::clamp(level, 0, levels);
+        std::vector<EditableMesh> steps = SubdivisionLevels(base, levels, mod.UseCreases);
+        const EditableMesh& finest = steps.back();
+        EditableMesh out = steps[(size_t)level];
+        if (mod.Displacements.size() == finest.VertexCount())
+            for (uint32_t v = 0; v < out.VertexCount(); ++v) out.Positions[v] = finest.Positions[v] + mod.Displacements[v];
+        out.Changed();
+        return out;
+    }
+
+    void ModifierOps::MultiresStore(const EditableMesh& base, Modifier& mod, const std::vector<glm::vec3>& finest)
+    {
+        EditableMesh smooth = SubdivisionLevels(base, std::clamp(mod.Levels, 0, 6), mod.UseCreases).back();
+        if (finest.size() != smooth.VertexCount()) return;
+        mod.Displacements.resize(finest.size());
+        for (size_t v = 0; v < finest.size(); ++v) mod.Displacements[v] = finest[v] - smooth.Positions[v];
+    }
+
+    void ModifierOps::MultiresSubdivide(const EditableMesh& base, Modifier& mod)
+    {
+        if (mod.Levels >= 6) return;
+        EditableMesh sculpted = MultiresMesh(base, mod, mod.Levels);
+        EditableMesh finer = SubdivideSmooth(sculpted, mod.UseCreases);
+        ++mod.Levels;
+        mod.ViewLevels = std::max(mod.ViewLevels, mod.Levels);
+        mod.Displacements.clear();
+        MultiresStore(base, mod, finer.Positions);
+    }
+
+    void ModifierOps::MultiresDeleteHigher(const EditableMesh& base, Modifier& mod)
+    {
+        if (mod.Levels <= 0) return;
+        EditableMesh coarser = MultiresMesh(base, mod, mod.Levels - 1);
+        --mod.Levels;
+        mod.Displacements.clear();
+        MultiresStore(base, mod, coarser.Positions);
+    }
+
     EditableMesh ApplyModifier(const EditableMesh& input, const Modifier& mod)
     {
         EditableMesh m = Plain(input);
@@ -704,6 +779,7 @@ namespace Dimension::Modeling
         case ModifierType::Subdivision:
             for (int i = 0; i < std::clamp(mod.Levels, 0, 6); ++i) m = ModifierOps::SubdivideSmooth(m, mod.UseCreases);
             return m;
+        case ModifierType::Multires: return ModifierOps::MultiresMesh(m, mod, std::min(mod.ViewLevels, mod.Levels));
         case ModifierType::Mirror:
             for (int axis = 0; axis < 3; ++axis)
             {

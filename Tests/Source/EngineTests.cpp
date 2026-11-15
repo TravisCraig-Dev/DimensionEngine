@@ -19615,6 +19615,49 @@ namespace
                 if (p.x > 0.95f) flat = std::max(flat, std::abs(p.x - 1.0f));
             CHECK(flat < 1e-3f);
         }
+        // Multires: levels that carry sculpted detail through subdividing, deleting levels, saving and moving the base.
+        {
+            EditableMesh base = Primitives::Cube(2.0f);
+            Modifier mr = Modifier::Make(ModifierType::Multires);
+            ModifierOps::MultiresSubdivide(base, mr);
+            ModifierOps::MultiresSubdivide(base, mr);
+            CHECK(mr.Levels == 2 && mr.Displacements.size() == 98); // (8 + 12 + 6 = 26, then 26 + 48 + 24)
+            EditableMesh smooth2 = ModifierOps::SubdivideSmooth(ModifierOps::SubdivideSmooth(base));
+            EditableMesh level2 = ModifierOps::MultiresMesh(base, mr, 2);
+            float drift = 0.0f;
+            for (uint32_t v = 0; v < level2.VertexCount(); ++v) drift = std::max(drift, glm::length(level2.Positions[v] - smooth2.Positions[v]));
+            CHECK(drift < 1e-4f); // (no detail yet: the smooth surface)
+            // Sculpt the finest level: a bump at the first corner.
+            std::vector<glm::vec3> sculpted = level2.Positions;
+            glm::vec3 out = glm::normalize(sculpted[0]);
+            sculpted[0] += out * 0.3f;
+            ModifierOps::MultiresStore(base, mr, sculpted);
+            CHECK(Near(ModifierOps::MultiresMesh(base, mr, 2).Positions[0], sculpted[0]));
+            CHECK(Near(ModifierOps::MultiresMesh(base, mr, 1).Positions[0], sculpted[0])); // (coarser levels show it too)
+            // A finer level keeps the bump; deleting it again leaves the level below as the finer one had it.
+            ModifierOps::MultiresSubdivide(base, mr);
+            EditableMesh level3 = ModifierOps::MultiresMesh(base, mr, 3);
+            EditableMesh smooth3 = ModifierOps::SubdivideSmooth(smooth2);
+            CHECK(mr.Levels == 3 && glm::length(level3.Positions[0] - smooth3.Positions[0]) > 0.1f);
+            ModifierOps::MultiresDeleteHigher(base, mr);
+            CHECK(mr.Levels == 2 && Near(ModifierOps::MultiresMesh(base, mr, 2).Positions[0], level3.Positions[0]));
+            // Saved with the model; shown by the modifier stack.
+            EditableMesh model = base;
+            model.Modifiers.push_back(mr);
+            EditableMesh back;
+            CHECK(EditableMesh::FromJson(model.ToJson(), back) && back.Modifiers.size() == 1 && back.Modifiers[0].Type == ModifierType::Multires &&
+                  back.Modifiers[0].Levels == 2 && back.Modifiers[0].Displacements.size() == 98 &&
+                  Near(back.Modifiers[0].Displacements[0], mr.Displacements[0], 1e-5f));
+            CHECK(EvaluateModifiers(back).VertexCount() == 98);
+            // Moving the base carries the detail along; changing its faces drops it (the plain subdivision shows).
+            EditableMesh moved = base;
+            for (glm::vec3& p : moved.Positions) p += glm::vec3(1, 0, 0);
+            CHECK(Near(ModifierOps::MultiresMesh(moved, mr, 2).Positions[0], ModifierOps::MultiresMesh(base, mr, 2).Positions[0] + glm::vec3(1, 0, 0), 1e-4f));
+            EditableMesh changed = base;
+            changed.AddVertex({ 5, 5, 5 });
+            EditableMesh plain2 = ModifierOps::MultiresMesh(changed, mr, 2);
+            CHECK(Near(plain2.Positions[0], smooth2.Positions[0], 1e-4f));
+        }
         // Dynamic topology keeps the UVs: on a flat sheet they stay the same linear function of position after
         // splitting finer and collapsing coarser.
         {

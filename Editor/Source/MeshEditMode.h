@@ -358,6 +358,9 @@ namespace Editor
         }
         void DoVoxelRemesh();
         bool m_Sculpting = false, m_SculptValid = false;
+        int m_SculptMultires = -1; // the Multires modifier the sculpt mesh is the finest level of (-1: the model itself)
+        int MultiresIndex() const;  // the first enabled Multires modifier with levels
+        bool DynTopoOn() const { return m_DynTopo && m_SculptMultires < 0; }
         Modeling::Sculpt::SculptMesh m_Sculpt;
         Modeling::Sculpt::Brush m_BrushType = Modeling::Sculpt::Brush::Draw;
         float m_BrushRadiusPx = 60.0f;

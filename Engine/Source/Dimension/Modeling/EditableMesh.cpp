@@ -126,7 +126,8 @@ namespace Dimension::Modeling
 
     const Topology& EditableMesh::Topo() const
     {
-        if (m_Topology) return *m_Topology;
+        // (built again when vertices or faces were added without Changed(): stale lists would be too short)
+        if (m_Topology && m_Topology->VertFaces.size() == Positions.size() && m_Topology->FaceEdges.size() == Faces.size()) return *m_Topology;
         auto t = std::make_shared<Topology>();
         t->VertFaces.resize(Positions.size());
         t->VertEdges.resize(Positions.size());

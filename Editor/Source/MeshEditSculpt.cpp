@@ -61,17 +61,34 @@ namespace Editor
         if (!on) ++m_GeometryVersion; // (Edit Mode works out what's visible again)
     }
 
+    int MeshEditMode::MultiresIndex() const
+    {
+        for (size_t i = 0; i < m_Mesh.Modifiers.size(); ++i)
+        {
+            const Modifier& mod = m_Mesh.Modifiers[i];
+            if (mod.Enabled && mod.Type == ModifierType::Multires && mod.Levels > 0) return (int)i;
+        }
+        return -1;
+    }
+
     void MeshEditMode::EnsureSculptMesh()
     {
         if (m_SculptValid) return;
-        m_Sculpt = sc::SculptMesh::FromEditable(m_Mesh);
+        // With a Multires modifier the strokes go into its finest level (the model itself stays the base cage).
+        m_SculptMultires = MultiresIndex();
+        if (m_SculptMultires >= 0)
+        {
+            const Modifier& mod = m_Mesh.Modifiers[(size_t)m_SculptMultires];
+            m_Sculpt = sc::SculptMesh::FromEditable(ModifierOps::MultiresMesh(m_Mesh, mod, mod.Levels));
+        }
+        else m_Sculpt = sc::SculptMesh::FromEditable(m_Mesh);
         m_SculptValid = true;
     }
 
     void MeshEditMode::SculptPreview()
     {
         ++m_GeometryVersion;
-        if (m_LiveModifiers && m_Mesh.HasActiveModifiers() && m_LiveModifierMs < 40.0f)
+        if (m_SculptMultires < 0 && m_LiveModifiers && m_Mesh.HasActiveModifiers() && m_LiveModifierMs < 40.0f)
         {
             // The model as it would be written back, with its modifiers (dropped for the rest of the stroke when it
             // gets slow).
@@ -87,8 +104,15 @@ namespace Editor
 
     void MeshEditMode::SculptCommit()
     {
-        bool rebuilt = m_Sculpt.TopologyChanged();
         m_LiveModifierMs = 0.0f;
+        if (m_SculptMultires >= 0 && m_SculptMultires < (int)m_Mesh.Modifiers.size() &&
+            m_Mesh.Modifiers[(size_t)m_SculptMultires].Type == ModifierType::Multires)
+        {
+            ModifierOps::MultiresStore(m_Mesh, m_Mesh.Modifiers[(size_t)m_SculptMultires], m_Sculpt.Positions);
+            Commit();
+            return;
+        }
+        bool rebuilt = m_Sculpt.TopologyChanged();
         m_Sculpt.WriteTo(m_Mesh);
         if (rebuilt)
         {
@@ -101,6 +125,11 @@ namespace Editor
     void MeshEditMode::DoVoxelRemesh()
     {
         EnsureSculptMesh();
+        if (m_SculptMultires >= 0)
+        {
+            Log::Warn("Voxel Remesh: apply or remove the Multiresolution modifier first");
+            return;
+        }
         Record("Voxel Remesh");
         m_Sculpt.WriteTo(m_Mesh);
         m_Mesh = sc::VoxelRemesh(m_Mesh, m_VoxelSize, 2, m_RemeshSharp);
@@ -174,7 +203,7 @@ namespace Editor
             Record((std::string("Sculpt: ") + sc::BrushName(m_StrokeType)).c_str());
             m_Stroking = true;
             sc::BrushSettings b = StrokeBrush(m_StrokeStart, dir);
-            m_Sculpt.DetailSize = m_DynTopo ? (m_ConstantDetail ? m_DetailSize : m_DetailPx * ModelPerPixel(m_StrokeStart)) : 0.0f;
+            m_Sculpt.DetailSize = DynTopoOn() ? (m_ConstantDetail ? m_DetailSize : m_DetailPx * ModelPerPixel(m_StrokeStart)) : 0.0f;
             m_Sculpt.BeginStroke(m_StrokeStart, b);
             if (!sc::IsDragBrush(m_StrokeType))
             {
@@ -228,7 +257,7 @@ namespace Editor
                 if (!m_Sculpt.Raycast(from, dir, t, n)) continue;
                 glm::vec3 hit = from + dir * t;
                 sc::BrushSettings b = StrokeBrush(hit, dir);
-                if (m_DynTopo && !m_ConstantDetail) m_Sculpt.DetailSize = m_DetailPx * ModelPerPixel(hit);
+                if (DynTopoOn() && !m_ConstantDetail) m_Sculpt.DetailSize = m_DetailPx * ModelPerPixel(hit);
                 m_Sculpt.Dab(hit, b);
                 m_StrokeLast = hit;
                 changed = true;
@@ -456,11 +485,18 @@ namespace Editor
                 m_Symmetry ^= (uint8_t)(1 << a);
         }
         ImGui::SameLine();
-        if (toggle("Dyntopo", m_DynTopo,
+        if (m_SculptMultires >= 0)
+        {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Multires");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Sculpting the Multiresolution modifier's finest level (its Subdivide adds detail; Dyntopo and Remesh are off)");
+        }
+        else if (toggle("Dyntopo", m_DynTopo,
                    "Dynamic topology (" + Shortcuts::Label("sculpt.dyntopo") +
                        "): the brush adds and removes triangles to keep the detail size. The model becomes triangles and loses its UVs."))
             m_DynTopo = !m_DynTopo;
-        if (m_DynTopo)
+        if (DynTopoOn())
         {
             ImGui::SameLine(0.0f, 2.0f);
             ImGui::SetNextItemWidth(80.0f);

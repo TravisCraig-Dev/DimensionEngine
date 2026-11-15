@@ -27,5 +27,14 @@ namespace Dimension::Modeling
         std::vector<glm::vec3> VertexNormals(const EditableMesh& mesh);
         // Smooth 3D value noise, 0..1.
         float Noise(const glm::vec3& p);
+
+        // Multires: `base` (a model, modifiers ignored) at `level` of the modifier's levels with its sculpted detail
+        // (a coarser level takes the finest one's corner vertices, which come first at every level).
+        EditableMesh MultiresMesh(const EditableMesh& base, const Modifier& multires, int level);
+        // The detail from the finest level's sculpted positions.
+        void MultiresStore(const EditableMesh& base, Modifier& multires, const std::vector<glm::vec3>& finest);
+        // One more level (the sculpted surface subdivided smoothly), or one fewer (Delete Higher).
+        void MultiresSubdivide(const EditableMesh& base, Modifier& multires);
+        void MultiresDeleteHigher(const EditableMesh& base, Modifier& multires);
     }
 }
