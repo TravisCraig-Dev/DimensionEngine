@@ -45,49 +45,86 @@ namespace Dimension::Modeling::Bake
                 std::vector<Tri> ordered(Tris.size());
                 for (size_t i = 0; i < Tris.size(); ++i) ordered[i] = Tris[m_Order[i]];
                 Tris = std::move(ordered);
+                // What the ray test needs, as plain floats: a corner and the two edges from it.
+                m_Fast.resize(Tris.size() * 9);
+                for (size_t i = 0; i < Tris.size(); ++i)
+                {
+                    const Tri& t = Tris[i];
+                    float* f = &m_Fast[i * 9];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        f[k] = t.P[0][k];
+                        f[3 + k] = t.P[1][k] - t.P[0][k];
+                        f[6 + k] = t.P[2][k] - t.P[0][k];
+                    }
+                }
             }
 
             // Nearest hit within maxT (`any`: the first found, for occlusion).
+            // (Plain floats and pointers throughout: this runs millions of times per bake, and must not crawl in
+            // debug builds either.)
             bool Raycast(const glm::vec3& o, const glm::vec3& d, float maxT, Hit& hit, bool any = false) const
             {
                 if (m_Nodes.empty()) return false;
-                glm::vec3 inv(1.0f / (std::abs(d.x) > 1e-12f ? d.x : 1e-12f), 1.0f / (std::abs(d.y) > 1e-12f ? d.y : 1e-12f),
-                              1.0f / (std::abs(d.z) > 1e-12f ? d.z : 1e-12f));
+                const float ox = o.x, oy = o.y, oz = o.z, dx = d.x, dy = d.y, dz = d.z;
+                const float ix = 1.0f / (dx > 1e-12f || dx < -1e-12f ? dx : 1e-12f), iy = 1.0f / (dy > 1e-12f || dy < -1e-12f ? dy : 1e-12f),
+                            iz = 1.0f / (dz > 1e-12f || dz < -1e-12f ? dz : 1e-12f);
+                const Node* nodes = m_Nodes.data();
+                const float* fast = m_Fast.data();
+                // The entry distance of a ray into a node's box (or a miss).
+                auto enter = [&](const Node& n, float limit) {
+                    float a0 = (n.Min.x - ox) * ix, a1 = (n.Max.x - ox) * ix;
+                    float b0 = (n.Min.y - oy) * iy, b1 = (n.Max.y - oy) * iy;
+                    float c0 = (n.Min.z - oz) * iz, c1 = (n.Max.z - oz) * iz;
+                    float lo = a0 < a1 ? a0 : a1, hi = a0 < a1 ? a1 : a0;
+                    float blo = b0 < b1 ? b0 : b1, bhi = b0 < b1 ? b1 : b0;
+                    float clo = c0 < c1 ? c0 : c1, chi = c0 < c1 ? c1 : c0;
+                    if (blo > lo) lo = blo;
+                    if (clo > lo) lo = clo;
+                    if (bhi < hi) hi = bhi;
+                    if (chi < hi) hi = chi;
+                    if (lo < 0.0f) lo = 0.0f;
+                    if (limit < hi) hi = limit;
+                    return lo <= hi ? lo : -1.0f;
+                };
                 uint32_t stack[64];
                 int sp = 0;
-                stack[sp++] = 0;
                 bool found = false;
                 float best = maxT;
+                if (enter(nodes[0], best) >= 0.0f) stack[sp++] = 0;
                 while (sp > 0)
                 {
-                    const Node& n = m_Nodes[stack[--sp]];
-                    float tx0 = (n.Min.x - o.x) * inv.x, tx1 = (n.Max.x - o.x) * inv.x;
-                    float ty0 = (n.Min.y - o.y) * inv.y, ty1 = (n.Max.y - o.y) * inv.y;
-                    float tz0 = (n.Min.z - o.z) * inv.z, tz1 = (n.Max.z - o.z) * inv.z;
-                    float tmin = std::max({ std::min(tx0, tx1), std::min(ty0, ty1), std::min(tz0, tz1), 0.0f });
-                    float tmax = std::min({ std::max(tx0, tx1), std::max(ty0, ty1), std::max(tz0, tz1), best });
-                    if (tmin > tmax) continue;
+                    const Node& n = nodes[stack[--sp]];
                     if (n.Count == 0)
                     {
+                        // Both children that the ray enters, the nearer visited first (so far ones get cut short).
+                        float tl = enter(nodes[n.Left], best), tr = enter(nodes[n.Left + 1], best);
                         if (sp + 2 > 64) continue;
-                        stack[sp++] = n.Left;
-                        stack[sp++] = n.Left + 1;
+                        if (tl >= 0.0f && tr >= 0.0f)
+                        {
+                            bool leftFirst = tl <= tr;
+                            stack[sp++] = leftFirst ? n.Left + 1 : n.Left;
+                            stack[sp++] = leftFirst ? n.Left : n.Left + 1;
+                        }
+                        else if (tl >= 0.0f) stack[sp++] = n.Left;
+                        else if (tr >= 0.0f) stack[sp++] = n.Left + 1;
                         continue;
                     }
                     for (uint32_t i = n.Left; i < n.Left + n.Count; ++i)
                     {
-                        const Tri& t = Tris[i];
-                        glm::vec3 e1 = t.P[1] - t.P[0], e2 = t.P[2] - t.P[0], p = glm::cross(d, e2);
-                        float det = glm::dot(e1, p);
-                        if (std::abs(det) < 1e-14f) continue;
+                        const float* f = fast + (size_t)i * 9;
+                        float e1x = f[3], e1y = f[4], e1z = f[5], e2x = f[6], e2y = f[7], e2z = f[8];
+                        float px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
+                        float det = e1x * px + e1y * py + e1z * pz;
+                        if (det > -1e-14f && det < 1e-14f) continue;
                         float invDet = 1.0f / det;
-                        glm::vec3 s = o - t.P[0];
-                        float u = glm::dot(s, p) * invDet;
+                        float sx = ox - f[0], sy = oy - f[1], sz = oz - f[2];
+                        float u = (sx * px + sy * py + sz * pz) * invDet;
                         if (u < 0.0f || u > 1.0f) continue;
-                        glm::vec3 q = glm::cross(s, e1);
-                        float v = glm::dot(d, q) * invDet;
+                        float qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+                        float v = (dx * qx + dy * qy + dz * qz) * invDet;
                         if (v < 0.0f || u + v > 1.0f) continue;
-                        float tt = glm::dot(e2, q) * invDet;
+                        float tt = (e2x * qx + e2y * qy + e2z * qz) * invDet;
                         if (tt <= 0.0f || tt >= best) continue;
                         best = tt;
                         hit = { tt, u, v, i };
@@ -105,6 +142,7 @@ namespace Dimension::Modeling::Bake
                 uint32_t Left = 0, Count = 0;
             };
             std::vector<Node> m_Nodes;
+            std::vector<float> m_Fast; // per triangle: P0, P1 - P0, P2 - P0
             std::vector<uint32_t> m_Order;
             std::vector<glm::vec3> m_Centers;
 
