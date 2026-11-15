@@ -29,6 +29,8 @@ namespace Editor
         // "Ctrl+Shift+S" ("" for none), for menus and the Shortcuts window.
         std::string Label(const char* id);
         std::string ChordName(ImGuiKeyChord chord);
+        // Whether a shortcut outside Edit Mode shares its keys with an Edit Mode one (Edit Mode's wins while editing).
+        bool ShadowedInEditMode(const char* id);
         // The shortcuts bound to the same keys as `s`.
         std::vector<const Shortcut*> Conflicts(const Shortcut& s);
         nlohmann::json Save();

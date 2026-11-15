@@ -80,6 +80,7 @@
 #include <Dimension/Video/VideoDecoder.h>
 #include <Dimension/Modeling/EditableMesh.h>
 #include <Dimension/Modeling/MeshOps.h>
+#include <Dimension/Modeling/MeshTools.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/ModelExport.h>
 #include <Dimension/Video/VideoPlayer.h>
@@ -17554,6 +17555,347 @@ namespace
         CHECK(sphere.EdgeAttrs.empty()); // nothing left to store
     }
 
+    namespace ModelingTest
+    {
+        // Every edge between two faces is walked in opposite directions by them (open borders allowed).
+        bool Consistent(const EditableMesh& m)
+        {
+            const Topology& t = m.Topo();
+            for (size_t e = 0; e < t.Edges.size(); ++e)
+            {
+                if (t.EdgeFaces[e].size() > 2) return false;
+                if (t.EdgeFaces[e].size() < 2) continue;
+                uint32_t a = EdgeA(t.Edges[e]), b = EdgeB(t.Edges[e]);
+                auto walks = [&](uint32_t f) {
+                    const auto& v = m.Faces[f].Verts;
+                    for (size_t i = 0; i < v.size(); ++i)
+                        if (v[i] == a && v[(i + 1) % v.size()] == b) return true;
+                    return false;
+                };
+                if (walks(t.EdgeFaces[e][0]) == walks(t.EdgeFaces[e][1])) return false;
+            }
+            return true;
+        }
+        EditableMesh CubeWithFace(uint32_t face)
+        {
+            EditableMesh cube = Primitives::Cube();
+            Ops::DeselectAll(cube);
+            Ops::SelectFace(cube, face, true);
+            Ops::FlushSelection(cube, SelectMode::Face);
+            return cube;
+        }
+        void SelectEdgeAt(EditableMesh& m, glm::vec3 a, glm::vec3 b)
+        {
+            int32_t e = EdgeAt(m, a, b);
+            if (e < 0) return;
+            EdgeKey k = m.Topo().Edges[e];
+            Ops::SelectEdge(m, k, true);
+            Ops::SelectVertex(m, EdgeA(k), true);
+            Ops::SelectVertex(m, EdgeB(k), true);
+        }
+    }
+
+    void TestModelingExtrudeInset()
+    {
+        using namespace ModelingTest;
+        // A cube's top face: four side faces, the face lifted along +Y.
+        EditableMesh cube = CubeWithFace(4);
+        glm::vec3 n = Ops::Extrude(cube);
+        CHECK(Near(n, glm::vec3(0, 1, 0)));
+        CHECK(cube.VertexCount() == 12 && cube.FaceCount() == 10 && EdgeCount(cube) == 20 && ClosedAndConsistent(cube));
+        CHECK(SelectedFaces(cube) == 1 && SelectedVerts(cube) == 4);
+        Ops::TransformVertices(cube, glm::translate(glm::mat4(1.0f), glm::vec3(0, 1, 0)));
+        CHECK(VertexAt(cube, { 1, 2, 1 }) >= 0 && VertexAt(cube, { 1, 1, 1 }) >= 0 && Outward(cube));
+        // Two neighbouring faces as one region, then each on its own.
+        cube = CubeWithFace(4);
+        Ops::SelectFace(cube, 0, true);
+        Ops::FlushSelection(cube, SelectMode::Face);
+        Ops::Extrude(cube);
+        CHECK(cube.VertexCount() == 14 && cube.FaceCount() == 12 && ClosedAndConsistent(cube));
+        cube = CubeWithFace(4);
+        Ops::SelectFace(cube, 0, true);
+        Ops::FlushSelection(cube, SelectMode::Face);
+        Ops::Extrude(cube, true);
+        CHECK(cube.VertexCount() == 16 && cube.FaceCount() == 14 && Consistent(cube));
+        // An edge of a plane becomes a quad that agrees with the plane; a lone vertex a wire edge.
+        EditableMesh plane = Primitives::Plane();
+        Ops::DeselectAll(plane);
+        SelectEdgeAt(plane, { -1, 0, 1 }, { 1, 0, 1 });
+        Ops::FlushSelection(plane, SelectMode::Edge);
+        CHECK(Near(Ops::Extrude(plane), glm::vec3(0.0f)));
+        CHECK(plane.VertexCount() == 6 && plane.FaceCount() == 2 && Consistent(plane) && SelectedEdges(plane) == 1);
+        plane = Primitives::Plane();
+        Ops::DeselectAll(plane);
+        Ops::SelectVertex(plane, 0, true);
+        Ops::FlushSelection(plane, SelectMode::Vertex);
+        Ops::Extrude(plane);
+        CHECK(plane.VertexCount() == 5 && plane.LooseEdges.size() == 1 && SelectedVerts(plane) == 1);
+        // Duplicate: a second cube, selected.
+        cube = Primitives::Cube();
+        Ops::Duplicate(cube);
+        CHECK(cube.VertexCount() == 16 && cube.FaceCount() == 12 && SelectedVerts(cube) == 8 && SelectedFaces(cube) == 6);
+        // Shrink/fatten directions: along the selected faces' normals.
+        cube = CubeWithFace(4);
+        auto dirs = Ops::ShrinkFattenDirections(cube);
+        CHECK(Near(dirs[7], glm::vec3(0, 1, 0)) && Near(dirs[0], glm::vec3(0.0f)));
+
+        // Inset the top face: a border a quarter in from the edges, the inner face selected.
+        cube = CubeWithFace(4);
+        Ops::Inset(cube, 0.25f);
+        CHECK(cube.VertexCount() == 12 && cube.FaceCount() == 10 && ClosedAndConsistent(cube));
+        CHECK(VertexAt(cube, { 0.75f, 1, 0.75f }) >= 0 && VertexAt(cube, { -0.75f, 1, -0.75f }) >= 0 && SelectedFaces(cube) == 1);
+        // The inner face's UVs shrink with it (the face's own mapping).
+        for (const Face& f : cube.Faces)
+            if (f.Flags & Selected)
+                for (size_t c = 0; c < f.Verts.size(); ++c)
+                {
+                    glm::vec2 uv = f.UVs[c];
+                    CHECK(uv.x > 0.1f && uv.x < 0.9f && uv.y > 0.1f && uv.y < 0.9f);
+                }
+        cube = CubeWithFace(4);
+        Ops::Inset(cube, 0.25f, 0.5f);
+        CHECK(VertexAt(cube, { 0.75f, 1.5f, 0.75f }) >= 0 && ClosedAndConsistent(cube));
+        // Two faces: one region (the shared edge stays inside) or each its own.
+        EditableMesh grid = Primitives::Grid(2, 1);
+        Ops::Inset(grid, 0.1f);
+        CHECK(grid.VertexCount() == 12 && grid.FaceCount() == 8 && Consistent(grid) && VertexAt(grid, { 0, 0, 0.9f }) >= 0);
+        grid = Primitives::Grid(2, 1);
+        Ops::Inset(grid, 0.1f, 0.0f, true);
+        CHECK(grid.VertexCount() == 14 && grid.FaceCount() == 10 && Consistent(grid) && VertexAt(grid, { -0.1f, 0, 0.9f }) >= 0);
+    }
+
+    void TestModelingBevelCut()
+    {
+        using namespace ModelingTest;
+        // One cube edge: a strip 0.2 in across both faces.
+        EditableMesh cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        SelectEdgeAt(cube, { -1, 1, 1 }, { 1, 1, 1 });
+        Ops::FlushSelection(cube, SelectMode::Edge);
+        Ops::Bevel(cube, 0.2f);
+        CHECK(cube.VertexCount() == 10 && cube.FaceCount() == 7 && ClosedAndConsistent(cube) && Outward(cube));
+        CHECK(VertexAt(cube, { 1, 1, 0.8f }) >= 0 && VertexAt(cube, { -1, 0.8f, 1 }) >= 0 && VertexAt(cube, { 1, 1, 1 }) < 0);
+        CHECK(SelectedFaces(cube) == 1);
+        // Rounded with three segments: the end faces follow the profile.
+        cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        SelectEdgeAt(cube, { -1, 1, 1 }, { 1, 1, 1 });
+        Ops::FlushSelection(cube, SelectMode::Edge);
+        Ops::Bevel(cube, 0.2f, 3);
+        CHECK(cube.VertexCount() == 14 && cube.FaceCount() == 9 && ClosedAndConsistent(cube) && Outward(cube));
+        // Every edge: corner triangles.
+        cube = Primitives::Cube();
+        Ops::Bevel(cube, 0.1f);
+        CHECK(cube.VertexCount() == 24 && cube.FaceCount() == 26 && ClosedAndConsistent(cube) && Outward(cube));
+        CHECK(VertexAt(cube, { 0.9f, 0.9f, 1 }) >= 0);
+        cube = Primitives::Cube();
+        Ops::Bevel(cube, 0.1f, 2);
+        CHECK(ClosedAndConsistent(cube) && Outward(cube));
+        // A corner vertex: a triangle across it.
+        cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        Ops::SelectVertex(cube, 7, true);
+        Ops::FlushSelection(cube, SelectMode::Vertex);
+        Ops::Bevel(cube, 0.2f, 1, true);
+        CHECK(cube.VertexCount() == 10 && cube.FaceCount() == 7 && ClosedAndConsistent(cube) && VertexAt(cube, { 0.8f, 1, 1 }) >= 0);
+        // An edge loop around a cylinder's side.
+        EditableMesh cyl = Primitives::Cylinder(8);
+        Ops::DeselectAll(cyl);
+        for (uint32_t f = 0; f < cyl.FaceCount(); ++f)
+            if (cyl.Faces[f].Verts.size() == 8 && cyl.FaceNormal(f).y > 0.5f) Ops::SelectFace(cyl, f, true);
+        Ops::FlushSelection(cyl, SelectMode::Face);
+        Ops::ConvertSelection(cyl, SelectMode::Face, SelectMode::Edge);
+        Ops::Bevel(cyl, 0.1f);
+        CHECK(cyl.FaceCount() == 10 + 8 && ClosedAndConsistent(cyl));
+
+        // Loop cut around a cube's sides: a ring of four edges at mid height.
+        cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        CHECK(Ops::LoopCut(cube, (uint32_t)EdgeAt(cube, { -1, -1, 1 }, { -1, 1, 1 })));
+        CHECK(cube.VertexCount() == 12 && cube.FaceCount() == 10 && ClosedAndConsistent(cube) && SelectedEdges(cube) == 4);
+        CHECK(VertexAt(cube, { -1, 0, 1 }) >= 0 && VertexAt(cube, { 1, 0, -1 }) >= 0);
+        // Sliding it: the whole loop moves the same way.
+        auto rails = Ops::EdgeSlideRails(cube);
+        CHECK(rails.Verts.size() == 4);
+        Ops::ApplySlide(cube, rails, 0.5f);
+        float y0 = cube.Positions[rails.Verts[0]].y;
+        bool level = Near(std::abs(y0), 0.5f);
+        for (uint32_t v : rails.Verts) level &= Near(cube.Positions[v].y, y0);
+        CHECK(level);
+        // Loop cut with a slide, and several cuts.
+        cube = Primitives::Cube();
+        Ops::LoopCut(cube, (uint32_t)EdgeAt(cube, { -1, -1, 1 }, { -1, 1, 1 }), 1, 0.5f);
+        float y1 = cube.Positions[Ops::SelectedVertices(cube)[0]].y;
+        bool same = Near(std::abs(y1), 0.5f);
+        for (uint32_t v : Ops::SelectedVertices(cube)) same &= Near(cube.Positions[v].y, y1);
+        CHECK(same);
+        EditableMesh grid = Primitives::Grid(2, 2);
+        Ops::LoopCut(grid, (uint32_t)EdgeAt(grid, { -1, 0, 1 }, { 0, 0, 1 }), 2);
+        CHECK(grid.FaceCount() == 4 + 2 * 2 && grid.VertexCount() == 9 + 6 && Consistent(grid));
+
+        // Knife across the front face, edge middle to edge middle; its neighbours gain a corner.
+        cube = Primitives::Cube();
+        size_t cuts = Ops::Knife(cube, { { 4, 5, 0.5f }, { 6, 7, 0.5f } });
+        CHECK(cuts == 1 && cube.VertexCount() == 10 && cube.FaceCount() == 7 && ClosedAndConsistent(cube));
+        CHECK(SelectedVerts(cube) == 2 && SelectedEdges(cube) == 1);
+        // Connect two opposite corners of a face.
+        cube = Primitives::Cube();
+        Ops::DeselectAll(cube);
+        Ops::SelectVertex(cube, 4, true);
+        Ops::SelectVertex(cube, 7, true);
+        CHECK(Ops::ConnectVertices(cube) == 1 && cube.FaceCount() == 7 && ClosedAndConsistent(cube));
+    }
+
+    void TestModelingFillDissolve()
+    {
+        using namespace ModelingTest;
+        // Fill the hole left by a deleted face: it closes, facing out.
+        EditableMesh cube = CubeWithFace(4);
+        Ops::Delete(cube, Ops::DeleteKind::Faces);
+        Ops::FlushSelection(cube, SelectMode::Vertex);
+        CHECK(Ops::Fill(cube));
+        CHECK(cube.FaceCount() == 6 && ClosedAndConsistent(cube) && Outward(cube) && SelectedFaces(cube) == 1);
+        // Two vertices make an edge, three a face.
+        EditableMesh pts;
+        pts.AddVertex({ 0, 0, 0 });
+        pts.AddVertex({ 1, 0, 0 });
+        pts.AddVertex({ 0, 0, 1 });
+        Ops::SelectVertex(pts, 0, true);
+        Ops::SelectVertex(pts, 1, true);
+        CHECK(Ops::Fill(pts) && pts.LooseEdges.size() == 1);
+        Ops::SelectVertex(pts, 2, true);
+        CHECK(Ops::Fill(pts) && pts.FaceCount() == 1 && pts.LooseEdges.empty());
+
+        // Bridge two cubes' facing sides: one closed solid.
+        cube = Primitives::Cube();
+        EditableMesh other = Primitives::Cube();
+        for (auto& p : other.Positions) p.x += 4.0f;
+        cube.Append(other);
+        Ops::DeselectAll(cube);
+        Ops::SelectFace(cube, 2, true);     // +X of the first
+        Ops::SelectFace(cube, 6 + 3, true); // -X of the second
+        Ops::FlushSelection(cube, SelectMode::Face);
+        CHECK(Ops::BridgeEdgeLoops(cube));
+        CHECK(cube.VertexCount() == 16 && cube.FaceCount() == 14 && ClosedAndConsistent(cube));
+        // Two wire circles: a tube facing out; uneven counts make triangles.
+        EditableMesh rings = Primitives::Circle(8);
+        EditableMesh top = Primitives::Circle(8);
+        for (auto& p : top.Positions) p.y += 2.0f;
+        rings.Append(top);
+        Ops::SelectAll(rings, SelectMode::Edge);
+        CHECK(Ops::BridgeEdgeLoops(rings) && rings.FaceCount() == 8 && Consistent(rings));
+        bool out = true;
+        for (uint32_t f = 0; f < rings.FaceCount(); ++f) out &= glm::dot(rings.FaceNormal(f), rings.FaceCenter(f) - glm::vec3(0, 1, 0)) > 0.0f;
+        CHECK(out);
+        rings = Primitives::Circle(8);
+        top = Primitives::Circle(6);
+        for (auto& p : top.Positions) p.y += 2.0f;
+        rings.Append(top);
+        Ops::SelectAll(rings, SelectMode::Edge);
+        CHECK(Ops::BridgeEdgeLoops(rings) && rings.FaceCount() == 14 && Consistent(rings));
+
+        // Dissolve the middle vertex of a 2x2 grid: one eight-cornered face.
+        EditableMesh grid = Primitives::Grid(2, 2);
+        Ops::DeselectAll(grid);
+        Ops::SelectVertex(grid, (uint32_t)VertexAt(grid, { 0, 0, 0 }), true);
+        Ops::DissolveVertices(grid);
+        CHECK(grid.FaceCount() == 1 && grid.Faces[0].Verts.size() == 8 && grid.VertexCount() == 8);
+        // Dissolve the middle edge of two quads: one quad (the edge's ends go too).
+        grid = Primitives::Grid(2, 1);
+        Ops::DeselectAll(grid);
+        SelectEdgeAt(grid, { 0, 0, 1 }, { 0, 0, -1 });
+        Ops::FlushSelection(grid, SelectMode::Edge);
+        Ops::DissolveEdges(grid);
+        CHECK(grid.FaceCount() == 1 && grid.VertexCount() == 4 && grid.Faces[0].Verts.size() == 4);
+        // Dissolve faces: four quads into one.
+        grid = Primitives::Grid(2, 2);
+        Ops::DissolveFaces(grid);
+        CHECK(grid.FaceCount() == 1 && grid.VertexCount() == 4);
+        // Limited dissolve: a subdivided cube back to six faces; a plain cube stays.
+        cube = Primitives::Cube();
+        Ops::Subdivide(cube);
+        CHECK(cube.FaceCount() == 24 && cube.VertexCount() == 26 && ClosedAndConsistent(cube));
+        Ops::DeselectAll(cube);
+        Ops::LimitedDissolve(cube);
+        CHECK(cube.FaceCount() == 6 && cube.VertexCount() == 8 && ClosedAndConsistent(cube));
+        Ops::LimitedDissolve(cube);
+        CHECK(cube.FaceCount() == 6);
+    }
+
+    void TestModelingSubdivideSpinSeparate()
+    {
+        using namespace ModelingTest;
+        // Subdivide: triangles into four, a plane into a 3x3 grid, a quad with two opposite edges into strips.
+        EditableMesh ico = Primitives::IcoSphere(1);
+        uint32_t before = ico.FaceCount();
+        Ops::Subdivide(ico);
+        CHECK(ico.FaceCount() == before * 4 && ClosedAndConsistent(ico));
+        EditableMesh plane = Primitives::Plane();
+        Ops::Subdivide(plane, 2);
+        CHECK(plane.FaceCount() == 9 && plane.VertexCount() == 16 && Consistent(plane) && SelectedFaces(plane) == 9);
+        plane = Primitives::Plane();
+        Ops::DeselectAll(plane);
+        SelectEdgeAt(plane, { -1, 0, 1 }, { 1, 0, 1 });
+        SelectEdgeAt(plane, { -1, 0, -1 }, { 1, 0, -1 });
+        Ops::FlushSelection(plane, SelectMode::Edge);
+        Ops::Subdivide(plane);
+        CHECK(plane.FaceCount() == 2 && plane.VertexCount() == 6 && Consistent(plane));
+        // An n-gon: quads around its middle.
+        EditableMesh disc = Primitives::Circle(6, 1.0f, true);
+        Ops::Subdivide(disc);
+        CHECK(disc.FaceCount() == 6 && disc.VertexCount() == 13 && Consistent(disc));
+
+        // Spin a wire edge a full turn: a tube, welded shut.
+        EditableMesh profile;
+        profile.AddVertex({ 1, 0, 0 });
+        profile.AddVertex({ 1, 1, 0 });
+        profile.AddLooseEdge(0, 1);
+        Ops::SelectAll(profile, SelectMode::Vertex);
+        Ops::Spin(profile, glm::vec3(0.0f), glm::vec3(0, 1, 0), glm::two_pi<float>(), 8);
+        CHECK(profile.FaceCount() == 8 && profile.VertexCount() == 16 && Consistent(profile) && profile.LooseEdges.empty());
+        profile = EditableMesh();
+        profile.AddVertex({ 1, 0, 0 });
+        profile.AddVertex({ 1, 1, 0 });
+        profile.AddLooseEdge(0, 1);
+        Ops::SelectAll(profile, SelectMode::Vertex);
+        Ops::Spin(profile, glm::vec3(0.0f), glm::vec3(0, 1, 0), glm::half_pi<float>(), 4);
+        CHECK(profile.FaceCount() == 4 && profile.VertexCount() == 10 && VertexAt(profile, { 0, 1, -1 }) >= 0);
+        // Spin a face a full turn: a closed ring.
+        EditableMesh square = Primitives::Plane(0.5f);
+        for (auto& p : square.Positions) p = glm::vec3(p.x + 2.0f, p.z, 0.0f);
+        square.Changed();
+        Ops::Spin(square, glm::vec3(0.0f), glm::vec3(0, 1, 0), glm::two_pi<float>(), 12);
+        CHECK(square.FaceCount() == 48 && square.VertexCount() == 48 && ClosedAndConsistent(square));
+
+        // Mirror the whole cube: still closed, still facing out.
+        EditableMesh cube = Primitives::Cube();
+        Ops::Mirror(cube, glm::vec3(0.0f), glm::vec3(1, 0, 0));
+        CHECK(ClosedAndConsistent(cube) && Outward(cube));
+
+        // Separate a selected part; split loose parts; join with a mirroring transform.
+        cube = Primitives::Cube();
+        EditableMesh lid = Primitives::Plane();
+        for (auto& p : lid.Positions) p.y += 5.0f;
+        cube.Append(lid);
+        Ops::DeselectAll(cube);
+        Ops::SelectFace(cube, 6, true);
+        Ops::FlushSelection(cube, SelectMode::Face);
+        EditableMesh part = Ops::Separate(cube);
+        CHECK(part.FaceCount() == 1 && part.VertexCount() == 4 && cube.FaceCount() == 6 && cube.VertexCount() == 8);
+        EditableMesh three = Primitives::Cube();
+        for (int i = 1; i <= 2; ++i)
+        {
+            EditableMesh c = Primitives::Cube();
+            for (auto& p : c.Positions) p.x += 3.0f * i;
+            three.Append(c);
+        }
+        auto parts = Ops::SeparateLooseParts(three);
+        CHECK(parts.size() == 2 && three.VertexCount() == 8 && three.FaceCount() == 6 && parts[1].FaceCount() == 6);
+        plane = Primitives::Plane();
+        Ops::Join(plane, Primitives::Plane(), glm::scale(glm::mat4(1.0f), glm::vec3(-1, 1, 1)) * glm::translate(glm::mat4(1.0f), glm::vec3(3, 0, 0)));
+        CHECK(plane.FaceCount() == 2 && Near(plane.FaceNormal(1), glm::vec3(0, 1, 0)) && VertexAt(plane, { -4, 0, 1 }) >= 0);
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -17958,6 +18300,10 @@ int main(int argc, char** argv)
     Run("Modeling selection", TestModelingSelection);
     Run("Modeling edits", TestModelingEdits);
     Run("Modeling files and ray casts", TestModelingFiles);
+    Run("Modeling extrude and inset", TestModelingExtrudeInset);
+    Run("Modeling bevel, loop cut and knife", TestModelingBevelCut);
+    Run("Modeling fill, bridge and dissolve", TestModelingFillDissolve);
+    Run("Modeling subdivide, spin and separate", TestModelingSubdivideSpinSeparate);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

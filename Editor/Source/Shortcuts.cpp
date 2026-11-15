@@ -110,6 +110,22 @@ namespace Editor::Shortcuts
                 { "mesh.reveal", "Mesh Edit", "Reveal Hidden", ImGuiMod_Alt | ImGuiKey_H },
                 { "mesh.proportional", "Mesh Edit", "Toggle Proportional Editing", ImGuiKey_O },
                 { "mesh.xray", "Mesh Edit", "Toggle X-Ray", ImGuiMod_Alt | ImGuiKey_Z },
+                { "mesh.frame", "Mesh Edit", "Frame Selected", ImGuiKey_KeypadDecimal },
+                { "mesh.extrude", "Mesh Edit", "Extrude", ImGuiKey_E },
+                { "mesh.extrudeMenu", "Mesh Edit", "Extrude Menu", ImGuiMod_Alt | ImGuiKey_E },
+                { "mesh.inset", "Mesh Edit", "Inset Faces", ImGuiKey_I },
+                { "mesh.bevel", "Mesh Edit", "Bevel Edges", ImGuiMod_Ctrl | ImGuiKey_B },
+                { "mesh.bevelVertices", "Mesh Edit", "Bevel Vertices", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_B },
+                { "mesh.loopCut", "Mesh Edit", "Loop Cut and Slide", ImGuiMod_Ctrl | ImGuiKey_R },
+                { "mesh.knife", "Mesh Edit", "Knife", ImGuiKey_K },
+                { "mesh.fill", "Mesh Edit", "Make Edge/Face", ImGuiKey_F },
+                { "mesh.connect", "Mesh Edit", "Connect Vertex Path", ImGuiKey_J },
+                { "mesh.dissolve", "Mesh Edit", "Dissolve (by select mode)", ImGuiMod_Ctrl | ImGuiKey_X },
+                { "mesh.duplicate", "Mesh Edit", "Duplicate", ImGuiMod_Shift | ImGuiKey_D },
+                { "mesh.separate", "Mesh Edit", "Separate Menu", ImGuiKey_P },
+                { "mesh.shrinkFatten", "Mesh Edit", "Shrink/Fatten", ImGuiMod_Alt | ImGuiKey_S },
+                { "mesh.faceMenu", "Mesh Edit", "Face Menu", ImGuiMod_Ctrl | ImGuiKey_F },
+                { "object.join", "Object", "Join Meshes", ImGuiMod_Ctrl | ImGuiKey_J },
             };
             for (Shortcut& x : s) x.Key = x.Default;
             return s;
@@ -146,14 +162,24 @@ namespace Editor::Shortcuts
         return s ? ChordName(s->Key) : std::string();
     }
 
+    bool ShadowedInEditMode(const char* id)
+    {
+        const Shortcut* s = Find(id);
+        if (!s || s->Key == 0 || std::string_view(s->Category) == "Mesh Edit") return false;
+        for (const Shortcut& other : All())
+            if (other.Key == s->Key && std::string_view(other.Category) == "Mesh Edit") return true;
+        return false;
+    }
+
     std::vector<const Shortcut*> Conflicts(const Shortcut& s)
     {
         std::vector<const Shortcut*> out;
         if (s.Key == 0) return out;
-        // Edit Mode's keys replace the object tools' and Scene view's while a mesh is edited, so those never clash.
+        // Edit Mode's keys replace the others while a mesh is edited (except Undo and Redo, which it uses), so those
+        // never clash.
         auto contextual = [](const Shortcut& x) {
-            std::string_view c = x.Category;
-            return c == "Tools" || c == "Scene View" || c == "Navigation";
+            std::string_view id = x.Id;
+            return id != "edit.undo" && id != "edit.redo";
         };
         for (const Shortcut& other : All())
         {

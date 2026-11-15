@@ -12,6 +12,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -202,7 +203,10 @@ namespace Editor
     void MeshEditMode::Exit()
     {
         if (!m_Active) return;
-        if (IsModal()) EndModal(false);
+        if (m_Modal.Kind != ModalKind::None) EndModal(false);
+        m_Tool = Tool::None;
+        m_KnifePoints.clear();
+        m_LoopPreview.clear();
         if (m_Dirty) Save();
         m_Active = false;
         m_Entity = Entity::Null();
@@ -273,9 +277,16 @@ namespace Editor
 
     void MeshEditMode::Undo()
     {
-        if (IsModal())
+        if (m_Modal.Kind != ModalKind::None)
         {
             EndModal(false);
+            return;
+        }
+        if (m_Tool != Tool::None)
+        {
+            m_Tool = Tool::None;
+            m_KnifePoints.clear();
+            m_LoopPreview.clear();
             return;
         }
         if (m_Undo.empty()) return;
@@ -339,9 +350,14 @@ namespace Editor
         m_OverUI = ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
 
         bool owns = false;
-        if (IsModal())
+        if (m_Modal.Kind != ModalKind::None)
         {
             UpdateModal();
+            owns = true;
+        }
+        else if (m_Tool != Tool::None)
+        {
+            UpdateTool(hovered && !blocked);
             owns = true;
         }
         else
@@ -352,6 +368,7 @@ namespace Editor
             owns = gizmo || m_Pressing;
         }
         if (IsModal()) owns = true;
+        DrawToolOverlay(dl);
 
         // The box being dragged.
         if (m_BoxSelecting && m_Pressing)
@@ -484,7 +501,7 @@ namespace Editor
         if (IsModal() && m_Modal.Axis >= 0)
         {
             glm::vec3 a = AxisVector(m_Modal.Axis);
-            static const ImU32 colors[3] = { IM_COL32(230, 70, 70, 220), IM_COL32(110, 200, 60, 220), IM_COL32(70, 120, 240, 220) };
+            static const ImU32 colors[4] = { IM_COL32(230, 70, 70, 220), IM_COL32(110, 200, 60, 220), IM_COL32(70, 120, 240, 220), IM_COL32(240, 200, 60, 220) };
             if (!m_Modal.Plane)
             {
                 // (drawn from the pivot's projection outward: far points behind the camera would project badly)
@@ -579,24 +596,65 @@ namespace Editor
         m_ToolbarMin = ImGui::GetItemRectMin();
         m_ToolbarMax = ImGui::GetItemRectMax();
 
-        // While transforming: what and how much.
-        if (IsModal())
+        // While transforming or using a tool: what and how much.
+        std::string text;
+        char buf[160];
+        const Modal& md = m_Modal;
+        switch (md.Kind)
+        {
+        case ModalKind::Move:
+        case ModalKind::Rotate:
+        case ModalKind::Scale:
         {
             const char* names[] = { "", "Move", "Rotate", "Scale" };
-            std::string text = names[(int)m_Modal.Kind];
-            if (m_Modal.Axis >= 0) text += std::string(m_Modal.Plane ? "  plane without " : "  along ") + "XYZ"[m_Modal.Axis] + (m_Modal.LocalAxes ? " (local)" : "");
-            if (!m_Modal.Typed.empty()) text += "   [" + m_Modal.Typed + "]";
+            text = names[(int)md.Kind];
+            if (md.Axis == 3) text += "  along the normal";
+            else if (md.Axis >= 0) text += std::string(md.Plane ? "  plane without " : "  along ") + "XYZ"[md.Axis] + (md.LocalAxes ? " (local)" : "");
+            if (!md.Typed.empty()) text += "   [" + md.Typed + "]";
             if (m_Proportional) text += "   Proportional " + std::to_string(m_ProportionalSize).substr(0, 5) + " m (wheel)";
-            text += "   X/Y/Z axis, Shift+axis plane, Ctrl snap, type a value; click or Enter: done, right-click or Esc: cancel";
-            ImGui::GetWindowDrawList()->AddText(ImVec2(origin.x + 8.0f, origin.y + m_Size.y - 24.0f), IM_COL32(255, 255, 255, 230), text.c_str());
+            text += std::string("   X/Y/Z axis, Shift+axis plane, Ctrl snap, type a value") + (md.Kind == ModalKind::Move ? ", G: slide along edges" : "") +
+                    "; click or Enter: done, right-click or Esc: cancel";
+            break;
         }
+        case ModalKind::ShrinkFatten:
+            std::snprintf(buf, sizeof(buf), "Shrink/Fatten  %.3f m", md.Value);
+            text = buf;
+            break;
+        case ModalKind::Inset:
+            std::snprintf(buf, sizeof(buf), "Inset  thickness %.3f m%s   I: each face on its own", md.Value, md.Option ? "  (individual)" : "");
+            text = buf;
+            break;
+        case ModalKind::Bevel:
+            std::snprintf(buf, sizeof(buf), "Bevel %s  width %.3f m  segments %d   wheel: segments, V: %s", md.Option ? "Vertices" : "Edges", md.Value, md.Segments,
+                          md.Option ? "edges" : "vertices");
+            text = buf;
+            break;
+        case ModalKind::Slide:
+            std::snprintf(buf, sizeof(buf), "Edge Slide  %.2f", md.Value);
+            text = buf;
+            break;
+        default: break;
+        }
+        if (md.Kind != ModalKind::None && md.Kind != ModalKind::Move && md.Kind != ModalKind::Rotate && md.Kind != ModalKind::Scale)
+        {
+            if (!md.Typed.empty()) text += "   [" + md.Typed + "]";
+            text += "   type a value; click or Enter: done, right-click or Esc: cancel";
+        }
+        if (md.Kind == ModalKind::None && m_Tool == Tool::LoopCut)
+            text = "Loop Cut: " + std::to_string(m_LoopCuts) + (m_LoopCuts == 1 ? " cut" : " cuts") +
+                   " (wheel)   point at an edge and click to cut (one cut then slides); Esc or right-click: cancel";
+        if (md.Kind == ModalKind::None && m_Tool == Tool::Knife)
+            text = "Knife: click on edges or vertices to cut through the faces between (" + std::to_string(m_KnifePoints.size()) +
+                   " points)   Enter or Space: cut, Backspace: remove the last point, Esc: cancel";
+        if (!text.empty())
+            ImGui::GetWindowDrawList()->AddText(ImVec2(origin.x + 8.0f, origin.y + m_Size.y - 24.0f), IM_COL32(255, 255, 255, 230), text.c_str());
     }
 
     void MeshEditMode::DrawMenus()
     {
         if (m_OpenMenu)
         {
-            static const char* ids[] = { "", "MeshDeleteMenu", "MeshMergeMenu", "MeshNormalsMenu", "MeshAddMenu", "MeshEdgeMenu" };
+            static const char* ids[] = { "", "MeshDeleteMenu", "MeshMergeMenu", "MeshNormalsMenu", "MeshAddMenu", "MeshEdgeMenu", "MeshFaceMenu", "MeshExtrudeMenu", "MeshSeparateMenu" };
             ImGui::OpenPopup(ids[m_OpenMenu]);
             m_OpenMenu = 0;
         }
@@ -607,6 +665,15 @@ namespace Editor
             ImGui::Separator();
             if (ImGui::MenuItem("Only Edges & Faces")) DoDelete(ops::DeleteKind::OnlyEdgesAndFaces);
             if (ImGui::MenuItem("Only Faces")) DoDelete(ops::DeleteKind::OnlyFaces);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Dissolve Vertices")) Operate("Dissolve Vertices", [&] { ops::DissolveVertices(m_Mesh); });
+            if (ImGui::MenuItem("Dissolve Edges")) Operate("Dissolve Edges", [&] { ops::DissolveEdges(m_Mesh); });
+            if (ImGui::MenuItem("Dissolve Faces")) Operate("Dissolve Faces", [&] { ops::DissolveFaces(m_Mesh); });
+            if (ImGui::MenuItem("Limited Dissolve")) Operate("Limited Dissolve", [&] { ops::LimitedDissolve(m_Mesh, m_DissolveAngle); });
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Joins faces that meet at less than the angle below (only the selected edges when any is selected)");
+            ImGui::SetNextItemWidth(90.0f);
+            ImGui::DragFloat("Max Angle", &m_DissolveAngle, 0.5f, 0.0f, 180.0f, "%.0f deg");
         };
         auto mergeItems = [&] {
             if (ImGui::MenuItem("At Center"))
@@ -685,7 +752,24 @@ namespace Editor
                 Commit();
             }
         };
+        auto fill = [&] {
+            Operate("Make Edge/Face", [&] {
+                if (!ops::Fill(m_Mesh)) Log::Warn("Make Edge/Face: select a loop of border edges, or two or more vertices");
+            });
+        };
         auto edgeItems = [&] {
+            if (ImGui::MenuItem("Subdivide")) Operate("Subdivide", [&] { ops::Subdivide(m_Mesh, (uint32_t)m_SubdivideCuts); });
+            ImGui::SetNextItemWidth(90.0f);
+            ImGui::SliderInt("Cuts", &m_SubdivideCuts, 1, 10);
+            if (ImGui::MenuItem("Loop Cut and Slide", Shortcuts::Label("mesh.loopCut").c_str())) StartTool(Tool::LoopCut);
+            if (ImGui::MenuItem("Bevel Edges", Shortcuts::Label("mesh.bevel").c_str())) BeginModal(ModalKind::Bevel);
+            if (ImGui::MenuItem("Edge Slide")) BeginModal(ModalKind::Slide);
+            if (ImGui::MenuItem("Bridge Edge Loops"))
+                Operate("Bridge Edge Loops", [&] {
+                    if (!ops::BridgeEdgeLoops(m_Mesh)) Log::Warn("Bridge: select two edge loops (or the faces inside them)");
+                });
+            if (ImGui::MenuItem("Dissolve Edges")) Operate("Dissolve Edges", [&] { ops::DissolveEdges(m_Mesh); });
+            ImGui::Separator();
             auto mark = [&](const char* name, auto fn) {
                 if (ImGui::MenuItem(name))
                 {
@@ -710,6 +794,72 @@ namespace Editor
                 ImGui::CloseCurrentPopup();
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("How sharp subdivision keeps the selected edges (0 smooth, 1 sharp)");
+        };
+        auto vertexItems = [&] {
+            if (ImGui::MenuItem("Connect Vertex Path", Shortcuts::Label("mesh.connect").c_str()))
+                Operate("Connect Vertex Path", [&] {
+                    if (!ops::ConnectVertices(m_Mesh)) Log::Warn("Connect: select two or more vertices of a face");
+                });
+            if (ImGui::MenuItem("Make Edge/Face", Shortcuts::Label("mesh.fill").c_str())) fill();
+            if (ImGui::MenuItem("Bevel Vertices", Shortcuts::Label("mesh.bevelVertices").c_str()))
+            {
+                BeginModal(ModalKind::Bevel);
+                if (m_Modal.Kind == ModalKind::Bevel) m_Modal.Option = true;
+            }
+            if (ImGui::MenuItem("Dissolve Vertices")) Operate("Dissolve Vertices", [&] { ops::DissolveVertices(m_Mesh); });
+        };
+        auto faceItems = [&] {
+            if (ImGui::MenuItem("Extrude Faces", Shortcuts::Label("mesh.extrude").c_str())) DoExtrude(false);
+            if (ImGui::MenuItem("Extrude Individual Faces")) DoExtrude(true);
+            if (ImGui::MenuItem("Inset Faces", Shortcuts::Label("mesh.inset").c_str())) BeginModal(ModalKind::Inset);
+            if (ImGui::MenuItem("Make Face", Shortcuts::Label("mesh.fill").c_str())) fill();
+            if (ImGui::MenuItem("Subdivide")) Operate("Subdivide", [&] { ops::Subdivide(m_Mesh, (uint32_t)m_SubdivideCuts); });
+            if (ImGui::MenuItem("Dissolve Faces")) Operate("Dissolve Faces", [&] { ops::DissolveFaces(m_Mesh); });
+            ImGui::Separator();
+            shadingItems();
+        };
+        auto spinItems = [&] {
+            ImGui::SetNextItemWidth(100.0f);
+            ImGui::SliderInt("Steps", &m_SpinSteps, 1, 128);
+            ImGui::SetNextItemWidth(100.0f);
+            ImGui::DragFloat("Angle", &m_SpinAngle, 1.0f, -360.0f, 360.0f, "%.0f deg");
+            ImGui::SetNextItemWidth(100.0f);
+            const char* axes[] = { "X", "Y", "Z" };
+            ImGui::Combo("Axis", &m_SpinAxis, axes, 3);
+            ImGui::Checkbox("About the selection's center", &m_SpinAboutSelection);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Else about the object's origin; the axis is the object's own");
+            if (ImGui::Button("Spin"))
+            {
+                DoSpin();
+                ImGui::CloseCurrentPopup();
+            }
+        };
+        auto extrudeItems = [&] {
+            if (ImGui::MenuItem("Extrude Region", Shortcuts::Label("mesh.extrude").c_str())) DoExtrude(false);
+            if (ImGui::MenuItem("Extrude Individual Faces")) DoExtrude(true);
+            if (ImGui::MenuItem("Duplicate", Shortcuts::Label("mesh.duplicate").c_str())) DoDuplicate();
+            if (ImGui::BeginMenu("Spin"))
+            {
+                spinItems();
+                ImGui::EndMenu();
+            }
+        };
+        auto separateItems = [&] {
+            if (ImGui::MenuItem("Selection")) DoSeparate(false);
+            if (ImGui::MenuItem("By Loose Parts")) DoSeparate(true);
+        };
+        auto mirrorItems = [&] {
+            for (int i = 0; i < 3; ++i)
+            {
+                std::string label = std::string("Mirror ") + "XYZ"[i];
+                if (ImGui::MenuItem(label.c_str()))
+                    Operate(label.c_str(), [&] {
+                        glm::vec3 axis(0.0f);
+                        axis[i] = 1.0f;
+                        ops::Mirror(m_Mesh, ops::SelectionCenter(m_Mesh), axis);
+                    });
+            }
+            if (ImGui::IsWindowHovered()) ImGui::SetTooltip("Across the selection's center, along the object's own axis");
         };
         auto addItems = [&] {
             for (int p = 0; p < (int)Primitive::Count; ++p)
@@ -773,6 +923,24 @@ namespace Editor
             selectItems();
             ImGui::EndPopup();
         }
+        if (ImGui::BeginPopup("MeshFaceMenu"))
+        {
+            ImGui::TextDisabled("Face");
+            faceItems();
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopup("MeshExtrudeMenu"))
+        {
+            ImGui::TextDisabled("Extrude");
+            extrudeItems();
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopup("MeshSeparateMenu"))
+        {
+            ImGui::TextDisabled("Separate");
+            separateItems();
+            ImGui::EndPopup();
+        }
         if (ImGui::BeginPopup("MeshMenu"))
         {
             if (ImGui::BeginMenu("Transform"))
@@ -780,6 +948,34 @@ namespace Editor
                 if (ImGui::MenuItem("Move", Shortcuts::Label("mesh.grab").c_str())) BeginModal(ModalKind::Move);
                 if (ImGui::MenuItem("Rotate", Shortcuts::Label("mesh.rotate").c_str())) BeginModal(ModalKind::Rotate);
                 if (ImGui::MenuItem("Scale", Shortcuts::Label("mesh.scale").c_str())) BeginModal(ModalKind::Scale);
+                if (ImGui::MenuItem("Shrink/Fatten", Shortcuts::Label("mesh.shrinkFatten").c_str())) BeginModal(ModalKind::ShrinkFatten);
+                if (ImGui::MenuItem("Edge Slide")) BeginModal(ModalKind::Slide);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Mirror"))
+            {
+                mirrorItems();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Extrude"))
+            {
+                extrudeItems();
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("Knife", Shortcuts::Label("mesh.knife").c_str())) StartTool(Tool::Knife);
+            if (ImGui::BeginMenu("Vertices"))
+            {
+                vertexItems();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Faces"))
+            {
+                faceItems();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Separate"))
+            {
+                separateItems();
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Delete"))
@@ -901,6 +1097,30 @@ namespace Editor
         }
         if (Pressed("mesh.proportional")) m_Proportional = !m_Proportional;
         if (Pressed("mesh.xray")) m_XRay = !m_XRay;
+        if (Pressed("mesh.extrude")) DoExtrude(false);
+        if (Pressed("mesh.extrudeMenu")) m_OpenMenu = 7;
+        if (Pressed("mesh.inset")) BeginModal(ModalKind::Inset);
+        if (Pressed("mesh.bevel")) BeginModal(ModalKind::Bevel);
+        if (Pressed("mesh.bevelVertices"))
+        {
+            BeginModal(ModalKind::Bevel);
+            if (m_Modal.Kind == ModalKind::Bevel) m_Modal.Option = true;
+        }
+        if (Pressed("mesh.loopCut")) StartTool(Tool::LoopCut);
+        if (Pressed("mesh.knife")) StartTool(Tool::Knife);
+        if (Pressed("mesh.fill"))
+            Operate("Make Edge/Face", [&] {
+                if (!ops::Fill(m_Mesh)) Log::Warn("Make Edge/Face: select a loop of border edges, or two or more vertices");
+            });
+        if (Pressed("mesh.connect"))
+            Operate("Connect Vertex Path", [&] {
+                if (!ops::ConnectVertices(m_Mesh)) Log::Warn("Connect: select two or more vertices of a face");
+            });
+        if (Pressed("mesh.dissolve")) DoDissolve();
+        if (Pressed("mesh.duplicate")) DoDuplicate();
+        if (Pressed("mesh.separate")) m_OpenMenu = 8;
+        if (Pressed("mesh.shrinkFatten")) BeginModal(ModalKind::ShrinkFatten);
+        if (Pressed("mesh.faceMenu")) m_OpenMenu = 6;
     }
 
     // ---- Mouse selection
@@ -1083,6 +1303,7 @@ namespace Editor
     glm::vec3 MeshEditMode::AxisVector(int axis) const
     {
         glm::vec3 a(0.0f);
+        if (axis == 3) return m_Modal.CustomAxis;
         if (axis < 0 || axis > 2) return a;
         a[axis] = 1.0f;
         if (m_Modal.LocalAxes)
@@ -1094,11 +1315,20 @@ namespace Editor
         return a;
     }
 
-    void MeshEditMode::BeginModal(ModalKind kind)
+    void MeshEditMode::BeginModal(ModalKind kind, bool recorded)
     {
-        if (!m_Active || ops::SelectedVertices(m_Mesh).empty()) return;
-        const char* names[] = { "", "Move", "Rotate", "Scale" };
-        Record(names[(int)kind]);
+        if (!m_Active) return;
+        if (ops::SelectedVertices(m_Mesh).empty())
+        {
+            if (recorded)
+            {
+                ops::FlushSelection(m_Mesh, m_Mode);
+                Commit(); // (the operation happened; there is just nothing to move)
+            }
+            return;
+        }
+        static const char* names[] = { "", "Move", "Rotate", "Scale", "Shrink/Fatten", "Inset", "Bevel", "Edge Slide" };
+        if (!recorded) Record(names[(int)kind]);
         m_Modal = {};
         m_Modal.Kind = kind;
         m_Modal.StartFrame = ImGui::GetFrameCount();
@@ -1110,24 +1340,168 @@ namespace Editor
         m_Modal.LastScreenAngle = std::atan2(d.y, d.x);
         // Proportional weights (the radius is in world units; the mesh may be scaled).
         float scale = (glm::length(glm::vec3(m_World[0])) + glm::length(glm::vec3(m_World[1])) + glm::length(glm::vec3(m_World[2]))) / 3.0f;
-        if (m_Proportional) m_Modal.Weights = ops::ProportionalWeights(m_Mesh, m_ProportionalSize / std::max(scale, 1e-6f), m_Falloff, m_ProportionalConnected);
+        bool transform = kind == ModalKind::Move || kind == ModalKind::Rotate || kind == ModalKind::Scale;
+        if (m_Proportional && transform)
+            m_Modal.Weights = ops::ProportionalWeights(m_Mesh, m_ProportionalSize / std::max(scale, 1e-6f), m_Falloff, m_ProportionalConnected);
         else
         {
             m_Modal.Weights.assign(m_Mesh.VertexCount(), 0.0f);
             for (uint32_t v : ops::SelectedVertices(m_Mesh)) m_Modal.Weights[v] = 1.0f;
         }
+        // How far one pixel reaches at the pivot (tools sized by the mouse).
+        glm::vec3 right = glm::vec3(glm::inverse(m_View)[0]);
+        ImVec2 r = Project(m_ViewProj, m_Origin, m_Size, m_Modal.Pivot + right);
+        float px = OnScreen(r) && OnScreen(m_Modal.PivotScreen) ? Length(Sub(r, m_Modal.PivotScreen)) : 0.0f;
+        m_Modal.WorldPerPixel = px > 1e-3f ? 1.0f / px : 0.01f;
+        switch (kind)
+        {
+        case ModalKind::ShrinkFatten: m_Modal.Dirs = ops::ShrinkFattenDirections(m_Mesh); break;
+        case ModalKind::Inset:
+        case ModalKind::Bevel: m_Modal.Base = m_Mesh; break;
+        case ModalKind::Slide:
+            if (!StartSlide())
+            {
+                EndModal(false);
+                Log::Warn("Edge slide: select edges (a loop slides between its neighbouring loops)");
+            }
+            break;
+        default: break;
+        }
+    }
+
+    bool MeshEditMode::StartSlide()
+    {
+        Modal& md = m_Modal;
+        md.Rails = ops::EdgeSlideRails(m_Mesh);
+        if (md.Rails.Verts.empty()) return false;
+        md.Kind = ModalKind::Slide;
+        md.Start = m_Mesh.Positions;
+        md.MouseStart = ImGui::GetMousePos();
+        md.Typed.clear();
+        md.Axis = -1;
+        // The screen direction of +1: where the rails' +1 ends lie, on average.
+        glm::vec3 delta(0.0f);
+        for (size_t i = 0; i < md.Rails.Verts.size(); ++i) delta += md.Rails.Plus[i] - md.Rails.Start[i];
+        delta /= (float)md.Rails.Verts.size();
+        ImVec2 a = Project(m_ViewProj, m_Origin, m_Size, md.Pivot);
+        ImVec2 b = Project(m_ViewProj, m_Origin, m_Size, md.Pivot + glm::mat3(m_World) * delta);
+        md.SlideScreen = OnScreen(a) && OnScreen(b) ? Sub(b, a) : ImVec2(100.0f, 0.0f);
+        if (Length(md.SlideScreen) < 4.0f) md.SlideScreen = ImVec2(100.0f, 0.0f);
+        return true;
+    }
+
+    float MeshEditMode::WorldScale() const
+    {
+        return (glm::length(glm::vec3(m_World[0])) + glm::length(glm::vec3(m_World[1])) + glm::length(glm::vec3(m_World[2]))) / 3.0f;
+    }
+
+    bool MeshEditMode::ReadTyped(float& value)
+    {
+        Modal& md = m_Modal;
+        for (int k = 0; k <= 9; ++k)
+            if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_0 + k)) || ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_Keypad0 + k))) md.Typed += (char)('0' + k);
+        if ((ImGui::IsKeyPressed(ImGuiKey_Period) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal)) && md.Typed.find('.') == std::string::npos) md.Typed += '.';
+        if (ImGui::IsKeyPressed(ImGuiKey_Minus) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract))
+            md.Typed = !md.Typed.empty() && md.Typed[0] == '-' ? md.Typed.substr(1) : "-" + md.Typed;
+        if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !md.Typed.empty()) md.Typed.pop_back();
+        if (md.Typed.empty() || md.Typed == "-" || md.Typed == "." || md.Typed == "-.") return false;
+        value = std::strtof(md.Typed.c_str(), nullptr);
+        return true;
+    }
+
+    void MeshEditMode::ApplyParametric()
+    {
+        Modal& md = m_Modal;
+        if (md.Value == md.Applied && md.Segments == md.AppliedSegments && md.Option == md.AppliedOption) return;
+        md.Applied = md.Value;
+        md.AppliedSegments = md.Segments;
+        md.AppliedOption = md.Option;
+        m_Mesh = md.Base;
+        float amount = md.Value / std::max(WorldScale(), 1e-6f); // (model space)
+        if (md.Kind == ModalKind::Inset) ops::Inset(m_Mesh, amount, 0.0f, md.Option);
+        else ops::Bevel(m_Mesh, amount, (uint32_t)md.Segments, md.Option);
+        ops::FlushSelection(m_Mesh, m_Mode);
+        SyncRenderMesh();
+    }
+
+    void MeshEditMode::UpdateToolModal(bool first, bool confirm)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        Modal& md = m_Modal;
+        float typed = 0.0f;
+        bool hasTyped = ReadTyped(typed);
+        ImVec2 mouse = io.MousePos;
+        float dist = Length(Sub(mouse, md.PivotScreen)), startDist = Length(Sub(md.MouseStart, md.PivotScreen));
+        const auto& prefs = EditorPreferences::Get();
+        bool snap = io.KeyCtrl != prefs.Snap;
+        switch (md.Kind)
+        {
+        case ModalKind::ShrinkFatten:
+        {
+            float d = hasTyped ? typed : (dist - startDist) * md.WorldPerPixel;
+            if (snap && !hasTyped) d = Snap(d, prefs.SnapMove);
+            md.Value = d;
+            float local = d / std::max(WorldScale(), 1e-6f);
+            for (uint32_t v = 0; v < m_Mesh.VertexCount() && v < md.Dirs.size(); ++v) m_Mesh.Positions[v] = md.Start[v] + md.Dirs[v] * local;
+            SyncRenderMesh();
+            break;
+        }
+        case ModalKind::Inset:
+        case ModalKind::Bevel:
+        {
+            if (!first && md.Kind == ModalKind::Inset && ImGui::IsKeyPressed(ImGuiKey_I, false)) md.Option = !md.Option;
+            if (!first && md.Kind == ModalKind::Bevel && ImGui::IsKeyPressed(ImGuiKey_V, false)) md.Option = !md.Option;
+            if (md.Kind == ModalKind::Bevel)
+            {
+                int step = io.MouseWheel > 0.0f ? 1 : io.MouseWheel < 0.0f ? -1 : 0;
+                if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) step = 1;
+                if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) step = -1;
+                md.Segments = std::clamp(md.Segments + step, 1, 64);
+            }
+            // Inset grows as the mouse nears the selection's middle, bevel as it leaves.
+            float pixels = md.Kind == ModalKind::Inset && startDist > 30.0f ? startDist - dist : dist - startDist;
+            float v = hasTyped ? typed : std::max(pixels, 0.0f) * md.WorldPerPixel;
+            if (snap && !hasTyped) v = Snap(v, prefs.SnapMove * 0.1f);
+            md.Value = std::max(v, 0.0f);
+            ApplyParametric();
+            break;
+        }
+        case ModalKind::Slide:
+        {
+            ImVec2 d = Sub(mouse, md.MouseStart);
+            float len2 = md.SlideScreen.x * md.SlideScreen.x + md.SlideScreen.y * md.SlideScreen.y;
+            float f = hasTyped ? typed : (d.x * md.SlideScreen.x + d.y * md.SlideScreen.y) / std::max(len2, 1.0f);
+            md.Value = std::clamp(f, -1.0f, 1.0f);
+            m_Mesh.Positions = md.Start;
+            ops::ApplySlide(m_Mesh, md.Rails, md.Value);
+            SyncRenderMesh();
+            break;
+        }
+        default: break;
+        }
+        if (confirm) EndModal(true);
     }
 
     void MeshEditMode::EndModal(bool confirm)
     {
-        if (!IsModal()) return;
+        if (m_Modal.Kind == ModalKind::None) return;
         if (!confirm)
         {
-            m_Mesh.Positions = m_Modal.Start;
-            if (!m_Undo.empty()) m_Undo.pop_back(); // nothing happened
+            // Back to before it (and before the operation that started it, such as an extrusion).
+            if (!m_Undo.empty())
+            {
+                m_Mesh = std::move(m_Undo.back().Mesh);
+                m_Mode = m_Undo.back().Mode;
+                m_Undo.pop_back();
+                m_Mesh.Changed();
+            }
             SyncRenderMesh();
         }
-        else Commit();
+        else
+        {
+            ops::FlushSelection(m_Mesh, m_Mode);
+            Commit();
+        }
         m_Modal = {};
     }
 
@@ -1144,9 +1518,23 @@ namespace Editor
         }
         bool confirm = !first && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || ImGui::IsKeyPressed(ImGuiKey_Space) ||
                        ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+        bool transform = md.Kind == ModalKind::Move || md.Kind == ModalKind::Rotate || md.Kind == ModalKind::Scale;
+        if (!transform)
+        {
+            UpdateToolModal(first, confirm);
+            return;
+        }
+        // G again while moving: slide along the edges instead.
+        if (!first && md.Kind == ModalKind::Move && ImGui::IsKeyPressed(ImGuiKey_G, false))
+        {
+            std::vector<glm::vec3> now = m_Mesh.Positions;
+            m_Mesh.Positions = md.Start;
+            if (StartSlide()) return;
+            m_Mesh.Positions = std::move(now);
+        }
         // Switch between move, rotate and scale.
         ModalKind switchTo = ModalKind::None;
-        if (!first && ImGui::IsKeyPressed(ImGuiKey_G) && md.Kind != ModalKind::Move) switchTo = ModalKind::Move;
+        if (!first && ImGui::IsKeyPressed(ImGuiKey_G, false) && md.Kind != ModalKind::Move) switchTo = ModalKind::Move;
         if (ImGui::IsKeyPressed(ImGuiKey_R) && md.Kind != ModalKind::Rotate) switchTo = ModalKind::Rotate;
         if (ImGui::IsKeyPressed(ImGuiKey_S) && md.Kind != ModalKind::Scale) switchTo = ModalKind::Scale;
         if (switchTo != ModalKind::None)
@@ -1182,19 +1570,8 @@ namespace Editor
             }
         }
         // Typed values.
-        for (int k = 0; k <= 9; ++k)
-            if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_0 + k)) || ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_Keypad0 + k))) md.Typed += (char)('0' + k);
-        if ((ImGui::IsKeyPressed(ImGuiKey_Period) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal)) && md.Typed.find('.') == std::string::npos) md.Typed += '.';
-        if (ImGui::IsKeyPressed(ImGuiKey_Minus) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract))
-            md.Typed = !md.Typed.empty() && md.Typed[0] == '-' ? md.Typed.substr(1) : "-" + md.Typed;
-        if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !md.Typed.empty()) md.Typed.pop_back();
         float typed = 0.0f;
-        bool hasTyped = false;
-        if (!md.Typed.empty() && md.Typed != "-" && md.Typed != "." && md.Typed != "-.")
-        {
-            typed = std::strtof(md.Typed.c_str(), nullptr);
-            hasTyped = true;
-        }
+        bool hasTyped = ReadTyped(typed);
         // The proportional size follows the mouse wheel.
         if (m_Proportional && io.MouseWheel != 0.0f)
         {
@@ -1356,6 +1733,369 @@ namespace Editor
         m_Mesh.Append(MakePrimitive(p));
         ops::FlushSelection(m_Mesh, m_Mode);
         Commit();
+    }
+
+    void MeshEditMode::DoExtrude(bool individual)
+    {
+        Record(individual ? "Extrude Individual Faces" : "Extrude");
+        glm::vec3 n = ops::Extrude(m_Mesh, individual);
+        ops::FlushSelection(m_Mesh, m_Mode);
+        SyncRenderMesh();
+        if (individual)
+        {
+            BeginModal(ModalKind::ShrinkFatten, true);
+            return;
+        }
+        // Then moved: faces along their normal (X/Y/Z still pick an axis), edges and vertices freely.
+        BeginModal(ModalKind::Move, true);
+        if (m_Modal.Kind == ModalKind::Move && glm::length(n) > 1e-6f)
+        {
+            glm::vec3 w = glm::mat3(glm::transpose(glm::inverse(m_World))) * n;
+            if (glm::length(w) > 1e-8f)
+            {
+                m_Modal.CustomAxis = glm::normalize(w);
+                m_Modal.Axis = 3;
+            }
+        }
+    }
+
+    void MeshEditMode::DoDuplicate()
+    {
+        Record("Duplicate");
+        ops::Duplicate(m_Mesh);
+        ops::FlushSelection(m_Mesh, m_Mode);
+        SyncRenderMesh();
+        BeginModal(ModalKind::Move, true);
+    }
+
+    void MeshEditMode::DoDissolve()
+    {
+        switch (m_Mode)
+        {
+        case SelectMode::Vertex: Operate("Dissolve Vertices", [&] { ops::DissolveVertices(m_Mesh); }); break;
+        case SelectMode::Edge: Operate("Dissolve Edges", [&] { ops::DissolveEdges(m_Mesh); }); break;
+        case SelectMode::Face: Operate("Dissolve Faces", [&] { ops::DissolveFaces(m_Mesh); }); break;
+        }
+    }
+
+    void MeshEditMode::DoSpin()
+    {
+        glm::vec3 axis(0.0f);
+        axis[std::clamp(m_SpinAxis, 0, 2)] = 1.0f;
+        glm::vec3 center = m_SpinAboutSelection ? ops::SelectionCenter(m_Mesh) : glm::vec3(0.0f);
+        Operate("Spin", [&] { ops::Spin(m_Mesh, center, axis, glm::radians(m_SpinAngle), (uint32_t)std::max(1, m_SpinSteps)); });
+    }
+
+    void MeshEditMode::DoSeparate(bool looseParts)
+    {
+        Record(looseParts ? "Separate Loose Parts" : "Separate");
+        std::vector<EditableMesh> parts;
+        if (looseParts) parts = ops::SeparateLooseParts(m_Mesh);
+        else
+        {
+            EditableMesh part = ops::Separate(m_Mesh);
+            if (part.VertexCount() > 0) parts.push_back(std::move(part));
+        }
+        if (parts.empty())
+        {
+            m_Undo.pop_back();
+            Log::Warn("{}", looseParts ? "Separate: the mesh is all one piece" : "Separate: select the faces to take out");
+            return;
+        }
+        // Each part becomes a model of its own on a new object beside this one (same place, same materials).
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        TransformComponent transform = reg.Get<TransformComponent>(m_Entity);
+        MeshRendererComponent renderer = reg.Get<MeshRendererComponent>(m_Entity);
+        std::string name = reg.Get<TagComponent>(m_Entity).Name;
+        Entity parent = scene.GetParent(m_Entity);
+        for (EditableMesh& part : parts)
+        {
+            AssetHandle model = CreateModelAsset(part, m_File.parent_path(), m_File.stem().string() + " Part");
+            if (!model.IsValid()) continue;
+            Entity e = CreateObject(m_Ctx, ObjectKind::Empty, parent);
+            auto& t = reg.Get<TransformComponent>(e);
+            t.Position = transform.Position;
+            t.Rotation = transform.Rotation;
+            t.Scale = transform.Scale;
+            reg.Get<TagComponent>(e).Name = name + " Part";
+            MeshRendererComponent copy = renderer;
+            copy.Mesh = model;
+            reg.Emplace<MeshRendererComponent>(e) = copy;
+        }
+        m_Ctx.Select(m_Entity); // (stay in Edit Mode on this object)
+        m_Ctx.MarkDirty();
+        ops::FlushSelection(m_Mesh, m_Mode);
+        Commit();
+        Save();
+        Log::Info("Separated {} part{} into new objects", parts.size(), parts.size() == 1 ? "" : "s");
+    }
+
+    // ---- Loop cut and knife
+
+    void MeshEditMode::StartTool(Tool tool)
+    {
+        if (!m_Active || IsModal()) return;
+        m_Tool = tool;
+        m_ToolStartFrame = ImGui::GetFrameCount();
+        m_LoopPreviewKey = 0;
+        m_LoopPreview.clear();
+        m_LoopEdge = -1;
+        m_KnifePoints.clear();
+    }
+
+    void MeshEditMode::UpdateTool(bool hovered)
+    {
+        if (m_Tool == Tool::LoopCut) UpdateLoopCut(hovered);
+        else if (m_Tool == Tool::Knife) UpdateKnife(hovered);
+    }
+
+    void MeshEditMode::UpdateLoopCut(bool hovered)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        bool first = ImGui::GetFrameCount() == m_ToolStartFrame;
+        if (!first && (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)))
+        {
+            m_Tool = Tool::None;
+            m_LoopPreview.clear();
+            return;
+        }
+        int step = io.MouseWheel > 0.0f ? 1 : io.MouseWheel < 0.0f ? -1 : 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_PageUp) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) step = 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_PageDown) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract)) step = -1;
+        m_LoopCuts = std::clamp(m_LoopCuts + step, 1, 64);
+        ImVec2 mouse = io.MousePos;
+        bool overToolbar = mouse.x >= m_ToolbarMin.x && mouse.x <= m_ToolbarMax.x && mouse.y >= m_ToolbarMin.y && mouse.y <= m_ToolbarMax.y;
+        int64_t edge = hovered && !overToolbar && !m_OverUI ? NearestEdge(mouse, 40.0f) : -1;
+        m_LoopEdge = edge;
+        // The preview: the cut made on a copy, its new edges drawn (worked out again only when something changes).
+        uint64_t key = ((uint64_t)(edge + 1) << 40) ^ ((uint64_t)m_LoopCuts << 32) ^ m_GeometryVersion;
+        if (key != m_LoopPreviewKey)
+        {
+            m_LoopPreviewKey = key;
+            m_LoopPreview.clear();
+            if (edge >= 0)
+            {
+                EditableMesh copy = m_Mesh;
+                if (ops::LoopCut(copy, (uint32_t)edge, (uint32_t)m_LoopCuts))
+                    for (EdgeKey k : copy.Topo().Edges)
+                        if (copy.IsEdgeSelected(k)) m_LoopPreview.push_back({ copy.Positions[EdgeA(k)], copy.Positions[EdgeB(k)] });
+            }
+        }
+        if (!first && edge >= 0 && !m_LoopPreview.empty() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            Record("Loop Cut and Slide");
+            ops::LoopCut(m_Mesh, (uint32_t)edge, (uint32_t)m_LoopCuts);
+            m_Tool = Tool::None;
+            m_LoopPreview.clear();
+            SyncRenderMesh();
+            if (m_LoopCuts == 1) BeginModal(ModalKind::Slide, true); // (rails come from the new loop's edges)
+            else
+            {
+                ops::FlushSelection(m_Mesh, m_Mode);
+                Commit();
+            }
+        }
+    }
+
+    bool MeshEditMode::KnifeSnap(const ImVec2& mouse, ops::CutPoint& cut, glm::vec3& pos) const
+    {
+        int64_t v = NearestVertex(mouse, 10.0f);
+        if (v >= 0)
+        {
+            cut = { (uint32_t)v, (uint32_t)v, 0.0f };
+            pos = m_Mesh.Positions[(size_t)v];
+            return true;
+        }
+        int64_t e = NearestEdge(mouse, 12.0f);
+        if (e < 0) return false;
+        EdgeKey k = m_Mesh.Topo().Edges[(size_t)e];
+        // Where the mouse ray passes the edge.
+        glm::vec3 from, dir;
+        RayAt(m_ViewProj, m_Origin, m_Size, mouse, from, dir);
+        glm::vec3 a = glm::vec3(m_World * glm::vec4(m_Mesh.Positions[EdgeA(k)], 1.0f)), b = glm::vec3(m_World * glm::vec4(m_Mesh.Positions[EdgeB(k)], 1.0f));
+        float t = std::clamp(ClosestOnAxis(from, dir, a, b - a), 0.02f, 0.98f);
+        cut = { EdgeA(k), EdgeB(k), t };
+        pos = glm::mix(m_Mesh.Positions[EdgeA(k)], m_Mesh.Positions[EdgeB(k)], t);
+        return true;
+    }
+
+    void MeshEditMode::UpdateKnife(bool hovered)
+    {
+        bool first = ImGui::GetFrameCount() == m_ToolStartFrame;
+        if (!first && ImGui::IsKeyPressed(ImGuiKey_Escape))
+        {
+            m_Tool = Tool::None;
+            m_KnifePoints.clear();
+            return;
+        }
+        if (!first && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || ImGui::IsKeyPressed(ImGuiKey_Space)))
+        {
+            FinishKnife();
+            return;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !m_KnifePoints.empty()) m_KnifePoints.pop_back();
+        ImVec2 mouse = ImGui::GetMousePos();
+        bool overToolbar = mouse.x >= m_ToolbarMin.x && mouse.x <= m_ToolbarMax.x && mouse.y >= m_ToolbarMin.y && mouse.y <= m_ToolbarMax.y;
+        if (!first && hovered && !overToolbar && !m_OverUI && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
+        {
+            ops::CutPoint cut;
+            glm::vec3 pos;
+            if (KnifeSnap(mouse, cut, pos))
+            {
+                bool same = !m_KnifePoints.empty() && glm::length(m_KnifePoints.back().Pos - pos) < 1e-6f;
+                if (!same) m_KnifePoints.push_back({ cut, pos });
+            }
+        }
+    }
+
+    void MeshEditMode::FinishKnife()
+    {
+        m_Tool = Tool::None;
+        if (m_KnifePoints.size() < 2)
+        {
+            m_KnifePoints.clear();
+            return;
+        }
+        // The path: the clicked points, and where the lines between them cross the visible edges.
+        const Topology& t = m_Mesh.Topo();
+        glm::mat4 mvp = m_ViewProj * m_World;
+        std::vector<ops::CutPoint> path;
+        for (size_t i = 0; i < m_KnifePoints.size(); ++i)
+        {
+            const KnifePoint& kp = m_KnifePoints[i];
+            path.push_back(kp.Cut);
+            if (i + 1 == m_KnifePoints.size()) break;
+            const KnifePoint& next = m_KnifePoints[i + 1];
+            ImVec2 P = Project(mvp, m_Origin, m_Size, kp.Pos), Q = Project(mvp, m_Origin, m_Size, next.Pos);
+            if (!OnScreen(P) || !OnScreen(Q)) continue;
+            auto touches = [&](const ops::CutPoint& c, EdgeKey k) {
+                if (c.A == c.B) return EdgeA(k) == c.A || EdgeB(k) == c.A;
+                return k == MakeEdgeKey(c.A, c.B);
+            };
+            std::vector<std::pair<float, ops::CutPoint>> crossings;
+            ImVec2 d1 = Sub(Q, P);
+            for (size_t e = 0; e < t.Edges.size() && e < m_EdgeVisible.size(); ++e)
+            {
+                if (!m_EdgeVisible[e]) continue;
+                EdgeKey k = t.Edges[e];
+                if (touches(kp.Cut, k) || touches(next.Cut, k)) continue;
+                ImVec2 A = m_Screen[EdgeA(k)], B = m_Screen[EdgeB(k)];
+                ImVec2 d2 = Sub(B, A);
+                float den = d1.x * d2.y - d1.y * d2.x;
+                if (std::abs(den) < 1e-6f) continue;
+                ImVec2 w = Sub(A, P);
+                float s = (w.x * d2.y - w.y * d2.x) / den, u = (w.x * d1.y - w.y * d1.x) / den;
+                if (s <= 1e-4f || s >= 1.0f - 1e-4f || u <= 0.01f || u >= 0.99f) continue;
+                // The screen crossing back onto the 3D edge.
+                ImVec2 at(P.x + d1.x * s, P.y + d1.y * s);
+                glm::vec3 from, dir;
+                RayAt(m_ViewProj, m_Origin, m_Size, at, from, dir);
+                glm::vec3 a = glm::vec3(m_World * glm::vec4(m_Mesh.Positions[EdgeA(k)], 1.0f)), b = glm::vec3(m_World * glm::vec4(m_Mesh.Positions[EdgeB(k)], 1.0f));
+                float tt = std::clamp(ClosestOnAxis(from, dir, a, b - a), 0.001f, 0.999f);
+                crossings.push_back({ s, { EdgeA(k), EdgeB(k), tt } });
+            }
+            std::sort(crossings.begin(), crossings.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+            for (auto& c : crossings) path.push_back(c.second);
+        }
+        m_KnifePoints.clear();
+        Record("Knife");
+        size_t cuts = ops::Knife(m_Mesh, path);
+        ops::FlushSelection(m_Mesh, m_Mode);
+        Commit();
+        if (cuts == 0) Log::Warn("Knife: nothing was cut (click on edges or vertices of the faces to cut)");
+    }
+
+    void MeshEditMode::DrawToolOverlay(ImDrawList* dl)
+    {
+        if (m_Tool == Tool::None) return;
+        dl->PushClipRect(m_Origin, ImVec2(m_Origin.x + m_Size.x, m_Origin.y + m_Size.y), true);
+        glm::mat4 mvp = m_ViewProj * m_World;
+        const ImU32 kTool = IM_COL32(255, 220, 60, 255);
+        if (m_Tool == Tool::LoopCut)
+            for (auto& [a, b] : m_LoopPreview)
+            {
+                ImVec2 pa = Project(mvp, m_Origin, m_Size, a), pb = Project(mvp, m_Origin, m_Size, b);
+                if (OnScreen(pa) && OnScreen(pb)) dl->AddLine(pa, pb, kTool, 2.0f);
+            }
+        if (m_Tool == Tool::Knife)
+        {
+            ImVec2 last(0, 0);
+            bool haveLast = false;
+            for (const KnifePoint& kp : m_KnifePoints)
+            {
+                ImVec2 p = Project(mvp, m_Origin, m_Size, kp.Pos);
+                if (!OnScreen(p)) continue;
+                if (haveLast) dl->AddLine(last, p, kTool, 2.0f);
+                dl->AddCircleFilled(p, 4.0f, kTool);
+                last = p;
+                haveLast = true;
+            }
+            ops::CutPoint cut;
+            glm::vec3 pos;
+            ImVec2 mouse = ImGui::GetMousePos();
+            bool snapped = KnifeSnap(mouse, cut, pos);
+            ImVec2 target = snapped ? Project(mvp, m_Origin, m_Size, pos) : mouse;
+            if (haveLast) dl->AddLine(last, target, snapped ? kTool : IM_COL32(255, 220, 60, 110), 1.5f);
+            if (snapped) dl->AddCircle(target, 6.0f, IM_COL32(120, 255, 120, 255), 0, 2.0f);
+        }
+        dl->PopClipRect();
+    }
+
+    // ---- Join (outside Edit Mode)
+
+    bool MeshEditMode::JoinSelected(EditorContext& ctx)
+    {
+        if (ctx.IsPlaying()) return false;
+        Scene& scene = ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        Entity target = ctx.Selected;
+        if (!scene.IsValid(target) || !reg.Has<MeshRendererComponent>(target))
+        {
+            Log::Warn("Join: the last selected object needs a Mesh Renderer (the others join it)");
+            return false;
+        }
+        AssetHandle targetMesh = reg.Get<MeshRendererComponent>(target).Mesh;
+        const AssetMetadata* meta = AssetManager::GetMetadata(targetMesh);
+        if (!meta || meta->Path.extension() != ".dmodel")
+        {
+            Log::Warn("Join: the last selected object's mesh must be a model made in the editor (Tab on it makes an editable copy)");
+            return false;
+        }
+        EditableMesh mesh;
+        if (!EditableMesh::Load(AssetManager::GetAbsolutePath(targetMesh), mesh)) return false;
+        glm::mat4 toTarget = glm::inverse(reg.Get<TransformComponent>(target).World);
+        std::vector<Entity> joined;
+        for (Entity e : ctx.Selection)
+        {
+            if (e == target || !scene.IsValid(e) || !reg.Has<MeshRendererComponent>(e)) continue;
+            AssetHandle h = reg.Get<MeshRendererComponent>(e).Mesh;
+            if (!h.IsValid()) continue;
+            EditableMesh part;
+            const AssetMetadata* m = AssetManager::GetMetadata(h);
+            if (m && m->Path.extension() == ".dmodel") EditableMesh::Load(AssetManager::GetAbsolutePath(h), part);
+            else if (auto data = AssetManager::GetMeshData(h)) part = EditableMesh::FromMeshData(*data);
+            if (part.VertexCount() == 0) continue;
+            ops::DeselectAll(part);
+            ops::Join(mesh, part, toTarget * reg.Get<TransformComponent>(e).World);
+            joined.push_back(e);
+        }
+        if (joined.empty())
+        {
+            Log::Warn("Join: select the objects to join, then (last) the one they join");
+            return false;
+        }
+        // A new model (so undoing the join brings back the old one as it was).
+        AssetHandle model = CreateModelAsset(mesh, AssetManager::GetAbsolutePath(targetMesh).parent_path(), AssetManager::GetAbsolutePath(targetMesh).stem().string());
+        if (!model.IsValid()) return false;
+        ctx.RecordUndo("Join");
+        reg.Get<MeshRendererComponent>(target).Mesh = model;
+        for (Entity e : joined)
+            if (scene.IsValid(e)) scene.DestroyEntity(e);
+        ctx.Select(target);
+        ctx.MarkDirty();
+        Log::Info("Joined {} object{} into {}", joined.size(), joined.size() == 1 ? "" : "s", AssetManager::GetMetadata(model)->Path.generic_string());
+        return true;
     }
 
     // ---- Making an editable copy of another mesh

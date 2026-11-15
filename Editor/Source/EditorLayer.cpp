@@ -752,7 +752,7 @@ namespace Editor
         }
         m_WasWindowFocused = focused;
 
-        if (m_SceneViewHovered || m_Camera.IsControlling()) m_Camera.Update(dt, m_SceneViewHovered && !m_MeshEdit->IsModal());
+        if (m_SceneViewHovered || m_Camera.IsControlling()) m_Camera.Update(dt, m_SceneViewHovered && !m_MeshEdit->BlocksCamera());
 
         m_TestRunner->Poll();
         if (m_Ctx.RequestPlayTest) // the Test Runner's next play-mode test: a play session of its own on an empty scene
@@ -4375,7 +4375,9 @@ namespace Editor
 
         // The keys are the Shortcuts window's (Shortcuts::Pressed).
         if (m_RebindingShortcut >= 0) return; // the Shortcuts window is listening for a new key
-        using Shortcuts::Pressed;
+        // While a mesh is edited, Edit Mode's keys win over the others bound to the same keys (Ctrl+B bevels).
+        const bool meshEditing = m_MeshEdit->IsActive();
+        auto Pressed = [&](const char* id) { return Shortcuts::Pressed(id) && !(meshEditing && Shortcuts::ShadowedInEditMode(id)); };
         if (Pressed("play.play")) m_Ctx.IsPlaying() ? Stop() : Play();
         if (Pressed("play.pause")) TogglePause();
         if (Pressed("file.save"))
@@ -4401,7 +4403,7 @@ namespace Editor
             if (viewActive && !m_Camera.IsControlling() && !m_MeshEdit->IsModal())
             {
                 if (Pressed("mesh.editMode")) m_MeshEdit->Toggle();
-                if (Pressed("scene.frame")) FocusSelected();
+                if (Pressed("scene.frame") || Pressed("mesh.frame")) FocusSelected();
                 for (int slot = 1; slot <= SceneBookmarks::kSlots; ++slot)
                 {
                     std::string n = std::to_string(slot);
@@ -4412,6 +4414,7 @@ namespace Editor
             return;
         }
         if (viewActive && !m_Camera.IsControlling() && Pressed("mesh.editMode")) m_MeshEdit->Toggle();
+        if (Pressed("object.join")) MeshEditMode::JoinSelected(m_Ctx);
 
         if (Pressed("edit.undo")) m_Ctx.Undo();
         if (Pressed("edit.redo")) m_Ctx.Redo();

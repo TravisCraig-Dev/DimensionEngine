@@ -2,6 +2,7 @@
 #include "EditorContext.h"
 #include <Dimension/Modeling/EditableMesh.h>
 #include <Dimension/Modeling/MeshOps.h>
+#include <Dimension/Modeling/MeshTools.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <imgui.h>
 #include <deque>
@@ -38,8 +39,11 @@ namespace Editor
                              bool focused, bool blocked);
         // The question asked before editing an object whose mesh is not a model (call each frame).
         void DrawPopups();
-        // A move, rotate or scale following the mouse (G, R, S): the camera stays still meanwhile.
-        bool IsModal() const { return m_Modal.Kind != ModalKind::None; }
+        // A move, rotate or scale following the mouse (G, R, S), or another tool that owns the keys (inset, bevel, loop
+        // cut, knife...).
+        bool IsModal() const { return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None; }
+        // Whether the camera should leave the mouse alone (the knife lets it orbit between cuts).
+        bool BlocksCamera() const { return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut; }
 
         bool CanUndo() const { return !m_Undo.empty(); }
         bool CanRedo() const { return !m_Redo.empty(); }
@@ -55,9 +59,13 @@ namespace Editor
         static Entity CreateModelObject(EditorContext& ctx, Primitive p, Entity parent = Entity::Null());
         // A new model file (unique name in `folder`) holding `mesh`; returns its handle.
         static AssetHandle CreateModelAsset(const Modeling::EditableMesh& mesh, const fs::path& folder, const std::string& name);
+        // Object > Join (Ctrl+J outside Edit Mode): the other selected objects' meshes join the primary one's model
+        // (which must be a model made in the editor); the other objects go.
+        static bool JoinSelected(EditorContext& ctx);
 
     private:
-        enum class ModalKind { None, Move, Rotate, Scale };
+        enum class ModalKind { None, Move, Rotate, Scale, ShrinkFatten, Inset, Bevel, Slide };
+        enum class Tool { None, LoopCut, Knife };
         struct Modal
         {
             ModalKind Kind = ModalKind::None;
@@ -68,10 +76,20 @@ namespace Editor
             ImVec2 MouseStart, PivotScreen;
             glm::vec3 PlaneStart{ 0.0f };  // where the mouse ray first met the move plane
             float Angle = 0.0f, LastScreenAngle = 0.0f;
-            int Axis = -1;                 // constrained axis (0 X, 1 Y, 2 Z), -1 none
+            int Axis = -1;                 // constrained axis (0 X, 1 Y, 2 Z, 3 the custom axis), -1 none
+            glm::vec3 CustomAxis{ 0, 1, 0 }; // world space (an extrusion's normal)
             bool Plane = false;            // Shift+axis: the other two axes
             bool LocalAxes = false;        // the object's axes (axis key pressed twice)
             std::string Typed;             // numeric input
+            // Tools that rebuild the mesh from where it started (inset, bevel) or move along precomputed paths.
+            Modeling::EditableMesh Base;
+            std::vector<glm::vec3> Dirs;   // shrink/fatten: per vertex (model space)
+            Modeling::Ops::SlideRails Rails;
+            ImVec2 SlideScreen{ 0, 0 };     // edge slide: the screen direction of +1
+            float WorldPerPixel = 0.01f;   // at the pivot
+            float Value = 0.0f, Applied = -1e30f;
+            int Segments = 1, AppliedSegments = 0;
+            bool Option = false, AppliedOption = false; // inset: each face on its own; bevel: vertices
         };
 
         struct Snapshot
@@ -99,7 +117,21 @@ namespace Editor
         int64_t NearestEdge(const ImVec2& mouse, float maxPixels) const;
         int64_t FaceUnderMouse(const ImVec2& mouse) const;
 
-        void BeginModal(ModalKind kind);
+        // `recorded`: the operation that starts it already recorded the undo step (cancelling undoes the operation too).
+        void BeginModal(ModalKind kind, bool recorded = false);
+        void ApplyParametric();
+        void UpdateToolModal(bool first, bool confirm); // shrink/fatten, inset, bevel, edge slide
+        bool StartSlide();       // turns the modal into an edge slide (false: nothing to slide)
+        bool ReadTyped(float& value); // numeric input while modal
+        float WorldScale() const;
+        // Loop cut (Ctrl+R) and knife (K).
+        void StartTool(Tool tool);
+        void UpdateTool(bool hovered);
+        void UpdateLoopCut(bool hovered);
+        void UpdateKnife(bool hovered);
+        bool KnifeSnap(const ImVec2& mouse, Modeling::Ops::CutPoint& cut, glm::vec3& pos) const;
+        void FinishKnife();
+        void DrawToolOverlay(ImDrawList* dl);
         void UpdateModal();
         void EndModal(bool confirm);
         glm::vec3 AxisVector(int axis) const;
@@ -108,6 +140,19 @@ namespace Editor
         // Operations from keys and menus.
         void DoDelete(Modeling::Ops::DeleteKind kind);
         void DoAdd(Primitive p);
+        void DoExtrude(bool individual);
+        void DoDuplicate();
+        void DoDissolve();
+        void DoSeparate(bool looseParts);
+        void DoSpin();
+        // Runs an operation as one undo step and shows the result.
+        template <class F> void Operate(const char* name, F&& fn)
+        {
+            Record(name);
+            fn();
+            Modeling::Ops::FlushSelection(m_Mesh, m_Mode);
+            Commit();
+        }
 
         EditorContext& m_Ctx;
         bool m_Active = false;
@@ -147,7 +192,28 @@ namespace Editor
         bool m_BoxSelecting = false;
         bool m_OverUI = false;     // the toolbar or a menu has the mouse
         ImVec2 m_ToolbarMin, m_ToolbarMax;
-        int m_OpenMenu = 0;        // a popup to open at the mouse this frame (1 delete, 2 merge, 3 normals, 4 add, 5 edges)
+        int m_OpenMenu = 0;        // a popup to open at the mouse this frame (1 delete, 2 merge, 3 normals, 4 add, 5 edges, 6 faces, 7 extrude, 8 separate)
         float m_MergeDistance = 0.0001f;
+
+        // Tools.
+        Tool m_Tool = Tool::None;
+        int m_LoopCuts = 1;
+        int64_t m_LoopEdge = -1;
+        uint64_t m_LoopPreviewKey = 0;
+        std::vector<std::pair<glm::vec3, glm::vec3>> m_LoopPreview; // model space
+        struct KnifePoint
+        {
+            Modeling::Ops::CutPoint Cut;
+            glm::vec3 Pos; // model space
+        };
+        std::vector<KnifePoint> m_KnifePoints;
+        int m_ToolStartFrame = 0;
+        // Operation settings.
+        int m_SubdivideCuts = 1;
+        float m_DissolveAngle = 5.0f;
+        int m_SpinSteps = 12;
+        float m_SpinAngle = 360.0f;
+        int m_SpinAxis = 1;               // 0 X, 1 Y, 2 Z (the object's axes)
+        bool m_SpinAboutSelection = false; // else about the object's origin
     };
 }
