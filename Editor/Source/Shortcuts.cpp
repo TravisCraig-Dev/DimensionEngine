@@ -167,6 +167,17 @@ namespace Editor::Shortcuts
                 { "rig.boneMode", "Rig", "Bones", 0 },
                 { "rig.poseMode", "Rig", "Pose", 0 },
                 { "rig.weightMode", "Rig", "Weights", 0 },
+                { "mesh.curveMode", "Mesh Edit", "Edit Curves", 0 },
+                { "mesh.snapSurface", "Mesh Edit", "Toggle Snapping to Surfaces", 0 },
+                { "curve.selectAll", "Curve", "Select All Points", ImGuiKey_A },
+                { "curve.deselectAll", "Curve", "Select No Points", ImGuiMod_Alt | ImGuiKey_A },
+                { "curve.grab", "Curve", "Move Points", ImGuiKey_G },
+                { "curve.radius", "Curve", "Scale Radius", ImGuiMod_Alt | ImGuiKey_S },
+                { "curve.extrude", "Curve", "Extrude", ImGuiKey_E },
+                { "curve.delete", "Curve", "Delete Points", ImGuiKey_X },
+                { "curve.cyclic", "Curve", "Toggle Cyclic", ImGuiMod_Alt | ImGuiKey_C },
+                { "curve.sharp", "Curve", "Toggle Sharp", ImGuiKey_V },
+                { "curve.add", "Curve", "Add Curve", ImGuiMod_Shift | ImGuiKey_A },
                 { "paint.radius", "Paint", "Brush Radius (drag)", ImGuiKey_F },
                 { "paint.strength", "Paint", "Brush Strength (drag)", ImGuiMod_Shift | ImGuiKey_F },
                 { "paint.sample", "Paint", "Pick Color Under the Mouse", ImGuiKey_S },
@@ -232,7 +243,7 @@ namespace Editor::Shortcuts
         const Shortcut* s = Find(id);
         auto editing = [](const Shortcut& x) {
             std::string_view c = x.Category;
-            return c == "Mesh Edit" || c == "Sculpt" || c == "Paint" || c == "Rig";
+            return c == "Mesh Edit" || c == "Sculpt" || c == "Paint" || c == "Rig" || c == "Curve";
         };
         if (!s || s->Key == 0 || editing(*s)) return false;
         for (const Shortcut& other : All())
@@ -252,7 +263,7 @@ namespace Editor::Shortcuts
         };
         auto scope = [](const Shortcut& x) {
             std::string_view c = x.Category;
-            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : c == "Sculpt" ? 3 : c == "Paint" ? 4 : c == "Rig" ? 5 : 0;
+            return c == "Mesh Edit" ? 1 : c == "UV Editor" ? 2 : c == "Sculpt" ? 3 : c == "Paint" ? 4 : c == "Rig" ? 5 : c == "Curve" ? 6 : 0;
         };
         for (const Shortcut& other : All())
         {

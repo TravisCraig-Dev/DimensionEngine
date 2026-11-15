@@ -1,6 +1,7 @@
 #include "Dimension/Modeling/EditableMesh.h"
 #include "Dimension/Modeling/Modifiers.h"
 #include "Dimension/Modeling/Rig.h"
+#include "Dimension/Modeling/Curves.h"
 #include "Dimension/Core/Log.h"
 #include <algorithm>
 #include <cstring>
@@ -357,8 +358,20 @@ namespace Dimension::Modeling
         return c;
     }
 
+    EditableMesh EditableMesh::WithGenerated() const
+    {
+        EditableMesh g = EditedShape >= 0 ? Canonical() : *this;
+        g.Curves.clear();
+        g.Text.Enabled = false;
+        if (!Curves.empty()) g.Append(CurveOps::ToMesh(Curves, CurveOptions));
+        if (Text.Enabled) g.Append(TextOps::ToMesh(Text));
+        g.Changed();
+        return g;
+    }
+
     MeshData EditableMesh::ToMeshData(bool applyModifiers) const
     {
+        if (HasGenerated()) return WithGenerated().ToMeshData(applyModifiers);
         if (EditedShape >= 0) return Canonical().ToMeshData(applyModifiers);
         if (applyModifiers && HasActiveModifiers())
         {
@@ -946,6 +959,25 @@ namespace Dimension::Modeling
             }
             j["actions"] = std::move(actions);
         }
+        // Curves and text.
+        if (!Curves.empty())
+        {
+            json curves = json::array();
+            for (const Curve& c : Curves)
+            {
+                json pts = json::array();
+                for (const CurvePoint& p : c.Points)
+                    pts.push_back({ Round(p.Position.x), Round(p.Position.y), Round(p.Position.z), Round(p.Radius), Round(p.Tilt), p.Sharp ? 1 : 0, (int)p.Flags });
+                curves.push_back({ { "cyclic", c.Cyclic }, { "points", std::move(pts) } });
+            }
+            j["curves"] = std::move(curves);
+            const CurveSettings& s = CurveOptions;
+            j["curveSettings"] = { { "resolution", s.Resolution }, { "bevelDepth", Round(s.BevelDepth) }, { "bevelResolution", s.BevelResolution },
+                                   { "extrude", Round(s.Extrude) }, { "fill", s.Fill }, { "caps", s.Caps }, { "smooth", s.Smooth } };
+        }
+        if (Text.Enabled)
+            j["text"] = { { "body", Text.Body }, { "font", Text.Font }, { "size", Round(Text.Size) }, { "depth", Round(Text.Depth) }, { "spacing", Round(Text.Spacing) },
+                          { "lineSpacing", Round(Text.LineSpacing) }, { "align", Text.Align }, { "resolution", Text.Resolution } };
         // Sculpt mask: [vertex, value] pairs of the masked vertices.
         if (Mask.size() == Positions.size())
         {
@@ -1130,6 +1162,49 @@ namespace Dimension::Modeling
             }
             std::sort(a.Keys.begin(), a.Keys.end(), [](const ActionKey& x, const ActionKey& y) { return x.Time < y.Time; });
             out.Actions.push_back(std::move(a));
+        }
+        for (const auto& cj : j.value("curves", json::array()))
+        {
+            Curve c;
+            c.Cyclic = cj.value("cyclic", false);
+            for (const auto& p : cj.value("points", json::array()))
+            {
+                if (!p.is_array() || p.size() < 3) continue;
+                CurvePoint cp;
+                cp.Position = { p[0].get<float>(), p[1].get<float>(), p[2].get<float>() };
+                if (p.size() > 3) cp.Radius = p[3].get<float>();
+                if (p.size() > 4) cp.Tilt = p[4].get<float>();
+                if (p.size() > 5) cp.Sharp = p[5].get<int>() != 0;
+                if (p.size() > 6) cp.Flags = (uint8_t)p[6].get<int>();
+                c.Points.push_back(cp);
+            }
+            out.Curves.push_back(std::move(c));
+        }
+        if (j.contains("curveSettings"))
+        {
+            const json& s = j["curveSettings"];
+            CurveSettings& o = out.CurveOptions;
+            o.Resolution = std::clamp(s.value("resolution", o.Resolution), 1, 64);
+            o.BevelDepth = s.value("bevelDepth", o.BevelDepth);
+            o.BevelResolution = std::clamp(s.value("bevelResolution", o.BevelResolution), 3, 64);
+            o.Extrude = s.value("extrude", o.Extrude);
+            o.Fill = s.value("fill", o.Fill);
+            o.Caps = s.value("caps", o.Caps);
+            o.Smooth = s.value("smooth", o.Smooth);
+        }
+        if (j.contains("text"))
+        {
+            const json& t = j["text"];
+            TextSettings& o = out.Text;
+            o.Enabled = true;
+            o.Body = t.value("body", "");
+            o.Font = t.value("font", (uint64_t)0);
+            o.Size = t.value("size", o.Size);
+            o.Depth = t.value("depth", o.Depth);
+            o.Spacing = t.value("spacing", o.Spacing);
+            o.LineSpacing = t.value("lineSpacing", o.LineSpacing);
+            o.Align = std::clamp(t.value("align", o.Align), 0, 2);
+            o.Resolution = std::clamp(t.value("resolution", o.Resolution), 1, 32);
         }
         if (j.contains("colors"))
         {

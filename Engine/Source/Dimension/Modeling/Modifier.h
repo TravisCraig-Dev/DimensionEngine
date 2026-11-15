@@ -19,6 +19,7 @@ namespace Dimension::Modeling
         Decimate,    // fewer triangles (collapsing edges)
         Weld,        // vertices closer than a distance merged
         Displace,    // vertices pushed by noise
+        Shrinkwrap,  // vertices moved onto another model's surface (retopology)
         Count
     };
     const char* ModifierTypeName(ModifierType type);
@@ -62,6 +63,9 @@ namespace Dimension::Modeling
         float NoiseSize = 1.0f; // world units per noise cell
         int Direction = 0;      // 0 normal, 1 X, 2 Y, 3 Z
         int Seed = 0;
+        // Shrinkwrap (the target is the Boolean's Operand, placed the same way)
+        int WrapMode = 0;        // 0 nearest surface point, 1 along the vertex normals
+        float WrapOffset = 0.0f; // kept this far out from the surface
 
         static Modifier Make(ModifierType type);
         nlohmann::json ToJson() const;

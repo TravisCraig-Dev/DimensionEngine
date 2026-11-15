@@ -6,6 +6,7 @@
 #include "Dimension/Core/Log.h"
 #include "Dimension/Renderer/Mesh.h"
 #include "Dimension/Modeling/Modifiers.h"
+#include "Dimension/Modeling/Curves.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/RenderDevice.h"
 #include "Dimension/Asset/AssetPrefetch.h"
@@ -288,6 +289,20 @@ namespace Dimension
         Refresh();
         // Boolean modifiers find their other model here: read straight from its file (meshes may load on worker threads,
         // so no shared caches), with its own modifiers applied.
+        // Text meshes' fonts: a font asset's file, or the built-in font (0 or one that can't be read).
+        Modeling::TextOps::SetFontResolver([](uint64_t asset, std::vector<uint8_t>& bytes) {
+            if (asset != 0)
+                if (const AssetMetadata* meta = GetMetadata(AssetHandle(asset)); meta && meta->Type == AssetType::Font)
+                {
+                    std::ifstream file(GetAbsolutePath(AssetHandle(asset)), std::ios::binary);
+                    bytes.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+                    if (!bytes.empty()) return true;
+                }
+            size_t size = 0;
+            const uint8_t* data = GetDefaultFontData(&size);
+            bytes.assign(data, data + size);
+            return true;
+        });
         Modeling::SetMeshResolver([](uint64_t asset, Modeling::EditableMesh& out) {
             switch (asset)
             {
@@ -1443,6 +1458,12 @@ namespace Dimension
             s->Circle = MakeRef<Texture2D>(pixels.data(), N, N, ts, "UICircle");
         }
         return s->Circle;
+    }
+
+    const uint8_t* AssetManager::GetDefaultFontData(size_t* size)
+    {
+        if (size) *size = (size_t)kDefaultFontData_size;
+        return (const uint8_t*)kDefaultFontData;
     }
 
     Ref<Font> AssetManager::GetDefaultFont()

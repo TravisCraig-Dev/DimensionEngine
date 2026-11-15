@@ -57,6 +57,7 @@ namespace Editor
         m_Tool = Tool::None;
         if (m_Sculpting) SetSculpting(false);
         if (m_PaintMode) SetPaintMode(0);
+        if (mode && m_CurveMode) SetCurveMode(false);
         m_RigMode = std::clamp(mode, 0, 3);
         m_WeightPainting = m_ActionPlaying = false;
         m_PaintRaysVersion = ~0ull;

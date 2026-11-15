@@ -126,6 +126,46 @@ namespace Dimension::Modeling
         float Value = 0.0f;
     };
 
+    // A curve's control point (a Bezier curve through the points, its handles worked out from the neighbours like
+    // Blender's Auto handles; Sharp makes a corner).
+    struct CurvePoint
+    {
+        glm::vec3 Position{ 0.0f };
+        float Radius = 1.0f; // the bevel's (tube's) thickness here, times the curve settings' depth
+        float Tilt = 0.0f;   // radians, the profile turned about the curve
+        bool Sharp = false;
+        uint8_t Flags = 0;   // Selected
+    };
+    struct Curve
+    {
+        std::vector<CurvePoint> Points;
+        bool Cyclic = false;
+    };
+    // How curves become geometry.
+    struct CurveSettings
+    {
+        int Resolution = 12;      // samples per span between points
+        float BevelDepth = 0.05f; // a round tube this thick (0: none)
+        int BevelResolution = 8;  // sides around the tube
+        float Extrude = 0.0f;     // a ribbon this wide either side (no bevel), or a filled shape's thickness either side
+        bool Fill = false;        // closed curves filled flat in the XY plane (nested ones make holes)
+        bool Caps = true;         // open tubes closed at their ends
+        bool Smooth = true;
+    };
+    // A text model: its text turned into solid letters (in the XY plane, facing +Z).
+    struct TextSettings
+    {
+        bool Enabled = false;
+        std::string Body;
+        uint64_t Font = 0;        // a font asset (0: the built-in one)
+        float Size = 1.0f;        // line height
+        float Depth = 0.1f;       // thickness (0: flat)
+        float Spacing = 0.0f;     // extra space between letters (times the size)
+        float LineSpacing = 1.2f; // times the size
+        int Align = 0;            // 0 left, 1 center, 2 right
+        int Resolution = 4;       // segments per outline curve
+    };
+
     // An action (an animation of the armature, played as a clip of the model by its name): poses keyed at times.
     struct ActionKey
     {
@@ -162,6 +202,13 @@ namespace Dimension::Modeling
         std::vector<std::vector<VertexWeight>> Weights;
         std::vector<ShapeKey> ShapeKeys;
         std::vector<Action> Actions;
+        // Generated geometry (Curves.h): curves and text, turned into faces with the mesh's own whenever it renders.
+        std::vector<Curve> Curves;
+        CurveSettings CurveOptions;
+        TextSettings Text;
+        bool HasGenerated() const { return !Curves.empty() || Text.Enabled; }
+        // The mesh with the curves' and text's geometry added as faces (and those taken out).
+        EditableMesh WithGenerated() const;
         // The shape key being edited (-1 the basis): while one is, Positions holds that shape and the key holds the
         // basis (swapped back in Canonical(), files and render meshes).
         int EditedShape = -1;

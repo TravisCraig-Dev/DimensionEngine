@@ -29,6 +29,7 @@ namespace Editor
         m_Tool = Tool::None;
         if (m_Sculpting) SetSculpting(false);
         if (mode && m_RigMode) SetRigMode(0);
+        if (mode && m_CurveMode) SetCurveMode(false);
         if (m_PaintMode == 2) SavePaintTexture();
         m_PaintMode = std::clamp(mode, 0, 2);
         m_Painting = false;

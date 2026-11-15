@@ -1,4 +1,5 @@
 #include "Dimension/Modeling/Modifiers.h"
+#include "Dimension/Modeling/Retopo.h"
 #include "Dimension/Modeling/MeshOps.h"
 #include "Dimension/Modeling/MeshTools.h"
 #include "Dimension/Renderer/MeshSimplify.h"
@@ -17,14 +18,14 @@ namespace Dimension::Modeling
 
     const char* ModifierTypeName(ModifierType type)
     {
-        static const char* names[] = { "Subdivision Surface", "Mirror", "Array", "Bevel", "Solidify", "Boolean", "Decimate", "Weld", "Displace" };
+        static const char* names[] = { "Subdivision Surface", "Mirror", "Array", "Bevel", "Solidify", "Boolean", "Decimate", "Weld", "Displace", "Shrinkwrap" };
         int i = (int)type;
         return i >= 0 && i < (int)ModifierType::Count ? names[i] : "Unknown";
     }
 
     namespace
     {
-        const char* kTypeKeys[] = { "subdivision", "mirror", "array", "bevel", "solidify", "boolean", "decimate", "weld", "displace" };
+        const char* kTypeKeys[] = { "subdivision", "mirror", "array", "bevel", "solidify", "boolean", "decimate", "weld", "displace", "shrinkwrap" };
         json Vec(const glm::vec3& v) { return json::array({ v.x, v.y, v.z }); }
         glm::vec3 ReadVec(const json& j, const char* key, glm::vec3 fallback)
         {
@@ -97,6 +98,14 @@ namespace Dimension::Modeling
             j["direction"] = Direction;
             j["seed"] = Seed;
             break;
+        case ModifierType::Shrinkwrap:
+            j["operand"] = Operand;
+            j["position"] = Vec(OperandPosition);
+            j["rotation"] = Vec(OperandRotation);
+            j["scale"] = Vec(OperandScale);
+            j["wrapMode"] = WrapMode;
+            j["wrapOffset"] = WrapOffset;
+            break;
         default: break;
         }
         return j;
@@ -138,6 +147,8 @@ namespace Dimension::Modeling
         out.Strength = j.value("strength", out.Strength);
         out.Midlevel = j.value("midlevel", out.Midlevel);
         out.NoiseSize = j.value("size", out.NoiseSize);
+        out.WrapMode = std::clamp(j.value("wrapMode", out.WrapMode), 0, 1);
+        out.WrapOffset = j.value("wrapOffset", out.WrapOffset);
         out.Direction = std::clamp(j.value("direction", out.Direction), 0, 3);
         out.Seed = j.value("seed", out.Seed);
         return true;
@@ -827,6 +838,19 @@ namespace Dimension::Modeling
             return out;
         }
         case ModifierType::Weld: Ops::MergeByDistance(m, mod.MergeDistance, false); return m;
+        case ModifierType::Shrinkwrap:
+        {
+            if (!s_Resolver || mod.Operand == 0 || t_ResolveDepth > 4) return m;
+            EditableMesh other;
+            ++t_ResolveDepth;
+            bool found = s_Resolver(mod.Operand, other);
+            --t_ResolveDepth;
+            if (!found || other.FaceCount() == 0) return m;
+            TriangleTree target;
+            target.Build(other, mod.OperandMatrix());
+            Retopo::Shrinkwrap(m, target, mod.WrapOffset, (Retopo::WrapMode)mod.WrapMode);
+            return m;
+        }
         case ModifierType::Displace:
         {
             std::vector<glm::vec3> normals = ModifierOps::VertexNormals(m);

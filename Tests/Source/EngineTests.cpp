@@ -87,6 +87,8 @@
 #include <Dimension/Modeling/Paint.h>
 #include <Dimension/Modeling/Bake.h>
 #include <Dimension/Modeling/Rig.h>
+#include <Dimension/Modeling/Curves.h>
+#include <Dimension/Modeling/Retopo.h>
 #include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/ModelExport.h>
@@ -19052,6 +19054,153 @@ namespace
         CHECK(sides && both.BlendShapes.size() == 1);
     }
 
+    void TestModelingCurvesAndText()
+    {
+        using namespace ModelingTest;
+        // A square with a square hole: triangles covering exactly the ring, all counter-clockwise.
+        std::vector<std::vector<glm::vec2>> rings = { { { -2, -2 }, { 2, -2 }, { 2, 2 }, { -2, 2 } }, { { -1, -1 }, { -1, 1 }, { 1, 1 }, { 1, -1 } } };
+        std::vector<uint32_t> tris = Shapes::Triangulate(rings);
+        std::vector<glm::vec2> pts = { { -2, -2 }, { 2, -2 }, { 2, 2 }, { -2, 2 }, { -1, -1 }, { -1, 1 }, { 1, 1 }, { 1, -1 } };
+        float area = 0.0f;
+        bool ccw = true;
+        for (size_t i = 0; i + 2 < tris.size(); i += 3)
+        {
+            glm::vec2 a = pts[tris[i]], b = pts[tris[i + 1]], c = pts[tris[i + 2]];
+            float x = ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) * 0.5f;
+            ccw &= x > 0.0f;
+            area += x;
+        }
+        CHECK(ccw && Near(area, 12.0f, 1e-4f));
+        // Made solid: closed, the right volume, the hole open.
+        EditableMesh frame = Shapes::Fill(rings, 1.0f);
+        CHECK(ClosedAndConsistent(frame) && Near(Volume(frame), 12.0f, 1e-3f));
+
+        // Curves: auto handles pass through the points; a straight run stays straight.
+        Modeling::Curve line = CurveOps::Make({ { 0, 0, 0 }, { 1, 0, 0 }, { 2, 0, 0 } }, false);
+        std::vector<glm::vec3> samples = CurveOps::Sample(line, 8);
+        bool straight = samples.size() == 17 && Near(samples.front(), glm::vec3(0.0f)) && Near(samples.back(), glm::vec3(2, 0, 0));
+        for (const glm::vec3& q : samples) straight &= Near(q.y, 0.0f) && Near(q.z, 0.0f);
+        CHECK(straight);
+        Modeling::Curve circle = CurveOps::Make({ { 1, 0, 0 }, { 0, 1, 0 }, { -1, 0, 0 }, { 0, -1, 0 } }, true);
+        float worst = 0.0f;
+        for (const glm::vec3& q : CurveOps::Sample(circle, 12)) worst = std::max(worst, std::abs(glm::length(q) - 1.0f));
+        CHECK(worst < 0.12f); // (Bezier auto handles: close to a circle)
+        // A tube along a bent curve: closed with its caps, facing out, about pi r^2 long.
+        Modeling::Curve bend = CurveOps::Make({ { 0, 0, 0 }, { 1, 0, 0 }, { 2, 1, 0 }, { 2, 2, 1 } }, false);
+        CurveSettings tube;
+        tube.BevelDepth = 0.1f;
+        tube.BevelResolution = 16;
+        EditableMesh t = CurveOps::ToMesh({ bend }, tube);
+        CHECK(ClosedAndConsistent(t));
+        std::vector<glm::vec3> path = CurveOps::Sample(bend, tube.Resolution);
+        float length = 0.0f;
+        for (size_t i = 1; i < path.size(); ++i) length += glm::length(path[i] - path[i - 1]);
+        float expected = glm::pi<float>() * 0.01f * length;
+        CHECK(Volume(t) > expected * 0.85f && Volume(t) < expected * 1.05f);
+        // A closed tube (a ring) has no caps and still closes.
+        EditableMesh ring = CurveOps::ToMesh({ circle }, tube);
+        CHECK(ClosedAndConsistent(ring) && Volume(ring) > 0.0f);
+        // A filled closed curve with thickness: a disc.
+        CurveSettings fill;
+        fill.Fill = true;
+        fill.Extrude = 0.1f;
+        EditableMesh disc = CurveOps::ToMesh({ circle }, fill);
+        CHECK(ClosedAndConsistent(disc) && Near(Volume(disc), glm::pi<float>() * 0.2f, 0.06f));
+        // A ribbon and plain lines.
+        CurveSettings ribbon;
+        ribbon.BevelDepth = 0.0f;
+        ribbon.Extrude = 0.2f;
+        ribbon.Resolution = 8;
+        CHECK(CurveOps::ToMesh({ line }, ribbon).FaceCount() == 16);
+        CurveSettings wire;
+        wire.BevelDepth = 0.0f;
+        wire.Resolution = 8;
+        EditableMesh lines = CurveOps::ToMesh({ line }, wire);
+        CHECK(lines.FaceCount() == 0 && lines.LooseEdges.size() == 16);
+
+        // A model with curves renders their geometry; curves and settings are kept in the file.
+        EditableMesh model;
+        model.Curves.push_back(bend);
+        model.CurveOptions = tube;
+        model.Curves[0].Points[1].Radius = 2.0f;
+        model.Curves[0].Points[2].Sharp = true;
+        CHECK(model.HasGenerated() && model.ToMeshData().Indices.size() > 0 && model.WithGenerated().FaceCount() == t.FaceCount());
+        EditableMesh back;
+        CHECK(EditableMesh::FromJson(model.ToJson(), back) && back.Curves.size() == 1 && back.Curves[0].Points.size() == 4);
+        CHECK(Near(back.Curves[0].Points[1].Radius, 2.0f) && back.Curves[0].Points[2].Sharp && Near(back.CurveOptions.BevelDepth, 0.1f));
+
+        // Text: solid, closed letters from the built-in font; an 'O' keeps its hole.
+        size_t fontSize = 0;
+        const uint8_t* font = AssetManager::GetDefaultFontData(&fontSize);
+        CHECK(font && fontSize > 1000);
+        TextSettings text;
+        text.Enabled = true;
+        text.Body = "O";
+        text.Size = 1.0f;
+        text.Depth = 0.2f;
+        EditableMesh o = TextOps::ToMesh(text, font, fontSize);
+        CHECK(o.FaceCount() > 20 && ClosedAndConsistent(o) && Volume(o) > 0.0f);
+        AABB ob = o.Bounds();
+        glm::vec3 middle = (ob.Min + ob.Max) * 0.5f;
+        MeshRaycaster rays;
+        rays.Build(o);
+        CHECK(!rays.Raycast(middle + glm::vec3(0, 0, 5), { 0, 0, -1 }).Hit); // through the hole
+        CHECK(rays.Raycast(glm::vec3(ob.Min.x + 0.03f, middle.y, 5), { 0, 0, -1 }).Hit); // the letter's side
+        // Lines, alignment and spacing.
+        text.Body = "Hi\nthere";
+        text.Align = 1;
+        EditableMesh two = TextOps::ToMesh(text, font, fontSize);
+        AABB tb = two.Bounds();
+        CHECK(ClosedAndConsistent(two) && tb.Min.y < -0.9f && std::abs(tb.Min.x + tb.Max.x) < 0.2f);
+        EditableMesh textModel;
+        textModel.Text = text;
+        EditableMesh textBack;
+        CHECK(EditableMesh::FromJson(textModel.ToJson(), textBack) && textBack.Text.Enabled && textBack.Text.Body == "Hi\nthere" && textBack.Text.Align == 1);
+    }
+
+    void TestModelingRetopology()
+    {
+        using namespace ModelingTest;
+        // A sphere to wrap onto: rays and nearest points.
+        EditableMesh sphere = Primitives::UVSphere(48, 24);
+        TriangleTree tree;
+        tree.Build(sphere);
+        CHECK(tree.TriangleCount() > 1000);
+        TriangleTree::Hit h = tree.Raycast({ 0, 0, 5 }, { 0, 0, -1 });
+        CHECK(h.Found && Near(h.Distance, 4.0f, 0.01f) && h.Normal.z > 0.99f);
+        TriangleTree::Hit c = tree.Closest({ 3, 0, 0 });
+        CHECK(c.Found && Near(c.Point, glm::vec3(1, 0, 0), 0.01f) && Near(c.Distance, 2.0f, 0.01f));
+        // Shrinkwrap a grid onto it (nearest, with an offset; projected along the normals).
+        EditableMesh grid = Primitives::Grid(10, 10, 1.0f);
+        for (auto& p : grid.Positions) p.y += 2.0f;
+        EditableMesh wrapped = grid;
+        CHECK(Retopo::Shrinkwrap(wrapped, tree, 0.05f, Retopo::WrapMode::Nearest) == grid.VertexCount());
+        bool onSurface = true;
+        for (const glm::vec3& p : wrapped.Positions) onSurface &= std::abs(glm::length(p) - 1.05f) < 0.01f;
+        CHECK(onSurface);
+        EditableMesh projected = grid;
+        Retopo::Shrinkwrap(projected, tree, 0.0f, Retopo::WrapMode::Project);
+        bool below = true;
+        for (uint32_t v = 0; v < grid.VertexCount(); ++v)
+            below &= Near(projected.Positions[v].x, grid.Positions[v].x, 1e-4f) && Near(projected.Positions[v].z, grid.Positions[v].z, 1e-4f) &&
+                     std::abs(glm::length(projected.Positions[v]) - 1.0f) < 0.01f;
+        CHECK(below); // (straight down, the grid's normal)
+        // Only some vertices.
+        EditableMesh some = grid;
+        std::vector<uint8_t> only(grid.VertexCount(), 0);
+        only[0] = 1;
+        CHECK(Retopo::Shrinkwrap(some, tree, 0.0f, Retopo::WrapMode::Nearest, &only) == 1 && some.Positions[1] == grid.Positions[1]);
+        // The modifier is saved like the others.
+        Modifier wrap = Modifier::Make(ModifierType::Shrinkwrap);
+        wrap.Operand = 1234;
+        wrap.WrapMode = 1;
+        wrap.WrapOffset = 0.25f;
+        Modifier wrapBack;
+        CHECK(Modifier::FromJson(wrap.ToJson(), wrapBack) && wrapBack.Type == ModifierType::Shrinkwrap && wrapBack.Operand == 1234 && wrapBack.WrapMode == 1 &&
+              Near(wrapBack.WrapOffset, 0.25f));
+        CHECK(std::string(ModifierTypeName(ModifierType::Shrinkwrap)) == "Shrinkwrap");
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -19472,6 +19621,8 @@ int main(int argc, char** argv)
     Run("Modeling baking", TestModelingBaking);
     Run("Modeling rigging", TestModelingRigging);
     Run("Modeling shape keys and rig files", TestModelingShapeKeysAndRigFiles);
+    Run("Modeling curves and text", TestModelingCurvesAndText);
+    Run("Modeling retopology", TestModelingRetopology);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

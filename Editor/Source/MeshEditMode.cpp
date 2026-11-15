@@ -99,7 +99,7 @@ namespace Editor
 
     const char* MeshEditMode::PrimitiveName(Primitive p)
     {
-        static const char* names[] = { "Cube", "Plane", "Circle", "Grid", "UV Sphere", "Ico Sphere", "Cylinder", "Cone", "Torus" };
+        static const char* names[] = { "Cube", "Plane", "Circle", "Grid", "UV Sphere", "Ico Sphere", "Cylinder", "Cone", "Torus", "Bezier Curve", "Circle Curve", "Text" };
         return names[std::clamp((int)p, 0, (int)Primitive::Count - 1)];
     }
 
@@ -116,6 +116,31 @@ namespace Editor
         case Primitive::Cylinder: return Primitives::Cylinder(32, 0.5f, 1.0f);
         case Primitive::Cone: return Primitives::Cone(32, 0.5f, 0.0f, 1.0f);
         case Primitive::Torus: return Primitives::Torus(48, 12, 0.4f, 0.1f);
+        case Primitive::BezierCurve:
+        {
+            EditableMesh m;
+            m.Name = "Curve";
+            m.Curves.push_back(CurveOps::Make({ { -0.5f, 0, 0 }, { -0.15f, 0.3f, 0 }, { 0.15f, -0.3f, 0 }, { 0.5f, 0, 0 } }, false));
+            return m;
+        }
+        case Primitive::CircleCurve:
+        {
+            EditableMesh m;
+            m.Name = "Circle";
+            m.Curves.push_back(CurveOps::Make({ { 0.5f, 0, 0 }, { 0, 0.5f, 0 }, { -0.5f, 0, 0 }, { 0, -0.5f, 0 } }, true));
+            return m;
+        }
+        case Primitive::Text:
+        {
+            EditableMesh m;
+            m.Name = "Text";
+            m.Text.Enabled = true;
+            m.Text.Body = "Text";
+            m.Text.Size = 0.5f;
+            m.Text.Depth = 0.05f;
+            m.Text.Align = 1;
+            return m;
+        }
         default: return Primitives::Cube(1.0f);
         }
     }
@@ -219,6 +244,9 @@ namespace Editor
         m_PaintRaysVersion = ~0ull;
         m_RigMode = 0;
         m_BoneModal = {};
+        m_CurveModal = {};
+        m_CurveMode = m_Mesh.HasGenerated() && m_Mesh.FaceCount() == 0 && !m_Mesh.Curves.empty(); // (a curve model: its points)
+        m_SnapSignature = 0;
         m_WeightPainting = m_ActionPlaying = false;
         m_ActiveBone = m_Mesh.Bones.empty() ? -1 : 0;
         m_Action = m_Mesh.Actions.empty() ? -1 : 0;
@@ -251,6 +279,9 @@ namespace Editor
         m_PaintMode = 0;
         m_PaintAdjust = 0;
         if (m_BoneModal.Kind) EndBoneModal(false);
+        if (m_CurveModal.Kind) EndCurveModal(false);
+        m_CurveMode = false;
+        m_SnapTree = {};
         m_RigMode = 0;
         m_WeightPainting = m_ActionPlaying = false;
         m_PaintImage = {};
@@ -338,6 +369,11 @@ namespace Editor
 
     void MeshEditMode::Undo()
     {
+        if (m_CurveModal.Kind)
+        {
+            EndCurveModal(false);
+            return;
+        }
         if (m_UVModal.Kind != UVModalKind::None)
         {
             EndUVModal(false);
@@ -414,13 +450,14 @@ namespace Editor
         m_Size = size;
         m_View = view;
         m_Proj = proj;
-        if (m_Sculpting || m_PaintMode || m_RigMode)
+        if (m_Sculpting || m_PaintMode || m_RigMode || m_CurveMode)
         {
             m_World = m_Ctx.ActiveScene().GetRegistry().Get<TransformComponent>(m_Entity).World;
             m_ViewProj = proj * view;
             m_CameraWorld = glm::vec3(glm::inverse(view)[3]);
             m_CameraLocal = glm::vec3(glm::inverse(m_World) * glm::vec4(m_CameraWorld, 1.0f));
             if (m_RigMode) return UpdateRigView(hovered, focused, blocked);
+            if (m_CurveMode) return UpdateCurveView(hovered, focused, blocked);
             return m_Sculpting ? UpdateSculptView(hovered, focused, blocked) : UpdatePaintView(hovered, focused, blocked);
         }
         UpdateProjection(origin, size, view, proj);
@@ -664,6 +701,23 @@ namespace Editor
         if (ImGui::Button("Add")) ImGui::OpenPopup("MeshAddMenu");
         ImGui::SameLine(0.0f, 2.0f);
         if (ImGui::Button("UV")) ImGui::OpenPopup("MeshUVMenu");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (ImGui::Button("Curves")) SetCurveMode(true);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The model's curves (control points; Ctrl+click adds them)");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (ImGui::Button(m_Mesh.Text.Enabled ? "Text*" : "Text")) ImGui::OpenPopup("TextSettings");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Solid letters made with the model");
+        DrawTextPopup();
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Snap", m_SnapSurface, "Retopology: moved vertices (and Ctrl+click's new ones) land on other objects' surfaces under them"))
+            m_SnapSurface = !m_SnapSurface;
+        if (m_SnapSurface)
+        {
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::SetNextItemWidth(70.0f);
+            ImGui::DragFloat("##snapoffset", &m_SnapOffset, 0.001f, -1.0f, 1.0f, "%.3f m");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Kept this far out from the surface");
+        }
         ImGui::SameLine(0.0f, 2.0f);
         if (ImGui::Button("Rig")) SetRigMode(1);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bones, posing, weight painting and actions");
@@ -1237,6 +1291,8 @@ namespace Editor
         if (Pressed("mesh.vertexPaint")) SetPaintMode(1);
         if (Pressed("mesh.texturePaint")) SetPaintMode(2);
         if (Pressed("mesh.rigMode")) SetRigMode(1);
+        if (Pressed("mesh.curveMode")) SetCurveMode(true);
+        if (Pressed("mesh.snapSurface")) m_SnapSurface = !m_SnapSurface;
     }
 
     // ---- Mouse selection
@@ -1410,6 +1466,7 @@ namespace Editor
                 }
         }
         else if (m_BoxSelecting) BoxSelect(m_PressPos, mouse, io.KeyShift ? 1 : io.KeyCtrl ? 2 : 0);
+        else if (io.KeyCtrl && m_Mode == SelectMode::Vertex) AddVertexAtMouse(mouse);
         else ClickSelect(mouse, io.KeyShift);
         m_BoxSelecting = false;
     }
@@ -1785,6 +1842,7 @@ namespace Editor
             }
             m_Mesh.Positions[v] = glm::vec3(inv * glm::vec4(p, 1.0f));
         }
+        if (md.Kind == ModalKind::Move && m_SnapSurface) SnapModalVertices(); // (retopology: onto the surface under them)
         SyncRenderMesh();
         if (confirm) EndModal(true);
     }
@@ -1846,7 +1904,11 @@ namespace Editor
     {
         Record((std::string("Add ") + PrimitiveName(p)).c_str());
         ops::DeselectAll(m_Mesh);
-        m_Mesh.Append(MakePrimitive(p));
+        EditableMesh added = MakePrimitive(p);
+        // Curves and text join the model's own (a model has one text).
+        for (const auto& c : added.Curves) m_Mesh.Curves.push_back(c);
+        if (added.Text.Enabled && !m_Mesh.Text.Enabled) m_Mesh.Text = added.Text;
+        m_Mesh.Append(added);
         ops::FlushSelection(m_Mesh, m_Mode);
         Commit();
     }
@@ -2386,11 +2448,20 @@ namespace Editor
                         modChanged |= ImGui::DragInt("##seed", &edit.Seed, 0.2f);
                         break;
                     }
+                    case ModifierType::Shrinkwrap:
+                    {
+                        UI::PropertyLabel("Mode", "Nearest Surface Point, or along each vertex's normal (Project)");
+                        const char* modes[] = { "Nearest Surface Point", "Project" };
+                        modChanged |= ImGui::Combo("##wrapmode", &edit.WrapMode, modes, 2);
+                        UI::PropertyLabel("Offset", "Kept this far out from the surface");
+                        modChanged |= ImGui::DragFloat("##wrapoffset", &edit.WrapOffset, 0.001f, -10.0f, 10.0f, "%.3f");
+                        break;
+                    }
                     default: break;
                     }
                     UI::EndProperties();
                 }
-                if (edit.Type == ModifierType::Boolean && UI::BeginProperties("##boolprops"))
+                if ((edit.Type == ModifierType::Boolean || edit.Type == ModifierType::Shrinkwrap) && UI::BeginProperties("##boolprops"))
                 {
                     AssetHandle operand(edit.Operand);
                     if (UI::AssetField("Model", operand, AssetType::Mesh).Changed && operand != asset)

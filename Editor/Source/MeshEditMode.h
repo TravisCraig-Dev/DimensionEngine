@@ -10,6 +10,8 @@
 #include <Dimension/Modeling/Paint.h>
 #include <Dimension/Modeling/Bake.h>
 #include <Dimension/Modeling/Rig.h>
+#include <Dimension/Modeling/Curves.h>
+#include <Dimension/Modeling/Retopo.h>
 #include <functional>
 #include <memory>
 #include <imgui.h>
@@ -60,13 +62,13 @@ namespace Editor
         bool IsModal() const
         {
             return m_Modal.Kind != ModalKind::None || m_Tool != Tool::None || m_UVModal.Kind != UVModalKind::None || m_Stroking || m_SculptAdjust != 0 ||
-                   m_Painting || m_PaintAdjust != 0 || m_BoneModal.Kind != 0 || m_WeightPainting;
+                   m_Painting || m_PaintAdjust != 0 || m_BoneModal.Kind != 0 || m_WeightPainting || m_CurveModal.Kind != 0;
         }
         // Whether the camera should leave the mouse alone (the knife lets it orbit between cuts).
         bool BlocksCamera() const
         {
             return m_Modal.Kind != ModalKind::None || m_Tool == Tool::LoopCut || m_Stroking || m_SculptAdjust != 0 || m_Painting || m_PaintAdjust != 0 ||
-                   m_BoneModal.Kind != 0 || m_WeightPainting;
+                   m_BoneModal.Kind != 0 || m_WeightPainting || m_CurveModal.Kind != 0;
         }
         // Vertex Paint (1) and Texture Paint (2): the model colored with brushes (MeshEditPaint.cpp); 0 off.
         int GetPaintMode() const { return m_Active ? m_PaintMode : 0; }
@@ -74,6 +76,9 @@ namespace Editor
         // Rigging (MeshEditRig.cpp): 1 the armature's bones, 2 posing them, 3 weight painting; 0 off.
         int GetRigMode() const { return m_Active ? m_RigMode : 0; }
         void SetRigMode(int mode);
+        // Curve editing (MeshEditCurve.cpp): the model's curves' control points instead of its vertices.
+        bool IsCurveEditing() const { return m_Active && m_CurveMode; }
+        void SetCurveMode(bool on);
         // Sculpt Mode: the same model shaped with brushes instead of selected and moved (MeshEditSculpt.cpp).
         bool IsSculpting() const { return m_Active && m_Sculpting; }
         void SetSculpting(bool on);
@@ -86,7 +91,7 @@ namespace Editor
         bool GetFrame(glm::vec3& center, float& radius) const;
 
         // GameObject > 3D Object > Model: a new model file (Assets/Models) of a primitive on a new object.
-        enum class Primitive { Cube, Plane, Circle, Grid, UVSphere, IcoSphere, Cylinder, Cone, Torus, Count };
+        enum class Primitive { Cube, Plane, Circle, Grid, UVSphere, IcoSphere, Cylinder, Cone, Torus, BezierCurve, CircleCurve, Text, Count };
         static const char* PrimitiveName(Primitive p);
         static Modeling::EditableMesh MakePrimitive(Primitive p);
         static Entity CreateModelObject(EditorContext& ctx, Primitive p, Entity parent = Entity::Null());
@@ -426,6 +431,40 @@ namespace Editor
         float m_ActionTime = 0.0f;
         bool m_ActionPlaying = false;
         bool m_OpenShapeKeys = false;
+        // Curves, text and retopology.
+        struct CurveModal
+        {
+            int Kind = 0; // 1 move, 2 radius
+            std::vector<Modeling::Curve> Start;
+            glm::vec3 Pivot{ 0.0f }, PlaneStart{ 0.0f };
+            ImVec2 MouseStart{ 0, 0 };
+            int Axis = -1;
+            int StartFrame = 0;
+            bool Recorded = false;
+        };
+        bool UpdateCurveView(bool hovered, bool focused, bool blocked);
+        void DrawCurveOverlay(ImDrawList* dl);
+        void DrawCurveToolbar(const ImVec2& origin);
+        void DrawTextPopup();
+        void HandleCurveKeys();
+        void HandleCurveMouse(bool hovered, bool blocked);
+        bool CurvePointScreen(size_t curve, size_t point, ImVec2& out) const;
+        void BeginCurveModal(int kind, bool recorded = false);
+        void UpdateCurveModal();
+        void EndCurveModal(bool confirm);
+        void AddCurvePointAtMouse(const ImVec2& mouse);
+        void ConvertGeneratedToMesh();
+        // Snapping to other objects' surfaces (retopology).
+        void BuildSnapTree();
+        bool SnapRay(const glm::vec3& worldFrom, const glm::vec3& worldDir, glm::vec3& worldHit, glm::vec3& worldNormal);
+        void SnapModalVertices();
+        void AddVertexAtMouse(const ImVec2& mouse);
+        bool m_CurveMode = false;
+        CurveModal m_CurveModal;
+        bool m_SnapSurface = false;
+        float m_SnapOffset = 0.0f;
+        Modeling::TriangleTree m_SnapTree;
+        uint64_t m_SnapSignature = 0;
         // Operation settings.
         int m_SubdivideCuts = 1;
         float m_DissolveAngle = 5.0f;

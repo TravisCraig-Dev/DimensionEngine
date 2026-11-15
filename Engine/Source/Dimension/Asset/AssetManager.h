@@ -185,6 +185,8 @@ namespace Dimension
         static Ref<Texture2D> FindInAtlas(AssetHandle texture, glm::vec4& region);
         static Ref<Font> GetDefaultFont();
         static Ref<Texture2D> GetWhiteTexture();
+        // The built-in font's file (Roboto Medium), for text meshes.
+        static const uint8_t* GetDefaultFontData(size_t* size);
         static Ref<Texture2D> GetCheckerTexture();
         static Ref<Texture2D> GetParticleTexture(); // soft round default sprite for particles
         static Ref<Texture2D> GetCircleTexture();   // antialiased disc (UI handles)
