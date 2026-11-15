@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/Core/Base.h"
 #include "Dimension/Renderer/Mesh.h"
+#include "Dimension/Modeling/Modifier.h"
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
@@ -77,6 +78,13 @@ namespace Dimension::Modeling
         std::vector<std::string> MaterialSlots;          // empty: one slot drawn with the renderer's material
         bool AutoSmooth = false;                          // smooth faces split where they meet at more than this
         float AutoSmoothAngle = 30.0f;                    // degrees
+        std::vector<Modifier> Modifiers;                  // applied in order by ToMeshData (Modifiers.h)
+        bool HasActiveModifiers() const
+        {
+            for (const Modifier& m : Modifiers)
+                if (m.Enabled) return true;
+            return false;
+        }
 
         uint32_t VertexCount() const { return (uint32_t)Positions.size(); }
         uint32_t FaceCount() const { return (uint32_t)Faces.size(); }
@@ -114,8 +122,9 @@ namespace Dimension::Modeling
 
         // A render mesh: faces triangulated, normals from the shading (flat faces get their own normal; smooth faces
         // share vertex normals, split at sharp edges and, with AutoSmooth, at edges sharper than its angle), one
-        // sub-mesh per used material slot, tangents generated. Hidden faces are drawn too.
-        MeshData ToMeshData() const;
+        // sub-mesh per used material slot, tangents generated. Hidden faces are drawn too. The enabled modifiers apply
+        // first (`applyModifiers` false: the mesh as it is).
+        MeshData ToMeshData(bool applyModifiers = true) const;
         // An editable mesh from a render mesh: corners at the same position are welded into one vertex (UVs kept per
         // corner), then pairs of triangles that make flat, convex quads are joined (`joinQuads`). Faces whose normals
         // were smooth come out smooth.

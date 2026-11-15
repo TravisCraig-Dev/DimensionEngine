@@ -1,6 +1,7 @@
 #include "MeshEditMode.h"
 #include "EditorActions.h"
 #include "EditorPreferences.h"
+#include "EditorUI.h"
 #include "Shortcuts.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Modeling/ModelExport.h>
@@ -2096,6 +2097,286 @@ namespace Editor
         ctx.MarkDirty();
         Log::Info("Joined {} object{} into {}", joined.size(), joined.size() == 1 ? "" : "s", AssetManager::GetMetadata(model)->Path.generic_string());
         return true;
+    }
+
+    // ---- Modifiers (the Inspector)
+
+    void MeshEditMode::DrawModifierPanel(Entity e)
+    {
+        Scene& scene = m_Ctx.ActiveScene();
+        auto& reg = scene.GetRegistry();
+        if (!scene.IsValid(e) || !reg.Has<MeshRendererComponent>(e)) return;
+        AssetHandle asset = reg.Get<MeshRendererComponent>(e).Mesh;
+        const AssetMetadata* meta = AssetManager::GetMetadata(asset);
+        if (!meta || meta->Path.extension() != ".dmodel") return;
+        // In Edit Mode on this object: its mesh (with undo); else the file's.
+        bool live = m_Active && m_Entity == e && m_Asset == asset;
+        fs::path file = AssetManager::GetAbsolutePath(asset);
+        EditableMesh* mesh = &m_Mesh;
+        if (!live)
+        {
+            std::error_code ec;
+            fs::file_time_type stamp = fs::last_write_time(file, ec);
+            if (m_PanelAsset != asset || (!m_PanelUnsaved && stamp != m_PanelStamp))
+            {
+                if (!EditableMesh::Load(file, m_PanelMesh)) return;
+                m_PanelAsset = asset;
+                m_PanelStamp = stamp;
+                m_PanelUnsaved = false;
+            }
+            mesh = &m_PanelMesh;
+        }
+        if (!ImGui::TreeNodeEx("Modifiers", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            return;
+        }
+        bool changed = false;
+        // Records the undo step (in Edit Mode) once per change; call before changing the mesh.
+        auto begin = [&](const char* what) {
+            if (live && !m_PanelEditing) Record(what);
+            m_PanelEditing = true;
+            changed = true;
+        };
+        int moveFrom = -1, moveTo = -1, remove = -1, apply = -1;
+        auto& mods = mesh->Modifiers;
+        for (int i = 0; i < (int)mods.size(); ++i)
+        {
+            ImGui::PushID(i);
+            Modifier edit = mods[i];
+            bool modChanged = false;
+            bool on = edit.Enabled;
+            if (ImGui::Checkbox("##on", &on))
+            {
+                edit.Enabled = on;
+                modChanged = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enabled");
+            ImGui::SameLine();
+            bool open = ImGui::TreeNodeEx("##mod", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap, "%s", ModifierTypeName(edit.Type));
+            float right = ImGui::GetContentRegionMax().x;
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX(), right - 150.0f));
+            ImGui::BeginDisabled(i == 0);
+            if (ImGui::SmallButton("Up"))
+            {
+                moveFrom = i;
+                moveTo = i - 1;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0f, 2.0f);
+            ImGui::BeginDisabled(i + 1 == (int)mods.size());
+            if (ImGui::SmallButton("Down"))
+            {
+                moveFrom = i;
+                moveTo = i + 1;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::SmallButton("Apply")) apply = i;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Make this modifier's result the model itself (and remove the modifier)");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::SmallButton("X")) remove = i;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove");
+            if (open)
+            {
+                if (UI::BeginProperties("##modprops"))
+                {
+                    switch (edit.Type)
+                    {
+                    case ModifierType::Subdivision:
+                        UI::PropertyLabel("Levels", "Each level splits every face into quads and smooths (4x the faces)");
+                        modChanged |= ImGui::SliderInt("##levels", &edit.Levels, 0, 4);
+                        UI::PropertyLabel("Use Creases", "Edge creases (Ctrl+E in Edit Mode) keep edges sharp");
+                        modChanged |= ImGui::Checkbox("##creases", &edit.UseCreases);
+                        break;
+                    case ModifierType::Mirror:
+                        UI::PropertyLabel("Axes", "Mirrored across the model's own planes through its origin");
+                        modChanged |= ImGui::Checkbox("X##ax", &edit.Axis[0]);
+                        ImGui::SameLine();
+                        modChanged |= ImGui::Checkbox("Y##ay", &edit.Axis[1]);
+                        ImGui::SameLine();
+                        modChanged |= ImGui::Checkbox("Z##az", &edit.Axis[2]);
+                        UI::PropertyLabel("Merge", "Weld vertices on the mirror plane");
+                        modChanged |= ImGui::Checkbox("##merge", &edit.Merge);
+                        UI::PropertyLabel("Merge Distance");
+                        modChanged |= ImGui::DragFloat("##dist", &edit.MergeDistance, 0.0005f, 0.0f, 1.0f, "%.4f");
+                        break;
+                    case ModifierType::Array:
+                        UI::PropertyLabel("Count");
+                        modChanged |= ImGui::SliderInt("##count", &edit.Count, 1, 50);
+                        UI::PropertyLabel("Relative Offset", "Each copy moves by this times the model's size");
+                        modChanged |= ImGui::Checkbox("##rel", &edit.UseRelativeOffset);
+                        if (edit.UseRelativeOffset)
+                        {
+                            UI::PropertyLabel("Factor");
+                            modChanged |= ImGui::DragFloat3("##relv", &edit.RelativeOffset.x, 0.01f);
+                        }
+                        UI::PropertyLabel("Constant Offset", "Each copy moves by this distance too");
+                        modChanged |= ImGui::Checkbox("##const", &edit.UseConstantOffset);
+                        if (edit.UseConstantOffset)
+                        {
+                            UI::PropertyLabel("Distance");
+                            modChanged |= ImGui::DragFloat3("##constv", &edit.ConstantOffset.x, 0.01f);
+                        }
+                        UI::PropertyLabel("Merge", "Weld vertices of neighbouring copies that touch");
+                        modChanged |= ImGui::Checkbox("##merge", &edit.Merge);
+                        if (edit.Merge)
+                        {
+                            UI::PropertyLabel("Merge Distance");
+                            modChanged |= ImGui::DragFloat("##dist", &edit.MergeDistance, 0.0005f, 0.0f, 1.0f, "%.4f");
+                        }
+                        break;
+                    case ModifierType::Bevel:
+                        UI::PropertyLabel("Width");
+                        modChanged |= ImGui::DragFloat("##width", &edit.Width, 0.002f, 0.0f, 100.0f, "%.3f");
+                        UI::PropertyLabel("Segments", "More segments round the bevel");
+                        modChanged |= ImGui::SliderInt("##segs", &edit.Segments, 1, 16);
+                        UI::PropertyLabel("Angle Limit", "Only edges whose faces meet sharper than this (0: every edge)");
+                        modChanged |= ImGui::DragFloat("##angle", &edit.AngleLimit, 0.5f, 0.0f, 180.0f, "%.0f deg");
+                        break;
+                    case ModifierType::Solidify:
+                        UI::PropertyLabel("Thickness");
+                        modChanged |= ImGui::DragFloat("##thick", &edit.Thickness, 0.002f, -100.0f, 100.0f, "%.3f");
+                        UI::PropertyLabel("Offset", "-1: behind the surface, 0: centered, 1: in front");
+                        modChanged |= ImGui::SliderFloat("##offset", &edit.Offset, -1.0f, 1.0f, "%.2f");
+                        UI::PropertyLabel("Fill Rim", "Close the open borders between the two sides");
+                        modChanged |= ImGui::Checkbox("##rim", &edit.FillRim);
+                        break;
+                    case ModifierType::Boolean:
+                    {
+                        UI::PropertyLabel("Operation");
+                        const char* opsNames[] = { "Difference", "Union", "Intersect" };
+                        modChanged |= ImGui::Combo("##op", &edit.Operation, opsNames, 3);
+                        break;
+                    }
+                    case ModifierType::Decimate:
+                        UI::PropertyLabel("Ratio", "The share of triangles to keep");
+                        modChanged |= ImGui::SliderFloat("##ratio", &edit.Ratio, 0.01f, 1.0f, "%.2f");
+                        break;
+                    case ModifierType::Weld:
+                        UI::PropertyLabel("Distance", "Vertices closer than this merge");
+                        modChanged |= ImGui::DragFloat("##dist", &edit.MergeDistance, 0.0005f, 0.0f, 10.0f, "%.4f");
+                        break;
+                    case ModifierType::Displace:
+                    {
+                        UI::PropertyLabel("Strength");
+                        modChanged |= ImGui::DragFloat("##strength", &edit.Strength, 0.005f, -100.0f, 100.0f, "%.3f");
+                        UI::PropertyLabel("Midlevel", "The noise value that stays put (0..1)");
+                        modChanged |= ImGui::SliderFloat("##mid", &edit.Midlevel, 0.0f, 1.0f, "%.2f");
+                        UI::PropertyLabel("Noise Size", "How large the bumps are");
+                        modChanged |= ImGui::DragFloat("##size", &edit.NoiseSize, 0.01f, 0.001f, 1000.0f, "%.3f");
+                        UI::PropertyLabel("Direction");
+                        const char* dirs[] = { "Normal", "X", "Y", "Z" };
+                        modChanged |= ImGui::Combo("##dir", &edit.Direction, dirs, 4);
+                        UI::PropertyLabel("Seed");
+                        modChanged |= ImGui::DragInt("##seed", &edit.Seed, 0.2f);
+                        break;
+                    }
+                    default: break;
+                    }
+                    UI::EndProperties();
+                }
+                if (edit.Type == ModifierType::Boolean && UI::BeginProperties("##boolprops"))
+                {
+                    AssetHandle operand(edit.Operand);
+                    if (UI::AssetField("Model", operand, AssetType::Mesh).Changed && operand != asset)
+                    {
+                        edit.Operand = (uint64_t)operand;
+                        modChanged = true;
+                    }
+                    // Take the model and placement of an object in the scene (a cutter placed where it should cut).
+                    Entity from = Entity::Null();
+                    if (UI::EntityField("From Object", from, scene, [&](Entity x) { return x != e && reg.Has<MeshRendererComponent>(x); }, "Mesh Renderer").Changed &&
+                        scene.IsValid(from))
+                    {
+                        edit.Operand = (uint64_t)reg.Get<MeshRendererComponent>(from).Mesh;
+                        glm::mat4 rel = glm::inverse(reg.Get<TransformComponent>(e).World) * reg.Get<TransformComponent>(from).World;
+                        glm::vec3 skew;
+                        glm::vec4 persp;
+                        glm::quat rot;
+                        glm::decompose(rel, edit.OperandScale, rot, edit.OperandPosition, skew, persp);
+                        edit.OperandRotation = glm::degrees(glm::eulerAngles(rot));
+                        modChanged = true;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Uses that object's mesh where it stands now (hide or delete it afterwards)");
+                    modChanged |= UI::Vec3Control("Position", edit.OperandPosition, 0.0f, 0.01f).Changed;
+                    modChanged |= UI::Vec3Control("Rotation", edit.OperandRotation, 0.0f, 0.5f).Changed;
+                    modChanged |= UI::Vec3Control("Scale", edit.OperandScale, 1.0f, 0.01f).Changed;
+                    UI::EndProperties();
+                    if (ImGui::SmallButton("Update")) changed = true; // (the other model changed)
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Work it out again (after the other model changed)");
+                }
+                ImGui::TreePop();
+            }
+            if (modChanged)
+            {
+                begin("Modifier Settings");
+                mods[i] = edit;
+            }
+            ImGui::PopID();
+        }
+        if (moveFrom >= 0)
+        {
+            begin("Move Modifier");
+            std::swap(mods[(size_t)moveFrom], mods[(size_t)moveTo]);
+        }
+        else if (remove >= 0)
+        {
+            begin("Remove Modifier");
+            mods.erase(mods.begin() + remove);
+        }
+        else if (apply >= 0)
+        {
+            begin("Apply Modifier");
+            Modifier m = mods[(size_t)apply];
+            std::vector<Modifier> rest = mods;
+            rest.erase(rest.begin() + apply);
+            EditableMesh base = *mesh;
+            base.Modifiers.clear();
+            EditableMesh result = ApplyModifier(base, m);
+            result.Name = mesh->Name;
+            result.Modifiers = std::move(rest);
+            *mesh = std::move(result);
+            if (apply > 0) Log::Warn("Applied a modifier that was not first: the ones above it still apply on top of the result");
+        }
+        if (ImGui::Button("Add Modifier")) ImGui::OpenPopup("AddModifier");
+        if (ImGui::BeginPopup("AddModifier"))
+        {
+            for (int t = 0; t < (int)ModifierType::Count; ++t)
+                if (ImGui::MenuItem(ModifierTypeName((ModifierType)t)))
+                {
+                    begin("Add Modifier");
+                    mods.push_back(Modifier::Make((ModifierType)t));
+                }
+            ImGui::EndPopup();
+        }
+        if (mods.empty()) ImGui::TextDisabled("Non-destructive: the model stays as modelled, the object shows the result");
+        ImGui::TreePop();
+
+        if (changed)
+        {
+            if (live)
+            {
+                ops::FlushSelection(m_Mesh, m_Mode);
+                Commit();
+            }
+            else
+            {
+                AssetManager::SetMeshData(asset, mesh->ToMeshData());
+                m_PanelUnsaved = true;
+            }
+        }
+        // One undo step per drag; the file written once it ends.
+        if (!ImGui::IsAnyItemActive())
+        {
+            m_PanelEditing = false;
+            if (!live && m_PanelUnsaved && m_PanelAsset == asset)
+            {
+                mesh->Save(file);
+                std::error_code ec;
+                m_PanelStamp = fs::last_write_time(file, ec);
+                m_PanelUnsaved = false;
+            }
+        }
     }
 
     // ---- Making an editable copy of another mesh

@@ -81,6 +81,8 @@
 #include <Dimension/Modeling/EditableMesh.h>
 #include <Dimension/Modeling/MeshOps.h>
 #include <Dimension/Modeling/MeshTools.h>
+#include <Dimension/Modeling/Modifiers.h>
+#include <Dimension/Renderer/MeshSimplify.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <Dimension/Modeling/ModelExport.h>
 #include <Dimension/Video/VideoPlayer.h>
@@ -17896,6 +17898,196 @@ namespace
         CHECK(plane.FaceCount() == 2 && Near(plane.FaceNormal(1), glm::vec3(0, 1, 0)) && VertexAt(plane, { -4, 0, 1 }) >= 0);
     }
 
+    namespace ModelingTest
+    {
+        // Volume of a closed mesh (divergence theorem over its triangles; T-junctions don't matter).
+        float Volume(const EditableMesh& m)
+        {
+            float v = 0.0f;
+            std::vector<uint32_t> tri;
+            for (uint32_t f = 0; f < m.FaceCount(); ++f)
+            {
+                tri.clear();
+                m.TriangulateFace(f, tri);
+                const auto& vs = m.Faces[f].Verts;
+                for (size_t i = 0; i + 2 < tri.size(); i += 3)
+                    v += glm::dot(m.Positions[vs[tri[i]]], glm::cross(m.Positions[vs[tri[i + 1]]], m.Positions[vs[tri[i + 2]]])) / 6.0f;
+            }
+            return v;
+        }
+        float MaxAbs(const EditableMesh& m)
+        {
+            float x = 0.0f;
+            for (auto& p : m.Positions) x = std::max({ x, std::abs(p.x), std::abs(p.y), std::abs(p.z) });
+            return x;
+        }
+    }
+
+    void TestModelingModifiers()
+    {
+        using namespace ModelingTest;
+        // Subdivision surface: a cube's corners pull in (Catmull-Clark: 5/9), creases keep it a cube.
+        EditableMesh cube = Primitives::Cube();
+        Modifier sub = Modifier::Make(ModifierType::Subdivision);
+        EditableMesh s1 = ApplyModifier(cube, sub);
+        CHECK(s1.FaceCount() == 24 && s1.VertexCount() == 26 && ClosedAndConsistent(s1) && Outward(s1));
+        CHECK(VertexAt(s1, glm::vec3(5.0f / 9.0f)) >= 0);
+        sub.Levels = 2;
+        CHECK(ApplyModifier(cube, sub).FaceCount() == 96);
+        EditableMesh creased = cube;
+        for (EdgeKey k : creased.Topo().Edges) creased.EditEdge(k).Crease = 1.0f;
+        EditableMesh s2 = ApplyModifier(creased, sub);
+        CHECK(VertexAt(s2, { 1, 1, 1 }) >= 0 && Near(MaxAbs(s2), 1.0f) && ClosedAndConsistent(s2));
+        // Half creased: between the two.
+        for (EdgeKey k : creased.Topo().Edges) creased.EditEdge(k).Crease = 0.5f;
+        float half = glm::length(ApplyModifier(creased, Modifier::Make(ModifierType::Subdivision)).Positions[7]);
+        CHECK(half > glm::length(glm::vec3(5.0f / 9.0f)) + 0.01f && half < std::sqrt(3.0f) - 0.01f);
+        // Open borders keep their outline (the corners round along it).
+        EditableMesh plane = Primitives::Plane();
+        EditableMesh sp = ApplyModifier(plane, Modifier::Make(ModifierType::Subdivision));
+        CHECK(sp.FaceCount() == 4 && VertexAt(sp, { 0.75f, 0, 0.75f }) >= 0 && VertexAt(sp, { 0, 0, 1 }) >= 0);
+
+        // Mirror across X, welded at the plane.
+        plane = Primitives::Plane();
+        for (auto& p : plane.Positions) p.x += 1.0f;
+        Modifier mirror = Modifier::Make(ModifierType::Mirror);
+        EditableMesh mp = ApplyModifier(plane, mirror);
+        CHECK(mp.FaceCount() == 2 && mp.VertexCount() == 6 && Consistent(mp) && VertexAt(mp, { -2, 0, 1 }) >= 0);
+        mirror.Merge = false;
+        CHECK(ApplyModifier(plane, mirror).VertexCount() == 8);
+        // Half a cube (open at x = 0) mirrors into a closed box.
+        EditableMesh halfBox = Primitives::Cube();
+        for (auto& p : halfBox.Positions) p.x = (p.x + 1.0f) * 0.5f;
+        Ops::DeselectAll(halfBox);
+        Ops::SelectFace(halfBox, 3, true); // -X, now at x = 0
+        Ops::FlushSelection(halfBox, SelectMode::Face);
+        Ops::Delete(halfBox, Ops::DeleteKind::Faces);
+        EditableMesh mb = ApplyModifier(halfBox, Modifier::Make(ModifierType::Mirror));
+        CHECK(mb.VertexCount() == 12 && mb.FaceCount() == 10 && ClosedAndConsistent(mb) && Near(Volume(mb), 8.0f));
+
+        // Array: three cubes in a row, touching ones welded.
+        Modifier array = Modifier::Make(ModifierType::Array);
+        array.Count = 3;
+        array.Merge = false;
+        EditableMesh ar = ApplyModifier(cube, array);
+        CHECK(ar.VertexCount() == 24 && ar.FaceCount() == 18 && VertexAt(ar, { 5, 1, 1 }) >= 0);
+        array.Merge = true;
+        CHECK(ApplyModifier(cube, array).VertexCount() == 16);
+        array.UseRelativeOffset = false;
+        array.UseConstantOffset = true;
+        array.ConstantOffset = { 0, 3, 0 };
+        CHECK(VertexAt(ApplyModifier(cube, array), { 1, 7, 1 }) >= 0);
+
+        // Bevel: every edge sharper than 30 degrees (all of a cube's); a sphere's soft edges are left alone.
+        Modifier bevel = Modifier::Make(ModifierType::Bevel);
+        EditableMesh bv = ApplyModifier(cube, bevel);
+        CHECK(bv.FaceCount() == 26 && ClosedAndConsistent(bv));
+        EditableMesh sphere = Primitives::UVSphere(32, 16);
+        CHECK(ApplyModifier(sphere, bevel).FaceCount() == sphere.FaceCount());
+
+        // Solidify: a plane gets a back and a rim (a thin closed box); a closed cube a second shell inside.
+        Modifier solid = Modifier::Make(ModifierType::Solidify);
+        solid.Thickness = 0.2f;
+        EditableMesh sl = ApplyModifier(Primitives::Plane(), solid);
+        CHECK(sl.VertexCount() == 8 && sl.FaceCount() == 6 && ClosedAndConsistent(sl) && VertexAt(sl, { 1, -0.2f, 1 }) >= 0);
+        CHECK(Near(Volume(sl), 0.8f));
+        EditableMesh sc = ApplyModifier(cube, solid);
+        // (two shells: the inner one 0.2 in along the corners' diagonal normals)
+        CHECK(sc.FaceCount() == 12 && Near(Volume(sc), 8.0f - std::pow(2.0f * (1.0f - 0.2f / std::sqrt(3.0f)), 3.0f), 1e-2f));
+
+        // Boolean: a unit cube on the big cube's corner (overlap 0.125).
+        EditableMesh small = Primitives::Cube(1.0f);
+        for (auto& p : small.Positions) p += glm::vec3(1.0f);
+        small.Changed();
+        EditableMesh diff = ModifierOps::BooleanOp(cube, small, 0);
+        CHECK(Near(Volume(diff), 7.875f, 1e-3f) && ClosedAndConsistent(diff));
+        CHECK(Near(Volume(ModifierOps::BooleanOp(cube, small, 1)), 8.875f, 1e-3f));
+        CHECK(Near(Volume(ModifierOps::BooleanOp(cube, small, 2)), 0.125f, 1e-3f));
+        // Through the modifier: the other model by asset id, placed in this one's space.
+        SetMeshResolver([](uint64_t asset, EditableMesh& out) {
+            if (asset != 42) return false;
+            out = Primitives::Cube(1.0f);
+            return true;
+        });
+        Modifier boolean = Modifier::Make(ModifierType::Boolean);
+        boolean.Operand = 42;
+        boolean.OperandPosition = glm::vec3(1.0f);
+        CHECK(Near(Volume(ApplyModifier(cube, boolean)), 7.875f, 1e-3f));
+        boolean.Operand = 43; // missing: nothing happens
+        CHECK(Near(Volume(ApplyModifier(cube, boolean)), 8.0f));
+        SetMeshResolver(nullptr);
+
+        // Decimate: about a quarter of the triangles.
+        Modifier dec = Modifier::Make(ModifierType::Decimate);
+        dec.Ratio = 0.25f;
+        size_t before = MeshSimplify::TriangleCount(sphere.ToMeshData(false));
+        size_t after = MeshSimplify::TriangleCount(ApplyModifier(sphere, dec).ToMeshData(false));
+        CHECK(after < before * 0.35f && after > before * 0.1f);
+
+        // Weld two planes side by side; displace a grid by noise (within strength / 2 of where it was).
+        EditableMesh pair = Primitives::Plane();
+        EditableMesh right = Primitives::Plane();
+        for (auto& p : right.Positions) p.x += 2.0f;
+        pair.Append(right);
+        CHECK(ApplyModifier(pair, Modifier::Make(ModifierType::Weld)).VertexCount() == 6);
+        Modifier disp = Modifier::Make(ModifierType::Displace);
+        disp.Strength = 0.5f;
+        disp.NoiseSize = 0.3f;
+        EditableMesh grid = ApplyModifier(Primitives::Grid(10, 10), disp);
+        float lo = 1e9f, hi = -1e9f;
+        for (auto& p : grid.Positions)
+        {
+            lo = std::min(lo, p.y);
+            hi = std::max(hi, p.y);
+        }
+        CHECK(lo >= -0.25f - 1e-4f && hi <= 0.25f + 1e-4f && hi - lo > 0.05f);
+
+        // A stack: kept in the file, applied by ToMeshData in order, disabled ones skipped.
+        EditableMesh stacked = Primitives::Cube();
+        stacked.Modifiers.push_back(Modifier::Make(ModifierType::Subdivision));
+        Modifier arr2 = Modifier::Make(ModifierType::Array);
+        arr2.Merge = false;
+        stacked.Modifiers.push_back(arr2);
+        Modifier off = Modifier::Make(ModifierType::Displace);
+        off.Enabled = false;
+        stacked.Modifiers.push_back(off);
+        CHECK(stacked.ToMeshData(false).Indices.size() == 36);
+        CHECK(stacked.ToMeshData().Indices.size() == 2 * 24 * 6);
+        EditableMesh evaluated = EvaluateModifiers(stacked);
+        CHECK(evaluated.Modifiers.empty() && evaluated.FaceCount() == 48);
+        EditableMesh loaded;
+        CHECK(EditableMesh::FromJson(stacked.ToJson(), loaded));
+        CHECK(loaded.Modifiers.size() == 3 && loaded.Modifiers[1].Type == ModifierType::Array && loaded.Modifiers[1].Count == 2 &&
+              !loaded.Modifiers[1].Merge && !loaded.Modifiers[2].Enabled);
+        CHECK(loaded.ToMeshData().Indices.size() == 2 * 24 * 6);
+        // Material slots survive decimation.
+        EditableMesh two = Primitives::UVSphere(32, 16);
+        two.MaterialSlots = { "Wood", "Metal" };
+        for (uint32_t f = 0; f < two.FaceCount(); ++f) two.Faces[f].Material = two.FaceCenter(f).y > 0.0f ? 1 : 0;
+        EditableMesh twoDec = ApplyModifier(two, dec);
+        bool metal = false;
+        for (auto& f : twoDec.Faces) metal |= f.Material == 1;
+        CHECK(twoDec.MaterialSlots.size() == 2 && metal);
+    }
+
+    void TestModelingModifierStacks()
+    {
+        using namespace ModelingTest;
+        // A box with a cylinder hole (messy boolean topology), bevelled and arrayed: nothing breaks, the hole stays.
+        EditableMesh box = Primitives::Cube(1.0f);
+        EditableMesh cyl = EditableMesh::FromMeshData(MeshData::Cylinder());
+        for (auto& p : cyl.Positions) p *= glm::vec3(0.5f, 1.5f, 0.5f);
+        cyl.Changed();
+        EditableMesh holed = ModifierOps::BooleanOp(box, cyl, 0);
+        CHECK(Volume(holed) < 0.95f && Volume(holed) > 0.7f && ClosedAndConsistent(holed));
+        Modifier bevel = Modifier::Make(ModifierType::Bevel);
+        bevel.Width = 0.04f;
+        bevel.Segments = 2;
+        EditableMesh bevelled = ApplyModifier(holed, bevel);
+        CHECK(bevelled.FaceCount() > holed.FaceCount());
+        CHECK(!bevelled.ToMeshData().Indices.empty());
+    }
+
     void TestModelingFiles()
     {
         using namespace ModelingTest;
@@ -18304,6 +18496,8 @@ int main(int argc, char** argv)
     Run("Modeling bevel, loop cut and knife", TestModelingBevelCut);
     Run("Modeling fill, bridge and dissolve", TestModelingFillDissolve);
     Run("Modeling subdivide, spin and separate", TestModelingSubdivideSpinSeparate);
+    Run("Modeling modifiers", TestModelingModifiers);
+    Run("Modeling modifier stacks", TestModelingModifierStacks);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

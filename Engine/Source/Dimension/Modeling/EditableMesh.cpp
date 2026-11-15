@@ -1,4 +1,5 @@
 #include "Dimension/Modeling/EditableMesh.h"
+#include "Dimension/Modeling/Modifiers.h"
 #include "Dimension/Core/Log.h"
 #include <algorithm>
 #include <cstring>
@@ -295,8 +296,9 @@ namespace Dimension::Modeling
         }
     }
 
-    MeshData EditableMesh::ToMeshData() const
+    MeshData EditableMesh::ToMeshData(bool applyModifiers) const
     {
+        if (applyModifiers && HasActiveModifiers()) return EvaluateModifiers(*this).ToMeshData(false);
         MeshData out;
         out.Name = Name;
         const Topology& t = Topo();
@@ -679,6 +681,12 @@ namespace Dimension::Modeling
         if (!edges.empty()) j["edges"] = std::move(edges);
         if (!MaterialSlots.empty()) j["materials"] = MaterialSlots;
         if (AutoSmooth) j["autoSmooth"] = Round(AutoSmoothAngle);
+        if (!Modifiers.empty())
+        {
+            json mods = json::array();
+            for (const Modifier& m : Modifiers) mods.push_back(m.ToJson());
+            j["modifiers"] = std::move(mods);
+        }
         // Selection and hiding (kept like Blender keeps them in the file).
         auto flagged = [&](uint8_t flag) {
             json s = json::object();
@@ -758,6 +766,11 @@ namespace Dimension::Modeling
         {
             out.AutoSmooth = true;
             out.AutoSmoothAngle = j["autoSmooth"].get<float>();
+        }
+        for (const auto& m : j.value("modifiers", json::array()))
+        {
+            Modifier mod;
+            if (Modifier::FromJson(m, mod)) out.Modifiers.push_back(mod);
         }
         auto readFlags = [&](const char* key, uint8_t flag) {
             if (!j.contains(key)) return;

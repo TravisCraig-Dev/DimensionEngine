@@ -3,6 +3,7 @@
 #include <Dimension/Modeling/EditableMesh.h>
 #include <Dimension/Modeling/MeshOps.h>
 #include <Dimension/Modeling/MeshTools.h>
+#include <Dimension/Modeling/Modifiers.h>
 #include <Dimension/Modeling/MeshRaycast.h>
 #include <imgui.h>
 #include <deque>
@@ -37,6 +38,9 @@ namespace Editor
         // `blocked`: the mouse is over something else (the view cube). Returns true while it owns the mouse.
         bool UpdateSceneView(const ImVec2& origin, const ImVec2& size, const glm::mat4& view, const glm::mat4& proj, bool hovered,
                              bool focused, bool blocked);
+        // The Inspector's Modifiers section (under the Mesh Renderer) for an object whose mesh is a model made in the
+        // editor: the model's modifier stack, edited live (in Edit Mode on that object, as undo steps of it).
+        void DrawModifierPanel(Entity e);
         // The question asked before editing an object whose mesh is not a model (call each frame).
         void DrawPopups();
         // A move, rotate or scale following the mouse (G, R, S), or another tool that owns the keys (inset, bevel, loop
@@ -208,6 +212,12 @@ namespace Editor
         };
         std::vector<KnifePoint> m_KnifePoints;
         int m_ToolStartFrame = 0;
+        // The Modifiers section outside Edit Mode: the model as read from its file.
+        Modeling::EditableMesh m_PanelMesh;
+        AssetHandle m_PanelAsset = AssetHandle::None();
+        fs::file_time_type m_PanelStamp{};
+        bool m_PanelEditing = false; // a change is under way (one undo step)
+        bool m_PanelUnsaved = false;
         // Operation settings.
         int m_SubdivideCuts = 1;
         float m_DissolveAngle = 5.0f;

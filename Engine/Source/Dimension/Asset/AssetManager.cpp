@@ -5,6 +5,7 @@
 #include "Dimension/Terrain/Terrain.h"
 #include "Dimension/Core/Log.h"
 #include "Dimension/Renderer/Mesh.h"
+#include "Dimension/Modeling/Modifiers.h"
 #include "Dimension/Renderer/Texture.h"
 #include "Dimension/Renderer/RenderDevice.h"
 #include "Dimension/Asset/AssetPrefetch.h"
@@ -285,6 +286,33 @@ namespace Dimension
         Localization::Reset(); // this project's tables, and its player's language
 
         Refresh();
+        // Boolean modifiers find their other model here: read straight from its file (meshes may load on worker threads,
+        // so no shared caches), with its own modifiers applied.
+        Modeling::SetMeshResolver([](uint64_t asset, Modeling::EditableMesh& out) {
+            switch (asset)
+            {
+            case 1: out = Modeling::EditableMesh::FromMeshData(MeshData::Cube()); return true;
+            case 2: out = Modeling::EditableMesh::FromMeshData(MeshData::Sphere()); return true;
+            case 3: out = Modeling::EditableMesh::FromMeshData(MeshData::Plane()); return true;
+            case 4: out = Modeling::EditableMesh::FromMeshData(MeshData::Quad()); return true;
+            case 5: out = Modeling::EditableMesh::FromMeshData(MeshData::Cylinder()); return true;
+            default: break;
+            }
+            const AssetMetadata* meta = s ? GetMetadata(AssetHandle(asset)) : nullptr;
+            if (!meta || meta->Type != AssetType::Mesh) return false;
+            fs::path path = s->AssetsDir / meta->Path;
+            if (path.extension() == ".dmodel")
+            {
+                Modeling::EditableMesh m;
+                if (!Modeling::EditableMesh::Load(path, m)) return false;
+                out = Modeling::EvaluateModifiers(m);
+                return true;
+            }
+            MeshData data;
+            if (!MeshData::LoadFromFile(path, data)) return false;
+            out = Modeling::EditableMesh::FromMeshData(data);
+            return true;
+        });
         Log::Info("Asset database: {} assets in '{}'", s->Assets.size(), assetsDirectory.string());
     }
 

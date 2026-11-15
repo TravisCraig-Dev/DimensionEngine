@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <deque>
+#include <functional>
 #include <optional>
 
 namespace Editor
@@ -26,6 +27,8 @@ namespace Editor
         // Material pictures for the Inspector and the Project window (owned by the editor layer).
         AssetPreviews* Previews = nullptr;
         bool OpenSpriteEditor = false; // a panel asks for the Sprite Editor on the selected texture
+        // The Inspector's Modifiers section for an object whose mesh is a model made in the editor (set by the editor layer).
+        std::function<void(Entity)> DrawModelModifiers;
         bool IsPlaying() const { return State != PlayState::Edit; }
 
         // Selection (by entity handle; survives play mode because clones keep handles).

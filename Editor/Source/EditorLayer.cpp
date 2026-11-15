@@ -158,6 +158,7 @@ namespace Editor
         m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
         m_Animation = MakeScope<AnimationPanel>(m_Ctx);
         m_MeshEdit = MakeScope<MeshEditMode>(m_Ctx);
+        m_Ctx.DrawModelModifiers = [this](Entity e) { m_MeshEdit->DrawModifierPanel(e); };
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
         m_TestRunner = MakeScope<TestRunnerPanel>(m_Ctx);
         m_Navigation = MakeScope<NavigationPanel>(m_Ctx);

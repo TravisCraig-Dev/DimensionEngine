@@ -997,6 +997,7 @@ namespace Editor
                     if (info.TypeId == GetComponentTypeId<MeshRendererComponent>())
                     {
                         auto& mr = *static_cast<MeshRendererComponent*>(info.Get(scene, e));
+                        if (m_Ctx.DrawModelModifiers && targets.size() == 1 && !m_Ctx.IsPlaying()) m_Ctx.DrawModelModifiers(e);
                         size_t slots = AssetManager::GetMeshMaterials(mr.Mesh).size();
                         if (slots > 0 && !AssetManager::GetMaterial(mr.Material))
                             ImGui::TextWrapped("Using %zu material(s) from the model. Color, Albedo, Smoothness and Emission only "
