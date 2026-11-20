@@ -22,8 +22,10 @@ namespace Dimension::Modeling::UV
 
     enum class UnwrapMethod
     {
-        AngleBased = 0, // conformal start refined towards rigid (as-rigid-as-possible): angles and areas both kept
-        Conformal = 1,  // least squares conformal maps (LSCM): angles kept, areas may grow apart
+        AngleBased = 0,     // ABF++: the flat triangles' angles solved as close to the surface's as can be, then laid out
+                            // from them (LSCM on the solved shapes); closed charts fall back to MinimumStretch
+        Conformal = 1,      // least squares conformal maps (LSCM): angles kept, areas may grow apart
+        MinimumStretch = 2, // conformal start refined towards rigid (as-rigid-as-possible): angles and areas both kept
     };
     struct UnwrapSettings
     {
@@ -31,7 +33,7 @@ namespace Dimension::Modeling::UV
         bool UsePins = true; // pinned UVs stay where they are; their charts are flattened around them and not packed
         bool Pack = true;    // the charts are packed into the 0..1 square afterwards
         float Margin = 0.01f; // the gap between packed charts (UV units)
-        int Iterations = 12;  // angle based: refinement steps
+        int Iterations = 12;  // angle based: Newton steps (plus 8); minimum stretch: refinement steps
     };
     // Flattens `faces`, cut along seams (and where the faces end) into charts, each with as little distortion as can be.
     // Returns the number of charts.

@@ -18272,6 +18272,82 @@ namespace
         UV::Unwrap(grid, AllFaces(grid), conformal);
         CHECK(Near(grid.Faces[0].UVs[0], glm::vec2(0.1f, 0.9f), 1e-4f) && Near(grid.Faces[last].UVs[2], glm::vec2(0.9f, 0.1f), 1e-4f));
         CHECK(MaxStretch(grid, UV::StretchMode::Angle) < 0.02f);
+        // The same with angle based (ABF's angles laid out between the pins).
+        EditableMesh grid2 = grid;
+        UV::Unwrap(grid2, AllFaces(grid2));
+        CHECK(Near(grid2.Faces[0].UVs[0], glm::vec2(0.1f, 0.9f), 1e-4f) && Near(grid2.Faces[last].UVs[2], glm::vec2(0.9f, 0.1f), 1e-4f));
+        CHECK(MaxStretch(grid2, UV::StretchMode::Angle) < 0.02f);
+
+        // ABF: a hemisphere (an open chart whose pole and inner rings are inner vertices, so the vertex sum and wheel
+        // conditions apply) keeps its corners' angles closer than LSCM does (relative error, ABF's measure), unflipped.
+        auto angleError = [](const EditableMesh& m, const std::vector<uint32_t>& faces) {
+            double sum = 0.0;
+            size_t count = 0;
+            for (uint32_t f : faces)
+            {
+                const Face& face = m.Faces[f];
+                size_t n = face.Verts.size();
+                for (size_t c = 0; c < n; ++c)
+                {
+                    glm::vec3 p = m.Positions[face.Verts[c]], a = m.Positions[face.Verts[(c + 1) % n]] - p,
+                              b = m.Positions[face.Verts[(c + n - 1) % n]] - p;
+                    glm::vec2 q = face.UVs[c], ua = face.UVs[(c + 1) % n] - q, ub = face.UVs[(c + n - 1) % n] - q;
+                    if (glm::length(a) < 1e-6f || glm::length(b) < 1e-6f || glm::length(ua) < 1e-7f || glm::length(ub) < 1e-7f) continue;
+                    double a3 = std::acos(std::clamp((double)glm::dot(glm::normalize(a), glm::normalize(b)), -1.0, 1.0));
+                    double a2 = std::acos(std::clamp((double)glm::dot(glm::normalize(ua), glm::normalize(ub)), -1.0, 1.0));
+                    if (a3 < 1e-3) continue;
+                    sum += std::abs(a2 - a3) / a3;
+                    ++count;
+                }
+            }
+            return count ? sum / (double)count : 1.0;
+        };
+        EditableMesh dome = Primitives::UVSphere(24, 12);
+        std::vector<uint32_t> top;
+        for (uint32_t f = 0; f < dome.FaceCount(); ++f)
+        {
+            glm::vec3 c(0.0f);
+            for (uint32_t v : dome.Faces[f].Verts) c += dome.Positions[v];
+            if (c.y > 0.0f) top.push_back(f);
+        }
+        CHECK(top.size() == dome.FaceCount() / 2);
+        double errors[2] = {};
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            EditableMesh m = dome;
+            UV::UnwrapSettings settings;
+            settings.Method = pass == 0 ? UV::UnwrapMethod::AngleBased : UV::UnwrapMethod::Conformal;
+            CHECK(UV::Unwrap(m, top, settings) == 1);
+            bool ok = true;
+            for (uint32_t f : top) ok &= UVWinding(m.Faces[f]) > 0.0f;
+            CHECK(ok);
+            errors[pass] = angleError(m, top);
+        }
+        CHECK(errors[0] < errors[1]);
+        CHECK(errors[0] < 0.1);
+
+        // Minimum Stretch (the conformal map refined towards rigid) still unwraps the tube without distortion.
+        EditableMesh tube = Primitives::Cylinder(16, 1.0f, 2.0f, false);
+        for (EdgeKey k : tube.Topo().Edges)
+        {
+            glm::vec3 a = tube.Positions[EdgeA(k)], b = tube.Positions[EdgeB(k)];
+            if (Near(a.x, b.x) && Near(a.z, b.z))
+            {
+                tube.EditEdge(k).Seam = true;
+                break;
+            }
+        }
+        UV::UnwrapSettings stretch;
+        stretch.Method = UV::UnwrapMethod::MinimumStretch;
+        CHECK(UV::Unwrap(tube, AllFaces(tube), stretch) == 1);
+        CHECK(MaxStretch(tube, UV::StretchMode::Angle) < 0.02f && MaxStretch(tube, UV::StretchMode::Area) < 0.03f);
+        // A closed chart (no seams) can't lie flat: angle based falls back and still gives finite UVs.
+        EditableMesh closed = Primitives::UVSphere(12, 6);
+        CHECK(UV::Unwrap(closed, AllFaces(closed)) == 1);
+        bool finite = true;
+        for (const Face& f : closed.Faces)
+            for (const glm::vec2& uv : f.UVs) finite &= std::isfinite(uv.x) && std::isfinite(uv.y);
+        CHECK(finite);
     }
 
     void TestModelingUVEditing()

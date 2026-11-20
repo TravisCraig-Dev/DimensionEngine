@@ -3,6 +3,7 @@
 #include "Dimension/Modeling/SparseSolve.h"
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <numeric>
@@ -339,7 +340,9 @@ namespace Dimension::Modeling::UV
             return fixed;
         }
 
-        void SolveConformal(Chart& ch, const std::vector<uint8_t>& fixed)
+        // `angles` (3 per chart triangle, from SolveAngles): the triangles' flat shapes come from these instead of their
+        // 3D shapes (ABF's layout step).
+        void SolveConformal(Chart& ch, const std::vector<uint8_t>& fixed, const std::vector<double>* angles = nullptr)
         {
             size_t n = ch.Pos.size();
             std::vector<int64_t> index(n, -1);
@@ -349,11 +352,25 @@ namespace Dimension::Modeling::UV
             if (freeCount == 0) return;
             LeastSquares ls;
             ls.Cols = freeCount * 2;
-            for (const glm::uvec3& t : ch.Tris)
+            for (size_t ti = 0; ti < ch.Tris.size(); ++ti)
             {
+                const glm::uvec3& t = ch.Tris[ti];
                 glm::dvec2 z[3];
                 double area;
-                if (!LocalTriangle(ch.Pos[t.x], ch.Pos[t.y], ch.Pos[t.z], z, area)) continue;
+                if (angles)
+                {
+                    // Law of sines: edge 0-1 keeps its 3D length, edge 0-2 follows from the angles.
+                    const double* a = angles->data() + ti * 3;
+                    double l01 = std::max(glm::length(ch.Pos[t.y] - ch.Pos[t.x]), 1e-6);
+                    double l02 = l01 * std::sin(a[1]) / std::max(std::sin(a[2]), 1e-12);
+                    z[0] = glm::dvec2(0.0);
+                    z[1] = glm::dvec2(l01, 0.0);
+                    z[2] = l02 * glm::dvec2(std::cos(a[0]), std::sin(a[0]));
+                    area = 0.5 * l01 * l02 * std::sin(a[0]);
+                    if (!(area > 1e-30)) continue;
+                }
+                else if (!LocalTriangle(ch.Pos[t.x], ch.Pos[t.y], ch.Pos[t.z], z, area))
+                    continue;
                 double s = 1.0 / std::sqrt(2.0 * area);
                 uint32_t id[3] = { t.x, t.y, t.z };
                 // sum_j W_j U_j = 0 with W_j = z_k - z_l (j, k, l in turn): U is a similarity of z on the triangle.
@@ -386,6 +403,160 @@ namespace Dimension::Modeling::UV
             if (!SolveDirect(ls, x)) ls.Solve(x, (int)std::clamp<size_t>(freeCount * 8, 200, 20000), 1e-10);
             for (size_t v = 0; v < n; ++v)
                 if (index[v] >= 0) ch.UV[v] = glm::dvec2(x[(size_t)index[v]], x[(size_t)index[v] + freeCount]);
+        }
+
+        // ---- Angle based flattening (ABF++, Sheffer, Levy, Mogilnitsky and Bogomyakov 2005)
+
+        // The angles of every chart triangle (3 per triangle, corners in order) as near their 3D angles as can be (relative
+        // error, so small angles count as much as big ones) while the triangles still fit together in the plane: each
+        // triangle's angles sum to pi, the angles around each inner vertex to 2 pi, and around each inner vertex the sines
+        // of the angles after and before it multiply out equal (the wheel condition: the edge lengths agree all the way
+        // round). Newton steps on the Lagrangian, the multipliers' system (J D^-1 J^T) factored directly.
+        // False when the chart has no border (closed: it can't lie flat) or the solve fails.
+        bool SolveAngles(const Chart& ch, std::vector<double>& alpha, int maxIterations = 20)
+        {
+            const size_t nt = ch.Tris.size(), nv = ch.Pos.size(), na = nt * 3;
+            if (nt == 0) return false;
+            constexpr double kMin = kPi / 180.0, kMax = kPi - kPi / 180.0;
+            std::vector<double> beta(na);
+            for (size_t t = 0; t < nt; ++t)
+            {
+                const uint32_t id[3] = { ch.Tris[t].x, ch.Tris[t].y, ch.Tris[t].z };
+                double sum = 0.0;
+                for (int k = 0; k < 3; ++k)
+                {
+                    glm::dvec3 a = ch.Pos[id[(k + 1) % 3]] - ch.Pos[id[k]], b = ch.Pos[id[(k + 2) % 3]] - ch.Pos[id[k]];
+                    double la = glm::length(a), lb = glm::length(b);
+                    double ang = la > 1e-14 && lb > 1e-14 ? std::acos(std::clamp(glm::dot(a, b) / (la * lb), -1.0, 1.0)) : kPi / 3.0;
+                    sum += beta[t * 3 + k] = std::clamp(ang, kMin, kMax);
+                }
+                // (Degenerate triangles: still summing to pi, none too small.)
+                for (int k = 0; k < 3; ++k) beta[t * 3 + k] *= kPi / sum;
+            }
+            // Inner vertices: every edge around them shared by exactly two chart triangles, in one fan.
+            std::map<std::pair<uint32_t, uint32_t>, int> edgeUse;
+            for (const glm::uvec3& t : ch.Tris)
+            {
+                const uint32_t id[3] = { t.x, t.y, t.z };
+                for (int k = 0; k < 3; ++k) ++edgeUse[{ std::min(id[k], id[(k + 1) % 3]), std::max(id[k], id[(k + 1) % 3]) }];
+            }
+            std::vector<uint8_t> border(nv, 0);
+            std::vector<uint32_t> fanTris(nv, 0), neighbours(nv, 0);
+            for (auto& [e, count] : edgeUse)
+            {
+                if (count != 2) border[e.first] = border[e.second] = 1;
+                ++neighbours[e.first];
+                ++neighbours[e.second];
+            }
+            for (const glm::uvec3& t : ch.Tris)
+            {
+                ++fanTris[t.x];
+                ++fanTris[t.y];
+                ++fanTris[t.z];
+            }
+            std::vector<int64_t> inner(nv, -1);
+            size_t ni = 0;
+            bool anyBorder = false;
+            for (size_t v = 0; v < nv; ++v)
+            {
+                if (!border[v] && fanTris[v] >= 3 && fanTris[v] == neighbours[v]) inner[v] = (int64_t)ni++;
+                else if (fanTris[v] > 0) anyBorder = true;
+            }
+            if (!anyBorder) return false;
+            auto vertexOf = [&](size_t i) { return ch.Tris[i / 3][(int)(i % 3)]; };
+            // The 3D angles around an inner vertex scaled to sum to 2 pi (the nearest flat target).
+            std::vector<double> around(nv, 0.0);
+            for (size_t i = 0; i < na; ++i) around[vertexOf(i)] += beta[i];
+            for (size_t i = 0; i < na; ++i)
+                if (uint32_t v = vertexOf(i); inner[v] >= 0 && around[v] > 1e-12) beta[i] *= 2.0 * kPi / around[v];
+            std::vector<double> weight(na);
+            for (size_t i = 0; i < na; ++i) weight[i] = 1.0 / (beta[i] * beta[i]);
+
+            // Constraint rows: triangles [0, nt), vertex sums [nt, nt + ni), wheels [nt + ni, nt + 2 ni).
+            const size_t rows = nt + 2 * ni;
+            alpha = beta;
+            std::vector<double> lambda(rows, 0.0);
+            // Per angle: the rows it appears in and its derivative there (at most 4: its triangle, its vertex, and the
+            // wheels of the triangle's other two vertices).
+            struct Entry
+            {
+                uint32_t Row;
+                double D;
+            };
+            std::vector<std::array<Entry, 4>> jac(na);
+            std::vector<uint8_t> jacCount(na);
+            std::vector<double> grad(na), cons(rows), dInv(na);
+            for (size_t i = 0; i < na; ++i) dInv[i] = 1.0 / (2.0 * weight[i]);
+            double startError = -1.0, error = 0.0;
+            for (int it = 0; it <= maxIterations; ++it)
+            {
+                std::fill(cons.begin(), cons.end(), 0.0);
+                for (size_t i = 0; i < na; ++i)
+                {
+                    jacCount[i] = 0;
+                    cons[i / 3] += alpha[i];
+                    jac[i][jacCount[i]++] = { (uint32_t)(i / 3), 1.0 };
+                    if (uint32_t v = vertexOf(i); inner[v] >= 0)
+                    {
+                        cons[nt + (size_t)inner[v]] += alpha[i];
+                        jac[i][jacCount[i]++] = { (uint32_t)(nt + (size_t)inner[v]), 1.0 };
+                    }
+                }
+                for (size_t t = 0; t < nt; ++t) cons[t] -= kPi;
+                for (size_t r = 0; r < ni; ++r) cons[nt + r] -= 2.0 * kPi;
+                for (size_t t = 0; t < nt; ++t)
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        uint32_t v = ch.Tris[t][k];
+                        if (inner[v] < 0) continue;
+                        uint32_t row = (uint32_t)(nt + ni + (size_t)inner[v]);
+                        size_t next = t * 3 + (k + 1) % 3, prev = t * 3 + (k + 2) % 3;
+                        cons[row] += std::log(std::sin(alpha[next])) - std::log(std::sin(alpha[prev]));
+                        jac[next][jacCount[next]++] = { row, 1.0 / std::tan(alpha[next]) };
+                        jac[prev][jacCount[prev]++] = { row, -1.0 / std::tan(alpha[prev]) };
+                    }
+                error = 0.0;
+                for (size_t i = 0; i < na; ++i)
+                {
+                    double g = 2.0 * weight[i] * (alpha[i] - beta[i]);
+                    for (uint8_t k = 0; k < jacCount[i]; ++k) g += lambda[jac[i][k].Row] * jac[i][k].D;
+                    grad[i] = g;
+                    error += g * g;
+                }
+                for (double c : cons) error += c * c;
+                if (startError < 0.0) startError = error;
+                if (error < 1e-22 || it == maxIterations) break;
+                // Newton step with the energy's Hessian D = 2 w: (J D^-1 J^T) dl = C - J D^-1 g, da = -D^-1 (g + J^T dl).
+                Sparse::SymmetricSystem M;
+                M.Rows.resize(rows);
+                std::vector<double> rhs = cons;
+                for (size_t i = 0; i < na; ++i)
+                    for (uint8_t a = 0; a < jacCount[i]; ++a)
+                    {
+                        const Entry& ea = jac[i][a];
+                        rhs[ea.Row] -= ea.D * dInv[i] * grad[i];
+                        for (uint8_t b = 0; b < jacCount[i]; ++b) M.Add(ea.Row, jac[i][b].Row, ea.D * dInv[i] * jac[i][b].D);
+                    }
+                Sparse::EnvelopeCholesky chol;
+                if (!chol.Factor(M)) return false;
+                std::vector<double> dl;
+                chol.Solve(rhs, dl);
+                for (size_t r = 0; r < rows; ++r)
+                {
+                    if (!std::isfinite(dl[r])) return false;
+                    lambda[r] += dl[r];
+                }
+                for (size_t i = 0; i < na; ++i)
+                {
+                    double s = grad[i];
+                    for (uint8_t k = 0; k < jacCount[i]; ++k) s += jac[i][k].D * dl[jac[i][k].Row];
+                    alpha[i] = std::clamp(alpha[i] - dInv[i] * s, 1e-6, kPi - 1e-6);
+                }
+            }
+            // Accept a solve that got the constraints (nearly) met.
+            double worst = 0.0;
+            for (double c : cons) worst = std::max(worst, std::abs(c));
+            return std::isfinite(error) && worst < 1e-3;
         }
 
         // As-rigid-as-possible: alternately the closest rotation of each triangle onto its true shape, and the UVs best
@@ -805,12 +976,18 @@ namespace Dimension::Modeling::UV
         {
             if (!settings.UsePins) ch.PinCount = 0;
             std::vector<uint8_t> fixed = StartChart(ch, settings.UsePins);
-            SolveConformal(ch, fixed);
+            // Angle based: the flat angles first, then the layout fitting them (closed charts, which can't lie flat,
+            // fall back to minimum stretch).
+            UnwrapMethod method = settings.Method;
+            std::vector<double> angles;
+            bool angled = method == UnwrapMethod::AngleBased && SolveAngles(ch, angles, std::max(settings.Iterations, 1) + 8);
+            if (method == UnwrapMethod::AngleBased && !angled) method = UnwrapMethod::MinimumStretch;
+            SolveConformal(ch, fixed, angled ? &angles : nullptr);
             bool pinned = settings.UsePins && ch.PinCount >= 2;
             if (!pinned)
             {
                 ScaleChart(ch, SurfaceArea(ch));
-                if (settings.Method == UnwrapMethod::AngleBased)
+                if (method == UnwrapMethod::MinimumStretch)
                 {
                     // Free of the conformal pins: one vertex holds it in place while it settles.
                     std::vector<uint8_t> one(ch.Pos.size(), 0);
@@ -819,7 +996,7 @@ namespace Dimension::Modeling::UV
                     ScaleChart(ch, std::abs(UVArea(ch)));
                 }
             }
-            else if (settings.Method == UnwrapMethod::AngleBased)
+            else if (method == UnwrapMethod::MinimumStretch)
                 SolveRigid(ch, fixed, settings.Iterations);
             if (settings.UsePins && ch.PinCount == 1)
             {

@@ -70,12 +70,14 @@ namespace Editor
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Flattens the faces, cut apart along seams (Mark Seam) and where the selection ends");
         {
             ImGui::Indent();
-            const char* methods[] = { "Angle Based", "Conformal" };
+            const char* methods[] = { "Angle Based", "Conformal", "Minimum Stretch" };
             int method = (int)m_Unwrap.Method;
             ImGui::SetNextItemWidth(120.0f);
-            if (ImGui::Combo("Method", &method, methods, 2)) m_Unwrap.Method = (uv::UnwrapMethod)method;
+            if (ImGui::Combo("Method", &method, methods, 3)) m_Unwrap.Method = (uv::UnwrapMethod)method;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Angle Based keeps both shapes and sizes true; Conformal keeps angles only (faster, sizes may grow apart)");
+                ImGui::SetTooltip("Angle Based solves the flat angles closest to the surface's, then lays the faces out from them; "
+                                  "Conformal keeps angles only (fastest, sizes may grow apart); Minimum Stretch refines a "
+                                  "conformal map towards keeping each face's shape and size");
             ImGui::SetNextItemWidth(120.0f);
             ImGui::DragFloat("Margin", &m_Unwrap.Margin, 0.001f, 0.0f, 0.25f, "%.3f");
             ImGui::Checkbox("Use Pins", &m_Unwrap.UsePins);
