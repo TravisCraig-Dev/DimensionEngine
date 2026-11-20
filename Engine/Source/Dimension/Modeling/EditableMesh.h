@@ -209,6 +209,18 @@ namespace Dimension::Modeling
         std::vector<uint8_t> Keyed;       // per bone: this key holds its pose (empty: every bone's)
         std::vector<float> Shapes;        // per shape key: its value (empty: shape keys not keyed here)
         std::vector<KeyCurve> Curves;     // per bone (empty, or shorter: linear with automatic handles)
+        std::vector<KeyCurve> ShapeCurves; // per shape key (its value is channel 0; same defaults)
+        bool HasShape(size_t s) const { return s < Shapes.size(); }
+        const KeyCurve& ShapeCurveOf(size_t s) const
+        {
+            static const KeyCurve none;
+            return s < ShapeCurves.size() ? ShapeCurves[s] : none;
+        }
+        KeyCurve& EditShapeCurve(size_t s)
+        {
+            if (ShapeCurves.size() <= s) ShapeCurves.resize(std::max(Shapes.size(), s + 1));
+            return ShapeCurves[s];
+        }
         bool HasBone(size_t b) const { return b < Rotations.size() && (Keyed.empty() || (b < Keyed.size() && Keyed[b])); }
         const KeyCurve& CurveOf(size_t b) const
         {

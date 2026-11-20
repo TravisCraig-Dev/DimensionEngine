@@ -20056,6 +20056,49 @@ namespace
         Rig::AddBone(m, "Extra", glm::vec3(1, 0, 0), glm::vec3(1, 1, 0));
         Rig::DeleteBones(m, { 1 });
         CHECK(m.Actions[(size_t)act].Keys[1].CurveOf(0).Free & 4);
+
+        // Shape keys in the graph: values keyed 0, 1, 0 for "Smile" (and 0.5 throughout for "Frown").
+        EditableMesh face = Primitives::Cube();
+        Rig::AddShapeKey(face, "Frown");
+        Rig::AddShapeKey(face, "Smile");
+        int sa = Rig::AddAction(face, "Talk");
+        for (int i = 0; i < 3; ++i)
+        {
+            face.ShapeKeys[0].Value = 0.5f;
+            face.ShapeKeys[1].Value = i == 1 ? 1.0f : 0.0f;
+            Rig::InsertKey(face, sa, (float)i, false, true);
+        }
+        const Action& talk = face.Actions[(size_t)sa];
+        float sv = 0.0f;
+        CHECK(Rig::ShapeValue(talk, 1, 0.25f, sv) && Near(sv, 0.25f));
+        CHECK(Rig::ShapeTrackOf(talk, 1).Keys.size() == 3);
+        for (size_t k = 0; k < 3; ++k) Rig::SetShapeInterpolation(face, sa, k, 1, KeyInterp::Bezier);
+        CHECK(Rig::ShapeValue(talk, 1, 0.1f, sv) && Near(sv, 0.028f, 1e-4f));
+        Rig::SetShapeHandles(face, sa, 0, 1, 2.0f, 2.0f);
+        CHECK(Rig::ShapeValue(talk, 1, 0.1f, sv) && Near(sv, 0.19f, 1e-4f));
+        Rig::SetShapeAutoHandles(face, sa, 0, 1);
+        Rig::SetShapeValue(face, sa, 1, 1, 0.8f);
+        CHECK(Rig::ShapeValue(talk, 1, 1.0f, sv) && Near(sv, 0.8f));
+        Rig::EvaluateAction(face, sa, 0.1f);
+        CHECK(Near(face.ShapeKeys[1].Value, 0.028f * 0.8f, 1e-4f) && Near(face.ShapeKeys[0].Value, 0.5f));
+        Rig::SetShapeInterpolation(face, sa, 0, 1, KeyInterp::Constant);
+        CHECK(Rig::ShapeValue(talk, 1, 0.99f, sv) && Near(sv, 0.0f));
+        Rig::SetShapeInterpolation(face, sa, 0, 1, KeyInterp::Bezier);
+        // Clips: the curved shape key sampled, the linear one keyed as is.
+        AnimationClip talkClip = Rig::ToClip(face, talk);
+        size_t frownSamples = 0, smileSamples = 0;
+        for (const AnimationChannel& c : talkClip.WeightChannels) (c.Joint == 0 ? frownSamples : smileSamples) = c.Times.size();
+        CHECK(frownSamples == 3 && smileSamples > 30);
+        // Files keep shape key curves.
+        Rig::SetShapeHandles(face, sa, 1, 1, -0.25f, 0.5f);
+        EditableMesh talkLoaded;
+        CHECK(EditableMesh::FromJson(face.ToJson(), talkLoaded) && talkLoaded.Actions.size() == 1);
+        const KeyCurve& sc = talkLoaded.Actions[0].Keys[1].ShapeCurveOf(1);
+        CHECK(sc.Interp == KeyInterp::Bezier && (sc.Free & 1) && Near(sc.SlopeIn[0], -0.25f) && Near(sc.SlopeOut[0], 0.5f));
+        // Removing a shape key takes its values (and curves) out of the actions: Smile's move down to index 0.
+        Rig::RemoveShapeKey(face, 0);
+        const ActionKey& middleKey = face.Actions[(size_t)sa].Keys[1];
+        CHECK(middleKey.Shapes.size() == 1 && Near(middleKey.Shapes[0], 0.8f) && middleKey.ShapeCurveOf(0).Interp == KeyInterp::Bezier);
     }
 
     void TestModelingBBonesEnvelopes()

@@ -1023,6 +1023,14 @@ namespace Dimension::Modeling
                         curves.push_back(std::move(e));
                     }
                     if (!curves.empty()) key["curves"] = std::move(curves);
+                    // Shape keys' curves: [shape, interpolation, free, slope in, slope out].
+                    json shapeCurves = json::array();
+                    for (size_t s = 0; s < k.ShapeCurves.size() && s < k.Shapes.size(); ++s)
+                    {
+                        const KeyCurve& c = k.ShapeCurves[s];
+                        if (!c.IsDefault()) shapeCurves.push_back({ s, (int)c.Interp, c.Free & 1, Round(c.SlopeIn[0]), Round(c.SlopeOut[0]) });
+                    }
+                    if (!shapeCurves.empty()) key["shapeCurves"] = std::move(shapeCurves);
                     keys.push_back(std::move(key));
                 }
                 actions.push_back({ { "name", a.Name }, { "keys", std::move(keys) } });
@@ -1266,6 +1274,17 @@ namespace Dimension::Modeling
                         c.SlopeIn[(size_t)i] = e[3 + (size_t)i].get<float>();
                         c.SlopeOut[(size_t)i] = e[3 + kBoneChannels + (size_t)i].get<float>();
                     }
+                }
+                for (const auto& e : kj.value("shapeCurves", json::array()))
+                {
+                    if (!e.is_array() || e.size() < 5) continue;
+                    size_t s = e[0].get<size_t>();
+                    if (s >= k.Shapes.size()) continue;
+                    KeyCurve& c = k.EditShapeCurve(s);
+                    c.Interp = (KeyInterp)std::clamp(e[1].get<int>(), 0, 2);
+                    c.Free = (uint16_t)(e[2].get<int>() & 1);
+                    c.SlopeIn[0] = e[3].get<float>();
+                    c.SlopeOut[0] = e[4].get<float>();
                 }
                 a.Keys.push_back(std::move(k));
             }

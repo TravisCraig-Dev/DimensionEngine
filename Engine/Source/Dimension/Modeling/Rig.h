@@ -147,6 +147,16 @@ namespace Dimension::Modeling::Rig
     void SetHandles(EditableMesh& m, int action, size_t key, size_t bone, int channel, float slopeIn, float slopeOut);
     void SetAutoHandles(EditableMesh& m, int action, size_t key, size_t bone, int channel);
 
+    // Shape keys' values over an action, the same way (a track's values in channel 0; keys that key the shape).
+    BoneTrack ShapeTrackOf(const Action& action, size_t shape);
+    void ShapeKeySlopes(const Action& action, const BoneTrack& track, size_t shape, size_t i, float& in, float& out);
+    // The shape key's value at a time; false when the action doesn't key it.
+    bool ShapeValue(const Action& action, size_t shape, float time, float& value);
+    void SetShapeValue(EditableMesh& m, int action, size_t key, size_t shape, float value);
+    void SetShapeInterpolation(EditableMesh& m, int action, size_t key, size_t shape, KeyInterp interp);
+    void SetShapeHandles(EditableMesh& m, int action, size_t key, size_t shape, float slopeIn, float slopeOut);
+    void SetShapeAutoHandles(EditableMesh& m, int action, size_t key, size_t shape);
+
     // ---- IK
 
     // Turns `bone` and `chain - 1` of its parents (cyclic coordinate descent) so its tail reaches `target` (model

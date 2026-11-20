@@ -917,6 +917,12 @@ namespace Dimension::Modeling::Rig
         int edited = m.EditedShape;
         SetEditedShape(m, -1);
         m.ShapeKeys.erase(m.ShapeKeys.begin() + key);
+        for (Action& a : m.Actions)
+            for (ActionKey& k : a.Keys)
+            {
+                if ((size_t)key < k.Shapes.size()) k.Shapes.erase(k.Shapes.begin() + key);
+                if ((size_t)key < k.ShapeCurves.size()) k.ShapeCurves.erase(k.ShapeCurves.begin() + key);
+            }
         if (edited == key) edited = -1;
         else if (edited > key) --edited;
         SetEditedShape(m, edited);
@@ -1022,7 +1028,11 @@ namespace Dimension::Modeling::Rig
                     o.Keyed[b] = 1;
                     if (b < moved.Curves.size()) o.EditCurve(b) = moved.Curves[b];
                 }
-            if (!moved.Shapes.empty()) o.Shapes = moved.Shapes;
+            if (!moved.Shapes.empty())
+            {
+                o.Shapes = moved.Shapes;
+                o.ShapeCurves = moved.ShapeCurves;
+            }
             if (std::all_of(o.Keyed.begin(), o.Keyed.end(), [](uint8_t k) { return k != 0; })) o.Keyed.clear();
         }
         else
@@ -1059,23 +1069,11 @@ namespace Dimension::Modeling::Rig
         const auto& keys = m.Actions[(size_t)action].Keys;
         if (keys.empty()) return;
         PoseAt(m.Actions[(size_t)action], time, m.Bones);
-        // Shape key values, between the keys that hold them.
+        // Shape key values, along their curves between the keys that hold them.
         for (size_t s = 0; s < m.ShapeKeys.size(); ++s)
         {
-            int lo = -1, hi = -1;
-            for (int k = 0; k < (int)keys.size(); ++k)
-            {
-                if (s >= keys[(size_t)k].Shapes.size()) continue;
-                if (keys[(size_t)k].Time <= time) lo = k;
-                else if (hi < 0) hi = k;
-            }
-            if (lo < 0 && hi < 0) continue;
-            if (lo < 0) lo = hi;
-            if (hi < 0) hi = lo;
-            const ActionKey &a = keys[(size_t)lo], &c = keys[(size_t)hi];
-            float span = c.Time - a.Time;
-            float t = span > 1e-6f ? std::clamp((time - a.Time) / span, 0.0f, 1.0f) : 0.0f;
-            m.ShapeKeys[s].Value = glm::mix(a.Shapes[s], c.Shapes[s], t);
+            float v;
+            if (ShapeValue(m.Actions[(size_t)action], s, time, v)) m.ShapeKeys[s].Value = v;
         }
     }
 
@@ -1158,12 +1156,34 @@ namespace Dimension::Modeling::Rig
             AnimationChannel w;
             w.Joint = (int)sk;
             w.Path = AnimationPath::Translation;
-            for (const ActionKey& k : action.Keys)
-                if (sk < k.Shapes.size())
+            bool curved = false;
+            for (const ActionKey& k : action.Keys) curved |= k.HasShape(sk) && k.ShapeCurveOf(sk).Interp != KeyInterp::Linear;
+            if (curved)
+            {
+                // (sampled at the keys and 30 times a second between, just before keys after a Constant stretch)
+                BoneTrack track = ShapeTrackOf(action, sk);
+                std::vector<float> times(track.Times.begin(), track.Times.end());
+                for (float x = track.Times.front(); x < track.Times.back(); x += 1.0f / 30.0f) times.push_back(x);
+                for (size_t i = 0; i + 1 < track.Keys.size(); ++i)
+                    if (action.Keys[track.Keys[i]].ShapeCurveOf(sk).Interp == KeyInterp::Constant)
+                        times.push_back(std::max(track.Times[i], track.Times[i + 1] - 1e-3f));
+                std::sort(times.begin(), times.end());
+                times.erase(std::unique(times.begin(), times.end(), [](float x, float y) { return std::abs(x - y) < 1e-5f; }), times.end());
+                for (float x : times)
                 {
-                    w.Times.push_back(k.Time);
-                    w.Values.push_back(glm::vec4(k.Shapes[sk], 0.0f, 0.0f, 0.0f));
+                    float v = 0.0f;
+                    ShapeValue(action, sk, x, v);
+                    w.Times.push_back(x);
+                    w.Values.push_back(glm::vec4(v, 0.0f, 0.0f, 0.0f));
                 }
+            }
+            else
+                for (const ActionKey& k : action.Keys)
+                    if (sk < k.Shapes.size())
+                    {
+                        w.Times.push_back(k.Time);
+                        w.Values.push_back(glm::vec4(k.Shapes[sk], 0.0f, 0.0f, 0.0f));
+                    }
             if (!w.Times.empty()) clip.WeightChannels.push_back(std::move(w));
         }
         // B-bone segments bend with the bones around them: their transforms (relative to their bone) sampled at the
@@ -1303,22 +1323,113 @@ namespace Dimension::Modeling::Rig
         return t;
     }
 
+    namespace
+    {
+        // A track key's slopes for one channel: its free handles, or automatic clamped ones.
+        void Slopes(const KeyCurve& kc, const BoneTrack& t, size_t i, int c, float& in, float& out)
+        {
+            if (kc.Free & (1u << c))
+            {
+                in = kc.SlopeIn[(size_t)c];
+                out = kc.SlopeOut[(size_t)c];
+                return;
+            }
+            in = out = 0.0f;
+            size_t n = t.Keys.size();
+            if (i == 0 || i + 1 >= n) return;
+            float a = t.Values[i - 1][(size_t)c], v = t.Values[i][(size_t)c], b = t.Values[i + 1][(size_t)c];
+            if ((v >= a && v >= b) || (v <= a && v <= b)) return; // (a peak or dip stays level: no overshoot)
+            float span = t.Times[i + 1] - t.Times[i - 1];
+            if (span > 1e-6f) in = out = (b - a) / span;
+        }
+    }
+
+    void ShapeKeySlopes(const Action& action, const BoneTrack& t, size_t shape, size_t i, float& in, float& out)
+    {
+        Slopes(action.Keys[t.Keys[i]].ShapeCurveOf(shape), t, i, 0, in, out);
+    }
+
+    BoneTrack ShapeTrackOf(const Action& action, size_t shape)
+    {
+        BoneTrack t;
+        for (size_t k = 0; k < action.Keys.size(); ++k)
+        {
+            const ActionKey& key = action.Keys[k];
+            if (!key.HasShape(shape)) continue;
+            std::array<float, kBoneChannels> v{};
+            v[0] = key.Shapes[shape];
+            t.Keys.push_back(k);
+            t.Times.push_back(key.Time);
+            t.Values.push_back(v);
+        }
+        return t;
+    }
+
+    bool ShapeValue(const Action& action, size_t shape, float time, float& value)
+    {
+        BoneTrack t = ShapeTrackOf(action, shape);
+        if (t.Keys.empty()) return false;
+        size_t i = 0;
+        while (i + 1 < t.Times.size() && t.Times[i + 1] <= time) ++i;
+        value = t.Values[i][0];
+        if (i + 1 >= t.Times.size() || time <= t.Times[i]) return true;
+        float span = t.Times[i + 1] - t.Times[i];
+        float s = span > 1e-6f ? std::clamp((time - t.Times[i]) / span, 0.0f, 1.0f) : 0.0f;
+        switch (action.Keys[t.Keys[i]].ShapeCurveOf(shape).Interp)
+        {
+        case KeyInterp::Constant: break;
+        case KeyInterp::Linear: value = glm::mix(t.Values[i][0], t.Values[i + 1][0], s); break;
+        case KeyInterp::Bezier:
+        {
+            float in0, out0, in1, out1;
+            ShapeKeySlopes(action, t, shape, i, in0, out0);
+            ShapeKeySlopes(action, t, shape, i + 1, in1, out1);
+            value = Hermite(t.Values[i][0], out0, t.Values[i + 1][0], in1, span, s);
+            break;
+        }
+        }
+        return true;
+    }
+
+    namespace
+    {
+        bool KeyHoldsShape(const EditableMesh& m, int action, size_t key, size_t shape)
+        {
+            return action >= 0 && action < (int)m.Actions.size() && key < m.Actions[(size_t)action].Keys.size() &&
+                   m.Actions[(size_t)action].Keys[key].HasShape(shape);
+        }
+    }
+
+    void SetShapeValue(EditableMesh& m, int action, size_t key, size_t shape, float value)
+    {
+        if (KeyHoldsShape(m, action, key, shape)) m.Actions[(size_t)action].Keys[key].Shapes[shape] = value;
+    }
+
+    void SetShapeInterpolation(EditableMesh& m, int action, size_t key, size_t shape, KeyInterp interp)
+    {
+        if (KeyHoldsShape(m, action, key, shape)) m.Actions[(size_t)action].Keys[key].EditShapeCurve(shape).Interp = interp;
+    }
+
+    void SetShapeHandles(EditableMesh& m, int action, size_t key, size_t shape, float slopeIn, float slopeOut)
+    {
+        if (!KeyHoldsShape(m, action, key, shape)) return;
+        KeyCurve& c = m.Actions[(size_t)action].Keys[key].EditShapeCurve(shape);
+        c.Free |= 1;
+        c.SlopeIn[0] = slopeIn;
+        c.SlopeOut[0] = slopeOut;
+    }
+
+    void SetShapeAutoHandles(EditableMesh& m, int action, size_t key, size_t shape)
+    {
+        if (!KeyHoldsShape(m, action, key, shape)) return;
+        KeyCurve& c = m.Actions[(size_t)action].Keys[key].EditShapeCurve(shape);
+        c.Free &= (uint16_t)~1u;
+        c.SlopeIn[0] = c.SlopeOut[0] = 0.0f;
+    }
+
     void KeySlopes(const Action& action, const BoneTrack& t, size_t bone, size_t i, int c, float& in, float& out)
     {
-        const KeyCurve& kc = action.Keys[t.Keys[i]].CurveOf(bone);
-        if (kc.Free & (1u << c))
-        {
-            in = kc.SlopeIn[(size_t)c];
-            out = kc.SlopeOut[(size_t)c];
-            return;
-        }
-        in = out = 0.0f;
-        size_t n = t.Keys.size();
-        if (i == 0 || i + 1 >= n) return;
-        float a = t.Values[i - 1][(size_t)c], v = t.Values[i][(size_t)c], b = t.Values[i + 1][(size_t)c];
-        if ((v >= a && v >= b) || (v <= a && v <= b)) return; // (a peak or dip stays level: no overshoot)
-        float span = t.Times[i + 1] - t.Times[i - 1];
-        if (span > 1e-6f) in = out = (b - a) / span;
+        Slopes(action.Keys[t.Keys[i]].CurveOf(bone), t, i, c, in, out);
     }
 
     void BonePoseAt(const Action& action, size_t b, float time, glm::vec3& location, glm::quat& rotation, glm::vec3& scale)
