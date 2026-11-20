@@ -60,8 +60,31 @@ namespace Dimension::Music
     int Song::SongTicks() const
     {
         int end = 0;
-        for (const auto& c : Playlist) end = std::max(end, c.Start + (c.Length > 0 ? c.Length : PatternTicks(c.Pattern)));
+        for (const auto& c : Playlist) end = std::max(end, c.Start + ClipTicks(c));
         return end;
+    }
+
+    std::string Song::TrackName(int track) const
+    {
+        if (track >= 0 && track < (int)Tracks.size() && !Tracks[track].Name.empty()) return Tracks[track].Name;
+        return "Track " + std::to_string(track + 1);
+    }
+
+    PlaylistTrack& Song::Track(int track)
+    {
+        track = std::max(0, track);
+        if (track >= (int)Tracks.size()) Tracks.resize(track + 1);
+        return Tracks[track];
+    }
+
+    int Song::FitPatternBars(int pattern)
+    {
+        if (pattern < 0 || pattern >= (int)Patterns.size()) return 1;
+        Pattern& p = Patterns[pattern];
+        int end = 0;
+        for (const Note& n : p.Notes) end = std::max(end, n.Start + n.Length);
+        p.Bars = std::clamp(std::max(p.Bars, (end + BarTicks() - 1) / BarTicks()), 1, 16);
+        return p.Bars;
     }
 
     bool Song::HasStep(int pattern, int channel, int step) const
@@ -149,6 +172,9 @@ namespace Dimension::Music
         json playlist = json::array();
         for (const PlaylistClip& c : Playlist) playlist.push_back(json::array({ c.Pattern, c.Track, c.Start, c.Length }));
         j["playlist"] = std::move(playlist);
+        json tracks = json::array();
+        for (const PlaylistTrack& t : Tracks) tracks.push_back({ { "name", t.Name }, { "mute", t.Mute } });
+        j["tracks"] = std::move(tracks);
         return j;
     }
 
@@ -234,8 +260,9 @@ namespace Dimension::Music
                 if (c.is_array() && c.size() >= 4)
                 {
                     PlaylistClip clip{ c[0].get<int>(), c[1].get<int>(), c[2].get<int>(), c[3].get<int>() };
-                    if (clip.Pattern >= 0 && clip.Pattern < (int)out.Patterns.size() && clip.Start >= 0) out.Playlist.push_back(clip);
+                    if (clip.Pattern >= 0 && clip.Pattern < (int)out.Patterns.size() && clip.Start >= 0 && clip.Track >= 0) out.Playlist.push_back(clip);
                 }
+            for (const json& t : j.value("tracks", json::array())) out.Tracks.push_back({ t.value("name", ""), t.value("mute", false) });
         }
         catch (const json::exception&)
         {

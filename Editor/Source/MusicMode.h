@@ -38,6 +38,14 @@ namespace Editor
         void DrawChannelRack(const ImVec2& size);
         void DrawChannelSettings(const ImVec2& size);
         void DrawKeyboard(const ImVec2& size);
+        // The Piano Roll: the selected channel's notes in the current pattern (MusicPianoRoll.cpp).
+        void DrawPianoRoll(const ImVec2& size);
+        void PianoRollKeys();
+        // The Playlist: patterns placed on tracks along the song (MusicPlaylist.cpp).
+        void DrawPlaylist(const ImVec2& size);
+        void PlaylistKeys();
+        void SetSongMode(bool song);
+        void SetPattern(int pattern);
         void HandleKeys();
         // Undo: Record before a change, Changed after it (the player hears it; the file is written once it is done).
         void Record();
@@ -73,6 +81,40 @@ namespace Editor
         std::vector<std::pair<int, int>> m_TypedNotes;
         int m_PianoNote = -1;
         int m_TypingOctave = 5;
+        // Which workspace view fills the middle (F6 Channel Rack, F7 Piano Roll, F5 Playlist), and Pattern / Song mode.
+        enum class View { Rack, PianoRoll, Playlist };
+        View m_View = View::Rack;
+        bool m_SongMode = false;
+        // Piano Roll: zoom (pixels per tick, per key), scroll (ticks, pixels from the top key), snap (ticks; 1 = none),
+        // the length new notes get, the selection (note indices in the pattern) and what the mouse is doing.
+        float m_RollTickW = 1.0f, m_RollKeyH = 14.0f;
+        double m_RollScrollX = 0.0;
+        float m_RollScrollY = -1.0f; // (-1: put the channel's notes in view first)
+        int m_RollSnap = 24, m_RollLength = 24;
+        std::vector<int> m_RollSelection;
+        struct RollDrag
+        {
+            enum Kind { None, Move, Resize, Box, Erase, Velocity } Kind = None;
+            double StartTick = 0.0;
+            int StartKey = 60, Anchor = -1, PreviewKey = -1;
+            ImVec2 StartMouse{ 0, 0 };
+            std::vector<Dimension::Music::Note> Before;
+            bool Moved = false;
+        } m_RollDrag;
+        // Playlist: zoom (pixels per bar, track height), scroll (ticks, pixels), snap (ticks), the selected clip and drag.
+        float m_ListBarW = 72.0f, m_ListTrackH = 42.0f;
+        double m_ListScrollX = 0.0;
+        float m_ListScrollY = 0.0f;
+        int m_ListSnap = 96;
+        int m_SelectedClip = -1;
+        int m_RenamingTrack = -1;
+        struct ListDrag
+        {
+            enum Kind { None, Move, Resize, Erase, Seek } Kind = None;
+            int Clip = -1;
+            double Offset = 0.0;
+            bool Moved = false;
+        } m_ListDrag;
         std::string m_Status;
         float m_StatusTime = 0.0f;
     };

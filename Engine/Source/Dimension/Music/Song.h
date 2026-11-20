@@ -99,6 +99,13 @@ namespace Dimension::Music
         int Start = 0, Length = 0;  // Length 0: the pattern's own length
     };
 
+    // A Playlist track's name and mute (tracks without one are "Track N", playing).
+    struct PlaylistTrack
+    {
+        std::string Name;
+        bool Mute = false;
+    };
+
     // A song (.dsong file, JSON): tempo, channels, patterns and their arrangement.
     struct Song
     {
@@ -110,6 +117,7 @@ namespace Dimension::Music
         std::vector<Channel> Channels;
         std::vector<Pattern> Patterns;
         std::vector<PlaylistClip> Playlist;
+        std::vector<PlaylistTrack> Tracks; // by track index (may be shorter than the tracks used)
 
         int StepTicks() const { return kTicksPerBeat / std::max(1, StepsPerBeat); }
         int BarTicks() const { return kTicksPerBeat * std::max(1, BeatsPerBar); }
@@ -124,6 +132,13 @@ namespace Dimension::Music
         void ToggleStep(int pattern, int channel, int step);
         // Removes a channel and its notes (later channels' notes move down one).
         void RemoveChannel(int channel);
+        // A clip's length in ticks (its own, or its pattern's).
+        int ClipTicks(const PlaylistClip& c) const { return c.Length > 0 ? c.Length : PatternTicks(c.Pattern); }
+        std::string TrackName(int track) const;
+        bool TrackMuted(int track) const { return track >= 0 && track < (int)Tracks.size() && Tracks[track].Mute; }
+        PlaylistTrack& Track(int track); // (grows Tracks to reach it)
+        // Grows a pattern's bars until all its notes fit (up to 16); returns its bars.
+        int FitPatternBars(int pattern);
 
         nlohmann::json ToJson() const;
         static bool FromJson(const nlohmann::json& j, Song& out);

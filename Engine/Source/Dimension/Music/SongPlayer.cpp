@@ -547,8 +547,8 @@ namespace Dimension::Music
         }
         for (const PlaylistClip& clip : m_Song.Playlist)
         {
-            if (clip.Pattern < 0 || clip.Pattern >= (int)m_Song.Patterns.size()) continue;
-            int length = clip.Length > 0 ? clip.Length : m_Song.PatternTicks(clip.Pattern);
+            if (clip.Pattern < 0 || clip.Pattern >= (int)m_Song.Patterns.size() || m_Song.TrackMuted(clip.Track)) continue;
+            int length = m_Song.ClipTicks(clip);
             if (clip.Start >= to || clip.Start + length + swing <= from) continue;
             for (const Note& n : m_Song.Patterns[clip.Pattern].Notes)
                 if (n.Start < length) add(n, (double)clip.Start + n.Start);

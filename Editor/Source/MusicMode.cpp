@@ -1,5 +1,6 @@
 #include "MusicMode.h"
 #include "EditorUI.h"
+#include "MusicModeUI.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Asset/AssetManager.h>
 #include <imgui_internal.h>
@@ -11,27 +12,10 @@ namespace Editor
 {
     using namespace Dimension;
     using namespace Dimension::Music;
+    using namespace Editor::MusicUI;
 
     namespace
     {
-        std::string NoteName(int key)
-        {
-            static const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-            return std::string(names[((key % 12) + 12) % 12]) + std::to_string(key / 12); // (FL's naming: 60 = C5)
-        }
-
-        bool IsBlackKey(int key)
-        {
-            int k = ((key % 12) + 12) % 12;
-            return k == 1 || k == 3 || k == 6 || k == 8 || k == 10;
-        }
-
-        ImU32 Shade(ImU32 c, float f)
-        {
-            ImVec4 v = ImGui::ColorConvertU32ToFloat4(c);
-            return ImGui::ColorConvertFloat4ToU32(ImVec4(std::min(1.0f, v.x * f), std::min(1.0f, v.y * f), std::min(1.0f, v.z * f), v.w));
-        }
-
         // The typing keyboard (FL's layout): Z row = one octave from C, Q row = the next.
         struct TypedKey
         {
@@ -143,6 +127,8 @@ namespace Editor
         m_Undo.pop_back();
         m_SelectedChannel = std::min(m_SelectedChannel, (int)m_Song.Channels.size() - 1);
         m_Pattern = std::clamp(m_Pattern, 0, (int)m_Song.Patterns.size() - 1);
+        m_RollSelection.clear();
+        m_SelectedClip = -1;
         Changed();
     }
 
@@ -154,6 +140,8 @@ namespace Editor
         m_Redo.pop_back();
         m_SelectedChannel = std::min(m_SelectedChannel, (int)m_Song.Channels.size() - 1);
         m_Pattern = std::clamp(m_Pattern, 0, (int)m_Song.Patterns.size() - 1);
+        m_RollSelection.clear();
+        m_SelectedClip = -1;
         Changed();
     }
 
@@ -170,9 +158,29 @@ namespace Editor
         if (m_Player->IsPlaying()) m_Player->Pause();
         else
         {
-            m_Player->SetPattern(m_Pattern);
+            if (!m_SongMode) m_Player->SetPattern(m_Pattern);
             m_Player->Play();
         }
+    }
+
+    void MusicMode::SetSongMode(bool song)
+    {
+        if (m_SongMode == song) return;
+        m_SongMode = song;
+        if (!m_Player) return;
+        bool playing = m_Player->IsPlaying();
+        m_Player->Stop();
+        m_Player->SetMode(song ? SongPlayer::Mode::Song : SongPlayer::Mode::Pattern);
+        m_Player->SetPattern(m_Pattern);
+        if (playing) m_Player->Play();
+    }
+
+    void MusicMode::SetPattern(int pattern)
+    {
+        pattern = std::clamp(pattern, 0, (int)m_Song.Patterns.size() - 1);
+        if (pattern != m_Pattern) m_RollSelection.clear();
+        m_Pattern = pattern;
+        if (m_Player && !m_SongMode) m_Player->SetPattern(pattern);
     }
 
     void MusicMode::StopPlayback()
@@ -189,9 +197,11 @@ namespace Editor
 
     void MusicMode::RenderToFile()
     {
-        // The current pattern (once, with the sound's tail) next to the song file, as an audio asset the game can play.
+        // The song (Song mode, its Playlist) or the current pattern (once), with the sound's tail, next to the song file
+        // as an audio asset the game can play.
         fs::path out = m_File.parent_path() / (m_File.stem().string() + ".wav");
-        auto samples = RenderSong(m_Song, 48000, SongPlayer::Mode::Pattern, m_Pattern, 1, 1.5f);
+        bool song = m_SongMode && !m_Song.Playlist.empty();
+        auto samples = RenderSong(m_Song, 48000, song ? SongPlayer::Mode::Song : SongPlayer::Mode::Pattern, m_Pattern, 1, 1.5f);
         if (!WriteWav(out, samples, 48000))
         {
             m_Status = "Could not write " + out.filename().string();
@@ -272,12 +282,22 @@ namespace Editor
         DrawTopBar();
         ImGui::Separator();
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        float keyboardHeight = 92.0f;
-        float settingsWidth = std::clamp(avail.x * 0.3f, 280.0f, 420.0f);
-        DrawChannelRack(ImVec2(avail.x - settingsWidth - ImGui::GetStyle().ItemSpacing.x, avail.y - keyboardHeight - ImGui::GetStyle().ItemSpacing.y));
-        ImGui::SameLine();
-        DrawChannelSettings(ImVec2(settingsWidth, avail.y - keyboardHeight - ImGui::GetStyle().ItemSpacing.y));
-        DrawKeyboard(ImVec2(avail.x, keyboardHeight));
+        const ImVec2 spacing = ImGui::GetStyle().ItemSpacing;
+        float keyboardHeight = m_View == View::Rack ? 92.0f : 0.0f;
+        float settingsWidth = m_View == View::Playlist ? 0.0f : std::clamp(avail.x * 0.26f, 260.0f, 400.0f);
+        ImVec2 main(avail.x - (settingsWidth > 0.0f ? settingsWidth + spacing.x : 0.0f), avail.y - (keyboardHeight > 0.0f ? keyboardHeight + spacing.y : 0.0f));
+        switch (m_View)
+        {
+        case View::Rack: DrawChannelRack(main); break;
+        case View::PianoRoll: DrawPianoRoll(main); break;
+        case View::Playlist: DrawPlaylist(main); break;
+        }
+        if (settingsWidth > 0.0f)
+        {
+            ImGui::SameLine();
+            DrawChannelSettings(ImVec2(settingsWidth, main.y));
+        }
+        if (keyboardHeight > 0.0f) DrawKeyboard(ImVec2(avail.x, keyboardHeight));
         HandleKeys();
         ImGui::End();
 
@@ -299,12 +319,36 @@ namespace Editor
         ImGui::TextColored(UI::AccentText(), "%s%s", m_Song.Name.c_str(), m_Unsaved ? "*" : "");
         ImGui::SameLine(0.0f, 24.0f);
 
+        // Views (FL's F5/F6/F7).
+        auto toggle = [](const char* label, bool on) {
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            bool pressed = ImGui::Button(label);
+            if (on) ImGui::PopStyleColor();
+            return pressed;
+        };
+        if (toggle("Channel Rack", m_View == View::Rack)) m_View = View::Rack;
+        ImGui::SetItemTooltip("F6");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Piano Roll", m_View == View::PianoRoll)) m_View = View::PianoRoll;
+        ImGui::SetItemTooltip("F7: the selected channel's notes");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Playlist", m_View == View::Playlist)) m_View = View::Playlist;
+        ImGui::SetItemTooltip("F5: the song's arrangement");
+        ImGui::SameLine(0.0f, 24.0f);
+        // Pattern or Song mode: what Play plays.
+        if (toggle("PAT", !m_SongMode)) SetSongMode(false);
+        ImGui::SetItemTooltip("Pattern mode: Play loops the current pattern");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("SONG", m_SongMode)) SetSongMode(true);
+        ImGui::SetItemTooltip("Song mode: Play plays the Playlist (Render WAV renders it)");
+        ImGui::SameLine(0.0f, 12.0f);
+
         // Transport.
         bool playing = m_Player && m_Player->IsPlaying();
         if (playing) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         if (ImGui::Button(playing ? "Pause" : "Play", ImVec2(56, 0))) TogglePlay();
         if (playing) ImGui::PopStyleColor();
-        ImGui::SetItemTooltip("Play the pattern (Space)");
+        ImGui::SetItemTooltip(m_SongMode ? "Play the song (Space)" : "Play the pattern (Space)");
         ImGui::SameLine();
         if (ImGui::Button("Stop", ImVec2(48, 0))) StopPlayback();
         ImGui::SameLine();
@@ -335,11 +379,7 @@ namespace Editor
         if (ImGui::BeginCombo("##pattern", m_Song.Patterns[m_Pattern].Name.c_str()))
         {
             for (int i = 0; i < (int)m_Song.Patterns.size(); ++i)
-                if (ImGui::Selectable(m_Song.Patterns[i].Name.c_str(), i == m_Pattern))
-                {
-                    m_Pattern = i;
-                    if (m_Player) m_Player->SetPattern(i);
-                }
+                if (ImGui::Selectable(m_Song.Patterns[i].Name.c_str(), i == m_Pattern)) SetPattern(i);
             ImGui::EndCombo();
         }
         ImGui::SameLine();
@@ -350,9 +390,8 @@ namespace Editor
             p.Name = "Pattern " + std::to_string(m_Song.Patterns.size() + 1);
             p.Bars = m_Song.Patterns[m_Pattern].Bars;
             m_Song.Patterns.push_back(p);
-            m_Pattern = (int)m_Song.Patterns.size() - 1;
             Changed();
-            if (m_Player) m_Player->SetPattern(m_Pattern);
+            SetPattern((int)m_Song.Patterns.size() - 1);
         }
         ImGui::SetItemTooltip("A new pattern");
         ImGui::SameLine();
@@ -423,7 +462,8 @@ namespace Editor
         }
         ImGui::SameLine();
         if (ImGui::Button("Render WAV")) RenderToFile();
-        ImGui::SetItemTooltip("Render the pattern to %s.wav next to the song (an audio clip the game can play)", m_File.stem().string().c_str());
+        ImGui::SetItemTooltip("Render %s to %s.wav next to the song (an audio clip the game can play)", m_SongMode && !m_Song.Playlist.empty() ? "the song" : "the pattern",
+                              m_File.stem().string().c_str());
         ImGui::SameLine();
         ImGui::BeginDisabled(m_Undo.empty());
         if (ImGui::Button("Undo")) Undo();
@@ -465,7 +505,7 @@ namespace Editor
         const int steps = pattern.Bars * stepsPerBar;
         const float rowH = 26.0f, stepW = 20.0f, stepH = 24.0f;
         int playStep = -1;
-        if (m_Player && m_Player->IsPlaying() && m_Player->GetPattern() == m_Pattern) playStep = (int)(m_Player->GetTick() / m_Song.StepTicks());
+        if (m_Player && m_Player->IsPlaying() && !m_SongMode && m_Player->GetPattern() == m_Pattern) playStep = (int)(m_Player->GetTick() / m_Song.StepTicks());
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_PaintChannel = -1;
 
         int removeChannel = -1, cloneChannel = -1, moveUp = -1;
@@ -940,6 +980,11 @@ namespace Editor
             m_TypedNotes.clear();
             return;
         }
+        if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) m_View = View::Playlist;
+        if (ImGui::IsKeyPressed(ImGuiKey_F6, false)) m_View = View::Rack;
+        if (ImGui::IsKeyPressed(ImGuiKey_F7, false)) m_View = View::PianoRoll;
+        if (m_View == View::PianoRoll) PianoRollKeys();
+        if (m_View == View::Playlist) PlaylistKeys();
         if (io.KeyCtrl)
         {
             if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) io.KeyShift ? Redo() : Undo();

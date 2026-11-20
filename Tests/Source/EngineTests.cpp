@@ -59,6 +59,7 @@
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Music/SongPlayer.h>
+#include <Dimension/Music/Editing.h>
 #include <Dimension/Renderer/ColrV1.h>
 #include <Dimension/Platform/Platform.h>
 #include <Dimension/Audio/Microphone.h>
@@ -20641,6 +20642,77 @@ namespace
         fs::remove(file);
     }
 
+    void TestMusicEditing()
+    {
+        using namespace Dimension::Music;
+        // Snapping.
+        CHECK(Edit::SnapFloor(47.9, 24) == 24 && Edit::SnapFloor(48.0, 24) == 48 && Edit::SnapRound(35.9, 24) == 24 && Edit::SnapRound(36.1, 24) == 48);
+        CHECK(Edit::SnapFloor(13.7, 1) == 13 && Edit::SnapRound(13.7, 1) == 14);
+        Pattern p;
+        p.Notes = { { 0, 0, 24, 60, 0.8f }, { 0, 48, 48, 64, 0.8f }, { 1, 48, 24, 60, 0.8f }, { 0, 100, 10, 67, 0.8f } };
+        // Hit testing and box selection (only the channel's notes).
+        CHECK(Edit::NoteAt(p, 0, 50.0, 64) == 1 && Edit::NoteAt(p, 0, 96.0, 64) == -1 && Edit::NoteAt(p, 1, 50.0, 64) == -1);
+        CHECK(Edit::NoteAt(p, 1, 50.0, 60) == 2);
+        auto box = Edit::NotesInBox(p, 0, 40, 120, 70, 62); // (corners in any order)
+        CHECK(box.size() == 2 && box[0] == 1 && box[1] == 3);
+        CHECK(Edit::NotesInBox(p, 0, 24, 48, 0, 127).empty()); // (touching ends do not overlap)
+        // Moving a group stops at the edges together (chords keep their shape).
+        Pattern moved = p;
+        Edit::Move(moved, { 0, 1 }, -30, 70);
+        CHECK(moved.Notes[0].Start == 0 && moved.Notes[1].Start == 48 && moved.Notes[0].Key == 123 && moved.Notes[1].Key == 127);
+        Edit::Move(moved, { 1 }, 12, -2);
+        CHECK(moved.Notes[1].Start == 60 && moved.Notes[1].Key == 125 && moved.Notes[2] == p.Notes[2]);
+        // Quantize and remove.
+        Pattern q = p;
+        Edit::Quantize(q, { 3 }, 24);
+        CHECK(q.Notes[3].Start == 96);
+        Edit::Remove(q, { 3, 0, 3 });
+        CHECK(q.Notes.size() == 2 && q.Notes[0] == p.Notes[1] && q.Notes[1] == p.Notes[2]);
+
+        // Patterns grow to fit their notes.
+        Song s;
+        s.Channels.push_back({});
+        s.Patterns.push_back(p);
+        CHECK(s.FitPatternBars(0) == 1);
+        s.Patterns[0].Notes.push_back({ 0, 380, 10, 60, 0.8f });
+        CHECK(s.FitPatternBars(0) == 2 && s.PatternTicks(0) == 768);
+
+        // Playlist: clips' lengths, hit testing, track names and mutes (saved, and muted tracks are silent).
+        s.Playlist = { { 0, 0, 0, 0 }, { 0, 2, 768, 200 } };
+        CHECK(s.ClipTicks(s.Playlist[0]) == 768 && s.ClipTicks(s.Playlist[1]) == 200 && s.SongTicks() == 968);
+        CHECK(Edit::ClipAt(s, 0, 767.0) == 0 && Edit::ClipAt(s, 0, 768.0) == -1 && Edit::ClipAt(s, 2, 900.0) == 1 && Edit::ClipAt(s, 1, 10.0) == -1);
+        CHECK(s.TrackName(2) == "Track 3" && !s.TrackMuted(2));
+        s.Track(2).Name = "Drums";
+        s.Track(2).Mute = true;
+        CHECK(s.Tracks.size() == 3 && s.TrackName(2) == "Drums" && s.TrackMuted(2) && s.TrackName(0) == "Track 1");
+        Song back;
+        CHECK(Song::FromJson(s.ToJson(), back) && back.TrackName(2) == "Drums" && back.TrackMuted(2) && back.Playlist.size() == 2 &&
+              back.Playlist[1].Length == 200);
+
+        // A muted track's clips are not heard; unmuted, they are.
+        Song arr;
+        arr.Tempo = 120.0f;
+        Channel kick;
+        arr.Channels.push_back(kick);
+        arr.Patterns.push_back({});
+        arr.ToggleStep(0, 0, 0);
+        arr.Playlist = { { 0, 1, 0, 0 } };
+        arr.Track(1).Mute = true;
+        auto muted = RenderSong(arr, 48000, SongPlayer::Mode::Song, 0, 1, 0.0f);
+        CHECK(MusicSilent(muted, 0, muted.size() / 2));
+        arr.Track(1).Mute = false;
+        auto heard = RenderSong(arr, 48000, SongPlayer::Mode::Song, 0, 1, 0.0f);
+        CHECK(MusicOnset(heard) < 48);
+        // A clip shorter than its pattern cuts the notes past its end.
+        arr.Patterns[0].Notes.clear();
+        arr.ToggleStep(0, 0, 8); // 1 s in
+        arr.Playlist = { { 0, 0, 0, 96 } }, arr.Playlist.push_back({ 0, 0, 384, 0 }); // a beat-long clip, then the whole pattern a bar later
+        auto cut = RenderSong(arr, 48000, SongPlayer::Mode::Song, 0, 1, 0.0f);
+        CHECK(MusicSilent(cut, 0, 48000 * 3 - 10)); // the first clip's hit (at 1 s) is cut; the second's is at 3 s
+        size_t hit = MusicOnset(cut);
+        CHECK(hit >= 48000 * 3 && hit < 48000 * 3 + 48);
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -20943,6 +21015,7 @@ int main(int argc, char** argv)
     Run("Music song format", TestMusicSongFormat);
     Run("Music rendering", TestMusicRendering);
     Run("Music sampler", TestMusicSampler);
+    Run("Music editing", TestMusicEditing);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;
