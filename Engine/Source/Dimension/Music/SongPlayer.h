@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/Music/Song.h"
+#include "Dimension/Music/Effects.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -27,7 +28,9 @@ namespace Dimension::Music
     public:
         enum class Mode { Pattern, Song };
         static constexpr int kMaxVoices = 96;
-        static constexpr int kMaxMeters = 64;
+        static constexpr int kMaxMeters = 64;  // channels
+        static constexpr int kMaxMixer = 32;   // mixer tracks (the Master and 31 inserts)
+        static constexpr uint32_t kChunk = 64; // frames between automation updates
 
         explicit SongPlayer(uint32_t sampleRate = 48000);
         ~SongPlayer();
@@ -58,6 +61,7 @@ namespace Dimension::Music
         // Peak levels since the last call (0..1+): a channel's (both sides), the master's left and right.
         float TakeChannelPeak(int channel);
         std::array<float, 2> TakeMasterPeak();
+        float TakeMixerPeak(int track); // after its level and pan
         int ActiveVoices() const;
 
         struct Voice;
@@ -73,6 +77,8 @@ namespace Dimension::Music
         void Collect(double from, uint32_t frameBase, uint32_t count, double framesPerTick, std::vector<Event>& events) const;
         double LoopEnd() const;
         float RenderVoice(Voice& v, float& left, float& right);
+        void RenderChunk(float* out, uint32_t frames);
+        void ApplyAutomation(double tick);
 
         uint32_t m_SampleRate;
         mutable std::mutex m_Mutex;
@@ -88,6 +94,9 @@ namespace Dimension::Music
         std::vector<Event> m_Events; // (reused each block)
         std::array<std::atomic<float>, kMaxMeters> m_ChannelPeaks{};
         std::atomic<float> m_PeakL{ 0.0f }, m_PeakR{ 0.0f };
+        std::array<std::atomic<float>, kMaxMixer> m_MixerPeaks{};
+        std::vector<std::vector<std::unique_ptr<EffectProcessor>>> m_Fx; // [track][slot]
+        std::vector<float> m_Bus;                                         // [track] kChunk stereo frames each
     };
 
     // Renders a song offline: Pattern mode plays `pattern` `loops` times, Song mode the Playlist once; then `tail`

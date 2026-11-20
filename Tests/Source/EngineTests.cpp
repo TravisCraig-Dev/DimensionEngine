@@ -20713,6 +20713,203 @@ namespace
         CHECK(hit >= 48000 * 3 && hit < 48000 * 3 + 48);
     }
 
+    // A song of one sine synth channel (open filter, quick envelope) playing `key` for `ticks` at 120 BPM.
+    Dimension::Music::Song MusicSineSong(int key, int ticks, float release = 0.01f)
+    {
+        using namespace Dimension::Music;
+        Song s;
+        s.Tempo = 120.0f;
+        Channel c;
+        c.Type = InstrumentType::Synth;
+        c.Synth.Wave1 = c.Synth.Wave2 = Waveform::Sine;
+        c.Synth.Detune = 0.0f;
+        c.Synth.Cutoff = 20000.0f;
+        c.Synth.FilterEnv = 0.0f;
+        c.Synth.Resonance = 0.0f;
+        c.Synth.Amp = { 0.001f, 0.01f, 1.0f, release };
+        c.Volume = 1.0f;
+        s.Channels.push_back(c);
+        Pattern p;
+        p.Bars = 2;
+        p.Notes.push_back({ 0, 0, ticks, key, 1.0f });
+        s.Patterns.push_back(p);
+        s.Master().Volume = 1.0f;
+        return s;
+    }
+
+    float MusicRms(const std::vector<float>& stereo, size_t from, size_t to)
+    {
+        double sum = 0.0;
+        size_t n = 0;
+        for (size_t f = from; f < to && f * 2 + 1 < stereo.size(); ++f, ++n) sum += stereo[f * 2] * stereo[f * 2] + stereo[f * 2 + 1] * stereo[f * 2 + 1];
+        return n ? (float)std::sqrt(sum / (2.0 * n)) : 0.0f;
+    }
+
+    void TestMusicMixer()
+    {
+        using namespace Dimension::Music;
+        const uint32_t rate = 48000;
+        // The format: inserts, routing, effects and automation survive a save; older songs' master volume moves to the Master.
+        Song s = MusicSineSong(69, 96);
+        s.Mixer.push_back({ "Bass Bus", 0.7f, -0.25f, false, 2, { Effect::Make(EffectType::Reverb), Effect::Make(EffectType::Filter) } });
+        s.Mixer.push_back({ "Drums", 1.0f, 0.0f, true, 0, {} });
+        s.Mixer[1].Effects[1].P[1] = 900.0f;
+        s.Channels[0].Insert = 1;
+        AutomationClip a;
+        a.Target = { ParamKind::EffectParam, 1, 1, 1 };
+        a.Track = 3;
+        a.Start = 96;
+        a.Length = 768;
+        a.Points = { { 0, 0.1f }, { 384, 0.9f } };
+        s.Automation.push_back(a);
+        Song back;
+        CHECK(Song::FromJson(s.ToJson(), back));
+        CHECK(back.Mixer.size() == 3 && back.Mixer[0].Name == "Master" && back.Mixer[1].Name == "Bass Bus" && back.Mixer[1].Output == 2);
+        CHECK(back.Mixer[1].Effects.size() == 2 && back.Mixer[1].Effects[0].Type == EffectType::Reverb && back.Mixer[1].Effects[1].P[1] == 900.0f);
+        CHECK(back.Mixer[2].Mute && back.Channels[0].Insert == 1);
+        CHECK(back.Automation.size() == 1 && back.Automation[0].Target == a.Target && back.Automation[0].Points == a.Points && back.Automation[0].Track == 3);
+        CHECK(back.SongTicks() == 96 + 768); // (automation clips count toward the song's length)
+        CHECK(back.ParamName(a.Target) == "Bass Bus Filter Cutoff");
+        nlohmann::json old = Song::Default().ToJson();
+        old.erase("mixer");
+        old["masterVolume"] = 0.5f;
+        CHECK(Song::FromJson(old, back) && back.Mixer.size() == 1 && back.Master().Volume == 0.5f);
+        // Bad routing (backwards, or to a track that is not there) goes to the Master.
+        nlohmann::json bad = s.ToJson();
+        bad["mixer"][2]["output"] = 1;
+        bad["channels"][0]["insert"] = 9;
+        CHECK(Song::FromJson(bad, back) && back.Mixer[2].Output == 0 && back.Channels[0].Insert == 0);
+
+        // Normalized automation values: linear and log ranges.
+        ParamRef vol{ ParamKind::ChannelVolume, 0 }, cutoff{ ParamKind::SynthCutoff, 0 };
+        CHECK(Near(s.FromNormalized(vol, 0.5f), 0.625f) && Near(s.ToNormalized(vol, 0.625f), 0.5f));
+        CHECK(Near(s.FromNormalized(cutoff, 0.5f), std::sqrt(20.0f * 20000.0f), 1.0f) && Near(s.ToNormalized(cutoff, 20000.0f), 1.0f));
+        CHECK(Near(a.ValueAt(-5), 0.1f) && Near(a.ValueAt(192), 0.5f) && Near(a.ValueAt(1000), 0.9f));
+        CHECK(!s.AutomatableParams().empty() && s.Param({ ParamKind::EffectParam, 1, 5, 0 }) == nullptr);
+
+        // Removing things keeps references right: channels, mixer tracks, effects.
+        Song r = s;
+        r.RemoveEffect(1, 0); // the reverb: the filter moves to slot 0 and its automation follows
+        CHECK(r.Mixer[1].Effects.size() == 1 && r.Automation.size() == 1 && r.Automation[0].Target.Slot == 0 && r.ParamName(r.Automation[0].Target) == "Bass Bus Filter Cutoff");
+        r.RemoveEffect(1, 0);
+        CHECK(r.Automation.empty());
+        Song m = s;
+        m.RemoveMixerTrack(1);
+        CHECK(m.Mixer.size() == 2 && m.Channels[0].Insert == 0 && m.Automation.empty() && m.Mixer[1].Name == "Drums");
+        Song c = s;
+        c.Automation.push_back({ { ParamKind::ChannelPan, 0 }, 0, 0, 96, { { 0, 0.5f } } });
+        Channel extra;
+        extra.Name = "Extra";
+        c.InsertChannel(0, extra);
+        CHECK(c.Channels[1].Type == InstrumentType::Synth && c.Patterns[0].Notes[0].Channel == 1 && c.Automation[1].Target.Index == 1);
+        c.SwapChannels(0, 1);
+        CHECK(c.Patterns[0].Notes[0].Channel == 0 && c.Automation[1].Target.Index == 0);
+        c.RemoveChannel(0);
+        CHECK(c.Channels.size() == 1 && c.Patterns[0].Notes.empty() && c.Automation.size() == 1);
+
+        // ---- Sound ----
+        auto render = [&](const Song& song, SongPlayer::Mode mode = SongPlayer::Mode::Pattern, float tail = 0.0f) {
+            return RenderSong(song, rate, mode, 0, 1, tail);
+        };
+        Song dry = MusicSineSong(69, 192);
+        float dryRms = MusicRms(render(dry), rate / 10, rate * 9 / 10);
+        CHECK(dryRms > 0.2f);
+        // Routing: through an insert at half volume; a muted insert (or one sent into a muted one) is silent.
+        Song routed = dry;
+        routed.Mixer.push_back({ "Insert", 0.5f });
+        routed.Channels[0].Insert = 1;
+        CHECK(Near(MusicRms(render(routed), rate / 10, rate * 9 / 10), dryRms * 0.5f, dryRms * 0.02f));
+        routed.Mixer[1].Mute = true;
+        CHECK(MusicSilent(render(routed), 0, rate * 4));
+        routed.Mixer[1].Mute = false;
+        routed.Mixer.push_back({ "Bus", 1.0f, 0.0f, true });
+        routed.Mixer[1].Output = 2;
+        CHECK(MusicSilent(render(routed), 0, rate * 4));
+        routed.Mixer[2].Mute = false;
+        CHECK(Near(MusicRms(render(routed), rate / 10, rate * 9 / 10), dryRms * 0.5f, dryRms * 0.02f));
+        // Mixer pan: balance hard left.
+        routed.Mixer[2].Pan = -1.0f;
+        auto left = render(routed);
+        float maxR = 0.0f;
+        for (size_t f = 0; f < left.size() / 2; ++f) maxR = std::max(maxR, std::fabs(left[f * 2 + 1]));
+        CHECK(maxR < 1e-5f && MusicRms(left, rate / 10, rate * 9 / 10) > 0.1f);
+
+        // EQ: a 12 dB low shelf lifts a low note about 4x and leaves a high one alone.
+        Song low = MusicSineSong(33, 192); // 55 Hz
+        float lowDry = MusicRms(render(low), rate / 10, rate * 9 / 10);
+        low.Master().Effects.push_back(Effect::Make(EffectType::EQ));
+        low.Master().Effects[0].P[0] = 12.0f;
+        float boost = MusicRms(render(low), rate / 10, rate * 9 / 10) / lowDry;
+        CHECK(boost > 3.0f && boost < 4.1f);
+        Song high = MusicSineSong(105, 192); // 3.5 kHz
+        float highDry = MusicRms(render(high), rate / 10, rate * 9 / 10);
+        high.Master().Effects = low.Master().Effects;
+        CHECK(Near(MusicRms(render(high), rate / 10, rate * 9 / 10) / highDry, 1.0f, 0.05f));
+        // Filter: a 200 Hz low pass all but removes 440 Hz... a high pass at 200 Hz keeps it.
+        Song filtered = dry;
+        Effect lp = Effect::Make(EffectType::Filter);
+        lp.P[1] = 100.0f;
+        lp.P[2] = 0.0f;
+        filtered.Master().Effects.push_back(lp);
+        CHECK(MusicRms(render(filtered), rate / 10, rate * 9 / 10) < dryRms * 0.1f);
+        filtered.Master().Effects[0].P[0] = 1.0f; // high pass
+        CHECK(MusicRms(render(filtered), rate / 10, rate * 9 / 10) > dryRms * 0.9f);
+        // Compressor: 20:1 above -24 dB brings a loud sine down a lot; makeup brings it back up.
+        Song comp = dry;
+        Effect c1 = Effect::Make(EffectType::Compressor);
+        c1.P[0] = -24.0f, c1.P[1] = 20.0f, c1.P[2] = 1.0f;
+        comp.Master().Effects.push_back(c1);
+        float squashed = MusicRms(render(comp), rate / 4, rate * 9 / 10);
+        CHECK(squashed < dryRms * 0.25f);
+        comp.Master().Effects[0].P[4] = 12.0f;
+        CHECK(Near(MusicRms(render(comp), rate / 4, rate * 9 / 10) / squashed, 3.98f, 0.3f));
+        // Delay: a short note (one step) echoes 3 steps later (0.375 s at 120 BPM), and again on the other side.
+        Song echo = MusicSineSong(69, 24);
+        Effect d = Effect::Make(EffectType::Delay);
+        d.Mix = 1.0f;
+        echo.Master().Effects.push_back(d);
+        auto echoed = render(echo, SongPlayer::Mode::Pattern, 1.0f);
+        CHECK(MusicSilent(echoed, rate * 15 / 100, rate * 37 / 100)); // (the note ends at 0.125 s)
+        CHECK(MusicRms(echoed, rate * 38 / 100, rate / 2) > 0.1f);
+        float echoL = 0.0f, echoR = 0.0f;
+        for (size_t f = rate * 375 / 1000; f < rate / 2; ++f) echoL += std::fabs(echoed[f * 2]), echoR += std::fabs(echoed[f * 2 + 1]);
+        CHECK(echoL > 10.0f * echoR); // ping-pong: the first echo on the left
+        // Reverb: a tail after the note, dying away.
+        Song wet = MusicSineSong(69, 24);
+        wet.Master().Effects.push_back(Effect::Make(EffectType::Reverb));
+        auto verb = render(wet, SongPlayer::Mode::Pattern, 3.0f);
+        float early = MusicRms(verb, rate / 5, rate * 3 / 10), late = MusicRms(verb, rate * 4, rate * 5);
+        CHECK(early > 0.005f && late < early * 0.2f);
+        // A disabled effect does nothing.
+        wet.Master().Effects[0].Enabled = false;
+        CHECK(MusicSilent(render(wet, SongPlayer::Mode::Pattern, 1.0f), rate / 5, rate));
+
+        // Automation (Song mode): the channel's volume rises from 0 to full across the bar.
+        Song autoSong = MusicSineSong(69, 768);
+        autoSong.Playlist.push_back({ 0, 0, 0, 0 });
+        autoSong.Automation.push_back({ { ParamKind::ChannelVolume, 0 }, 1, 0, 768, { { 0, 0.0f }, { 768, 0.8f } } });
+        auto ramp = render(autoSong, SongPlayer::Mode::Song);
+        float start = MusicRms(ramp, 0, rate / 10), mid = MusicRms(ramp, rate * 19 / 10, rate * 21 / 10), end = MusicRms(ramp, rate * 37 / 10, rate * 39 / 10);
+        CHECK(start < 0.05f && mid > start * 3.0f && end > mid * 1.6f);
+        CHECK(Near(end / mid, 1.95f, 0.25f)); // (linear in volume)
+        // A muted Playlist track's automation does nothing (the volume stays where it is).
+        autoSong.Track(1).Mute = true;
+        auto flat = render(autoSong, SongPlayer::Mode::Song);
+        CHECK(Near(MusicRms(flat, 0, rate / 10) / MusicRms(flat, rate * 37 / 10, rate * 39 / 10), 1.0f, 0.05f));
+        // Pattern mode ignores automation.
+        autoSong.Track(1).Mute = false;
+        auto pat = render(autoSong, SongPlayer::Mode::Pattern);
+        CHECK(Near(MusicRms(pat, 0, rate / 10) / MusicRms(pat, rate * 37 / 10, rate * 39 / 10), 1.0f, 0.05f));
+
+        // Meters per mixer track.
+        SongPlayer live(rate);
+        live.SetSong(routed);
+        std::vector<float> block(256 * 2);
+        live.NoteOn(0, 69, 1.0f);
+        live.Render(block.data(), 256);
+        CHECK(live.TakeMixerPeak(1) > 0.1f && live.TakeMixerPeak(2) > 0.1f && live.TakeMixerPeak(0) > 0.1f && live.TakeMixerPeak(1) == 0.0f);
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -21016,6 +21213,7 @@ int main(int argc, char** argv)
     Run("Music rendering", TestMusicRendering);
     Run("Music sampler", TestMusicSampler);
     Run("Music editing", TestMusicEditing);
+    Run("Music mixer", TestMusicMixer);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

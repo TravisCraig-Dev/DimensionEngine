@@ -44,6 +44,14 @@ namespace Editor
         // The Playlist: patterns placed on tracks along the song (MusicPlaylist.cpp).
         void DrawPlaylist(const ImVec2& size);
         void PlaylistKeys();
+        // The Mixer: tracks with faders, pan, routing and effect chains (MusicMixer.cpp).
+        void DrawMixer(const ImVec2& size);
+        void DrawEffectPanel(const ImVec2& size);
+        // Automation: a right-click menu on the last widget offering a clip for `ref`, making one, and the selected
+        // clip's curve under the Playlist.
+        void AutomationMenu(const Dimension::Music::ParamRef& ref);
+        void CreateAutomation(const Dimension::Music::ParamRef& ref);
+        void DrawAutomationEditor(const ImVec2& min, const ImVec2& max);
         void SetSongMode(bool song);
         void SetPattern(int pattern);
         void HandleKeys();
@@ -82,7 +90,7 @@ namespace Editor
         int m_PianoNote = -1;
         int m_TypingOctave = 5;
         // Which workspace view fills the middle (F6 Channel Rack, F7 Piano Roll, F5 Playlist), and Pattern / Song mode.
-        enum class View { Rack, PianoRoll, Playlist };
+        enum class View { Rack, PianoRoll, Playlist, Mixer };
         View m_View = View::Rack;
         bool m_SongMode = false;
         // Piano Roll: zoom (pixels per tick, per key), scroll (ticks, pixels from the top key), snap (ticks; 1 = none),
@@ -112,9 +120,14 @@ namespace Editor
         {
             enum Kind { None, Move, Resize, Erase, Seek } Kind = None;
             int Clip = -1;
+            bool Automation = false; // (Clip indexes the automation clips)
             double Offset = 0.0;
             bool Moved = false;
         } m_ListDrag;
+        // Mixer: the selected track and effect slot, meters; the selected automation clip and the point being dragged.
+        int m_SelectedMixer = 0, m_SelectedEffect = -1, m_RenamingMixer = -1;
+        std::vector<float> m_MixerMeters;
+        int m_SelectedAuto = -1, m_AutoDragPoint = -1;
         std::string m_Status;
         float m_StatusTime = 0.0f;
     };

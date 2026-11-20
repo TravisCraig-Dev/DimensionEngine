@@ -208,6 +208,17 @@ namespace Dimension::Music
                 m_Voices[i].Active = false;
         m_Song = song;
         m_Samples = std::move(samples);
+        int tracks = std::min((int)m_Song.Mixer.size(), kMaxMixer);
+        m_Fx.resize(tracks);
+        for (int t = 0; t < tracks; ++t)
+        {
+            const auto& effects = m_Song.Mixer[t].Effects;
+            auto& fx = m_Fx[t];
+            fx.resize(std::min((int)effects.size(), kMaxEffects));
+            for (int e = 0; e < (int)fx.size(); ++e)
+                if (!fx[e] || fx[e]->GetType() != effects[e].Type) fx[e] = EffectProcessor::Create(effects[e].Type, m_SampleRate);
+        }
+        if (m_Bus.size() < (size_t)tracks * kChunk * 2) m_Bus.assign((size_t)tracks * kChunk * 2, 0.0f);
         m_Pattern = std::clamp(m_Pattern, 0, std::max(0, (int)m_Song.Patterns.size() - 1));
     }
 
@@ -557,13 +568,34 @@ namespace Dimension::Music
 
     void SongPlayer::Render(float* out, uint32_t frames)
     {
-        std::fill(out, out + (size_t)frames * 2, 0.0f);
         std::lock_guard lock(m_Mutex);
+        // In short chunks, so automation moves settings smoothly.
+        for (uint32_t done = 0; done < frames;)
+        {
+            uint32_t n = std::min<uint32_t>(kChunk, frames - done);
+            RenderChunk(out + (size_t)done * 2, n);
+            done += n;
+        }
+    }
+
+    void SongPlayer::ApplyAutomation(double tick)
+    {
+        for (const AutomationClip& a : m_Song.Automation)
+        {
+            if (m_Song.TrackMuted(a.Track) || tick < a.Start || tick >= a.Start + a.Length) continue;
+            if (float* p = m_Song.Param(a.Target)) *p = m_Song.FromNormalized(a.Target, a.ValueAt(tick - a.Start));
+        }
+    }
+
+    void SongPlayer::RenderChunk(float* out, uint32_t frames)
+    {
+        std::fill(out, out + (size_t)frames * 2, 0.0f);
         const float sr = (float)m_SampleRate;
         const double ticksPerFrame = m_Song.TicksPerSecond() / sr;
         const double framesPerTick = 1.0 / ticksPerFrame;
+        if (m_Playing && m_Mode == Mode::Song) ApplyAutomation(m_Tick);
 
-        // This block's notes (wrapping at the loop's end).
+        // This chunk's notes (wrapping at the loop's end).
         m_Events.clear();
         if (m_Playing)
         {
@@ -585,29 +617,36 @@ namespace Dimension::Music
 
         bool anySolo = false;
         for (const Channel& c : m_Song.Channels) anySolo |= c.Solo;
-        // Per channel: gain and pan (equal power), muted by Mute or another channel's Solo.
-        size_t channelCount = m_Song.Channels.size();
+        // Per channel: gain and pan (equal power), muted by Mute or another channel's Solo; and its mixer track.
+        const size_t channelCount = m_Song.Channels.size();
+        const int tracks = std::min((int)m_Song.Mixer.size(), kMaxMixer);
         float gainL[kMaxMeters], gainR[kMaxMeters], peaks[kMaxMeters] = {};
+        int insert[kMaxMeters];
+        bool audibleChannel[kMaxMeters];
         for (size_t i = 0; i < channelCount && i < kMaxMeters; ++i)
         {
             const Channel& c = m_Song.Channels[i];
             bool audible = !c.Mute && (!anySolo || c.Solo);
+            audibleChannel[i] = audible;
             float g = audible ? c.Volume : 0.0f;
             float angle = (std::clamp(c.Pan, -1.0f, 1.0f) + 1.0f) * 0.25f * (float)kPi;
             gainL[i] = g * std::cos(angle) * 1.41421356f;
             gainR[i] = g * std::sin(angle) * 1.41421356f;
+            insert[i] = c.Insert >= 0 && c.Insert < tracks ? c.Insert : 0;
         }
-        float master = m_Song.MasterVolume, peakL = 0.0f, peakR = 0.0f;
+        std::fill(m_Bus.begin(), m_Bus.begin() + (size_t)tracks * kChunk * 2, 0.0f);
+
+        // Voices into their channels' mixer tracks.
         size_t next = 0;
         for (uint32_t f = 0; f < frames; ++f)
         {
             while (next < m_Events.size() && m_Events[next].Frame <= f)
             {
                 const Event& e = m_Events[next++];
-                if (e.Channel >= 0 && e.Channel < (int)channelCount && e.Channel < kMaxMeters && gainL[e.Channel] + gainR[e.Channel] > 0.0f)
+                // (muted channels start no notes; a channel turned all the way down does, so automation can bring it up)
+                if (e.Channel >= 0 && e.Channel < (int)channelCount && e.Channel < kMaxMeters && audibleChannel[e.Channel])
                     Trigger(e.Channel, e.Key, e.Velocity, std::max(1.0, e.LengthFrames));
             }
-            float l = 0.0f, r = 0.0f;
             for (int i = 0; i < kMaxVoices; ++i)
             {
                 Voice& v = m_Voices[i];
@@ -627,20 +666,62 @@ namespace Dimension::Music
                 sl *= gainL[v.Channel];
                 sr2 *= gainR[v.Channel];
                 peaks[v.Channel] = std::max(peaks[v.Channel], std::max(std::fabs(sl), std::fabs(sr2)));
-                l += sl;
-                r += sr2;
+                float* bus = m_Bus.data() + ((size_t)insert[v.Channel] * kChunk + f) * 2;
+                bus[0] += sl;
+                bus[1] += sr2;
             }
-            l *= master;
-            r *= master;
-            out[f * 2] = l;
-            out[f * 2 + 1] = r;
-            peakL = std::max(peakL, std::fabs(l));
-            peakR = std::max(peakR, std::fabs(r));
+        }
+
+        // The Mixer: each insert's effects, level and pan, into its output (a later track or the Master); the Master last.
+        auto runTrack = [&](int t) {
+            const MixerTrack& m = m_Song.Mixer[t];
+            float* bus = m_Bus.data() + (size_t)t * kChunk * 2;
+            for (int slot = 0; slot < (int)m.Effects.size() && slot < kMaxEffects; ++slot)
+            {
+                const Effect& e = m.Effects[slot];
+                EffectProcessor* fx = t < (int)m_Fx.size() && slot < (int)m_Fx[t].size() ? m_Fx[t][slot].get() : nullptr;
+                if (e.Enabled && fx && fx->GetType() == e.Type) fx->Process(e, bus, frames, m_Song.Tempo, m_Song.StepsPerBeat);
+            }
+            float g = m.Mute ? 0.0f : std::max(0.0f, m.Volume);
+            float pan = std::clamp(m.Pan, -1.0f, 1.0f);
+            float gl = g * std::min(1.0f, 1.0f - pan), gr = g * std::min(1.0f, 1.0f + pan);
+            float peak = 0.0f;
+            for (uint32_t f = 0; f < frames; ++f)
+            {
+                bus[f * 2] *= gl;
+                bus[f * 2 + 1] *= gr;
+                peak = std::max(peak, std::max(std::fabs(bus[f * 2]), std::fabs(bus[f * 2 + 1])));
+            }
+            if (peak > m_MixerPeaks[t].load()) m_MixerPeaks[t] = peak;
+            return bus;
+        };
+        for (int t = 1; t < tracks; ++t)
+        {
+            float* bus = runTrack(t);
+            int target = m_Song.Mixer[t].Output;
+            if (target <= t || target >= tracks) target = 0;
+            float* into = m_Bus.data() + (size_t)target * kChunk * 2;
+            for (uint32_t i = 0; i < frames * 2; ++i) into[i] += bus[i];
+        }
+        float* master = runTrack(0);
+        float peakL = 0.0f, peakR = 0.0f;
+        for (uint32_t f = 0; f < frames; ++f)
+        {
+            out[f * 2] = master[f * 2];
+            out[f * 2 + 1] = master[f * 2 + 1];
+            peakL = std::max(peakL, std::fabs(out[f * 2]));
+            peakR = std::max(peakR, std::fabs(out[f * 2 + 1]));
         }
         for (size_t i = 0; i < channelCount && i < kMaxMeters; ++i)
             if (peaks[i] > m_ChannelPeaks[i].load()) m_ChannelPeaks[i] = peaks[i];
         if (peakL > m_PeakL.load()) m_PeakL = peakL;
         if (peakR > m_PeakR.load()) m_PeakR = peakR;
+    }
+
+    float SongPlayer::TakeMixerPeak(int track)
+    {
+        if (track < 0 || track >= kMaxMixer) return 0.0f;
+        return m_MixerPeaks[track].exchange(0.0f);
     }
 
     // ---- Offline rendering ----

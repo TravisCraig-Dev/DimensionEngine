@@ -88,4 +88,14 @@ namespace Dimension::Music::Edit
         }
         return -1;
     }
+
+    int AutomationAt(const Song& s, int track, double tick)
+    {
+        for (int i = (int)s.Automation.size() - 1; i >= 0; --i)
+        {
+            const AutomationClip& a = s.Automation[i];
+            if (a.Track == track && tick >= a.Start && tick < a.Start + a.Length) return i;
+        }
+        return -1;
+    }
 }

@@ -23,4 +23,6 @@ namespace Dimension::Music::Edit
 
     // The Playlist clip under a tick on a track (the topmost: the last one), or -1.
     int ClipAt(const Song& s, int track, double tick);
+    // The automation clip under a tick on a track (the last one), or -1.
+    int AutomationAt(const Song& s, int track, double tick);
 }

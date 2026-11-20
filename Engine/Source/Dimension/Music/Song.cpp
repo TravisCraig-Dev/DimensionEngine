@@ -1,10 +1,22 @@
 #include "Dimension/Music/Song.h"
 #include "Dimension/Core/Log.h"
+#include <cmath>
 #include <fstream>
 
 namespace Dimension::Music
 {
     using json = nlohmann::json;
+
+    namespace
+    {
+        bool TargetsChannel(const ParamRef& r)
+        {
+            return r.Kind == ParamKind::ChannelVolume || r.Kind == ParamKind::ChannelPan || r.Kind == ParamKind::SynthCutoff || r.Kind == ParamKind::SynthResonance;
+        }
+        bool TargetsMixer(const ParamRef& r) { return !TargetsChannel(r); }
+        bool TargetsEffect(const ParamRef& r) { return r.Kind == ParamKind::EffectParam || r.Kind == ParamKind::EffectMix; }
+    }
+
 
     const char* InstrumentTypeName(InstrumentType t)
     {
@@ -61,7 +73,188 @@ namespace Dimension::Music
     {
         int end = 0;
         for (const auto& c : Playlist) end = std::max(end, c.Start + ClipTicks(c));
+        for (const auto& a : Automation) end = std::max(end, a.Start + a.Length);
         return end;
+    }
+
+    MixerTrack MasterTrack()
+    {
+        MixerTrack m;
+        m.Name = "Master";
+        m.Volume = 0.8f;
+        return m;
+    }
+
+    std::string Song::MixerTrackName(int track) const
+    {
+        if (track == 0) return "Master";
+        if (track > 0 && track < (int)Mixer.size() && !Mixer[track].Name.empty()) return Mixer[track].Name;
+        return "Insert " + std::to_string(track);
+    }
+
+    void Song::RemoveMixerTrack(int track)
+    {
+        if (track <= 0 || track >= (int)Mixer.size()) return;
+        Mixer.erase(Mixer.begin() + track);
+        for (Channel& c : Channels)
+            if (c.Insert == track) c.Insert = 0;
+            else if (c.Insert > track) --c.Insert;
+        for (MixerTrack& m : Mixer)
+            if (m.Output == track) m.Output = 0;
+            else if (m.Output > track) --m.Output;
+        std::erase_if(Automation, [&](const AutomationClip& a) { return TargetsMixer(a.Target) && a.Target.Index == track; });
+        for (AutomationClip& a : Automation)
+            if (TargetsMixer(a.Target) && a.Target.Index > track) --a.Target.Index;
+    }
+
+    void Song::RemoveEffect(int track, int slot)
+    {
+        if (track < 0 || track >= (int)Mixer.size() || slot < 0 || slot >= (int)Mixer[track].Effects.size()) return;
+        Mixer[track].Effects.erase(Mixer[track].Effects.begin() + slot);
+        std::erase_if(Automation, [&](const AutomationClip& a) { return TargetsEffect(a.Target) && a.Target.Index == track && a.Target.Slot == slot; });
+        for (AutomationClip& a : Automation)
+            if (TargetsEffect(a.Target) && a.Target.Index == track && a.Target.Slot > slot) --a.Target.Slot;
+    }
+
+    float* Song::Param(const ParamRef& r)
+    {
+        if (TargetsChannel(r))
+        {
+            if (r.Index < 0 || r.Index >= (int)Channels.size()) return nullptr;
+            Channel& c = Channels[r.Index];
+            switch (r.Kind)
+            {
+            case ParamKind::ChannelVolume: return &c.Volume;
+            case ParamKind::ChannelPan: return &c.Pan;
+            case ParamKind::SynthCutoff: return &c.Synth.Cutoff;
+            case ParamKind::SynthResonance: return &c.Synth.Resonance;
+            default: return nullptr;
+            }
+        }
+        if (r.Index < 0 || r.Index >= (int)Mixer.size()) return nullptr;
+        MixerTrack& m = Mixer[r.Index];
+        if (r.Kind == ParamKind::MixerVolume) return &m.Volume;
+        if (r.Kind == ParamKind::MixerPan) return &m.Pan;
+        if (r.Slot < 0 || r.Slot >= (int)m.Effects.size()) return nullptr;
+        Effect& e = m.Effects[r.Slot];
+        if (r.Kind == ParamKind::EffectMix) return &e.Mix;
+        if (r.Param < 0 || r.Param >= GetEffectInfo(e.Type).ParamCount) return nullptr;
+        return &e.P[r.Param];
+    }
+
+    bool Song::ParamRange(const ParamRef& r, float& min, float& max, bool& log) const
+    {
+        if (!const_cast<Song*>(this)->Param(r)) return false;
+        log = false;
+        switch (r.Kind)
+        {
+        case ParamKind::ChannelVolume:
+        case ParamKind::MixerVolume: min = 0.0f, max = 1.25f; break;
+        case ParamKind::ChannelPan:
+        case ParamKind::MixerPan: min = -1.0f, max = 1.0f; break;
+        case ParamKind::SynthCutoff: min = 20.0f, max = 20000.0f, log = true; break;
+        case ParamKind::SynthResonance:
+        case ParamKind::EffectMix: min = 0.0f, max = 1.0f; break;
+        case ParamKind::EffectParam:
+        {
+            const EffectParamInfo& info = GetEffectInfo(Mixer[r.Index].Effects[r.Slot].Type).Params[r.Param];
+            min = info.Min, max = info.Max, log = info.Log;
+            break;
+        }
+        }
+        return true;
+    }
+
+    std::string Song::ParamName(const ParamRef& r) const
+    {
+        if (!const_cast<Song*>(this)->Param(r)) return "(missing)";
+        switch (r.Kind)
+        {
+        case ParamKind::ChannelVolume: return Channels[r.Index].Name + " Volume";
+        case ParamKind::ChannelPan: return Channels[r.Index].Name + " Pan";
+        case ParamKind::SynthCutoff: return Channels[r.Index].Name + " Cutoff";
+        case ParamKind::SynthResonance: return Channels[r.Index].Name + " Resonance";
+        case ParamKind::MixerVolume: return MixerTrackName(r.Index) + " Volume";
+        case ParamKind::MixerPan: return MixerTrackName(r.Index) + " Pan";
+        case ParamKind::EffectMix: return MixerTrackName(r.Index) + " " + EffectTypeName(Mixer[r.Index].Effects[r.Slot].Type) + " Mix";
+        case ParamKind::EffectParam:
+        {
+            EffectType t = Mixer[r.Index].Effects[r.Slot].Type;
+            return MixerTrackName(r.Index) + " " + EffectTypeName(t) + " " + GetEffectInfo(t).Params[r.Param].Name;
+        }
+        }
+        return "?";
+    }
+
+    float Song::ToNormalized(const ParamRef& r, float value) const
+    {
+        float min, max;
+        bool log;
+        if (!ParamRange(r, min, max, log) || max <= min) return 0.0f;
+        value = std::clamp(value, min, max);
+        if (log && min > 0.0f) return std::log(value / min) / std::log(max / min);
+        return (value - min) / (max - min);
+    }
+
+    float Song::FromNormalized(const ParamRef& r, float n) const
+    {
+        float min, max;
+        bool log;
+        if (!ParamRange(r, min, max, log)) return 0.0f;
+        n = std::clamp(n, 0.0f, 1.0f);
+        if (log && min > 0.0f) return min * std::pow(max / min, n);
+        return min + (max - min) * n;
+    }
+
+    std::vector<ParamRef> Song::AutomatableParams() const
+    {
+        std::vector<ParamRef> out;
+        for (int c = 0; c < (int)Channels.size(); ++c)
+        {
+            out.push_back({ ParamKind::ChannelVolume, c });
+            out.push_back({ ParamKind::ChannelPan, c });
+            if (Channels[c].Type == InstrumentType::Synth)
+            {
+                out.push_back({ ParamKind::SynthCutoff, c });
+                out.push_back({ ParamKind::SynthResonance, c });
+            }
+        }
+        for (int m = 0; m < (int)Mixer.size(); ++m)
+        {
+            out.push_back({ ParamKind::MixerVolume, m });
+            out.push_back({ ParamKind::MixerPan, m });
+            for (int e = 0; e < (int)Mixer[m].Effects.size(); ++e)
+            {
+                for (int p = 0; p < GetEffectInfo(Mixer[m].Effects[e].Type).ParamCount; ++p) out.push_back({ ParamKind::EffectParam, m, e, p });
+                out.push_back({ ParamKind::EffectMix, m, e });
+            }
+        }
+        return out;
+    }
+
+    void Song::InsertChannel(int at, Channel channel)
+    {
+        at = std::clamp(at, 0, (int)Channels.size());
+        Channels.insert(Channels.begin() + at, std::move(channel));
+        for (auto& p : Patterns)
+            for (auto& n : p.Notes)
+                if (n.Channel >= at) ++n.Channel;
+        for (auto& a : Automation)
+            if (TargetsChannel(a.Target) && a.Target.Index >= at) ++a.Target.Index;
+    }
+
+    void Song::SwapChannels(int a, int b)
+    {
+        if (a < 0 || b < 0 || a >= (int)Channels.size() || b >= (int)Channels.size() || a == b) return;
+        std::swap(Channels[a], Channels[b]);
+        auto swapIndex = [&](int& i) {
+            if (i == a) i = b;
+            else if (i == b) i = a;
+        };
+        for (auto& p : Patterns)
+            for (auto& n : p.Notes) swapIndex(n.Channel);
+        for (auto& c : Automation)
+            if (TargetsChannel(c.Target)) swapIndex(c.Target.Index);
     }
 
     std::string Song::TrackName(int track) const
@@ -117,6 +310,9 @@ namespace Dimension::Music
             for (auto& n : p.Notes)
                 if (n.Channel > channel) --n.Channel;
         }
+        std::erase_if(Automation, [&](const AutomationClip& a) { return TargetsChannel(a.Target) && a.Target.Index == channel; });
+        for (auto& a : Automation)
+            if (TargetsChannel(a.Target) && a.Target.Index > channel) --a.Target.Index;
     }
 
     namespace
@@ -138,13 +334,12 @@ namespace Dimension::Music
         j["tempo"] = Tempo;
         j["beatsPerBar"] = BeatsPerBar;
         j["stepsPerBeat"] = StepsPerBeat;
-        j["masterVolume"] = MasterVolume;
         j["swing"] = Swing;
         json channels = json::array();
         for (const Channel& c : Channels)
         {
             json cj{ { "name", c.Name }, { "type", InstrumentTypeName(c.Type) }, { "volume", c.Volume }, { "pan", c.Pan },
-                     { "mute", c.Mute }, { "solo", c.Solo }, { "key", c.Key }, { "color", c.Color } };
+                     { "mute", c.Mute }, { "solo", c.Solo }, { "key", c.Key }, { "color", c.Color }, { "insert", c.Insert } };
             if (c.Type == InstrumentType::Drum)
                 cj["drum"] = { { "kind", (int)c.Drum.Kind }, { "tune", c.Drum.Tune }, { "decay", c.Drum.Decay }, { "tone", c.Drum.Tone } };
             if (c.Type == InstrumentType::Synth)
@@ -175,6 +370,29 @@ namespace Dimension::Music
         json tracks = json::array();
         for (const PlaylistTrack& t : Tracks) tracks.push_back({ { "name", t.Name }, { "mute", t.Mute } });
         j["tracks"] = std::move(tracks);
+        json mixer = json::array();
+        for (const MixerTrack& m : Mixer)
+        {
+            json effects = json::array();
+            for (const Effect& e : m.Effects)
+            {
+                json params = json::array();
+                for (int i = 0; i < GetEffectInfo(e.Type).ParamCount; ++i) params.push_back(e.P[i]);
+                effects.push_back({ { "type", EffectTypeName(e.Type) }, { "enabled", e.Enabled }, { "mix", e.Mix }, { "params", std::move(params) } });
+            }
+            mixer.push_back({ { "name", m.Name }, { "volume", m.Volume }, { "pan", m.Pan }, { "mute", m.Mute }, { "output", m.Output },
+                              { "effects", std::move(effects) } });
+        }
+        j["mixer"] = std::move(mixer);
+        json automation = json::array();
+        for (const AutomationClip& a : Automation)
+        {
+            json points = json::array();
+            for (const AutomationPoint& p : a.Points) points.push_back(json::array({ p.Tick, p.Value }));
+            automation.push_back({ { "target", json::array({ (int)a.Target.Kind, a.Target.Index, a.Target.Slot, a.Target.Param }) },
+                                   { "track", a.Track }, { "start", a.Start }, { "length", a.Length }, { "points", std::move(points) } });
+        }
+        j["automation"] = std::move(automation);
         return j;
     }
 
@@ -188,7 +406,6 @@ namespace Dimension::Music
             out.Tempo = std::clamp(j.value("tempo", 130.0f), 10.0f, 999.0f);
             out.BeatsPerBar = std::clamp(j.value("beatsPerBar", 4), 1, 16);
             out.StepsPerBeat = std::clamp(j.value("stepsPerBeat", 4), 1, 8);
-            out.MasterVolume = j.value("masterVolume", 0.8f);
             out.Swing = j.value("swing", 0.0f);
             for (const json& cj : j.value("channels", json::array()))
             {
@@ -202,6 +419,7 @@ namespace Dimension::Music
                 c.Solo = cj.value("solo", false);
                 c.Key = std::clamp(cj.value("key", 60), 0, 127);
                 c.Color = cj.value("color", 0u);
+                c.Insert = std::max(0, cj.value("insert", 0));
                 if (cj.contains("drum"))
                 {
                     const json& d = cj["drum"];
@@ -263,6 +481,56 @@ namespace Dimension::Music
                     if (clip.Pattern >= 0 && clip.Pattern < (int)out.Patterns.size() && clip.Start >= 0 && clip.Track >= 0) out.Playlist.push_back(clip);
                 }
             for (const json& t : j.value("tracks", json::array())) out.Tracks.push_back({ t.value("name", ""), t.value("mute", false) });
+            // The Mixer (older songs: a Master with their master volume).
+            out.Mixer.clear();
+            for (const json& mj : j.value("mixer", json::array()))
+            {
+                MixerTrack m;
+                m.Name = mj.value("name", "");
+                m.Volume = mj.value("volume", 1.0f);
+                m.Pan = mj.value("pan", 0.0f);
+                m.Mute = mj.value("mute", false);
+                m.Output = mj.value("output", 0);
+                for (const json& ej : mj.value("effects", json::array()))
+                {
+                    if ((int)m.Effects.size() >= kMaxEffects) break;
+                    std::string type = ej.value("type", "EQ");
+                    EffectType t = EffectType::EQ;
+                    for (int i = 0; i < (int)EffectType::Count; ++i)
+                        if (type == EffectTypeName((EffectType)i)) t = (EffectType)i;
+                    Effect e = Effect::Make(t);
+                    e.Enabled = ej.value("enabled", true);
+                    e.Mix = ej.value("mix", e.Mix);
+                    const json params = ej.value("params", json::array());
+                    for (int i = 0; i < GetEffectInfo(t).ParamCount && i < (int)params.size(); ++i) e.P[i] = params[i].get<float>();
+                    m.Effects.push_back(e);
+                }
+                out.Mixer.push_back(std::move(m));
+            }
+            if (out.Mixer.empty())
+            {
+                out.Mixer.push_back(MasterTrack());
+                out.Mixer[0].Volume = j.value("masterVolume", 0.8f);
+            }
+            out.Mixer[0].Name = "Master";
+            out.Mixer[0].Output = 0;
+            for (int i = 1; i < (int)out.Mixer.size(); ++i)
+                if (out.Mixer[i].Output != 0 && (out.Mixer[i].Output <= i || out.Mixer[i].Output >= (int)out.Mixer.size())) out.Mixer[i].Output = 0;
+            for (Channel& c : out.Channels)
+                if (c.Insert >= (int)out.Mixer.size()) c.Insert = 0;
+            for (const json& aj : j.value("automation", json::array()))
+            {
+                AutomationClip a;
+                const json t = aj.value("target", json::array());
+                if (t.size() >= 4) a.Target = { (ParamKind)t[0].get<int>(), t[1].get<int>(), t[2].get<int>(), t[3].get<int>() };
+                a.Track = std::max(0, aj.value("track", 0));
+                a.Start = std::max(0, aj.value("start", 0));
+                a.Length = std::max(1, aj.value("length", 384));
+                for (const json& pj : aj.value("points", json::array()))
+                    if (pj.is_array() && pj.size() >= 2) a.Points.push_back({ pj[0].get<int>(), std::clamp(pj[1].get<float>(), 0.0f, 1.0f) });
+                a.SortPoints();
+                if (out.Param(a.Target)) out.Automation.push_back(std::move(a));
+            }
         }
         catch (const json::exception&)
         {

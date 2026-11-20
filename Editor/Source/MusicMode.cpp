@@ -129,6 +129,9 @@ namespace Editor
         m_Pattern = std::clamp(m_Pattern, 0, (int)m_Song.Patterns.size() - 1);
         m_RollSelection.clear();
         m_SelectedClip = -1;
+        m_SelectedAuto = -1;
+        m_SelectedMixer = std::min(m_SelectedMixer, (int)m_Song.Mixer.size() - 1);
+        m_SelectedEffect = -1;
         Changed();
     }
 
@@ -142,6 +145,9 @@ namespace Editor
         m_Pattern = std::clamp(m_Pattern, 0, (int)m_Song.Patterns.size() - 1);
         m_RollSelection.clear();
         m_SelectedClip = -1;
+        m_SelectedAuto = -1;
+        m_SelectedMixer = std::min(m_SelectedMixer, (int)m_Song.Mixer.size() - 1);
+        m_SelectedEffect = -1;
         Changed();
     }
 
@@ -201,7 +207,11 @@ namespace Editor
         // as an audio asset the game can play.
         fs::path out = m_File.parent_path() / (m_File.stem().string() + ".wav");
         bool song = m_SongMode && !m_Song.Playlist.empty();
-        auto samples = RenderSong(m_Song, 48000, song ? SongPlayer::Mode::Song : SongPlayer::Mode::Pattern, m_Pattern, 1, 1.5f);
+        float tail = 1.5f;
+        for (const MixerTrack& m : m_Song.Mixer)
+            for (const Effect& e : m.Effects)
+                if (e.Enabled && (e.Type == EffectType::Delay || e.Type == EffectType::Reverb)) tail = 4.0f;
+        auto samples = RenderSong(m_Song, 48000, song ? SongPlayer::Mode::Song : SongPlayer::Mode::Pattern, m_Pattern, 1, tail);
         if (!WriteWav(out, samples, 48000))
         {
             m_Status = "Could not write " + out.filename().string();
@@ -284,13 +294,14 @@ namespace Editor
         ImVec2 avail = ImGui::GetContentRegionAvail();
         const ImVec2 spacing = ImGui::GetStyle().ItemSpacing;
         float keyboardHeight = m_View == View::Rack ? 92.0f : 0.0f;
-        float settingsWidth = m_View == View::Playlist ? 0.0f : std::clamp(avail.x * 0.26f, 260.0f, 400.0f);
+        float settingsWidth = m_View == View::Playlist || m_View == View::Mixer ? 0.0f : std::clamp(avail.x * 0.26f, 260.0f, 400.0f);
         ImVec2 main(avail.x - (settingsWidth > 0.0f ? settingsWidth + spacing.x : 0.0f), avail.y - (keyboardHeight > 0.0f ? keyboardHeight + spacing.y : 0.0f));
         switch (m_View)
         {
         case View::Rack: DrawChannelRack(main); break;
         case View::PianoRoll: DrawPianoRoll(main); break;
         case View::Playlist: DrawPlaylist(main); break;
+        case View::Mixer: DrawMixer(main); break;
         }
         if (settingsWidth > 0.0f)
         {
@@ -334,6 +345,9 @@ namespace Editor
         ImGui::SameLine(0.0f, 2.0f);
         if (toggle("Playlist", m_View == View::Playlist)) m_View = View::Playlist;
         ImGui::SetItemTooltip("F5: the song's arrangement");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Mixer", m_View == View::Mixer)) m_View = View::Mixer;
+        ImGui::SetItemTooltip("F9: tracks, routing and effects");
         ImGui::SameLine(0.0f, 24.0f);
         // Pattern or Song mode: what Play plays.
         if (toggle("PAT", !m_SongMode)) SetSongMode(false);
@@ -440,11 +454,12 @@ namespace Editor
 
         // Right: master level and meter, Render, undo.
         float right = 470.0f;
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 16.0f, ImGui::GetWindowWidth() - right));
+        float after = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + 24.0f; // (just past the swing slider)
+        ImGui::SameLine(std::max(after, ImGui::GetWindowWidth() - right));
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Master");
         ImGui::SameLine();
-        Knob("##master", &m_Song.MasterVolume, 0.0f, 1.25f, 0.8f, ImGui::GetFrameHeight(), "Master %.2f");
+        Knob("##master", &m_Song.Master().Volume, 0.0f, 1.25f, 0.8f, ImGui::GetFrameHeight(), "Master %.2f");
         ImGui::SameLine();
         {
             ImVec2 p = ImGui::GetCursorScreenPos();
@@ -536,8 +551,10 @@ namespace Editor
             }
             ImGui::SameLine();
             Knob("##pan", &ch.Pan, -1.0f, 1.0f, 0.0f, 22.0f, "Pan %.2f");
+            AutomationMenu({ ParamKind::ChannelPan, ci });
             ImGui::SameLine();
             Knob("##vol", &ch.Volume, 0.0f, 1.25f, 0.78f, 22.0f, "Volume %.2f");
+            AutomationMenu({ ParamKind::ChannelVolume, ci });
             ImGui::SameLine();
             // Level meter.
             {
@@ -649,23 +666,14 @@ namespace Editor
             Record();
             Channel c = m_Song.Channels[cloneChannel];
             c.Name += " 2";
-            m_Song.Channels.insert(m_Song.Channels.begin() + cloneChannel + 1, c);
-            for (auto& p : m_Song.Patterns)
-            {
-                for (auto& n : p.Notes)
-                    if (n.Channel > cloneChannel) ++n.Channel;
-            }
+            m_Song.InsertChannel(cloneChannel + 1, c);
             m_SelectedChannel = cloneChannel + 1;
             Changed();
         }
         if (moveUp > 0)
         {
             Record();
-            std::swap(m_Song.Channels[moveUp], m_Song.Channels[moveUp - 1]);
-            for (auto& p : m_Song.Patterns)
-                for (auto& n : p.Notes)
-                    if (n.Channel == moveUp) n.Channel = moveUp - 1;
-                    else if (n.Channel == moveUp - 1) n.Channel = moveUp;
+            m_Song.SwapChannels(moveUp, moveUp - 1);
             m_SelectedChannel = moveUp - 1;
             Changed();
         }
@@ -776,7 +784,30 @@ namespace Editor
                 Changed();
             }
             slider("Volume", &ch.Volume, 0.0f, 1.25f, "%.2f");
+            AutomationMenu({ ParamKind::ChannelVolume, m_SelectedChannel });
             slider("Pan", &ch.Pan, -1.0f, 1.0f, "%.2f");
+            AutomationMenu({ ParamKind::ChannelPan, m_SelectedChannel });
+            UI::PropertyLabel("Mixer Track", "The mixer track the channel plays through (its effects, level and routing)");
+            if (ImGui::BeginCombo("##insert", m_Song.MixerTrackName(ch.Insert).c_str()))
+            {
+                for (int t = 0; t < (int)m_Song.Mixer.size(); ++t)
+                    if (ImGui::Selectable(m_Song.MixerTrackName(t).c_str(), ch.Insert == t))
+                    {
+                        Record();
+                        ch.Insert = t;
+                        Changed();
+                    }
+                if ((int)m_Song.Mixer.size() < SongPlayer::kMaxMixer && ImGui::Selectable("New Insert"))
+                {
+                    Record();
+                    MixerTrack m;
+                    m.Name = ch.Name;
+                    m_Song.Mixer.push_back(m);
+                    ch.Insert = (int)m_Song.Mixer.size() - 1;
+                    Changed();
+                }
+                ImGui::EndCombo();
+            }
             UI::PropertyLabel("Step Key", "The note the step sequencer plays");
             int key = ch.Key;
             if (Edited(ImGui::SliderInt("##key", &key, 0, 127, NoteName(key).c_str()))) ch.Key = key, Changed();
@@ -844,7 +875,9 @@ namespace Editor
             if (UI::BeginProperties("##filter"))
             {
                 slider("Cutoff", &s.Cutoff, 20.0f, 20000.0f, "%.0f Hz", ImGuiSliderFlags_Logarithmic);
+                AutomationMenu({ ParamKind::SynthCutoff, m_SelectedChannel });
                 slider("Resonance", &s.Resonance, 0.0f, 1.0f, "%.2f");
+                AutomationMenu({ ParamKind::SynthResonance, m_SelectedChannel });
                 slider("Envelope", &s.FilterEnv, 0.0f, 1.0f, "%.2f");
                 UI::EndProperties();
             }
@@ -983,6 +1016,7 @@ namespace Editor
         if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) m_View = View::Playlist;
         if (ImGui::IsKeyPressed(ImGuiKey_F6, false)) m_View = View::Rack;
         if (ImGui::IsKeyPressed(ImGuiKey_F7, false)) m_View = View::PianoRoll;
+        if (ImGui::IsKeyPressed(ImGuiKey_F9, false)) m_View = View::Mixer;
         if (m_View == View::PianoRoll) PianoRollKeys();
         if (m_View == View::Playlist) PlaylistKeys();
         if (io.KeyCtrl)

@@ -1,5 +1,6 @@
 #pragma once
 #include "Dimension/Core/Base.h"
+#include "Dimension/Music/Mixer.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -69,6 +70,7 @@ namespace Dimension::Music
         bool Mute = false, Solo = false;
         int Key = 60;               // the note the step sequencer plays
         uint32_t Color = 0;         // RGBA (0: picked from the name)
+        int Insert = 0;             // the mixer track it plays through (0 = straight to the Master)
         DrumParams Drum;
         SynthParams Synth;
         SamplerParams Sampler;
@@ -106,23 +108,27 @@ namespace Dimension::Music
         bool Mute = false;
     };
 
+    // The Master mixer track a new song starts with.
+    MixerTrack MasterTrack();
+
     // A song (.dsong file, JSON): tempo, channels, patterns and their arrangement.
     struct Song
     {
         std::string Name = "Song";
         float Tempo = 130.0f;       // BPM
         int BeatsPerBar = 4, StepsPerBeat = 4;
-        float MasterVolume = 0.8f;
         float Swing = 0.0f;         // 0..1: every second step is delayed by up to half a step
         std::vector<Channel> Channels;
         std::vector<Pattern> Patterns;
         std::vector<PlaylistClip> Playlist;
         std::vector<PlaylistTrack> Tracks; // by track index (may be shorter than the tracks used)
+        std::vector<MixerTrack> Mixer{ MasterTrack() }; // [0] is the Master (always there)
+        std::vector<AutomationClip> Automation;                         // on the Playlist's tracks
 
         int StepTicks() const { return kTicksPerBeat / std::max(1, StepsPerBeat); }
         int BarTicks() const { return kTicksPerBeat * std::max(1, BeatsPerBar); }
         int PatternTicks(int pattern) const;
-        // The Playlist's end (ticks); 0 when empty.
+        // The Playlist's end (ticks, pattern and automation clips); 0 when empty.
         int SongTicks() const;
         double TicksPerSecond() const { return Tempo / 60.0 * kTicksPerBeat; }
 
@@ -130,8 +136,11 @@ namespace Dimension::Music
         // one step on the channel's key).
         bool HasStep(int pattern, int channel, int step) const;
         void ToggleStep(int pattern, int channel, int step);
-        // Removes a channel and its notes (later channels' notes move down one).
+        // Removes a channel and its notes and automation (later channels' move down one); inserting one at `at` and
+        // swapping two keep notes and automation on their channels.
         void RemoveChannel(int channel);
+        void InsertChannel(int at, Channel channel);
+        void SwapChannels(int a, int b);
         // A clip's length in ticks (its own, or its pattern's).
         int ClipTicks(const PlaylistClip& c) const { return c.Length > 0 ? c.Length : PatternTicks(c.Pattern); }
         std::string TrackName(int track) const;
@@ -139,6 +148,22 @@ namespace Dimension::Music
         PlaylistTrack& Track(int track); // (grows Tracks to reach it)
         // Grows a pattern's bars until all its notes fit (up to 16); returns its bars.
         int FitPatternBars(int pattern);
+
+        // The Mixer. Removing a track sends what used it to the Master (later tracks move down one); removing an
+        // effect takes its automation with it.
+        MixerTrack& Master() { return Mixer[0]; }
+        std::string MixerTrackName(int track) const;
+        void RemoveMixerTrack(int track);
+        void RemoveEffect(int track, int slot);
+
+        // Automatable settings: where one lives (null when the reference no longer fits the song), its range and
+        // name, and conversions to and from automation's 0..1.
+        float* Param(const ParamRef& r);
+        bool ParamRange(const ParamRef& r, float& min, float& max, bool& log) const;
+        std::string ParamName(const ParamRef& r) const;
+        float ToNormalized(const ParamRef& r, float value) const;
+        float FromNormalized(const ParamRef& r, float normalized) const;
+        std::vector<ParamRef> AutomatableParams() const;
 
         nlohmann::json ToJson() const;
         static bool FromJson(const nlohmann::json& j, Song& out);
