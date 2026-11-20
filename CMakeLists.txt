@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Installer builds (the "dist" preset): no paths into this source tree are compiled in (the editor's Sandbox comes
+# from the install), and the tests are left out.
+option(DIM_DISTRIBUTION "Build for the installers (cmake/Packaging.cmake)" OFF)
+
 # All executables land in one folder so the editor can find the player for builds.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -32,5 +36,9 @@ add_subdirectory(Game)
 add_subdirectory(Editor)
 add_subdirectory(Player)
 
-enable_testing()
-add_subdirectory(Tests)
+if(NOT DIM_DISTRIBUTION)
+    enable_testing()
+    add_subdirectory(Tests)
+endif()
+
+include(cmake/Packaging.cmake)

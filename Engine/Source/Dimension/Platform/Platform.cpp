@@ -2,6 +2,7 @@
 #include <cstdlib>
 #ifdef _WIN32
 #include <windows.h>
+#include <shlobj.h>
 #else
 #include <climits>
 #include <sys/wait.h>
@@ -57,6 +58,43 @@ namespace Dimension::Platform
         return Env("USERPROFILE");
 #else
         return Env("HOME");
+#endif
+    }
+
+    fs::path DocumentsDirectory()
+    {
+#ifdef _WIN32
+        // (the shell's Documents folder: it may be moved, e.g. into OneDrive)
+        PWSTR path = nullptr;
+        fs::path out;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &path)) && path) out = fs::path(path);
+        CoTaskMemFree(path);
+        if (!out.empty()) return out;
+        return HomeDirectory() / "Documents";
+#else
+        // XDG's user-dirs.dirs names it (XDG_DOCUMENTS_DIR="$HOME/Documents"); else ~/Documents when there is one.
+        fs::path home = HomeDirectory();
+        fs::path config = Env("XDG_CONFIG_HOME");
+        if (config.empty()) config = home / ".config";
+        if (FILE* f = std::fopen((config / "user-dirs.dirs").string().c_str(), "r"))
+        {
+            char line[1024];
+            fs::path found;
+            while (std::fgets(line, sizeof(line), f))
+            {
+                std::string l = line;
+                const std::string key = "XDG_DOCUMENTS_DIR=\"";
+                if (l.rfind(key, 0) != 0) continue;
+                std::string value = l.substr(key.size());
+                value = value.substr(0, value.find('"'));
+                if (value.rfind("$HOME", 0) == 0) found = home / value.substr(std::min<size_t>(value.size(), 6));
+                else found = value;
+            }
+            std::fclose(f);
+            if (!found.empty() && fs::is_directory(found)) return found;
+        }
+        std::error_code ec;
+        return fs::is_directory(home / "Documents", ec) ? home / "Documents" : home;
 #endif
     }
 

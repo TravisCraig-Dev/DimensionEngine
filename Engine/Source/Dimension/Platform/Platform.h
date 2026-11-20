@@ -18,6 +18,7 @@ namespace Dimension::Platform
     fs::path UserDataDirectory();     // Windows %APPDATA%, Linux ~/.local/share (player saves)
     fs::path UserCacheDirectory();    // Windows %LOCALAPPDATA%, Linux ~/.cache
     fs::path HomeDirectory();         // %USERPROFILE% / $HOME
+    fs::path DocumentsDirectory();    // the user's Documents (Windows' known folder, XDG_DOCUMENTS_DIR), else home
 
     // A shell command's output, read as it runs (stderr too when the command redirects it). Commands are run by
     // cmd.exe on Windows and /bin/sh elsewhere: ClosePipe returns the exit code.

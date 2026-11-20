@@ -1,0 +1,10 @@
+#!/bin/sh
+# dimension-engine .deb: takes back what postinst added.
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "upgrade" ] || [ "$1" = "deconfigure" ]; then
+    rm -f /usr/bin/dimension-editor
+    rm -f /usr/share/applications/dimension-editor.desktop
+    rm -f /usr/share/icons/hicolor/256x256/apps/dimension-editor.png
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications || true
+fi
+exit 0

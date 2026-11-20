@@ -72,12 +72,7 @@ namespace Dimension::SceneTemplates
 
     std::vector<Template> All()
     {
-        std::vector<Template> out = {
-            { "Basic 3D", "A camera and a sun, under the procedural sky." },
-            { "Basic 2D", "An orthographic camera looking down -Z at a plain sky-blue background, for sprites and tilemaps." },
-            { "Outdoor", "A camera, a sun with soft shadows, a grass ground plane, fog, bloom and tonemapping." },
-            { "Empty", "Nothing at all." },
-        };
+        std::vector<Template> out = Builtins();
         for (AssetHandle h : AssetManager::Search(std::string("t:Scene l:") + kLabel)) // by path
         {
             const AssetMetadata* meta = AssetManager::GetMetadata(h);
@@ -86,6 +81,16 @@ namespace Dimension::SceneTemplates
             out.push_back({ meta->Path.stem().string(), description.empty() ? meta->Path.generic_string() : description, h });
         }
         return out;
+    }
+
+    std::vector<Template> Builtins()
+    {
+        return {
+            { "Basic 3D", "A camera and a sun, under the procedural sky." },
+            { "Basic 2D", "An orthographic camera looking down -Z at a plain sky-blue background, for sprites and tilemaps." },
+            { "Outdoor", "A camera, a sun with soft shadows, a grass ground plane, fog, bloom and tonemapping." },
+            { "Empty", "Nothing at all." },
+        };
     }
 
     Ref<Scene> Create(const Template& t)

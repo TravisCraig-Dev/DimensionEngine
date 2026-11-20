@@ -1,0 +1,11 @@
+#!/bin/sh
+# dimension-engine .deb: the menu entry, its icon and the `dimension-editor` command.
+set -e
+if [ "$1" = "configure" ]; then
+    ln -sf /opt/dimension/bin/DimensionEditor /usr/bin/dimension-editor
+    install -Dm644 /opt/dimension/share/applications/dimension-editor.desktop /usr/share/applications/dimension-editor.desktop
+    install -Dm644 /opt/dimension/share/icons/dimension-editor.png /usr/share/icons/hicolor/256x256/apps/dimension-editor.png
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications || true
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
+fi
+exit 0

@@ -1,12 +1,15 @@
 // Dimension Editor entry point.
-// Usage: DimensionEditor [projectDir] [--play] [--frames N] [--screenshot file.png] [--build outputFolder]
+// Usage: DimensionEditor [projectDir] [--play] [--frames N] [--screenshot file.png] [--build outputFolder] [--launcher]
+// Without a project folder the launch screen (Launcher.h) picks one.
 #include <Dimension/Core/AppRuntime.h>
 #include "EditorLayer.h"
+#include "Launcher.h"
 #include <Dimension/Core/Log.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Platform/Platform.h>
 #include <Dimension/Platform/SplashScreen.h>
 #include <Dimension/Project/Project.h>
+#include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <cstring>
 
@@ -15,7 +18,8 @@ using namespace Dimension;
 int main(int argc, char** argv)
 {
     Dimension::AppRuntime::SetHost(Dimension::AppRuntime::Host::Editor); // Application.Quit is ignored, as in Unity's editor
-    fs::path projectDir = DIM_DEFAULT_PROJECT;
+    fs::path projectDir;
+    bool showLauncher = false;
     Editor::EditorOptions options;
     ApplicationSpec spec;
     spec.Name = "Dimension Editor";
@@ -93,7 +97,25 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--prefab") && i + 1 < argc) options.PrefabPath = argv[++i];
         else if (!std::strcmp(argv[i], "--open-scene") && i + 1 < argc) options.OpenSceneLater = argv[++i];
         else if (!std::strcmp(argv[i], "--menu-open-scene")) options.MenuOpenScene = true;
+        else if (!std::strcmp(argv[i], "--launcher")) showLauncher = true;
         else projectDir = argv[i];
+    }
+
+    // No project given: the launch screen picks one (or makes one). Automated runs (screenshots, batch builds) take
+    // the Sandbox instead, as they always have.
+    std::optional<Editor::Launcher::Choice> choice;
+    bool automated = spec.MaxFrames > 0 || !spec.ScreenshotPath.empty() || !options.BuildFolder.empty();
+    if (showLauncher || (projectDir.empty() && !automated))
+    {
+        choice = Editor::Launcher::Run(showLauncher ? spec.MaxFrames : 0, showLauncher ? spec.ScreenshotPath : std::string());
+        if (!choice) return 0; // (closed)
+        projectDir = choice->Project;
+    }
+    if (projectDir.empty()) projectDir = Editor::Launcher::SandboxProject();
+    if (projectDir.empty())
+    {
+        Log::Error("No project to open: pass a project folder (DimensionEditor <folder>)");
+        return 1;
     }
 
     // The splash screen until the editor is ready to show the scene (EditorLayer closes it); the main window waits
@@ -110,6 +132,17 @@ int main(int argc, char** argv)
     }
     {
         Application app(spec);
+        if (choice && choice->Create)
+        {
+            SplashScreen::SetStatus("Creating the project...");
+            if (!ProjectHub::Create(projectDir, choice->Name, choice->StarterScene))
+            {
+                SplashScreen::Close();
+                Log::Error("Could not create a project in '{}'", projectDir.string());
+                return 1;
+            }
+            Log::Info("Created project '{}' in '{}'", choice->Name, projectDir.string());
+        }
         SplashScreen::SetStatus("Opening the project (importing changed assets)...");
         if (!Project::Open(projectDir))
         {

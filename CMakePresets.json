@@ -7,7 +7,8 @@
       "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
     },
     { "name": "debug",   "inherits": "base", "displayName": "Debug",   "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
-    { "name": "release", "inherits": "base", "displayName": "Release", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } }
+    { "name": "release", "inherits": "base", "displayName": "Release", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } },
+    { "name": "dist",    "inherits": "base", "displayName": "Distribution (installers)", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "DIM_DISTRIBUTION": "ON" } }
   ],
   "testPresets": [
     { "name": "debug",   "configurePreset": "debug",   "output": { "outputOnFailure": true } },
@@ -15,6 +16,7 @@
   ],
   "buildPresets": [
     { "name": "debug",   "configurePreset": "debug" },
-    { "name": "release", "configurePreset": "release" }
+    { "name": "release", "configurePreset": "release" },
+    { "name": "dist",    "configurePreset": "dist" }
   ]
 }

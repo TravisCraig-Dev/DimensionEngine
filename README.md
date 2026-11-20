@@ -442,6 +442,14 @@ out/build/debug/bin/DimensionTests
 ```
 Under WSL2 the editor and player open through WSLg; Mesa there offers only llvmpipe (software Vulkan), which is correct but slow.
 
+**Installers.** The `dist` preset builds for packaging (Release, without the source tree's paths compiled in, no tests), and CPack makes the installers in `out/build/dist/`:
+```bat
+scripts\dev.bat cmake --preset dist
+scripts\dev.bat cmake --build --preset dist
+cd out\build\dist && ..\..\..\scripts\dev.bat cpack -C Release
+```
+On Windows that gives `DimensionEngine-<version>-Windows-x64.exe`, an NSIS setup (needs NSIS: `winget install NSIS.NSIS`) that installs to Program Files with Start menu and desktop shortcuts and an uninstaller, plus a portable `.zip`. On Linux (`CC=gcc-14 CXX=g++-14 cmake --preset dist`, `cmake --build --preset dist`, `cpack` in `out/build/dist`) it gives `dimension-engine_<version>_amd64.deb` (installs to `/opt/dimension` with a menu entry and the `dimension-editor` command; `sudo apt install ./dimension-engine_*.deb`) and `DimensionEngine-<version>-Linux-x86_64.tar.gz` (unpack and run `./install.sh` for yourself, `sudo ./install.sh` for everyone, or `bin/DimensionEditor` in place). Both carry the editor, player, engine, Sandbox game module, the C# assemblies and the Sandbox sample (`Samples/Sandbox`; the launch screen copies it to Documents/Dimension Projects the first time it's opened). C# scripts still need the .NET 10 SDK on the machine.
+
 **Validation layers (optional).** Debug builds enable `VK_LAYER_KHRONOS_validation` when it is installed, either from the Vulkan SDK or by pointing `VK_ADD_LAYER_PATH` at a self-built layer.
 
 ## Running
@@ -450,7 +458,7 @@ Under WSL2 the editor and player open through WSLg; Mesa there offers only llvmp
 DimensionEditor.exe [projectDir] [--play] [--windowed]
 DimensionPlayer.exe [projectDir] [--scene file.scene]
 ```
-With no arguments, both open `Projects/Sandbox`. A built game is `<Name>.exe` next to `DimensionEngine.dll`, the game module DLL, and a `Project/` folder. You can also pass `--frames N --screenshot out.png` to either program for automated checks (the player also takes `--move x,y,frame` and `--click x,y,frame` to drive the UI and scripts' mouse with a simulated pointer, `--key name,frame` to press a key for one frame (Right, Enter, A-Z...), and `--no-instancing`, `--no-clusters`, `--no-occlusion` and `--no-vsync` for benchmarks, `--fixed-dt seconds` to advance the game by the same step every frame for repeatable runs; it logs draw-call and frame-time stats on exit), and `--build <folder>`, `--scene <path>` or `--open "Build Settings"|Preferences|"Project Settings"|"Tile Palette"|"Audio Mixer"|Navigation` and `--theme dark|light|midnight` (this session only) to the editor.
+With no project folder the editor shows its **launch screen**: the recent projects (search, click to open, `x` to take one off the list), **New Project** (name, location, by default `Documents/Dimension Projects`, and a starter scene), **Open the Sandbox** (the sample; an installed editor first copies it to `Documents/Dimension Projects/Sandbox`) and **Open Project Folder...**; then the editor starts with that project. A project folder on the command line skips it, and so do automated runs (`--frames`, `--screenshot`, `--build`), which open the Sandbox as before; `--launcher` shows it anyway. The player with no arguments opens `Projects/Sandbox`. A built game is `<Name>.exe` next to `DimensionEngine.dll`, the game module DLL, and a `Project/` folder. You can also pass `--frames N --screenshot out.png` to either program for automated checks (the player also takes `--move x,y,frame` and `--click x,y,frame` to drive the UI and scripts' mouse with a simulated pointer, `--key name,frame` to press a key for one frame (Right, Enter, A-Z...), and `--no-instancing`, `--no-clusters`, `--no-occlusion` and `--no-vsync` for benchmarks, `--fixed-dt seconds` to advance the game by the same step every frame for repeatable runs; it logs draw-call and frame-time stats on exit), and `--build <folder>`, `--scene <path>` or `--open "Build Settings"|Preferences|"Project Settings"|"Tile Palette"|"Audio Mixer"|Navigation` and `--theme dark|light|midnight` (this session only) to the editor.
 
 ### Editor controls
 

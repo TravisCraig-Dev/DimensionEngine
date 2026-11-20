@@ -264,7 +264,11 @@ int main(int argc, char** argv)
     if (projectDir.empty())
     {
         fs::path bundled = ExecutableDirectory() / "Project";
+#ifdef DIM_DEFAULT_PROJECT
         projectDir = fs::exists(bundled / Project::kFileName) ? bundled : fs::path(DIM_DEFAULT_PROJECT);
+#else
+        projectDir = bundled;
+#endif
     }
 
 #ifdef DIM_GAME_BUILD

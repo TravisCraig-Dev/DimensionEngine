@@ -20,6 +20,8 @@ namespace Dimension
         };
         // The built-in templates (Basic 3D first), then the project's by path.
         std::vector<Template> All();
+        // Just the built-in ones (no project needed).
+        std::vector<Template> Builtins();
         // A new scene from a template ("Untitled"); null when its file cannot be read.
         Ref<Scene> Create(const Template& t);
         // Saves a copy of `scene` as a project template: Assets/Scene Templates/<name>.scene, labelled Template.
