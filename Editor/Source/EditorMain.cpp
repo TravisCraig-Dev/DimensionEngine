@@ -138,6 +138,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) options.ScenePath = argv[++i];
         else if (!std::strcmp(argv[i], "--prefab") && i + 1 < argc) options.PrefabPath = argv[++i];
         else if (!std::strcmp(argv[i], "--model") && i + 1 < argc) options.ModelPath = argv[++i];
+        else if (!std::strcmp(argv[i], "--song") && i + 1 < argc) options.SongPath = argv[++i];
         else if (!std::strcmp(argv[i], "--open-scene") && i + 1 < argc) options.OpenSceneLater = argv[++i];
         else if (!std::strcmp(argv[i], "--menu-open-scene")) options.MenuOpenScene = true;
         else if (!std::strcmp(argv[i], "--launcher")) showLauncher = true;

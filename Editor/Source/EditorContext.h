@@ -211,6 +211,9 @@ namespace Editor
         const std::string& StageSceneName() const { return m_Stage->SceneName; }
         void ExitStage();
         std::optional<AssetHandle> RequestOpenModel; // Model Mode on this model (handled by the EditorLayer)
+        // Music Mode (the full-screen music workspace) on this song, and back to the editor.
+        std::optional<AssetHandle> RequestOpenSong;
+        bool RequestCloseMusic = false;
 
         // Terrain brush (Inspector picks it, the Scene view paints with it): 0 = off, else Terrain::BrushMode + 1.
         int TerrainTool = 0;

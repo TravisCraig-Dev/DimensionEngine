@@ -58,6 +58,7 @@
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Animation/ClipAsset.h>
+#include <Dimension/Music/SongPlayer.h>
 #include <Dimension/Renderer/ColrV1.h>
 #include <Dimension/Platform/Platform.h>
 #include <Dimension/Audio/Microphone.h>
@@ -20423,6 +20424,223 @@ namespace
         fn();
         std::printf("%s %s\n", g_Failures == before ? "[ OK ]" : "[FAIL]", name);
     }
+    // ---- Music ----
+
+    // Frames of a mono view of the render (left + right) whose level stays under `quiet` (from `from` to `to`).
+    bool MusicSilent(const std::vector<float>& stereo, size_t from, size_t to, float quiet = 1e-4f)
+    {
+        for (size_t f = from; f < to && f * 2 + 1 < stereo.size(); ++f)
+            if (std::fabs(stereo[f * 2]) + std::fabs(stereo[f * 2 + 1]) > quiet) return false;
+        return true;
+    }
+
+    // The first frame louder than `level` (or npos).
+    size_t MusicOnset(const std::vector<float>& stereo, float level = 1e-3f)
+    {
+        for (size_t f = 0; f * 2 + 1 < stereo.size(); ++f)
+            if (std::fabs(stereo[f * 2]) + std::fabs(stereo[f * 2 + 1]) > level) return f;
+        return std::string::npos;
+    }
+
+    // Frequency from upward zero crossings of the left channel in [from, to).
+    float MusicPitch(const std::vector<float>& stereo, size_t from, size_t to, uint32_t rate)
+    {
+        int crossings = 0;
+        size_t first = 0, last = 0;
+        for (size_t f = from + 1; f < to; ++f)
+            if (stereo[(f - 1) * 2] < 0.0f && stereo[f * 2] >= 0.0f)
+            {
+                if (crossings == 0) first = f;
+                last = f;
+                ++crossings;
+            }
+        return crossings > 1 ? (float)(crossings - 1) * rate / (float)(last - first) : 0.0f;
+    }
+
+    void TestMusicSongFormat()
+    {
+        using namespace Dimension::Music;
+        Song s = Song::Default();
+        CHECK(s.Channels.size() == 5 && s.Patterns.size() == 1);
+        CHECK(s.HasStep(0, 0, 0) && s.HasStep(0, 0, 12) && !s.HasStep(0, 0, 1));
+        s.ToggleStep(0, 0, 1);
+        CHECK(s.HasStep(0, 0, 1));
+        s.ToggleStep(0, 0, 1);
+        CHECK(!s.HasStep(0, 0, 1));
+        s.Channels[4].Synth.Cutoff = 1234.0f;
+        s.Channels[4].Synth.Amp.Release = 0.75f;
+        s.Patterns[0].Notes.push_back({ 4, 48, 72, 55, 0.5f });
+        s.Playlist.push_back({ 0, 1, 384, 0 });
+        s.Tempo = 97.5f;
+        s.Swing = 0.4f;
+        Song back;
+        CHECK(Song::FromJson(s.ToJson(), back));
+        CHECK(back.Tempo == 97.5f && back.Swing == 0.4f && back.Channels.size() == 5);
+        CHECK(back.Channels[4].Type == InstrumentType::Synth && back.Channels[4].Synth.Cutoff == 1234.0f && back.Channels[4].Synth.Amp.Release == 0.75f);
+        CHECK(back.Channels[1].Drum.Kind == DrumKind::Clap);
+        CHECK(back.Patterns[0].Notes == s.Patterns[0].Notes);
+        CHECK(back.Playlist.size() == 1 && back.Playlist[0].Start == 384 && back.Playlist[0].Track == 1);
+        CHECK(back.SongTicks() == 384 + back.BarTicks());
+        // Removing a channel takes its notes and renumbers the rest.
+        back.RemoveChannel(0);
+        CHECK(back.Channels.size() == 4 && back.Channels[0].Name == "Clap");
+        CHECK(back.HasStep(0, 0, 4) && !back.HasStep(0, 0, 0));
+        bool kept = false;
+        for (const Note& n : back.Patterns[0].Notes) kept |= n.Channel == 3 && n.Key == 55;
+        CHECK(kept);
+        // Files: written and read back; other JSON is refused.
+        fs::path file = fs::temp_directory_path() / "dimension_song_test.dsong";
+        CHECK(s.Save(file));
+        Song loaded;
+        CHECK(Song::Load(file, loaded) && loaded.Patterns[0].Notes == s.Patterns[0].Notes);
+        CHECK(!Song::FromJson(nlohmann::json{ { "format", "dmodel" } }, loaded));
+        fs::remove(file);
+    }
+
+    void TestMusicRendering()
+    {
+        using namespace Dimension::Music;
+        const uint32_t rate = 48000;
+        // One kick on step 4 (a beat in): silence until then, sound after.
+        Song s;
+        s.Tempo = 120.0f; // a beat = 0.5 s
+        Channel kick;
+        kick.Name = "Kick";
+        s.Channels.push_back(kick);
+        s.Patterns.push_back({});
+        s.ToggleStep(0, 0, 4);
+        auto out = RenderSong(s, rate, SongPlayer::Mode::Pattern, 0, 1, 1.0f);
+        CHECK(out.size() == (size_t)(rate * 2 + rate) * 2); // one bar (2 s) and the 1 s tail
+        size_t onset = MusicOnset(out);
+        CHECK(onset != std::string::npos && onset >= rate / 2 && onset < rate / 2 + 48); // within 1 ms of the beat
+        CHECK(!MusicSilent(out, rate / 2, rate));
+        CHECK(MusicSilent(out, rate * 2, rate * 3)); // the kick has rung out by the next bar
+        // Two loops: the kick again a bar later.
+        auto twice = RenderSong(s, rate, SongPlayer::Mode::Pattern, 0, 2, 0.0f);
+        CHECK(twice.size() == (size_t)rate * 4 * 2);
+        CHECK(!MusicSilent(twice, rate * 2 + rate / 2, rate * 2 + rate / 2 + 2000));
+        CHECK(MusicSilent(twice, rate * 2, rate * 2 + rate / 2 - 10));
+        // Swing delays every second step: step 1 lands a quarter step late at swing 0.5... (half of half a step).
+        Song sw = s;
+        sw.Patterns[0].Notes.clear();
+        sw.ToggleStep(0, 0, 1);
+        sw.Swing = 1.0f; // half a step late
+        size_t stepFrames = rate / 8; // a 16th at 120 BPM = 0.125 s
+        size_t swung = MusicOnset(RenderSong(sw, rate, SongPlayer::Mode::Pattern));
+        CHECK(swung >= stepFrames + stepFrames / 2 && swung < stepFrames + stepFrames / 2 + 48);
+        // Mute silences the channel; a solo on another channel too.
+        Song muted = s;
+        muted.Channels[0].Mute = true;
+        auto silent = RenderSong(muted, rate, SongPlayer::Mode::Pattern);
+        CHECK(MusicSilent(silent, 0, silent.size() / 2));
+        Song solo = s;
+        solo.Channels.push_back(kick);
+        solo.Channels[1].Solo = true;
+        CHECK(MusicSilent(RenderSong(solo, rate, SongPlayer::Mode::Pattern), 0, rate * 3));
+        // Pan: hard left leaves the right side silent.
+        Song left = s;
+        left.Channels[0].Pan = -1.0f;
+        auto l = RenderSong(left, rate, SongPlayer::Mode::Pattern);
+        float maxL = 0.0f, maxR = 0.0f;
+        for (size_t f = 0; f < l.size() / 2; ++f) maxL = std::max(maxL, std::fabs(l[f * 2])), maxR = std::max(maxR, std::fabs(l[f * 2 + 1]));
+        CHECK(maxL > 0.1f && maxR < 1e-4f);
+
+        // Every drum kind makes a sound that ends.
+        for (int k = 0; k < (int)DrumKind::Count; ++k)
+        {
+            Song d = s;
+            d.Channels[0].Drum.Kind = (DrumKind)k;
+            auto o = RenderSong(d, rate, SongPlayer::Mode::Pattern, 0, 1, 1.0f);
+            float peak = 0.0f;
+            for (float x : o) peak = std::max(peak, std::fabs(x));
+            CHECK(peak > 0.05f && peak < 2.0f);
+            CHECK(MusicSilent(o, rate * 2 + rate / 2, rate * 3));
+        }
+
+        // The synth plays the note's pitch (a sine through an open filter) and releases after its length.
+        Song syn;
+        syn.Tempo = 120.0f;
+        Channel c;
+        c.Type = InstrumentType::Synth;
+        c.Synth.Wave1 = c.Synth.Wave2 = Waveform::Sine;
+        c.Synth.Detune = 0.0f;
+        c.Synth.Cutoff = 18000.0f;
+        c.Synth.FilterEnv = 0.0f;
+        c.Synth.Amp = { 0.001f, 0.01f, 1.0f, 0.05f };
+        syn.Channels.push_back(c);
+        Pattern p;
+        p.Notes.push_back({ 0, 0, 96, 69, 1.0f }); // A4 for one beat (0.5 s)
+        syn.Patterns.push_back(p);
+        auto tone = RenderSong(syn, rate, SongPlayer::Mode::Pattern);
+        CHECK(Near(MusicPitch(tone, rate / 20, rate * 2 / 5, rate), 440.0f, 2.0f));
+        CHECK(MusicSilent(tone, rate / 2 + rate / 10, rate * 2)); // released at 0.5 s, gone 50 ms later
+        // An octave up.
+        syn.Patterns[0].Notes[0].Key = 81;
+        CHECK(Near(MusicPitch(RenderSong(syn, rate, SongPlayer::Mode::Pattern), rate / 20, rate * 2 / 5, rate), 880.0f, 4.0f));
+        // Glide: monophonic, the pitch slides from one note to the next.
+        syn.Channels[0].Synth.Glide = 0.05f;
+        syn.Patterns[0].Notes = { { 0, 0, 96, 69, 1.0f }, { 0, 96, 96, 81, 1.0f } };
+        auto glide = RenderSong(syn, rate, SongPlayer::Mode::Pattern);
+        CHECK(Near(MusicPitch(glide, rate / 2 + rate / 4, rate - rate / 20, rate), 880.0f, 6.0f));
+
+        // Song mode: a clip a bar in plays then (and the first bar is silent).
+        Song arr = s;
+        arr.Playlist.push_back({ 0, 0, arr.BarTicks(), 0 });
+        auto song = RenderSong(arr, rate, SongPlayer::Mode::Song, 0, 1, 0.5f);
+        CHECK(song.size() == (size_t)(rate * 4 + rate / 2) * 2);
+        CHECK(MusicSilent(song, 0, rate * 2 + rate / 2 - 10));
+        size_t at = MusicOnset(song);
+        CHECK(at >= rate * 2 + rate / 2 && at < rate * 2 + rate / 2 + 48);
+
+        // Live notes (auditioning): sound until NoteOff, then the release.
+        SongPlayer live(rate);
+        live.SetSong(syn);
+        std::vector<float> block(512 * 2);
+        live.NoteOn(0, 69, 1.0f);
+        live.Render(block.data(), 512);
+        CHECK(!MusicSilent(block, 100, 512) && live.ActiveVoices() == 1);
+        CHECK(live.TakeChannelPeak(0) > 0.1f && live.TakeChannelPeak(0) == 0.0f);
+        live.NoteOff(0, 69);
+        for (int i = 0; i < 20; ++i) live.Render(block.data(), 512);
+        CHECK(live.ActiveVoices() == 0 && MusicSilent(block, 0, 512));
+    }
+
+    void TestMusicSampler()
+    {
+        using namespace Dimension::Music;
+        const uint32_t rate = 48000;
+        // A one-second 1 kHz sine at 44.1 kHz, played an octave up (2 kHz) after resampling.
+        std::vector<float> sine(44100 * 2);
+        for (size_t i = 0; i < 44100; ++i) sine[i * 2] = sine[i * 2 + 1] = 0.5f * (float)std::sin(2.0 * 3.14159265358979 * 1000.0 * i / 44100.0);
+        fs::path file = fs::temp_directory_path() / "dimension_sampler_test.wav";
+        CHECK(WriteWav(file, sine, 44100));
+        auto data = LoadSample(file);
+        CHECK(data && data->SampleRate == 44100 && data->FrameCount() == 44100);
+        CHECK(data && Near(data->Frames[2 * 11], sine[2 * 11], 1e-3f));
+        Song s;
+        s.Tempo = 120.0f;
+        Channel c;
+        c.Type = InstrumentType::Sampler;
+        c.Sampler.SamplePath = file.string();
+        c.Sampler.RootKey = 60;
+        s.Channels.push_back(c);
+        Pattern p;
+        p.Notes.push_back({ 0, 0, 24, 72, 1.0f }); // one step long, but one-shot: the whole sample (half as long, an octave up)
+        s.Patterns.push_back(p);
+        auto out = RenderSong(s, rate, SongPlayer::Mode::Pattern, 0, 1, 0.0f);
+        CHECK(Near(MusicPitch(out, 1000, rate / 3, rate), 2000.0f, 8.0f));
+        CHECK(!MusicSilent(out, rate * 4 / 10, rate * 45 / 100)); // still playing after the step (one-shot)
+        CHECK(MusicSilent(out, rate / 2 + 10, rate)); // done after half a second
+        // Not one-shot: stops (after its release) at the note's end.
+        s.Channels[0].Sampler.OneShot = false;
+        auto gated = RenderSong(s, rate, SongPlayer::Mode::Pattern, 0, 1, 0.0f);
+        CHECK(MusicSilent(gated, rate / 8 + rate / 10, rate));
+        // A missing file plays nothing (and does not crash).
+        s.Channels[0].Sampler.SamplePath = (fs::temp_directory_path() / "no_such_sample.wav").string();
+        CHECK(MusicSilent(RenderSong(s, rate, SongPlayer::Mode::Pattern), 0, rate * 2));
+        fs::remove(file);
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -20722,6 +20940,9 @@ int main(int argc, char** argv)
     Run("Modeling rig weights", TestModelingRigWeights);
     Run("Modeling B-bones and envelopes", TestModelingBBonesEnvelopes);
     Run("Modeling graph editor", TestModelingGraphEditor);
+    Run("Music song format", TestMusicSongFormat);
+    Run("Music rendering", TestMusicRendering);
+    Run("Music sampler", TestMusicSampler);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

@@ -158,6 +158,7 @@ namespace Editor
         m_Timeline = MakeScope<TimelinePanel>(m_Ctx);
         m_Animation = MakeScope<AnimationPanel>(m_Ctx);
         m_MeshEdit = MakeScope<MeshEditMode>(m_Ctx);
+        m_Music = MakeScope<MusicMode>(m_Ctx);
         m_Ctx.DrawModelModifiers = [this](Entity e) { m_MeshEdit->DrawModifierPanel(e); };
         m_Ctx.OnFileRestored = [this](const fs::path& file) { m_MeshEdit->OnFileRestored(file); };
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
@@ -222,6 +223,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Shortcuts") m_ShowShortcuts = true;
         else if (m_Options.OpenWindow == "New Scene") m_ShowNewScene = true;
         else if (m_Options.OpenWindow == "New Model") m_ShowNewModel = true;
+        else if (m_Options.OpenWindow == "New Song") m_ShowNewSong = true;
         else if (m_Options.OpenWindow == "Project Hub") m_ShowHub = true;
         else if (m_Options.OpenWindow == "Undo History") m_ShowUndoHistory = true;
         else if (m_Options.OpenWindow == "Views") m_OpenViewsMenu = true;
@@ -271,6 +273,13 @@ namespace Editor
             if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
             if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenModelMode(h);
             else Log::Error("No model at {}", p.string());
+        }
+        if (!m_Options.SongPath.empty())
+        {
+            fs::path p = m_Options.SongPath;
+            if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
+            if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenMusicMode(h);
+            else Log::Error("No song at {}", p.string());
         }
         m_Ctx.HierarchySearch = m_Options.Search;
         if (!m_Options.SelectEntity.empty())
@@ -375,6 +384,7 @@ namespace Editor
     {
         if (m_Ctx.IsPlaying()) Stop();
         m_MeshEdit->Exit(); // (writes the model and a painted texture)
+        m_Music->Close();   // (writes the song)
         ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
         ImGui::GetIO().IniFilename = nullptr;
         m_Ctx.EditorScene.reset();
@@ -384,6 +394,7 @@ namespace Editor
 
     bool EditorLayer::OnCloseRequested()
     {
+        m_Music->Close(); // (saves the song)
         if (m_Ctx.IsPlaying()) Stop();
         return ConfirmDiscardChanges();
     }
@@ -688,6 +699,17 @@ namespace Editor
         {
             m_LeavePrefabRequested = false;
             LeaveStage();
+        }
+        if (m_Ctx.RequestOpenSong)
+        {
+            AssetHandle h = *m_Ctx.RequestOpenSong;
+            m_Ctx.RequestOpenSong.reset();
+            OpenMusicMode(h);
+        }
+        if (m_Ctx.RequestCloseMusic)
+        {
+            m_Ctx.RequestCloseMusic = false;
+            m_Music->Close();
         }
         if (m_Ctx.RequestOpenModel)
         {
@@ -1059,6 +1081,51 @@ namespace Editor
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
+    }
+
+    void EditorLayer::OpenMusicMode(AssetHandle song)
+    {
+        if (m_Ctx.IsPlaying()) Stop();
+        if (!m_Music->Open(song)) Log::Error("Could not open the song '{}'", AssetManager::GetDisplayName(song));
+    }
+
+    void EditorLayer::DrawNewSongWindow()
+    {
+        // A new song file (Assets/Music) from the default beat, opened in Music Mode.
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.4f),
+                                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("New Song", &m_ShowNewSong, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking))
+        {
+            ImGui::End();
+            return;
+        }
+        bool create = false;
+        if (UI::BeginProperties("##newSong"))
+        {
+            UI::PropertyLabel("Name");
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            if (ImGui::InputText("##name", &m_NewSongName, ImGuiInputTextFlags_EnterReturnsTrue)) create = true;
+            UI::EndProperties();
+        }
+        ImGui::TextDisabled("Saved to Assets/Music; opens in Music Mode.");
+        bool named = m_NewSongName.find_first_not_of(' ') != std::string::npos;
+        ImGui::BeginDisabled(!named);
+        if (ImGui::Button("Create", ImVec2(120.0f, 0.0f))) create = true;
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) m_ShowNewSong = false;
+        ImGui::End();
+        if (create && named)
+        {
+            AssetHandle h = MusicMode::CreateSongAsset(AssetManager::GetAssetsDirectory() / "Music", m_NewSongName);
+            if (h.IsValid())
+            {
+                m_ShowNewSong = false;
+                m_Ctx.RequestOpenSong = h;
+            }
+        }
     }
 
     void EditorLayer::DrawNewModelWindow()
@@ -2197,6 +2264,7 @@ namespace Editor
         auto add = [&](std::string name, std::function<void()> run) { out.push_back({ std::move(name), std::move(run) }); };
         add("File/New Scene...", [this] { m_ShowNewScene = true; });
         add("File/New Model...", [this] { m_ShowNewModel = true; });
+        add("File/New Song...", [this] { m_ShowNewSong = true; });
         for (const fs::path& p : RecentScenes::List())
             add("File/Open Recent/" + p.filename().string(), [this, p] { if (ConfirmDiscardChanges()) OpenScene(p); });
         add("File/Open Scene...", [this] { OpenSceneWithDialog(); });
@@ -2897,6 +2965,13 @@ namespace Editor
             }
         }
 
+        if (m_Music->IsActive())
+        {
+            m_Music->OnImGui();
+            InjectInput(); // (automation)
+            style = saved;
+            return;
+        }
         DrawMenuBar();
         DrawToolbar();
         DrawDockspace();
@@ -2943,6 +3018,7 @@ namespace Editor
         if (m_ShowShortcuts) DrawShortcutsWindow();
         if (m_ShowNewScene) DrawNewSceneWindow();
         if (m_ShowNewModel) DrawNewModelWindow();
+        if (m_ShowNewSong) DrawNewSongWindow();
         if (m_ShowHub) DrawProjectHub();
         if (m_ShowUndoHistory) DrawUndoHistory();
         else m_RebindingShortcut = -1;
@@ -3071,6 +3147,7 @@ namespace Editor
         {
             if (ImGui::MenuItem("New Scene...", Shortcuts::Label("file.new").c_str())) m_ShowNewScene = true;
             if (ImGui::MenuItem("New Model...", nullptr, false, !m_Ctx.IsPlaying())) m_ShowNewModel = true;
+            if (ImGui::MenuItem("New Song...")) m_ShowNewSong = true;
             if (ImGui::MenuItem("Open Scene...", Shortcuts::Label("file.open").c_str())) OpenSceneWithDialog();
             // The project's last opened scenes (newest first).
             if (ImGui::BeginMenu("Open Recent"))

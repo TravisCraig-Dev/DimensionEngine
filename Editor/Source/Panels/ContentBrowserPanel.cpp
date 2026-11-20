@@ -20,6 +20,7 @@
 #include <Dimension/Platform/FileDialogs.h>
 #include <Dimension/Modeling/ModelExport.h>
 #include "../MeshEditMode.h"
+#include "../MusicMode.h"
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <algorithm>
@@ -118,6 +119,7 @@ namespace Editor
             else if (type == AssetType::Scene) m_Ctx.RequestOpenScene = path;
             else if (type == AssetType::Prefab && handle.IsValid()) m_Ctx.RequestOpenPrefab = handle;
             else if (path.extension() == ".dmodel" && handle.IsValid()) m_Ctx.RequestOpenModel = handle; // Model Mode
+            else if (type == AssetType::Song && handle.IsValid()) m_Ctx.RequestOpenSong = handle;           // Music Mode
             else if (type == AssetType::VisualEffect && handle.IsValid()) m_Ctx.RequestOpenVisualEffect = handle;
             else FileDialogs::OpenWithDefaultApp(path);
         }
@@ -662,6 +664,16 @@ namespace Editor
                     {
                         m_Ctx.SelectAsset(h);
                         if (!m_Ctx.IsPlaying()) m_Ctx.RequestOpenModel = h;
+                    }
+                }
+                if (ImGui::MenuItem("New Song"))
+                {
+                    // A song (the default beat to start from), opened in Music Mode.
+                    AssetHandle h = MusicMode::CreateSongAsset(m_Current, "New Song");
+                    if (h.IsValid())
+                    {
+                        m_Ctx.SelectAsset(h);
+                        m_Ctx.RequestOpenSong = h;
                     }
                 }
                 if (ImGui::MenuItem("New Timeline"))

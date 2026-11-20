@@ -10,6 +10,7 @@
 #include <Dimension/Renderer/CameraStack.h>
 #include "AssetPreviews.h"
 #include "MeshEditMode.h"
+#include "MusicMode.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneTemplates.h>
@@ -29,6 +30,7 @@ namespace Editor
         std::string ScenePath;    // open this scene instead of the project's start scene
         std::string PrefabPath;   // open this prefab in Prefab Mode on startup (path relative to Assets or absolute)
         std::string ModelPath;    // --model: open this .dmodel in Model Mode on startup (relative to Assets or absolute)
+        std::string SongPath;     // --song: open this .dsong in Music Mode on startup (relative to Assets or absolute)
         std::string OpenSceneLater; // request this scene like the UI does, after a few frames (automation/testing)
         bool MenuOpenScene = false; // run File > Open Scene... after a few frames (automation/testing)
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
@@ -242,6 +244,12 @@ namespace Editor
         Scope<TimelinePanel> m_Timeline;
         Scope<AnimationPanel> m_Animation;
         Scope<MeshEditMode> m_MeshEdit; // Edit Mode: modeling in the Scene view
+        Scope<MusicMode> m_Music;       // Music Mode: the full-screen music workspace
+        // File > New Song...: a song file (the default beat) opened in Music Mode.
+        bool m_ShowNewSong = false;
+        std::string m_NewSongName = "New Song";
+        void DrawNewSongWindow();
+        void OpenMusicMode(AssetHandle song);
         Scope<PackagesPanel> m_Packages;
         Scope<TestRunnerPanel> m_TestRunner;
         Scope<NavigationPanel> m_Navigation;

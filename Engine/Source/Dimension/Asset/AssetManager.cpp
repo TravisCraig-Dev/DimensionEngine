@@ -191,6 +191,7 @@ namespace Dimension
         case AssetType::NavMeshData: return "NavMesh Data";
         case AssetType::AvatarMask: return "Avatar Mask";
         case AssetType::VisualEffect: return "Visual Effect";
+        case AssetType::Song: return "Song";
         default: return "None";
         }
     }
@@ -367,6 +368,7 @@ namespace Dimension
         if (ext == ".navmesh") return AssetType::NavMeshData;
         if (ext == ".mask") return AssetType::AvatarMask;
         if (ext == ".vfx") return AssetType::VisualEffect;
+        if (ext == ".dsong") return AssetType::Song;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;
