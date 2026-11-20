@@ -11,13 +11,55 @@
 #include <Dimension/Project/Project.h>
 #include <Dimension/Project/ProjectHub.h>
 #include <Dimension/Scripting/GameModule.h>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 using namespace Dimension;
+
+namespace
+{
+    // The editor is a Windows GUI program (no console window opens with it). Started from a terminal, it writes its
+    // log there anyway; output redirected to a file or pipe already has somewhere to go.
+    void UseParentConsole()
+    {
+#ifdef _WIN32
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (out && out != INVALID_HANDLE_VALUE && GetFileType(out) != FILE_TYPE_UNKNOWN) return;
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+        FILE* f = nullptr;
+        freopen_s(&f, "CONOUT$", "w", stdout);
+        freopen_s(&f, "CONOUT$", "w", stderr);
+#endif
+    }
+
+    // The log also goes to a file, since there's no console to read it in (like Unity's Editor.log):
+    // %LOCALAPPDATA%/Dimension/Editor.log, ~/.cache/Dimension/Editor.log.
+    void LogToFile()
+    {
+        std::error_code ec;
+        fs::path dir = Platform::UserCacheDirectory() / "Dimension";
+        fs::create_directories(dir, ec);
+        auto file = std::make_shared<std::ofstream>(dir / "Editor.log", std::ios::trunc);
+        if (!*file) return;
+        Log::AddSink([file](const LogEntry& e) {
+            static const char* levels[] = { "trace", "info", "warn", "error" };
+            char time[32];
+            std::snprintf(time, sizeof(time), "%10.3f", e.Time);
+            *file << "[" << time << "] [" << levels[(int)e.Level] << "] " << e.Message << '\n';
+            if (e.Level >= LogLevel::Warn) file->flush();
+        });
+    }
+}
 
 int main(int argc, char** argv)
 {
     Dimension::AppRuntime::SetHost(Dimension::AppRuntime::Host::Editor); // Application.Quit is ignored, as in Unity's editor
+    UseParentConsole();
+    LogToFile();
     fs::path projectDir;
     bool showLauncher = false;
     Editor::EditorOptions options;

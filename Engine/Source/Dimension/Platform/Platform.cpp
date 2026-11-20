@@ -3,6 +3,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>
+#include <fcntl.h>
+#include <io.h>
+#include <mutex>
+#include <unordered_map>
 #else
 #include <climits>
 #include <sys/wait.h>
@@ -127,11 +131,72 @@ namespace Dimension::Platform
 #endif
     }
 
+#ifdef _WIN32
+    namespace
+    {
+        // The processes behind open pipes (OpenPipe -> ClosePipe).
+        std::mutex s_PipeMutex;
+        std::unordered_map<FILE*, HANDLE> s_PipeProcesses;
+
+        // A handle the child may inherit: a duplicate of `h`, or the null device when `h` isn't usable (a GUI program
+        // started without a console has no standard handles).
+        HANDLE InheritableOr(HANDLE h, DWORD access)
+        {
+            HANDLE out = nullptr;
+            if (h && h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_UNKNOWN &&
+                DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &out, 0, TRUE, DUPLICATE_SAME_ACCESS))
+                return out;
+            SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
+            return CreateFileW(L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+        }
+    }
+#endif
+
     FILE* OpenPipe(const std::string& command)
     {
 #ifdef _WIN32
-        // cmd /c strips the outer quotes, so commands that start with a quoted program still run.
-        return _popen(("\"" + command + "\"").c_str(), "r");
+        // As _popen(command, "r") (cmd /c, its output read through the pipe, stderr where ours goes), but without a
+        // console window: the editor is a GUI program, and _popen would flash one up for every command it runs.
+        SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
+        HANDLE readEnd = nullptr, writeEnd = nullptr;
+        if (!CreatePipe(&readEnd, &writeEnd, &sa, 0)) return nullptr;
+        SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = InheritableOr(nullptr, GENERIC_READ);
+        si.hStdOutput = writeEnd;
+        si.hStdError = InheritableOr(GetStdHandle(STD_ERROR_HANDLE), GENERIC_WRITE);
+        // cmd /c strips the outer quotes, so commands that start with a quoted program still run. (The command is in
+        // the ANSI code page, as _popen takes it.)
+        std::string line = "cmd.exe /c \"" + command + "\"";
+        int n = MultiByteToWideChar(CP_ACP, 0, line.c_str(), -1, nullptr, 0);
+        std::wstring wline(n > 0 ? (size_t)n : 1, L'\0');
+        MultiByteToWideChar(CP_ACP, 0, line.c_str(), -1, wline.data(), n);
+        PROCESS_INFORMATION pi{};
+        BOOL ok = CreateProcessW(nullptr, wline.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+        CloseHandle(writeEnd);
+        if (si.hStdInput && si.hStdInput != INVALID_HANDLE_VALUE) CloseHandle(si.hStdInput);
+        if (si.hStdError && si.hStdError != INVALID_HANDLE_VALUE) CloseHandle(si.hStdError);
+        if (!ok)
+        {
+            CloseHandle(readEnd);
+            return nullptr;
+        }
+        CloseHandle(pi.hThread);
+        int fd = _open_osfhandle((intptr_t)readEnd, _O_RDONLY | _O_TEXT);
+        FILE* pipe = fd >= 0 ? _fdopen(fd, "r") : nullptr;
+        if (!pipe)
+        {
+            if (fd >= 0) _close(fd);
+            else CloseHandle(readEnd);
+            TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hProcess);
+            return nullptr;
+        }
+        std::lock_guard lock(s_PipeMutex);
+        s_PipeProcesses[pipe] = pi.hProcess;
+        return pipe;
 #else
         return popen(command.c_str(), "r");
 #endif
@@ -140,7 +205,23 @@ namespace Dimension::Platform
     int ClosePipe(FILE* pipe)
     {
 #ifdef _WIN32
-        return _pclose(pipe);
+        HANDLE process = nullptr;
+        {
+            std::lock_guard lock(s_PipeMutex);
+            auto it = s_PipeProcesses.find(pipe);
+            if (it != s_PipeProcesses.end())
+            {
+                process = it->second;
+                s_PipeProcesses.erase(it);
+            }
+        }
+        std::fclose(pipe);
+        if (!process) return -1;
+        WaitForSingleObject(process, INFINITE);
+        DWORD code = (DWORD)-1;
+        GetExitCodeProcess(process, &code);
+        CloseHandle(process);
+        return (int)code;
 #else
         int status = pclose(pipe);
         if (status == -1) return -1;

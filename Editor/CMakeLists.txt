@@ -1,5 +1,10 @@
 file(GLOB_RECURSE EDITOR_SOURCES CONFIGURE_DEPENDS Source/*.cpp Source/*.h)
-add_executable(DimensionEditor ${EDITOR_SOURCES} ${CMAKE_SOURCE_DIR}/Engine/Resources/Dimension.rc)
+# A GUI program on Windows: no console window opens with it (it writes to the terminal it was started from, and to
+# Editor.log). main() stays the entry point.
+add_executable(DimensionEditor WIN32 ${EDITOR_SOURCES} ${CMAKE_SOURCE_DIR}/Engine/Resources/Dimension.rc)
+if(MSVC)
+    target_link_options(DimensionEditor PRIVATE /ENTRY:mainCRTStartup)
+endif()
 target_include_directories(DimensionEditor PRIVATE Source)
 target_link_libraries(DimensionEditor PRIVATE DimensionEngine)
 target_compile_definitions(DimensionEditor PRIVATE DIM_ENGINE_VERSION="${PROJECT_VERSION}")
