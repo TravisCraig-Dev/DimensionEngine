@@ -125,9 +125,187 @@ namespace Dimension::Modeling::Rig
 
     std::vector<glm::mat4> SkinMatrices(const EditableMesh& m)
     {
-        std::vector<glm::mat4> pose = PoseMatrices(m);
-        for (size_t b = 0; b < pose.size(); ++b) pose[b] = pose[b] * glm::inverse(RestMatrix(m.Bones[b]));
-        return pose;
+        std::vector<glm::mat4> pose = PoseMatrices(m), rest = RestMatrices(m);
+        std::vector<glm::mat4> out(pose.size());
+        for (size_t b = 0; b < pose.size(); ++b) out[b] = pose[b] * glm::inverse(rest[b]);
+        for (size_t b = 0; b < m.Bones.size(); ++b)
+        {
+            if (m.Bones[b].Segments <= 1) continue;
+            std::vector<glm::mat4> posed = BBoneSegments(m, (int)b, pose), restSeg = BBoneSegments(m, (int)b, rest);
+            for (size_t k = 0; k < posed.size(); ++k) out.push_back(posed[k] * glm::inverse(restSeg[k]));
+        }
+        return out;
+    }
+
+    std::vector<glm::mat4> RestMatrices(const EditableMesh& m)
+    {
+        std::vector<glm::mat4> out(m.Bones.size());
+        for (size_t b = 0; b < m.Bones.size(); ++b) out[b] = RestMatrix(m.Bones[b]);
+        return out;
+    }
+
+    // ---- B-bones
+
+    namespace
+    {
+        bool Joined(const glm::vec3& a, const glm::vec3& b, const Bone& scale)
+        {
+            return glm::length(a - b) <= std::max(glm::length(scale.Tail - scale.Head) * 1e-3f, 1e-5f);
+        }
+    }
+
+    int BBoneInBone(const EditableMesh& m, int bone)
+    {
+        const Bone& b = m.Bones[(size_t)bone];
+        if (b.Parent < 0 || b.Parent >= (int)m.Bones.size()) return -1;
+        return Joined(m.Bones[(size_t)b.Parent].Tail, b.Head, b) ? b.Parent : -1;
+    }
+
+    int BBoneOutBone(const EditableMesh& m, int bone)
+    {
+        const Bone& b = m.Bones[(size_t)bone];
+        for (size_t c = 0; c < m.Bones.size(); ++c)
+            if (m.Bones[c].Parent == bone && Joined(m.Bones[c].Head, b.Tail, b)) return (int)c;
+        return -1;
+    }
+
+    std::vector<glm::mat4> BBoneSegments(const EditableMesh& m, int bone, const std::vector<glm::mat4>& frames)
+    {
+        const Bone& b = m.Bones[(size_t)bone];
+        const glm::mat4& F = frames[(size_t)bone];
+        int n = std::clamp(b.Segments, 1, 32);
+        float len = glm::length(b.Tail - b.Head);
+        if (n <= 1 || len < 1e-8f) return { F };
+        // The curve in the bone's own frame (unscaled: the frame's scale applies on top), +Y from head to tail.
+        glm::mat3 toLocal = glm::inverse(glm::mat3(F));
+        auto localDir = [&](const glm::vec3& v) {
+            glm::vec3 d = toLocal * v;
+            return glm::length(d) > 1e-12f ? glm::normalize(d) : glm::vec3(0, 1, 0);
+        };
+        int in = BBoneInBone(m, bone), out = BBoneOutBone(m, bone);
+        glm::vec3 dIn = in >= 0 ? localDir(glm::vec3(frames[(size_t)in][1])) : glm::vec3(0, 1, 0);
+        glm::vec3 dOut = out >= 0 ? localDir(glm::vec3(frames[(size_t)out][1])) : glm::vec3(0, 1, 0);
+        glm::vec3 p0(0.0f), p3(0.0f, len, 0.0f);
+        glm::vec3 p1 = p0 + dIn * (len * std::max(b.EaseIn, 0.0f) / 3.0f), p2 = p3 - dOut * (len * std::max(b.EaseOut, 0.0f) / 3.0f);
+        auto at = [&](float t) {
+            float s = 1.0f - t;
+            return p0 * (s * s * s) + p1 * (3.0f * s * s * t) + p2 * (3.0f * s * t * t) + p3 * (t * t * t);
+        };
+        std::vector<glm::vec3> q((size_t)n + 1);
+        for (int k = 0; k <= n; ++k) q[(size_t)k] = at((float)k / (float)n);
+        // Frames carried along the chords without twisting (each turned by the least rotation onto the next chord).
+        std::vector<glm::vec3> tangent((size_t)n), xAxis((size_t)n);
+        for (int k = 0; k < n; ++k)
+        {
+            glm::vec3 d = q[(size_t)k + 1] - q[(size_t)k];
+            tangent[(size_t)k] = glm::length(d) > 1e-12f ? glm::normalize(d) : glm::vec3(0, 1, 0);
+        }
+        auto turn = [](const glm::vec3& v, const glm::vec3& from, const glm::vec3& to) {
+            glm::vec3 axis = glm::cross(from, to);
+            float s = glm::length(axis), c = glm::dot(from, to);
+            if (s < 1e-9f) return v;
+            return glm::vec3(glm::mat4_cast(glm::angleAxis(std::atan2(s, c), axis / s)) * glm::vec4(v, 0.0f));
+        };
+        xAxis[0] = turn(glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), tangent[0]);
+        for (int k = 1; k < n; ++k) xAxis[(size_t)k] = turn(xAxis[(size_t)k - 1], tangent[(size_t)k - 1], tangent[(size_t)k]);
+        // The twist: the child's X about the end, against the carried frame's, spread along the segments.
+        float twist = 0.0f;
+        if (out >= 0)
+        {
+            glm::vec3 endT = tangent[(size_t)n - 1];
+            glm::vec3 carried = turn(xAxis[(size_t)n - 1], endT, dOut);
+            glm::vec3 childX = toLocal * glm::vec3(frames[(size_t)out][0]);
+            childX -= dOut * glm::dot(childX, dOut);
+            if (glm::length(childX) > 1e-9f)
+            {
+                childX = glm::normalize(childX);
+                twist = std::atan2(glm::dot(glm::cross(carried, childX), dOut), glm::dot(carried, childX));
+            }
+        }
+        std::vector<glm::mat4> segs((size_t)n);
+        float share = len / (float)n;
+        for (int k = 0; k < n; ++k)
+        {
+            glm::vec3 y = tangent[(size_t)k];
+            float angle = twist * ((float)k + 0.5f) / (float)n;
+            glm::vec3 x = glm::vec3(glm::mat4_cast(glm::angleAxis(angle, y)) * glm::vec4(xAxis[(size_t)k], 0.0f));
+            x = glm::normalize(x - y * glm::dot(x, y));
+            glm::vec3 z = glm::cross(x, y);
+            float stretch = glm::length(q[(size_t)k + 1] - q[(size_t)k]) / share;
+            glm::mat4 local(1.0f);
+            local[0] = glm::vec4(x, 0.0f);
+            local[1] = glm::vec4(y * stretch, 0.0f);
+            local[2] = glm::vec4(z, 0.0f);
+            local[3] = glm::vec4(q[(size_t)k], 1.0f);
+            segs[(size_t)k] = F * local;
+        }
+        return segs;
+    }
+
+    SkinLayout MakeSkinLayout(const EditableMesh& m)
+    {
+        SkinLayout l;
+        l.First.assign(m.Bones.size(), -1);
+        l.RestCurve.resize(m.Bones.size());
+        l.JointCount = m.Bones.size();
+        std::vector<glm::mat4> rest;
+        for (size_t b = 0; b < m.Bones.size(); ++b)
+        {
+            if (m.Bones[b].Segments <= 1) continue;
+            if (rest.empty()) rest = RestMatrices(m);
+            std::vector<glm::mat4> segs = BBoneSegments(m, (int)b, rest);
+            if (segs.size() <= 1) continue;
+            l.First[b] = (int)l.JointCount;
+            l.JointCount += segs.size();
+            for (const glm::mat4& s : segs) l.RestCurve[b].push_back(glm::vec3(s[3]));
+            l.RestCurve[b].push_back(m.Bones[b].Tail);
+        }
+        return l;
+    }
+
+    void SkinLayout::Joints(const glm::vec3& p, const std::vector<VertexWeight>& bones, std::vector<VertexWeight>& joints) const
+    {
+        joints.clear();
+        auto add = [&](uint32_t joint, float w) {
+            if (w <= 0.0f) return;
+            for (VertexWeight& j : joints)
+                if (j.Bone == joint)
+                {
+                    j.Weight += w;
+                    return;
+                }
+            joints.push_back({ (uint16_t)joint, w });
+        };
+        for (const VertexWeight& bw : bones)
+        {
+            if (bw.Bone >= First.size() || First[bw.Bone] < 0)
+            {
+                add(bw.Bone, bw.Weight);
+                continue;
+            }
+            // Where along the rest curve the vertex lies (segments 0..n), each segment's joint counted at its middle.
+            const std::vector<glm::vec3>& c = RestCurve[bw.Bone];
+            size_t n = c.size() - 1;
+            float best = 1e30f, u = 0.0f;
+            for (size_t k = 0; k < n; ++k)
+            {
+                glm::vec3 ab = c[k + 1] - c[k];
+                float l2 = glm::dot(ab, ab);
+                float t = l2 > 1e-20f ? std::clamp(glm::dot(p - c[k], ab) / l2, 0.0f, 1.0f) : 0.0f;
+                float d = glm::length(p - (c[k] + ab * t));
+                if (d < best - 1e-7f)
+                {
+                    best = d;
+                    u = (float)k + t;
+                }
+            }
+            float x = std::clamp(u - 0.5f, 0.0f, (float)n - 1.0f);
+            size_t j = std::min((size_t)x, n - 1);
+            float f = x - (float)j;
+            add((uint32_t)(First[bw.Bone] + (int)j), bw.Weight * (1.0f - f));
+            if (j + 1 < n) add((uint32_t)(First[bw.Bone] + (int)j + 1), bw.Weight * f);
+        }
+        Normalize(joints);
     }
 
     Ref<Skeleton> BuildSkeleton(const EditableMesh& m)
@@ -141,6 +319,23 @@ namespace Dimension::Modeling::Rig
             Decompose(RestLocal(m, (int)b), j.Translation, j.Rotation, j.Scale);
             j.InverseBind = glm::inverse(RestMatrix(m.Bones[b]));
             s->Joints.push_back(j);
+        }
+        // B-bone segments: children of their bone (actions bake their bending; at rest they ride along with it).
+        std::vector<glm::mat4> rest = RestMatrices(m);
+        for (size_t b = 0; b < m.Bones.size(); ++b)
+        {
+            if (m.Bones[b].Segments <= 1) continue;
+            std::vector<glm::mat4> segs = BBoneSegments(m, (int)b, rest);
+            if (segs.size() <= 1) continue;
+            for (size_t k = 0; k < segs.size(); ++k)
+            {
+                Joint j;
+                j.Name = m.Bones[b].Name + ".seg" + std::to_string(k);
+                j.Parent = (int)b;
+                Decompose(glm::inverse(rest[b]) * segs[k], j.Translation, j.Rotation, j.Scale);
+                j.InverseBind = glm::inverse(segs[k]);
+                s->Joints.push_back(j);
+            }
         }
         s->ComputeOrder();
         return s;
@@ -234,6 +429,14 @@ namespace Dimension::Modeling::Rig
         b.Head = head;
         b.Tail = tail;
         b.Parent = parent >= 0 && parent < (int)m.Bones.size() ? parent : -1;
+        float len = glm::length(tail - head);
+        if (len > 1e-6f)
+        {
+            // (Blender's envelope for a 1 m bone, scaled to this one)
+            b.HeadRadius = 0.1f * len;
+            b.TailRadius = 0.05f * len;
+            b.EnvelopeDistance = 0.25f * len;
+        }
         m.Bones.push_back(b);
         int index = (int)m.Bones.size() - 1;
         for (Action& a : m.Actions)
@@ -507,6 +710,42 @@ namespace Dimension::Modeling::Rig
             Normalize(w[v]);
             m.Weights[v] = w[v];
         }
+    }
+
+    float EnvelopeInfluence(const Bone& b, const glm::vec3& p)
+    {
+        glm::vec3 ab = b.Tail - b.Head;
+        float l2 = glm::dot(ab, ab);
+        float t = l2 > 1e-20f ? std::clamp(glm::dot(p - b.Head, ab) / l2, 0.0f, 1.0f) : 0.0f;
+        float d = glm::length(p - (b.Head + ab * t));
+        float radius = std::max(0.0f, b.HeadRadius + (b.TailRadius - b.HeadRadius) * t);
+        if (d <= radius) return b.EnvelopeWeight;
+        float dist = std::max(b.EnvelopeDistance, 0.0f);
+        if (dist <= 0.0f || d >= radius + dist) return 0.0f;
+        float f = 1.0f - (d - radius) / dist;
+        return b.EnvelopeWeight * f * f; // (smooth to nothing at the envelope's edge)
+    }
+
+    size_t EnvelopeWeights(EditableMesh& m, bool selectedOnly)
+    {
+        EnsureWeights(m);
+        size_t count = 0;
+        for (uint32_t v = 0; v < m.VertexCount(); ++v)
+        {
+            if (selectedOnly && !m.IsVertSelected(v)) continue;
+            std::vector<VertexWeight> w;
+            for (size_t b = 0; b < m.Bones.size(); ++b)
+            {
+                if (!m.Bones[b].Deform) continue;
+                float x = EnvelopeInfluence(m.Bones[b], m.Positions[v]);
+                if (x > 0.0f) w.push_back({ (uint16_t)b, x });
+            }
+            Normalize(w);
+            if (w.empty()) continue;
+            m.Weights[v] = std::move(w);
+            ++count;
+        }
+        return count;
     }
 
     std::vector<std::vector<VertexWeight>> TransferWeights(const EditableMesh& from, const EditableMesh& to)
@@ -796,38 +1035,48 @@ namespace Dimension::Modeling::Rig
         keys.erase(std::remove_if(keys.begin(), keys.end(), [&](const ActionKey& k) { return std::abs(k.Time - time) < 1e-4f; }), keys.end());
     }
 
+    namespace
+    {
+        // The bones' poses in `action` at `time` (per bone, between the keys around it that hold it).
+        void PoseAt(const Action& action, float time, std::vector<Bone>& bones)
+        {
+            const auto& keys = action.Keys;
+            if (keys.empty()) return;
+            for (size_t b = 0; b < bones.size(); ++b)
+            {
+                Bone& bone = bones[b];
+                int lo = -1, hi = -1;
+                for (int k = 0; k < (int)keys.size(); ++k)
+                {
+                    if (!keys[(size_t)k].HasBone(b)) continue;
+                    if (keys[(size_t)k].Time <= time) lo = k;
+                    else if (hi < 0) hi = k;
+                }
+                if (lo < 0 && hi < 0)
+                {
+                    bone.PoseRotation = glm::quat(1, 0, 0, 0);
+                    bone.PoseLocation = glm::vec3(0.0f);
+                    bone.PoseScale = glm::vec3(1.0f);
+                    continue;
+                }
+                if (lo < 0) lo = hi;
+                if (hi < 0) hi = lo;
+                const ActionKey &a = keys[(size_t)lo], &c = keys[(size_t)hi];
+                float span = c.Time - a.Time;
+                float t = span > 1e-6f ? std::clamp((time - a.Time) / span, 0.0f, 1.0f) : 0.0f;
+                bone.PoseRotation = glm::slerp(a.Rotations[b], c.Rotations[b], t);
+                bone.PoseLocation = glm::mix(a.Locations[b], c.Locations[b], t);
+                bone.PoseScale = glm::mix(a.Scales[b], c.Scales[b], t);
+            }
+        }
+    }
+
     void EvaluateAction(EditableMesh& m, int action, float time)
     {
         if (action < 0 || action >= (int)m.Actions.size()) return;
         const auto& keys = m.Actions[(size_t)action].Keys;
         if (keys.empty()) return;
-        // Per bone, between the keys around `time` that hold it.
-        for (size_t b = 0; b < m.Bones.size(); ++b)
-        {
-            Bone& bone = m.Bones[b];
-            int lo = -1, hi = -1;
-            for (int k = 0; k < (int)keys.size(); ++k)
-            {
-                if (!keys[(size_t)k].HasBone(b)) continue;
-                if (keys[(size_t)k].Time <= time) lo = k;
-                else if (hi < 0) hi = k;
-            }
-            if (lo < 0 && hi < 0)
-            {
-                bone.PoseRotation = glm::quat(1, 0, 0, 0);
-                bone.PoseLocation = glm::vec3(0.0f);
-                bone.PoseScale = glm::vec3(1.0f);
-                continue;
-            }
-            if (lo < 0) lo = hi;
-            if (hi < 0) hi = lo;
-            const ActionKey &a = keys[(size_t)lo], &c = keys[(size_t)hi];
-            float span = c.Time - a.Time;
-            float t = span > 1e-6f ? std::clamp((time - a.Time) / span, 0.0f, 1.0f) : 0.0f;
-            bone.PoseRotation = glm::slerp(a.Rotations[b], c.Rotations[b], t);
-            bone.PoseLocation = glm::mix(a.Locations[b], c.Locations[b], t);
-            bone.PoseScale = glm::mix(a.Scales[b], c.Scales[b], t);
-        }
+        PoseAt(m.Actions[(size_t)action], time, m.Bones);
         // Shape key values, between the keys that hold them.
         for (size_t s = 0; s < m.ShapeKeys.size(); ++s)
         {
@@ -903,6 +1152,49 @@ namespace Dimension::Modeling::Rig
                     w.Values.push_back(glm::vec4(k.Shapes[sk], 0.0f, 0.0f, 0.0f));
                 }
             if (!w.Times.empty()) clip.WeightChannels.push_back(std::move(w));
+        }
+        // B-bone segments bend with the bones around them: their transforms (relative to their bone) sampled at the
+        // keys and 30 times a second between.
+        SkinLayout layout = MakeSkinLayout(m);
+        if (layout.JointCount > m.Bones.size() && !action.Keys.empty())
+        {
+            std::vector<float> times;
+            float first = action.Keys.front().Time, last = action.Keys.back().Time;
+            for (float t = first; t < last; t += 1.0f / 30.0f) times.push_back(t);
+            for (const ActionKey& k : action.Keys) times.push_back(k.Time);
+            std::sort(times.begin(), times.end());
+            times.erase(std::unique(times.begin(), times.end(), [](float a, float b) { return std::abs(a - b) < 1e-4f; }), times.end());
+            std::vector<AnimationChannel> seg(3 * (layout.JointCount - m.Bones.size()));
+            for (size_t j = 0; j < seg.size(); ++j)
+            {
+                seg[j].Joint = (int)(m.Bones.size() + j / 3);
+                seg[j].Path = j % 3 == 0 ? AnimationPath::Translation : j % 3 == 1 ? AnimationPath::Rotation : AnimationPath::Scale;
+            }
+            EditableMesh posed;
+            posed.Bones = m.Bones;
+            for (float t : times)
+            {
+                PoseAt(action, t, posed.Bones);
+                std::vector<glm::mat4> frames = PoseMatrices(posed);
+                for (size_t b = 0; b < m.Bones.size(); ++b)
+                {
+                    if (layout.First[b] < 0) continue;
+                    std::vector<glm::mat4> segs = BBoneSegments(posed, (int)b, frames);
+                    glm::mat4 inv = glm::inverse(frames[b]);
+                    for (size_t k = 0; k < segs.size(); ++k)
+                    {
+                        glm::vec3 tr, sc;
+                        glm::quat rot;
+                        Decompose(inv * segs[k], tr, rot, sc);
+                        size_t base = ((size_t)layout.First[b] - m.Bones.size() + k) * 3;
+                        for (int c = 0; c < 3; ++c) seg[base + (size_t)c].Times.push_back(t);
+                        seg[base].Values.push_back(glm::vec4(tr, 0.0f));
+                        seg[base + 1].Values.push_back(glm::vec4(rot.x, rot.y, rot.z, rot.w));
+                        seg[base + 2].Values.push_back(glm::vec4(sc, 0.0f));
+                    }
+                }
+            }
+            for (AnimationChannel& c : seg) clip.Channels.push_back(std::move(c));
         }
         return clip;
     }

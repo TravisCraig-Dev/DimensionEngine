@@ -113,6 +113,14 @@ namespace Dimension::Modeling
         // IKChain - 1 of its parents (-1: none). Applied when posing; actions key its result.
         int IKTarget = -1;
         int IKChain = 2;
+        // B-bone (Blender's bendy bones): more than one segment bends the bone along a curve from head to tail whose
+        // ends lean towards the bones joined to it (the parent it continues, the child continuing it), handles EaseIn
+        // and EaseOut times a third of its length; its twist spreads along it to meet the child's.
+        int Segments = 1;
+        float EaseIn = 1.0f, EaseOut = 1.0f;
+        // Envelope (Rig::EnvelopeWeights): full weight within a radius of the bone (head to tail radius along it),
+        // fading out over Distance beyond, times Weight.
+        float HeadRadius = 0.1f, TailRadius = 0.05f, EnvelopeDistance = 0.25f, EnvelopeWeight = 1.0f;
     };
     enum BoneFlag : uint8_t { BoneHead = 1, BoneTail = 2, BoneBody = 4 };
 

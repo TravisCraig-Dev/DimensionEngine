@@ -171,6 +171,7 @@ namespace Editor::Shortcuts
                 { "rig.clearScale", "Rig", "Clear Pose Scale", ImGuiMod_Alt | ImGuiKey_S },
                 { "rig.insertKey", "Rig", "Insert Keyframe", ImGuiKey_I },
                 { "rig.autoWeights", "Rig", "Automatic Weights", 0 },
+                { "rig.envelopeWeights", "Rig", "Envelope Weights", 0 },
                 { "rig.boneMode", "Rig", "Bones", 0 },
                 { "rig.poseMode", "Rig", "Pose", 0 },
                 { "rig.weightMode", "Rig", "Weights", 0 },

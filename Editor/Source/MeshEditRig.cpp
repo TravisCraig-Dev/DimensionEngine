@@ -176,6 +176,55 @@ namespace Editor
                 dl->AddCircleFilled(p[0], 4.0f, (bone.Flags & BoneHead) ? kBoneSelected : IM_COL32(40, 40, 40, 255));
                 dl->AddCircleFilled(p[5], 4.0f, (bone.Flags & BoneTail) ? kBoneSelected : IM_COL32(40, 40, 40, 255));
             }
+            // A B-bone's curve: its segments, with a tick across each joint between them.
+            if (bone.Segments > 1)
+            {
+                std::vector<glm::mat4> segs = rig::BBoneSegments(m_Mesh, (int)b, frames);
+                std::vector<ImVec2> pts;
+                for (const glm::mat4& s : segs)
+                {
+                    ImVec2 q;
+                    if (project(glm::vec3(s[3]), q)) pts.push_back(q);
+                }
+                ImVec2 tail;
+                if (project(glm::vec3(f * glm::vec4(0, len, 0, 1)), tail)) pts.push_back(tail);
+                ImU32 curve = IM_COL32(255, 170, 60, 230);
+                for (size_t i = 1; i < pts.size(); ++i) dl->AddLine(pts[i - 1], pts[i], curve, 2.5f);
+                for (size_t k = 1; k < segs.size(); ++k)
+                {
+                    ImVec2 a, c;
+                    glm::vec3 x = glm::vec3(segs[k][0]) * (len * 0.06f);
+                    if (project(glm::vec3(segs[k][3]) - x, a) && project(glm::vec3(segs[k][3]) + x, c)) dl->AddLine(a, c, curve, 1.5f);
+                }
+            }
+            // The envelope: full weight inside the inner outline, none past the outer one.
+            if (m_ShowEnvelopes && m_RigMode == 1 && bone.Deform)
+            {
+                glm::vec3 right = glm::normalize(glm::vec3(glm::inverse(m_View)[0]));
+                glm::mat3 toModel = glm::inverse(glm::mat3(m_World));
+                glm::vec3 side = glm::normalize(toModel * right);
+                glm::vec3 headP = glm::vec3(f * glm::vec4(0, 0, 0, 1)), tailP = glm::vec3(f * glm::vec4(0, len, 0, 1));
+                for (int ring = 0; ring < 2; ++ring)
+                {
+                    float extra = ring ? bone.EnvelopeDistance : 0.0f;
+                    float rh = bone.HeadRadius + extra, rt = bone.TailRadius + extra;
+                    ImVec2 h0, h1, t0, t1;
+                    if (!project(headP, h0) || !project(headP + side * rh, h1) || !project(tailP, t0) || !project(tailP + side * rt, t1)) continue;
+                    float sh = Dist(h0, h1), st = Dist(t0, t1);
+                    ImU32 col = ring ? IM_COL32(200, 200, 255, 70) : IM_COL32(200, 200, 255, 150);
+                    dl->AddCircle(h0, sh, col, 32, 1.0f);
+                    dl->AddCircle(t0, st, col, 32, 1.0f);
+                    // The capsule's sides (perpendicular to the bone on screen).
+                    ImVec2 d(t0.x - h0.x, t0.y - h0.y);
+                    float dl2 = std::sqrt(d.x * d.x + d.y * d.y);
+                    if (dl2 > 1e-3f)
+                    {
+                        ImVec2 n(-d.y / dl2, d.x / dl2);
+                        dl->AddLine(ImVec2(h0.x + n.x * sh, h0.y + n.y * sh), ImVec2(t0.x + n.x * st, t0.y + n.y * st), col, 1.0f);
+                        dl->AddLine(ImVec2(h0.x - n.x * sh, h0.y - n.y * sh), ImVec2(t0.x - n.x * st, t0.y - n.y * st), col, 1.0f);
+                    }
+                }
+            }
         }
     }
 
@@ -497,6 +546,8 @@ namespace Editor
             if (Pressed("paint.larger")) m_WeightRadiusPx = std::min(2000.0f, m_WeightRadiusPx * 1.15f);
         }
         if (Pressed("rig.autoWeights")) RigOperate("Automatic Weights", [&] { rig::AutomaticWeights(m_Mesh); });
+        if (Pressed("rig.envelopeWeights"))
+            RigOperate("Envelope Weights", [&] { Log::Info("Envelope Weights: {} vertices weighted", rig::EnvelopeWeights(m_Mesh)); });
         if (Pressed("rig.boneMode")) SetRigMode(1);
         if (Pressed("rig.poseMode")) SetRigMode(2);
         if (Pressed("rig.weightMode")) SetRigMode(3);
@@ -733,7 +784,66 @@ namespace Editor
                     int chain = bone.IKChain;
                     if (ImGui::SliderInt("##chain", &chain, 1, 8, "chain %d")) RigOperate("IK Chain", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].IKChain = chain; });
                 }
+                // Third row: envelope weights, then the bone's B-bone curve and envelope (live edits: one undo step per drag).
+                if (ImGui::Button("Envelope Weights")) Shortcuts::Press("rig.envelopeWeights");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Weights from the bones' envelopes (the vertices inside them; others keep theirs). Show Envelopes to see them.");
+                ImGui::SameLine(0.0f, 2.0f);
+                if (toggle("Envelopes", m_ShowEnvelopes, "Draws each bone's envelope: full weight inside, fading to nothing at the outer line"))
+                    m_ShowEnvelopes = !m_ShowEnvelopes;
+                auto liveFloat = [&](const char* id, float* value, float speed, float lo, float hi, const char* format, const char* undo,
+                                     const char* tip) {
+                    ImGui::SetNextItemWidth(84.0f);
+                    if (ImGui::DragFloat(id, value, speed, lo, hi, format))
+                    {
+                        if (ImGui::IsItemActivated()) Record(undo);
+                        m_Dirty = true;
+                        SyncRigPreview();
+                    }
+                    else if (ImGui::IsItemActivated())
+                        Record(undo);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                };
+                Bone& active = m_Mesh.Bones[(size_t)m_ActiveBone];
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(96.0f);
+                int segments = active.Segments;
+                if (ImGui::SliderInt("##segments", &segments, 1, 16, segments > 1 ? "B-bone %d" : "B-bone off"))
+                    RigOperate("B-Bone Segments", [&] { m_Mesh.Bones[(size_t)m_ActiveBone].Segments = segments; });
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Segments: more than one makes a bendy bone, curving towards the bones joined to its ends "
+                                      "(its parent and a child at its tail) and twisting along to meet the child");
+                if (active.Segments > 1)
+                {
+                    ImGui::SameLine(0.0f, 2.0f);
+                    liveFloat("##easein", &active.EaseIn, 0.01f, 0.0f, 5.0f, "ease in %.2f", "B-Bone Ease",
+                              "How far the curve follows the parent's direction from the head");
+                    ImGui::SameLine(0.0f, 2.0f);
+                    liveFloat("##easeout", &active.EaseOut, 0.01f, 0.0f, 5.0f, "ease out %.2f", "B-Bone Ease",
+                              "How far the curve follows the child's direction into the tail");
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("Envelope");
+                ImGui::SameLine(0.0f, 4.0f);
+                liveFloat("##headr", &active.HeadRadius, 0.002f, 0.0f, 100.0f, "head %.3f", "Envelope", "Full weight within this of the head");
+                ImGui::SameLine(0.0f, 2.0f);
+                liveFloat("##tailr", &active.TailRadius, 0.002f, 0.0f, 100.0f, "tail %.3f", "Envelope", "Full weight within this of the tail");
+                ImGui::SameLine(0.0f, 2.0f);
+                liveFloat("##envdist", &active.EnvelopeDistance, 0.002f, 0.0f, 100.0f, "fade %.3f", "Envelope",
+                          "Beyond the radius the weight fades out over this distance");
+                ImGui::SameLine(0.0f, 2.0f);
+                liveFloat("##envweight", &active.EnvelopeWeight, 0.01f, 0.0f, 10.0f, "weight %.2f", "Envelope",
+                          "The envelope's strength against other bones' where they overlap");
             }
+        }
+        if (m_RigMode == 1 && (m_ActiveBone < 0 || m_ActiveBone >= (int)m_Mesh.Bones.size()))
+        {
+            if (ImGui::Button("Envelope Weights")) Shortcuts::Press("rig.envelopeWeights");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Weights from the bones' envelopes (the vertices inside them; others keep theirs). Show Envelopes to see them.");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (toggle("Envelopes", m_ShowEnvelopes, "Draws each bone's envelope: full weight inside, fading to nothing at the outer line"))
+                m_ShowEnvelopes = !m_ShowEnvelopes;
         }
         else if (m_RigMode == 2)
         {

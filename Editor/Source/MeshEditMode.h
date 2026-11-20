@@ -494,6 +494,7 @@ namespace Editor
         bool m_OpenShapeKeys = false;
         bool m_KeySelectedOnly = false, m_KeyShapes = false, m_AutoIK = false, m_ShowDopeSheet = true;
         int m_AutoIKChain = 2;
+        bool m_ShowEnvelopes = false; // Bones: the bones' envelopes drawn
         float m_SelectedKey = -1.0f;   // the dope sheet's selected key (its time), -1 none
         float m_DragKeyFrom = -1.0f;   // a key being dragged (its time when the drag began)
         void DrawDopeSheet(ImDrawList* dl);

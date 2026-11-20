@@ -536,12 +536,17 @@ namespace Dimension::Modeling
         {
             out.SkeletonData = Rig::BuildSkeleton(*this);
             out.Skin.resize(out.Vertices.size());
+            Rig::SkinLayout layout = Rig::MakeSkinLayout(*this);
+            std::vector<VertexWeight> bw;
             for (size_t i = 0; i < out.Vertices.size(); ++i)
             {
                 std::vector<VertexWeight> w;
+                bw.clear();
                 if (source[i] < Weights.size())
                     for (const VertexWeight& x : Weights[source[i]])
-                        if (x.Bone < Bones.size() && Bones[x.Bone].Deform && x.Weight > 0.0f) w.push_back(x);
+                        if (x.Bone < Bones.size() && Bones[x.Bone].Deform && x.Weight > 0.0f) bw.push_back(x);
+                // (weights to B-bones go to their segments' joints)
+                layout.Joints(Positions[source[i]], bw, w);
                 std::sort(w.begin(), w.end(), [](const VertexWeight& a, const VertexWeight& b) { return a.Weight > b.Weight; });
                 if (w.size() > 4) w.resize(4);
                 float sum = 0.0f;
@@ -566,8 +571,13 @@ namespace Dimension::Modeling
                             nearest = (uint32_t)b;
                         }
                     }
-                    s.Joints = glm::uvec4(nearest, 0, 0, 0);
-                    s.Weights.x = 1.0f;
+                    std::vector<VertexWeight> one{ { (uint16_t)nearest, 1.0f } }, joints;
+                    layout.Joints(p, one, joints);
+                    for (size_t k = 0; k < joints.size() && k < 4; ++k)
+                    {
+                        s.Joints[(int)k] = joints[k].Bone;
+                        s.Weights[(int)k] = joints[k].Weight;
+                    }
                     continue;
                 }
                 for (size_t k = 0; k < w.size(); ++k)
@@ -928,6 +938,13 @@ namespace Dimension::Modeling
                     o["ikTarget"] = b.IKTarget;
                     o["ikChain"] = b.IKChain;
                 }
+                if (b.Segments > 1)
+                {
+                    o["segments"] = b.Segments;
+                    o["easeIn"] = Round(b.EaseIn);
+                    o["easeOut"] = Round(b.EaseOut);
+                }
+                o["envelope"] = { Round(b.HeadRadius), Round(b.TailRadius), Round(b.EnvelopeDistance), Round(b.EnvelopeWeight) };
                 bones.push_back(std::move(o));
             }
             j["bones"] = std::move(bones);
@@ -1159,6 +1176,16 @@ namespace Dimension::Modeling
             b.PoseScale = readVec3(o.value("poseScale", json()), glm::vec3(1.0f));
             b.IKTarget = o.value("ikTarget", -1);
             b.IKChain = std::clamp(o.value("ikChain", 2), 1, 64);
+            b.Segments = std::clamp(o.value("segments", 1), 1, 32);
+            b.EaseIn = o.value("easeIn", 1.0f);
+            b.EaseOut = o.value("easeOut", 1.0f);
+            if (const json env = o.value("envelope", json()); env.is_array() && env.size() >= 4)
+            {
+                b.HeadRadius = env[0].get<float>();
+                b.TailRadius = env[1].get<float>();
+                b.EnvelopeDistance = env[2].get<float>();
+                b.EnvelopeWeight = env[3].get<float>();
+            }
             out.Bones.push_back(b);
         }
         for (Bone& b : out.Bones)

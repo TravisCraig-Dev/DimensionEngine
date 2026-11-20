@@ -19978,6 +19978,146 @@ namespace
         CHECK(tex.At(4, 16) == red && tex.At(28, 16) == white);
     }
 
+    void TestModelingBBonesEnvelopes()
+    {
+        using namespace ModelingTest;
+        // A tube from y 0 to 2 with two bones up it: A (0..1) and its child B (1..2), joined.
+        auto makeRig = [] {
+            // (rings every 0.25 so there are vertices all along the bones)
+            EditableMesh m;
+            const int sides = 8, rings = 9;
+            for (int r = 0; r < rings; ++r)
+                for (int i = 0; i < sides; ++i)
+                {
+                    float a = glm::two_pi<float>() * (float)i / (float)sides;
+                    m.AddVertex(glm::vec3(0.1f * std::cos(a), 0.25f * (float)r, -0.1f * std::sin(a)));
+                }
+            for (int r = 0; r + 1 < rings; ++r)
+                for (int i = 0; i < sides; ++i)
+                {
+                    uint32_t a = (uint32_t)(r * sides + i), b = (uint32_t)(r * sides + (i + 1) % sides);
+                    m.AddFace({ a, b, b + sides, a + sides });
+                }
+            Rig::AddBone(m, "A", glm::vec3(0.0f), glm::vec3(0, 1, 0));
+            Rig::AddBone(m, "B", glm::vec3(0, 1, 0), glm::vec3(0, 2, 0), 0);
+            return m;
+        };
+
+        // Envelopes: sized to the bone by default; full weight inside, fading out, nothing beyond.
+        EditableMesh env = makeRig();
+        const Bone& a = env.Bones[0];
+        CHECK(Near(a.HeadRadius, 0.1f) && Near(a.TailRadius, 0.05f) && Near(a.EnvelopeDistance, 0.25f));
+        CHECK(Near(Rig::EnvelopeInfluence(a, glm::vec3(0.05f, 0.0f, 0.0f)), 1.0f));
+        float mid = Rig::EnvelopeInfluence(a, glm::vec3(0.1f + 0.125f, 0.0f, 0.0f));
+        CHECK(mid > 0.1f && mid < 0.5f);
+        CHECK(Rig::EnvelopeInfluence(a, glm::vec3(0.36f, 0.0f, 0.0f)) == 0.0f);
+        CHECK(Rig::EnvelopeWeights(env) == env.VertexCount());
+        bool lowA = true, highB = true, joint = true;
+        for (uint32_t v = 0; v < env.VertexCount(); ++v)
+        {
+            float y = env.Positions[v].y;
+            float wa = Rig::GetWeight(env, v, 0), wb = Rig::GetWeight(env, v, 1);
+            if (y < 0.01f) lowA &= Near(wa, 1.0f) && wb == 0.0f;
+            if (y > 1.99f) highB &= Near(wb, 1.0f) && wa == 0.0f;
+            if (std::abs(y - 1.0f) < 0.01f) joint &= wa > 0.2f && wb > 0.2f && Near(wa + wb, 1.0f);
+        }
+        CHECK(lowA && highB && joint);
+        // A vertex out of every envelope keeps what it had.
+        EditableMesh outside = makeRig();
+        uint32_t lone = outside.AddVertex(glm::vec3(5.0f, 0.0f, 0.0f));
+        Rig::SetWeight(outside, lone, 1, 1.0f);
+        Rig::EnvelopeWeights(outside);
+        CHECK(Near(Rig::GetWeight(outside, lone, 1), 1.0f));
+
+        // B-bones: A in 4 segments. At rest straight: the segments evenly up the bone, the skin matrices all identity.
+        EditableMesh bb = makeRig();
+        bb.Bones[0].Segments = 4;
+        CHECK(Rig::BBoneInBone(bb, 0) == -1 && Rig::BBoneOutBone(bb, 0) == 1 && Rig::BBoneInBone(bb, 1) == 0);
+        std::vector<glm::mat4> rest = Rig::RestMatrices(bb);
+        std::vector<glm::mat4> segs = Rig::BBoneSegments(bb, 0, rest);
+        CHECK(segs.size() == 4);
+        bool even = true;
+        for (size_t k = 0; k < segs.size(); ++k)
+            even &= Near(glm::vec3(segs[k][3]), glm::vec3(0.0f, 0.25f * (float)k, 0.0f), 1e-4f) && Near(glm::vec3(segs[k][1]), glm::vec3(0, 1, 0), 1e-4f);
+        CHECK(even);
+        Rig::SkinLayout layout = Rig::MakeSkinLayout(bb);
+        CHECK(layout.JointCount == 6 && layout.First[0] == 2 && layout.First[1] == -1);
+        std::vector<glm::mat4> skinRest = Rig::SkinMatrices(bb);
+        bool identity = skinRest.size() == 6;
+        for (const glm::mat4& s : skinRest)
+            for (int c = 0; c < 4; ++c) identity &= Near(glm::vec3(s[c]), glm::vec3(glm::mat4(1.0f)[c]), 1e-4f);
+        CHECK(identity);
+        // Weights to A split between the segments the vertex lies along.
+        std::vector<VertexWeight> joints;
+        layout.Joints(glm::vec3(0.1f, 0.05f, 0.0f), { { 0, 1.0f } }, joints);
+        CHECK(joints.size() == 1 && joints[0].Bone == 2 && Near(joints[0].Weight, 1.0f));
+        layout.Joints(glm::vec3(0.1f, 0.5f, 0.0f), { { 0, 1.0f } }, joints);
+        CHECK(joints.size() == 2 && Near(joints[0].Weight, 0.5f) && Near(joints[1].Weight, 0.5f));
+        layout.Joints(glm::vec3(0.1f, 1.5f, 0.0f), { { 1, 1.0f } }, joints);
+        CHECK(joints.size() == 1 && joints[0].Bone == 1);
+
+        // Bending B bends A's curve towards it at the tail (the head end stays along A, the tail stays put).
+        EditableMesh bent = bb;
+        bent.Bones[1].PoseRotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0, 0, 1));
+        std::vector<glm::mat4> pose = Rig::PoseMatrices(bent);
+        std::vector<glm::mat4> bentSegs = Rig::BBoneSegments(bent, 0, pose);
+        glm::vec3 firstDir = glm::normalize(glm::vec3(bentSegs.front()[1])), lastDir = glm::normalize(glm::vec3(bentSegs.back()[1]));
+        CHECK(firstDir.y > 0.95f && lastDir.x > 0.5f);
+        // Twisting B about its length twists A's segments a growing share of the way.
+        EditableMesh twisted = bb;
+        twisted.Bones[1].PoseRotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+        std::vector<glm::mat4> twistSegs = Rig::BBoneSegments(twisted, 0, Rig::PoseMatrices(twisted));
+        auto turned = [](const glm::mat4& s) {
+            glm::vec3 x = glm::vec3(s[0]);
+            return glm::degrees(std::atan2(-x.z, x.x));
+        };
+        CHECK(std::abs(turned(twistSegs[0]) - 11.25f) < 0.5f && std::abs(turned(twistSegs[3]) - 78.75f) < 0.5f);
+
+        // The render mesh: six joints, A's weights on its segments; posed on the CPU the twist reaches the vertices.
+        for (uint32_t v = 0; v < twisted.VertexCount(); ++v) Rig::SetWeight(twisted, v, twisted.Positions[v].y < 1.0f ? 0 : 1, 1.0f);
+        MeshData data = twisted.ToMeshData();
+        CHECK(data.SkeletonData && data.SkeletonData->Joints.size() == 6 && data.SkeletonData->Joints[2].Parent == 0);
+        bool onSegments = true;
+        for (size_t i = 0; i < data.Vertices.size(); ++i)
+            if (data.Vertices[i].Position.y < 0.99f) onSegments &= data.Skin[i].Joints.x >= 2;
+        CHECK(onSegments);
+        MeshData posed = data;
+        Rig::PoseMeshData(posed, twisted);
+        float headTurn = 0.0f, midTurn = 0.0f;
+        for (size_t i = 0; i < data.Vertices.size(); ++i)
+        {
+            glm::vec3 p0 = data.Vertices[i].Position, p1 = posed.Vertices[i].Position;
+            float turn = glm::degrees(std::atan2(p0.x * p1.z - p0.z * p1.x, p0.x * p1.x + p0.z * p1.z));
+            if (p0.y < 0.01f) headTurn = std::max(headTurn, std::abs(turn));
+            if (std::abs(p0.y - 0.5f) < 0.3f) midTurn = std::max(midTurn, std::abs(turn));
+        }
+        CHECK(headTurn < 15.0f && midTurn > 25.0f);
+
+        // Actions bake the segments' bending into the clip (between the keys too).
+        EditableMesh anim = bb;
+        int act = Rig::AddAction(anim, "Twist");
+        Rig::InsertKey(anim, act, 0.0f);
+        anim.Bones[1].PoseRotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+        Rig::InsertKey(anim, act, 1.0f);
+        AnimationClip clip = Rig::ToClip(anim, anim.Actions[(size_t)act]);
+        size_t segChannels = 0, samples = 0;
+        for (const AnimationChannel& c : clip.Channels)
+            if (c.Joint >= 2)
+            {
+                ++segChannels;
+                samples = c.Times.size();
+            }
+        CHECK(segChannels == 12 && samples >= 30);
+
+        // Files keep B-bone and envelope settings.
+        bb.Bones[0].EaseIn = 0.5f;
+        bb.Bones[1].HeadRadius = 0.2f;
+        EditableMesh loaded;
+        CHECK(EditableMesh::FromJson(bb.ToJson(), loaded) && loaded.Bones.size() == 2);
+        CHECK(loaded.Bones[0].Segments == 4 && Near(loaded.Bones[0].EaseIn, 0.5f) && Near(loaded.Bones[1].HeadRadius, 0.2f) &&
+              Near(loaded.Bones[1].EnvelopeDistance, 0.25f));
+    }
+
     void TestModelingRigWeights()
     {
         using namespace ModelingTest;
@@ -20457,6 +20597,7 @@ int main(int argc, char** argv)
     Run("Modeling face sets", TestModelingFaceSets);
     Run("Modeling paint fixes", TestModelingPaintFixes);
     Run("Modeling rig weights", TestModelingRigWeights);
+    Run("Modeling B-bones and envelopes", TestModelingBBonesEnvelopes);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

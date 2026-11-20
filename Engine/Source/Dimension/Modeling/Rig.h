@@ -14,7 +14,8 @@ namespace Dimension::Modeling::Rig
     glm::mat4 RestLocal(const EditableMesh& m, int bone);
     // Every bone's posed transform in the model's space (rest local x the bone's pose, down the hierarchy).
     std::vector<glm::mat4> PoseMatrices(const EditableMesh& m);
-    // Per bone: posed x inverse rest (moves rest-pose vertices to the pose).
+    // Per skeleton joint (SkinLayout: the bones, then B-bone segments): posed x inverse rest (moves rest-pose vertices
+    // to the pose).
     std::vector<glm::mat4> SkinMatrices(const EditableMesh& m);
     Ref<Skeleton> BuildSkeleton(const EditableMesh& m);
     // Moves a render mesh made from `m` (its Skin) into m's current pose on the CPU (a preview: the result is static).
@@ -35,6 +36,30 @@ namespace Dimension::Modeling::Rig
     // Bones on the +X side mirrored to the -X side with flipped names (Blender's Symmetrize); returns how many made.
     int Symmetrize(EditableMesh& m);
 
+    // ---- B-bones
+
+    // The bones a B-bone's curve leans towards: the parent it continues (its head on the parent's tail) and the first
+    // child continuing it (head on its tail); -1: none (the bone's own direction there).
+    int BBoneInBone(const EditableMesh& m, int bone);
+    int BBoneOutBone(const EditableMesh& m, int bone);
+    // Every bone's rest transform (RestMatrix), indexed like PoseMatrices.
+    std::vector<glm::mat4> RestMatrices(const EditableMesh& m);
+    // A B-bone's segment frames in the model's space given every bone's transform (PoseMatrices or RestMatrices): one
+    // per segment, at its start on the curve, +Y along it (scaled to its share of the bone), X turned with the curve
+    // (rotation minimizing) plus its share of the twist. A plain bone: its own transform.
+    std::vector<glm::mat4> BBoneSegments(const EditableMesh& m, int bone, const std::vector<glm::mat4>& frames);
+    // The render skeleton's joints: one per bone (same index), then each B-bone's segments.
+    struct SkinLayout
+    {
+        std::vector<int> First;                       // per bone: its first segment joint (-1: a plain bone)
+        size_t JointCount = 0;
+        std::vector<std::vector<glm::vec3>> RestCurve; // per B-bone: its rest curve's points (segments + 1)
+        // A vertex's bone weights (at `restPos`) as joint weights: a B-bone's split between the two segments nearest
+        // the vertex along it; the four strongest kept, adding up to one.
+        void Joints(const glm::vec3& restPos, const std::vector<VertexWeight>& bones, std::vector<VertexWeight>& joints) const;
+    };
+    SkinLayout MakeSkinLayout(const EditableMesh& m);
+
     // ---- Weights
 
     float GetWeight(const EditableMesh& m, uint32_t vertex, int bone);
@@ -44,6 +69,12 @@ namespace Dimension::Modeling::Rig
     // Automatic weights (like Blender's bone heat): each vertex weighted by its distance to the bones it can see
     // from inside the surface, then smoothed along the mesh. Only `selected` vertices when true.
     void AutomaticWeights(EditableMesh& m, bool selectedOnly = false);
+    // Envelope weights (Blender's "With Envelope Weights"): each vertex weighted by the deform bones whose envelopes
+    // (Bone::HeadRadius ... EnvelopeWeight) reach it. Vertices no envelope reaches keep their weights. Only `selected`
+    // vertices when true. Returns how many vertices got weights.
+    size_t EnvelopeWeights(EditableMesh& m, bool selectedOnly = false);
+    // How much a bone's envelope weighs a point (0: out of reach).
+    float EnvelopeInfluence(const Bone& b, const glm::vec3& p);
     // Weights for another mesh made from this one (by modifiers): each vertex blends the nearest source vertices'
     // weights; Mirror modifiers' mirrored halves take the mirrored side's bones (by name).
     std::vector<std::vector<VertexWeight>> TransferWeights(const EditableMesh& from, const EditableMesh& to);
