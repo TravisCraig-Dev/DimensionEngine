@@ -84,6 +84,7 @@
 #include <Dimension/Modeling/Modifiers.h>
 #include <Dimension/Modeling/UVTools.h>
 #include <Dimension/Modeling/Sculpt.h>
+#include <Dimension/Modeling/FaceSets.h>
 #include <Dimension/Modeling/Paint.h>
 #include <Dimension/Modeling/Bake.h>
 #include <Dimension/Modeling/Rig.h>
@@ -19506,6 +19507,178 @@ namespace
         CHECK(Ops::SelectedVertices(plane).size() == 4 && (plane.Faces[1].Flags & Selected) && !(plane.Faces[0].Flags & Selected));
     }
 
+    void TestModelingFaceSets()
+    {
+        using namespace ModelingTest;
+        // Init Face Sets: a cube's six sides by normals; two cubes by loose parts; seams.
+        EditableMesh cube = Primitives::Cube();
+        CHECK(FaceSets::InitFrom(cube, FaceSets::InitMode::Normals, 30.0f) == 6);
+        CHECK(FaceSets::Used(cube).size() == 6 && FaceSets::Next(cube) == 7);
+        CHECK(FaceSets::Color(1) != FaceSets::Color(2) && FaceSets::Color(0) == glm::vec3(1.0f));
+        EditableMesh two = Primitives::Cube(), other = Primitives::Cube();
+        for (glm::vec3& p : other.Positions) p.x += 3.0f;
+        two.Append(other);
+        two.Changed();
+        CHECK(FaceSets::InitFrom(two, FaceSets::InitMode::LooseParts) == 2);
+        EditableMesh seamed = Primitives::Cube();
+        CHECK(FaceSets::InitFrom(seamed, FaceSets::InitMode::UVSeams) == 1);
+        for (EdgeKey k : seamed.Topo().Edges) seamed.EditEdge(k).Seam = true;
+        CHECK(FaceSets::InitFrom(seamed, FaceSets::InitMode::UVSeams) == 6);
+        // Files keep them.
+        EditableMesh loaded;
+        CHECK(EditableMesh::FromJson(cube.ToJson(), loaded) && loaded.FaceCount() == cube.FaceCount());
+        bool same = true;
+        for (uint32_t f = 0; f < cube.FaceCount(); ++f) same &= loaded.Faces[f].FaceSet == cube.Faces[f].FaceSet;
+        CHECK(same);
+        // ...and so do operators and the subdivision modifier.
+        EditableMesh sub = cube;
+        Modifier subsurf;
+        subsurf.Type = ModifierType::Subdivision;
+        subsurf.Levels = 1;
+        sub.Modifiers.push_back(subsurf);
+        EditableMesh subbed = EvaluateModifiers(sub);
+        CHECK(FaceSets::Used(subbed).size() == 6);
+
+        // Grow and shrink by shared vertices on a grid.
+        EditableMesh grid = Primitives::Grid(5, 5, 2.0f);
+        uint32_t middle = 12; // (x 2, y 2: the middle, its neighbours not at the border)
+        grid.Faces[middle].FaceSet = 3;
+        FaceSets::Grow(grid, 3);
+        size_t grown = 0;
+        for (const Face& f : grid.Faces) grown += f.FaceSet == 3;
+        CHECK(grown == 9);
+        FaceSets::Shrink(grid, 3);
+        size_t shrunk = 0;
+        for (const Face& f : grid.Faces) shrunk += f.FaceSet == 3;
+        CHECK(shrunk == 1 && grid.Faces[middle].FaceSet == 3);
+
+        // Halves of a grid: set 1 at x < 0, set 2 at x > 0.
+        EditableMesh halves = Primitives::Grid(20, 20, 2.0f);
+        for (uint32_t f = 0; f < halves.FaceCount(); ++f) halves.Faces[f].FaceSet = halves.FaceCenter(f).x < 0.0f ? 1 : 2;
+        // Isolate hides the other half (vertices on the middle line stay: they have visible faces); H again shows all.
+        EditableMesh iso = halves;
+        FaceSets::ToggleIsolate(iso, 1);
+        size_t hiddenFaces = 0, hiddenVerts = 0;
+        for (const Face& f : iso.Faces) hiddenFaces += (f.Flags & Hidden) != 0;
+        for (uint32_t v = 0; v < iso.VertexCount(); ++v)
+        {
+            hiddenVerts += iso.IsVertHidden(v);
+            if (std::abs(iso.Positions[v].x) < 1e-4f) CHECK(!iso.IsVertHidden(v));
+        }
+        CHECK(hiddenFaces == 200 && hiddenVerts == 21 * 10);
+        EditableMesh back = iso;
+        FaceSets::ToggleIsolate(back, 1);
+        CHECK(!FaceSets::AnyHidden(back));
+        EditableMesh hid = halves;
+        FaceSets::Hide(hid, 2);
+        size_t hid2 = 0;
+        for (const Face& f : hid.Faces) hid2 += (f.Flags & Hidden) && f.FaceSet == 2;
+        CHECK(hid2 == 200);
+        // Masks from a set, and a set from the mask.
+        EditableMesh masked = halves;
+        FaceSets::MaskFromSet(masked, 1);
+        bool maskOk = true;
+        for (uint32_t v = 0; v < masked.VertexCount(); ++v)
+        {
+            float x = masked.Positions[v].x;
+            if (x < -1e-4f) maskOk &= masked.Mask[v] == 0.0f;
+            if (x > 1e-4f) maskOk &= masked.Mask[v] == 1.0f;
+        }
+        CHECK(maskOk);
+        int32_t fromMask = FaceSets::FromMasked(masked);
+        CHECK(fromMask == 3);
+        size_t inMasked = 0;
+        for (const Face& f : masked.Faces) inMasked += f.FaceSet == 3;
+        CHECK(inMasked == 180); // (the column touching the unmasked middle line is out)
+
+        // Sculpting: auto-masking keeps a stroke to the face set it starts on.
+        Sculpt::BrushSettings draw;
+        draw.Type = Sculpt::Brush::Draw;
+        draw.Radius = 0.6f;
+        draw.Strength = 1.0f;
+        draw.ViewDir = glm::vec3(0, -1, 0);
+        draw.AutoMaskFaceSet = true;
+        {
+            Sculpt::SculptMesh s = Sculpt::SculptMesh::FromEditable(halves);
+            glm::vec3 c(-0.1f, 0.0f, 0.0f);
+            s.BeginStroke(c, draw);
+            s.Dab(c, draw);
+            s.EndStroke();
+            bool rightStill = true, leftMoved = false;
+            for (size_t v = 0; v < s.Positions.size(); ++v)
+            {
+                if (halves.Positions[v].x > 1e-4f) rightStill &= s.Positions[v] == halves.Positions[v];
+                if (halves.Positions[v].x < -1e-4f) leftMoved |= s.Positions[v].y > 1e-4f;
+            }
+            CHECK(rightStill && leftMoved);
+        }
+        // Hidden faces: not hit by rays, not moved (their border with what shows holds too), not drawn.
+        draw.AutoMaskFaceSet = false;
+        {
+            Sculpt::SculptMesh s = Sculpt::SculptMesh::FromEditable(iso);
+            float t;
+            glm::vec3 n;
+            CHECK(!s.Raycast(glm::vec3(0.5f, 1.0f, 0.03f), glm::vec3(0, -1, 0), t, n));
+            CHECK(s.Raycast(glm::vec3(-0.5f, 1.0f, 0.03f), glm::vec3(0, -1, 0), t, n));
+            CHECK(s.FaceSetAt(glm::vec3(-0.5f, 1.0f, 0.03f), glm::vec3(0, -1, 0)) == 1);
+            glm::vec3 c(0.0f);
+            s.BeginStroke(c, draw);
+            s.Dab(c, draw);
+            s.EndStroke();
+            bool held = true, moved = false;
+            for (size_t v = 0; v < s.Positions.size(); ++v)
+            {
+                if (iso.Positions[v].x > -1e-4f) held &= s.Positions[v] == iso.Positions[v];
+                else moved |= s.Positions[v].y > 1e-4f;
+            }
+            CHECK(held && moved);
+            MeshData shown = s.ToMeshData(0);
+            CHECK(shown.Indices.size() == 200 * 2 * 3);
+            // The Face Sets brush paints the triangles under it; written back, their faces have the set.
+            Sculpt::BrushSettings paint = draw;
+            paint.Type = Sculpt::Brush::FaceSet;
+            paint.FaceSet = s.NextFaceSet();
+            paint.Radius = 0.3f;
+            CHECK(paint.FaceSet == 3);
+            glm::vec3 at(-0.5f, 0.0f, 0.0f);
+            s.BeginStroke(at, paint);
+            s.Dab(at, paint);
+            s.EndStroke();
+            EditableMesh painted = iso;
+            s.WriteTo(painted);
+            size_t threes = 0;
+            bool closeBy = true;
+            for (uint32_t f = 0; f < painted.FaceCount(); ++f)
+                if (painted.Faces[f].FaceSet == 3)
+                {
+                    ++threes;
+                    closeBy &= glm::length(painted.FaceCenter(f) - at) < 0.3f + 0.1f;
+                }
+            CHECK(threes > 4 && closeBy);
+            // Dynamic topology carries face sets and hiding into the rebuilt model, and leaves hidden parts alone.
+            s.DetailSize = 0.04f;
+            glm::vec3 d(-0.5f, 0.0f, 0.3f);
+            s.BeginStroke(d, draw);
+            s.Dab(d, draw);
+            s.EndStroke();
+            CHECK(s.TopologyChanged());
+            EditableMesh rebuilt = iso;
+            s.WriteTo(rebuilt);
+            size_t hiddenTris = 0;
+            bool setsKept = true, hiddenRight = true;
+            for (uint32_t f = 0; f < rebuilt.FaceCount(); ++f)
+            {
+                glm::vec3 fc = rebuilt.FaceCenter(f);
+                bool hiddenFace = (rebuilt.Faces[f].Flags & Hidden) != 0;
+                hiddenTris += hiddenFace;
+                hiddenRight &= hiddenFace == (fc.x > 0.0f);
+                if (fc.x > 0.0f) setsKept &= rebuilt.Faces[f].FaceSet == 2;
+                else if (glm::length(fc - at) > 0.45f) setsKept &= rebuilt.Faces[f].FaceSet == 1;
+            }
+            CHECK(hiddenTris == 400 && hiddenRight && setsKept);
+        }
+    }
+
     void TestModelingSculptFixes()
     {
         using namespace ModelingTest;
@@ -20281,6 +20454,7 @@ int main(int argc, char** argv)
     Run("Modeling curve and text fixes", TestModelingCurveTextFixes);
     Run("Modeling UV fixes", TestModelingUVFixes);
     Run("Modeling sculpt fixes", TestModelingSculptFixes);
+    Run("Modeling face sets", TestModelingFaceSets);
     Run("Modeling paint fixes", TestModelingPaintFixes);
     Run("Modeling rig weights", TestModelingRigWeights);
 

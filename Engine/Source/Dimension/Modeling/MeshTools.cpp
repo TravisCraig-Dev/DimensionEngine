@@ -598,6 +598,7 @@ namespace Dimension::Modeling::Ops
             std::vector<uint32_t> verts;
             for (uint32_t v : src.Verts) verts.push_back(copyOf(v));
             uint32_t nf = m.AddFace(std::move(verts), src.UVs, src.Material, src.Smooth);
+            m.Faces[nf].FaceSet = src.FaceSet;
             faces.push_back(nf);
             // Edge marks come along.
             for (size_t i = 0, n = src.Verts.size(); i < n; ++i)

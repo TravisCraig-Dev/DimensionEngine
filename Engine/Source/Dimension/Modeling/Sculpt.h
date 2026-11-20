@@ -24,6 +24,7 @@ namespace Dimension::Modeling::Sculpt
         Pose,      // turns the part under the brush about a pivot at the brush's edge, as a joint bends (drag)
         Boundary,  // drags the open edges (borders) under the brush, the surface behind them following (drag)
         Cloth,     // drags the surface like cloth: edges keep their length, so it folds and wrinkles (drag)
+        FaceSet,   // Draw Face Sets: paints BrushSettings::FaceSet onto the faces under it
         Count
     };
     const char* BrushName(Brush b);
@@ -62,6 +63,8 @@ namespace Dimension::Modeling::Sculpt
         glm::vec3 ViewDir{ 0, 0, -1 };   // the camera's looking direction (model space)
         uint8_t Symmetry = 0;            // bits: 1 X, 2 Y, 4 Z (mirrored across the model's own planes)
         const BrushTexture* Texture = nullptr; // varies the strength (not the drag brushes')
+        int32_t FaceSet = 1;             // Draw Face Sets: the set painted
+        bool AutoMaskFaceSet = false;    // only the face set under the stroke's start is affected
     };
 
     // A triangle mesh being sculpted: vertices know their triangles, so brushes and dynamic topology work locally.
@@ -74,6 +77,9 @@ namespace Dimension::Modeling::Sculpt
         std::vector<float> Mask;           // per vertex, 0..1
         std::vector<glm::uvec3> Tris;      // counter-clockwise; dead ones are all ~0
         std::vector<int32_t> TriMaterial;  // per triangle
+        std::vector<int32_t> TriFaceSet;   // per triangle (Face::FaceSet)
+        std::vector<uint8_t> TriHidden;    // per triangle: hidden (not drawn, hit or moved; its vertices hold still)
+        std::vector<uint32_t> TriFace;     // per triangle: the model's face it came from (~0: made by dynamic topology)
         std::vector<std::vector<uint32_t>> VertTris;
 
         static SculptMesh FromEditable(const EditableMesh& m);
@@ -89,7 +95,14 @@ namespace Dimension::Modeling::Sculpt
         bool IsDead(uint32_t tri) const { return Tris[tri].x == ~0u; }
 
         // The nearest triangle hit by the ray (false: none). `normal` is the triangle's (unit).
-        bool Raycast(const glm::vec3& from, const glm::vec3& dir, float& t, glm::vec3& normal) const;
+        bool Raycast(const glm::vec3& from, const glm::vec3& dir, float& t, glm::vec3& normal, uint32_t* tri = nullptr) const;
+        // The face set of the visible triangle the ray hits first (-1: none).
+        int32_t FaceSetAt(const glm::vec3& from, const glm::vec3& dir) const;
+        // An id no triangle uses yet.
+        int32_t NextFaceSet() const;
+        bool HasFaceSets() const;
+        // A vertex of a hidden triangle (hidden parts hold still, their borders too).
+        bool IsLocked(uint32_t v) const;
 
         // A stroke: Begin at the first point (Grab catches the vertices there), Dab at each point along it. `move` is the
         // mouse's motion carried to the surface since the stroke began (Grab) or since the last dab (Snake Hook).
@@ -124,6 +137,11 @@ namespace Dimension::Modeling::Sculpt
         };
         std::vector<PoseFrame> m_Pose;
         std::unordered_map<uint64_t, float> m_ClothRest; // edge -> its length when the stroke first reached it
+        int32_t m_StrokeSet = -1; // auto-masking: the face set the stroke started on (-1: any)
+        bool InStrokeSet(uint32_t v) const;
+        // How free a vertex is to move: not masked, not locked, in the stroke's face set.
+        float Free(uint32_t v) const;
+        int32_t SetNear(const glm::vec3& center, float radius) const;
         bool m_TopologyChanged = false;
         void CatchPose(const glm::vec3& center, const BrushSettings& brush, const glm::vec3& mirror);
         void CatchBoundary(const glm::vec3& center, const BrushSettings& brush, const glm::vec3& mirror);

@@ -4,6 +4,7 @@
 #include "EditorUI.h"
 #include "Shortcuts.h"
 #include <Dimension/Core/Log.h>
+#include <Dimension/Modeling/FaceSets.h>
 #include <Dimension/Modeling/ModelExport.h>
 #include <Dimension/Platform/FileDialogs.h>
 #include <Dimension/Scene/Components.h>
@@ -388,6 +389,13 @@ namespace Editor
     void MeshEditMode::SyncRenderMesh()
     {
         ++m_GeometryVersion;
+        if (m_Sculpting && Modeling::FaceSets::AnyHidden(m_Mesh))
+        {
+            // Sculpting with face sets hidden: the sculpt mesh, which leaves them out (without the modifiers).
+            EnsureSculptMesh();
+            AssetManager::SetMeshData(m_Asset, m_Sculpt.ToMeshData(m_Mesh.MaterialSlots.size()));
+            return;
+        }
         if (m_Mesh.EditedShape >= 0)
         {
             // Editing a shape key: the object shows that shape.

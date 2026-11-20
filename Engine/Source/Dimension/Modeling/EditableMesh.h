@@ -44,6 +44,7 @@ namespace Dimension::Modeling
         uint8_t Flags = 0;
         std::vector<uint8_t> UVFlags; // per corner UVFlag bits (ignored unless there is one per corner)
         std::vector<uint32_t> Colors; // per corner vertex color, RGBA8 sRGB (ignored unless there is one per corner: white)
+        int32_t FaceSet = 0;          // sculpting's face set (FaceSets.h; 0: none)
 
         uint8_t CornerFlags(size_t c) const { return UVFlags.size() == Verts.size() ? UVFlags[c] : 0; }
         uint32_t ColorAt(size_t c) const { return Colors.size() == Verts.size() ? Colors[c] : 0xFFFFFFFFu; }

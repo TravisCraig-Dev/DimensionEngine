@@ -1,4 +1,5 @@
 #include "Dimension/Modeling/Sculpt.h"
+#include "Dimension/Modeling/FaceSets.h"
 #include "Dimension/Core/Log.h"
 #include <algorithm>
 #include <cmath>
@@ -47,7 +48,7 @@ namespace Dimension::Modeling::Sculpt
     const char* BrushName(Brush b)
     {
         static const char* names[] = { "Draw", "Clay", "Inflate", "Smooth", "Flatten", "Scrape", "Pinch", "Crease", "Grab", "Snake Hook", "Mask",
-                                       "Pose", "Boundary", "Cloth" };
+                                       "Pose", "Boundary", "Cloth", "Draw Face Sets" };
         return names[std::clamp((int)b, 0, (int)Brush::Count - 1)];
     }
 
@@ -132,7 +133,10 @@ namespace Dimension::Modeling::Sculpt
                 uint32_t a = face.Verts[tri[k]], b = face.Verts[tri[k + 1]], c = face.Verts[tri[k + 2]];
                 if (a == b || b == c || a == c) continue;
                 auto uv = [&](uint32_t corner) { return corner < face.UVs.size() ? face.UVs[corner] : glm::vec2(0.0f); };
-                s.AddTri(a, b, c, face.Material, { uv(tri[k]), uv(tri[k + 1]), uv(tri[k + 2]) });
+                uint32_t t = s.AddTri(a, b, c, face.Material, { uv(tri[k]), uv(tri[k + 1]), uv(tri[k + 2]) });
+                s.TriFaceSet[t] = face.FaceSet;
+                s.TriHidden[t] = (face.Flags & Hidden) ? 1 : 0;
+                s.TriFace[t] = f;
             }
             for (size_t c = 0; c < face.Verts.size(); ++c)
                 if (!hasUV[face.Verts[c]] && c < face.UVs.size())
@@ -154,6 +158,8 @@ namespace Dimension::Modeling::Sculpt
             m.Positions = Positions;
             if (anyMask) m.Mask = Mask;
             else m.Mask.clear();
+            for (size_t t = 0; t < Tris.size(); ++t)
+                if (!IsDead((uint32_t)t) && TriFace[t] < m.FaceCount()) m.Faces[TriFace[t]].FaceSet = TriFaceSet[t];
             return;
         }
         EditableMesh out;
@@ -162,6 +168,7 @@ namespace Dimension::Modeling::Sculpt
         out.AutoSmooth = m.AutoSmooth;
         out.AutoSmoothAngle = m.AutoSmoothAngle;
         out.Modifiers = m.Modifiers;
+        bool anyHidden = false;
         std::vector<int64_t> index(Positions.size(), -1);
         for (size_t t = 0; t < Tris.size(); ++t)
         {
@@ -176,10 +183,19 @@ namespace Dimension::Modeling::Sculpt
                 }
                 x = (uint32_t)index[x];
             }
-            out.AddFace({ v[0], v[1], v[2] }, { TriUVs[t][0], TriUVs[t][1], TriUVs[t][2] }, TriMaterial[t], true);
+            uint32_t f = out.AddFace({ v[0], v[1], v[2] }, { TriUVs[t][0], TriUVs[t][1], TriUVs[t][2] }, TriMaterial[t], true);
+            out.Faces[f].FaceSet = TriFaceSet[t];
+            anyHidden |= TriHidden[t] != 0;
         }
         if (!anyMask) out.Mask.clear();
         out.Changed();
+        if (anyHidden)
+        {
+            std::vector<uint8_t> hidden;
+            for (size_t t = 0; t < Tris.size(); ++t)
+                if (!IsDead((uint32_t)t)) hidden.push_back(TriHidden[t]);
+            FaceSets::SetFacesHidden(out, hidden);
+        }
         m = std::move(out);
     }
 
@@ -191,7 +207,7 @@ namespace Dimension::Modeling::Sculpt
         std::vector<std::vector<uint32_t>> bySlot(slots);
         for (size_t t = 0; t < Tris.size(); ++t)
         {
-            if (IsDead((uint32_t)t)) continue;
+            if (IsDead((uint32_t)t) || TriHidden[t]) continue;
             size_t slot = (size_t)std::clamp<int32_t>(TriMaterial[t], 0, (int32_t)slots - 1);
             for (uint32_t v : { Tris[t].x, Tris[t].y, Tris[t].z })
             {
@@ -259,6 +275,9 @@ namespace Dimension::Modeling::Sculpt
         uint32_t t = (uint32_t)Tris.size();
         Tris.push_back({ a, b, c });
         TriMaterial.push_back(material);
+        TriFaceSet.push_back(0);
+        TriHidden.push_back(0);
+        TriFace.push_back(~0u);
         TriUVs.push_back(uv);
         VertTris[a].push_back(t);
         VertTris[b].push_back(t);
@@ -439,14 +458,15 @@ namespace Dimension::Modeling::Sculpt
 
     // ---- Picking
 
-    bool SculptMesh::Raycast(const glm::vec3& from, const glm::vec3& dir, float& tHit, glm::vec3& normal) const
+    bool SculptMesh::Raycast(const glm::vec3& from, const glm::vec3& dir, float& tHit, glm::vec3& normal, uint32_t* triOut) const
     {
         float best = 1e30f;
         bool hit = false;
+        uint32_t bestTri = 0;
         const float ox = from.x, oy = from.y, oz = from.z, dx = dir.x, dy = dir.y, dz = dir.z;
         auto test = [&](uint32_t t) {
             const glm::uvec3& tri = Tris[t];
-            if (tri.x == kDead) return;
+            if (tri.x == kDead || TriHidden[t]) return;
             const glm::vec3 &a = Positions[tri.x], &b = Positions[tri.y], &c = Positions[tri.z];
             // Moller-Trumbore in plain floats.
             float e1x = b.x - a.x, e1y = b.y - a.y, e1z = b.z - a.z, e2x = c.x - a.x, e2y = c.y - a.y, e2z = c.z - a.z;
@@ -465,6 +485,7 @@ namespace Dimension::Modeling::Sculpt
             best = d;
             normal = glm::vec3(e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x);
             hit = true;
+            bestTri = t;
         };
         EnsureGrid();
         // The ray's stretch inside the bounds (a cell wider all round).
@@ -536,8 +557,76 @@ namespace Dimension::Modeling::Sculpt
         {
             tHit = best;
             normal = glm::normalize(normal);
+            if (triOut) *triOut = bestTri;
         }
         return hit;
+    }
+
+    int32_t SculptMesh::FaceSetAt(const glm::vec3& from, const glm::vec3& dir) const
+    {
+        float t;
+        glm::vec3 n;
+        uint32_t tri = 0;
+        return Raycast(from, dir, t, n, &tri) ? TriFaceSet[tri] : -1;
+    }
+
+    int32_t SculptMesh::NextFaceSet() const
+    {
+        int32_t best = 0;
+        for (size_t t = 0; t < Tris.size(); ++t)
+            if (!IsDead((uint32_t)t)) best = std::max(best, TriFaceSet[t]);
+        return best + 1;
+    }
+
+    bool SculptMesh::HasFaceSets() const
+    {
+        for (size_t t = 0; t < Tris.size(); ++t)
+            if (!IsDead((uint32_t)t) && TriFaceSet[t] != 0) return true;
+        return false;
+    }
+
+    bool SculptMesh::IsLocked(uint32_t v) const
+    {
+        for (uint32_t t : VertTris[v])
+            if (TriHidden[t]) return true;
+        return false;
+    }
+
+    bool SculptMesh::InStrokeSet(uint32_t v) const
+    {
+        if (m_StrokeSet < 0) return true;
+        for (uint32_t t : VertTris[v])
+            if (TriFaceSet[t] == m_StrokeSet) return true;
+        return false;
+    }
+
+    float SculptMesh::Free(uint32_t v) const
+    {
+        float f = 1.0f - Mask[v];
+        if (f <= 0.0f || IsLocked(v) || !InStrokeSet(v)) return 0.0f;
+        return f;
+    }
+
+    int32_t SculptMesh::SetNear(const glm::vec3& center, float radius) const
+    {
+        // The visible triangle nearest the point (by its middle) among those around the vertices near it.
+        std::vector<uint32_t> near;
+        VertsNear(center, std::max(radius, 1e-6f), near);
+        float best = 1e30f;
+        int32_t set = -1;
+        for (uint32_t v : near)
+            for (uint32_t t : VertTris[v])
+            {
+                if (TriHidden[t]) continue;
+                glm::vec3 mid = (Positions[Tris[t].x] + Positions[Tris[t].y] + Positions[Tris[t].z]) / 3.0f;
+                float d = glm::length(mid - center);
+                if (d < best)
+                {
+                    best = d;
+                    set = TriFaceSet[t];
+                }
+            }
+        return set;
     }
 
     // ---- Strokes
@@ -562,6 +651,7 @@ namespace Dimension::Modeling::Sculpt
         m_Caught.clear();
         m_Pose.clear();
         m_ClothRest.clear();
+        m_StrokeSet = brush.AutoMaskFaceSet ? SetNear(center, brush.Radius) : -1;
         if (brush.Type == Brush::Pose || brush.Type == Brush::Boundary)
         {
             for (const glm::vec3& s : Mirrors(brush.Symmetry))
@@ -582,7 +672,7 @@ namespace Dimension::Modeling::Sculpt
                 float d2 = glm::dot(d, d);
                 if (d2 > r2) continue;
                 if (brush.FrontFacesOnly && glm::dot(Normals[v], view) > 0.0f) continue;
-                float w = Falloff(std::sqrt(d2) / brush.Radius) * (1.0f - Mask[v]);
+                float w = Falloff(std::sqrt(d2) / brush.Radius) * Free(v);
                 if (w <= 0.0f) continue;
                 bool already = false;
                 for (const Caught& k : m_Caught)
@@ -594,6 +684,7 @@ namespace Dimension::Modeling::Sculpt
 
     void SculptMesh::EndStroke()
     {
+        m_StrokeSet = -1;
         m_Caught.clear();
         m_Pose.clear();
         m_ClothRest.clear();
@@ -644,7 +735,7 @@ namespace Dimension::Modeling::Sculpt
         for (uint32_t v : queue)
         {
             float t = std::clamp(along(v), 0.0f, 1.0f);
-            float w = t * t * (3.0f - 2.0f * t) * (1.0f - Mask[v]);
+            float w = t * t * (3.0f - 2.0f * t) * Free(v);
             if (w <= 0.0f) continue;
             bool already = false;
             for (const Caught& k : m_Caught) already |= k.Vertex == v;
@@ -688,7 +779,7 @@ namespace Dimension::Modeling::Sculpt
         }
         for (auto& [v, d] : dist)
         {
-            float w = Falloff(d / r) * (1.0f - Mask[v]);
+            float w = Falloff(d / r) * Free(v);
             if (w <= 0.0f) continue;
             bool already = false;
             for (const Caught& k : m_Caught) already |= k.Vertex == v;
@@ -728,12 +819,13 @@ namespace Dimension::Modeling::Sculpt
         {
             uint32_t v = region[i];
             float d = glm::length(Positions[v] - c);
-            float f = Falloff(d / r) * (1.0f - Mask[v]);
+            float free = Free(v);
+            float f = Falloff(d / r) * free;
             // (a slight lift where the brush's edge bunches the cloth up, so it folds out of the surface rather than
             // squashing flat)
             p[i] = Positions[v] + move * (f * str) + Normals[v] * (f * (1.0f - f) * glm::length(move) * str);
             // (the middle goes with the brush, a ring past it is free to be pulled along, the rest holds)
-            freedom[i] = d >= r * 1.3f ? 0.0f : (1.0f - f) * (1.0f - Mask[v]);
+            freedom[i] = d >= r * 1.3f ? 0.0f : (1.0f - f) * free;
         }
         for (int it = 0; it < 20; ++it)
             for (size_t e = 0; e < edges.size(); ++e)
@@ -826,7 +918,7 @@ namespace Dimension::Modeling::Sculpt
         }
         std::vector<glm::vec3> mirrors = Mirrors(brush.Symmetry);
         // The detail first (so even a big flat face has vertices under the brush), then the brush.
-        if (DetailSize > 0.0f && brush.Type != Brush::Mask)
+        if (DetailSize > 0.0f && brush.Type != Brush::Mask && brush.Type != Brush::FaceSet)
             for (const glm::vec3& s : mirrors) Retopologize(center * s, brush.Radius);
         for (const glm::vec3& s : mirrors)
             if (brush.Type == Brush::Cloth) ClothDab(center * s, brush, move * s);
@@ -848,6 +940,7 @@ namespace Dimension::Modeling::Sculpt
             float dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z, d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > r2) continue;
             if (brush.FrontFacesOnly && glm::dot(Normals[v], view) > 0.0f) continue;
+            if (IsLocked(v)) continue;
             float f = Falloff(std::sqrt(d2) / r);
             if (f <= 0.0f) continue;
             hit.push_back({ v, f });
@@ -856,6 +949,23 @@ namespace Dimension::Modeling::Sculpt
             areaW += f;
         }
         if (hit.empty()) return;
+        if (brush.Type == Brush::FaceSet)
+        {
+            // The visible triangles around the vertices under the brush whose middles are inside it (and facing the
+            // view, with Front Faces) take the set.
+            for (auto& [v, f] : hit)
+                for (uint32_t t : VertTris[v])
+                {
+                    if (TriHidden[t] || TriFaceSet[t] == brush.FaceSet) continue;
+                    const glm::vec3 &a = Positions[Tris[t].x], &b = Positions[Tris[t].y], &cc = Positions[Tris[t].z];
+                    glm::vec3 mid = (a + b + cc) / 3.0f;
+                    if (glm::dot(mid - c, mid - c) > r2) continue;
+                    if (brush.FrontFacesOnly && glm::dot(glm::cross(b - a, cc - a), view) > 0.0f) continue;
+                    if (m_StrokeSet >= 0 && TriFaceSet[t] != m_StrokeSet) continue;
+                    TriFaceSet[t] = brush.FaceSet;
+                }
+            return;
+        }
         areaC /= areaW;
         areaN = glm::length(areaN) > 1e-12f ? glm::normalize(areaN) : -view;
         float sign = brush.Invert ? -1.0f : 1.0f, str = std::clamp(brush.Strength, 0.0f, 1.0f);
@@ -866,7 +976,7 @@ namespace Dimension::Modeling::Sculpt
             float f = hit[i].second;
             glm::vec3 p = Positions[v];
             if (brush.Texture && brush.Type != Brush::SnakeHook) f *= brush.Texture->At(p, c, r, view);
-            float w = f * (1.0f - Mask[v]);
+            float w = f * Free(v);
             switch (brush.Type)
             {
             case Brush::Draw: p += areaN * (sign * w * r * kDrawRate * str); break;
@@ -914,7 +1024,9 @@ namespace Dimension::Modeling::Sculpt
                 break;
             }
             case Brush::SnakeHook: p += move * (w * std::min(1.0f, str * 2.0f)); break;
-            case Brush::Mask: Mask[v] = std::clamp(Mask[v] + sign * f * str * 0.5f, 0.0f, 1.0f); break;
+            case Brush::Mask:
+                if (InStrokeSet(v)) Mask[v] = std::clamp(Mask[v] + sign * f * str * 0.5f, 0.0f, 1.0f);
+                break;
             default: break;
             }
             next[i] = p;
@@ -947,6 +1059,7 @@ namespace Dimension::Modeling::Sculpt
 
     bool SculptMesh::Split(uint32_t a, uint32_t b)
     {
+        if (IsLocked(a) || IsLocked(b)) return false;
         std::vector<uint32_t> shared;
         for (uint32_t t : VertTris[a])
             if (Tris[t].x == b || Tris[t].y == b || Tris[t].z == b) shared.push_back(t);
@@ -963,11 +1076,11 @@ namespace Dimension::Modeling::Sculpt
                 if ((v[i] == a && v[(i + 1) % 3] == b) || (v[i] == b && v[(i + 1) % 3] == a)) break;
             if (i == 3) continue;
             uint32_t x = v[i], y = v[(i + 1) % 3], z = v[(i + 2) % 3];
-            int32_t mat = TriMaterial[t];
+            int32_t mat = TriMaterial[t], set = TriFaceSet[t];
             glm::vec2 ux = TriUVs[t][i], uy = TriUVs[t][(i + 1) % 3], uz = TriUVs[t][(i + 2) % 3], um = (ux + uy) * 0.5f;
             KillTri(t);
-            AddTri(x, m, z, mat, { ux, um, uz });
-            AddTri(m, y, z, mat, { um, uy, uz });
+            TriFaceSet[AddTri(x, m, z, mat, { ux, um, uz })] = set;
+            TriFaceSet[AddTri(m, y, z, mat, { um, uy, uz })] = set;
         }
         m_TopologyChanged = true;
         return true;
@@ -975,7 +1088,7 @@ namespace Dimension::Modeling::Sculpt
 
     bool SculptMesh::Collapse(uint32_t a, uint32_t b, float maxLen)
     {
-        if (VertTris[a].empty() || VertTris[b].empty()) return false;
+        if (VertTris[a].empty() || VertTris[b].empty() || IsLocked(a) || IsLocked(b)) return false;
         std::vector<uint32_t> shared;
         for (uint32_t t : VertTris[a])
             if (Tris[t].x == b || Tris[t].y == b || Tris[t].z == b) shared.push_back(t);
@@ -1081,7 +1194,7 @@ namespace Dimension::Modeling::Sculpt
             }
             for (uint32_t t : candidates)
             {
-                if (IsDead(t)) continue;
+                if (IsDead(t) || TriHidden[t]) continue;
                 const glm::vec3 &a = Positions[Tris[t].x], &b = Positions[Tris[t].y], &c = Positions[Tris[t].z];
                 if (reach2 < 1e35f)
                 {
@@ -1191,7 +1304,7 @@ namespace Dimension::Modeling::Sculpt
                 if (nb.empty()) continue;
                 glm::vec3 avg(0.0f);
                 for (uint32_t u : nb) avg += Positions[u];
-                float w = factor * (respectMask ? 1.0f - Mask[v] : 1.0f);
+                float w = factor * (respectMask ? Free(v) : IsLocked(v) ? 0.0f : 1.0f);
                 next[v] = Positions[v] + (avg / (float)nb.size() - Positions[v]) * w;
             }
             Positions = std::move(next);

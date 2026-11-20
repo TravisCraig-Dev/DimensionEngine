@@ -2,6 +2,7 @@
 #include "EditorUI.h"
 #include "Shortcuts.h"
 #include <Dimension/Core/Log.h>
+#include <Dimension/Modeling/FaceSets.h>
 #include <Dimension/Scene/Components.h>
 #include <algorithm>
 #include <chrono>
@@ -28,7 +29,7 @@ namespace Editor
 
         const char* kBrushKeys[] = { "sculpt.draw", "sculpt.clay", "sculpt.inflate", "sculpt.smooth", "sculpt.flatten", "sculpt.scrape",
                                      "sculpt.pinch", "sculpt.crease", "sculpt.grab", "sculpt.snakeHook", "sculpt.mask",
-                                     "sculpt.pose", "sculpt.boundary", "sculpt.cloth" };
+                                     "sculpt.pose", "sculpt.boundary", "sculpt.cloth", "sculpt.faceSet" };
         const char* kBrushTips[] = { "Pushes the surface out (in with Ctrl or Subtract)",
                                      "Builds up towards a plane above the surface, filling dips first",
                                      "Each part swells along its own normal (shrinks with Ctrl)",
@@ -42,7 +43,8 @@ namespace Editor
                                      "Paints the mask: masked parts don't move (Ctrl erases)",
                                      "Bends the part under the brush about a joint at the brush's edge (put the brush over a limb's end and drag)",
                                      "Drags the open edges under the brush, the surface behind them following",
-                                     "Drags the surface like cloth: it keeps its size, so it folds and wrinkles where it bunches up" };
+                                     "Drags the surface like cloth: it keeps its size, so it folds and wrinkles where it bunches up",
+                                     "Draw Face Sets: paints a new face set each stroke (Ctrl: grows the one under the stroke's start)" };
     }
 
     void MeshEditMode::SetSculpting(bool on)
@@ -55,6 +57,7 @@ namespace Editor
         m_Tool = Tool::None;
         m_Sculpting = on;
         m_SculptValid = false;
+        if (FaceSets::AnyHidden(m_Mesh)) SyncRenderMesh(); // (Sculpt Mode leaves hidden face sets out of the view)
         m_Stroking = false;
         m_SculptAdjust = 0;
         m_Pressing = m_BoxSelecting = false;
@@ -88,7 +91,7 @@ namespace Editor
     void MeshEditMode::SculptPreview()
     {
         ++m_GeometryVersion;
-        if (m_SculptMultires < 0 && m_LiveModifiers && m_Mesh.HasActiveModifiers() && m_LiveModifierMs < 40.0f)
+        if (m_SculptMultires < 0 && m_LiveModifiers && m_Mesh.HasActiveModifiers() && m_LiveModifierMs < 40.0f && !FaceSets::AnyHidden(m_Mesh))
         {
             // The model as it would be written back, with its modifiers (dropped for the rest of the stroke when it
             // gets slow).
@@ -177,6 +180,8 @@ namespace Editor
         b.Texture = m_BrushTexAsset.IsValid() && !m_BrushTex.Values.empty() ? &m_BrushTex : nullptr;
         b.ViewDir = viewDir;
         b.Symmetry = m_Symmetry;
+        b.FaceSet = m_StrokeFaceSet;
+        b.AutoMaskFaceSet = m_AutoMaskFaceSet;
         return b;
     }
 
@@ -196,6 +201,17 @@ namespace Editor
             if (!m_Sculpt.Raycast(from, dir, t, n)) return; // (strokes start on the surface)
             m_StrokeType = io.KeyShift ? sc::Brush::Smooth : m_BrushType;
             m_StrokeInvert = io.KeyCtrl != m_BrushInvert;
+            if (m_StrokeType == sc::Brush::FaceSet)
+            {
+                if (m_SculptMultires >= 0)
+                {
+                    Log::Warn("Face Sets brush: not on a Multiresolution level (make face sets from the menu, or in Edit Mode)");
+                    return;
+                }
+                // A new set each stroke; inverted, the one under the stroke's start grows.
+                int32_t under = m_Sculpt.FaceSetAt(from, dir);
+                m_StrokeFaceSet = m_StrokeInvert && under >= 0 ? under : m_Sculpt.NextFaceSet();
+            }
             m_StrokeStart = m_StrokeLast = from + dir * t;
             m_StrokeView = dir;
             m_StrokeMouse = mouse;
@@ -302,6 +318,73 @@ namespace Editor
         if (Pressed("sculpt.remesh")) DoVoxelRemesh();
         if (Pressed("sculpt.clearMask")) SculptOperate("Clear Mask", [&] { m_Sculpt.ClearMask(); });
         if (Pressed("sculpt.invertMask")) SculptOperate("Invert Mask", [&] { m_Sculpt.InvertMask(); });
+        int32_t set = m_HoverFaceSet;
+        if (Pressed("sculpt.faceSetIsolate") && set >= 0) FaceSetOperate("Isolate Face Set", [&] { FaceSets::ToggleIsolate(m_Mesh, set); });
+        if (Pressed("sculpt.faceSetHide") && set >= 0) FaceSetOperate("Hide Face Set", [&] { FaceSets::Hide(m_Mesh, set); });
+        if (Pressed("sculpt.revealAll") && FaceSets::AnyHidden(m_Mesh)) FaceSetOperate("Reveal Face Sets", [&] { FaceSets::RevealAll(m_Mesh); });
+    }
+
+    // ---- Face sets
+
+    void MeshEditMode::FaceSetOperate(const char* name, const std::function<void()>& fn)
+    {
+        // On the model itself (the base mesh with a Multires modifier: its levels inherit the sets), then the sculpt
+        // mesh built again from it.
+        EnsureSculptMesh();
+        Record(name);
+        if (m_SculptMultires < 0) m_Sculpt.WriteTo(m_Mesh);
+        fn();
+        m_Mesh.Changed();
+        m_SculptValid = false;
+        Commit();
+        EnsureSculptMesh();
+        SculptPreview();
+    }
+
+    void MeshEditMode::DrawFaceSetMenu()
+    {
+        int32_t set = m_MenuFaceSet;
+        char label[96];
+        if (set >= 0) std::snprintf(label, sizeof(label), "Face set %d (under the mouse)", set);
+        else std::snprintf(label, sizeof(label), "No face set under the mouse");
+        ImGui::TextDisabled("%s", label);
+        if (ImGui::MenuItem("From Masked")) FaceSetOperate("Face Set from Masked", [&] { FaceSets::FromMasked(m_Mesh); });
+        if (ImGui::MenuItem("From Visible")) FaceSetOperate("Face Set from Visible", [&] { FaceSets::FromVisible(m_Mesh); });
+        if (ImGui::MenuItem("From Edit Mode Selection")) FaceSetOperate("Face Set from Selection", [&] { FaceSets::FromSelection(m_Mesh); });
+        if (ImGui::BeginMenu("Init Face Sets"))
+        {
+            const char* modes[] = { "By Loose Parts", "By Materials", "By Normals", "By UV Seams", "By Sharp Edges" };
+            for (int i = 0; i < 5; ++i)
+                if (ImGui::MenuItem(modes[i]))
+                    FaceSetOperate("Init Face Sets", [&] {
+                        int n = FaceSets::InitFrom(m_Mesh, (FaceSets::InitMode)i, m_FaceSetAngle);
+                        Log::Info("Init Face Sets: {} sets", n);
+                    });
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::DragFloat("Angle", &m_FaceSetAngle, 0.5f, 1.0f, 180.0f, "%.0f deg");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("By Normals: faces meeting at a sharper bend than this start a new set");
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Grow", nullptr, false, set >= 0)) FaceSetOperate("Grow Face Set", [&] { FaceSets::Grow(m_Mesh, set); });
+        if (ImGui::MenuItem("Shrink", nullptr, false, set >= 0)) FaceSetOperate("Shrink Face Set", [&] { FaceSets::Shrink(m_Mesh, set); });
+        ImGui::Separator();
+        if (ImGui::MenuItem("Isolate", Shortcuts::Label("sculpt.faceSetIsolate").c_str(), false, set >= 0))
+            FaceSetOperate("Isolate Face Set", [&] { FaceSets::ToggleIsolate(m_Mesh, set); });
+        if (ImGui::MenuItem("Hide", Shortcuts::Label("sculpt.faceSetHide").c_str(), false, set >= 0))
+            FaceSetOperate("Hide Face Set", [&] { FaceSets::Hide(m_Mesh, set); });
+        if (ImGui::MenuItem("Reveal All", Shortcuts::Label("sculpt.revealAll").c_str(), false, FaceSets::AnyHidden(m_Mesh)))
+            FaceSetOperate("Reveal Face Sets", [&] { FaceSets::RevealAll(m_Mesh); });
+        ImGui::Separator();
+        if (ImGui::MenuItem("Mask Others", nullptr, false, set >= 0)) FaceSetOperate("Mask from Face Set", [&] { FaceSets::MaskFromSet(m_Mesh, set); });
+        if (ImGui::MenuItem("Mask This Set", nullptr, false, set >= 0))
+            FaceSetOperate("Mask from Face Set", [&] { FaceSets::MaskFromSet(m_Mesh, set, true); });
+        ImGui::Separator();
+        if (ImGui::MenuItem("Show Colors", nullptr, m_ShowFaceSets)) m_ShowFaceSets = !m_ShowFaceSets;
+        if (ImGui::MenuItem("Randomize Colors")) ++m_FaceSetSeed;
+        if (ImGui::MenuItem("Clear All")) FaceSetOperate("Clear Face Sets", [&] {
+            for (Face& f : m_Mesh.Faces) f.FaceSet = 0;
+        });
     }
 
     // ---- The view
@@ -333,6 +416,51 @@ namespace Editor
             }
             if (m_Sculpting) UpdateStroke(hovered, blocked); // (a key may have left Sculpt Mode)
         }
+        if (!m_Sculpting) return false;
+        EnsureSculptMesh(); // (a face set operation may have rebuilt the model)
+        if (hovered && !m_Stroking && !m_OverUI)
+        {
+            glm::vec3 from, dir;
+            SculptRay(ImGui::GetIO().MousePos, from, dir);
+            m_HoverFaceSet = m_Sculpt.FaceSetAt(from, dir);
+        }
+        // Face sets: each triangle facing the camera tinted with its set's color.
+        if (m_ShowFaceSets && m_Sculpt.HasFaceSets())
+        {
+            glm::mat4 mvp = m_ViewProj * m_World;
+            auto project = [&](const glm::vec3& p, ImVec2& out) {
+                glm::vec4 c = mvp * glm::vec4(p, 1.0f);
+                if (c.w <= 1e-6f) return false;
+                out = ImVec2(m_Origin.x + (c.x / c.w * 0.5f + 0.5f) * m_Size.x, m_Origin.y + (0.5f - c.y / c.w * 0.5f) * m_Size.y);
+                return true;
+            };
+            ImDrawListFlags saved = dl->Flags;
+            dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+            ImVec2 white = ImGui::GetFontTexUvWhitePixel();
+            int32_t lastSet = INT32_MIN;
+            ImU32 col = 0;
+            for (size_t t = 0; t < m_Sculpt.Tris.size(); ++t)
+            {
+                if (m_Sculpt.IsDead((uint32_t)t) || m_Sculpt.TriHidden[t] || m_Sculpt.TriFaceSet[t] == 0) continue;
+                const glm::uvec3& tri = m_Sculpt.Tris[t];
+                const glm::vec3 &a = m_Sculpt.Positions[tri.x], &b = m_Sculpt.Positions[tri.y], &c = m_Sculpt.Positions[tri.z];
+                if (glm::dot(glm::cross(b - a, c - a), m_CameraLocal - a) <= 0.0f) continue;
+                ImVec2 pa, pb, pc;
+                if (!project(a, pa) || !project(b, pb) || !project(c, pc)) continue;
+                if (m_Sculpt.TriFaceSet[t] != lastSet)
+                {
+                    lastSet = m_Sculpt.TriFaceSet[t];
+                    glm::vec3 k = FaceSets::Color(lastSet, m_FaceSetSeed);
+                    bool hot = lastSet == m_HoverFaceSet && hovered && !m_Stroking;
+                    col = IM_COL32((int)(k.r * 255.0f), (int)(k.g * 255.0f), (int)(k.b * 255.0f), hot ? 130 : 95);
+                }
+                dl->PrimReserve(3, 3);
+                dl->PrimVtx(pa, white, col);
+                dl->PrimVtx(pb, white, col);
+                dl->PrimVtx(pc, white, col);
+            }
+            dl->Flags = saved;
+        }
         // The mask: masked triangles facing the camera darkened.
         if (std::any_of(m_Sculpt.Mask.begin(), m_Sculpt.Mask.end(), [](float v) { return v > 0.0f; }))
         {
@@ -350,7 +478,7 @@ namespace Editor
             auto shade = [](float m) { return IM_COL32(0, 0, 0, (int)(std::clamp(m, 0.0f, 1.0f) * 150.0f)); };
             for (size_t t = 0; t < m_Sculpt.Tris.size(); ++t)
             {
-                if (m_Sculpt.IsDead((uint32_t)t)) continue;
+                if (m_Sculpt.IsDead((uint32_t)t) || m_Sculpt.TriHidden[t]) continue;
                 const glm::uvec3& tri = m_Sculpt.Tris[t];
                 float ma = m_Sculpt.Mask[tri.x], mb = m_Sculpt.Mask[tri.y], mc = m_Sculpt.Mask[tri.z];
                 if (ma + mb + mc <= 0.01f) continue;
@@ -368,7 +496,9 @@ namespace Editor
         // The brush circle.
         ImVec2 mouse = ImGui::GetIO().MousePos;
         bool invert = (ImGui::GetIO().KeyCtrl != m_BrushInvert);
-        ImU32 col = m_BrushType == sc::Brush::Mask ? IM_COL32(120, 120, 255, 220) : invert ? IM_COL32(120, 180, 255, 220) : IM_COL32(255, 255, 255, 220);
+        ImU32 col = m_BrushType == sc::Brush::Mask ? IM_COL32(120, 120, 255, 220)
+                    : m_BrushType == sc::Brush::FaceSet ? IM_COL32(255, 200, 90, 220)
+                    : invert ? IM_COL32(120, 180, 255, 220) : IM_COL32(255, 255, 255, 220);
         if (m_SculptAdjust)
         {
             dl->AddCircle(m_AdjustCenter, m_SculptAdjust == 1 ? m_BrushRadiusPx : m_BrushStrength[(size_t)m_BrushType] * 200.0f, col, 64, 2.0f);
@@ -527,6 +657,24 @@ namespace Editor
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Voxel Remesh (%s): a new, even all-quad surface over the model's volume (overlapping parts join; UVs are lost)",
                               Shortcuts::Label("sculpt.remesh").c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Face Sets"))
+        {
+            m_MenuFaceSet = m_HoverFaceSet;
+            ImGui::OpenPopup("SculptFaceSetMenu");
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Group faces to show, hide (%s isolates the set under the mouse, %s hides it, %s shows all) and mask by",
+                              Shortcuts::Label("sculpt.faceSetIsolate").c_str(), Shortcuts::Label("sculpt.faceSetHide").c_str(),
+                              Shortcuts::Label("sculpt.revealAll").c_str());
+        if (ImGui::BeginPopup("SculptFaceSetMenu"))
+        {
+            DrawFaceSetMenu();
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine(0.0f, 2.0f);
+        if (toggle("Set Mask", m_AutoMaskFaceSet, "Auto-masking: a stroke only works on the face set it starts on"))
+            m_AutoMaskFaceSet = !m_AutoMaskFaceSet;
         ImGui::SameLine();
         if (ImGui::Button("Mask")) ImGui::OpenPopup("SculptMaskMenu");
         if (ImGui::BeginPopup("SculptMaskMenu"))

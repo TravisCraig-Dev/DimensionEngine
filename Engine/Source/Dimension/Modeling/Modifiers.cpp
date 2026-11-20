@@ -343,6 +343,8 @@ namespace Dimension::Modeling
                     }
                     nf.Material = face.Material;
                     nf.Smooth = face.Smooth;
+                    nf.FaceSet = face.FaceSet;
+                    nf.Flags = face.Flags & Hidden;
                     out.Faces.push_back(std::move(nf));
                 }
             }

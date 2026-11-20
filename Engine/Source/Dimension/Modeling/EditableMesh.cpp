@@ -822,8 +822,9 @@ namespace Dimension::Modeling
             pos.push_back(Round(p.z));
         }
         j["positions"] = std::move(pos);
-        json sizes = json::array(), verts = json::array(), uvs = json::array(), mats = json::array(), smooth = json::array();
-        bool anyMaterial = false;
+        json sizes = json::array(), verts = json::array(), uvs = json::array(), mats = json::array(), smooth = json::array(),
+             sets = json::array();
+        bool anyMaterial = false, anySet = false;
         for (uint32_t f = 0; f < Faces.size(); ++f)
         {
             const Face& face = Faces[f];
@@ -837,12 +838,15 @@ namespace Dimension::Modeling
             }
             mats.push_back(face.Material);
             anyMaterial |= face.Material != 0;
+            sets.push_back(face.FaceSet);
+            anySet |= face.FaceSet != 0;
             if (face.Smooth) smooth.push_back(f);
         }
         j["faceSizes"] = std::move(sizes);
         j["faceVerts"] = std::move(verts);
         j["uvs"] = std::move(uvs);
         if (anyMaterial) j["faceMaterials"] = std::move(mats);
+        if (anySet) j["faceSets"] = std::move(sets);
         if (!smooth.empty()) j["smoothFaces"] = std::move(smooth);
         if (!LooseEdges.empty())
         {
@@ -1048,7 +1052,7 @@ namespace Dimension::Modeling
         for (size_t i = 0; i + 2 < pos.size(); i += 3) out.AddVertex({ pos[i].get<float>(), pos[i + 1].get<float>(), pos[i + 2].get<float>() });
         uint32_t vc = out.VertexCount();
         const json sizes = j.value("faceSizes", json::array()), verts = j.value("faceVerts", json::array()), uvs = j.value("uvs", json::array());
-        const json mats = j.value("faceMaterials", json::array());
+        const json mats = j.value("faceMaterials", json::array()), faceSets = j.value("faceSets", json::array());
         size_t corner = 0;
         std::set<size_t> skipped;
         for (size_t f = 0; f < sizes.size(); ++f)
@@ -1067,6 +1071,7 @@ namespace Dimension::Modeling
                 face.UVs.push_back(uv);
             }
             face.Material = f < mats.size() ? mats[f].get<int32_t>() : 0;
+            face.FaceSet = f < faceSets.size() ? faceSets[f].get<int32_t>() : 0;
             if (valid) out.Faces.push_back(std::move(face));
             else skipped.insert(f);
             if (!valid) Log::Warn("Model '{}': face {} skipped (bad vertex indices)", out.Name, f);

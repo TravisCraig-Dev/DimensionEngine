@@ -364,7 +364,7 @@ namespace Editor
         Modeling::Sculpt::SculptMesh m_Sculpt;
         Modeling::Sculpt::Brush m_BrushType = Modeling::Sculpt::Brush::Draw;
         float m_BrushRadiusPx = 60.0f;
-        float m_BrushStrength[(size_t)Modeling::Sculpt::Brush::Count] = { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f, 0.5f, 0.5f, 0.5f };
+        float m_BrushStrength[(size_t)Modeling::Sculpt::Brush::Count] = { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f, 0.5f, 0.5f, 0.5f, 1.0f };
         AssetHandle m_BrushTexAsset = AssetHandle::None(); // varies the brushes' strength
         Modeling::Sculpt::BrushTexture m_BrushTex;
         void LoadBrushTexture();
@@ -383,6 +383,15 @@ namespace Editor
         ImVec2 m_StrokeMouse{ 0, 0 };
         bool m_StrokeMoved = false;
         int m_SculptAdjust = 0; // F: 1 radius, 2 strength (Shift+F)
+        // Face sets (FaceSets.h): shown as colors, painted by the Face Sets brush, worked on from the Face Sets menu.
+        bool m_ShowFaceSets = true, m_AutoMaskFaceSet = false;
+        int32_t m_HoverFaceSet = -1;  // the face set under the mouse (-1: none)
+        int32_t m_MenuFaceSet = -1;   // ...when the Face Sets menu opened
+        int32_t m_StrokeFaceSet = 1;  // what the Face Sets brush paints this stroke
+        uint32_t m_FaceSetSeed = 0;   // Randomize Colors
+        float m_FaceSetAngle = 30.0f; // Init Face Sets by normals
+        void FaceSetOperate(const char* name, const std::function<void()>& fn);
+        void DrawFaceSetMenu();
         ImVec2 m_AdjustCenter{ 0, 0 };
         float m_AdjustStart = 0.0f;
         int m_AdjustFrame = 0;
