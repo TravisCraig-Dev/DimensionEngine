@@ -117,6 +117,7 @@ namespace Editor
             if (isDir) m_EnterDir = path;
             else if (type == AssetType::Scene) m_Ctx.RequestOpenScene = path;
             else if (type == AssetType::Prefab && handle.IsValid()) m_Ctx.RequestOpenPrefab = handle;
+            else if (path.extension() == ".dmodel" && handle.IsValid()) m_Ctx.RequestOpenModel = handle; // Model Mode
             else if (type == AssetType::VisualEffect && handle.IsValid()) m_Ctx.RequestOpenVisualEffect = handle;
             else FileDialogs::OpenWithDefaultApp(path);
         }
@@ -171,6 +172,8 @@ namespace Editor
                 AssetHandle variant = Prefabs::CreateVariant(base, UniquePath(path.parent_path() / (path.stem().string() + " Variant.prefab")));
                 if (variant.IsValid()) m_Ctx.SelectedAsset = variant;
             }
+            if (path.extension() == ".dmodel" && ImGui::MenuItem("Open in Model Mode", nullptr, false, !m_Ctx.IsPlaying()))
+                m_Ctx.RequestOpenModel = AssetManager::GetHandle(path);
             if (path.extension() == ".scene" && ImGui::MenuItem("Open Additive", nullptr, false, !m_Ctx.IsPlaying()))
                 m_Ctx.RequestOpenAdditive = path;
             if (ImGui::MenuItem("Export Package...")) m_Ctx.RequestExportPackage = path; // with what it references
@@ -653,9 +656,13 @@ namespace Editor
                 }
                 if (ImGui::MenuItem("New Model"))
                 {
-                    // An editable model (a cube to start from): Tab edits it in the Scene view once on an object.
+                    // An editable model (a cube to start from), opened on its own in Model Mode.
                     AssetHandle h = MeshEditMode::CreateModelAsset(MeshEditMode::MakePrimitive(MeshEditMode::Primitive::Cube), m_Current, "New Model");
-                    if (h.IsValid()) m_Ctx.SelectAsset(h);
+                    if (h.IsValid())
+                    {
+                        m_Ctx.SelectAsset(h);
+                        if (!m_Ctx.IsPlaying()) m_Ctx.RequestOpenModel = h;
+                    }
                 }
                 if (ImGui::MenuItem("New Timeline"))
                 {

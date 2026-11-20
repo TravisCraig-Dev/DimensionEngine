@@ -28,6 +28,7 @@ namespace Editor
         std::string BuildFolder;  // batch build: build the project here and exit (CI)
         std::string ScenePath;    // open this scene instead of the project's start scene
         std::string PrefabPath;   // open this prefab in Prefab Mode on startup (path relative to Assets or absolute)
+        std::string ModelPath;    // --model: open this .dmodel in Model Mode on startup (relative to Assets or absolute)
         std::string OpenSceneLater; // request this scene like the UI does, after a few frames (automation/testing)
         bool MenuOpenScene = false; // run File > Open Scene... after a few frames (automation/testing)
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"
@@ -104,6 +105,11 @@ namespace Editor
         int m_NewSceneTemplate = 0;
         std::string m_TemplateName, m_TemplateDescription;
         void DrawNewSceneWindow();
+        // File > New Model...: a model file (empty or a shape to start from) opened in Model Mode.
+        bool m_ShowNewModel = false;
+        int m_NewModelShape = 1; // 0 empty, else MeshEditMode::Primitive + 1
+        std::string m_NewModelName = "New Model";
+        void DrawNewModelWindow();
         // File > Project Hub... (recent projects, a new one, another folder) and switching the open project.
         bool m_ShowHub = false;
         std::string m_HubName, m_HubLocation;
@@ -146,6 +152,12 @@ namespace Editor
         bool LeavePrefabMode(); // saves or asks first; false = user cancelled
         bool SavePrefabStage();
         void DrawPrefabModeBar();
+
+        // Model Mode: one model on its own (a stage like Prefab Mode's), in Edit Mode.
+        void OpenModelMode(AssetHandle model);
+        void DrawModelModeBar();
+        // Prefab Mode or Model Mode: saves (or asks) and goes back to the scene; false = user cancelled.
+        bool LeaveStage();
         EditorCamera m_SceneCamera; // the scene's view while a prefab is open
         bool m_LeavePrefabRequested = false;
         void UpdateWindowTitle();

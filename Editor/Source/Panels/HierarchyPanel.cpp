@@ -55,14 +55,14 @@ namespace Editor
         {
             // The main scene's objects (with scenes open alongside, theirs come in their own sections below; Prefab
             // Mode's context is not listed). Copy: nodes may be reordered by drag-drop during iteration.
-            bool sectioned = sections.Count() > 1 && !m_Ctx.InPrefabMode(); // Prefab Mode shows the prefab alone
+            bool sectioned = sections.Count() > 1 && !m_Ctx.InStage(); // Prefab Mode shows the prefab alone
             auto roots = sectioned ? sections.Roots(scene, 0) : scene.GetRootEntities();
             for (Entity e : roots)
                 if (e != m_Ctx.PrefabContext) DrawNode(scene, e);
             ImGui::TreePop();
         }
         // Scenes open alongside: a section each (drop an object on it to move it there; its menu saves or closes it).
-        for (size_t i = 1; i < sections.Count() && !m_Ctx.InPrefabMode(); ++i)
+        for (size_t i = 1; i < sections.Count() && !m_Ctx.InStage(); ++i)
         {
             const auto& added = sections.Added()[i - 1];
             ImGui::PushID((int)i);
@@ -429,7 +429,7 @@ namespace Editor
             }
             if (ImGui::MenuItem("Frame Selected", "F")) m_Ctx.RequestFocusSelected = true;
             // With scenes open alongside: which scene a root object belongs to.
-            if (m_Ctx.Sections.Count() > 1 && !m_Ctx.InPrefabMode() && scene.GetParent(e).IsNull() && ImGui::BeginMenu("Move to Scene"))
+            if (m_Ctx.Sections.Count() > 1 && !m_Ctx.InStage() && scene.GetParent(e).IsNull() && ImGui::BeginMenu("Move to Scene"))
             {
                 size_t current = m_Ctx.Sections.SectionOf(scene, e);
                 for (size_t i = 0; i < m_Ctx.Sections.Count(); ++i)

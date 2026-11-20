@@ -221,6 +221,7 @@ namespace Editor
         else if (m_Options.OpenWindow == "Lighting") m_ShowLighting = true;
         else if (m_Options.OpenWindow == "Shortcuts") m_ShowShortcuts = true;
         else if (m_Options.OpenWindow == "New Scene") m_ShowNewScene = true;
+        else if (m_Options.OpenWindow == "New Model") m_ShowNewModel = true;
         else if (m_Options.OpenWindow == "Project Hub") m_ShowHub = true;
         else if (m_Options.OpenWindow == "Undo History") m_ShowUndoHistory = true;
         else if (m_Options.OpenWindow == "Views") m_OpenViewsMenu = true;
@@ -263,6 +264,13 @@ namespace Editor
             fs::path p = m_Options.PrefabPath;
             if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
             if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenPrefabMode(h);
+        }
+        if (!m_Options.ModelPath.empty())
+        {
+            fs::path p = m_Options.ModelPath;
+            if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
+            if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenModelMode(h);
+            else Log::Error("No model at {}", p.string());
         }
         m_Ctx.HierarchySearch = m_Options.Search;
         if (!m_Options.SelectEntity.empty())
@@ -430,6 +438,11 @@ namespace Editor
             Log::Warn("Exit play mode before saving the scene");
             return false;
         }
+        if (m_Ctx.InModelMode())
+        {
+            m_MeshEdit->Save(); // (the model is written by Edit Mode; the stage itself is never saved)
+            return true;
+        }
         if (m_Ctx.InPrefabMode()) return SavePrefabStage();
         if (m_Ctx.ScenePath.empty()) return SaveSceneAs();
         // With scenes open alongside it, only the main scene's objects go into its file; the others save to theirs.
@@ -463,7 +476,7 @@ namespace Editor
 
     bool EditorLayer::SaveSceneAs()
     {
-        if (m_Ctx.InPrefabMode()) return SavePrefabStage();
+        if (m_Ctx.InStage()) return SaveScene();
         auto path = FileDialogs::SaveFile({ { L"Scene", L"*.scene" } }, L"scene", AssetManager::GetAssetsDirectory());
         if (!path) return false;
         m_Ctx.ScenePath = *path;
@@ -474,7 +487,7 @@ namespace Editor
 
     bool EditorLayer::ConfirmDiscardChanges()
     {
-        if (m_Ctx.InPrefabMode() && !LeavePrefabMode()) return false;
+        if (m_Ctx.InStage() && !LeaveStage()) return false;
         // The scenes open alongside the main one, each asked about on its own.
         for (size_t i = 1; i < m_Ctx.Sections.Count(); ++i)
             if (m_Ctx.Sections.IsDirty(*m_Ctx.EditorScene, i))
@@ -491,9 +504,9 @@ namespace Editor
 
     void EditorLayer::OpenSceneAdditive(const fs::path& path)
     {
-        if (m_Ctx.IsPlaying() || m_Ctx.InPrefabMode())
+        if (m_Ctx.IsPlaying() || m_Ctx.InStage())
         {
-            Log::Warn("Open scenes additively outside play mode and Prefab Mode");
+            Log::Warn("Open scenes additively outside play mode, Prefab Mode and Model Mode");
             return;
         }
         if (!m_Ctx.ScenePath.empty() && fs::equivalent(path, m_Ctx.ScenePath))
@@ -528,7 +541,8 @@ namespace Editor
     void EditorLayer::UpdateWindowTitle()
     {
         std::string title = "Dimension Editor - " + Project::GetConfig().Name + " - ";
-        if (m_Ctx.InPrefabMode()) title += m_Ctx.PrefabModeSceneName() + " > Prefab: ";
+        if (m_Ctx.InPrefabMode()) title += m_Ctx.StageSceneName() + " > Prefab: ";
+        if (m_Ctx.InModelMode()) title += m_Ctx.StageSceneName() + " > Model: ";
         title += m_Ctx.EditorScene->GetName() + (m_Ctx.Dirty ? "*" : "");
         if (m_Ctx.IsPlaying()) title += "  [PLAYING]";
         Application::Get().GetWindow().SetTitle(title);
@@ -539,7 +553,7 @@ namespace Editor
     void EditorLayer::Play(bool emptyScene)
     {
         if (m_Ctx.IsPlaying()) return;
-        if (m_Ctx.InPrefabMode() && !LeavePrefabMode()) return; // play always runs the scene
+        if (m_Ctx.InStage() && !LeaveStage()) return; // play always runs the scene
         m_Animation->StopPreview(); // the Animator as it was, not posed by the Animation window
         if (EditorPreferences::Get().SaveSceneBeforePlay && m_Ctx.Dirty && !m_Ctx.ScenePath.empty()) SaveScene();
         if (m_Console->ClearOnPlay && !emptyScene) m_Console->Clear(); // (a test run keeps the earlier tests' logs)
@@ -673,7 +687,13 @@ namespace Editor
         if (m_LeavePrefabRequested)
         {
             m_LeavePrefabRequested = false;
-            LeavePrefabMode();
+            LeaveStage();
+        }
+        if (m_Ctx.RequestOpenModel)
+        {
+            AssetHandle h = *m_Ctx.RequestOpenModel;
+            m_Ctx.RequestOpenModel.reset();
+            OpenModelMode(h);
         }
         // Prefab Mode auto save: write the asset once an edit is finished (no widget or gizmo held).
         if (m_Ctx.InPrefabMode() && m_Ctx.PrefabAutoSave && m_Ctx.Dirty && !ImGui::IsAnyItemActive() && !ImGuizmo::IsUsing() &&
@@ -689,7 +709,7 @@ namespace Editor
         {
             fs::path file = Project::GetDirectory() / ".dimension" / "SceneVisibility.json";
             std::string key = m_Ctx.ScenePath.generic_string();
-            if (m_Ctx.InPrefabMode()) key = m_VisibilityScene; // the prefab is edited inside the scene's settings
+            if (m_Ctx.InStage()) key = m_VisibilityScene; // the prefab (or model) is edited inside the scene's settings
             if (key != m_VisibilityScene)
             {
                 m_VisibilityScene = key;
@@ -746,7 +766,7 @@ namespace Editor
         if (focused && !m_WasWindowFocused)
         {
             AssetManager::Refresh();
-            if (!m_Ctx.IsPlaying() && !m_Ctx.InPrefabMode())
+            if (!m_Ctx.IsPlaying() && !m_Ctx.InStage())
             {
                 // Prefab files may have changed outside the editor.
                 auto before = SceneSerializer::Serialize(*m_Ctx.EditorScene);
@@ -841,11 +861,9 @@ namespace Editor
     void EditorLayer::OpenPrefabMode(AssetHandle prefab, std::optional<uint64_t> from)
     {
         if (m_Ctx.IsPlaying()) Stop();
-        if (m_Ctx.InPrefabMode())
-        {
-            if (prefab == m_Ctx.PrefabModeAsset()) return;
-            if (!LeavePrefabMode()) return;
-        }
+        if (m_Ctx.InPrefabMode() && prefab == m_Ctx.PrefabModeAsset()) return;
+        if (m_Ctx.InStage() && !LeaveStage()) return;
+        m_MeshEdit->Exit(); // (its object is in the scene being put aside)
         auto stage = Prefabs::OpenForEditing(prefab);
         if (!stage)
         {
@@ -953,6 +971,145 @@ namespace Editor
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
+    }
+
+    // ---- Model Mode -----------------------------------------------------------------------------
+
+    bool EditorLayer::LeaveStage()
+    {
+        if (m_Ctx.InPrefabMode()) return LeavePrefabMode();
+        if (!m_Ctx.InModelMode()) return true;
+        AssetHandle model = m_Ctx.ModelModeAsset();
+        m_MeshEdit->Exit(); // (writes the model)
+        m_Ctx.ExitStage();
+        // Objects in the scene using the model already show it (the edits went to the asset itself); its dependents
+        // (Boolean and Shrinkwrap modifiers of other models) are made again.
+        m_MeshEdit->RefreshDependents(model);
+        m_Camera = m_SceneCamera;
+        UpdateWindowTitle();
+        return true;
+    }
+
+    void EditorLayer::OpenModelMode(AssetHandle model)
+    {
+        const AssetMetadata* meta = AssetManager::GetMetadata(model);
+        if (!meta || meta->Path.extension() != ".dmodel")
+        {
+            Log::Warn("Model Mode opens models made in the editor (.dmodel files)");
+            return;
+        }
+        if (m_Ctx.IsPlaying()) Stop();
+        if (m_Ctx.InModelMode() && model == m_Ctx.ModelModeAsset()) return;
+        if (m_Ctx.InStage() && !LeaveStage()) return;
+        m_MeshEdit->Exit(); // (its object is in the scene being put aside)
+        // The stage: the model alone at the origin, lit by the Scene view's default light.
+        std::string name = AssetManager::GetDisplayName(model);
+        auto stage = MakeRef<Scene>(name);
+        Entity e = stage->CreateEntity(name);
+        stage->GetRegistry().Emplace<MeshRendererComponent>(e).Mesh = model;
+        stage->UpdateTransforms();
+        m_SceneCamera = m_Camera;
+        m_Ctx.EnterModelMode(model, stage);
+        m_Ctx.Select(e);
+        if (!m_MeshEdit->Enter(e))
+        {
+            m_Ctx.ExitStage();
+            m_Camera = m_SceneCamera;
+            Log::Error("Could not open the model '{}'", name);
+            return;
+        }
+        // The whole model in view (not the selection it was saved with); an empty one frames the origin, where Add puts shapes.
+        glm::vec3 center(0.0f);
+        float radius = 1.0f;
+        if (auto mesh = AssetManager::GetMesh(model); mesh && glm::length(mesh->GetBounds().Extents()) > 1e-4f)
+        {
+            center = mesh->GetBounds().Center();
+            radius = glm::length(mesh->GetBounds().Extents());
+        }
+        m_Camera.Focus(center, radius);
+        m_FocusSceneView = 3; // models are edited in the Scene view
+        UpdateWindowTitle();
+        Log::Info("Editing model '{}' (Model Mode)", name);
+    }
+
+    void EditorLayer::DrawModelModeBar()
+    {
+        // Like Prefab Mode's: back to the scene, the model's name, Save. The model is written as each change finishes.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, UI::AccentBackground(0.35f));
+        ImGui::BeginChild("##ModelModeBar", ImVec2(0, ImGui::GetFrameHeight() + 8.0f), ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_NoScrollbar);
+        if (ImGui::Button("< Scene")) m_LeavePrefabRequested = true; // handled next update, outside the panels
+        ImGui::SetItemTooltip("Back to the scene (the model is saved)");
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s  >", m_Ctx.StageSceneName().c_str());
+        ImGui::SameLine();
+        ImGui::TextColored(UI::AccentText(), "Model: %s", AssetManager::GetDisplayName(m_Ctx.ModelModeAsset()).c_str());
+        if (!m_MeshEdit->IsActive())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%s: Edit Mode)", Shortcuts::Label("mesh.editMode").c_str());
+        }
+        float right = ImGui::CalcTextSize("Save").x + ImGui::CalcTextSize("Show in Project").x + 40.0f;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 12.0f, ImGui::GetWindowWidth() - right));
+        if (ImGui::Button("Show in Project")) m_Ctx.SelectAsset(m_Ctx.ModelModeAsset());
+        ImGui::SameLine();
+        if (ImGui::Button("Save")) m_MeshEdit->Save();
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+    }
+
+    void EditorLayer::DrawNewModelWindow()
+    {
+        // A new model file: a name, a shape to start from (or nothing) and where it goes; opened in Model Mode.
+        ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_Always);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.4f),
+                                ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("New Model", &m_ShowNewModel, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking))
+        {
+            ImGui::End();
+            return;
+        }
+        bool create = false;
+        if (UI::BeginProperties("##newModel"))
+        {
+            UI::PropertyLabel("Name");
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            if (ImGui::InputText("##name", &m_NewModelName, ImGuiInputTextFlags_EnterReturnsTrue)) create = true;
+            std::vector<std::string> shapes{ "Empty" };
+            for (int p = 0; p < (int)MeshEditMode::Primitive::Count; ++p) shapes.push_back(MeshEditMode::PrimitiveName((MeshEditMode::Primitive)p));
+            UI::PropertyLabel("Start From");
+            const char* current = shapes[std::clamp(m_NewModelShape, 0, (int)shapes.size() - 1)].c_str();
+            if (ImGui::BeginCombo("##shape", current))
+            {
+                for (int i = 0; i < (int)shapes.size(); ++i)
+                    if (ImGui::Selectable(shapes[i].c_str(), i == m_NewModelShape)) m_NewModelShape = i;
+                ImGui::EndCombo();
+            }
+            UI::EndProperties();
+        }
+        ImGui::TextDisabled("Saved to Assets/Models; Shift+A adds shapes while editing.");
+        bool named = m_NewModelName.find_first_not_of(' ') != std::string::npos;
+        ImGui::BeginDisabled(!named || m_Ctx.IsPlaying());
+        if (ImGui::Button("Create", ImVec2(120.0f, 0.0f))) create = true;
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) m_ShowNewModel = false;
+        ImGui::End();
+        if (create && named && !m_Ctx.IsPlaying())
+        {
+            Modeling::EditableMesh mesh;
+            if (m_NewModelShape > 0) mesh = MeshEditMode::MakePrimitive((MeshEditMode::Primitive)(m_NewModelShape - 1));
+            AssetHandle h = MeshEditMode::CreateModelAsset(mesh, AssetManager::GetAssetsDirectory() / "Models", m_NewModelName);
+            if (h.IsValid())
+            {
+                m_ShowNewModel = false;
+                m_Ctx.RequestOpenModel = h;
+            }
+        }
     }
 
     namespace
@@ -1262,7 +1419,7 @@ namespace Editor
                 options.Selection.clear();
                 options.Selected = Entity::Null();
             }
-            options.DefaultLight = m_Ctx.InPrefabMode();
+            options.DefaultLight = m_Ctx.InStage();
             DIM_PROFILE_SCOPE("Scene View");
             options.ShowNavMeshes = m_ShowNavigation;
             options.DrawMode = m_DrawMode;
@@ -1782,7 +1939,7 @@ namespace Editor
         ImGui::SetNextItemWidth(220.0f);
         ImGui::InputTextWithHint("##templateAbout", "Description", &m_TemplateDescription);
         ImGui::SameLine();
-        ImGui::BeginDisabled(m_TemplateName.find_first_not_of(' ') == std::string::npos || m_Ctx.IsPlaying() || m_Ctx.InPrefabMode());
+        ImGui::BeginDisabled(m_TemplateName.find_first_not_of(' ') == std::string::npos || m_Ctx.IsPlaying() || m_Ctx.InStage());
         if (ImGui::Button("Save Open Scene as Template"))
         {
             if (SceneTemplates::SaveAsTemplate(*m_Ctx.EditorScene, m_TemplateName, m_TemplateDescription).IsValid())
@@ -2039,6 +2196,7 @@ namespace Editor
         std::vector<EditorCommand> out;
         auto add = [&](std::string name, std::function<void()> run) { out.push_back({ std::move(name), std::move(run) }); };
         add("File/New Scene...", [this] { m_ShowNewScene = true; });
+        add("File/New Model...", [this] { m_ShowNewModel = true; });
         for (const fs::path& p : RecentScenes::List())
             add("File/Open Recent/" + p.filename().string(), [this, p] { if (ConfirmDiscardChanges()) OpenScene(p); });
         add("File/Open Scene...", [this] { OpenSceneWithDialog(); });
@@ -2784,6 +2942,7 @@ namespace Editor
         if (m_ShowLighting) DrawLightingWindow();
         if (m_ShowShortcuts) DrawShortcutsWindow();
         if (m_ShowNewScene) DrawNewSceneWindow();
+        if (m_ShowNewModel) DrawNewModelWindow();
         if (m_ShowHub) DrawProjectHub();
         if (m_ShowUndoHistory) DrawUndoHistory();
         else m_RebindingShortcut = -1;
@@ -2911,6 +3070,7 @@ namespace Editor
         if (ImGui::BeginMenu("File"))
         {
             if (ImGui::MenuItem("New Scene...", Shortcuts::Label("file.new").c_str())) m_ShowNewScene = true;
+            if (ImGui::MenuItem("New Model...", nullptr, false, !m_Ctx.IsPlaying())) m_ShowNewModel = true;
             if (ImGui::MenuItem("Open Scene...", Shortcuts::Label("file.open").c_str())) OpenSceneWithDialog();
             // The project's last opened scenes (newest first).
             if (ImGui::BeginMenu("Open Recent"))
@@ -2928,7 +3088,7 @@ namespace Editor
                 if (ImGui::MenuItem("Clear Recent", nullptr, false, !recent.empty())) RecentScenes::Clear();
                 ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Open Scene Additive...", nullptr, false, !m_Ctx.IsPlaying() && !m_Ctx.InPrefabMode()))
+            if (ImGui::MenuItem("Open Scene Additive...", nullptr, false, !m_Ctx.IsPlaying() && !m_Ctx.InStage()))
                 if (auto p = FileDialogs::OpenFile({ { L"Scene", L"*.scene" } }, AssetManager::GetAssetsDirectory())) OpenSceneAdditive(*p);
             if (ImGui::MenuItem("Save", Shortcuts::Label("file.save").c_str(), false, !m_Ctx.IsPlaying())) SaveScene();
             if (ImGui::MenuItem("Save As...", Shortcuts::Label("file.saveAs").c_str(), false, !m_Ctx.IsPlaying())) SaveSceneAs();
@@ -3229,6 +3389,7 @@ namespace Editor
             // Right side: compile status + scene name
             std::string label = m_Ctx.EditorScene->GetName() + (m_Ctx.Dirty ? "*" : "");
             if (m_Ctx.InPrefabMode()) label = "Prefab Mode: " + label;
+            if (m_Ctx.InModelMode()) label = "Model Mode: " + label;
             if (m_BuildState && m_BuildState->load() == 1) label = "Compiling scripts...   " + label;
             else if (m_CSharpBuild && m_CSharpBuild->load() == 1) label = "Compiling C#...   " + label;
             else if (m_ReloadPending) label = "Scripts changed: reload after Stop   " + label;
@@ -3259,6 +3420,7 @@ namespace Editor
         }
         m_SceneViewFocused = ImGui::IsWindowFocused();
         if (m_Ctx.InPrefabMode()) DrawPrefabModeBar();
+        if (m_Ctx.InModelMode()) DrawModelModeBar();
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
         m_SceneViewSize = { (uint32_t)std::max(1.0f, avail.x), (uint32_t)std::max(1.0f, avail.y) };
@@ -5089,7 +5251,7 @@ namespace Editor
     void EditorLayer::Autosave(float dt)
     {
         float minutes = EditorPreferences::Get().AutosaveMinutes;
-        if (minutes <= 0.0f || m_Ctx.IsPlaying() || !m_Ctx.Dirty || m_Ctx.InPrefabMode()) return;
+        if (minutes <= 0.0f || m_Ctx.IsPlaying() || !m_Ctx.Dirty || m_Ctx.InStage()) return;
         m_AutosaveTimer += dt;
         if (m_AutosaveTimer < minutes * 60.0f) return;
         m_AutosaveTimer = 0.0f;

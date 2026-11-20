@@ -628,7 +628,8 @@ namespace Dimension
                 if (ok)
                 {
                     RegisterMeshMaterials(handle, *meta, data);
-                    mesh = MakeRef<Mesh>(std::move(data));
+                    // (a model with nothing to draw yet, such as a new empty one, has no GPU mesh)
+                    if (!data.Vertices.empty() && !data.Indices.empty()) mesh = MakeRef<Mesh>(std::move(data));
                 }
             }
         }
@@ -673,7 +674,8 @@ namespace Dimension
         if (meta && (it == s->MeshMaterialNames.end() || it->second != names)) RegisterMeshMaterials(handle, *meta, data);
         auto shared = std::make_shared<const MeshData>(std::move(data));
         s->MeshDatas[handle] = shared;
-        s->Meshes[handle] = MakeRef<Mesh>(MeshData(*shared));
+        // (nothing to draw, e.g. every face of a model deleted: no GPU mesh)
+        s->Meshes[handle] = shared->Vertices.empty() || shared->Indices.empty() ? nullptr : MakeRef<Mesh>(MeshData(*shared));
     }
 
     AssetHandle AssetManager::RegisterRuntimeMesh(MeshData data, std::vector<AssetHandle> materials)

@@ -177,11 +177,26 @@ namespace Editor
 
     void EditorContext::EnterPrefabMode(AssetHandle prefab, Ref<Scene> stageScene)
     {
+        EnterStage(prefab, AssetHandle::None(), std::move(stageScene));
+    }
+
+    void EditorContext::EnterModelMode(AssetHandle model, Ref<Scene> stageScene)
+    {
+        EnterStage(AssetHandle::None(), model, std::move(stageScene));
+    }
+
+    void EditorContext::ExitPrefabMode()
+    {
+        ExitStage();
+    }
+
+    void EditorContext::EnterStage(AssetHandle prefab, AssetHandle model, Ref<Scene> stageScene)
+    {
         Snapshot selection = { {}, HasValidSelection() ? (uint64_t)EditorScene->GetGuid(Selected) : 0, {} };
         for (Entity e : Selection)
             if (EditorScene->IsValid(e)) selection.SelectionGuids.push_back(EditorScene->GetGuid(e));
         m_Stage = PrefabStage{ prefab, EditorScene, EditorScene->GetName(), ScenePath, Dirty,
-                               std::move(m_UndoStack), std::move(m_RedoStack), selection.SelectionGuids, selection.SelectedGuid };
+                               std::move(m_UndoStack), std::move(m_RedoStack), selection.SelectionGuids, selection.SelectedGuid, model };
         EditorScene = std::move(stageScene);
         ScenePath.clear();
         Dirty = false;
@@ -189,7 +204,7 @@ namespace Editor
         Select(Entity::Null());
     }
 
-    void EditorContext::ExitPrefabMode()
+    void EditorContext::ExitStage()
     {
         if (!m_Stage) return;
         PrefabStage stage = std::move(*m_Stage);

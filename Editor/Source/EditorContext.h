@@ -195,12 +195,22 @@ namespace Editor
 
         // Prefab Mode: EditorScene is the prefab alone; the scene being edited (with its path, dirty flag,
         // undo history and selection) waits in the stage and comes back on exit.
-        bool InPrefabMode() const { return m_Stage.has_value(); }
+        bool InPrefabMode() const { return m_Stage.has_value() && m_Stage->Prefab.IsValid(); }
         AssetHandle PrefabModeAsset() const { return m_Stage ? m_Stage->Prefab : AssetHandle::None(); }
         const std::string& PrefabModeSceneName() const { return m_Stage->SceneName; }
         void EnterPrefabMode(AssetHandle prefab, Ref<Scene> stageScene);
         void ExitPrefabMode();
         bool PrefabAutoSave = true;
+        // Model Mode: EditorScene is a stage holding one model (a .dmodel asset) alone, modeled there in Edit Mode
+        // without a scene object of its own; the scene waits in the stage as in Prefab Mode.
+        bool InModelMode() const { return m_Stage.has_value() && m_Stage->Model.IsValid(); }
+        AssetHandle ModelModeAsset() const { return m_Stage ? m_Stage->Model : AssetHandle::None(); }
+        void EnterModelMode(AssetHandle model, Ref<Scene> stageScene);
+        // Prefab Mode or Model Mode: the scene being edited is put aside.
+        bool InStage() const { return m_Stage.has_value(); }
+        const std::string& StageSceneName() const { return m_Stage->SceneName; }
+        void ExitStage();
+        std::optional<AssetHandle> RequestOpenModel; // Model Mode on this model (handled by the EditorLayer)
 
         // Terrain brush (Inspector picks it, the Scene view paints with it): 0 = off, else Terrain::BrushMode + 1.
         int TerrainTool = 0;
@@ -254,7 +264,9 @@ namespace Editor
             std::deque<Snapshot> UndoStack, RedoStack;
             std::vector<uint64_t> SelectionGuids;
             uint64_t SelectedGuid;
+            AssetHandle Model = AssetHandle::None(); // Model Mode (Prefab is None then)
         };
         std::optional<PrefabStage> m_Stage;
+        void EnterStage(AssetHandle prefab, AssetHandle model, Ref<Scene> stageScene);
     };
 }
