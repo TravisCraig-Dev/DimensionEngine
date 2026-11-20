@@ -6,6 +6,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 
 namespace Dimension::Modeling
@@ -185,6 +186,20 @@ namespace Dimension::Modeling
         int Resolution = 4;       // segments per outline curve
     };
 
+    // How a bone's channels go from a key to the bone's next key (the Graph Editor's interpolation).
+    enum class KeyInterp : uint8_t { Linear = 0, Constant = 1, Bezier = 2 };
+    // A bone's channels in the Graph Editor: location X Y Z, rotation X Y Z (Euler XYZ, radians), scale X Y Z.
+    constexpr int kBoneChannels = 9;
+    // A key's curve settings for one bone: its interpolation onwards and its Bezier handles, as slopes (value per
+    // second) arriving and leaving; channels whose Free bit is clear use automatic (clamped) handles.
+    struct KeyCurve
+    {
+        KeyInterp Interp = KeyInterp::Linear;
+        uint16_t Free = 0;
+        std::array<float, kBoneChannels> SlopeIn{}, SlopeOut{};
+        bool IsDefault() const { return Interp == KeyInterp::Linear && Free == 0; }
+    };
+
     // An action (an animation of the armature, played as a clip of the model by its name): poses keyed at times.
     struct ActionKey
     {
@@ -193,7 +208,18 @@ namespace Dimension::Modeling
         std::vector<glm::vec3> Locations, Scales;
         std::vector<uint8_t> Keyed;       // per bone: this key holds its pose (empty: every bone's)
         std::vector<float> Shapes;        // per shape key: its value (empty: shape keys not keyed here)
+        std::vector<KeyCurve> Curves;     // per bone (empty, or shorter: linear with automatic handles)
         bool HasBone(size_t b) const { return b < Rotations.size() && (Keyed.empty() || (b < Keyed.size() && Keyed[b])); }
+        const KeyCurve& CurveOf(size_t b) const
+        {
+            static const KeyCurve none;
+            return b < Curves.size() ? Curves[b] : none;
+        }
+        KeyCurve& EditCurve(size_t b)
+        {
+            if (Curves.size() <= b) Curves.resize(std::max(Rotations.size(), b + 1));
+            return Curves[b];
+        }
     };
     struct Action
     {

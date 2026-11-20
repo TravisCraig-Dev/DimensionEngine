@@ -646,7 +646,8 @@ namespace Editor
             SyncRigPreview();
         }
         DrawBoneOverlay(dl);
-        if (m_RigMode == 2 && m_ShowDopeSheet) DrawDopeSheet(dl);
+        if (m_RigMode == 2 && m_ShowGraph) DrawGraphEditor(dl);
+        else if (m_RigMode == 2 && m_ShowDopeSheet) DrawDopeSheet(dl);
         ImVec2 cursor = ImGui::GetCursorScreenPos();
         DrawRigToolbar(m_Origin);
         ImGui::SetCursorScreenPos(cursor);
@@ -907,6 +908,12 @@ namespace Editor
             ImGui::SameLine();
             ImGui::Checkbox("Dope Sheet", &m_ShowDopeSheet);
             ImGui::SameLine();
+            ImGui::Checkbox("Graph", &m_ShowGraph);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The Graph Editor: the selected bones' location, rotation and scale as curves (drag keys and handles; "
+                                  "%s interpolation, %s handle type)",
+                                  Shortcuts::Label("rig.interpolation").c_str(), Shortcuts::Label("rig.handleType").c_str());
+            ImGui::SameLine();
             if (ImGui::Button("Rest Pose"))
                 RigOperate("Clear Pose", [&] {
                     m_ActionPlaying = false;
@@ -1049,6 +1056,327 @@ namespace Editor
         {
             RigOperate("Delete Keyframe", [&] { rig::DeleteKey(m_Mesh, m_Action, m_SelectedKey); });
             m_SelectedKey = -1.0f;
+        }
+    }
+
+    // ---- The Graph Editor: curves of the selected bones' channels (drag key points and handles, click to scrub)
+
+    void MeshEditMode::DrawGraphEditor(ImDrawList* dl)
+    {
+        if (m_Action < 0 || m_Action >= (int)m_Mesh.Actions.size()) return;
+        Action& action = m_Mesh.Actions[(size_t)m_Action];
+        static const ImU32 kAxis[3] = { IM_COL32(240, 90, 90, 255), IM_COL32(110, 210, 90, 255), IM_COL32(90, 150, 250, 255) };
+        // Channels: each selected bone (up to 4) that the action keys, its nine channels.
+        struct Row
+        {
+            int Bone, Channel;
+        };
+        std::vector<Row> rows;
+        std::vector<int> bones;
+        for (size_t b = 0; b < m_Mesh.Bones.size() && bones.size() < 4; ++b)
+        {
+            if (!(m_Mesh.Bones[b].Flags & BoneBody)) continue;
+            bool keyed = false;
+            for (const ActionKey& k : action.Keys) keyed |= k.HasBone(b);
+            if (!keyed) continue;
+            bones.push_back((int)b);
+            for (int c = 0; c < kBoneChannels; ++c) rows.push_back({ (int)b, c });
+        }
+        auto hidden = [&](int b, int c) {
+            return std::find(m_GraphHidden.begin(), m_GraphHidden.end(), ((uint32_t)b << 8) | (uint32_t)c) != m_GraphHidden.end();
+        };
+        // Rotations show in degrees.
+        auto shown = [](int c, float v) { return c >= 3 && c < 6 ? glm::degrees(v) : v; };
+        auto stored = [](int c, float v) { return c >= 3 && c < 6 ? glm::radians(v) : v; };
+
+        float height = std::clamp(m_Size.y * 0.42f, 160.0f, 420.0f);
+        ImVec2 mn(m_Origin.x + 8.0f, m_Origin.y + m_Size.y - 32.0f - height), mx(m_Origin.x + m_Size.x - 8.0f, m_Origin.y + m_Size.y - 32.0f);
+        const float listW = 150.0f;
+        float end = std::max(action.Duration() + 0.5f, 1.0f);
+        float x0 = mn.x + listW + 10.0f, x1 = mx.x - 10.0f, y0 = mn.y + 20.0f, y1 = mx.y - 8.0f;
+        auto toX = [&](float t) { return x0 + (x1 - x0) * t / end; };
+        auto toTime = [&](float x) { return std::clamp((x - x0) / (x1 - x0) * end, 0.0f, end); };
+        dl->AddRectFilled(mn, mx, IM_COL32(25, 25, 28, 225), 4.0f);
+        ImVec2 cursor = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(mn);
+        ImGui::SetNextItemAllowOverlap(); // (the value field drawn over it stays usable)
+        ImGui::InvisibleButton("##graph", ImVec2(mx.x - mn.x, mx.y - mn.y));
+        bool hovered = ImGui::IsItemHovered() || ImGui::IsItemActive();
+        ImGui::SetCursorScreenPos(cursor);
+        ImVec2 mouse = ImGui::GetIO().MousePos;
+        if (rows.empty())
+        {
+            dl->AddText(ImVec2(mn.x + 10.0f, mn.y + 10.0f), IM_COL32(200, 200, 200, 200), "Select keyed bones to see their curves");
+            return;
+        }
+
+        // The value range: fitted to the visible curves (held while dragging, so the view doesn't run away).
+        const int samples = std::max(16, (int)((x1 - x0) / 4.0f));
+        std::vector<std::vector<float>> curves(rows.size());
+        float lo = 1e30f, hi = -1e30f;
+        for (size_t r = 0; r < rows.size(); ++r)
+        {
+            if (hidden(rows[r].Bone, rows[r].Channel)) continue;
+            curves[r].resize((size_t)samples + 1);
+            for (int i = 0; i <= samples; ++i)
+            {
+                float v = shown(rows[r].Channel, rig::ChannelValue(action, (size_t)rows[r].Bone, rows[r].Channel, end * (float)i / (float)samples));
+                curves[r][(size_t)i] = v;
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+            }
+        }
+        if (!m_GraphDrag)
+        {
+            if (lo > hi) lo = -1.0f, hi = 1.0f;
+            float pad = std::max((hi - lo) * 0.1f, 0.05f);
+            m_GraphLo = lo - pad;
+            m_GraphHi = hi + pad;
+        }
+        auto toY = [&](float v) { return y1 - (y1 - y0) * (v - m_GraphLo) / std::max(m_GraphHi - m_GraphLo, 1e-6f); };
+        auto toValue = [&](float y) { return m_GraphLo + (y1 - y) / (y1 - y0) * (m_GraphHi - m_GraphLo); };
+
+        // Grid: time across, values up.
+        for (float t = 0.0f; t <= end + 1e-4f; t += end > 4.0f ? 1.0f : 0.25f)
+        {
+            float x = toX(t);
+            dl->AddLine(ImVec2(x, mn.y + 2.0f), ImVec2(x, y1), IM_COL32(255, 255, 255, 22));
+            char label[16];
+            std::snprintf(label, sizeof(label), "%.2g", t);
+            dl->AddText(ImVec2(x + 2.0f, mn.y + 2.0f), IM_COL32(200, 200, 200, 150), label);
+        }
+        float range = m_GraphHi - m_GraphLo, step = std::pow(10.0f, std::floor(std::log10(std::max(range, 1e-6f) / 4.0f)));
+        if (range / step > 10.0f) step *= range / step > 20.0f ? 5.0f : 2.0f;
+        for (float v = std::ceil(m_GraphLo / step) * step; v <= m_GraphHi; v += step)
+        {
+            float y = toY(v);
+            dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), std::abs(v) < step * 0.01f ? IM_COL32(255, 255, 255, 60) : IM_COL32(255, 255, 255, 18));
+            char label[24];
+            std::snprintf(label, sizeof(label), "%.3g", std::abs(v) < step * 0.01f ? 0.0f : v);
+            dl->AddText(ImVec2(x0 - 2.0f - ImGui::CalcTextSize(label).x, y - 7.0f), IM_COL32(200, 200, 200, 120), label);
+        }
+
+        // The channel list (click a channel to show or hide it).
+        float rowH = std::min(15.0f, (mx.y - mn.y - 8.0f) / (float)(rows.size() + bones.size()));
+        float ly = mn.y + 4.0f;
+        int lastBone = -1;
+        for (const Row& r : rows)
+        {
+            if (r.Bone != lastBone)
+            {
+                dl->AddText(ImVec2(mn.x + 6.0f, ly), IM_COL32(230, 230, 230, 230), m_Mesh.Bones[(size_t)r.Bone].Name.c_str());
+                ly += rowH;
+                lastBone = r.Bone;
+            }
+            bool off = hidden(r.Bone, r.Channel);
+            ImU32 col = kAxis[r.Channel % 3];
+            dl->AddCircleFilled(ImVec2(mn.x + 16.0f, ly + rowH * 0.5f), 3.5f, off ? IM_COL32(90, 90, 90, 255) : col);
+            dl->AddText(ImVec2(mn.x + 24.0f, ly + rowH * 0.5f - 7.0f), off ? IM_COL32(120, 120, 120, 200) : IM_COL32(210, 210, 210, 220), rig::ChannelName(r.Channel));
+            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse.x < mn.x + listW && mouse.y >= ly && mouse.y < ly + rowH)
+            {
+                uint32_t id = ((uint32_t)r.Bone << 8) | (uint32_t)r.Channel;
+                auto it = std::find(m_GraphHidden.begin(), m_GraphHidden.end(), id);
+                if (it == m_GraphHidden.end()) m_GraphHidden.push_back(id);
+                else m_GraphHidden.erase(it);
+            }
+            ly += rowH;
+        }
+        dl->AddLine(ImVec2(mn.x + listW, mn.y + 4.0f), ImVec2(mn.x + listW, mx.y - 4.0f), IM_COL32(255, 255, 255, 40));
+
+        // Curves, key points, the selected point's handles.
+        dl->PushClipRect(ImVec2(x0 - 6.0f, mn.y), ImVec2(mx.x, mx.y), true);
+        struct Hit
+        {
+            int Row = -1, Key = -1, Part = 0; // part: 1 point, 2 handle in, 3 handle out
+            float Dist = 1e30f;
+        } hit;
+        auto consider = [&](int row, int key, int part, ImVec2 p) {
+            float d = std::sqrt((mouse.x - p.x) * (mouse.x - p.x) + (mouse.y - p.y) * (mouse.y - p.y));
+            if (d < 7.0f && d < hit.Dist) hit = { row, key, part, d };
+        };
+        for (size_t r = 0; r < rows.size(); ++r)
+        {
+            if (curves[r].empty()) continue;
+            int b = rows[r].Bone, c = rows[r].Channel;
+            ImU32 col = kAxis[c % 3];
+            if (c >= 3 && c < 6) col = (col & 0x00FFFFFFu) | 0xD0000000u; // (rotation a little fainter, then scale)
+            if (c >= 6) col = (col & 0x00FFFFFFu) | 0x90000000u;
+            for (int i = 1; i <= samples; ++i)
+                dl->AddLine(ImVec2(toX(end * (float)(i - 1) / (float)samples), toY(curves[r][(size_t)i - 1])),
+                            ImVec2(toX(end * (float)i / (float)samples), toY(curves[r][(size_t)i])), col, 1.5f);
+            rig::BoneTrack track = rig::TrackOf(action, (size_t)b);
+            for (size_t i = 0; i < track.Keys.size(); ++i)
+            {
+                float v = shown(c, track.Values[i][(size_t)c]);
+                ImVec2 p(toX(track.Times[i]), toY(v));
+                bool sel = m_GraphBone == b && m_GraphChannel == c && m_GraphKey == (int)track.Keys[i];
+                dl->AddCircleFilled(p, sel ? 4.5f : 3.5f, sel ? IM_COL32(255, 200, 80, 255) : IM_COL32(230, 230, 230, 240));
+                consider((int)r, (int)track.Keys[i], 1, p);
+                if (!sel) continue;
+                // Handles: a third of the way to the neighbouring keys, along the curve's slope there (Bezier sides).
+                float in, out;
+                rig::KeySlopes(action, track, (size_t)b, i, c, in, out);
+                bool free = (action.Keys[track.Keys[i]].CurveOf((size_t)b).Free >> c) & 1;
+                ImU32 hcol = free ? IM_COL32(255, 160, 220, 230) : IM_COL32(200, 200, 200, 200);
+                if (i > 0 && action.Keys[track.Keys[i - 1]].CurveOf((size_t)b).Interp == KeyInterp::Bezier)
+                {
+                    float dt = (track.Times[i] - track.Times[i - 1]) / 3.0f;
+                    ImVec2 h(toX(track.Times[i] - dt), toY(shown(c, track.Values[i][(size_t)c] - in * dt)));
+                    dl->AddLine(p, h, hcol, 1.0f);
+                    dl->AddCircle(h, 3.5f, hcol, 0, 1.5f);
+                    consider((int)r, (int)track.Keys[i], 2, h);
+                }
+                if (i + 1 < track.Keys.size() && action.Keys[track.Keys[i]].CurveOf((size_t)b).Interp == KeyInterp::Bezier)
+                {
+                    float dt = (track.Times[i + 1] - track.Times[i]) / 3.0f;
+                    ImVec2 h(toX(track.Times[i] + dt), toY(shown(c, track.Values[i][(size_t)c] + out * dt)));
+                    dl->AddLine(p, h, hcol, 1.0f);
+                    dl->AddCircle(h, 3.5f, hcol, 0, 1.5f);
+                    consider((int)r, (int)track.Keys[i], 3, h);
+                }
+            }
+        }
+        float px = toX(m_ActionTime);
+        dl->AddLine(ImVec2(px, mn.y), ImVec2(px, y1), IM_COL32(80, 160, 255, 255), 2.0f);
+        dl->PopClipRect();
+
+        auto refresh = [&] {
+            m_Dirty = true;
+            rig::EvaluateAction(m_Mesh, m_Action, m_ActionTime);
+            rig::ApplyConstraints(m_Mesh);
+            SyncRigPreview();
+        };
+        // Clicks: a point or handle selects it and starts dragging it; elsewhere in the graph moves the playhead.
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse.x >= mn.x + listW)
+        {
+            if (hit.Row >= 0)
+            {
+                m_GraphBone = rows[(size_t)hit.Row].Bone;
+                m_GraphChannel = rows[(size_t)hit.Row].Channel;
+                m_GraphKey = hit.Key;
+                m_SelectedKey = action.Keys[(size_t)hit.Key].Time;
+                m_GraphDrag = hit.Part;
+                m_GraphDragMouse = mouse;
+                Record(hit.Part == 1 ? "Move Key Value" : "Move Handle");
+            }
+            else
+            {
+                m_ActionPlaying = false;
+                m_ActionTime = toTime(mouse.x);
+                refresh();
+            }
+        }
+        bool valid = m_GraphKey >= 0 && m_GraphKey < (int)action.Keys.size() && m_GraphBone >= 0 && m_GraphBone < (int)m_Mesh.Bones.size() &&
+                     action.Keys[(size_t)m_GraphKey].HasBone((size_t)m_GraphBone);
+        if (m_GraphDrag && valid && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            size_t key = (size_t)m_GraphKey, bone = (size_t)m_GraphBone;
+            if (m_GraphDrag == 1)
+                rig::SetChannelValue(m_Mesh, m_Action, key, bone, m_GraphChannel, stored(m_GraphChannel, toValue(mouse.y)));
+            else
+            {
+                // The handle through the mouse: its slope (the other side turns with it, aligned).
+                rig::BoneTrack track = rig::TrackOf(action, bone);
+                size_t i = 0;
+                while (i < track.Keys.size() && track.Keys[i] != key) ++i;
+                if (i < track.Keys.size())
+                {
+                    float dt = toTime(mouse.x) - track.Times[i];
+                    if (m_GraphDrag == 2) dt = std::min(dt, -1e-3f);
+                    else dt = std::max(dt, 1e-3f);
+                    float slope = (stored(m_GraphChannel, toValue(mouse.y)) - track.Values[i][(size_t)m_GraphChannel]) / dt;
+                    rig::SetHandles(m_Mesh, m_Action, key, bone, m_GraphChannel, slope, slope);
+                }
+            }
+            refresh();
+        }
+        else if (m_GraphDrag)
+        {
+            // Released: a key point dragged sideways moves the whole key to that time.
+            if (m_GraphDrag == 1 && valid && std::abs(mouse.x - m_GraphDragMouse.x) > 4.0f)
+            {
+                float from = action.Keys[(size_t)m_GraphKey].Time, to = std::round(toTime(mouse.x) * 100.0f) / 100.0f;
+                if (std::abs(to - from) > 1e-4f && rig::MoveKey(m_Mesh, m_Action, from, to))
+                {
+                    m_SelectedKey = to;
+                    m_GraphKey = -1;
+                    for (size_t k = 0; k < action.Keys.size(); ++k)
+                        if (std::abs(action.Keys[k].Time - to) < 1e-4f) m_GraphKey = (int)k;
+                    refresh();
+                }
+            }
+            m_GraphDrag = 0;
+        }
+
+        // Keys over the graph: T interpolation, V handle type, Delete/X the key.
+        if (hovered && valid && !m_GraphDrag)
+        {
+            if (Shortcuts::Pressed("rig.interpolation")) ImGui::OpenPopup("GraphInterp");
+            if (Shortcuts::Pressed("rig.handleType")) ImGui::OpenPopup("GraphHandles");
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_X))
+            {
+                RigOperate("Delete Keyframe", [&] { rig::DeleteKey(m_Mesh, m_Action, action.Keys[(size_t)m_GraphKey].Time); });
+                m_GraphKey = -1;
+                m_SelectedKey = -1.0f;
+                return;
+            }
+        }
+        if (hovered && valid && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("GraphInterp");
+        if (ImGui::BeginPopup("GraphInterp"))
+        {
+            ImGui::TextDisabled("Interpolation (%s, to the next key)", m_Mesh.Bones[(size_t)std::max(m_GraphBone, 0)].Name.c_str());
+            const char* names[] = { "Linear", "Constant", "Bezier" };
+            for (int i = 0; i < 3; ++i)
+                if (ImGui::MenuItem(names[i]) && valid)
+                    RigOperate("Interpolation Mode", [&] { rig::SetInterpolation(m_Mesh, m_Action, (size_t)m_GraphKey, (size_t)m_GraphBone, (KeyInterp)i); });
+            ImGui::Separator();
+            if (ImGui::MenuItem("Bezier: Every Key of the Bone") && valid)
+                RigOperate("Interpolation Mode", [&] {
+                    for (size_t k = 0; k < action.Keys.size(); ++k)
+                        rig::SetInterpolation(m_Mesh, m_Action, k, (size_t)m_GraphBone, KeyInterp::Bezier);
+                });
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopup("GraphHandles"))
+        {
+            ImGui::TextDisabled("Handles (%s)", rig::ChannelName(std::max(m_GraphChannel, 0)));
+            if (ImGui::MenuItem("Auto Clamped") && valid)
+                RigOperate("Handle Type", [&] { rig::SetAutoHandles(m_Mesh, m_Action, (size_t)m_GraphKey, (size_t)m_GraphBone, m_GraphChannel); });
+            if (ImGui::MenuItem("Flat") && valid)
+                RigOperate("Handle Type", [&] { rig::SetHandles(m_Mesh, m_Action, (size_t)m_GraphKey, (size_t)m_GraphBone, m_GraphChannel, 0.0f, 0.0f); });
+            ImGui::EndPopup();
+        }
+        // The selected key's value, typed in.
+        if (valid)
+        {
+            const ActionKey& k = action.Keys[(size_t)m_GraphKey];
+            rig::BoneTrack track = rig::TrackOf(action, (size_t)m_GraphBone);
+            size_t i = 0;
+            while (i < track.Keys.size() && track.Keys[i] != (size_t)m_GraphKey) ++i;
+            if (i < track.Keys.size())
+            {
+                static const char* interpNames[] = { "linear", "constant", "bezier" };
+                char info[160];
+                std::snprintf(info, sizeof(info), "%s %s at %.2f s:", m_Mesh.Bones[(size_t)m_GraphBone].Name.c_str(), rig::ChannelName(m_GraphChannel), k.Time);
+                ImVec2 infoSize = ImGui::CalcTextSize(info);
+                dl->AddRectFilled(ImVec2(x0, y1 - 40.0f), ImVec2(x0 + infoSize.x + 190.0f, y1 - 14.0f), IM_COL32(20, 20, 22, 235), 3.0f);
+                dl->AddText(ImVec2(x0 + 4.0f, y1 - 34.0f), IM_COL32(230, 230, 230, 230), info);
+                ImVec2 save = ImGui::GetCursorScreenPos();
+                ImGui::SetCursorScreenPos(ImVec2(x0 + 8.0f + ImGui::CalcTextSize(info).x, y1 - 37.0f));
+                float v = shown(m_GraphChannel, track.Values[i][(size_t)m_GraphChannel]);
+                ImGui::SetNextItemWidth(90.0f);
+                if (ImGui::DragFloat("##graphvalue", &v, m_GraphChannel >= 3 && m_GraphChannel < 6 ? 0.5f : 0.01f))
+                {
+                    if (ImGui::IsItemActivated()) Record("Key Value");
+                    rig::SetChannelValue(m_Mesh, m_Action, (size_t)m_GraphKey, (size_t)m_GraphBone, m_GraphChannel, stored(m_GraphChannel, v));
+                    refresh();
+                }
+                else if (ImGui::IsItemActivated())
+                    Record("Key Value");
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", interpNames[(int)k.CurveOf((size_t)m_GraphBone).Interp]);
+                ImGui::SetCursorScreenPos(save);
+            }
         }
     }
 

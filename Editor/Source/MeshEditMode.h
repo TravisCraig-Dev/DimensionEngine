@@ -498,6 +498,14 @@ namespace Editor
         float m_SelectedKey = -1.0f;   // the dope sheet's selected key (its time), -1 none
         float m_DragKeyFrom = -1.0f;   // a key being dragged (its time when the drag began)
         void DrawDopeSheet(ImDrawList* dl);
+        // The Graph Editor: the selected bones' channels as curves over the action (MeshEditRig.cpp).
+        void DrawGraphEditor(ImDrawList* dl);
+        bool m_ShowGraph = false;
+        std::vector<uint32_t> m_GraphHidden; // (bone << 8 | channel) hidden
+        int m_GraphBone = -1, m_GraphChannel = -1, m_GraphKey = -1; // the selected key point (key: index into the action)
+        int m_GraphDrag = 0;                 // 1 a key point, 2 its incoming handle, 3 its outgoing one
+        ImVec2 m_GraphDragMouse{ 0, 0 };
+        float m_GraphLo = -1.0f, m_GraphHi = 1.0f; // the value range shown (kept while dragging)
         // Curves, text and retopology.
         struct CurveModal
         {

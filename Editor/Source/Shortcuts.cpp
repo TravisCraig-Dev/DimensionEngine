@@ -170,6 +170,8 @@ namespace Editor::Shortcuts
                 { "rig.clearLocation", "Rig", "Clear Pose Location", ImGuiMod_Alt | ImGuiKey_G },
                 { "rig.clearScale", "Rig", "Clear Pose Scale", ImGuiMod_Alt | ImGuiKey_S },
                 { "rig.insertKey", "Rig", "Insert Keyframe", ImGuiKey_I },
+                { "rig.interpolation", "Rig", "Graph: Interpolation Mode", ImGuiKey_T },
+                { "rig.handleType", "Rig", "Graph: Handle Type", ImGuiKey_V },
                 { "rig.autoWeights", "Rig", "Automatic Weights", 0 },
                 { "rig.envelopeWeights", "Rig", "Envelope Weights", 0 },
                 { "rig.boneMode", "Rig", "Bones", 0 },

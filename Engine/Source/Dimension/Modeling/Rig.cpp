@@ -447,6 +447,7 @@ namespace Dimension::Modeling::Rig
                     k.Locations.push_back(glm::vec3(0.0f));
                     k.Scales.push_back(glm::vec3(1.0f));
                     if (!k.Keyed.empty()) k.Keyed.push_back(0);
+                    if (!k.Curves.empty()) k.Curves.resize(k.Rotations.size());
                 }
         return index;
     }
@@ -501,6 +502,7 @@ namespace Dimension::Modeling::Rig
                         out.Locations.push_back(k.Locations[b]);
                         out.Scales.push_back(k.Scales[b]);
                         if (!k.Keyed.empty()) out.Keyed.push_back(b < k.Keyed.size() ? k.Keyed[b] : 0);
+                        if (!k.Curves.empty()) out.Curves.push_back(k.CurveOf(b));
                     }
                 k = std::move(out);
             }
@@ -1018,6 +1020,7 @@ namespace Dimension::Modeling::Rig
                     o.Locations[b] = moved.Locations[b];
                     o.Scales[b] = moved.Scales[b];
                     o.Keyed[b] = 1;
+                    if (b < moved.Curves.size()) o.EditCurve(b) = moved.Curves[b];
                 }
             if (!moved.Shapes.empty()) o.Shapes = moved.Shapes;
             if (std::all_of(o.Keyed.begin(), o.Keyed.end(), [](uint8_t k) { return k != 0; })) o.Keyed.clear();
@@ -1045,28 +1048,7 @@ namespace Dimension::Modeling::Rig
             for (size_t b = 0; b < bones.size(); ++b)
             {
                 Bone& bone = bones[b];
-                int lo = -1, hi = -1;
-                for (int k = 0; k < (int)keys.size(); ++k)
-                {
-                    if (!keys[(size_t)k].HasBone(b)) continue;
-                    if (keys[(size_t)k].Time <= time) lo = k;
-                    else if (hi < 0) hi = k;
-                }
-                if (lo < 0 && hi < 0)
-                {
-                    bone.PoseRotation = glm::quat(1, 0, 0, 0);
-                    bone.PoseLocation = glm::vec3(0.0f);
-                    bone.PoseScale = glm::vec3(1.0f);
-                    continue;
-                }
-                if (lo < 0) lo = hi;
-                if (hi < 0) hi = lo;
-                const ActionKey &a = keys[(size_t)lo], &c = keys[(size_t)hi];
-                float span = c.Time - a.Time;
-                float t = span > 1e-6f ? std::clamp((time - a.Time) / span, 0.0f, 1.0f) : 0.0f;
-                bone.PoseRotation = glm::slerp(a.Rotations[b], c.Rotations[b], t);
-                bone.PoseLocation = glm::mix(a.Locations[b], c.Locations[b], t);
-                bone.PoseScale = glm::mix(a.Scales[b], c.Scales[b], t);
+                BonePoseAt(action, b, time, bone.PoseLocation, bone.PoseRotation, bone.PoseScale);
             }
         }
     }
@@ -1110,6 +1092,37 @@ namespace Dimension::Modeling::Rig
             r.Path = AnimationPath::Rotation;
             s.Path = AnimationPath::Scale;
             glm::mat4 rest = RestLocal(m, (int)b);
+            // Curves the clip's linear keys can't follow (Bezier, Constant): sampled at the keys and 30 times a second.
+            bool curved = false;
+            for (const ActionKey& k : action.Keys) curved |= k.HasBone(b) && k.CurveOf(b).Interp != KeyInterp::Linear;
+            if (curved)
+            {
+                BoneTrack track = TrackOf(action, b);
+                std::vector<float> times;
+                for (float x = track.Times.front(); x < track.Times.back(); x += 1.0f / 30.0f) times.push_back(x);
+                times.insert(times.end(), track.Times.begin(), track.Times.end());
+                // (just before each key after a Constant stretch, so the step stays a step)
+                for (size_t i = 0; i + 1 < track.Keys.size(); ++i)
+                    if (action.Keys[track.Keys[i]].CurveOf(b).Interp == KeyInterp::Constant) times.push_back(std::max(track.Times[i], track.Times[i + 1] - 1e-3f));
+                std::sort(times.begin(), times.end());
+                times.erase(std::unique(times.begin(), times.end(), [](float x, float y) { return std::abs(x - y) < 1e-5f; }), times.end());
+                for (float x : times)
+                {
+                    Bone posed = m.Bones[b];
+                    BonePoseAt(action, b, x, posed.PoseLocation, posed.PoseRotation, posed.PoseScale);
+                    glm::vec3 tr, sc;
+                    glm::quat rot;
+                    Decompose(rest * PoseDelta(posed), tr, rot, sc);
+                    for (AnimationChannel* c : { &t, &r, &s }) c->Times.push_back(x);
+                    t.Values.push_back(glm::vec4(tr, 0.0f));
+                    r.Values.push_back(glm::vec4(rot.x, rot.y, rot.z, rot.w));
+                    s.Values.push_back(glm::vec4(sc, 0.0f));
+                }
+                clip.Channels.push_back(std::move(t));
+                clip.Channels.push_back(std::move(r));
+                clip.Channels.push_back(std::move(s));
+                continue;
+            }
             for (const ActionKey& k : action.Keys)
             {
                 if (!k.HasBone(b) && !k.Keyed.empty()) continue; // (keys without this bone: no key for it here)
@@ -1197,6 +1210,249 @@ namespace Dimension::Modeling::Rig
             for (AnimationChannel& c : seg) clip.Channels.push_back(std::move(c));
         }
         return clip;
+    }
+
+    // ---- Graph Editor
+
+    const char* ChannelName(int channel)
+    {
+        static const char* names[] = { "Location X", "Location Y", "Location Z", "Rotation X", "Rotation Y", "Rotation Z", "Scale X", "Scale Y", "Scale Z" };
+        return names[std::clamp(channel, 0, kBoneChannels - 1)];
+    }
+
+    glm::quat EulerToQuat(const glm::vec3& e)
+    {
+        return glm::angleAxis(e.z, glm::vec3(0, 0, 1)) * glm::angleAxis(e.y, glm::vec3(0, 1, 0)) * glm::angleAxis(e.x, glm::vec3(1, 0, 0));
+    }
+
+    glm::vec3 QuatToEuler(const glm::quat& q)
+    {
+        // R = Rz Ry Rx (glm: m[column][row]).
+        glm::mat3 r = glm::mat3_cast(glm::normalize(q));
+        float sy = std::clamp(-r[0][2], -1.0f, 1.0f);
+        float y = std::asin(sy);
+        if (std::abs(sy) < 0.99999f) return glm::vec3(std::atan2(r[1][2], r[2][2]), y, std::atan2(r[0][1], r[0][0]));
+        // Gimbal lock: X and Z turn about the same axis; all of it on X.
+        return glm::vec3(std::atan2(-r[2][1], r[1][1]), y, 0.0f);
+    }
+
+    namespace
+    {
+        // Of the Euler angles giving a turn (the other solution x+pi, pi-y, z+pi, and whole turns), the ones nearest `near`.
+        glm::vec3 NearestEuler(const glm::quat& q, const glm::vec3& near)
+        {
+            glm::vec3 e = QuatToEuler(q);
+            auto wrap = [](float a, float to) {
+                float twoPi = glm::two_pi<float>();
+                return a + twoPi * std::round((to - a) / twoPi);
+            };
+            glm::vec3 alt(e.x + glm::pi<float>(), glm::pi<float>() - e.y, e.z + glm::pi<float>());
+            glm::vec3 c1(wrap(e.x, near.x), wrap(e.y, near.y), wrap(e.z, near.z));
+            glm::vec3 c2(wrap(alt.x, near.x), wrap(alt.y, near.y), wrap(alt.z, near.z));
+            return glm::length(c1 - near) <= glm::length(c2 - near) ? c1 : c2;
+        }
+
+        // The Euler angles along a slerp from `a` (whose angles are `ea`) towards `b`, `s` of the way: followed in small
+        // steps so they change continuously with the turn.
+        glm::vec3 FollowSlerp(const glm::quat& a, glm::vec3 ea, const glm::quat& b, float s)
+        {
+            int steps = std::max(1, (int)std::ceil(24.0f * std::abs(s)));
+            for (int k = 1; k <= steps; ++k) ea = NearestEuler(glm::slerp(a, b, s * (float)k / (float)steps), ea);
+            return ea;
+        }
+
+        std::array<float, kBoneChannels> Channels(const glm::vec3& loc, const glm::vec3& euler, const glm::vec3& scale)
+        {
+            std::array<float, kBoneChannels> v{};
+            for (int c = 0; c < 3; ++c)
+            {
+                v[(size_t)c] = loc[c];
+                v[3 + (size_t)c] = euler[c];
+                v[6 + (size_t)c] = scale[c];
+            }
+            return v;
+        }
+
+        float Hermite(float v0, float m0, float v1, float m1, float h, float s)
+        {
+            float s2 = s * s, s3 = s2 * s;
+            return (2 * s3 - 3 * s2 + 1) * v0 + (s3 - 2 * s2 + s) * h * m0 + (-2 * s3 + 3 * s2) * v1 + (s3 - s2) * h * m1;
+        }
+    }
+
+    BoneTrack TrackOf(const Action& action, size_t bone)
+    {
+        // Each key's Euler angles continue from the key before: along the slerp a linear stretch makes, else the
+        // nearest to the last key's.
+        BoneTrack t;
+        glm::vec3 last(0.0f);
+        const ActionKey* prev = nullptr;
+        for (size_t k = 0; k < action.Keys.size(); ++k)
+        {
+            const ActionKey& key = action.Keys[k];
+            if (!key.HasBone(bone)) continue;
+            glm::vec3 e = !prev ? QuatToEuler(key.Rotations[bone])
+                          : prev->CurveOf(bone).Interp == KeyInterp::Linear ? FollowSlerp(prev->Rotations[bone], last, key.Rotations[bone], 1.0f)
+                                                                            : NearestEuler(key.Rotations[bone], last);
+            last = e;
+            prev = &key;
+            t.Keys.push_back(k);
+            t.Times.push_back(key.Time);
+            t.Values.push_back(Channels(key.Locations[bone], e, key.Scales[bone]));
+        }
+        return t;
+    }
+
+    void KeySlopes(const Action& action, const BoneTrack& t, size_t bone, size_t i, int c, float& in, float& out)
+    {
+        const KeyCurve& kc = action.Keys[t.Keys[i]].CurveOf(bone);
+        if (kc.Free & (1u << c))
+        {
+            in = kc.SlopeIn[(size_t)c];
+            out = kc.SlopeOut[(size_t)c];
+            return;
+        }
+        in = out = 0.0f;
+        size_t n = t.Keys.size();
+        if (i == 0 || i + 1 >= n) return;
+        float a = t.Values[i - 1][(size_t)c], v = t.Values[i][(size_t)c], b = t.Values[i + 1][(size_t)c];
+        if ((v >= a && v >= b) || (v <= a && v <= b)) return; // (a peak or dip stays level: no overshoot)
+        float span = t.Times[i + 1] - t.Times[i - 1];
+        if (span > 1e-6f) in = out = (b - a) / span;
+    }
+
+    void BonePoseAt(const Action& action, size_t b, float time, glm::vec3& location, glm::quat& rotation, glm::vec3& scale)
+    {
+        const auto& keys = action.Keys;
+        int lo = -1, hi = -1;
+        for (int k = 0; k < (int)keys.size(); ++k)
+        {
+            if (!keys[(size_t)k].HasBone(b)) continue;
+            if (keys[(size_t)k].Time <= time) lo = k;
+            else if (hi < 0) hi = k;
+        }
+        if (lo < 0 && hi < 0)
+        {
+            rotation = glm::quat(1, 0, 0, 0);
+            location = glm::vec3(0.0f);
+            scale = glm::vec3(1.0f);
+            return;
+        }
+        if (lo < 0) lo = hi;
+        if (hi < 0) hi = lo;
+        const ActionKey &a = keys[(size_t)lo], &c = keys[(size_t)hi];
+        float span = c.Time - a.Time;
+        float t = span > 1e-6f ? std::clamp((time - a.Time) / span, 0.0f, 1.0f) : 0.0f;
+        KeyInterp interp = lo == hi ? KeyInterp::Constant : a.CurveOf(b).Interp;
+        if (interp == KeyInterp::Constant)
+        {
+            const ActionKey& k = t >= 1.0f ? c : a;
+            rotation = k.Rotations[b];
+            location = k.Locations[b];
+            scale = k.Scales[b];
+            return;
+        }
+        if (interp == KeyInterp::Linear)
+        {
+            rotation = glm::slerp(a.Rotations[b], c.Rotations[b], t);
+            location = glm::mix(a.Locations[b], c.Locations[b], t);
+            scale = glm::mix(a.Scales[b], c.Scales[b], t);
+            return;
+        }
+        // Bezier: each channel along its curve (cubic Hermite with the keys' slopes); rotation through Euler angles.
+        BoneTrack track = TrackOf(action, b);
+        size_t i = 0;
+        while (i + 1 < track.Keys.size() && (int)track.Keys[i] != lo) ++i;
+        std::array<float, kBoneChannels> v{};
+        for (int ch = 0; ch < kBoneChannels; ++ch)
+        {
+            float in0, out0, in1, out1;
+            KeySlopes(action, track, b, i, ch, in0, out0);
+            KeySlopes(action, track, b, i + 1, ch, in1, out1);
+            v[(size_t)ch] = Hermite(track.Values[i][(size_t)ch], out0, track.Values[i + 1][(size_t)ch], in1, span, t);
+        }
+        location = glm::vec3(v[0], v[1], v[2]);
+        rotation = EulerToQuat(glm::vec3(v[3], v[4], v[5]));
+        scale = glm::vec3(v[6], v[7], v[8]);
+    }
+
+    float ChannelValue(const Action& action, size_t bone, int channel, float time)
+    {
+        glm::vec3 loc, scl;
+        glm::quat rot;
+        BonePoseAt(action, bone, time, loc, rot, scl);
+        if (channel < 3) return loc[channel];
+        if (channel >= 6) return scl[channel - 6];
+        // Rotation: continuous with the track. Linear stretches follow their slerp from the key before; Bezier ones are
+        // Euler curves already (the turn's angles nearest them).
+        BoneTrack track = TrackOf(action, bone);
+        if (track.Times.empty()) return 0.0f;
+        size_t i = 0;
+        while (i + 1 < track.Times.size() && track.Times[i + 1] <= time) ++i;
+        glm::vec3 ei(track.Values[i][3], track.Values[i][4], track.Values[i][5]);
+        if (i + 1 >= track.Times.size() || time <= track.Times[i]) return ei[channel - 3];
+        const ActionKey &a = action.Keys[track.Keys[i]], &b = action.Keys[track.Keys[i + 1]];
+        float span = track.Times[i + 1] - track.Times[i];
+        float s = span > 1e-6f ? std::clamp((time - track.Times[i]) / span, 0.0f, 1.0f) : 0.0f;
+        KeyInterp interp = a.CurveOf(bone).Interp;
+        if (interp == KeyInterp::Constant) return ei[channel - 3];
+        if (interp == KeyInterp::Linear) return FollowSlerp(a.Rotations[bone], ei, b.Rotations[bone], s)[channel - 3];
+        // (the curve itself: no round trip through the turn, which loses the angles at gimbal lock)
+        float in0, out0, in1, out1;
+        KeySlopes(action, track, bone, i, channel, in0, out0);
+        KeySlopes(action, track, bone, i + 1, channel, in1, out1);
+        return Hermite(track.Values[i][(size_t)channel], out0, track.Values[i + 1][(size_t)channel], in1, span, s);
+    }
+
+    namespace
+    {
+        bool KeyHolds(const EditableMesh& m, int action, size_t key, size_t bone)
+        {
+            return action >= 0 && action < (int)m.Actions.size() && key < m.Actions[(size_t)action].Keys.size() &&
+                   m.Actions[(size_t)action].Keys[key].HasBone(bone);
+        }
+    }
+
+    void SetChannelValue(EditableMesh& m, int action, size_t key, size_t bone, int channel, float value)
+    {
+        if (!KeyHolds(m, action, key, bone) || channel < 0 || channel >= kBoneChannels) return;
+        Action& a = m.Actions[(size_t)action];
+        ActionKey& k = a.Keys[key];
+        if (channel < 3) k.Locations[bone][channel] = value;
+        else if (channel >= 6) k.Scales[bone][channel - 6] = value;
+        else
+        {
+            // The key's Euler angles as the graph shows them (continuous with the keys before), one changed.
+            BoneTrack track = TrackOf(a, bone);
+            size_t i = 0;
+            while (i < track.Keys.size() && track.Keys[i] != key) ++i;
+            glm::vec3 e = i < track.Keys.size() ? glm::vec3(track.Values[i][3], track.Values[i][4], track.Values[i][5]) : QuatToEuler(k.Rotations[bone]);
+            e[channel - 3] = value;
+            k.Rotations[bone] = EulerToQuat(e);
+        }
+    }
+
+    void SetInterpolation(EditableMesh& m, int action, size_t key, size_t bone, KeyInterp interp)
+    {
+        if (!KeyHolds(m, action, key, bone)) return;
+        m.Actions[(size_t)action].Keys[key].EditCurve(bone).Interp = interp;
+    }
+
+    void SetHandles(EditableMesh& m, int action, size_t key, size_t bone, int channel, float slopeIn, float slopeOut)
+    {
+        if (!KeyHolds(m, action, key, bone) || channel < 0 || channel >= kBoneChannels) return;
+        KeyCurve& c = m.Actions[(size_t)action].Keys[key].EditCurve(bone);
+        c.Free |= (uint16_t)(1u << channel);
+        c.SlopeIn[(size_t)channel] = slopeIn;
+        c.SlopeOut[(size_t)channel] = slopeOut;
+    }
+
+    void SetAutoHandles(EditableMesh& m, int action, size_t key, size_t bone, int channel)
+    {
+        if (!KeyHolds(m, action, key, bone) || channel < 0 || channel >= kBoneChannels) return;
+        KeyCurve& c = m.Actions[(size_t)action].Keys[key].EditCurve(bone);
+        c.Free &= (uint16_t)~(1u << channel);
+        c.SlopeIn[(size_t)channel] = c.SlopeOut[(size_t)channel] = 0.0f;
     }
 
     // ---- IK

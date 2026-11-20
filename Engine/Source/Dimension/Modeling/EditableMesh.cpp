@@ -1010,6 +1010,19 @@ namespace Dimension::Modeling
                         for (float v : k.Shapes) shapes.push_back(Round(v));
                         key["shapes"] = std::move(shapes);
                     }
+                    // Graph Editor curves: [bone, interpolation, free bits, 9 slopes in, 9 slopes out] for the bones
+                    // with any.
+                    json curves = json::array();
+                    for (size_t b = 0; b < k.Curves.size() && b < k.Rotations.size(); ++b)
+                    {
+                        const KeyCurve& c = k.Curves[b];
+                        if (c.IsDefault()) continue;
+                        json e = json::array({ b, (int)c.Interp, c.Free });
+                        for (float s : c.SlopeIn) e.push_back(Round(s));
+                        for (float s : c.SlopeOut) e.push_back(Round(s));
+                        curves.push_back(std::move(e));
+                    }
+                    if (!curves.empty()) key["curves"] = std::move(curves);
                     keys.push_back(std::move(key));
                 }
                 actions.push_back({ { "name", a.Name }, { "keys", std::move(keys) } });
@@ -1240,6 +1253,20 @@ namespace Dimension::Modeling
                         if (b.get<size_t>() < k.Keyed.size()) k.Keyed[b.get<size_t>()] = 1;
                 }
                 for (const auto& v : kj.value("shapes", json::array())) k.Shapes.push_back(v.get<float>());
+                for (const auto& e : kj.value("curves", json::array()))
+                {
+                    if (!e.is_array() || e.size() < 3 + 2 * kBoneChannels) continue;
+                    size_t b = e[0].get<size_t>();
+                    if (b >= k.Rotations.size()) continue;
+                    KeyCurve& c = k.EditCurve(b);
+                    c.Interp = (KeyInterp)std::clamp(e[1].get<int>(), 0, 2);
+                    c.Free = (uint16_t)e[2].get<int>();
+                    for (int i = 0; i < kBoneChannels; ++i)
+                    {
+                        c.SlopeIn[(size_t)i] = e[3 + (size_t)i].get<float>();
+                        c.SlopeOut[(size_t)i] = e[3 + kBoneChannels + (size_t)i].get<float>();
+                    }
+                }
                 a.Keys.push_back(std::move(k));
             }
             std::sort(a.Keys.begin(), a.Keys.end(), [](const ActionKey& x, const ActionKey& y) { return x.Time < y.Time; });

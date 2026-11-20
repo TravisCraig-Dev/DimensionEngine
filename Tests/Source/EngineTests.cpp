@@ -19978,6 +19978,86 @@ namespace
         CHECK(tex.At(4, 16) == red && tex.At(28, 16) == white);
     }
 
+    void TestModelingGraphEditor()
+    {
+        using namespace ModelingTest;
+        // Euler XYZ round trips (away from gimbal lock).
+        bool round = true;
+        for (glm::vec3 e : { glm::vec3(0.3f, -0.7f, 1.2f), glm::vec3(-2.5f, 0.4f, 3.0f), glm::vec3(0.0f, 1.2f, -0.2f) })
+        {
+            glm::quat q = Rig::EulerToQuat(e);
+            round &= Near(Rig::QuatToEuler(q), e, 1e-4f);
+        }
+        CHECK(round);
+        CHECK(Near(glm::vec3(glm::mat4_cast(Rig::EulerToQuat(glm::vec3(0, 0, glm::half_pi<float>()))) * glm::vec4(1, 0, 0, 0)), glm::vec3(0, 1, 0), 1e-5f));
+
+        // One bone keyed at 0, 1 and 2 s: location X 0, 1, 0.
+        EditableMesh m;
+        Rig::AddBone(m, "Bone", glm::vec3(0.0f), glm::vec3(0, 1, 0));
+        int act = Rig::AddAction(m, "Bob");
+        for (int i = 0; i < 3; ++i)
+        {
+            m.Bones[0].PoseLocation = glm::vec3(i == 1 ? 1.0f : 0.0f, 0.0f, 0.0f);
+            Rig::InsertKey(m, act, (float)i);
+        }
+        const Action& a = m.Actions[(size_t)act];
+        // Linear by default (as before).
+        CHECK(Near(Rig::ChannelValue(a, 0, 0, 0.25f), 0.25f));
+        // Bezier with automatic handles: level at the ends and at the peak, so it eases in and out and never overshoots.
+        for (size_t k = 0; k < 3; ++k) Rig::SetInterpolation(m, act, k, 0, KeyInterp::Bezier);
+        CHECK(Near(Rig::ChannelValue(a, 0, 0, 0.1f), 0.028f, 1e-4f));
+        CHECK(Near(Rig::ChannelValue(a, 0, 0, 0.5f), 0.5f, 1e-4f));
+        float peak = 0.0f;
+        for (float t = 0.0f; t <= 2.0f; t += 0.01f) peak = std::max(peak, Rig::ChannelValue(a, 0, 0, t));
+        CHECK(peak <= 1.0f + 1e-5f);
+        // A free handle: leaving the first key at 2 per second.
+        Rig::SetHandles(m, act, 0, 0, 0, 2.0f, 2.0f);
+        CHECK(Near(Rig::ChannelValue(a, 0, 0, 0.1f), 0.162f + 0.028f, 1e-4f));
+        Rig::SetAutoHandles(m, act, 0, 0, 0);
+        CHECK(Near(Rig::ChannelValue(a, 0, 0, 0.1f), 0.028f, 1e-4f));
+        // Evaluating the action poses the bone along the curve.
+        Rig::EvaluateAction(m, act, 0.1f);
+        CHECK(Near(m.Bones[0].PoseLocation.x, 0.028f, 1e-4f));
+        // Constant: holds until the next key.
+        Rig::SetInterpolation(m, act, 0, 0, KeyInterp::Constant);
+        CHECK(Near(Rig::ChannelValue(a, 0, 0, 0.99f), 0.0f) && Near(Rig::ChannelValue(a, 0, 0, 1.0f), 1.0f));
+        Rig::SetInterpolation(m, act, 0, 0, KeyInterp::Bezier);
+
+        // Editing a channel at a key, rotation through its Euler angles; turns past 180 degrees stay continuous.
+        Rig::SetChannelValue(m, act, 1, 0, 1, 0.5f);
+        CHECK(Near(m.Actions[(size_t)act].Keys[1].Locations[0].y, 0.5f));
+        Rig::SetChannelValue(m, act, 1, 0, 5, glm::radians(170.0f));
+        Rig::SetChannelValue(m, act, 2, 0, 5, glm::radians(340.0f));
+        Rig::BoneTrack track = Rig::TrackOf(a, 0);
+        CHECK(track.Keys.size() == 3 && Near(glm::degrees(track.Values[1][5]), 170.0f, 0.01f) && Near(glm::degrees(track.Values[2][5]), 340.0f, 0.01f));
+        float mid = glm::degrees(Rig::ChannelValue(a, 0, 5, 1.5f));
+        CHECK(mid > 170.0f && mid < 340.0f);
+
+        // Clips sample the curved bone (more than its three keys) and land on the curve.
+        AnimationClip clip = Rig::ToClip(m, a);
+        const AnimationChannel* tr = nullptr;
+        for (const AnimationChannel& c : clip.Channels)
+            if (c.Joint == 0 && c.Path == AnimationPath::Translation) tr = &c;
+        CHECK(tr && tr->Times.size() > 30);
+        if (tr)
+        {
+            size_t i = 3; // (t = 0.1)
+            CHECK(Near(tr->Times[i], 0.1f, 1e-4f) && Near(tr->Values[i].x, Rig::ChannelValue(a, 0, 0, 0.1f), 1e-4f));
+        }
+
+        // Files keep the curves.
+        Rig::SetHandles(m, act, 1, 0, 2, -0.5f, 0.75f);
+        EditableMesh loaded;
+        CHECK(EditableMesh::FromJson(m.ToJson(), loaded) && loaded.Actions.size() == 1);
+        const KeyCurve& kc = loaded.Actions[0].Keys[1].CurveOf(0);
+        CHECK(kc.Interp == KeyInterp::Bezier && (kc.Free & 4) && Near(kc.SlopeIn[2], -0.5f) && Near(kc.SlopeOut[2], 0.75f));
+        CHECK(Near(Rig::ChannelValue(loaded.Actions[0], 0, 0, 0.3f), Rig::ChannelValue(a, 0, 0, 0.3f), 1e-4f));
+        // Bones added and removed keep each key's curves lined up.
+        Rig::AddBone(m, "Extra", glm::vec3(1, 0, 0), glm::vec3(1, 1, 0));
+        Rig::DeleteBones(m, { 1 });
+        CHECK(m.Actions[(size_t)act].Keys[1].CurveOf(0).Free & 4);
+    }
+
     void TestModelingBBonesEnvelopes()
     {
         using namespace ModelingTest;
@@ -20598,6 +20678,7 @@ int main(int argc, char** argv)
     Run("Modeling paint fixes", TestModelingPaintFixes);
     Run("Modeling rig weights", TestModelingRigWeights);
     Run("Modeling B-bones and envelopes", TestModelingBBonesEnvelopes);
+    Run("Modeling graph editor", TestModelingGraphEditor);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

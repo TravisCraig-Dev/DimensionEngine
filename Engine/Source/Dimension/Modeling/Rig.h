@@ -118,6 +118,35 @@ namespace Dimension::Modeling::Rig
     void EvaluateAction(EditableMesh& m, int action, float time);
     AnimationClip ToClip(const EditableMesh& m, const Action& action);
 
+    // ---- Graph Editor (a bone's channels as curves over an action)
+
+    const char* ChannelName(int channel); // "Location X" ... "Scale Z"
+    // Euler XYZ (radians; X turned first) and back.
+    glm::vec3 QuatToEuler(const glm::quat& q);
+    glm::quat EulerToQuat(const glm::vec3& euler);
+    // A bone's channel values at each key that holds it (in time order; rotations as Euler angles kept continuous from
+    // key to key, so a turn past 180 degrees doesn't jump).
+    struct BoneTrack
+    {
+        std::vector<size_t> Keys; // indices into the action's keys
+        std::vector<float> Times;
+        std::vector<std::array<float, kBoneChannels>> Values;
+    };
+    BoneTrack TrackOf(const Action& action, size_t bone);
+    // The slopes (value per second) a track key's curve arrives and leaves with: its free handles, or automatic ones
+    // (clamped: level at the ends and at peaks and dips, else along its neighbours).
+    void KeySlopes(const Action& action, const BoneTrack& track, size_t bone, size_t i, int channel, float& in, float& out);
+    // A channel's value at any time, as the action plays (between keys by their interpolation).
+    float ChannelValue(const Action& action, size_t bone, int channel, float time);
+    // A bone's pose in the action at a time (what EvaluateAction sets).
+    void BonePoseAt(const Action& action, size_t bone, float time, glm::vec3& location, glm::quat& rotation, glm::vec3& scale);
+    // Editing one bone's curve at one key (`key` indexes the action's keys; the key must hold the bone).
+    void SetChannelValue(EditableMesh& m, int action, size_t key, size_t bone, int channel, float value);
+    void SetInterpolation(EditableMesh& m, int action, size_t key, size_t bone, KeyInterp interp);
+    // Free handles with these slopes (one channel), or back to automatic ones.
+    void SetHandles(EditableMesh& m, int action, size_t key, size_t bone, int channel, float slopeIn, float slopeOut);
+    void SetAutoHandles(EditableMesh& m, int action, size_t key, size_t bone, int channel);
+
     // ---- IK
 
     // Turns `bone` and `chain - 1` of its parents (cyclic coordinate descent) so its tail reaches `target` (model
