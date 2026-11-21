@@ -9,6 +9,8 @@
 #include "Dimension/Navigation/NavMesh.h"
 #include <stb_image.h>
 #include <algorithm>
+#include <climits>
+#include <functional>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -259,22 +261,30 @@ namespace Dimension::Terrain
         return at(c0, r0) + (at(c0, r0 + 1) - at(c0, r0)) * tz + (at(c0 + 1, r0 + 1) - at(c0, r0 + 1)) * tx;
     }
 
+    namespace
+    {
+        // The surface's vertex at sample (c, r): its normal from the heights around it. No tangent: the terrain shader
+        // makes its own frame for the layers' normal maps.
+        Vertex SurfaceVertex(const std::vector<float>& heights, int n, const glm::vec2& size, const glm::vec2& step, int c, int r)
+        {
+            auto h = [&](int col, int row) { return heights[(size_t)std::clamp(row, 0, n - 1) * n + std::clamp(col, 0, n - 1)]; };
+            Vertex v;
+            v.Position = { -size.x * 0.5f + c * step.x, h(c, r), -size.y * 0.5f + r * step.y };
+            v.Normal = glm::normalize(glm::vec3((h(c - 1, r) - h(c + 1, r)) / (2.0f * step.x), 1.0f, (h(c, r - 1) - h(c, r + 1)) / (2.0f * step.y)));
+            v.UV = { c / (float)(n - 1), r / (float)(n - 1) };
+            v.Tangent = glm::vec4(0.0f);
+            return v;
+        }
+    }
+
     MeshData BuildMesh(const TerrainComponent& terrain, const std::vector<float>& heights)
     {
         int n = SampleCount(terrain);
         glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
         glm::vec2 step = size / (float)(n - 1);
         std::vector<Vertex> vertices((size_t)n * n);
-        auto h = [&](int c, int r) { return heights[(size_t)std::clamp(r, 0, n - 1) * n + std::clamp(c, 0, n - 1)]; };
         for (int r = 0; r < n; ++r)
-            for (int c = 0; c < n; ++c)
-            {
-                Vertex& v = vertices[(size_t)r * n + c];
-                v.Position = { -size.x * 0.5f + c * step.x, h(c, r), -size.y * 0.5f + r * step.y };
-                v.Normal = glm::normalize(glm::vec3((h(c - 1, r) - h(c + 1, r)) / (2.0f * step.x), 1.0f, (h(c, r - 1) - h(c, r + 1)) / (2.0f * step.y)));
-                v.UV = { c / (float)(n - 1), r / (float)(n - 1) };
-                v.Tangent = glm::vec4(0.0f);
-            }
+            for (int c = 0; c < n; ++c) vertices[(size_t)r * n + c] = SurfaceVertex(heights, n, size, step, c, r);
         std::vector<uint32_t> indices;
         indices.reserve((size_t)(n - 1) * (n - 1) * 6);
         std::vector<uint8_t> holes = HoleMap(terrain);
@@ -287,7 +297,12 @@ namespace Dimension::Terrain
                 if (solid(a, e, b)) indices.insert(indices.end(), { a, e, b });
                 if (solid(a, d, e)) indices.insert(indices.end(), { a, d, e });
             }
-        MeshData mesh = MeshData::FromArrays(std::move(vertices), std::move(indices), "Terrain");
+        // (not FromArrays: its tangents took most of the time, and nothing reads a terrain's)
+        MeshData mesh;
+        mesh.Name = "Terrain";
+        mesh.Vertices = std::move(vertices);
+        mesh.Indices = std::move(indices);
+        mesh.SubMeshes.push_back({ 0, (uint32_t)mesh.Indices.size(), -1 });
         return mesh;
     }
 
@@ -388,6 +403,29 @@ namespace Dimension::Terrain
 
     uint64_t SettingsKey(const TerrainComponent& t)
     {
+        uint64_t h = BaseKey(t);
+        const auto* b = reinterpret_cast<const uint8_t*>(&t.EditRevision);
+        for (size_t i = 0; i < sizeof(t.EditRevision); ++i) h = (h ^ b[i]) * 1099511628211ull;
+        return h;
+    }
+
+    bool ChangedSince(const TerrainComponent& terrain, uint64_t revision, glm::ivec4& samples)
+    {
+        samples = glm::ivec4(INT_MAX, INT_MAX, INT_MIN, INT_MIN);
+        if (revision > terrain.EditRevision) return false;
+        uint64_t next = revision + 1;
+        for (const TerrainComponent::DirtyRect& d : terrain.EditLog)
+        {
+            if (d.Revision < next) continue;
+            if (d.Revision != next) return false; // an edit in between that was not logged
+            samples = glm::ivec4(glm::min(glm::ivec2(samples), glm::ivec2(d.Samples)), glm::max(glm::ivec2(samples.z, samples.w), glm::ivec2(d.Samples.z, d.Samples.w)));
+            ++next;
+        }
+        return next == terrain.EditRevision + 1;
+    }
+
+    uint64_t BaseKey(const TerrainComponent& t)
+    {
         uint64_t h = 1469598103934665603ull;
         auto mix = [&](const void* p, size_t n) {
             const auto* b = static_cast<const uint8_t*>(p);
@@ -425,7 +463,6 @@ namespace Dimension::Terrain
         mixString(t.SculptedHeights);
         mixString(t.PaintedLayers);
         mixString(t.PaintedHoles);
-        mix(&t.EditRevision, sizeof(t.EditRevision));
         if (t.Heightmap.IsValid())
         {
             std::error_code ec;
@@ -452,65 +489,130 @@ namespace Dimension::Terrain
         out.push_back(last);
     }
 
+    namespace
+    {
+        // A chunk's samples: columns c0-c1 and rows r0-r1 (inclusive; chunk (cx, cz) of `across` a side).
+        struct ChunkSpan
+        {
+            int C0, C1, R0, R1;
+        };
+        ChunkSpan SpanOf(int cx, int cz, int n)
+        {
+            int quads = n - 1, per = kChunkQuads;
+            return { cx * per, std::min(cx * per + per, quads), cz * per, std::min(cz * per + per, quads) };
+        }
+
+        // Its lowest and highest sample, and how far each level strays from the full surface: the most any sample is
+        // off the level's triangles there.
+        void MeasureChunk(const std::vector<float>& heights, int n, const ChunkSpan& s, Chunk& chunk, float& low, float& high)
+        {
+            auto h = [&](int c, int r) { return heights[(size_t)r * n + c]; };
+            low = high = h(s.C0, s.R0);
+            for (int r = s.R0; r <= s.R1; ++r)
+                for (int c = s.C0; c <= s.C1; ++c)
+                {
+                    low = std::min(low, h(c, r));
+                    high = std::max(high, h(c, r));
+                }
+            std::vector<int> cols, rows;
+            chunk.Error[0] = 0.0f;
+            for (int level = 1; level < chunk.Levels; ++level)
+            {
+                LevelLines(s.C0, s.C1, 1 << level, cols);
+                LevelLines(s.R0, s.R1, 1 << level, rows);
+                float error = chunk.Error[level - 1];
+                for (size_t j = 0; j + 1 < rows.size(); ++j)
+                    for (size_t i = 0; i + 1 < cols.size(); ++i)
+                    {
+                        int ca = cols[i], cb = cols[i + 1], ra = rows[j], rb = rows[j + 1];
+                        float a = h(ca, ra), b = h(cb, ra), d = h(ca, rb), e = h(cb, rb);
+                        for (int r = ra; r <= rb; ++r)
+                            for (int c = ca; c <= cb; ++c)
+                            {
+                                float tx = (c - ca) / (float)(cb - ca), tz = (r - ra) / (float)(rb - ra);
+                                // the same split as the full surface: (ca, ra) -> (cb, rb)
+                                float at = tx >= tz ? a + (b - a) * tx + (e - b) * tz : a + (d - a) * tz + (e - d) * tx;
+                                error = std::max(error, std::abs(h(c, r) - at));
+                            }
+                    }
+                chunk.Error[level] = error;
+            }
+            for (int level = chunk.Levels; level < kChunkLevels; ++level) chunk.Error[level] = chunk.Error[chunk.Levels - 1];
+        }
+
+        // Skirts on the edges a chunk shares: two neighbours stray from the full surface by at most their errors, so
+        // the gap between them is at most the sum; a skirt that deep on each side covers it whichever is higher.
+        float SkirtDepth(const std::vector<Chunk>& chunks, int across, int cx, int cz, const glm::vec2& step)
+        {
+            auto worst = [&](int x, int z) {
+                if (x < 0 || z < 0 || x >= across || z >= across) return 0.0f;
+                return chunks[(size_t)z * across + x].Error[kChunkLevels - 1];
+            };
+            float depth = chunks[(size_t)cz * across + cx].Error[kChunkLevels - 1] +
+                          std::max({ worst(cx - 1, cz), worst(cx + 1, cz), worst(cx, cz - 1), worst(cx, cz + 1) });
+            return depth > 0.0f ? depth + 0.05f * std::max(step.x, step.y) : 0.0f;
+        }
+
+        // An edge of a chunk (0 west, 1 east, 2 south, 3 north): whether a neighbour shares it, and its samples.
+        struct ChunkEdge
+        {
+            bool Shared;
+            bool AlongX; // the edge runs along X (a row of samples) or along Z (a column)
+            int Fixed;   // that row or column
+            int From, To;
+        };
+        ChunkEdge EdgeOf(const ChunkSpan& s, int cx, int cz, int across, int e)
+        {
+            switch (e)
+            {
+            case 0: return { cx > 0, false, s.C0, s.R0, s.R1 };
+            case 1: return { cx + 1 < across, false, s.C1, s.R0, s.R1 };
+            case 2: return { cz > 0, true, s.R0, s.C0, s.C1 };
+            default: return { cz + 1 < across, true, s.R1, s.C0, s.C1 };
+            }
+        }
+        uint32_t EdgeSample(const ChunkEdge& edge, int n, int k) { return edge.AlongX ? (uint32_t)(edge.Fixed * n + k) : (uint32_t)(k * n + edge.Fixed); }
+
+        std::mutex s_UploadMutex;
+        std::vector<std::function<void(VkCommandBuffer)>> s_Uploads;
+        void QueueUpload(std::function<void(VkCommandBuffer)> upload)
+        {
+            std::lock_guard lock(s_UploadMutex);
+            s_Uploads.push_back(std::move(upload));
+        }
+    }
+
+    void FlushUploads(VkCommandBuffer cmd)
+    {
+        std::vector<std::function<void(VkCommandBuffer)>> uploads;
+        {
+            std::lock_guard lock(s_UploadMutex);
+            uploads.swap(s_Uploads);
+        }
+        for (auto& upload : uploads) upload(cmd);
+    }
+
     void BuildChunks(const TerrainComponent& terrain, const std::vector<float>& heights, std::vector<Vertex>& vertices,
                      std::vector<uint32_t>& indices, std::vector<Chunk>& chunks)
     {
         std::vector<uint8_t> holes = HoleMap(terrain);
         int n = SampleCount(terrain);
         int quads = n - 1, per = kChunkQuads, across = (quads + per - 1) / per;
-        auto h = [&](int c, int r) { return heights[(size_t)r * n + c]; };
         auto solid = [&](uint32_t i, uint32_t j, uint32_t k) { return holes.empty() || !(holes[i] | holes[j] | holes[k]); };
         chunks.assign((size_t)across * across, Chunk{});
         std::vector<float> low(chunks.size()), high(chunks.size());
         std::vector<int> cols, rows;
-        // How far each level strays from the full surface: the most any sample is off the level's triangles there.
         for (int cz = 0; cz < across; ++cz)
             for (int cx = 0; cx < across; ++cx)
             {
                 size_t index = (size_t)cz * across + cx;
-                Chunk& chunk = chunks[index];
-                int c0 = cx * per, c1 = std::min(c0 + per, quads), r0 = cz * per, r1 = std::min(r0 + per, quads);
-                float lo = h(c0, r0), hi = lo;
+                ChunkSpan s = SpanOf(cx, cz, n);
                 bool hole = false;
-                for (int r = r0; r <= r1; ++r)
-                    for (int c = c0; c <= c1; ++c)
-                    {
-                        lo = std::min(lo, h(c, r));
-                        hi = std::max(hi, h(c, r));
-                        hole |= !holes.empty() && holes[(size_t)r * n + c] != 0;
-                    }
-                low[index] = lo;
-                high[index] = hi;
-                chunk.Levels = hole ? 1 : kChunkLevels;
-                for (int level = 1; level < chunk.Levels; ++level)
-                {
-                    LevelLines(c0, c1, 1 << level, cols);
-                    LevelLines(r0, r1, 1 << level, rows);
-                    float error = chunk.Error[level - 1];
-                    for (size_t j = 0; j + 1 < rows.size(); ++j)
-                        for (size_t i = 0; i + 1 < cols.size(); ++i)
-                        {
-                            int ca = cols[i], cb = cols[i + 1], ra = rows[j], rb = rows[j + 1];
-                            float a = h(ca, ra), b = h(cb, ra), d = h(ca, rb), e = h(cb, rb);
-                            for (int r = ra; r <= rb; ++r)
-                                for (int c = ca; c <= cb; ++c)
-                                {
-                                    float tx = (c - ca) / (float)(cb - ca), tz = (r - ra) / (float)(rb - ra);
-                                    // the same split as the full surface: (ca, ra) -> (cb, rb)
-                                    float at = tx >= tz ? a + (b - a) * tx + (e - b) * tz : a + (d - a) * tz + (e - d) * tx;
-                                    error = std::max(error, std::abs(h(c, r) - at));
-                                }
-                        }
-                    chunk.Error[level] = error;
-                }
-                for (int level = chunk.Levels; level < kChunkLevels; ++level) chunk.Error[level] = chunk.Error[chunk.Levels - 1];
+                for (int r = s.R0; r <= s.R1 && !holes.empty(); ++r)
+                    for (int c = s.C0; c <= s.C1; ++c) hole |= holes[(size_t)r * n + c] != 0;
+                chunks[index].Levels = hole ? 1 : kChunkLevels;
+                MeasureChunk(heights, n, s, chunks[index], low[index], high[index]);
             }
-        // Skirts on the edges a chunk shares: two neighbours stray from the full surface by at most their errors, so
-        // the gap between them is at most the sum; a skirt that deep on each side covers it whichever is higher.
-        auto worst = [&](int cx, int cz) {
-            if (cx < 0 || cz < 0 || cx >= across || cz >= across) return 0.0f;
-            return chunks[(size_t)cz * across + cx].Error[kChunkLevels - 1];
-        };
         glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
         glm::vec2 step = size / (float)(n - 1);
         for (int cz = 0; cz < across; ++cz)
@@ -518,23 +620,30 @@ namespace Dimension::Terrain
             {
                 size_t index = (size_t)cz * across + cx;
                 Chunk& chunk = chunks[index];
-                int c0 = cx * per, c1 = std::min(c0 + per, quads), r0 = cz * per, r1 = std::min(r0 + per, quads);
-                float neighbours = std::max({ worst(cx - 1, cz), worst(cx + 1, cz), worst(cx, cz - 1), worst(cx, cz + 1) });
-                float depth = chunk.Error[kChunkLevels - 1] + neighbours;
-                depth = depth > 0.0f ? depth + 0.05f * std::max(step.x, step.y) : 0.0f;
+                ChunkSpan s = SpanOf(cx, cz, n);
+                int c0 = s.C0, c1 = s.C1, r0 = s.R0, r1 = s.R1;
+                float depth = SkirtDepth(chunks, across, cx, cz, step);
+                chunk.Depth = depth;
                 // The edges (west, east, south, north) and, for each shared one, the first of its skirt's bottom vertices.
                 struct Edge
                 {
                     bool Shared;
-                    bool AlongX; // the edge runs along X (a row of samples) or along Z (a column)
-                    int Fixed;   // that row or column
+                    bool AlongX;
+                    int Fixed;
                     uint32_t Bottom = 0;
                 };
-                Edge edges[4] = { { cx > 0, false, c0 }, { cx + 1 < across, false, c1 }, { cz > 0, true, r0 }, { cz + 1 < across, true, r1 } };
-                for (Edge& edge : edges)
+                Edge edges[4];
+                for (int e = 0; e < 4; ++e)
                 {
+                    ChunkEdge ce = EdgeOf(s, cx, cz, across, e);
+                    edges[e] = { ce.Shared, ce.AlongX, ce.Fixed };
+                }
+                for (int e = 0; e < 4; ++e)
+                {
+                    Edge& edge = edges[e];
                     if (!edge.Shared || depth <= 0.0f) continue;
                     edge.Bottom = (uint32_t)vertices.size();
+                    chunk.Skirt[e] = edge.Bottom;
                     int from = edge.AlongX ? c0 : r0, to = edge.AlongX ? c1 : r1;
                     for (int i = from; i <= to; ++i)
                     {
@@ -586,17 +695,142 @@ namespace Dimension::Terrain
 
     const Runtime* GetRuntime(const TerrainComponent& terrain) { return GetRuntime(terrain, SettingsKey(terrain)); }
 
+    namespace
+    {
+        // Brings a runtime up to the terrain's edits that touched only `samples` (and its edges' neighbours): the
+        // vertices there, the chunks over them (errors, bounds, skirts) and the splat maps. False when it cannot (the
+        // whole is built again).
+        bool UpdateRuntime(const TerrainComponent& terrain, Runtime& rt, glm::ivec4 samples)
+        {
+            int n = SampleCount(terrain);
+            size_t count = (size_t)n * n;
+            int maps = SplatMapCount(terrain);
+            const std::vector<float>& heights = terrain.EditHeights;
+            if (heights.size() != count || terrain.EditLayers.size() != count * (size_t)maps || (int)rt.Splats.size() != maps) return false;
+            if (samples.x > samples.z || samples.y > samples.w) return true; // nothing changed
+            int quads = n - 1, per = kChunkQuads, across = (quads + per - 1) / per;
+            if ((int)rt.Chunks.size() != across * across) return false;
+            glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+            glm::vec2 step = size / (float)(n - 1);
+            // Normals read a sample's neighbours: the ring around the changed samples moves too.
+            int c0 = std::max(samples.x - 1, 0), r0 = std::max(samples.y - 1, 0), c1 = std::min(samples.z + 1, n - 1), r1 = std::min(samples.w + 1, n - 1);
+            Ref<Mesh> mesh = rt.Surface;
+            for (int r = r0; r <= r1; ++r)
+            {
+                std::vector<Vertex> row;
+                row.reserve((size_t)(c1 - c0 + 1));
+                for (int c = c0; c <= c1; ++c) row.push_back(SurfaceVertex(heights, n, size, step, c, r));
+                uint32_t first = (uint32_t)(r * n + c0);
+                QueueUpload([mesh, first, row = std::move(row)](VkCommandBuffer cmd) { mesh->UpdateVertices(cmd, first, row.data(), (uint32_t)row.size()); });
+            }
+            // The chunks over them: measured again; their skirts and their neighbours' (which hang by their errors).
+            int x0 = std::max(c0 - 1, 0) / per, x1 = std::min(c1 / per, across - 1), z0 = std::max(r0 - 1, 0) / per, z1 = std::min(r1 / per, across - 1);
+            std::vector<float> lows(rt.Chunks.size()), highs(rt.Chunks.size());
+            for (size_t i = 0; i < rt.Chunks.size(); ++i)
+            {
+                lows[i] = rt.Chunks[i].Min.y + rt.Chunks[i].Depth;
+                highs[i] = rt.Chunks[i].Max.y;
+            }
+            for (int cz = z0; cz <= z1; ++cz)
+                for (int cx = x0; cx <= x1; ++cx)
+                {
+                    size_t i = (size_t)cz * across + cx;
+                    MeasureChunk(heights, n, SpanOf(cx, cz, n), rt.Chunks[i], lows[i], highs[i]);
+                }
+            for (int cz = std::max(z0 - 1, 0); cz <= std::min(z1 + 1, across - 1); ++cz)
+                for (int cx = std::max(x0 - 1, 0); cx <= std::min(x1 + 1, across - 1); ++cx)
+                {
+                    size_t i = (size_t)cz * across + cx;
+                    Chunk& chunk = rt.Chunks[i];
+                    ChunkSpan s = SpanOf(cx, cz, n);
+                    float depth = SkirtDepth(rt.Chunks, across, cx, cz, step);
+                    bool touched = cx >= x0 && cx <= x1 && cz >= z0 && cz <= z1;
+                    if (!touched && depth == chunk.Depth) continue;
+                    for (int e = 0; e < 4; ++e)
+                    {
+                        ChunkEdge edge = EdgeOf(s, cx, cz, across, e);
+                        if (!edge.Shared) continue;
+                        if (chunk.Skirt[e] == 0) // built without a skirt (flat): it has nothing to hang now
+                        {
+                            if (depth > 0.0f) return false;
+                            continue;
+                        }
+                        std::vector<Vertex> skirt;
+                        for (int k = edge.From; k <= edge.To; ++k)
+                        {
+                            uint32_t top = EdgeSample(edge, n, k);
+                            Vertex v = SurfaceVertex(heights, n, size, step, (int)(top % n), (int)(top / n));
+                            v.Position.y -= depth;
+                            skirt.push_back(v);
+                        }
+                        uint32_t first = chunk.Skirt[e];
+                        QueueUpload([mesh, first, skirt = std::move(skirt)](VkCommandBuffer cmd) { mesh->UpdateVertices(cmd, first, skirt.data(), (uint32_t)skirt.size()); });
+                    }
+                    chunk.Depth = depth;
+                    chunk.Min.y = lows[i] - depth;
+                    chunk.Max.y = highs[i];
+                }
+            // The splat maps over the changed samples (painted while digging).
+            uint32_t w = (uint32_t)(samples.z - samples.x + 1), hgt = (uint32_t)(samples.w - samples.y + 1);
+            for (int m = 0; m < maps; ++m)
+            {
+                std::vector<uint32_t> texels((size_t)w * hgt);
+                for (uint32_t y = 0; y < hgt; ++y)
+                    for (uint32_t x = 0; x < w; ++x)
+                        texels[(size_t)y * w + x] = terrain.EditLayers[(size_t)m * count + (size_t)(samples.y + y) * n + (samples.x + x)];
+                Ref<Texture2D> splat = rt.Splats[m];
+                uint32_t sx = (uint32_t)samples.x, sy = (uint32_t)samples.y;
+                QueueUpload([splat, sx, sy, w, hgt, texels = std::move(texels)](VkCommandBuffer cmd) { splat->UpdateRegion(cmd, sx, sy, w, hgt, texels.data()); });
+            }
+            return true;
+        }
+
+        // Which runtime each terrain drew last (by component), to bring up to date in place.
+        std::unordered_map<const TerrainComponent*, uint64_t>& LastRuntime()
+        {
+            static std::unordered_map<const TerrainComponent*, uint64_t> last;
+            return last;
+        }
+    }
+
     const Runtime* GetRuntime(const TerrainComponent& terrain, uint64_t key)
     {
         auto& runtimes = Runtimes();
         if (auto it = runtimes.find(key); it != runtimes.end()) return &it->second;
-        if (runtimes.size() > 16) runtimes.clear(); // edited settings leave old builds behind; drop them now and then
+        // The one this terrain drew last, if only craters (logged edits) came since: moved to the new key, updated there.
+        uint64_t base = BaseKey(terrain);
+        auto& last = LastRuntime();
+        if (auto l = last.find(&terrain); l != last.end())
+            if (auto old = runtimes.find(l->second); old != runtimes.end() && old->second.BaseKey == base)
+            {
+                glm::ivec4 samples;
+                if (ChangedSince(terrain, old->second.Revision, samples))
+                {
+                    Runtime rt = std::move(old->second);
+                    runtimes.erase(old);
+                    if (UpdateRuntime(terrain, rt, samples))
+                    {
+                        rt.Key = key;
+                        rt.Revision = terrain.EditRevision;
+                        l->second = key;
+                        return &(runtimes[key] = std::move(rt));
+                    }
+                }
+            }
+        if (runtimes.size() > 16)
+        {
+            runtimes.clear(); // edited settings leave old builds behind; drop them now and then
+            last.clear();
+        }
         std::vector<float> heights = BuildHeights(terrain);
         MeshData data = BuildMesh(terrain, heights);
         std::vector<uint32_t> splat = BuildSplat(terrain, data); // (one per grid sample: before the skirts are added)
         int n = SampleCount(terrain);
         Runtime rt;
         rt.Key = key;
+        rt.BaseKey = base;
+        rt.Revision = terrain.EditRevision;
+        last[&terrain] = key;
         std::vector<uint32_t> indices;
         BuildChunks(terrain, heights, data.Vertices, indices, rt.Chunks);
         if (indices.empty()) indices = { 0, 0, 0 }; // all holes: one degenerate triangle keeps the mesh valid
@@ -834,7 +1068,25 @@ namespace Dimension::Terrain
         }
     }
 
-    DetailInstances BuildDetails(const TerrainComponent& terrain, const std::vector<float>& heights)
+    namespace
+    {
+        // The meters a rectangle of samples covers (lo inclusive, hi exclusive): the details placed there.
+        void SampleArea(const TerrainComponent& terrain, const glm::ivec4& samples, glm::vec2& lo, glm::vec2& hi)
+        {
+            int n = SampleCount(terrain);
+            glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+            glm::vec2 step = size / (float)(n - 1);
+            lo = -size * 0.5f + glm::vec2(samples.x, samples.y) * step;
+            hi = -size * 0.5f + glm::vec2(samples.z, samples.w) * step;
+        }
+    }
+
+    // The details, all of them or (with `only`) just those placed over that rectangle of samples.
+    static DetailInstances BuildDetailsIn(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only);
+
+    DetailInstances BuildDetails(const TerrainComponent& terrain, const std::vector<float>& heights) { return BuildDetailsIn(terrain, heights, nullptr); }
+
+    static DetailInstances BuildDetailsIn(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only)
     {
         DetailInstances out;
         std::vector<uint8_t> map = DetailMap(terrain);
@@ -847,12 +1099,18 @@ namespace Dimension::Terrain
         if (map.empty()) map.assign((size_t)n * n * 2, 0);
         if (grows && heights.size() == (size_t)n * n)
         {
-            MeshData mesh = BuildMesh(terrain, heights);
-            std::vector<uint32_t> splat = BuildSplat(terrain, mesh);
             size_t count = (size_t)n * n;
+            // The layers' weights: painted (or being edited) as they are, else laid out by their rules over the mesh.
+            std::vector<uint32_t> splat = EditedLayers(terrain, count);
+            if (splat.empty()) splat = BuildSplat(terrain, BuildMesh(terrain, heights));
+            // (with `only`, the samples it reads: the rectangle and one more all round)
+            int c0 = 0, c1 = n - 1, r0 = 0, r1 = n - 1;
+            if (only) c0 = std::max(only->x - 1, 0), c1 = std::min(only->z + 1, n - 1), r0 = std::max(only->y - 1, 0), r1 = std::min(only->w + 1, n - 1);
             if (splat.size() == count * (size_t)SplatMapCount(terrain))
-                for (size_t i = 0; i < count; ++i)
+                for (int row = r0; row <= r1; ++row)
+                    for (int col = c0; col <= c1; ++col)
                 {
+                    size_t i = (size_t)row * n + col;
                     float trees = 0.0f, grass = 0.0f;
                     for (int k = 0; k < LayerCount(terrain) && k < (int)terrain.Layers.size(); ++k)
                     {
@@ -890,11 +1148,21 @@ namespace Dimension::Terrain
             int cx = std::max(1, (int)std::ceil(size.x / cell)), cz = std::max(1, (int)std::ceil(size.y / cell));
             float minUp = std::cos(glm::radians(std::clamp(maxSlope, 0.0f, 90.0f)));
             auto& list = kind == 0 ? out.Trees : out.Grass;
-            for (int j = 0; j < cz; ++j)
-                for (int i = 0; i < cx; ++i)
+            // With `only`: the cells that can place one over the rectangle (each lands somewhere in its own cell).
+            int i0 = 0, i1 = cx - 1, j0 = 0, j1 = cz - 1;
+            glm::vec2 lo(0.0f), hi(0.0f);
+            if (only)
+            {
+                SampleArea(terrain, *only, lo, hi);
+                i0 = std::max(0, (int)std::floor((lo.x + size.x * 0.5f) / cell)), i1 = std::min(cx - 1, (int)std::floor((hi.x + size.x * 0.5f) / cell));
+                j0 = std::max(0, (int)std::floor((lo.y + size.y * 0.5f) / cell)), j1 = std::min(cz - 1, (int)std::floor((hi.y + size.y * 0.5f) / cell));
+            }
+            for (int j = j0; j <= j1; ++j)
+                for (int i = i0; i <= i1; ++i)
                 {
                     uint32_t state = Hash((uint32_t)i * 73856093u ^ (uint32_t)j * 19349663u ^ (uint32_t)(kind + 1) * 83492791u ^ (uint32_t)terrain.Seed * 2654435761u);
                     float x = -size.x * 0.5f + (i + Random01(state)) * cell, z = -size.y * 0.5f + (j + Random01(state)) * cell;
+                    if (only && (x < lo.x || x >= hi.x || z < lo.y || z >= hi.y)) continue;
                     float chance = Random01(state);
                     if (std::abs(x) > size.x * 0.5f || std::abs(z) > size.y * 0.5f || chance >= densityAt(x, z, kind)) continue;
                     if (upAt(x, z) < minUp || IsHoleAt(terrain, holes, x, z)) continue;
@@ -911,27 +1179,76 @@ namespace Dimension::Terrain
 
     const DetailInstances& GetDetails(const TerrainComponent& terrain, uint64_t key)
     {
-        auto mix = [&](const void* p, size_t size) {
-            const auto* b = static_cast<const uint8_t*>(p);
-            for (size_t i = 0; i < size; ++i) key = (key ^ b[i]) * 1099511628211ull;
+        // The detail settings on top of the terrain's (whose edit counter covers its edited holes and details too).
+        auto withDetails = [&](uint64_t h) {
+            auto mix = [&](const void* p, size_t size) {
+                const auto* b = static_cast<const uint8_t*>(p);
+                for (size_t i = 0; i < size; ++i) h = (h ^ b[i]) * 1099511628211ull;
+            };
+            for (const float* f : { &terrain.TreeDensity, &terrain.TreeScale.x, &terrain.TreeScale.y, &terrain.TreeMaxSlope, &terrain.GrassDensity,
+                                    &terrain.GrassScale.x, &terrain.GrassScale.y, &terrain.GrassMaxSlope })
+                mix(f, sizeof(float));
+            uint64_t painted = BlobHash(terrain.PaintedDetails);
+            mix(&painted, sizeof(painted));
+            for (const TerrainLayer& l : terrain.Layers)
+            {
+                mix(&l.Trees, sizeof(float));
+                mix(&l.Grass, sizeof(float));
+            }
+            return h;
         };
-        for (const float* f : { &terrain.TreeDensity, &terrain.TreeScale.x, &terrain.TreeScale.y, &terrain.TreeMaxSlope, &terrain.GrassDensity,
-                                &terrain.GrassScale.x, &terrain.GrassScale.y, &terrain.GrassMaxSlope })
-            mix(f, sizeof(float));
-        uint64_t painted = BlobHash(terrain.PaintedDetails);
-        mix(&painted, sizeof(painted));
-        mix(terrain.EditHoles.data(), terrain.EditHoles.size());
-        for (const TerrainLayer& l : terrain.Layers)
+        key = withDetails(key);
+        struct Entry
         {
-            mix(&l.Trees, sizeof(float));
-            mix(&l.Grass, sizeof(float));
-        }
+            DetailInstances Details;
+            uint64_t Base = 0, Revision = 0;
+        };
         static std::mutex mutex;
-        static std::unordered_map<uint64_t, DetailInstances> cache;
+        static std::unordered_map<uint64_t, Entry> cache;
+        static std::unordered_map<const TerrainComponent*, uint64_t> last; // the entry each terrain used last
         std::lock_guard lock(mutex);
-        if (auto it = cache.find(key); it != cache.end()) return it->second;
-        if (cache.size() > 16) cache.clear();
-        return cache[key] = BuildDetails(terrain, terrain.EditHeights.size() == (size_t)SampleCount(terrain) * SampleCount(terrain) ? terrain.EditHeights : BuildHeights(terrain));
+        if (auto it = cache.find(key); it != cache.end()) return it->second.Details;
+        int n = SampleCount(terrain);
+        bool edited = terrain.EditHeights.size() == (size_t)n * n;
+        uint64_t base = withDetails(BaseKey(terrain));
+        // Since this terrain's last details only craters (logged edits) came: the details over them placed again.
+        if (auto l = last.find(&terrain); l != last.end() && edited)
+            if (auto old = cache.find(l->second); old != cache.end() && old->second.Base == base)
+            {
+                glm::ivec4 samples;
+                if (ChangedSince(terrain, old->second.Revision, samples))
+                {
+                    Entry entry = std::move(old->second);
+                    cache.erase(old);
+                    if (samples.x <= samples.z && samples.y <= samples.w)
+                    {
+                        // Two samples more all round: a detail's height, slope and density read the samples about it.
+                        samples = glm::ivec4(glm::max(glm::ivec2(samples) - 2, glm::ivec2(0)), glm::min(glm::ivec2(samples.z, samples.w) + 2, glm::ivec2(n - 1)));
+                        glm::vec2 lo, hi;
+                        SampleArea(terrain, samples, lo, hi);
+                        auto inside = [&](const glm::mat4& m) { return m[3].x >= lo.x && m[3].x < hi.x && m[3].z >= lo.y && m[3].z < hi.y; };
+                        for (auto* list : { &entry.Details.Trees, &entry.Details.Grass })
+                            list->erase(std::remove_if(list->begin(), list->end(), inside), list->end());
+                        DetailInstances added = BuildDetailsIn(terrain, terrain.EditHeights, &samples);
+                        entry.Details.Trees.insert(entry.Details.Trees.end(), added.Trees.begin(), added.Trees.end());
+                        entry.Details.Grass.insert(entry.Details.Grass.end(), added.Grass.begin(), added.Grass.end());
+                    }
+                    entry.Revision = terrain.EditRevision;
+                    l->second = key;
+                    return (cache[key] = std::move(entry)).Details;
+                }
+            }
+        if (cache.size() > 16)
+        {
+            cache.clear();
+            last.clear();
+        }
+        Entry entry;
+        entry.Base = base;
+        entry.Revision = terrain.EditRevision;
+        entry.Details = BuildDetails(terrain, edited ? terrain.EditHeights : BuildHeights(terrain));
+        last[&terrain] = key;
+        return (cache[key] = std::move(entry)).Details;
     }
 
     namespace
@@ -1152,28 +1469,37 @@ namespace Dimension::Terrain
                 ++changed;
             }
         ++terrain.EditRevision;
+        // What it touched, so the mesh, details and collider can update just there.
+        terrain.EditLog.push_back({ terrain.EditRevision, glm::ivec4(c0, r0, c1, r1) });
+        if (terrain.EditLog.size() > 64) terrain.EditLog.erase(terrain.EditLog.begin());
         return changed;
     }
 
     int DigCrater(Scene& scene, const glm::vec3& point, float radius, float depth, int paintLayer)
     {
         int changed = 0;
-        std::vector<Entity> dug;
+        std::vector<std::pair<Entity, glm::ivec4>> dug; // and the samples changed
         for (auto [e, terrain, t] : scene.GetRegistry().ViewOf<TerrainComponent, TransformComponent>())
         {
             if (!t.ActiveInHierarchy) continue;
             glm::vec3 local = glm::vec3(glm::inverse(t.World) * glm::vec4(point, 1.0f));
             glm::vec2 half = glm::max(terrain.Size, glm::vec2(0.01f)) * 0.5f + radius * 2.0f;
             if (std::abs(local.x) > half.x || std::abs(local.z) > half.y) continue;
+            // Only the terrain the point is on (not another far under or over it, as a wide one around a valley's).
+            glm::vec3 ground, normal;
+            if (Sample(terrain, t.World, point, ground, normal) && std::abs(ground.y - point.y) > radius + depth + 1.0f) continue;
             BeginEdit(terrain);
             int n = Crater(terrain, t.World, point, radius, depth, paintLayer);
-            CommitEdit(terrain);
-            if (n > 0) dug.push_back(e);
+            // While playing the edit buffers stay the terrain's (the scene is not saved): encoding them back after
+            // every crater took longer than the rest together, and decoding them again for the next.
+            if (!scene.IsRunning()) CommitEdit(terrain);
+            if (n > 0) dug.push_back({ e, terrain.EditLog.empty() ? glm::ivec4(0, 0, -1, -1) : terrain.EditLog.back().Samples });
             changed += n;
         }
         // The collider follows the new ground (the mesh redraws by itself: its settings changed).
         if (Physics3DWorld* physics = scene.GetPhysics3D())
-            for (Entity e : dug) physics->RefreshShape(e);
+            for (auto& [e, samples] : dug)
+                if (!physics->RefreshTerrain(e, samples)) physics->RefreshShape(e);
         // Navigation meshes over it: the ground there sampled again (a bowl too steep to walk out of becomes a hole).
         if (!dug.empty())
         {

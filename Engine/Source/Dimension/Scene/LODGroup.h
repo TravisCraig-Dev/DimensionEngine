@@ -54,7 +54,8 @@ namespace Dimension
         void Hidden(Scene& scene, const glm::vec3& cameraPosition, const glm::mat4& projection, bool orthographic, std::vector<uint8_t>& hidden);
 
         // A mesh for generated level `level` (0 = the mesh itself): simplified to Reduction^level of its triangles,
-        // once (kept until the mesh is reloaded).
-        AssetHandle GeneratedMesh(AssetHandle mesh, int level, float reduction);
+        // once (kept until the mesh is reloaded). Without `wait`, a level not made yet is simplified on a worker thread
+        // and the nearest finer level that is ready comes back meanwhile (the renderer: no frame waits on it).
+        AssetHandle GeneratedMesh(AssetHandle mesh, int level, float reduction, bool wait = true);
     }
 }

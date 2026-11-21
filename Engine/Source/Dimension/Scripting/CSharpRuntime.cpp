@@ -348,6 +348,8 @@ namespace Dimension
             float (*VisualEffectOp)(void*, uint64_t, int, const char*, float*);
             // Gamepad haptics: op 0 trigger rumble (left, right, seconds, pad), 1 the pad's GamepadHapticBits.
             int (*GamepadHaptics)(int, float, float, float, int);
+            // The camera jumped to another shot this frame (temporal effects start over instead of smearing across it).
+            void (*CameraCut)(void*);
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -1684,6 +1686,7 @@ namespace Dimension
                 if (auto* w = S(s).GetPhysics2D()) w->RefreshColliders(Unpack(e));
             };
             a.SetMainCamera = [](void* s, uint64_t e) { if (s) S(s).SetPrimaryCamera(Unpack(e)); };
+            a.CameraCut = [](void* s) { if (s) S(s).MarkCameraCut(); };
             a.ComponentEntity = [](void* s, uint64_t e, const char* component, const char* field, int op, uint64_t target) -> uint64_t {
                 const FieldInfo* f = nullptr;
                 void* value = ReflectedField(s, e, component, field, f);

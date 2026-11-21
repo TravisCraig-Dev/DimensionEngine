@@ -2248,7 +2248,12 @@ namespace Dimension
                 std::vector<uint8_t> holes = Terrain::HoleMap(*terrain);
                 for (size_t i = 0; i < holes.size(); ++i)
                     if (holes[i]) samples[i] = JPH::HeightFieldShapeConstants::cNoCollisionValue;
-                compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::HeightFieldShapeSettings(samples.data(), offset, cell, (JPH::uint32)n));
+                auto* field = new JPH::HeightFieldShapeSettings(samples.data(), offset, cell, (JPH::uint32)n);
+                // Room for every height the terrain can have (0 to Height), so edits while playing (craters) can be
+                // written in place (RefreshTerrain) however far they go below or above the ground it started with.
+                field->mMinHeightValue = 0.0f;
+                field->mMaxHeightValue = std::max(terrain->Height, 1e-3f);
+                compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), field);
                 if (rb.Type != BodyType::Static) Log::Warn("Terrain on '{}' only collides as a static body", reg.Get<TagComponent>(e).Name);
                 ++shapeCount;
                 // Trees collide as upright trunk capsules, as tall as their mesh.
@@ -2352,6 +2357,44 @@ namespace Dimension
         bool sensor;
         if (!BuildBodyShape(m_Scene, e, shape, friction, restitution, sensor)) return;
         m_Impl->System.GetBodyInterface().SetShape(JPH::BodyID(rb->RuntimeBody), shape, rb->Type == BodyType::Dynamic, JPH::EActivation::Activate);
+    }
+
+    bool Physics3DWorld::RefreshTerrain(Entity e, const glm::ivec4& samples)
+    {
+        auto& reg = m_Scene.GetRegistry();
+        auto* rb = m_Scene.IsValid(e) ? reg.TryGet<RigidbodyComponent>(e) : nullptr;
+        const auto* terrain = rb ? reg.TryGet<TerrainComponent>(e) : nullptr;
+        if (!terrain || rb->RuntimeBody == 0xFFFFFFFF || terrain->TreeColliderRadius > 0.0f) return false;
+        JPH::BodyID id(rb->RuntimeBody);
+        JPH::RefConst<JPH::Shape> shape = m_Impl->System.GetBodyInterface().GetShape(id);
+        // The height field: the body's shape, or one of its compound's.
+        const JPH::HeightFieldShape* field = nullptr;
+        if (shape && shape->GetSubType() == JPH::EShapeSubType::HeightField)
+            field = static_cast<const JPH::HeightFieldShape*>(shape.GetPtr());
+        else if (shape && shape->GetType() == JPH::EShapeType::Compound)
+            for (const JPH::CompoundShape::SubShape& sub : static_cast<const JPH::CompoundShape*>(shape.GetPtr())->GetSubShapes())
+                if (sub.mShape->GetSubType() == JPH::EShapeSubType::HeightField) field = static_cast<const JPH::HeightFieldShape*>(sub.mShape.GetPtr());
+        int n = Terrain::SampleCount(*terrain);
+        if (!field || (int)field->GetSampleCount() < n) return false;
+        if (samples.x > samples.z || samples.y > samples.w) return true;
+        // Whole blocks (Jolt updates those) over the changed samples; past the last sample it repeats it, as when made.
+        uint32_t block = field->GetBlockSize(), count = field->GetSampleCount();
+        uint32_t x0 = (uint32_t)std::max(samples.x, 0) / block * block, y0 = (uint32_t)std::max(samples.y, 0) / block * block;
+        uint32_t x1 = std::min(count, ((uint32_t)samples.z / block + 1) * block), y1 = std::min(count, ((uint32_t)samples.w / block + 1) * block);
+        std::vector<float> heights = terrain->EditHeights.size() == (size_t)n * n ? std::vector<float>() : Terrain::BuildHeights(*terrain);
+        const std::vector<float>& h = heights.empty() ? terrain->EditHeights : heights;
+        std::vector<uint8_t> holes = Terrain::HoleMap(*terrain);
+        std::vector<float> patch((size_t)(x1 - x0) * (y1 - y0));
+        for (uint32_t y = y0; y < y1; ++y)
+            for (uint32_t x = x0; x < x1; ++x)
+            {
+                size_t i = (size_t)std::min<int>(y, n - 1) * n + std::min<int>(x, n - 1);
+                patch[(size_t)(y - y0) * (x1 - x0) + (x - x0)] = !holes.empty() && holes[i] ? JPH::HeightFieldShapeConstants::cNoCollisionValue : h[i];
+            }
+        // (the body only ever reads it during the physics step, not now)
+        const_cast<JPH::HeightFieldShape*>(field)->SetHeights(x0, y0, x1 - x0, y1 - y0, patch.data(), (intptr_t)(x1 - x0), *m_Impl->TempAllocator);
+        m_Impl->System.GetBodyInterface().NotifyShapeChanged(id, shape->GetCenterOfMass(), false, JPH::EActivation::Activate);
+        return true;
     }
 
     // Jolt's allowed degrees of freedom: its bits are RigidbodyComponent::Constraints' shifted down by one.

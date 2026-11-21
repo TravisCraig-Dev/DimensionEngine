@@ -5,6 +5,7 @@
 #include "Dimension/Renderer/MeshSimplify.h"
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <map>
 #include <unordered_map>
 
@@ -216,25 +217,40 @@ namespace Dimension
             hidden = std::move(frame.Hidden);
         }
 
-        AssetHandle GeneratedMesh(AssetHandle mesh, int level, float reduction)
+        AssetHandle GeneratedMesh(AssetHandle mesh, int level, float reduction, bool wait)
         {
             if (level <= 0) return mesh;
             struct Entry
             {
                 std::weak_ptr<const MeshData> Source;
                 AssetHandle Handle;
+                std::shared_future<MeshData> Making; // simplifying on a worker thread
+                std::weak_ptr<const MeshData> MakingFrom;
+                bool Failed = false;                 // nothing came of it: the mesh itself stands in
             };
             static std::map<std::tuple<uint64_t, int, int>, Entry> cache;
             std::shared_ptr<const MeshData> data = AssetManager::GetMeshData(mesh);
             if (!data || data->Indices.empty()) return mesh;
             int quantized = (int)std::lround(std::clamp(reduction, 0.01f, 1.0f) * 1000.0f);
             Entry& entry = cache[{ (uint64_t)mesh, level, quantized }];
-            if (entry.Source.lock() == data && entry.Handle.IsValid()) return entry.Handle;
+            if (entry.Source.lock() == data && (entry.Handle.IsValid() || entry.Failed)) return entry.Failed ? mesh : entry.Handle;
+            // Started from another version of the mesh (reloaded since): start over.
+            if (entry.Making.valid() && entry.MakingFrom.lock() != data) entry.Making = {};
+            if (!entry.Making.valid())
+            {
+                float ratio = std::pow(quantized / 1000.0f, (float)level);
+                entry.Making = std::async(std::launch::async, [data, ratio] { return MeshSimplify::Simplify(*data, ratio, 0.08f); }).share();
+                entry.MakingFrom = data;
+            }
+            if (!wait && entry.Making.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                return GeneratedMesh(mesh, level - 1, reduction, false); // a finer level meanwhile
+            MeshData simple = entry.Making.get();
+            entry.Making = {};
             if (entry.Handle.IsValid()) AssetManager::ReleaseRuntimeMesh(entry.Handle);
-            MeshData simple = MeshSimplify::Simplify(*data, std::pow(quantized / 1000.0f, (float)level), 0.08f);
-            if (simple.Indices.empty()) return mesh;
-            entry = { data, AssetManager::RegisterRuntimeMesh(std::move(simple)) };
-            return entry.Handle;
+            entry.Source = data;
+            entry.Failed = simple.Indices.empty();
+            entry.Handle = entry.Failed ? AssetHandle(0ull) : AssetManager::RegisterRuntimeMesh(std::move(simple));
+            return entry.Failed ? mesh : entry.Handle;
         }
     }
 }

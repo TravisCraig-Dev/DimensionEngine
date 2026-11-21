@@ -279,6 +279,15 @@ namespace Dimension
         std::vector<uint8_t> EditDetails;
         std::vector<uint8_t> EditHoles;   // 1 per hole sample
         uint64_t EditRevision = 0;
+        // Edits that touched only part of the terrain (craters while playing): the revision each made and the samples
+        // it changed (columns x-z, rows y-w, inclusive). The mesh, details and collider update just there when every
+        // revision since theirs is in this log, else they rebuild whole (see Terrain::ChangedSince).
+        struct DirtyRect
+        {
+            uint64_t Revision;
+            glm::ivec4 Samples;
+        };
+        std::vector<DirtyRect> EditLog;
     };
 
     // Fur (and short grass, moss, carpet) on the object's Mesh Renderer, drawn as shells: the mesh again Shells times,

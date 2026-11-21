@@ -53,7 +53,9 @@ namespace Dimension
         out.Farthest.assign(Farthest.size(), -1.0f); // -1: no quad yet
         // The old view's NDC straight to the new view's clip space. It is linear, so a cell's other corners are its
         // first plus a step along x and y (plain floats: this runs every frame the camera moves, Debug builds too).
-        const glm::mat4 m = viewProj * glm::inverse(ViewProj);
+        // In doubles: with a far plane kilometers out, distant depths differ only in the fifth or sixth decimal, and a
+        // single-precision inverse of the old view's matrix errs by more, hiding far terrain the moving camera sees.
+        const glm::mat4 m = glm::mat4(glm::dmat4(viewProj) * glm::inverse(glm::dmat4(ViewProj)));
         const float* e = &m[0][0];
         const float sx = 2.0f / (float)Width, sy = 2.0f / (float)Height;
         const float w = (float)Width, h = (float)Height;

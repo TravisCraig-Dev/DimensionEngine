@@ -145,6 +145,9 @@ namespace Dimension
         static Ref<Mesh> CreateCylinder(uint32_t segments = 48);
 
         void Bind(VkCommandBuffer cmd) const;
+        // Rewrites vertices [first, first + count), recorded into `cmd` outside render passes: draws submitted
+        // earlier finish reading them first, and later ones see the new ones (an edited terrain's changed patch).
+        void UpdateVertices(VkCommandBuffer cmd, uint32_t first, const Vertex* vertices, uint32_t count);
         uint32_t GetIndexCount() const { return m_IndexCount; }
         uint32_t GetVertexCount() const { return m_VertexCount; }
         const AABB& GetBounds() const { return m_Bounds; }

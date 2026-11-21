@@ -42,6 +42,9 @@ namespace Dimension
         // New pixels for an RGBA8 texture without mips (same size), copied in by `cmd` (recorded outside render passes;
         // the GPU's earlier reads finish first). False when it does not fit that.
         bool Update(VkCommandBuffer cmd, const void* rgba8, uint32_t width, uint32_t height);
+        // New pixels for a rectangle of an RGBA8 texture's top level (`rgba8`: width x height, rows packed), copied in by
+        // `cmd` outside render passes; its smaller mips are redrawn over the same area. False when it does not fit.
+        bool UpdateRegion(VkCommandBuffer cmd, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const void* rgba8);
         // Copies another texture's top level onto this one's, scaled to fit (both in SHADER_READ_ONLY between frames).
         void BlitFrom(VkCommandBuffer cmd, const Texture2D& source);
 

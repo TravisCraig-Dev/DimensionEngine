@@ -102,6 +102,9 @@ namespace Dimension
         void SnapRope(Entity e, int segment);
         // Rebuilds a body's collider from its components (after its mesh, dents or terrain changed).
         void RefreshShape(Entity e);
+        // A terrain's collider after an edit of some of its samples (columns x-z, rows y-w): its height field rewritten
+        // there in place. False when it cannot (RefreshShape then): no height field, or trees that collide.
+        bool RefreshTerrain(Entity e, const glm::ivec4& samples);
         // Breaks a Breakable object into its pieces now, flying apart from `point` (world space). Returns the pieces.
         static std::vector<Entity> Break(Scene& scene, Entity e, const glm::vec3& point);
         // Queries: hitTriggers false skips trigger colliders (as Unity's QueryTriggerInteraction.Ignore).

@@ -139,6 +139,9 @@ namespace Dimension
             std::array<float, kChunkLevels> Error{};        // the most a level's surface strays from the full one (local height)
             std::array<uint32_t, kChunkLevels> First{}, Count{};
             int Levels = 1;                                 // those it has (a chunk with holes keeps every sample)
+            float Depth = 0.0f;                             // its skirts' depth
+            std::array<uint32_t, 4> Skirt{};                // the first bottom vertex of each edge's skirt (west, east,
+                                                            // south, north; 0: none)
         };
         // Splits a surface into chunks (`vertices`: BuildMesh's n x n grid): appends the skirts' vertices and writes every
         // chunk's triangles at each level to `indices` (Runtime's Surface and Chunks are made this way).
@@ -148,12 +151,21 @@ namespace Dimension
         {
             Ref<Mesh> Surface;
             std::vector<Chunk> Chunks;
+            uint64_t BaseKey = 0, Revision = 0; // the settings without the edit counter, and the edits it shows
             std::vector<Ref<Texture2D>> Splats; // a map per 4 layers
             uint64_t Key = 0;
         };
         const Runtime* GetRuntime(const TerrainComponent& terrain);
         const Runtime* GetRuntime(const TerrainComponent& terrain, uint64_t settingsKey);
         uint64_t SettingsKey(const TerrainComponent& terrain);
+        // The same without the edit counter (what stays while craters are dug).
+        uint64_t BaseKey(const TerrainComponent& terrain);
+        // Whether every edit since `revision` touched only part of the terrain (TerrainComponent::EditLog), and the
+        // samples they changed together (columns x-z, rows y-w; empty when none).
+        bool ChangedSince(const TerrainComponent& terrain, uint64_t revision, glm::ivec4& samples);
+        // GPU updates of terrains edited in place (a crater's patch of the mesh and splat maps), queued while the render
+        // list is built and recorded by the renderer into its command buffer outside render passes.
+        void FlushUploads(VkCommandBuffer cmd);
         void ReleaseRuntimes();
     }
 }

@@ -244,6 +244,8 @@ namespace Dimension
         void MoveBody(Entity e, const glm::vec3& position, const glm::vec3& rotation, bool teleport);
         // Counts the times the camera the game shows changed (a cut): the renderer starts its temporal history over.
         uint32_t GetCameraCuts() const { return m_CameraCuts; }
+        // A cut within one camera (it jumped to another shot): temporal effects start over, as on switching cameras.
+        void MarkCameraCut() { ++m_CameraCuts; }
         // A 3D physics world for queries only (raycasts against the colliders; nothing is simulated), on a scene that
         // is not playing: the navigation bake uses one on a copy of the scene being edited.
         void StartQueryPhysics();

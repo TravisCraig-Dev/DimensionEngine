@@ -6,6 +6,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include "Dimension/Renderer/RenderDevice.h"
+#include "Dimension/Renderer/Vulkan.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -900,6 +901,26 @@ namespace Dimension
         info.buffer = m_VertexBuffer.GetHandle();
         m_VertexAddress = vkGetBufferDeviceAddress(RenderDevice::Get().GetDevice(), &info);
         m_IndexBuffer = Buffer::CreateWithData(indices.data(), indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, m_Name.c_str());
+    }
+
+    void Mesh::UpdateVertices(VkCommandBuffer cmd, uint32_t first, const Vertex* vertices, uint32_t count)
+    {
+        if (!cmd || count == 0 || first + count > m_VertexCount) return;
+        VkDeviceSize bytes = (VkDeviceSize)count * sizeof(Vertex);
+        TransientAllocation staging = RenderDevice::Get().AllocateTransient(bytes, 16);
+        if (!staging) return;
+        std::memcpy(staging.Data, vertices, bytes);
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                          VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkBufferCopy region{ staging.Offset, (VkDeviceSize)first * sizeof(Vertex), bytes };
+        vkCmdCopyBuffer(cmd, staging.Buffer, m_VertexBuffer.GetHandle(), 1, &region);
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                          VK_ACCESS_2_MEMORY_READ_BIT);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            m_Bounds.Min = glm::min(m_Bounds.Min, vertices[i].Position);
+            m_Bounds.Max = glm::max(m_Bounds.Max, vertices[i].Position);
+        }
     }
 
     void Mesh::Bind(VkCommandBuffer cmd) const

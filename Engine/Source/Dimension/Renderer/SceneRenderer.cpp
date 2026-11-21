@@ -1289,6 +1289,7 @@ namespace Dimension
             DIM_PROFILE_SCOPE("Render List");
             BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
         }
+        Terrain::FlushUploads(cmd); // terrains edited in place (craters): their changed patches, before any pass draws
         if (!m_BlendJobs.empty())
         {
             // Blend shapes into this list's vertex streams, before any pass draws them.
@@ -2562,7 +2563,7 @@ namespace Dimension
             const RopeComponent* rope = cloth || soft || water ? nullptr : reg.TryGet<RopeComponent>(e);
             const WaterVolumeComponent* ocean = water && water->Ocean ? water : nullptr;
             Ref<Mesh> mesh = rope ? Rope::TubeMesh(*rope) : cloth ? Cloth::GridMesh(*cloth) : ocean ? Water::OceanMesh() : water ? Water::SurfaceMesh(*water) : terrainRt ? terrainRt->Surface
-                                                                                                                   : AssetManager::GetMesh(own ? LODGroups::GeneratedMesh(mr.Mesh, own->Level, reduction) : mr.Mesh);
+                                                                                                                   : AssetManager::GetMesh(own ? LODGroups::GeneratedMesh(mr.Mesh, own->Level, reduction, false) : mr.Mesh);
             if (!mesh || (cloth && cloth->TornEdges > 0 && cloth->TornIndices.empty())) continue; // torn to nothing
             RenderItem item;
             item.World = t.World;
@@ -2919,7 +2920,7 @@ namespace Dimension
             }
             // The next generated level, sharing the pixels while they cross-fade (dithered the other way).
             if (own && own->Next >= 0 && !m_RenderItems[mainItem].Vertices && !m_RenderItems[mainItem].Indices)
-                if (Ref<Mesh> nextMesh = AssetManager::GetMesh(LODGroups::GeneratedMesh(mr.Mesh, own->Next, reduction)))
+                if (Ref<Mesh> nextMesh = AssetManager::GetMesh(LODGroups::GeneratedMesh(mr.Mesh, own->Next, reduction, false)))
                 {
                     RenderItem next = m_RenderItems[mainItem];
                     next.Fade = own->NextFade;

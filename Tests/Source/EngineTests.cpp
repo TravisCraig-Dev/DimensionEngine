@@ -3785,11 +3785,73 @@ namespace
         RaycastHit hit1 = ray();
         CHECK(hit1 && Near(hit1.Point.y, center, 0.1f));
         auto& rtc = rt->GetRegistry().Get<TerrainComponent>(land);
-        Terrain::BeginEdit(rtc); // the committed edits, decoded again
+        Terrain::BeginEdit(rtc); // (while playing the edits stay decoded: nothing to do)
         int n = Terrain::SampleCount(rtc);
         CHECK(Terrain::LayerWeight(rtc, (size_t)(n / 2) * n + n / 2, 3) > 0.8f); // dirt (the fourth layer) at the center
         rt->OnRuntimeStop();
         CHECK(Near(heightAt(scene, 0.0f, 0.0f), before, 1e-4f)); // the edited scene is untouched
+    }
+
+    void TestTerrainCraterInPlace()
+    {
+        // Craters while playing change a patch of the terrain: they are logged (ChangedSince gives the samples), not
+        // encoded back into the scene's data, the grass and trees over them are placed again just there exactly as a
+        // full build places them, and the collider follows in place (a ray finds the new bowl).
+        Scene scene("Field");
+        auto& reg = scene.GetRegistry();
+        Entity land = scene.CreateEntity("Land");
+        auto& tc = reg.Emplace<TerrainComponent>(land);
+        tc.Size = { 128.0f, 128.0f };
+        tc.Resolution = 128;
+        tc.Height = 20.0f;
+        tc.FlatCenter = 1.0f;
+        tc.GrassDensity = 40.0f;
+        tc.TreeDensity = 4.0f;
+        if (tc.Layers.empty()) tc.Layers.resize(1);
+        tc.Layers[0].Grass = 1.0f;
+        tc.Layers[0].Trees = 1.0f;
+        reg.Emplace<MeshRendererComponent>(land);
+        scene.UpdateTransforms();
+        auto rt = scene.Clone();
+        rt->OnRuntimeStart();
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        auto& t = rt->GetRegistry().Get<TerrainComponent>(land);
+        size_t grass0 = Terrain::GetDetails(t).Grass.size(), trees0 = Terrain::GetDetails(t).Trees.size();
+        CHECK(grass0 > 1000 && trees0 > 50);
+        uint64_t revision = t.EditRevision;
+        float ground = Terrain::HeightAt(t, Terrain::BuildHeights(t), 10.0f, 10.0f);
+        CHECK(Terrain::DigCrater(*rt, { 10.0f, ground, 10.0f }, 6.0f, 1.5f) > 0);
+        CHECK(Terrain::DigCrater(*rt, { -25.0f, ground, 18.0f }, 5.0f, 1.0f) > 0);
+        glm::ivec4 changed;
+        int n = Terrain::SampleCount(t);
+        CHECK(Terrain::ChangedSince(t, revision, changed) && changed.x < changed.z && changed.y < changed.w);
+        CHECK(changed.z - changed.x < n / 2);                      // two patches, not the whole terrain
+        CHECK(t.SculptedHeights.empty() && t.EditHeights.size() == (size_t)n * n); // nothing encoded back
+        // The details updated in place match a full build (as sets: the order differs).
+        Terrain::DetailInstances inPlace = Terrain::GetDetails(t);
+        Terrain::DetailInstances full = Terrain::BuildDetails(t, t.EditHeights);
+        auto sameSet = [](std::vector<glm::mat4> a, std::vector<glm::mat4> b) {
+            if (a.size() != b.size()) return false;
+            auto less = [](const glm::mat4& x, const glm::mat4& y) { return std::tie(x[3].x, x[3].z, x[3].y) < std::tie(y[3].x, y[3].z, y[3].y); };
+            std::sort(a.begin(), a.end(), less);
+            std::sort(b.begin(), b.end(), less);
+            for (size_t i = 0; i < a.size(); ++i)
+                for (int c = 0; c < 4; ++c)
+                    if (glm::length(a[i][c] - b[i][c]) > 1e-4f) return false;
+            return true;
+        };
+        CHECK(inPlace.Grass.size() < grass0);                      // the craters cleared some
+        CHECK(sameSet(inPlace.Grass, full.Grass) && sameSet(inPlace.Trees, full.Trees));
+        // An edit that was not logged: nothing since `revision` can be patched any more.
+        uint64_t now = t.EditRevision;
+        ++t.EditRevision;
+        CHECK(!Terrain::ChangedSince(t, revision, changed) && !Terrain::ChangedSince(t, now, changed) && Terrain::ChangedSince(t, t.EditRevision, changed));
+        --t.EditRevision;
+        // The collider, rewritten in place.
+        rt->OnUpdateRuntime(1.0f / 60.0f);
+        RaycastHit hit = Physics3DWorld::Raycast(*rt, { 10.0f, 50.0f, 10.0f }, { 0.0f, -1.0f, 0.0f }, 100.0f);
+        CHECK(hit && hit.Point.y < ground - 1.0f && Near(hit.Point.y, Terrain::HeightAt(t, t.EditHeights, 10.0f, 10.0f), 0.1f));
+        rt->OnRuntimeStop();
     }
 
     // A yard for navigation tests: 30 x 30 m of ground, a wall across the middle (z = 0) from x = -15 to 6 with a gap
@@ -5648,6 +5710,25 @@ namespace
         OccluderDepth turnedOcc = occ.Reprojected(turned);
         CHECK(turnedOcc.Hides({ -6.0f, 0.0f, -20.0f }, glm::vec3(0.5f)));
         CHECK(!turnedOcc.Hides({ -30.0f, 0.0f, -12.0f }, glm::vec3(0.5f)));
+
+        // Kilometers out (a 12 km far plane, as a valley's camera has): a mountainside 3 km away fills the view and the
+        // camera has moved on a little. A ridge in front of it stays drawn and a peak far behind it stays hidden: the
+        // depths there differ in the fifth decimal, finer than a single-precision reprojection could tell apart.
+        glm::mat4 farProj = glm::perspective(glm::radians(34.0f), 16.0f / 9.0f, 0.3f, 12000.0f);
+        glm::vec3 eye0(-170.0f, 120.0f, 560.0f), ahead = glm::normalize(glm::vec3(170.0f, -60.0f, -410.0f));
+        OccluderDepth distant;
+        distant.Width = 64;
+        distant.Height = 36;
+        distant.ViewProj = farProj * glm::lookAt(eye0, eye0 + ahead, glm::vec3(0, 1, 0));
+        glm::vec4 slope = distant.ViewProj * glm::vec4(eye0 + ahead * 3000.0f, 1.0f);
+        distant.Farthest.assign((size_t)distant.Width * distant.Height, slope.z / slope.w);
+        for (glm::vec3 step : { glm::vec3(0.4f, -0.2f, -0.4f), glm::vec3(-1.5f, 0.6f, -2.0f) })
+        {
+            glm::vec3 eye = eye0 + step;
+            OccluderDepth distantMoved = distant.Reprojected(farProj * glm::lookAt(eye, eye + ahead, glm::vec3(0, 1, 0)));
+            CHECK(!distantMoved.Hides(eye0 + ahead * 2700.0f, glm::vec3(40.0f)));
+            CHECK(distantMoved.Hides(eye0 + ahead * 4500.0f, glm::vec3(40.0f)));
+        }
     }
 
     void TestMeshSimplify()
@@ -21609,6 +21690,7 @@ int main(int argc, char** argv)
     Run("Wind zones", TestWindZones);
     Run("Terrain chunks", TestTerrainChunks);
     Run("Terrain crater", TestTerrainCrater);
+    Run("Terrain crater in place", TestTerrainCraterInPlace);
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh saved with the scene", TestNavMeshSaved);
     Run("NavMesh modifiers", TestNavMeshModifiers);

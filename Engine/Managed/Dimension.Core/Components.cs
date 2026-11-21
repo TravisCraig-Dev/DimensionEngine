@@ -669,6 +669,10 @@ namespace Dimension
         public static Camera[] AllCameras => Entity.FindObjectsOfType<Camera>();
         /// <summary>Makes this the camera the game shows (marked Primary; the others not).</summary>
         public void MakeMain() => Native.Api.SetMainCamera(Entity.Scene, Entity.Id);
+        /// <summary>Tells the renderer this camera jumped to another shot this frame: TAA, motion blur and the other
+        /// effects that blend in earlier frames start over instead of smearing the last shot into the new one (switching
+        /// cameras does this by itself).</summary>
+        public void Cut() => Native.Api.CameraCut(Entity.Scene);
         /// <summary>Whether the game shows this camera now.</summary>
         public bool IsMain => Native.Api.MainCamera(Entity.Scene) == Entity.Id;
 

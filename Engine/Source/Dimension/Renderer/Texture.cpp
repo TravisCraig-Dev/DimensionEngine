@@ -37,6 +37,45 @@ namespace Dimension
         return true;
     }
 
+    bool Texture2D::UpdateRegion(VkCommandBuffer cmd, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const void* rgba8)
+    {
+        if (!cmd || width == 0 || height == 0 || x + width > GetWidth() || y + height > GetHeight() || IsHDR()) return false;
+        VkDeviceSize size = VkDeviceSize(width) * height * 4;
+        TransientAllocation staging = RenderDevice::Get().AllocateTransient(size, 16);
+        if (!staging) return false;
+        std::memcpy(staging.Data, rgba8, size);
+        VkImage image = m_Image.GetHandle();
+        uint32_t mips = m_Image.GetMipLevels();
+        Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkBufferImageCopy copy{};
+        copy.bufferOffset = staging.Offset;
+        copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.imageOffset = { (int32_t)x, (int32_t)y, 0 };
+        copy.imageExtent = { width, height, 1 };
+        vkCmdCopyBufferToImage(cmd, staging.Buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        // Each smaller level over the area: the texels covering it, from the level above (as the chain was made).
+        uint32_t x0 = x, y0 = y, x1 = x + width, y1 = y + height;
+        for (uint32_t mip = 1; mip < mips; ++mip)
+        {
+            Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+            uint32_t srcW = std::max(1u, GetWidth() >> (mip - 1)), srcH = std::max(1u, GetHeight() >> (mip - 1));
+            uint32_t dstW = std::max(1u, GetWidth() >> mip), dstH = std::max(1u, GetHeight() >> mip);
+            x0 = std::min(x0 / 2, dstW - 1), y0 = std::min(y0 / 2, dstH - 1);
+            x1 = std::min((x1 + 1) / 2, dstW), y1 = std::min((y1 + 1) / 2, dstH);
+            VkImageBlit blit{};
+            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, 1 };
+            blit.srcOffsets[0] = { (int32_t)std::min(x0 * 2, srcW - 1), (int32_t)std::min(y0 * 2, srcH - 1), 0 };
+            blit.srcOffsets[1] = { (int32_t)std::min(x1 * 2, srcW), (int32_t)std::min(y1 * 2, srcH), 1 };
+            blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1 };
+            blit.dstOffsets[0] = { (int32_t)x0, (int32_t)y0, 0 };
+            blit.dstOffsets[1] = { (int32_t)x1, (int32_t)y1, 1 };
+            vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 1);
+        }
+        Vk::TransitionImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, mips - 1, 1);
+        return true;
+    }
+
     void Texture2D::BlitFrom(VkCommandBuffer cmd, const Texture2D& source)
     {
         VkImage src = source.m_Image.GetHandle(), dst = m_Image.GetHandle();
