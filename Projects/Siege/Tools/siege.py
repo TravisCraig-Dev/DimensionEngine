@@ -21,6 +21,9 @@ def guid(rel):
     return 1_000_000 + h  # (clear of the built-in handles and small hand-made ids)
 
 
+MAX_TEXTURE = 1024
+
+
 def write_meta(rel, settings=None):
     """Writes <asset>.meta (keeping an existing one's GUID) and returns the asset's GUID."""
     path = os.path.join(ASSETS, rel)
@@ -42,6 +45,10 @@ def write_meta(rel, settings=None):
             name = os.path.basename(rel).lower()
             linear = any(h in name for h in _LINEAR_HINTS)
             settings = {"filter": 0, "srgb": not linear and ext != ".hdr", "mips": ext != ".hdr"}
+            # Images that repeat over a few meters need no more than 1024 texels a side: half the GPU memory of 2048
+            # four times over, which lets the sample fit a 4 GB card (the sky stays full size).
+            if ext != ".hdr":
+                settings["maxSize"] = MAX_TEXTURE
     with open(meta_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump({"guid": g, "type": kind, "settings": settings}, f, indent=2)
     return g

@@ -4,6 +4,7 @@
   "settings": {
     "filter": 0,
     "srgb": true,
-    "mips": true
+    "mips": true,
+    "maxSize": 1024
   }
 }
