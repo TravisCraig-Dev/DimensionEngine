@@ -62,8 +62,26 @@ def neutral_linen():
         S.write_meta(f"Textures/Props/linen/linen_{suffix}_2k.jpg")
 
 
+def slate_tiles():
+    """Grey-blue slate roofing from Poly Haven's clay_roof_tiles_02 (terracotta): its luminance with the contrast
+    raised a little, so tower cones read as slate. Normal and ARM maps reused."""
+    src = os.path.join(S.ASSETS, "Textures", "Castle", "clay_roof_tiles_02")
+    dst = os.path.join(S.ASSETS, "Textures", "Castle", "slate_tiles")
+    os.makedirs(dst, exist_ok=True)
+    a = np.asarray(Image.open(os.path.join(src, "clay_roof_tiles_02_diff_2k.jpg")).convert("RGB"), dtype=np.float64) / 255
+    lum = a @ np.array([0.2126, 0.7152, 0.0722])
+    lum = (lum - lum.mean()) * 1.4 + 0.3
+    out = np.dstack([lum * 0.92, lum * 0.97, lum * 1.05])
+    Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8)).save(os.path.join(dst, "slate_tiles_diff_2k.jpg"), quality=92)
+    for suffix in ("nor_gl", "arm"):
+        Image.open(os.path.join(src, f"clay_roof_tiles_02_{suffix}_2k.jpg")).save(os.path.join(dst, f"slate_tiles_{suffix}_2k.jpg"), quality=95)
+    for suffix in ("diff", "nor_gl", "arm"):
+        S.write_meta(f"Textures/Castle/slate_tiles/slate_tiles_{suffix}_2k.jpg")
+
+
 def main():
     neutral_linen()
+    slate_tiles()
     folder = os.path.join(S.ASSETS, "Textures", "Props", "chainmail")
     os.makedirs(folder, exist_ok=True)
     color, normal, arm = chainmail()

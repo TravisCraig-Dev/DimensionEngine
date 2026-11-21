@@ -9,7 +9,7 @@ with open(os.path.join(S.ROOT, "Project.dproj"), "w", encoding="utf-8", newline=
                "engineVersion": "0.1.0", "startScene": S.guid("Scenes/AssetPreview.scene"),
                "buildScenes": [S.guid("Scenes/AssetPreview.scene")]}, f, indent=2)
 
-grass = S.pbr_material("Materials/Preview Grass.mat", "Textures/Terrain/leafy_grass", tiling=(20, 20))
+grass = S.pbr_material("Materials/Preview Grass.mat", "Textures/Terrain/grass_ground", tiling=(20, 20))
 sc = S.Scene("AssetPreview", 10_000)
 sc.settings = {
     "ambientColor": [0.55, 0.6, 0.7], "ambientIntensity": 0.35, "bloom": True, "bloomIntensity": 0.4,

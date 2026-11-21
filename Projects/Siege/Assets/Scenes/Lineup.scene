@@ -19,7 +19,7 @@
     "tonemapping": true,
     "skyMode": 1,
     "skyIntensity": 1.0,
-    "skyTexture": 86605452878293181,
+    "skyTexture": 1035300711734215783,
     "vignette": 0.15,
     "gravity": [
       0,
@@ -204,12 +204,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Sword_Regular_A",
+          "Clip": "Sword_Regular_Combo",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 272232063449290753,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -262,12 +262,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Idle_Shield_Loop",
+          "Clip": "Death01",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 272232063449290753,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -320,12 +320,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Idle_Loop",
+          "Clip": "Spell_Simple_Shoot",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 36770254633959566,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -378,12 +378,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Walk_Loop",
+          "Clip": "Jog_Fwd_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 36770254633959566,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -436,12 +436,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Sword_Regular_A",
+          "Clip": "Sword_Regular_Combo",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 272232063449290753,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -494,12 +494,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Idle_Shield_Loop",
+          "Clip": "Death01",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 272232063449290753,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -552,12 +552,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Idle_Loop",
+          "Clip": "Spell_Simple_Shoot",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 36770254633959566,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -610,12 +610,12 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Walk_Loop",
+          "Clip": "Jog_Fwd_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
-          "Animation Source": 36770254633959566,
+          "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5

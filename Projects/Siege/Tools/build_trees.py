@@ -35,15 +35,15 @@ def branch_texture(size=(512, 1024), seed=3):
     cx = w / 2
     dc.line([(cx, h - 4), (cx, 8)], fill=(70, 52, 36, 255), width=7)
     dh.line([(cx, h - 4), (cx, 8)], fill=255, width=7)
-    for k in range(16):
-        y = h - 60 - k * (h - 120) / 16
+    for k in range(22):
+        y = h - 50 - k * (h - 100) / 22
         for side in (-1, 1):
-            span = (w * 0.46) * (1 - k / 22) * rng.uniform(0.8, 1.0)
+            span = (w * 0.46) * (1 - k / 30) * rng.uniform(0.85, 1.0)
             ex, ey = cx + side * span, y - span * 0.55
             dc.line([(cx, y), (ex, ey)], fill=(60, 46, 32, 255), width=3)
             dh.line([(cx, y), (ex, ey)], fill=220, width=3)
-            needles(cx, y, ex, ey, 22, 0.9)
-    needles(cx, h - 10, cx, 10, 26, 1.4)
+            needles(cx, y, ex, ey, 30, 1.8)
+    needles(cx, h - 10, cx, 10, 34, 2.0)
     alpha = np.array(color)[:, :, 3]
     rgb = np.array(color)[:, :, :3]
     # Spread the needle colors into the transparent texels so mip levels don't fringe dark.
@@ -76,12 +76,12 @@ def fir(height, seed):
     trunk = (np.array(pos), np.array(nor), np.array(uv, np.float32), np.array(tri))
     # Branch whorls: cards from the trunk outward, drooping, shorter toward the top.
     pos, nor, uv, tri = [], [], [], []
-    whorls = 11
+    whorls = 16
     for k in range(whorls):
         t = k / (whorls - 1)
         y = height * (0.18 + 0.8 * t)
         length = height * 0.34 * (1 - t) ** 0.9 + 0.35
-        count = 7 if t < 0.7 else 5
+        count = 9 if t < 0.7 else 6
         for b in range(count):
             a = 2 * np.pi * (b + rng.random() * 0.6) / count + k * 0.7
             d = np.array([np.cos(a), 0, np.sin(a)])
@@ -89,7 +89,7 @@ def fir(height, seed):
             droop = -0.35 - 0.25 * (1 - t)
             tip = np.array([0, y, 0]) + d * length + np.array([0, droop * length, 0])
             root = np.array([0, y + 0.1, 0])
-            width = length * 0.5
+            width = length * 0.7
             up = np.cross(tip - root, side)
             up /= np.linalg.norm(up)
             if up[1] < 0:
@@ -118,7 +118,7 @@ def write_tree(name, trunk, cards):
            "materials": [
                {"name": "Bark", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "metallicFactor": 0,
                                                          "roughnessFactor": 0.9}, "normalTexture": {"index": 1}},
-               {"name": "Fir Branches", "alphaMode": "MASK", "alphaCutoff": 0.45, "doubleSided": True,
+               {"name": "Fir Branches", "alphaMode": "MASK", "alphaCutoff": 0.4, "doubleSided": True,
                 "pbrMetallicRoughness": {"baseColorTexture": {"index": 2}, "baseColorFactor": [0.9, 1.0, 0.9, 1],
                                          "metallicFactor": 0, "roughnessFactor": 0.85}, "normalTexture": {"index": 3}}]}
     w = G.Writer(doc)

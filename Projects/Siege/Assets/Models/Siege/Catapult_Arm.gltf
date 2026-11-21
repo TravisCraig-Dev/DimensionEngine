@@ -1,0 +1,373 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "Siege meshkit"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Catapult_Arm",
+   "mesh": 0
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "Catapult_Arm.bin",
+   "byteLength": 6840
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 240,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 240,
+   "byteLength": 240,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 480,
+   "byteLength": 160,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 640,
+   "byteLength": 120,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 760,
+   "byteLength": 720,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1480,
+   "byteLength": 720,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 2200,
+   "byteLength": 480,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 2680,
+   "byteLength": 360,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 3040,
+   "byteLength": 1200,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 4240,
+   "byteLength": 1200,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 5440,
+   "byteLength": 800,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 6240,
+   "byteLength": 600,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 20,
+   "type": "VEC3",
+   "min": [
+    -0.12999999523162842,
+    -0.15000000596046448,
+    -0.5
+   ],
+   "max": [
+    0.12999999523162842,
+    0.15000000596046448,
+    4.300000190734863
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 20,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 20,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5125,
+   "count": 30,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 60,
+   "type": "VEC3",
+   "min": [
+    -0.15000000596046448,
+    -0.17000000178813934,
+    0.5600000023841858
+   ],
+   "max": [
+    0.15000000596046448,
+    0.17000000178813934,
+    3.240000009536743
+   ]
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 60,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 60,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5125,
+   "count": 90,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 8,
+   "componentType": 5126,
+   "count": 100,
+   "type": "VEC3",
+   "min": [
+    -0.3799999952316284,
+    0.15000000596046448,
+    3.7699999809265137
+   ],
+   "max": [
+    0.3799999952316284,
+    0.49000000953674316,
+    4.53000020980835
+   ]
+  },
+  {
+   "bufferView": 9,
+   "componentType": 5126,
+   "count": 100,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 10,
+   "componentType": 5126,
+   "count": 100,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 11,
+   "componentType": 5125,
+   "count": 150,
+   "type": "SCALAR"
+  }
+ ],
+ "images": [
+  {
+   "uri": "../../Textures/Props/rough_wood/rough_wood_diff_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rough_wood/rough_wood_nor_gl_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rough_wood/rough_wood_arm_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rusty_metal_02/rusty_metal_02_diff_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rusty_metal_02/rusty_metal_02_nor_gl_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rusty_metal_02/rusty_metal_02_arm_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rough_wood/rough_wood_diff_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rough_wood/rough_wood_nor_gl_2k.jpg"
+  },
+  {
+   "uri": "../../Textures/Props/rough_wood/rough_wood_arm_2k.jpg"
+  }
+ ],
+ "textures": [
+  {
+   "source": 0
+  },
+  {
+   "source": 1
+  },
+  {
+   "source": 2
+  },
+  {
+   "source": 3
+  },
+  {
+   "source": 4
+  },
+  {
+   "source": 5
+  },
+  {
+   "source": 6
+  },
+  {
+   "source": 7
+  },
+  {
+   "source": 8
+  }
+ ],
+ "materials": [
+  {
+   "name": "Wood",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     1,
+     1,
+     1,
+     1
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0,
+    "baseColorTexture": {
+     "index": 0
+    },
+    "metallicRoughnessTexture": {
+     "index": 2
+    }
+   },
+   "normalTexture": {
+    "index": 1
+   },
+   "occlusionTexture": {
+    "index": 2
+   }
+  },
+  {
+   "name": "Iron",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.45,
+     0.42,
+     0.4,
+     1
+    ],
+    "metallicFactor": 0.7,
+    "roughnessFactor": 0.6,
+    "baseColorTexture": {
+     "index": 3
+    },
+    "metallicRoughnessTexture": {
+     "index": 5
+    }
+   },
+   "normalTexture": {
+    "index": 4
+   },
+   "occlusionTexture": {
+    "index": 5
+   }
+  },
+  {
+   "name": "Dark Wood",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.55,
+     0.45,
+     0.38,
+     1
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0,
+    "baseColorTexture": {
+     "index": 6
+    },
+    "metallicRoughnessTexture": {
+     "index": 8
+    }
+   },
+   "normalTexture": {
+    "index": 7
+   },
+   "occlusionTexture": {
+    "index": 8
+   }
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Catapult_Arm",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    },
+    {
+     "attributes": {
+      "POSITION": 4,
+      "NORMAL": 5,
+      "TEXCOORD_0": 6
+     },
+     "indices": 7,
+     "material": 1
+    },
+    {
+     "attributes": {
+      "POSITION": 8,
+      "NORMAL": 9,
+      "TEXCOORD_0": 10
+     },
+     "indices": 11,
+     "material": 2
+    }
+   ]
+  }
+ ]
+}

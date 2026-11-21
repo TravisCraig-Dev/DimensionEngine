@@ -29,8 +29,8 @@ def inner_weights(x, z, h, road):
     slope = T.slope_degrees(h, spacing)
     n1 = T.fbm(x, z, 1 / 60, 3, offset=21) * 0.5 + 0.5
     n2 = T.fbm(x, z, 1 / 25, 3, offset=33) * 0.5 + 0.5
-    cliff = T.smoothstep(38, 50, slope)
-    rock = T.smoothstep(24, 36, slope) * (1 - cliff)
+    cliff = T.smoothstep(46, 56, slope)
+    rock = T.smoothstep(36, 46, slope + (n2 - 0.5) * 14) * (1 - cliff)
     open_ground = 1 - cliff - rock
     # Forest on the mountain's lower slopes and in patches on the plains' edges; not on the battlefield or road.
     d_battle = np.hypot(x - T.BATTLE_CENTER[0], (z - T.BATTLE_CENTER[1]) * 0.8)
@@ -39,7 +39,7 @@ def inner_weights(x, z, h, road):
     forest = T.smoothstep(0.52, 0.62, n1) * (1 - battlefield) * T.smoothstep(T.CASTLE_RADIUS + 40, T.CASTLE_RADIUS + 90, d_castle)
     forest *= T.smoothstep(130, 40, h - T.PLAINS_HEIGHT) * T.smoothstep(2, 14, h - T.PLAINS_HEIGHT * 0.5)
     forest *= T.smoothstep(12, 30, road)
-    trampled = battlefield * T.smoothstep(0.45, 0.75, n2) * 0.55
+    trampled = battlefield * T.smoothstep(0.55, 0.8, n2) * 0.35
     trail = T.smoothstep(7, 3.5, road)
     sparse = T.smoothstep(0.3, 0.8, n1) * 0.45 + T.smoothstep(40, 120, h - T.PLAINS_HEIGHT) * 0.5
     w = np.zeros((8,) + h.shape)
@@ -73,8 +73,8 @@ def outer_weights(x, z, h):
     slope = T.slope_degrees(h, spacing)
     n1 = T.fbm(x, z, 1 / 300, 3, offset=41) * 0.5 + 0.5
     snow = T.smoothstep(720, 900, h + n1 * 120) * (1 - T.smoothstep(48, 60, slope) * 0.6)
-    cliff = T.smoothstep(34, 46, slope) * (1 - snow)
-    rock = T.smoothstep(22, 32, slope) * (1 - cliff - snow)
+    cliff = T.smoothstep(38, 50, slope) * (1 - snow)
+    rock = T.smoothstep(28, 38, slope) * (1 - cliff - snow)
     open_ground = np.clip(1 - snow - cliff - rock, 0, 1)
     forest = T.smoothstep(0.45, 0.6, n1) * T.smoothstep(650, 450, h)
     w = np.zeros((5,) + h.shape)
@@ -98,14 +98,14 @@ def main():
     sc = S.Scene("Siege", 100_000)
     sc.settings = {
         "ambientColor": [0.55, 0.6, 0.7], "ambientIntensity": 0.3, "bloom": True, "bloomIntensity": 0.35,
-        "bloomThreshold": 1.6, "exposure": 1.0, "fxaa": False, "taa": True, "ssao": True, "ssaoIntensity": 1.0,
+        "bloomThreshold": 1.6, "exposure": 0.85, "fxaa": False, "taa": True, "ssao": True, "ssaoIntensity": 1.0,
         "ssaoRadius": 0.8, "tonemapping": True, "skyMode": 1, "skyIntensity": 1.0, "skyRotation": 2.2,
-        "skyTexture": S.guid("Sky/approaching_storm_2k.hdr"), "vignette": 0.22, "gravity": [0, -9.81, 0],
-        "fog": True, "fogDensity": 0.00022, "fogHeight": 20.0, "fogHeightFalloff": 0.01, "fogSunScattering": 0.8,
+        "skyTexture": S.guid("Sky/kloofendal_48d_partly_cloudy_puresky_2k.hdr"), "vignette": 0.22, "gravity": [0, -9.81, 0],
+        "fog": True, "fogDensity": 0.00022, "fogHeight": 20.0, "fogHeightFalloff": 0.01, "fogSunScattering": 0.35,
         "fogIntensity": 0.5, "fogMaxDistance": 6000, "fogAnisotropy": 0.65,
     }
-    hero = (-170.0, 48.0, 330.0)
-    target = (20.0, 150.0, -430.0)
+    hero = (-150.0, 52.0, 300.0)
+    target = (25.0, 190.0, -430.0)
     # (python build_siege.py --camera x,y,z --target x,y,z: another view, for checks)
     args = sys.argv[1:]
     if "--camera" in args:
@@ -113,18 +113,20 @@ def main():
     if "--target" in args:
         target = tuple(float(v) for v in args[args.index("--target") + 1].split(","))
     sc.add("Main Camera", hero, look(hero, target), Camera={
-        "Projection": 0, "Field Of View": 42, "Orthographic Size": 5, "Near Clip": 0.3, "Far Clip": 12000,
+        "Projection": 0, "Field Of View": 34, "Orthographic Size": 5, "Near Clip": 0.3, "Far Clip": 12000,
         "Primary": True, "Background": [0.4, 0.5, 0.6, 1], "Clear Flags": 1})
     sc.add("Sun", (0, 500, 0), (-0.42, -2.25, 0), Directional_Light={
-        "Color": [1.0, 0.86, 0.68], "Intensity": 3.4, "Soft Shadows": True, "Light Angle": 1.0})
+        "Color": [1.0, 0.93, 0.82], "Intensity": 3.6, "Soft Shadows": True, "Light Angle": 1.0})
 
     # The inner terrain: the castle mountain, the road and the battlefield.
     x, z, h, road = T.heights(INNER_SIZE, INNER_RES)
     np.save(os.path.join(os.path.dirname(__file__), "cache_inner_heights.npy"), h.astype(np.float32))
+    import build_castle
+    castle = build_castle.build()
     layers = [
-        layer("Grass", "Terrain", "leafy_grass", 0.22, (0.72, 0.92, 0.55, 1)),
-        layer("Rock", "Terrain", "rocky_terrain_02", 0.12, normal=1.3, triplanar=True),
-        layer("Cliff", "Terrain", "rock_face", 0.06, (0.9, 0.88, 0.85, 1), normal=1.5, triplanar=True),
+        layer("Grass", "Terrain", "grass_ground", 0.2, (0.66, 0.9, 0.5, 1)),
+        layer("Rock", "Terrain", "rock_ground", 0.12, normal=1.3, triplanar=True),
+        layer("Cliff", "Terrain", "mossy_rock", 0.1, normal=1.5, triplanar=True),
         layer("Trampled Earth", "Terrain", "dirt", 0.2),
         layer("Forest Floor", "Terrain", "forest_ground_04", 0.2, trees=1.0),
         layer("Road", "Terrain", "rocky_trail", 0.2),
@@ -143,9 +145,9 @@ def main():
     # The outer terrain: the ranges around the valley.
     xo, zo, ho = outer_heights()
     outer_layers = [
-        layer("Meadow", "Terrain", "leafy_grass", 0.05, (0.8, 0.88, 0.7, 1)),
-        layer("Rock", "Terrain", "rocky_terrain_02", 0.03, triplanar=True),
-        layer("Cliff", "Terrain", "rock_face", 0.02, normal=1.3, triplanar=True),
+        layer("Meadow", "Terrain", "aerial_grass_rock", 0.05, (0.85, 0.9, 0.8, 1)),
+        layer("Rock", "Terrain", "rock_ground", 0.06, triplanar=True),
+        layer("Cliff", "Terrain", "mossy_rock", 0.06, normal=1.3, triplanar=True),
         layer("Snow", "Terrain", "snow_02", 0.04, (0.95, 0.97, 1.0, 1)),
         layer("Forest", "Terrain", "forest_ground_04", 0.05, (0.55, 0.65, 0.5, 1), trees=1.0),
     ]
@@ -157,6 +159,12 @@ def main():
                     "Tree Max Slope": 32,
                     "Sculpted Heights": T.encode_heights(np.clip(ho, 0, None), OUTER_HEIGHT),
                     "Painted Layers": T.encode_layers(outer_weights(xo, zo, ho))})
+    # The castle (its model's origin is the crag's center at height 0) and its gate.
+    sc.add("Castle", (float(T.CASTLE_CENTER[0]), 0.0, float(T.CASTLE_CENTER[1])),
+           Mesh_Renderer=S.mesh_renderer(castle["model"]))
+    # The battle (Scripts/Battle.cs) and the objects it copies.
+    import battle_templates
+    battle_templates.add(sc)
     guid = sc.save("Scenes/Siege.scene")
     with open(os.path.join(S.ROOT, "Project.dproj"), "w", encoding="utf-8", newline="\n") as f:
         json.dump({"name": "Siege", "gameModule": "", "windowWidth": 1600, "windowHeight": 900,

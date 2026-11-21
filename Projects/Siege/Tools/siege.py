@@ -94,10 +94,10 @@ class Scene:
         self.entities = []
         self.settings = {}
 
-    def add(self, name, position=(0, 0, 0), rotation=(0, 0, 0), scale=(1, 1, 1), parent=0, **components):
+    def add(self, name, position=(0, 0, 0), rotation=(0, 0, 0), scale=(1, 1, 1), parent=0, active=True, **components):
         g = self.next
         self.next += 1
-        comps = {"Tag": {"Name": name, "Tag": "Untagged", "Active": True, "Layer": 0},
+        comps = {"Tag": {"Name": name, "Tag": "Untagged", "Active": active, "Layer": 0},
                  "Transform": {"Position": list(position), "Rotation": list(rotation), "Scale": list(scale)}}
         for key, value in components.items():
             comps[key.replace("_", " ")] = value

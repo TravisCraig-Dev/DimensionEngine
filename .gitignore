@@ -20,3 +20,4 @@ Projects/*/Scripts/Directory.Build.targets
 # Siege tool by-products
 Projects/Siege/Tools/__pycache__/
 Projects/Siege/Tools/cache_*.npy
+Projects/Siege/Scripts/Directory.Build.props

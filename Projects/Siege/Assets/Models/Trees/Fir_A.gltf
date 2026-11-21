@@ -61,7 +61,7 @@
   {
    "name": "Fir Branches",
    "alphaMode": "MASK",
-   "alphaCutoff": 0.45,
+   "alphaCutoff": 0.4,
    "doubleSided": true,
    "pbrMetallicRoughness": {
     "baseColorTexture": {
@@ -84,7 +84,7 @@
  "buffers": [
   {
    "uri": "Fir_A.bin",
-   "byteLength": 11592
+   "byteLength": 20712
   }
  ],
  "bufferViews": [
@@ -115,25 +115,25 @@
   {
    "buffer": 0,
    "byteOffset": 1104,
-   "byteLength": 3312,
+   "byteLength": 6192,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 4416,
-   "byteLength": 3312,
+   "byteOffset": 7296,
+   "byteLength": 6192,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 7728,
-   "byteLength": 2208,
+   "byteOffset": 13488,
+   "byteLength": 4128,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 9936,
-   "byteLength": 1656,
+   "byteOffset": 17616,
+   "byteLength": 3096,
    "target": 34963
   }
  ],
@@ -175,35 +175,35 @@
   {
    "bufferView": 4,
    "componentType": 5126,
-   "count": 276,
+   "count": 516,
    "type": "VEC3",
    "min": [
-    -5.179436206817627,
+    -5.376153945922852,
     -0.5460000038146973,
-    -5.114549160003662
+    -5.413715839385986
    ],
    "max": [
-    5.2647905349731445,
+    5.373520374298096,
     13.819999694824219,
-    5.258695125579834
+    5.362581729888916
    ]
   },
   {
    "bufferView": 5,
    "componentType": 5126,
-   "count": 276,
+   "count": 516,
    "type": "VEC3"
   },
   {
    "bufferView": 6,
    "componentType": 5126,
-   "count": 276,
+   "count": 516,
    "type": "VEC2"
   },
   {
    "bufferView": 7,
    "componentType": 5125,
-   "count": 414,
+   "count": 774,
    "type": "SCALAR"
   }
  ],

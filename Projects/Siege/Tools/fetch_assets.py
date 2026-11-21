@@ -21,7 +21,8 @@ AGENT = {"User-Agent": "dimension-siege-assets/1.0"}
 # Poly Haven (CC0): PBR textures at 2k (color, OpenGL normal, AO/roughness/metal packed as glTF expects).
 TEXTURES = {
     # terrain
-    "leafy_grass": "Terrain", "sparse_grass": "Terrain", "rocky_terrain_02": "Terrain", "rock_face": "Terrain",
+    "grass_ground": "Terrain", "aerial_grass_rock": "Terrain", "sparse_grass": "Terrain", "rock_ground": "Terrain",
+    "mossy_rock": "Terrain",
     "snow_02": "Terrain", "dirt": "Terrain", "burned_ground_01": "Terrain", "forest_ground_04": "Terrain",
     "rocky_trail": "Terrain",
     # castle
@@ -44,7 +45,7 @@ MODELS = [
 ]
 
 # Poly Haven (CC0): sky HDRIs at 2k.
-HDRIS = ["alps_field", "approaching_storm"]
+HDRIS = ["kloofendal_48d_partly_cloudy_puresky"]
 
 # Quaternius (CC0), from public mirrors of the itch.io downloads (CC0 allows redistribution).
 NAFIS = "https://raw.githubusercontent.com/NafisRayan/Animate-Rigged-Humanoid-No-Blender/HEAD/"
