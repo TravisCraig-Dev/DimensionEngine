@@ -1,5 +1,7 @@
 #pragma once
 #include <array>
+#include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -8,7 +10,19 @@ namespace Dimension::Music
 {
     // ---- Effects ----
 
-    enum class EffectType : int { EQ = 0, Compressor, Delay, Reverb, Filter, Count };
+    // A VST3 plug-in a channel plays or a mixer track runs: which one, its saved state, and the parameters the
+    // song's automation sets (normalized, by parameter id).
+    struct PluginRef
+    {
+        std::string Name, Module, ClassId;  // Module: the .vst3 path
+        uint64_t Id = 0;                    // its instance (PluginRack), kept in the file
+        std::string State, ControllerState; // base64
+        std::map<int, float> Values;
+        std::map<int, std::string> ParamNames;
+        bool Valid() const { return !Module.empty() && !ClassId.empty(); }
+    };
+
+    enum class EffectType : int { EQ = 0, Compressor, Delay, Reverb, Filter, Plugin, Count };
     const char* EffectTypeName(EffectType t);
     constexpr int kEffectParams = 6;
     constexpr int kMaxEffects = 8;  // slots per mixer track
@@ -37,6 +51,7 @@ namespace Dimension::Music
         bool Enabled = true;
         float Mix = 1.0f;
         std::array<float, kEffectParams> P{};
+        PluginRef Plugin; // (Plugin effects)
         static Effect Make(EffectType type); // with the type's defaults
     };
 
@@ -55,13 +70,15 @@ namespace Dimension::Music
     // ---- Automation ----
 
     // A setting automation can move.
-    enum class ParamKind : int { ChannelVolume = 0, ChannelPan, SynthCutoff, SynthResonance, MixerVolume, MixerPan, EffectParam, EffectMix };
+    // PluginParam: a plug-in's parameter (Param = its id): a channel's instrument (Index = the channel, Slot = -1) or
+    // a mixer track's effect (Index = the track, Slot = the effect).
+    enum class ParamKind : int { ChannelVolume = 0, ChannelPan, SynthCutoff, SynthResonance, MixerVolume, MixerPan, EffectParam, EffectMix, PluginParam };
     struct ParamRef
     {
         ParamKind Kind = ParamKind::ChannelVolume;
         int Index = 0;  // the channel, or the mixer track
-        int Slot = 0;   // effect slot (EffectParam, EffectMix)
-        int Param = 0;  // effect setting (EffectParam)
+        int Slot = 0;   // effect slot (EffectParam, EffectMix, PluginParam on an effect; -1 for an instrument)
+        int Param = 0;  // effect setting (EffectParam), or plug-in parameter id (PluginParam)
         bool operator==(const ParamRef&) const = default;
     };
 

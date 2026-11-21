@@ -11,10 +11,42 @@ namespace Dimension::Music
     {
         bool TargetsChannel(const ParamRef& r)
         {
-            return r.Kind == ParamKind::ChannelVolume || r.Kind == ParamKind::ChannelPan || r.Kind == ParamKind::SynthCutoff || r.Kind == ParamKind::SynthResonance;
+            return r.Kind == ParamKind::ChannelVolume || r.Kind == ParamKind::ChannelPan || r.Kind == ParamKind::SynthCutoff ||
+                   r.Kind == ParamKind::SynthResonance || (r.Kind == ParamKind::PluginParam && r.Slot < 0);
         }
         bool TargetsMixer(const ParamRef& r) { return !TargetsChannel(r); }
-        bool TargetsEffect(const ParamRef& r) { return r.Kind == ParamKind::EffectParam || r.Kind == ParamKind::EffectMix; }
+        bool TargetsEffect(const ParamRef& r)
+        {
+            return r.Kind == ParamKind::EffectParam || r.Kind == ParamKind::EffectMix || (r.Kind == ParamKind::PluginParam && r.Slot >= 0);
+        }
+
+        nlohmann::json PluginToJson(const PluginRef& p)
+        {
+            nlohmann::json values = nlohmann::json::object(), names = nlohmann::json::object();
+            for (auto& [id, v] : p.Values) values[std::to_string(id)] = v;
+            for (auto& [id, n] : p.ParamNames) names[std::to_string(id)] = n;
+            return { { "name", p.Name }, { "module", p.Module }, { "classId", p.ClassId }, { "id", p.Id }, { "state", p.State },
+                     { "controllerState", p.ControllerState }, { "values", values }, { "paramNames", names } };
+        }
+
+        PluginRef PluginFromJson(const nlohmann::json& j)
+        {
+            PluginRef p;
+            if (!j.is_object()) return p;
+            p.Name = j.value("name", "");
+            p.Module = j.value("module", "");
+            p.ClassId = j.value("classId", "");
+            p.Id = j.value("id", (uint64_t)0);
+            p.State = j.value("state", "");
+            p.ControllerState = j.value("controllerState", "");
+            // (bound to locals: iterating items() of a temporary is undefined)
+            const nlohmann::json values = j.value("values", nlohmann::json::object()), names = j.value("paramNames", nlohmann::json::object());
+            for (auto& [k, v] : values.items())
+                if (v.is_number()) p.Values[std::atoi(k.c_str())] = std::clamp(v.get<float>(), 0.0f, 1.0f);
+            for (auto& [k, v] : names.items())
+                if (v.is_string()) p.ParamNames[std::atoi(k.c_str())] = v.get<std::string>();
+            return p;
+        }
     }
 
 
@@ -25,6 +57,7 @@ namespace Dimension::Music
         case InstrumentType::Drum: return "Drum";
         case InstrumentType::Synth: return "Synth";
         case InstrumentType::Sampler: return "Sampler";
+        case InstrumentType::Plugin: return "Plugin";
         }
         return "Drum";
     }
@@ -116,8 +149,44 @@ namespace Dimension::Music
             if (TargetsEffect(a.Target) && a.Target.Index == track && a.Target.Slot > slot) --a.Target.Slot;
     }
 
+    PluginRef* Song::PluginOf(const ParamRef& r)
+    {
+        if (r.Kind != ParamKind::PluginParam) return nullptr;
+        if (r.Slot < 0)
+            return r.Index >= 0 && r.Index < (int)Channels.size() && Channels[r.Index].Type == InstrumentType::Plugin ? &Channels[r.Index].Plugin : nullptr;
+        if (r.Index < 0 || r.Index >= (int)Mixer.size() || r.Slot >= (int)Mixer[r.Index].Effects.size()) return nullptr;
+        Effect& e = Mixer[r.Index].Effects[r.Slot];
+        return e.Type == EffectType::Plugin ? &e.Plugin : nullptr;
+    }
+
+    std::vector<PluginRef*> Song::Plugins()
+    {
+        std::vector<PluginRef*> out;
+        for (Channel& c : Channels)
+            if (c.Type == InstrumentType::Plugin && c.Plugin.Valid()) out.push_back(&c.Plugin);
+        for (MixerTrack& m : Mixer)
+            for (Effect& e : m.Effects)
+                if (e.Type == EffectType::Plugin && e.Plugin.Valid()) out.push_back(&e.Plugin);
+        return out;
+    }
+
+    std::vector<const PluginRef*> Song::Plugins() const
+    {
+        std::vector<const PluginRef*> out;
+        for (PluginRef* p : const_cast<Song*>(this)->Plugins()) out.push_back(p);
+        return out;
+    }
+
     float* Song::Param(const ParamRef& r)
     {
+        if (r.Kind == ParamKind::PluginParam)
+        {
+            PluginRef* p = PluginOf(r);
+            if (!p) return nullptr;
+            auto it = p->Values.find(r.Param);
+            if (it == p->Values.end()) it = p->Values.emplace(r.Param, 0.5f).first; // (made by the automation clip that sets it)
+            return &it->second;
+        }
         if (TargetsChannel(r))
         {
             if (r.Index < 0 || r.Index >= (int)Channels.size()) return nullptr;
@@ -138,7 +207,7 @@ namespace Dimension::Music
         if (r.Slot < 0 || r.Slot >= (int)m.Effects.size()) return nullptr;
         Effect& e = m.Effects[r.Slot];
         if (r.Kind == ParamKind::EffectMix) return &e.Mix;
-        if (r.Param < 0 || r.Param >= GetEffectInfo(e.Type).ParamCount) return nullptr;
+        if (r.Kind != ParamKind::EffectParam || r.Param < 0 || r.Param >= GetEffectInfo(e.Type).ParamCount) return nullptr;
         return &e.P[r.Param];
     }
 
@@ -154,7 +223,8 @@ namespace Dimension::Music
         case ParamKind::MixerPan: min = -1.0f, max = 1.0f; break;
         case ParamKind::SynthCutoff: min = 20.0f, max = 20000.0f, log = true; break;
         case ParamKind::SynthResonance:
-        case ParamKind::EffectMix: min = 0.0f, max = 1.0f; break;
+        case ParamKind::EffectMix:
+        case ParamKind::PluginParam: min = 0.0f, max = 1.0f; break;
         case ParamKind::EffectParam:
         {
             const EffectParamInfo& info = GetEffectInfo(Mixer[r.Index].Effects[r.Slot].Type).Params[r.Param];
@@ -181,6 +251,13 @@ namespace Dimension::Music
         {
             EffectType t = Mixer[r.Index].Effects[r.Slot].Type;
             return MixerTrackName(r.Index) + " " + EffectTypeName(t) + " " + GetEffectInfo(t).Params[r.Param].Name;
+        }
+        case ParamKind::PluginParam:
+        {
+            const PluginRef* p = const_cast<Song*>(this)->PluginOf(r);
+            std::string owner = r.Slot < 0 ? Channels[r.Index].Name : MixerTrackName(r.Index) + " " + p->Name;
+            auto it = p->ParamNames.find(r.Param);
+            return owner + " " + (it != p->ParamNames.end() ? it->second : "Parameter " + std::to_string(r.Param));
         }
         }
         return "?";
@@ -349,6 +426,7 @@ namespace Dimension::Music
                                 { "pulseWidth", s.PulseWidth }, { "cutoff", s.Cutoff }, { "resonance", s.Resonance }, { "filterEnv", s.FilterEnv },
                                 { "glide", s.Glide }, { "amp", EnvToJson(s.Amp) }, { "filter", EnvToJson(s.Filter) } };
             }
+            if (c.Type == InstrumentType::Plugin) cj["plugin"] = PluginToJson(c.Plugin);
             if (c.Type == InstrumentType::Sampler)
                 cj["sampler"] = { { "sample", c.Sampler.Sample }, { "samplePath", c.Sampler.SamplePath }, { "rootKey", c.Sampler.RootKey },
                                   { "oneShot", c.Sampler.OneShot }, { "reverse", c.Sampler.Reverse }, { "amp", EnvToJson(c.Sampler.Amp) } };
@@ -378,7 +456,9 @@ namespace Dimension::Music
             {
                 json params = json::array();
                 for (int i = 0; i < GetEffectInfo(e.Type).ParamCount; ++i) params.push_back(e.P[i]);
-                effects.push_back({ { "type", EffectTypeName(e.Type) }, { "enabled", e.Enabled }, { "mix", e.Mix }, { "params", std::move(params) } });
+                json ej = { { "type", EffectTypeName(e.Type) }, { "enabled", e.Enabled }, { "mix", e.Mix }, { "params", std::move(params) } };
+                if (e.Type == EffectType::Plugin) ej["plugin"] = PluginToJson(e.Plugin);
+                effects.push_back(std::move(ej));
             }
             mixer.push_back({ { "name", m.Name }, { "volume", m.Volume }, { "pan", m.Pan }, { "mute", m.Mute }, { "output", m.Output },
                               { "effects", std::move(effects) } });
@@ -412,7 +492,8 @@ namespace Dimension::Music
                 Channel c;
                 c.Name = cj.value("name", "Channel");
                 std::string type = cj.value("type", "Drum");
-                c.Type = type == "Synth" ? InstrumentType::Synth : type == "Sampler" ? InstrumentType::Sampler : InstrumentType::Drum;
+                c.Type = type == "Synth" ? InstrumentType::Synth : type == "Sampler" ? InstrumentType::Sampler : type == "Plugin" ? InstrumentType::Plugin : InstrumentType::Drum;
+                if (cj.contains("plugin")) c.Plugin = PluginFromJson(cj["plugin"]);
                 c.Volume = cj.value("volume", 0.78f);
                 c.Pan = cj.value("pan", 0.0f);
                 c.Mute = cj.value("mute", false);
@@ -503,6 +584,7 @@ namespace Dimension::Music
                     e.Mix = ej.value("mix", e.Mix);
                     const json params = ej.value("params", json::array());
                     for (int i = 0; i < GetEffectInfo(t).ParamCount && i < (int)params.size(); ++i) e.P[i] = params[i].get<float>();
+                    if (ej.contains("plugin")) e.Plugin = PluginFromJson(ej["plugin"]);
                     m.Effects.push_back(e);
                 }
                 out.Mixer.push_back(std::move(m));

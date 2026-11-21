@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/Music/Song.h"
 #include "Dimension/Music/Effects.h"
+#include "Dimension/Music/Plugin.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -38,6 +39,9 @@ namespace Dimension::Music
 
         // A copy of the song is played (call again after each edit); samples are loaded here, not on the audio thread.
         void SetSong(const Song& song);
+        // Where the song's plug-ins live (instances by their references' ids). Set before SetSong; without one, plug-in
+        // channels and effects are silent / pass through.
+        void SetRack(std::shared_ptr<PluginRack> rack);
         void SetMode(Mode mode);
         Mode GetMode() const { return m_Mode; }
         void SetPattern(int pattern);
@@ -78,6 +82,7 @@ namespace Dimension::Music
         double LoopEnd() const;
         float RenderVoice(Voice& v, float& left, float& right);
         void RenderChunk(float* out, uint32_t frames);
+        void PluginNote(int channel, int key, float velocity, bool on, int frame);
         void ApplyAutomation(double tick);
 
         uint32_t m_SampleRate;
@@ -97,6 +102,19 @@ namespace Dimension::Music
         std::array<std::atomic<float>, kMaxMixer> m_MixerPeaks{};
         std::vector<std::vector<std::unique_ptr<EffectProcessor>>> m_Fx; // [track][slot]
         std::vector<float> m_Bus;                                         // [track] kChunk stereo frames each
+        // Plug-ins: the rack, each channel's instrument and each effect slot's (null where none), notes waiting for
+        // their ends, and scratch buffers.
+        std::shared_ptr<PluginRack> m_Rack;
+        std::vector<std::shared_ptr<PluginInstance>> m_ChannelPlugins;
+        std::vector<std::vector<std::shared_ptr<PluginInstance>>> m_EffectPlugins;
+        struct PluginNoteOff
+        {
+            int Channel, Key;
+            double Frames; // until it ends
+        };
+        std::vector<PluginNoteOff> m_PluginNoteOffs;
+        std::vector<float> m_PluginBuffer, m_PluginDry;
+        int64_t m_SongSamples = 0;
     };
 
     // Renders a song offline: Pattern mode plays `pattern` `loops` times, Song mode the Playlist once; then `tail`

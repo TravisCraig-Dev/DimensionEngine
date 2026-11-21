@@ -28,7 +28,10 @@ target_include_directories(DimensionEngine PUBLIC Source)
 # Public: headers only. Private: libraries whose state must exist exactly once (inside this DLL).
 target_link_libraries(DimensionEngine
     PUBLIC volk_headers vma glm::glm nlohmann_json::nlohmann_json imgui_headers
-    PRIVATE volk glfw stb cgltf ufbx box2d Jolt miniaudio vhacd opusfile msdfgen)
+    PRIVATE volk glfw stb cgltf ufbx box2d Jolt miniaudio vhacd opusfile msdfgen vst3hosting)
+# The VST3 host's sources include the SDK, which wants RELEASE (or DEVELOPMENT) defined; kept off the rest of the engine.
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/Source/Dimension/Music/Vst3Host.cpp
+                            ${CMAKE_CURRENT_SOURCE_DIR}/Source/Dimension/Music/PluginWindow.cpp PROPERTIES COMPILE_DEFINITIONS RELEASE=1)
 target_compile_definitions(DimensionEngine
     PUBLIC GLFW_INCLUDE_NONE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS GLM_ENABLE_EXPERIMENTAL $<$<CONFIG:Debug>:DIM_DEBUG>)
 if(WIN32)

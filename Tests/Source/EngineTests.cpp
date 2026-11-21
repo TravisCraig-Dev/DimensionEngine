@@ -60,6 +60,7 @@
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Music/SongPlayer.h>
 #include <Dimension/Music/Editing.h>
+#include <Dimension/Music/Plugin.h>
 #include <Dimension/Renderer/ColrV1.h>
 #include <Dimension/Platform/Platform.h>
 #include <Dimension/Audio/Microphone.h>
@@ -20910,6 +20911,179 @@ namespace
         CHECK(live.TakeMixerPeak(1) > 0.1f && live.TakeMixerPeak(2) > 0.1f && live.TakeMixerPeak(0) > 0.1f && live.TakeMixerPeak(1) == 0.0f);
     }
 
+    // The VST3 SDK's example plug-ins, built into out/v3b by out/vst3build.bat (the plug-in tests skip without them).
+    fs::path MusicTestPluginFolder()
+    {
+        for (fs::path p = fs::current_path(); !p.empty(); p = p.parent_path())
+        {
+            fs::path candidate = p / "out" / "v3b" / "VST3" / "Release";
+            if (fs::exists(candidate / "again.vst3")) return candidate;
+            if (p == p.parent_path()) break;
+        }
+        fs::path exe = fs::path(DIM_SOURCE_DIR) / "out" / "v3b" / "VST3" / "Release";
+        return fs::exists(exe / "again.vst3") ? exe : fs::path();
+    }
+
+    void TestMusicPlugins()
+    {
+        using namespace Dimension::Music;
+        // References in songs survive a save (whatever is installed).
+        Song s = MusicSineSong(60, 96);
+        Channel inst;
+        inst.Name = "Keys";
+        inst.Type = InstrumentType::Plugin;
+        inst.Plugin = { "mda Piano", "C:/Plugins/mda.vst3", "0123456789ABCDEF0123456789ABCDEF", 4242, "c3RhdGU=", "Y3RybA==", { { 7, 0.25f } }, { { 7, "Decay" } } };
+        s.Channels.push_back(inst);
+        Effect fx = Effect::Make(EffectType::Plugin);
+        fx.Plugin = { "AGain", "C:/Plugins/again.vst3", "FEDCBA9876543210FEDCBA9876543210", 77, "", "", {}, {} };
+        s.Master().Effects.push_back(fx);
+        s.Automation.push_back({ { ParamKind::PluginParam, 1, -1, 7 }, 0, 0, 384, { { 0, 0.0f }, { 384, 1.0f } } });
+        s.Automation.push_back({ { ParamKind::PluginParam, 0, 0, 3 }, 1, 0, 384, { { 0, 1.0f } } });
+        Song back;
+        CHECK(Song::FromJson(s.ToJson(), back));
+        CHECK(back.Channels[1].Type == InstrumentType::Plugin && back.Channels[1].Plugin.Id == 4242 && back.Channels[1].Plugin.State == "c3RhdGU=" &&
+              back.Channels[1].Plugin.Values.at(7) == 0.25f && back.Channels[1].Plugin.ParamNames.at(7) == "Decay");
+        CHECK(back.Master().Effects[0].Type == EffectType::Plugin && back.Master().Effects[0].Plugin.ClassId == fx.Plugin.ClassId);
+        CHECK(back.Automation.size() == 2 && back.ParamName(back.Automation[0].Target) == "Keys Decay");
+        CHECK(back.ParamName(back.Automation[1].Target) == "Master AGain Parameter 3");
+        CHECK(back.Plugins().size() == 2);
+        // Removing the effect takes its automation; removing the channel takes the instrument's.
+        back.RemoveEffect(0, 0);
+        CHECK(back.Automation.size() == 1);
+        back.RemoveChannel(1);
+        CHECK(back.Automation.empty() && back.Plugins().empty());
+        CHECK(Base64Decode(Base64Encode({ 1, 2, 3, 250, 0, 9, 8 })) == std::vector<uint8_t>({ 1, 2, 3, 250, 0, 9, 8 }));
+        CHECK(Base64Encode({ 'M', 'a' }) == "TWE=" && NewPluginId() != NewPluginId());
+
+        fs::path folder = MusicTestPluginFolder();
+        if (folder.empty() || !Plugins::IsSupported())
+        {
+            std::printf("  (skipped the plug-in checks: build the SDK's examples with out/vst3build.bat)\n");
+            return;
+        }
+        // Scanning: the effect and instruments in the example bundles.
+        std::vector<std::string> errors;
+        auto found = Plugins::Scan({ folder }, &errors);
+        const PluginInfo *gain = nullptr, *synth = nullptr;
+        for (const PluginInfo& p : found)
+        {
+            if (p.Name == "AGain VST3") gain = &p;
+            if (p.Name == "mda JX10") synth = &p;
+        }
+        CHECK(gain && !gain->Instrument && gain->ClassId.size() == 32);
+        CHECK(synth && synth->Instrument);
+        if (!gain || !synth) return;
+
+        // An effect: AGain's gain parameter scales the sound; its state comes back in a new instance.
+        const uint32_t rate = 48000;
+        std::string error;
+        auto again = PluginInstance::Create(gain->Module, gain->ClassId, rate, 64, error);
+        CHECK(again && error.empty());
+        if (!again) return;
+        CHECK(!again->IsInstrument() && again->GetName() == "AGain VST3");
+        auto params = again->Parameters();
+        const PluginParameter* gainParam = nullptr;
+        for (const auto& p : params)
+            if (p.Title == "Gain") gainParam = &p;
+        CHECK(gainParam != nullptr);
+        if (!gainParam) return;
+        auto blockRms = [&](PluginInstance& p) {
+            std::vector<float> b(64 * 2);
+            float rms = 0.0f;
+            for (int i = 0; i < 20; ++i)
+            {
+                for (int f = 0; f < 64; ++f) b[f * 2] = b[f * 2 + 1] = 0.5f * (float)std::sin(2.0 * 3.14159265 * 440.0 * (i * 64 + f) / rate);
+                p.Process(b.data(), 64, {});
+                rms = MusicRms(b, 0, 64);
+            }
+            return rms;
+        };
+        again->SetParameter(gainParam->Id, 1.0);
+        float loud = blockRms(*again);
+        again->SetParameter(gainParam->Id, 0.25);
+        float quiet = blockRms(*again);
+        CHECK(loud > 0.1f && quiet < loud * 0.5f && quiet > 0.0f);
+        CHECK(Near((float)again->GetParameter(gainParam->Id), 0.25f) && !again->FormatParameter(gainParam->Id, 0.25).empty());
+        std::vector<uint8_t> component, controller;
+        CHECK(again->GetState(component, controller) && !component.empty());
+        auto copy = PluginInstance::Create(gain->Module, gain->ClassId, rate, 64, error);
+        CHECK(copy && copy->SetState(component, controller));
+        if (copy) CHECK(Near((float)copy->GetParameter(gainParam->Id), 0.25f) && Near(blockRms(*copy), quiet, quiet * 0.05f));
+        // Parameter changes on the audio thread (automation's way in).
+        again->QueueParameter(gainParam->Id, 0.0, 0);
+        std::vector<float> b(64 * 2, 0.5f);
+        again->Process(b.data(), 64, {});
+        CHECK(MusicRms(b, 8, 64) < 0.01f);
+
+        // An instrument: a note sounds, and stops after its release.
+        auto jx = PluginInstance::Create(synth->Module, synth->ClassId, rate, 64, error);
+        CHECK(jx && jx->IsInstrument());
+        if (!jx) return;
+        std::vector<float> out(64 * 2);
+        jx->QueueNote(60, 0.9f, true, 0);
+        float peak = 0.0f;
+        for (int i = 0; i < 100; ++i)
+        {
+            std::fill(out.begin(), out.end(), 0.0f);
+            jx->Process(out.data(), 64, {});
+            for (float x : out) peak = std::max(peak, std::fabs(x));
+        }
+        CHECK(peak > 0.01f);
+        jx->QueueNote(60, 0.0f, false, 0);
+        for (int i = 0; i < 3000; ++i) jx->Process(out.data(), 64, {});
+        CHECK(MusicRms(out, 0, 64) < peak * 0.01f); // (its default patch has a long release)
+
+        // In a song: a plug-in channel plays its notes on time; a plug-in effect on the Master changes the sound.
+        Song song;
+        song.Tempo = 120.0f;
+        Channel keys;
+        keys.Name = "JX10";
+        keys.Type = InstrumentType::Plugin;
+        keys.Volume = 1.0f;
+        keys.Plugin = { synth->Name, synth->Module.string(), synth->ClassId, NewPluginId() };
+        song.Channels.push_back(keys);
+        Pattern p;
+        p.Notes.push_back({ 0, 96, 96, 60, 0.9f }); // half a second in, for half a second
+        song.Patterns.push_back(p);
+        song.Master().Volume = 1.0f;
+        auto rendered = RenderSong(song, rate, SongPlayer::Mode::Pattern, 0, 1, 0.5f);
+        size_t onset = MusicOnset(rendered, 1e-4f);
+        CHECK(onset >= rate / 2 && onset < rate / 2 + 128); // (JX10's attack starts quietly)
+        CHECK(MusicRms(rendered, rate * 6 / 10, rate * 9 / 10) > 0.01f);
+        // AGain at a quarter on the Master, from its saved state: quieter.
+        Effect g = Effect::Make(EffectType::Plugin);
+        g.Plugin = { gain->Name, gain->Module.string(), gain->ClassId, NewPluginId(), Base64Encode(component), Base64Encode(controller) };
+        song.Master().Effects.push_back(g);
+        auto through = RenderSong(song, rate, SongPlayer::Mode::Pattern, 0, 1, 0.5f);
+        float before = MusicRms(rendered, rate * 6 / 10, rate * 9 / 10), after = MusicRms(through, rate * 6 / 10, rate * 9 / 10);
+        CHECK(after < before * 0.5f && after > 0.0f);
+        // Automating the plug-in's gain to 0 (Song mode) silences it.
+        song.Playlist.push_back({ 0, 0, 0, 0 });
+        song.Automation.push_back({ { ParamKind::PluginParam, 0, 0, (int)gainParam->Id }, 1, 0, 384, { { 0, 0.0f } } });
+        auto muted = RenderSong(song, rate, SongPlayer::Mode::Song, 0, 1, 0.0f);
+        CHECK(MusicRms(muted, rate * 6 / 10, rate * 9 / 10) < before * 0.01f);
+
+        // The rack: instances by id from a song, kept across syncs, states written back, let go when unused.
+        PluginRack rack(rate, 64);
+        rack.Sync(song);
+        auto inRack = rack.Get(keys.Plugin.Id);
+        CHECK(inRack && rack.Get(g.Plugin.Id) && rack.LastErrors().empty());
+        rack.Sync(song);
+        CHECK(rack.Get(keys.Plugin.Id) == inRack);
+        song.Channels[0].Plugin.State.clear();
+        rack.StoreStates(song);
+        CHECK(!song.Channels[0].Plugin.State.empty());
+        song.Master().Effects.clear();
+        rack.Sync(song);
+        CHECK(!rack.Get(g.Plugin.Id) && rack.Get(keys.Plugin.Id));
+        // A plug-in that is not there: an error, not a crash (and not retried every sync).
+        song.Channels[0].Plugin = { "Missing", (folder / "nothing.vst3").string(), synth->ClassId, NewPluginId() };
+        rack.Sync(song);
+        rack.Sync(song);
+        CHECK(rack.LastErrors().size() == 1 && !rack.Get(song.Channels[0].Plugin.Id));
+        CHECK(MusicSilent(RenderSong(song, rate, SongPlayer::Mode::Pattern), 0, rate));
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -21214,6 +21388,7 @@ int main(int argc, char** argv)
     Run("Music sampler", TestMusicSampler);
     Run("Music editing", TestMusicEditing);
     Run("Music mixer", TestMusicMixer);
+    Run("Music plugins", TestMusicPlugins);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

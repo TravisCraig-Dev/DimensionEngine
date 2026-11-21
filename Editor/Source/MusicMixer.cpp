@@ -243,7 +243,7 @@ namespace Editor
             if (Edited(ImGui::Checkbox("##on", &e.Enabled))) Changed();
             ImGui::SetItemTooltip("On / bypassed");
             ImGui::SameLine();
-            std::string label = std::to_string(i + 1) + ". " + EffectTypeName(e.Type);
+            std::string label = std::to_string(i + 1) + ". " + (e.Type == EffectType::Plugin ? e.Plugin.Name : std::string(EffectTypeName(e.Type)));
             if (ImGui::Selectable(label.c_str(), i == m_SelectedEffect, 0, ImVec2(ImGui::GetContentRegionAvail().x - 54.0f, 0))) m_SelectedEffect = i;
             ImGui::SameLine();
             ImGui::BeginDisabled(i == 0);
@@ -279,13 +279,28 @@ namespace Editor
         if (ImGui::BeginPopup("AddEffect"))
         {
             for (int i = 0; i < (int)EffectType::Count; ++i)
-                if (ImGui::MenuItem(EffectTypeName((EffectType)i)))
+                if (i != (int)EffectType::Plugin && ImGui::MenuItem(EffectTypeName((EffectType)i)))
                 {
                     Record();
                     m.Effects.push_back(Effect::Make((EffectType)i));
                     m_SelectedEffect = (int)m.Effects.size() - 1;
                     Changed();
                 }
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Plug-in"))
+            {
+                PluginRef picked;
+                if (PluginMenu(false, picked))
+                {
+                    Record();
+                    Effect e = Effect::Make(EffectType::Plugin);
+                    e.Plugin = picked;
+                    m.Effects.push_back(e);
+                    m_SelectedEffect = (int)m.Effects.size() - 1;
+                    Changed();
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndPopup();
         }
 
@@ -294,6 +309,21 @@ namespace Editor
         {
             Effect& e = m.Effects[m_SelectedEffect];
             const EffectInfo& info = GetEffectInfo(e.Type);
+            if (e.Type == EffectType::Plugin)
+            {
+                // A plug-in: its mix here, its own settings in its panel (and editor window).
+                ImGui::SeparatorText("Plug-in");
+                if (UI::BeginProperties("##pluginMix"))
+                {
+                    UI::PropertyLabel("Mix", "Dry to wet");
+                    if (Edited(ImGui::SliderFloat("##mix", &e.Mix, 0.0f, 1.0f, "%.2f"))) Changed();
+                    AutomationMenu({ ParamKind::EffectMix, t, m_SelectedEffect });
+                    UI::EndProperties();
+                }
+                DrawPluginPanel(e.Plugin, t, m_SelectedEffect, ImGui::GetContentRegionAvail().y);
+                ImGui::EndChild();
+                return;
+            }
             ImGui::SeparatorText(EffectTypeName(e.Type));
             if (UI::BeginProperties("##fx"))
             {

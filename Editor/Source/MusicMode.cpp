@@ -76,6 +76,11 @@ namespace Editor
         m_RenamingChannel = -1;
         m_Meters.assign(m_Song.Channels.size(), 0.0f);
         m_Player = std::make_shared<SongPlayer>(48000);
+        // The song's plug-ins, made from their saved states (they live as long as the song uses them).
+        m_Rack = std::make_shared<PluginRack>(48000.0, (int)SongPlayer::kChunk);
+        m_Rack->Sync(m_Song);
+        for (const auto& e : m_Rack->LastErrors()) m_Status = "Plug-in missing: " + e, m_StatusTime = 8.0f;
+        m_Player->SetRack(m_Rack);
         m_Player->SetSong(m_Song);
         if (!MusicOutput::Start(m_Player)) m_Status = "No audio output: songs can still be edited and rendered";
         Log::Info("Opened song '{}' (Music Mode)", m_Song.Name);
@@ -85,6 +90,7 @@ namespace Editor
     bool MusicMode::Save()
     {
         if (!m_Active) return false;
+        if (m_Rack) m_Rack->StoreStates(m_Song); // (the plug-ins' current settings go into the file)
         if (!m_Song.Save(m_File))
         {
             Log::Error("Could not write the song {}", m_File.string());
@@ -100,6 +106,10 @@ namespace Editor
         if (m_Unsaved) Save();
         MusicOutput::Stop();
         m_Player.reset();
+        if (m_Rack) m_Rack->Clear(); // (closes their editor windows)
+        m_Rack.reset();
+        m_ParamCache.clear();
+        m_HasEditorCache.clear();
         m_Active = false;
         m_TypedNotes.clear();
         m_PianoNote = -1;
@@ -116,6 +126,7 @@ namespace Editor
     {
         m_Dirty = m_Unsaved = true;
         m_Meters.resize(m_Song.Channels.size(), 0.0f);
+        if (m_Rack) m_Rack->Sync(m_Song);
         if (m_Player) m_Player->SetSong(m_Song);
     }
 
@@ -206,6 +217,7 @@ namespace Editor
         // The song (Song mode, its Playlist) or the current pattern (once), with the sound's tail, next to the song file
         // as an audio asset the game can play.
         fs::path out = m_File.parent_path() / (m_File.stem().string() + ".wav");
+        if (m_Rack) m_Rack->StoreStates(m_Song); // (the render makes its own plug-ins from these)
         bool song = m_SongMode && !m_Song.Playlist.empty();
         float tail = 1.5f;
         for (const MixerTrack& m : m_Song.Mixer)
@@ -278,6 +290,7 @@ namespace Editor
             for (int i = 0; i < 2; ++i) m_MasterMeter[i] = std::max(m[i], m_MasterMeter[i] * 0.88f);
         }
         m_StatusTime = std::max(0.0f, m_StatusTime - ImGui::GetIO().DeltaTime);
+        if (m_Rack && m_Rack->TakeEdited()) m_Dirty = m_Unsaved = true; // (a plug-in's own editor changed it)
 
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -311,6 +324,7 @@ namespace Editor
         if (keyboardHeight > 0.0f) DrawKeyboard(ImVec2(avail.x, keyboardHeight));
         HandleKeys();
         ImGui::End();
+        DrawPluginManager();
 
         // The file follows the song once an edit is finished.
         if (m_Unsaved && m_Dirty && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -664,8 +678,10 @@ namespace Editor
         if (cloneChannel >= 0)
         {
             Record();
+            if (m_Rack) m_Rack->StoreStates(m_Song);
             Channel c = m_Song.Channels[cloneChannel];
             c.Name += " 2";
+            if (c.Type == InstrumentType::Plugin) c.Plugin.Id = NewPluginId();
             m_Song.InsertChannel(cloneChannel + 1, c);
             m_SelectedChannel = cloneChannel + 1;
             Changed();
@@ -716,6 +732,21 @@ namespace Editor
                 c.Type = InstrumentType::Synth;
                 c.Volume = 0.6f;
                 add(c);
+            }
+            if (ImGui::BeginMenu("Plug-in"))
+            {
+                PluginRef picked;
+                if (PluginMenu(true, picked))
+                {
+                    Channel c;
+                    c.Name = picked.Name;
+                    c.Type = InstrumentType::Plugin;
+                    c.Plugin = picked;
+                    c.Volume = 0.8f;
+                    add(c);
+                    if (m_Rack && !m_Rack->Get(picked.Id)) m_Status = "The plug-in would not load", m_StatusTime = 6.0f;
+                }
+                ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Sampler"))
             {
@@ -777,8 +808,9 @@ namespace Editor
             if (Edited(ImGui::InputText("##name", &name))) ch.Name = name, Changed();
             UI::PropertyLabel("Instrument");
             int type = (int)ch.Type;
-            const char* types[] = { "Drum", "Synth", "Sampler" };
-            if (Edited(ImGui::Combo("##type", &type, types, 3)))
+            const char* types[] = { "Drum", "Synth", "Sampler", "Plug-in" };
+            int typeCount = ch.Type == InstrumentType::Plugin || ch.Plugin.Valid() ? 4 : 3; // (plug-ins are added from + Channel)
+            if (Edited(ImGui::Combo("##type", &type, types, typeCount)))
             {
                 ch.Type = (InstrumentType)type;
                 Changed();
@@ -816,6 +848,12 @@ namespace Editor
 
         switch (ch.Type)
         {
+        case InstrumentType::Plugin:
+        {
+            ImGui::SeparatorText("Plug-in");
+            DrawPluginPanel(ch.Plugin, m_SelectedChannel, -1, ImGui::GetContentRegionAvail().y);
+            break;
+        }
         case InstrumentType::Drum:
         {
             ImGui::SeparatorText("Drum");

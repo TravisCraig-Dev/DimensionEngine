@@ -56,6 +56,38 @@ if(MSVC)
     target_compile_options(msdfgen PRIVATE /W0)
 endif()
 
+# VST3 hosting: loading plug-in modules, their factories, process data, events and parameter changes.
+set(DIM_VST3 ${vst3sdk_SOURCE_DIR})
+set(DIM_VST3_SOURCES
+    ${DIM_VST3}/pluginterfaces/base/conststringtable.cpp ${DIM_VST3}/pluginterfaces/base/coreiids.cpp
+    ${DIM_VST3}/pluginterfaces/base/funknown.cpp ${DIM_VST3}/pluginterfaces/base/ustring.cpp
+    ${DIM_VST3}/base/source/baseiids.cpp ${DIM_VST3}/base/source/fbuffer.cpp ${DIM_VST3}/base/source/fdebug.cpp
+    ${DIM_VST3}/base/source/fdynlib.cpp ${DIM_VST3}/base/source/fobject.cpp ${DIM_VST3}/base/source/fstreamer.cpp
+    ${DIM_VST3}/base/source/fstring.cpp ${DIM_VST3}/base/source/timer.cpp ${DIM_VST3}/base/source/updatehandler.cpp
+    ${DIM_VST3}/base/thread/source/fcondition.cpp ${DIM_VST3}/base/thread/source/flock.cpp
+    ${DIM_VST3}/public.sdk/source/common/commoniids.cpp ${DIM_VST3}/public.sdk/source/common/commonstringconvert.cpp
+    ${DIM_VST3}/public.sdk/source/common/memorystream.cpp ${DIM_VST3}/public.sdk/source/common/readfile.cpp
+    ${DIM_VST3}/public.sdk/source/vst/hosting/connectionproxy.cpp ${DIM_VST3}/public.sdk/source/vst/hosting/eventlist.cpp
+    ${DIM_VST3}/public.sdk/source/vst/hosting/hostclasses.cpp ${DIM_VST3}/public.sdk/source/vst/hosting/module.cpp
+    ${DIM_VST3}/public.sdk/source/vst/hosting/parameterchanges.cpp ${DIM_VST3}/public.sdk/source/vst/hosting/pluginterfacesupport.cpp
+    ${DIM_VST3}/public.sdk/source/vst/hosting/plugprovider.cpp ${DIM_VST3}/public.sdk/source/vst/hosting/processdata.cpp
+    ${DIM_VST3}/public.sdk/source/vst/utility/stringconvert.cpp ${DIM_VST3}/public.sdk/source/vst/vstinitiids.cpp)
+if(WIN32)
+    list(APPEND DIM_VST3_SOURCES ${DIM_VST3}/public.sdk/source/vst/hosting/module_win32.cpp ${DIM_VST3}/public.sdk/source/common/threadchecker_win32.cpp)
+elseif(UNIX AND NOT APPLE)
+    list(APPEND DIM_VST3_SOURCES ${DIM_VST3}/public.sdk/source/vst/hosting/module_linux.cpp ${DIM_VST3}/public.sdk/source/common/threadchecker_linux.cpp)
+endif()
+add_library(vst3hosting STATIC ${DIM_VST3_SOURCES})
+target_include_directories(vst3hosting SYSTEM PUBLIC ${DIM_VST3})
+target_compile_definitions(vst3hosting PRIVATE RELEASE=1)
+set_target_properties(vst3hosting PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_STANDARD 17) # (C++20 changes u8string, which it uses)
+if(MSVC)
+    target_compile_options(vst3hosting PRIVATE /W0)
+else()
+    target_compile_options(vst3hosting PRIVATE -w)
+    target_link_libraries(vst3hosting PUBLIC ${CMAKE_DL_LIBS} pthread)
+endif()
+
 add_library(miniaudio INTERFACE)
 target_include_directories(miniaudio SYSTEM INTERFACE ${miniaudio_SOURCE_DIR})
 

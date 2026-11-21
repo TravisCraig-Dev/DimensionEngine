@@ -195,12 +195,43 @@ namespace Dimension::Music
     SongPlayer::SongPlayer(uint32_t sampleRate) : m_SampleRate(std::max(8000u, sampleRate)), m_Voices(new Voice[kMaxVoices]) {}
     SongPlayer::~SongPlayer() = default;
 
+    void SongPlayer::SetRack(std::shared_ptr<PluginRack> rack)
+    {
+        std::lock_guard lock(m_Mutex);
+        m_Rack = std::move(rack);
+    }
+
     void SongPlayer::SetSong(const Song& song)
     {
         std::vector<std::shared_ptr<const SampleData>> samples;
         for (const Channel& c : song.Channels)
             samples.push_back(c.Type == InstrumentType::Sampler ? LoadSample(ResolveSamplePath(c.Sampler)) : nullptr);
+        std::shared_ptr<PluginRack> rack;
+        {
+            std::lock_guard lock(m_Mutex);
+            rack = m_Rack;
+        }
+        std::vector<std::shared_ptr<PluginInstance>> channelPlugins(song.Channels.size());
+        std::vector<std::vector<std::shared_ptr<PluginInstance>>> effectPlugins(song.Mixer.size());
+        if (rack)
+        {
+            for (size_t i = 0; i < song.Channels.size(); ++i)
+                if (song.Channels[i].Type == InstrumentType::Plugin) channelPlugins[i] = rack->Get(song.Channels[i].Plugin.Id);
+            for (size_t t = 0; t < song.Mixer.size(); ++t)
+            {
+                effectPlugins[t].resize(song.Mixer[t].Effects.size());
+                for (size_t e = 0; e < song.Mixer[t].Effects.size(); ++e)
+                    if (song.Mixer[t].Effects[e].Type == EffectType::Plugin) effectPlugins[t][e] = rack->Get(song.Mixer[t].Effects[e].Plugin.Id);
+            }
+        }
         std::lock_guard lock(m_Mutex);
+        // Plug-in notes of instruments that went away (or moved) end.
+        for (size_t i = 0; i < m_ChannelPlugins.size(); ++i)
+            if (m_ChannelPlugins[i] && (i >= channelPlugins.size() || channelPlugins[i] != m_ChannelPlugins[i])) m_ChannelPlugins[i]->AllNotesOff();
+        m_PluginNoteOffs.clear();
+        m_ChannelPlugins.swap(channelPlugins);
+        m_EffectPlugins.swap(effectPlugins);
+        if (m_PluginBuffer.size() < kChunk * 2) m_PluginBuffer.assign(kChunk * 2, 0.0f), m_PluginDry.assign(kChunk * 2, 0.0f);
         // Voices of channels that went away stop.
         for (int i = 0; i < kMaxVoices; ++i)
             if (m_Voices[i].Active && (m_Voices[i].Channel >= (int)song.Channels.size() ||
@@ -216,7 +247,8 @@ namespace Dimension::Music
             auto& fx = m_Fx[t];
             fx.resize(std::min((int)effects.size(), kMaxEffects));
             for (int e = 0; e < (int)fx.size(); ++e)
-                if (!fx[e] || fx[e]->GetType() != effects[e].Type) fx[e] = EffectProcessor::Create(effects[e].Type, m_SampleRate);
+                if (effects[e].Type == EffectType::Plugin) fx[e].reset();
+                else if (!fx[e] || fx[e]->GetType() != effects[e].Type) fx[e] = EffectProcessor::Create(effects[e].Type, m_SampleRate);
         }
         if (m_Bus.size() < (size_t)tracks * kChunk * 2) m_Bus.assign((size_t)tracks * kChunk * 2, 0.0f);
         m_Pattern = std::clamp(m_Pattern, 0, std::max(0, (int)m_Song.Patterns.size() - 1));
@@ -245,6 +277,9 @@ namespace Dimension::Music
         std::lock_guard lock(m_Mutex);
         m_Playing = false;
         m_Tick = 0.0;
+        for (auto& p : m_ChannelPlugins)
+            if (p) p->AllNotesOff();
+        m_PluginNoteOffs.clear();
         for (int i = 0; i < kMaxVoices; ++i)
             if (m_Voices[i].Active && !m_Voices[i].Held)
             {
@@ -274,12 +309,15 @@ namespace Dimension::Music
     {
         std::lock_guard lock(m_Mutex);
         if (channel < 0 || channel >= (int)m_Song.Channels.size()) return;
+        if (m_Song.Channels[channel].Type == InstrumentType::Plugin) return PluginNote(channel, key, velocity, true, 0);
         Trigger(channel, key, velocity, -1.0);
     }
 
     void SongPlayer::NoteOff(int channel, int key)
     {
         std::lock_guard lock(m_Mutex);
+        if (channel >= 0 && channel < (int)m_Song.Channels.size() && m_Song.Channels[channel].Type == InstrumentType::Plugin)
+            return PluginNote(channel, key, 0.0f, false, 0);
         for (int i = 0; i < kMaxVoices; ++i)
         {
             Voice& v = m_Voices[i];
@@ -292,9 +330,18 @@ namespace Dimension::Music
         }
     }
 
+    void SongPlayer::PluginNote(int channel, int key, float velocity, bool on, int frame)
+    {
+        if (channel >= 0 && channel < (int)m_ChannelPlugins.size() && m_ChannelPlugins[channel])
+            m_ChannelPlugins[channel]->QueueNote(key, velocity, on, frame);
+    }
+
     void SongPlayer::AllNotesOff()
     {
         std::lock_guard lock(m_Mutex);
+        for (auto& p : m_ChannelPlugins)
+            if (p) p->AllNotesOff();
+        m_PluginNoteOffs.clear();
         for (int i = 0; i < kMaxVoices; ++i) m_Voices[i].Active = false;
     }
 
@@ -317,6 +364,7 @@ namespace Dimension::Music
     void SongPlayer::Trigger(int channel, int key, float velocity, double lengthFrames)
     {
         const Channel& c = m_Song.Channels[channel];
+        if (c.Type == InstrumentType::Plugin) return; // (plug-ins get their notes as events)
         bool held = lengthFrames < 0.0;
         // A gliding synth is monophonic: the playing note slides to the new one.
         if (c.Type == InstrumentType::Synth && c.Synth.Glide > 0.0f)
@@ -396,6 +444,9 @@ namespace Dimension::Music
         }
         switch (c.Type)
         {
+        case InstrumentType::Plugin:
+            v.Active = false;
+            break;
         case InstrumentType::Synth:
         {
             const SynthParams& p = c.Synth;
@@ -583,7 +634,17 @@ namespace Dimension::Music
         for (const AutomationClip& a : m_Song.Automation)
         {
             if (m_Song.TrackMuted(a.Track) || tick < a.Start || tick >= a.Start + a.Length) continue;
-            if (float* p = m_Song.Param(a.Target)) *p = m_Song.FromNormalized(a.Target, a.ValueAt(tick - a.Start));
+            float* p = m_Song.Param(a.Target);
+            if (!p) continue;
+            *p = m_Song.FromNormalized(a.Target, a.ValueAt(tick - a.Start));
+            if (a.Target.Kind == ParamKind::PluginParam)
+            {
+                PluginInstance* instance = nullptr;
+                if (a.Target.Slot < 0 && a.Target.Index < (int)m_ChannelPlugins.size()) instance = m_ChannelPlugins[a.Target.Index].get();
+                if (a.Target.Slot >= 0 && a.Target.Index < (int)m_EffectPlugins.size() && a.Target.Slot < (int)m_EffectPlugins[a.Target.Index].size())
+                    instance = m_EffectPlugins[a.Target.Index][a.Target.Slot].get();
+                if (instance) instance->QueueParameter((uint32_t)a.Target.Param, *p, 0);
+            }
         }
     }
 
@@ -645,7 +706,14 @@ namespace Dimension::Music
                 const Event& e = m_Events[next++];
                 // (muted channels start no notes; a channel turned all the way down does, so automation can bring it up)
                 if (e.Channel >= 0 && e.Channel < (int)channelCount && e.Channel < kMaxMeters && audibleChannel[e.Channel])
-                    Trigger(e.Channel, e.Key, e.Velocity, std::max(1.0, e.LengthFrames));
+                {
+                    if (m_Song.Channels[e.Channel].Type == InstrumentType::Plugin)
+                    {
+                        PluginNote(e.Channel, e.Key, e.Velocity, true, (int)f);
+                        m_PluginNoteOffs.push_back({ e.Channel, e.Key, f + std::max(1.0, e.LengthFrames) });
+                    }
+                    else Trigger(e.Channel, e.Key, e.Velocity, std::max(1.0, e.LengthFrames));
+                }
             }
             for (int i = 0; i < kMaxVoices; ++i)
             {
@@ -672,6 +740,45 @@ namespace Dimension::Music
             }
         }
 
+        // Plug-in instruments: their notes' ends in this chunk, then their sound into their mixer tracks.
+        for (size_t i = 0; i < m_PluginNoteOffs.size();)
+        {
+            PluginNoteOff& n = m_PluginNoteOffs[i];
+            if (n.Frames < frames)
+            {
+                PluginNote(n.Channel, n.Key, 0.0f, false, (int)n.Frames);
+                n = m_PluginNoteOffs.back();
+                m_PluginNoteOffs.pop_back();
+            }
+            else
+            {
+                n.Frames -= frames;
+                ++i;
+            }
+        }
+        PluginTransport transport;
+        transport.Tempo = m_Song.Tempo;
+        transport.Playing = m_Playing;
+        transport.Quarters = m_Tick / kTicksPerBeat;
+        transport.Samples = (int64_t)(m_Tick / m_Song.TicksPerSecond() * sr);
+        transport.BeatsPerBar = m_Song.BeatsPerBar;
+        for (size_t c = 0; c < channelCount && c < m_ChannelPlugins.size() && c < kMaxMeters; ++c)
+        {
+            PluginInstance* plugin = m_ChannelPlugins[c].get();
+            if (!plugin) continue;
+            float* buf = m_PluginBuffer.data();
+            std::fill(buf, buf + frames * 2, 0.0f);
+            plugin->Process(buf, frames, transport);
+            float* bus = m_Bus.data() + (size_t)insert[c] * kChunk * 2;
+            for (uint32_t f = 0; f < frames; ++f)
+            {
+                float l = buf[f * 2] * gainL[c], r = buf[f * 2 + 1] * gainR[c]; // (the pan law is unity at the centre)
+                peaks[c] = std::max(peaks[c], std::max(std::fabs(l), std::fabs(r)));
+                bus[f * 2] += l;
+                bus[f * 2 + 1] += r;
+            }
+        }
+
         // The Mixer: each insert's effects, level and pan, into its output (a later track or the Master); the Master last.
         auto runTrack = [&](int t) {
             const MixerTrack& m = m_Song.Mixer[t];
@@ -679,6 +786,17 @@ namespace Dimension::Music
             for (int slot = 0; slot < (int)m.Effects.size() && slot < kMaxEffects; ++slot)
             {
                 const Effect& e = m.Effects[slot];
+                if (e.Type == EffectType::Plugin)
+                {
+                    PluginInstance* plugin = t < (int)m_EffectPlugins.size() && slot < (int)m_EffectPlugins[t].size() ? m_EffectPlugins[t][slot].get() : nullptr;
+                    if (!e.Enabled || !plugin) continue;
+                    float mix = std::clamp(e.Mix, 0.0f, 1.0f);
+                    std::copy(bus, bus + frames * 2, m_PluginDry.begin());
+                    plugin->Process(bus, frames, transport);
+                    if (mix < 1.0f)
+                        for (uint32_t i = 0; i < frames * 2; ++i) bus[i] = m_PluginDry[i] + (bus[i] - m_PluginDry[i]) * mix;
+                    continue;
+                }
                 EffectProcessor* fx = t < (int)m_Fx.size() && slot < (int)m_Fx[t].size() ? m_Fx[t][slot].get() : nullptr;
                 if (e.Enabled && fx && fx->GetType() == e.Type) fx->Process(e, bus, frames, m_Song.Tempo, m_Song.StepsPerBeat);
             }
@@ -729,6 +847,12 @@ namespace Dimension::Music
     std::vector<float> RenderSong(const Song& song, uint32_t sampleRate, SongPlayer::Mode mode, int pattern, int loops, float tail)
     {
         SongPlayer player(sampleRate);
+        if (!song.Plugins().empty())
+        {
+            auto rack = std::make_shared<PluginRack>((double)sampleRate, (int)SongPlayer::kChunk);
+            rack->Sync(song);
+            player.SetRack(rack);
+        }
         player.SetSong(song);
         player.SetMode(mode);
         player.SetPattern(pattern);

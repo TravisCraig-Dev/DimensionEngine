@@ -18,7 +18,7 @@ namespace Dimension::Music
         float Attack = 0.005f, Decay = 0.2f, Sustain = 0.7f, Release = 0.2f;
     };
 
-    enum class InstrumentType : int { Drum = 0, Synth, Sampler };
+    enum class InstrumentType : int { Drum = 0, Synth, Sampler, Plugin };
     const char* InstrumentTypeName(InstrumentType t);
 
     // A synthesized drum (no samples needed): its sound shaped by Tune (semitones), Decay (x its natural length) and
@@ -74,6 +74,7 @@ namespace Dimension::Music
         DrumParams Drum;
         SynthParams Synth;
         SamplerParams Sampler;
+        PluginRef Plugin; // (a VST3 instrument)
     };
 
     struct Note
@@ -164,6 +165,11 @@ namespace Dimension::Music
         float ToNormalized(const ParamRef& r, float value) const;
         float FromNormalized(const ParamRef& r, float normalized) const;
         std::vector<ParamRef> AutomatableParams() const;
+        // The plug-in a reference points into (a channel's instrument or an effect), or null.
+        PluginRef* PluginOf(const ParamRef& r);
+        // Every plug-in reference of the song (channels, then mixer effects).
+        std::vector<PluginRef*> Plugins();
+        std::vector<const PluginRef*> Plugins() const;
 
         nlohmann::json ToJson() const;
         static bool FromJson(const nlohmann::json& j, Song& out);

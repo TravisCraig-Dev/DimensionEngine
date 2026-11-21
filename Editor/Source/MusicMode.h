@@ -3,6 +3,7 @@
 #include <Dimension/Music/SongPlayer.h>
 #include <deque>
 #include <imgui.h>
+#include <map>
 #include <memory>
 
 namespace Editor
@@ -52,6 +53,13 @@ namespace Editor
         void AutomationMenu(const Dimension::Music::ParamRef& ref);
         void CreateAutomation(const Dimension::Music::ParamRef& ref);
         void DrawAutomationEditor(const ImVec2& min, const ImVec2& max);
+        // VST3 plug-ins (MusicPlugins.cpp): the list of installed ones (cached per project, rescanned on request), the
+        // Plug-ins window (folders, scan), and a plug-in's editor button and parameter list (channels and effects).
+        void LoadPluginList();
+        void ScanPlugins();
+        void DrawPluginManager();
+        void DrawPluginPanel(Dimension::Music::PluginRef& ref, int index, int slot, float height);
+        bool PluginMenu(bool instruments, Dimension::Music::PluginRef& picked); // true when one was picked
         void SetSongMode(bool song);
         void SetPattern(int pattern);
         void HandleKeys();
@@ -128,6 +136,13 @@ namespace Editor
         int m_SelectedMixer = 0, m_SelectedEffect = -1, m_RenamingMixer = -1;
         std::vector<float> m_MixerMeters;
         int m_SelectedAuto = -1, m_AutoDragPoint = -1;
+        std::shared_ptr<Dimension::Music::PluginRack> m_Rack;
+        std::vector<Dimension::Music::PluginInfo> m_PluginList;
+        std::vector<std::string> m_PluginFolders, m_PluginErrors; // (extra folders, beside the system's)
+        bool m_PluginListLoaded = false, m_ShowPluginManager = false;
+        std::map<uint64_t, std::vector<Dimension::Music::PluginParameter>> m_ParamCache;
+        std::map<uint64_t, bool> m_HasEditorCache;
+        std::string m_ParamFilter;
         std::string m_Status;
         float m_StatusTime = 0.0f;
     };

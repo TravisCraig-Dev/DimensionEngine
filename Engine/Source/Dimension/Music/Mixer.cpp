@@ -5,7 +5,7 @@ namespace Dimension::Music
 {
     const char* EffectTypeName(EffectType t)
     {
-        static const char* names[] = { "EQ", "Compressor", "Delay", "Reverb", "Filter" };
+        static const char* names[] = { "EQ", "Compressor", "Delay", "Reverb", "Filter", "Plugin" };
         return names[std::clamp((int)t, 0, (int)EffectType::Count - 1)];
     }
 
@@ -27,6 +27,8 @@ namespace Dimension::Music
             // Filter: 0 low pass, 1 high pass, 2 band pass.
             { 3, { { { "Mode", 0.0f, 2.0f, 0.0f, "%.0f" }, { "Cutoff", 20.0f, 20000.0f, 20000.0f, "%.0f Hz", true },
                      { "Resonance", 0.0f, 1.0f, 0.2f, "%.2f" } } }, 1.0f, false },
+            // A VST3 plug-in: its own parameters (the mix crossfades its output with the dry sound).
+            { 0, {}, 1.0f, false },
         };
         return infos[std::clamp((int)t, 0, (int)EffectType::Count - 1)];
     }
