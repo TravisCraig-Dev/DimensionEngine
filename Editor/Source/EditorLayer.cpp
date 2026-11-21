@@ -667,6 +667,7 @@ namespace Editor
         m_IdleSeconds = input || busy ? 0.0f : m_IdleSeconds + dt;
         int cap = 0;
         if (m_Options.Automated && !m_Options.KeepFrameCaps) cap = 0;
+        else if (m_Music && m_Music->WantsFrames()) cap = 0; // (music playing, or a plug-in window has the focus)
         else if (!Application::Get().GetWindow().IsFocused()) cap = prefs.BackgroundFrameRate;
         else if (m_IdleSeconds > 1.5f) cap = prefs.IdleFrameRate;
         AppRuntime::SetFrameRateCap(cap);

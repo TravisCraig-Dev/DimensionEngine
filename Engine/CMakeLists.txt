@@ -37,6 +37,9 @@ target_compile_definitions(DimensionEngine
 if(WIN32)
     target_compile_definitions(DimensionEngine PRIVATE "IMGUI_API=__declspec(dllexport)" INTERFACE "IMGUI_API=__declspec(dllimport)")
     target_link_libraries(DimensionEngine PRIVATE runtimeobject) # Windows.Gaming.Input (gamepad haptics)
+elseif(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED) # plug-in editor windows (Music Mode)
+    target_link_libraries(DimensionEngine PRIVATE X11::X11)
 endif()
 if(MSVC)
     target_compile_options(DimensionEngine PRIVATE /W4 /wd4100 /wd4201 /wd4324 /bigobj) # /bigobj: the component registry has many template instances

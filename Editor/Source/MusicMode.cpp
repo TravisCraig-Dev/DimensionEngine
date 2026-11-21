@@ -362,9 +362,15 @@ namespace Editor
 
     // ---- The window ----
 
+    bool MusicMode::WantsFrames() const
+    {
+        return m_Active && ((m_Player && m_Player->IsPlaying()) || m_Taking || Plugins::AnyEditorOpen());
+    }
+
     void MusicMode::OnImGui()
     {
         if (!m_Active) return;
+        Plugins::PollEvents(); // (plug-in editor windows' events on Linux)
         // Meters fall back between peaks.
         if (m_Player)
         {

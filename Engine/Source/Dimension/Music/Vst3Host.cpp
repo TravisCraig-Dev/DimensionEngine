@@ -26,6 +26,12 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <ole2.h>
+#pragma comment(lib, "ole32.lib")
+#else
+#include "Dimension/Music/PluginWindowX11.h"
+#include <chrono>
+#include <poll.h>
 #endif
 
 #include <algorithm>
@@ -42,9 +48,96 @@ namespace Dimension::Music
         std::string ToUtf8(const TChar* s) { return StringConvert::convert(std::u16string(reinterpret_cast<const char16_t*>(s))); }
 
         // One host object for every plug-in (its name, and the message/attribute objects it makes for them).
+#ifndef _WIN32
+        // The host's run loop for plug-in editors (Linux::IRunLoop): plug-ins register file descriptors (their own X
+        // connections) and timers; PollEvents runs them each frame.
+        struct RunLoop
+        {
+            std::vector<std::pair<int, IPtr<Linux::IEventHandler>>> Fds;
+            struct Timer
+            {
+                IPtr<Linux::ITimerHandler> Handler;
+                std::chrono::milliseconds Interval;
+                std::chrono::steady_clock::time_point Due;
+            };
+            std::vector<Timer> Timers;
+        };
+        RunLoop& Loop()
+        {
+            static RunLoop loop;
+            return loop;
+        }
+
+        class HostRunLoop : public U::ImplementsNonDestroyable<U::Directly<Linux::IRunLoop>>
+        {
+        public:
+            tresult PLUGIN_API registerEventHandler(Linux::IEventHandler* handler, Linux::FileDescriptor fd) override
+            {
+                if (!handler) return kInvalidArgument;
+                Loop().Fds.emplace_back(fd, handler);
+                return kResultTrue;
+            }
+            tresult PLUGIN_API unregisterEventHandler(Linux::IEventHandler* handler) override
+            {
+                auto& fds = Loop().Fds;
+                size_t before = fds.size();
+                std::erase_if(fds, [&](const auto& f) { return f.second.get() == handler; });
+                return fds.size() != before ? kResultTrue : kResultFalse;
+            }
+            tresult PLUGIN_API registerTimer(Linux::ITimerHandler* handler, Linux::TimerInterval ms) override
+            {
+                if (!handler || ms == 0) return kInvalidArgument;
+                auto interval = std::chrono::milliseconds(ms);
+                Loop().Timers.push_back({ handler, interval, std::chrono::steady_clock::now() + interval });
+                return kResultTrue;
+            }
+            tresult PLUGIN_API unregisterTimer(Linux::ITimerHandler* handler) override
+            {
+                auto& timers = Loop().Timers;
+                size_t before = timers.size();
+                std::erase_if(timers, [&](const auto& t) { return t.Handler.get() == handler; });
+                return timers.size() != before ? kResultTrue : kResultFalse;
+            }
+        };
+        HostRunLoop& TheRunLoop()
+        {
+            static HostRunLoop loop;
+            return loop;
+        }
+
+        // The host application object plug-ins get when they start: it also answers for the run loop (plug-ins built
+        // with VSTGUI take it from there as they initialize, before any editor opens).
+        class LinuxHostApplication : public HostApplication
+        {
+        public:
+            tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
+            {
+                if (FUnknownPrivate::iidEqual(iid, Linux::IRunLoop::iid))
+                {
+                    *obj = static_cast<Linux::IRunLoop*>(&TheRunLoop());
+                    return kResultOk;
+                }
+                return HostApplication::queryInterface(iid, obj);
+            }
+        };
+#endif
+
         FUnknown* HostContext()
         {
+#ifdef _WIN32
+            // Plug-ins (VSTGUI: Direct2D, drag and drop) expect COM/OLE on the host's thread before their modules load.
+            // A thread already in another apartment (the C# runtime makes the main thread MTA) keeps it.
+            static thread_local bool ole = [] {
+                OleInitialize(nullptr);
+                return true;
+            }();
+            (void)ole;
+#endif
+#ifdef _WIN32
             static IPtr<HostApplication> host = owned(new HostApplication());
+#else
+            static IPtr<HostApplication> host = owned(new LinuxHostApplication());
+#endif
             static bool set = [] {
                 PluginContextFactory::instance().setPluginContext(host.get());
                 return true;
@@ -64,9 +157,17 @@ namespace Dimension::Music
             std::lock_guard lock(s_ModuleMutex);
             if (auto it = s_Modules.find(key); it != s_Modules.end()) return it->second;
             auto module = VST3::Hosting::Module::create(path.string(), error);
-            if (module) s_Modules[key] = module;
+            if (module)
+            {
+                // The factory gets the host context as hosts give it (plug-ins built with VSTGUI take the Linux run loop
+                // from it here).
+                module->getFactory().setHostContext(HostContext());
+                s_Modules[key] = module;
+            }
             return module;
         }
+
+        std::atomic<int> s_OpenEditors{ 0 }; // (editor windows open: the editor keeps its frame rate up for them)
 
         bool IsAudioClass(const VST3::Hosting::ClassInfo& info) { return info.category() == kVstAudioEffectClass; }
         bool IsInstrumentClass(const VST3::Hosting::ClassInfo& info) { return info.subCategoriesString().find("Instrument") != std::string::npos; }
@@ -223,19 +324,32 @@ namespace Dimension::Music
             DWORD m_Style = 0;
         };
 #else
-        // Linux (X11 embedding with the plug-ins' run loop) is not done yet: plug-ins work, edited through their
-        // parameter lists.
+        // Linux: a top-level X11 window the plug-in's view embeds itself in (PluginWindowX11.cpp).
         class PluginWindow
         {
         public:
             std::function<void()> OnClose;
             std::function<void(int, int)> OnResize;
-            static std::unique_ptr<PluginWindow> Create(const std::string&, int, int) { return nullptr; }
-            void Show() {}
-            void* Native() const { return nullptr; }
-            void SetClientSize(int, int) {}
+
+            static std::unique_ptr<PluginWindow> Create(const std::string& title, int width, int height)
+            {
+                auto w = std::unique_ptr<PluginWindow>(new PluginWindow());
+                PluginWindow* self = w.get();
+                w->m_Handle = X11::Create(title, width, height, [self] { if (self->OnClose) self->OnClose(); },
+                                          [self](int cw, int ch) { if (self->OnResize) self->OnResize(cw, ch); });
+                if (!w->m_Handle) return nullptr;
+                return w;
+            }
+            ~PluginWindow() { X11::Destroy(m_Handle); }
+            void Show() { X11::Show(m_Handle); }
+            void* Native() const { return (void*)(uintptr_t)X11::NativeId(m_Handle); }
+            void SetClientSize(int width, int height) { X11::SetClientSize(m_Handle, width, height); }
             static const char* PlatformType() { return kPlatformTypeX11EmbedWindowID; }
+
+        private:
+            X11::WindowHandle* m_Handle = nullptr;
         };
+
 #endif
     }
 
@@ -257,12 +371,28 @@ namespace Dimension::Music
             Vst3Instance* m_Owner;
         };
 
-        // The editor window asks for a new size.
+        // The editor window asks for a new size; on Linux the frame is also the host's run loop.
+#ifdef _WIN32
         class PlugFrame : public U::Implements<U::Directly<IPlugFrame>>
+#else
+        class PlugFrame : public U::Implements<U::Directly<IPlugFrame, Linux::IRunLoop>>
+#endif
         {
         public:
             explicit PlugFrame(Vst3Instance* owner) : m_Owner(owner) {}
             tresult PLUGIN_API resizeView(IPlugView* view, ViewRect* newSize) override;
+#ifndef _WIN32
+            tresult PLUGIN_API registerEventHandler(Linux::IEventHandler* handler, Linux::FileDescriptor fd) override
+            {
+                return TheRunLoop().registerEventHandler(handler, fd);
+            }
+            tresult PLUGIN_API unregisterEventHandler(Linux::IEventHandler* handler) override { return TheRunLoop().unregisterEventHandler(handler); }
+            tresult PLUGIN_API registerTimer(Linux::ITimerHandler* handler, Linux::TimerInterval ms) override
+            {
+                return TheRunLoop().registerTimer(handler, ms);
+            }
+            tresult PLUGIN_API unregisterTimer(Linux::ITimerHandler* handler) override { return TheRunLoop().unregisterTimer(handler); }
+#endif
             Vst3Instance* m_Owner;
         };
 
@@ -562,6 +692,9 @@ namespace Dimension::Music
             bool HasEditor() override
             {
                 if (!m_Controller) return false;
+#ifndef _WIN32
+                if (!X11::Available()) return false; // (no X display to put a window on)
+#endif
                 IPtr<IPlugView> view = owned(m_Controller->createView(ViewType::kEditor));
                 return view && view->isPlatformTypeSupported(PluginWindow::PlatformType()) == kResultTrue;
             }
@@ -586,7 +719,8 @@ namespace Dimension::Music
                 }
                 m_Frame = owned(new PlugFrame(this));
                 m_View->setFrame(m_Frame);
-                if (m_View->attached(m_Window->Native(), PluginWindow::PlatformType()) != kResultOk)
+                tresult attachedResult = m_View->attached(m_Window->Native(), PluginWindow::PlatformType());
+                if (attachedResult != kResultOk)
                 {
                     m_View->setFrame(nullptr);
                     m_View = nullptr;
@@ -603,6 +737,7 @@ namespace Dimension::Music
                     m_View->onSize(&want);
                 };
                 m_Window->Show();
+                ++s_OpenEditors;
                 return true;
             }
 
@@ -614,6 +749,7 @@ namespace Dimension::Music
                     m_View->removed();
                     m_View = nullptr;
                 }
+                if (m_Window) --s_OpenEditors;
                 m_Window.reset();
             }
 
@@ -673,6 +809,34 @@ namespace Dimension::Music
         }
         return instance;
     }
+
+    void Plugins::PollEvents()
+    {
+#ifndef _WIN32
+        X11::Pump();
+        // Copies: handlers may (un)register others while they run.
+        auto fds = Loop().Fds;
+        if (!fds.empty())
+        {
+            std::vector<pollfd> polls;
+            for (auto& [fd, handler] : fds) polls.push_back({ fd, POLLIN, 0 });
+            if (::poll(polls.data(), (nfds_t)polls.size(), 0) > 0)
+                for (size_t i = 0; i < polls.size(); ++i)
+                    if (polls[i].revents & (POLLIN | POLLHUP | POLLERR)) fds[i].second->onFDIsSet(fds[i].first);
+        }
+        auto now = std::chrono::steady_clock::now();
+        auto timers = Loop().Timers;
+        for (auto& t : timers)
+            if (now >= t.Due)
+            {
+                for (auto& live : Loop().Timers)
+                    if (live.Handler == t.Handler) live.Due = now + live.Interval;
+                t.Handler->onTimer();
+            }
+#endif
+    }
+
+    bool Plugins::AnyEditorOpen() { return s_OpenEditors.load() > 0; }
 
     // ---- The rack ----
 

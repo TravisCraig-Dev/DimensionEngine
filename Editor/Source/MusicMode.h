@@ -23,6 +23,9 @@ namespace Editor
         ~MusicMode();
 
         bool IsActive() const { return m_Active; }
+        // Whether the editor should keep drawing at full rate (playing, recording, or a plug-in's editor window open:
+        // their input does not reach the editor's window, so it would look idle).
+        bool WantsFrames() const;
         AssetHandle GetSong() const { return m_Asset; }
         // Opens the song (closing one already open); false when it cannot be read.
         bool Open(AssetHandle song);

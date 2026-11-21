@@ -21011,6 +21011,22 @@ namespace
         auto copy = PluginInstance::Create(gain->Module, gain->ClassId, rate, 64, error);
         CHECK(copy && copy->SetState(component, controller));
         if (copy) CHECK(Near((float)copy->GetParameter(gainParam->Id), 0.25f) && Near(blockRms(*copy), quiet, quiet * 0.05f));
+        // Its editor window (Windows: a window of its own; Linux: an X11 window it embeds in, its events run by
+        // PollEvents). Skipped without a display.
+        if (again->HasEditor())
+        {
+            CHECK(again->OpenEditor("AGain (test)") && again->IsEditorOpen() && Plugins::AnyEditorOpen());
+            for (int i = 0; i < 30; ++i)
+            {
+                Plugins::PollEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            }
+            CHECK(again->IsEditorOpen());
+            again->CloseEditor();
+            Plugins::PollEvents();
+            CHECK(!again->IsEditorOpen() && !Plugins::AnyEditorOpen());
+        }
+        else std::printf("  (skipped the editor window: no display)%c", 10);
         // Parameter changes on the audio thread (automation's way in).
         again->QueueParameter(gainParam->Id, 0.0, 0);
         std::vector<float> b(64 * 2, 0.5f);

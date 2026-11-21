@@ -52,6 +52,11 @@ namespace Dimension::Music
         // their factories). Modules that fail add a line to `errors`.
         std::vector<PluginInfo> Scan(const std::vector<fs::path>& folders, std::vector<std::string>* errors = nullptr);
         std::vector<PluginInfo> ScanModule(const fs::path& module, std::string* error = nullptr);
+        // Keeps plug-in editor windows alive where the host runs their events (Linux: their X11 windows, and the file
+        // descriptors and timers plug-ins register with the host's run loop). Call each frame; nothing to do on Windows.
+        void PollEvents();
+        // Whether any plug-in's editor window is open.
+        bool AnyEditorOpen();
     }
 
     // A running plug-in: its processor and controller. Main-thread calls (parameters, state, editor) and the audio
