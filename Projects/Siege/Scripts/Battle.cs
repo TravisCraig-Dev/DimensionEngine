@@ -37,6 +37,7 @@ namespace Siege
         private float m_ReinforceCheck;
 
         internal static readonly Vector3 HorseScale = new(0.55f, 0.55f, 0.55f);
+        private static readonly string[] HorseCoats = { "Bay", "Chestnut", "Black", "Grey" }; // Tools/build_horse.py
         private const float RiderSeat = 0.62f; // the rider's root below the horse's saddle joint
 
         public override void OnCreate()
@@ -46,8 +47,11 @@ namespace Siege
             foreach (string side in new[] { "Defenders", "Attackers" })
                 foreach (string kind in new[] { "Swordsman", "Spearman", "Archer", "Knight" })
                     m_Templates[$"{side}_{kind}"] = Entity.Find($"Template {side}_{kind}");
-            foreach (string name in new[] { "Horse", "Arrow", "Catapult", "Catapult Arm", "Shot", "Impact", "Flash" })
+            foreach (string name in new[] { "Arrow", "Catapult", "Catapult Arm", "Shot", "Impact", "Flash" })
                 m_Templates[name] = Entity.Find($"Template {name}");
+            foreach (string side in new[] { "Defenders", "Attackers" })
+                foreach (string coat in HorseCoats)
+                    m_Templates[$"Horse {side} {coat}"] = Entity.Find($"Template Horse {side} {coat}");
             Grid = new SpatialGrid(-700, -350, 700, 700);
             Arrows = new ArrowSystem(this, m_Templates["Arrow"], 1400);
             Engines = new SiegeEngines(this, m_Templates["Catapult"], m_Templates["Catapult Arm"], m_Templates["Shot"],
@@ -143,7 +147,9 @@ namespace Siege
                 s.Anim = body.GetComponent<Animator>();
                 if (r.Mounted)
                 {
-                    s.Horse = Entity.Instantiate(m_Templates["Horse"], new Vector3(pos.X, 0, pos.Y), Quaternion.Identity);
+                    // A horse of the rider's side (its saddle cloth) in any coat.
+                    string coat = HorseCoats[Rng.Next(HorseCoats.Length)];
+                    s.Horse = Entity.Instantiate(m_Templates[$"Horse {r.Side} {coat}"], new Vector3(pos.X, 0, pos.Y), Quaternion.Identity);
                     s.HorseXf = s.Horse.Transform;
                     s.HorseAnim = s.Horse.GetComponent<Animator>();
                 }

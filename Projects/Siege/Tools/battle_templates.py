@@ -21,6 +21,9 @@ def particles(**kw):
     return p
 
 
+HORSE_COATS = ("Bay", "Chestnut", "Black", "Grey")
+
+
 def add(sc):
     anims = S.guid("Models/Animations/Soldier_Anims.gltf")
     for side in ("Defenders", "Attackers"):
@@ -30,11 +33,14 @@ def add(sc):
                    Animator=S.animator("Idle_Shield_Loop", anims),
                    LOD_Group={"LOD 1 Below": 0.12, "LOD 2 Below": 0.05, "LOD 3 Below": 0.02, "Cull Below": 0.0025,
                               "Size": 1.8, "Bias": 1.0, "Fade Width": 0.1, "Generated Levels": 3, "Reduction": 0.35})
-    sc.add("Template Horse", HIDDEN, scale=(0.55, 0.55, 0.55), active=False,
-           Mesh_Renderer=S.mesh_renderer(S.guid("Models/Horse/Horse.gltf")),
-           Animator=S.animator("Idle", 0),
-           LOD_Group={"LOD 1 Below": 0.1, "LOD 2 Below": 0.04, "LOD 3 Below": 0.02, "Cull Below": 0.003,
-                      "Size": 2.6, "Bias": 1.0, "Fade Width": 0.1, "Generated Levels": 2, "Reduction": 0.4})
+    # The horses: a saddle cloth in each side's colours, several coats (Tools/build_horse.py).
+    for side in ("Defenders", "Attackers"):
+        for coat in HORSE_COATS:
+            sc.add(f"Template Horse {side} {coat}", HIDDEN, scale=(0.55, 0.55, 0.55), active=False,
+                   Mesh_Renderer=S.mesh_renderer(S.guid(f"Models/Horse/Horse_{side}_{coat}.gltf")),
+                   Animator=S.animator("Idle", 0),
+                   LOD_Group={"LOD 1 Below": 0.1, "LOD 2 Below": 0.04, "LOD 3 Below": 0.02, "Cull Below": 0.003,
+                              "Size": 2.6, "Bias": 1.0, "Fade Width": 0.1, "Generated Levels": 2, "Reduction": 0.4})
     sc.add("Template Arrow", HIDDEN, active=False,
            Mesh_Renderer=S.mesh_renderer(S.guid("Models/Props/Arrow.gltf"), shadows=False))
     sc.add("Template Catapult", HIDDEN, active=False,

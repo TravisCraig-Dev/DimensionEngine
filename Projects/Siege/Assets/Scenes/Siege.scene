@@ -1083,11 +1083,11 @@
       }
     },
     {
-      "guid": 100013,
+      "guid": 100025,
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Template Horse",
+          "Name": "Template Horse Defenders Bay",
           "Tag": "Untagged",
           "Active": false,
           "Layer": 0
@@ -1110,7 +1110,490 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 64444113778049299,
+          "Mesh": 1091924771158840784,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        },
+        "LOD Group": {
+          "LOD 1 Below": 0.1,
+          "LOD 2 Below": 0.04,
+          "LOD 3 Below": 0.02,
+          "Cull Below": 0.003,
+          "Size": 2.6,
+          "Bias": 1.0,
+          "Fade Width": 0.1,
+          "Generated Levels": 2,
+          "Reduction": 0.4
+        }
+      }
+    },
+    {
+      "guid": 100026,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Template Horse Defenders Chestnut",
+          "Tag": "Untagged",
+          "Active": false,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            -300.0,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 577318942123942200,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        },
+        "LOD Group": {
+          "LOD 1 Below": 0.1,
+          "LOD 2 Below": 0.04,
+          "LOD 3 Below": 0.02,
+          "Cull Below": 0.003,
+          "Size": 2.6,
+          "Bias": 1.0,
+          "Fade Width": 0.1,
+          "Generated Levels": 2,
+          "Reduction": 0.4
+        }
+      }
+    },
+    {
+      "guid": 100027,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Template Horse Defenders Black",
+          "Tag": "Untagged",
+          "Active": false,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            -300.0,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 678416507892532804,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        },
+        "LOD Group": {
+          "LOD 1 Below": 0.1,
+          "LOD 2 Below": 0.04,
+          "LOD 3 Below": 0.02,
+          "Cull Below": 0.003,
+          "Size": 2.6,
+          "Bias": 1.0,
+          "Fade Width": 0.1,
+          "Generated Levels": 2,
+          "Reduction": 0.4
+        }
+      }
+    },
+    {
+      "guid": 100028,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Template Horse Defenders Grey",
+          "Tag": "Untagged",
+          "Active": false,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            -300.0,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 745906112107854123,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        },
+        "LOD Group": {
+          "LOD 1 Below": 0.1,
+          "LOD 2 Below": 0.04,
+          "LOD 3 Below": 0.02,
+          "Cull Below": 0.003,
+          "Size": 2.6,
+          "Bias": 1.0,
+          "Fade Width": 0.1,
+          "Generated Levels": 2,
+          "Reduction": 0.4
+        }
+      }
+    },
+    {
+      "guid": 100029,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Template Horse Attackers Bay",
+          "Tag": "Untagged",
+          "Active": false,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            -300.0,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 722448092277935178,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        },
+        "LOD Group": {
+          "LOD 1 Below": 0.1,
+          "LOD 2 Below": 0.04,
+          "LOD 3 Below": 0.02,
+          "Cull Below": 0.003,
+          "Size": 2.6,
+          "Bias": 1.0,
+          "Fade Width": 0.1,
+          "Generated Levels": 2,
+          "Reduction": 0.4
+        }
+      }
+    },
+    {
+      "guid": 100030,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Template Horse Attackers Chestnut",
+          "Tag": "Untagged",
+          "Active": false,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            -300.0,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 555091852536777261,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        },
+        "LOD Group": {
+          "LOD 1 Below": 0.1,
+          "LOD 2 Below": 0.04,
+          "LOD 3 Below": 0.02,
+          "Cull Below": 0.003,
+          "Size": 2.6,
+          "Bias": 1.0,
+          "Fade Width": 0.1,
+          "Generated Levels": 2,
+          "Reduction": 0.4
+        }
+      }
+    },
+    {
+      "guid": 100031,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Template Horse Attackers Black",
+          "Tag": "Untagged",
+          "Active": false,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            -300.0,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 440926492699382010,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        },
+        "LOD Group": {
+          "LOD 1 Below": 0.1,
+          "LOD 2 Below": 0.04,
+          "LOD 3 Below": 0.02,
+          "Cull Below": 0.003,
+          "Size": 2.6,
+          "Bias": 1.0,
+          "Fade Width": 0.1,
+          "Generated Levels": 2,
+          "Reduction": 0.4
+        }
+      }
+    },
+    {
+      "guid": 100032,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Template Horse Attackers Grey",
+          "Tag": "Untagged",
+          "Active": false,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            -300.0,
+            0.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            0.55,
+            0.55,
+            0.55
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 336908523060081948,
           "Material": 0,
           "Albedo": 0,
           "Color": [
