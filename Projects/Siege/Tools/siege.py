@@ -114,5 +114,7 @@ def mesh_renderer(mesh, material=0, color=(1, 1, 1, 1), shadows=True):
 
 
 def animator(clip, source=0, speed=1.0, loop=True, controller=0):
+    # Retargeting by joint name: every soldier has the clips' own skeleton, so they play exactly as made (the
+    # humanoid mapping's muscle limits bent the authored bow draw, and it drops joints such as the bowstring).
     return {"Clip": clip, "Speed": speed, "Loop": loop, "Playing": True, "Controller": controller,
-            "Animation Source": source, "Muscle Limits": True, "Foot IK": False, "Foot IK Reach": 0.5}
+            "Animation Source": source, "Retargeting": 1, "Muscle Limits": True, "Foot IK": False, "Foot IK Reach": 0.5}

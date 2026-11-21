@@ -10,6 +10,7 @@ import os
 
 import numpy as np
 
+import anim_author
 import gltfio as G
 import siege as S
 
@@ -335,14 +336,18 @@ def bow():
     for i in range(n):
         t0, t1 = i / n, (i + 1) / n
         y0, y1 = (t0 - 0.5) * 1.7, (t1 - 0.5) * 1.7
-        z0, z1 = -0.18 * (1 - (2 * t0 - 1) ** 2), -0.18 * (1 - (2 * t1 - 1) ** 2)
+        # the grip (the stave's middle) in the fist, the tips 0.18 m back toward the string
+        z0, z1 = 0.18 * (2 * t0 - 1) ** 2, 0.18 * (2 * t1 - 1) ** 2
         r = 0.016 - 0.01 * abs(t0 - 0.5)
         d = np.array([0, y1 - y0, z1 - z0])
         length = np.linalg.norm(d)
         ang = np.degrees(np.arctan2(d[2], d[1]))
         segs.append(moved(cylinder(r, length, segments=6), (0, y0, z0), rot_x(ang)))
-    string = moved(cylinder(0.002, 1.7, segments=3, caps=False), (0, -0.85, 0))
-    return {"wood": merge(*segs), "leather": merge(string)}
+    # The string in two halves meeting at the middle (where the draw pulls it: the bowstring joint).
+    back = anim_author.STRING_BACK
+    upper = moved(cylinder(0.002, 0.85, segments=3, caps=False), (0, 0, back))
+    lower = moved(cylinder(0.002, 0.85, segments=3, caps=False), (0, -0.85, back))
+    return {"wood": merge(*segs), "leather": merge(upper, lower)}
 
 
 # ---- materials ----------------------------------------------------------------------------------------------------
@@ -375,6 +380,7 @@ def texture_material(doc, name, folder, color, metallic=0.0, uv=None):
 
 def build(side, kind, spec, body_gltf, names, bind, body_parts, shield_parts):
     doc = copy.deepcopy(body_gltf.doc)
+    names = list(names)  # (an archer adds its bowstring joint)
     for k in ("meshes", "accessors", "bufferViews", "buffers", "animations"):
         doc.pop(k, None)
     for img in doc["images"]:  # body textures stay beside the body model, the shield's beside the shield
@@ -464,9 +470,14 @@ def build(side, kind, spec, body_gltf, names, bind, body_parts, shield_parts):
     if spec["left"] == "bow":
         hold = np.eye(4)
         hold[:3, :3] = np.eye(3)
-        hold[:3, 3] = hand_l[:3, 3] + np.array([0.085, -0.02, 0.0])
+        hold[:3, 3] = hand_l[:3, 3] + anim_author.BOW_HOLD
+        string_joint = add_bowstring(doc, names, bind)
         for mat, mesh in bow().items():
-            parts.append(rigid(*mesh, hold, joint["hand_l"], mats[mat]))
+            part = rigid(*mesh, hold, joint["hand_l"], mats[mat])
+            if mat == "leather":  # the string: its middle on the bowstring joint (the draw pulls it back)
+                middle = np.linalg.norm(part.pos - (hold[:3, 3] + [0, 0, anim_author.STRING_BACK]), axis=1) < 0.01
+                part.joints[middle, 0] = string_joint
+            parts.append(part)
     elif spec["left"] == "shield":
         forearm = bind[joint["lowerarm_l"]]
         place = np.eye(4)
@@ -505,6 +516,24 @@ def load_shield():
     return g, parts, hi - lo
 
 
+def add_bowstring(doc, names, bind):
+    """A joint for the middle of the bowstring under the left hand (anim_author.py animates it); returns its index."""
+    hand = next(i for i, n in enumerate(doc["nodes"]) if n.get("name") == "hand_l")
+    hand_bind = bind[names.index("hand_l")]
+    local = anim_author.bowstring_local(hand_bind)
+    doc["nodes"].append({"name": "bowstring", "translation": local.tolist()})
+    doc["nodes"][hand].setdefault("children", []).append(len(doc["nodes"]) - 1)
+    doc["skins"][0]["joints"].append(len(doc["nodes"]) - 1)
+    names.append("bowstring")
+    world = hand_bind.copy()
+    world[:3, 3] = (hand_bind @ np.append(local, 1.0))[:3]
+    EXTRA_BIND.append(np.linalg.inv(world).T.astype(np.float32))  # (column-major, as the file stores them)
+    return len(names) - 1
+
+
+EXTRA_BIND = []
+
+
 def write(doc, parts, side, kind, names):
     w = G.Writer(doc)
     prims = []
@@ -539,7 +568,9 @@ def write(doc, parts, side, kind, names):
     doc["nodes"][keep]["skin"] = 0
     doc["nodes"][keep]["name"] = f"{side} {kind}"
     # The skin's inverse bind matrices, written again.
-    w.doc["skins"][0]["inverseBindMatrices"] = w.add(INVERSE_BIND)
+    ibm = INVERSE_BIND if not EXTRA_BIND else np.concatenate([INVERSE_BIND.reshape(-1, 4, 4), np.array(EXTRA_BIND)]).reshape(len(INVERSE_BIND) + len(EXTRA_BIND), -1)
+    EXTRA_BIND.clear()
+    w.doc["skins"][0]["inverseBindMatrices"] = w.add(ibm.astype(np.float32))
     path = os.path.join(OUT, f"{side}_{kind}.gltf")
     w.save(path)
     S.write_meta(os.path.relpath(path, S.ASSETS).replace("\\", "/"))

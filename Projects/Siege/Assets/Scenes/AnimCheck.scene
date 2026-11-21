@@ -1,0 +1,572 @@
+{
+  "version": 1,
+  "name": "AnimCheck",
+  "settings": {
+    "ambientColor": [
+      0.55,
+      0.6,
+      0.7
+    ],
+    "ambientIntensity": 0.4,
+    "bloom": false,
+    "exposure": 1.0,
+    "taa": false,
+    "ssao": true,
+    "ssaoIntensity": 1.0,
+    "ssaoRadius": 0.5,
+    "tonemapping": true,
+    "skyMode": 1,
+    "skyIntensity": 1.0,
+    "skyTexture": 1035300711734215783,
+    "gravity": [
+      0,
+      -9.81,
+      0
+    ]
+  },
+  "entities": [
+    {
+      "guid": 21000,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            4.8,
+            1.5,
+            4.6
+          ],
+          "Rotation": [
+            -0.13962634015954636,
+            -0.4363323129985824,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 0,
+          "Field Of View": 40,
+          "Orthographic Size": 5,
+          "Near Clip": 0.05,
+          "Far Clip": 1000,
+          "Primary": true,
+          "Background": [
+            0.4,
+            0.6,
+            0.85,
+            1
+          ],
+          "Clear Flags": 1
+        }
+      }
+    },
+    {
+      "guid": 21001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Sun",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            20,
+            0
+          ],
+          "Rotation": [
+            -0.8,
+            0.6,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Directional Light": {
+          "Color": [
+            1.0,
+            0.95,
+            0.88
+          ],
+          "Intensity": 3.0,
+          "Soft Shadows": true,
+          "Light Angle": 1.5
+        }
+      }
+    },
+    {
+      "guid": 21002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ground",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            -0.5,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            80,
+            1,
+            80
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Material": 316159502007913028,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 21003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spearman 0.1",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Spear_Thrust",
+          "Speed": 0.1,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 21004,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spearman 0.25",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            1.6,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Spear_Thrust",
+          "Speed": 0.25,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 21005,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spearman 0.35",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            3.2,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Spear_Thrust",
+          "Speed": 0.35,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 21006,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spearman 0.42",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            4.800000000000001,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Spear_Thrust",
+          "Speed": 0.42,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 21007,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spearman 0.5",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            6.4,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Spear_Thrust",
+          "Speed": 0.5,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 21008,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spearman 0.7",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            8.0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Spear_Thrust",
+          "Speed": 0.7,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 21009,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Spearman 0.9",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            9.600000000000001,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Spear_Thrust",
+          "Speed": 0.9,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    }
+  ]
+}

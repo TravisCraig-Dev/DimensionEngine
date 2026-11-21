@@ -295,12 +295,13 @@ namespace Siege
                 a.Yaw = BattleMath.YawOf(to);
                 if (!release)
                 {
-                    Once(a, "Spell_Simple_Shoot", 1.1f);
-                    m_Shots.Add((Now + 0.45f, a, target, true));
+                    Once(a, "Bow_Shoot", 2.0f);
+                    m_Shots.Add((Now + BowRelease, a, target, true));
                     continue;
                 }
+                // From the bow at full draw: out in front of the archer at about head height.
                 Vector2 f = BattleMath.Facing(a.Yaw);
-                Vector3 from = new(a.Pos.X + f.X * 0.4f, a.Ground + 1.55f, a.Pos.Y + f.Y * 0.4f);
+                Vector3 from = new(a.Pos.X + f.X * 0.55f, a.Ground + 1.7f, a.Pos.Y + f.Y * 0.55f);
                 target.Y = m_Terrain.SampleHeight(target);
                 float flight = Math.Clamp(to.Length() / 36.0f, 1.6f, 5.0f);
                 Arrows.Fire(from, target, flight, a.Side);
@@ -347,9 +348,12 @@ namespace Siege
             return r;
         }
 
+        private const float BowRelease = 1.2f; // Bow_Shoot looses its arrow this far in (Tools/anim_author.py)
+
         private static string IdleClip(Soldier s) => s.Kind switch
         {
             Kind.Archer => "Idle_Loop",
+            Kind.Spearman => "Spear_Rest",
             _ => "Idle_Shield_Loop",
         };
 
@@ -430,14 +434,16 @@ namespace Siege
         {
             if (s.OneShot) return;
             float v = s.Vel.Length();
-            if (v < 0.25f) Loop(s, s.Foe != null && s.Kind != Kind.Archer ? "Sword_Idle" : IdleClip(s), 1.0f);
-            else if (v < 2.3f) Loop(s, "Walk_Loop", Math.Clamp(v / 1.35f, 0.6f, 1.6f));
-            else if (v < 4.8f) Loop(s, "Jog_Fwd_Loop", Math.Clamp(v / 3.4f, 0.7f, 1.4f));
+            bool spear = s.Kind == Kind.Spearman;
+            string ready = spear ? "Spear_Idle" : "Sword_Idle";
+            if (v < 0.25f) Loop(s, s.Foe != null && s.Kind != Kind.Archer ? ready : IdleClip(s), 1.0f);
+            else if (v < 2.3f) Loop(s, spear ? "Spear_Walk" : "Walk_Loop", Math.Clamp(v / 1.35f, 0.6f, 1.6f));
+            else if (v < 4.8f || spear) Loop(s, spear ? "Spear_Jog" : "Jog_Fwd_Loop", Math.Clamp(v / 3.4f, 0.7f, spear ? 1.7f : 1.4f));
             else Loop(s, "Sprint_Loop", Math.Clamp(v / 6.0f, 0.7f, 1.4f));
         }
 
         private static readonly string[] s_SwordSwings = { "Sword_Regular_A", "Sword_Regular_B", "Sword_Regular_C", "Sword_Attack" };
-        private static readonly string[] s_SpearThrusts = { "Sword_Regular_B", "Sword_Regular_A", "Shield_OneShot" };
+        private static readonly string[] s_SpearThrusts = { "Spear_Thrust", "Spear_Thrust_Low" };
 
         private void Swing(Soldier s)
         {

@@ -576,7 +576,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -645,7 +646,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -714,7 +716,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -783,7 +786,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -852,7 +856,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -921,7 +926,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -990,7 +996,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -1059,7 +1066,8 @@
           "Animation Source": 462471928835067955,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Retargeting": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,

@@ -1,11 +1,12 @@
 """Models/Animations/Soldier_Anims.gltf: one animation source for every soldier. An Animator plays clips from a single
 model, and the battle needs clips from both of Quaternius' Universal Animation Libraries (same skeleton), plus clips
-authored here (see authored_clips). The file holds the skeleton (UAL1's nodes) and the animations, channels matched to
+authored here (anim_author.py: the bow and the spear). The file holds the skeleton (UAL1's nodes) and the animations, channels matched to
 joints by name."""
 import os
 
 import numpy as np
 
+import anim_author
 import gltfio as G
 import siege as S
 
@@ -33,6 +34,11 @@ def main(authored=None):
     ual1 = G.Gltf(os.path.join(SRC, "UAL1_Standard.glb"))
     ual2 = G.Gltf(os.path.join(SRC, "UAL2_Standard.glb"))
     nodes, roots = copy_skeleton(ual1.doc)
+    # The bowstring's joint under the left hand (archers' strings follow it: build_soldiers.py, anim_author.py).
+    hand_l = next(i for i, n in enumerate(nodes) if n.get("name") == "hand_l")
+    world = G.world_matrices({"nodes": nodes})
+    nodes.append({"name": "bowstring", "translation": anim_author.bowstring_local(world[hand_l]).tolist()})
+    nodes[hand_l].setdefault("children", []).append(len(nodes) - 1)
     index = {n.get("name"): i for i, n in enumerate(nodes)}
     doc = {"asset": {"version": "2.0", "generator": "Siege build_animations"}, "scene": 0,
            "scenes": [{"nodes": roots}], "nodes": nodes, "animations": []}
@@ -41,7 +47,10 @@ def main(authored=None):
     # degenerate triangle, so the file is a valid animation source without carrying a body.
     skin = ual1.doc["skins"][0]
     ibm = ual1.read(skin["inverseBindMatrices"]).astype(np.float32)
-    doc["skins"] = [{"joints": [index[ual1.doc["nodes"][j]["name"]] for j in skin["joints"]],
+    string_world = world[hand_l].copy()
+    string_world[:3, 3] = (world[hand_l] @ np.append(nodes[index["bowstring"]]["translation"], 1.0))[:3]
+    ibm = np.vstack([ibm.reshape(-1, 16), np.linalg.inv(string_world).T.reshape(1, 16)]).astype(np.float32)
+    doc["skins"] = [{"joints": [index[ual1.doc["nodes"][j]["name"]] for j in skin["joints"]] + [index["bowstring"]],
                      "inverseBindMatrices": w.add(ibm)}]
     tri = np.zeros((3, 3), np.float32)
     tri[1, 0] = tri[2, 2] = 0.001
@@ -85,4 +94,4 @@ def main(authored=None):
 
 
 if __name__ == "__main__":
-    main()
+    main(authored=anim_author.clips())

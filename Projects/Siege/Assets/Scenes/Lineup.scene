@@ -210,6 +210,7 @@
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -262,12 +263,13 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Death01",
+          "Clip": "Idle_Shield_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -320,12 +322,13 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spell_Simple_Shoot",
+          "Clip": "Idle_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -378,12 +381,13 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Jog_Fwd_Loop",
+          "Clip": "Walk_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -442,6 +446,7 @@
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -494,12 +499,13 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Death01",
+          "Clip": "Idle_Shield_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -552,12 +558,13 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spell_Simple_Shoot",
+          "Clip": "Idle_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
@@ -610,12 +617,13 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Jog_Fwd_Loop",
+          "Clip": "Walk_Loop",
           "Speed": 1.0,
           "Loop": true,
           "Playing": true,
           "Controller": 0,
           "Animation Source": 462471928835067955,
+          "Retargeting": 1,
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5
