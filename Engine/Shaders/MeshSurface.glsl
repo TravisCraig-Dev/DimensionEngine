@@ -253,17 +253,19 @@ void main()
         TerrainLayersRef layers = TerrainLayersRef(m.Maps2.xy);
         vec3 world = vWorldPos;
         vec3 surfaceN = normalize(vNormal);
-        // Triplanar axes: an axis with under 5% of the blend gives its share to the others (smoothly: each loses 5%),
-        // so gentle slopes read their textures once instead of three times.
-        vec3 axes = pow(abs(surfaceN), vec3(4.0));
-        axes /= max(axes.x + axes.y + axes.z, 1e-4);
-        axes = max(axes - 0.05, 0.0);
-        axes /= max(axes.x + axes.y + axes.z, 1e-4);
+        // Far ground needs less: once a layer's texture repeats in few pixels (16 down to 6 a tile) its normal map
+        // fades out and its triplanar blend narrows toward the axis the ground faces most (each axis less a floor of 5%
+        // near, 30% far, renormalized: the strongest, at least a third, always stays), so distant mountains read a
+        // texture or two a layer instead of up to six. Meters a pixel from the screen derivatives.
+        float metersPerPixel = max(length(fwidth(world)) * 0.7071, 1e-5);
+        vec3 axesFull = pow(abs(surfaceN), vec3(4.0));
+        axesFull /= max(axesFull.x + axesFull.y + axesFull.z, 1e-4);
         uint count = min(m.Maps2.z, 16u);
         float heightBlend = uintBitsToFloat(m.Maps2.w);
         float weights[16];
         vec3 colors[16];
         float heights[16];
+        float details[16];
         vec4 w = vec4(0.0);
         float top = -1e9, plainTotal = 0.0;
         for (uint k = 0u; k < count; ++k)
@@ -276,7 +278,11 @@ void main()
             colors[k] = vec3(0.0);
             heights[k] = -1e9;
             if (weights[k] <= 0.0) continue;
-            vec3 texel = TerrainSample(layer.Maps.x, world, layer.Color.w, layer.Params.y > 0.5, axes).rgb;
+            float detail = smoothstep(6.0, 16.0, 1.0 / max(layer.Color.w * metersPerPixel, 1e-6)); // (pixels a tile)
+            vec3 layerAxes = max(axesFull - mix(0.3, 0.05, detail), 0.0);
+            layerAxes /= max(layerAxes.x + layerAxes.y + layerAxes.z, 1e-4);
+            details[k] = detail;
+            vec3 texel = TerrainSample(layer.Maps.x, world, layer.Color.w, layer.Params.y > 0.5, layerAxes).rgb;
             colors[k] = texel * layer.Color.rgb;
             heights[k] = weights[k] + dot(texel, vec3(0.299, 0.587, 0.114)) * heightBlend;
             top = max(top, heights[k]);
@@ -292,7 +298,13 @@ void main()
             if (weight <= 0.0) continue;
             c += colors[k] * weight;
             TerrainLayer layer = layers.Layers[k];
-            vec3 t = layer.Maps.w != 0xFFFFFFFFu ? TerrainNormal(layer.Maps.w, world, layer.Color.w, layer.Params.x, layer.Params.y > 0.5, axes, surfaceN) : surfaceN;
+            vec3 t = surfaceN;
+            if (layer.Maps.w != 0xFFFFFFFFu && details[k] > 0.0)
+            {
+                vec3 layerAxes = max(axesFull - mix(0.3, 0.05, details[k]), 0.0);
+                layerAxes /= max(layerAxes.x + layerAxes.y + layerAxes.z, 1e-4);
+                t = mix(surfaceN, normalize(TerrainNormal(layer.Maps.w, world, layer.Color.w, layer.Params.x, layer.Params.y > 0.5, layerAxes, surfaceN)), details[k]);
+            }
             n += normalize(t) * weight;
             total += weight;
         }
