@@ -1832,6 +1832,7 @@ namespace Dimension
             a.TerrainSample = [](void* s, uint64_t e, const float* p, float* out) -> int {
                 auto* terrain = Comp<TerrainComponent>(s, e);
                 if (!terrain) return 0;
+                Terrain::PrepareSampling(*terrain); // scripts sample every frame: keep the heights decoded
                 glm::vec3 ground, normal;
                 if (!Terrain::Sample(*terrain, S(s).GetRegistry().Get<TransformComponent>(Unpack(e)).World, { p[0], p[1], p[2] }, ground, normal))
                     return 0;

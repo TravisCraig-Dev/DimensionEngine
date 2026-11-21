@@ -3667,6 +3667,93 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestTerrainChunks()
+    {
+        // The surface drawn in chunks: every level of a chunk covers the chunk exactly once, strays from the full surface
+        // by no more than its recorded error, and its skirts hang deep enough to hide the gap to any neighbour.
+        TerrainComponent t;
+        t.Size = { 300.0f, 260.0f };
+        t.Height = 60.0f;
+        t.Resolution = 150; // 149 quads a side: two whole chunks and a narrower last one
+        t.NoiseScale = 0.02f;
+        t.Octaves = 5;
+        std::vector<float> heights = Terrain::BuildHeights(t);
+        MeshData mesh = Terrain::BuildMesh(t, heights);
+        int n = Terrain::SampleCount(t);
+        std::vector<Vertex> vertices = mesh.Vertices;
+        std::vector<uint32_t> indices;
+        std::vector<Terrain::Chunk> chunks;
+        Terrain::BuildChunks(t, heights, vertices, indices, chunks);
+        CHECK(chunks.size() == 9);
+        CHECK(vertices.size() > (size_t)n * n); // skirts
+        bool inRange = true, growing = true, tiles = true, withinError = true, skirtsDeep = true, coarser = true;
+        size_t fullTriangles = 0;
+        for (const Terrain::Chunk& chunk : chunks)
+        {
+            CHECK(chunk.Levels == Terrain::kChunkLevels);
+            float area = (chunk.Max.x - chunk.Min.x) * (chunk.Max.z - chunk.Min.z);
+            for (int level = 0; level < Terrain::kChunkLevels; ++level)
+            {
+                growing &= chunk.Error[0] == 0.0f && (level == 0 || chunk.Error[level] >= chunk.Error[level - 1]);
+                if (level > 0) coarser &= chunk.Count[level] <= chunk.Count[level - 1];
+                double covered = 0.0;
+                for (uint32_t i = chunk.First[level]; i < chunk.First[level] + chunk.Count[level]; i += 3)
+                {
+                    uint32_t a = indices[i], b = indices[i + 1], c = indices[i + 2];
+                    inRange &= a < vertices.size() && b < vertices.size() && c < vertices.size();
+                    if (a >= (uint32_t)(n * n) || b >= (uint32_t)(n * n) || c >= (uint32_t)(n * n))
+                    {
+                        // a skirt: its bottom is below the top by at least this chunk's worst error
+                        for (uint32_t v : { a, b, c })
+                            if (v >= (uint32_t)(n * n))
+                                skirtsDeep &= v < vertices.size() && vertices[v].Position.y >= chunk.Min.y - 1e-3f &&
+                                              vertices[v].Position.y <= Terrain::HeightAt(t, heights, vertices[v].Position.x, vertices[v].Position.z) -
+                                                                                chunk.Error[Terrain::kChunkLevels - 1] + 1e-3f;
+                        continue;
+                    }
+                    glm::vec3 pa = vertices[a].Position, pb = vertices[b].Position, pc = vertices[c].Position;
+                    float cross = (pb.x - pa.x) * (pc.z - pa.z) - (pb.z - pa.z) * (pc.x - pa.x);
+                    covered += std::abs(cross) * 0.5;
+                    if (level == 0) ++fullTriangles;
+                    // Every sample inside the triangle is within the level's error of it.
+                    glm::vec2 lo = glm::min(glm::min(glm::vec2(pa.x, pa.z), glm::vec2(pb.x, pb.z)), glm::vec2(pc.x, pc.z));
+                    glm::vec2 hi = glm::max(glm::max(glm::vec2(pa.x, pa.z), glm::vec2(pb.x, pb.z)), glm::vec2(pc.x, pc.z));
+                    glm::vec2 step = t.Size / (float)(n - 1);
+                    for (float z = lo.y; z <= hi.y + 1e-3f; z += step.y)
+                        for (float x = lo.x; x <= hi.x + 1e-3f; x += step.x)
+                        {
+                            float d = (pb.z - pc.z) * (pa.x - pc.x) + (pc.x - pb.x) * (pa.z - pc.z);
+                            float wa = ((pb.z - pc.z) * (x - pc.x) + (pc.x - pb.x) * (z - pc.z)) / d;
+                            float wb = ((pc.z - pa.z) * (x - pc.x) + (pa.x - pc.x) * (z - pc.z)) / d;
+                            float wc = 1.0f - wa - wb;
+                            if (wa < -1e-4f || wb < -1e-4f || wc < -1e-4f) continue;
+                            float plane = wa * pa.y + wb * pb.y + wc * pc.y;
+                            withinError &= std::abs(Terrain::HeightAt(t, heights, x, z) - plane) <= chunk.Error[level] + 1e-3f;
+                        }
+                }
+                tiles &= std::abs(covered - area) <= area * 1e-4;
+            }
+        }
+        CHECK(inRange);
+        CHECK(growing);
+        CHECK(coarser);
+        CHECK(tiles);
+        CHECK(withinError);
+        CHECK(skirtsDeep);
+        CHECK(fullTriangles == (size_t)(n - 1) * (n - 1) * 2); // level 0 is the full surface
+        CHECK(chunks[4].Error[Terrain::kChunkLevels - 1] > 0.0f); // (a hilly middle)
+
+        // A chunk with a hole keeps every sample (the hole's triangles left out); the others still have their levels.
+        uint32_t whole = chunks[0].Count[0];
+        t.EditHoles.assign((size_t)n * n, 0);
+        t.EditHoles[(size_t)10 * n + 10] = 1;
+        vertices = mesh.Vertices;
+        Terrain::BuildChunks(t, heights, vertices, indices, chunks);
+        CHECK(chunks[0].Levels == 1 && chunks[1].Levels == Terrain::kChunkLevels);
+        CHECK(chunks[0].Count[0] == whole - 6 * 3); // the six triangles around the sample
+        CHECK(chunks[0].First[Terrain::kChunkLevels - 1] == chunks[0].First[0] && chunks[0].Count[Terrain::kChunkLevels - 1] == chunks[0].Count[0]);
+    }
+
     void TestTerrainCrater()
     {
         // A crater sinks the ground in the middle by about Depth, throws up a rim around it, leaves the ground far off
@@ -21520,6 +21607,7 @@ int main(int argc, char** argv)
     Run("Soft buoyancy", TestSoftBuoyancy);
     Run("Scene search", TestSceneSearch);
     Run("Wind zones", TestWindZones);
+    Run("Terrain chunks", TestTerrainChunks);
     Run("Terrain crater", TestTerrainCrater);
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh saved with the scene", TestNavMeshSaved);

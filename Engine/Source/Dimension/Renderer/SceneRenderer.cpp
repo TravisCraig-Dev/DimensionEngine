@@ -2385,6 +2385,19 @@ namespace Dimension
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 
+    uint64_t SceneRenderer::TerrainKey(const TerrainComponent& terrain)
+    {
+        uint64_t frame = RenderDevice::Get().Frame().FrameNumber;
+        if (frame != m_TerrainKeysFrame)
+        {
+            m_TerrainKeys.clear();
+            m_TerrainKeysFrame = frame;
+        }
+        auto [it, added] = m_TerrainKeys.try_emplace(&terrain, 0);
+        if (added) it->second = Terrain::SettingsKey(terrain);
+        return it->second;
+    }
+
     void SceneRenderer::BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options)
     {
         auto& device = RenderDevice::Get();
@@ -2527,7 +2540,7 @@ namespace Dimension
             const ClothComponent* cloth = reg.TryGet<ClothComponent>(e);
             const SoftBodyComponent* soft = cloth ? nullptr : reg.TryGet<SoftBodyComponent>(e);
             const TerrainComponent* terrain = reg.TryGet<TerrainComponent>(e);
-            const Terrain::Runtime* terrainRt = terrain ? Terrain::GetRuntime(*terrain) : nullptr;
+            const Terrain::Runtime* terrainRt = terrain ? Terrain::GetRuntime(*terrain, TerrainKey(*terrain)) : nullptr;
             // A Water Volume draws its surface grid, moved by the waves.
             const WaterVolumeComponent* water = cloth || soft ? nullptr : reg.TryGet<WaterVolumeComponent>(e);
             // A rope draws a tube along its points (simulated, or its starting shape in the editor).
@@ -2832,6 +2845,38 @@ namespace Dimension
                 for (size_t p = item.FirstPart; p < m_RenderParts.size(); ++p) m_RenderParts[p].Water = true;
             item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
             item.MeshRef = std::move(mesh);
+            if (terrainRt && !terrainRt->Chunks.empty() && item.PartCount == 1)
+            {
+                // Terrain: an item per chunk (each culled by every pass on its own bounds), drawn at the coarsest level
+                // whose error looks no bigger than kTerrainErrorPixels on a 1080-line view from this camera. Shadows
+                // draw the same levels.
+                constexpr float kTerrainErrorPixels = 2.0f;
+                RenderPart part = m_RenderParts[item.FirstPart];
+                m_RenderParts.resize(item.FirstPart);
+                float heightScale = glm::length(glm::vec3(t.World[1]));
+                float pixelsPerUnit = 540.0f * std::abs(camera.Projection[1][1]); // at a distance of 1 (perspective)
+                for (const Terrain::Chunk& chunk : terrainRt->Chunks)
+                {
+                    if (chunk.Count[0] == 0) continue; // all holes
+                    glm::vec3 half = (chunk.Max - chunk.Min) * 0.5f;
+                    RenderItem piece = item;
+                    piece.Center = glm::vec3(t.World * glm::vec4(chunk.Min + half, 1.0f));
+                    piece.Extents = glm::abs(m[0]) * half.x + glm::abs(m[1]) * half.y + glm::abs(m[2]) * half.z;
+                    float distance = camera.Orthographic ? 1.0f : std::max(glm::length(glm::max(glm::abs(camera.Position - piece.Center) - piece.Extents, glm::vec3(0.0f))), 1e-3f);
+                    int level = 0;
+                    while (level + 1 < chunk.Levels && chunk.Error[level + 1] * heightScale * pixelsPerUnit / distance <= kTerrainErrorPixels) ++level;
+                    piece.FirstPart = (uint32_t)m_RenderParts.size();
+                    piece.PartCount = 1;
+                    RenderPart p = part;
+                    p.FirstIndex = chunk.First[level];
+                    p.IndexCount = chunk.Count[level];
+                    p.Item = (uint32_t)m_RenderItems.size();
+                    p.Batch = batchOf({ piece.MeshRef.get(), p.FirstIndex, p.IndexCount, p.Material, p.DoubleSided, piece.Probe }, true);
+                    m_RenderParts.push_back(p);
+                    m_RenderItems.push_back(std::move(piece));
+                }
+                continue;
+            }
             m_RenderItems.push_back(std::move(item));
             size_t mainItem = m_RenderItems.size() - 1;
             if (fur && furMaterials.size() == m_RenderItems.back().PartCount)
@@ -2999,7 +3044,7 @@ namespace Dimension
         {
             if (!t.ActiveInHierarchy) continue;
             int dark = dimmed(e);
-            const Terrain::DetailInstances& details = Terrain::GetDetails(terrain);
+            const Terrain::DetailInstances& details = Terrain::GetDetails(terrain, TerrainKey(terrain));
             const auto* terrainRenderer = reg.TryGet<MeshRendererComponent>(e);
             for (int kind = 0; kind < 2; ++kind)
             {
@@ -4352,7 +4397,7 @@ namespace Dimension
         if (collideTerrain)
         {
             auto& pt = res.ParticleTerrain;
-            uint64_t key = Terrain::SettingsKey(*collideTerrain) ^ (collideTerrain->EditHeights.empty() ? 0ull : (uint64_t)(uintptr_t)collideTerrain->EditHeights.data());
+            uint64_t key = TerrainKey(*collideTerrain) ^ (collideTerrain->EditHeights.empty() ? 0ull : (uint64_t)(uintptr_t)collideTerrain->EditHeights.data());
             if (key != pt.Key || !pt.Heights.IsValid())
             {
                 std::vector<float> heights = Terrain::GetHeights(*collideTerrain);

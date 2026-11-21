@@ -353,6 +353,39 @@ namespace Dimension::Terrain
         return splat;
     }
 
+    namespace
+    {
+        uint64_t Fnv(const void* p, size_t n)
+        {
+            uint64_t h = 1469598103934665603ull;
+            const auto* b = static_cast<const uint8_t*>(p);
+            for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+            return h;
+        }
+
+        // The hash of a sculpted or painted data string. They run to megabytes and the renderer asks for the key every
+        // frame, so a big one's hash is remembered with a copy of what was hashed: comparing with the copy is many
+        // times faster than hashing again, and stays right however the string was changed (an undo can overwrite it in
+        // place, keeping its buffer and size).
+        uint64_t BlobHash(const std::string& s)
+        {
+            if (s.size() < 65536) return Fnv(s.data(), s.size());
+            struct Memo
+            {
+                std::string Data;
+                uint64_t Hash = 0;
+            };
+            static std::mutex mutex;
+            static std::unordered_map<const std::string*, Memo> memo; // by the string's address (the component's field)
+            std::lock_guard lock(mutex);
+            if (auto it = memo.find(&s); it != memo.end() && it->second.Data == s) return it->second.Hash;
+            if (memo.size() >= 24) memo.clear(); // fields of components since moved or destroyed
+            uint64_t h = Fnv(s.data(), s.size());
+            memo[&s] = { s, h };
+            return h;
+        }
+    }
+
     uint64_t SettingsKey(const TerrainComponent& t)
     {
         uint64_t h = 1469598103934665603ull;
@@ -386,7 +419,8 @@ namespace Dimension::Terrain
         auto mixString = [&](const std::string& s) {
             size_t size = s.size();
             mix(&size, sizeof(size));
-            mix(s.data(), s.size());
+            uint64_t blob = BlobHash(s);
+            mix(&blob, sizeof(blob));
         };
         mixString(t.SculptedHeights);
         mixString(t.PaintedLayers);
@@ -410,19 +444,163 @@ namespace Dimension::Terrain
         }
     }
 
-    const Runtime* GetRuntime(const TerrainComponent& terrain)
+    // The samples a level keeps between a chunk's first and last (every `stride`-th, and the last).
+    static void LevelLines(int first, int last, int stride, std::vector<int>& out)
     {
-        uint64_t key = SettingsKey(terrain);
+        out.clear();
+        for (int i = first; i < last; i += stride) out.push_back(i);
+        out.push_back(last);
+    }
+
+    void BuildChunks(const TerrainComponent& terrain, const std::vector<float>& heights, std::vector<Vertex>& vertices,
+                     std::vector<uint32_t>& indices, std::vector<Chunk>& chunks)
+    {
+        std::vector<uint8_t> holes = HoleMap(terrain);
+        int n = SampleCount(terrain);
+        int quads = n - 1, per = kChunkQuads, across = (quads + per - 1) / per;
+        auto h = [&](int c, int r) { return heights[(size_t)r * n + c]; };
+        auto solid = [&](uint32_t i, uint32_t j, uint32_t k) { return holes.empty() || !(holes[i] | holes[j] | holes[k]); };
+        chunks.assign((size_t)across * across, Chunk{});
+        std::vector<float> low(chunks.size()), high(chunks.size());
+        std::vector<int> cols, rows;
+        // How far each level strays from the full surface: the most any sample is off the level's triangles there.
+        for (int cz = 0; cz < across; ++cz)
+            for (int cx = 0; cx < across; ++cx)
+            {
+                size_t index = (size_t)cz * across + cx;
+                Chunk& chunk = chunks[index];
+                int c0 = cx * per, c1 = std::min(c0 + per, quads), r0 = cz * per, r1 = std::min(r0 + per, quads);
+                float lo = h(c0, r0), hi = lo;
+                bool hole = false;
+                for (int r = r0; r <= r1; ++r)
+                    for (int c = c0; c <= c1; ++c)
+                    {
+                        lo = std::min(lo, h(c, r));
+                        hi = std::max(hi, h(c, r));
+                        hole |= !holes.empty() && holes[(size_t)r * n + c] != 0;
+                    }
+                low[index] = lo;
+                high[index] = hi;
+                chunk.Levels = hole ? 1 : kChunkLevels;
+                for (int level = 1; level < chunk.Levels; ++level)
+                {
+                    LevelLines(c0, c1, 1 << level, cols);
+                    LevelLines(r0, r1, 1 << level, rows);
+                    float error = chunk.Error[level - 1];
+                    for (size_t j = 0; j + 1 < rows.size(); ++j)
+                        for (size_t i = 0; i + 1 < cols.size(); ++i)
+                        {
+                            int ca = cols[i], cb = cols[i + 1], ra = rows[j], rb = rows[j + 1];
+                            float a = h(ca, ra), b = h(cb, ra), d = h(ca, rb), e = h(cb, rb);
+                            for (int r = ra; r <= rb; ++r)
+                                for (int c = ca; c <= cb; ++c)
+                                {
+                                    float tx = (c - ca) / (float)(cb - ca), tz = (r - ra) / (float)(rb - ra);
+                                    // the same split as the full surface: (ca, ra) -> (cb, rb)
+                                    float at = tx >= tz ? a + (b - a) * tx + (e - b) * tz : a + (d - a) * tz + (e - d) * tx;
+                                    error = std::max(error, std::abs(h(c, r) - at));
+                                }
+                        }
+                    chunk.Error[level] = error;
+                }
+                for (int level = chunk.Levels; level < kChunkLevels; ++level) chunk.Error[level] = chunk.Error[chunk.Levels - 1];
+            }
+        // Skirts on the edges a chunk shares: two neighbours stray from the full surface by at most their errors, so
+        // the gap between them is at most the sum; a skirt that deep on each side covers it whichever is higher.
+        auto worst = [&](int cx, int cz) {
+            if (cx < 0 || cz < 0 || cx >= across || cz >= across) return 0.0f;
+            return chunks[(size_t)cz * across + cx].Error[kChunkLevels - 1];
+        };
+        glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+        glm::vec2 step = size / (float)(n - 1);
+        for (int cz = 0; cz < across; ++cz)
+            for (int cx = 0; cx < across; ++cx)
+            {
+                size_t index = (size_t)cz * across + cx;
+                Chunk& chunk = chunks[index];
+                int c0 = cx * per, c1 = std::min(c0 + per, quads), r0 = cz * per, r1 = std::min(r0 + per, quads);
+                float neighbours = std::max({ worst(cx - 1, cz), worst(cx + 1, cz), worst(cx, cz - 1), worst(cx, cz + 1) });
+                float depth = chunk.Error[kChunkLevels - 1] + neighbours;
+                depth = depth > 0.0f ? depth + 0.05f * std::max(step.x, step.y) : 0.0f;
+                // The edges (west, east, south, north) and, for each shared one, the first of its skirt's bottom vertices.
+                struct Edge
+                {
+                    bool Shared;
+                    bool AlongX; // the edge runs along X (a row of samples) or along Z (a column)
+                    int Fixed;   // that row or column
+                    uint32_t Bottom = 0;
+                };
+                Edge edges[4] = { { cx > 0, false, c0 }, { cx + 1 < across, false, c1 }, { cz > 0, true, r0 }, { cz + 1 < across, true, r1 } };
+                for (Edge& edge : edges)
+                {
+                    if (!edge.Shared || depth <= 0.0f) continue;
+                    edge.Bottom = (uint32_t)vertices.size();
+                    int from = edge.AlongX ? c0 : r0, to = edge.AlongX ? c1 : r1;
+                    for (int i = from; i <= to; ++i)
+                    {
+                        Vertex v = edge.AlongX ? vertices[(size_t)edge.Fixed * n + i] : vertices[(size_t)i * n + edge.Fixed];
+                        v.Position.y -= depth;
+                        vertices.push_back(v);
+                    }
+                }
+                chunk.Min = { -size.x * 0.5f + c0 * step.x, low[index] - depth, -size.y * 0.5f + r0 * step.y };
+                chunk.Max = { -size.x * 0.5f + c1 * step.x, high[index], -size.y * 0.5f + r1 * step.y };
+                for (int level = 0; level < kChunkLevels; ++level)
+                {
+                    if (level >= chunk.Levels)
+                    {
+                        chunk.First[level] = chunk.First[chunk.Levels - 1];
+                        chunk.Count[level] = chunk.Count[chunk.Levels - 1];
+                        continue;
+                    }
+                    chunk.First[level] = (uint32_t)indices.size();
+                    LevelLines(c0, c1, 1 << level, cols);
+                    LevelLines(r0, r1, 1 << level, rows);
+                    for (size_t j = 0; j + 1 < rows.size(); ++j)
+                        for (size_t i = 0; i + 1 < cols.size(); ++i)
+                        {
+                            uint32_t a = rows[j] * n + cols[i], b = rows[j] * n + cols[i + 1];
+                            uint32_t d = rows[j + 1] * n + cols[i], e = rows[j + 1] * n + cols[i + 1];
+                            // Counter-clockwise seen from above, split along (c, r) -> (c + 1, r + 1) as BuildMesh.
+                            if (solid(a, e, b)) indices.insert(indices.end(), { a, e, b });
+                            if (solid(a, d, e)) indices.insert(indices.end(), { a, d, e });
+                        }
+                    for (const Edge& edge : edges)
+                    {
+                        if (!edge.Shared || depth <= 0.0f) continue;
+                        const std::vector<int>& along = edge.AlongX ? cols : rows;
+                        int from = edge.AlongX ? c0 : r0;
+                        auto top = [&](int k) { return edge.AlongX ? (uint32_t)(edge.Fixed * n + k) : (uint32_t)(k * n + edge.Fixed); };
+                        for (size_t i = 0; i + 1 < along.size(); ++i)
+                        {
+                            uint32_t tp = top(along[i]), tq = top(along[i + 1]);
+                            uint32_t bp = edge.Bottom + (uint32_t)(along[i] - from), bq = edge.Bottom + (uint32_t)(along[i + 1] - from);
+                            // both faces: it is seen from whichever neighbour sits lower
+                            indices.insert(indices.end(), { tp, bp, bq, tp, bq, tq, tp, bq, bp, tp, tq, bq });
+                        }
+                    }
+                    chunk.Count[level] = (uint32_t)indices.size() - chunk.First[level];
+                }
+            }
+    }
+
+    const Runtime* GetRuntime(const TerrainComponent& terrain) { return GetRuntime(terrain, SettingsKey(terrain)); }
+
+    const Runtime* GetRuntime(const TerrainComponent& terrain, uint64_t key)
+    {
         auto& runtimes = Runtimes();
         if (auto it = runtimes.find(key); it != runtimes.end()) return &it->second;
         if (runtimes.size() > 16) runtimes.clear(); // edited settings leave old builds behind; drop them now and then
-        MeshData data = BuildMesh(terrain, BuildHeights(terrain));
-        std::vector<uint32_t> splat = BuildSplat(terrain, data);
+        std::vector<float> heights = BuildHeights(terrain);
+        MeshData data = BuildMesh(terrain, heights);
+        std::vector<uint32_t> splat = BuildSplat(terrain, data); // (one per grid sample: before the skirts are added)
         int n = SampleCount(terrain);
         Runtime rt;
         rt.Key = key;
-        if (data.Indices.empty()) data.Indices = { 0, 0, 0 }; // all holes: one degenerate triangle keeps the mesh valid
-        rt.Surface = MakeRef<Mesh>(std::move(data.Vertices), std::move(data.Indices), "Terrain");
+        std::vector<uint32_t> indices;
+        BuildChunks(terrain, heights, data.Vertices, indices, rt.Chunks);
+        if (indices.empty()) indices = { 0, 0, 0 }; // all holes: one degenerate triangle keeps the mesh valid
+        rt.Surface = MakeRef<Mesh>(std::move(data.Vertices), std::move(indices), "Terrain");
         TextureSettings settings;
         settings.SRGB = false;
         settings.GenerateMips = true;
@@ -729,9 +907,10 @@ namespace Dimension::Terrain
         return out;
     }
 
-    const DetailInstances& GetDetails(const TerrainComponent& terrain)
+    const DetailInstances& GetDetails(const TerrainComponent& terrain) { return GetDetails(terrain, SettingsKey(terrain)); }
+
+    const DetailInstances& GetDetails(const TerrainComponent& terrain, uint64_t key)
     {
-        uint64_t key = SettingsKey(terrain);
         auto mix = [&](const void* p, size_t size) {
             const auto* b = static_cast<const uint8_t*>(p);
             for (size_t i = 0; i < size; ++i) key = (key ^ b[i]) * 1099511628211ull;
@@ -739,7 +918,8 @@ namespace Dimension::Terrain
         for (const float* f : { &terrain.TreeDensity, &terrain.TreeScale.x, &terrain.TreeScale.y, &terrain.TreeMaxSlope, &terrain.GrassDensity,
                                 &terrain.GrassScale.x, &terrain.GrassScale.y, &terrain.GrassMaxSlope })
             mix(f, sizeof(float));
-        mix(terrain.PaintedDetails.data(), terrain.PaintedDetails.size());
+        uint64_t painted = BlobHash(terrain.PaintedDetails);
+        mix(&painted, sizeof(painted));
         mix(terrain.EditHoles.data(), terrain.EditHoles.size());
         for (const TerrainLayer& l : terrain.Layers)
         {
@@ -754,34 +934,60 @@ namespace Dimension::Terrain
         return cache[key] = BuildDetails(terrain, terrain.EditHeights.size() == (size_t)SampleCount(terrain) * SampleCount(terrain) ? terrain.EditHeights : BuildHeights(terrain));
     }
 
+    namespace
+    {
+        // Calls fn with the terrain's heights without copying them: the edited heights, or the generated grid from a
+        // cache (held locked while fn runs, so fn must not call back into it).
+        template<typename Fn>
+        void WithHeights(const TerrainComponent& terrain, Fn&& fn)
+        {
+            int n = SampleCount(terrain);
+            if (terrain.EditHeights.size() == (size_t)n * n) { fn(terrain.EditHeights); return; }
+            uint64_t key = SettingsKey(terrain);
+            static std::mutex mutex;
+            static std::unordered_map<uint64_t, std::vector<float>> cache;
+            std::lock_guard lock(mutex);
+            auto it = cache.find(key);
+            if (it == cache.end())
+            {
+                if (cache.size() > 8) cache.clear();
+                it = cache.emplace(key, BuildHeights(terrain)).first;
+            }
+            fn(it->second);
+        }
+    }
+
     bool Sample(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& point, glm::vec3& ground, glm::vec3& normal)
     {
         glm::mat4 inv = glm::inverse(world);
         glm::vec3 local = glm::vec3(inv * glm::vec4(point, 1.0f));
         glm::vec2 half = glm::max(terrain.Size, glm::vec2(0.01f)) * 0.5f;
         if (std::abs(local.x) > half.x || std::abs(local.z) > half.y) return false;
-        std::vector<float> heights = GetHeights(terrain);
-        local.y = HeightAt(terrain, heights, local.x, local.z);
-        ground = glm::vec3(world * glm::vec4(local, 1.0f));
-        // From the height slopes around the point, over about a sample's spacing.
+        // From the height slopes around the point, over about a sample's spacing. The heights are read in place: a
+        // copy of the grid per call (tens of MB on a big terrain) made scripts sampling every frame crawl.
         float h = std::max(terrain.Size.x, terrain.Size.y) / (float)std::max(SampleCount(terrain) - 1, 1) * 0.5f;
-        float dx = HeightAt(terrain, heights, local.x + h, local.z) - HeightAt(terrain, heights, local.x - h, local.z);
-        float dz = HeightAt(terrain, heights, local.x, local.z + h) - HeightAt(terrain, heights, local.x, local.z - h);
+        float dx = 0.0f, dz = 0.0f;
+        WithHeights(terrain, [&](const std::vector<float>& heights) {
+            local.y = HeightAt(terrain, heights, local.x, local.z);
+            dx = HeightAt(terrain, heights, local.x + h, local.z) - HeightAt(terrain, heights, local.x - h, local.z);
+            dz = HeightAt(terrain, heights, local.x, local.z + h) - HeightAt(terrain, heights, local.x, local.z - h);
+        });
+        ground = glm::vec3(world * glm::vec4(local, 1.0f));
         normal = glm::normalize(glm::transpose(glm::mat3(inv)) * glm::vec3(-dx, 2.0f * h, -dz));
         return true;
     }
 
-    std::vector<float> GetHeights(const TerrainComponent& terrain)
+    void PrepareSampling(TerrainComponent& terrain)
     {
         int n = SampleCount(terrain);
-        if (terrain.EditHeights.size() == (size_t)n * n) return terrain.EditHeights;
-        uint64_t key = SettingsKey(terrain);
-        static std::mutex mutex;
-        static std::unordered_map<uint64_t, std::vector<float>> cache;
-        std::lock_guard lock(mutex);
-        if (auto it = cache.find(key); it != cache.end()) return it->second;
-        if (cache.size() > 8) cache.clear();
-        return cache[key] = BuildHeights(terrain);
+        if (terrain.EditHeights.size() != (size_t)n * n) terrain.EditHeights = GetHeights(terrain);
+    }
+
+    std::vector<float> GetHeights(const TerrainComponent& terrain)
+    {
+        std::vector<float> copy;
+        WithHeights(terrain, [&](const std::vector<float>& heights) { copy = heights; });
+        return copy;
     }
 
     void ClearEdits(TerrainComponent& terrain)

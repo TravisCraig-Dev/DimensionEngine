@@ -1,6 +1,7 @@
 #pragma once
 #include "Dimension/Renderer/Mesh.h"
 #include <glm/glm.hpp>
+#include <array>
 #include <vector>
 
 namespace Dimension
@@ -110,8 +111,14 @@ namespace Dimension
         DetailInstances BuildDetails(const TerrainComponent& terrain, const std::vector<float>& heights);
         // Cached for the current settings and edits (rebuilt when they change).
         const DetailInstances& GetDetails(const TerrainComponent& terrain);
+        // The same, for a key from SettingsKey(terrain) the caller already has (it takes a while on big terrains).
+        const DetailInstances& GetDetails(const TerrainComponent& terrain, uint64_t settingsKey);
         // The heights (as BuildHeights, or the edit arrays while editing), cached for the current settings and edits.
         std::vector<float> GetHeights(const TerrainComponent& terrain);
+        // Decodes the heights into the terrain's edit buffer (as an edit does) when they are not there yet, so Sample
+        // reads them directly instead of finding the generated grid by its settings (which hashes the sculpted and
+        // painted data: milliseconds on a big terrain). For callers that sample many times a frame, such as scripts.
+        void PrepareSampling(TerrainComponent& terrain);
         // The ground under (or over) a world point, straight along the terrain's up axis, and the surface normal there,
         // both in world space (`world` is the object's transform). False when the point is outside the terrain's area.
         // Holes are ignored (the height is still that of the surface around them).
@@ -120,13 +127,32 @@ namespace Dimension
         bool Raycast(const TerrainComponent& terrain, const glm::mat4& world, const glm::vec3& origin, const glm::vec3& direction, glm::vec3& hit);
 
         // The GPU mesh and splat textures for a terrain's current settings (cached; rebuilt when they change).
+        // Surface is drawn in square chunks, each at the level of detail its distance allows: level k keeps every 2^k-th
+        // row and column of the chunk's samples (and its last ones). Each chunk's triangles at each level are a range of
+        // Surface's indices, with skirts hanging from its edges shared with other chunks, deep enough to hide the gaps
+        // between neighbours drawn at different levels.
+        static constexpr int kChunkQuads = 64; // a chunk's samples per side (minus one)
+        static constexpr int kChunkLevels = 7; // levels 0 (every sample) to 6 (the corners)
+        struct Chunk
+        {
+            glm::vec3 Min{ 0.0f }, Max{ 0.0f };            // local bounds, skirts included
+            std::array<float, kChunkLevels> Error{};        // the most a level's surface strays from the full one (local height)
+            std::array<uint32_t, kChunkLevels> First{}, Count{};
+            int Levels = 1;                                 // those it has (a chunk with holes keeps every sample)
+        };
+        // Splits a surface into chunks (`vertices`: BuildMesh's n x n grid): appends the skirts' vertices and writes every
+        // chunk's triangles at each level to `indices` (Runtime's Surface and Chunks are made this way).
+        void BuildChunks(const TerrainComponent& terrain, const std::vector<float>& heights, std::vector<Vertex>& vertices,
+                         std::vector<uint32_t>& indices, std::vector<Chunk>& chunks);
         struct Runtime
         {
             Ref<Mesh> Surface;
+            std::vector<Chunk> Chunks;
             std::vector<Ref<Texture2D>> Splats; // a map per 4 layers
             uint64_t Key = 0;
         };
         const Runtime* GetRuntime(const TerrainComponent& terrain);
+        const Runtime* GetRuntime(const TerrainComponent& terrain, uint64_t settingsKey);
         uint64_t SettingsKey(const TerrainComponent& terrain);
         void ReleaseRuntimes();
     }

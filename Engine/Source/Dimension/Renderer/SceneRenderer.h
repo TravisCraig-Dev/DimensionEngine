@@ -16,6 +16,7 @@ namespace Dimension
 {
     class Scene;
     struct WaterVolumeComponent;
+    struct TerrainComponent;
     class Texture2D;
     struct NavMeshData;
     struct SceneSettings;
@@ -309,6 +310,11 @@ namespace Dimension
         std::vector<BlendJob> m_BlendJobs;
         std::vector<Vertex> m_BlendVertices;                // (scratch: blend-shaped vertices of an unskinned mesh)
         std::vector<RenderPart> m_RenderParts;
+        // Each terrain's settings key this frame (Terrain::SettingsKey goes over its sculpted and painted data, which is
+        // slow to do for every use): by component, for the frame number `m_TerrainKeysFrame`.
+        std::unordered_map<const TerrainComponent*, uint64_t> m_TerrainKeys;
+        uint64_t m_TerrainKeysFrame = ~0ull;
+        uint64_t TerrainKey(const TerrainComponent& terrain);
         std::vector<uint8_t> m_BatchInstanceable;       // per batch: false for skinned parts (one draw each)
         std::vector<uint32_t> m_BatchStart, m_BatchFill; // per-pass scratch for the counting sort
         LightClusters m_Clusters; // this view's light clusters (rebuilt every Render)

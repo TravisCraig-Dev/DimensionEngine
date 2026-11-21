@@ -8,6 +8,7 @@
 //        [--cpu-blend-shapes]                     apply skinned models' blend shapes on the CPU instead of in a compute shader
 //        [--no-occlusion]                         draw meshes hidden behind others too (for comparisons)
 //        [--fixed-dt seconds]                     every frame advances the game by this step (repeatable runs)
+//        [--profile file.dprof]                   save the profiler's last frames (CPU sections, GPU passes) on exit
 //        [--wait-for-debugger]                    wait up to 60 s for a C# debugger to attach
 //        [--system-language fr-FR]                start as if the system's language were that (unless one was chosen)
 //        [--ime text]                             an input method composing this text from frame 60 (\uXXXX escapes allowed)
@@ -208,6 +209,7 @@ int main(int argc, char** argv)
     int qualityOverride = -1;
     int maxFrames = 0;
     std::string screenshot;
+    fs::path profileFile;
     std::vector<PointerEvent> pointerEvents;
     std::vector<KeyEvent> keyEvents;
     bool noVSync = false, waitForDebugger = false;
@@ -217,6 +219,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--quality") && i + 1 < argc) qualityOverride = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
+        else if (!std::strcmp(argv[i], "--profile") && i + 1 < argc) profileFile = argv[++i];
         else if (!std::strcmp(argv[i], "--no-instancing")) SceneRenderer::SetInstancingEnabled(false);
         else if (!std::strcmp(argv[i], "--no-clusters")) SceneRenderer::SetLightClusteringEnabled(false);
         else if (!std::strcmp(argv[i], "--cpu-light-culling")) SceneRenderer::SetGpuLightCullingEnabled(false);
@@ -319,6 +322,8 @@ int main(int argc, char** argv)
         if (scene.empty()) Log::Error("Project has no scenes to run. Add some in the editor (File > Build Settings).");
         app.PushLayer(MakeScope<PlayerLayer>(scene, std::move(pointerEvents), std::move(keyEvents)));
         app.Run();
+        if (!profileFile.empty() && !Profiler::SaveRecording(profileFile, Profiler::History()))
+            Log::Error("Could not save the profile to {}", profileFile.string());
         app.PopAllLayers();
         GameModule::Unload();
     }
