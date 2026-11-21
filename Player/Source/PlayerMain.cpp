@@ -306,7 +306,8 @@ int main(int argc, char** argv)
                 for (auto& s : sizes) icons.push_back({ s.Width, s.Height, s.Rgba.data() });
                 app.GetWindow().SetIcon(icons);
             }
-        GameModule::Load(ExecutableDirectory() / Platform::SharedLibraryName(config.GameModule));
+        if (!config.GameModule.empty()) // (projects with only C# scripts have none)
+            GameModule::Load(ExecutableDirectory() / Platform::SharedLibraryName(config.GameModule));
         if (CSharpRuntime::Init(ExecutableDirectory() / "managed"))
         {
             if (waitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);

@@ -8,4 +8,4 @@ Icon=dimension-editor
 Terminal=false
 Categories=Development;IDE;Graphics;3DGraphics;
 Keywords=game;engine;editor;3d;
-StartupWMClass=DimensionEditor
+StartupWMClass=dimension-editor

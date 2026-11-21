@@ -16,3 +16,7 @@ Projects/*/Scripts/Directory.Build.targets
 # Local tool settings
 .claude/settings.local.json
 .mcp.json
+
+# Siege tool by-products
+Projects/Siege/Tools/__pycache__/
+Projects/Siege/Tools/cache_*.npy

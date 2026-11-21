@@ -5535,6 +5535,17 @@ namespace Editor
         fs::copy_file(ExecutableDirectory() / engineLibrary, folder / engineLibrary, fs::copy_options::overwrite_existing, ec);
         fs::path module = ExecutableDirectory() / Dimension::Platform::SharedLibraryName(config.GameModule);
         if (fs::exists(module)) fs::copy_file(module, folder / module.filename(), fs::copy_options::overwrite_existing, ec);
+        // The Microsoft C++ runtime, when the editor has it beside itself (installs do): games then run on machines
+        // without the VC++ redistributable.
+        if (Dimension::Platform::IsWindows())
+            for (const auto& entry : fs::directory_iterator(ExecutableDirectory(), ec))
+            {
+                std::string file = entry.path().filename().string();
+                std::transform(file.begin(), file.end(), file.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
+                bool crt = file.ends_with(".dll") && (file.starts_with("msvcp") || file.starts_with("vcruntime") ||
+                                                      file.starts_with("concrt") || file.starts_with("vccorlib"));
+                if (crt) fs::copy_file(entry.path(), folder / entry.path().filename(), fs::copy_options::overwrite_existing, ec);
+            }
         std::string nethost = Dimension::Platform::IsWindows() ? "nethost.dll" : "libnethost.so";
         if (fs::exists(ExecutableDirectory() / nethost))
         {
@@ -5718,6 +5729,7 @@ namespace Editor
 
     void EditorLayer::LoadGameModule()
     {
+        if (Project::GetConfig().GameModule.empty()) return; // (a project with only C# scripts)
         fs::path dll = ExecutableDirectory() / Dimension::Platform::SharedLibraryName(Project::GetConfig().GameModule);
         if (!GameModule::Load(dll)) Log::Warn("Running without a game module: scripts will be unavailable");
     }

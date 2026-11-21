@@ -41,12 +41,40 @@ if(WIN32)
     endif()
 endif()
 
-# The Sandbox sample, without what the editor makes in it.
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/Projects/Sandbox/" DESTINATION Samples/Sandbox COMPONENT Runtime
-        PATTERN ".dimension" EXCLUDE
-        PATTERN "Scripts/bin" EXCLUDE
-        PATTERN "Scripts/obj" EXCLUDE
-        PATTERN "Directory.Build.props" EXCLUDE)
+# The Sandbox sample, without what the editor makes in it (its caches, script builds, Directory.Build.props with this
+# machine's paths). From a git checkout, only the files git tracks: work in progress in the sample folder stays out.
+set(_sandbox "${CMAKE_SOURCE_DIR}/Projects/Sandbox")
+set(_sandbox_files "")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" -c core.quotepath=off ls-files -- Projects/Sandbox
+                    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" OUTPUT_VARIABLE _tracked RESULT_VARIABLE _git_result
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(_git_result EQUAL 0 AND _tracked)
+        string(REPLACE "\n" ";" _sandbox_files "${_tracked}")
+        # (configure again when the tracked files change)
+        if(EXISTS "${CMAKE_SOURCE_DIR}/.git/index")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/.git/index")
+        endif()
+    endif()
+endif()
+if(_sandbox_files)
+    foreach(_file IN LISTS _sandbox_files)
+        file(RELATIVE_PATH _rel "${_sandbox}" "${CMAKE_SOURCE_DIR}/${_file}")
+        if(_rel MATCHES "(^|/)(\\.dimension|Scripts/bin|Scripts/obj)/" OR _rel MATCHES "Directory\\.Build\\.props$"
+           OR NOT EXISTS "${_sandbox}/${_rel}")
+            continue()
+        endif()
+        get_filename_component(_dir "${_rel}" DIRECTORY)
+        install(FILES "${_sandbox}/${_rel}" DESTINATION "Samples/Sandbox/${_dir}" COMPONENT Runtime)
+    endforeach()
+else()
+    install(DIRECTORY "${_sandbox}/" DESTINATION Samples/Sandbox COMPONENT Runtime
+            PATTERN ".dimension" EXCLUDE
+            PATTERN "Scripts/bin" EXCLUDE
+            PATTERN "Scripts/obj" EXCLUDE
+            PATTERN "Directory.Build.props" EXCLUDE)
+endif()
 
 if(NOT WIN32)
     install(FILES "${CMAKE_SOURCE_DIR}/Engine/Resources/Dimension.png" DESTINATION share/icons RENAME dimension-editor.png COMPONENT Runtime)

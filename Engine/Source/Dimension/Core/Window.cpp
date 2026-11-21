@@ -107,6 +107,12 @@ namespace Dimension
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_MAXIMIZED, spec.Maximized ? GLFW_TRUE : GLFW_FALSE);
         glfwWindowHint(GLFW_VISIBLE, spec.Hidden ? GLFW_FALSE : GLFW_TRUE);
+        if (!spec.AppId.empty())
+        {
+            glfwWindowHintString(GLFW_X11_CLASS_NAME, spec.AppId.c_str());
+            glfwWindowHintString(GLFW_X11_INSTANCE_NAME, spec.AppId.c_str());
+            glfwWindowHintString(GLFW_WAYLAND_APP_ID, spec.AppId.c_str());
+        }
         m_ShowMaximized = spec.Hidden && spec.Maximized;
         m_Window = glfwCreateWindow((int)spec.Width, (int)spec.Height, spec.Title.c_str(), nullptr, nullptr);
         DIM_ASSERT(m_Window, "Failed to create window");

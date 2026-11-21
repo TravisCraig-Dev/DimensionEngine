@@ -135,7 +135,7 @@ namespace Dimension::SplashScreen
             XChangeProperty(d, window, atom("_MOTIF_WM_HINTS"), atom("_MOTIF_WM_HINTS"), 32, PropModeReplace, (const unsigned char*)motif, 5);
             XClassHint* classHint = XAllocClassHint();
             classHint->res_name = (char*)"dimension-editor";
-            classHint->res_class = (char*)"Dimension";
+            classHint->res_class = (char*)"dimension-editor"; // (the editor window's, and the desktop entry's)
             XSetClassHint(d, window, classHint);
             XFree(classHint);
             XSizeHints* sizeHints = XAllocSizeHints();

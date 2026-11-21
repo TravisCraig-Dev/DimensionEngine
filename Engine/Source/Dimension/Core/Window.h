@@ -13,6 +13,9 @@ namespace Dimension
         bool Maximized = false;
         bool Fullscreen = false; // borderless fullscreen on the primary monitor
         bool Hidden = false;     // created hidden (the editor shows it once loaded, behind its splash screen)
+        // Linux: the window's X11 class and Wayland app id, which desktops match to a .desktop entry of that name
+        // (its menu entry and icon). Empty: GLFW's default.
+        std::string AppId;
     };
 
     class Window

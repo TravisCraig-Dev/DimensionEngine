@@ -66,6 +66,7 @@ int main(int argc, char** argv)
     ApplicationSpec spec;
     spec.Name = "Dimension Editor";
     spec.Window.Title = "Dimension Editor";
+    spec.Window.AppId = "dimension-editor"; // (the installs' dimension-editor.desktop)
     spec.Window.Width = 1600;
     spec.Window.Height = 900;
     spec.Window.Maximized = true;

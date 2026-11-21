@@ -17,6 +17,11 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 if(NOT WIN32)
     set(CMAKE_BUILD_RPATH "$ORIGIN")
     set(CMAKE_INSTALL_RPATH "$ORIGIN")
+    # Installers ship the built files as they are: only $ORIGIN, none of the build machine's folders (the build
+    # tree, the .NET SDK's host pack) that CMake would add for linked libraries.
+    if(DIM_DISTRIBUTION)
+        set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+    endif()
     # The static third-party libraries end up inside DimensionEngine.so.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
