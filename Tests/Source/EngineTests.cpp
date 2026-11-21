@@ -62,6 +62,7 @@
 #include <Dimension/Music/Editing.h>
 #include <Dimension/Music/Plugin.h>
 #include <Dimension/Music/MidiInput.h>
+#include <Dimension/Music/AudioExport.h>
 #include <Dimension/Renderer/ColrV1.h>
 #include <Dimension/Platform/Platform.h>
 #include <Dimension/Audio/Microphone.h>
@@ -21204,6 +21205,57 @@ namespace
         CHECK(MusicSilent(second, 0, rate));
     }
 
+    void TestMusicExport()
+    {
+        using namespace Dimension::Music;
+        const uint32_t rate = 48000;
+        // A second and a half of 440 Hz at half level, as Ogg Opus: read back with its length, level and pitch.
+        std::vector<float> tone(rate * 3 / 2 * 2);
+        for (size_t i = 0; i < tone.size() / 2; ++i) tone[i * 2] = tone[i * 2 + 1] = 0.5f * (float)std::sin(2.0 * 3.14159265358979 * 440.0 * i / rate);
+        fs::path file = fs::temp_directory_path() / "dimension_export_test.opus";
+        CHECK(WriteOpus(file, tone, rate, 160));
+        CHECK(fs::file_size(file) > 1000 && fs::file_size(file) < 60000); // (about 160 kbps: ~30 KB)
+        auto info = AudioEngine::GetClipInfo(file);
+        CHECK(info && info->Format == "Opus" && info->Channels == 2 && info->SampleRate == 48000);
+        if (info) CHECK(Near(info->Seconds, 1.5f, 0.002f)); // (the pre-skip and padding trimmed by the granule positions)
+        std::vector<float> back;
+        uint32_t backRate = 0;
+        CHECK(AudioEngine::DecodeFile(file, back, backRate) && backRate == 48000 && back.size() / 2 == tone.size() / 2);
+        if (back.size() >= tone.size())
+        {
+            CHECK(Near(MusicRms(back, rate / 10, rate), 0.5f / std::sqrt(2.0f), 0.01f));
+            CHECK(Near(MusicPitch(back, rate / 10, rate, rate), 440.0f, 1.0f));
+            // Lined up with the original (the encoder's delay is skipped): the difference is small.
+            double diff = 0.0;
+            for (size_t i = rate / 10; i < (size_t)rate; ++i) diff += std::fabs(back[i * 2] - tone[i * 2]);
+            CHECK(diff / (rate * 0.9) < 0.02);
+        }
+        CHECK(!WriteOpus(fs::temp_directory_path() / "dimension_export_44k.opus", tone, 44100)); // (Opus is 48 kHz)
+        // A Sampler plays an Opus file (decoded through the audio engine).
+        auto sample = LoadSample(file);
+        CHECK(sample && sample->SampleRate == 48000 && sample->FrameCount() == tone.size() / 2);
+        fs::remove(file);
+
+        // Normalizing: the peak to -1 dB (0.891); silence stays silent.
+        std::vector<float> quiet = { 0.1f, -0.25f, 0.2f, 0.0f };
+        CHECK(Near(PeakOf(quiet), 0.25f));
+        Normalize(quiet, -1.0f);
+        CHECK(Near(PeakOf(quiet), 0.8913f, 1e-3f) && Near(quiet[0] / quiet[2], 0.5f));
+        std::vector<float> silence(16, 0.0f);
+        Normalize(silence);
+        CHECK(PeakOf(silence) == 0.0f);
+
+        // A whole song to Opus, as Render does.
+        Song s = Song::Default();
+        auto rendered = RenderSong(s, rate, SongPlayer::Mode::Pattern, 0, 2, 1.0f);
+        Normalize(rendered, -1.0f);
+        fs::path songFile = fs::temp_directory_path() / "dimension_export_song.opus";
+        CHECK(WriteOpus(songFile, rendered, rate, 128));
+        auto songInfo = AudioEngine::GetClipInfo(songFile);
+        CHECK(songInfo && Near(songInfo->Seconds, (float)(rendered.size() / 2) / rate, 0.002f));
+        fs::remove(songFile);
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -21510,6 +21562,7 @@ int main(int argc, char** argv)
     Run("Music mixer", TestMusicMixer);
     Run("Music plugins", TestMusicPlugins);
     Run("Music recording", TestMusicRecording);
+    Run("Music export", TestMusicExport);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

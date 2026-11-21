@@ -91,7 +91,11 @@ namespace Editor
         void Redo();
         void TogglePlay();
         void StopPlayback();
+        // Render... (the window): what (the pattern or the Playlist), the format (WAV, or Ogg Opus at a bit rate), the
+        // tail, peak normalizing and the file's name; the file goes next to the song as an audio asset.
         void RenderToFile();
+        void DrawRenderWindow();
+        float SuggestedTail() const;
         void Preview(int channel, int key, bool on);
         // A knob (vertical drag; double-click resets). Returns true when the value changed; records undo as it starts.
         bool Knob(const char* id, float* value, float min, float max, float reset, float size, const char* format);
@@ -185,6 +189,12 @@ namespace Editor
         double m_TakeStartTick = 0.0;
         int m_SelectedAudio = -1;
         std::map<std::string, std::shared_ptr<Dimension::AudioWaveform>> m_Waveforms;
+        bool m_ShowRender = false, m_RenderWholeSong = false, m_RenderNormalize = true;
+        int m_RenderFormat = 0, m_RenderKbps = 160;
+        float m_RenderTail = -1.0f; // (-1: suggested from the effects)
+        std::string m_RenderName;
+        fs::path m_LastRender;
+        float m_InputLatencyMs = 0.0f; // audio takes move this much earlier (the time sound takes out and back in)
         std::string m_Status;
         float m_StatusTime = 0.0f;
     };

@@ -28,6 +28,7 @@
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Project/Localization.h>
 #include <Dimension/Asset/DataAsset.h>
+#include <Dimension/Music/Song.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -2316,6 +2317,30 @@ namespace Editor
         else if (meta->Type == AssetType::Scene)
         {
             if (ImGui::Button("Open Scene")) m_Ctx.RequestOpenScene = AssetManager::GetAbsolutePath(handle);
+        }
+        else if (meta->Type == AssetType::Song)
+        {
+            // A Music Mode song: what is in it, and its rendered audio (what the game plays).
+            Music::Song song;
+            fs::path file = AssetManager::GetAbsolutePath(handle);
+            if (Music::Song::Load(file, song))
+            {
+                double seconds = song.SongTicks() / song.TicksPerSecond();
+                ImGui::Text("%.1f BPM, %d/4", song.Tempo, song.BeatsPerBar);
+                ImGui::Text("%d channels, %d patterns, %d mixer tracks", (int)song.Channels.size(), (int)song.Patterns.size(), (int)song.Mixer.size());
+                if (seconds > 0.0) ImGui::Text("Song: %d:%04.1f", (int)(seconds / 60.0), std::fmod(seconds, 60.0));
+                else ImGui::TextDisabled("The Playlist is empty");
+                if (size_t plugins = song.Plugins().size()) ImGui::Text("%d VST3 plug-ins", (int)plugins);
+                for (const char* ext : { ".wav", ".opus" })
+                    if (fs::path rendered = file.parent_path() / (file.stem().string() + ext); fs::exists(rendered))
+                        if (AssetHandle h = AssetManager::GetHandle(rendered); h.IsValid())
+                        {
+                            ImGui::TextDisabled("Rendered:");
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton(rendered.filename().string().c_str())) m_Ctx.SelectAsset(h);
+                        }
+            }
+            if (ImGui::Button("Open in Music Mode")) m_Ctx.RequestOpenSong = handle;
         }
         else if (meta->Type == AssetType::DataAsset)
         {

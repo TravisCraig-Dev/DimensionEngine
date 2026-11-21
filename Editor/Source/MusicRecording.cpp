@@ -36,6 +36,7 @@ namespace Editor
         m_MidiDeviceName = j.value("midi", "");
         m_MicDevice = j.value("microphone", -1);
         m_RecordQuantize = j.value("quantize", false);
+        m_InputLatencyMs = j.value("inputLatencyMs", 0.0f);
         m_Metronome = j.value("metronome", false);
     }
 
@@ -44,7 +45,7 @@ namespace Editor
         std::error_code ec;
         fs::create_directories(IOSettingsFile().parent_path(), ec);
         std::ofstream(IOSettingsFile()) << nlohmann::json{ { "midi", m_MidiDeviceName }, { "microphone", m_MicDevice }, { "quantize", m_RecordQuantize },
-                                                           { "metronome", m_Metronome } }.dump(1);
+                                                           { "metronome", m_Metronome }, { "inputLatencyMs", m_InputLatencyMs } }.dump(1);
     }
 
     void MusicMode::StartMidi()
@@ -179,7 +180,12 @@ namespace Editor
         }
         AssetHandle h = AssetManager::Import(path);
         Record();
-        int clip = AddAudioClip(h, path, (int)m_TakeStartTick);
+        // Placed earlier by the input latency (the take is late by the time sound takes out to the speakers and back in
+        // through the microphone); what would fall before the song's start is trimmed off the clip.
+        double latencyTicks = m_InputLatencyMs / 1000.0 * m_Song.TicksPerSecond();
+        double start = m_TakeStartTick - latencyTicks;
+        int clip = AddAudioClip(h, path, (int)std::lround(std::max(0.0, start)));
+        if (start < 0.0) m_Song.AudioClips[clip].Offset = (float)(-start / m_Song.TicksPerSecond());
         m_SelectedAudio = clip;
         Changed();
         m_Status = "Recorded " + path.filename().string();
@@ -355,6 +361,9 @@ namespace Editor
                 m_RecordSource = 1;
                 if (!m_SongMode) SetSongMode(true); // (audio takes go on the Playlist)
             }
+            UI::PropertyLabel("Input Latency", "Audio takes are moved this much earlier: the delay from the speakers to the microphone and "
+                                               "back (try 20-60 ms; adjust until takes sit on the beat)");
+            changed |= ImGui::SliderFloat("##latency", &m_InputLatencyMs, 0.0f, 300.0f, "%.0f ms");
             UI::PropertyLabel("Snap Notes to Steps", "Recorded notes start on the step grid (otherwise as played)");
             changed |= ImGui::Checkbox("##quantize", &m_RecordQuantize);
             UI::PropertyLabel("Metronome");

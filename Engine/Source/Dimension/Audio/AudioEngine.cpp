@@ -769,6 +769,29 @@ namespace Dimension
         return std::min(peak, 1.0f);
     }
 
+    bool AudioEngine::DecodeFile(const fs::path& file, std::vector<float>& stereo, uint32_t& sampleRate)
+    {
+        stereo.clear();
+        sampleRate = 0;
+        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 2, 0); // (its own rate, as stereo)
+        cfg.ppCustomBackendVTables = s_CustomBackends;
+        cfg.customBackendCount = 1;
+        ma_decoder decoder;
+        if (DecoderInitFile(file, &cfg, &decoder) != MA_SUCCESS) return false;
+        sampleRate = decoder.outputSampleRate;
+        float buffer[4096 * 2];
+        for (;;)
+        {
+            ma_uint64 read = 0;
+            ma_result r = ma_decoder_read_pcm_frames(&decoder, buffer, 4096, &read);
+            if (read == 0) break;
+            stereo.insert(stereo.end(), buffer, buffer + read * 2);
+            if (r != MA_SUCCESS) break;
+        }
+        ma_decoder_uninit(&decoder);
+        return sampleRate > 0;
+    }
+
     std::optional<AudioWaveform> AudioEngine::GetWaveform(const fs::path& file, size_t buckets)
     {
         if (buckets == 0) return std::nullopt;

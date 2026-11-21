@@ -1,6 +1,7 @@
 #include "MusicMode.h"
 #include "EditorUI.h"
 #include "MusicModeUI.h"
+#include <Dimension/Music/AudioExport.h>
 #include <Dimension/Core/Log.h>
 #include <Dimension/Asset/AssetManager.h>
 #include <imgui_internal.h>
@@ -217,19 +218,31 @@ namespace Editor
         else m_Player->NoteOff(channel, key);
     }
 
-    void MusicMode::RenderToFile()
+    float MusicMode::SuggestedTail() const
     {
-        // The song (Song mode, its Playlist) or the current pattern (once), with the sound's tail, next to the song file
-        // as an audio asset the game can play.
-        fs::path out = m_File.parent_path() / (m_File.stem().string() + ".wav");
-        if (m_Rack) m_Rack->StoreStates(m_Song); // (the render makes its own plug-ins from these)
-        bool song = m_SongMode && !m_Song.Playlist.empty();
+        // Long enough for delays and reverbs to ring out.
         float tail = 1.5f;
         for (const MixerTrack& m : m_Song.Mixer)
             for (const Effect& e : m.Effects)
-                if (e.Enabled && (e.Type == EffectType::Delay || e.Type == EffectType::Reverb)) tail = 4.0f;
+                if (e.Enabled && (e.Type == EffectType::Delay || e.Type == EffectType::Reverb || e.Type == EffectType::Plugin)) tail = 4.0f;
+        return tail;
+    }
+
+    void MusicMode::RenderToFile()
+    {
+        // The Playlist or the current pattern (once), with its tail, next to the song file as an audio asset the game can
+        // play (played back through the engine like any other clip).
+        std::string name = m_RenderName.find_first_not_of(' ') == std::string::npos ? m_File.stem().string() : m_RenderName;
+        for (char& c : name)
+            if (std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos) c = '_';
+        fs::path out = m_File.parent_path() / (name + (m_RenderFormat == 1 ? ".opus" : ".wav"));
+        if (m_Rack) m_Rack->StoreStates(m_Song); // (the render makes its own plug-ins from these)
+        bool song = m_RenderWholeSong && (!m_Song.Playlist.empty() || !m_Song.AudioClips.empty());
+        float tail = m_RenderTail >= 0.0f ? m_RenderTail : SuggestedTail();
         auto samples = RenderSong(m_Song, 48000, song ? SongPlayer::Mode::Song : SongPlayer::Mode::Pattern, m_Pattern, 1, tail);
-        if (!WriteWav(out, samples, 48000))
+        if (m_RenderNormalize) Normalize(samples, -1.0f);
+        bool ok = m_RenderFormat == 1 ? WriteOpus(out, samples, 48000, m_RenderKbps) : WriteWav(out, samples, 48000);
+        if (!ok)
         {
             m_Status = "Could not write " + out.filename().string();
             Log::Error("Could not write {}", out.string());
@@ -237,9 +250,75 @@ namespace Editor
         }
         AssetHandle h = AssetManager::Import(out);
         if (h.IsValid()) AssetManager::Refresh();
+        m_LastRender = out;
         m_Status = "Rendered " + out.filename().string();
         m_StatusTime = 4.0f;
         Log::Info("Rendered '{}' to {} ({:.1f} s)", m_Song.Name, out.filename().string(), samples.size() / 2 / 48000.0);
+    }
+
+    void MusicMode::DrawRenderWindow()
+    {
+        if (!m_ShowRender) return;
+        ImGui::SetNextWindowSize(ImVec2(430.0f, 0.0f), ImGuiCond_Always);
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 120.0f), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
+        if (!ImGui::Begin("Render", &m_ShowRender, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse))
+        {
+            ImGui::End();
+            return;
+        }
+        if (ImGui::IsWindowAppearing())
+        {
+            if (m_RenderName.empty()) m_RenderName = m_File.stem().string();
+            m_RenderWholeSong = m_SongMode && (!m_Song.Playlist.empty() || !m_Song.AudioClips.empty());
+        }
+        bool hasSong = !m_Song.Playlist.empty() || !m_Song.AudioClips.empty();
+        if (UI::BeginProperties("##render"))
+        {
+            UI::PropertyLabel("Render");
+            if (ImGui::RadioButton("Pattern", !m_RenderWholeSong)) m_RenderWholeSong = false;
+            ImGui::SetItemTooltip("The current pattern, once");
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!hasSong);
+            if (ImGui::RadioButton("Song", m_RenderWholeSong)) m_RenderWholeSong = true;
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip(hasSong ? "The Playlist, start to end" : "The Playlist is empty");
+            UI::PropertyLabel("Format", "WAV: 16-bit, large; Opus: compressed (a fraction of the size), what games ship");
+            const char* formats[] = { "WAV (16-bit)", "Ogg Opus" };
+            ImGui::Combo("##format", &m_RenderFormat, formats, 2);
+            if (m_RenderFormat == 1)
+            {
+                UI::PropertyLabel("Quality");
+                ImGui::SliderInt("##kbps", &m_RenderKbps, 64, 320, "%d kbps");
+            }
+            UI::PropertyLabel("Tail", "Seconds after the end for the sound to ring out (Auto: longer with delays and reverbs)");
+            float tail = m_RenderTail >= 0.0f ? m_RenderTail : SuggestedTail();
+            bool autoTail = m_RenderTail < 0.0f;
+            if (ImGui::Checkbox("Auto##tail", &autoTail)) m_RenderTail = autoTail ? -1.0f : tail;
+            ImGui::SameLine();
+            ImGui::BeginDisabled(autoTail);
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::SliderFloat("##tail", &tail, 0.0f, 10.0f, "%.1f s")) m_RenderTail = tail;
+            ImGui::EndDisabled();
+            UI::PropertyLabel("Normalize", "Raise or lower it so its loudest moment peaks at -1 dB");
+            ImGui::Checkbox("##normalize", &m_RenderNormalize);
+            UI::PropertyLabel("File Name");
+            ImGui::InputText("##name", &m_RenderName);
+            UI::EndProperties();
+        }
+        double ticks = m_RenderWholeSong ? m_Song.SongTicks() : m_Song.PatternTicks(m_Pattern);
+        float seconds = (float)(ticks / m_Song.TicksPerSecond()) + (m_RenderTail >= 0.0f ? m_RenderTail : SuggestedTail());
+        ImGui::TextDisabled("%.1f s, next to the song: %s%s", seconds, m_RenderName.c_str(), m_RenderFormat == 1 ? ".opus" : ".wav");
+        if (ImGui::Button("Render", ImVec2(120, 0))) RenderToFile();
+        if (!m_LastRender.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Last: %s", m_LastRender.filename().string().c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Show in Project"))
+                if (AssetHandle h = AssetManager::GetHandle(m_LastRender); h.IsValid()) m_Ctx.SelectAsset(h), m_Ctx.RequestCloseMusic = true;
+        }
+        ImGui::End();
     }
 
     bool MusicMode::Knob(const char* id, float* value, float min, float max, float reset, float size, const char* format)
@@ -343,6 +422,7 @@ namespace Editor
         ImGui::End();
         DrawPluginManager();
         DrawIOWindow();
+        DrawRenderWindow();
 
         // The file follows the song once an edit is finished.
         if (m_Unsaved && m_Dirty && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -528,9 +608,8 @@ namespace Editor
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Render WAV")) RenderToFile();
-        ImGui::SetItemTooltip("Render %s to %s.wav next to the song (an audio clip the game can play)", m_SongMode && !m_Song.Playlist.empty() ? "the song" : "the pattern",
-                              m_File.stem().string().c_str());
+        if (ImGui::Button("Render...")) m_ShowRender = !m_ShowRender;
+        ImGui::SetItemTooltip("Render the pattern or the song to WAV or Ogg Opus next to the song (an audio clip the game can play)");
         ImGui::SameLine();
         ImGui::BeginDisabled(m_Undo.empty());
         if (ImGui::Button("Undo")) Undo();

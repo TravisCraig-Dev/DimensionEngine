@@ -1,5 +1,6 @@
 #include "Dimension/Music/SongPlayer.h"
 #include "Dimension/Asset/AssetManager.h"
+#include "Dimension/Audio/AudioEngine.h"
 #include "Dimension/Core/Log.h"
 #define MA_NO_ENCODING // as where the implementation is built (AudioEngine.cpp)
 #include <miniaudio.h>
@@ -30,24 +31,13 @@ namespace Dimension::Music
             std::lock_guard lock(s_SampleMutex);
             if (auto it = s_Samples.find(key); it != s_Samples.end() && it->second.first == stamp) return it->second.second;
         }
-        ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 2, 0); // the file's own rate
-        ma_decoder decoder;
-        if (ma_decoder_init_file(file.string().c_str(), &config, &decoder) != MA_SUCCESS)
+        // (through the audio engine's decoders: WAV, MP3, FLAC, Ogg Vorbis and Opus)
+        auto data = std::make_shared<SampleData>();
+        if (!AudioEngine::DecodeFile(file, data->Frames, data->SampleRate))
         {
             Log::Warn("Sampler: cannot read '{}'", file.filename().string());
             return nullptr;
         }
-        auto data = std::make_shared<SampleData>();
-        data->SampleRate = decoder.outputSampleRate;
-        float buffer[4096 * 2];
-        for (;;)
-        {
-            ma_uint64 read = 0;
-            if (ma_decoder_read_pcm_frames(&decoder, buffer, 4096, &read) != MA_SUCCESS && read == 0) break;
-            if (read == 0) break;
-            data->Frames.insert(data->Frames.end(), buffer, buffer + read * 2);
-        }
-        ma_decoder_uninit(&decoder);
         std::lock_guard lock(s_SampleMutex);
         s_Samples[key] = { stamp, data };
         return data;

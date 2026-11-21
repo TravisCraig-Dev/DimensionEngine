@@ -53,6 +53,9 @@ namespace Dimension
         static std::optional<AudioClipInfo> GetClipInfo(const fs::path& file);
         // Decodes the whole file (no audio device needed).
         static std::optional<AudioWaveform> GetWaveform(const fs::path& file, size_t buckets);
+        // The whole file as interleaved stereo floats at its own rate (any format clips play, Opus included; mono
+        // files on both sides). No audio device needed.
+        static bool DecodeFile(const fs::path& file, std::vector<float>& stereo, uint32_t& sampleRate);
 
         // The editor's clip preview (the Inspector's Play): one clip at a time, straight to the output (not through
         // the mixer). Play returns false without an audio device or when the file cannot be read.
