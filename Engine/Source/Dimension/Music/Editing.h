@@ -25,4 +25,31 @@ namespace Dimension::Music::Edit
     int ClipAt(const Song& s, int track, double tick);
     // The automation clip under a tick on a track (the last one), or -1.
     int AutomationAt(const Song& s, int track, double tick);
+    // The audio clip under a tick on a track (the last one), or -1.
+    int AudioClipAt(const Song& s, int track, double tick);
+
+    // Records notes played live into a pattern: NoteOn and NoteOff with the song position (ticks in the pattern) as
+    // they happen; each note goes in when it ends (wrapping past the loop's end), its start snapped to `grid` (1: as
+    // played). Notes still held at End are ended there.
+    class NoteRecorder
+    {
+    public:
+        void Begin(int channel, int loopTicks, int grid);
+        void NoteOn(int key, float velocity, double tick);
+        // The note it ended (false when that key was not down).
+        bool NoteOff(int key, double tick, Note& out);
+        std::vector<Note> End(double tick);
+        bool IsHeld(int key) const;
+
+    private:
+        struct Held
+        {
+            int Key;
+            float Velocity;
+            double Start;
+        };
+        Note Make(const Held& h, double end) const;
+        std::vector<Held> m_Held;
+        int m_Channel = 0, m_Loop = 384, m_Grid = 1;
+    };
 }

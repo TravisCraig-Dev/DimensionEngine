@@ -102,6 +102,21 @@ namespace Dimension::Music
         int Start = 0, Length = 0;  // Length 0: the pattern's own length
     };
 
+    // An audio file placed on the Playlist (a recording, or any clip of the project): it plays at its own speed from
+    // Start, through a mixer track. Seconds is the file's length (so the song knows the clip's without reading it).
+    struct AudioClip
+    {
+        std::string Name;
+        uint64_t Sample = 0;        // the audio asset's GUID
+        std::string SamplePath;     // Assets-relative (or absolute) path, when the GUID does not resolve
+        int Track = 0;
+        int Start = 0, Length = 0;  // ticks; Length 0: to the file's end
+        float Offset = 0.0f;        // seconds into the file where the clip starts
+        float Seconds = 0.0f;       // the file's length
+        float Gain = 1.0f;
+        int Insert = 0;             // mixer track
+    };
+
     // A Playlist track's name and mute (tracks without one are "Track N", playing).
     struct PlaylistTrack
     {
@@ -125,6 +140,7 @@ namespace Dimension::Music
         std::vector<PlaylistTrack> Tracks; // by track index (may be shorter than the tracks used)
         std::vector<MixerTrack> Mixer{ MasterTrack() }; // [0] is the Master (always there)
         std::vector<AutomationClip> Automation;                         // on the Playlist's tracks
+        std::vector<AudioClip> AudioClips;                              // on the Playlist's tracks
 
         int StepTicks() const { return kTicksPerBeat / std::max(1, StepsPerBeat); }
         int BarTicks() const { return kTicksPerBeat * std::max(1, BeatsPerBar); }
@@ -144,6 +160,8 @@ namespace Dimension::Music
         void SwapChannels(int a, int b);
         // A clip's length in ticks (its own, or its pattern's).
         int ClipTicks(const PlaylistClip& c) const { return c.Length > 0 ? c.Length : PatternTicks(c.Pattern); }
+        // An audio clip's length in ticks at the song's tempo (its own, or the rest of its file).
+        int ClipTicks(const AudioClip& c) const;
         std::string TrackName(int track) const;
         bool TrackMuted(int track) const { return track >= 0 && track < (int)Tracks.size() && Tracks[track].Mute; }
         PlaylistTrack& Track(int track); // (grows Tracks to reach it)

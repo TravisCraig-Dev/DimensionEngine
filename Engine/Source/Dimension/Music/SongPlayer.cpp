@@ -203,9 +203,16 @@ namespace Dimension::Music
 
     void SongPlayer::SetSong(const Song& song)
     {
-        std::vector<std::shared_ptr<const SampleData>> samples;
+        std::vector<std::shared_ptr<const SampleData>> samples, clipSamples;
         for (const Channel& c : song.Channels)
             samples.push_back(c.Type == InstrumentType::Sampler ? LoadSample(ResolveSamplePath(c.Sampler)) : nullptr);
+        for (const AudioClip& a : song.AudioClips)
+        {
+            SamplerParams where;
+            where.Sample = a.Sample;
+            where.SamplePath = a.SamplePath;
+            clipSamples.push_back(LoadSample(ResolveSamplePath(where)));
+        }
         std::shared_ptr<PluginRack> rack;
         {
             std::lock_guard lock(m_Mutex);
@@ -239,6 +246,7 @@ namespace Dimension::Music
                 m_Voices[i].Active = false;
         m_Song = song;
         m_Samples = std::move(samples);
+        m_ClipSamples.swap(clipSamples);
         int tracks = std::min((int)m_Song.Mixer.size(), kMaxMixer);
         m_Fx.resize(tracks);
         for (int t = 0; t < tracks; ++t)
@@ -269,7 +277,13 @@ namespace Dimension::Music
         if (m_Tick >= LoopEnd()) m_Tick = 0.0;
     }
 
-    void SongPlayer::Play() { m_Playing = true; }
+    void SongPlayer::Play()
+    {
+        // The metronome clicks on the next beat (at once when starting on one).
+        double tick = m_Tick;
+        m_LastBeat = std::fmod(tick, (double)kTicksPerBeat) < 1e-6 ? -1.0 : std::floor(tick / kTicksPerBeat);
+        m_Playing = true;
+    }
     void SongPlayer::Pause() { m_Playing = false; }
 
     void SongPlayer::Stop()
@@ -654,6 +668,7 @@ namespace Dimension::Music
         const float sr = (float)m_SampleRate;
         const double ticksPerFrame = m_Song.TicksPerSecond() / sr;
         const double framesPerTick = 1.0 / ticksPerFrame;
+        const double chunkStart = m_Tick, loopEnd = LoopEnd();
         if (m_Playing && m_Mode == Mode::Song) ApplyAutomation(m_Tick);
 
         // This chunk's notes (wrapping at the loop's end).
@@ -779,6 +794,31 @@ namespace Dimension::Music
             }
         }
 
+        // Audio clips (Song mode): their files at their own speed, from where each starts, into their mixer tracks.
+        if (m_Playing && m_Mode == Mode::Song)
+            for (size_t i = 0; i < m_Song.AudioClips.size() && i < m_ClipSamples.size(); ++i)
+            {
+                const AudioClip& clip = m_Song.AudioClips[i];
+                const SampleData* data = m_ClipSamples[i].get();
+                if (!data || data->FrameCount() < 2 || m_Song.TrackMuted(clip.Track)) continue;
+                const double end = clip.Start + m_Song.ClipTicks(clip), tps = m_Song.TicksPerSecond();
+                const size_t frameCount = data->FrameCount();
+                int target = clip.Insert >= 0 && clip.Insert < tracks ? clip.Insert : 0;
+                float* bus = m_Bus.data() + (size_t)target * kChunk * 2;
+                for (uint32_t f = 0; f < frames; ++f)
+                {
+                    double t = chunkStart + f * ticksPerFrame;
+                    if (t >= loopEnd) t -= loopEnd;
+                    if (t < clip.Start || t >= end) continue;
+                    double pos = ((t - clip.Start) / tps + clip.Offset) * data->SampleRate;
+                    size_t at = (size_t)pos;
+                    if (at + 1 >= frameCount) continue;
+                    float frac = (float)(pos - at);
+                    bus[f * 2] += (data->Frames[at * 2] * (1 - frac) + data->Frames[at * 2 + 2] * frac) * clip.Gain;
+                    bus[f * 2 + 1] += (data->Frames[at * 2 + 1] * (1 - frac) + data->Frames[at * 2 + 3] * frac) * clip.Gain;
+                }
+            }
+
         // The Mixer: each insert's effects, level and pan, into its output (a later track or the Master); the Master last.
         auto runTrack = [&](int t) {
             const MixerTrack& m = m_Song.Mixer[t];
@@ -823,10 +863,32 @@ namespace Dimension::Music
         }
         float* master = runTrack(0);
         float peakL = 0.0f, peakR = 0.0f;
+        const bool clicking = m_Playing && m_Metronome;
         for (uint32_t f = 0; f < frames; ++f)
         {
             out[f * 2] = master[f * 2];
             out[f * 2 + 1] = master[f * 2 + 1];
+            if (clicking)
+            {
+                // A new beat starts a click (after the Master: no effects, never in renders).
+                double t = chunkStart + f * ticksPerFrame;
+                if (t >= loopEnd) t -= loopEnd;
+                double beat = std::floor(t / kTicksPerBeat);
+                if (beat != m_LastBeat)
+                {
+                    m_LastBeat = beat;
+                    m_ClickTime = 0.0f;
+                    m_ClickFreq = (int)beat % std::max(1, m_Song.BeatsPerBar) == 0 ? 1760.0f : 1320.0f;
+                }
+            }
+            if (m_ClickTime >= 0.0f)
+            {
+                float c = std::sin(2.0f * (float)kPi * m_ClickFreq * m_ClickTime) * std::exp(-m_ClickTime * 70.0f) * 0.35f;
+                out[f * 2] += c;
+                out[f * 2 + 1] += c;
+                m_ClickTime += 1.0f / sr;
+                if (m_ClickTime > 0.08f) m_ClickTime = -1.0f;
+            }
             peakL = std::max(peakL, std::fabs(out[f * 2]));
             peakR = std::max(peakR, std::fabs(out[f * 2 + 1]));
         }

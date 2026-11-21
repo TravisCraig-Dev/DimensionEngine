@@ -107,7 +107,14 @@ namespace Dimension::Music
         int end = 0;
         for (const auto& c : Playlist) end = std::max(end, c.Start + ClipTicks(c));
         for (const auto& a : Automation) end = std::max(end, a.Start + a.Length);
+        for (const auto& a : AudioClips) end = std::max(end, a.Start + ClipTicks(a));
         return end;
+    }
+
+    int Song::ClipTicks(const AudioClip& c) const
+    {
+        if (c.Length > 0) return c.Length;
+        return std::max(1, (int)std::ceil(std::max(0.0f, c.Seconds - c.Offset) * TicksPerSecond()));
     }
 
     MixerTrack MasterTrack()
@@ -130,6 +137,9 @@ namespace Dimension::Music
         if (track <= 0 || track >= (int)Mixer.size()) return;
         Mixer.erase(Mixer.begin() + track);
         for (Channel& c : Channels)
+            if (c.Insert == track) c.Insert = 0;
+            else if (c.Insert > track) --c.Insert;
+        for (AudioClip& c : AudioClips)
             if (c.Insert == track) c.Insert = 0;
             else if (c.Insert > track) --c.Insert;
         for (MixerTrack& m : Mixer)
@@ -473,6 +483,11 @@ namespace Dimension::Music
                                    { "track", a.Track }, { "start", a.Start }, { "length", a.Length }, { "points", std::move(points) } });
         }
         j["automation"] = std::move(automation);
+        json audio = json::array();
+        for (const AudioClip& a : AudioClips)
+            audio.push_back({ { "name", a.Name }, { "sample", a.Sample }, { "samplePath", a.SamplePath }, { "track", a.Track }, { "start", a.Start },
+                              { "length", a.Length }, { "offset", a.Offset }, { "seconds", a.Seconds }, { "gain", a.Gain }, { "insert", a.Insert } });
+        j["audio"] = std::move(audio);
         return j;
     }
 
@@ -612,6 +627,22 @@ namespace Dimension::Music
                     if (pj.is_array() && pj.size() >= 2) a.Points.push_back({ pj[0].get<int>(), std::clamp(pj[1].get<float>(), 0.0f, 1.0f) });
                 a.SortPoints();
                 if (out.Param(a.Target)) out.Automation.push_back(std::move(a));
+            }
+            for (const json& aj : j.value("audio", json::array()))
+            {
+                AudioClip a;
+                a.Name = aj.value("name", "");
+                a.Sample = aj.value("sample", (uint64_t)0);
+                a.SamplePath = aj.value("samplePath", "");
+                a.Track = std::max(0, aj.value("track", 0));
+                a.Start = std::max(0, aj.value("start", 0));
+                a.Length = std::max(0, aj.value("length", 0));
+                a.Offset = std::max(0.0f, aj.value("offset", 0.0f));
+                a.Seconds = std::max(0.0f, aj.value("seconds", 0.0f));
+                a.Gain = aj.value("gain", 1.0f);
+                a.Insert = aj.value("insert", 0);
+                if (a.Insert < 0 || a.Insert >= (int)out.Mixer.size()) a.Insert = 0;
+                out.AudioClips.push_back(std::move(a));
             }
         }
         catch (const json::exception&)

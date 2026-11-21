@@ -2,6 +2,7 @@
 #include "MusicMode.h"
 #include "MusicModeUI.h"
 #include <Dimension/Music/Editing.h>
+#include <Dimension/Asset/AssetManager.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <algorithm>
@@ -76,6 +77,24 @@ namespace Editor
                 });
             ImGui::EndPopup();
         }
+        ImGui::SameLine(0.0f, 4.0f);
+        if (ImGui::Button("+ Audio")) ImGui::OpenPopup("AddAudio");
+        ImGui::SetItemTooltip("An audio file of the project as a clip (at the song position); REC records new ones");
+        if (ImGui::BeginPopup("AddAudio"))
+        {
+            auto clips = AssetManager::GetAssetsOfType(AssetType::Audio);
+            for (AssetHandle h : clips)
+                if (ImGui::MenuItem(AssetManager::GetDisplayName(h).c_str()))
+                {
+                    Record();
+                    int start = m_SongMode && m_Player ? Edit::SnapFloor(m_Player->GetTick(), m_Song.BarTicks()) : 0;
+                    m_SelectedAudio = AddAudioClip(h, AssetManager::GetAbsolutePath(h), start);
+                    m_SelectedClip = m_SelectedAuto = -1;
+                    Changed();
+                }
+            if (clips.empty()) ImGui::TextDisabled("No audio files in the project");
+            ImGui::EndPopup();
+        }
         ImGui::SameLine(0.0f, 16.0f);
         ImGui::TextDisabled("Click to place the pattern, drag to move, drag the end to resize, right-click deletes, double-click edits it; click the ruler to seek");
         if (!m_SongMode)
@@ -86,9 +105,10 @@ namespace Editor
 
         const float headerW = 140.0f, rulerH = 22.0f;
         if (m_SelectedAuto >= (int)m_Song.Automation.size()) m_SelectedAuto = -1;
+        if (m_SelectedAudio >= (int)m_Song.AudioClips.size()) m_SelectedAudio = -1;
         ImVec2 origin = ImGui::GetCursorScreenPos();
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        const float editorH = m_SelectedAuto >= 0 ? std::min(170.0f, avail.y * 0.4f) : 0.0f;
+        const float editorH = m_SelectedAuto >= 0 ? std::min(170.0f, avail.y * 0.4f) : m_SelectedAudio >= 0 ? ImGui::GetFrameHeight() + 12.0f : 0.0f;
         ImRect ruler(ImVec2(origin.x + headerW, origin.y), ImVec2(origin.x + avail.x, origin.y + rulerH));
         ImRect grid(ImVec2(ruler.Min.x, ruler.Max.y), ImVec2(ruler.Max.x, origin.y + avail.y - (editorH > 0.0f ? editorH + 6.0f : 0.0f)));
         ImRect headers(ImVec2(origin.x, grid.Min.y), ImVec2(grid.Min.x, grid.Max.y));
@@ -102,6 +122,7 @@ namespace Editor
         int usedTracks = 0;
         for (const auto& c : m_Song.Playlist) usedTracks = std::max(usedTracks, c.Track + 1);
         for (const auto& c : m_Song.Automation) usedTracks = std::max(usedTracks, c.Track + 1);
+        for (const auto& c : m_Song.AudioClips) usedTracks = std::max(usedTracks, c.Track + 1);
         const int trackCount = std::max({ usedTracks + 4, (int)m_Song.Tracks.size(), (int)std::ceil(grid.GetHeight() / trackH) });
         m_ListScrollY = std::clamp(m_ListScrollY, 0.0f, std::max(0.0f, trackCount * trackH - grid.GetHeight()));
         m_ListScrollX = std::max(0.0, m_ListScrollX);
@@ -204,7 +225,7 @@ namespace Editor
         }
         if (hovered && io.MouseWheelH != 0.0f) m_ListScrollX = std::max(0.0, m_ListScrollX - io.MouseWheelH * 80.0 / tickW);
 
-        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && Edit::AutomationAt(m_Song, mtrack, mt) < 0)
+        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && Edit::AutomationAt(m_Song, mtrack, mt) < 0 && Edit::AudioClipAt(m_Song, mtrack, mt) < 0)
         {
             int hit = Edit::ClipAt(m_Song, mtrack, mt);
             if (hit >= 0)
@@ -228,7 +249,19 @@ namespace Editor
                 m_ListDrag.Clip = autoHit;
                 m_ListDrag.Offset = mt - a.Start;
                 m_SelectedAuto = autoHit;
-                m_SelectedClip = -1;
+                m_SelectedClip = m_SelectedAudio = -1;
+            }
+            else if (int audioHit = Edit::AudioClipAt(m_Song, mtrack, mt); audioHit >= 0)
+            {
+                const AudioClip& a = m_Song.AudioClips[audioHit];
+                int ticks = m_Song.ClipTicks(a);
+                bool edge = mouse.x > xOf(a.Start + ticks) - std::min(7.0f, ticks * tickW * 0.3f);
+                m_ListDrag.Kind = edge ? ListDrag::Resize : ListDrag::Move;
+                m_ListDrag.Audio = true;
+                m_ListDrag.Clip = audioHit;
+                m_ListDrag.Offset = mt - a.Start;
+                m_SelectedAudio = audioHit;
+                m_SelectedClip = m_SelectedAuto = -1;
             }
             else
             {
@@ -246,7 +279,7 @@ namespace Editor
             m_ListDrag.Clip = hit;
             m_ListDrag.Offset = mt - c.Start;
             m_SelectedClip = hit;
-            m_SelectedAuto = -1;
+            m_SelectedAuto = m_SelectedAudio = -1;
             }
         }
         if (ImGui::IsItemActivated() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
@@ -255,7 +288,29 @@ namespace Editor
             m_ListDrag.Kind = ListDrag::Erase;
             Record();
         }
-        if (ImGui::IsItemActive() && m_ListDrag.Automation && m_ListDrag.Clip >= 0 && m_ListDrag.Clip < (int)m_Song.Automation.size())
+        if (ImGui::IsItemActive() && m_ListDrag.Audio && m_ListDrag.Clip >= 0 && m_ListDrag.Clip < (int)m_Song.AudioClips.size())
+        {
+            AudioClip& a = m_Song.AudioClips[m_ListDrag.Clip];
+            AudioClip before = a;
+            if (m_ListDrag.Kind == ListDrag::Move)
+            {
+                a.Start = std::max(0, Edit::SnapRound(mt - m_ListDrag.Offset, snap));
+                a.Track = mtrack;
+            }
+            else if (m_ListDrag.Kind == ListDrag::Resize)
+            {
+                // Shorter or longer (up to the rest of its file: no repeating).
+                int full = (int)std::ceil(std::max(0.0f, a.Seconds - a.Offset) * m_Song.TicksPerSecond());
+                a.Length = std::clamp(Edit::SnapRound(mt, snap) - a.Start, std::min(full, m_Song.StepTicks()), full);
+                if (a.Length >= full) a.Length = 0;
+            }
+            if (a.Start != before.Start || a.Track != before.Track || a.Length != before.Length)
+            {
+                m_ListDrag.Moved = true;
+                Changed();
+            }
+        }
+        else if (ImGui::IsItemActive() && m_ListDrag.Automation && m_ListDrag.Clip >= 0 && m_ListDrag.Clip < (int)m_Song.Automation.size())
         {
             AutomationClip& a = m_Song.Automation[m_ListDrag.Clip];
             AutomationClip before = a;
@@ -308,7 +363,15 @@ namespace Editor
                     m_ListDrag.Moved = true;
                     Changed();
                 }
-                int hit = autoHit >= 0 ? -1 : Edit::ClipAt(m_Song, mtrack, mt);
+                int audioHit = autoHit >= 0 ? -1 : Edit::AudioClipAt(m_Song, mtrack, mt);
+                if (audioHit >= 0)
+                {
+                    m_Song.AudioClips.erase(m_Song.AudioClips.begin() + audioHit);
+                    m_SelectedAudio = -1;
+                    m_ListDrag.Moved = true;
+                    Changed();
+                }
+                int hit = autoHit >= 0 || audioHit >= 0 ? -1 : Edit::ClipAt(m_Song, mtrack, mt);
                 if (hit >= 0)
                 {
                     m_Song.Playlist.erase(m_Song.Playlist.begin() + hit);
@@ -371,6 +434,33 @@ namespace Editor
             }
             dl->PopClipRect();
         }
+        for (int i = 0; i < (int)m_Song.AudioClips.size(); ++i)
+        {
+            const AudioClip& a = m_Song.AudioClips[i];
+            float x0 = xOf(a.Start), x1 = xOf(a.Start + m_Song.ClipTicks(a)), y = yOf(a.Track);
+            if (x1 < grid.Min.x || x0 > grid.Max.x || y + trackH < grid.Min.y || y > grid.Max.y) continue;
+            ImU32 color = m_Song.TrackMuted(a.Track) ? IM_COL32(90, 90, 110, 255) : IM_COL32(110, 140, 230, 255);
+            dl->AddRectFilled(ImVec2(x0, y + 1), ImVec2(x1, y + trackH - 1), Shade(color, 0.35f), 3.0f);
+            dl->AddRect(ImVec2(x0, y + 1), ImVec2(x1, y + trackH - 1), i == m_SelectedAudio ? IM_COL32(255, 255, 255, 255) : Shade(color, 0.6f), 3.0f, 0,
+                        i == m_SelectedAudio ? 2.0f : 1.0f);
+            dl->PushClipRect(ImVec2(std::max(x0, grid.Min.x), y), ImVec2(std::min(x1, grid.Max.x), y + trackH), true);
+            // The waveform (its loudest and quietest sample per pixel), from where the clip starts in its file.
+            if (const AudioWaveform* w = ClipWaveform(a); w && w->Buckets > 0 && w->Seconds > 0.0f)
+            {
+                float mid = y + 9 + (trackH - 10) * 0.5f, half = (trackH - 14) * 0.5f * std::min(1.0f, 0.9f / std::max(0.05f, w->Peak()));
+                double tps = m_Song.TicksPerSecond();
+                for (float x = std::max(x0, grid.Min.x); x < std::min(x1, grid.Max.x); x += 1.0f)
+                {
+                    double seconds = (tickAt(x) - a.Start) / tps + a.Offset;
+                    size_t b = (size_t)(seconds / w->Seconds * w->Buckets);
+                    if (b >= w->Buckets) break;
+                    float lo = w->Min[b], hi = w->Max[b];
+                    dl->AddLine(ImVec2(x, mid - hi * half * a.Gain), ImVec2(x, mid - lo * half * a.Gain + 1), color);
+                }
+            }
+            dl->AddText(ImVec2(x0 + 4, y + 1), IM_COL32(220, 228, 255, 255), a.Name.c_str());
+            dl->PopClipRect();
+        }
         for (int i = 0; i < (int)m_Song.Automation.size(); ++i)
         {
             const AutomationClip& a = m_Song.Automation[i];
@@ -396,7 +486,8 @@ namespace Editor
             dl->PopClipRect();
         }
         // Where a click would place the pattern.
-        if (hovered && !ImGui::IsItemActive() && Edit::ClipAt(m_Song, mtrack, mt) < 0 && Edit::AutomationAt(m_Song, mtrack, mt) < 0)
+        if (hovered && !ImGui::IsItemActive() && Edit::ClipAt(m_Song, mtrack, mt) < 0 && Edit::AutomationAt(m_Song, mtrack, mt) < 0 &&
+            Edit::AudioClipAt(m_Song, mtrack, mt) < 0)
         {
             float x0 = xOf(std::max(0, Edit::SnapFloor(mt, snap))), y = yOf(mtrack);
             dl->AddRect(ImVec2(x0, y + 1), ImVec2(x0 + m_Song.PatternTicks(m_Pattern) * tickW, y + trackH - 1), IM_COL32(255, 255, 255, 70), 3.0f);
@@ -415,6 +506,7 @@ namespace Editor
                 dl->AddTriangleFilled(ImVec2(x - 6, ruler.Max.y - 9), ImVec2(x + 6, ruler.Max.y - 9), ImVec2(x, ruler.Max.y), IM_COL32(120, 255, 140, 255));
         }
         if (editorH > 0.0f && m_SelectedAuto >= 0) DrawAutomationEditor(ImVec2(origin.x, grid.Max.y + 6.0f), ImVec2(origin.x + avail.x, origin.y + avail.y));
+        if (editorH > 0.0f && m_SelectedAudio >= 0) DrawAudioClipBar(ImVec2(origin.x, grid.Max.y + 6.0f), ImVec2(origin.x + avail.x, origin.y + avail.y));
         ImGui::EndChild();
     }
 
@@ -520,6 +612,15 @@ namespace Editor
 
     void MusicMode::PlaylistKeys()
     {
+        if ((ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) && m_SelectedAudio >= 0 &&
+            m_SelectedAudio < (int)m_Song.AudioClips.size())
+        {
+            Record();
+            m_Song.AudioClips.erase(m_Song.AudioClips.begin() + m_SelectedAudio);
+            m_SelectedAudio = -1;
+            Changed();
+            return;
+        }
         if ((ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) && m_SelectedAuto >= 0 &&
             m_SelectedAuto < (int)m_Song.Automation.size())
         {

@@ -1,9 +1,14 @@
 #pragma once
 #include "EditorContext.h"
 #include <Dimension/Music/SongPlayer.h>
+#include <Dimension/Music/Editing.h>
+#include <Dimension/Music/MidiInput.h>
+#include <Dimension/Audio/AudioEngine.h>
 #include <deque>
 #include <imgui.h>
+#include <atomic>
 #include <map>
+#include <mutex>
 #include <memory>
 
 namespace Editor
@@ -60,6 +65,22 @@ namespace Editor
         void DrawPluginManager();
         void DrawPluginPanel(Dimension::Music::PluginRef& ref, int index, int slot, float height);
         bool PluginMenu(bool instruments, Dimension::Music::PluginRef& picked); // true when one was picked
+        // Recording (MusicRecording.cpp): MIDI input (straight to the sound on its own thread, and queued for recording),
+        // notes recorded into the pattern while playing with REC on, audio takes from the microphone onto the Playlist,
+        // and the Audio & MIDI window.
+        void StartMidi();
+        void StopMidi();
+        void UpdateRecording();
+        void BeginTake();
+        void EndTake();
+        void RecordLive(int key, float velocity, bool on); // a note played (typing keyboard, piano, MIDI)
+        void DrawIOWindow();
+        void LoadIOSettings();
+        void SaveIOSettings();
+        // An audio clip of `asset` (or a file) on the first free Playlist track from `start`; returns its index.
+        int AddAudioClip(AssetHandle asset, const fs::path& file, int start);
+        void DrawAudioClipBar(const ImVec2& min, const ImVec2& max);
+        const Dimension::AudioWaveform* ClipWaveform(const Dimension::Music::AudioClip& clip);
         void SetSongMode(bool song);
         void SetPattern(int pattern);
         void HandleKeys();
@@ -129,6 +150,7 @@ namespace Editor
             enum Kind { None, Move, Resize, Erase, Seek } Kind = None;
             int Clip = -1;
             bool Automation = false; // (Clip indexes the automation clips)
+            bool Audio = false;      // (Clip indexes the audio clips)
             double Offset = 0.0;
             bool Moved = false;
         } m_ListDrag;
@@ -143,6 +165,26 @@ namespace Editor
         std::map<uint64_t, std::vector<Dimension::Music::PluginParameter>> m_ParamCache;
         std::map<uint64_t, bool> m_HasEditorCache;
         std::string m_ParamFilter;
+        // Recording: REC armed, what it records (0 notes, 1 audio), snapping notes to steps, the metronome; devices.
+        bool m_RecordArmed = false, m_RecordQuantize = false, m_Metronome = false, m_ShowIO = false, m_IOLoaded = false;
+        int m_RecordSource = 0;
+        int m_MidiDevice = -1, m_MicDevice = -1;
+        std::string m_MidiDeviceName;
+        bool m_Taking = false, m_WasPlaying = false, m_TakeUndone = false;
+        Dimension::Music::Edit::NoteRecorder m_NoteRec;
+        struct MidiEvent
+        {
+            Dimension::Music::MidiMessage Message;
+        };
+        std::mutex m_MidiMutex;
+        std::vector<MidiEvent> m_MidiQueue;
+        std::atomic<int> m_LiveChannel{ 0 };
+        std::vector<int> m_MidiHeld; // keys held on the MIDI keyboard (shown on the piano)
+        uint64_t m_MicCursor = 0;
+        std::vector<float> m_Take;
+        double m_TakeStartTick = 0.0;
+        int m_SelectedAudio = -1;
+        std::map<std::string, std::shared_ptr<Dimension::AudioWaveform>> m_Waveforms;
         std::string m_Status;
         float m_StatusTime = 0.0f;
     };

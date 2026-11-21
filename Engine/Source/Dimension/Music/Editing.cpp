@@ -98,4 +98,65 @@ namespace Dimension::Music::Edit
         }
         return -1;
     }
+
+    int AudioClipAt(const Song& s, int track, double tick)
+    {
+        for (int i = (int)s.AudioClips.size() - 1; i >= 0; --i)
+        {
+            const AudioClip& a = s.AudioClips[i];
+            if (a.Track == track && tick >= a.Start && tick < a.Start + s.ClipTicks(a)) return i;
+        }
+        return -1;
+    }
+
+    void NoteRecorder::Begin(int channel, int loopTicks, int grid)
+    {
+        m_Held.clear();
+        m_Channel = channel;
+        m_Loop = std::max(1, loopTicks);
+        m_Grid = std::max(1, grid);
+    }
+
+    void NoteRecorder::NoteOn(int key, float velocity, double tick)
+    {
+        std::erase_if(m_Held, [&](const Held& h) { return h.Key == key; });
+        m_Held.push_back({ key, velocity, tick });
+    }
+
+    Note NoteRecorder::Make(const Held& h, double end) const
+    {
+        double length = end - h.Start;
+        if (length < 0.0) length += m_Loop; // (it wrapped past the loop's end)
+        int start = m_Grid > 1 ? SnapRound(h.Start, m_Grid) : (int)std::floor(h.Start);
+        if (start >= m_Loop) start -= m_Loop;
+        int len = m_Grid > 1 ? std::max(m_Grid, SnapRound(length, m_Grid)) : std::max(1, (int)std::lround(length));
+        return { m_Channel, std::max(0, start), std::min(len, m_Loop), h.Key, std::clamp(h.Velocity, 0.0f, 1.0f) };
+    }
+
+    bool NoteRecorder::NoteOff(int key, double tick, Note& out)
+    {
+        for (size_t i = 0; i < m_Held.size(); ++i)
+            if (m_Held[i].Key == key)
+            {
+                out = Make(m_Held[i], tick);
+                m_Held.erase(m_Held.begin() + i);
+                return true;
+            }
+        return false;
+    }
+
+    std::vector<Note> NoteRecorder::End(double tick)
+    {
+        std::vector<Note> out;
+        for (const Held& h : m_Held) out.push_back(Make(h, tick));
+        m_Held.clear();
+        return out;
+    }
+
+    bool NoteRecorder::IsHeld(int key) const
+    {
+        for (const Held& h : m_Held)
+            if (h.Key == key) return true;
+        return false;
+    }
 }

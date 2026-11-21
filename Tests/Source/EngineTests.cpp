@@ -61,6 +61,7 @@
 #include <Dimension/Music/SongPlayer.h>
 #include <Dimension/Music/Editing.h>
 #include <Dimension/Music/Plugin.h>
+#include <Dimension/Music/MidiInput.h>
 #include <Dimension/Renderer/ColrV1.h>
 #include <Dimension/Platform/Platform.h>
 #include <Dimension/Audio/Microphone.h>
@@ -21084,6 +21085,125 @@ namespace
         CHECK(MusicSilent(RenderSong(song, rate, SongPlayer::Mode::Pattern), 0, rate));
     }
 
+    void TestMusicRecording()
+    {
+        using namespace Dimension::Music;
+        // MIDI bytes to messages: running status, clock bytes inside messages, system exclusive skipped.
+        MidiParser parser;
+        std::vector<MidiMessage> msgs;
+        for (uint8_t b : { 0x90, 60, 100, 62, 0xF8, 90, 0xF0, 1, 2, 3, 0xF7, 0x80, 60, 0, 0xC1, 5, 0x91, 64, 0, 0xB0, 64, 127 }) parser.Feed(b, msgs);
+        CHECK(msgs.size() == 6);
+        if (msgs.size() == 6)
+        {
+            CHECK(msgs[0].IsNoteOn() && msgs[0].Data1 == 60 && msgs[0].Data2 == 100 && Near(msgs[0].Velocity(), 100 / 127.0f));
+            CHECK(msgs[1].IsNoteOn() && msgs[1].Data1 == 62 && msgs[1].Data2 == 90); // (running status)
+            CHECK(msgs[2].IsNoteOff() && msgs[2].Data1 == 60);
+            CHECK(msgs[3].Kind() == 0xC0 && msgs[3].Channel() == 1 && msgs[3].Data1 == 5);
+            CHECK(msgs[4].IsNoteOff() && !msgs[4].IsNoteOn() && msgs[4].Data1 == 64); // (note on, velocity 0)
+            CHECK(msgs[5].IsController() && msgs[5].Data1 == 64 && msgs[5].Data2 == 127);
+        }
+        // The input's handler gets messages (injected here: no device needed); listing devices works without any.
+        std::vector<MidiMessage> got;
+        MidiInput::SetHandler([&](const MidiMessage& m) { got.push_back(m); });
+        MidiInput::Inject({ 0x90, 48, 64 });
+        MidiInput::SetHandler(nullptr);
+        MidiInput::Inject({ 0x80, 48, 0 });
+        CHECK(got.size() == 1 && got[0].Data1 == 48);
+        (void)MidiInput::Devices();
+        CHECK(!MidiInput::IsOpen() && !MidiInput::Open(9999));
+
+        // Recording notes: as played (grid 1) or snapped; held across the loop's end; ended at End.
+        Edit::NoteRecorder rec;
+        rec.Begin(2, 384, 1);
+        rec.NoteOn(60, 0.7f, 10.4);
+        Note n;
+        CHECK(rec.IsHeld(60) && rec.NoteOff(60, 58.0, n));
+        CHECK(n.Channel == 2 && n.Start == 10 && n.Length == 48 && n.Key == 60 && Near(n.Velocity, 0.7f) && !rec.IsHeld(60));
+        CHECK(!rec.NoteOff(60, 70.0, n)); // (not down)
+        rec.Begin(0, 384, 24);
+        rec.NoteOn(64, 1.0f, 35.0);
+        CHECK(rec.NoteOff(64, 70.0, n) && n.Start == 24 && n.Length == 24);
+        rec.NoteOn(65, 1.0f, 380.0); // snaps to the loop's end: wraps to the start
+        CHECK(rec.NoteOff(65, 30.0, n) && n.Start == 0 && n.Length == 24);
+        rec.Begin(0, 384, 1);
+        rec.NoteOn(67, 0.5f, 300.0); // held past the loop's end
+        CHECK(rec.NoteOff(67, 20.0, n) && n.Start == 300 && n.Length == 104);
+        rec.NoteOn(69, 0.5f, 100.0);
+        auto ended = rec.End(150.0);
+        CHECK(ended.size() == 1 && ended[0].Key == 69 && ended[0].Length == 50);
+
+        // Audio clips: saved; played at their own speed from their start in Song mode, through their mixer track.
+        const uint32_t rate = 48000;
+        std::vector<float> tone(rate * 2); // a second of 440 Hz at half level
+        for (uint32_t i = 0; i < rate; ++i) tone[i * 2] = tone[i * 2 + 1] = 0.5f * (float)std::sin(2.0 * 3.14159265358979 * 440.0 * i / rate);
+        fs::path file = fs::temp_directory_path() / "dimension_audio_clip_test.wav";
+        CHECK(WriteWav(file, tone, rate));
+        Song s;
+        s.Tempo = 120.0f; // a bar = 2 s
+        s.Channels.push_back({});
+        s.Patterns.push_back({});
+        s.Master().Volume = 1.0f;
+        AudioClip clip;
+        clip.Name = "Take 1";
+        clip.SamplePath = file.string();
+        clip.Track = 1;
+        clip.Start = 384;
+        clip.Seconds = 1.0f;
+        s.AudioClips.push_back(clip);
+        CHECK(s.ClipTicks(s.AudioClips[0]) == 192 && s.SongTicks() == 576 && Edit::AudioClipAt(s, 1, 400.0) == 0 && Edit::AudioClipAt(s, 0, 400.0) == -1);
+        Song back;
+        CHECK(Song::FromJson(s.ToJson(), back) && back.AudioClips.size() == 1 && back.AudioClips[0].SamplePath == clip.SamplePath &&
+              back.AudioClips[0].Start == 384 && back.AudioClips[0].Seconds == 1.0f && back.AudioClips[0].Track == 1);
+        auto played = RenderSong(s, rate, SongPlayer::Mode::Song, 0, 1, 0.0f);
+        CHECK(played.size() == (size_t)rate * 3 * 2);
+        CHECK(MusicSilent(played, 0, rate * 2 - 1));
+        CHECK(Near(MusicRms(played, rate * 2 + 100, rate * 3 - 100), 0.5f / std::sqrt(2.0f), 0.01f));
+        CHECK(Near(MusicPitch(played, rate * 2 + 100, rate * 3 - 100, rate), 440.0f, 2.0f));
+        // Gain, a shorter clip and an offset into the file; a muted track; its mixer track's level.
+        s.AudioClips[0].Gain = 0.5f;
+        CHECK(Near(MusicRms(RenderSong(s, rate, SongPlayer::Mode::Song, 0, 1, 0.0f), rate * 2 + 100, rate * 3 - 100), 0.25f / std::sqrt(2.0f), 0.01f));
+        s.AudioClips[0].Gain = 1.0f;
+        s.AudioClips[0].Length = 96;   // half a second
+        s.AudioClips[0].Offset = 0.75f; // (its last quarter second, then nothing)
+        auto cut = RenderSong(s, rate, SongPlayer::Mode::Song, 0, 1, 0.0f);
+        CHECK(MusicRms(cut, rate * 2 + 100, rate * 2 + rate / 4 - 100) > 0.3f && MusicSilent(cut, rate * 2 + rate / 4 + 10, rate * 3));
+        s.AudioClips[0].Length = 0;
+        s.AudioClips[0].Offset = 0.0f;
+        s.Track(1).Mute = true;
+        CHECK(MusicSilent(RenderSong(s, rate, SongPlayer::Mode::Song, 0, 1, 0.0f), 0, rate * 3));
+        s.Track(1).Mute = false;
+        s.Mixer.push_back({ "Vocals", 0.5f });
+        s.AudioClips[0].Insert = 1;
+        CHECK(Near(MusicRms(RenderSong(s, rate, SongPlayer::Mode::Song, 0, 1, 0.0f), rate * 2 + 100, rate * 3 - 100), 0.25f / std::sqrt(2.0f), 0.01f));
+        s.RemoveMixerTrack(1);
+        CHECK(s.AudioClips[0].Insert == 0);
+        // Pattern mode leaves audio clips out.
+        CHECK(MusicSilent(RenderSong(s, rate, SongPlayer::Mode::Pattern, 0, 1, 0.0f), 0, rate * 2));
+        // A file that is not there plays nothing.
+        s.AudioClips[0].SamplePath = (fs::temp_directory_path() / "no_such_take.wav").string();
+        CHECK(MusicSilent(RenderSong(s, rate, SongPlayer::Mode::Song, 0, 1, 0.0f), 0, rate * 3));
+        fs::remove(file);
+
+        // The metronome: a click on each beat while playing (live only), higher on the bar.
+        Song quiet;
+        quiet.Tempo = 120.0f;
+        quiet.Channels.push_back({});
+        quiet.Patterns.push_back({});
+        SongPlayer live(rate);
+        live.SetSong(quiet);
+        live.SetMetronome(true);
+        live.Play();
+        std::vector<float> second(rate * 2);
+        for (uint32_t done = 0; done < rate; done += 480) live.Render(second.data() + done * 2, 480);
+        CHECK(MusicOnset(second) < 4); // (a sine from zero)
+        CHECK(MusicSilent(second, rate / 10, rate / 2 - 1) && !MusicSilent(second, rate / 2, rate / 2 + 200));
+        float bar = MusicPitch(second, 0, rate / 20, rate), beat = MusicPitch(second, rate / 2, rate / 2 + rate / 20, rate);
+        CHECK(Near(bar, 1760.0f, 40.0f) && Near(beat, 1320.0f, 40.0f));
+        live.SetMetronome(false);
+        for (uint32_t done = 0; done < rate; done += 480) live.Render(second.data() + done * 2, 480);
+        CHECK(MusicSilent(second, 0, rate));
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -21389,6 +21509,7 @@ int main(int argc, char** argv)
     Run("Music editing", TestMusicEditing);
     Run("Music mixer", TestMusicMixer);
     Run("Music plugins", TestMusicPlugins);
+    Run("Music recording", TestMusicRecording);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;

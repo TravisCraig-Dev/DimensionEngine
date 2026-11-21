@@ -49,6 +49,9 @@ namespace Dimension::Music
 
         void Play();
         void Pause();               // stops where it is
+        // A click on each beat while playing (higher on the bar's first): for recording; never in renders.
+        void SetMetronome(bool on) { m_Metronome = on; }
+        bool GetMetronome() const { return m_Metronome; }
         void Stop();                // back to the start; notes released
         bool IsPlaying() const { return m_Playing; }
         double GetTick() const { return m_Tick; }
@@ -115,6 +118,11 @@ namespace Dimension::Music
         std::vector<PluginNoteOff> m_PluginNoteOffs;
         std::vector<float> m_PluginBuffer, m_PluginDry;
         int64_t m_SongSamples = 0;
+        // Audio clips' files (by clip), and the metronome's click.
+        std::vector<std::shared_ptr<const SampleData>> m_ClipSamples;
+        std::atomic<bool> m_Metronome{ false };
+        double m_LastBeat = -1.0;
+        float m_ClickTime = -1.0f, m_ClickFreq = 1000.0f;
     };
 
     // Renders a song offline: Pattern mode plays `pattern` `loops` times, Song mode the Playlist once; then `tail`

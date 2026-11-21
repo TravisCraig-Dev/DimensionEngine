@@ -83,6 +83,7 @@ namespace Editor
         m_Player->SetRack(m_Rack);
         m_Player->SetSong(m_Song);
         if (!MusicOutput::Start(m_Player)) m_Status = "No audio output: songs can still be edited and rendered";
+        StartMidi();
         Log::Info("Opened song '{}' (Music Mode)", m_Song.Name);
         return true;
     }
@@ -103,6 +104,8 @@ namespace Editor
     void MusicMode::Close()
     {
         if (!m_Active) return;
+        StopMidi(); // (ends a take in progress; no MIDI reaches the player after this)
+        m_RecordArmed = false;
         if (m_Unsaved) Save();
         MusicOutput::Stop();
         m_Player.reset();
@@ -141,6 +144,7 @@ namespace Editor
         m_RollSelection.clear();
         m_SelectedClip = -1;
         m_SelectedAuto = -1;
+        m_SelectedAudio = -1;
         m_SelectedMixer = std::min(m_SelectedMixer, (int)m_Song.Mixer.size() - 1);
         m_SelectedEffect = -1;
         Changed();
@@ -157,6 +161,7 @@ namespace Editor
         m_RollSelection.clear();
         m_SelectedClip = -1;
         m_SelectedAuto = -1;
+        m_SelectedAudio = -1;
         m_SelectedMixer = std::min(m_SelectedMixer, (int)m_Song.Mixer.size() - 1);
         m_SelectedEffect = -1;
         Changed();
@@ -291,6 +296,7 @@ namespace Editor
         }
         m_StatusTime = std::max(0.0f, m_StatusTime - ImGui::GetIO().DeltaTime);
         if (m_Rack && m_Rack->TakeEdited()) m_Dirty = m_Unsaved = true; // (a plug-in's own editor changed it)
+        UpdateRecording();
 
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -323,8 +329,20 @@ namespace Editor
         }
         if (keyboardHeight > 0.0f) DrawKeyboard(ImVec2(avail.x, keyboardHeight));
         HandleKeys();
+        // Status messages: a note at the bottom right, fading out (the missing audio output one stays).
+        if (!m_Status.empty() && (m_StatusTime > 0.0f || m_Status.rfind("No audio", 0) == 0))
+        {
+            float alpha = m_Status.rfind("No audio", 0) == 0 ? 1.0f : std::min(1.0f, m_StatusTime);
+            ImVec2 size = ImGui::CalcTextSize(m_Status.c_str());
+            ImVec2 max(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 14.0f, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - 14.0f);
+            ImVec2 min(max.x - size.x - 16.0f, max.y - size.y - 10.0f);
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            dl->AddRectFilled(min, max, IM_COL32(20, 22, 26, (int)(230 * alpha)), 4.0f);
+            dl->AddText(ImVec2(min.x + 8, min.y + 5), IM_COL32(230, 230, 230, (int)(255 * alpha)), m_Status.c_str());
+        }
         ImGui::End();
         DrawPluginManager();
+        DrawIOWindow();
 
         // The file follows the song once an edit is finished.
         if (m_Unsaved && m_Dirty && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -380,6 +398,33 @@ namespace Editor
         ImGui::SameLine();
         if (ImGui::Button("Stop", ImVec2(48, 0))) StopPlayback();
         ImGui::SameLine();
+        {
+            bool armed = m_RecordArmed;
+            if (armed) ImGui::PushStyleColor(ImGuiCol_Button, m_Taking ? ImVec4(0.85f, 0.15f, 0.15f, 1.0f) : ImVec4(0.6f, 0.15f, 0.15f, 1.0f));
+            if (ImGui::Button("REC"))
+            {
+                m_RecordArmed = !m_RecordArmed;
+                if (m_RecordArmed && m_RecordSource == 1 && !m_SongMode) SetSongMode(true); // (audio takes go on the Playlist)
+            }
+            if (armed) ImGui::PopStyleColor();
+            ImGui::SetItemTooltip(m_RecordSource == 0 ? "Record notes: with REC on, Play and play the selected channel (MIDI keyboard, typing keys, piano)"
+                                                      : "Record audio: with REC on, Play (Song mode) records the microphone onto the Playlist");
+            ImGui::SameLine(0.0f, 2.0f);
+            bool click = m_Metronome;
+            if (click) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::Button("Click"))
+            {
+                m_Metronome = !m_Metronome;
+                if (m_Player) m_Player->SetMetronome(m_Metronome);
+                SaveIOSettings();
+            }
+            if (click) ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("Metronome (never in renders)");
+            ImGui::SameLine(0.0f, 2.0f);
+            if (ImGui::Button("I/O")) m_ShowIO = !m_ShowIO;
+            ImGui::SetItemTooltip("Audio & MIDI: the MIDI keyboard, the microphone, what REC records");
+        }
+        ImGui::SameLine();
         // Position: bar:beat:step.
         {
             double tick = m_Player ? m_Player->GetTick() : 0.0;
@@ -389,21 +434,15 @@ namespace Editor
             ImGui::AlignTextToFramePadding();
             ImGui::Text("%d:%d:%d", bar + 1, beat + 1, step + 1);
         }
-        ImGui::SameLine(0.0f, 24.0f);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Tempo");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(70.0f);
-        Edited(ImGui::DragFloat("##tempo", &m_Song.Tempo, 0.2f, 10.0f, 999.0f, "%.1f"));
+        ImGui::SameLine(0.0f, 16.0f);
+        ImGui::SetNextItemWidth(78.0f);
+        Edited(ImGui::DragFloat("##tempo", &m_Song.Tempo, 0.2f, 10.0f, 999.0f, "%.1f BPM"));
         if (ImGui::IsItemDeactivatedAfterEdit()) m_Song.Tempo = std::clamp(m_Song.Tempo, 10.0f, 999.0f);
-        ImGui::SetItemTooltip("Beats per minute (drag, or double-click to type)");
-        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::SetItemTooltip("Tempo: beats per minute (drag, or double-click to type)");
+        ImGui::SameLine(0.0f, 16.0f);
 
         // Patterns.
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Pattern");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(130.0f);
+        ImGui::SetNextItemWidth(110.0f);
         if (ImGui::BeginCombo("##pattern", m_Song.Patterns[m_Pattern].Name.c_str()))
         {
             for (int i = 0; i < (int)m_Song.Patterns.size(); ++i)
@@ -467,17 +506,16 @@ namespace Editor
         if (Edited(ImGui::SliderFloat("##swing", &swing, 0.0f, 100.0f, "%.0f%%"))) m_Song.Swing = swing / 100.0f, Changed();
 
         // Right: master level and meter, Render, undo.
-        float right = 470.0f;
-        float after = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + 24.0f; // (just past the swing slider)
-        ImGui::SameLine(std::max(after, ImGui::GetWindowWidth() - right));
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Master");
-        ImGui::SameLine();
+        // (on a narrow window the rest goes on a second row)
+        float right = 330.0f;
+        float after = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + 20.0f; // (just past the swing slider)
+        if (after + right > ImGui::GetWindowWidth()) ImGui::SetCursorPosX(ImGui::GetWindowWidth() - right);
+        else ImGui::SameLine(ImGui::GetWindowWidth() - right);
         Knob("##master", &m_Song.Master().Volume, 0.0f, 1.25f, 0.8f, ImGui::GetFrameHeight(), "Master %.2f");
         ImGui::SameLine();
         {
             ImVec2 p = ImGui::GetCursorScreenPos();
-            float h = ImGui::GetFrameHeight(), w = 90.0f;
+            float h = ImGui::GetFrameHeight(), w = 64.0f;
             ImGui::Dummy(ImVec2(w, h));
             ImDrawList* dl = ImGui::GetWindowDrawList();
             for (int i = 0; i < 2; ++i)
@@ -501,11 +539,6 @@ namespace Editor
         ImGui::BeginDisabled(m_Redo.empty());
         if (ImGui::Button("Redo")) Redo();
         ImGui::EndDisabled();
-        if (!m_Status.empty() && (m_StatusTime > 0.0f || m_Status.rfind("No audio", 0) == 0))
-        {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", m_Status.c_str());
-        }
         (void)style;
     }
 
@@ -992,7 +1025,7 @@ namespace Editor
         ImGui::InvisibleButton("##piano", ImVec2(whiteW * whites, whiteH));
         ImDrawList* dl = ImGui::GetWindowDrawList();
         auto held = [&](int key) {
-            if (key == m_PianoNote) return true;
+            if (key == m_PianoNote || std::find(m_MidiHeld.begin(), m_MidiHeld.end(), key) != m_MidiHeld.end()) return true;
             for (auto& t : m_TypedNotes)
                 if (t.second == key) return true;
             return false;
@@ -1026,9 +1059,9 @@ namespace Editor
         int want = ImGui::IsItemActive() ? hover : -1;
         if (want != m_PianoNote)
         {
-            if (m_PianoNote >= 0) Preview(m_SelectedChannel, m_PianoNote, false);
+            if (m_PianoNote >= 0) Preview(m_SelectedChannel, m_PianoNote, false), RecordLive(m_PianoNote, 0.0f, false);
             m_PianoNote = want;
-            if (m_PianoNote >= 0) Preview(m_SelectedChannel, m_PianoNote, true);
+            if (m_PianoNote >= 0) Preview(m_SelectedChannel, m_PianoNote, true), RecordLive(m_PianoNote, 0.8f, true);
         }
         for (auto& [k, r] : whiteRects)
         {
@@ -1047,7 +1080,7 @@ namespace Editor
         if (io.WantTextInput)
         {
             // Typing in a field: notes held by the typing keyboard stop.
-            for (auto& [k, note] : m_TypedNotes) Preview(m_SelectedChannel, note, false);
+            for (auto& [k, note] : m_TypedNotes) Preview(m_SelectedChannel, note, false), RecordLive(note, 0.0f, false);
             m_TypedNotes.clear();
             return;
         }
@@ -1074,6 +1107,7 @@ namespace Editor
             if (ImGui::IsKeyPressed(t.Key, false))
             {
                 Preview(m_SelectedChannel, note, true);
+                RecordLive(note, 0.8f, true);
                 m_TypedNotes.push_back({ (int)t.Key, note });
             }
         }
@@ -1081,6 +1115,7 @@ namespace Editor
             if (!ImGui::IsKeyDown((ImGuiKey)m_TypedNotes[i].first))
             {
                 Preview(m_SelectedChannel, m_TypedNotes[i].second, false);
+                RecordLive(m_TypedNotes[i].second, 0.0f, false);
                 m_TypedNotes.erase(m_TypedNotes.begin() + i);
             }
             else ++i;
