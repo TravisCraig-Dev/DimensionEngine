@@ -57,18 +57,19 @@ namespace Siege
             Debug.Log($"Battle: {Soldiers.Count} soldiers in {Regiments.Count} regiments, {Catapults} catapults");
         }
 
-        private readonly System.Diagnostics.Stopwatch m_Watch = new();
+        private readonly System.Diagnostics.Stopwatch m_Watch = new(), m_Wall = System.Diagnostics.Stopwatch.StartNew();
         private int m_Frames;
         private double m_ScriptMs, m_FrameMs;
 
         public override void OnUpdate(float dt)
         {
             m_Watch.Restart();
-            m_FrameMs += Time.UnscaledDeltaTime * 1000.0;
             Step(Math.Min(dt, 1.0f / 20.0f), true);
             m_ScriptMs += m_Watch.Elapsed.TotalMilliseconds;
             if (++m_Frames == 30)
             {
+                m_FrameMs = m_Wall.Elapsed.TotalMilliseconds;
+                m_Wall.Restart();
                 Debug.Log($"Battle: frame {m_FrameMs / 30:0.0} ms, battle script {m_ScriptMs / 30:0.0} ms, {Arrows.InFlight} arrows in flight");
                 m_Frames = 0;
                 m_ScriptMs = m_FrameMs = 0;
