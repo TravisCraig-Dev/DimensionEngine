@@ -409,13 +409,14 @@ namespace Dimension
     {
         enum Kind { Mesh, MeshDoubleSided, MeshTransparent, DepthPrepass, DepthPrepassDoubleSided, Sky, Sprite, SpriteAdditive, Line,
                     GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive, MeshWire, MeshWireOverlay, MeshOverdraw, MeshImpostor,
-                    DepthPrepassImpostor, Count };
+                    DepthPrepassImpostor, MeshPrepassed, MeshDoubleSidedPrepassed, Count };
         Pipeline Pipelines[Count];
         const Pipeline& operator[](Kind k) const { return Pipelines[k]; }
     };
 
     struct Renderer::Resources
     {
+        Pipeline MeshPrepassed, MeshDoubleSidedPrepassed; // after the depth prepass: testing its depth, not writing it
         Pipeline Mesh, MeshDoubleSided, MeshTransparent, Shadow, Sky, UI, SpriteAdditive, Sprite, Line, LineOverlay, Composite;
         Pipeline MeshWire, MeshWireOverlay, MeshOverdraw; // Scene view draw modes
         Pipeline MeshImpostor, DepthPrepassImpostor, ShadowImpostor; // impostors: pixels at their depth on the mesh
@@ -499,6 +500,18 @@ namespace Dimension
         meshTwoSided.DebugName = "MeshDoubleSidedPipeline";
         r.MeshDoubleSided = Pipeline(meshTwoSided);
         r.MainDescs[MainPipelines::MeshDoubleSided] = meshTwoSided;
+        // Opaque parts whose depth the prepass already wrote: the shader can discard (cutouts), and a pipeline that
+        // writes depth from such a shader tests it only after shading, so every hidden fragment would be shaded. Without
+        // the write the test comes first and only the visible surface is shaded (the depths match: Mesh.vert is invariant).
+        GraphicsPipelineDesc meshPrepassed = mesh;
+        meshPrepassed.DepthWrite = false;
+        meshPrepassed.DebugName = "MeshPrepassedPipeline";
+        r.MeshPrepassed = Pipeline(meshPrepassed);
+        r.MainDescs[MainPipelines::MeshPrepassed] = meshPrepassed;
+        meshPrepassed.CullMode = VK_CULL_MODE_NONE;
+        meshPrepassed.DebugName = "MeshDoubleSidedPrepassedPipeline";
+        r.MeshDoubleSidedPrepassed = Pipeline(meshPrepassed);
+        r.MainDescs[MainPipelines::MeshDoubleSidedPrepassed] = meshPrepassed;
         GraphicsPipelineDesc meshImpostor = meshTwoSided;
         meshImpostor.FragmentSpirv = kMeshImpostor_frag;
         meshImpostor.DebugName = "MeshImpostorPipeline";
@@ -1372,6 +1385,7 @@ namespace Dimension
         // Water surfaces read the opaque depth under them (shore foam): the depth prepass, copied.
         bool waterDepth = m_FrameHasWater && !camera.Orthographic && !options.ProbeCapture;
         u.Refraction.w = waterDepth ? (float)target.GetOpaqueDepthBindless() + 1.0f : 0.0f;
+        m_DepthPrepassed = ssao || waterDepth;
         if (ssao || waterDepth)
         {
             if (ssao) u.AOParams = glm::vec4(settings.SSAODebug ? 2.0f : 1.0f, (float)target.GetAOBindless(1), 1.0f / extent.width, 1.0f / extent.height);
@@ -3257,6 +3271,7 @@ namespace Dimension
                                                                           : nullptr;
         std::vector<std::pair<Draw, uint32_t>> wireOverlay; // Shaded Wireframe: the opaque draws again, as edges
         bool overlayEdges = pass == MeshPass::Main && m_DrawMode == SceneDrawMode::ShadedWireframe;
+        bool prepassed = pass == MeshPass::Main && m_DepthPrepassed; // (the opaque parts' depth is in place)
         glm::vec3 camPos = glm::vec3(glm::inverse(viewProj) * glm::vec4(0, 0, 0, 1)); // only used for sorting
         auto makeDraw = [&](const RenderPart& part) {
             const RenderItem& item = m_RenderItems[part.Item];
@@ -3282,6 +3297,7 @@ namespace Dimension
                                                    : part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
                    : modePipe    ? modePipe
                    : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.Impostor ? MainPipelines::MeshImpostor
+                                   : prepassed && !part.Water ? (part.DoubleSided ? MainPipelines::MeshDoubleSidedPrepassed : MainPipelines::MeshPrepassed)
                                    : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
             return d;
         };
@@ -3390,7 +3406,8 @@ namespace Dimension
                     d.Pipe = shadowPass ? &res.Shadow
                            : depthPass  ? &MainPipeline(v.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
                            : modePipe   ? modePipe
-                                        : &MainPipeline(v.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
+                                        : &MainPipeline(prepassed ? (v.DoubleSided ? MainPipelines::MeshDoubleSidedPrepassed : MainPipelines::MeshPrepassed)
+                                                                  : v.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
                     submit(d, std::min(kMaxInstancesPerDraw, v.Capacity - done));
                 }
             }
@@ -3467,6 +3484,8 @@ namespace Dimension
             case MainPipelines::MeshOverdraw: return r.MeshOverdraw;
             case MainPipelines::MeshImpostor: return r.MeshImpostor;
             case MainPipelines::DepthPrepassImpostor: return r.DepthPrepassImpostor;
+            case MainPipelines::MeshPrepassed: return r.MeshPrepassed;
+            case MainPipelines::MeshDoubleSidedPrepassed: return r.MeshDoubleSidedPrepassed;
             default: return r.Line;
             }
         auto& set = r.Multisampled[m_Samples];

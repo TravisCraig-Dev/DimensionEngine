@@ -262,6 +262,7 @@ namespace Dimension
         // culled and batched by each pass (main, depth prepass, every shadow map).
         bool m_FrameRefracts = false; // a transparent material this frame refracts
         bool m_FrameHasWater = false; // a water surface is drawn (it reads the opaque depth for shore foam)
+        bool m_DepthPrepassed = false; // this view drew the depth prepass (the main pass tests its depth without writing)
         struct RenderPart
         {
             uint32_t FirstIndex, IndexCount;

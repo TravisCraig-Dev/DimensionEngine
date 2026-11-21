@@ -50,8 +50,8 @@ vec4 TerrainSample(uint map, vec3 world, float tiling, bool triplanar, vec3 weig
     vec4 top = SampleTexture(map, world.xz * tiling);
     if (!triplanar) return top;
     vec4 c = top * weights.y;
-    if (weights.x > 0.01) c += SampleTexture(map, world.zy * tiling) * weights.x;
-    if (weights.z > 0.01) c += SampleTexture(map, world.xy * tiling) * weights.z;
+    if (weights.x > 0.0) c += SampleTexture(map, world.zy * tiling) * weights.x;
+    if (weights.z > 0.0) c += SampleTexture(map, world.xy * tiling) * weights.z;
     return c;
 }
 
@@ -65,12 +65,12 @@ vec3 TerrainNormal(uint map, vec3 world, float tiling, float strength, bool trip
     vec3 fromTop = mat3(T, cross(N, T), N) * tY;
     if (!triplanar) return fromTop;
     vec3 n = fromTop * weights.y;
-    if (weights.x > 0.01)
+    if (weights.x > 0.0)
     {
         vec2 t = (SampleTexture(map, world.zy * tiling).xy * 2.0 - 1.0) * strength;
         n += normalize(vec3(N.x, t.y + N.y, t.x + N.z)) * weights.x;
     }
-    if (weights.z > 0.01)
+    if (weights.z > 0.0)
     {
         vec2 t = (SampleTexture(map, world.xy * tiling).xy * 2.0 - 1.0) * strength;
         n += normalize(vec3(t.x + N.x, t.y + N.y, N.z)) * weights.z;
@@ -252,7 +252,11 @@ void main()
         TerrainLayersRef layers = TerrainLayersRef(m.Maps2.xy);
         vec3 world = vWorldPos;
         vec3 surfaceN = normalize(vNormal);
+        // Triplanar axes: an axis with under 5% of the blend gives its share to the others (smoothly: each loses 5%),
+        // so gentle slopes read their textures once instead of three times.
         vec3 axes = pow(abs(surfaceN), vec3(4.0));
+        axes /= max(axes.x + axes.y + axes.z, 1e-4);
+        axes = max(axes - 0.05, 0.0);
         axes /= max(axes.x + axes.y + axes.z, 1e-4);
         uint count = min(m.Maps2.z, 16u);
         float heightBlend = uintBitsToFloat(m.Maps2.w);
@@ -265,7 +269,9 @@ void main()
         {
             TerrainLayer layer = layers.Layers[k];
             if (layer.Maps.z == 0u) w = SampleTexture(layer.Maps.y, vUV);
-            weights[k] = w[layer.Maps.z];
+            // Layers at the faint edges of the filtered splat maps are left out (each weight less 2%, renormalized
+            // below), so a pixel reads the layers that show rather than every one within a sample of it.
+            weights[k] = max(w[layer.Maps.z] - 0.02, 0.0);
             colors[k] = vec3(0.0);
             heights[k] = -1e9;
             if (weights[k] <= 0.0) continue;
