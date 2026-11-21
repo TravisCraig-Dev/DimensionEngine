@@ -108,7 +108,7 @@ def main():
         "ssaoRadius": 0.8, "tonemapping": True, "skyMode": 1, "skyIntensity": 1.0, "skyRotation": 2.2,
         "skyTexture": S.guid("Sky/kloofendal_48d_partly_cloudy_puresky_2k.hdr"), "vignette": 0.22, "gravity": [0, -9.81, 0],
         "fog": True, "fogDensity": 0.00022, "fogHeight": 20.0, "fogHeightFalloff": 0.01, "fogSunScattering": 0.35,
-        "fogIntensity": 0.5, "fogMaxDistance": 6000, "fogAnisotropy": 0.65,
+        "fogIntensity": 0.5, "fogMaxDistance": 6000, "fogAnisotropy": 0.65, "wind": [2.2, 0.0, 1.2], "windGusts": 0.5,
     }
     hero = (-150.0, 52.0, 300.0)
     target = (25.0, 190.0, -430.0)
@@ -131,13 +131,13 @@ def main():
     import build_castle
     castle = build_castle.build()
     layers = [
-        layer("Grass", "Terrain", "grass_ground", 0.2, (0.66, 0.9, 0.5, 1)),
+        layer("Grass", "Terrain", "grass_ground", 0.2, (0.66, 0.9, 0.5, 1), grass=1.0),
         layer("Rock", "Terrain", "rock_ground", 0.12, normal=1.3, triplanar=True),
         layer("Cliff", "Terrain", "mossy_rock", 0.1, normal=1.5, triplanar=True),
-        layer("Trampled Earth", "Terrain", "dirt", 0.2),
-        layer("Forest Floor", "Terrain", "forest_ground_04", 0.2, trees=1.0),
+        layer("Trampled Earth", "Terrain", "dirt", 0.2, grass=0.15),
+        layer("Forest Floor", "Terrain", "forest_ground_04", 0.2, trees=1.0, grass=0.25),
         layer("Road", "Terrain", "rocky_trail", 0.2),
-        layer("Sparse Grass", "Terrain", "sparse_grass", 0.2),
+        layer("Sparse Grass", "Terrain", "sparse_grass", 0.2, grass=0.45),
         layer("Scorched", "Terrain", "burned_ground_01", 0.2),
     ]
     sc.add("Valley", Mesh_Renderer={"Mesh": 3, "Albedo": 0, "Color": [1, 1, 1, 1], "Tiling": [1, 1], "Smoothness": 0.05,
@@ -146,6 +146,9 @@ def main():
                     "Layers": layers, "Height Blend": 0.35,
                     "Tree Mesh": S.guid("Models/Trees/Fir_B.gltf"), "Tree Density": 2.2, "Tree Scale": [0.7, 1.35],
                     "Tree Max Slope": 34,
+                    # The grass: a dense field made on the GPU around the camera (Tools/build_grass.py's tuft).
+                    "Grass Mesh": S.guid("Models/Nature/Grass_Tuft.gltf"), "Grass Density": 600.0, "Grass Scale": [0.8, 1.3],
+                    "Grass Max Slope": 32.0, "Grass Sway": 1.0, "Grass Bending": 1.0, "Grass Distance": 55.0,
                     "Sculpted Heights": T.encode_heights(h, INNER_HEIGHT),
                     "Painted Layers": T.encode_layers(inner_weights(x, z, h, road))})
 

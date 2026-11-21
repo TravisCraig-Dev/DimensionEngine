@@ -1,0 +1,120 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "Siege build_grass"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Grass Tuft",
+   "mesh": 0
+  }
+ ],
+ "materials": [
+  {
+   "name": "Grass Blades",
+   "doubleSided": false,
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.10702310297826761,
+     0.18116424424986022,
+     0.02518685962736163,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.8
+   }
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "Grass_Tuft.bin",
+   "byteLength": 7424
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 1536,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1536,
+   "byteLength": 1536,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 3072,
+   "byteLength": 2048,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 5120,
+   "byteLength": 2304,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 128,
+   "type": "VEC3",
+   "min": [
+    -0.1554213911294937,
+    0.0,
+    -0.17999300360679626
+   ],
+   "max": [
+    0.1960243135690689,
+    0.3739061653614044,
+    0.2782059907913208
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 128,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 128,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5125,
+   "count": 576,
+   "type": "SCALAR"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Grass Tuft",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "COLOR_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  }
+ ]
+}
