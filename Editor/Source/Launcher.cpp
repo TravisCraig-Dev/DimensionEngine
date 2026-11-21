@@ -23,15 +23,15 @@ namespace Editor::Launcher
 
     fs::path DefaultProjectsFolder() { return Platform::DocumentsDirectory() / "Dimension Projects"; }
 
-    fs::path SandboxSample()
+    fs::path ShippedSample()
     {
-#ifdef DIM_DEFAULT_PROJECT
-        // (a development build: the source tree's own Sandbox)
-        if (ProjectHub::IsProject(DIM_DEFAULT_PROJECT)) return fs::path(DIM_DEFAULT_PROJECT);
+#ifdef DIM_SAMPLE_PROJECT
+        // (a development build: the source tree's own)
+        if (ProjectHub::IsProject(DIM_SAMPLE_PROJECT)) return fs::path(DIM_SAMPLE_PROJECT);
 #endif
-        // Installs: <prefix>/bin/DimensionEditor and <prefix>/Samples/Sandbox (Windows and Linux alike).
+        // Installs: <prefix>/bin/DimensionEditor and <prefix>/Samples/Siege (Windows and Linux alike).
         fs::path exe = Platform::ExecutableDirectory();
-        for (const fs::path& p : { exe.parent_path() / "Samples" / "Sandbox", exe / "Samples" / "Sandbox" })
+        for (const fs::path& p : { exe.parent_path() / "Samples" / "Siege", exe / "Samples" / "Siege" })
             if (ProjectHub::IsProject(p)) return p;
         return {};
     }
@@ -69,19 +69,19 @@ namespace Editor::Launcher
         }
     }
 
-    fs::path SandboxProject(std::string* error)
+    fs::path SampleProject(std::string* error)
     {
-        fs::path sample = SandboxSample();
+        fs::path sample = ShippedSample();
         if (sample.empty())
         {
-            if (error) *error = "The Sandbox sample isn't installed.";
+            if (error) *error = "The Siege sample isn't installed.";
             return {};
         }
-#ifdef DIM_DEFAULT_PROJECT
-        if (sample == fs::path(DIM_DEFAULT_PROJECT)) return sample;
+#ifdef DIM_SAMPLE_PROJECT
+        if (sample == fs::path(DIM_SAMPLE_PROJECT)) return sample;
 #endif
         // From an install: the user's own copy (made once; opened as it is after that).
-        fs::path copy = DefaultProjectsFolder() / "Sandbox";
+        fs::path copy = DefaultProjectsFolder() / "Siege";
         if (ProjectHub::IsProject(copy)) return copy;
         std::string why;
         if (!CopyProject(sample, copy, why))
@@ -89,7 +89,7 @@ namespace Editor::Launcher
             if (error) *error = why;
             return {};
         }
-        Log::Info("Copied the Sandbox sample to '{}'", copy.string());
+        Log::Info("Copied the Siege sample to '{}'", copy.string());
         return copy;
     }
 
@@ -102,16 +102,12 @@ namespace Editor::Launcher
 
             void OnAttach() override
             {
-                std::fprintf(stderr, "BC attach\n");
                 ImGuiLayer::ApplyEditorStyle(ImGuiLayer::ThemeDark);
-                std::fprintf(stderr, "BC style\n");
                 ImGui::GetIO().IniFilename = nullptr; // (nothing to remember about this window's layout)
                 m_Location = DefaultProjectsFolder().string();
                 for (const auto& t : SceneTemplates::Builtins()) m_Starters.push_back({ t.Name, t.Description }); // (no project yet)
-                std::fprintf(stderr, "BC templates\n");
                 m_Tab = ProjectHub::Recent().empty() ? 1 : 0;
-                std::fprintf(stderr, "BC recent\n");
-                if (m_Tab == 1 && !SandboxSample().empty()) m_Tab = 0; // (first run: the Sandbox is the obvious start)
+                if (m_Tab == 1 && !ShippedSample().empty()) m_Tab = 0; // (first run: the sample is the obvious start)
             }
 
             void OnImGui() override
@@ -125,12 +121,9 @@ namespace Editor::Launcher
                 ImGui::Begin("##launcher", nullptr,
                              ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
                 ImGui::PopStyleVar(3);
-                std::fprintf(stderr, "BC side\n");
                 DrawSidebar();
                 ImGui::SameLine(0.0f, 0.0f);
-                std::fprintf(stderr, "BC content\n");
                 DrawContent();
-                std::fprintf(stderr, "BC done\n");
                 ImGui::End();
             }
 
@@ -204,15 +197,15 @@ namespace Editor::Launcher
                 ImGui::Dummy(ImVec2(0.0f, 10.0f));
                 ImGui::Separator();
                 ImGui::Dummy(ImVec2(0.0f, 10.0f));
-                bool sandbox = !SandboxSample().empty();
-                ImGui::BeginDisabled(!sandbox);
-                if (SideButton("Open the Sandbox", false,
-                               sandbox ? "The sample project: a scene of everything the engine does (from an install, your own copy is made in "
-                                         "Documents/Dimension Projects)"
-                                       : "The Sandbox sample isn't installed"))
+                bool sample = !ShippedSample().empty();
+                ImGui::BeginDisabled(!sample);
+                if (SideButton("Open the Siege sample", false,
+                               sample ? "The sample project: a castle on its crag above a battle of hundreds, catapults, cavalry and a "
+                                        "cinematic camera (from an install, your own copy is made in Documents/Dimension Projects)"
+                                      : "The Siege sample isn't installed"))
                 {
                     std::string error;
-                    fs::path project = SandboxProject(&error);
+                    fs::path project = SampleProject(&error);
                     if (project.empty()) m_Error = error;
                     else Finish({ project });
                 }
@@ -279,7 +272,7 @@ namespace Editor::Launcher
                 {
                     ImGui::Dummy(ImVec2(0.0f, 30.0f));
                     ImGui::TextDisabled("No projects yet.");
-                    ImGui::TextDisabled("Open the Sandbox to look around, or make a New Project.");
+                    ImGui::TextDisabled("Open the Siege sample to look around, or make a New Project.");
                     return;
                 }
                 auto lower = [](std::string s) {

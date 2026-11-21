@@ -564,6 +564,15 @@ namespace Editor
     void EditorLayer::Play(bool emptyScene)
     {
         if (m_Ctx.IsPlaying()) return;
+        // The scripts still compiling (a project just opened, or sources just saved): play once they are loaded, so the
+        // scene's scripts exist when it starts (PollCSharp), not a play session without them.
+        if (!emptyScene && m_CSharpBuild && m_CSharpBuild->load() == 1)
+        {
+            if (!m_PlayWhenScriptsReady) Log::Info("Play starts when the C# scripts have compiled");
+            m_PlayWhenScriptsReady = true;
+            return;
+        }
+        m_PlayWhenScriptsReady = false;
         if (m_Ctx.InStage() && !LeaveStage()) return; // play always runs the scene
         m_Animation->StopPreview(); // the Animator as it was, not posed by the Animation window
         if (EditorPreferences::Get().SaveSceneBeforePlay && m_Ctx.Dirty && !m_Ctx.ScenePath.empty()) SaveScene();
@@ -6329,6 +6338,8 @@ namespace Editor
             else
                 CSharpRuntime::LoadScripts(dll);
         }
+        // Play asked for while they compiled: now (with the new scripts, or the previous ones if the build failed).
+        if (m_PlayWhenScriptsReady && !m_CSharpBuild && !m_Ctx.IsPlaying()) Play();
 
         // Rebuild automatically when sources change (debounced).
         m_CSharpCheckTimer += dt;

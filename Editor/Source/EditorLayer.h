@@ -392,6 +392,7 @@ namespace Editor
         float m_ModuleCheckTimer = 0.0f;
         // C# scripts
         std::shared_ptr<std::atomic<int>> m_CSharpBuild; // 0 idle, 1 building, 2 ok, 3 failed
+        bool m_PlayWhenScriptsReady = false;             // Play pressed while they compiled: starts when they are loaded
         fs::file_time_type m_CSharpBuiltSources{};
         float m_CSharpCheckTimer = 0.0f;
         bool m_CSharpReloadPending = false;

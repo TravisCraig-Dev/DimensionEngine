@@ -2,8 +2,8 @@
 #   Windows: an NSIS setup (Start menu and desktop shortcuts, uninstaller) and a portable .zip.
 #   Linux:   a .deb (installs to /opt/dimension, adds a menu entry and `dimension-editor`) and a .tar.gz with install.sh.
 # The install tree is the same everywhere: bin/ (programs, the engine library, the game module, the C# assemblies),
-# Samples/Sandbox (the sample project; the editor copies it to the user's Documents to open it) and share/ (icon and
-# desktop entry, Linux).
+# Samples/Siege (the sample project; the editor copies it to the user's Documents to open it) and share/ (icon and
+# desktop entry, Linux). The Sandbox stays in the repository as the test bed; it is not shipped.
 
 include(GNUInstallDirs)
 
@@ -12,7 +12,7 @@ include(GNUInstallDirs)
 # RPATH $ORIGIN already.
 install(PROGRAMS $<TARGET_FILE:DimensionEditor> $<TARGET_FILE:DimensionPlayer> $<TARGET_FILE:DimensionGame>
         DESTINATION bin COMPONENT Runtime)
-install(FILES $<TARGET_FILE:DimensionEngine> $<TARGET_FILE:SandboxGame> DESTINATION bin COMPONENT Runtime)
+install(FILES $<TARGET_FILE:DimensionEngine> DESTINATION bin COMPONENT Runtime)
 # C# scripting: the host library and the engine's managed assemblies (scripts compile against bin/managed).
 if(WIN32)
     install(FILES "${CMAKE_BINARY_DIR}/bin/nethost.dll" DESTINATION bin OPTIONAL COMPONENT Runtime)
@@ -41,39 +41,26 @@ if(WIN32)
     endif()
 endif()
 
-# The Sandbox sample, without what the editor makes in it (its caches, script builds, Directory.Build.props with this
-# machine's paths). From a git checkout, only the files git tracks: work in progress in the sample folder stays out.
-set(_sandbox "${CMAKE_SOURCE_DIR}/Projects/Sandbox")
-set(_sandbox_files "")
-find_package(Git QUIET)
-if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
-    execute_process(COMMAND "${GIT_EXECUTABLE}" -c core.quotepath=off ls-files -- Projects/Sandbox
-                    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" OUTPUT_VARIABLE _tracked RESULT_VARIABLE _git_result
-                    OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if(_git_result EQUAL 0 AND _tracked)
-        string(REPLACE "\n" ";" _sandbox_files "${_tracked}")
-        # (configure again when the tracked files change)
-        if(EXISTS "${CMAKE_SOURCE_DIR}/.git/index")
-            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/.git/index")
+# The Siege sample: the files its scenes need (Projects/Siege/Sample.files, made by its Tools/sample_files.py: the
+# scenes and everything they reference, the scripts, the credits), not the source assets nothing uses, nor the tools
+# or what the editor makes in it (caches, script builds, Directory.Build.props with this machine's paths).
+set(_sample "${CMAKE_SOURCE_DIR}/Projects/Siege")
+if(EXISTS "${_sample}/Sample.files")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_sample}/Sample.files")
+    file(STRINGS "${_sample}/Sample.files" _sample_files ENCODING UTF-8)
+    foreach(_rel IN LISTS _sample_files)
+        if(_rel STREQUAL "" OR _rel MATCHES "^#")
+            continue()
         endif()
-    endif()
-endif()
-if(_sandbox_files)
-    foreach(_file IN LISTS _sandbox_files)
-        file(RELATIVE_PATH _rel "${_sandbox}" "${CMAKE_SOURCE_DIR}/${_file}")
-        if(_rel MATCHES "(^|/)(\\.dimension|Scripts/bin|Scripts/obj)/" OR _rel MATCHES "Directory\\.Build\\.props$"
-           OR NOT EXISTS "${_sandbox}/${_rel}")
+        if(NOT EXISTS "${_sample}/${_rel}")
+            message(WARNING "The Siege sample's ${_rel} is missing (run Projects/Siege/Tools/sample_files.py)")
             continue()
         endif()
         get_filename_component(_dir "${_rel}" DIRECTORY)
-        install(FILES "${_sandbox}/${_rel}" DESTINATION "Samples/Sandbox/${_dir}" COMPONENT Runtime)
+        install(FILES "${_sample}/${_rel}" DESTINATION "Samples/Siege/${_dir}" COMPONENT Runtime)
     endforeach()
 else()
-    install(DIRECTORY "${_sandbox}/" DESTINATION Samples/Sandbox COMPONENT Runtime
-            PATTERN ".dimension" EXCLUDE
-            PATTERN "Scripts/bin" EXCLUDE
-            PATTERN "Scripts/obj" EXCLUDE
-            PATTERN "Directory.Build.props" EXCLUDE)
+    message(WARNING "Projects/Siege/Sample.files is missing: the installers ship no sample")
 endif()
 
 if(NOT WIN32)
@@ -144,5 +131,9 @@ else()
     set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
     set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_SOURCE_DIR}/cmake/packaging/CPackOptions.cmake")
 endif()
+
+# Only what this file installs (the Runtime component): not the headers and static libraries that bundled libraries'
+# own install rules add (box2d, ogg, opus).
+set(CPACK_INSTALL_CMAKE_PROJECTS "${CMAKE_BINARY_DIR};${PROJECT_NAME};Runtime;/")
 
 include(CPack)

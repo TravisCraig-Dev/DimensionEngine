@@ -147,7 +147,7 @@ int main(int argc, char** argv)
     }
 
     // No project given: the launch screen picks one (or makes one). Automated runs (screenshots, batch builds) take
-    // the Sandbox instead, as they always have.
+    // the Sandbox instead in a development build (the test bed, as they always have), the sample from an install.
     std::optional<Editor::Launcher::Choice> choice;
     bool automated = spec.MaxFrames > 0 || !spec.ScreenshotPath.empty() || !options.BuildFolder.empty();
     if (showLauncher || (projectDir.empty() && !automated))
@@ -156,7 +156,10 @@ int main(int argc, char** argv)
         if (!choice) return 0; // (closed)
         projectDir = choice->Project;
     }
-    if (projectDir.empty()) projectDir = Editor::Launcher::SandboxProject();
+#ifdef DIM_DEFAULT_PROJECT
+    if (projectDir.empty() && fs::exists(fs::path(DIM_DEFAULT_PROJECT) / "Project.dproj")) projectDir = DIM_DEFAULT_PROJECT;
+#endif
+    if (projectDir.empty()) projectDir = Editor::Launcher::SampleProject();
     if (projectDir.empty())
     {
         Log::Error("No project to open: pass a project folder (DimensionEditor <folder>)");
