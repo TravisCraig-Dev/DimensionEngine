@@ -1,0 +1,626 @@
+{
+  "version": 1,
+  "name": "Lineup",
+  "settings": {
+    "ambientColor": [
+      0.55,
+      0.6,
+      0.7
+    ],
+    "ambientIntensity": 0.35,
+    "bloom": true,
+    "bloomIntensity": 0.3,
+    "bloomThreshold": 2.0,
+    "exposure": 1.0,
+    "taa": true,
+    "ssao": true,
+    "ssaoIntensity": 1.2,
+    "ssaoRadius": 0.5,
+    "tonemapping": true,
+    "skyMode": 1,
+    "skyIntensity": 1.0,
+    "skyTexture": 86605452878293181,
+    "vignette": 0.15,
+    "gravity": [
+      0,
+      -9.81,
+      0
+    ]
+  },
+  "entities": [
+    {
+      "guid": 20000,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.0,
+            1.3,
+            5.2
+          ],
+          "Rotation": [
+            -0.05,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 0,
+          "Field Of View": 45,
+          "Orthographic Size": 5,
+          "Near Clip": 0.05,
+          "Far Clip": 1000,
+          "Primary": true,
+          "Background": [
+            0.4,
+            0.6,
+            0.85,
+            1
+          ],
+          "Clear Flags": 1
+        }
+      }
+    },
+    {
+      "guid": 20001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Sun",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            20,
+            0
+          ],
+          "Rotation": [
+            -0.7,
+            0.5,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Directional Light": {
+          "Color": [
+            1.0,
+            0.95,
+            0.88
+          ],
+          "Intensity": 3.0,
+          "Soft Shadows": true,
+          "Light Angle": 1.5
+        }
+      }
+    },
+    {
+      "guid": 20002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ground",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            -0.5,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            60,
+            1,
+            60
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Material": 316159502007913028,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 20003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Defenders Swordsman",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -3.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 897832458999344169,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Sword_Regular_A",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 272232063449290753,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 20004,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Defenders Spearman",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -2.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 889736083970818496,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle_Shield_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 272232063449290753,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 20005,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Defenders Archer",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -1.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 33861221247592090,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 36770254633959566,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 20006,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Defenders Knight",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -0.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 540862606076930841,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Walk_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 36770254633959566,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 20007,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Attackers Swordsman",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 994445717184062,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Sword_Regular_A",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 272232063449290753,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 20008,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Attackers Spearman",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            1.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 427939439152295402,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle_Shield_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 272232063449290753,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 20009,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Attackers Archer",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            2.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 488456010184893520,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 36770254633959566,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 20010,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Attackers Knight",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            3.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 20419612060830523,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Walk_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 36770254633959566,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,678 @@
+{
+  "version": 1,
+  "name": "AssetPreview",
+  "settings": {
+    "ambientColor": [
+      0.55,
+      0.6,
+      0.7
+    ],
+    "ambientIntensity": 0.35,
+    "bloom": true,
+    "bloomIntensity": 0.4,
+    "bloomThreshold": 2.0,
+    "exposure": 1.0,
+    "fxaa": false,
+    "taa": true,
+    "ssao": true,
+    "ssaoIntensity": 1.2,
+    "ssaoRadius": 0.6,
+    "tonemapping": true,
+    "skyMode": 1,
+    "skyIntensity": 1.0,
+    "skyRotation": 0.0,
+    "skyTexture": 86605452878293181,
+    "vignette": 0.2,
+    "gravity": [
+      0,
+      -9.81,
+      0
+    ]
+  },
+  "entities": [
+    {
+      "guid": 10000,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Main Camera",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            2.2,
+            9.5
+          ],
+          "Rotation": [
+            -0.12,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Camera": {
+          "Projection": 0,
+          "Field Of View": 50,
+          "Orthographic Size": 5,
+          "Near Clip": 0.1,
+          "Far Clip": 2000,
+          "Primary": true,
+          "Background": [
+            0.4,
+            0.6,
+            0.85,
+            1
+          ],
+          "Clear Flags": 1
+        }
+      }
+    },
+    {
+      "guid": 10001,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Sun",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            20,
+            0
+          ],
+          "Rotation": [
+            -0.75,
+            0.6,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Directional Light": {
+          "Color": [
+            1.0,
+            0.95,
+            0.88
+          ],
+          "Intensity": 3.0,
+          "Soft Shadows": true,
+          "Light Angle": 1.5
+        }
+      }
+    },
+    {
+      "guid": 10002,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Ground",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            -0.5,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            60,
+            1,
+            60
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1,
+          "Material": 316159502007913028,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 10003,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Soldier Sword_Regular_Combo",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -3.0,
+            0,
+            1.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 976588692952749653,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Sword_Regular_Combo",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 272232063449290753,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 10004,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Soldier Walk_Loop",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -1.7,
+            0,
+            1.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 976588692952749653,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Walk_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 36770254633959566,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 10005,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Soldier Idle_Shield_Loop",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -0.3999999999999999,
+            0,
+            1.0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 976588692952749653,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Idle_Shield_Loop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 272232063449290753,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 10006,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Horse",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            3.2,
+            0,
+            0.5
+          ],
+          "Rotation": [
+            0,
+            -1.2,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 64444113778049299,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Gallop",
+          "Speed": 1.0,
+          "Loop": true,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 0,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 10007,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Kite Shield",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0.5,
+            0,
+            2.5
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 754963304735246065,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 10008,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Barrels",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -5.5,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 324305674091845232,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 10009,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Rock Face",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -7,
+            0,
+            -6
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 761004627399582564,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 10010,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Boulder",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            6,
+            0,
+            -4
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 489784778074740171,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 10011,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Fir",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            8,
+            0,
+            -9
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 1120386721241439237,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    },
+    {
+      "guid": 10012,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Mossy Rocks",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            -2,
+            0,
+            -3
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 456655669507014264,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        }
+      }
+    }
+  ]
+}

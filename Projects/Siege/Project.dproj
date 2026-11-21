@@ -1,0 +1,11 @@
+{
+  "name": "Siege",
+  "gameModule": "",
+  "windowWidth": 1600,
+  "windowHeight": 900,
+  "engineVersion": "0.1.0",
+  "startScene": 809031539537398784,
+  "buildScenes": [
+    809031539537398784
+  ]
+}

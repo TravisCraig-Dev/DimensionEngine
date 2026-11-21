@@ -1,0 +1,235 @@
+{
+ "asset": {
+  "version": "2.0"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Fir_A",
+   "mesh": 0
+  }
+ ],
+ "images": [
+  {
+   "uri": "../../Models/Nature/pine_sapling_small/textures/pine_sapling_small_bark_diff_1k.jpg"
+  },
+  {
+   "uri": "../../Models/Nature/pine_sapling_small/textures/pine_sapling_small_bark_nor_gl_1k.jpg"
+  },
+  {
+   "uri": "../../Textures/Trees/fir_branch_diff.png"
+  },
+  {
+   "uri": "../../Textures/Trees/fir_branch_nor_gl.png"
+  }
+ ],
+ "textures": [
+  {
+   "source": 0
+  },
+  {
+   "source": 1
+  },
+  {
+   "source": 2
+  },
+  {
+   "source": 3
+  }
+ ],
+ "materials": [
+  {
+   "name": "Bark",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 0
+    },
+    "metallicFactor": 0,
+    "roughnessFactor": 0.9
+   },
+   "normalTexture": {
+    "index": 1
+   }
+  },
+  {
+   "name": "Fir Branches",
+   "alphaMode": "MASK",
+   "alphaCutoff": 0.45,
+   "doubleSided": true,
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 2
+    },
+    "baseColorFactor": [
+     0.9,
+     1.0,
+     0.9,
+     1
+    ],
+    "metallicFactor": 0,
+    "roughnessFactor": 0.85
+   },
+   "normalTexture": {
+    "index": 3
+   }
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "Fir_A.bin",
+   "byteLength": 11592
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 288,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 576,
+   "byteLength": 192,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 768,
+   "byteLength": 336,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1104,
+   "byteLength": 3312,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 4416,
+   "byteLength": 3312,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 7728,
+   "byteLength": 2208,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 9936,
+   "byteLength": 1656,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3",
+   "min": [
+    -0.16217440366744995,
+    0.0,
+    -0.17548702657222748
+   ],
+   "max": [
+    0.18000000715255737,
+    14.0,
+    0.17548702657222748
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5125,
+   "count": 84,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 276,
+   "type": "VEC3",
+   "min": [
+    -5.179436206817627,
+    -0.5460000038146973,
+    -5.114549160003662
+   ],
+   "max": [
+    5.2647905349731445,
+    13.819999694824219,
+    5.258695125579834
+   ]
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 276,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 276,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5125,
+   "count": 414,
+   "type": "SCALAR"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Fir_A",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    },
+    {
+     "attributes": {
+      "POSITION": 4,
+      "NORMAL": 5,
+      "TEXCOORD_0": 6
+     },
+     "indices": 7,
+     "material": 1
+    }
+   ]
+  }
+ ]
+}
