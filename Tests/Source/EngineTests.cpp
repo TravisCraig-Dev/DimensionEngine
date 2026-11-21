@@ -5198,8 +5198,19 @@ namespace
         writer->Release();
         return ok;
 #else
-        (void)file, (void)w, (void)h, (void)frames, (void)fps;
-        return false; // (no encoder here: the video tests skip)
+        // Elsewhere through the ffmpeg command, when installed (the same picture and tone; else the video tests skip):
+        // red over blue for the first half, then green over blue; 440 Hz at half level on both sides.
+        if (std::system("ffmpeg -version > /dev/null 2>&1") != 0) return false;
+        std::filesystem::remove(file);
+        double half = frames / 2.0 / fps, total = (double)frames / fps;
+        char command[2048];
+        std::snprintf(command, sizeof(command),
+                      "ffmpeg -y -loglevel error -f lavfi -i color=c=red:s=%ux%u:r=%d:d=%.4f -f lavfi -i color=c=lime:s=%ux%u:r=%d:d=%.4f "
+                      "-f lavfi -i color=c=blue:s=%ux%u:r=%d:d=%.4f -f lavfi -i 'aevalsrc=0.5*sin(2*PI*440*t)|0.5*sin(2*PI*440*t):s=44100:d=%.4f' "
+                      "-filter_complex '[0][1]concat=n=2:v=1[top];[2][top]overlay=0:0[v]' -map '[v]' -map 3 -c:v libx264 -pix_fmt yuv420p "
+                      "-c:a aac -b:a 192k -t %.4f '%s'",
+                      w, h / 2, fps, half, w, h / 2, fps, half, w, h, fps, total, total, total, file.string().c_str());
+        return std::system(command) == 0 && std::filesystem::exists(file);
 #endif
     }
 

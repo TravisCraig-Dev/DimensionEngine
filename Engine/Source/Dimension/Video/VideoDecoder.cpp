@@ -268,8 +268,11 @@ namespace Dimension
     void VideoDecoder::SeekAudio(double seconds) { Rewind(m_Native->Audio, seconds); }
 }
 
+#elif defined(DIM_FFMPEG)
+#include "VideoDecoderFFmpeg.inl"
 #else
 
+// No decoder on this platform (Linux built without FFmpeg's development libraries): videos do not open.
 namespace Dimension
 {
     struct VideoDecoder::Native {};
