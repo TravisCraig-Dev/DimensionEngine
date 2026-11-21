@@ -517,6 +517,36 @@ namespace Dimension
             uint32_t Capacity, EntityId;
         };
         std::vector<VfxMeshPart> m_VfxMeshParts;
+        // Terrains' grass fields (TerrainComponent::GrassDistance): tufts made on the GPU around the camera each frame
+        // (GrassField.comp) and drawn by indirect instanced draws in the depth and main passes.
+        struct GrassField
+        {
+            struct Part
+            {
+                uint32_t FirstIndex, IndexCount;
+                VkDeviceAddress Material;
+                bool DoubleSided;
+            };
+            // This frame's (from the render list):
+            bool Active = false; // drawn by the view being rendered
+            uint64_t LastFrame = 0;
+            Scene* SceneRef = nullptr;
+            Entity Terrain;
+            Ref<Mesh> MeshRef;
+            std::vector<Part> Parts;
+            uint32_t EntityId = 0, Motion = 0;
+            // The terrain's heights and grass density on the GPU, for the edits `Revision` (of settings `BaseKey`):
+            Buffer Heights, Density;
+            VkDeviceAddress HeightsAddress = 0, DensityAddress = 0;
+            uint64_t Key = 0, BaseKey = 0, Revision = 0;
+            std::vector<uint8_t> DensityCpu;
+            // The tufts and the indirect draws' arguments (a count, then a command per part).
+            Buffer Instances, Args;
+            VkDeviceAddress InstancesAddress = 0, ArgsAddress = 0;
+            uint32_t Capacity = 0;
+        };
+        std::unordered_map<uint64_t, GrassField> m_GrassFields;
+        void UpdateGrassFields(VkCommandBuffer cmd, const CameraData& camera);
         void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& view);
         // GPU particle world collision reads the depth this view stored last frame (with its view-projection).
         bool m_ParticleDepthWanted = false, m_ParticleDepthKept = false;

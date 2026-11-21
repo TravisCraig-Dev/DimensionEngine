@@ -3854,6 +3854,36 @@ namespace
         rt->OnRuntimeStop();
     }
 
+    void TestTerrainGrassField()
+    {
+        // A terrain whose grass is a GPU field (Grass Distance): its scattered details leave the grass out (the trees
+        // stay), and the field's density per sample comes from the layers' Grass (here everywhere, at the first
+        // layer's weight) with none in holes.
+        TerrainComponent t;
+        t.Size = { 64.0f, 64.0f };
+        t.Resolution = 64;
+        t.FlatCenter = 1.0f;
+        t.GrassDensity = 200.0f;
+        t.TreeDensity = 5.0f;
+        if (t.Layers.empty()) t.Layers.resize(1);
+        t.Layers[0].Grass = 1.0f;
+        t.Layers[0].Trees = 1.0f;
+        std::vector<float> heights = Terrain::BuildHeights(t);
+        Terrain::DetailInstances scattered = Terrain::BuildDetails(t, heights);
+        CHECK(!scattered.Grass.empty() && !scattered.Trees.empty());
+        t.GrassDistance = 40.0f;
+        Terrain::DetailInstances withField = Terrain::BuildDetails(t, heights);
+        CHECK(withField.Grass.empty() && withField.Trees.size() == scattered.Trees.size());
+        int n = Terrain::SampleCount(t);
+        std::vector<uint8_t> grass = Terrain::GrassDensities(t, heights);
+        CHECK(grass.size() == (size_t)n * n);
+        size_t middle = (size_t)(n / 2) * n + n / 2;
+        CHECK(grass[middle] > 200); // the first layer covers the flat middle
+        t.EditHoles.assign((size_t)n * n, 0);
+        t.EditHoles[middle] = 1;
+        CHECK(Terrain::GrassDensities(t, heights)[middle] == 0 && Terrain::GrassDensities(t, heights)[middle + 1] == grass[middle + 1]);
+    }
+
     // A yard for navigation tests: 30 x 30 m of ground, a wall across the middle (z = 0) from x = -15 to 6 with a gap
     // beyond it, a raised platform at (10, 10) with no way up, and a dynamic crate (not baked in) at (-5, 0, -10).
     Entity BuildNavYard(Scene& scene)
@@ -21709,6 +21739,7 @@ int main(int argc, char** argv)
     Run("Terrain chunks", TestTerrainChunks);
     Run("Terrain crater", TestTerrainCrater);
     Run("Terrain crater in place", TestTerrainCraterInPlace);
+    Run("Terrain grass field", TestTerrainGrassField);
     Run("NavMesh bake", TestNavMeshBake);
     Run("NavMesh saved with the scene", TestNavMeshSaved);
     Run("NavMesh modifiers", TestNavMeshModifiers);

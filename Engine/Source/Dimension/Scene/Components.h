@@ -272,6 +272,10 @@ namespace Dimension
         // walking through push them aside (0 = rigid).
         float GrassSway = 1.0f;
         float GrassBending = 1.0f;
+        // Above 0: the grass is a dense field made on the GPU every frame around the camera out to this distance
+        // (Density counts there, with no cap on the whole terrain's count), thinning toward its edge, instead of tufts
+        // scattered once over the whole terrain.
+        float GrassDistance = 0.0f;
         std::string PaintedDetails; // tree and grass density per sample (2 bytes each), base64. Empty = none
         // Runtime: decoded edits while brushing (encoded back when a stroke ends), and a counter that changes with them.
         std::vector<float> EditHeights;

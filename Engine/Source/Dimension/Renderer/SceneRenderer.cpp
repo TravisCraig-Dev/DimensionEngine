@@ -70,6 +70,7 @@
 #include "shaders/LightCull.comp.h"
 #include "shaders/BlendShapes.comp.h"
 #include "shaders/DepthReduce.comp.h"
+#include "shaders/GrassField.comp.h"
 #include "shaders/LuminanceReduce.comp.h"
 #include "shaders/ParticleSim.comp.h"
 #include "shaders/VfxSim.comp.h"
@@ -425,7 +426,7 @@ namespace Dimension
         GraphicsPipelineDesc MainDescs[MainPipelines::Count];
         std::map<uint32_t, std::unique_ptr<MainPipelines>> Multisampled;
         Pipeline BloomDown, BloomUp, Fxaa, DepthPrepass, DepthPrepassDoubleSided, Ssao, SsaoBlur, DofPrefilter, DofBlur, ProbeEquirect, ProbePrefilter;
-        Pipeline LightCull, ParticleSim, VfxSim, ParticleSortKeys, ParticleSort, DepthReduce, LuminanceReduce, BlendShapes; // compute
+        Pipeline LightCull, ParticleSim, VfxSim, ParticleSortKeys, ParticleSort, DepthReduce, LuminanceReduce, BlendShapes, GrassField; // compute
         Pipeline GpuParticles, GpuParticlesAdditive, GpuTrails, GpuTrailsAdditive;
         // GPU particle systems' simulation buffers, per (scene, entity); dropped when unused for a while.
         struct GpuParticleState
@@ -797,6 +798,7 @@ namespace Dimension
         r.LightCull = Pipeline::Compute(kLightCull_comp, "LightCullPipeline");
         r.BlendShapes = Pipeline::Compute(kBlendShapes_comp, "BlendShapesPipeline");
         r.DepthReduce = Pipeline::Compute(kDepthReduce_comp, "DepthReducePipeline");
+        r.GrassField = Pipeline::Compute(kGrassField_comp, "GrassFieldPipeline");
         r.LuminanceReduce = Pipeline::Compute(kLuminanceReduce_comp, "LuminanceReducePipeline");
         r.ParticleSim = Pipeline::Compute(kParticleSim_comp, "ParticleSimPipeline");
         r.VfxSim = Pipeline::Compute(kVfxSim_comp, "VfxSimPipeline");
@@ -1290,6 +1292,7 @@ namespace Dimension
             BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
         }
         Terrain::FlushUploads(cmd); // terrains edited in place (craters): their changed patches, before any pass draws
+        UpdateGrassFields(cmd, camera);
         if (!m_BlendJobs.empty())
         {
             // Blend shapes into this list's vertex streams, before any pass draws them.
@@ -2414,8 +2417,150 @@ namespace Dimension
         return it->second;
     }
 
+    namespace
+    {
+        // std430 mirror of GrassField.comp's parameters.
+        struct GrassParamsGPU
+        {
+            glm::mat4 TerrainToWorld;
+            glm::vec4 Frustum[6];
+            glm::vec4 Camera, Terrain, Grid, Look, Mesh;
+            glm::uvec4 Sources, Out, Info;
+        };
+
+        VkDeviceAddress AddressOf(const Buffer& b)
+        {
+            VkBufferDeviceAddressInfo info{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+            info.buffer = b.GetHandle();
+            return vkGetBufferDeviceAddress(RenderDevice::Get().GetDevice(), &info);
+        }
+    }
+
+    void SceneRenderer::UpdateGrassFields(VkCommandBuffer cmd, const CameraData& camera)
+    {
+        auto& device = RenderDevice::Get();
+        bool any = false;
+        for (auto& [key, f] : m_GrassFields)
+        {
+            if (!f.Active || f.Parts.empty() || !f.SceneRef || !f.SceneRef->IsValid(f.Terrain)) continue;
+            auto& reg = f.SceneRef->GetRegistry();
+            const auto& terrain = reg.Get<TerrainComponent>(f.Terrain);
+            const glm::mat4& world = reg.Get<TransformComponent>(f.Terrain).World;
+            int n = Terrain::SampleCount(terrain);
+            size_t count = (size_t)n * n;
+            // The heights and the grass density on the GPU, again when the terrain changed (craters: the density just
+            // over them).
+            uint64_t terrainKey = TerrainKey(terrain);
+            if (f.Key != terrainKey || !f.Heights.IsValid() || f.DensityCpu.size() != count)
+            {
+                std::vector<float> heights = Terrain::GetHeights(terrain);
+                if (heights.size() != count) continue;
+                uint64_t base = Terrain::BaseKey(terrain);
+                glm::ivec4 changed;
+                if (f.DensityCpu.size() == count && f.BaseKey == base && Terrain::ChangedSince(terrain, f.Revision, changed))
+                {
+                    if (changed.x <= changed.z && changed.y <= changed.w)
+                    {
+                        std::vector<uint8_t> patch = Terrain::GrassDensities(terrain, heights, &changed);
+                        for (int r = std::max(changed.y - 1, 0); r <= std::min(changed.w + 1, n - 1); ++r)
+                            for (int c = std::max(changed.x - 1, 0); c <= std::min(changed.z + 1, n - 1); ++c)
+                                f.DensityCpu[(size_t)r * n + c] = patch[(size_t)r * n + c];
+                    }
+                }
+                else
+                    f.DensityCpu = Terrain::GrassDensities(terrain, heights);
+                if (!f.Heights.IsValid() || f.Heights.GetSize() < count * sizeof(float))
+                {
+                    VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                    f.Heights = Buffer(count * sizeof(float), usage, MemoryUsage::CpuToGpu, "GrassHeights");
+                    f.Density = Buffer((count + 3) / 4 * 4, usage, MemoryUsage::CpuToGpu, "GrassDensity");
+                    f.HeightsAddress = AddressOf(f.Heights);
+                    f.DensityAddress = AddressOf(f.Density);
+                }
+                std::memcpy(f.Heights.GetMapped(), heights.data(), count * sizeof(float));
+                std::memcpy(f.Density.GetMapped(), f.DensityCpu.data(), count);
+                f.Key = terrainKey;
+                f.BaseKey = base;
+                f.Revision = terrain.EditRevision;
+            }
+            // The grid of cells over the square about the camera (in the terrain's space).
+            glm::mat4 toLocal = glm::inverse(world);
+            glm::vec3 eye = glm::vec3(toLocal * glm::vec4(camera.Position, 1.0f));
+            float worldScale = std::max(glm::length(glm::vec3(world[0])), 1e-4f);
+            float reach = terrain.GrassDistance / worldScale;
+            float cell = std::sqrt(100.0f / std::max(terrain.GrassDensity, 0.01f)) / worldScale;
+            glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+            uint32_t side = std::min((uint32_t)std::ceil(2.0f * reach / cell) + 2, 640u);
+            uint32_t capacity = side * side;
+            if (capacity > f.Capacity || !f.Instances.IsValid())
+            {
+                f.Capacity = capacity;
+                f.Instances = Buffer((VkDeviceSize)capacity * sizeof(InstanceGPU), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     MemoryUsage::GpuOnly, "GrassInstances");
+                f.InstancesAddress = AddressOf(f.Instances);
+            }
+            VkDeviceSize argsSize = 16 + f.Parts.size() * sizeof(VkDrawIndexedIndirectCommand);
+            if (!f.Args.IsValid() || f.Args.GetSize() < argsSize)
+            {
+                f.Args = Buffer(std::max<VkDeviceSize>(argsSize, 256), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, MemoryUsage::GpuOnly, "GrassArgs");
+                f.ArgsAddress = AddressOf(f.Args);
+            }
+            TransientAllocation params = device.AllocateTransient(sizeof(GrassParamsGPU), 16);
+            if (!params) continue;
+            auto* p = static_cast<GrassParamsGPU*>(params.Data);
+            p->TerrainToWorld = world;
+            // The view's planes (Gribb & Hartmann), pointing in.
+            glm::mat4 vp = camera.Projection * camera.View;
+            glm::vec4 rows[4] = { glm::vec4(vp[0][0], vp[1][0], vp[2][0], vp[3][0]), glm::vec4(vp[0][1], vp[1][1], vp[2][1], vp[3][1]),
+                                  glm::vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]), glm::vec4(vp[0][3], vp[1][3], vp[2][3], vp[3][3]) };
+            glm::vec4 planes[6] = { rows[3] + rows[0], rows[3] - rows[0], rows[3] + rows[1], rows[3] - rows[1], rows[2], rows[3] - rows[2] };
+            for (int i = 0; i < 6; ++i) p->Frustum[i] = planes[i] / std::max(glm::length(glm::vec3(planes[i])), 1e-6f);
+            glm::ivec2 first = glm::ivec2(glm::floor((glm::vec2(eye.x, eye.z) - reach + size * 0.5f) / cell));
+            AABB bounds = f.MeshRef->GetBounds();
+            float radius = std::max({ std::abs(bounds.Min.x), std::abs(bounds.Max.x), std::abs(bounds.Min.z), std::abs(bounds.Max.z), bounds.Max.y - bounds.Min.y });
+            p->Camera = glm::vec4(eye, reach);
+            p->Terrain = glm::vec4(size, (float)n, worldScale);
+            p->Grid = glm::vec4((float)first.x, (float)first.y, (float)side, cell);
+            p->Look = glm::vec4(terrain.GrassScale.x, terrain.GrassScale.y, std::cos(glm::radians(std::clamp(terrain.GrassMaxSlope, 0.0f, 90.0f))),
+                                glm::uintBitsToFloat((uint32_t)terrain.Seed * 2654435761u + 0x6a09e667u));
+            p->Mesh = glm::vec4(radius, bounds.Center().y, 0.12f, 0.0f);
+            p->Sources = glm::uvec4((uint32_t)f.HeightsAddress, (uint32_t)(f.HeightsAddress >> 32), (uint32_t)f.DensityAddress, (uint32_t)(f.DensityAddress >> 32));
+            p->Out = glm::uvec4((uint32_t)f.InstancesAddress, (uint32_t)(f.InstancesAddress >> 32), (uint32_t)f.ArgsAddress, (uint32_t)(f.ArgsAddress >> 32));
+            p->Info = glm::uvec4(capacity, f.EntityId, f.Motion, 0u);
+            // The arguments afresh (the count at 0), the tufts made, the count copied into each part's draw.
+            if (!any)
+                Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                  VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+            any = true;
+            std::vector<uint32_t> args(argsSize / 4, 0u);
+            for (size_t k = 0; k < f.Parts.size(); ++k)
+            {
+                auto* draw = reinterpret_cast<VkDrawIndexedIndirectCommand*>(args.data() + 4) + k;
+                draw->indexCount = f.Parts[k].IndexCount;
+                draw->firstIndex = f.Parts[k].FirstIndex;
+            }
+            vkCmdUpdateBuffer(cmd, f.Args.GetHandle(), 0, argsSize, args.data());
+            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                              VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+            Renderer::Get().GrassField.Bind(cmd);
+            glm::uvec2 address((uint32_t)params.Address, (uint32_t)(params.Address >> 32));
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(address), &address);
+            vkCmdDispatch(cmd, (side + 7) / 8, (side + 7) / 8, 1);
+            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            std::vector<VkBufferCopy> copies;
+            for (size_t k = 0; k < f.Parts.size(); ++k)
+                copies.push_back({ 0, 16 + k * sizeof(VkDrawIndexedIndirectCommand) + offsetof(VkDrawIndexedIndirectCommand, instanceCount), 4 });
+            vkCmdCopyBuffer(cmd, f.Args.GetHandle(), f.Args.GetHandle(), (uint32_t)copies.size(), copies.data());
+        }
+        if (any)
+            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                              VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+    }
+
     void SceneRenderer::BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options)
     {
+        for (auto& [key, f] : m_GrassFields) f.Active = false;
         auto& device = RenderDevice::Get();
         auto& reg = scene.GetRegistry();
         m_RenderItems.clear();
@@ -3066,7 +3211,8 @@ namespace Dimension
             {
                 const std::vector<glm::mat4>& list = kind == 0 ? details.Trees : details.Grass;
                 AssetHandle meshHandle = kind == 0 ? terrain.TreeMesh : terrain.GrassMesh;
-                Ref<Mesh> mesh = list.empty() ? nullptr : AssetManager::GetMesh(meshHandle);
+                bool field = kind == 1 && terrain.GrassDistance > 0.0f && terrain.GrassDensity > 0.0f && !options.ProbeCapture;
+                Ref<Mesh> mesh = list.empty() && !field ? nullptr : AssetManager::GetMesh(meshHandle);
                 if (!mesh) continue;
                 Ref<Material> overrideMat = AssetManager::GetMaterial(kind == 0 ? terrain.TreeMaterial : terrain.GrassMaterial);
                 const auto& slots = AssetManager::GetMeshMaterials(meshHandle);
@@ -3099,6 +3245,22 @@ namespace Dimension
                     parts.push_back({ sub.IndexOffset, sub.IndexCount, address, mat->BlendMode == MaterialBlendMode::Transparent, mat->DoubleSided,
                                       mat->CastShadows, batch });
                 }
+                if (field)
+                {
+                    // A grass field: made and drawn on the GPU (UpdateGrassFields, DrawMeshes).
+                    GrassField& f = m_GrassFields[(uint64_t)(uintptr_t)&scene * 1000003ull ^ (((uint64_t)e.Generation << 32) | e.Index)];
+                    f.Active = true;
+                    f.LastFrame = device.Frame().FrameNumber;
+                    f.SceneRef = &scene;
+                    f.Terrain = e;
+                    f.MeshRef = mesh;
+                    f.EntityId = e.Index + 1;
+                    f.Motion = motion;
+                    f.Parts.clear();
+                    for (const DetailPart& p : parts)
+                        if (!p.Transparent) f.Parts.push_back({ p.FirstIndex, p.IndexCount, p.Address, p.DoubleSided });
+                    continue;
+                }
                 AABB bounds = mesh->GetBounds();
                 glm::vec3 ext = bounds.Extents();
                 for (const glm::mat4& local : list)
@@ -3125,6 +3287,8 @@ namespace Dimension
         m_Stats.RenderListItems = (uint32_t)m_RenderItems.size();
         // Visual Effects drawn as meshes: a part per submesh, each drawn once for all the effect's slots.
         m_VfxMeshParts.clear();
+        for (auto it = m_GrassFields.begin(); it != m_GrassFields.end();) // (terrains gone a while: their fields too)
+            it = device.Frame().FrameNumber - it->second.LastFrame > 300 ? m_GrassFields.erase(it) : std::next(it);
         for (const VfxMeshOutput& out : m_VfxMeshOutputs)
         {
             static const Material kDefaultMaterial;
@@ -3412,6 +3576,40 @@ namespace Dimension
                                         : &MainPipeline(prepassed ? (v.DoubleSided ? MainPipelines::MeshDoubleSidedPrepassed : MainPipelines::MeshPrepassed)
                                                                   : v.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
                     submit(d, std::min(kMaxInstancesPerDraw, v.Capacity - done));
+                }
+            }
+        // Grass fields: the tufts the compute pass kept, one indirect instanced draw per part (they cast no shadows).
+        if (!shadowPass && !oitPass)
+            for (auto& [key, f] : m_GrassFields)
+            {
+                if (!f.Active || !f.Args.IsValid() || !f.Instances.IsValid() || !f.MeshRef) continue;
+                for (size_t k = 0; k < f.Parts.size(); ++k)
+                {
+                    const GrassField::Part& part = f.Parts[k];
+                    const Pipeline* pipe = depthPass ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
+                                         : modePipe  ? modePipe
+                                         : &MainPipeline(prepassed ? (part.DoubleSided ? MainPipelines::MeshDoubleSidedPrepassed : MainPipelines::MeshPrepassed)
+                                                                   : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
+                    if (pipe != bound)
+                    {
+                        pipe->Bind(cmd);
+                        bound = pipe;
+                    }
+                    MeshPush push{};
+                    push.Model = glm::mat4(1.0f);
+                    push.Material = part.Material;
+                    push.Instances = f.InstancesAddress;
+                    push.EntityId = f.EntityId;
+                    push.Flags = 2u | (1u << 17); // instanced, each with its own tint
+                    push.Motion = f.Motion;
+                    vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(MeshPush), &push);
+                    if (f.MeshRef.get() != boundMesh)
+                    {
+                        f.MeshRef->Bind(cmd);
+                        boundMesh = f.MeshRef.get();
+                    }
+                    vkCmdDrawIndexedIndirect(cmd, f.Args.GetHandle(), 16 + k * sizeof(VkDrawIndexedIndirectCommand), 1, 0);
+                    m_Stats.DrawCalls++;
                 }
             }
         // Shaded Wireframe: the opaque meshes' edges over them (not counted in the stats).

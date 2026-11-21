@@ -1086,16 +1086,15 @@ namespace Dimension::Terrain
 
     DetailInstances BuildDetails(const TerrainComponent& terrain, const std::vector<float>& heights) { return BuildDetailsIn(terrain, heights, nullptr); }
 
-    static DetailInstances BuildDetailsIn(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only)
+    std::vector<uint8_t> DetailDensities(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only)
     {
-        DetailInstances out;
         std::vector<uint8_t> map = DetailMap(terrain);
         // Layers that grow details by themselves: per sample, the layers' weights times their Trees and Grass, kept
         // where more than what was painted.
         bool grows = false;
         for (int k = 0; k < LayerCount(terrain) && k < (int)terrain.Layers.size(); ++k) grows |= terrain.Layers[k].Trees > 0.0f || terrain.Layers[k].Grass > 0.0f;
-        if (map.empty() && !grows) return out;
         int n = SampleCount(terrain);
+        if (map.empty() && !grows) return map;
         if (map.empty()) map.assign((size_t)n * n * 2, 0);
         if (grows && heights.size() == (size_t)n * n)
         {
@@ -1122,6 +1121,26 @@ namespace Dimension::Terrain
                     map[i * 2 + 1] = std::max(map[i * 2 + 1], (uint8_t)std::clamp((int)std::lround(grass * 255.0f), 0, 255));
                 }
         }
+        return map;
+    }
+
+    std::vector<uint8_t> GrassDensities(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only)
+    {
+        std::vector<uint8_t> map = DetailDensities(terrain, heights, only);
+        int n = SampleCount(terrain);
+        std::vector<uint8_t> grass((size_t)n * n, 0);
+        if (map.size() != grass.size() * 2) return grass;
+        std::vector<uint8_t> holes = HoleMap(terrain);
+        for (size_t i = 0; i < grass.size(); ++i) grass[i] = holes.empty() || !holes[i] ? map[i * 2 + 1] : 0;
+        return grass;
+    }
+
+    static DetailInstances BuildDetailsIn(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only)
+    {
+        DetailInstances out;
+        std::vector<uint8_t> map = DetailDensities(terrain, heights, only);
+        if (map.empty()) return out;
+        int n = SampleCount(terrain);
         std::vector<uint8_t> holes = HoleMap(terrain);
         glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
         glm::vec2 step = size / (float)(n - 1);
@@ -1139,6 +1158,7 @@ namespace Dimension::Terrain
         };
         for (int kind = 0; kind < 2; ++kind)
         {
+            if (kind == 1 && terrain.GrassDistance > 0.0f) continue; // made on the GPU around the camera instead
             float density = kind == 0 ? terrain.TreeDensity : terrain.GrassDensity;
             glm::vec2 scale = kind == 0 ? terrain.TreeScale : terrain.GrassScale;
             float maxSlope = kind == 0 ? terrain.TreeMaxSlope : terrain.GrassMaxSlope;

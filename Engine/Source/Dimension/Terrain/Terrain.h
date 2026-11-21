@@ -109,6 +109,11 @@ namespace Dimension
             std::vector<glm::mat4> Trees, Grass;
         };
         DetailInstances BuildDetails(const TerrainComponent& terrain, const std::vector<float>& heights);
+        // Tree and grass density per sample (2 bytes each, 0-255): painted, and grown by the layers with Trees or Grass
+        // (with `only`, just over that rectangle of samples and one more all round; the rest as painted). Empty: none.
+        std::vector<uint8_t> DetailDensities(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only = nullptr);
+        // The grass's alone (a byte per sample, 0 in holes): what the GPU grass field grows from.
+        std::vector<uint8_t> GrassDensities(const TerrainComponent& terrain, const std::vector<float>& heights, const glm::ivec4* only = nullptr);
         // Cached for the current settings and edits (rebuilt when they change).
         const DetailInstances& GetDetails(const TerrainComponent& terrain);
         // The same, for a key from SettingsKey(terrain) the caller already has (it takes a while on big terrains).
