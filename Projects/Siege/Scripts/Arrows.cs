@@ -31,6 +31,19 @@ namespace Siege
 
         public int InFlight { get; private set; }
 
+        /// <summary>The middle of the arrows in the air and their average velocity (false when none fly).</summary>
+        public bool FlyingCenter(out Vector3 center, out Vector3 velocity)
+        {
+            center = velocity = Vector3.Zero;
+            int n = 0;
+            foreach (int i in m_Live)
+                if (m_Arrows[i].State == 1) { center += m_Arrows[i].P; velocity += m_Arrows[i].V; ++n; }
+            if (n == 0) return false;
+            center /= n;
+            velocity /= n;
+            return true;
+        }
+
         public ArrowSystem(Battle battle, Entity template, int capacity)
         {
             m_Battle = battle;

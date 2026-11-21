@@ -12,7 +12,7 @@ namespace Siege
     /// around and leaves the earth scorched.</summary>
     internal sealed class SiegeEngines
     {
-        private sealed class Catapult
+        internal sealed class Catapult
         {
             public Entity Frame, Arm;
             public Transform ArmXf;
@@ -24,7 +24,7 @@ namespace Siege
             public Shot Shot;
         }
 
-        private sealed class Shot
+        internal sealed class Shot
         {
             public Entity E;
             public Transform X;
@@ -43,6 +43,12 @@ namespace Siege
         private readonly Entity m_Frame, m_Arm, m_Shot, m_Impact, m_Flash;
         private readonly List<Catapult> m_Catapults = new();
         private readonly List<Shot> m_Flying = new();
+
+        // For the cinematic camera: the engines, the stones in the air, and where and when the last one landed.
+        internal IReadOnlyList<Catapult> Catapults => m_Catapults;
+        internal IReadOnlyList<Shot> Flying => m_Flying;
+        internal Vector3 LastImpact;
+        internal float LastImpactTime = -1e9f;
         private readonly List<Soldier> m_Near = new();
 
         public SiegeEngines(Battle battle, Entity frame, Entity arm, Entity shot, Entity impact, Entity flash)
@@ -95,7 +101,7 @@ namespace Siege
 
         private void UpdateCatapult(Catapult c, float dt)
         {
-            c.Timer -= dt;
+            if (c.State != 2) c.Timer -= dt; // (the throw counts its own time up)
             switch (c.State)
             {
                 case 0: // winding the arm back down (the skein creaks), over a few seconds
@@ -130,6 +136,16 @@ namespace Siege
             }
             PoseArm(c);
         }
+
+        /// <summary>About how long until a catapult throws (from its state: winding at 34 degrees a second, then a
+        /// wait of 1.5-3.5 s loaded; the middle of each random wait).</summary>
+        internal static float SecondsToThrow(Catapult c) => c.State switch
+        {
+            0 => Math.Max((Loaded - c.Angle) / 34.0f, Math.Max(c.Timer, 0.0f)) + 2.5f,
+            1 => Math.Max(c.Timer, 0.0f),
+            2 => 0.0f,
+            _ => Math.Max(c.Timer, 0.0f) + Math.Max((Loaded - Thrown) / 34.0f, 4.5f) + 2.5f,
+        };
 
         private void PoseArm(Catapult c) =>
             c.ArmXf.SetLocal(Pivot, new Vector3(c.Angle, 0, 0), Vector3.One);
@@ -193,6 +209,8 @@ namespace Siege
             flash.SetActive(true);
             m_Battle.Destroy(flash, 0.35f);
             TerrainTools.DigCrater(at, 3.4f, 1.1f, 7);
+            LastImpact = at;
+            LastImpactTime = m_Battle.Now;
             Vector2 p = new(at.X, at.Z);
             m_Battle.Grid.Collect(p, 7.0f, m_Near);
             foreach (var o in m_Near)

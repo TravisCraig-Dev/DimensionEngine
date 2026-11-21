@@ -79,6 +79,22 @@
             1
           ],
           "Clear Flags": 1
+        },
+        "Script": {
+          "Scripts": [
+            {
+              "Class": "Siege.CinematicCamera",
+              "Fields": {
+                "AutoPlay": true,
+                "FirstShot": 0,
+                "Pace": 1.0,
+                "Handheld": 0.3,
+                "CatapultInterrupts": true,
+                "CatapultEvery": 45.0
+              },
+              "Enabled": true
+            }
+          ]
         }
       }
     },

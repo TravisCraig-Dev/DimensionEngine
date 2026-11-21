@@ -86,6 +86,12 @@ def outer_weights(x, z, h):
     return w
 
 
+# The hero camera films the battle (Scripts/CinematicCamera.cs).
+CINEMATIC = {"Scripts": [{"Class": "Siege.CinematicCamera", "Fields": {"AutoPlay": True, "FirstShot": 0, "Pace": 1.0,
+                                                                     "Handheld": 0.3, "CatapultInterrupts": True,
+                                                                     "CatapultEvery": 45.0}, "Enabled": True}]}
+
+
 def look(position, target):
     d = np.array(target, float) - np.array(position, float)
     yaw = math.atan2(-d[0], -d[2])
@@ -114,7 +120,8 @@ def main():
         target = tuple(float(v) for v in args[args.index("--target") + 1].split(","))
     sc.add("Main Camera", hero, look(hero, target), Camera={
         "Projection": 0, "Field Of View": 34, "Orthographic Size": 5, "Near Clip": 0.3, "Far Clip": 12000,
-        "Primary": True, "Background": [0.4, 0.5, 0.6, 1], "Clear Flags": 1})
+        "Primary": True, "Background": [0.4, 0.5, 0.6, 1], "Clear Flags": 1},
+        Script=CINEMATIC)
     sc.add("Sun", (0, 500, 0), (-0.42, -2.25, 0), Directional_Light={
         "Color": [1.0, 0.93, 0.82], "Intensity": 3.6, "Soft Shadows": True, "Light Angle": 1.0})
 
