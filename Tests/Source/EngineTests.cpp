@@ -7163,6 +7163,24 @@ namespace
             }
         }
         CHECK(same);
+
+        // A joint below the root moved by the clip (a bowstring drawn back): onto a skeleton with it in the same place
+        // the move carries over, as its change from that place; onto one of other proportions it does not.
+        Skeleton alike = source;
+        for (auto& j : alike.Joints) j.Name = "rig:" + j.Name;
+        int moved = 1;
+        CHECK(source.Joints[moved].Parent >= 0);
+        AnimationClip drawn = clip;
+        AnimationChannel pull;
+        pull.Joint = moved;
+        pull.Path = AnimationPath::Translation;
+        pull.Times = { 0.0f, clip.Duration };
+        pull.Values = { glm::vec4(source.Joints[moved].Translation, 0.0f), glm::vec4(source.Joints[moved].Translation + glm::vec3(0.0f, 0.3f, 0.1f), 0.0f) };
+        drawn.Channels.push_back(pull);
+        Animation::Sample(alike, Animation::RetargetClip(source, alike, drawn), clip.Duration, pt);
+        CHECK(Near(pt.Translations[moved], alike.Joints[moved].Translation + glm::vec3(0.0f, 0.3f, 0.1f), 1e-4f));
+        Animation::Sample(target, Animation::RetargetClip(source, target, drawn), clip.Duration, pt);
+        CHECK(Near(pt.Translations[moved], target.Joints[moved].Translation, 1e-4f));
     }
 
     // A skeleton from joints given by name, parent name, model-space position and bind rotation (local rotations follow

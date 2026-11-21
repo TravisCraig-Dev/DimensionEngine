@@ -658,9 +658,19 @@ namespace Dimension
                 }
                 else if (ch.Path == AnimationPath::Translation)
                 {
-                    if (to.Parent >= 0 || from.Parent >= 0) continue; // proportions belong to the target
-                    float hs = rootHeight(source, ch.Joint), ht = rootHeight(target, t);
-                    float scale = hs > 1e-4f && ht > 1e-4f ? ht / hs : 1.0f;
+                    // Proportions belong to the target: below the root a joint's translation carries over only where
+                    // both skeletons have it in the same place (the same skeleton: hips bobbing, a bowstring drawn),
+                    // as its change from that place.
+                    float scale = 1.0f;
+                    if (to.Parent >= 0 || from.Parent >= 0)
+                    {
+                        if (glm::distance(from.Translation, to.Translation) > 1e-3f * std::max(1.0f, glm::length(from.Translation))) continue;
+                    }
+                    else
+                    {
+                        float hs = rootHeight(source, ch.Joint), ht = rootHeight(target, t);
+                        scale = hs > 1e-4f && ht > 1e-4f ? ht / hs : 1.0f;
+                    }
                     for (glm::vec4& v : mapped.Values)
                         v = glm::vec4(to.Translation + (glm::vec3(v) - from.Translation) * scale, v.w);
                 }
