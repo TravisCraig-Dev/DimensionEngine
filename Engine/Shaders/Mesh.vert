@@ -18,6 +18,7 @@ layout(location = 5) out float vShell; // fur shells: height 0-1 (0 for everythi
 layout(location = 6) out float vFoam;  // water: foam 0-1, carried as the normal's length above 1
 layout(location = 7) flat out vec4 vTint; // instances with their own color (Flags bit 17: Data.yz, half floats; linear)
 layout(location = 8) out vec4 vColor;     // the vertex color, linear
+layout(location = 9) flat out uint vFade;  // LOD cross-fade (see LodFadeDiscard): the draw's, or the instance's
 
 invariant gl_Position; // the depth prepass and the main pass must produce identical depths
 
@@ -43,11 +44,14 @@ void main()
     }
     mat4 model = pc.Model;
     vEntity = pc.EntityId;
+    vFade = (pc.Flags >> 8) & 511u;
     uint motion = pc.Motion;
     if ((pc.Flags & 2u) != 0u)
     {
         model = pc.Instances.Items[gl_InstanceIndex].Model;
-        vEntity = pc.Instances.Items[gl_InstanceIndex].Data.x;
+        uint id = pc.Instances.Items[gl_InstanceIndex].Data.x;
+        vEntity = id & 0x7FFFFFu;
+        vFade = id >> 23;
         motion = pc.Instances.Items[gl_InstanceIndex].Data.w;
     }
     vTint = vec4(1.0);

@@ -8,10 +8,11 @@
 layout(location = 2) in vec2 vUV;
 layout(location = 3) flat in uint vEntity; // unused; matches Mesh.vert's outputs
 layout(location = 5) in float vShell;      // fur shells
+layout(location = 9) flat in uint vFade;   // LOD cross-fade
 
 void main()
 {
-    if (LodFadeDiscard(gl_FragCoord.xy)) discard;
+    if (LodFadeDiscard(gl_FragCoord.xy, vFade)) discard;
     MaterialRef m = pc.Material;
     if (m.Flags.x == 1u)
     {

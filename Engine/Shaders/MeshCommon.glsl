@@ -45,7 +45,8 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Jo
 struct MeshInstance
 {
     mat4 Model;
-    uvec4 Data; // x: entity id, yz: skinning matrices address (skinned instances), w: grass motion (see Push)
+    uvec4 Data; // x: entity id (low 23 bits) and LOD cross-fade (top 9, as Flags bits 8-16), yz: skinning matrices
+                // address (skinned instances), w: grass motion (see Push)
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstancesRef { MeshInstance Items[]; };
 
@@ -63,15 +64,15 @@ layout(push_constant) uniform Push
 } pc;
 
 // LOD cross-fade: two levels share the pixels by a 4x4 ordered dither, one keeping those under the coverage, the
-// other the rest (called with gl_FragCoord.xy).
-bool LodFadeDiscard(vec2 fragCoord)
+// other the rest (called with gl_FragCoord.xy and Mesh.vert's vFade: coverage in bits 0-7, the side in bit 8).
+bool LodFadeDiscard(vec2 fragCoord, uint fade)
 {
-    uint coverage = (pc.Flags >> 8) & 255u;
+    uint coverage = fade & 255u;
     if (coverage == 0u) return false;
     const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
     ivec2 p = ivec2(fragCoord) & 3;
     bool under = (bayer[p.y * 4 + p.x] + 0.5) / 16.0 < float(coverage) / 255.0;
-    return ((pc.Flags >> 16) & 1u) == 0u ? !under : under;
+    return ((fade >> 8) & 1u) == 0u ? !under : under;
 }
 
 // Fur: whether a shell at `shell` (0 root - 1 tip) has no strand at this UV. Strands stand on a grid of Density cells

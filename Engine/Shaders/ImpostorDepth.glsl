@@ -4,10 +4,11 @@
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 2) in vec2 vUV;
 layout(location = 3) flat in uint vEntity; // unused; matches Mesh.vert's outputs
+layout(location = 9) flat in uint vFade;   // LOD cross-fade
 
 void main()
 {
-    if (LodFadeDiscard(gl_FragCoord.xy)) discard;
+    if (LodFadeDiscard(gl_FragCoord.xy, vFade)) discard;
     MaterialRef m = pc.Material;
     vec2 uv = vUV * m.TilingOffset.xy + m.TilingOffset.zw;
     if (SampleTexture(m.Maps.x, uv).a * m.BaseColor.a * CutoutAlphaScale(m.Maps.x, uv) < m.Params.z) discard;

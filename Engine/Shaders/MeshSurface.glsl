@@ -88,6 +88,7 @@ layout(location = 5) in float vShell; // fur shells: height 0-1
 layout(location = 6) in float vFoam;  // water (Flags.w = 2): foam 0-1
 layout(location = 7) flat in vec4 vTint; // an instance's own color (Visual Effect meshes), else white
 layout(location = 8) in vec4 vColor;     // the vertex color (linear), white when the mesh has none
+layout(location = 9) flat in uint vFade;   // LOD cross-fade
 
 #ifdef DIM_OIT
 // Weighted blended order-independent transparency (McGuire and Bavoil 2013): the shaded color, weighted by its alpha
@@ -233,7 +234,7 @@ vec3 DirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, float metal
 
 void main()
 {
-    if (LodFadeDiscard(gl_FragCoord.xy)) discard;
+    if (LodFadeDiscard(gl_FragCoord.xy, vFade)) discard;
     MaterialRef m = pc.Material;
     vec2 uv = vUV * m.TilingOffset.xy + m.TilingOffset.zw;
     vWorldPos = vWorldPosIn;

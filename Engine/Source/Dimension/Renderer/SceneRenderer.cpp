@@ -196,8 +196,9 @@ namespace Dimension
         struct InstanceGPU
         {
             glm::mat4 Model;
-            glm::uvec4 Data; // x: entity id, yz: skinning matrices address, w: grass motion (see MeshPush)
+            glm::uvec4 Data; // x: entity id (low 23 bits) and LOD cross-fade (top 9), yz: skinning matrices address, w: grass motion (see MeshPush)
         };
+        constexpr uint32_t kInstanceIdLimit = 1u << 23; // items with larger ids draw on their own
 
 
         bool s_InstancingEnabled = true;
@@ -2846,7 +2847,7 @@ namespace Dimension
                 bool doubleSided = mat.DoubleSided || cloth; // cloth is seen from both sides
                 // Every part can batch: skinned instances carry their own skinning matrices, and transparent parts
                 // merge with same-batch neighbours in the back-to-front order. Parts with their own vertices cannot.
-                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, doubleSided, item.Probe }, !item.Vertices && !item.Fade);
+                uint32_t batch = batchOf({ mesh.get(), sub.IndexOffset, sub.IndexCount, address, doubleSided, item.Probe }, !item.Vertices && item.EntityId < kInstanceIdLimit);
                 partSubMesh.push_back((uint32_t)si);
                 if (item.Indices) // its own triangles: one part over all of them
                     m_RenderParts.push_back({ 0u, item.IndexCount, address, transparent, doubleSided, mat.CastShadows, (uint32_t)m_RenderItems.size(), batch });
@@ -2931,7 +2932,7 @@ namespace Dimension
                         part.FirstIndex = nextSubs[partSubMesh[p]].IndexOffset;
                         part.IndexCount = nextSubs[partSubMesh[p]].IndexCount;
                         part.Item = (uint32_t)m_RenderItems.size();
-                        part.Batch = batchOf({ nextMesh.get(), part.FirstIndex, part.IndexCount, part.Material, part.DoubleSided, next.Probe }, false);
+                        part.Batch = batchOf({ nextMesh.get(), part.FirstIndex, part.IndexCount, part.Material, part.DoubleSided, next.Probe }, next.EntityId < kInstanceIdLimit);
                         m_RenderParts.push_back(part);
                     }
                     next.PartCount = (uint32_t)m_RenderParts.size() - next.FirstPart;
@@ -3022,7 +3023,7 @@ namespace Dimension
                     if (!address) continue;
                     const SubMesh& sub = quad->GetSubMeshes()[0];
                     item.FirstPart = (uint32_t)m_RenderParts.size();
-                    uint32_t batch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, address, true, 0u }, !fade);
+                    uint32_t batch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, address, true, 0u }, true);
                     m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, address, false, true, false, (uint32_t)m_RenderItems.size(), batch });
                     m_RenderParts.back().Impostor = true;
                     item.PartCount = 1;
@@ -3046,7 +3047,7 @@ namespace Dimension
                     VkDeviceAddress shadowAddress = uploadMaterialGPU(dim(gpu, dimmed(g)));
                     if (!shadowAddress) continue;
                     shadow.FirstPart = (uint32_t)m_RenderParts.size();
-                    uint32_t shadowBatch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, shadowAddress, true, 0u }, !fade);
+                    uint32_t shadowBatch = batchOf({ quad.get(), sub.IndexOffset, sub.IndexCount, shadowAddress, true, 0u }, true);
                     m_RenderParts.push_back({ sub.IndexOffset, sub.IndexCount, shadowAddress, false, true, true, (uint32_t)m_RenderItems.size(), shadowBatch });
                     m_RenderParts.back().Impostor = true;
                     m_RenderItems.push_back(std::move(shadow));
@@ -3261,7 +3262,8 @@ namespace Dimension
         // Unpickable objects (Scene visibility) draw without their id.
         auto idOf = [&](const RenderItem& item) { return m_UnpickableIds.empty() || !m_UnpickableIds.contains(item.EntityId) ? item.EntityId : 0u; };
         auto InstanceOf = [&](const RenderItem& item) {
-            return InstanceGPU{ item.World, glm::uvec4(idOf(item), (uint32_t)item.Joints, (uint32_t)(item.Joints >> 32), item.Motion) };
+            // The id's top 9 bits carry the LOD cross-fade (as MeshPush.Flags bits 8-16), so fading copies batch too.
+            return InstanceGPU{ item.World, glm::uvec4(idOf(item) | (item.Fade << 23), (uint32_t)item.Joints, (uint32_t)(item.Joints >> 32), item.Motion) };
         };
         // The Scene view's draw modes swap the main pass's mesh pipelines.
         bool mainPass = pass == MeshPass::Main || pass == MeshPass::Transparent;
