@@ -675,7 +675,13 @@ namespace Dimension
                         v = glm::vec4(to.Translation + (glm::vec3(v) - from.Translation) * scale, v.w);
                 }
                 else
-                    continue; // scale animation stays with the source
+                {
+                    // Scale as its ratio to the source's bind scale, on the target's (the same skeleton: exactly the
+                    // clip's; a part shown and hidden by scaling it, such as a nocked arrow, carries over).
+                    glm::vec3 fromScale = glm::max(glm::abs(from.Scale), glm::vec3(1e-6f));
+                    for (glm::vec4& v : mapped.Values)
+                        v = glm::vec4(to.Scale * (glm::vec3(v) / fromScale), v.w);
+                }
                 out.Channels.push_back(std::move(mapped));
             }
             return out;

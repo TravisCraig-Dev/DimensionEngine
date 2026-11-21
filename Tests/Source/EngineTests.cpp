@@ -7214,6 +7214,22 @@ namespace
         CHECK(Near(pt.Translations[moved], alike.Joints[moved].Translation + glm::vec3(0.0f, 0.3f, 0.1f), 1e-4f));
         Animation::Sample(target, Animation::RetargetClip(source, target, drawn), clip.Duration, pt);
         CHECK(Near(pt.Translations[moved], target.Joints[moved].Translation, 1e-4f));
+
+        // Scale keys carry over as their ratio to the bind scale: a part hidden at rest (scaled to nothing) and shown
+        // by the clip shows on the target too, at the target's own size.
+        Skeleton hidden = alike;
+        AnimationClip shown = clip;
+        AnimationChannel grow;
+        grow.Joint = moved;
+        grow.Path = AnimationPath::Scale;
+        grow.Times = { 0.0f, clip.Duration };
+        grow.Values = { glm::vec4(source.Joints[moved].Scale * 0.001f, 0.0f), glm::vec4(source.Joints[moved].Scale, 0.0f) };
+        shown.Channels.push_back(grow);
+        hidden.Joints[moved].Scale = glm::vec3(2.0f);
+        Animation::Sample(hidden, Animation::RetargetClip(source, hidden, shown), clip.Duration, pt);
+        CHECK(Near(pt.Scales[moved], glm::vec3(2.0f), 1e-4f));
+        Animation::Sample(hidden, Animation::RetargetClip(source, hidden, shown), 0.0f, pt);
+        CHECK(Near(pt.Scales[moved], glm::vec3(0.002f), 1e-5f));
     }
 
     // A skeleton from joints given by name, parent name, model-space position and bind rotation (local rotations follow
