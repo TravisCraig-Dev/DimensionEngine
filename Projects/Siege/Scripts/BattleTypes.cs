@@ -166,6 +166,21 @@ namespace Siege
         }
     }
 
+    /// <summary>Where a rider sits on his horse. The riding clips (Tools/anim_author.py: RIDE_PELVIS) put the pelvis 1 m
+    /// over the rider's root; the saddle's seat is 0.4 m above the horse's Torso2 joint (at Battle.HorseScale), the hips a
+    /// hand over it and a little behind the joint.</summary>
+    public static class Mount
+    {
+        public const float PelvisHeight = 1.0f, SeatAboveTorso = 0.5f, SeatBack = -0.06f;
+
+        /// <summary>The rider's root for the horse's Torso2 joint (world) and the yaw both face (radians).</summary>
+        public static Vector3 RiderRoot(Vector3 torso2, float yaw)
+        {
+            Vector2 back = BattleMath.Facing(yaw) * SeatBack;
+            return torso2 + new Vector3(back.X, SeatAboveTorso - PelvisHeight, back.Y);
+        }
+    }
+
     internal static class BattleMath
     {
         public static float YawOf(Vector2 dir) => MathF.Atan2(dir.X, dir.Y);

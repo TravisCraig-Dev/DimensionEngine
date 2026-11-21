@@ -261,4 +261,5 @@ Scripts/Battle.cs
 Scripts/BattleTypes.cs
 Scripts/CinematicCamera.cs
 Scripts/GameScripts.csproj
+Scripts/RideCheck.cs
 Scripts/SiegeEngines.cs

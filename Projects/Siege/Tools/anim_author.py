@@ -1,5 +1,5 @@
 """Animation clips the Universal Animation Libraries lack, authored on their skeleton: drawing and loosing a longbow,
-and holding, carrying and thrusting a spear. Each clip starts from a library clip (the legs, the breathing, the other
+holding, carrying and thrusting a spear, and riding a horse (sitting it, charging, cutting down at the infantry). Each clip starts from a library clip (the legs, the breathing, the other
 arm) and poses the arms by two-bone IK toward targets placed in the character's space (it faces +Z, its left is +X),
 with the hands turned so the weapon (rigid on the hand: build_soldiers.py) points where it should. A bow's string has a
 joint of its own ("bowstring", under the left hand) that the draw pulls back to the right hand.
@@ -194,7 +194,13 @@ class Skeleton:
     def reach(self, pose, side, target, pole):
         """Two-bone IK: the upper arm and forearm of `side` ("l" or "r") turned so the hand reaches `target`, the
         elbow bending toward `pole` (a direction)."""
-        up, low, hand = f"upperarm_{side}", f"lowerarm_{side}", f"hand_{side}"
+        self.limb(pose, f"upperarm_{side}", f"lowerarm_{side}", f"hand_{side}", target, pole)
+
+    def step(self, pose, side, target, pole):
+        """Two-bone IK for a leg: the ankle (foot joint) of `side` to `target`, the knee toward `pole`."""
+        self.limb(pose, f"thigh_{side}", f"calf_{side}", f"foot_{side}", target, pole)
+
+    def limb(self, pose, up, low, hand, target, pole):
         w = self.world(pose)
         s, e0, h0 = (w[self.index[n]][:3, 3] for n in (up, low, hand))
         l1, l2 = np.linalg.norm(e0 - s), np.linalg.norm(h0 - e0)
@@ -388,6 +394,88 @@ def spear_thrust(sk, name, height=0.30, aim_down=0.06, lunge=0.14):
     return clip.tracks(moved_joints(sk, base) | {"pelvis"})
 
 
+# ---- riding ----------------------------------------------------------------------------------------------------------
+# The rider's pelvis in its own space while mounted (Battle.cs's Mount seats the root so this lands on the saddle), and
+# the stirrups (the ankles) either side of the horse's barrel, a little ahead of the hips; a knight's left hand holds
+# the reins over the pommel with the shield on that forearm (its face out to the left), the sword in the right.
+RIDE_PELVIS = np.array([0.0, 1.0, 0.0])
+STIRRUP = np.array([0.37, 0.42, 0.16])  # x: either side (left +X), y: above the root, z: forward
+REINS = np.array([0.10, 0.22, 0.34])     # from the pelvis
+
+
+def seat(sk, pose, lean=0.0, rise=0.0, forward=0.0, turn=0.0, roll=0.0, look=1.0):
+    """Sits the base pose on the horse: the pelvis on the saddle (`rise` up off it, `forward` over the pommel), the
+    chest leaning forward by `lean` degrees, turned right by `turn` and over to the right by `roll`, the head kept
+    level `look` (1: looking ahead), the feet in the stirrups, heels down, toes out."""
+    up = np.array([0.0, 1.0, 0.0])
+    sk.shift(pose, "pelvis", RIDE_PELVIS + np.array([0.0, rise, forward]) - sk.position(pose, "pelvis"))
+    for joint, share in (("spine_01", 0.35), ("spine_02", 0.35), ("spine_03", 0.3)):
+        sk.turn(pose, joint, axis_angle(up, -turn * share) @ axis_angle([0, 0, 1], -roll * share) @ axis_angle([1, 0, 0], lean * share))
+    sk.turn(pose, "Head", axis_angle([1, 0, 0], -lean * look * 0.8) @ axis_angle(up, turn * look * 0.5))
+    for side, sx in (("l", 1.0), ("r", -1.0)):
+        ankle = STIRRUP * np.array([sx, 1.0, 1.0])
+        sk.step(pose, side, ankle, pole=[sx * 0.55, 0.0, 1.0])
+        foot = axis_angle(up, sx * 14) @ axis_angle([1, 0, 0], -10) @ sk.bind_rotation(f"foot_{side}")
+        sk.set_world_rotation(pose, f"foot_{side}", foot)
+
+
+def reins(sk, pose, offset=(0.0, 0.0, 0.0)):
+    """The left hand on the reins over the pommel, the shield on its forearm facing out to the left."""
+    target = sk.position(pose, "pelvis") + REINS + np.asarray(offset, float)
+    sk.reach(pose, "l", target, pole=[1.0, -0.4, -0.6])
+    out = np.array([0.9, 0.0, 0.4])
+    sk.set_world_rotation(pose, "hand_l", frame(out / np.linalg.norm(out), [0.0, -1.0, 0.0]) @ sk.bind_rotation("hand_l"))
+
+
+# The sword's holds, from the pelvis: upright at rest; raised forward for the charge.
+RIDE_REST = ((-0.24, 0.18, 0.30), (0.05, 1.0, 0.3), (-1.0, -0.6, 0.6))
+RIDE_CHARGE = ((-0.30, 0.40, 0.34), (0.12, 0.55, 1.0), (-1.0, -0.8, -0.4))
+
+
+def ride_loop(sk, name, lean, rise, forward, sword):
+    base = "Idle_Loop"  # (its breathing, in the chest and head)
+    clip = Clip(sk, name, sk.duration(base))
+    for t in clip.times:
+        pose = sk.sample(base, t)
+        seat(sk, pose, lean=lean, rise=rise, forward=forward)
+        reins(sk, pose, offset=(0.0, 0.0, forward + 0.25 * np.sin(np.radians(lean))))
+        hold_spear(sk, pose, sword[0], sword[1], pole=sword[2])
+        clip.key(pose)
+    return clip.tracks(moved_joints(sk, base) | {"pelvis"})
+
+
+def ride_slash(sk, name="Ride_Slash"):
+    """From the charge: the sword drawn up and back over the right shoulder (to 0.3 s), cut down past the horse's right
+    shoulder at the man on foot, the body turning and leaning into it (the edge low at 0.48), held, and back up to the
+    charge (to 1.1)."""
+    base, length = "Idle_Loop", 1.1
+    clip = Clip(sk, name, length)
+    keys = [  # time, (hand from the pelvis, blade direction, elbow), lean, turn, roll
+        (0.0, RIDE_CHARGE, 20.0, 0.0, 0.0),
+        (0.3, ((-0.20, 0.72, -0.02), (-0.15, 0.5, -1.0), (-1.0, 0.4, -0.4)), 8.0, -18.0, -6.0),
+        (0.48, ((-0.66, 0.02, 0.42), (-0.5, -0.75, 0.45), (-0.6, 0.6, -0.8)), 26.0, 22.0, 16.0),
+        (0.6, ((-0.66, -0.04, 0.36), (-0.45, -0.8, 0.35), (-0.6, 0.6, -0.8)), 26.0, 22.0, 16.0),
+        (1.1, RIDE_CHARGE, 20.0, 0.0, 0.0),
+    ]
+    for t in clip.times:
+        pose = sk.sample(base, t)
+        k = max(i for i in range(len(keys)) if keys[i][0] <= t + 1e-9)
+        a = keys[min(k, len(keys) - 1)]
+        b = keys[min(k + 1, len(keys) - 1)]
+        f = 0.0 if b[0] == a[0] else smooth((t - a[0]) / (b[0] - a[0]))
+        if k == 1:  # the cut: fast through, slow at the end
+            f = f ** 0.7
+
+        def mix(x, y):
+            return np.asarray(x, float) + (np.asarray(y, float) - np.asarray(x, float)) * f
+        lean, turn, roll = (a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f, a[4] + (b[4] - a[4]) * f)
+        seat(sk, pose, lean=lean, rise=0.05, forward=0.04, turn=turn, roll=roll, look=0.6)
+        reins(sk, pose, offset=(0.0, 0.0, 0.04 + 0.25 * np.sin(np.radians(lean))))
+        hold_spear(sk, pose, mix(a[1][0], b[1][0]), mix(a[1][1], b[1][1]), pole=mix(a[1][2], b[1][2]))
+        clip.key(pose)
+    return clip.tracks(moved_joints(sk, base) | {"pelvis"})
+
+
 def clips():
     sk = Skeleton()
     out = [
@@ -398,6 +486,9 @@ def clips():
         spear_loop(sk, "Spear_Jog", "Jog_Fwd_Loop", (-0.26, 0.14, 0.22), (0.0, 0.35, 1.0)),
         spear_thrust(sk, "Spear_Thrust"),
         spear_thrust(sk, "Spear_Thrust_Low", height=0.18, aim_down=0.16, lunge=0.2),
+        ride_loop(sk, "Ride_Idle", lean=4.0, rise=0.0, forward=0.0, sword=RIDE_REST),
+        ride_loop(sk, "Ride_Gallop", lean=20.0, rise=0.05, forward=0.04, sword=RIDE_CHARGE),
+        ride_slash(sk),
     ]
     return out
 

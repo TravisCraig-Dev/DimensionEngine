@@ -38,7 +38,6 @@ namespace Siege
 
         internal static readonly Vector3 HorseScale = new(0.55f, 0.55f, 0.55f);
         private static readonly string[] HorseCoats = { "Bay", "Chestnut", "Black", "Grey" }; // Tools/build_horse.py
-        private const float RiderSeat = 0.62f; // the rider's root below the horse's saddle joint
 
         public override void OnCreate()
         {
@@ -64,6 +63,17 @@ namespace Siege
         private readonly System.Diagnostics.Stopwatch m_Watch = new(), m_Wall = System.Diagnostics.Stopwatch.StartNew();
         private int m_Frames;
         private double m_ScriptMs, m_FrameMs;
+
+        public override void OnLateUpdate(float dt)
+        {
+            // Riders on this frame's saddles: the horses' poses are in now (Place in the update had last frame's, a
+            // frame behind the gallop's rise and fall).
+            foreach (var s in Soldiers)
+            {
+                if (!s.Mounted || s.Dead || s.Gone || !s.Horse.IsValid) continue;
+                s.Xf.SetLocal(Mount.RiderRoot(s.HorseAnim.GetBonePosition("Torso2"), s.Yaw), new Vector3(0, s.Yaw * 180.0f / MathF.PI, 0), Vector3.One);
+            }
+        }
 
         public override void OnUpdate(float dt)
         {
@@ -176,7 +186,7 @@ namespace Siege
             r.Members.Add(s);
             if (s.Mounted)
             {
-                Loop(s, "Sitting_Idle_Loop", 1.0f);
+                Loop(s, "Ride_Idle", 1.0f);
                 s.HorseAnim.CrossFade("Idle", 0.2f);
             }
             else Loop(s, IdleClip(s), 1.0f);
@@ -530,7 +540,18 @@ namespace Siege
             s.Pos += s.Vel * dt;
             float v = s.Vel.Length();
             if (v > 0.3f) s.Yaw = BattleMath.TurnTowards(s.Yaw, BattleMath.YawOf(s.Vel), dt * 2.5f);
-            // Riding down the infantry in the way.
+            // Riding down the infantry in the way: the sword comes up and cuts as they come within reach (the cut lands
+            // about half a second in, as the horse reaches them).
+            if (v > 4.0f && !s.OneShot)
+            {
+                Grid.Collect(s.Pos + BattleMath.Facing(s.Yaw) * (1.2f + v * 0.45f), 1.4f, m_Near);
+                foreach (var o in m_Near)
+                {
+                    if (o.Side == s.Side || o.Mounted || o.Dead) continue;
+                    Once(s, "Ride_Slash", 1.1f);
+                    break;
+                }
+            }
             s.ChargeHit -= dt;
             if (v > 4.0f && s.ChargeHit <= 0)
             {
@@ -551,6 +572,8 @@ namespace Siege
                 s.HorseAnim.CrossFade(horseClip, 0.3f);
             }
             s.HorseAnim.Speed = horseClip == "Gallop" ? Math.Clamp(v / 8.0f, 0.7f, 1.3f) : horseClip == "Walk" ? Math.Clamp(v / 1.8f, 0.6f, 1.6f) : 1.0f;
+            // The rider: sitting up at a walk, leaning into the gallop with the sword forward (a cut plays over either).
+            if (!s.OneShot) Loop(s, horseClip == "Gallop" ? "Ride_Gallop" : "Ride_Idle", 1.0f);
         }
 
         // --- keeping apart --------------------------------------------------------------------------------------
@@ -648,12 +671,12 @@ namespace Siege
             if (s.Mounted && !s.Dead)
             {
                 Vector3 horse = new(s.Pos.X, s.Ground, s.Pos.Y);
-                // The saddle rides on the horse's back as it moves (from the pose last drawn, relative to the horse).
+                // The saddle rides on the horse's back as it moves (from the pose last drawn, relative to the horse; set
+                // again from this frame's in OnLateUpdate).
                 Vector3 seat = s.HorseAnim.GetBonePosition("Torso2") - s.HorseXf.Position;
                 if (seat.LengthSquared() > 25.0f || seat == Vector3.Zero) seat = new Vector3(0, 1.5f, 0);
                 s.HorseXf.SetLocal(horse, new Vector3(0, yawDeg, 0), HorseScale);
-                Vector2 back = BattleMath.Facing(s.Yaw) * -0.12f;
-                s.Xf.SetLocal(horse + seat + new Vector3(back.X, -RiderSeat, back.Y), new Vector3(0, yawDeg, 0), Vector3.One);
+                s.Xf.SetLocal(Mount.RiderRoot(horse + seat, s.Yaw), new Vector3(0, yawDeg, 0), Vector3.One);
                 return;
             }
             s.Xf.SetLocal(new Vector3(s.Pos.X, s.Ground, s.Pos.Y), new Vector3(0, yawDeg, 0), Vector3.One);
