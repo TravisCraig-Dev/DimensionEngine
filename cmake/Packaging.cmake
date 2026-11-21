@@ -59,6 +59,18 @@ if(EXISTS "${_sample}/Sample.files")
         get_filename_component(_dir "${_rel}" DIRECTORY)
         install(FILES "${_sample}/${_rel}" DESTINATION "Samples/Siege/${_dir}" COMPONENT Runtime)
     endforeach()
+    # Its textures compressed ahead of time (Prebuilt/Textures, keyed by the files' contents): the first open reads
+    # them instead of compressing them (about 12 s). Made from the installed files by the player, which needs no GPU
+    # for it; ~105 MB more in the install.
+    install(CODE "
+        set(_siege \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/Samples/Siege\")
+        message(STATUS \"Prebuilding the Siege sample's compressed textures\")
+        execute_process(COMMAND \"$<TARGET_FILE:DimensionPlayer>\" \"\${_siege}\" --prebuild-textures \"\${_siege}/Prebuilt/Textures\"
+                        RESULT_VARIABLE _result OUTPUT_QUIET ERROR_QUIET)
+        if(NOT _result EQUAL 0)
+            message(WARNING \"Prebuilding the Siege sample's textures failed (\${_result}): it compresses them when first opened\")
+        endif()
+    " COMPONENT Runtime)
 else()
     message(WARNING "Projects/Siege/Sample.files is missing: the installers ship no sample")
 endif()

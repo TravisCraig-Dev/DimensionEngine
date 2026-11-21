@@ -287,6 +287,12 @@ namespace Dimension
         {
             CompressedImage blocks;
             if (ImportCache::LoadCompressedImage(path, CompressedCacheVariant(settings), blocks)) return MakeRef<Texture2D>(blocks, settings, name.c_str());
+            // (blocks the project ships, by the file's contents: into the cache for next time)
+            if (ImportCache::LoadPrebuiltImage(path, CompressedCacheVariant(settings), blocks))
+            {
+                ImportCache::StoreCompressedImage(path, CompressedCacheVariant(settings), blocks);
+                return MakeRef<Texture2D>(blocks, settings, name.c_str());
+            }
         }
         // Decoding goes through the import cache.
         std::optional<DecodedImage> own;

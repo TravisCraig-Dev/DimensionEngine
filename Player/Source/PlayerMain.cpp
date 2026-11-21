@@ -1,5 +1,5 @@
 // Dimension Player: runs a project's start scene without the editor.
-// Usage: DimensionPlayer [projectDir] [--scene path] [--frames N] [--screenshot file]
+// Usage: DimensionPlayer [projectDir] [--scene path] [--frames N] [--screenshot file] [--prebuild-textures dir]
 //        [--move x,y,frame] [--click x,y,frame]   simulated pointer for automated checks (framebuffer pixels)
 //        [--key name,frame]   a key pressed for that one frame (Right, Left, Up, Down, Enter, Space, Tab, Escape, A-Z)
 //        [--no-instancing] [--no-vsync]           draw every mesh separately / uncapped frame rate (for comparisons)
@@ -22,6 +22,7 @@
 #include <Dimension/Renderer/CameraStack.h>
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Renderer/GpuMemory.h>
+#include <Dimension/Asset/ImportCache.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
@@ -221,6 +222,7 @@ int main(int argc, char** argv)
     int maxFrames = 0;
     std::string screenshot;
     fs::path profileFile;
+    fs::path prebuildTextures;
     std::vector<PointerEvent> pointerEvents;
     std::vector<KeyEvent> keyEvents;
     bool noVSync = false, waitForDebugger = false;
@@ -229,6 +231,7 @@ int main(int argc, char** argv)
         if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) sceneOverride = argv[++i];
         else if (!std::strcmp(argv[i], "--quality") && i + 1 < argc) qualityOverride = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--prebuild-textures") && i + 1 < argc) prebuildTextures = argv[++i];
         else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
         else if (!std::strcmp(argv[i], "--profile") && i + 1 < argc) profileFile = argv[++i];
         else if (!std::strcmp(argv[i], "--no-instancing")) SceneRenderer::SetInstancingEnabled(false);
@@ -293,6 +296,17 @@ int main(int argc, char** argv)
         *logFile << "[" << e.Time << "] [" << levels[(int)e.Level] << "] " << e.Message << std::endl;
     });
 #endif
+    // --prebuild-textures <dir>: the project's compressed textures, for it to ship (no window; the project left as it was).
+    if (!prebuildTextures.empty())
+    {
+        ImportCache::SetEnabled(false);
+        if (!Project::Open(projectDir)) return 1;
+        auto start = std::chrono::steady_clock::now();
+        size_t n = ImportCache::WritePrebuiltTextures(prebuildTextures);
+        Log::Info("Prebuilt {} compressed texture(s) into '{}' in {:.1f} s", n, prebuildTextures.string(),
+                  std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        return 0;
+    }
     // The project is opened first so its window settings apply.
     if (!Project::Open(projectDir)) return 1;
     if (qualityOverride >= 0) Quality::SetCurrent(qualityOverride); // (--quality: else the project's default level)

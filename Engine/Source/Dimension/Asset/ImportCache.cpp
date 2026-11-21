@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <thread>
 #include <unordered_set>
 #include <type_traits>
@@ -119,6 +120,55 @@ namespace Dimension::ImportCache
         }
     }
 
+    namespace
+    {
+        // A prebuilt texture's file: its source's contents, the settings variant and the format version.
+        fs::path PrebuiltEntry(const fs::path& dir, const fs::path& source, const std::string& variant)
+        {
+            std::vector<uint8_t> bytes;
+            if (!ReadFile(source, bytes)) return {};
+            // (the contents eight bytes at a time: a few GB/s, read once per texture on a cache miss)
+            uint64_t h = 0x9E3779B97F4A7C15ull ^ bytes.size();
+            size_t words = bytes.size() / 8;
+            for (size_t i = 0; i < words; ++i)
+            {
+                uint64_t v;
+                std::memcpy(&v, bytes.data() + i * 8, 8);
+                h = (h ^ v) * 0xBF58476D1CE4E5B9ull;
+                h ^= h >> 31;
+            }
+            h = Hash(bytes.data() + words * 8, bytes.size() - words * 8, h);
+            h = Hash(variant.data(), variant.size(), h);
+            h = Hash(&kCompressedVersion, sizeof(kCompressedVersion), h);
+            char name[32];
+            std::snprintf(name, sizeof(name), "%016llx.bc", (unsigned long long)h);
+            return dir / name;
+        }
+
+        bool ReadCompressed(const fs::path& file, CompressedImage& out)
+        {
+            std::vector<uint8_t> bytes;
+            if (file.empty() || !ReadFile(file, bytes)) return false;
+            Reader r{ bytes.data(), bytes.data() + bytes.size() };
+            r.Pod(out.Width);
+            r.Pod(out.Height);
+            out.Levels.resize(r.Count(8));
+            for (auto& level : out.Levels) r.Vec(level);
+            return r.Ok && out.Width && out.Height && !out.Levels.empty() &&
+                   out.Levels[0].size() == (size_t)((out.Width + 3) / 4) * ((out.Height + 3) / 4) * 16;
+        }
+
+        std::vector<uint8_t> WriteCompressed(const CompressedImage& image)
+        {
+            Writer w;
+            w.Pod(image.Width);
+            w.Pod(image.Height);
+            w.Pod((uint64_t)image.Levels.size());
+            for (const auto& level : image.Levels) w.Vec(level);
+            return std::move(w.Bytes);
+        }
+    }
+
     fs::path Directory()
     {
         const fs::path& project = Project::GetDirectory();
@@ -155,28 +205,90 @@ namespace Dimension::ImportCache
 
     bool LoadCompressedImage(const fs::path& source, const std::string& variant, CompressedImage& out)
     {
-        fs::path file = EntryFor(source, "bc", kCompressedVersion, variant);
-        std::vector<uint8_t> bytes;
-        if (file.empty() || !ReadFile(file, bytes)) return false;
-        Reader r{ bytes.data(), bytes.data() + bytes.size() };
-        r.Pod(out.Width);
-        r.Pod(out.Height);
-        out.Levels.resize(r.Count(8));
-        for (auto& level : out.Levels) r.Vec(level);
-        return r.Ok && out.Width && out.Height && !out.Levels.empty() &&
-               out.Levels[0].size() == (size_t)((out.Width + 3) / 4) * ((out.Height + 3) / 4) * 16;
+        return ReadCompressed(EntryFor(source, "bc", kCompressedVersion, variant), out);
     }
 
     void StoreCompressedImage(const fs::path& source, const std::string& variant, const CompressedImage& image)
     {
         fs::path file = EntryFor(source, "bc", kCompressedVersion, variant);
         if (file.empty()) return;
-        Writer w;
-        w.Pod(image.Width);
-        w.Pod(image.Height);
-        w.Pod((uint64_t)image.Levels.size());
-        for (const auto& level : image.Levels) w.Vec(level);
-        WriteFile(file, w.Bytes);
+        WriteFile(file, WriteCompressed(image));
+    }
+
+    fs::path PrebuiltDirectory()
+    {
+        const fs::path& project = Project::GetDirectory();
+        return project.empty() ? fs::path() : project / "Prebuilt" / "Textures";
+    }
+
+    bool LoadPrebuiltImage(const fs::path& source, const std::string& variant, CompressedImage& out)
+    {
+        fs::path dir = PrebuiltDirectory();
+        std::error_code ec;
+        if (dir.empty() || !fs::is_directory(dir, ec)) return false;
+        return ReadCompressed(PrebuiltEntry(dir, source, variant), out);
+    }
+
+    size_t WritePrebuiltTextures(const fs::path& outDir)
+    {
+        // Every (file, settings) pair the project loads compressed, as AssetManager does: texture assets by their
+        // own settings; images models reference (not embedded, materials not extracted) by the slot's colour space with
+        // the image's own mips, Max Size and compression settings.
+        std::map<std::pair<std::string, std::string>, std::pair<fs::path, TextureSettings>> jobs;
+        auto settingsOf = [](const fs::path& file, bool srgb, bool& compress) {
+            TextureSettings ts;
+            ts.SRGB = srgb;
+            ts.Compress = true;
+            if (const AssetMetadata* own = AssetManager::GetMetadata(AssetManager::GetHandle(file)); own && own->Type == AssetType::Texture)
+            {
+                ts.GenerateMips = own->ImportSettings.value("mips", true);
+                ts.MaxSize = own->ImportSettings.value("maxSize", 0u);
+                ts.Compress = own->ImportSettings.value("compress", true);
+            }
+            compress = ts.Compress;
+            return ts;
+        };
+        auto add = [&](const fs::path& file, bool srgb) {
+            bool compress = false;
+            TextureSettings ts = settingsOf(file, srgb, compress);
+            if (!compress) return;
+            jobs[{ fs::weakly_canonical(file).generic_string(), Texture2D::CompressedCacheVariant(ts) }] = { file, ts };
+        };
+        for (AssetHandle h : AssetManager::GetAssetsOfType(AssetType::Texture))
+            if (const AssetMetadata* meta = AssetManager::GetMetadata(h))
+                add(AssetManager::GetAbsolutePath(h), meta->ImportSettings.value("srgb", true));
+        for (AssetHandle h : AssetManager::GetAssetsOfType(AssetType::Mesh))
+        {
+            const AssetMetadata* meta = AssetManager::GetMetadata(h);
+            MeshData data;
+            if (!meta || !AssetManager::LoadMeshData(AssetManager::GetAbsolutePath(h), data)) continue;
+            nlohmann::json extracted = meta->ImportSettings.value("materials", nlohmann::json::array());
+            for (size_t m = 0; m < data.Materials.size(); ++m)
+            {
+                if (m < extracted.size() && extracted[m].is_number_unsigned() && AssetManager::GetMetadata(AssetHandle(extracted[m].get<uint64_t>())))
+                    continue; // (an extracted material: its texture assets are above)
+                const ImportedMaterial& im = data.Materials[m];
+                for (auto [index, srgb] : { std::pair{ im.BaseColorImage, true }, std::pair{ im.NormalImage, false },
+                                            std::pair{ im.MetallicRoughnessImage, false }, std::pair{ im.EmissionImage, true } })
+                    if (index >= 0 && index < (int32_t)data.Images.size() && data.Images[index].Bytes.empty() && !data.Images[index].File.empty())
+                        add(data.Images[index].File, srgb);
+            }
+        }
+        std::error_code ec;
+        fs::create_directories(outDir, ec);
+        size_t written = 0;
+        for (auto& [key, job] : jobs)
+        {
+            auto& [file, ts] = job;
+            auto image = DecodedImage::Decode(file);
+            if (!image) continue;
+            auto blocks = Texture2D::Compress(*image, ts);
+            fs::path entry = blocks ? PrebuiltEntry(outDir, file, key.second) : fs::path();
+            if (entry.empty()) continue;
+            WriteFile(entry, WriteCompressed(*blocks));
+            ++written;
+        }
+        return written;
     }
 
     bool LoadMesh(const fs::path& source, const std::string& variant, MeshData& out)

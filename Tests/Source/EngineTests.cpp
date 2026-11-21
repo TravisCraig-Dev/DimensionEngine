@@ -14340,6 +14340,58 @@ namespace
         CHECK(!Texture2D::Compress(hdr, TextureSettings{}));
     }
 
+    // Prebuilt compressed textures (what installers ship with a sample): every texture of the open project compressed
+    // into a folder, keyed by the files' contents, so a copy with other file times still finds them; changed contents don't.
+    void TestPrebuiltTextures()
+    {
+        fs::path dir = fs::temp_directory_path() / "dimension_prebuilt";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir / "Assets", ec);
+        // An 8x8 24-bit BMP (rows bottom-up): a small image any decoder reads.
+        auto writeBmp = [](const fs::path& file, uint8_t shade) {
+            std::vector<uint8_t> b(54 + 8 * 8 * 3, 0);
+            auto put32 = [&](size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) b[at + i] = (uint8_t)(v >> (8 * i)); };
+            b[0] = 'B';
+            b[1] = 'M';
+            put32(2, (uint32_t)b.size());
+            put32(10, 54);
+            put32(14, 40);
+            put32(18, 8);
+            put32(22, 8);
+            b[26] = 1;
+            b[28] = 24;
+            for (size_t i = 0; i < 64; ++i)
+            {
+                b[54 + i * 3] = (uint8_t)(i * 4);
+                b[54 + i * 3 + 1] = shade;
+                b[54 + i * 3 + 2] = (uint8_t)(255 - i * 4);
+            }
+            std::ofstream(file, std::ios::binary).write((const char*)b.data(), (std::streamsize)b.size());
+        };
+        fs::path image = dir / "Assets" / "Tile.bmp";
+        writeBmp(image, 90);
+        CHECK(Project::Open(dir));
+        AssetManager::Init(dir / "Assets");
+        CHECK(AssetManager::GetHandle(image).IsValid());
+        CHECK(ImportCache::PrebuiltDirectory() == dir / "Prebuilt" / "Textures");
+        CHECK(ImportCache::WritePrebuiltTextures(ImportCache::PrebuiltDirectory()) == 1);
+        TextureSettings ts; // (the asset's settings: sRGB, mips, full size)
+        std::string variant = Texture2D::CompressedCacheVariant(ts);
+        CompressedImage blocks;
+        CHECK(ImportCache::LoadPrebuiltImage(image, variant, blocks) && blocks.Width == 8 && blocks.Levels.size() == 4);
+        // Another file time (an install, a copy): still found. Another colour space: not.
+        fs::last_write_time(image, fs::last_write_time(image) - std::chrono::hours(48), ec);
+        CHECK(ImportCache::LoadPrebuiltImage(image, variant, blocks));
+        ts.SRGB = false;
+        CHECK(!ImportCache::LoadPrebuiltImage(image, Texture2D::CompressedCacheVariant(ts), blocks));
+        // Other contents: not found (compressed afresh instead).
+        writeBmp(image, 200);
+        CHECK(!ImportCache::LoadPrebuiltImage(image, variant, blocks));
+        AssetManager::Shutdown();
+        fs::remove_all(dir, ec);
+    }
+
     // Import defaults per folder (new textures and models there get a rule's import settings; the deepest folder's rule
     // wins; a .meta's settings are kept), applying a rule to the assets already there, and batch import settings.
     void TestImportDefaults()
@@ -21803,6 +21855,7 @@ int main(int argc, char** argv)
     Run("Presets", TestPresets);
     Run("Import defaults and batch import settings", TestImportDefaults);
     Run("BC7 texture compression", TestTextureCompression);
+    Run("Prebuilt compressed textures", TestPrebuiltTextures);
     Run("Asset references and Find References In Scene", TestAssetReferences);
     Run("Project list view and Favorites", TestProjectListAndFavorites);
     Run("Audio preview (waveform and playback)", TestAudioPreview);
