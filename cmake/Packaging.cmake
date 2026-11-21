@@ -79,8 +79,6 @@ set(CPACK_PACKAGE_INSTALL_DIRECTORY "Dimension Engine")
 set(CPACK_PACKAGE_EXECUTABLES "DimensionEditor" "Dimension Editor")
 set(CPACK_STRIP_FILES ON)
 set(CPACK_PACKAGE_CHECKSUM SHA256)
-# Only this project's Runtime component (the fetched libraries' own install rules add headers and static libraries).
-set(CPACK_INSTALL_CMAKE_PROJECTS "${CMAKE_BINARY_DIR};${PROJECT_NAME};Runtime;/")
 
 if(WIN32)
     set(CPACK_GENERATOR "NSIS;ZIP")
