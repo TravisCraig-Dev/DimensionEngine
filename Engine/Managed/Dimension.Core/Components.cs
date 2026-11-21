@@ -127,6 +127,11 @@ namespace Dimension
             get { Vector3 v; Native.Api.GetWorldPosition(Entity.Scene, Entity.Id, (float*)&v); return v; }
         }
 
+        /// <summary>Sets the local position, rotation (Euler angles in degrees) and scale at once: one call into the
+        /// engine instead of a read and a write per property (for scripts moving many objects every frame).</summary>
+        public void SetLocal(Vector3 position, Vector3 eulerDegrees, Vector3 scale) =>
+            Set(position, eulerDegrees * (System.MathF.PI / 180.0f), scale);
+
         public void Translate(Vector3 delta) => Position += delta;
         public void Rotate(Vector3 eulerDegrees) => EulerAngles += eulerDegrees;
 

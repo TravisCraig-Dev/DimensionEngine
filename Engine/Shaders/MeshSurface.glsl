@@ -1,6 +1,7 @@
 // The mesh fragment shader's body, shared by Mesh.frag (the main pass) and MeshOit.frag (order-independent
 // transparency, with DIM_OIT defined).
 #include "Clouds.glsl"
+#include "Cutout.glsl"
 
 // Clustered point and spot lights (see LightClusters).
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightListRef { PointLight Lights[]; };
@@ -294,7 +295,7 @@ void main()
     else
         base = SampleTexture(m.Maps.x, uv) * m.BaseColor;
     base *= vColor;
-    if (m.Flags.x == 1u && base.a < m.Params.z) discard;
+    if (m.Flags.x == 1u && base.a * CutoutAlphaScale(m.Maps.x, uv) < m.Params.z) discard;
     if (m.Flags.w == 1u)
     {
         // A fur shell: only the strands, darker at the roots and tinted toward the tips.
