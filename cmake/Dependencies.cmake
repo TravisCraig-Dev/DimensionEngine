@@ -28,6 +28,8 @@ FetchContent_Declare(ogg            GIT_REPOSITORY https://github.com/xiph/ogg.g
 FetchContent_Declare(opus           GIT_REPOSITORY https://github.com/xiph/opus.git                 GIT_TAG v1.5.2 GIT_SHALLOW TRUE)
 FetchContent_Declare(opusfile       GIT_REPOSITORY https://github.com/xiph/opusfile.git             GIT_TAG v0.12  GIT_SHALLOW TRUE)
 # Multi-channel signed distance fields for text (core only, built in ThirdPartyTargets.cmake).
+# BC7 texture compression (bc7enc.cpp only; the repository's own CMakeLists builds its command-line tools).
+FetchContent_Declare(bc7enc         GIT_REPOSITORY https://github.com/richgel999/bc7enc_rdo.git     GIT_TAG b9438627eef73a1157e84201b6fa6eb2ffd6d9f0 SOURCE_SUBDIR _sources_only)
 FetchContent_Declare(msdfgen        GIT_REPOSITORY https://github.com/Chlumsky/msdfgen.git          GIT_TAG v1.12  GIT_SHALLOW TRUE SOURCE_SUBDIR _sources_only)
 # VST3 plugin hosting (MIT since SDK 3.8): only the hosting sources are built (ThirdPartyTargets.cmake), not its CMake.
 FetchContent_Declare(vst3sdk        GIT_REPOSITORY https://github.com/steinbergmedia/vst3sdk.git    GIT_TAG v3.8.1_build_84 GIT_SHALLOW TRUE
@@ -79,7 +81,7 @@ if (MSVC AND DIM_OPTIMIZE_DEPENDENCIES)
     set(CMAKE_CXX_FLAGS_DEBUG "/Zi /O2 /Ob2")
 endif()
 
-FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf ufbx box2d jolt miniaudio vhacd ogg opus opusfile msdfgen vst3sdk glslang)
+FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf ufbx box2d jolt miniaudio vhacd ogg opus opusfile msdfgen bc7enc vst3sdk glslang)
 
 if (MSVC AND DIM_OPTIMIZE_DEPENDENCIES)
     set(CMAKE_C_FLAGS_DEBUG "${DIM_SAVED_C_FLAGS_DEBUG}")

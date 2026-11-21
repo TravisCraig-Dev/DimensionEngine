@@ -231,11 +231,13 @@ namespace Dimension
                     {
                         TextureSettings ts;
                         ts.SRGB = srgb;
+                        ts.Compress = true;
                         if (const AssetMetadata* own = AssetManager::GetMetadata(AssetManager::GetHandle(file.File)); own && own->Type == AssetType::Texture)
                         {
                             ts.Filter = (TextureFilter)own->ImportSettings.value("filter", 0);
                             ts.GenerateMips = own->ImportSettings.value("mips", true);
                             ts.MaxSize = own->ImportSettings.value("maxSize", 0u);
+                            ts.Compress = own->ImportSettings.value("compress", true);
                         }
                         s->Textures[shared] = Texture2D::LoadFromFile(file.File, ts);
                         s->SubAssetNames[shared] = file.Name;
@@ -616,10 +618,10 @@ namespace Dimension
         ts.SRGB = meta->ImportSettings.value("srgb", true);
         ts.GenerateMips = meta->ImportSettings.value("mips", true);
         ts.MaxSize = meta->ImportSettings.value("maxSize", 0u);
+        ts.Compress = meta->ImportSettings.value("compress", true);
         fs::path file = s->AssetsDir / meta->Path;
-        Ref<Texture2D> tex;
-        if (auto image = AssetPrefetch::TakeImage(file)) tex = Texture2D::FromDecoded(*image, ts, meta->Path.filename().string());
-        else tex = Texture2D::LoadFromFile(file, ts);
+        std::optional<DecodedImage> prefetched = AssetPrefetch::TakeImage(file);
+        Ref<Texture2D> tex = Texture2D::LoadFromFile(file, ts, prefetched ? &*prefetched : nullptr);
         s->Textures[handle] = tex; // cache failures too (nullptr) until next reimport
         return tex;
     }

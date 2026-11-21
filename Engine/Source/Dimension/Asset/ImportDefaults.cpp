@@ -44,7 +44,7 @@ namespace Dimension::ImportDefaults
 
     const std::vector<std::string>& Keys(AssetType type)
     {
-        static const std::vector<std::string> texture = { "filter", "srgb", "mips" };
+        static const std::vector<std::string> texture = { "filter", "srgb", "mips", "maxSize", "compress" };
         static const std::vector<std::string> mesh = { "scale", "animations", "importMaterials" };
         static const std::vector<std::string> none;
         return type == AssetType::Texture ? texture : type == AssetType::Mesh ? mesh : none;

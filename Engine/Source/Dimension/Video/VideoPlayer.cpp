@@ -418,12 +418,12 @@ namespace Dimension
                 {
                     AssetManager::StreamRuntimeTexturePixels(p.Texture, frame.Pixels.data(), frame.Pixels.size());
                     // Render Texture mode: the picture scaled into the target (a render texture, or any RGBA8 texture
-                    // without mips), through this frame's commands.
+                    // without mips or compression), through this frame's commands.
                     if (vp.RenderMode == VideoRenderMode::RenderTexture && vp.TargetTexture.IsValid() && RenderDevice::Exists() &&
                         RenderDevice::Get().IsRecordingFrame())
                     {
                         Ref<Texture2D> source = AssetManager::GetTexture(p.Texture), target = AssetManager::GetTexture(vp.TargetTexture);
-                        if (source && target && source != target && target->GetMipLevels() == 1 && !target->IsHDR())
+                        if (source && target && source != target && target->GetMipLevels() == 1 && !target->IsHDR() && !target->IsCompressed())
                             target->BlitFrom(RenderDevice::Get().Frame().Cmd, *source);
                     }
                     ++p.Shown;

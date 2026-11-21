@@ -212,6 +212,8 @@ namespace Dimension
         features.features.fillModeNonSolid = supported.fillModeNonSolid;
         features.features.independentBlend = VK_TRUE;
         features.features.wideLines = supported.wideLines;
+        features.features.textureCompressionBC = supported.textureCompressionBC; // (compressed textures when there)
+        m_TextureCompressionBC = supported.textureCompressionBC == VK_TRUE;
 
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queue{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };

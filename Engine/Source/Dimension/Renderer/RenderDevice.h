@@ -101,6 +101,7 @@ namespace Dimension
         VkPipelineLayout GetPipelineLayout() const { return m_PipelineLayout; }
         VkFormat GetSwapchainFormat() const { return m_SwapchainFormat; }
         uint32_t GetSwapchainImageCount() const { return (uint32_t)m_SwapchainImages.size(); }
+        bool SupportsTextureCompressionBC() const { return m_TextureCompressionBC; }
         VkSampler GetLinearSampler() const { return m_LinearSampler; }
         VkSampler GetNearestSampler() const { return m_NearestSampler; }
         VkSampler GetClampSampler() const { return m_ClampSampler; }
@@ -136,6 +137,7 @@ namespace Dimension
         std::vector<VkImageView> m_SwapchainViews;
         std::vector<VkSemaphore> m_RenderFinished; // one per swapchain image
         bool m_VSync = true;
+        bool m_TextureCompressionBC = false;
         bool m_SwapchainDirty = false;
 
         struct PerFrame

@@ -2,6 +2,7 @@
 #include "Dimension/Asset/AssetPrefetch.h"
 #include "Dimension/Asset/AssetManager.h"
 #include "Dimension/Renderer/Mesh.h"
+#include "Dimension/Renderer/Texture.h"
 #include "Dimension/Project/Project.h"
 #include "Dimension/Core/Log.h"
 #include <atomic>
@@ -16,7 +17,7 @@ namespace Dimension::ImportCache
     namespace
     {
         // Bump when an importer's output changes, so old entries are not read back.
-        constexpr uint32_t kImageVersion = 1, kMeshVersion = 4; // 2: OBJ materials; 3: cubic spline tangents; 4: blend shapes
+        constexpr uint32_t kImageVersion = 1, kCompressedVersion = 1, kMeshVersion = 4; // 2: OBJ materials; 3: cubic spline tangents; 4: blend shapes
         std::atomic<bool> s_Enabled{ true };
 
         uint64_t Hash(const void* data, size_t size, uint64_t h = 1469598103934665603ull)
@@ -149,6 +150,32 @@ namespace Dimension::ImportCache
         w.Pod(image.Height);
         w.Vec(image.Rgba8);
         w.Vec(image.Rgba32f);
+        WriteFile(file, w.Bytes);
+    }
+
+    bool LoadCompressedImage(const fs::path& source, const std::string& variant, CompressedImage& out)
+    {
+        fs::path file = EntryFor(source, "bc", kCompressedVersion, variant);
+        std::vector<uint8_t> bytes;
+        if (file.empty() || !ReadFile(file, bytes)) return false;
+        Reader r{ bytes.data(), bytes.data() + bytes.size() };
+        r.Pod(out.Width);
+        r.Pod(out.Height);
+        out.Levels.resize(r.Count(8));
+        for (auto& level : out.Levels) r.Vec(level);
+        return r.Ok && out.Width && out.Height && !out.Levels.empty() &&
+               out.Levels[0].size() == (size_t)((out.Width + 3) / 4) * ((out.Height + 3) / 4) * 16;
+    }
+
+    void StoreCompressedImage(const fs::path& source, const std::string& variant, const CompressedImage& image)
+    {
+        fs::path file = EntryFor(source, "bc", kCompressedVersion, variant);
+        if (file.empty()) return;
+        Writer w;
+        w.Pod(image.Width);
+        w.Pod(image.Height);
+        w.Pod((uint64_t)image.Levels.size());
+        for (const auto& level : image.Levels) w.Vec(level);
         WriteFile(file, w.Bytes);
     }
 
@@ -347,6 +374,19 @@ namespace Dimension::ImportCache
                 // Models are keyed with their import settings too.
                 std::string variant = std::string(kind) == "mesh" ? AssetManager::GetMeshImportSettings(AssetManager::GetHandle(entry.path())).Key() : std::string();
                 if (fs::path p = EntryFor(entry.path(), kind, version, variant); !p.empty()) live.insert(p.filename().string());
+            }
+            // Compressed textures, by their settings (either colour space: a model's material may load an image as data).
+            if (const AssetMetadata* meta = AssetManager::GetMetadata(AssetManager::GetHandle(entry.path())); meta && meta->Type == AssetType::Texture)
+            {
+                TextureSettings ts;
+                ts.GenerateMips = meta->ImportSettings.value("mips", true);
+                ts.MaxSize = meta->ImportSettings.value("maxSize", 0u);
+                for (bool srgb : { true, false })
+                {
+                    ts.SRGB = srgb;
+                    if (fs::path p = EntryFor(entry.path(), "bc", kCompressedVersion, Texture2D::CompressedCacheVariant(ts)); !p.empty())
+                        live.insert(p.filename().string());
+                }
             }
         }
         size_t removed = 0;

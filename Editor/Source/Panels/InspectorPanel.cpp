@@ -1819,6 +1819,7 @@ namespace Editor
             }
             checkbox("sRGB (Color Texture)", "srgb", changes);
             checkbox("Generate Mip Maps", "mips", changes);
+            checkbox("Compress (BC7)", "compress", changes);
         }
         else
         {
@@ -1927,6 +1928,13 @@ namespace Editor
             for (int i = 0; i < 6; ++i) if (kSizes[i] == maxSize) pick = i;
             ImGui::SetNextItemWidth(120.0f);
             if (ImGui::Combo("Max Size", &pick, kSizeNames, 6)) { settings["maxSize"] = kSizes[pick]; changed = true; }
+            // Compression (like Unity's): BC7 blocks, a quarter of the GPU memory; made once and kept in the import cache.
+            bool compress = settings.value("compress", true);
+            if (ImGui::Checkbox("Compress (BC7)", &compress)) { settings["compress"] = compress; changed = true; }
+            ImGui::SameLine();
+            UI::HelpMarker("BC7 block compression: a quarter of the GPU memory (and faster to sample), near-lossless. Compressed "
+                           "once when first loaded and kept in the import cache. Off for exact texels (pixel art, lookup tables). "
+                           "HDR images and GPUs without BC support stay uncompressed.");
             if (changed) AssetManager::SetImportSettings(handle, settings);
             DrawImportDefault(handle);
 
@@ -1940,7 +1948,7 @@ namespace Editor
                 float avail = ImGui::GetContentRegionAvail().x;
                 float aspect = (float)tex->GetHeight() / std::max(1u, tex->GetWidth());
                 ImGui::Image(ImTextureRef((ImTextureID)tex->GetImGuiId()), ImVec2(avail, avail * aspect));
-                ImGui::TextDisabled("%u x %u", tex->GetWidth(), tex->GetHeight());
+                ImGui::TextDisabled("%u x %u%s", tex->GetWidth(), tex->GetHeight(), tex->IsCompressed() ? ", BC7" : "");
             }
         }
         else if (meta->Type == AssetType::AnimationClip)

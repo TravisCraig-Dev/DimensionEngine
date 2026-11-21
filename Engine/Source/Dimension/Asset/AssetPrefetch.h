@@ -18,6 +18,13 @@ namespace Dimension
         static std::optional<DecodedImage> Decode(const fs::path& file); // thread-safe
     };
 
+    // A texture compressed for the GPU (CPU only): BC7 blocks (16 bytes per 4 x 4 texels) for each mip level, largest first.
+    struct CompressedImage
+    {
+        uint32_t Width = 0, Height = 0;
+        std::vector<std::vector<uint8_t>> Levels;
+    };
+
     // Asset data decoded ahead of time on a worker thread (asynchronous scene loads). The asset manager takes from
     // here instead of reading the file again; GPU uploads still happen on the main thread. Keyed by absolute path.
     namespace AssetPrefetch

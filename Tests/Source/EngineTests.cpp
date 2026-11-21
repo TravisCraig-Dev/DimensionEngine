@@ -23,6 +23,9 @@
 #include <Dimension/Scene/SceneVisibility.h>
 #include <Dimension/Asset/Preset.h>
 #include <Dimension/Asset/ImportDefaults.h>
+#include <Dimension/Asset/AssetPrefetch.h>
+#include <Dimension/Renderer/Texture.h>
+#include <bc7decomp.h>
 #include <Dimension/Asset/AssetListing.h>
 #include <Dimension/Asset/ProjectFavorites.h>
 #include <Dimension/Scene/SceneBounds.h>
@@ -14293,6 +14296,50 @@ namespace
         fs::remove_all(dir, ec);
     }
 
+    // BC7 texture compression (CPU side): a level per mip with whole 4 x 4 blocks (partial ones at odd edges), Max Size
+    // applied first, no mips when off, HDR images left alone; the blocks decode back close to the image.
+    void TestTextureCompression()
+    {
+        DecodedImage image;
+        image.Width = 10;
+        image.Height = 6;
+        for (uint32_t y = 0; y < image.Height; ++y)
+            for (uint32_t x = 0; x < image.Width; ++x)
+                image.Rgba8.insert(image.Rgba8.end(), { (uint8_t)(x * 25), (uint8_t)(y * 40), (uint8_t)128, (uint8_t)(x < 8 ? 255 : 100) });
+        TextureSettings ts;
+        auto c = Texture2D::Compress(image, ts);
+        CHECK(c && c->Width == 10 && c->Height == 6);
+        // 10x6 -> 5x3 -> 2x1 -> 1x1
+        CHECK(c && c->Levels.size() == 4 && c->Levels[0].size() == 3 * 2 * 16 && c->Levels[1].size() == 2 * 1 * 16 &&
+              c->Levels[2].size() == 16 && c->Levels[3].size() == 16);
+        if (c && !c->Levels.empty())
+        {
+            int worst = 0;
+            for (uint32_t by = 0; by < 2; ++by)
+                for (uint32_t bx = 0; bx < 3; ++bx)
+                {
+                    bc7decomp::color_rgba px[16];
+                    CHECK(bc7decomp::unpack_bc7(&c->Levels[0][(by * 3 + bx) * 16], px));
+                    for (uint32_t i = 0; i < 16; ++i)
+                    {
+                        uint32_t x = bx * 4 + i % 4, y = by * 4 + i / 4;
+                        if (x >= image.Width || y >= image.Height) continue;
+                        for (int k = 0; k < 4; ++k)
+                            worst = std::max(worst, std::abs((int)px[i].m_comps[k] - (int)image.Rgba8[(y * image.Width + x) * 4 + k]));
+                    }
+                }
+            CHECK(worst <= 20); // (steep gradients across both axes of a block: the hardest case for one colour line)
+        }
+        ts.GenerateMips = false;
+        ts.MaxSize = 4;
+        c = Texture2D::Compress(image, ts); // 10x6 -> 5x3 -> 2x1 (fits 4)
+        CHECK(c && c->Width == 2 && c->Height == 1 && c->Levels.size() == 1 && c->Levels[0].size() == 16);
+        DecodedImage hdr;
+        hdr.Width = hdr.Height = 1;
+        hdr.Rgba32f = { 1.0f, 2.0f, 3.0f, 1.0f };
+        CHECK(!Texture2D::Compress(hdr, TextureSettings{}));
+    }
+
     // Import defaults per folder (new textures and models there get a rule's import settings; the deepest folder's rule
     // wins; a .meta's settings are kept), applying a rule to the assets already there, and batch import settings.
     void TestImportDefaults()
@@ -14314,7 +14361,7 @@ namespace
             const AssetMetadata* m = AssetManager::GetMetadata(h);
             return m && m->ImportSettings.contains(key) ? m->ImportSettings[key] : nlohmann::json();
         };
-        CHECK(ImportDefaults::Keys(AssetType::Texture).size() == 3 && ImportDefaults::Keys(AssetType::Mesh).size() == 3 &&
+        CHECK(ImportDefaults::Keys(AssetType::Texture).size() == 5 && ImportDefaults::Keys(AssetType::Mesh).size() == 3 &&
               ImportDefaults::Keys(AssetType::Audio).empty());
 
         AssetHandle brick = add("Textures/Brick.png", "Textures/Brick.png");
@@ -21755,6 +21802,7 @@ int main(int argc, char** argv)
     Run("Scene visibility", TestSceneVisibility);
     Run("Presets", TestPresets);
     Run("Import defaults and batch import settings", TestImportDefaults);
+    Run("BC7 texture compression", TestTextureCompression);
     Run("Asset references and Find References In Scene", TestAssetReferences);
     Run("Project list view and Favorites", TestProjectListAndFavorites);
     Run("Audio preview (waveform and playback)", TestAudioPreview);
