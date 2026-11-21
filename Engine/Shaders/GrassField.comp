@@ -6,6 +6,7 @@
 // over the square around the camera, each kept as often as the terrain's grass density there says, thinning toward
 // the field's edge (the survivors grow a little to cover for the missing), set on the ground, left out on steep slopes
 // and outside the view; the kept ones are appended to an instance buffer (MeshInstance) that an indirect draw renders.
+// The sun's shadow cascades run it again with their own frustums (the same tufts: the thinning goes by the camera).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 

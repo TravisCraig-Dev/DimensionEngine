@@ -29,6 +29,13 @@ struct VelocityObject
                   // z: grass sway or fur shell (half floats, as Mesh.vert's Motion), 0 = none; w: fur (droop, wind)
 };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer PositionsRef { float Values[]; };
+// A grass field's tufts (GrassField.comp's MeshInstance): Flags bit 2, in place of Objects.
+struct MeshInstance
+{
+    mat4 Model;
+    uvec4 Data; // w: motion (sway, bending)
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstancesRef { MeshInstance Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer ObjectsRef { VelocityObject Items[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer FrameRef
 {
@@ -43,7 +50,7 @@ layout(push_constant) uniform Push
     SkinRef Skin;       // the mesh's skin weights (skinned objects)
     FrameRef Frame;
     uint Depth;         // bindless: the scene depth
-    uint Flags;         // 1: a water surface (Velocity.frag)
+    uint Flags;         // 1: a water surface (Velocity.frag); 2: Objects are a grass field's tufts (MeshInstance)
 } pc;
 
 layout(location = 0) out vec4 vCurrent;
@@ -58,7 +65,15 @@ mat4 SkinMatrix(uvec2 address, SkinVertex s)
 
 void main()
 {
-    VelocityObject o = pc.Objects.Items[gl_InstanceIndex];
+    VelocityObject o;
+    if ((pc.Flags & 2u) != 0u)
+    {
+        // A grass field's tuft: in place (its cell is fixed to the terrain), swaying.
+        MeshInstance m = InstancesRef(uvec2(pc.Objects)).Items[gl_InstanceIndex];
+        o = VelocityObject(m.Model, m.Model, uvec4(0u), uvec4(0u, 0u, m.Data.w, 0u));
+    }
+    else
+        o = pc.Objects.Items[gl_InstanceIndex];
     vec4 position = vec4(aPosition, 1.0), previous = position;
     vec3 normal = aNormal, prevNormal = aNormal;
     if (o.Joints.x != 0u || o.Joints.y != 0u)

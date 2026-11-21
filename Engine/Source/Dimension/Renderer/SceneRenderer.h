@@ -447,6 +447,9 @@ namespace Dimension
                        uint64_t material = 0);
         std::unordered_map<uint64_t, FrameDebugEvent> m_FrameMaterials; // by material address: the values (capturing)
         const char* m_ShadowTargetName = "Shadow Map";
+        // The sun cascade being drawn, for grass fields' tufts culled for it; -1 in other shadow passes (point and spot
+        // lights: no grass fields).
+        int m_GrassShadowCascade = -1;
         // The preview picture (RGBA8, registered for ImGui) and what it shows.
         Scope<Image> m_FramePreview;
         uint64_t m_FramePreviewImGui = 0;
@@ -525,7 +528,7 @@ namespace Dimension
             {
                 uint32_t FirstIndex, IndexCount;
                 VkDeviceAddress Material;
-                bool DoubleSided;
+                bool DoubleSided, CastShadows;
             };
             // This frame's (from the render list):
             bool Active = false; // drawn by the view being rendered
@@ -535,18 +538,30 @@ namespace Dimension
             Ref<Mesh> MeshRef;
             std::vector<Part> Parts;
             uint32_t EntityId = 0, Motion = 0;
+            float Reach = 0.0f; // the field's reach (world units): sun cascades starting beyond it draw none of it
             // The terrain's heights and grass density on the GPU, for the edits `Revision` (of settings `BaseKey`):
             Buffer Heights, Density;
             VkDeviceAddress HeightsAddress = 0, DensityAddress = 0;
             uint64_t Key = 0, BaseKey = 0, Revision = 0;
             std::vector<uint8_t> DensityCpu;
-            // The tufts and the indirect draws' arguments (a count, then a command per part).
-            Buffer Instances, Args;
-            VkDeviceAddress InstancesAddress = 0, ArgsAddress = 0;
-            uint32_t Capacity = 0;
+            // This frame's cull (GrassField.comp's parameters but the frustum and output) and its grid's cells a side.
+            std::vector<uint8_t> ParamBytes;
+            uint32_t Side = 0;
+            // The tufts and the indirect draws' arguments (a count, then a command per part): for the view [0] and for
+            // each sun shadow cascade [1 + c], culled by its frustum; Ready when made this frame.
+            struct Output
+            {
+                Buffer Instances, Args;
+                VkDeviceAddress InstancesAddress = 0, ArgsAddress = 0;
+                uint32_t Capacity = 0;
+                bool Ready = false;
+            };
+            Output Out[1 + ShadowCascades::kMax];
         };
         std::unordered_map<uint64_t, GrassField> m_GrassFields;
         void UpdateGrassFields(VkCommandBuffer cmd, const CameraData& camera);
+        // Culls a field's tufts by `viewProj` into its output `index` (0: the view; 1 + c: sun cascade c). Outside rendering.
+        void CullGrassField(VkCommandBuffer cmd, GrassField& f, const glm::mat4& viewProj, int index);
         void SimulateGpuParticles(VkCommandBuffer cmd, Scene& scene, SceneRenderTarget& target, const glm::mat4& view);
         // GPU particle world collision reads the depth this view stored last frame (with its view-projection).
         bool m_ParticleDepthWanted = false, m_ParticleDepthKept = false;

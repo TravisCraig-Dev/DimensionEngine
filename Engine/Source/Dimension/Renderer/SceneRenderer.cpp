@@ -2438,10 +2438,9 @@ namespace Dimension
 
     void SceneRenderer::UpdateGrassFields(VkCommandBuffer cmd, const CameraData& camera)
     {
-        auto& device = RenderDevice::Get();
-        bool any = false;
         for (auto& [key, f] : m_GrassFields)
         {
+            for (auto& out : f.Out) out.Ready = false;
             if (!f.Active || f.Parts.empty() || !f.SceneRef || !f.SceneRef->IsValid(f.Terrain)) continue;
             auto& reg = f.SceneRef->GetRegistry();
             const auto& terrain = reg.Get<TerrainComponent>(f.Terrain);
@@ -2491,71 +2490,86 @@ namespace Dimension
             float cell = std::sqrt(100.0f / std::max(terrain.GrassDensity, 0.01f)) / worldScale;
             glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
             uint32_t side = std::min((uint32_t)std::ceil(2.0f * reach / cell) + 2, 640u);
-            uint32_t capacity = side * side;
-            if (capacity > f.Capacity || !f.Instances.IsValid())
-            {
-                f.Capacity = capacity;
-                f.Instances = Buffer((VkDeviceSize)capacity * sizeof(InstanceGPU), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                     MemoryUsage::GpuOnly, "GrassInstances");
-                f.InstancesAddress = AddressOf(f.Instances);
-            }
-            VkDeviceSize argsSize = 16 + f.Parts.size() * sizeof(VkDrawIndexedIndirectCommand);
-            if (!f.Args.IsValid() || f.Args.GetSize() < argsSize)
-            {
-                f.Args = Buffer(std::max<VkDeviceSize>(argsSize, 256), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, MemoryUsage::GpuOnly, "GrassArgs");
-                f.ArgsAddress = AddressOf(f.Args);
-            }
-            TransientAllocation params = device.AllocateTransient(sizeof(GrassParamsGPU), 16);
-            if (!params) continue;
-            auto* p = static_cast<GrassParamsGPU*>(params.Data);
-            p->TerrainToWorld = world;
-            // The view's planes (Gribb & Hartmann), pointing in.
-            glm::mat4 vp = camera.Projection * camera.View;
-            glm::vec4 rows[4] = { glm::vec4(vp[0][0], vp[1][0], vp[2][0], vp[3][0]), glm::vec4(vp[0][1], vp[1][1], vp[2][1], vp[3][1]),
-                                  glm::vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]), glm::vec4(vp[0][3], vp[1][3], vp[2][3], vp[3][3]) };
-            glm::vec4 planes[6] = { rows[3] + rows[0], rows[3] - rows[0], rows[3] + rows[1], rows[3] - rows[1], rows[2], rows[3] - rows[2] };
-            for (int i = 0; i < 6; ++i) p->Frustum[i] = planes[i] / std::max(glm::length(glm::vec3(planes[i])), 1e-6f);
+            GrassParamsGPU p{};
+            p.TerrainToWorld = world;
             glm::ivec2 first = glm::ivec2(glm::floor((glm::vec2(eye.x, eye.z) - reach + size * 0.5f) / cell));
             AABB bounds = f.MeshRef->GetBounds();
             float radius = std::max({ std::abs(bounds.Min.x), std::abs(bounds.Max.x), std::abs(bounds.Min.z), std::abs(bounds.Max.z), bounds.Max.y - bounds.Min.y });
-            p->Camera = glm::vec4(eye, reach);
-            p->Terrain = glm::vec4(size, (float)n, worldScale);
-            p->Grid = glm::vec4((float)first.x, (float)first.y, (float)side, cell);
-            p->Look = glm::vec4(terrain.GrassScale.x, terrain.GrassScale.y, std::cos(glm::radians(std::clamp(terrain.GrassMaxSlope, 0.0f, 90.0f))),
-                                glm::uintBitsToFloat((uint32_t)terrain.Seed * 2654435761u + 0x6a09e667u));
-            p->Mesh = glm::vec4(radius, bounds.Center().y, 0.12f, 0.0f);
-            p->Sources = glm::uvec4((uint32_t)f.HeightsAddress, (uint32_t)(f.HeightsAddress >> 32), (uint32_t)f.DensityAddress, (uint32_t)(f.DensityAddress >> 32));
-            p->Out = glm::uvec4((uint32_t)f.InstancesAddress, (uint32_t)(f.InstancesAddress >> 32), (uint32_t)f.ArgsAddress, (uint32_t)(f.ArgsAddress >> 32));
-            p->Info = glm::uvec4(capacity, f.EntityId, f.Motion, 0u);
-            // The arguments afresh (the count at 0), the tufts made, the count copied into each part's draw.
-            if (!any)
-                Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                                  VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
-            any = true;
-            std::vector<uint32_t> args(argsSize / 4, 0u);
-            for (size_t k = 0; k < f.Parts.size(); ++k)
-            {
-                auto* draw = reinterpret_cast<VkDrawIndexedIndirectCommand*>(args.data() + 4) + k;
-                draw->indexCount = f.Parts[k].IndexCount;
-                draw->firstIndex = f.Parts[k].FirstIndex;
-            }
-            vkCmdUpdateBuffer(cmd, f.Args.GetHandle(), 0, argsSize, args.data());
-            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                              VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
-            Renderer::Get().GrassField.Bind(cmd);
-            glm::uvec2 address((uint32_t)params.Address, (uint32_t)(params.Address >> 32));
-            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(address), &address);
-            vkCmdDispatch(cmd, (side + 7) / 8, (side + 7) / 8, 1);
-            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-            std::vector<VkBufferCopy> copies;
-            for (size_t k = 0; k < f.Parts.size(); ++k)
-                copies.push_back({ 0, 16 + k * sizeof(VkDrawIndexedIndirectCommand) + offsetof(VkDrawIndexedIndirectCommand, instanceCount), 4 });
-            vkCmdCopyBuffer(cmd, f.Args.GetHandle(), f.Args.GetHandle(), (uint32_t)copies.size(), copies.data());
+            p.Camera = glm::vec4(eye, reach);
+            p.Terrain = glm::vec4(size, (float)n, worldScale);
+            p.Grid = glm::vec4((float)first.x, (float)first.y, (float)side, cell);
+            p.Look = glm::vec4(terrain.GrassScale.x, terrain.GrassScale.y, std::cos(glm::radians(std::clamp(terrain.GrassMaxSlope, 0.0f, 90.0f))),
+                               glm::uintBitsToFloat((uint32_t)terrain.Seed * 2654435761u + 0x6a09e667u));
+            p.Mesh = glm::vec4(radius, bounds.Center().y, 0.12f, 0.0f);
+            p.Sources = glm::uvec4((uint32_t)f.HeightsAddress, (uint32_t)(f.HeightsAddress >> 32), (uint32_t)f.DensityAddress, (uint32_t)(f.DensityAddress >> 32));
+            p.Info = glm::uvec4(0u, f.EntityId, f.Motion, 0u);
+            f.ParamBytes.assign((const uint8_t*)&p, (const uint8_t*)&p + sizeof(p));
+            f.Side = side;
+            for (auto& out : f.Out) out.Ready = false;
+            CullGrassField(cmd, f, camera.Projection * camera.View, 0);
         }
-        if (any)
-            Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-                              VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+    }
+
+    void SceneRenderer::CullGrassField(VkCommandBuffer cmd, GrassField& f, const glm::mat4& viewProj, int index)
+    {
+        auto& device = RenderDevice::Get();
+        GrassField::Output& o = f.Out[index];
+        o.Ready = false;
+        if (f.ParamBytes.size() != sizeof(GrassParamsGPU) || f.Side == 0) return;
+        uint32_t capacity = f.Side * f.Side;
+        if (capacity > o.Capacity || !o.Instances.IsValid())
+        {
+            o.Capacity = capacity;
+            o.Instances = Buffer((VkDeviceSize)capacity * sizeof(InstanceGPU), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                 MemoryUsage::GpuOnly, index ? "GrassShadowInstances" : "GrassInstances");
+            o.InstancesAddress = AddressOf(o.Instances);
+        }
+        VkDeviceSize argsSize = 16 + f.Parts.size() * sizeof(VkDrawIndexedIndirectCommand);
+        if (!o.Args.IsValid() || o.Args.GetSize() < argsSize)
+        {
+            o.Args = Buffer(std::max<VkDeviceSize>(argsSize, 256), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, MemoryUsage::GpuOnly, "GrassArgs");
+            o.ArgsAddress = AddressOf(o.Args);
+        }
+        TransientAllocation params = device.AllocateTransient(sizeof(GrassParamsGPU), 16);
+        if (!params) return;
+        GrassParamsGPU p;
+        std::memcpy(&p, f.ParamBytes.data(), sizeof(p));
+        // The view's planes (Gribb & Hartmann), pointing in.
+        const glm::mat4& vp = viewProj;
+        glm::vec4 rows[4] = { glm::vec4(vp[0][0], vp[1][0], vp[2][0], vp[3][0]), glm::vec4(vp[0][1], vp[1][1], vp[2][1], vp[3][1]),
+                              glm::vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]), glm::vec4(vp[0][3], vp[1][3], vp[2][3], vp[3][3]) };
+        glm::vec4 planes[6] = { rows[3] + rows[0], rows[3] - rows[0], rows[3] + rows[1], rows[3] - rows[1], rows[2], rows[3] - rows[2] };
+        for (int i = 0; i < 6; ++i) p.Frustum[i] = planes[i] / std::max(glm::length(glm::vec3(planes[i])), 1e-6f);
+        p.Out = glm::uvec4((uint32_t)o.InstancesAddress, (uint32_t)(o.InstancesAddress >> 32), (uint32_t)o.ArgsAddress, (uint32_t)(o.ArgsAddress >> 32));
+        p.Info.x = capacity;
+        std::memcpy(params.Data, &p, sizeof(p));
+        // The arguments afresh (the count at 0; earlier draws done with them), the tufts made, the count copied into
+        // each part's draw.
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+        std::vector<uint32_t> args(argsSize / 4, 0u);
+        for (size_t k = 0; k < f.Parts.size(); ++k)
+        {
+            auto* draw = reinterpret_cast<VkDrawIndexedIndirectCommand*>(args.data() + 4) + k;
+            draw->indexCount = f.Parts[k].IndexCount;
+            draw->firstIndex = f.Parts[k].FirstIndex;
+        }
+        vkCmdUpdateBuffer(cmd, o.Args.GetHandle(), 0, argsSize, args.data());
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+        Renderer::Get().GrassField.Bind(cmd);
+        glm::uvec2 address((uint32_t)params.Address, (uint32_t)(params.Address >> 32));
+        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(address), &address);
+        vkCmdDispatch(cmd, (f.Side + 7) / 8, (f.Side + 7) / 8, 1);
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        std::vector<VkBufferCopy> copies;
+        for (size_t k = 0; k < f.Parts.size(); ++k)
+            copies.push_back({ 0, 16 + k * sizeof(VkDrawIndexedIndirectCommand) + offsetof(VkDrawIndexedIndirectCommand, instanceCount), 4 });
+        vkCmdCopyBuffer(cmd, o.Args.GetHandle(), o.Args.GetHandle(), (uint32_t)copies.size(), copies.data());
+        Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+        o.Ready = true;
     }
 
     void SceneRenderer::BuildRenderList(Scene& scene, const CameraData& camera, const SceneRenderOptions& options)
@@ -3256,9 +3270,10 @@ namespace Dimension
                     f.MeshRef = mesh;
                     f.EntityId = e.Index + 1;
                     f.Motion = motion;
+                    f.Reach = terrain.GrassDistance;
                     f.Parts.clear();
                     for (const DetailPart& p : parts)
-                        if (!p.Transparent) f.Parts.push_back({ p.FirstIndex, p.IndexCount, p.Address, p.DoubleSided });
+                        if (!p.Transparent) f.Parts.push_back({ p.FirstIndex, p.IndexCount, p.Address, p.DoubleSided, p.CastShadows && !p.Transparent });
                     continue;
                 }
                 AABB bounds = mesh->GetBounds();
@@ -3578,15 +3593,19 @@ namespace Dimension
                     submit(d, std::min(kMaxInstancesPerDraw, v.Capacity - done));
                 }
             }
-        // Grass fields: the tufts the compute pass kept, one indirect instanced draw per part (they cast no shadows).
-        if (!shadowPass && !oitPass)
+        // Grass fields: the tufts the compute pass kept, one indirect instanced draw per part; into the sun's cascades
+        // that start within the field's reach, the tufts culled for each (the parts that cast shadows).
+        if (!oitPass && (!shadowPass || m_GrassShadowCascade >= 0))
             for (auto& [key, f] : m_GrassFields)
             {
-                if (!f.Active || !f.Args.IsValid() || !f.Instances.IsValid() || !f.MeshRef) continue;
+                const GrassField::Output& out = f.Out[shadowPass ? 1 + m_GrassShadowCascade : 0];
+                if (!f.Active || !out.Ready || !f.MeshRef) continue;
                 for (size_t k = 0; k < f.Parts.size(); ++k)
                 {
                     const GrassField::Part& part = f.Parts[k];
-                    const Pipeline* pipe = depthPass ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
+                    if (shadowPass && !part.CastShadows) continue;
+                    const Pipeline* pipe = shadowPass ? &res.Shadow
+                                         : depthPass ? &MainPipeline(part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
                                          : modePipe  ? modePipe
                                          : &MainPipeline(prepassed ? (part.DoubleSided ? MainPipelines::MeshDoubleSidedPrepassed : MainPipelines::MeshPrepassed)
                                                                    : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
@@ -3598,7 +3617,7 @@ namespace Dimension
                     MeshPush push{};
                     push.Model = glm::mat4(1.0f);
                     push.Material = part.Material;
-                    push.Instances = f.InstancesAddress;
+                    push.Instances = out.InstancesAddress;
                     push.EntityId = f.EntityId;
                     push.Flags = 2u | (1u << 17); // instanced, each with its own tint
                     push.Motion = f.Motion;
@@ -3608,7 +3627,7 @@ namespace Dimension
                         f.MeshRef->Bind(cmd);
                         boundMesh = f.MeshRef.get();
                     }
-                    vkCmdDrawIndexedIndirect(cmd, f.Args.GetHandle(), 16 + k * sizeof(VkDrawIndexedIndirectCommand), 1, 0);
+                    vkCmdDrawIndexedIndirect(cmd, out.Args.GetHandle(), 16 + k * sizeof(VkDrawIndexedIndirectCommand), 1, 0);
                     m_Stats.DrawCalls++;
                 }
             }
@@ -3896,6 +3915,16 @@ namespace Dimension
             out.DepthRange[c] = radius * 2.0f + backoff;
         }
 
+        // Grass fields' tufts for each cascade starting within a field's reach, culled by the cascade's own frustum (those
+        // outside the view cast into it too).
+        for (auto& [key, f] : m_GrassFields)
+        {
+            if (!f.Active || !f.Out[0].Ready || std::none_of(f.Parts.begin(), f.Parts.end(), [](const GrassField::Part& p) { return p.CastShadows; })) continue;
+            for (int c = 0; c < out.Count; ++c)
+                if ((c == 0 ? 0.0f : out.Splits[c - 1]) < f.Reach) CullGrassField(cmd, f, out.ViewProj[c], 1 + c);
+                else f.Out[1 + c].Ready = false;
+        }
+
         // Depth-only passes into the atlas tiles, reusing the mesh vertex shader with the light as the camera.
         VkImage img = m_ShadowMap->GetHandle();
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -3922,7 +3951,9 @@ namespace Dimension
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             std::memcpy(shadowUniforms.data(), &out.ViewProj[c], sizeof(glm::mat4)); // ViewProj is the first member
             device.BindUniforms(cmd, shadowUniforms.data(), shadowUniforms.size());
+            m_GrassShadowCascade = c;
             DrawMeshes(cmd, out.ViewProj[c], MeshPass::Shadow);
+            m_GrassShadowCascade = -1;
         }
         vkCmdEndRendering(cmd);
         Vk::TransitionImage(cmd, img, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -5490,7 +5521,13 @@ namespace Dimension
             grassDraws.push_back({ group.Item, (uint32_t)objects.size(), (uint32_t)group.Entries.size() });
             objects.insert(objects.end(), group.Entries.begin(), group.Entries.end());
         }
-        if (draws.empty() && spriteVertices.empty() && m_GpuParticleDraws.empty() && grassDraws.empty()) return;
+        // Grass fields swaying: their tufts straight from the field's instances, by its indirect draws (they stay put:
+        // their own motion is the sway alone).
+        bool fieldsSway = std::any_of(m_GrassFields.begin(), m_GrassFields.end(), [](const auto& entry) {
+            const GrassField& f = entry.second;
+            return f.Active && f.Motion && f.Out[0].Ready && f.MeshRef;
+        });
+        if (draws.empty() && spriteVertices.empty() && m_GpuParticleDraws.empty() && grassDraws.empty() && !fieldsSway) return;
 
         TransientAllocation objectBlock = objects.empty() ? TransientAllocation{} : device.AllocateTransient(objects.size() * sizeof(VelocityGPU), 16);
         TransientAllocation frameBlock = device.AllocateTransient(2 * sizeof(glm::mat4) + sizeof(glm::vec4), 16);
@@ -5521,7 +5558,7 @@ namespace Dimension
         VkRect2D scissor{ { 0, 0 }, extent };
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
-        if (!draws.empty() || !grassDraws.empty()) res.Velocity.Bind(cmd);
+        if (!draws.empty() || !grassDraws.empty() || fieldsSway) res.Velocity.Bind(cmd);
         Mesh* bound = nullptr;
         // Water last: its surface covers whatever under it moved (it is not in the depth to hide them).
         std::stable_partition(draws.begin(), draws.end(), [this](const ObjectDraw& d)
@@ -5577,6 +5614,25 @@ namespace Dimension
                 }
             }
         }
+        if (fieldsSway)
+            for (auto& [key, f] : m_GrassFields)
+            {
+                if (!f.Active || !f.Motion || !f.Out[0].Ready || !f.MeshRef) continue;
+                if (!DebugDraw("Motion Vectors", "Velocity", "Grass Field", f.EntityId, 1, 0)) continue;
+                struct { VkDeviceAddress Objects, Skin, Frame; uint32_t Depth, Flags; } push{ f.Out[0].InstancesAddress, 0, frameBlock.Address,
+                                                                                              target.GetDepthBindless(), 2u };
+                vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                if (f.MeshRef.get() != bound)
+                {
+                    f.MeshRef->Bind(cmd);
+                    bound = f.MeshRef.get();
+                }
+                for (size_t k = 0; k < f.Parts.size(); ++k)
+                {
+                    vkCmdDrawIndexedIndirect(cmd, f.Out[0].Args.GetHandle(), 16 + k * sizeof(VkDrawIndexedIndirectCommand), 1, 0);
+                    m_Stats.DrawCalls++;
+                }
+            }
         if (spriteBlock && DebugDraw("Motion Vectors", "Velocity", "Sprites", 0, 1, (uint32_t)spriteCount * 2))
         {
             res.VelocitySprite.Bind(cmd);
