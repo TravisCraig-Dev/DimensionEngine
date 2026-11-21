@@ -35,7 +35,7 @@ float SunVisibility(vec3 p)
     for (int c = 0; c < count; ++c)
     {
         if (depth > uScene.CascadeSplits[c]) continue;
-        float s = SampleCascade(c, p, vec3(0.0));
+        float s = SampleCascadePoint(c, p); // one reading: the jittered steps (and TAA) smooth the shafts
         if (s >= 0.0) return s;
     }
     return 1.0;

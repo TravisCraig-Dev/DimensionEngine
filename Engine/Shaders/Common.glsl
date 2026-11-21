@@ -221,6 +221,22 @@ float SampleCascade(int c, vec3 worldPos, vec3 normal)
     return lit / 9.0;
 }
 
+// One shadow map reading at a point (1 lit, 0 shadowed, -1 outside this cascade's tile): for effects that sample many
+// points and smooth the result themselves (fog's light shafts), where SampleCascade's filtering would cost dozens of
+// reads a point.
+float SampleCascadePoint(int c, vec3 worldPos)
+{
+    vec4 ls = uScene.LightViewProj[c] * vec4(worldPos, 1.0);
+    vec3 p = ls.xyz / ls.w;
+    vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    uint map = uint(uScene.ShadowParams.y);
+    vec2 texel = vec2(1.0) / vec2(textureSize(uTextures[nonuniformEXT(map)], 0));
+    float margin = texel.x * 2.0;
+    if (uv.x <= margin || uv.y <= margin || uv.x >= 1.0 - margin || uv.y >= 1.0 - margin || p.z >= 1.0) return -1.0;
+    vec2 atlasUV = (vec2(float(c & 1), float(c >> 1)) + uv) * 0.5;
+    return p.z - uScene.ShadowParams.z <= textureLod(uTextures[nonuniformEXT(map)], atlasUV, 0.0).r ? 1.0 : 0.0;
+}
+
 int ShadowCascadeIndex(vec3 worldPos)
 {
     int count = int(uScene.ShadowParams.x);
