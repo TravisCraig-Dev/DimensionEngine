@@ -2,8 +2,6 @@
 #include "Dimension/Core/Log.h"
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
 #include <Windows.h>
 #include <algorithm>
 #include <atomic>
@@ -230,7 +228,7 @@ namespace Dimension::SplashScreen
 
     bool IsShown() { return S().Thread.joinable(); }
 }
-#else
+#elif !defined(__linux__) // (SplashScreenLinux.cpp)
 namespace Dimension::SplashScreen
 {
     void Show(const std::string&, const std::string&) {}
