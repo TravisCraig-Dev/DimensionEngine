@@ -21,6 +21,7 @@
 #include <Dimension/Renderer/SceneRenderer.h>
 #include <Dimension/Renderer/CameraStack.h>
 #include <Dimension/Core/Profiler.h>
+#include <Dimension/Renderer/GpuMemory.h>
 #include <Dimension/Scripting/GameModule.h>
 #include <Dimension/Scene/Prefab.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
@@ -108,6 +109,16 @@ namespace
                           "(CPU: update {:.2f} ms, render recording {:.2f} ms, of which render list {:.2f} ms)",
                           st.DrawCalls, st.Meshes, st.InstancedMeshes, st.Occluded, st.Triangles, st.ShadowCasters, avg, m_TimedFrames,
                           m_UpdateMs / n, m_RenderMs / n, m_ListMs / n);
+                // GPU memory by kind (and the device-local heaps' use against their budget): for runs that check it fits.
+                std::string memory;
+                for (int k = 0; k < (int)GpuMemory::Kind::Count; ++k)
+                {
+                    GpuMemory::Usage u = GpuMemory::Get((GpuMemory::Kind)k);
+                    memory += std::format("{}{} {:.0f} MB ({})", k ? ", " : "", GpuMemory::Name((GpuMemory::Kind)k), u.Bytes / 1048576.0, u.Count);
+                }
+                for (const GpuMemory::Heap& h : GpuMemory::Heaps())
+                    if (h.DeviceLocal) memory += std::format("; device heap {:.0f} of {:.0f} MB", h.Used / 1048576.0, h.Budget / 1048576.0);
+                Log::Info("GPU memory: {}", memory);
             }
             m_Scene->NotifyApplicationQuit();
             m_Scene->OnRuntimeStop();

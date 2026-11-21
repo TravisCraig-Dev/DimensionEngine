@@ -1919,6 +1919,14 @@ namespace Editor
             if (ImGui::Checkbox("sRGB (Color Texture)", &srgb)) { settings["srgb"] = srgb; changed = true; }
             bool mips = settings.value("mips", true);
             if (ImGui::Checkbox("Generate Mip Maps", &mips)) { settings["mips"] = mips; changed = true; }
+            // Max Size (like Unity's): larger images are halved until they fit when loaded (GPU memory).
+            static const uint32_t kSizes[] = { 0, 4096, 2048, 1024, 512, 256 };
+            static const char* kSizeNames[] = { "Full", "4096", "2048", "1024", "512", "256" };
+            uint32_t maxSize = settings.value("maxSize", 0u);
+            int pick = 0;
+            for (int i = 0; i < 6; ++i) if (kSizes[i] == maxSize) pick = i;
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::Combo("Max Size", &pick, kSizeNames, 6)) { settings["maxSize"] = kSizes[pick]; changed = true; }
             if (changed) AssetManager::SetImportSettings(handle, settings);
             DrawImportDefault(handle);
 

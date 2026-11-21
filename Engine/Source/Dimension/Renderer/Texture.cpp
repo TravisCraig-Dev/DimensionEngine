@@ -3,6 +3,7 @@
 #include "Dimension/ImGui/ImGuiLayer.h"
 #include "Dimension/Core/Log.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -189,10 +190,63 @@ namespace Dimension
         return texture;
     }
 
+    namespace
+    {
+        // Halves an image (2 x 2 boxes; an odd last row or column counts once), colour in linear light when sRGB.
+        template<typename T, typename ToLinear, typename FromLinear>
+        std::vector<T> Halve(const std::vector<T>& src, uint32_t w, uint32_t h, ToLinear toLinear, FromLinear fromLinear)
+        {
+            uint32_t nw = std::max(1u, w / 2), nh = std::max(1u, h / 2);
+            std::vector<T> out((size_t)nw * nh * 4);
+            for (uint32_t y = 0; y < nh; ++y)
+                for (uint32_t x = 0; x < nw; ++x)
+                    for (int c = 0; c < 4; ++c)
+                    {
+                        float sum = 0.0f;
+                        for (uint32_t dy = 0; dy < 2; ++dy)
+                            for (uint32_t dx = 0; dx < 2; ++dx)
+                            {
+                                uint32_t sx = std::min(x * 2 + dx, w - 1), sy = std::min(y * 2 + dy, h - 1);
+                                sum += toLinear(src[((size_t)sy * w + sx) * 4 + c], c);
+                            }
+                        out[((size_t)y * nw + x) * 4 + c] = fromLinear(sum * 0.25f, c);
+                    }
+            return out;
+        }
+    }
+
     Ref<Texture2D> Texture2D::FromDecoded(const DecodedImage& image, const TextureSettings& settings, const std::string& name)
     {
-        if (image.IsHdr()) return MakeRef<Texture2D>(image.Rgba32f.data(), image.Width, image.Height, settings, name.c_str());
-        return MakeRef<Texture2D>(image.Rgba8.data(), image.Width, image.Height, settings, name.c_str());
+        uint32_t w = image.Width, h = image.Height;
+        bool fits = settings.MaxSize == 0 || std::max(w, h) <= settings.MaxSize;
+        if (image.IsHdr())
+        {
+            if (fits) return MakeRef<Texture2D>(image.Rgba32f.data(), w, h, settings, name.c_str());
+            std::vector<float> px = image.Rgba32f;
+            auto same = [](float v, int) { return v; };
+            for (; std::max(w, h) > settings.MaxSize && std::max(w, h) > 1; w = std::max(1u, w / 2), h = std::max(1u, h / 2)) px = Halve(px, w, h, same, same);
+            return MakeRef<Texture2D>(px.data(), w, h, settings, name.c_str());
+        }
+        if (fits) return MakeRef<Texture2D>(image.Rgba8.data(), w, h, settings, name.c_str());
+        // (sRGB colour averaged as light, not as its encoded values, which would darken it; alpha as it is)
+        static const std::array<float, 256> linear = [] {
+            std::array<float, 256> t{};
+            for (int i = 0; i < 256; ++i)
+            {
+                float c = i / 255.0f;
+                t[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+            }
+            return t;
+        }();
+        bool srgb = settings.SRGB;
+        auto toLinear = [&](uint8_t v, int c) { return srgb && c < 3 ? linear[v] : v / 255.0f; };
+        auto fromLinear = [&](float v, int c) {
+            if (srgb && c < 3) v = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+            return (uint8_t)std::clamp((int)std::lround(v * 255.0f), 0, 255);
+        };
+        std::vector<uint8_t> px = image.Rgba8;
+        for (; std::max(w, h) > settings.MaxSize && std::max(w, h) > 1; w = std::max(1u, w / 2), h = std::max(1u, h / 2)) px = Halve(px, w, h, toLinear, fromLinear);
+        return MakeRef<Texture2D>(px.data(), w, h, settings, name.c_str());
     }
 
     Ref<Texture2D> Texture2D::CreateSolid(uint32_t rgba, const char* debugName)

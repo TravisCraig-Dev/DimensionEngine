@@ -218,6 +218,30 @@ namespace Dimension
             auto& subs = s->SubAssets[mesh];
             auto image = [&](int32_t index, bool srgb) -> AssetHandle {
                 if (index < 0 || index >= (int32_t)data.Images.size()) return AssetHandle::None();
+                const ImportedImage& file = data.Images[index];
+                // An image file (not embedded) is loaded once for every model that uses it, as its own .meta says
+                // (Max Size, filtering, mip maps; the color space as the material slot wants): eight models sharing a
+                // body's textures used to hold eight full-size copies of each.
+                if (file.Bytes.empty() && !file.File.empty())
+                {
+                    std::error_code ec;
+                    std::string key = fs::weakly_canonical(file.File, ec).generic_string();
+                    AssetHandle shared = SubAssetHandle(AssetHandle(std::hash<std::string>{}(key)), srgb ? 4 : 5, 0);
+                    if (!s->Textures.contains(shared))
+                    {
+                        TextureSettings ts;
+                        ts.SRGB = srgb;
+                        if (const AssetMetadata* own = AssetManager::GetMetadata(AssetManager::GetHandle(file.File)); own && own->Type == AssetType::Texture)
+                        {
+                            ts.Filter = (TextureFilter)own->ImportSettings.value("filter", 0);
+                            ts.GenerateMips = own->ImportSettings.value("mips", true);
+                            ts.MaxSize = own->ImportSettings.value("maxSize", 0u);
+                        }
+                        s->Textures[shared] = Texture2D::LoadFromFile(file.File, ts);
+                        s->SubAssetNames[shared] = file.Name;
+                    }
+                    return shared;
+                }
                 AssetHandle h = SubAssetHandle(mesh, srgb ? 1 : 2, (uint64_t)index);
                 if (!s->Textures.contains(h))
                 {
@@ -591,6 +615,7 @@ namespace Dimension
         ts.Filter = (TextureFilter)meta->ImportSettings.value("filter", 0);
         ts.SRGB = meta->ImportSettings.value("srgb", true);
         ts.GenerateMips = meta->ImportSettings.value("mips", true);
+        ts.MaxSize = meta->ImportSettings.value("maxSize", 0u);
         fs::path file = s->AssetsDir / meta->Path;
         Ref<Texture2D> tex;
         if (auto image = AssetPrefetch::TakeImage(file)) tex = Texture2D::FromDecoded(*image, ts, meta->Path.filename().string());

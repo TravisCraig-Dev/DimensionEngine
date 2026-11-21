@@ -12,6 +12,9 @@ namespace Dimension
         TextureFilter Filter = TextureFilter::Bilinear;
         bool SRGB = true;
         bool GenerateMips = true;
+        // Images larger than this (either side) are halved until they fit when loaded (0: as they are). Saves GPU memory
+        // where a texture repeats over a few meters and its full size adds nothing.
+        uint32_t MaxSize = 0;
     };
 
     // Sampled 2D texture registered in the bindless table.
