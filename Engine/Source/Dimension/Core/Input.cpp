@@ -56,6 +56,18 @@ namespace Dimension
         };
         std::array<RumbleState, kMaxPads> s_Rumble;
 
+        // Pad p's GUID and its rank among the connected pads with the same one (-1: none).
+        int SameGuidOrdinal(int pad, std::string& guid)
+        {
+            const char* g = glfwGetJoystickGUID(GLFW_JOYSTICK_1 + pad);
+            if (!g) return -1;
+            guid = g;
+            int ordinal = 0;
+            for (int j = 0; j < pad; ++j)
+                if (const char* other = glfwGetJoystickGUID(GLFW_JOYSTICK_1 + j); other && guid == other) ++ordinal;
+            return ordinal;
+        }
+
 #ifdef _WIN32
         // XInput is loaded at runtime (as GLFW does), so nothing extra is linked.
         struct XInputApi
@@ -109,11 +121,17 @@ namespace Dimension
         }
 
         // Windows.Gaming.Input drives all four motors (Xbox One / Series impulse triggers too); XInput only the two
-        // body motors, for pads it does not list.
+        // body motors, for pads it does not list. Other pads (DualShock 4, DualSense): their HID output reports.
         void SendRumble(int pad, const Motors& m)
         {
             int rank = XInputRank(pad);
-            if (rank < 0) return;
+            if (rank < 0)
+            {
+                std::string guid;
+                int ordinal = SameGuidOrdinal(pad, guid);
+                if (ordinal >= 0) GamepadHaptics::SetDeviceRumble(guid, ordinal, m[0], m[1]);
+                return;
+            }
             if (GamepadHaptics::Set(rank, m[0], m[1], m[2], m[3])) return;
             int slot = XInputSlot(pad);
             if (slot < 0 || !XInput().SetState) return;
@@ -124,23 +142,16 @@ namespace Dimension
         int ProbeHaptics(int pad)
         {
             int rank = XInputRank(pad);
-            if (rank < 0) return 0;
+            if (rank < 0)
+            {
+                std::string guid;
+                int ordinal = SameGuidOrdinal(pad, guid);
+                return ordinal >= 0 && GamepadHaptics::DeviceHasRumble(guid, ordinal) ? (int)GamepadHapticBits::Rumble : 0;
+            }
             if (rank < GamepadHaptics::Count()) return (int)GamepadHapticBits::Rumble | (int)GamepadHapticBits::TriggerRumble;
             return XInputSlot(pad) >= 0 ? (int)GamepadHapticBits::Rumble : 0;
         }
 #else
-        // Pad p's GUID and its rank among the connected pads with the same one (-1: none).
-        int SameGuidOrdinal(int pad, std::string& guid)
-        {
-            const char* g = glfwGetJoystickGUID(GLFW_JOYSTICK_1 + pad);
-            if (!g) return -1;
-            guid = g;
-            int ordinal = 0;
-            for (int j = 0; j < pad; ++j)
-                if (const char* other = glfwGetJoystickGUID(GLFW_JOYSTICK_1 + j); other && guid == other) ++ordinal;
-            return ordinal;
-        }
-
         // The body motors through the kernel's force feedback (no trigger motors there).
         void SendRumble(int pad, const Motors& m)
         {

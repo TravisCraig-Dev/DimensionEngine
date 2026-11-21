@@ -65,6 +65,7 @@
 #include <Dimension/Music/AudioExport.h>
 #include <Dimension/Renderer/ColrV1.h>
 #include <Dimension/Platform/Platform.h>
+#include <Dimension/Platform/SonyPadReports.h>
 #include <Dimension/Audio/Microphone.h>
 #include <Dimension/Audio/VoiceChat.h>
 #include <Dimension/Physics/Water.h>
@@ -21232,6 +21233,48 @@ namespace
         CHECK(MusicSilent(second, 0, rate));
     }
 
+    void TestSonyPadReports()
+    {
+        namespace S = GamepadHaptics::Sony;
+        CHECK(S::Identify(0x054C, 0x09CC) == S::Pad::DualShock4);
+        CHECK(S::Identify(0x054C, 0x0CE6) == S::Pad::DualSense);
+        CHECK(!S::Identify(0x054C, 0x0268)); // (DualShock 3: no report of these kinds)
+        CHECK(!S::Identify(0x045E, 0x0CE6));
+        uint16_t vendor = 0, product = 0;
+        CHECK(S::IdentifyGuid("030000004c050000e60c000000000000", &vendor, &product) == S::Pad::DualSense);
+        CHECK(vendor == 0x054C && product == 0x0CE6);
+        CHECK(S::IdentifyGuid("030000004C050000CC09000000000000") == S::Pad::DualShock4);
+        CHECK(!S::IdentifyGuid("78696e707574010000000000000000")); // too short / XInput
+        CHECK(!S::IdentifyGuid("030000005e0400008e02000000000000"));
+
+        const uint8_t digits[] = { '1', '2', '3', '4', '5', '6', '7', '8', '9' };
+        CHECK(S::Crc32(digits, 9) == 0xCBF43926u); // the standard check value
+        CHECK(S::Crc32(digits + 4, 5, S::Crc32(digits, 4)) == 0xCBF43926u);
+
+        auto crcOk = [&](const std::vector<uint8_t>& r) {
+            uint8_t header = 0xA2;
+            uint32_t crc = S::Crc32(r.data(), r.size() - 4, S::Crc32(&header, 1));
+            size_t n = r.size();
+            return r[n - 4] == (uint8_t)crc && r[n - 3] == (uint8_t)(crc >> 8) && r[n - 2] == (uint8_t)(crc >> 16) &&
+                   r[n - 1] == (uint8_t)(crc >> 24);
+        };
+
+        auto r = S::RumbleReport(S::Pad::DualShock4, false, 1.0f, 0.5f);
+        CHECK(r.size() == 32 && r[0] == 0x05 && r[1] == 0x01 && r[4] == 128 && r[5] == 255);
+        CHECK(r[6] == 0 && r[7] == 0 && r[8] == 0); // the light bar is left alone
+        r = S::RumbleReport(S::Pad::DualShock4, true, 0.0f, 2.0f);
+        CHECK(r.size() == 78 && r[0] == 0x11 && r[1] == 0xC4 && r[3] == 0x01 && r[6] == 255 && r[7] == 0);
+        CHECK(crcOk(r));
+
+        r = S::RumbleReport(S::Pad::DualSense, false, 0.25f, 1.0f);
+        CHECK(r.size() == 48 && r[0] == 0x02 && r[1] == 0x03 && r[3] == 255 && r[4] == 64);
+        r = S::RumbleReport(S::Pad::DualSense, true, 1.0f, 0.0f, 0x15);
+        CHECK(r.size() == 78 && r[0] == 0x31 && r[1] == 0x50 && r[2] == 0x10 && r[3] == 0x03);
+        CHECK(r[5] == 0 && r[6] == 255);
+        CHECK(crcOk(r));
+        CHECK(S::RumbleReport(S::Pad::DualSense, true, 1.0f, 0.0f, 6) != r); // a new sequence number, a new CRC
+    }
+
     void TestMusicExport()
     {
         using namespace Dimension::Music;
@@ -21590,6 +21633,7 @@ int main(int argc, char** argv)
     Run("Music plugins", TestMusicPlugins);
     Run("Music recording", TestMusicRecording);
     Run("Music export", TestMusicExport);
+    Run("Sony pad reports", TestSonyPadReports);
 
     std::printf("\n%d checks, %d failures\n", g_Checks, g_Failures);
     return g_Failures == 0 ? 0 : 1;
