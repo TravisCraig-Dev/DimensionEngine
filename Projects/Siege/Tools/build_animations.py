@@ -39,6 +39,11 @@ def main(authored=None):
     world = G.world_matrices({"nodes": nodes})
     nodes.append({"name": "bowstring", "translation": anim_author.bowstring_local(world[hand_l]).tolist()})
     nodes[hand_l].setdefault("children", []).append(len(nodes) - 1)
+    # The nocked arrow's joint (also under the left hand; hidden at rest: anim_author.py).
+    arrow_t, arrow_q = anim_author.nockedarrow_bind(world[hand_l])
+    nodes.append({"name": "nockedarrow", "translation": arrow_t.tolist(), "rotation": arrow_q.tolist(),
+                  "scale": [anim_author.ARROW_HIDDEN] * 3})
+    nodes[hand_l]["children"].append(len(nodes) - 1)
     index = {n.get("name"): i for i, n in enumerate(nodes)}
     doc = {"asset": {"version": "2.0", "generator": "Siege build_animations"}, "scene": 0,
            "scenes": [{"nodes": roots}], "nodes": nodes, "animations": []}
@@ -49,8 +54,11 @@ def main(authored=None):
     ibm = ual1.read(skin["inverseBindMatrices"]).astype(np.float32)
     string_world = world[hand_l].copy()
     string_world[:3, 3] = (world[hand_l] @ np.append(nodes[index["bowstring"]]["translation"], 1.0))[:3]
-    ibm = np.vstack([ibm.reshape(-1, 16), np.linalg.inv(string_world).T.reshape(1, 16)]).astype(np.float32)
-    doc["skins"] = [{"joints": [index[ual1.doc["nodes"][j]["name"]] for j in skin["joints"]] + [index["bowstring"]],
+    arrow_world = np.eye(4)
+    arrow_world[:3, 3] = string_world[:3, 3]  # (its bind rotation is the identity in the world)
+    ibm = np.vstack([ibm.reshape(-1, 16), np.linalg.inv(string_world).T.reshape(1, 16),
+                     np.linalg.inv(arrow_world).T.reshape(1, 16)]).astype(np.float32)
+    doc["skins"] = [{"joints": [index[ual1.doc["nodes"][j]["name"]] for j in skin["joints"]] + [index["bowstring"], index["nockedarrow"]],
                      "inverseBindMatrices": w.add(ibm)}]
     tri = np.zeros((3, 3), np.float32)
     tri[1, 0] = tri[2, 2] = 0.001

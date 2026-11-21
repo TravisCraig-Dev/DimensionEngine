@@ -19,6 +19,11 @@ FPS = 30.0
 BOW_HOLD = np.array([0.085, -0.02, 0.0])
 STRING_BACK = 0.18
 DRAW = 0.68  # from the grip to the anchor at full draw
+# The arrow on the string while drawing (its own joint, "nockedarrow", under the left hand: shown from the nock to the
+# loose, otherwise scaled to nothing, its rest too, so clips that don't key it show no arrow).
+ARROW_LENGTH = 0.78
+ARROW_HIDDEN = 0.001
+NOCK_AT = 0.3
 
 
 # ---- rotations (matrices; glTF quaternions are x, y, z, w) ---------------------------------------------------------
@@ -228,6 +233,14 @@ class Skeleton:
         return orthonormal(self.bind[self.index[joint]][:3, :3])
 
 
+def nockedarrow_bind(hand_world):
+    """The nocked arrow joint's bind (local translation and rotation under the left hand): at the string's middle, the
+    joint's world rotation the identity (the arrow mesh points along -Z from it, through the bow: build_soldiers.py)."""
+    local = bowstring_local(hand_world)
+    rotation = orthonormal(hand_world[:3, :3]).T
+    return local, m2q(rotation)
+
+
 def bowstring_local(hand_world):
     """The bowstring joint's place under the left hand (in its space): the middle of the string, held in the fist."""
     hold = hand_world[:3, 3] + BOW_HOLD + np.array([0.0, 0.0, STRING_BACK])
@@ -244,8 +257,9 @@ class Clip:
         self.times = list(np.arange(0.0, length + 1e-6, 1.0 / FPS))
         self.rot = {}
         self.tr = {}
+        self.sc = {}
 
-    def key(self, pose, moved=(), extra=None):
+    def key(self, pose, moved=(), extra=None, extra_rot=None, extra_scale=None):
         for j, (t, r, s) in enumerate(pose):
             name = self.sk.names[j]
             if not name or name in ("Armature",):
@@ -254,6 +268,10 @@ class Clip:
             self.tr.setdefault(name, []).append(t.copy())
         for name, value in (extra or {}).items():
             self.tr.setdefault(name, []).append(np.asarray(value, float))
+        for name, value in (extra_rot or {}).items():
+            self.rot.setdefault(name, []).append(np.asarray(value, float))
+        for name, value in (extra_scale or {}).items():
+            self.sc.setdefault(name, []).append(np.asarray(value, float))
 
     def tracks(self, translated):
         out = {}
@@ -266,6 +284,8 @@ class Clip:
         for name in translated:
             if name in self.tr:
                 out.setdefault(name, {})["translation"] = (self.times, np.array(self.tr[name]))
+        for name, values in self.sc.items():
+            out.setdefault(name, {})["scale"] = (self.times, np.array(values))
         return {"name": self.name, "tracks": out}
 
 
@@ -281,6 +301,7 @@ def bow_shoot(sk, name="Bow_Shoot", pitch=28.0):
     clip = Clip(sk, name, length)
     hand_l_bind = sk.bind_rotation("hand_l")
     rest_string = bowstring_local(sk.bind[sk.index["hand_l"]])
+    rest_arrow = nockedarrow_bind(sk.bind[sk.index["hand_l"]])
     up = np.array([0.0, 1.0, 0.0])
 
     def aim_at(deg):
@@ -323,12 +344,18 @@ def bow_shoot(sk, name="Bow_Shoot", pitch=28.0):
             sk.reach(pose, "r", hand_r0 + (hand_draw - hand_r0) * raise_w, pole=[-0.4, 0.5, -1.0])
         # The string's middle, in the left hand's space (where the bow is): drawn back, or at rest in the bow.
         local = rest_string
+        hand_l = sk.world(pose)[sk.index["hand_l"]]
         if raise_w > 0:
-            hand_l = sk.world(pose)[sk.index["hand_l"]]
             drawn = (np.linalg.inv(hand_l) @ np.append(string, 1.0))[:3]
             local = rest_string + (drawn - rest_string) * min(raise_w * 4.0, 1.0)
-        clip.key(pose, extra={"bowstring": local})
-    return clip.tracks(moved_joints(sk, base) | {"bowstring"})
+        # The arrow: nocked on the string's middle, along the aim through the bow, from the nock to the loose.
+        arrow_t, arrow_q, arrow_s = rest_arrow[0], rest_arrow[1], ARROW_HIDDEN
+        if NOCK_AT <= t < release:
+            # (the joint's bind world rotation is the identity, the mesh along -Z: the bow's frame turns it to the aim)
+            arrow_t, arrow_q, arrow_s = local, m2q(orthonormal(hand_l[:3, :3]).T @ bow_frame(aim)), 1.0
+        clip.key(pose, extra={"bowstring": local, "nockedarrow": arrow_t}, extra_rot={"nockedarrow": arrow_q},
+                 extra_scale={"nockedarrow": np.full(3, arrow_s)})
+    return clip.tracks(moved_joints(sk, base) | {"bowstring", "nockedarrow"})
 
 
 def spear_frame(sk, direction):

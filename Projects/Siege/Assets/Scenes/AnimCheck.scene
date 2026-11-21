@@ -37,13 +37,13 @@
         },
         "Transform": {
           "Position": [
-            4.8,
-            1.5,
-            4.6
+            5.6000000000000005,
+            1.4,
+            11.4
           ],
           "Rotation": [
-            -0.13962634015954636,
-            -0.4363323129985824,
+            -0.10471975511965978,
+            0.0,
             0
           ],
           "Scale": [
@@ -160,7 +160,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Spearman 0.1",
+          "Name": "Archer 0.15",
           "Tag": "Untagged",
           "Active": true,
           "Layer": 0
@@ -183,7 +183,7 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 889736083970818496,
+          "Mesh": 33861221247592090,
           "Material": 0,
           "Albedo": 0,
           "Color": [
@@ -201,8 +201,8 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spear_Thrust",
-          "Speed": 0.1,
+          "Clip": "Bow_Shoot",
+          "Speed": 0.15,
           "Loop": false,
           "Playing": true,
           "Controller": 0,
@@ -219,7 +219,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Spearman 0.25",
+          "Name": "Archer 0.35",
           "Tag": "Untagged",
           "Active": true,
           "Layer": 0
@@ -242,7 +242,7 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 889736083970818496,
+          "Mesh": 33861221247592090,
           "Material": 0,
           "Albedo": 0,
           "Color": [
@@ -260,8 +260,8 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spear_Thrust",
-          "Speed": 0.25,
+          "Clip": "Bow_Shoot",
+          "Speed": 0.35,
           "Loop": false,
           "Playing": true,
           "Controller": 0,
@@ -278,7 +278,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Spearman 0.35",
+          "Name": "Archer 0.6",
           "Tag": "Untagged",
           "Active": true,
           "Layer": 0
@@ -301,7 +301,7 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 889736083970818496,
+          "Mesh": 33861221247592090,
           "Material": 0,
           "Albedo": 0,
           "Color": [
@@ -319,8 +319,8 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spear_Thrust",
-          "Speed": 0.35,
+          "Clip": "Bow_Shoot",
+          "Speed": 0.6,
           "Loop": false,
           "Playing": true,
           "Controller": 0,
@@ -337,7 +337,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Spearman 0.42",
+          "Name": "Archer 0.85",
           "Tag": "Untagged",
           "Active": true,
           "Layer": 0
@@ -360,7 +360,7 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 889736083970818496,
+          "Mesh": 33861221247592090,
           "Material": 0,
           "Albedo": 0,
           "Color": [
@@ -378,8 +378,8 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spear_Thrust",
-          "Speed": 0.42,
+          "Clip": "Bow_Shoot",
+          "Speed": 0.85,
           "Loop": false,
           "Playing": true,
           "Controller": 0,
@@ -396,7 +396,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Spearman 0.5",
+          "Name": "Archer 1.0",
           "Tag": "Untagged",
           "Active": true,
           "Layer": 0
@@ -419,7 +419,7 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 889736083970818496,
+          "Mesh": 33861221247592090,
           "Material": 0,
           "Albedo": 0,
           "Color": [
@@ -437,8 +437,8 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spear_Thrust",
-          "Speed": 0.5,
+          "Clip": "Bow_Shoot",
+          "Speed": 1.0,
           "Loop": false,
           "Playing": true,
           "Controller": 0,
@@ -455,7 +455,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Spearman 0.7",
+          "Name": "Archer 1.2",
           "Tag": "Untagged",
           "Active": true,
           "Layer": 0
@@ -478,7 +478,7 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 889736083970818496,
+          "Mesh": 33861221247592090,
           "Material": 0,
           "Albedo": 0,
           "Color": [
@@ -496,8 +496,8 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spear_Thrust",
-          "Speed": 0.7,
+          "Clip": "Bow_Shoot",
+          "Speed": 1.2,
           "Loop": false,
           "Playing": true,
           "Controller": 0,
@@ -514,7 +514,7 @@
       "parent": 0,
       "components": {
         "Tag": {
-          "Name": "Spearman 0.9",
+          "Name": "Archer 1.5",
           "Tag": "Untagged",
           "Active": true,
           "Layer": 0
@@ -537,7 +537,7 @@
           ]
         },
         "Mesh Renderer": {
-          "Mesh": 889736083970818496,
+          "Mesh": 33861221247592090,
           "Material": 0,
           "Albedo": 0,
           "Color": [
@@ -555,8 +555,67 @@
           "Cast Shadows": true
         },
         "Animator": {
-          "Clip": "Spear_Thrust",
-          "Speed": 0.9,
+          "Clip": "Bow_Shoot",
+          "Speed": 1.5,
+          "Loop": false,
+          "Playing": true,
+          "Controller": 0,
+          "Animation Source": 462471928835067955,
+          "Retargeting": 1,
+          "Muscle Limits": true,
+          "Foot IK": false,
+          "Foot IK Reach": 0.5
+        }
+      }
+    },
+    {
+      "guid": 21010,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Archer 1.9",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            11.200000000000001,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            1.5707963267948966,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Mesh Renderer": {
+          "Mesh": 33861221247592090,
+          "Material": 0,
+          "Albedo": 0,
+          "Color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "Tiling": [
+            1,
+            1
+          ],
+          "Smoothness": 0.5,
+          "Emission": 0.0,
+          "Cast Shadows": true
+        },
+        "Animator": {
+          "Clip": "Bow_Shoot",
+          "Speed": 1.9,
           "Loop": false,
           "Playing": true,
           "Controller": 0,

@@ -472,6 +472,12 @@ def build(side, kind, spec, body_gltf, names, bind, body_parts, shield_parts):
         hold[:3, :3] = np.eye(3)
         hold[:3, 3] = hand_l[:3, 3] + anim_author.BOW_HOLD
         string_joint = add_bowstring(doc, names, bind)
+        arrow_joint, arrow_bind = add_nockedarrow(doc, names, bind)
+        aim = np.eye(4)
+        aim[:3, :3] = rot_x(-90)  # the meshes' +Y to -Z: from the nock through the bow
+        aim[:3, 3] = arrow_bind[:3, 3]
+        for mat, mesh in nocked_arrow().items():
+            parts.append(rigid(*mesh, aim, arrow_joint, mats[mat]))
         for mat, mesh in bow().items():
             part = rigid(*mesh, hold, joint["hand_l"], mats[mat])
             if mat == "leather":  # the string: its middle on the bowstring joint (the draw pulls it back)
@@ -529,6 +535,35 @@ def add_bowstring(doc, names, bind):
     world[:3, 3] = (hand_bind @ np.append(local, 1.0))[:3]
     EXTRA_BIND.append(np.linalg.inv(world).T.astype(np.float32))  # (column-major, as the file stores them)
     return len(names) - 1
+
+
+def add_nockedarrow(doc, names, bind):
+    """The nocked arrow's joint beside the bowstring's (anim_author.py shows it while drawing); returns its index and
+    its bind (world)."""
+    hand = next(i for i, n in enumerate(doc["nodes"]) if n.get("name") == "hand_l")
+    hand_bind = bind[names.index("hand_l")]
+    local, rotation = anim_author.nockedarrow_bind(hand_bind)
+    doc["nodes"].append({"name": "nockedarrow", "translation": local.tolist(), "rotation": rotation.tolist(),
+                         "scale": [anim_author.ARROW_HIDDEN] * 3})
+    doc["nodes"][hand]["children"].append(len(doc["nodes"]) - 1)
+    doc["skins"][0]["joints"].append(len(doc["nodes"]) - 1)
+    names.append("nockedarrow")
+    world = np.eye(4)
+    world[:3, 3] = (hand_bind @ np.append(local, 1.0))[:3]
+    EXTRA_BIND.append(np.linalg.inv(world).T.astype(np.float32))
+    return len(names) - 1, world
+
+
+def nocked_arrow():
+    """An arrow along +Y from its nock: a shaft, a bodkin head and three fletches (as Models/Props/Arrow.gltf)."""
+    length = anim_author.ARROW_LENGTH
+    shaft = cylinder(0.0045, length - 0.05, segments=5, uv_scale=0.5)
+    head = moved(cylinder(0.008, 0.06, segments=4, radius_top=0.0005), (0, length - 0.06, 0))
+    vanes = []
+    for k in range(3):
+        vane = moved(box(0.0008, 0.11, 0.016), (0, 0.09, 0.011))
+        vanes.append(moved(vane, (0, 0, 0), rot_y(120 * k)))
+    return {"wood": merge(shaft), "steel": merge(head), "trim": merge(*vanes)}
 
 
 EXTRA_BIND = []

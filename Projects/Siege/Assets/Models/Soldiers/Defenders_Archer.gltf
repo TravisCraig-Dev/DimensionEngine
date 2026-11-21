@@ -456,7 +456,8 @@
     13,
     17,
     21,
-    69
+    69,
+    70
    ],
    "name": "hand_l",
    "rotation": [
@@ -1334,6 +1335,25 @@
     0.08500000500091676,
     0.18000005478120068
    ]
+  },
+  {
+   "name": "nockedarrow",
+   "translation": [
+    0.019999996707312364,
+    0.08500000500091676,
+    0.18000005478120068
+   ],
+   "rotation": [
+    2.3435704488150577e-09,
+    -1.0003594752561185e-07,
+    0.7071068286895752,
+    0.7071068286895752
+   ],
+   "scale": [
+    0.001,
+    0.001,
+    0.001
+   ]
   }
  ],
  "materials": [
@@ -1904,7 +1924,7 @@
  ],
  "skins": [
   {
-   "inverseBindMatrices": 48,
+   "inverseBindMatrices": 60,
    "joints": [
     64,
     63,
@@ -1971,7 +1991,8 @@
     60,
     59,
     58,
-    69
+    69,
+    70
    ],
    "name": "Armature"
   }
@@ -1985,7 +2006,7 @@
  "buffers": [
   {
    "uri": "Defenders_Archer.bin",
-   "byteLength": 1241136
+   "byteLength": 1248784
   }
  ],
  "bufferViews": [
@@ -2244,43 +2265,115 @@
   {
    "buffer": 0,
    "byteOffset": 1209360,
-   "byteLength": 5040,
+   "byteLength": 5352,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 1214400,
-   "byteLength": 5040,
+   "byteOffset": 1214712,
+   "byteLength": 5352,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 1219440,
-   "byteLength": 3360,
+   "byteOffset": 1220064,
+   "byteLength": 3568,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 1222800,
-   "byteLength": 3360,
+   "byteOffset": 1223632,
+   "byteLength": 3568,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 1226160,
-   "byteLength": 6720,
+   "byteOffset": 1227200,
+   "byteLength": 7136,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 1232880,
-   "byteLength": 4032,
+   "byteOffset": 1234336,
+   "byteLength": 4272,
    "target": 34963
   },
   {
    "buffer": 0,
-   "byteOffset": 1236912,
-   "byteLength": 4224
+   "byteOffset": 1238608,
+   "byteLength": 264,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1238872,
+   "byteLength": 264,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1239136,
+   "byteLength": 176,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1239312,
+   "byteLength": 176,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1239488,
+   "byteLength": 352,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1239840,
+   "byteLength": 192,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1240032,
+   "byteLength": 864,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1240896,
+   "byteLength": 864,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1241760,
+   "byteLength": 576,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1242336,
+   "byteLength": 576,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1242912,
+   "byteLength": 1152,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1244064,
+   "byteLength": 432,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1244496,
+   "byteLength": 4288
   }
  ],
  "accessors": [
@@ -2609,12 +2702,12 @@
   {
    "bufferView": 42,
    "componentType": 5126,
-   "count": 420,
+   "count": 446,
    "type": "VEC3",
    "min": [
     0.775486946105957,
     0.5820133686065674,
-    -0.07925006002187729
+    -0.6154000163078308
    ],
    "max": [
     0.8074869513511658,
@@ -2625,37 +2718,129 @@
   {
    "bufferView": 43,
    "componentType": 5126,
-   "count": 420,
+   "count": 446,
    "type": "VEC3"
   },
   {
    "bufferView": 44,
    "componentType": 5126,
-   "count": 420,
+   "count": 446,
    "type": "VEC2"
   },
   {
    "bufferView": 45,
    "componentType": 5123,
-   "count": 420,
+   "count": 446,
    "type": "VEC4"
   },
   {
    "bufferView": 46,
    "componentType": 5126,
-   "count": 420,
+   "count": 446,
    "type": "VEC4"
   },
   {
    "bufferView": 47,
    "componentType": 5125,
-   "count": 1008,
+   "count": 1068,
    "type": "SCALAR"
   },
   {
    "bufferView": 48,
    "componentType": 5126,
-   "count": 66,
+   "count": 22,
+   "type": "VEC3",
+   "min": [
+    0.7834869623184204,
+    1.4274998903274536,
+    -0.665399968624115
+   ],
+   "max": [
+    0.7994869351387024,
+    1.4434999227523804,
+    -0.6053999662399292
+   ]
+  },
+  {
+   "bufferView": 49,
+   "componentType": 5126,
+   "count": 22,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 50,
+   "componentType": 5126,
+   "count": 22,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 51,
+   "componentType": 5123,
+   "count": 22,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 52,
+   "componentType": 5126,
+   "count": 22,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 53,
+   "componentType": 5125,
+   "count": 48,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 54,
+   "componentType": 5126,
+   "count": 72,
+   "type": "VEC3",
+   "min": [
+    0.7748324871063232,
+    1.4256534576416016,
+    -0.0303999874740839
+   ],
+   "max": [
+    0.8081414103507996,
+    1.4544998407363892,
+    0.0796000137925148
+   ]
+  },
+  {
+   "bufferView": 55,
+   "componentType": 5126,
+   "count": 72,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 56,
+   "componentType": 5126,
+   "count": 72,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 57,
+   "componentType": 5123,
+   "count": 72,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 58,
+   "componentType": 5126,
+   "count": 72,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 59,
+   "componentType": 5125,
+   "count": 108,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 60,
+   "componentType": 5126,
+   "count": 67,
    "type": "MAT4"
   }
  ],
@@ -2750,6 +2935,28 @@
      },
      "indices": 47,
      "material": 13
+    },
+    {
+     "attributes": {
+      "POSITION": 48,
+      "NORMAL": 49,
+      "TEXCOORD_0": 50,
+      "JOINTS_0": 51,
+      "WEIGHTS_0": 52
+     },
+     "indices": 53,
+     "material": 10
+    },
+    {
+     "attributes": {
+      "POSITION": 54,
+      "NORMAL": 55,
+      "TEXCOORD_0": 56,
+      "JOINTS_0": 57,
+      "WEIGHTS_0": 58
+     },
+     "indices": 59,
+     "material": 6
     }
    ]
   }
