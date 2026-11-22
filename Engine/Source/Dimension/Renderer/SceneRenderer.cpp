@@ -3062,6 +3062,11 @@ namespace Dimension
             }
             if (water)
                 for (size_t p = item.FirstPart; p < m_RenderParts.size(); ++p) m_RenderParts[p].Water = true;
+            // Skinned crowds far off (generated level 2 and coarser): no prepass (see RenderPart::NoPrepass). Each
+            // batch is one mesh, so one level: its parts all agree.
+            constexpr int kNoPrepassLevel = 2;
+            if (skinned && own && own->Level >= kNoPrepassLevel)
+                for (size_t p = item.FirstPart; p < m_RenderParts.size(); ++p) m_RenderParts[p].NoPrepass = true;
             item.PartCount = (uint32_t)m_RenderParts.size() - item.FirstPart;
             item.MeshRef = std::move(mesh);
             if (terrainRt && !terrainRt->Chunks.empty() && item.PartCount == 1)
@@ -3136,6 +3141,7 @@ namespace Dimension
                         part.FirstIndex = nextSubs[partSubMesh[p]].IndexOffset;
                         part.IndexCount = nextSubs[partSubMesh[p]].IndexCount;
                         part.Item = (uint32_t)m_RenderItems.size();
+                        part.NoPrepass = skinned && own->Next >= kNoPrepassLevel;
                         part.Batch = batchOf({ nextMesh.get(), part.FirstIndex, part.IndexCount, part.Material, part.DoubleSided, next.Probe }, next.EntityId < kInstanceIdLimit);
                         m_RenderParts.push_back(part);
                     }
@@ -3539,7 +3545,7 @@ namespace Dimension
                                                    : part.DoubleSided ? MainPipelines::DepthPrepassDoubleSided : MainPipelines::DepthPrepass)
                    : modePipe    ? modePipe
                    : &MainPipeline(part.Transparent ? MainPipelines::MeshTransparent : part.Impostor ? MainPipelines::MeshImpostor
-                                   : prepassed && !part.Water ? (part.DoubleSided ? MainPipelines::MeshDoubleSidedPrepassed : MainPipelines::MeshPrepassed)
+                                   : prepassed && !part.Water && !part.NoPrepass ? (part.DoubleSided ? MainPipelines::MeshDoubleSidedPrepassed : MainPipelines::MeshPrepassed)
                                    : part.DoubleSided ? MainPipelines::MeshDoubleSided : MainPipelines::Mesh);
             return d;
         };
@@ -3568,7 +3574,7 @@ namespace Dimension
             {
                 const RenderPart& part = m_RenderParts[p];
                 if (shadowPass && (!part.CastShadows || part.Transparent)) continue;
-                if (depthPass && part.Water) continue; // it reads the depth under it
+                if (depthPass && (part.Water || part.NoPrepass)) continue; // (water reads the depth under it)
                 if (part.Transparent)
                 {
                     if (depthPass || (pass == MeshPass::Main && m_Oit)) continue; // OIT draws them in their own pass
