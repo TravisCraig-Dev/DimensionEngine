@@ -405,7 +405,9 @@ namespace Editor
         if (m_Ctx.IsPlaying()) Stop();
         m_MeshEdit->Exit(); // (writes the model and a painted texture)
         m_Music->Close();   // (writes the song)
-        ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
+        // Not when the editor quits before it drew a frame (--render-song): the windows were never docked, and saving
+        // that would leave the project with every window floating.
+        if (m_LayoutDrawn) ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
         ImGui::GetIO().IniFilename = nullptr;
         m_Ctx.EditorScene.reset();
         m_SceneTarget.reset();
@@ -3168,6 +3170,7 @@ namespace Editor
             m_ResetLayout = false;
         }
         ImGui::DockSpaceOverViewport(id, ImGui::GetMainViewport());
+        m_LayoutDrawn = true;
     }
 
     void EditorLayer::DrawMenuBar()

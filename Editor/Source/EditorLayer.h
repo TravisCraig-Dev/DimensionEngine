@@ -426,6 +426,7 @@ namespace Editor
         bool m_TileStroke = false;
         float m_AutosaveTimer = 0.0f;
         bool m_ResetLayout = false;
+        bool m_LayoutDrawn = false; // the dock space has been drawn: the window layout is real and worth saving
         bool m_ShowImGuiDemo = false;
         std::string m_IniPath;
         float m_StatsTimer = 0.0f, m_DisplayFps = 0.0f, m_DisplayMs = 0.0f;
