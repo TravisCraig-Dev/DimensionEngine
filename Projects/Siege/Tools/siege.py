@@ -10,7 +10,7 @@ _TYPES = {
     ".png": "Texture", ".jpg": "Texture", ".jpeg": "Texture", ".hdr": "Texture",
     ".gltf": "Mesh", ".glb": "Mesh", ".obj": "Mesh", ".fbx": "Mesh", ".dmodel": "Mesh",
     ".scene": "Scene", ".prefab": "Prefab", ".mat": "Material", ".controller": "AnimatorController",
-    ".anim": "AnimationClip", ".vfx": "VisualEffect", ".wav": "Audio", ".ogg": "Audio", ".timeline": "Timeline",
+    ".anim": "AnimationClip", ".vfx": "VisualEffect", ".wav": "Audio", ".ogg": "Audio", ".flac": "Audio", ".mp3": "Audio", ".timeline": "Timeline",
 }
 _LINEAR_HINTS = ("_nor", "_arm", "_rough", "_ao", "_disp", "normal", "roughness", "_mask")
 
@@ -120,8 +120,10 @@ def mesh_renderer(mesh, material=0, color=(1, 1, 1, 1), shadows=True):
             "Smoothness": 0.5, "Emission": 0.0, "Cast Shadows": shadows}
 
 
-def animator(clip, source=0, speed=1.0, loop=True, controller=0):
+def animator(clip, source=0, speed=1.0, loop=True, controller=0, cull=False):
     # Retargeting by joint name: every soldier has the clips' own skeleton, so they play exactly as made (the
     # humanoid mapping's muscle limits bent the authored bow draw, and it drops joints such as the bowstring).
     return {"Clip": clip, "Speed": speed, "Loop": loop, "Playing": True, "Controller": controller,
-            "Animation Source": source, "Retargeting": 1, "Muscle Limits": True, "Foot IK": False, "Foot IK Reach": 0.5}
+            "Animation Source": source, "Retargeting": 1, "Muscle Limits": True, "Foot IK": False, "Foot IK Reach": 0.5,
+            # Cull Completely: crowds off screen do not animate (the battle never waits on a clip's time alone).
+            "Culling Mode": 1 if cull else 0}

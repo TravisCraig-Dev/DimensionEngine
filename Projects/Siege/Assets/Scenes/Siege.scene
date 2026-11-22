@@ -31,7 +31,7 @@
     "fog": true,
     "fogDensity": 0.00022,
     "fogHeight": 20.0,
-    "fogHeightFalloff": 0.01,
+    "fogHeightFalloff": 0.0025,
     "fogSunScattering": 0.35,
     "fogIntensity": 0.5,
     "fogMaxDistance": 6000,
@@ -401,9 +401,9 @@
               "Name": "Meadow",
               "Texture": 1114801273744343647,
               "Color": [
-                0.85,
-                0.9,
+                0.62,
                 0.8,
+                0.5,
                 1
               ],
               "Tiling": 0.05,
@@ -593,7 +593,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -663,7 +664,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -733,7 +735,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -803,7 +806,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -873,7 +877,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -943,7 +948,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -1013,7 +1019,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -1083,7 +1090,8 @@
           "Muscle Limits": true,
           "Foot IK": false,
           "Foot IK Reach": 0.5,
-          "Retargeting": 1
+          "Retargeting": 1,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.12,
@@ -1152,7 +1160,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1221,7 +1230,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1290,7 +1300,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1359,7 +1370,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1428,7 +1440,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1497,7 +1510,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1566,7 +1580,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1635,7 +1650,8 @@
           "Animation Source": 0,
           "Muscle Limits": true,
           "Foot IK": false,
-          "Foot IK Reach": 0.5
+          "Foot IK Reach": 0.5,
+          "Culling Mode": 1
         },
         "LOD Group": {
           "LOD 1 Below": 0.1,
@@ -1985,6 +2001,24 @@
           "Texture Mode": 0,
           "Blend": 1,
           "Sorting Order": 1
+        },
+        "Audio Source": {
+          "Clip": 825969663200066397,
+          "Volume": 0.9,
+          "Pitch": 1.0,
+          "Loop": true,
+          "Play On Awake": true,
+          "Spatial": true,
+          "Min Distance": 4.0,
+          "Max Distance": 80.0,
+          "Output": "",
+          "Stream": false,
+          "Mute": false,
+          "Occlusion": false,
+          "Occlusion Volume": -9.0,
+          "Occlusion Cutoff": 1200.0,
+          "Rolloff": 0,
+          "Doppler Level": 1.0
         }
       }
     },
@@ -2620,6 +2654,100 @@
           "Range": 55.0,
           "Cast Shadows": false,
           "Shadow Bias": 0.05
+        }
+      }
+    },
+    {
+      "guid": 100033,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Battle Ambience",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Audio Source": {
+          "Clip": 991643088858994031,
+          "Volume": 0.12,
+          "Pitch": 1.0,
+          "Loop": true,
+          "Play On Awake": true,
+          "Spatial": false,
+          "Min Distance": 1.0,
+          "Max Distance": 50.0,
+          "Output": "",
+          "Stream": true,
+          "Mute": false,
+          "Occlusion": false,
+          "Occlusion Volume": -9.0,
+          "Occlusion Cutoff": 1200.0,
+          "Rolloff": 0,
+          "Doppler Level": 0.0
+        }
+      }
+    },
+    {
+      "guid": 100034,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Cavalry Hooves",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Audio Source": {
+          "Clip": 124170733700937754,
+          "Volume": 0.0,
+          "Pitch": 1.4,
+          "Loop": true,
+          "Play On Awake": true,
+          "Spatial": true,
+          "Min Distance": 1.0,
+          "Max Distance": 50.0,
+          "Output": "",
+          "Stream": false,
+          "Mute": false,
+          "Occlusion": false,
+          "Occlusion Volume": -9.0,
+          "Occlusion Cutoff": 1200.0,
+          "Rolloff": 0,
+          "Doppler Level": 1.0
         }
       }
     },

@@ -27,6 +27,7 @@ namespace Siege
         internal SpatialGrid Grid;
         internal ArrowSystem Arrows;
         internal SiegeEngines Engines;
+        internal BattleAudio Audio;
         internal float Now;
 
         private Terrain m_Terrain;
@@ -51,6 +52,7 @@ namespace Siege
             foreach (string side in new[] { "Defenders", "Attackers" })
                 foreach (string coat in HorseCoats)
                     m_Templates[$"Horse {side} {coat}"] = Entity.Find($"Template Horse {side} {coat}");
+            Audio = new BattleAudio(this);
             Grid = new SpatialGrid(-700, -350, 700, 700);
             Arrows = new ArrowSystem(this, m_Templates["Arrow"], 1400);
             Engines = new SiegeEngines(this, m_Templates["Catapult"], m_Templates["Catapult Arm"], m_Templates["Shot"],
@@ -84,7 +86,8 @@ namespace Siege
             {
                 m_FrameMs = m_Wall.Elapsed.TotalMilliseconds;
                 m_Wall.Restart();
-                Debug.Log($"Battle: frame {m_FrameMs / 30:0.0} ms, battle script {m_ScriptMs / 30:0.0} ms, {Arrows.InFlight} arrows in flight");
+                Debug.Log($"Battle: frame {m_FrameMs / 30:0.0} ms, battle script {m_ScriptMs / 30:0.0} ms, {Arrows.InFlight} arrows in flight, {Audio.Played} sounds");
+                Audio.Played = 0;
                 m_Frames = 0;
                 m_ScriptMs = m_FrameMs = 0;
             }
@@ -198,6 +201,8 @@ namespace Siege
 
         private void Step(float dt, bool visible)
         {
+            Audio.Live = visible;
+            Audio.Begin(dt);
             Now += dt;
             Grid.Build(Soldiers);
             foreach (var r in Regiments) UpdateRegiment(r, dt);
@@ -213,6 +218,7 @@ namespace Siege
             Engines.Update(dt);
             foreach (var s in Soldiers)
                 if (!s.Dead && !s.Gone) Place(s);
+            Audio.End(dt);
             m_ReinforceCheck -= dt;
             if (m_ReinforceCheck <= 0)
             {
@@ -321,6 +327,7 @@ namespace Siege
                 target.Y = m_Terrain.SampleHeight(target);
                 float flight = Math.Clamp(to.Length() / 36.0f, 1.6f, 5.0f);
                 Arrows.Fire(from, target, flight, a.Side);
+                Audio.BowLoosed(from);
             }
         }
 
@@ -479,12 +486,16 @@ namespace Siege
         {
             bool shield = foe.Kind != Kind.Archer && !foe.Mounted;
             bool facing = Vector2.Dot(BattleMath.Facing(foe.Yaw), attacker.Pos - foe.Pos) > 0;
+            Vector3 at = new(foe.Pos.X, foe.Ground + 1.2f, foe.Pos.Y);
             if (shield && facing && Rng.NextDouble() < 0.4)
             {
                 if (!foe.OneShot) Once(foe, Rng.Next(2) == 0 ? "Sword_Block" : "Idle_Shield_Break", 0.8f);
+                Audio.Blow(at, attacker.Kind, blocked: true, missed: false);
                 return;
             }
-            if (Rng.NextDouble() > 0.6) return; // a miss
+            bool miss = Rng.NextDouble() > 0.6;
+            Audio.Blow(at, attacker.Kind, blocked: false, missed: miss);
+            if (miss) return;
             Wound(foe, attacker.Pos, 1);
         }
 

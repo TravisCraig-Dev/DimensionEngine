@@ -57,6 +57,10 @@ def main():
                 uri = item.get("uri", "")
                 if uri and not uri.startswith("data:"):
                     todo.append(os.path.join(base, uri.replace("%20", " ")))
+    # Sounds: the battle scripts play them by path (Scripts/BattleAudio.cs), so no scene names most of them.
+    for root, _, files in os.walk(os.path.join(S.ASSETS, "Audio")):
+        for f in files:
+            need.add(os.path.join(root, f))
     # The project itself: its file, scripts (not their build output) and credits.
     for f in ("Project.dproj", "CREDITS.md"):
         need.add(os.path.join(PROJECT, f))

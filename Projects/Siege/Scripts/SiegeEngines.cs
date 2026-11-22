@@ -108,6 +108,7 @@ namespace Siege
                     c.Angle = Math.Min(Loaded, c.Angle + dt * 34.0f);
                     if (c.Angle >= Loaded && c.Timer <= 0)
                     {
+                        m_Battle.Audio.CatapultCreak(c.Pos);
                         c.State = 1;
                         c.Timer = BattleMath.Range(m_Battle.Rng, 1.5f, 3.5f);
                         c.Shot = Load(c);
@@ -127,7 +128,12 @@ namespace Siege
                         if (t >= 0.8f) Release(c);
                         else c.Shot.X.SetLocal(CupPosition(c), Vector3.Zero, new Vector3(5.5f));
                     }
-                    if (t >= 1.0f) { c.State = 3; c.Timer = 1.2f; }
+                    if (t >= 1.0f)
+                    {
+                        c.State = 3;
+                        c.Timer = 1.2f;
+                        m_Battle.Audio.CatapultThrow(c.Pos + new Vector3(0, 3.0f, 0)); // the arm against the crossbar
+                    }
                     break;
                 }
                 case 3: // the arm rests against the crossbar, then the crew winds it back
@@ -209,6 +215,7 @@ namespace Siege
             flash.SetActive(true);
             m_Battle.Destroy(flash, 0.35f);
             TerrainTools.DigCrater(at, 3.4f, 1.1f, 7);
+            m_Battle.Audio.Impact(at);
             LastImpact = at;
             LastImpactTime = m_Battle.Now;
             Vector2 p = new(at.X, at.Z);

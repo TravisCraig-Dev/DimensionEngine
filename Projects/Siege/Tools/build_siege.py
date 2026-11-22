@@ -107,7 +107,7 @@ def main():
         "bloomThreshold": 1.6, "exposure": 0.85, "fxaa": False, "taa": True, "ssao": True, "ssaoIntensity": 1.0,
         "ssaoRadius": 0.8, "tonemapping": True, "skyMode": 1, "skyIntensity": 1.0, "skyRotation": 2.2,
         "skyTexture": S.guid("Sky/kloofendal_48d_partly_cloudy_puresky_2k.hdr"), "vignette": 0.22, "gravity": [0, -9.81, 0],
-        "fog": True, "fogDensity": 0.00022, "fogHeight": 20.0, "fogHeightFalloff": 0.01, "fogSunScattering": 0.35,
+        "fog": True, "fogDensity": 0.00022, "fogHeight": 20.0, "fogHeightFalloff": 0.0025, "fogSunScattering": 0.35,
         "fogIntensity": 0.5, "fogMaxDistance": 6000, "fogAnisotropy": 0.65, "wind": [2.2, 0.0, 1.2], "windGusts": 0.5,
     }
     hero = (-150.0, 52.0, 300.0)
@@ -155,7 +155,7 @@ def main():
     # The outer terrain: the ranges around the valley.
     xo, zo, ho = outer_heights()
     outer_layers = [
-        layer("Meadow", "Terrain", "aerial_grass_rock", 0.05, (0.85, 0.9, 0.8, 1)),
+        layer("Meadow", "Terrain", "aerial_grass_rock", 0.05, (0.62, 0.8, 0.5, 1)),
         layer("Rock", "Terrain", "rock_ground", 0.06, triplanar=True),
         layer("Cliff", "Terrain", "mossy_rock", 0.06, normal=1.3, triplanar=True),
         layer("Snow", "Terrain", "snow_02", 0.04, (0.95, 0.97, 1.0, 1)),

@@ -11,3 +11,19 @@ armor, the terrain, the scenes and scripts) was made for the sample. `Tools/fetc
   from the *Ultimate Animated Animal Pack*. Fetched from public CC0 mirrors of the itch.io downloads:
   https://github.com/NafisRayan/Animate-Rigged-Humanoid-No-Blender and
   https://github.com/benjaminpjones/catch-the-animal.
+
+## Sounds (CC0 1.0, from OpenGameArt.org)
+
+`Tools/build_audio.py` downloads these and cuts the clips in `Assets/Audio` from them.
+
+- *Medieval sound effects - Weapon impacts* and *Weapon Textures* by Ben Jaszczak and Brian Nelson
+  (https://opengameart.org/content/medieval-sound-effects-weapon-impacts,
+  https://opengameart.org/content/medieval-sound-effects-weapon-textures): blade clashes, swings, longbow, arrows.
+- *20 Sword Sound Effects (Attacks and Clashes)* by StarNinjas
+  (https://opengameart.org/content/20-sword-sound-effects-attacks-and-clashes).
+- *35 wooden cracks/hits/destructions* by independent.nu (https://opengameart.org/content/35-wooden-crackshitsdestructions):
+  the catapults' creak and thud.
+- *Battle at sea* (https://opengameart.org/content/battle-at-sea): the stones' impacts.
+- *Crowd Shouting/Speaking Ambience* (https://opengameart.org/content/crowd-shoutingspeaking-ambience): the armies.
+- *Fire Crackling* (https://opengameart.org/content/fire-crackling): the burning stones.
+- *Horse Trotting* (https://opengameart.org/content/horse-trotting): the cavalry.

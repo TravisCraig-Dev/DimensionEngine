@@ -24,13 +24,20 @@ def particles(**kw):
 HORSE_COATS = ("Bay", "Chestnut", "Black", "Grey")
 
 
+def audio(clip, volume, loop=True, spatial=False, mn=1.0, mx=50.0, pitch=1.0, stream=False):
+    """An Audio Source playing `clip` (path under Assets/) from the start."""
+    return {"Clip": S.guid(clip), "Volume": volume, "Pitch": pitch, "Loop": loop, "Play On Awake": True, "Spatial": spatial,
+            "Min Distance": mn, "Max Distance": mx, "Output": "", "Stream": stream, "Mute": False, "Occlusion": False,
+            "Occlusion Volume": -9.0, "Occlusion Cutoff": 1200.0, "Rolloff": 0, "Doppler Level": 1.0 if spatial else 0.0}
+
+
 def add(sc):
     anims = S.guid("Models/Animations/Soldier_Anims.gltf")
     for side in ("Defenders", "Attackers"):
         for kind in ("Swordsman", "Spearman", "Archer", "Knight"):
             sc.add(f"Template {side}_{kind}", HIDDEN, active=False,
                    Mesh_Renderer=S.mesh_renderer(S.guid(f"Models/Soldiers/{side}_{kind}.gltf")),
-                   Animator=S.animator("Idle_Shield_Loop", anims),
+                   Animator=S.animator("Idle_Shield_Loop", anims, cull=True),
                    LOD_Group={"LOD 1 Below": 0.12, "LOD 2 Below": 0.05, "LOD 3 Below": 0.02, "Cull Below": 0.0025,
                               "Size": 1.8, "Bias": 1.0, "Fade Width": 0.1, "Generated Levels": 3, "Reduction": 0.35})
     # The horses: a saddle cloth in each side's colours, several coats (Tools/build_horse.py).
@@ -38,7 +45,7 @@ def add(sc):
         for coat in HORSE_COATS:
             sc.add(f"Template Horse {side} {coat}", HIDDEN, scale=(0.55, 0.55, 0.55), active=False,
                    Mesh_Renderer=S.mesh_renderer(S.guid(f"Models/Horse/Horse_{side}_{coat}.gltf")),
-                   Animator=S.animator("Idle", 0),
+                   Animator=S.animator("Idle", 0, cull=True),
                    LOD_Group={"LOD 1 Below": 0.1, "LOD 2 Below": 0.04, "LOD 3 Below": 0.02, "Cull Below": 0.003,
                               "Size": 2.6, "Bias": 1.0, "Fade Width": 0.1, "Generated Levels": 2, "Reduction": 0.4})
     sc.add("Template Arrow", HIDDEN, active=False,
@@ -63,7 +70,8 @@ def add(sc):
                                             Noise_Strength=0.6, Noise_Frequency=1.5, Noise_Scroll_Speed=2.0),
                   Trail_Renderer={"Time": 0.9, "Min Vertex Distance": 0.4, "Width": 1.1, "Width Curve": [[0.0, 1.0], [1.0, 0.1]],
                                   "Color": [[0.0, 1.0, 0.7, 0.3, 0.9], [0.35, 1.0, 0.35, 0.08, 0.5], [1.0, 0.3, 0.1, 0.05, 0.0]],
-                                  "Emitting": True, "Texture": 0, "Texture Mode": 0, "Blend": 1, "Sorting Order": 1})
+                                  "Emitting": True, "Texture": 0, "Texture Mode": 0, "Blend": 1, "Sorting Order": 1},
+                  Audio_Source=audio("Audio/Loops/Fire.ogg", 0.9, spatial=True, mn=4.0, mx=80.0))
     sc.add("Smoke", parent=shot, scale=(1 / 5.5, 1 / 5.5, 1 / 5.5),
            Particle_System=particles(Texture=SMOKE, Blend=0, Rate_Over_Time=70, Max_Particles=700,
                                      Start_Lifetime=[2.5, 4.5], Start_Speed=[0.2, 0.8], Start_Size=[1.2, 2.0],
@@ -108,6 +116,9 @@ def add(sc):
     sc.add("Template Flash", HIDDEN, active=False,
            Point_Light={"Color": [1.0, 0.62, 0.3], "Intensity": 160.0, "Range": 55.0, "Cast Shadows": False, "Shadow Bias": 0.05})
 
+    # Sound (Tools/build_audio.py; Scripts/BattleAudio.cs sets their volumes and moves the hooves).
+    sc.add("Battle Ambience", Audio_Source=audio("Audio/Loops/Battle_Crowd.ogg", 0.12, stream=True))
+    sc.add("Cavalry Hooves", Audio_Source=audio("Audio/Loops/Horse_Trot.ogg", 0.0, spatial=True, pitch=1.4))
     sc.add("Battle", Script={"Scripts": [{"Class": "Siege.Battle", "Fields": {"ArmySize": 320, "CavalryPerSide": 24,
                                                                               "Catapults": 4, "Seed": 7},
                                           "Enabled": True}]})

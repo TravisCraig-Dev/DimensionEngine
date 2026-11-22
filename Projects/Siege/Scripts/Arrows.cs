@@ -102,6 +102,7 @@ namespace Siege
                 ++flying;
                 a.V.Y -= Gravity * dt;
                 a.P += a.V * dt;
+                m_Battle.Audio.ArrowNear(a.P, a.V);
                 if (a.P.Y < 80.0f) // near the plains: check what it comes down on
                 {
                     float ground = m_Battle.GroundAt(a.P.X, a.P.Z);
