@@ -15,7 +15,7 @@ namespace Editor
     // draw (or stepping with the arrows) shows the view as it stood right after it: the later draws are left out
     // (effects and post processing still run). The draw's object can be selected in the Hierarchy; a mesh draw shows its
     // material values, and the target it drew into (a shadow map, the HDR image) is pictured as it stood then.
-    void FrameDebuggerPanel::OnImGui(bool* open, const std::vector<FrameDebugEvent>& events, uint64_t preview, glm::uvec2 previewSize)
+    void FrameDebuggerPanel::OnImGui(bool* open, const std::vector<FrameDebugEvent>& events, const std::vector<float>& times, uint64_t preview, glm::uvec2 previewSize)
     {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowSize(ImVec2(620.0f, 560.0f), ImGuiCond_FirstUseEver);
@@ -105,6 +105,12 @@ namespace Editor
             row("Object", at.EntityId ? nameOf(at.EntityId) : std::string("-"));
             row("Triangles", std::to_string(at.Triangles));
             row("Instances", std::to_string(at.Instances));
+            if (shown < (int)times.size() && times[shown] >= 0.0f)
+            {
+                char gpu[32];
+                std::snprintf(gpu, sizeof(gpu), "%.3f ms", times[shown]);
+                row("GPU Time", gpu);
+            }
             if (at.HasMaterial)
             {
                 // Material values as drawn (colors linear).
@@ -165,7 +171,9 @@ namespace Editor
 
         // Every draw, under its pass.
         ImGui::SeparatorText("Draws");
-        if (ImGui::BeginTable("##events", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV,
+        // GPU time per draw (until the next one), measured when the GPU finished a frame like this one; each pass's total.
+        auto timeOf = [&](int i) { return i < (int)times.size() ? times[i] : -1.0f; };
+        if (ImGui::BeginTable("##events", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV,
                               ImVec2(0.0f, ImGui::GetContentRegionAvail().y)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
@@ -174,6 +182,7 @@ namespace Editor
             ImGui::TableSetupColumn("Object", ImGuiTableColumnFlags_WidthStretch, 2.0f);
             ImGui::TableSetupColumn("Triangles", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableSetupColumn("Instances", ImGuiTableColumnFlags_WidthFixed, 66.0f);
+            ImGui::TableSetupColumn("GPU ms", ImGuiTableColumnFlags_WidthFixed, 60.0f);
             ImGui::TableHeadersRow();
             const std::string* pass = nullptr;
             for (int i = 0; i < count; ++i)
@@ -186,6 +195,15 @@ namespace Editor
                     ImGui::TableNextColumn();
                     ImGui::TableNextColumn();
                     ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "%s  -> %s", ev.Pass.c_str(), ev.Target.c_str());
+                    float total = 0.0f;
+                    bool timed = false;
+                    for (int k = i; k < count && events[k].Pass == ev.Pass; ++k)
+                        if (timeOf(k) >= 0.0f) total += timeOf(k), timed = true;
+                    if (timed)
+                    {
+                        ImGui::TableSetColumnIndex(5);
+                        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "%.2f", total);
+                    }
                 }
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -212,6 +230,13 @@ namespace Editor
                 ImGui::Text("%u", ev.Triangles);
                 ImGui::TableNextColumn();
                 ImGui::Text("%u", ev.Instances);
+                ImGui::TableNextColumn();
+                if (float t = timeOf(i); t >= 0.0f)
+                {
+                    // The costly ones stand out.
+                    if (t >= 0.5f) ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f), "%.3f", t);
+                    else ImGui::Text("%.3f", t);
+                }
                 if (after) ImGui::PopStyleColor();
             }
             ImGui::EndTable();

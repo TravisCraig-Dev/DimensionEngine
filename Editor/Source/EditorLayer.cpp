@@ -5,6 +5,8 @@
 #include <Dimension/Renderer/Quality.h>
 #include <Dimension/Core/AppRuntime.h>
 #include <Dimension/Asset/AssetPack.h>
+#include <Dimension/Music/AudioExport.h>
+#include <Dimension/Music/SongPlayer.h>
 #include "EditorLayer.h"
 #include "Dimension/Platform/AppIcon.h"
 #include "Dimension/ImGui/ImGuiLayer.h"
@@ -238,13 +240,13 @@ namespace Editor
             OpenSearch(true);
             m_SearchQuery = m_Options.SearchQuery;
         }
-        else if (!m_Options.OpenWindow.empty()) m_ScriptWindows[m_Options.OpenWindow] = true; // a C# extension's window, by title
         else if (m_Options.OpenWindow == "Frame Debugger")
         {
             m_ShowFrameDebugger = true;
             m_FrameDebugger->Start(m_Options.FrameEvent);
         }
         else if (m_Options.OpenWindow == "Tile Palette") m_ShowTilePalette = true;
+        else if (!m_Options.OpenWindow.empty()) m_ScriptWindows[m_Options.OpenWindow] = true; // a C# extension's window, by title
 
         SplashScreen::SetStatus("Loading the game module...");
         LoadGameModule();
@@ -280,6 +282,24 @@ namespace Editor
             if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
             if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenMusicMode(h);
             else Log::Error("No song at {}", p.string());
+        }
+        if (!m_Options.RenderSong.empty())
+        {
+            auto resolve = [](fs::path p) { return p.is_relative() ? AssetManager::GetAssetsDirectory() / p : p; };
+            fs::path in = resolve(m_Options.RenderSong), out = resolve(m_Options.RenderSongOut);
+            Music::Song song;
+            if (!Music::Song::Load(in, song)) Log::Error("Cannot load the song {}", in.string());
+            else
+            {
+                constexpr uint32_t rate = 48000;
+                std::vector<float> audio = Music::RenderSong(song, rate, Music::SongPlayer::Mode::Song);
+                Music::Normalize(audio, -1.0f);
+                fs::create_directories(out.parent_path());
+                bool ok = out.extension() == ".ogg" ? Music::WriteOpus(out, audio, rate, 128) : Music::WriteWav(out, audio, rate);
+                if (ok) Log::Info("Rendered {} ({:.1f} s) to {}", in.filename().string(), audio.size() / 2.0 / rate, out.string());
+                else Log::Error("Cannot write {}", out.string());
+            }
+            Application::Get().Close();
         }
         m_Ctx.HierarchySearch = m_Options.Search;
         if (!m_Options.SelectEntity.empty())
@@ -3069,7 +3089,8 @@ namespace Editor
         if (m_ShowFrameDebugger)
         {
             SceneRenderer& debugged = m_FrameDebugger->View() == 0 ? m_SceneRenderer : m_GameRenderer;
-            m_FrameDebugger->OnImGui(&m_ShowFrameDebugger, debugged.GetFrameEvents(), debugged.GetFramePreview(), debugged.GetFramePreviewSourceSize());
+            m_FrameDebugger->OnImGui(&m_ShowFrameDebugger, debugged.GetFrameEvents(), debugged.GetFrameEventTimes(), debugged.GetFramePreview(),
+                                     debugged.GetFramePreviewSourceSize());
         }
         if (m_ShowStats) DrawStats();
         DrawGameView();

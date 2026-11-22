@@ -509,8 +509,19 @@ void main()
     vec3 shadowPos = vWorldPos, shadowNormal = normalize(vNormal);
 #endif
     if (uScene.LightDirection.w > 0.5)
-        color += DirectLight(N, V, normalize(-uScene.LightDirection.xyz), uScene.LightColor.rgb, albedo, metallic, roughness) *
-                 DirectionalShadow(shadowPos, shadowNormal) * CloudShadow(vWorldPos) * (m.Flags.x != 2u ? UnderwaterSun(vWorldPos) : 1.0);
+    {
+        vec3 L = normalize(-uScene.LightDirection.xyz);
+        float sunShadow = DirectionalShadow(shadowPos, shadowNormal) * CloudShadow(vWorldPos) * (m.Flags.x != 2u ? UnderwaterSun(vWorldPos) : 1.0);
+        color += DirectLight(N, V, L, uScene.LightColor.rgb, albedo, metallic, roughness) * sunShadow;
+        // Translucent thin surfaces: the sun through them from behind (diffuse, tinted by the surface), and a little
+        // scattered on toward the viewer when looking into the light.
+        float translucency = m.Flags.z == 0u && m.Flags.w == 0u ? m.Layers[1].w : 0.0;
+        if (translucency > 0.0)
+        {
+            float through = max(dot(-N, L), 0.0) + 0.6 * pow(max(dot(-V, L), 0.0), 4.0);
+            color += albedo * (1.0 - metallic) * uScene.LightColor.rgb * translucency * through * sunShadow;
+        }
+    }
 
     // The point and spot lights of this pixel's cluster.
     uvec2 cell = uvec2(0u);

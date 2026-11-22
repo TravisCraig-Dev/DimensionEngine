@@ -77,6 +77,7 @@ namespace Dimension
             vkDestroyFence(m_Device, f.Fence, nullptr);
             vkDestroySemaphore(m_Device, f.ImageAvailable, nullptr);
             if (f.Timers) vkDestroyQueryPool(m_Device, f.Timers, nullptr);
+            if (f.DrawStamps) vkDestroyQueryPool(m_Device, f.DrawStamps, nullptr);
         }
         FlushReleases(UINT64_MAX);
         vkDestroyCommandPool(m_Device, m_ImmediatePool, nullptr);
@@ -358,6 +359,8 @@ namespace Dimension
                 timers.queryType = VK_QUERY_TYPE_TIMESTAMP;
                 timers.queryCount = kMaxTimerQueries;
                 VK_CHECK(vkCreateQueryPool(m_Device, &timers, nullptr, &f.Timers));
+                timers.queryCount = kMaxDrawStamps;
+                VK_CHECK(vkCreateQueryPool(m_Device, &timers, nullptr, &f.DrawStamps));
             }
 
             f.Transient = Buffer(kTransientSize,
@@ -513,6 +516,21 @@ namespace Dimension
                         m_GpuTimings.push_back({ t.Name, t.Depth, (float)((double)(stamps[t.End] - stamps[t.Begin]) * period / 1e6) });
             }
         }
+        // And its draw marks (one more stamp closes the last draw's span: the frame's end).
+        if (f.DrawStamps && f.DrawStampCount > 1)
+        {
+            std::vector<uint64_t> stamps(f.DrawStampCount);
+            if (vkGetQueryPoolResults(m_Device, f.DrawStamps, 0, f.DrawStampCount, stamps.size() * sizeof(uint64_t), stamps.data(), sizeof(uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            {
+                double period = m_Properties.limits.timestampPeriod;
+                m_DrawTimes.resize(stamps.size() - 1);
+                for (size_t i = 0; i + 1 < stamps.size(); ++i)
+                    m_DrawTimes[i] = stamps[i + 1] >= stamps[i] ? (float)((double)(stamps[i + 1] - stamps[i]) * period / 1e6) : 0.0f;
+                m_DrawTimesFrame = f.SubmittedFrame;
+            }
+        }
+        f.DrawStampCount = 0;
         f.TimerRecords.clear();
         f.TimerQueries = 0;
         f.OpenTimers = 0;
@@ -525,6 +543,7 @@ namespace Dimension
         if (f.Timers)
         {
             vkCmdResetQueryPool(f.Cmd, f.Timers, 0, kMaxTimerQueries);
+            vkCmdResetQueryPool(f.Cmd, f.DrawStamps, 0, kMaxDrawStamps);
             f.FrameTimer = BeginGpuTimer(f.Cmd, "Frame");
         }
 
@@ -548,6 +567,14 @@ namespace Dimension
         f.TimerRecords.push_back({ name, f.OpenTimers, q, UINT32_MAX });
         ++f.OpenTimers;
         return (int)f.TimerRecords.size() - 1;
+    }
+
+    int RenderDevice::MarkDraw(VkCommandBuffer cmd)
+    {
+        PerFrame& f = m_Frames[m_FrameNumber % kFramesInFlight];
+        if (!f.DrawStamps || cmd != f.Cmd || f.DrawStampCount >= kMaxDrawStamps) return -1;
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f.DrawStamps, f.DrawStampCount);
+        return (int)f.DrawStampCount++;
     }
 
     void RenderDevice::EndGpuTimer(VkCommandBuffer cmd, int timer)

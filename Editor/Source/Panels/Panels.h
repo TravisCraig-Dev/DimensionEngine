@@ -270,7 +270,8 @@ namespace Editor
     public:
         explicit FrameDebuggerPanel(EditorContext& ctx) : m_Ctx(ctx) {}
         // `preview`: the picked draw's target as an ImGui texture (0 = none) and that target's size.
-        void OnImGui(bool* open, const std::vector<FrameDebugEvent>& events, uint64_t preview, glm::uvec2 previewSize);
+        // `times`: each draw's GPU milliseconds (SceneRenderer::GetFrameEventTimes; empty until measured).
+        void OnImGui(bool* open, const std::vector<FrameDebugEvent>& events, const std::vector<float>& times, uint64_t preview, glm::uvec2 previewSize);
         // SceneRenderOptions::FrameDebugStop for a view (0 Scene, 1 Game): -2 unless it is the one being debugged.
         int StopFor(int view) const;
         int View() const { return m_View; }

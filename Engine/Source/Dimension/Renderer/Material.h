@@ -34,6 +34,9 @@ namespace Dimension
         // Transparent materials (game views): what lies behind is seen bent by the surface's normals (water, glass,
         // ice), this much (0 = straight through, as plain blending).
         float Refraction = 0.0f;
+        // Thin surfaces (leaves, needles, grass blades, cloth): the share of sunlight that comes through them from
+        // behind, tinted by the surface (glTF KHR_materials_diffuse_transmission).
+        float Translucency = 0.0f;
 
         static const std::vector<FieldInfo>& Fields();
 

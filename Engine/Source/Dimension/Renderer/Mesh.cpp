@@ -388,6 +388,7 @@ namespace Dimension
                 else if (src.alpha_mode == cgltf_alpha_mode_blend)
                     v.BlendMode = MaterialBlendMode::Transparent;
                 v.DoubleSided = src.double_sided;
+                if (src.has_diffuse_transmission) v.Translucency = std::clamp(src.diffuse_transmission.diffuse_transmission_factor, 0.0f, 1.0f);
                 out.Materials.push_back(std::move(m));
             }
         }

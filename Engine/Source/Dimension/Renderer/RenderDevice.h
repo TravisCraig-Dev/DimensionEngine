@@ -72,6 +72,13 @@ namespace Dimension
         };
         // The newest finished frame's spans, in the order they began ("Frame" first: all of it).
         const std::vector<GpuTiming>& GetGpuTimings() const { return m_GpuTimings; }
+        // Draw timestamps (the Frame Debugger's GPU time per draw): MarkDraw writes one before a draw (allowed inside a
+        // render pass; up to kMaxDrawStamps a frame) and returns its index, or -1. Once that frame is done on the GPU,
+        // GetDrawTimes has the milliseconds from each mark to the next (the last to the end of the frame's work), and
+        // GetDrawTimesFrame the frame they were measured in.
+        int MarkDraw(VkCommandBuffer cmd);
+        const std::vector<float>& GetDrawTimes() const { return m_DrawTimes; }
+        uint64_t GetDrawTimesFrame() const { return m_DrawTimesFrame; }
         uint64_t GetCompletedFrameNumber() const { return m_CompletedFrame; }
 
         void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& record);
@@ -162,7 +169,12 @@ namespace Dimension
             uint32_t TimerQueries = 0;
             int OpenTimers = 0;
             int FrameTimer = -1;
+            VkQueryPool DrawStamps = VK_NULL_HANDLE;
+            uint32_t DrawStampCount = 0;
         };
+        static constexpr uint32_t kMaxDrawStamps = 8192;
+        std::vector<float> m_DrawTimes;
+        uint64_t m_DrawTimesFrame = 0;
         static constexpr uint32_t kMaxTimerQueries = 256;
         std::vector<GpuTiming> m_GpuTimings;
         PerFrame m_Frames[kFramesInFlight];

@@ -18,7 +18,7 @@ namespace Dimension::ImportCache
     namespace
     {
         // Bump when an importer's output changes, so old entries are not read back.
-        constexpr uint32_t kImageVersion = 1, kCompressedVersion = 1, kMeshVersion = 4; // 2: OBJ materials; 3: cubic spline tangents; 4: blend shapes
+        constexpr uint32_t kImageVersion = 1, kCompressedVersion = 1, kMeshVersion = 5; // 2: OBJ materials; 3: cubic spline tangents; 4: blend shapes; 5: translucency
         std::atomic<bool> s_Enabled{ true };
 
         uint64_t Hash(const void* data, size_t size, uint64_t h = 1469598103934665603ull)

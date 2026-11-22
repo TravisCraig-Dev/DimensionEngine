@@ -31,6 +31,9 @@ namespace Editor
         std::string PrefabPath;   // open this prefab in Prefab Mode on startup (path relative to Assets or absolute)
         std::string ModelPath;    // --model: open this .dmodel in Model Mode on startup (relative to Assets or absolute)
         std::string SongPath;     // --song: open this .dsong in Music Mode on startup (relative to Assets or absolute)
+        // --render-song <song> <out>: renders the song's Playlist (Song mode) to an audio file (.ogg: Opus, else WAV),
+        // normalized to -1 dB, and quits (paths relative to Assets or absolute).
+        std::string RenderSong, RenderSongOut;
         std::string OpenSceneLater; // request this scene like the UI does, after a few frames (automation/testing)
         bool MenuOpenScene = false; // run File > Open Scene... after a few frames (automation/testing)
         std::string OpenWindow;   // open a tool window on startup: "Build Settings", "Preferences", "Project Settings"

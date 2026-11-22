@@ -31,7 +31,9 @@ namespace Dimension
                 .Field("Double Sided", &Material::DoubleSided)
                 .Field("Cast Shadows", &Material::CastShadows)
                 .Field("Refraction", &Material::Refraction).Range(0.0f, 2.0f).Speed(0.01f)
-                    .Tooltip("Transparent: bends what is seen through it by the surface's normals (water, glass; game views)");
+                    .Tooltip("Transparent: bends what is seen through it by the surface's normals (water, glass; game views)")
+                .Field("Translucency", &Material::Translucency).Range(0.0f, 1.0f).Speed(0.01f)
+                    .Tooltip("Thin surfaces (leaves, needles, grass, cloth): sunlight shining through from behind");
             return f;
         }();
         return fields;

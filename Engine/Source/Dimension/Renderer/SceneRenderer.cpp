@@ -962,6 +962,7 @@ namespace Dimension
             m_FrameEvents.clear();
             m_FrameMaterials.clear();
             m_FrameStop = options.FrameDebugStop;
+            m_FrameCmd = cmd;
         }
         // Temporal anti-aliasing renders the game view with a sub-pixel offset that cycles through a Halton sequence;
         // the Scene view and probe faces are never jittered.
@@ -1485,6 +1486,7 @@ namespace Dimension
         {
             MainPipeline(MainPipelines::Sky).Bind(cmd);
             vkCmdDraw(cmd, 3, 1, 0, 0);
+            if (m_FrameCapturing) RenderDevice::Get().MarkDraw(cmd);
             m_Stats.DrawCalls++;
         }
         DrawMeshes(cmd, u.ViewProj, MeshPass::Main);
@@ -1532,7 +1534,7 @@ namespace Dimension
             }
             device.BindUniforms(cmd, &u, sizeof(u));
         }
-        if (velocity) RenderVelocity(cmd, target, u.ViewProj, unjitteredViewProj, u.Wind);
+        if (velocity) { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "Motion Vectors"); RenderVelocity(cmd, target, u.ViewProj, unjitteredViewProj, u.Wind); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
         else target.Motion.Valid = false;
         // HDR effects that need the finished opaque image: decals onto surfaces, reflections, fog, then TAA over all.
         if (!m_Decals.empty()) DrawDecals(cmd, target);
@@ -1602,7 +1604,7 @@ namespace Dimension
             } push{ glm::vec4(ToLinear(settings.FogColor) * settings.FogIntensity, std::max(settings.FogSunScattering, 0.0f)), target.GetDepthBindless(),
                     (uint32_t)std::clamp(settings.FogSteps, 4, 128), settings.FogDensity, std::max(settings.FogHeightFalloff, 0.0f), settings.FogHeight,
                     std::max(settings.FogMaxDistance, 1.0f), settings.FogAnisotropy, taa ? Halton(target.Temporal.Frame % 16 + 1, 5) : 0.0f };
-            FullscreenPass(cmd, target.GetHdr(), true, res.Fog, &push, sizeof(push));
+            { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "Fog"); FullscreenPass(cmd, target.GetHdr(), true, res.Fog, &push, sizeof(push)); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
         }
         if (underwaterFog)
         {
@@ -1623,7 +1625,7 @@ namespace Dimension
             } push{ target.Temporal.PrevViewProj, target.GetHdrBindless(), target.GetTaaHistoryBindless(read), target.GetDepthBindless(),
                     target.Temporal.Valid ? 1u : 0u, glm::vec2(1.0f / extent.width, 1.0f / extent.height),
                     std::clamp(settings.TAAFeedback, 0.01f, 1.0f), target.GetVelocityBindless() + 1 };
-            FullscreenPass(cmd, target.GetTaaHistory(write), false, res.Taa, &push, sizeof(push));
+            { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "TAA"); FullscreenPass(cmd, target.GetTaaHistory(write), false, res.Taa, &push, sizeof(push)); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
             VkImage hdr = target.GetHdr().GetHandle(), result = target.GetTaaHistory(write).GetHandle();
             Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
             Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -1651,7 +1653,7 @@ namespace Dimension
                     uint32_t Frame, Pad;
                 } push{ target.GetHdrBindless(), target.GetDepthBindless(), target.GetVelocityBindless(), target.GetVelocityTilesBindless(),
                         std::clamp(post.MotionBlur, 0.0f, 1.0f), 0.06f, (uint32_t)RenderDevice::Get().Frame().FrameNumber, 0u };
-                FullscreenPass(cmd, target.GetScratch(), false, res.MotionBlur, &push, sizeof(push));
+                { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "Motion Blur"); FullscreenPass(cmd, target.GetScratch(), false, res.MotionBlur, &push, sizeof(push)); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
                 VkImage hdr = target.GetHdr().GetHandle(), result = target.GetScratch().GetHandle();
                 Vk::TransitionImage(cmd, result, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
                 Vk::TransitionImage(cmd, hdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -1674,7 +1676,7 @@ namespace Dimension
         else
             m_AutoExposureStarted = false;
         bool bloom = settings.Bloom && settings.BloomIntensity > 0.0f && target.GetBloomLevels() > 0;
-        if (bloom) RenderBloom(cmd, target, settings);
+        { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "Bloom"); if (bloom) RenderBloom(cmd, target, settings); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
         if (dof) RenderDepthOfField(cmd, target, camera, settings);
 
         VkViewport flat{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
@@ -1763,7 +1765,17 @@ namespace Dimension
         Vk::TransitionImage(cmd, target.GetOutput().GetHandle(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         device.EndGpuTimer(cmd, postTimer);
         m_Stats.DrawCalls++;
-        if (m_FrameCapturing) RenderFramePreview(cmd, target);
+        if (m_FrameCapturing)
+        {
+            // The last draw's span ends here; the events' stamps are kept for when the GPU's times come back.
+            RenderDevice::Get().MarkDraw(cmd);
+            uint64_t frame = RenderDevice::Get().Frame().FrameNumber;
+            StampedFrame& kept = m_StampedFrames[frame % 4];
+            kept.Frame = frame;
+            kept.Stamps.clear();
+            for (const FrameDebugEvent& ev : m_FrameEvents) kept.Stamps.push_back(ev.Stamp);
+            RenderFramePreview(cmd, target);
+        }
 
         m_Sprites.clear();
         m_Lines.clear();
@@ -1826,6 +1838,7 @@ namespace Dimension
             g->Maps = glm::uvec4(TextureIndex(m.BaseColorMap, white), normal, TextureIndex(m.MetallicRoughnessMap, white),
                                  TextureIndex(m.EmissionMap, white));
             g->Flags = glm::uvec4((uint32_t)m.BlendMode, m.NormalMap.IsValid() && normal != white ? 1u : 0u, 0u, 0u);
+            g->Layers[1].w = std::clamp(m.Translucency, 0.0f, 1.0f); // (plain materials: fur shells use Layers for their own)
             // Occlusion (plain materials: terrain and water use Maps2 themselves): z its texture + 1, w the strength.
             if (m.OcclusionMap.IsValid())
             {
@@ -3056,7 +3069,7 @@ namespace Dimension
                 // Terrain: an item per chunk (each culled by every pass on its own bounds), drawn at the coarsest level
                 // whose error looks no bigger than kTerrainErrorPixels on a 1080-line view from this camera. Shadows
                 // draw the same levels.
-                constexpr float kTerrainErrorPixels = 2.0f;
+                constexpr float kTerrainErrorPixels = 3.0f;
                 RenderPart part = m_RenderParts[item.FirstPart];
                 m_RenderParts.resize(item.FirstPart);
                 float heightScale = glm::length(glm::vec3(t.World[1]));
@@ -3371,8 +3384,21 @@ namespace Dimension
         ev.EntityId = entity;
         ev.Instances = instances;
         ev.Triangles = triangles;
+        ev.Stamp = RenderDevice::Get().MarkDraw(m_FrameCmd);
         m_FrameEvents.push_back(std::move(ev));
         return m_FrameStop < 0 || index <= m_FrameStop;
+    }
+
+    std::vector<float> SceneRenderer::GetFrameEventTimes() const
+    {
+        const auto& device = RenderDevice::Get();
+        const std::vector<float>& times = device.GetDrawTimes();
+        const StampedFrame& kept = m_StampedFrames[device.GetDrawTimesFrame() % 4];
+        std::vector<float> out;
+        if (kept.Frame != device.GetDrawTimesFrame()) return out;
+        out.reserve(kept.Stamps.size());
+        for (int s : kept.Stamps) out.push_back(s >= 0 && s < (int)times.size() ? times[s] : -1.0f);
+        return out;
     }
 
     void SceneRenderer::RenderFramePreview(VkCommandBuffer cmd, SceneRenderTarget& target)
@@ -3417,6 +3443,8 @@ namespace Dimension
 
     void SceneRenderer::DrawMeshes(VkCommandBuffer cmd, const glm::mat4& viewProj, MeshPass pass)
     {
+        // Frame debugger: the last draw's GPU span ends with this pass (not with whatever runs before the next draw).
+        struct SpanEnd { bool On; VkCommandBuffer Cmd; ~SpanEnd() { if (On) RenderDevice::Get().MarkDraw(Cmd); } } spanEnd{ m_FrameCapturing, cmd };
         bool shadowPass = pass == MeshPass::Shadow, depthPass = pass == MeshPass::Depth, oitPass = pass == MeshPass::Transparent;
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
@@ -4377,6 +4405,8 @@ namespace Dimension
 
     void SceneRenderer::DrawSprites(VkCommandBuffer cmd)
     {
+        // Frame debugger: the last draw's GPU span ends with this pass (not with whatever runs before the next draw).
+        struct SpanEnd { bool On; VkCommandBuffer Cmd; ~SpanEnd() { if (On) RenderDevice::Get().MarkDraw(Cmd); } } spanEnd{ m_FrameCapturing, cmd };
         // Scene visibility: hidden objects' sprites and icons go; unpickable ones draw without their id.
         if (!m_HiddenIds.empty()) std::erase_if(m_Sprites, [&](const SpriteDraw& d) { return m_HiddenIds.contains(d.Entity); });
         if (!m_UnpickableIds.empty())
@@ -5263,6 +5293,8 @@ namespace Dimension
 
     void SceneRenderer::DrawGpuParticles(VkCommandBuffer cmd)
     {
+        // Frame debugger: the last draw's GPU span ends with this pass (not with whatever runs before the next draw).
+        struct SpanEnd { bool On; VkCommandBuffer Cmd; ~SpanEnd() { if (On) RenderDevice::Get().MarkDraw(Cmd); } } spanEnd{ m_FrameCapturing, cmd };
         if (m_GpuParticleDraws.empty()) return;
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
@@ -5377,6 +5409,8 @@ namespace Dimension
     void SceneRenderer::RenderVelocity(VkCommandBuffer cmd, SceneRenderTarget& target, const glm::mat4& viewProj, const glm::mat4& unjitteredViewProj,
                                        const glm::vec4& wind)
     {
+        // Frame debugger: the last draw's GPU span ends with this pass (not with whatever runs before the next draw).
+        struct SpanEnd { bool On; VkCommandBuffer Cmd; ~SpanEnd() { if (On) RenderDevice::Get().MarkDraw(Cmd); } } spanEnd{ m_FrameCapturing, cmd };
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
         auto& motion = target.Motion;
@@ -5432,6 +5466,14 @@ namespace Dimension
             if (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId)) continue;
             if (m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[i]) continue;
             if (!item.AlwaysVisible && !frustum.IntersectsWorld(item.Center, item.Extents)) continue;
+            // A few pixels tall: whatever it does moves less than a pixel a frame, and the camera's motion serves it
+            // (thousands of far crowd members drawn again, skinned twice over, cost more than TAA gains from them).
+            if (!item.AlwaysVisible && item.MotionVectors == 1)
+            {
+                glm::vec4 c = viewProj * glm::vec4(item.Center, 1.0f);
+                float focal = glm::length(glm::vec3(viewProj[0][1], viewProj[1][1], viewProj[2][1])); // (the projection's y scale)
+                if (c.w > 0.0f && glm::length(item.Extents) * 2.0f * focal / c.w < 0.03f) continue; // under 1.5% of the height
+            }
             auto& last = motion.Objects[key];
             bool had = history && last.Frame + 1 == frame;
             glm::mat4 prevWorld = had ? last.World : item.World;
@@ -5708,6 +5750,8 @@ namespace Dimension
 
     void SceneRenderer::DrawDecals(VkCommandBuffer cmd, SceneRenderTarget& target)
     {
+        // Frame debugger: the last draw's GPU span ends with this pass (not with whatever runs before the next draw).
+        struct SpanEnd { bool On; VkCommandBuffer Cmd; ~SpanEnd() { if (On) RenderDevice::Get().MarkDraw(Cmd); } } spanEnd{ m_FrameCapturing, cmd };
         auto& device = RenderDevice::Get();
         auto& res = Renderer::Get();
         Ref<Mesh> cube = AssetManager::GetMesh(AssetManager::kCube);
@@ -5902,7 +5946,7 @@ namespace Dimension
         VkRect2D scissor{ { 0, 0 }, extent };
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
-        DrawMeshes(cmd, viewProj, MeshPass::Depth);
+        { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "Depth Prepass"); DrawMeshes(cmd, viewProj, MeshPass::Depth); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
         vkCmdEndRendering(cmd);
 
         VkImage depthImage = target.GetDepth().GetHandle();
@@ -5945,10 +5989,10 @@ namespace Dimension
         };
         SsaoPush ao{ target.GetDepthBindless(), 16u, glm::vec2(1.0f / extent.width, 1.0f / extent.height),
                      std::max(settings.SSAORadius, 0.01f), std::max(settings.SSAOIntensity, 0.0f), settings.SSAOBias, 0.0f };
-        pass(target.GetAO(0), res.Ssao, &ao, sizeof(ao));
+        { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "SSAO"); pass(target.GetAO(0), res.Ssao, &ao, sizeof(ao)); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
         const Image& raw = target.GetAO(0);
         SsaoBlurPush blur{ target.GetAOBindless(0), target.GetDepthBindless(), glm::vec2(1.0f / raw.GetWidth(), 1.0f / raw.GetHeight()) };
-        pass(target.GetAO(1), res.SsaoBlur, &blur, sizeof(blur));
+        { int subTimer = RenderDevice::Get().BeginGpuTimer(cmd, "SSAO Blur"); pass(target.GetAO(1), res.SsaoBlur, &blur, sizeof(blur)); RenderDevice::Get().EndGpuTimer(cmd, subTimer); }
         Vk::TransitionImage(cmd, depthImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_ASPECT_DEPTH_BIT);
     }

@@ -86,6 +86,7 @@ namespace Dimension
         uint32_t BlendMode = 0;             // 0 opaque, 1 cutout, 2 transparent
         bool BaseMap = false, NormalMap = false;
         const char* Kind = "Mesh";          // Mesh, Terrain, Fur Shell, Water
+        int Stamp = -1;                     // its GPU timestamp this frame (RenderDevice::MarkDraw)
     };
 
     // Directional shadow cascades for one frame.
@@ -195,6 +196,9 @@ namespace Dimension
         const RenderStats& GetStats() const { return m_Stats; }
         // The draws of the last frame rendered with SceneRenderOptions::FrameDebugStop above -2, in order.
         const std::vector<FrameDebugEvent>& GetFrameEvents() const { return m_FrameEvents; }
+        // The GPU time of the recorded draws (by index in GetFrameEvents), measured a couple of frames ago when the GPU
+        // finished them: from each draw to the next (state changes and waits included). Empty until then.
+        std::vector<float> GetFrameEventTimes() const;
         // That frame's picture of the target its last kept draw went into (shadow maps, the HDR image), as an ImGui
         // texture (0 = none for that target), and its size.
         uint64_t GetFramePreview() const { return m_FramePreviewShown ? m_FramePreviewImGui : 0; }
@@ -441,6 +445,13 @@ namespace Dimension
         bool m_FrameCapturing = false;
         int m_FrameStop = -1;
         std::vector<FrameDebugEvent> m_FrameEvents;
+        VkCommandBuffer m_FrameCmd = VK_NULL_HANDLE;
+        struct StampedFrame
+        {
+            uint64_t Frame = 0;
+            std::vector<int> Stamps; // per event
+        };
+        StampedFrame m_StampedFrames[4];
         // Records a draw (while capturing); false when it falls after the stop and is to be skipped. `material` is a
         // mesh draw's material address (its values were kept when it was uploaded).
         bool DebugDraw(const char* pass, const char* target, const std::string& what, uint32_t entity, uint32_t instances, uint32_t triangles,
