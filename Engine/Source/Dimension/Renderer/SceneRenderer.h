@@ -286,7 +286,7 @@ namespace Dimension
             VkBuffer Indices = VK_NULL_HANDLE;  // and triangles instead of the mesh's (torn cloth)
             VkDeviceSize IndexOffset = 0;
             uint32_t IndexCount = 0;
-            bool AlwaysVisible;        // skinned: animated bounds are unknown
+            bool AlwaysVisible;        // never culled (the ocean, whose rings follow the camera)
             bool CastShadows;          // the renderer's flag
             uint32_t Motion = 0;       // grass tufts: half floats (sway, bending); fur shells: (length, -height); 0 = rigid
             uint32_t FurWind = 0;      // fur shells: half floats (droop, wind response), for their motion vectors

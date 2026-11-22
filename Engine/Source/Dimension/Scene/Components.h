@@ -506,6 +506,7 @@ namespace Dimension
         AnimatorCullingMode CullingMode = AnimatorCullingMode::AlwaysAnimate;
         AnimatorMatchTarget Match; // runtime
         bool Culled = false;       // runtime: off screen and not animated this frame
+        float CulledTime = 0.0f;   // runtime: the time it skipped while culled, caught up when it shows again
         std::string RootMotionJoint;   // empty = the skeleton's first root joint
         // Animation Source: another model whose clips this one plays, retargeted onto its own skeleton by joint name
         // (None = the clips of its own mesh).

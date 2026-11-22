@@ -958,7 +958,7 @@ namespace Dimension
             ma_uint32 flags = stream ? MA_SOUND_FLAG_STREAM : MA_SOUND_FLAG_DECODE;
             if (SoundInitFromFile(s_Engine, path, flags, group, &voice->Sound) != MA_SUCCESS)
             {
-                Log::Error("Failed to load audio clip '{}'", path.string());
+                Log::Error("Failed to load audio clip '{}' ({})", path.empty() ? std::string("no such asset") : path.string(), (uint64_t)clip);
                 delete voice;
                 return nullptr;
             }

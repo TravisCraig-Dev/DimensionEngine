@@ -1282,11 +1282,14 @@ namespace Dimension
         if (!options.ProbeCapture) RenderWorldCanvases(cmd, scene);
         // Prepare CPU-side draw lists (the camera's layers: nested probe captures above drew everything)
         m_CullingMask = view.CullingMask;
-        CollectSprites(scene, camera);
-        CollectTilemaps(scene, camera);
-        CollectText(scene, camera);
-        CollectParticles(scene, camera);
-        CollectLines(scene, camera);
+        {
+            DIM_PROFILE_SCOPE("Sprites, Particles and Lines");
+            CollectSprites(scene, camera);
+            CollectTilemaps(scene, camera);
+            CollectText(scene, camera);
+            CollectParticles(scene, camera);
+            CollectLines(scene, camera);
+        }
         {
             DIM_PROFILE_SCOPE("Render List");
             BuildRenderList(scene, camera, options); // shared by the shadow, depth and main passes below
@@ -1341,6 +1344,7 @@ namespace Dimension
         if (castShadows)
         {
             ShadowCascades cascades;
+            DIM_PROFILE_SCOPE("Shadow Maps");
             RenderShadowMap(cmd, scene, camera, glm::vec3(u.LightDirection), shadowDistance, cascadeCount, &u, sizeof(u), cascades);
             for (int i = 0; i < cascades.Count; ++i)
             {
@@ -2680,6 +2684,9 @@ namespace Dimension
             return g;
         };
         auto uploadMaterial = [&](const Material& m, int dark) { return uploadMaterialGPU(dim(BuildMaterialGPU(m), dark)); };
+        // Material assets by address (they stay put for the frame): the many objects sharing one skip building and
+        // hashing its GPU values again.
+        std::unordered_map<const Material*, VkDeviceAddress> assetMaterials[3];
         // LOD groups pick their child for this camera (so every pass, shadows too, draws the same one).
         LODGroups::Frame lods;
         LODGroups::Evaluate(scene, camera.Position, camera.Projection, camera.Orthographic, lods);
@@ -2881,6 +2888,28 @@ namespace Dimension
                             bounds.Max = glm::max(bounds.Max, moved.Max);
                         }
                 }
+            // Skinned meshes use the Animator's matrices (uploaded once, shared by every pass); without an
+            // Animator they render in bind pose.
+            const AnimatorComponent* animator = mesh->IsSkinned() ? reg.TryGet<AnimatorComponent>(e) : nullptr;
+            bool skinned = animator && animator->SkinMatrices.size() == mesh->GetSkeleton()->Joints.size() && mesh->GetSkinAddress();
+            if (skinned)
+            {
+                // The posed bounds: every skinned vertex is a weighted mix of its joints' matrices applied to it, so it
+                // lies within the bind bounds moved by any of them: around where each joint takes the bounds' center,
+                // as far as the bounds reach from it (turned any way; joints that grow the mesh are not expected).
+                glm::vec3 c = bounds.Center(), lo(FLT_MAX), hi(-FLT_MAX);
+                for (const glm::mat4& j : animator->SkinMatrices)
+                {
+                    glm::vec3 jc = glm::vec3(j[0]) * c.x + glm::vec3(j[1]) * c.y + glm::vec3(j[2]) * c.z + glm::vec3(j[3]);
+                    lo = glm::min(lo, jc);
+                    hi = glm::max(hi, jc);
+                }
+                if (!animator->SkinMatrices.empty() && glm::all(glm::lessThanEqual(lo, hi)))
+                {
+                    float reach = glm::length(bounds.Extents());
+                    bounds.Min = glm::min(bounds.Min, lo - reach), bounds.Max = glm::max(bounds.Max, hi + reach);
+                }
+            }
             glm::mat3 m(t.World);
             glm::vec3 ext = bounds.Extents();
             item.Center = glm::vec3(t.World * glm::vec4(bounds.Center(), 1.0f));
@@ -2892,11 +2921,7 @@ namespace Dimension
             partSubMesh.clear();
             // Reflection probes are chosen and blended per pixel in the shader (item.Probe stays 0).
 
-            // Skinned meshes use the Animator's matrices (uploaded once, shared by every pass); without an
-            // Animator they render in bind pose.
-            const AnimatorComponent* animator = mesh->IsSkinned() ? reg.TryGet<AnimatorComponent>(e) : nullptr;
-            bool skinned = animator && animator->SkinMatrices.size() == mesh->GetSkeleton()->Joints.size() && mesh->GetSkinAddress();
-            item.AlwaysVisible = skinned || ocean;
+            item.AlwaysVisible = ocean; // (skinned meshes: bounds of the pose, above)
             if (skinned)
             {
                 size_t bytes = animator->SkinMatrices.size() * sizeof(glm::mat4);
@@ -2991,8 +3016,14 @@ namespace Dimension
                     address = uploadMaterialGPU(dim(gpu, dark));
                     m_FrameHasWater = true;
                 }
-                else
+                else if (matPtr == &tinted || matPtr == &scratch)
                     address = uploadMaterial(mat, dark);
+                else
+                {
+                    VkDeviceAddress& known = assetMaterials[dark][matPtr];
+                    if (!known) known = uploadMaterial(mat, dark);
+                    address = known;
+                }
                 if (!address) continue;
                 if (fur)
                 {
@@ -3409,6 +3440,7 @@ namespace Dimension
         Mesh* boundMesh = nullptr;
         const char* passName = shadowPass ? "Shadows" : depthPass ? "Depth Prepass" : oitPass ? "Transparent (OIT)" : "Opaque";
         const char* targetName = shadowPass ? m_ShadowTargetName : depthPass ? "Depth" : oitPass ? "OIT Accumulation" : "HDR Color";
+        DIM_PROFILE_SCOPE(passName);
         auto submit = [&](const Draw& d, uint32_t instances) {
             if (!DebugDraw(passName, targetName, d.MeshPtr->GetName(), d.Push.EntityId, instances, d.IndexCount / 3 * instances, d.Push.Material)) return;
             if (d.Pipe != bound)
@@ -5395,6 +5427,11 @@ namespace Dimension
             swaying |= waves;
             if ((item.MotionVectors == 0 && !swaying) || (item.Motion && !shell) || item.ShadowOnly || (item.Vertices && item.SimPositions < 0 && !item.Ocean)) continue;
             uint64_t key = ((uint64_t)item.EntityId << 32) | occurrence[item.EntityId]++;
+            // Not seen: no velocity to draw, and its history (a skinned one's every joint) is not kept up either; back
+            // in view, it moves only with the camera for its first frame.
+            if (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId)) continue;
+            if (m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[i]) continue;
+            if (!item.AlwaysVisible && !frustum.IntersectsWorld(item.Center, item.Extents)) continue;
             auto& last = motion.Objects[key];
             bool had = history && last.Frame + 1 == frame;
             glm::mat4 prevWorld = had ? last.World : item.World;
@@ -5445,9 +5482,6 @@ namespace Dimension
             else last.Positions.clear();
             last.Frame = frame;
             if (!moved && item.MotionVectors != 2) continue;
-            if (!m_HiddenIds.empty() && m_HiddenIds.contains(item.EntityId)) continue;
-            if (m_ItemOccluded.size() == m_RenderItems.size() && m_ItemOccluded[i]) continue;
-            if (!item.AlwaysVisible && !frustum.IntersectsWorld(item.Center, item.Extents)) continue;
             if (item.MotionVectors == 2)
             {
                 // Force No Motion: last frame's matrices put it where the camera would have seen it then, so its

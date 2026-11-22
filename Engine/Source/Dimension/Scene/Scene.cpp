@@ -17,6 +17,9 @@
 #include "Dimension/UI/UI.h"
 #include "Dimension/Scene/Prefab.h"
 #include "Dimension/Particles/ParticleSystem.h"
+#include "Dimension/Scene/LODGroup.h"
+#include "Dimension/Renderer/RenderDevice.h"
+#include "Dimension/Renderer/Material.h"
 #include "Dimension/Animation/Animation.h"
 #include "Dimension/Animation/AnimatorController.h"
 #include "Dimension/Animation/Timeline.h"
@@ -790,10 +793,48 @@ namespace Dimension
             a.Node = -1;
         }
         Navigation::BakeAll(*this, false, true); // (a surface's saved bake when it is up to date)
+        WarmUpAssets();
         DataAssets::OnRuntimeStart(); // the scripts' data asset objects start from their files
         InstantiateScripts();
         for (auto& sys : m_Systems) sys->OnStart(*this);
         m_Audio->Start();
+    }
+
+    void Scene::WarmUpAssets()
+    {
+        // Everything the scene's objects draw with, inactive ones too (templates that scripts copy): loaded and on the
+        // GPU now, while the scene starts, rather than in the frame something first shows it. Generated LOD levels are
+        // simplified meanwhile on worker threads and uploaded at the end.
+        if (!RenderDevice::Exists()) return; // (headless: nothing to draw)
+        auto material = [](AssetHandle h) {
+            if (Ref<Material> m = AssetManager::GetMaterial(h))
+                for (AssetHandle map : { m->BaseColorMap, m->NormalMap, m->MetallicRoughnessMap, m->OcclusionMap, m->EmissionMap })
+                    AssetManager::GetTexture(map);
+        };
+        std::vector<std::tuple<AssetHandle, int, float>> levels;
+        for (auto [e, mr] : m_Registry.ViewOf<MeshRendererComponent>())
+        {
+            if (m_Registry.Has<TerrainComponent>(e)) continue; // (terrains build their own)
+            if (!AssetManager::GetMesh(mr.Mesh)) continue;
+            material(mr.Material);
+            for (AssetHandle h : mr.Materials) material(h);
+            for (AssetHandle h : AssetManager::GetMeshMaterials(mr.Mesh)) material(h);
+            AssetManager::GetTexture(mr.Texture);
+            if (const auto* lod = m_Registry.TryGet<LODGroupComponent>(e); lod && lod->GeneratedLevels > 0)
+                for (int level = 1; level <= std::min(lod->GeneratedLevels, 3); ++level)
+                {
+                    levels.emplace_back(mr.Mesh, level, lod->Reduction);
+                    LODGroups::GeneratedMesh(mr.Mesh, level, lod->Reduction, false); // (starts it)
+                }
+        }
+        for (auto [e, ps] : m_Registry.ViewOf<ParticleSystemComponent>())
+        {
+            AssetManager::GetTexture(ps.Texture);
+            AssetManager::GetTexture(ps.DecalTexture);
+            AssetManager::GetParticleTexture(); // (made on first use: the default sprite, and particle trails)
+        }
+        for (auto [e, tr] : m_Registry.ViewOf<TrailRendererComponent>()) AssetManager::GetTexture(tr.Texture);
+        for (auto& [mesh, level, reduction] : levels) AssetManager::GetMesh(LODGroups::GeneratedMesh(mesh, level, reduction, true));
     }
 
     void Scene::StartQueryPhysics()
@@ -1426,9 +1467,17 @@ namespace Dimension
                         outside[4] += p.z < 0.0f;  outside[5] += p.z > p.w;
                     }
                     for (int k = 0; k < 6; ++k) anim.Culled |= outside[k] == 8;
-                    if (anim.Culled) continue;
+                    if (anim.Culled)
+                    {
+                        anim.CulledTime += dt;
+                        continue;
+                    }
                 }
             }
+            // Back in view: it plays on from where it would be had it never stopped (a clip that ended while off screen
+            // shows its last frame, not its start).
+            dt += anim.CulledTime;
+            anim.CulledTime = 0.0f;
             const auto& clips = generic ? GenericClips() : AnimatorClips(anim, mr.Mesh, mesh);
             auto duration = [&](const std::string& name) {
                 const AnimationClip* c = Animation::FindClip(clips, name);

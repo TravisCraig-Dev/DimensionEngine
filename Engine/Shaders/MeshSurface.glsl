@@ -262,48 +262,64 @@ void main()
         axesFull /= max(axesFull.x + axesFull.y + axesFull.z, 1e-4);
         uint count = min(m.Maps2.z, 16u);
         float heightBlend = uintBitsToFloat(m.Maps2.w);
-        float weights[16];
-        vec3 colors[16];
-        float heights[16];
-        float details[16];
-        vec4 w = vec4(0.0);
-        float top = -1e9, plainTotal = 0.0;
+        // The pixel's four strongest layers (by splat weight), kept sorted in fixed registers: arrays indexed by the
+        // loop counter would live in slow local memory, and a pixel rarely shows more than three layers.
+        vec4 w = vec4(0.0), topW = vec4(0.0);
+        uvec4 topI = uvec4(0u);
         for (uint k = 0u; k < count; ++k)
         {
             TerrainLayer layer = layers.Layers[k];
             if (layer.Maps.z == 0u) w = SampleTexture(layer.Maps.y, vUV);
             // Layers at the faint edges of the filtered splat maps are left out (each weight less 2%, renormalized
             // below), so a pixel reads the layers that show rather than every one within a sample of it.
-            weights[k] = max(w[layer.Maps.z] - 0.02, 0.0);
-            colors[k] = vec3(0.0);
-            heights[k] = -1e9;
-            if (weights[k] <= 0.0) continue;
+            float wk = max(w[layer.Maps.z] - 0.02, 0.0);
+            if (wk <= topW.w) continue;
+            topW.w = wk; topI.w = k;
+            if (topW.w > topW.z) { topW.zw = topW.wz; topI.zw = topI.wz; }
+            if (topW.z > topW.y) { topW.yz = topW.zy; topI.yz = topI.zy; }
+            if (topW.y > topW.x) { topW.xy = topW.yx; topI.xy = topI.yx; }
+        }
+        vec3 colors[4];
+        vec4 heights = vec4(-1e9), details = vec4(0.0);
+        float top = -1e9, plainTotal = 0.0;
+        for (int s = 0; s < 4; ++s)
+        {
+            colors[s] = vec3(0.0);
+            if (topW[s] <= 0.0) continue;
+            TerrainLayer layer = layers.Layers[topI[s]];
             float detail = smoothstep(6.0, 16.0, 1.0 / max(layer.Color.w * metersPerPixel, 1e-6)); // (pixels a tile)
             vec3 layerAxes = max(axesFull - mix(0.3, 0.05, detail), 0.0);
             layerAxes /= max(layerAxes.x + layerAxes.y + layerAxes.z, 1e-4);
-            details[k] = detail;
+            details[s] = detail;
             vec3 texel = TerrainSample(layer.Maps.x, world, layer.Color.w, layer.Params.y > 0.5, layerAxes).rgb;
-            colors[k] = texel * layer.Color.rgb;
-            heights[k] = weights[k] + dot(texel, vec3(0.299, 0.587, 0.114)) * heightBlend;
-            top = max(top, heights[k]);
-            plainTotal += weights[k];
+            // Far off, a tile repeats every few pixels and the ground reads as a grid: blended with the same texture
+            // turned and some five times larger as the detail fades, the repeats no longer line up.
+            if (detail < 1.0 && layer.Params.y <= 0.5)
+            {
+                vec2 q = mat2(0.8, -0.6, 0.6, 0.8) * world.xz * (layer.Color.w * 0.21);
+                texel = mix(texel, 0.5 * (texel + SampleTexture(layer.Maps.x, q).rgb), 1.0 - detail);
+            }
+            colors[s] = texel * layer.Color.rgb;
+            heights[s] = topW[s] + dot(texel, vec3(0.299, 0.587, 0.114)) * heightBlend;
+            top = max(top, heights[s]);
+            plainTotal += topW[s];
         }
         float band = mix(0.6, 0.05, heightBlend), total = 0.0;
         vec3 c = vec3(0.0), n = vec3(0.0);
-        for (uint k = 0u; k < count; ++k)
+        for (int s = 0; s < 4; ++s)
         {
-            if (weights[k] <= 0.0) continue;
-            float byHeight = max(heights[k] - (top - band), 0.0);
-            float weight = mix(weights[k] / max(plainTotal, 1e-4), byHeight, heightBlend > 0.0 ? 1.0 : 0.0);
+            if (topW[s] <= 0.0) continue;
+            float byHeight = max(heights[s] - (top - band), 0.0);
+            float weight = mix(topW[s] / max(plainTotal, 1e-4), byHeight, heightBlend > 0.0 ? 1.0 : 0.0);
             if (weight <= 0.0) continue;
-            c += colors[k] * weight;
-            TerrainLayer layer = layers.Layers[k];
+            c += colors[s] * weight;
+            TerrainLayer layer = layers.Layers[topI[s]];
             vec3 t = surfaceN;
-            if (layer.Maps.w != 0xFFFFFFFFu && details[k] > 0.0)
+            if (layer.Maps.w != 0xFFFFFFFFu && details[s] > 0.0)
             {
-                vec3 layerAxes = max(axesFull - mix(0.3, 0.05, details[k]), 0.0);
+                vec3 layerAxes = max(axesFull - mix(0.3, 0.05, details[s]), 0.0);
                 layerAxes /= max(layerAxes.x + layerAxes.y + layerAxes.z, 1e-4);
-                t = mix(surfaceN, normalize(TerrainNormal(layer.Maps.w, world, layer.Color.w, layer.Params.x, layer.Params.y > 0.5, layerAxes, surfaceN)), details[k]);
+                t = mix(surfaceN, normalize(TerrainNormal(layer.Maps.w, world, layer.Color.w, layer.Params.x, layer.Params.y > 0.5, layerAxes, surfaceN)), details[s]);
             }
             n += normalize(t) * weight;
             total += weight;

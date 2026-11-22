@@ -381,7 +381,9 @@ namespace Dimension::Terrain
         // The hash of a sculpted or painted data string. They run to megabytes and the renderer asks for the key every
         // frame, so a big one's hash is remembered with a copy of what was hashed: comparing with the copy is many
         // times faster than hashing again, and stays right however the string was changed (an undo can overwrite it in
-        // place, keeping its buffer and size).
+        // place, keeping its buffer and size). Even comparing megabytes every frame shows, so while the string keeps its
+        // buffer and size only every 16th ask compares (edits that assign a new string are seen at once; an in-place
+        // overwrite a few frames late).
         uint64_t BlobHash(const std::string& s)
         {
             if (s.size() < 65536) return Fnv(s.data(), s.size());
@@ -389,14 +391,25 @@ namespace Dimension::Terrain
             {
                 std::string Data;
                 uint64_t Hash = 0;
+                const char* Buffer = nullptr;
+                uint32_t Asks = 0;
             };
             static std::mutex mutex;
             static std::unordered_map<const std::string*, Memo> memo; // by the string's address (the component's field)
             std::lock_guard lock(mutex);
-            if (auto it = memo.find(&s); it != memo.end() && it->second.Data == s) return it->second.Hash;
+            if (auto it = memo.find(&s); it != memo.end() && it->second.Data.size() == s.size())
+            {
+                Memo& m = it->second;
+                if (m.Buffer == s.data() && ++m.Asks % 16 != 0) return m.Hash;
+                if (m.Data == s)
+                {
+                    m.Buffer = s.data();
+                    return m.Hash;
+                }
+            }
             if (memo.size() >= 24) memo.clear(); // fields of components since moved or destroyed
             uint64_t h = Fnv(s.data(), s.size());
-            memo[&s] = { s, h };
+            memo[&s] = { s, h, s.data(), 0 };
             return h;
         }
     }

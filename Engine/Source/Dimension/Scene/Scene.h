@@ -215,6 +215,8 @@ namespace Dimension
 
         // ---- Lifecycle
         void OnRuntimeStart();
+        // Loads what the scene's objects (inactive ones too) draw with, and makes their generated LOD levels.
+        void WarmUpAssets();
         void OnRuntimeStop();
         void OnUpdateRuntime(float dt);
         void OnUpdateEditor(float dt);
