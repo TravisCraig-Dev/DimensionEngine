@@ -38,7 +38,7 @@ def add(sc):
             sc.add(f"Template {side}_{kind}", HIDDEN, active=False,
                    Mesh_Renderer=S.mesh_renderer(S.guid(f"Models/Soldiers/{side}_{kind}.gltf")),
                    Animator=S.animator("Idle_Shield_Loop", anims, cull=True),
-                   LOD_Group={"LOD 1 Below": 0.12, "LOD 2 Below": 0.05, "LOD 3 Below": 0.02, "Cull Below": 0.0025,
+                   LOD_Group={"LOD 1 Below": 0.2, "LOD 2 Below": 0.08, "LOD 3 Below": 0.03, "Cull Below": 0.0025,
                               "Size": 1.8, "Bias": 1.0, "Fade Width": 0.1, "Generated Levels": 3, "Reduction": 0.35})
     # The horses: a saddle cloth in each side's colours, several coats (Tools/build_horse.py).
     for side in ("Defenders", "Attackers"):
@@ -119,6 +119,8 @@ def add(sc):
     # Sound (Tools/build_audio.py; Scripts/BattleAudio.cs sets their volumes and moves the hooves).
     sc.add("Battle Ambience", Audio_Source=audio("Audio/Loops/Battle_Crowd.ogg", 0.12, stream=True))
     sc.add("Cavalry Hooves", Audio_Source=audio("Audio/Loops/Horse_Trot.ogg", 0.0, spatial=True, pitch=1.4))
+    # The battle theme (Assets/Music/Siege_Battle.dsong, rendered by Tools/compose_music.py's command).
+    sc.add("Music", Audio_Source=audio("Audio/Music/Siege_Battle.ogg", 0.32, stream=True))
     sc.add("Battle", Script={"Scripts": [{"Class": "Siege.Battle", "Fields": {"ArmySize": 320, "CavalryPerSide": 24,
                                                                               "Catapults": 4, "Seed": 7},
                                           "Enabled": True}]})

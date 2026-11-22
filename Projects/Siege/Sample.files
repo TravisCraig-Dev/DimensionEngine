@@ -5,6 +5,8 @@ Assets/Audio/Loops/Fire.ogg
 Assets/Audio/Loops/Fire.ogg.meta
 Assets/Audio/Loops/Horse_Trot.ogg
 Assets/Audio/Loops/Horse_Trot.ogg.meta
+Assets/Audio/Music/Siege_Battle.ogg
+Assets/Audio/Music/Siege_Battle.ogg.meta
 Assets/Audio/SFX/Arrow_Approach_1.wav
 Assets/Audio/SFX/Arrow_Approach_1.wav.meta
 Assets/Audio/SFX/Arrow_Approach_2.wav
@@ -180,6 +182,8 @@ Assets/Models/Trees/Fir_A.gltf.meta
 Assets/Models/Trees/Fir_B.bin
 Assets/Models/Trees/Fir_B.gltf
 Assets/Models/Trees/Fir_B.gltf.meta
+Assets/Music/Siege_Battle.dsong
+Assets/Music/Siege_Battle.dsong.meta
 Assets/Scenes/Lineup.scene
 Assets/Scenes/Lineup.scene.meta
 Assets/Scenes/Siege.scene

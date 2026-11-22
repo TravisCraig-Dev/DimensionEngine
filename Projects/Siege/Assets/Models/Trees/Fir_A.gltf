@@ -78,8 +78,16 @@
    },
    "normalTexture": {
     "index": 3
+   },
+   "extensions": {
+    "KHR_materials_diffuse_transmission": {
+     "diffuseTransmissionFactor": 0.45
+    }
    }
   }
+ ],
+ "extensionsUsed": [
+  "KHR_materials_diffuse_transmission"
  ],
  "buffers": [
   {

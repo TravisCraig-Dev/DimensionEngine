@@ -10,7 +10,7 @@ _TYPES = {
     ".png": "Texture", ".jpg": "Texture", ".jpeg": "Texture", ".hdr": "Texture",
     ".gltf": "Mesh", ".glb": "Mesh", ".obj": "Mesh", ".fbx": "Mesh", ".dmodel": "Mesh",
     ".scene": "Scene", ".prefab": "Prefab", ".mat": "Material", ".controller": "AnimatorController",
-    ".anim": "AnimationClip", ".vfx": "VisualEffect", ".wav": "Audio", ".ogg": "Audio", ".flac": "Audio", ".mp3": "Audio", ".timeline": "Timeline",
+    ".anim": "AnimationClip", ".vfx": "VisualEffect", ".dsong": "Song", ".wav": "Audio", ".ogg": "Audio", ".flac": "Audio", ".mp3": "Audio", ".timeline": "Timeline",
 }
 _LINEAR_HINTS = ("_nor", "_arm", "_rough", "_ao", "_disp", "normal", "roughness", "_mask")
 

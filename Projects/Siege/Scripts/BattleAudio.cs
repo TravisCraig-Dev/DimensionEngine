@@ -19,7 +19,8 @@ namespace Siege
         private readonly Battle m_Battle;
         private readonly Dictionary<string, AudioClip[]> m_Clips = new();
         private readonly List<(float gain, AudioClip clip, Vector3 dir)> m_Requests = new();
-        private readonly AudioSource m_Crowd, m_Hooves;
+        private readonly AudioSource m_Crowd, m_Hooves, m_Music;
+        private float m_Duck; // seconds the music stays lowered after a stone lands
         private Vector3 m_Camera;
         private float m_PassbyCooldown;
 
@@ -44,6 +45,7 @@ namespace Siege
             m_Clips["Thud"] = new[] { Clip("Audio/SFX/Catapult_Thud.flac") };
             m_Crowd = Entity.Find("Battle Ambience").GetComponent<AudioSource>();
             m_Hooves = Entity.Find("Cavalry Hooves").GetComponent<AudioSource>();
+            m_Music = Entity.Find("Music").GetComponent<AudioSource>();
         }
 
         /// <summary>An asset's GUID from its path under Assets/ (as Tools/siege.py makes them: the first 15 hex digits of
@@ -69,7 +71,11 @@ namespace Siege
 
         public void CatapultCreak(Vector3 at) => Request("Creak", at, 1.0f, 60.0f);
         public void CatapultThrow(Vector3 at) => Request("Thud", at, 1.0f, 70.0f);
-        public void Impact(Vector3 at) => Request("Impact", at, 1.0f, 160.0f, important: true);
+        public void Impact(Vector3 at)
+        {
+            Request("Impact", at, 1.0f, 160.0f, important: true);
+            if (Live && Vector3.Distance(at, m_Camera) < 200.0f) m_Duck = 1.6f; // the music steps back for the blast
+        }
 
         /// <summary>An arrow in flight: heard as it passes close to the camera (one at a time).</summary>
         public void ArrowNear(Vector3 at, Vector3 velocity)
@@ -152,6 +158,9 @@ namespace Siege
                 Ease(m_Hooves, MathF.Min(1.0f, charging.AliveCount / 8.0f) / (1.0f + MathF.Pow(d / 45.0f, 1.6f)), dt);
             }
             else Ease(m_Hooves, 0.0f, dt);
+            // The music under it all, lowered a moment while a near stone's blast rings out.
+            m_Duck -= dt;
+            if (m_Music != null) Ease(m_Music, m_Duck > 0 ? 0.14f : 0.32f, dt * (m_Duck > 0 ? 4.0f : 1.0f));
         }
 
         private static void Ease(AudioSource source, float volume, float dt) =>

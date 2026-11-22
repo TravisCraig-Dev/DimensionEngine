@@ -29,7 +29,8 @@ def branch_texture(size=(512, 1024), seed=3):
             ln = length * rng.uniform(0.6, 1.1) * (1 - 0.4 * t)
             ex, ey = px + np.cos(ang) * ln, py + np.sin(ang) * ln
             g = rng.uniform(0.55, 1.0)
-            dc.line([(px, py), (ex, ey)], fill=(int(28 * g), int(58 * g), int(30 * g), 255), width=2)
+            # (fir needles reflect some 5-8% of green light: darker paint made whole forests read black)
+            dc.line([(px, py), (ex, ey)], fill=(int(52 * g), int(86 * g), int(40 * g), 255), width=2)
             dh.line([(px, py), (ex, ey)], fill=int(150 + 100 * g), width=2)
 
     cx = w / 2
@@ -46,9 +47,16 @@ def branch_texture(size=(512, 1024), seed=3):
     needles(cx, h - 10, cx, 10, 34, 2.0)
     alpha = np.array(color)[:, :, 3]
     rgb = np.array(color)[:, :, :3]
-    # Spread the needle colors into the transparent texels so mip levels don't fringe dark.
-    blurred = np.array(color.filter(ImageFilter.GaussianBlur(6)))[:, :, :3]
-    rgb = np.where(alpha[..., None] > 0, rgb, blurred)
+    # Spread the needle colors into the transparent texels so mip levels don't fringe dark: the blur of the colors
+    # over the blur of the coverage (the empty texels' black left out), and the average color where nothing reaches.
+    premult = rgb.astype(np.float64) * (alpha[..., None] > 0)
+    cover = Image.fromarray(((alpha > 0) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(6))
+    spread = np.dstack([np.array(Image.fromarray(premult[..., c].astype(np.uint8)).filter(ImageFilter.GaussianBlur(6)), dtype=np.float64)
+                        for c in range(3)])
+    weight = np.array(cover, dtype=np.float64)[..., None] / 255.0
+    mean = premult[alpha > 0].mean(axis=0)
+    blurred = np.where(weight > 0.02, spread / np.maximum(weight, 1e-3), mean)
+    rgb = np.where(alpha[..., None] > 0, rgb, np.clip(blurred, 0, 255))
     hgt = np.array(height.filter(ImageFilter.GaussianBlur(1)), dtype=np.float64) / 255
     gy, gx = np.gradient(hgt)
     n = np.dstack([-gx * 6, gy * 6, np.ones_like(hgt)])
@@ -120,7 +128,10 @@ def write_tree(name, trunk, cards):
                                                          "roughnessFactor": 0.9}, "normalTexture": {"index": 1}},
                {"name": "Fir Branches", "alphaMode": "MASK", "alphaCutoff": 0.4, "doubleSided": True,
                 "pbrMetallicRoughness": {"baseColorTexture": {"index": 2}, "baseColorFactor": [0.9, 1.0, 0.9, 1],
-                                         "metallicFactor": 0, "roughnessFactor": 0.85}, "normalTexture": {"index": 3}}]}
+                                         "metallicFactor": 0, "roughnessFactor": 0.85}, "normalTexture": {"index": 3},
+                # needles let the sun through (lit from behind, the crowns glow rather than going black)
+                "extensions": {"KHR_materials_diffuse_transmission": {"diffuseTransmissionFactor": 0.45}}}],
+           "extensionsUsed": ["KHR_materials_diffuse_transmission"]}
     w = G.Writer(doc)
     prims = []
     for mat, (p, n, uv, tri) in enumerate((trunk, cards)):

@@ -597,9 +597,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -668,9 +668,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -739,9 +739,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -810,9 +810,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -881,9 +881,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -952,9 +952,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -1023,9 +1023,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -1094,9 +1094,9 @@
           "Culling Mode": 1
         },
         "LOD Group": {
-          "LOD 1 Below": 0.12,
-          "LOD 2 Below": 0.05,
-          "LOD 3 Below": 0.02,
+          "LOD 1 Below": 0.2,
+          "LOD 2 Below": 0.08,
+          "LOD 3 Below": 0.03,
           "Cull Below": 0.0025,
           "Size": 1.8,
           "Bias": 1.0,
@@ -2748,6 +2748,53 @@
           "Occlusion Cutoff": 1200.0,
           "Rolloff": 0,
           "Doppler Level": 1.0
+        }
+      }
+    },
+    {
+      "guid": 100035,
+      "parent": 0,
+      "components": {
+        "Tag": {
+          "Name": "Music",
+          "Tag": "Untagged",
+          "Active": true,
+          "Layer": 0
+        },
+        "Transform": {
+          "Position": [
+            0,
+            0,
+            0
+          ],
+          "Rotation": [
+            0,
+            0,
+            0
+          ],
+          "Scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "Audio Source": {
+          "Clip": 810727336484839669,
+          "Volume": 0.32,
+          "Pitch": 1.0,
+          "Loop": true,
+          "Play On Awake": true,
+          "Spatial": false,
+          "Min Distance": 1.0,
+          "Max Distance": 50.0,
+          "Output": "",
+          "Stream": true,
+          "Mute": false,
+          "Occlusion": false,
+          "Occlusion Volume": -9.0,
+          "Occlusion Cutoff": 1200.0,
+          "Rolloff": 0,
+          "Doppler Level": 0.0
         }
       }
     },
