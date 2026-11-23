@@ -59,6 +59,8 @@
 #include <Dimension/Core/Profiler.h>
 #include <Dimension/Audio/Convolver.h>
 #include <Dimension/Terrain/Terrain.h>
+#include <Dimension/Code/TextBuffer.h>
+#include <Dimension/Code/CSharpLexer.h>
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Music/SongPlayer.h>
@@ -21644,6 +21646,163 @@ namespace
         CHECK(S::RumbleReport(S::Pad::DualSense, true, 1.0f, 0.0f, 6) != r); // a new sequence number, a new CRC
     }
 
+    void TestCodeTextBuffer()
+    {
+        using namespace Dimension::Code;
+        TextBuffer b;
+        // Lines and line endings: a CRLF file stays CRLF; a BOM-less file round-trips exactly.
+        b.SetText("a\r\nbc\r\n");
+        CHECK(b.LineCount() == 3 && b.Line(1) == "bc" && b.UsesCrlf() && b.GetText() == "a\r\nbc\r\n" && !b.IsDirty());
+        b.SetText("class A\n{\n}");
+        CHECK(!b.UsesCrlf() && b.GetText() == "class A\n{\n}" && b.IndentUnit == "    ");
+        // Typing merges into one undo step; moving the cursor starts another.
+        b.SetCursor({ 0, 7 });
+        b.Type(" ");
+        b.Type(":");
+        b.Type(" B");
+        CHECK(b.Line(0) == "class A : B" && b.IsDirty());
+        b.SetCursor({ 2, 0 });
+        b.Type("x");
+        CHECK(b.Line(2) == "x}");
+        CHECK(b.Undo() && b.Line(2) == "}" && b.Undo() && b.Line(0) == "class A" && !b.IsDirty());
+        CHECK(b.Redo() && b.Line(0) == "class A : B" && b.Cursor() == (TextPos{ 0, 11 }));
+        b.MarkSaved();
+        CHECK(!b.IsDirty());
+        // Multi-line inserts and selections.
+        b.SetText("one two\nthree");
+        b.SetSelection({ 0, 4 }, { 1, 2 });
+        CHECK(b.SelectedText() == "two\nth");
+        b.Insert("X\nY\nZ");
+        CHECK(b.LineCount() == 3 && b.Line(0) == "one X" && b.Line(1) == "Y" && b.Line(2) == "Zree" && b.Cursor() == (TextPos{ 2, 1 }));
+        CHECK(b.Undo() && b.GetText() == "one two\nthree" && b.SelectedText() == "two\nth");
+        // Word jumps, smart Home, vertical moves that keep their column.
+        b.SetText("    int value = 42;\nx\n    float other;");
+        CHECK(b.Right({ 0, 4 }, true) == (TextPos{ 0, 8 }) && b.Left({ 0, 14 }, true) == (TextPos{ 0, 8 }) && b.Left({ 0, 4 }, true) == (TextPos{ 0, 0 }));
+        b.SetCursor({ 0, 12 });
+        b.MoveHome(false);
+        CHECK(b.Cursor() == (TextPos{ 0, 4 }));
+        b.MoveHome(false);
+        CHECK(b.Cursor() == (TextPos{ 0, 0 }));
+        b.SetCursor({ 0, 12 });
+        b.MoveVertical(1, false);
+        CHECK(b.Cursor() == (TextPos{ 1, 1 }));
+        b.MoveVertical(1, false);
+        CHECK(b.Cursor() == (TextPos{ 2, 12 }));
+        // Tabs: columns as drawn.
+        b.SetText("\tx\n\tw\n  \ty");
+        CHECK(b.IndentUnit == "\t" && b.VisualColumn(0, 1) == 4 && b.VisualColumn(2, 3) == 4 && b.ColumnAtVisual(2, 4) == 3 && b.ColumnAtVisual(2, 1) == 1);
+        // UTF-8: one step over a whole character.
+        b.SetText("aé b");
+        b.SetCursor({ 0, 1 });
+        b.MoveRight(false, false);
+        CHECK(b.Cursor() == (TextPos{ 0, 3 }));
+        b.Backspace(false);
+        CHECK(b.Line(0) == "a b");
+        // Backspace in indentation goes back to the previous stop.
+        b.SetText("      x");
+        b.SetCursor({ 0, 6 });
+        b.Backspace(false);
+        CHECK(b.Line(0) == "    x");
+        // Indent / outdent / comment / duplicate / move / delete lines.
+        b.SetText("a\nb\nc");
+        b.SetSelection({ 0, 0 }, { 1, 1 });
+        b.IndentLines();
+        CHECK(b.Line(0) == "    a" && b.Line(1) == "    b" && b.Line(2) == "c");
+        b.OutdentLines();
+        CHECK(b.GetText() == "a\nb\nc");
+        b.SetSelection({ 0, 0 }, { 1, 1 });
+        b.ToggleLineComment();
+        CHECK(b.Line(0) == "// a" && b.Line(1) == "// b");
+        b.ToggleLineComment();
+        CHECK(b.GetText() == "a\nb\nc");
+        CHECK(b.Undo() && b.Line(0) == "// a" && b.Undo() && b.GetText() == "a\nb\nc");
+        b.SetCursor({ 1, 0 });
+        b.DuplicateLines();
+        CHECK(b.GetText() == "a\nb\nb\nc" && b.Cursor().Line == 2);
+        b.MoveLines(-1);
+        b.MoveLines(-1);
+        CHECK(b.GetText() == "b\na\nb\nc" && b.Cursor().Line == 0);
+        b.MoveLines(1);
+        CHECK(b.GetText() == "a\nb\nb\nc" && b.Cursor().Line == 1);
+        b.DeleteLines();
+        CHECK(b.GetText() == "a\nb\nc");
+        b.SetCursor({ 2, 0 });
+        b.DeleteLines();
+        CHECK(b.GetText() == "a\nb");
+        // Word selection, find (wrapping, case, whole words), replace all as one step.
+        b.SetText("Foo foo_bar food\nfoo");
+        b.SelectWordAt({ 0, 6 });
+        CHECK(b.SelectedText() == "foo_bar");
+        TextPos fa, fb;
+        TextBuffer::FindOptions any, word;
+        word.WholeWord = true;
+        CHECK(b.Find("foo", any, { 0, 1 }, false, fa, fb) && fa == (TextPos{ 0, 4 }));
+        CHECK(b.Find("foo", word, { 0, 1 }, false, fa, fb) && fa == (TextPos{ 1, 0 }));
+        CHECK(b.Find("foo", word, { 1, 1 }, false, fa, fb) && fa == (TextPos{ 0, 0 })); // (wrapped)
+        CHECK(b.Find("foo", any, { 0, 4 }, true, fa, fb) && fa == (TextPos{ 0, 0 }));
+        TextBuffer::FindOptions exact;
+        exact.CaseSensitive = true;
+        CHECK(!b.Find("FOO", exact, { 0, 0 }, false, fa, fb));
+        CHECK(b.ReplaceAll("foo", "x", word) == 2 && b.GetText() == "x foo_bar food\nx");
+        CHECK(b.Undo() && b.GetText() == "Foo foo_bar food\nfoo");
+    }
+
+    void TestCodeLexer()
+    {
+        using namespace Dimension::Code;
+        auto kinds = [](std::string_view line, LexState in, LexState* out = nullptr) {
+            std::vector<Token> tokens;
+            LexState next = LexLine(line, in, tokens);
+            if (out) *out = next;
+            return tokens;
+        };
+        auto kindAt = [](const std::vector<Token>& tokens, int col) {
+            for (const Token& t : tokens)
+                if (col >= t.Start && col < t.Start + t.Length) return t.Kind;
+            return TokenKind::Count;
+        };
+        // Tokens cover the line without gaps.
+        std::string line = "public class Foo : Behaviour { int x = 0x1F; string s = \"a\\\"b\"; } // done";
+        auto t = kinds(line, {});
+        int covered = 0;
+        for (const Token& k : t)
+        {
+            CHECK(k.Start == covered);
+            covered += k.Length;
+        }
+        CHECK(covered == (int)line.size());
+        CHECK(kindAt(t, 0) == TokenKind::Keyword && kindAt(t, 7) == TokenKind::Keyword && kindAt(t, 13) == TokenKind::TypeName);
+        CHECK(kindAt(t, 19) == TokenKind::TypeName);   // (after :)
+        CHECK(kindAt(t, 31) == TokenKind::TypeKeyword); // int
+        CHECK(kindAt(t, 39) == TokenKind::Number);      // 0x1F
+        CHECK(kindAt(t, 57) == TokenKind::String && kindAt(t, 61) == TokenKind::String); // ("a\"b" in one piece)
+        CHECK(kindAt(t, (int)line.size() - 1) == TokenKind::Comment);
+        // Calls, control keywords, char literals, verbatim identifiers.
+        t = kinds("if (Ready()) return @class + 'x';", {});
+        CHECK(kindAt(t, 0) == TokenKind::ControlKeyword && kindAt(t, 4) == TokenKind::Method && kindAt(t, 13) == TokenKind::ControlKeyword);
+        CHECK(kindAt(t, 20) == TokenKind::Identifier && kindAt(t, 30) == TokenKind::Char);
+        // Doc comments and preprocessor lines.
+        CHECK(kindAt(kinds("    /// <summary>", {}), 6) == TokenKind::DocComment);
+        CHECK(kindAt(kinds("  #region Stuff", {}), 4) == TokenKind::Preprocessor);
+        // Constructs that span lines carry over.
+        LexState s;
+        t = kinds("int a; /* start", {}, &s);
+        CHECK(s.In == LexState::BlockComment && kindAt(t, 9) == TokenKind::Comment);
+        t = kinds("still */ int b;", s, &s);
+        CHECK(s.In == LexState::Code && kindAt(t, 2) == TokenKind::Comment && kindAt(t, 9) == TokenKind::TypeKeyword);
+        t = kinds("var p = @\"C:\\dir\\", {}, &s);
+        CHECK(s.In == LexState::VerbatimString);
+        t = kinds("more\"\"quoted\"; int c;", s, &s);
+        CHECK(s.In == LexState::Code && kindAt(t, 6) == TokenKind::String && kindAt(t, 15) == TokenKind::TypeKeyword);
+        t = kinds("var r = \"\"\"", {}, &s);
+        CHECK(s.In == LexState::RawString && s.Quotes == 3);
+        kinds("  a \"\" quote", s, &s);
+        CHECK(s.In == LexState::RawString);
+        t = kinds("  \"\"\"; int d;", s, &s);
+        CHECK(s.In == LexState::Code && kindAt(t, 2) == TokenKind::String && kindAt(t, 8) == TokenKind::TypeKeyword);
+        CHECK(IsCSharpKeyword("foreach") && IsCSharpKeyword("float") && !IsCSharpKeyword("Update"));
+    }
+
     void TestMusicExport()
     {
         using namespace Dimension::Music;
@@ -22007,6 +22166,8 @@ int main(int argc, char** argv)
     Run("Music plugins", TestMusicPlugins);
     Run("Music recording", TestMusicRecording);
     Run("Music export", TestMusicExport);
+    Run("Code text buffer", TestCodeTextBuffer);
+    Run("Code lexer", TestCodeLexer);
     Run("Sony pad reports", TestSonyPadReports);
     Run("Splash screen image", TestSplashScreenImage);
 

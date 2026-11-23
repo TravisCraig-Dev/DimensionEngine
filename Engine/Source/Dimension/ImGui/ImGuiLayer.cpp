@@ -11,6 +11,9 @@
 namespace Dimension
 {
     static bool s_Active = false;
+    static ImFont* s_MonoFont = nullptr;
+
+    ImFont* ImGuiLayer::GetMonoFont() { return s_MonoFont; }
 
     ImGuiLayer::ImGuiLayer(Window& window, bool docking)
     {
@@ -25,6 +28,12 @@ namespace Dimension
         const char* font = "C:/Windows/Fonts/segoeui.ttf";
         if (std::filesystem::exists(font)) io.Fonts->AddFontFromFileTTF(font, 16.0f);
         else io.Fonts->AddFontDefault();
+        // The fixed-width one, for code.
+        s_MonoFont = nullptr;
+        for (const char* mono : { "C:/Windows/Fonts/CascadiaMono.ttf", "C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                                  "/usr/share/fonts/TTF/DejaVuSansMono.ttf", "/usr/share/fonts/dejavu/DejaVuSansMono.ttf" })
+            if (std::filesystem::exists(mono) && (s_MonoFont = io.Fonts->AddFontFromFileTTF(mono, 15.0f))) break;
+        if (!s_MonoFont) s_MonoFont = io.Fonts->AddFontDefault();
         ApplyEditorStyle();
 
         ImGui_ImplGlfw_InitForVulkan(window.GetNative(), true);

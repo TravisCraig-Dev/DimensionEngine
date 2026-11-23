@@ -161,6 +161,9 @@ namespace Editor
         m_Animation = MakeScope<AnimationPanel>(m_Ctx);
         m_MeshEdit = MakeScope<MeshEditMode>(m_Ctx);
         m_Music = MakeScope<MusicMode>(m_Ctx);
+        m_Code = MakeScope<CodeMode>(m_Ctx);
+        m_Code->BuildScripts = [this] { BuildCSharp(); };
+        m_Code->BuildState = [this] { return m_CSharpBuild ? m_CSharpBuild->load() : 0; };
         m_Ctx.DrawModelModifiers = [this](Entity e) { m_MeshEdit->DrawModifierPanel(e); };
         m_Ctx.OnFileRestored = [this](const fs::path& file) { m_MeshEdit->OnFileRestored(file); };
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
@@ -282,6 +285,12 @@ namespace Editor
             if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
             if (AssetHandle h = AssetManager::Import(p); h.IsValid()) OpenMusicMode(h);
             else Log::Error("No song at {}", p.string());
+        }
+        if (!m_Options.ScriptPath.empty())
+        {
+            fs::path p = m_Options.ScriptPath;
+            if (p.is_relative()) p = Project::GetDirectory() / p;
+            m_Code->Open(p);
         }
         if (!m_Options.RenderSong.empty())
         {
@@ -406,6 +415,7 @@ namespace Editor
         RememberSceneView();
         m_MeshEdit->Exit(); // (writes the model and a painted texture)
         m_Music->Close();   // (writes the song)
+        m_Code->Close();    // (saves the scripts)
         // Not when the editor quits before it drew a frame (--render-song): the windows were never docked, and saving
         // that would leave the project with every window floating.
         if (m_LayoutDrawn) ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
@@ -418,6 +428,7 @@ namespace Editor
     bool EditorLayer::OnCloseRequested()
     {
         m_Music->Close(); // (saves the song)
+        m_Code->Close();  // (saves the scripts)
         if (m_Ctx.IsPlaying()) Stop();
         return ConfirmDiscardChanges();
     }
@@ -776,6 +787,19 @@ namespace Editor
         {
             m_Ctx.RequestCloseMusic = false;
             m_Music->Close();
+        }
+        if (m_Ctx.RequestOpenScript)
+        {
+            fs::path p = *m_Ctx.RequestOpenScript;
+            m_Ctx.RequestOpenScript.reset();
+            if (m_Ctx.IsPlaying()) Stop();
+            m_Music->Close();
+            m_Code->Open(p);
+        }
+        if (m_Ctx.RequestCloseCode)
+        {
+            m_Ctx.RequestCloseCode = false;
+            m_Code->Close();
         }
         if (m_Ctx.RequestOpenModel)
         {
@@ -3038,6 +3062,14 @@ namespace Editor
             style = saved;
             return;
         }
+        if (m_Code->IsActive())
+        {
+            m_Code->OnImGui();
+            if (Shortcuts::Pressed("file.codeMode")) m_Ctx.RequestCloseCode = true;
+            InjectInput(); // (automation)
+            style = saved;
+            return;
+        }
         DrawMenuBar();
         DrawToolbar();
         DrawDockspace();
@@ -3295,6 +3327,7 @@ namespace Editor
             ImGui::Separator();
             bool csBuilding = m_CSharpBuild && m_CSharpBuild->load() == 1;
             if (ImGui::MenuItem("Build C# Scripts", nullptr, false, CSharpRuntime::IsAvailable() && !csBuilding)) BuildCSharp();
+            if (ImGui::MenuItem("Code Mode", Shortcuts::Label("file.codeMode").c_str())) m_Ctx.RequestOpenScript = fs::path();
             if (ImGui::MenuItem("Open C# Project Folder", nullptr, false, CSharpRuntime::IsAvailable()))
                 FileDialogs::OpenWithDefaultApp(CSharpProject::ScriptsDirectory(Project::GetDirectory()));
             if (ImGui::BeginMenu("C# Debugger", CSharpRuntime::IsAvailable()))
@@ -4714,6 +4747,7 @@ namespace Editor
         if (Pressed("file.saveAs")) SaveSceneAs();
         if (Pressed("file.new")) m_ShowNewScene = true;
         if (Pressed("file.buildModule")) BuildGameModule();
+        if (Pressed("file.codeMode")) m_Ctx.RequestOpenScript = fs::path();
         if (Pressed("file.buildSettings")) m_ShowBuildSettings = true;
         if (Pressed("file.buildAndRun") && !m_Ctx.IsPlaying()) BuildGame(true, Project::GetConfig().BuildFolder);
         if (Pressed("file.open")) OpenSceneWithDialog();

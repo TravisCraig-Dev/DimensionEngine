@@ -214,6 +214,9 @@ namespace Editor
         // Music Mode (the full-screen music workspace) on this song, and back to the editor.
         std::optional<AssetHandle> RequestOpenSong;
         bool RequestCloseMusic = false;
+        // Code Mode (the full-screen script editor) on this script (empty: the files open last time), and back.
+        std::optional<fs::path> RequestOpenScript;
+        bool RequestCloseCode = false;
 
         // Terrain brush (Inspector picks it, the Scene view paints with it): 0 = off, else Terrain::BrushMode + 1.
         int TerrainTool = 0;

@@ -11,6 +11,7 @@
 #include "AssetPreviews.h"
 #include "MeshEditMode.h"
 #include "MusicMode.h"
+#include "CodeMode.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneTemplates.h>
@@ -31,6 +32,7 @@ namespace Editor
         std::string PrefabPath;   // open this prefab in Prefab Mode on startup (path relative to Assets or absolute)
         std::string ModelPath;    // --model: open this .dmodel in Model Mode on startup (relative to Assets or absolute)
         std::string SongPath;     // --song: open this .dsong in Music Mode on startup (relative to Assets or absolute)
+        std::string ScriptPath;   // --script: open this script in Code Mode on startup (relative to the project or absolute)
         // --render-song <song> <out>: renders the song's Playlist (Song mode) to an audio file (.ogg: Opus, else WAV),
         // normalized to -1 dB, and quits (paths relative to Assets or absolute).
         std::string RenderSong, RenderSongOut;
@@ -251,6 +253,7 @@ namespace Editor
         Scope<AnimationPanel> m_Animation;
         Scope<MeshEditMode> m_MeshEdit; // Edit Mode: modeling in the Scene view
         Scope<MusicMode> m_Music;       // Music Mode: the full-screen music workspace
+        Scope<CodeMode> m_Code;         // Code Mode: the full-screen script editor
         // File > New Song...: a song file (the default beat) opened in Music Mode.
         bool m_ShowNewSong = false;
         std::string m_NewSongName = "New Song";

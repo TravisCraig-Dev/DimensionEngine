@@ -1,6 +1,8 @@
 #pragma once
 #include "Dimension/Renderer/Vulkan.h"
 
+struct ImFont;
+
 namespace Dimension
 {
     class Window;
@@ -27,5 +29,8 @@ namespace Dimension
         static constexpr uint32_t kDefaultAccent = 0x3A79BB;
         static void ApplyEditorStyle(int theme = ThemeDark, uint32_t accent = kDefaultAccent);
         static bool IsLightTheme();
+        // A fixed-width font (code: Code Mode's editor): Cascadia Mono or Consolas on Windows, DejaVu Sans Mono on
+        // Linux, else ImGui's own (fixed-width too). Null before the layer exists.
+        static ::ImFont* GetMonoFont();
     };
 }

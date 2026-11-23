@@ -121,6 +121,7 @@ namespace Editor
             else if (path.extension() == ".dmodel" && handle.IsValid()) m_Ctx.RequestOpenModel = handle; // Model Mode
             else if (type == AssetType::Song && handle.IsValid()) m_Ctx.RequestOpenSong = handle;           // Music Mode
             else if (type == AssetType::VisualEffect && handle.IsValid()) m_Ctx.RequestOpenVisualEffect = handle;
+            else if (path.extension() == ".cs") m_Ctx.RequestOpenScript = path;                             // Code Mode
             else FileDialogs::OpenWithDefaultApp(path);
         }
 

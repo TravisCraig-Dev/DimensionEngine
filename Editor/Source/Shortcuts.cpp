@@ -22,6 +22,7 @@ namespace Editor::Shortcuts
                 { "file.buildSettings", "File", "Build Settings", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_B },
                 { "file.buildAndRun", "File", "Build And Run", ImGuiMod_Ctrl | ImGuiKey_B },
                 { "file.buildModule", "File", "Build Game Module", ImGuiMod_Ctrl | ImGuiKey_R },
+                { "file.codeMode", "File", "Code Mode (script editor)", ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_E },
                 { "edit.undo", "Edit", "Undo", ImGuiMod_Ctrl | ImGuiKey_Z, 0, true },
                 { "edit.redo", "Edit", "Redo", ImGuiMod_Ctrl | ImGuiKey_Y, 0, true },
                 { "edit.duplicate", "Edit", "Duplicate", ImGuiMod_Ctrl | ImGuiKey_D },
