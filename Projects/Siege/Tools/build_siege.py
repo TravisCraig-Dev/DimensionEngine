@@ -1,5 +1,6 @@
 """Scenes/Siege.scene: the valley (two terrains), sky, sun and the hero camera. Later stages add the castle, the
 armies and the siege engines (see the other build_*.py tools, run from here)."""
+import base64
 import json
 import math
 import os
@@ -61,11 +62,21 @@ def inner_weights(x, z, h, road):
 
 def outer_heights():
     x, z, h, road = T.heights(OUTER_SIZE, OUTER_RES, erode=False)
-    # Inside the inner terrain's square, sink well below it (the inner one draws there); at its edge, match.
+    # Inside the inner terrain's square a hole is cut (outer_holes); the band left under its edge sinks just below it.
     half = INNER_SIZE / 2
     edge = np.maximum(np.abs(x), np.abs(z))
     sink = T.smoothstep(half - 8, half - 60, edge) * 25 + T.smoothstep(half + 40, half - 8, edge) * 0.6
     return x, z, h - sink
+
+
+def outer_holes(x, z):
+    """The outer terrain's hole under the inner one (Painted Holes: a bit per sample, row-major, low bit first).
+    A triangle touching a hole sample is cut, so the hole stops two samples short of the inner border: the outer
+    ground's first whole cells then reach ~9 m under the inner terrain's edge and no gap shows between them."""
+    spacing = OUTER_SIZE / (OUTER_RES - 1)
+    edge = np.maximum(np.abs(x), np.abs(z))
+    hole = edge < INNER_SIZE / 2 - 2 * spacing
+    return base64.b64encode(np.packbits(hole.reshape(-1), bitorder="little").tobytes()).decode("ascii")
 
 
 def outer_weights(x, z, h):
@@ -77,6 +88,10 @@ def outer_weights(x, z, h):
     rock = T.smoothstep(28, 38, slope) * (1 - cliff - snow)
     open_ground = np.clip(1 - snow - cliff - rock, 0, 1)
     forest = T.smoothstep(0.45, 0.6, n1) * T.smoothstep(650, 450, h)
+    # No forest under the inner terrain: this ground is sunk out of sight there, and its trees would still be drawn
+    # (and poke through near the inner border, where the sink is shallow).
+    edge = np.maximum(np.abs(x), np.abs(z))
+    forest = forest * T.smoothstep(INNER_SIZE / 2, INNER_SIZE / 2 + 15, edge)
     w = np.zeros((5,) + h.shape)
     w[0] = open_ground * (1 - forest)
     w[1] = rock
@@ -123,7 +138,7 @@ def main():
         "Primary": True, "Background": [0.4, 0.5, 0.6, 1], "Clear Flags": 1},
         Script=CINEMATIC)
     sc.add("Sun", (0, 500, 0), (-0.42, -2.25, 0), Directional_Light={
-        "Color": [1.0, 0.93, 0.82], "Intensity": 3.6, "Soft Shadows": True, "Light Angle": 1.0})
+        "Color": [1.0, 0.93, 0.82], "Intensity": 0.75, "Soft Shadows": True, "Light Angle": 0.01, "Shadow Distance": 40.0})
 
     # The inner terrain: the castle mountain, the road and the battlefield.
     x, z, h, road = T.heights(INNER_SIZE, INNER_RES)
@@ -148,7 +163,7 @@ def main():
                     "Tree Max Slope": 34,
                     # The grass: a dense field made on the GPU around the camera (Tools/build_grass.py's tuft).
                     "Grass Mesh": S.guid("Models/Nature/Grass_Tuft.gltf"), "Grass Density": 600.0, "Grass Scale": [0.8, 1.3],
-                    "Grass Max Slope": 32.0, "Grass Sway": 1.0, "Grass Bending": 1.0, "Grass Distance": 55.0,
+                    "Grass Max Slope": 32.0, "Grass Sway": 1.0, "Grass Bending": 1.0, "Grass Distance": 900.0,
                     "Sculpted Heights": T.encode_heights(h, INNER_HEIGHT),
                     "Painted Layers": T.encode_layers(inner_weights(x, z, h, road))})
 
@@ -168,7 +183,8 @@ def main():
                     "Tree Mesh": S.guid("Models/Trees/Fir_A.gltf"), "Tree Density": 0.8, "Tree Scale": [1.0, 1.6],
                     "Tree Max Slope": 32,
                     "Sculpted Heights": T.encode_heights(np.clip(ho, 0, None), OUTER_HEIGHT),
-                    "Painted Layers": T.encode_layers(outer_weights(xo, zo, ho))})
+                    "Painted Layers": T.encode_layers(outer_weights(xo, zo, ho)),
+                    "Painted Holes": outer_holes(xo, zo)})
     # The castle (its model's origin is the crag's center at height 0) and its gate.
     sc.add("Castle", (float(T.CASTLE_CENTER[0]), 0.0, float(T.CASTLE_CENTER[1])),
            Mesh_Renderer=S.mesh_renderer(castle["model"]))

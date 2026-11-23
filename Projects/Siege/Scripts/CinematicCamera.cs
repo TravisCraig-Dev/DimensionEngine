@@ -43,8 +43,9 @@ namespace Siege
         private bool m_Hold, m_Fresh = true, m_Started;
         private float m_LastCatapult = -1e9f;
 
-        // The camera as it moves (smoothed toward each frame's wish) and what it looks at.
-        private Vector3 m_Pos, m_Look;
+        // The camera as it moves (springs toward each frame's wish, so it eases in and out of a change of subject rather
+        // than jumping to full speed) and what it looks at, with their velocities.
+        private Vector3 m_Pos, m_Look, m_PosV, m_LookV;
         private float m_Fov = 34.0f, m_Roll;
         private float m_Shake;
 
@@ -57,6 +58,19 @@ namespace Siege
         private float m_Landed = -1.0f;          // seconds since the followed stone landed (-1: not yet)
         private bool m_SawLoaded;                // the catapult has been seen loaded (its next stone is the one to follow)
         private readonly List<Soldier> m_Fighters = new();
+        private Soldier m_Lead;                   // the lead rider filmed (kept until clearly beaten)
+
+        // What the shots aim at, kept steady as the battle wears on (soldiers falling, fights scattering, reinforcements
+        // marching in): the thickest knot of fighting, chosen at each cut and kept for the shot (when its soldier
+        // falls, one fighting beside him takes over; when the knot is gone the camera stays where it was until the
+        // next cut, rather than sweeping off across the field to another), and the front between the armies, followed slowly.
+        private Soldier m_HotAnchor;
+        private bool m_HotRepick = true;
+        private Vector2 m_Hot, m_FrontS, m_TowardS;
+        private bool m_HotValid, m_FrontValid;
+        private const float HotRadius = 14.0f;
+        private float m_ArrowMix;                 // how far the volley shot's look has turned to the arrows (0..1)
+        private Vector3 m_ArrowLook;              // where it last saw them
 
         public override void OnCreate()
         {
@@ -85,6 +99,11 @@ namespace Siege
                      m_Clock - m_LastCatapult > CatapultEvery && AboutToThrow() != null)
                 Begin(Array.FindIndex(Sequence, s => s.Kind == ShotKind.Catapult));
 
+            // A subject lost mid-shot (the lead rider's whole regiment down, the archers gone): a cut to the next shot
+            // rather than a glide off to somewhere else.
+            if (AutoPlay && !m_Hold && SubjectLost()) Begin(m_Index + 1);
+            Track(dt);
+
             Want(out Vector3 pos, out Vector3 look, out float fov, out float follow);
             // Never under the ground (or the ramparts' stone).
             float ground = m_Battle.GroundAt(pos.X, pos.Z) + 1.0f;
@@ -94,14 +113,15 @@ namespace Siege
                 m_Pos = pos;
                 m_Look = look;
                 m_Fov = fov;
+                m_PosV = m_LookV = Vector3.Zero;
                 m_Fresh = false;
                 m_Camera?.Cut();
             }
             else
             {
-                float k = 1.0f - MathF.Exp(-follow * dt);
-                m_Pos = Vector3.Lerp(m_Pos, pos, k);
-                m_Look = Vector3.Lerp(m_Look, look, k);
+                // (twice the follow rate: the same lag behind a steadily moving subject as a plain exponential follow)
+                m_Pos = Spring(m_Pos, ref m_PosV, pos, 2.0f * follow, dt);
+                m_Look = Spring(m_Look, ref m_LookV, look, 2.0f * follow, dt);
                 m_Fov += (fov - m_Fov) * (1.0f - MathF.Exp(-1.5f * dt));
             }
             Shake(dt);
@@ -110,7 +130,7 @@ namespace Siege
 
         // --- the shots ------------------------------------------------------------------------------------------
 
-        private void Begin(int index)
+        private void Begin(int index, int skipped = 0)
         {
             m_Index = index % Sequence.Length;
             (m_Kind, m_Length) = Sequence[m_Index];
@@ -123,17 +143,28 @@ namespace Siege
             m_Regiment = null;
             m_Catapult = null;
             m_Stone = null;
+            m_Lead = null;
+            m_HotRepick = true;
+            m_ArrowMix = 0.0f;
             m_Landed = -1.0f;
             m_SawLoaded = false;
             if (m_Battle == null) return;
+            // (a shot with nothing to film, the cavalry or archers all down, gives way to the next)
+            bool skip = skipped < Sequence.Length && AutoPlay && !m_Hold;
             switch (m_Kind)
             {
-                case ShotKind.Cavalry: m_Regiment = Charging(); break;
-                case ShotKind.Volley: m_Regiment = NextVolley(); break;
+                case ShotKind.Cavalry:
+                    m_Regiment = Charging();
+                    if (m_Regiment == null && skip) { Begin(m_Index + 1, skipped + 1); return; }
+                    break;
+                case ShotKind.Volley:
+                    m_Regiment = NextVolley();
+                    if (m_Regiment == null && skip) { Begin(m_Index + 1, skipped + 1); return; }
+                    break;
                 case ShotKind.Catapult:
                     m_Catapult = Soonest(out float wait);
                     // In the rotation with no throw coming soon: on to the next shot (the throws cut in by themselves).
-                    if (AutoPlay && !m_Hold && wait > 4.0f) { Begin(m_Index + 1); return; }
+                    if (skip && wait > 4.0f) { Begin(m_Index + 1, skipped + 1); return; }
                     m_LastCatapult = m_Clock;
                     break;
             }
@@ -143,7 +174,7 @@ namespace Siege
         {
             float t = m_Time, u = Math.Clamp(m_Time / (m_Length * Pace), 0.0f, 1.0f);
             float e = u * u * (3.0f - 2.0f * u); // eased
-            Vector2 front = Front(out Vector2 across, out Vector2 toward);
+            Vector2 front = m_FrontS, toward = m_TowardS, across = new(-toward.Y, toward.X);
             switch (m_Kind)
             {
                 case ShotKind.Establishing:
@@ -172,7 +203,7 @@ namespace Siege
                 case ShotKind.Cavalry:
                 {
                     // Riding beside the knight at the head of a charge, keeping pace.
-                    Soldier lead = Lead(m_Regiment);
+                    Soldier lead = m_Lead = Lead(m_Regiment, m_Lead);
                     if (lead == null) { Wide(front, toward, out pos, out look, out fov, out follow); return; }
                     Vector2 f = BattleMath.Facing(lead.Yaw), right = new(-f.Y, f.X);
                     Vector2 p = lead.Pos + right * 9.0f * m_Side.X - f * 3.0f;
@@ -189,8 +220,11 @@ namespace Siege
                     Vector2 c = m_Regiment.Centroid, f = m_Regiment.Forward, right = m_Regiment.Right;
                     pos = At(c - f * 14.0f + right * 7.0f * m_Side.X, 2.2f);
                     look = At(c + f * 70.0f, 0.0f) + new Vector3(0.0f, 16.0f, 0.0f);
-                    if (m_Battle.Arrows.FlyingCenter(out Vector3 arrows, out Vector3 v) && t > 1.0f)
-                        look = Vector3.Lerp(look, arrows + v * 0.4f, 0.6f);
+                    // (turning to the arrows and back over a second or so as volleys go up and land)
+                    bool flying = m_Battle.Arrows.FlyingCenter(out Vector3 arrows, out Vector3 v) && t > 1.0f;
+                    if (flying) m_ArrowLook = arrows + v * 0.4f;
+                    m_ArrowMix = Math.Clamp(m_ArrowMix + (flying ? 1.0f : -1.0f) * Time.DeltaTime, 0.0f, 1.0f);
+                    if (m_ArrowMix > 0.0f) look = Vector3.Lerp(look, m_ArrowLook, 0.6f * m_ArrowMix * m_ArrowMix * (3.0f - 2.0f * m_ArrowMix));
                     fov = 42.0f;
                     follow = 2.0f;
                     return;
@@ -313,19 +347,73 @@ namespace Siege
             return n > 0 ? sum / n : null;
         }
 
-        /// <summary>The fighting soldier nearest the middle of all the fighting (the front when nobody fights yet).</summary>
-        private Vector2 Fighting(Vector2 front)
+        /// <summary>The thickest fighting (the front when nobody fights yet), followed slowly.</summary>
+        private Vector2 Fighting(Vector2 front) => m_HotValid ? m_Hot : front;
+
+        private bool SubjectLost() => (m_Kind == ShotKind.Cavalry || m_Kind == ShotKind.Volley) && m_Time > 0.5f &&
+                                      (m_Regiment == null || m_Regiment.AliveCount == 0);
+
+        /// <summary>The front and the thickest fighting this frame, eased toward from where they were.</summary>
+        private void Track(float dt)
         {
+            Vector2 front = Front(out _, out Vector2 toward);
+            if (!m_FrontValid) { m_FrontS = front; m_TowardS = toward; m_FrontValid = true; }
+            float slow = 1.0f - MathF.Exp(-dt / 3.0f);
+            m_FrontS += (front - m_FrontS) * slow;
+            Vector2 t = m_TowardS + (toward - m_TowardS) * slow;
+            m_TowardS = t.LengthSquared() > 1e-6f ? Vector2.Normalize(t) : toward;
+
+            // Fighting: a foe of his own, or his regiment in the fight (foes are dropped and picked up again all the time).
             m_Fighters.Clear();
-            Vector2 sum = Vector2.Zero;
             foreach (var s in m_Battle.Soldiers)
-                if (!s.Dead && !s.Gone && s.Foe != null && !s.Mounted) { m_Fighters.Add(s); sum += s.Pos; }
-            if (m_Fighters.Count < 6) return front;
-            Vector2 middle = sum / m_Fighters.Count;
-            Soldier best = m_Fighters[0];
+                if (!s.Dead && !s.Gone && !s.Mounted && (s.Foe != null || s.Regiment != null && s.Regiment.Engaged)) m_Fighters.Add(s);
+            bool anchorOk = m_HotAnchor != null && !m_HotAnchor.Dead && !m_HotAnchor.Gone;
+            if (m_HotRepick)
+            {
+                // At the cut: the soldier with the most fighters around him (the camera cuts there, no glide); with no
+                // fighting yet, the front for this shot.
+                m_HotRepick = false;
+                if (m_Fighters.Count < 4) { m_HotAnchor = null; m_HotValid = false; return; }
+                Soldier best = null;
+                int bestCount = 0;
+                foreach (var a in m_Fighters)
+                {
+                    int n = Around(a.Pos);
+                    if (n > bestCount) { bestCount = n; best = a; }
+                }
+                m_HotAnchor = best;
+                anchorOk = true;
+                m_HotValid = false; // (taken as it is below)
+            }
+            else if (!anchorOk && m_HotAnchor != null)
+            {
+                // Its soldier fell: the nearest fighter beside him takes over (the same knot), if any.
+                Soldier next = null;
+                float nearest = HotRadius * HotRadius;
+                foreach (var a in m_Fighters)
+                {
+                    float d2 = Vector2.DistanceSquared(a.Pos, m_HotAnchor.Pos);
+                    if (d2 < nearest) { nearest = d2; next = a; }
+                }
+                m_HotAnchor = next;
+                anchorOk = next != null;
+            }
+            if (!anchorOk) return; // (the knot is gone: the camera stays on where it was)
+            // Its middle: the fighters around its soldier.
+            Vector2 sum = Vector2.Zero;
+            int count = 0;
             foreach (var s in m_Fighters)
-                if (Vector2.DistanceSquared(s.Pos, middle) < Vector2.DistanceSquared(best.Pos, middle)) best = s;
-            return best.Pos;
+                if (Vector2.DistanceSquared(s.Pos, m_HotAnchor.Pos) < HotRadius * HotRadius) { sum += s.Pos; ++count; }
+            Vector2 middle = count > 0 ? sum / count : m_HotAnchor.Pos;
+            if (!m_HotValid) { m_Hot = middle; m_HotValid = true; }
+            else m_Hot += (middle - m_Hot) * (1.0f - MathF.Exp(-dt / 1.5f));
+        }
+
+        private int Around(Vector2 p)
+        {
+            int n = 0;
+            foreach (var s in m_Fighters) if (Vector2.DistanceSquared(s.Pos, p) < HotRadius * HotRadius) ++n;
+            return n;
         }
 
         private Regiment Charging()
@@ -341,7 +429,8 @@ namespace Siege
             return best;
         }
 
-        private static Soldier Lead(Regiment r)
+        /// <summary>The rider farthest ahead, or `current` while it lives and is within a few meters of that one.</summary>
+        private static Soldier Lead(Regiment r, Soldier current)
         {
             if (r == null) return null;
             Soldier best = null;
@@ -352,6 +441,9 @@ namespace Siege
                 float ahead = Vector2.Dot(s.Pos - r.Anchor, r.Forward);
                 if (ahead > most) { most = ahead; best = s; }
             }
+            if (current != null && !current.Dead && r.Members.Contains(current) &&
+                Vector2.Dot(current.Pos - r.Anchor, r.Forward) > most - 6.0f)
+                return current;
             return best;
         }
 
@@ -393,6 +485,16 @@ namespace Siege
         }
 
         // --- the camera itself ------------------------------------------------------------------------------------
+
+        /// <summary>A critically damped spring's exact step toward `target` (velocity `v` carried between frames).</summary>
+        private static Vector3 Spring(Vector3 x, ref Vector3 v, Vector3 target, float omega, float dt)
+        {
+            float decay = MathF.Exp(-omega * dt);
+            Vector3 d = x - target;
+            Vector3 temp = (v + omega * d) * dt;
+            v = (v - omega * temp) * decay;
+            return target + (d + temp) * decay;
+        }
 
         private Vector3 At(Vector2 p, float height) => new(p.X, m_Battle.GroundAt(p.X, p.Y) + height, p.Y);
 

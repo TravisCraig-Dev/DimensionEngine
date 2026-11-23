@@ -618,7 +618,20 @@ namespace Siege
 
         private void UpdateBody(Soldier s, float dt)
         {
+            float before = s.DeadFor;
             s.DeadFor += dt;
+            // Down: the grass under the body is pressed flat (it falls backward, away from the blow; a horse lies across
+            // more ground), so it lies in the grass rather than on top of it.
+            if (before < 0.7f && s.DeadFor >= 0.7f)
+            {
+                Vector2 back = -BattleMath.Facing(s.Yaw);
+                if (s.Mounted) TerrainTools.FlattenGrass(new Vector3(s.Pos.X, s.Ground, s.Pos.Y), 2.2f);
+                else
+                {
+                    TerrainTools.FlattenGrass(new Vector3(s.Pos.X + back.X * 0.5f, s.Ground, s.Pos.Y + back.Y * 0.5f), 0.9f);
+                    TerrainTools.FlattenGrass(new Vector3(s.Pos.X + back.X * 1.3f, s.Ground, s.Pos.Y + back.Y * 1.3f), 0.9f);
+                }
+            }
             // The fallen lie where they fell for a while, then sink out of sight to make room for the living.
             if (s.DeadFor < 60.0f) return;
             float sink = (s.DeadFor - 60.0f) * 0.25f;
