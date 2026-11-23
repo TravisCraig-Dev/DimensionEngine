@@ -1,6 +1,6 @@
 #include "Dimension/Platform/SplashScreen.h"
 #include "Dimension/Asset/AssetManager.h"
-#include "embedded/kEngineIconPng.h"
+#include "embedded/kSplashLogoPng.h"
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -13,10 +13,9 @@ namespace Dimension::SplashScreen
 {
     namespace
     {
-        constexpr int kWidth = 560, kHeight = 300; // at scale 1
         struct Rgb { uint8_t R, G, B; };
         constexpr Rgb kBackground{ 30, 33, 41 }, kAccent{ 58, 121, 187 }, kTitle{ 236, 238, 242 }, kSubtitle{ 160, 168, 182 },
-                      kStatus{ 190, 196, 206 }, kTrack{ 48, 53, 64 }, kFooter{ 110, 117, 130 };
+                      kStatus{ 190, 196, 206 }, kTrack{ 48, 53, 64 };
 
         struct Canvas
         {
@@ -45,7 +44,7 @@ namespace Dimension::SplashScreen
         {
             stbtt_fontinfo Font{};
             bool FontOk = false;
-            std::optional<AppIcon::Image> Icon;
+            std::optional<AppIcon::Image> Logo;
         };
         const Resources& Shared()
         {
@@ -56,13 +55,13 @@ namespace Dimension::SplashScreen
                 const uint8_t* font = AssetManager::GetDefaultFontData(&size);
                 r.FontOk = font && stbtt_InitFont(&r.Font, font, stbtt_GetFontOffsetForIndex(font, 0)) != 0;
                 int w = 0, h = 0, channels = 0;
-                if (stbi_uc* px = stbi_load_from_memory(kEngineIconPng, (int)kEngineIconPng_size, &w, &h, &channels, 4))
+                if (stbi_uc* px = stbi_load_from_memory(kSplashLogoPng, (int)kSplashLogoPng_size, &w, &h, &channels, 4))
                 {
-                    AppIcon::Image icon;
-                    icon.Width = w, icon.Height = h;
-                    icon.Rgba.assign(px, px + (size_t)w * h * 4);
+                    AppIcon::Image logo;
+                    logo.Width = w, logo.Height = h;
+                    logo.Rgba.assign(px, px + (size_t)w * h * 4);
                     stbi_image_free(px);
-                    r.Icon = std::move(icon);
+                    r.Logo = std::move(logo);
                 }
             });
             return r;
@@ -133,23 +132,21 @@ namespace Dimension::SplashScreen
         }
     }
 
-    AppIcon::Image Render(float scale, const std::string& title, const std::string& subtitle, const std::string& status,
-                          float phase)
+    AppIcon::Image Background(float scale)
     {
+        using namespace Layout;
         scale = std::clamp(scale, 0.5f, 4.0f);
         auto px = [&](float v) { return (int)std::lround(v * scale); };
         AppIcon::Image image;
-        image.Width = px((float)kWidth), image.Height = px((float)kHeight);
+        image.Width = px((float)Width), image.Height = px((float)Height);
         image.Rgba.assign((size_t)image.Width * image.Height * 4, 255);
         Canvas canvas{ image };
-        int w = image.Width, h = image.Height;
-        canvas.Fill(0, 0, w, h, kBackground);
-        canvas.Fill(0, 0, w, px(4), kAccent); // accent line (the editor's default accent)
-
-        if (const auto& icon = Shared().Icon)
+        canvas.Fill(0, 0, image.Width, image.Height, kBackground);
+        if (const auto& logo = Shared().Logo)
         {
-            AppIcon::Image sized = AppIcon::Resize(*icon, px(72));
-            int ox = px(36), oy = px(52);
+            int lw = px((float)LogoWidth), lh = (int)std::lround((float)lw * logo->Height / logo->Width);
+            AppIcon::Image sized = AppIcon::Resize(*logo, lw, lh);
+            int ox = px((float)LogoX), oy = px((float)LogoY);
             for (int y = 0; y < sized.Height; ++y)
                 for (int x = 0; x < sized.Width; ++x)
                 {
@@ -157,19 +154,30 @@ namespace Dimension::SplashScreen
                     canvas.Blend(ox + x, oy + y, { s[0], s[1], s[2] }, s[3]);
                 }
         }
-        int textX = px(128);
-        Text(canvas, title, 30.0f * scale, kTitle, textX, px(50), w - px(30));
-        Text(canvas, subtitle, 16.0f * scale, kSubtitle, textX, px(94), w - px(30));
+        canvas.Fill(0, 0, image.Width, px((float)AccentHeight), kAccent); // accent line (the editor's default accent)
+        return image;
+    }
+
+    AppIcon::Image Render(float scale, const std::string& title, const std::string& subtitle, const std::string& status,
+                          float phase)
+    {
+        using namespace Layout;
+        scale = std::clamp(scale, 0.5f, 4.0f);
+        auto px = [&](float v) { return (int)std::lround(v * scale); };
+        AppIcon::Image image = Background(scale);
+        Canvas canvas{ image };
+        int left = px((float)TextLeft), right = px((float)TextRight);
+        Text(canvas, title, TitleSize * scale, kTitle, left, px((float)TitleTop), right);
+        Text(canvas, subtitle, SubtitleSize * scale, kSubtitle, left, px((float)SubtitleTop), right);
 
         // Status and a moving bar (loading has no known length: a segment sweeping across).
-        int barTop = h - px(64), barH = px(4), left = px(36), right = w - px(36);
-        Text(canvas, status.empty() ? "Loading..." : status, 13.0f * scale, kStatus, left, barTop - px(26), right);
+        int barTop = px((float)BarTop), barH = px((float)BarHeight);
+        Text(canvas, status.empty() ? "Loading..." : status, StatusSize * scale, kStatus, left, px((float)StatusTop), right);
         canvas.Fill(left, barTop, right, barTop + barH, kTrack);
         phase = phase - std::floor(phase);
         int span = right - left, seg = span / 4;
         int x0 = left + (int)((span + seg) * phase) - seg;
         canvas.Fill(std::max(x0, left), barTop, std::min(x0 + seg, right), barTop + barH, kAccent);
-        Text(canvas, "Dimension Engine", 13.0f * scale, kFooter, left, h - px(34), right);
         return image;
     }
 }

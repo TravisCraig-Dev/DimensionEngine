@@ -71,16 +71,18 @@ namespace Dimension::AppIcon
         return image;
     }
 
-    Image Resize(const Image& source, int size)
+    Image Resize(const Image& source, int size) { return Resize(source, size, size); }
+
+    Image Resize(const Image& source, int width, int height)
     {
         Image out;
-        out.Width = out.Height = size;
-        out.Rgba.assign((size_t)size * size * 4, 0);
+        out.Width = width = std::max(width, 0), out.Height = height = std::max(height, 0);
+        out.Rgba.assign((size_t)width * height * 4, 0);
         if (source.Width <= 0 || source.Height <= 0) return out;
         // Destination rectangle of the fitted image.
-        float scale = (float)size / (float)std::max(source.Width, source.Height);
+        float scale = std::min((float)width / (float)source.Width, (float)height / (float)source.Height);
         float dw = source.Width * scale, dh = source.Height * scale;
-        float ox = (size - dw) * 0.5f, oy = (size - dh) * 0.5f;
+        float ox = (width - dw) * 0.5f, oy = (height - dh) * 0.5f;
         auto texel = [&](int x, int y) {
             x = std::clamp(x, 0, source.Width - 1);
             y = std::clamp(y, 0, source.Height - 1);
@@ -96,8 +98,8 @@ namespace Dimension::AppIcon
         };
         // Supersample each destination pixel enough to cover the source pixels it spans (box filter when shrinking).
         int samples = std::clamp((int)std::ceil(1.0f / scale), 1, 16);
-        for (int y = 0; y < size; ++y)
-            for (int x = 0; x < size; ++x)
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x)
             {
                 glm::vec4 sum(0.0f);
                 for (int sy = 0; sy < samples; ++sy)
@@ -108,7 +110,7 @@ namespace Dimension::AppIcon
                         sum += bilinear((px - ox) / scale, (py - oy) / scale);
                     }
                 sum /= (float)(samples * samples);
-                uint8_t* d = &out.Rgba[((size_t)y * size + x) * 4];
+                uint8_t* d = &out.Rgba[((size_t)y * width + x) * 4];
                 float a = sum.a;
                 glm::vec3 c = a > 1e-5f ? glm::vec3(sum) / a : glm::vec3(0.0f);
                 for (int i = 0; i < 3; ++i) d[i] = (uint8_t)std::lround(std::clamp(c[i], 0.0f, 1.0f) * 255.0f);

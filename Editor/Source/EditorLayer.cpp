@@ -4637,7 +4637,7 @@ namespace Editor
         ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Appearing);
         if (ImGui::Begin("About Dimension", &m_ShowAbout, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoResize))
         {
-            ImGui::Text("Dimension Engine 0.1.0");
+            ImGui::Text("Dimension Engine 0.2.0");
             ImGui::TextWrapped("2D/3D Vulkan game engine with an ECS core. Built with GLFW, Dear ImGui, ImGuizmo, "
                                "VMA, volk, glm, Box2D, Jolt Physics, miniaudio, cgltf, stb and nlohmann/json.");
         }

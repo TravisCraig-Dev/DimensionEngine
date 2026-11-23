@@ -24,6 +24,8 @@ namespace Dimension
         // Fits the image into a size x size square (keeping its aspect ratio, transparent margins), filtering with
         // premultiplied alpha so edges do not darken.
         Image Resize(const Image& source, int size);
+        // The same into a width x height box.
+        Image Resize(const Image& source, int width, int height);
         // An .ico file holding every size in kSizes as PNG-compressed images.
         std::vector<uint8_t> BuildIco(const Image& source);
         // Replaces the GLFW_ICON icon group of an executable (one that is not running). Windows only.

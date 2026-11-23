@@ -101,7 +101,7 @@ else()
     message(STATUS "C# scripting disabled (.NET SDK native host pack not found)")
 endif()
 dim_embed_file(DimensionEngine ${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf kDefaultFontData)
-dim_embed_file(DimensionEngine ${CMAKE_SOURCE_DIR}/Engine/Resources/Dimension.png kEngineIconPng) # (splash screen)
+dim_embed_file(DimensionEngine ${CMAKE_SOURCE_DIR}/Engine/Resources/SplashLogo.png kSplashLogoPng) # (splash screen)
 if(NOT WIN32)
     set_target_properties(DimensionEngine PROPERTIES PREFIX "") # DimensionEngine.so, as the editor packages it
 endif()

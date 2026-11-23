@@ -21574,27 +21574,27 @@ namespace
             return glm::ivec3(p[0], p[1], p[2]);
         };
         AppIcon::Image a = SplashScreen::Render(1.0f, "Dimension Editor", "Sandbox", "Loading the C# scripts...", 0.5f);
-        CHECK(a.Width == 560 && a.Height == 300 && a.Rgba.size() == 560u * 300u * 4u);
-        CHECK(px(a, 550, 290) == glm::ivec3(30, 33, 41)); // background
+        CHECK(a.Width == 560 && a.Height == 320 && a.Rgba.size() == 560u * 320u * 4u);
+        CHECK(px(a, 550, 310) == glm::ivec3(30, 33, 41)); // background
         CHECK(px(a, 10, 1) == glm::ivec3(58, 121, 187));  // accent line
-        CHECK(px(a, 40, 237) == glm::ivec3(48, 53, 64));  // the bar's track, left of the segment at phase 0.5
-        CHECK(px(a, 280, 237) == glm::ivec3(58, 121, 187)); // the segment
+        CHECK(px(a, 40, 277) == glm::ivec3(48, 53, 64));  // the bar's track, left of the segment at phase 0.5
+        CHECK(px(a, 280, 277) == glm::ivec3(58, 121, 187)); // the segment
         auto bright = [&](const AppIcon::Image& im, int x0, int y0, int x1, int y1) {
             int n = 0;
             for (int y = y0; y < y1; ++y)
                 for (int x = x0; x < x1; ++x) n += px(im, x, y).x > 200;
             return n;
         };
-        CHECK(bright(a, 128, 50, 530, 92) > 300); // the title is drawn
-        CHECK(bright(a, 36, 52, 108, 124) > 0);   // the icon
+        CHECK(bright(a, 36, 186, 524, 210) > 300); // the title is drawn
+        CHECK(bright(a, 190, 50, 520, 110) > 1000); // the logo's lettering
         AppIcon::Image b = SplashScreen::Render(1.0f, "Dimension Editor", "Sandbox", "", 0.5f);
-        CHECK(bright(b, 128, 50, 530, 92) == bright(a, 128, 50, 530, 92));
+        CHECK(bright(b, 36, 186, 524, 210) == bright(a, 36, 186, 524, 210));
         CHECK(a.Rgba != b.Rgba); // the status line differs ("Loading..." when empty)
         // A title too long for its box is cut with an ellipsis, not drawn past it.
         AppIcon::Image c = SplashScreen::Render(1.0f, std::string(200, 'W'), "", "", 0.0f);
-        CHECK(bright(c, 531, 40, 560, 100) == 0);
+        CHECK(bright(c, 525, 184, 560, 210) == 0);
         AppIcon::Image d = SplashScreen::Render(2.0f, "Dimension Editor", "Sandbox", "\xC3\x89" "tape", 0.0f);
-        CHECK(d.Width == 1120 && d.Height == 600);
+        CHECK(d.Width == 1120 && d.Height == 640);
         if (const char* out = std::getenv("DIM_SPLASH_PPM")) // (to look at it)
             if (FILE* f = std::fopen(out, "wb"))
             {
