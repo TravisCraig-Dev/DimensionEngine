@@ -64,8 +64,35 @@ namespace Editor::Launcher
                     return false;
                 }
             }
-            if (ec) error = "Could not read '" + from.string() + "': " + ec.message();
-            return !ec;
+            if (ec)
+            {
+                error = "Could not read '" + from.string() + "': " + ec.message();
+                return false;
+            }
+            // Its scripts compiled when it was packaged (an install's sample), so it plays without the .NET SDK: copied
+            // too, and dated now, after the sources just copied (a copy may not keep the times, and an older assembly
+            // than its sources is built again).
+            fs::path built = from / ".dimension" / "ScriptAssemblies";
+            if (fs::exists(built / "GameScripts.dll", ec))
+            {
+                fs::path out = to / ".dimension" / "ScriptAssemblies";
+                fs::create_directories(out, ec);
+                auto now = fs::file_time_type::clock::now();
+                for (const auto& entry : fs::directory_iterator(built, ec))
+                {
+                    if (!entry.is_regular_file()) continue;
+                    fs::path dst = out / entry.path().filename();
+                    fs::copy_file(entry.path(), dst, fs::copy_options::overwrite_existing, ec);
+                    if (ec)
+                    {
+                        error = "Could not copy '" + entry.path().string() + "': " + ec.message();
+                        return false;
+                    }
+                    fs::last_write_time(dst, now, ec);
+                }
+                ec.clear();
+            }
+            return true;
         }
     }
 
