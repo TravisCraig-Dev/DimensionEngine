@@ -283,6 +283,10 @@ namespace Dimension
         std::vector<uint8_t> EditDetails;
         std::vector<uint8_t> EditHoles;   // 1 per hole sample
         uint64_t EditRevision = 0;
+        // Runtime: grass pressed flat (a byte per sample, 255 = flat: where bodies lie; see Terrain::FlattenGrass), and
+        // a counter that changes with it. Never saved.
+        std::vector<uint8_t> GrassFlatten;
+        uint64_t GrassFlattenRevision = 0;
         // Edits that touched only part of the terrain (craters while playing): the revision each made and the samples
         // it changed (columns x-z, rows y-w, inclusive). The mesh, details and collider update just there when every
         // revision since theirs is in this log, else they rebuild whole (see Terrain::ChangedSince).

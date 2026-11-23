@@ -3,10 +3,13 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 
 // A terrain's grass field: one tuft per cell of a grid anchored to the terrain (so tufts stay put as the camera moves)
-// over the square around the camera, each kept as often as the terrain's grass density there says, thinning toward
-// the field's edge (the survivors grow a little to cover for the missing), set on the ground, left out on steep slopes
+// over the square around the camera, each kept as often as the terrain's grass density there says, thinning past a
+// full-density distance (the survivors grow to cover for the missing; those near the cut-off shrink in and out rather
+// than pop as the camera moves; far ones neither sway nor vary in tint: less shimmer), set on the ground, left out on steep slopes
 // and outside the view; the kept ones are appended to an instance buffer (MeshInstance) that an indirect draw renders.
 // The sun's shadow cascades run it again with their own frustums (the same tufts: the thinning goes by the camera).
+// It runs once per ring about the camera, each ring's cells twice the size of the one before's (taking over where the
+// thinning keeps about a tuft per one of its cells), neighbouring rings cross-fading by the tufts' size.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -28,10 +31,13 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Pa
     vec4 Terrain;      // xy: size, z: samples a side, w: world units per terrain unit (for the cull radius)
     vec4 Grid;         // xy: the first cell, z: cells a side, w: cell size
     vec4 Look;         // x, y: min and max scale, z: the flattest the ground must be (normal's y), w: seed
-    vec4 Mesh;         // x: the tuft's radius, y: its middle's height (both at scale 1), z: tint variation
+    vec4 Mesh;         // x: the tuft's radius, y: its middle's height (both at scale 1), z: tint variation, w: full-density distance
     uvec4 Sources;     // xy: heights (a float per sample), zw: grass density (a byte per sample)
     uvec4 Out;         // xy: instances, zw: counter
-    uvec4 Info;        // x: capacity, y: entity id, z: motion
+    uvec4 Info;        // x: capacity, y: entity id, z: motion, w: the camera's height above the ground (float bits)
+    vec4 Ring;         // x, y: the distances the ring fades in over, z, w: those it fades out over
+    vec4 RingInfo;     // x: fine cells (the density's) per cell of this ring, y: the ring's index
+    uvec4 Flatten;     // xy: the grass pressed flat (a byte per sample, as the density; 0: none)
 };
 
 layout(push_constant) uniform Push
@@ -66,6 +72,7 @@ float HeightAt(HeightsRef h, int n, vec2 size, vec2 xz)
     return a + (c - a) * tz + (d - c) * tx;
 }
 
+// A byte per sample (4 a uint), 0-1, between the samples.
 float DensityAt(DensityRef dens, int n, vec2 size, vec2 xz)
 {
     vec2 f = clamp((xz / size + 0.5) * float(n - 1), vec2(0.0), vec2(float(n - 1)));
@@ -90,17 +97,31 @@ void main()
     float cellSize = P.Grid.w;
     vec2 size = P.Terrain.xy;
     int n = int(P.Terrain.z);
-    uint state = Hash(uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u ^ floatBitsToUint(P.Look.w));
+    uint state = Hash(uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u ^ floatBitsToUint(P.Look.w) ^ uint(P.RingInfo.y) * 83492791u);
     vec2 xz = -size * 0.5 + (vec2(cell) + vec2(Rand(state), Rand(state))) * cellSize;
     if (any(greaterThan(abs(xz), size * 0.5))) return;
     float reach = P.Camera.w;
-    float d = distance(xz, P.Camera.xz);
-    if (d > reach) return;
-    // Thinner toward the edge (a third kept there), each survivor larger to cover for the gaps, shrinking away at the end.
-    float far = smoothstep(0.35 * reach, reach, d);
-    float keep = mix(1.0, 0.33, far);
+    // The distance counts the camera's height above the ground (so looking down from high up, the grass below thins).
+    float above = uintBitsToFloat(P.Info.w);
+    float d = sqrt(dot(xz - P.Camera.xz, xz - P.Camera.xz) + above * above);
+    if (d > reach || d < P.Ring.x || d > P.Ring.w) return;
+    // (between rings: this one's tufts growing in, or shrinking away, over the overlap)
+    float ringWeight = (P.Ring.y <= 0.0 ? 1.0 : smoothstep(P.Ring.x, P.Ring.y, d)) * (1.0 - smoothstep(P.Ring.z, P.Ring.w, d));
+    // Every tuft out to the full-density distance, then kept as (full / d)^1.5 a fine cell (so a longer reach costs
+    // few more tufts; a ring's cell holds RingInfo.x fine ones), each survivor larger to cover for the gaps (up to
+    // four times), shrinking away at the end.
+    float full = P.Mesh.w;
+    float keep = d > full ? pow(full / d, 1.5) : 1.0;
+    // (and as (full / d)^2 past five times the full-density distance: a sparse cover far out, for few tufts)
+    if (d > 5.0 * full) keep *= sqrt(5.0 * full / d);
+    float cellKeep = min(keep * P.RingInfo.x, 1.0);
+    float r = Rand(state);
+    if (r >= cellKeep) return; // (most far cells end here, before reading anything)
     DensityRef dens = DensityRef(P.Sources.zw);
-    if (Rand(state) >= DensityAt(dens, n, size, xz) * keep) return;
+    float kept = DensityAt(dens, n, size, xz) * cellKeep;
+    if (r >= kept) return;
+    // Near the cut-off (which moves with the camera): shrinking toward it rather than popping out at it.
+    float emerge = smoothstep(0.0, 1.0, (kept - r) / max(0.3 * (1.0 - cellKeep) * kept, 1e-5));
     HeightsRef h = HeightsRef(P.Sources.xy);
     float y = HeightAt(h, n, size, xz);
     float step = max(size.x, size.y) / float(max(n - 1, 1));
@@ -108,8 +129,9 @@ void main()
     float dz = HeightAt(h, n, size, xz + vec2(0.0, step)) - HeightAt(h, n, size, xz - vec2(0.0, step));
     float up = 2.0 * step / length(vec3(dx, 2.0 * step, dz));
     if (up < P.Look.z) return;
-    // (shrinking over the last 40%: no line where the field ends)
-    float scale = mix(P.Look.x, P.Look.y, Rand(state)) * mix(1.0, 1.45, far) * (1.0 - smoothstep(0.6 * reach, reach, d));
+    // (shrinking over the last quarter: no line where the field ends)
+    float scale = mix(P.Look.x, P.Look.y, Rand(state)) * min(inversesqrt(keep), 4.0) * emerge * ringWeight * (1.0 - smoothstep(0.75 * reach, reach, d));
+    if (scale <= 0.0) return;
     float yaw = Rand(state) * 6.2831853;
     // Outside the view: left out (a sphere about the tuft, its sway included).
     vec3 middle = (P.TerrainToWorld * vec4(xz.x, y + P.Mesh.y * scale, xz.y, 1.0)).xyz;
@@ -118,13 +140,25 @@ void main()
         if (dot(P.Frustum[i].xyz, middle) + P.Frustum[i].w < -radius) return;
     uint index = atomicAdd(CounterRef(P.Out.zw).Count, 1u);
     if (index >= P.Info.x) return;
+    // Pressed flat (a body lying there): low and spread out, and still in the wind.
+    float pressed = P.Flatten.x != 0u || P.Flatten.y != 0u ? DensityAt(DensityRef(P.Flatten.xy), n, size, xz) : 0.0;
+    float wide = scale * (1.0 + 0.6 * pressed), tall = scale * (1.0 - 0.85 * pressed);
     float c = cos(yaw), s = sin(yaw);
-    mat4 local = mat4(vec4(c * scale, 0.0, -s * scale, 0.0), vec4(0.0, scale, 0.0, 0.0), vec4(s * scale, 0.0, c * scale, 0.0),
+    mat4 local = mat4(vec4(c * wide, 0.0, -s * wide, 0.0), vec4(0.0, tall, 0.0, 0.0), vec4(s * wide, 0.0, c * wide, 0.0),
                       vec4(xz.x, y, xz.y, 1.0));
     // A little variety: lighter and darker, greener and yellower tufts.
-    float bright = 1.0 + (Rand(state) - 0.5) * 2.0 * P.Mesh.z;
-    float warm = (Rand(state) - 0.5) * 2.0 * P.Mesh.z;
+    // (fading out with distance, as the sway does: sub-pixel blades flickering between tints or swaying shimmer)
+    float calm = 1.0 - smoothstep(2.0 * full, 4.0 * full, d);
+    float bright = 1.0 + (Rand(state) - 0.5) * 2.0 * P.Mesh.z * calm;
+    float warm = (Rand(state) - 0.5) * 2.0 * P.Mesh.z * calm;
+    uint motion = P.Info.z;
+    if (motion != 0u)
+    {
+        vec2 m = unpackHalf2x16(motion);
+        motion = calm > 0.0 || m.y > 0.0 ? packHalf2x16(vec2(m.x * calm, m.y)) : 0u;
+        if (pressed > 0.0) motion = m.y > 0.0 || calm * (1.0 - pressed) > 0.0 ? packHalf2x16(vec2(m.x * calm * (1.0 - pressed), m.y * (1.0 - pressed))) : 0u;
+    }
     vec3 tint = bright * vec3(1.0 + 0.6 * warm, 1.0, 1.0 - 0.8 * warm);
     InstancesRef(P.Out.xy).Items[index] = MeshInstance(P.TerrainToWorld * local,
-        uvec4(P.Info.y, packHalf2x16(tint.xy), packHalf2x16(vec2(tint.z, 1.0)), P.Info.z));
+        uvec4(P.Info.y, packHalf2x16(tint.xy), packHalf2x16(vec2(tint.z, 1.0)), motion));
 }

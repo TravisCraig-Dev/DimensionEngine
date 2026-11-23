@@ -1508,6 +1508,38 @@ namespace Dimension::Terrain
         return changed;
     }
 
+    int FlattenGrass(Scene& scene, const glm::vec3& point, float radius, float amount)
+    {
+        int changed = 0;
+        uint8_t value = (uint8_t)std::clamp(amount * 255.0f + 0.5f, 0.0f, 255.0f);
+        for (auto [e, terrain, t] : scene.GetRegistry().ViewOf<TerrainComponent, TransformComponent>())
+        {
+            if (!t.ActiveInHierarchy || terrain.GrassDistance <= 0.0f) continue;
+            glm::vec3 local = glm::vec3(glm::inverse(t.World) * glm::vec4(point, 1.0f));
+            glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
+            float r = radius / std::max(glm::length(glm::vec3(t.World[0])), 1e-4f);
+            if (std::abs(local.x) > size.x * 0.5f + r || std::abs(local.z) > size.y * 0.5f + r) continue;
+            int n = SampleCount(terrain);
+            if (terrain.GrassFlatten.size() != (size_t)n * n) terrain.GrassFlatten.assign((size_t)n * n, 0);
+            // Every sample within the radius (and the ring just past it, so the tufts between samples lie down too).
+            float step = size.x / (n - 1), stepZ = size.y / (n - 1);
+            int c0 = std::max((int)std::floor((local.x - r + size.x * 0.5f) / step), 0), c1 = std::min((int)std::ceil((local.x + r + size.x * 0.5f) / step), n - 1);
+            int r0 = std::max((int)std::floor((local.z - r + size.y * 0.5f) / stepZ), 0), r1 = std::min((int)std::ceil((local.z + r + size.y * 0.5f) / stepZ), n - 1);
+            int here = 0;
+            for (int row = r0; row <= r1; ++row)
+                for (int col = c0; col <= c1; ++col)
+                {
+                    glm::vec2 p(col * step - size.x * 0.5f, row * stepZ - size.y * 0.5f);
+                    if (glm::length(p - glm::vec2(local.x, local.z)) > r + std::max(step, stepZ) * 0.5f) continue;
+                    uint8_t& f = terrain.GrassFlatten[(size_t)row * n + col];
+                    if (f < value) { f = value; ++here; }
+                }
+            if (here > 0) ++terrain.GrassFlattenRevision;
+            changed += here;
+        }
+        return changed;
+    }
+
     int DigCrater(Scene& scene, const glm::vec3& point, float radius, float depth, int paintLayer)
     {
         int changed = 0;

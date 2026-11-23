@@ -350,6 +350,7 @@ namespace Dimension
             int (*GamepadHaptics)(int, float, float, float, int);
             // The camera jumped to another shot this frame (temporal effects start over instead of smearing across it).
             void (*CameraCut)(void*);
+            int (*TerrainFlattenGrass)(void*, const float*, float, float); // world point, radius, amount
         };
 
         std::vector<uint8_t> s_PngBytes; // the last EncodeToPNG result (read back right away)
@@ -1687,6 +1688,9 @@ namespace Dimension
             };
             a.SetMainCamera = [](void* s, uint64_t e) { if (s) S(s).SetPrimaryCamera(Unpack(e)); };
             a.CameraCut = [](void* s) { if (s) S(s).MarkCameraCut(); };
+            a.TerrainFlattenGrass = [](void* s, const float* p, float radius, float amount) -> int {
+                return s ? Terrain::FlattenGrass(S(s), { p[0], p[1], p[2] }, radius, amount) : 0;
+            };
             a.ComponentEntity = [](void* s, uint64_t e, const char* component, const char* field, int op, uint64_t target) -> uint64_t {
                 const FieldInfo* f = nullptr;
                 void* value = ReflectedField(s, e, component, field, f);

@@ -203,6 +203,7 @@ namespace Dimension.Interop
         public delegate* unmanaged<IntPtr, ulong, int, byte*, float*, float> VisualEffectOp;  // see VisualEffect in Components.cs
         public delegate* unmanaged<int, float, float, float, int, int> GamepadHaptics;  // see Input.SetGamepadTriggerVibration
         public delegate* unmanaged<IntPtr, void> CameraCut;  // see Camera.Cut
+        public delegate* unmanaged<IntPtr, float*, float, float, int> TerrainFlattenGrass; // world point, radius, amount
     }
 
     // C# functions callable from the engine. Layout must match ManagedApi in CSharpRuntime.cpp.

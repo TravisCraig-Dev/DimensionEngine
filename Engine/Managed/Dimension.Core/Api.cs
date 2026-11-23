@@ -977,6 +977,12 @@ namespace Dimension
         /// grass. The terrain redraws and collides with its new shape. Returns how many height samples changed.</summary>
         public static int DigCrater(Vector3 point, float radius, float depth, int paintLayer = 3) =>
             Native.Api.TerrainCrater(Native.CurrentScene, (float*)&point, radius, depth, paintLayer);
+
+        /// <summary>Presses the grass flat (by `amount`, 0-1) within `radius` of `point`, as a body lying there would:
+        /// the grass field's tufts there lie down instead of standing through it. For the time playing only (the terrain
+        /// itself is not changed). Returns how many grass samples changed.</summary>
+        public static int FlattenGrass(Vector3 point, float radius, float amount = 1.0f) =>
+            Native.Api.TerrainFlattenGrass(Native.CurrentScene, (float*)&point, radius, amount);
     }
 
     /// <summary>The project's physics layers by name (Project Settings > Physics), and masks of them for queries.</summary>

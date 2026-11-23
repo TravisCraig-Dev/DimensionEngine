@@ -558,9 +558,15 @@ namespace Dimension
             VkDeviceAddress HeightsAddress = 0, DensityAddress = 0;
             uint64_t Key = 0, BaseKey = 0, Revision = 0;
             std::vector<uint8_t> DensityCpu;
-            // This frame's cull (GrassField.comp's parameters but the frustum and output) and its grid's cells a side.
+            // The grass pressed flat (TerrainComponent::GrassFlatten) on the GPU, as of its `FlattenRevision`.
+            Buffer Flatten;
+            VkDeviceAddress FlattenAddress = 0;
+            uint64_t FlattenRevision = ~0ull;
+            // This frame's cull: GrassField.comp's parameters (but the frustum and output) for each ring about the
+            // camera, each ring's grid's cells a side, and the most tufts they can make (the outputs' capacity).
             std::vector<uint8_t> ParamBytes;
-            uint32_t Side = 0;
+            std::vector<uint32_t> Sides;
+            uint32_t Capacity = 0;
             // The tufts and the indirect draws' arguments (a count, then a command per part): for the view [0] and for
             // each sun shadow cascade [1 + c], culled by its frustum; Ready when made this frame.
             struct Output

@@ -2443,6 +2443,9 @@ namespace Dimension
             glm::vec4 Frustum[6];
             glm::vec4 Camera, Terrain, Grid, Look, Mesh;
             glm::uvec4 Sources, Out, Info;
+            glm::vec4 Ring;     // the ring (GrassField.comp): x, y fading in, z, w fading out, as distances
+            glm::vec4 RingInfo; // x: fine cells per cell, y: the ring's index
+            glm::uvec4 Flatten; // xy: the grass pressed flat (a byte per sample; 0: none)
         };
 
         VkDeviceAddress AddressOf(const Buffer& b)
@@ -2499,6 +2502,20 @@ namespace Dimension
                 f.BaseKey = base;
                 f.Revision = terrain.EditRevision;
             }
+            // The grass pressed flat (bodies lying in it), again when it changed.
+            if (terrain.GrassFlatten.size() != count)
+                f.FlattenAddress = 0;
+            else if (f.FlattenRevision != terrain.GrassFlattenRevision || !f.FlattenAddress)
+            {
+                if (!f.Flatten.IsValid() || f.Flatten.GetSize() < (count + 3) / 4 * 4)
+                {
+                    f.Flatten = Buffer((count + 3) / 4 * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                       MemoryUsage::CpuToGpu, "GrassFlatten");
+                }
+                std::memcpy(f.Flatten.GetMapped(), terrain.GrassFlatten.data(), count);
+                f.FlattenAddress = AddressOf(f.Flatten);
+                f.FlattenRevision = terrain.GrassFlattenRevision;
+            }
             // The grid of cells over the square about the camera (in the terrain's space).
             glm::mat4 toLocal = glm::inverse(world);
             glm::vec3 eye = glm::vec3(toLocal * glm::vec4(camera.Position, 1.0f));
@@ -2506,22 +2523,60 @@ namespace Dimension
             float reach = terrain.GrassDistance / worldScale;
             float cell = std::sqrt(100.0f / std::max(terrain.GrassDensity, 0.01f)) / worldScale;
             glm::vec2 size = glm::max(terrain.Size, glm::vec2(0.01f));
-            uint32_t side = std::min((uint32_t)std::ceil(2.0f * reach / cell) + 2, 640u);
+            // Full density out to `full`, thinning as (full / d)^1.5 beyond (GrassField.comp): the tufts that can be
+            // made, with a margin (a tuft a cell), size the instance buffers rather than the whole square of cells.
+            float full = std::min(0.35f * reach, 30.0f / worldScale);
+            float expected = (glm::pi<float>() * full * full +
+                              4.0f * glm::pi<float>() * std::pow(full, 1.5f) * (std::sqrt(reach) - std::sqrt(std::min(full, reach)))) / (cell * cell);
+            // The camera's height above the ground under it (the field's distances count it).
+            float above = 0.0f;
+            {
+                const float* h = static_cast<const float*>(f.Heights.GetMapped());
+                glm::vec2 g = glm::clamp((glm::vec2(eye.x, eye.z) / size + 0.5f) * float(n - 1), glm::vec2(0.0f), glm::vec2(float(n - 1)));
+                int c0 = std::min((int)g.x, n - 2), r0 = std::min((int)g.y, n - 2);
+                float tx = g.x - c0, tz = g.y - r0;
+                float a = h[(size_t)r0 * n + c0], b = h[(size_t)r0 * n + c0 + 1], c = h[(size_t)(r0 + 1) * n + c0], d = h[(size_t)(r0 + 1) * n + c0 + 1];
+                float ground = glm::mix(glm::mix(a, b, tx), glm::mix(c, d, tx), tz);
+                above = std::max(eye.y - ground, 0.0f);
+            }
             GrassParamsGPU p{};
             p.TerrainToWorld = world;
-            glm::ivec2 first = glm::ivec2(glm::floor((glm::vec2(eye.x, eye.z) - reach + size * 0.5f) / cell));
             AABB bounds = f.MeshRef->GetBounds();
             float radius = std::max({ std::abs(bounds.Min.x), std::abs(bounds.Max.x), std::abs(bounds.Min.z), std::abs(bounds.Max.z), bounds.Max.y - bounds.Min.y });
             p.Camera = glm::vec4(eye, reach);
             p.Terrain = glm::vec4(size, (float)n, worldScale);
-            p.Grid = glm::vec4((float)first.x, (float)first.y, (float)side, cell);
             p.Look = glm::vec4(terrain.GrassScale.x, terrain.GrassScale.y, std::cos(glm::radians(std::clamp(terrain.GrassMaxSlope, 0.0f, 90.0f))),
                                glm::uintBitsToFloat((uint32_t)terrain.Seed * 2654435761u + 0x6a09e667u));
-            p.Mesh = glm::vec4(radius, bounds.Center().y, 0.12f, 0.0f);
+            p.Mesh = glm::vec4(radius, bounds.Center().y, 0.12f, full);
             p.Sources = glm::uvec4((uint32_t)f.HeightsAddress, (uint32_t)(f.HeightsAddress >> 32), (uint32_t)f.DensityAddress, (uint32_t)(f.DensityAddress >> 32));
-            p.Info = glm::uvec4(0u, f.EntityId, f.Motion, 0u);
-            f.ParamBytes.assign((const uint8_t*)&p, (const uint8_t*)&p + sizeof(p));
-            f.Side = side;
+            p.Info = glm::uvec4(0u, f.EntityId, f.Motion, glm::floatBitsToUint(above));
+            p.Flatten = glm::uvec4((uint32_t)f.FlattenAddress, (uint32_t)(f.FlattenAddress >> 32), 0u, 0u);
+            // Rings about the camera, each a grid of cells twice the last's: ring k takes over where the thinning leaves
+            // a tuft per 4^k fine cells anyway (full * 2^(4k/3)), cross-fading with the ring before over the last 15%
+            // (so a far reach costs about what the tufts it keeps do, not a fine grid over all of it).
+            f.ParamBytes.clear();
+            f.Sides.clear();
+            uint32_t cells = 0;
+            for (int k = 0; k < 8; ++k)
+            {
+                float inner = k == 0 ? 0.0f : full * std::exp2(4.0f * k / 3.0f);
+                if (k > 0 && 0.85f * inner >= reach) break;
+                float outer = full * std::exp2(4.0f * (k + 1) / 3.0f);
+                bool last = outer >= reach || k == 7;
+                float ring = cell * std::exp2((float)k);
+                float extent = last ? reach : outer;
+                uint32_t side = std::min((uint32_t)std::ceil(2.0f * extent / ring) + 2, 2048u);
+                glm::ivec2 first = glm::ivec2(glm::floor((glm::vec2(eye.x, eye.z) - extent + size * 0.5f) / ring));
+                p.Grid = glm::vec4((float)first.x, (float)first.y, (float)side, ring);
+                p.Ring = glm::vec4(k == 0 ? -2.0f : 0.85f * inner, k == 0 ? -1.0f : inner, last ? 2.0f * reach + 1.0f : 0.85f * outer,
+                                   last ? 2.0f * reach + 2.0f : outer);
+                p.RingInfo = glm::vec4(std::exp2(2.0f * k), (float)k, 0.0f, 0.0f);
+                f.ParamBytes.insert(f.ParamBytes.end(), (const uint8_t*)&p, (const uint8_t*)&p + sizeof(p));
+                f.Sides.push_back(side);
+                cells += side * side;
+                if (last) break;
+            }
+            f.Capacity = std::min(cells, (uint32_t)(expected * 1.2f) + 4096u);
             for (auto& out : f.Out) out.Ready = false;
             CullGrassField(cmd, f, camera.Projection * camera.View, 0);
         }
@@ -2532,8 +2587,8 @@ namespace Dimension
         auto& device = RenderDevice::Get();
         GrassField::Output& o = f.Out[index];
         o.Ready = false;
-        if (f.ParamBytes.size() != sizeof(GrassParamsGPU) || f.Side == 0) return;
-        uint32_t capacity = f.Side * f.Side;
+        if (f.Sides.empty() || f.ParamBytes.size() != f.Sides.size() * sizeof(GrassParamsGPU)) return;
+        uint32_t capacity = f.Capacity;
         if (capacity > o.Capacity || !o.Instances.IsValid())
         {
             o.Capacity = capacity;
@@ -2548,7 +2603,8 @@ namespace Dimension
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, MemoryUsage::GpuOnly, "GrassArgs");
             o.ArgsAddress = AddressOf(o.Args);
         }
-        TransientAllocation params = device.AllocateTransient(sizeof(GrassParamsGPU), 16);
+        size_t rings = f.Sides.size();
+        TransientAllocation params = device.AllocateTransient(rings * sizeof(GrassParamsGPU), 16);
         if (!params) return;
         GrassParamsGPU p;
         std::memcpy(&p, f.ParamBytes.data(), sizeof(p));
@@ -2560,7 +2616,15 @@ namespace Dimension
         for (int i = 0; i < 6; ++i) p.Frustum[i] = planes[i] / std::max(glm::length(glm::vec3(planes[i])), 1e-6f);
         p.Out = glm::uvec4((uint32_t)o.InstancesAddress, (uint32_t)(o.InstancesAddress >> 32), (uint32_t)o.ArgsAddress, (uint32_t)(o.ArgsAddress >> 32));
         p.Info.x = capacity;
-        std::memcpy(params.Data, &p, sizeof(p));
+        for (size_t r = 0; r < rings; ++r)
+        {
+            // (each ring's own grid and fades; the rest as the first's)
+            const GrassParamsGPU& ring = reinterpret_cast<const GrassParamsGPU*>(f.ParamBytes.data())[r];
+            p.Grid = ring.Grid;
+            p.Ring = ring.Ring;
+            p.RingInfo = ring.RingInfo;
+            std::memcpy((uint8_t*)params.Data + r * sizeof(p), &p, sizeof(p));
+        }
         // The arguments afresh (the count at 0; earlier draws done with them), the tufts made, the count copied into
         // each part's draw.
         Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
@@ -2576,9 +2640,13 @@ namespace Dimension
         Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                           VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
         Renderer::Get().GrassField.Bind(cmd);
-        glm::uvec2 address((uint32_t)params.Address, (uint32_t)(params.Address >> 32));
-        vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(address), &address);
-        vkCmdDispatch(cmd, (f.Side + 7) / 8, (f.Side + 7) / 8, 1);
+        for (size_t r = 0; r < rings; ++r)
+        {
+            VkDeviceAddress a = params.Address + r * sizeof(GrassParamsGPU);
+            glm::uvec2 address((uint32_t)a, (uint32_t)(a >> 32));
+            vkCmdPushConstants(cmd, device.GetPipelineLayout(), VK_SHADER_STAGE_ALL, 0, sizeof(address), &address);
+            vkCmdDispatch(cmd, (f.Sides[r] + 7) / 8, (f.Sides[r] + 7) / 8, 1);
+        }
         Vk::MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
         std::vector<VkBufferCopy> copies;
         for (size_t k = 0; k < f.Parts.size(); ++k)

@@ -90,6 +90,10 @@ namespace Dimension
         // Digs a crater into every terrain under the point, at any time (also while playing: the terrain redraws and its
         // collider is rebuilt). Returns how many samples changed.
         int DigCrater(Scene& scene, const glm::vec3& point, float radius, float depth, int paintLayer = 3);
+        // Presses the grass flat (by `amount`, 0-1) within `radius` of a world point on the terrain under it, as a body
+        // lying there would: its grass field's tufts there lie down rather than stand through it. Runtime only (the
+        // terrain is not changed). Returns how many samples changed.
+        int FlattenGrass(Scene& scene, const glm::vec3& point, float radius, float amount = 1.0f);
         // Hydraulic erosion (the Erode brush): `droplets` raindrops start at random inside the circle (the same `seed`
         // gives the same drops) and run downhill over the heights, picking up sediment where they speed up and the
         // ground falls away, and dropping it where they slow down or climb, which carves gullies and fills basins.

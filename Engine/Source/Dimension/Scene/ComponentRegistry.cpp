@@ -182,7 +182,7 @@ namespace Dimension
             .Field("Grass Sway", &TerrainComponent::GrassSway).Range(0.0f, 10.0f).Speed(0.01f).Tooltip("How much tufts bend in the scene's Wind (0 = still)")
             .Field("Grass Bending", &TerrainComponent::GrassBending).Range(0.0f, 4.0f).Speed(0.01f)
                 .Tooltip("How far rigid bodies and characters push tufts aside (0 = not at all)")
-            .Field("Grass Distance", &TerrainComponent::GrassDistance).Range(0.0f, 500.0f).Speed(0.5f)
+            .Field("Grass Distance", &TerrainComponent::GrassDistance).Range(0.0f, 2000.0f).Speed(0.5f)
                 .Tooltip("Above 0: dense grass made on the GPU around the camera out to this distance (m), instead of tufts scattered over the whole terrain")
             .Field("Sculpted Heights", &TerrainComponent::SculptedHeights).HideInInspector()
             .Field("Painted Layers", &TerrainComponent::PaintedLayers).HideInInspector()
