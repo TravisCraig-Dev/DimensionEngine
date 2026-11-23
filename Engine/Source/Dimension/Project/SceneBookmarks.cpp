@@ -40,34 +40,47 @@ namespace Dimension::SceneBookmarks
         }
 
         bool Valid(int slot) { return slot >= 1 && slot <= kSlots; }
+
+        std::optional<CameraBookmark> GetEntry(const fs::path& scene, const std::string& s)
+        {
+            json all = Read();
+            std::string key = Key(scene);
+            if (!all.contains(key) || !all[key].is_object() || !all[key].contains(s)) return std::nullopt;
+            const json& b = all[key][s];
+            CameraBookmark out;
+            auto pivot = b.value("pivot", std::vector<float>{ 0.0f, 0.0f, 0.0f });
+            if (pivot.size() == 3) out.Pivot = { pivot[0], pivot[1], pivot[2] };
+            out.Distance = b.value("distance", out.Distance);
+            out.Yaw = b.value("yaw", out.Yaw);
+            out.Pitch = b.value("pitch", out.Pitch);
+            out.Is2D = b.value("2d", out.Is2D);
+            out.OrthoSize = b.value("orthoSize", out.OrthoSize);
+            return out;
+        }
+
+        void SetEntry(const fs::path& scene, const std::string& s, const CameraBookmark& b)
+        {
+            json all = Read();
+            all[Key(scene)][s] = { { "pivot", { b.Pivot.x, b.Pivot.y, b.Pivot.z } }, { "distance", b.Distance }, { "yaw", b.Yaw },
+                                   { "pitch", b.Pitch }, { "2d", b.Is2D }, { "orthoSize", b.OrthoSize } };
+            Write(all);
+        }
     }
 
     std::optional<CameraBookmark> Get(const fs::path& scene, int slot)
     {
         if (!Valid(slot)) return std::nullopt;
-        json all = Read();
-        std::string key = Key(scene), s = std::to_string(slot);
-        if (!all.contains(key) || !all[key].is_object() || !all[key].contains(s)) return std::nullopt;
-        const json& b = all[key][s];
-        CameraBookmark out;
-        auto pivot = b.value("pivot", std::vector<float>{ 0.0f, 0.0f, 0.0f });
-        if (pivot.size() == 3) out.Pivot = { pivot[0], pivot[1], pivot[2] };
-        out.Distance = b.value("distance", out.Distance);
-        out.Yaw = b.value("yaw", out.Yaw);
-        out.Pitch = b.value("pitch", out.Pitch);
-        out.Is2D = b.value("2d", out.Is2D);
-        out.OrthoSize = b.value("orthoSize", out.OrthoSize);
-        return out;
+        return GetEntry(scene, std::to_string(slot));
     }
 
     void Set(const fs::path& scene, int slot, const CameraBookmark& b)
     {
-        if (!Valid(slot)) return;
-        json all = Read();
-        all[Key(scene)][std::to_string(slot)] = { { "pivot", { b.Pivot.x, b.Pivot.y, b.Pivot.z } }, { "distance", b.Distance }, { "yaw", b.Yaw },
-                                                   { "pitch", b.Pitch }, { "2d", b.Is2D }, { "orthoSize", b.OrthoSize } };
-        Write(all);
+        if (Valid(slot)) SetEntry(scene, std::to_string(slot), b);
     }
+
+    std::optional<CameraBookmark> GetLastView(const fs::path& scene) { return GetEntry(scene, "last"); }
+
+    void SetLastView(const fs::path& scene, const CameraBookmark& b) { SetEntry(scene, "last", b); }
 
     void Clear(const fs::path& scene, int slot)
     {

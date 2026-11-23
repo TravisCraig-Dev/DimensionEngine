@@ -403,6 +403,7 @@ namespace Editor
     void EditorLayer::OnDetach()
     {
         if (m_Ctx.IsPlaying()) Stop();
+        RememberSceneView();
         m_MeshEdit->Exit(); // (writes the model and a painted texture)
         m_Music->Close();   // (writes the song)
         // Not when the editor quits before it drew a frame (--render-song): the windows were never docked, and saving
@@ -451,6 +452,7 @@ namespace Editor
         if (m_Ctx.IsPlaying()) Stop();
         auto scene = SceneSerializer::LoadFromFile(path);
         if (!scene) return;
+        RememberSceneView();
         Prefabs::SyncAll(*scene); // pick up prefab edits made since the scene was saved
         m_Ctx.EditorScene = scene;
         m_Ctx.Sections.Clear();
@@ -460,7 +462,39 @@ namespace Editor
         m_Ctx.ClearHistory();
         UpdateWindowTitle();
         RecentScenes::Add(path);
+        RestoreSceneView();
         Log::Info("Opened scene '{}'", path.filename().string());
+    }
+
+    void EditorLayer::RememberSceneView()
+    {
+        // (a stage's camera is its own: the scene's is put aside in m_SceneCamera meanwhile)
+        if (!m_Ctx.EditorScene || m_Ctx.ScenePath.empty()) return;
+        SceneBookmarks::SetLastView(m_Ctx.ScenePath, m_Ctx.InStage() ? m_SceneCamera.GetBookmark() : m_Camera.GetBookmark());
+    }
+
+    void EditorLayer::RestoreSceneView()
+    {
+        // The view the scene was last left with; a scene never opened here looks through its primary camera (what the
+        // game will show), or frames it all when it has none.
+        if (auto last = SceneBookmarks::GetLastView(m_Ctx.ScenePath))
+        {
+            m_Camera.SetBookmark(*last);
+            return;
+        }
+        Scene& scene = *m_Ctx.EditorScene;
+        scene.UpdateTransforms();
+        Entity camera = scene.GetPrimaryCamera();
+        const auto* t = camera.IsNull() ? nullptr : scene.GetRegistry().TryGet<TransformComponent>(camera);
+        if (t)
+        {
+            if (m_Camera.Is2D()) m_Camera.Set2D(false);
+            glm::mat4 world = t->World;
+            for (int i = 0; i < 3; ++i) world[i] = glm::vec4(glm::normalize(glm::vec3(world[i])), 0.0f); // (no scale)
+            m_Camera.SetFromView(glm::inverse(world));
+            return;
+        }
+        FrameAll();
     }
 
     bool EditorLayer::SaveScene()

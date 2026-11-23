@@ -26,5 +26,8 @@ namespace Dimension
         void Clear(const fs::path& scene, int slot);
         // The slots in use, in order.
         std::vector<int> Slots(const fs::path& scene);
+        // The view the Scene view last had on the scene (kept apart from the slots): what the editor reopens it with.
+        std::optional<CameraBookmark> GetLastView(const fs::path& scene);
+        void SetLastView(const fs::path& scene, const CameraBookmark& bookmark);
     }
 }

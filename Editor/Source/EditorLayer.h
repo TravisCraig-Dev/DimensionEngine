@@ -143,6 +143,9 @@ namespace Editor
         bool m_OpenViewsMenu = false;
         void DrawNoteLabels(const ImVec2& origin, const ImVec2& size);
         void OpenScene(const fs::path& path);
+        // The Scene view kept per scene (SceneBookmarks::SetLastView) as it is left, and set again as it opens.
+        void RememberSceneView();
+        void RestoreSceneView();
         // Another scene's objects alongside the main scene's (a Hierarchy section of its own), and closing it.
         void OpenSceneAdditive(const fs::path& path);
         void CloseAddedScene(size_t section);
